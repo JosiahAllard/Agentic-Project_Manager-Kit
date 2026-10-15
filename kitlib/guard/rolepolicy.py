@@ -464,6 +464,23 @@ LOCK_PATH_PRINTERS = frozenset(('echo', 'printf', 'write-output', 'write', 'writ
 LOCK_LAUNCHERS = frozenset((
     'winpty', 'uv', 'uvx', 'hatch', 'pdm', 'poetry', 'pipenv', 'conda', 'mamba', 'setsid', 'watch', 'start',
     'bash', 'sh', 'zsh', 'dash', 'ksh', 'cmd', 'pwsh', 'powershell'))
+# The program launchers among them (_launch): name -> (their options that take the next word, the
+# subcommands that must come first: uv run or uv tool run). An option not listed that takes a value
+# makes its value read as the program, which is no python: the call is then refused, not passed.
+UV_VALUES = ('-p', '--python', '--with', '--with-editable', '--with-requirements', '--package', '--project',
+             '--directory', '--extra', '--group', '--only-group', '--no-group', '--env-file', '--index',
+             '--index-url', '--default-index', '--extra-index-url', '-f', '--find-links', '--from', '--cache-dir',
+             '--config-file', '--color', '-C', '--config-setting')
+LAUNCH_PROGRAMS = {
+    'winpty': ((), ((),)), 'setsid': ((), ((),)), 'watch': (('-n', '--interval', '-q', '--equexit'), ((),)),
+    'uvx': (UV_VALUES, ((),)), 'uv': (UV_VALUES, (('run',), ('tool', 'run'))),
+    'hatch': (('-e', '--env', '-p', '--project', '--data-dir', '--cache-dir', '--config'), (('run',),)),
+    'pdm': (('-p', '--project', '--venv', '-L', '--lockfile'), (('run',),)),
+    'poetry': (('-C', '--directory', '-P', '--project'), (('run',),)),
+    'pipenv': (('--python',), (('run',),)),
+    'conda': (('-n', '--name', '-p', '--prefix', '--cwd'), (('run',),)),
+    'mamba': (('-n', '--name', '-p', '--prefix', '--cwd'), (('run',),)),
+}
 # the module python -m runs as the lock CLI, matched as the last dotted part (`-m tools.machine_lock`)
 LOCK_MODULE = 'machine_lock'
 # a word that is a module name of the lock CLI (`tools.machine_lock`, `machine_lock`), and the
@@ -596,14 +613,84 @@ def _output_stays(cmd, commands):
     return True
 
 
+# What hands a later command the words of an earlier one, or the line's own text (_last_words):
+# bash's $_ (the last word of the command before; ${_}, a nameref or ${!n} to `_`) and
+# $BASH_COMMAND; PowerShell's $$ and $^ (the last and first token of the line before), $Error and
+# $MyInvocation (their records hold the line). With `items`, PowerShell's pipeline and match
+# variables too ($_, $PSItem, $input, $Matches). A *-Variable cmdlet, the variable: drive or
+# PSVariable may reach them by a name the text does not spell: _ps_variable_reach and
+# _ps_names_last.
+BASH_LAST_RE = re.compile(r'\$\{?!|\$\{?_(?!\w)|(?<![\w$])_(?!\w)|BASH_COMMAND')
+PS_LAST_RE = re.compile(r'(?i)\$(?:\$|\^|\{[$^]\}|\{?(?:\w+:)?(?:error|myinvocation)(?!\w))')
+PS_ITEM_RE = re.compile(r'(?i)\$\{?(?:_|psitem|input|matches)(?!\w)')
+# a variable name a *-Variable cmdlet is given that is plainly none of those (`Get-Variable c`):
+PS_PLAIN_NAME_RE = re.compile(r'[A-Za-z][\w-]*')
+PS_LAST_NAMES = ('error', 'myinvocation', 'psitem', 'input', 'matches')
+# git's options that run a program or write a file (an external diff, a textconv filter, --output),
+# matched as rules.hub_opt_denied does (any prefix: --ext, --out), and the short -o:
+LOCK_GIT_DENIED = rules.HUB_GIT_DENIED + ('--output',)
+
+
+def _last_words(commands, items=False):
+    """True when a command of the line may read an earlier command's words or the line's text
+    (BASH_LAST_RE, PS_LAST_RE, and PS_ITEM_RE with `items`), read from each command's source as
+    its shell writes it: `echo tools/machine_lock.py; python "$_" hold create x` runs the lock.
+    Fail-closed: any such text anywhere on the line counts, quoted or not."""
+    for c in commands:
+        src = c.source or ''
+        if c.shell == sh.BASH and BASH_LAST_RE.search(src):
+            return True
+        if c.shell == sh.PS and (PS_LAST_RE.search(src) or items and PS_ITEM_RE.search(src)
+                                 or _ps_variable_reach(c) or _ps_names_last(c)):
+            return True
+    return False
+
+
+def _ps_names_last(cmd):
+    """True when the PowerShell command `cmd` is a *-Variable cmdlet (PS_VARIABLE_CMDLETS) given a
+    name that may be $$, $^, $_ or the like (_last_words): one the shell fills in, or any but a
+    plain name (PS_PLAIN_NAME_RE) that is not one of PS_LAST_NAMES. `Get-Variable c` is not;
+    `gv '$'`, `gv ^` and `Get-Variable Error` are."""
+    inv = cm.invocation(cmd)
+    if inv is None or inv.name not in PS_VARIABLE_CMDLETS:
+        return False
+    return any(w.dyn or not w.text.startswith('-') and (
+        not PS_PLAIN_NAME_RE.fullmatch(w.text) or w.text.lower() in PS_LAST_NAMES) for w in inv.args)
+
+
+def _git_plain(args, g, commands):
+    """True when git's words `args` (GitCall `g`) only read: global options only -C <path>,
+    --no-pager and -P (no -c, --config-env, --exec-path, --git-dir: rules.hub_git_family's
+    rule), none of LOCK_GIT_DENIED or -o before a `--`, no alias or place git cannot be told
+    (g.blind), and the line sets no environment variable (commands.line_env_names: GIT_PAGER,
+    GIT_EXTERNAL_DIFF, PAGER, PATH; and what git_env or home_env marks): a pager, an external
+    diff or a textconv filter git starts may run the path it is given."""
+    if g.alias or g.blind or getattr(g.inv.cmd, 'git_env', False) or getattr(g.inv.cmd, 'home_env', False):
+        return False
+    if cm.line_env_names(commands):
+        return False
+    first = len(args) - len(g.rest)             # the words after the subcommand
+    k = 0
+    while k < first - 1:
+        if args[k] == '-C' and k + 1 < first - 1 and not args[k + 1].startswith('-'):
+            k += 2
+        elif args[k] in ('--no-pager', '-P'):
+            k += 1
+        else:
+            return False
+    head = g.argv[:g.argv.index('--')] if '--' in g.argv else g.argv
+    return not any(t == '-o' or rules.hub_opt_denied(t, LOCK_GIT_DENIED) for t in head)
+
+
 def _lock_path_only(inv, commands, kit=None, kit_checkout=None):
     """True when `inv` is a program that never runs its words (the kit's LOCK_PATH_SCRIPTS,
-    LOCK_PATH_READERS, LOCK_PATH_PRINTERS but printf -v, git's LOCK_PATH_GIT subcommands), so a
-    word naming the lock CLI there is a path, not a lock call. A reader's, printer's or git's
-    output must not reach a program (_output_stays): `cat tools/machine_lock.py | python - stop
-    42` runs the lock. `kit` is the kit folder and `kit_checkout` tells a checkout of the kit
-    repository (_kit_tool)."""
-    if inv.dyn:
+    LOCK_PATH_READERS, LOCK_PATH_PRINTERS but printf -v, git's LOCK_PATH_GIT subcommands with
+    only plain options: _git_plain), so a word naming the lock CLI there is a path, not a lock
+    call. A reader's, printer's or git's output must not reach a program (_output_stays): `cat
+    tools/machine_lock.py | python - stop 42` runs the lock; nor may a later command read its
+    words (_last_words: `ls tools/machine_lock.py; python "$_" stop 42`). `kit` is the kit
+    folder and `kit_checkout` tells a checkout of the kit repository (_kit_tool)."""
+    if inv.dyn or _last_words(commands, items=True):
         return False
     name, args = inv.name, inv.argv
     if name in LOCK_PATH_SCRIPTS:
@@ -619,11 +706,11 @@ def _lock_path_only(inv, commands, kit=None, kit_checkout=None):
             return False                        # printf -v c ...: stored for a later command
         return _reader(inv, LOCK_PATH_PRINTERS) and _output_stays(inv.cmd, commands)
     g = cm.git_call(inv)
-    if g is None or g.sub_dyn or g.sub not in LOCK_PATH_GIT:
+    if g is None or g.sub_dyn or g.sub not in LOCK_PATH_GIT or not _git_plain(args, g, commands):
         return False
     first = len(args) - len(g.rest)             # the words after the subcommand
     if any(_lock_names(t) and (i < first or t.startswith('-')) for i, t in enumerate(args)):
-        return False                            # in -c or an option's value: config git may run
+        return False                            # in an option's value: what git may run
     return _output_stays(inv.cmd, commands)
 
 
@@ -670,11 +757,17 @@ def _fed(cmd):
     return [r.target.text for r in cmd.redirects if r.op in STDIN_OPS and not r.dup and r.target is not None]
 
 
+def _tokens(w):
+    """The word `w` as _lock_seq reads it: split into its words when it holds white space."""
+    return w.split() if any(c.isspace() for c in w) else [w]
+
+
 def _lock_seq(inv):
     """(seq, named): the words `inv` is given that the guard reads for the lock CLI, and for each
     whether it names it. The program and its words, a word holding white space split into its
-    words (an -ArgumentList string, a title, `bash -c` text), named when its base name is
-    machine_lock.py or it is a module name of it (LOCK_MODULE_WORD_RE: `tools.machine_lock`,
+    words (_tokens: an -ArgumentList string, a title, `bash -c` text), named when it is a path
+    Windows opens as machine_lock.py (rules.is_lock_script: any case, a trailing dot or space, a
+    `::$DATA` stream) or it is a module name of it (LOCK_MODULE_WORD_RE: `tools.machine_lock`,
     for runpy or a later python -m), so `-m "machine_lock.py: fix"` is not; then the text of what
     it reads on standard input (_fed: a heredoc's body, a here-string, a `<` file) split the same
     way, named when it names the lock anywhere (_lock_code), since a body is code or data (`read a
@@ -686,9 +779,9 @@ def _lock_seq(inv):
     write rules'."""
     seq, named = [], []
     for w in [inv.path] + inv.argv:
-        for t in (w.split() if any(c.isspace() for c in w) else [w]):
+        for t in _tokens(w):
             seq.append(t)
-            named.append(cm.base_name(t) == rules.LOCK_SCRIPT or bool(LOCK_MODULE_WORD_RE.fullmatch(t)))
+            named.append(rules.is_lock_script(t) or bool(LOCK_MODULE_WORD_RE.fullmatch(t)))
     for text in _fed(inv.cmd):
         for t in text.split():
             seq.append(t)
@@ -726,24 +819,118 @@ def _lock_words(inv, commands=(), kit=None, kit_checkout=None):
 
 
 def _runs_lock(inv):
-    """True when `inv` runs the lock CLI itself: machine_lock.py is its program, or python's
-    script (_python_script), or python runs it as a module (_lock_module). A launcher left
-    unwrapped (winpty, uv run) is not; it is _launched's."""
-    if cm.base_name(inv.path) == rules.LOCK_SCRIPT:
+    """True when `inv` runs the lock CLI itself: machine_lock.py (in any spelling Windows opens
+    as it: rules.is_lock_script) is its program, or python's script (_python_script), or python
+    runs it as a module (_lock_module). A launcher left unwrapped (winpty, uv run) is not; it is
+    _launched's."""
+    if rules.is_lock_script(inv.path):
         return True
     if not rules.HUB_CODE_PYTHON_RE.match(inv.name):
         return False
     k = _python_script(inv.argv)
-    return (k is not None and cm.base_name(inv.argv[k]) == rules.LOCK_SCRIPT) or _lock_module(inv.argv) is not None
+    return (k is not None and rules.is_lock_script(inv.argv[k])) or _lock_module(inv.argv) is not None
+
+
+LINE, STDIN_BODY, PROGRAM = 'line', 'stdin', 'program'
+
+
+def _skip_opts(words, k, values):
+    """The index of the first word from words[k] that is not an option (`--` skipped); an option
+    of `values` takes the next word (written --opt=value, it holds it)."""
+    while k < len(words):
+        a = words[k]
+        if a == '--':
+            return k + 1
+        if not a.startswith('-') or a == '-':
+            return k
+        k += 2 if a in values else 1
+    return k
+
+
+def _launch(words, i, titled=False):
+    """How the launcher words[i] (LOCK_LAUNCHERS) runs what it is given, read from its own options
+    as the shell, cmd or PowerShell reads them: (LINE, lo, hi) when words[lo:hi] are the command
+    line it runs (bash -c's text, and nothing after it: those words are $0, $1, ...; everything
+    after cmd's /c or PowerShell's -Command), (STDIN_BODY,) when it runs what it reads on standard
+    input, (PROGRAM, q) when words[q] is the program it runs with the words after it (winpty, uv
+    run, poetry run and the like, after their own options: LAUNCH_PROGRAMS); None when it runs a
+    script file (bash x.sh, pwsh x.ps1, -File, -EncodedCommand) or the guard cannot tell (an
+    option it does not know that takes a value). `titled`: a bash `start`'s first word is quoted,
+    so it is the window title."""
+    name = cm.base_name(words[i])
+    if name in cm.BASH_SHELLS:
+        k, run_c, run_s = i + 1, False, False
+        while k < len(words):
+            a = words[k]
+            if a in ('-', '--'):
+                k += 1
+                break
+            if len(a) < 2 or a[0] not in '-+':
+                break
+            if a.startswith('--'):
+                k += 2 if a in SH_VALUE_LONG else 1
+                continue
+            if a[0] == '-':
+                run_c, run_s = run_c or 'c' in a[1:], run_s or 's' in a[1:]
+            k += 2 if any(f in SH_VALUE for f in a[1:]) else 1
+        if run_c:
+            return (LINE, k, k + 1) if k < len(words) else None
+        return (STDIN_BODY,) if run_s or k >= len(words) else None
+    if name == 'cmd':
+        for k in range(i + 1, len(words)):
+            a = words[k].lower()
+            if a in ('/c', '/r', '//c', '//r'):
+                return LINE, k + 1, len(words)
+            if not a.startswith('/'):
+                return None
+        return None
+    if name in cm.PS_SHELLS:
+        k = i + 1
+        while k < len(words):
+            a = words[k]
+            if a == '-':
+                return (STDIN_BODY,)
+            if a[:1] not in ('-', '/'):
+                return (LINE, k, len(words)) if name == 'powershell' else None   # pwsh: a file
+            key = a.lower().lstrip('-/').split(':', 1)[0]
+            if _ps_key(key, ('command',), ('c',)):
+                return (STDIN_BODY,) if words[k + 1:k + 2] == ['-'] else (LINE, k + 1, len(words))
+            if _ps_key(key, ('encodedcommand',), ('e', 'ec')) or _ps_key(key, ('file',), ('f',), 2):
+                return None
+            k += 2 if _ps_key(key, PS_VALUE_NAMES, PS_VALUE_SHORT) else 1
+        return (STDIN_BODY,)
+    if name == 'start':
+        k = i + 1 + (1 if titled else 0)
+        while k < len(words) and (words[k] == '' or words[k].startswith('/')):
+            k += 2 if words[k].lower() == '/d' else 1
+        return (PROGRAM, k) if k < len(words) else None
+    if name not in LAUNCH_PROGRAMS:
+        return None
+    values, subs = LAUNCH_PROGRAMS[name]
+    for sub in subs:
+        k = _skip_opts(words, i + 1, values)
+        for s in sub:
+            if k >= len(words) or words[k] != s:
+                break
+            k = _skip_opts(words, k + 1, values)
+        else:
+            return (PROGRAM, k) if k < len(words) else None
+    return None
 
 
 def _launched(inv, commands):
     """True when `inv` is a launcher (LOCK_LAUNCHERS, named by a literal word) whose words name
-    the lock CLI once (_lock_seq), as the script or -m module of a python word before it
-    (`winpty python tools/machine_lock.py status`, `bash -c "python tools/machine_lock.py
-    status"`), and whose output stays (_output_stays). Then the words after it are the lock's,
-    judged by their verb. A second word naming it (`bash -c '... python "$0" stop 42'
-    tools/machine_lock.py`) or one in any other place is a path handed on."""
+    the lock CLI once (_lock_seq), as the script or -m module of the python it runs (_launch):
+    `winpty python tools/machine_lock.py status`, `uv run python ...`, `bash -c "python
+    tools/machine_lock.py status"`, a `bash <<'EOF'` body; and whose output stays (_output_stays).
+    Then the words after it are the lock's, judged by their verb. A python word counts only when
+    it is the program launched: the words after a bash -c text are its $0, $1, ..., so `bash -c
+    'python "$1" hold create x' python tools/machine_lock.py status` hands the path on. In a
+    command line the guard reads as nested commands (bash -c, cmd /c, pwsh -Command: the commands
+    nested in `inv`'s, each judged on its own) the python may stand anywhere before it (`cd tools
+    && python machine_lock.py status`); in one the guard does not read (a shell a program
+    launcher starts: `uv run sh -c '...'`) it must open the line. A second word naming it, or
+    one in any other place, is a path handed on."""
     if inv.dyn or inv.name not in LOCK_LAUNCHERS:
         return False
     seq, named = _lock_seq(inv)
@@ -751,10 +938,48 @@ def _launched(inv, commands):
     if len(ks) != 1:
         return False
     k = ks[0]
-    if not any(_python_word(seq[j]) and k - j - 1 in (_python_script(seq[j + 1:]), _lock_module(seq[j + 1:]))
-               for j in range(k)):
+    words = [inv.path] + inv.argv
+    starts = [0]
+    for w in words:
+        starts.append(starts[-1] + len(_tokens(w)))   # starts[q]: words[q]'s first token in seq
+    i, read = 0, any(c.nested_in is inv.cmd for c in commands)   # $( ) in its words too: see LINE
+    while True:
+        how = _launch(words, i, i == 0 and bool(inv.args) and cm.quoted(inv.cmd, inv.args[0]))
+        if how is None:
+            return False
+        if how[0] == LINE:                     # a word the shell fills in is not read (only flagged)
+            read = read and not any(w.dyn for w in inv.args[how[1] - 1:how[2] - 1])
+            lo, hi, strict = starts[how[1]], starts[how[2]], not read
+        elif how[0] == STDIN_BODY:
+            lo, hi, strict = starts[-1], len(seq), not read
+        else:
+            q = how[1]
+            lo, hi, strict = starts[q], starts[-1], True
+            if starts[q + 1] - lo != 1:
+                return False                    # the program word holds white space
+            if not _python_word(seq[lo]) and cm.base_name(words[q]) in LOCK_LAUNCHERS:
+                i, read = q, False              # uv run sh -c ...: that launcher's words, unread
+                continue
+        break
+    if not lo <= k < hi:
+        return False
+    if not any(_python_word(seq[j]) and k - j - 1 in (_python_script(seq[j + 1:hi]), _lock_module(seq[j + 1:hi]))
+               for j in ([lo] if strict else range(lo, k))):
         return False
     return _output_stays(inv.cmd, commands)
+
+
+def _hidden_launch(inv, commands):
+    """True when `inv` is a launcher (LOCK_LAUNCHERS, named by a literal word) whose command line
+    the guard does not read as nested commands (a shell a program launcher starts, `uv run sh -c
+    '...'`, a script file, an option it cannot place) and one of whose words (_lock_seq) holds the
+    lock CLI's name glued to other text, which _lock_seq does not count as naming it: `uv run sh -c
+    'f=tools/machine_lock.py; python $f stop 42'`, `setsid sh -c "cat tools/machine_lock.py|python
+    - stop 42"`. The name is matched standing alone (LOCK_MODULE_CODE_RE), so
+    tests/lock/test_machine_lock.py is not it. Fail-closed: lock_verb refuses it as HANDED_ON."""
+    if inv.dyn or inv.name not in LOCK_LAUNCHERS or any(c.nested_in is inv.cmd for c in commands):
+        return False
+    return any(LOCK_MODULE_CODE_RE.search(t) for t in _lock_seq(inv)[0])
 
 
 # The verb named for a command that runs no program the guard can name (an assignment alone, a
@@ -790,9 +1015,11 @@ def lock_verb(parsed, m, kit=None, kit_checkout=None):
             continue
         words = _lock_words(inv, parsed.commands, kit, kit_checkout)
         if words is None:
+            if _hidden_launch(inv, parsed.commands):
+                return HANDED_ON, allowed
             continue
-        if not _runs_lock(inv) and not _launched(inv, parsed.commands):
-            return HANDED_ON, allowed
+        if not _runs_lock(inv) and not _launched(inv, parsed.commands) or _last_words(parsed.commands):
+            return HANDED_ON, allowed           # $_ after `... tools/machine_lock.py`: its path again
         head = words[:words.index('--')] if '--' in words else words
         said, k = [], 0
         while k < len(head):

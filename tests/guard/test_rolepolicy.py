@@ -745,6 +745,134 @@ class LockVerbs(Base):
                 with self.subTest(shell=shell, role=role, text=text):
                     self.assertIsNone(rolepolicy.check(self.shell(text, role, shell=shell), self.w.ctx()))
 
+    def test_a_python_word_given_to_a_shell_as_a_positional_hands_the_path_on(self):
+        """rolepolicy._launched: a python word counts only when it is the program launched. The
+        words after a shell's -c text are its $0, $1, ..., which the text runs with any verb; and a
+        shell given a script file runs what the script says."""
+        lock = 'tools/machine_lock.py'
+        rows = [('bash', '%s -c \'python "$1" hold create x\' python %s status' % (s, lock))
+                for s in ('bash', 'sh', 'zsh', 'dash', 'ksh')]
+        rows += [('bash', 'bash -c \'"$0" "$1" stop 42\' python %s status' % lock),
+                 ('bash', 'sh -c \'"$0" "$1" stop 42\' python %s status' % lock),
+                 ('bash', 'uv run sh -c \'python "$1" hold create x\' python %s status' % lock),
+                 ('bash', 'uv run bash -c \'"$0" "$1" stop 42\' python %s status' % lock),
+                 ('bash', 'bash script.sh python %s status' % lock),
+                 ('powershell', 'bash -c \'python "$1" hold create x\' python %s status' % lock)]
+        self.handed_on(rows)
+
+    def test_a_lock_name_glued_to_other_text_in_a_line_the_guard_does_not_read_hands_the_path_on(self):
+        """rolepolicy._hidden_launch: in a shell line the guard does not read as commands (one a
+        program launcher starts), the lock CLI's name glued to an assignment or a pipe is still its
+        name; a test module named after it is not."""
+        lock = 'tools/machine_lock.py'
+        self.handed_on((
+            ('bash', "uv run sh -c 'f=%s; python $f stop 42'" % lock),
+            ('bash', "setsid sh -c 'cat %s|python - stop 42'" % lock),
+            ('bash', "winpty bash -c 'm=tools.machine_lock; python -m $m stop 42'"),
+            ('powershell', "uv run sh -c 'f=%s; python $f hold create x'" % lock)))
+        for text in ('uv run python -m unittest tests.lock.test_machine_lock',
+                     'uv run python tests/lock/test_machine_lock.py',
+                     "uv run sh -c 'python -m unittest tests.lock.test_machine_lock'"):
+            with self.subTest(text):
+                self.assertIsNone(rolepolicy.check(self.shell(text, 'reviewer', shell='bash'), self.w.ctx()))
+
+    def test_git_that_may_run_a_program_or_write_a_file_hands_the_path_on(self):
+        """rolepolicy._git_plain, as rules.HUB_GIT_DENIED refuses rather than allow-lists: git's
+        read exemption does not hold with a global option but -C, --no-pager and -P (-c,
+        --config-env, --exec-path), an option that runs a program or writes a file (--ext-diff,
+        --textconv, --output, -o), or an environment assignment on the line (GIT_PAGER,
+        GIT_EXTERNAL_DIFF): an external diff or a pager is given the lock path, and a file written
+        is a copy a later command runs."""
+        lock = 'tools/machine_lock.py'
+        self.handed_on((
+            ('bash', 'git -c diff.external=\'sh -c "python \\"\\$4\\" hold create x"\' diff --no-index /dev/null %s'
+             % lock),
+            ('bash', 'git diff --no-index --output=p /dev/null %s; python -c "import runpy; '
+                     'runpy.run_path(\'p\')" hold create x' % lock),
+            ('bash', 'git diff -o p HEAD -- %s; python p stop 42' % lock),
+            ('bash', 'git diff --ext-diff HEAD -- %s' % lock),
+            ('bash', 'git log -p --textconv -- %s' % lock),
+            ('bash', 'git --exec-path=x log -- %s' % lock),
+            ('bash', 'git --config-env=core.pager=P log -- %s' % lock),
+            ('bash', "GIT_PAGER='tee p' git show HEAD:%s; python p hold create x" % lock),
+            ('bash', 'GIT_EXTERNAL_DIFF=x.sh git diff HEAD -- %s' % lock),
+            ('bash', "export GIT_PAGER='tee p'; git show HEAD:%s; python p hold create x" % lock),
+            ('powershell', "$env:GIT_PAGER='tee p'; git show HEAD:%s; python p hold create x" % lock),
+            ('powershell', "$env:GIT_PAGER = 'tee p'; git show HEAD:%s; python p hold create x" % lock)))
+
+    def test_a_later_command_reading_the_last_word_hands_the_path_on(self):
+        """rolepolicy._last_words: bash's $_ and PowerShell's $$ are the last word of the command
+        before, so a reader's, printer's, git's or the lock CLI's own words reach the next one."""
+        lock = 'tools/machine_lock.py'
+        self.handed_on((
+            ('bash', 'echo %s; python "$_" hold create x' % lock),
+            ('bash', 'ls %s; python "$_" stop 42 --force' % lock),
+            ('bash', 'git log -- %s; python "$_" stop 42' % lock),
+            ('bash', 'cat %s; python ${_} stop 42' % lock),
+            ('bash', 'python %s status %s; python "$_" stop 42' % (lock, lock)),
+            ('powershell', 'gc %s; python $$ stop 42' % lock),
+            ('powershell', 'echo %s; python $$ hold create x' % lock),
+            ('powershell', 'python %s status; python $$ stop 42' % lock)))
+        # a *-Variable cmdlet given such a name (rolepolicy._ps_names_last); role-shell meets these first
+        from kitlib.guard import commands as cm, shell as sh
+        for text in ("gc %s; python (gv '$').Value stop 42" % lock,
+                     'gc %s; python (Get-Variable ^ -ValueOnly) stop 42' % lock,
+                     'gc %s; python (Get-Variable Error).Value stop 42' % lock):
+            with self.subTest(text):
+                parsed = cm.read(text, sh.PS, self.w.wt)
+                self.assertEqual(rolepolicy.lock_verb(parsed, 'write', self.w.kit_dir)[0], rolepolicy.HANDED_ON)
+
+    def test_every_spelling_windows_opens_as_the_lock_cli_is_read(self):
+        """rules.is_lock_script: Win32 drops trailing dots and spaces and opens the `::$DATA`
+        stream as the file itself, in any case (observed on Windows 11), so each such spelling
+        runs the lock CLI and is judged by its verb, by the policy and by the owner-lock rule."""
+        from kitlib.guard import commands as cm, shell as sh
+        for shell, text in (('bash', 'python tools/machine_lock.py. hold create x'),
+                            ('bash', 'tools/machine_lock.py. hold create x'),
+                            ('bash', 'python "tools/machine_lock.py " hold create x'),
+                            ('powershell', "python 'tools/machine_lock.py::$DATA' hold create x"),
+                            ('powershell', "python 'tools/machine_lock.py::$data' hold create x"),
+                            ('bash', 'python TOOLS/MACHINE_LOCK.PY hold create x')):
+            with self.subTest(shell=shell, text=text):
+                parsed = cm.read(text, sh.PS if shell == 'powershell' else sh.BASH, self.w.wt)
+                self.assertEqual(rolepolicy.lock_verb(parsed, 'write', self.w.kit_dir)[0], 'hold create')
+                self.denied(self.shell(text, 'senior-worker', shell=shell), 'role-lock')
+        # a name holding a space in its middle is read as two words: refused, its verb misnamed
+        self.denied(self.shell('python "tools/machine_lock.py. ." status', 'reviewer', shell='bash'), 'role-lock')
+        for shell, text in (('bash', 'python "tools/machine_lock.py " hold whole'),
+                            ('bash', 'tools/machine_lock.py. hold whole'),
+                            ('powershell', "python 'tools/machine_lock.py::$DATA' hold whole")):
+            for role in ('pm', 'senior-worker'):
+                with self.subTest(shell=shell, role=role, text=text):
+                    self.assertEqual(self.decide(self.shell(text, role, shell=shell)).rule, 'owner-lock')
+        self.assertIsNone(rolepolicy.check(self.shell('python "tools/machine_lock.py " status', 'reviewer',
+                                                      shell='bash'), self.w.ctx()))
+
+    def test_plain_git_and_the_launchers_still_pass(self):
+        """What the round's refusals leave alone: git reading the lock path with plain options, a
+        colon after the name (not a stream Windows opens), a launcher's python running the lock
+        CLI read-only, and PowerShell's $_ in a filter after the lock CLI itself."""
+        lock = 'tools/machine_lock.py'
+        rows = (('bash', 'git log -- %s' % lock), ('bash', 'git log -p -- %s' % lock),
+                ('bash', 'git -C x show HEAD:%s' % lock), ('bash', 'git --no-pager diff -- %s' % lock),
+                ('bash', 'git commit -m "machine_lock.py: fix"'),
+                ('powershell', 'git commit -m "machine_lock.py: fix"'),
+                ('bash', 'winpty python %s status' % lock), ('bash', 'bash -c "python %s status"' % lock),
+                ('bash', 'bash -c "cd tools && python machine_lock.py status"'),
+                ('bash', "bash <<'EOF'\npython %s status\nEOF" % lock),
+                ('bash', 'cmd /c "python %s status"' % lock),
+                ('powershell', 'pwsh -Command "python %s status"' % lock),
+                ('bash', 'start "" /b python %s status' % lock),
+                ('bash', 'winpty python -m tools.machine_lock status'),
+                ('bash', 'uv run python %s status' % lock),
+                ('powershell', 'python %s status | ? { $_ -match "x" }' % lock))
+        for shell, text in rows:
+            for role in ('reviewer', 'pm'):
+                with self.subTest(shell=shell, role=role, text=text):
+                    self.assertIsNone(rolepolicy.check(self.shell(text, role, shell=shell), self.w.ctx()))
+                    if role == 'pm':                # a read role may not commit (write-jail)
+                        self.allowed(self.shell(text, role, shell=shell))
+
 
 class LockMcp(Base):
     """The lock MCP's tools are held to the same verbs as the CLI (rolepolicy.MCP_VERBS)."""

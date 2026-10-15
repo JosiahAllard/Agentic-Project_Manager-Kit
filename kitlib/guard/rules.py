@@ -322,6 +322,19 @@ def owner_lock_refusal(ctx, role, what):
                   'python %s status' % lock_tool(ctx))
 
 
+def is_lock_script(text):
+    """True when the path `text` opens the lock CLI on Windows: its base name
+    (commands.base_name, in any case) is LOCK_SCRIPT once a named NTFS stream (`::$DATA`, `:x`)
+    and then the trailing dots and spaces Win32 drops are taken off: `tools/machine_lock.py.`,
+    `"tools/machine_lock.py "`, `tools/machine_lock.py::$DATA` (observed: each opens the file). A
+    colon with no stream name after it (`machine_lock.py:`, as in a commit message
+    `machine_lock.py: fix`) is a name Windows refuses (EINVAL), so not it."""
+    name, colon, stream = cm.base_name(text).partition(':')
+    if colon and not stream.strip(':. '):
+        return False
+    return name.rstrip('. ') == LOCK_SCRIPT
+
+
 def _ui_word(w):
     return not w.dyn and bool(UI_NAME_RE.match(ntpath.basename(w.text.replace('/', '\\'))))
 
@@ -428,15 +441,16 @@ def lock_owner_write(words):
 
 def owner_lock(event, ctx, cmd, inv, cwd, role):
     """A command that runs machine_lock.py (any launcher: python, pythonw, py, start,
-    Start-Process, a direct path; nested in a `run` too) with an owner-only write. The owner's
-    own session (nothing marks it) is not held to it."""
+    Start-Process, a direct path; nested in a `run` too; named in any spelling Windows opens as it,
+    is_lock_script) with an owner-only write. The owner's own session (nothing marks it) is not
+    held to it."""
     if inv is None or is_owner_session(event, ctx):
         return None
     if runs_reserve_ui(cmd, inv):
         return owner_lock_refusal(ctx, role, '`%s` runs reserve_ui, the owner\'s lock reservation UI' % bare(cmd))
     seq = [inv.path] + inv.argv
     for k, t in enumerate(seq):
-        if cm.base_name(t) != LOCK_SCRIPT:
+        if not is_lock_script(t):
             continue
         rest = []
         for w in seq[k + 1:]:
