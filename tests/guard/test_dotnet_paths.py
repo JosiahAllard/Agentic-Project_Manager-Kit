@@ -178,6 +178,116 @@ class LostPlace(Base):
                 self.denied(self.run_ps(text, cwd=self.w.main), 'main-checkout')
 
 
+class ParseEdges(Base):
+    """_net_lost reads the raw argument text, so a ${ inside a single-quoted string or after a
+    backtick counts too: the call is also judged where the line runs (fails closed), and the
+    literals it read are still judged. A second call on the line is read on its own."""
+
+    def test_a_braced_variable_in_a_single_quoted_string(self):
+        self.denied(self.run_ps("[IO.File]::Copy('{wt}\\s${{a', '{main}\\x')"), 'main-checkout')
+        self.allowed(self.run_ps("[IO.File]::Copy('{wt}\\s${{a', '{wt}\\x')"))
+        self.denied(self.run_ps("[IO.File]::Copy('{wt}\\s${{a', '{wt}\\x')", cwd=self.w.main), 'main-checkout')
+
+    def test_a_braced_variable_after_a_backtick(self):
+        self.denied(self.run_ps("[IO.File]::Copy(\"{wt}\\s`${{a\", '{main}\\x')"), 'main-checkout')
+
+    def test_beside_a_second_call(self):
+        self.denied(self.run_ps("[IO.File]::Copy(${{a'}}, '{wt}\\ok') + [IO.File]::Delete('{main}\\x')"),
+                    'main-checkout')
+
+
+class StartDirectory(Base):
+    """A .NET write the guard does not read the path of, or cannot place, is also judged in the
+    directory the call's process started in (rules.dotnet_process_dir): .NET resolves a relative
+    path there, and a Set-Location into a worktree does not move it. Allowed before."""
+
+    def test_set_location_from_the_main_checkout(self):
+        for text in Unread.NOT_CALLED_HERE + Unread.MISSED:
+            with self.subTest(text=text):
+                d = self.denied(self.run_ps("Set-Location '{wt}'; " + text, cwd=self.w.main), 'main-checkout')
+                self.assertIn('the directory its process started in', d.reason)
+
+    def test_a_placed_write_is_judged_where_it_points(self):
+        self.allowed(self.run_ps("Set-Location '{wt}'; [IO.File]::WriteAllText('{wt}\\x.txt', 'y')",
+                                 cwd=self.w.main))
+
+    def test_a_nested_shell_judges_each_start(self):
+        nested = "pwsh -NoProfile -Command \"[IO.File]::WriteAllText.Invoke('x.txt', 'y')\""
+        self.allowed(self.run_ps(nested))
+        self.denied(self.run_ps("Set-Location '{wt}'; " + nested, cwd=self.w.main), 'main-checkout')
+
+    def test_the_owners_own_session_is_not_judged(self):
+        self.allowed(self.run_ps("Set-Location '{wt}'; [IO.File]::WriteAllText.Invoke('x.txt', 'y')",
+                                 cwd=self.w.main, sub=False))
+
+
+class DevicePaths(Base):
+    """\\\\?\\C:\\x and \\\\.\\C:\\x are C:\\x to .NET, judged as that path; a share (\\\\host\\C$\\x)
+    is a path the guard cannot place. Both were judged as placed, and passed the main-checkout
+    rule, before."""
+
+    def share(self, path):
+        return '\\\\localhost\\%s$%s' % (path[0], path[2:])
+
+    def test_a_device_path(self):
+        for text in (r"[IO.File]::WriteAllText('\\?\{main}\x.txt', 'y')",
+                     r"[IO.File]::WriteAllText('\\.\{main}\x.txt', 'y')",
+                     "[IO.File]::WriteAllText('//?/{main}/x.txt', 'y')"):
+            with self.subTest(text=text):
+                d = self.denied(self.run_ps(text), 'main-checkout')
+                self.assertIn('is in the main checkout', d.reason)
+                self.allowed(self.run_ps(d.instead))
+        self.allowed(self.run_ps(r"[IO.File]::WriteAllText('\\?\{wt}\x.txt', 'y')"))
+
+    def test_a_share(self):
+        text = "[IO.File]::WriteAllText('%s\\x.txt', 'y')" % self.share(self.w.main)
+        d = self.denied(self.run_ps(text), 'main-checkout')
+        self.assertIn('share path', d.reason)
+        self.denied(self.run_ps(r"[IO.File]::WriteAllText('\\?\UNC\localhost\share\x.txt', 'y')"),
+                    'main-checkout')
+
+
+class Constructors(Base):
+    """A StreamWriter or FileStream opened on a path ([IO.StreamWriter]::new, New-Object, a cast
+    of a string) is a .NET write as a File call is: unjudged before."""
+
+    INTO_MAIN = (r"$s = [IO.StreamWriter]::new('{main}\x.txt')",
+                 r"[System.IO.FileStream]::new('{main}\x.txt', 'Create').Close()",
+                 r"$s = New-Object IO.StreamWriter('{main}\x.txt')",
+                 r"$s = New-Object System.IO.StreamWriter {main}\x.txt -ErrorAction Stop",
+                 r"$s = New-Object -TypeName System.IO.FileStream -ArgumentList '{main}\x.txt', 'Create'",
+                 r"$s = New-Object -ArgumentList '{main}\x.txt' -TypeName IO.StreamWriter",
+                 r"$s = New-Object IO.FileStream -Args @('{main}\x.txt', 'Create')",
+                 r"$s = [System.IO.StreamWriter]'{main}\x.txt'")
+
+    def test_into_the_main_checkout(self):
+        for text in self.INTO_MAIN:
+            with self.subTest(text=text):
+                d = self.denied(self.run_ps(text), 'main-checkout')
+                self.assertIn('is in the main checkout', d.reason)
+
+    def test_into_the_worktree(self):
+        for text in self.INTO_MAIN:
+            with self.subTest(text=text):
+                self.allowed(self.run_ps(text.replace('{main}', '{wt}')))
+
+    def test_a_relative_or_computed_path(self):
+        for text in ("$s = [IO.StreamWriter]::new('x.txt')", '$s = New-Object IO.StreamWriter x.txt',
+                     "$f = [IO.FileStream]::new($p, 'Open')"):
+            with self.subTest(text=text):
+                self.denied(self.run_ps(text), 'main-checkout')
+
+    def test_a_stream_or_a_read(self):
+        for text in ('$s = [IO.StreamWriter]::new($fs)', '$s = New-Object IO.StreamWriter($fs)',
+                     '$s = [IO.StreamWriter]::new($ms, [Text.Encoding]::UTF8)', '$s = [IO.StreamWriter]::Null',
+                     "$f = [IO.FileStream]::new($p, 'Open', 'Read', 'ReadWrite')",
+                     '$f = New-Object IO.FileStream($p, [IO.FileMode]::Open, [IO.FileAccess]::Read)',
+                     r"$s = New-Object IO.StreamReader('{main}\x.txt')",
+                     r"$s = [IO.StreamReader]::new('{main}\x.txt')"):
+            with self.subTest(text=text):
+                self.allowed(self.run_ps(text))
+
+
 class LockedMain(Base):
     """A repository whose roles keep the main session out of its main checkout: a .NET write
     there that the guard cannot place is judged where the line runs, for every session."""
@@ -195,6 +305,18 @@ class LockedMain(Base):
         for text in DESYNC:
             with self.subTest(text=text):
                 self.denied(self.run_ps(text, cwd=self.w.main, sub=False), 'main-checkout')
+
+    def test_set_location_into_a_worktree(self):
+        self.denied(self.run_ps("Set-Location '{wt}'; [IO.File]::WriteAllText.Invoke('x.txt', 'y')",
+                                cwd=self.w.main, sub=False), 'main-checkout')
+
+    def test_a_device_path_or_a_share(self):
+        share = '\\\\localhost\\%s$%s' % (self.w.main[0], self.w.main[2:])
+        for text in (r"[IO.File]::WriteAllText('\\?\{main}\x.txt', 'y')",
+                     "[IO.File]::WriteAllText('%s\\x.txt', 'y')" % share):
+            for cwd in (self.w.main, self.w.wt):
+                with self.subTest(text=text, cwd=cwd):
+                    self.denied(self.run_ps(text, cwd=cwd, sub=False), 'main-checkout')
 
 
 if __name__ == '__main__':

@@ -1781,7 +1781,11 @@ EVALS = {'node': ('-e', '--eval', '-p', '--print'), 'ruby': ('-e',)}
 # a .NET file call that writes (OpenRead and OpenText only read)
 IO_FILE_RE = re.compile(r'(?i)\[(?:System\.)?IO\.(?:File|Directory)\]::'
                         r'(?:Write|Append|Create|Copy|Move|Delete|Replace|Open(?!Read\b|Text\b))')
-NET_ABS_RE = re.compile(r'^(?:[A-Za-z]:[\\/]|[\\/]{2})')     # a path .NET reads the same from any directory
+# a .NET type whose constructor opens a file to write: [IO.StreamWriter]::new(...), New-Object IO.FileStream ...
+NET_TYPE_RE = re.compile(r'(?i)(?<![\w.])(?:System\.)?IO\.(?:StreamWriter|FileStream)(?![\w.])')
+NET_ABS_RE = re.compile(r'^[A-Za-z]:[\\/]')     # a path .NET reads the same from any directory
+# \\?\C:\x and \\.\C:\x are C:\x (a device path); any other \\ or // path is a share the guard cannot place
+NET_DEVICE_RE = re.compile(r'^[\\/]{2}[?.][\\/](?=[A-Za-z]:[\\/])')
 WIN_OPT_RE = re.compile(r'^/[A-Za-z]+(?::\S*)?$')
 
 
@@ -1959,16 +1963,193 @@ def _net_lost(span):
     return '"' in span and '$(' in span
 
 
+def net_mentioned(cmd):
+    """True when the PowerShell command names a .NET file call or type that writes (IO_FILE_RE,
+    NET_TYPE_RE): net_writes reads it."""
+    return cmd.shell == sh.PS and bool(IO_FILE_RE.search(cmd.text) or NET_TYPE_RE.search(cmd.text))
+
+
+def _net_word(raw):
+    """The text of a command-mode argument `raw`: a plain string (_net_literal) or a bare word,
+    else None."""
+    text = _net_literal(raw)
+    if text is None and re.match(r'^[^\s\'"`$(){}\[\]@#;,|&<>%s]+$' % NET_QUOTES, raw):
+        return raw
+    return text
+
+
+def _net_list(src, k):
+    """([(text or None, start, end)], end): the command-mode argument at offset `k` of `src`, a
+    word or a comma list of them ('a', 'b'), read as _net_args reads a call's; a bare word ends at
+    a '(' (PowerShell starts a new argument there)."""
+    args, n = [], len(src)
+    while True:
+        start, depth = k, 0
+        while k < n:
+            c = src[k]
+            if c in '\'"':
+                k = _net_string_end(src, k)
+                continue
+            if c == '`':
+                k += 2
+                continue
+            if c in '([{':
+                if c == '(' and depth == 0 and k > start and src[k - 1] != '$':
+                    break
+                depth += 1
+            elif c in ')]}':
+                if depth == 0:
+                    break
+                depth -= 1
+            elif depth == 0 and c in ', \t\r\n;|&':
+                break
+            k += 1
+        k = min(k, n)
+        if k > start:
+            args.append((_net_word(src[start:k]), start, k))
+        j = k
+        while j < n and src[j] in ' \t':
+            j += 1
+        if j >= n or src[j] != ',':
+            return args, k
+        k = j + 1
+        while k < n and src[k] in ' \t\r\n':
+            k += 1
+
+
+NEW_OBJECT_PARAMS = ('typename', 'argumentlist', 'property', 'comobject', 'strict')
+
+
+def _net_new_object(cmd, inv):
+    """(type (text or None, start, end), [argument], end, lost) of the New-Object call `inv`, or
+    None when the guard does not read it: its -TypeName and -ArgumentList, named or positional,
+    each a word, a comma list, (...) or @(...)."""
+    src, n = cmd.source, len(cmd.source)
+    k, vals, slots, lost = inv.word.end, {}, ['typename', 'argumentlist'], ''
+    while True:
+        while k < n and src[k] in ' \t':
+            k += 1
+        if k >= n or src[k] in ';|&\r\n)}':
+            break
+        m = re.compile(r'-([A-Za-z]+)(:?)').match(src, k)
+        if m and src[k + 1:k + 2].isalpha():
+            body = m.group(1).lower()
+            names = ['argumentlist'] if body == 'args' else [p for p in NEW_OBJECT_PARAMS if p.startswith(body)]
+            if len(names) != 1:                 # a common parameter (-ErrorAction Stop, -Verbose)
+                body = PS_COMMON_ALIASES.get(body, body)
+                if not any(p.startswith(body) for p in PS_COMMON_VALUES + PS_COMMON_SWITCHES):
+                    return None
+                names = ['skip' if any(p.startswith(body) for p in PS_COMMON_VALUES) else 'strict']
+            k = m.end()
+            if names[0] == 'strict':
+                continue
+            while not m.group(2) and k < n and src[k] in ' \t':
+                k += 1
+            param = names[0]
+            if param in slots:
+                slots.remove(param)
+        elif slots:
+            param = slots.pop(0)
+        else:
+            return None
+        stops = ' \t;|&\r\n)}'
+        if src.startswith('@(', k) or src.startswith('(', k):
+            open_ = k + (2 if src[k] == '@' else 1)
+            args, k = _net_args(src, open_)
+            lost += src[open_:k]
+        else:
+            args, k = _net_list(src, k)
+            lost += ''.join(src[s:e] for _t, s, e in args)
+            stops += '('                        # IO.StreamWriter('x'): the list starts a new argument
+        if k < n and src[k] not in stops:
+            return None                         # ('a') + 'b': an expression the guard does not read
+        vals[param] = args
+    kind = vals.get('typename') or []
+    if len(kind) != 1:
+        return None
+    return kind[0], vals.get('argumentlist', []), k, _net_lost(lost)
+
+
+FILE_MODE_RE = re.compile(r'(?i)^(?:\[(?:System\.)?IO\.FileMode\]::)?(\w+)$')
+FILE_ACCESS_RE = re.compile(r'(?i)^(?:\[(?:System\.)?IO\.FileAccess\]::)?(\w+)$')
+
+
+def _net_arg_name(src, arg, pattern):
+    """The enum value name the argument names ('Open', [IO.FileMode]::Open), lower case, or ''."""
+    text, s, e = arg
+    m = pattern.match(text if text is not None else src[s:e].strip())
+    return m.group(1).lower() if m else ''
+
+
+def _net_ctor(src, kind, args, end, out):
+    """Add the path a StreamWriter or FileStream constructor with `args` writes to `out`; True
+    when the guard does not read it: no arguments, or a StreamWriter's first argument that is not a
+    plain string (a Stream it writes through, judged where it is opened, or a path the line
+    computes). A FileStream opened to read only (FileMode Open, FileAccess Read) writes nothing."""
+    if not args:
+        return True
+    text, s, e = args[0]
+    if kind == 'filestream' and len(args) >= 3 and _net_arg_name(src, args[1], FILE_MODE_RE) == 'open' and \
+            _net_arg_name(src, args[2], FILE_ACCESS_RE) == 'read':
+        return False
+    if text is None and (kind == 'streamwriter' or src[s:e].lower() == '$null'):
+        return kind == 'streamwriter'
+    out.append(NetWrite(sh.Word(src[s:e] if text is None else text, text is None, s, e), end))
+    return False
+
+
 def net_writes(cmd):
-    """([NetWrite], unread): each path the PowerShell command's .NET file calls (IO_FILE_RE) write,
-    and True when a match is a write the guard does not read the path of, so write_targets judges
-    the directory the command runs in, as it did for every such call: one inside a quoted word, a
-    method named with no '(' after it (called later, through .Invoke or a variable), a call with
-    fewer arguments than the ones it writes (_net_written), and one whose arguments the parse may
-    have lost its place in (_net_lost). A $null argument (Replace's backup) writes nothing."""
+    """([NetWrite], unread): each path the PowerShell command's .NET file calls (IO_FILE_RE) and
+    StreamWriter and FileStream constructors (NET_TYPE_RE: ::new(...), New-Object, or a StreamWriter
+    cast from a plain string, [IO.StreamWriter]'x.txt') write, and True
+    when a match is a write the guard does not read the path of, so write_targets judges the
+    directory the command runs in, as it did for every such call, and dotnet_process_dir the one
+    its process started in: one inside a quoted word, a method named with no '(' after it (called
+    later, through .Invoke or a variable), a call with fewer arguments than the ones it writes
+    (_net_written), one whose arguments the parse may have lost its place in (_net_lost), a type
+    named any other way (any other cast, [type] as a value) and a New-Object call _net_new_object does
+    not read. A $null argument (Replace's backup) writes nothing."""
     if cmd.shell != sh.PS:
         return [], False
     out, unread, src = [], False, cmd.source
+    read = []                                   # the span of the type a New-Object call names
+    inv = cm.invocation(cmd) if NET_TYPE_RE.search(cmd.text) else None
+    if inv is not None and inv.name == 'new-object':
+        got = _net_new_object(cmd, inv)
+        kind = got and got[0][0] and re.match(r'(?i)^(?:System\.)?IO\.(StreamWriter|FileStream)$', got[0][0])
+        if kind:
+            read.append(got[0][1:])
+            unread = _net_ctor(src, kind.group(1).lower(), got[1], got[2], out) or got[3]
+    for m in NET_TYPE_RE.finditer(cmd.text):
+        pos, after = cmd.start + m.start(), cmd.start + m.end()
+        if any(s <= pos < e for s, e in read):
+            continue
+        w = next((x for x in cmd.words if x.start <= pos < x.end), None)
+        call = re.compile(r'\]::(\w+)').match(src, after)
+        if w is None or src[w.start:w.start + 1] in '\'"' + NET_QUOTES or src[pos - 1:pos] != '[':
+            unread = True                       # in a string, a type name passed as a value
+            continue
+        if not call:
+            # [IO.StreamWriter]'x.txt': PowerShell converts a string by the constructor that takes it
+            cast = re.compile(r'\][ \t]*([\'"])').match(src, after)
+            end = _net_string_end(src, cast.start(1)) if cast else None
+            text = _net_literal(src[cast.start(1):end]) if cast else None
+            if text is None or not m.group(0).lower().endswith('streamwriter'):
+                unread = True                   # a cast of a value, [type] passed as a value
+            else:
+                out.append(NetWrite(sh.Word(text, False, cast.start(1), end), end))
+            continue
+        if call.group(1).lower() != 'new':
+            continue                            # a static member: [IO.StreamWriter]::Null
+        k = call.end()
+        while k < len(src) and src[k] in ' \t':
+            k += 1
+        if src[k:k + 1] != '(':
+            unread = True
+            continue
+        args, end = _net_args(src, k + 1)
+        kind = re.search(r'(?i)(StreamWriter|FileStream)$', m.group(0)).group(1).lower()
+        unread = _net_ctor(src, kind, args, end, out) or _net_lost(src[k + 1:end]) or unread
     for m in IO_FILE_RE.finditer(cmd.text):
         pos = cmd.start + m.start()
         w = next((x for x in cmd.words if x.start <= pos < x.end), None)
@@ -1991,11 +2172,17 @@ def net_writes(cmd):
             if text is None and src[s:e].lower() == '$null':
                 continue
             out.append(NetWrite(sh.Word(src[s:e] if text is None else text, text is None, s, e), end))
+    for x in out:
+        m = None if x.word.dyn else NET_DEVICE_RE.match(x.word.text)
+        if m:                                   # \\?\C:\x is C:\x; the span stays the argument's
+            x.word = sh.Word(x.word.text[m.end():], False, x.word.start, x.word.end)
     return out, unread
 
 
 def net_placed(w):
-    """True when the .NET argument Word `w` is a literal absolute path (NET_ABS_RE)."""
+    """True when the .NET argument Word `w` is a literal absolute path on a drive (NET_ABS_RE;
+    net_writes reads \\\\?\\C:\\x as C:\\x). A share (\\\\host\\C$\\x) is not: the guard cannot tell
+    which folder it is, so dotnet_unplaced judges it as a path it cannot place."""
     return not w.dyn and bool(NET_ABS_RE.match(w.text))
 
 
@@ -2353,7 +2540,7 @@ def write_targets(cmd, inv):
         if r.target.text.lower() in NULL_TARGETS:
             continue
         out.append(r.target)
-    if cmd.shell == sh.PS and IO_FILE_RE.search(cmd.text):
+    if net_mentioned(cmd):
         net, unread = net_writes(cmd)
         out.extend(x.word for x in net if net_placed(x.word))
         # The rest are dotnet_unplaced's, and the directory the command runs in is judged too,
@@ -2686,11 +2873,11 @@ def shell_writes(event, ctx, cmd, inv, cwd, role):
     d = git_jail(event, ctx, cmd, inv, cwd, role)
     if d:
         return d
-    d = dotnet_unplaced(event, ctx, cmd, cwd, role)
+    d = dotnet_unplaced(event, ctx, cmd, cwd, role) or dotnet_process_dir(event, ctx, cmd, cwd, role)
     if d:
         return d
     net = {}
-    if cmd.shell == sh.PS and IO_FILE_RE.search(cmd.text):
+    if net_mentioned(cmd):
         net = dict(((x.word.start, x.word.end), x) for x in net_writes(cmd)[0])
     into = copy_into(cmd, inv)
     for w in write_targets(cmd, inv):
@@ -2749,7 +2936,7 @@ def dotnet_unplaced(event, ctx, cmd, cwd, role):
     (write-jail); the owner's own session is not judged. A relative path is first judged where the
     PowerShell location puts it (edit_target), and the alternative is the call on that absolute
     path."""
-    if cmd.shell != sh.PS or not IO_FILE_RE.search(cmd.text):
+    if not net_mentioned(cmd):
         return None
     for x in net_writes(cmd)[0]:
         w = x.word
@@ -2775,12 +2962,43 @@ def dotnet_unplaced(event, ctx, cmd, cwd, role):
         why = '%s through .NET. %s' % (what, NET_RELATIVE)
         if w.dyn:
             why += ' The guard does not read a path the line computes.'
+        elif re.match(r'^[\\/]{2}', w.text):
+            why += ' The guard cannot tell which folder a share path names.'
         if fixed:
             return refuse(rule, role, why + ' The same write on the absolute path:', rewrite(fixed))
         base = own_worktree(ctx, cwd) or cmd.cwd
         if base:
             return refuse(rule, role, why + ' Give it a literal absolute path:', rewrite(fwd(base) + '/<file>'))
         return refuse(rule, role, why + ' Give it a literal absolute path; to see where this session runs:', 'pwd')
+    return None
+
+
+def dotnet_process_dir(event, ctx, cmd, cwd, role):
+    """A .NET write the guard does not read the path of, or one it cannot place (net_writes,
+    net_placed), judged in each directory its process may have started in (edit_target): the
+    directory the call runs in (`cwd`) and the PowerShell location of each command it is nested
+    in. .NET reads a relative path there (NET_RELATIVE), so a Set-Location into a worktree does not
+    take the write with it; write_targets judges the PowerShell location itself."""
+    if not net_mentioned(cmd):
+        return None
+    net, unread = net_writes(cmd)
+    if not unread and all(net_placed(x.word) for x in net):
+        return None
+    dirs, outer = [cwd], cmd.nested_in
+    while outer is not None:
+        dirs.append(outer.cwd)
+        outer = outer.nested_in
+    seen = set([paths.norm(cmd.cwd)] if cmd.cwd else [])
+    for d in dirs:
+        if not d or paths.norm(d) in seen:
+            continue
+        seen.add(paths.norm(d))
+        what = ('`%s` may write through .NET in %s, the directory its process started in (.NET reads a relative '
+                'path there, and Set-Location does not move it; give the call literal absolute paths)'
+                % (bare(cmd), fwd(d)))
+        res = edit_target(event, ctx, paths.norm(d, fold=False), cwd, role, what, run=bare(cmd))
+        if res:
+            return res
     return None
 
 
