@@ -16,7 +16,7 @@ from tests.proc.spawnscan import scan_source
 HERE = os.path.dirname(os.path.abspath(__file__))
 SPAWN = ('run', 'call', 'popen')
 # the files of this folder that start a child, and how many starts each makes through the helper
-STARTS = {'pagedom.py': 1, 'test_page.py': 1, 'test_store.py': 2}
+STARTS = {'pagedom.py': 1, 'test_page.py': 1, 'test_store.py': 2, 'test_todosteps.py': 2}
 
 
 def sources():
