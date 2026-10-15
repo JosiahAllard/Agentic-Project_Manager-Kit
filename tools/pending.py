@@ -93,10 +93,11 @@ def run(a, path):
             print(line)
         return 0
     plan = None
+    host = host_of(a) if a.commit or a.push else None   # a usage error never waits for the lock
     with pending.locked(path):          # read to commit: no other writer between (kitlib.pending)
         if a.commit or a.push:
             plan = vcs.prepare(path, branch_ok=a.branch_ok, model=a.model, noun=NOUN,
-                               provider=host_of(a))
+                               provider=host)
         raw = pending.read_raw(path)
         if a.cmd == 'add':
             new, n = pending.add(raw, a.text)

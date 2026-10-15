@@ -10,11 +10,13 @@ import subprocess
 import sys
 import time
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 from tests.gitfixture import TempRepo, fixture_env
 from tests.realgit import real_git
 from kitlib.config import user as kuser
+from kitlib.git import repo as gitrepo
 
 TOOL = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
                     'tools', 'pending.py')
@@ -225,6 +227,54 @@ class WriteLockTest(Base):
         self.assertIn('held by pid %d' % holder.pid, err.getvalue())
         self.assertIn('nothing was written', err.getvalue())
         self.assertEqual(self.read(), TEXT)
+
+    def load_tool(self):
+        spec = importlib.util.spec_from_file_location('pending_tool_under_test', TOOL)
+        tool = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(tool)
+        return tool
+
+    def test_a_plain_add_where_git_cannot_place_the_lock_is_refused_and_nothing_is_written(self):
+        tool = self.load_tool()
+        unknown = SimpleNamespace(kind=gitrepo.UNKNOWN, common=None,
+                                  detail='fatal: detected dubious ownership in repository')
+        err = io.StringIO()
+        with mock.patch.dict(os.environ, {'USERPROFILE': self.home, 'HOME': self.home}), \
+                mock.patch('kitlib.fs.writelock.gitrepo.classify', return_value=unknown), \
+                contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            code = tool.main(['add', '--text', 'x'])
+        self.assertEqual(code, 1)
+        self.assertIn('pending.py: refused: cannot take the write lock of %s: cannot tell whether' % self.path,
+                      err.getvalue())
+        self.assertIn('dubious ownership', err.getvalue())
+        self.assertIn('nothing was written', err.getvalue())
+        self.assertEqual(self.read(), TEXT)
+
+    def test_a_bad_host_is_a_usage_error_before_the_lock_is_taken(self):
+        tool = self.load_tool()
+        err = io.StringIO()
+        with mock.patch.dict(os.environ, {'USERPROFILE': self.home, 'HOME': self.home}), \
+                mock.patch.object(tool.pending, 'locked', side_effect=AssertionError('lock taken')) as lk, \
+                contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            code = tool.main(['add', '--text', 'x', '--commit', '--host', 'no-such-host'])
+        self.assertEqual(code, 2, err.getvalue())
+        self.assertIn('USAGE: --host', err.getvalue())
+        lk.assert_not_called()
+        self.assertEqual(self.read(), TEXT)
+
+
+class PushFailureTest(Base):
+    def test_a_failed_push_prints_the_commit_first_and_says_not_pushed(self):
+        self.repo.git('remote', 'set-url', 'origin', os.path.join(self.repo.base, 'no-such-remote'))
+        r = self.run_tool('add', '--text', 'Third step', '--push')
+        self.assertEqual(r.returncode, 1, r.stderr)
+        lines = r.stdout.splitlines()
+        self.assertEqual(lines[0], 'added 3')
+        self.assertTrue(lines[1].startswith('commit '), lines)
+        self.assertTrue(self.repo.git('rev-parse', 'HEAD').startswith(lines[1][len('commit '):]), lines)
+        self.assertEqual(len(lines), 2, lines)
+        self.assertIn('NOT pushed', r.stderr)
+        self.assertEqual(self.repo.git('log', '-1', '--format=%s'), 'pending: added 3')
 
 
 @real_git('hooks: the fake runs no hooks')
