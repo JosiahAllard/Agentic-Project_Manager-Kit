@@ -522,7 +522,8 @@ class LockVerbs(Base):
         for shell, text in refused:
             with self.subTest(shell=shell, text=text):
                 d = self.denied(self.shell(text, 'reviewer', shell=shell), 'role-lock')
-                self.assertIn('machine_lock.py stop is not', d.reason)
+                # another script given the lock path may copy or run it: handed on, in any mode
+                self.assertIn('machine_lock.py %s is not' % rolepolicy.HANDED_ON, d.reason)
 
     def test_a_relative_kit_tool_in_a_checkout_that_is_not_the_kits_runs_the_lock(self):
         lock = 'tools/machine_lock.py'
@@ -627,6 +628,118 @@ class LockVerbs(Base):
                 ('bash', 'bash -c "python %s status"' % lock),
                 ('powershell', '$s = python %s/tools/machine_lock.py status' % kit),
                 ('bash', 'python %s status | head -5' % lock))
+        for shell, text in rows:
+            for role in ('reviewer', 'senior-worker', 'pm'):
+                with self.subTest(shell=shell, role=role, text=text):
+                    self.assertIsNone(rolepolicy.check(self.shell(text, role, shell=shell), self.w.ctx()))
+
+    def handed_on(self, rows):
+        """Each (shell, text) is refused as HANDED_ON in every mode, and denied role-lock for a
+        read, a write and a controller role."""
+        from kitlib.guard import commands as cm, shell as sh
+        for shell, text in rows:
+            parsed = cm.read(text, sh.PS if shell == 'powershell' else sh.BASH, self.w.wt)
+            for m in ('read', 'write', 'controller'):
+                with self.subTest(shell=shell, mode=m, text=text):
+                    got = rolepolicy.lock_verb(parsed, m, self.w.kit_dir)
+                    self.assertEqual(got and got[0], rolepolicy.HANDED_ON)
+            for role in ('reviewer', 'senior-worker', 'pm'):
+                with self.subTest(shell=shell, role=role, text=text):
+                    d = rolepolicy.check(self.shell(text, role, shell=shell), self.w.ctx())
+                    self.assertIsNotNone(d, text)
+                    self.assertEqual((d.verdict, d.rule), ('deny', 'role-lock'), d.reason)
+
+    def test_a_lock_path_in_a_heredoc_or_a_redirect_is_read(self):
+        """A heredoc's body and a redirect's file name the lock CLI as surely as a word does: read
+        or mapfile keeps it for a later command, xargs and python - run it."""
+        lock = 'tools/machine_lock.py'
+        self.handed_on((
+            ('bash', "read a <<'EOF'\n%s\nEOF\npython \"$a\" hold create x" % lock),
+            ('bash', "read a <<-EOF\n\t%s\n\tEOF\npython \"$a\" stop 42" % lock),
+            ('bash', "mapfile -t a <<'EOF'\n%s\nEOF\npython \"${a[0]}\" stop 42" % lock),
+            ('bash', "xargs -I{} python {} stop 42 <<'EOF'\n%s\nEOF" % lock),
+            ('bash', "python - stop 42 <<'EOF'\nimport runpy; runpy.run_path('%s')\nEOF" % lock),
+            ('bash', 'python - stop 42 < %s' % lock),
+            ('bash', 'xargs python < %s.args' % lock)))
+
+    def test_a_lock_path_copied_or_linked_to_a_new_name_is_refused(self):
+        """A program that is neither a reader nor the lock CLI may copy, move or link it to a name
+        that is no longer machine_lock.py, which a later command runs with any verb."""
+        lock = 'tools/machine_lock.py'
+        self.handed_on((
+            ('bash', 'cp %s stop; python stop hold create x' % lock),
+            ('bash', 'cp %s status && python status stop 42' % lock),
+            ('bash', 'mv %s status && python status stop 42' % lock),
+            ('bash', 'ln -s %s status && python status stop 42' % lock),
+            ('bash', 'install %s status && python status stop 42' % lock),
+            ('bash', 'rsync %s status && python status stop 42' % lock),
+            ('bash', 'cp %s x.py' % lock),
+            ('powershell', 'Copy-Item %s status; python status stop 42' % lock),
+            ('powershell', 'Copy-Item -Path %s -Destination status; python status stop 42' % lock),
+            ('powershell', 'cp %s status; python status stop 42' % lock),
+            ('powershell', 'copy %s status; python status stop 42' % lock),
+            ('powershell', 'Move-Item %s status; python status stop 42' % lock),
+            ('powershell', 'Rename-Item %s status; python status stop 42' % lock),
+            ('powershell', 'New-Item -ItemType SymbolicLink -Path status -Value %s; python status stop 42' % lock),
+            ('powershell', 'New-Item -ItemType HardLink -Path status -Target %s; python status stop 42' % lock),
+            ('powershell', 'xcopy %s status; python status stop 42' % lock),
+            ('powershell', 'Write-Host -InformationVariable c %s; python $c stop 42' % lock)))
+
+    def test_the_lock_cli_run_as_a_module_is_read(self):
+        """python -m with a module whose last part is machine_lock runs the lock CLI: its words
+        are judged by their verb, as a run of the script is."""
+        lock = 'tools/machine_lock.py'
+        from kitlib.guard import commands as cm, shell as sh
+        for shell, text in (('bash', 'python -m tools.machine_lock stop 42'),
+                            ('bash', 'cd tools; python -m machine_lock stop 42'),
+                            ('bash', 'python -mtools.machine_lock stop 42'),
+                            ('bash', 'python -u -m tools.machine_lock hold create x'),
+                            ('powershell', 'py -3 -m tools.machine_lock stop 42'),
+                            ('bash', 'winpty python -m tools.machine_lock stop 42')):
+            with self.subTest(shell=shell, text=text):
+                parsed = cm.read(text, sh.PS if shell == 'powershell' else sh.BASH, self.w.wt)
+                self.assertIsNotNone(rolepolicy.lock_verb(parsed, 'read', self.w.kit_dir))
+                d = rolepolicy.check(self.shell(text, 'reviewer', shell=shell), self.w.ctx())
+                self.assertIsNotNone(d, text)
+                self.assertEqual((d.verdict, d.rule), ('deny', 'role-lock'), d.reason)
+        for text in ('python -m tools.machine_lock status', 'python -m unittest tests.lock.test_machine_lock',
+                     'python %s status' % lock):
+            with self.subTest(text):
+                self.assertIsNone(rolepolicy.check(self.shell(text, 'reviewer', shell='bash'), self.w.ctx()))
+        for text in ('python -m pytest tests/lock/test_machine_lock.py', 'python tests/lock/test_machine_lock.py',
+                     'python -m unittest -v tests.lock.test_machine_lock'):
+            with self.subTest(text):
+                self.assertIsNone(rolepolicy.check(self.shell(text, 'senior-worker', shell='bash'), self.w.ctx()))
+
+    def test_the_lock_module_named_to_another_program_is_handed_on(self):
+        """A module name of the lock CLI given to anything but python -m itself - runpy, python -c
+        code, a heredoc fed to python, a variable a later python -m reads - may run it with any
+        verb."""
+        self.handed_on((
+            ('bash', 'python -m runpy tools.machine_lock stop 42'),
+            ('bash', 'cd tools; python -m runpy machine_lock stop 42'),
+            ('bash', 'python -m tools.machine_lock.py stop 42'),
+            ('bash', "python -c \"import runpy; runpy.run_module('tools.machine_lock', run_name='__main__')\" stop 42"),
+            ('bash', "python - stop 42 <<'EOF'\nimport runpy; runpy.run_module('tools.machine_lock', run_name='__main__')\nEOF"),
+            ('powershell', '$m = Write-Output tools.machine_lock; python -m $m stop 42'),
+            ('bash', 'echo machine_lock | xargs python -m'),
+            ('bash', 'uv run python -m runpy tools.machine_lock stop 42')))
+        for shell, text in (('powershell', "$m = 'tools.machine_lock'; python -m $m stop 42"),
+                            ('bash', 'm=tools.machine_lock; python -m $m stop 42')):
+            with self.subTest(shell=shell, text=text):
+                d = rolepolicy.check(self.shell(text, 'reviewer', shell=shell), self.w.ctx())
+                self.assertIsNotNone(d, text)
+                self.assertEqual((d.verdict, d.rule), ('deny', 'role-lock'), d.reason)
+
+    def test_a_reader_whose_plain_words_name_a_variable_still_passes(self):
+        """A bare reader's literal words are text it searches for or prints, not a variable it sets
+        (rolepolicy._ps_variable_reach); and a reader of a heredoc or of a `<` file whose output
+        stays reads the lock CLI, as a reader of its path does."""
+        lock = 'tools/machine_lock.py'
+        rows = (('powershell', 'sls PSVariable %s' % lock), ('powershell', "sls 'variable:' %s" % lock),
+                ('powershell', 'Select-String -Pattern PSDefault -Path %s' % lock),
+                ('bash', "cat <<'EOF'\n%s status\nEOF" % lock), ('bash', 'grep -n hold < %s' % lock),
+                ('bash', 'grep -c lock <<< "python %s stop 42"' % lock))
         for shell, text in rows:
             for role in ('reviewer', 'senior-worker', 'pm'):
                 with self.subTest(shell=shell, role=role, text=text):
