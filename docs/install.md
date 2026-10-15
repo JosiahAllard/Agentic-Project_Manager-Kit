@@ -352,9 +352,10 @@ with the stub's arguments.
 - Run from an export with no `KIT_LIVE_ROOT` (`<kit>/tools/kit_stubs.py` itself, or the session
   start's stubs check, which runs in the plugin's export), the location is the main checkout the
   export's marker names, when that folder holds `kit.json` and `tools/` (`kitlib.stubs.live_kit`).
-  An export whose marker names none is refused: `write` and `check` exit 2 with
-  `kit_stubs: refused: <export> is an export of the kit ...` and write nothing, so no stub ever
-  names an export a prune may remove (`tests/stubs/test_live_root.py`).
+  An export whose marker names none is refused: `write`, and `check` on a repository that uses
+  stubs, exit 2 with `kit_stubs: refused: <export> is an export of the kit ...` and write nothing,
+  so no stub ever names an export a prune may remove (`tests/stubs/test_live_root.py`). A
+  repository that uses no stubs is never refused (`check` below).
 - The child runs in the caller's directory when that is inside the stub's checkout, else in the
   stub's checkout. So a kit tool's default `-C .` names the stub's checkout, and a linked
   worktree's stub acts on that worktree.

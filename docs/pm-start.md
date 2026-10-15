@@ -80,8 +80,9 @@ stubs are current prints nothing; a folder that is not there, or a check that fa
 repository's own `could not check stubs (<repo>): ...` line. The check runs in the plugin's
 export, so it compares each stub with the main checkout the export's marker names, the folder
 `kit_stubs.py write` would name (`kitlib.stubs.live_kit`); an export whose marker names none gives
-`could not check stubs (<repo>): <export> is an export of the kit ...` with no write command
-(docs/plugin-source.md "Layout"). The coordinator's session start has the
+each repository that uses stubs `could not check stubs (<repo>): <export> is an export of the kit
+...` with no write command, and a repository with none still nothing (docs/plugin-source.md
+"Layout"). The coordinator's session start has the
 same check for its own repository (docs/install.md "Tools without a stub"). Code: `kitlib/pmstart`
 `stubs`; tests: `tests/pmstart/test_stubs_check.py`.
 

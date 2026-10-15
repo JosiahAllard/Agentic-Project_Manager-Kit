@@ -241,20 +241,24 @@ def problem_line(root, kit=None):
     `<kit>/tools/<x>.py -C <checkout>`): a repository uses them when its `.kit.json` sets
     "stubs".tools or it holds at least one stub. One that does neither gets no line.
 
-    Run from an export whose marker names no main checkout (`live_kit`), the line is a "could not
-    check" one with no command: a write from there would name the export in every stub."""
+    Run from an export whose marker names no main checkout (`live_kit`), a repository that uses
+    stubs gets a "could not check" line with no command: a write from there would name the export
+    in every stub. The tool list is read from the kit as given, so the opt-in test comes first."""
     label = os.path.basename(os.path.normpath(root))
-    kit, why = live_kit(kit or kit_root())
-    if why:
-        return 'could not check stubs (%s): %s' % (label, why)
+    given = kit or kit_root()
+    kit, why = live_kit(given)
     try:
         cfg = load(root)
-        names = wanted(cfg, kit)
+        names = wanted(cfg, kit or given)
     except ConfigError as e:
         return 'could not check stubs (%s): %s' % (label, e)
     tdir = os.path.normpath(os.path.join(root, cfg.tools_dir))
-    bad, others = [], []
     opted = _opted(cfg, tdir, names)
+    if not opted:
+        return None
+    if why:
+        return 'could not check stubs (%s): %s' % (label, why)
+    bad, others = [], []
     for name in names:
         path = os.path.join(tdir, name + '.py')
         exists = os.path.exists(path)
@@ -265,7 +269,7 @@ def problem_line(root, kit=None):
             other = _plain(found[1])
             if other and other not in others:
                 others.append(other)
-    if not bad or not opted:
+    if not bad:
         return None
     return 'stubs (%s): %d missing/stale: %s; run python %s -C %s%s' % (
         label, len(bad), ', '.join(bad),
@@ -289,15 +293,15 @@ def run(root, verb, tools=None, replace=False, dry_run=False, kit=None):
     """Outcome(code, lines) of `write` or `check` for the checkout `root`. `kit` (default
     kit_root()) goes through `live_kit`: an export is replaced by the main checkout its marker
     names, and one whose marker names none is refused (CONFIG) before anything is written. `check`
-    on a repository that uses no stubs (`_opted`) is OK: there is nothing to check."""
+    on a repository that uses no stubs (`_opted`) is OK, whatever the kit: there is nothing to
+    check, so the tool list is read from the kit as given and the opt-in test comes first."""
     if verb not in ('write', 'check'):
         raise ValueError(verb)
-    kit, why = live_kit(kit or kit_root())
-    if why:
-        return Outcome(CONFIG, ['kit_stubs: refused: %s' % why])
+    given = kit or kit_root()
+    kit, why = live_kit(given)
     try:
         cfg = load(root)
-        names = wanted(cfg, kit, tools)
+        names = wanted(cfg, kit or given, tools)
     except ConfigError as e:
         return Outcome(CONFIG, ['kit_stubs: refused: %s' % e])
     rel = cfg.tools_dir
@@ -306,6 +310,8 @@ def run(root, verb, tools=None, replace=False, dry_run=False, kit=None):
         return Outcome(OK, _retired_notes(tdir) + [
             'kit_stubs: uses no stubs (no "stubs".tools in .kit.json and no stub in %s); '
             'nothing to check' % tdir])
+    if why:
+        return Outcome(CONFIG, ['kit_stubs: refused: %s' % why])
     lines, problems = [], []
     for name in names:
         path = os.path.join(tdir, name + '.py')
