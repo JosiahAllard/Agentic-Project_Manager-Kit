@@ -9,6 +9,8 @@ Provider identity is never inferred from a model name.
   model_environment(provider)      the model fallback variable, or None
   requires_model_id(provider)      whether --model must be an explicit id (no fallback)
   coauthor(model, provider, families)   the Co-Authored-By line; ValueError when it cannot be one
+  session_trailer(env, provider)   the host's session line (`Claude-Session: <url>`), or None
+  session_keys(path)               every host's session trailer key
   agent_trailer(path)              the regex a Co-Authored-By value of any provider matches
   AGENT_TRAILER                    agent_trailer() of the kit's hosts.json, read at import
 """
@@ -53,6 +55,31 @@ def coauthor(model, provider=None, families=(), path=None):
         if name != a.name and not name.startswith(a.name + ' '):
             name = a.name + ' ' + name
     return 'Co-Authored-By: %s <%s>' % (name, a.email)
+
+
+SESSION_ID = re.compile(r'[A-Za-z0-9_-]+\Z')
+
+
+def session_trailer(env, provider=None, path=None):
+    """`<key>: <url>` for the session `env` (a mapping) names under `provider`'s
+    attribution.session_trailer, or None: the host has none, or its variable is unset, blank or
+    not a plain id (letters, digits, `_`, `-`), so nothing odd is ever written into a trailer."""
+    st = _of(provider, path).session_trailer
+    if st is None:
+        return None
+    value = (env.get(st.env) or '').strip()
+    if not SESSION_ID.match(value):
+        return None
+    return '%s: %s' % (st.key, st.url.replace('{id}', value))
+
+
+def session_keys(path=None):
+    """The session trailer keys of every registered host, in file order, each once."""
+    keys = []
+    for a in providers(path).values():
+        if a.session_trailer is not None and a.session_trailer.key not in keys:
+            keys.append(a.session_trailer.key)
+    return tuple(keys)
 
 
 def agent_trailer(path=None):
