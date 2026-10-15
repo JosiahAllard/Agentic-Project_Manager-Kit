@@ -16,7 +16,7 @@ alone. A question whose `recommended` is text that stands for a number (kitlib.h
 rule, schema.whole_recommended) is read as that number, so its next write stores the number; its
 file is not rewritten until then.
 
-One writer. Store.open takes kitlib.dailyfull.treelock.TreeLock on `_store.lock` for the life of
+One writer. Store.open takes kitlib.fs.treelock.TreeLock on `_store.lock` for the life of
 the Store: an msvcrt byte-range lock the system drops when the holder exits, however it exits. A
 second open, in this process or another, raises StoreBusy naming the holder. A dead holder's lock
 is already gone, so the next open succeeds; `took_over` is the record it left. Inside the process
@@ -74,7 +74,7 @@ import threading
 import time
 
 from kitlib import hubvalidate
-from kitlib.dailyfull.treelock import TreeBusy, TreeLock, TreeLockError, describe
+from kitlib.fs.treelock import TreeBusy, TreeLock, TreeLockError, describe
 
 from . import schema
 

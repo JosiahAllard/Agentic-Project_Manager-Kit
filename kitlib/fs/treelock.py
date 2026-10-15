@@ -1,11 +1,14 @@
-"""kitlib.dailyfull.treelock: one daily full run at a time per worktree (docs/daily-full.md).
+"""kitlib.fs.treelock: an OS lock on one file, held by one process at a time.
 
-A run takes the tree's lock before it fetches or moves the tree and holds it until its result is
-written, so a second run (a manual one during the scheduled one, or a double trigger) can never
-move the tree under a run that is mid-gate.
+Its first user is the daily full run (docs/daily-full.md): a run takes its tree's lock before it
+fetches or moves the tree and holds it until its result is written, so a second run (a manual one
+during the scheduled one, or a double trigger) can never move the tree under a run that is
+mid-gate. The hub store (kitlib.hubsite.store) and every per-file write lock (kitlib.fs.writelock)
+use it too.
 
 The lock is an operating-system byte-range lock (msvcrt.locking, LockFile) on one byte far past
-the end of the file `<git common dir>/kit-tree-<name>-<hash>.lock`. The common dir exists before
+the end of the lock file; for a tree that file is `<git common dir>/kit-tree-<name>-<hash>.lock`
+(lock_name). The common dir exists before
 the tree is first added, every checkout of the repository sees it, `git worktree prune` never
 removes it, and it is never tracked. The OS lock is the exclusion: the system drops it when the
 holder exits, however it exits, so a dead holder never blocks a run, and a pid that was reused

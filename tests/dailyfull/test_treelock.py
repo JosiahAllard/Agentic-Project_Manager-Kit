@@ -1,4 +1,4 @@
-"""One daily full run at a time per tree (kitlib.dailyfull.treelock), in a scratch repository with
+"""One daily full run at a time per tree (kitlib.fs.treelock), in a scratch repository with
 a bare remote, booking on the scratch lock store. Holders are real: a second run in a thread while
 the first is mid-gate, and child processes that hold the lock, exit holding it, or are killed."""
 import errno
@@ -12,6 +12,7 @@ from unittest import mock
 
 from kitlib import dailyfull as D
 from kitlib import gate as G
+from kitlib.fs import treelock
 from kitlib.gate import runner
 from tests.dailyfull.test_dailyfull import FAILING, KIT, Case
 
@@ -24,7 +25,7 @@ HOLD = {'name': 'unit', 'always': True, 'pass': '^ok$', 'cmd': [
     'print("ok")' % SIGNALS]}
 # A child that takes the lock at argv[2], says so, and holds it until its stdin closes.
 HOLDER = ('import sys; sys.path.insert(0, sys.argv[1]); '
-          'from kitlib.dailyfull import treelock as T; '
+          'from kitlib.fs import treelock as T; '
           'T.TreeLock(sys.argv[2], "a test holder").acquire(); print("held", flush=True); '
           'sys.stdin.read()')
 WAIT_S = 60
@@ -54,7 +55,7 @@ class LockCase(Case):
 
     def assert_free(self):
         """Another holder can take the lock now, and no record was left behind."""
-        lock = D.treelock.TreeLock(self.lock_path())
+        lock = treelock.TreeLock(self.lock_path())
         lock.acquire()
         try:
             self.assertEqual(lock.took_over, {})
@@ -154,7 +155,7 @@ class ChildHolders(LockCase):
         p = self.holder()
         p.kill()
         p.wait(30)
-        left = D.treelock.read_record(self.lock_path())
+        left = treelock.read_record(self.lock_path())
         self.assertEqual(left.get('pid'), p.pid)        # its record is still there: stale
         said = []
         o = D.run(self.main_dir, self.cfg(), out=self.out, stamp='20261008-040000',
@@ -169,7 +170,7 @@ class ChildHolders(LockCase):
         p = subprocess.run([sys.executable, '-c', code, KIT, self.lock_path()],
                            capture_output=True, text=True, timeout=WAIT_S)
         self.assertEqual(p.stdout.strip(), 'held', p.stderr)
-        self.assertTrue(D.treelock.read_record(self.lock_path()).get('pid'))
+        self.assertTrue(treelock.read_record(self.lock_path()).get('pid'))
         self.assertEqual(self.run_daily().code, G.OK)
         self.assert_free()
 
@@ -196,12 +197,12 @@ class Released(LockCase):
         self.assert_free()
 
     def test_a_busy_run_leaves_the_holder_holding(self):
-        lock = D.treelock.TreeLock(self.lock_path(), 'the first run').acquire()
+        lock = treelock.TreeLock(self.lock_path(), 'the first run').acquire()
         try:
             self.assertEqual(self.run_daily().code, G.BUSY)
             self.assertTrue(lock.held)
-            with self.assertRaises(D.treelock.TreeBusy):
-                D.treelock.TreeLock(self.lock_path()).acquire()
+            with self.assertRaises(treelock.TreeBusy):
+                treelock.TreeLock(self.lock_path()).acquire()
         finally:
             lock.release()
         self.assert_free()
@@ -217,9 +218,9 @@ class ReleasedAfterRed(LockCase):
 
 class Names(LockCase):
     def test_one_lock_per_tree(self):
-        a = D.treelock.lock_name(self.wt)
-        self.assertEqual(a, D.treelock.lock_name(self.wt.upper()))   # Windows paths fold case
-        self.assertNotEqual(a, D.treelock.lock_name(self.wt + '-2'))
+        a = treelock.lock_name(self.wt)
+        self.assertEqual(a, treelock.lock_name(self.wt.upper()))   # Windows paths fold case
+        self.assertNotEqual(a, treelock.lock_name(self.wt + '-2'))
         self.assertEqual(os.path.normcase(os.path.dirname(self.lock_path())),
                          os.path.normcase(os.path.realpath(self.repo.common_dir())))
 
@@ -235,10 +236,10 @@ class Failures(LockCase):
     def test_a_lock_error_that_is_not_contention_is_refused_not_busy(self):
         path = self.lock_path()
         broken = OSError(errno.EIO, 'simulated I/O error')
-        with mock.patch.object(D.treelock.TreeLock, '_lock_byte', side_effect=broken):
-            with self.assertRaises(D.treelock.TreeLockError) as cm:
-                D.treelock.TreeLock(path).acquire()
-            self.assertNotIsInstance(cm.exception, D.treelock.TreeBusy)
+        with mock.patch.object(treelock.TreeLock, '_lock_byte', side_effect=broken):
+            with self.assertRaises(treelock.TreeLockError) as cm:
+                treelock.TreeLock(path).acquire()
+            self.assertNotIsInstance(cm.exception, treelock.TreeBusy)
             o = self.run_daily()
         self.assertEqual(o.code, G.REFUSED, o.lines)
         r = self.result()
@@ -251,9 +252,9 @@ class Failures(LockCase):
     def test_contention_is_busy(self):
         path = self.lock_path()
         held = OSError(errno.EACCES, 'locked')
-        with mock.patch.object(D.treelock.TreeLock, '_lock_byte', side_effect=held):
-            with self.assertRaises(D.treelock.TreeBusy):
-                D.treelock.TreeLock(path).acquire()
+        with mock.patch.object(treelock.TreeLock, '_lock_byte', side_effect=held):
+            with self.assertRaises(treelock.TreeBusy):
+                treelock.TreeLock(path).acquire()
         self.assert_closed(path)
 
     def test_a_record_that_is_not_utf8_or_json_reads_as_none(self):
@@ -261,16 +262,16 @@ class Failures(LockCase):
         for raw in (bytes([0xff, 0xfe]) + b'{"pid": 1}', b'{"pid": ', b'[1, 2]'):
             with open(path, 'wb') as f:
                 f.write(raw)
-            self.assertEqual(D.treelock.read_record(path), {}, raw)
+            self.assertEqual(treelock.read_record(path), {}, raw)
 
     def test_release_lets_go_when_the_truncate_fails(self):
         path = self.lock_path()
-        lock = D.treelock.TreeLock(path, 'first').acquire()
-        with mock.patch.object(D.treelock.os, 'ftruncate',
+        lock = treelock.TreeLock(path, 'first').acquire()
+        with mock.patch.object(treelock.os, 'ftruncate',
                                side_effect=OSError(errno.EIO, 'simulated')):
             lock.release()
         self.assertFalse(lock.held)
-        second = D.treelock.TreeLock(path).acquire()     # unlocked: the next taker gets it
+        second = treelock.TreeLock(path).acquire()     # unlocked: the next taker gets it
         try:
             self.assertEqual(second.took_over.get('what'), 'first')   # the record stayed
         finally:
