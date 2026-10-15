@@ -371,7 +371,8 @@ class Constructors(Base):
                      "$t = [IO.StreamWriter]\n$u = 'x.txt'", "$t = [IO.StreamWriter]\r\n$u = 'x.txt'",
                      "$t = [IO.StreamWriter] # 'x.txt'", '$t = [IO.StreamWriter] <#c#> -eq $u',
                      "$t = [IO.StreamWriter] `\n-and $y", '$t = [IO.StreamWriter] –and $y',
-                     "$t = [IO.StreamWriter] -f 'x.txt'", '$t = [IO.StreamWriter]..5'):
+                     "$t = [IO.StreamWriter] -f 'x.txt'", '$t = [IO.StreamWriter]..5',
+                     '$l = [Collections.Generic.List[IO.StreamWriter]]::new()'):
             with self.subTest(text=text):
                 self.allowed(self.run_ps(text))
                 self.denied(self.run_ps(text, cwd=self.w.main), 'main-checkout')

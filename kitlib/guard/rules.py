@@ -2147,8 +2147,9 @@ def _net_cast_operand(src, k):
 def _net_cast(src, k):
     """The NetWrite of the StreamWriter cast whose type name ends at src[k] (its ']'), or None when
     no operand follows (the type passed as a value: [IO.StreamWriter], [IO.StreamWriter].Name,
-    $x -is [IO.StreamWriter] -and $y, @([IO.StreamWriter], 1)). What follows the ']' is an operand
-    unless it ends the statement or the expression (a line end, a line comment, . ) } ; | , ..) or is
+    $x -is [IO.StreamWriter] -and $y, @([IO.StreamWriter], 1), List[IO.StreamWriter]). What follows
+    the ']' is an operand unless it ends the statement or the expression (a line end, a line comment,
+    . ) ] } ; | , ..) or is
     a binary operator (-and, -eq, -f); a unary one (-join, -split, -not, -bnot, -1, +, !) opens an
     operand, as a comment or a line continuation before it does not end one (_net_cast_operand).
     PowerShell converts the operand by the constructor that takes a string, so a plain string
@@ -2158,8 +2159,8 @@ def _net_cast(src, k):
     if src[k:k + 1] != ']':
         return None
     k = _net_cast_operand(src, k + 1)
-    if k >= n or src[k] in '\r\n#)};|,':
-        return None
+    if k >= n or src[k] in '\r\n#)]};|,':
+        return None                             # ']': a type argument, List[IO.StreamWriter]
     if src[k] == '.' and not (src[k - 1] != ']' and src[k + 1:k + 2].isdigit()):
         return None                             # .Name, ..5; but [IO.StreamWriter] .5 is a cast of 0.5
     if src[k] in NET_DASHES:
