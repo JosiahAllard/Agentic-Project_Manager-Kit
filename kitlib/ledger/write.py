@@ -280,10 +280,19 @@ def show(text, rid):
     return None
 
 
-def grep(text, needle):
-    """The header (without `## `) of every entry whose block holds `needle`, case-insensitive."""
+def _repo_column(header):
+    parts = header.split('|')
+    return parts[2].strip().lower() if len(parts) > 2 else None
+
+
+def grep(text, needle, repo=None):
+    """The header (without `## `) of every entry whose block holds `needle`, case-insensitive.
+    `repo`: only the entries whose repo column is `repo` or `all`."""
     low = needle.lower()
-    return [b.split('\n', 1)[0][3:] for _, b in E.split_entries(text)[1] if low in b.lower()]
+    heads = [b.split('\n', 1)[0][3:] for _, b in E.split_entries(text)[1] if low in b.lower()]
+    if repo is None:
+        return heads
+    return [h for h in heads if _repo_column(h) in (repo, E.ALL_REPOS)]
 
 
 def check(text, base, repos=None, repo=None, others=()):

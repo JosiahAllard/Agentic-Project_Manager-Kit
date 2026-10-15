@@ -193,13 +193,19 @@ def default_base(path):
         return DEFAULT_REMOTE + '/main'
 
 
-def base_text(path, base, env=None):
-    """`(the ledger's text at revision base, None)` or `(None, why)`."""
+def base_text(path, base, env=None, new_ok=False):
+    """`(the ledger's text at revision base, None)` or `(None, why)`. `new_ok`: a file the revision
+    lacks (base read, the path not in its tree) is `('', None)`, a file that grew from nothing; a
+    per-repo ledger file is new until its first entry is merged."""
     try:
         root, rel = locate(path)
     except Refused as e:
         return None, str(e)
     out, why = cmd.run(['show', '%s:%s' % (base, rel)], root, env=env)
     if out is None:
+        if new_ok:
+            listed, _ = cmd.run(['ls-tree', '--name-only', base, '--', rel], root, env=env)
+            if listed is not None and not cmd.text(listed).strip():
+                return '', None
         return None, why
     return cmd.text(out), None

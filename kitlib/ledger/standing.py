@@ -53,6 +53,19 @@ def problems(ledger_text, digest_text):
     return errs
 
 
+def section(digest_text, repo):
+    """The digest's `## <repo>` section (any case), its deeper headings included, up to the next
+    `##` heading; '' when it has none."""
+    out, inside = [], False
+    for line in digest_text.replace('\r\n', '\n').split('\n'):
+        m = HEADING_RE.match(line)
+        if m and len(m.group(1)) == 2:
+            inside = line[3:].strip().lower() == repo.lower()
+        if inside:
+            out.append(line)
+    return '\n'.join(out)
+
+
 def topic(digest_text, word):
     """The digest's rule lines (`- ...`) for `word`, case-insensitive: a line matches when the word
     is in it or in a heading it sits under. Each heading comes once, before its first match."""
