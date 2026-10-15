@@ -333,6 +333,36 @@ def invocation(cmd):
     return None
 
 
+# what cmd drops before a command name: @ (no echo) and its delimiters , ; =
+CMD_LEAD_RE = re.compile(r'^[@;,=]+')
+
+
+def cmd_invocation(cmd, inv):
+    """`inv`, cmd's invocation of `cmd`, with the @ and delimiters cmd drops before a command name
+    (CMD_LEAD_RE) left out, as a prefix of the program word or as words of their own: @set, ;set
+    and @ set all run set, @ path runs path. Another shell's, a computed or quoted program word,
+    and one with nothing to drop come back as they are. The environment rules read cmd's set, path
+    and call through it; invocation itself still names @git as `@git` (the program rules do not
+    read the lead)."""
+    if cmd.shell != sh.CMD or inv is None or inv.dyn or inv.word is None:
+        return inv
+    words, i = cmd.words, inv.index
+
+    def placed_quoted(w):               # a word with no place in the source reads as unquoted
+        return w.start is not None and quoted(cmd, w)
+    while (i + 1 < len(words) and not words[i].dyn and not placed_quoted(words[i])
+           and CMD_LEAD_RE.sub('', words[i].text) == ''):
+        i += 1
+    w = words[i]
+    if w.dyn or placed_quoted(w):
+        return inv if i == inv.index else Invocation(base_name(w.text), w.text, words[i + 1:], cmd, w.dyn, i,
+                                                      via=inv.via, word=w)
+    t = CMD_LEAD_RE.sub('', w.text)
+    if not t or (i == inv.index and t == w.text):
+        return inv
+    return Invocation(base_name(t), t, words[i + 1:], cmd, w.dyn, i, via=inv.via, word=w)
+
+
 ENV_VALUE_OPTS = ('-u', '--unset')
 
 
@@ -662,7 +692,7 @@ def env_assignments(c, names):
                 g = NET_SET_ENV_RE.search(src, w.start)
                 if g and g.start() < (w.end or len(src)) and name_re.match(g.group(1)):
                     out.append((g.group(1), g.group(2) if g.group(2) is not None else g.group(3) or ''))
-    inv = invocation(c)
+    inv = cmd_invocation(c, invocation(c))
     if c.shell == sh.BASH:
         lead = []
         for w in words:                          # FOO+=x is an assignment the program finder does not skip
@@ -726,7 +756,7 @@ def git_env_set(c):
         m = GIT_ENV_NET_RE.search(c.source[c.start:c.end]) if 0 <= c.start <= c.end <= len(c.source) else None
         if m:
             return m.group(1)
-    inv = invocation(c)
+    inv = cmd_invocation(c, invocation(c))
     if inv is None:
         return None
     if inv.name in EXPORTERS:
@@ -884,13 +914,18 @@ CMD_PATH_RE = re.compile(r'(?i)^[@;,=\s]*path(?![A-Za-z0-9_\-])')
 
 def cmd_path_set(c):
     """True when the cmd command `c` is cmd's path command with anything after it (CMD_PATH_RE):
-    it sets PATH for the rest of the line. A bare path (or @path) with no other word only prints it."""
+    it sets PATH for the rest of the line. The words before it that are only @ and delimiters
+    (CMD_LEAD_RE: @ path X, , path X) are passed over, as cmd drops them. A bare path (or @path,
+    @ path) with no other word only prints it."""
     if c.shell != sh.CMD or not c.words:
         return False
-    first = c.words[0].text
+    words, k = c.words, 0
+    while k + 1 < len(words) and not words[k].dyn and CMD_LEAD_RE.sub('', words[k].text) == '':
+        k += 1
+    first = words[k].text
     if not CMD_PATH_RE.match(first):
         return False
-    return not (len(c.words) == 1 and first.lstrip('@').lower() == 'path')
+    return not (k == len(words) - 1 and CMD_LEAD_RE.sub('', first).lower() == 'path')
 
 
 # a bash builtin's target the text does not name (read $n): bash_var_targets gives it as this name,
@@ -1064,7 +1099,7 @@ def _env_unsafe(c, line_sets):
     words = c.words
     if not words:
         return False
-    inv = invocation(c)
+    inv = cmd_invocation(c, invocation(c))
     if c.shell == sh.BASH:
         if _bash_env_unsafe(c, inv):
             return True
