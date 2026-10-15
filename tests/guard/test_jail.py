@@ -1363,15 +1363,35 @@ class UnplacedGit(MainGit):
             'Set-Item env:GIT_DIR "$b :: $f"; %s' % g,
             '[Environment]::SetEnvironmentVariable(\'GIT_DIR\', "$b :: $f"); %s' % g], tool='PowerShell')
         # a string piped to Invoke-Expression is code, and a $ in it expands before it runs: the
-        # line is unreadable, with or without a ::
-        for text in ('"$t::$n(\'GIT_DIR\', \'x\')" | iex; %s' % g, '"a :: $b" | Invoke-Expression; %s' % g,
-                     '"x $b" | iex; %s' % g):
+        # line is unreadable, with or without a :: (a worker's static call there reads as a git
+        # variable set unseen: write-jail, as the held rows above)
+        for text, rule in (('"$t::$n(\'GIT_DIR\', \'x\')" | iex; %s' % g, 'write-jail'),
+                           ('"a :: $b" | Invoke-Expression; %s' % g, 'unreadable'),
+                           ('"x $b" | iex; %s' % g, 'unreadable')):
             with self.subTest(text):
                 self.assertFalse(cm.read(text, sh.PS, wt).clean, text)
-                self.denied(self.git(text, 'worker', tool='PowerShell'))
+                self.jailed(self.git(text, 'worker', tool='PowerShell'), rule)
                 for environ in (COORDINATOR, OLD_MARK):
                     with self.subTest(text, mark=environ[context.ROLE_ENV]):
-                        self.denied(self.marked(text, environ, 'PowerShell'))
+                        self.jailed(self.marked(text, environ, 'PowerShell'))
+        # a shell reading such a string from a pipe is unreadable the same way
+        text = '"git $b" | powershell -Command -'
+        self.assertFalse(cm.read(text, sh.PS, wt).clean, text)
+        self.jailed(self.git(text, 'worker', tool='PowerShell'), 'unreadable')
+        for environ in (COORDINATOR, OLD_MARK):
+            with self.subTest(text, mark=environ[context.ROLE_ENV]):
+                self.jailed(self.marked(text, environ, 'PowerShell'))
+        # a single-quoted string and a backtick-escaped $ do not expand: iex runs the text as
+        # written (x $b), and the git after it stays placed
+        for text in ("'x $b' | iex; %s" % g, '"x `$b" | iex; %s' % g):
+            with self.subTest(text):
+                p = cm.read(text, sh.PS, wt)
+                self.assertTrue(p.clean, text)
+                self.assertEqual([c.git_env for c in p.commands], [False] * len(p.commands), text)
+                self.allowed(self.git(text, 'worker', tool='PowerShell'))
+                for environ in (COORDINATOR, OLD_MARK):
+                    with self.subTest(text, mark=environ[context.ROLE_ENV]):
+                        self.allowed(self.marked(text, environ, 'PowerShell'))
         # a string handed to Invoke-Expression is code, and a $( inside ${...} is a substitution:
         # the line is unreadable
         for text in ('iex "$t::$n(\'GIT_DIR\', \'x\')"; %s' % g, 'Write-Output "${a$(x)}::y"; %s' % g):
