@@ -14,7 +14,8 @@ The command cannot narrow its own pin (the run's wrapper holds the job), so it a
      from what it inherits), so a command they start cannot give away slots another command of
      the run still needs.
   2. The command (Offer.give) writes the request: {id, cpu: [slot ids], by_pid, by_ctime, at},
-     then waits for its id in the run record's `given_back` (done) or `give_back_refused`.
+     then waits for its id in the run record's `given_back` (done) or `give_back_refused`. A
+     record it cannot open now (the wrapper is replacing it) is read again, never taken as gone.
   3. The wrapper (Slot.wait, every settings.child_poll_s) reads the request and removes it. It
      refuses (check) unless the asker is alive and in the run's job, the run holds its cpu slots
      itself (not nested) and is pinned to them, the slots are some of its own and at least one
@@ -52,6 +53,7 @@ nothing back. The installed tool reads a shrunk record and entry as it reads any
 has); the request file is not a .json, so neither tool reads it as a run record.
 """
 import copy
+import json
 import os
 import secrets
 import time
@@ -181,6 +183,23 @@ def queue_books(store, rid, keep):
 
 
 # ------------------------------------------------------------------ the command's side
+def read_record(path):
+    """(record, there): the run record at path, and whether its file is there. (None, False):
+    no such file, the run is gone (finish removes it). (None, True): there but not read now.
+    The wrapper writes the record by os.replace, and on Windows an open that lands while it
+    swaps the file is refused (PermissionError), never answered with no such file: that is
+    "not now", not "gone" (KIT-LOCK-GIVEBACK-FLAKE: under load an asker heard "gone" from a
+    run that went on to refuse). A file that is not a JSON object reads the same way."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            d = json.load(f)
+    except FileNotFoundError:
+        return None, False
+    except (OSError, ValueError):
+        return None, True
+    return (d if isinstance(d, dict) else None), True
+
+
 class Offer:
     """A command's offer to give back cpu slots (from_env: None when it has none)."""
 
@@ -210,20 +229,23 @@ class Offer:
     def give(self, cpu, wait_s=10.0):
         """Asks the wrapper to give back cpu slots `cpu`; waits up to wait_s for its answer.
         ("given", the record's given_back: {id, cpu (all given back so far), cores (kept),
-        cpumask, cpuset, at}), ("refused", why), ("gone", why) or ("timeout", why). After a
-        timeout the request is withdrawn; held() says what the run holds."""
+        cpumask, cpuset, at}), ("refused", why), ("gone", why) or ("timeout", why). "gone" only
+        when the record is not there or not held; one it cannot read now (read_record) is read
+        again on the next poll. After a timeout the request is withdrawn; held() says what the
+        run holds."""
         rid = secrets.token_hex(6)
         write_json(self.path, {"id": rid, "cpu": sorted(set(cpu)), "by_pid": os.getpid(),
                                "by_ctime": process.own_ctime(), "at": iso()})
         end = time.monotonic() + wait_s
         while True:
-            rec = self.record()
-            if rec is None or rec.get("state") != "held":
+            rec, there = read_record(self.record_path)
+            if not there or (rec is not None and rec.get("state") != "held"):
                 return "gone", "run %s holds nothing now" % self.rid
-            if (rec.get("given_back") or {}).get("id") == rid:
-                return "given", rec["given_back"]
-            if (rec.get("give_back_refused") or {}).get("id") == rid:
-                return "refused", rec["give_back_refused"].get("why")
+            if rec is not None:
+                if (rec.get("given_back") or {}).get("id") == rid:
+                    return "given", rec["given_back"]
+                if (rec.get("give_back_refused") or {}).get("id") == rid:
+                    return "refused", rec["give_back_refused"].get("why")
             if time.monotonic() >= end:
                 d = read_json(self.path)
                 if d and d.get("id") == rid:

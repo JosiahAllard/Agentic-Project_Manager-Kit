@@ -702,6 +702,24 @@ class Helpers(unittest.TestCase):
                 json.dump(base if gpu is None else dict(base, gpu=gpu), f)
             self.assertEqual(g.read_request(path)["gpu"], want)
 
+    def test_only_a_missing_record_reads_as_gone(self):
+        g = gb()
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        rec = os.path.join(d, "r-20261010T000000Z-abcdef.json")
+        self.assertEqual(g.read_record(rec), (None, False))
+        offer = g.Offer(os.path.join(d, "r-20261010T000000Z-abcdef" + g.SUFFIX))
+        self.assertEqual(offer.give([1], wait_s=20)[0], "gone")      # at once, not at wait_s
+        with open(rec, "w", encoding="utf-8") as f:
+            json.dump({"state": "held", "cores": [0, 1]}, f)
+        self.assertEqual(g.read_record(rec), ({"state": "held", "cores": [0, 1]}, True))
+        with unopenable(rec):
+            self.assertEqual(g.read_record(rec), (None, True))
+        for text in ("[1]", "{half"):
+            with open(rec, "w", encoding="utf-8") as f:
+                f.write(text)
+            self.assertEqual(g.read_record(rec), (None, True))
+
     def test_the_request_file_is_not_a_run_record(self):
         # Both tools list active/*.json as run records; the request must not be one.
         self.assertFalse(gb().SUFFIX.endswith(".json"))
