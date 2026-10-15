@@ -207,6 +207,30 @@ class VcsTest(unittest.TestCase):
         self.assertFalse(os.path.exists(self.path))
         self.assertFalse(os.path.exists(os.path.dirname(self.path)))
 
+    def test_a_missing_ledger_folder_names_the_same_lock_before_and_after_it_is_made(self):
+        folder = os.path.dirname(self.path)
+        self.assertFalse(os.path.exists(folder))
+        lock = write.lock_path(self.path)
+        with write.locked(self.path):                   # taken while the folder is still missing
+            self.assertTrue(write.held(self.path))
+            self.assertFalse(os.path.exists(folder))    # the lock is in the common dir, not there
+            self.assertEqual(self.add().id, rid(1))     # the write makes the folder, under the lock
+            self.assertTrue(os.path.isdir(folder))
+            self.assertEqual(write.lock_path(self.path), lock)
+            self.assertTrue(write.held(self.path))      # one file identity before and after
+        self.assertFalse(write.held(self.path))
+
+    def test_held_is_false_when_not_held_when_the_lock_file_is_missing_and_when_git_cannot_say(self):
+        self.assertFalse(os.path.exists(write.lock_path(self.path)))
+        self.assertFalse(write.held(self.path))         # no lock file yet
+        self.add()                                      # makes the lock file and gives the lock up
+        self.assertTrue(os.path.isfile(write.lock_path(self.path)))
+        self.assertFalse(write.held(self.path))         # the file exists, nobody holds it
+        bad = write.gitrepo.Place(write.gitrepo.UNKNOWN, None, 'git did not answer: timed out', None, None)
+        with write.locked(self.path):
+            with mock.patch.object(write.gitrepo, 'classify', return_value=bad):
+                self.assertFalse(write.held(self.path))  # nowhere to look: never held
+
     def test_two_processes_adding_and_committing_at_once_give_one_commit_per_entry(self):
         self.one_commit_per_entry('commit', self.env)
 

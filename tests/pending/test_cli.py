@@ -8,6 +8,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import unittest
 from unittest import mock
 
@@ -19,6 +20,35 @@ TOOL = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.absp
                     'tools', 'pending.py')
 MODEL = 'Test Model 1'
 TEXT = '# Pending\n\n1. First step\n2. Second step\n'
+HOLD = 0.4           # seconds a racing child sleeps between its read of the file and its write
+RACE_TIMEOUT = 60.0  # the hard bound on a child
+# A racing child: kitlib.pending.write_atomic sleeps HOLD first, so two children that read the file
+# together both read it before either writes. It says it is ready, waits for the go file, then runs
+# tools/pending.py with the rest of its arguments.
+RACE_CHILD = r'''
+import os, runpy, sys, time
+tool, ready, go, hold = sys.argv[1:5]
+sys.path.insert(0, os.path.dirname(os.path.dirname(tool)))
+from kitlib import pending
+real = pending.write_atomic
+def slow(p, text):
+    time.sleep(float(hold))
+    real(p, text)
+pending.write_atomic = slow
+open(ready, 'w').close()
+deadline = time.monotonic() + 30
+while not os.path.exists(go):
+    if time.monotonic() > deadline:
+        sys.exit('no go file')
+    time.sleep(0.01)
+sys.argv = [tool] + sys.argv[5:]
+runpy.run_path(tool, run_name='__main__')
+'''
+# A child that holds the pending file's write lock until its stdin closes.
+HOLDER = ('import os, sys; sys.path.insert(0, os.path.dirname(os.path.dirname(sys.argv[1]))); '
+          'from kitlib import pending\n'
+          'with pending.locked(sys.argv[2]):\n'
+          '    print("held", flush=True); sys.stdin.read()\n')
 
 
 class Base(unittest.TestCase):
@@ -126,6 +156,75 @@ class CliTest(Base):
         r = self.run_tool('list')
         self.assertEqual(r.returncode, 1)
         self.assertIn('pending_path', r.stderr)
+
+
+class WriteLockTest(Base):
+    """Two changes at once: the write lock keeps both (without it the second replace drops the first)."""
+
+    def env(self):
+        return fixture_env({'USERPROFILE': self.home, 'HOME': self.home, 'CLAUDE_AGENT_MODEL': MODEL})
+
+    def race(self, *runs):
+        procs, readies = [], []
+        go = os.path.join(self.repo.base, 'go')
+        for i, args in enumerate(runs):
+            ready = os.path.join(self.repo.base, 'ready-%d' % i)
+            readies.append(ready)
+            p = subprocess.Popen([sys.executable, '-c', RACE_CHILD, TOOL, ready, go, str(HOLD)] + list(args),
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                 env=self.env(), cwd=self.repo.root)
+            self.addCleanup(lambda p=p: p.poll() is None and p.kill())
+            procs.append(p)
+        deadline = time.monotonic() + 30
+        while not all(os.path.exists(r) for r in readies):
+            for p in procs:
+                if p.poll() is not None:
+                    self.fail('a child exited before it was ready: %s' % (p.communicate(),))
+            self.assertLess(time.monotonic(), deadline, 'the children were not ready')
+            time.sleep(0.01)
+        open(go, 'w').close()
+        return [p.communicate(timeout=RACE_TIMEOUT) + (p.returncode,) for p in procs]
+
+    def test_two_adds_at_once_get_two_numbers_and_keep_both_items(self):
+        got = self.race(['add', '--text', 'From A'], ['add', '--text', 'From B'])
+        for out, err, rc in got:
+            self.assertEqual(rc, 0, err)
+        self.assertEqual(sorted(out for out, _, _ in got), ['added 3\n', 'added 4\n'])
+        text = self.read()
+        self.assertIn('. From A\n', text)
+        self.assertIn('. From B\n', text)
+        self.assertEqual(sorted(line[:2] for line in text.splitlines() if line[:1].isdigit()),
+                         ['1.', '2.', '3.', '4.'])
+
+    def test_two_adds_with_commit_at_once_give_one_commit_per_item(self):
+        got = self.race(['add', '--text', 'From A', '--commit'], ['add', '--text', 'From B', '--commit'])
+        for out, err, rc in got:
+            self.assertEqual(rc, 0, err)
+        subjects = self.repo.git('log', '-2', '--format=%s').splitlines()
+        self.assertEqual(sorted(subjects), ['pending: added 3', 'pending: added 4'])
+        self.assertEqual(self.repo.git('status', '--porcelain', '--', 'owner/PENDING.md'), '')
+        self.assertIn('. From A', self.read())
+        self.assertIn('. From B', self.read())
+
+    def test_a_held_lock_is_refused_after_the_wait_and_nothing_is_written(self):
+        holder = subprocess.Popen([sys.executable, '-c', HOLDER, TOOL, self.path], stdin=subprocess.PIPE,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.addCleanup(holder.communicate, timeout=RACE_TIMEOUT)
+        self.addCleanup(holder.stdin.close)
+        self.assertEqual(holder.stdout.readline().strip(), 'held')
+        spec = importlib.util.spec_from_file_location('pending_tool_under_test', TOOL)
+        tool = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(tool)
+        err = io.StringIO()
+        with mock.patch.dict(os.environ, {'USERPROFILE': self.home, 'HOME': self.home}), \
+                mock.patch.object(tool.pending, 'LOCK_WAIT', 0.3), \
+                contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            code = tool.main(['add', '--text', 'x'])
+        self.assertEqual(code, 1)
+        self.assertIn('pending.py: refused: ', err.getvalue())
+        self.assertIn('held by pid %d' % holder.pid, err.getvalue())
+        self.assertIn('nothing was written', err.getvalue())
+        self.assertEqual(self.read(), TEXT)
 
 
 @real_git('hooks: the fake runs no hooks')
