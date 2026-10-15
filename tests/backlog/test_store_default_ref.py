@@ -10,11 +10,12 @@ from unittest import mock
 
 from kitlib import config as kconfig
 from kitlib import pmdata
+from kitlib.backlog import at_landing
 from kitlib.backlog import record as rmod
 from kitlib.backlog import store as smod
 from kitlib.backlog.errors import Refusal
 
-from tests.backlog.helpers import ADD_FLAGS, priced
+from tests.backlog.helpers import ADD_FLAGS, priced, record_text
 from tests.gitfixture import TempRepo, fixture_env
 from tests.home import temp_home
 
@@ -95,6 +96,25 @@ class DefaultRef(unittest.TestCase):
         self.assertIn('or set ' + OPT_IN, text)
         self.assertEqual(self.ref_tip(), ('', ''))
 
+    def test_a_landing_close_refused_there_is_advised_in_the_pm_data_worktree(self):
+        """at_landing._close_in's WARNING: the WORKTREE command meets the same refusal, so the
+        advice names the PM data worktree; another store's refusal keeps the plain command."""
+        pmdata.write(self.repo.common_dir(), 'pmdata', 'private', self.repo.head())
+        wt = self.repo.worktree('pm', branch='pmdata')
+        backend = self.backend()
+        with self.assertRaises(Refusal) as caught:
+            self.publish(backend, priced('FOO'))
+        act = at_landing._Act('FOO', 'kit/x', 'abc')
+        args = ['close', 'FOO', '--reason', '"landed abc"']
+        said = at_landing._refused_advice(caught.exception, backend, self.root, act, args,
+                                          lambda *a: 'PLAIN ' + ' '.join(a))
+        self.assertEqual(said, 'close it in the PM data worktree with: %s'
+                         % at_landing.backlog_command(wt.replace('\\', '/'), *args))
+        named = self.backend(store='ref')
+        said = at_landing._refused_advice(Refusal('busy'), named, self.root, act, args,
+                                          lambda *a: 'PLAIN ' + ' '.join(a))
+        self.assertEqual(said, 'close it with: PLAIN close FOO --reason "landed abc"')
+
     def test_a_missing_pm_data_worktree_is_named(self):
         pmdata.write(self.repo.common_dir(), 'pmdata', 'private', self.repo.head())
         with self.assertRaises(Refusal) as caught:
@@ -118,6 +138,19 @@ class DefaultRef(unittest.TestCase):
         rc, out = self.run_tool(*add)
         self.assertEqual(rc, 0, out)
         self.assertIn('ADDED FOO', out)
+
+    def test_a_bare_migrate_onto_the_default_store_is_refused_and_so_is_its_dry_run(self):
+        """`migrate` without `--to` and no store named would build the whole store and be refused
+        at publish, while its dry run passed: both are refused before anything is read."""
+        self.repo.write('docs/backlog/FOO.md', record_text(id='FOO'))
+        self.repo.commit('records', 'docs/backlog/FOO.md')
+        self.repo.git('push', '-q', 'origin', 'main')
+        for args in (('migrate', '--dry-run'), ('migrate',)):
+            rc, out = self.run_tool(*args)
+            self.assertEqual(rc, 2, out)
+            self.assertTrue(out.startswith('REFUSED: ' + HEAD), out)
+            self.assertNotIn('DRY RUN', out)
+        self.assertEqual(self.ref_tip(), ('', ''))
 
 
 if __name__ == '__main__':

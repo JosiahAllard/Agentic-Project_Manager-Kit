@@ -187,6 +187,7 @@ class DefaultStoreCloses(StoreLandCase):
         self.assertEqual(len(warn), 1, out.lines)
         self.assertIn('FOO', warn[0])
         self.assertIn('is the default backlog store', warn[0])
+        self.assertIn('close it, once .kit.json names its "backlog".store, with: ', warn[0])
         self.assertEqual(len([l for l in out.lines if l.startswith('LANDED ')]), 1, out.lines)
         self.assertIsNone(self.lock().read())
 
