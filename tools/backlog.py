@@ -381,7 +381,9 @@ def do_migrate(args, top, cfg, rules):
         raise Usage('the configured store is `%s`, not a `ref` or `branch` store; name the store '
                     'to start with `--to ref` or `--to branch`' % configured)
     rel = args.dir or ('docs/backlog' if configured in ('ref', 'branch', 'main') else configured)
-    backend = smod.open_backend(top, cfg, fetch=False, store=to)
+    backend = smod.open_backend(top, cfg, fetch=False, store=args.to)   # the default: implicit
+    if getattr(backend, 'implicit', False):      # a dry run says so too, not only the real run
+        raise Refusal(smod.default_store_refusal(top))
     label, src = mmod.main_tip(top, backend.remote, cfg.main_branch)
     res = mmod.migrate(backend, rules, top, src, rel, dry_run=args.dry_run, label=label,
                        session=args.session)
