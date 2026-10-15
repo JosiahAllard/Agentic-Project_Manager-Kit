@@ -179,7 +179,8 @@ class WithTimer(SnapshotCase):
     def test_repositories_read_so_far_show_and_the_rest_say_not_read_yet(self):
         roots = self.build(['alpha', 'beta'], blocked=['beta'])
         self.assertTrue(self.views_b.start())
-        # the round reads alpha (its fetch, then its read), then waits in beta's fetch
+        # the round fetches and reads alpha (the read reuses the fetch's open), then waits in
+        # beta's fetch
         self.assertTrue(self.opener.entered.acquire(timeout=WAIT))
         self.assertTrue(self.opener.entered.acquire(timeout=WAIT))
         self.assertEqual(self.opener.calls[-1][:2], (roots['beta'], True))
