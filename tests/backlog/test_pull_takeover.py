@@ -141,6 +141,28 @@ class PullTakeover(StoreCase):
         self.verb('pull', 'DEAD')
         self.assertEqual(self.get('DEAD').get('pulled_by'), BRANCH)
 
+    def test_a_merge_off_mains_first_parent_line_is_no_landing(self):
+        # GONE merged into a side branch (`Merge GONE: ...` there), and the side branch landed:
+        # that merge is in main's history but not on its first-parent line, so GONE never landed
+        # on main and its pull is dead.
+        when = '%sT12:00:00+0000' % EARLIER
+        self.repo.git('checkout', '-q', '-b', 'kit/side')
+        self.repo.git('checkout', '-q', '-b', GONE)
+        self.repo.write('landed/gone.txt', 'x\n')
+        self.repo.commit('work', 'landed')
+        self.repo.git('checkout', '-q', 'kit/side')
+        with mock.patch.dict(os.environ, GIT_COMMITTER_DATE=when, GIT_AUTHOR_DATE=when):
+            self.repo.git('merge', '-q', '--no-ff', '-m', 'Merge %s: its summary' % GONE, GONE)
+            self.repo.git('checkout', '-q', 'main')
+            self.repo.git('merge', '-q', '--no-ff', '-m', 'Merge kit/side: its summary',
+                          'kit/side')
+        self.repo.git('branch', '-D', GONE)
+        self.repo.git('branch', '-D', 'kit/side')
+        self.seed(self.pulled('DEAD', GONE))
+        change = self.verb('pull', 'DEAD')
+        self.assertIn('took over a dead pull from %s' % GONE, '\n'.join(change.lines))
+        self.assertEqual(self.get('DEAD').get('pulled_by'), BRANCH)
+
     def test_a_history_git_cannot_read_fails_closed(self):
         self.ctx.main_branch = 'no-such-main'
         self.seed(self.pulled('DEAD', GONE))
