@@ -770,28 +770,31 @@ def _gate_checkout(top, cfg, seen, base=None, full=False, only=None, plan=False,
 # ---------------------------------------------------------------- the merged-tree gate
 
 def merged_gate(root, cfg, base, full=False, slug='land', log_dir=None, say=None, book_kw=None,
-                lane_args=None, reuse=None, slot=None):
+                lane_args=None, reuse=None, slot=None, tree=None):
     """_merged_gate() with its source (kitlib.gate.detect) in facts['source'] and as the last
     line. With no "gate" section in `cfg` the gate is detected from the merged tree, plus the
     steps `base` owes (detect.effective). `slot`: the Slot the landing already holds; the steps
-    run in it and no second slot is booked (gated)."""
+    run in it and no second slot is booked (gated). `tree`: the checkout holding the merge (a
+    landing's landing tree, kitlib.gate.land); default `root`."""
     try:
-        eff = detect.effective(cfg, root, base=base)
+        eff = detect.effective(cfg, tree or root, base=base)
     except detect.DetectError as e:
         return G.Outcome(G.REFUSED, ['REFUSED: the auto-detected gate: %s' % e])
     if eff.source == detect.AUTO:
         (say or _quiet)(detect.label(eff))
     out = _merged_gate(root, cfg, eff, base, full=full, slug=slug, log_dir=log_dir, say=say,
-                       book_kw=book_kw, lane_args=lane_args, reuse=reuse, slot=slot)
+                       book_kw=book_kw, lane_args=lane_args, reuse=reuse, slot=slot, tree=tree)
     out.facts['source'] = eff.source
     out.lines.append(detect.label(eff))
     return out
 
 
 def _merged_gate(root, cfg, eff, base, full=False, slug='land', log_dir=None, say=None,
-                 book_kw=None, lane_args=None, reuse=None, slot=None):
-    """Gate the merged tree at `root`'s HEAD (a landing's merge, in the main checkout) against
-    `base` (the main it was merged into): the paths base..HEAD changes select the steps (every
+                 book_kw=None, lane_args=None, reuse=None, slot=None, tree=None):
+    """Gate the merged tree at HEAD of `tree` (a landing's merge, in its landing tree; default
+    `root`) against `base` (the main it was merged into). The steps run in `tree`, and their hook
+    checks get it as ctx['root']; the repository's name and its log folder are `root`'s (the main
+    checkout's), wherever the tree is. The paths base..HEAD changes select the steps (every
     non-manual step with full, each running its full_cmd when it has one), and each step's
     merged_args are appended, then `lane_args` (the landing lane's merged_args). Outcome codes:
     OK, FAILED, REFUSED (also when no step is selected) or a machine lock code; facts verdict,
@@ -804,18 +807,19 @@ def _merged_gate(root, cfg, eff, base, full=False, slug='land', log_dir=None, sa
     and no slot is booked when none does. An auto-detected gate that found no stack runs nothing
     and passes (NO_CHECKS). `slot`: a held Slot to run in instead of booking one (gated)."""
     say = say or _quiet
+    tree = tree or root
     gate = eff.gate
     empty = detect.nothing_detected(eff)
-    head, why = refs.head(root)
+    head, why = refs.head(tree)
     if not head:
         return G.Outcome(G.REFUSED, ['REFUSED: no HEAD commit: %s' % why])
-    changed, why = changed_between(root, base, head)
+    changed, why = changed_between(tree, base, head)
     if changed is None:
         return G.Outcome(G.REFUSED, ['REFUSED: git cannot list the merged paths: %s' % why])
     try:
-        all_steps = S.build(gate, root, base, cfg.tools_dir, merged=True, extra=lane_args,
+        all_steps = S.build(gate, tree, base, cfg.tools_dir, merged=True, extra=lane_args,
                             full=full)
-        chosen, _ = S.select(gate, all_steps, changed, full=full, read=S.working_tree_reader(root))
+        chosen, _ = S.select(gate, all_steps, changed, full=full, read=S.working_tree_reader(tree))
     except S.GateConfigError as e:
         return G.Outcome(G.REFUSED, ['REFUSED: %s' % e])
     if not chosen and not empty:
@@ -829,7 +833,7 @@ def _merged_gate(root, cfg, eff, base, full=False, slug='land', log_dir=None, sa
     run = _to_run(chosen, reused)
     results, watched = [], {}
     if run:
-        results, refused = gated(cfg, root, base, changed, run, gate['kind'], name, slug_of(slug),
+        results, refused = gated(cfg, tree, base, changed, run, gate['kind'], name, slug_of(slug),
                                  logs, say, book_kw, merged=True, checks_rev=base, gate=gate,
                                  slot=slot, seen=watched)
         if refused is not None:
