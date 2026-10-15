@@ -14,7 +14,8 @@ The command cannot narrow its own pin (the run's wrapper holds the job), so it a
      from what it inherits), so a command they start cannot give away slots another command of
      the run still needs.
   2. The command (Offer.give) writes the request: {id, cpu: [slot ids], by_pid, by_ctime, at},
-     then waits for its id in the run record's `given_back` (done) or `give_back_refused`.
+     then waits for its id in the run record's `given_back` (done) or `give_back_refused`. A
+     record it cannot open now (the wrapper is replacing it) is read again, never taken as gone.
   3. The wrapper (Slot.wait, every settings.child_poll_s) reads the request and removes it. It
      refuses (check) unless the asker is alive and in the run's job, the run holds its cpu slots
      itself (not nested) and is pinned to them, the slots are some of its own and at least one
@@ -57,7 +58,7 @@ import secrets
 import time
 
 from kitlib.lock import queue as qm
-from kitlib.lock.store import iso, read_json, remove, write_json
+from kitlib.lock.store import iso, read_json, read_record, write_json
 from kitlib.proc import process
 
 GIVE_ENV = "MACHINE_LOCK_GIVE_BACK"
@@ -181,6 +182,13 @@ def queue_books(store, rid, keep):
 
 
 # ------------------------------------------------------------------ the command's side
+# The command reads the run record with store.read_record (re-exported here): (None, False) is
+# no record, the run is gone (finish removes it); (None, True) is a record it cannot read now,
+# most often one the wrapper's os.replace is swapping (under load an asker heard "gone" from a
+# run that went on to refuse). That one is read again, never taken for gone or for no slots.
+WITHDRAW_S = 2.0            # how long a timed-out give tries to withdraw a request it cannot read
+
+
 class Offer:
     """A command's offer to give back cpu slots (from_env: None when it has none)."""
 
@@ -199,36 +207,64 @@ class Offer:
         nest = (env.get("MACHINE_LOCK_RUN") or "").split(":")[0]       # kitlib.lock.run.NEST_ENV
         return o if nest == o.rid else None
 
-    def record(self):
-        return read_json(self.record_path)
-
     def held(self):
-        """The cpu slots the run holds now (its record's cores), [] when it is gone."""
-        rec = self.record() or {}
+        """The cpu slots the run holds now (its record's cores): [] when it is gone (no record,
+        or one not held); None when its record cannot be read now, which is never no slots."""
+        rec, there = read_record(self.record_path)
+        if not there:
+            return []
+        if rec is None:
+            return None
         return [i for i in rec.get("cores") or [] if type(i) is int] if rec.get("state") == "held" else []
 
     def give(self, cpu, wait_s=10.0):
         """Asks the wrapper to give back cpu slots `cpu`; waits up to wait_s for its answer.
         ("given", the record's given_back: {id, cpu (all given back so far), cores (kept),
-        cpumask, cpuset, at}), ("refused", why), ("gone", why) or ("timeout", why). After a
-        timeout the request is withdrawn; held() says what the run holds."""
+        cpumask, cpuset, at}), ("refused", why), ("gone", why) or ("timeout", why). "gone" only
+        when the record is not there or not held; one it cannot read now (read_record) is read
+        again on the next poll. After a timeout the request is withdrawn (withdraw); held()
+        says what the run holds."""
         rid = secrets.token_hex(6)
         write_json(self.path, {"id": rid, "cpu": sorted(set(cpu)), "by_pid": os.getpid(),
                                "by_ctime": process.own_ctime(), "at": iso()})
         end = time.monotonic() + wait_s
         while True:
-            rec = self.record()
-            if rec is None or rec.get("state") != "held":
+            rec, there = read_record(self.record_path)
+            if not there or (rec is not None and rec.get("state") != "held"):
                 return "gone", "run %s holds nothing now" % self.rid
-            if (rec.get("given_back") or {}).get("id") == rid:
-                return "given", rec["given_back"]
-            if (rec.get("give_back_refused") or {}).get("id") == rid:
-                return "refused", rec["give_back_refused"].get("why")
+            if rec is not None:
+                if (rec.get("given_back") or {}).get("id") == rid:
+                    return "given", rec["given_back"]
+                if (rec.get("give_back_refused") or {}).get("id") == rid:
+                    return "refused", rec["give_back_refused"].get("why")
             if time.monotonic() >= end:
-                d = read_json(self.path)
-                if d and d.get("id") == rid:
-                    remove(self.path)
-                return "timeout", "run %s did not answer within %g s" % (self.rid, wait_s)
+                why = "run %s did not answer within %g s" % (self.rid, wait_s)
+                if not self.withdraw(rid):
+                    why += ("; its request could not be withdrawn within %g s, so the run may "
+                            "still act on it" % WITHDRAW_S)
+                return "timeout", why
+            time.sleep(POLL_S)
+
+    def withdraw(self, rid):
+        """Removes request rid unless the wrapper has taken it. True: it is not on disk as rid
+        now (removed here, taken, or another request). A request that cannot be read or removed
+        now (the wrapper has it open) is tried again every POLL_S for WITHDRAW_S, then False:
+        left there, it would be served after its asker stopped waiting."""
+        end = time.monotonic() + WITHDRAW_S
+        while True:
+            d, there = read_record(self.path)
+            if not there or (d is not None and d.get("id") != rid):
+                return True
+            if d is not None:
+                try:
+                    os.remove(self.path)
+                    return True
+                except FileNotFoundError:
+                    return True
+                except OSError:
+                    pass
+            if time.monotonic() >= end:
+                return False
             time.sleep(POLL_S)
 
 
@@ -254,19 +290,26 @@ def drainer(say, env=None):
     the cpu slots past what threads_needed threads use (surplus), says what happened, and returns
     the ack (given_back) or None; None itself when the command has no offer. After a refusal, a
     timeout or the run's end it asks no more; only a refusal is said as "the run keeps them" (a
-    timeout says what the record books then, which a lost ack's give-back already shows)."""
+    timeout says what the record books then, which a lost ack's give-back already shows).
+    A record it cannot read now (held() None) asks nothing that time and is read again on the
+    next call; threads per slot come from the first record it reads, before anything is given
+    back (the command's mask is the one it started with)."""
     env = os.environ if env is None else env
     offer = Offer.from_env(env)
     if offer is None:
         return None
-    tps = threads_per_slot(offer.held(), env.get("MACHINE_LOCK_CPUMASK"))   # run.CPUMASK_ENV
-    state = {"off": False}
+    mask = env.get("MACHINE_LOCK_CPUMASK")      # run.CPUMASK_ENV
+    state = {"off": False, "tps": None}
 
     def give(threads_needed):
         if state["off"]:
             return None
         cores = offer.held()
-        extra = surplus(cores, tps, threads_needed)
+        if cores is None:
+            return None
+        if state["tps"] is None:
+            state["tps"] = threads_per_slot(cores, mask)
+        extra = surplus(cores, state["tps"], threads_needed)
         if not extra:
             return None
         res, info = offer.give(extra)
@@ -281,8 +324,10 @@ def drainer(say, env=None):
         else:
             # No answer is not a "no": the wrapper may have given them back and not yet written
             # its ack (a lost ack is written on its next poll), or be mid-write.
-            say("give back: cpu slot(s) %s: no answer (%s: %s); the run's record books %s now"
+            now = offer.held()
+            say("give back: cpu slot(s) %s: no answer (%s: %s); %s"
                 % (",".join(map(str, extra)), res, info,
-                   ",".join(map(str, offer.held())) or "nothing"))
+                   "the run's record cannot be read now" if now is None else
+                   "the run's record books %s now" % (",".join(map(str, now)) or "nothing")))
         return None
     return give

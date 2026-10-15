@@ -1,13 +1,18 @@
 """kitlib.lock.run nesting: MACHINE_LOCK_RUN names a run by id, wrapper pid and ctime;
 nest_check accepts it only when that wrapper is an ancestor, alive, and its record holds;
 nest_need inherits what the parent holds enough of and refuses a run that needs more."""
+import contextlib
 import os
+import time
+import types
 import unittest
+from unittest import mock
 
-from .helpers import StoreCase, clean_env
+from .helpers import StoreCase, clean_env, unopenable
 
 if os.name == "nt":
     from kitlib.lock import run as rm
+    from kitlib.lock import store as store_mod
     from kitlib.proc import process
 
 RID = "r-20261006T120000Z-abcdef"
@@ -90,6 +95,44 @@ class NestCheck(StoreCase):
         self.assertEqual(cm.exception.code, 2)
         self.assertIn("nested run refused", cm.exception.message)
         self.assertIsNone(self.store.read("queue.json"))
+
+    def test_a_record_that_cannot_be_opened_now_is_read_again(self):
+        pp, ct = self.parent_or_skip()
+        self.live_record(RID, pid=pp, ctime=ct, has={"cpu": 2}, cores=[0, 1])
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        stack.enter_context(unopenable(self.store.path("active", RID + ".json")))
+        sleeps = []
+
+        def sleep(s):
+            # The wrapper's os.replace is done: the next read opens it.
+            sleeps.append(s)
+            stack.close()
+        with mock.patch.object(store_mod, "time",
+                               types.SimpleNamespace(monotonic=time.monotonic, sleep=sleep)):
+            got, why = rm.nest_check(self.store, self.value(pp, ct))
+        self.assertIsNone(why)
+        self.assertEqual(got["cores"], [0, 1])
+        self.assertEqual(len(sleeps), 1)
+
+    def test_a_record_that_stays_unreadable_is_an_error_never_no_lock(self):
+        pp, ct = self.parent_or_skip()
+        self.live_record(RID, pid=pp, ctime=ct, has={"cpu": 2}, cores=[0, 1])
+        with unopenable(self.store.path("active", RID + ".json")):
+            with self.assertRaises(rm.LockError) as cm:
+                rm.nest_check(self.store, self.value(pp, ct))
+        self.assertEqual(cm.exception.code, rm.EXIT_REQUIRE)
+        self.assertIn("could not be read", cm.exception.message)
+
+    def test_book_inside_a_parent_whose_record_stays_unreadable_takes_no_lock(self):
+        pp, ct = self.parent_or_skip()
+        self.live_record(RID, pid=pp, ctime=ct, has={"cpu": 2}, cores=[0, 1])
+        with unopenable(self.store.path("active", RID + ".json")):
+            with self.assertRaises(rm.LockError) as cm:
+                rm.book("engine-test", "kit", "t", store=self.store,
+                        env=clean_env(**{rm.NEST_ENV: self.value(pp, ct)}))
+        self.assertIn("could not be read", cm.exception.message)
+        self.assertIsNone(self.store.read("queue.json"))        # it never queued for its own
 
 
 @unittest.skipUnless(os.name == "nt", "the lock is Windows only")
