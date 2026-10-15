@@ -1822,21 +1822,48 @@ def _rsync(args):
     return pos[-1:] if len(pos) >= 2 else []
 
 
+def _tar_folder(args, k):
+    """(folder Word or None, index of its last word) for tar's word args[k]: -C <dir>, -C<dir>,
+    -C in a cluster (-xC <dir>, -xvC<dir>), --directory[=]<dir> or a prefix of it from --dir
+    (--di is also --diff)."""
+    w, t = args[k], args[k].text
+    if t.startswith('--'):
+        name, eq, value = t.partition('=')
+        if len(name) < 5 or not '--directory'.startswith(name):
+            return None, k
+        if eq:
+            return tail_word(w, value), k
+    elif t.startswith('-') and 'C' in t[1:]:
+        rest = t[t.index('C', 1) + 1:]
+        if rest:
+            return tail_word(w, rest), k
+    else:
+        return None, k
+    return (args[k + 1], k + 1) if k + 1 < len(args) else (None, k)
+
+
 def _tar(args, cmd_word):
+    """[Word]: the folders tar -x writes: each -C/--directory (_tar_folder), a relative one read
+    from the one before it as tar does (-C /a -C b is /a/b); with none, the working directory."""
     first = args[0].text if args else ''
     extract = bool(re.match(r'^[A-Za-z]*x', first)) and not first.startswith('-')       # tar xf a.tar
-    folder = None
-    for k, w in enumerate(args):
-        t = w.text
+    folders, k = [], 0
+    while k < len(args):
+        t = args[k].text
         if t in ('--extract', '--get') or re.match(r'^-[A-Za-z]*x', t) and not t.startswith('--'):
             extract = True
-        if t in ('-C', '--directory') and k + 1 < len(args):
-            folder = args[k + 1]
-        elif t.startswith('--directory='):
-            folder = sh.Word(t.partition('=')[2], w.dyn, w.start, w.end)
+        folder, k = _tar_folder(args, k)
+        if folder is not None:
+            prev = folders[-1] if folders else None
+            rooted = folder.text.startswith(('/', '\\', '~')) or ntpath.splitdrive(folder.text)[0]
+            if prev is not None and not rooted:
+                folder = sh.Word(ntpath.join(prev.text, folder.text), folder.dyn or prev.dyn, folder.start,
+                                 folder.end)
+            folders.append(folder)
+        k += 1
     if not extract:
         return []
-    return [folder if folder is not None else here(cmd_word)]
+    return folders or [here(cmd_word)]
 
 
 def _unzip(args, cmd_word):
@@ -1952,14 +1979,14 @@ def write_targets(cmd, inv):
         return out + _python(cmd, args, word)
     if name in EVALS:
         return out + _evals(name, args, word)
+    if name == 'tar':                           # Windows' own tar.exe runs from PowerShell too
+        return out + _tar(args, word)
     if cmd.shell == sh.PS:
         return out
     if name == 'sed':
         return out + _sed(args)
     if name == 'perl':
         return out + _perl(args, word)
-    if name == 'tar':
-        return out + _tar(args, word)
     if name == 'unzip':
         return out + _unzip(args, word)
     if name == 'dd':
@@ -2796,6 +2823,79 @@ def writes_output_file(t):
     return len(name) >= 4 and '--output'.startswith(name)
 
 
+# git archive's long options in full (git expands a unique prefix: --outp is --output), those that
+# take a value, and its short ones (-o takes a value; -0..-9 are compression levels)
+ARCHIVE_LONGS = ('format', 'prefix', 'add-file', 'add-virtual-file', 'output', 'worktree-attributes', 'verbose',
+                 'list', 'mtime', 'remote', 'exec')
+ARCHIVE_VALUES = {'format', 'prefix', 'add-file', 'add-virtual-file', 'output', 'mtime', 'remote', 'exec'}
+ARCHIVE_FLAGS = set('vl0123456789')
+# --remote runs git-upload-archive (a program --exec names) instead of reading this repository
+ARCHIVE_RUNS = {'remote', 'exec'}
+
+
+def tail_word(w, value):
+    """The Word for `value`, the end of the word `w` after an option attached to it (--output=x,
+    -ox, -Cdir): its span covers only the value when `w` is spelt as its text (unquoted), so a
+    rewrite (retarget) keeps the option; else the whole word's."""
+    start = w.end - len(value) if w.end - w.start == len(w.text) else w.start
+    return sh.Word(value, w.dyn, start, w.end)
+
+
+def archive_long(name):
+    """The archive long option `name` (no dashes) stands for, or None when it is unknown or an
+    ambiguous prefix (--add)."""
+    if name in ARCHIVE_LONGS:
+        return name
+    hits = [o for o in ARCHIVE_LONGS if name and o.startswith(name)]
+    return hits[0] if len(hits) == 1 else None
+
+
+def archive_outputs(gc):
+    """(outputs, read) for git archive `gc`: the Words its -o/--output name (-o <f>, -o<f>,
+    -vo <f>, --output[=]<f> and any unique prefix, --o=<f>), and True when the archive only reads
+    the repository it runs in: no --remote or --exec (they run a program), no option the guard
+    does not know (a --no-* among them) and no word that is not literal (an unquoted $X may hold
+    -o). An unknown option does not end the scan, so an -o after it is still an output."""
+    words = gc.rest
+    outs, read, k = [], True, 0
+    while k < len(words):
+        w, t = words[k], words[k].text
+        if w.dyn:
+            read = False
+        if t == '--':
+            read = read and not any(x.dyn for x in words[k + 1:])
+            break
+        if t.startswith('--'):
+            name, eq, value = t[2:].partition('=')
+            opt = archive_long(name)
+            if opt is None or opt in ARCHIVE_RUNS:
+                read = False
+            if opt in ARCHIVE_VALUES and not eq:
+                k += 1
+                if k < len(words):
+                    w, value = words[k], words[k].text
+                    read = read and not w.dyn
+                else:
+                    w = None
+            if opt == 'output' and w is not None:
+                outs.append(tail_word(w, value) if eq else w)
+        elif t.startswith('-') and len(t) > 1:
+            for j, c in enumerate(t[1:], 1):
+                if c == 'o':
+                    if t[j + 1:]:
+                        outs.append(tail_word(w, t[j + 1:]))
+                    elif k + 1 < len(words):
+                        k += 1
+                        outs.append(words[k])
+                        read = read and not words[k].dyn
+                    break
+                if c not in ARCHIVE_FLAGS:
+                    read = False
+                    break
+        k += 1
+    return outs, read
+
+
 def strict_read_opts(sub, words):
     """True when every option of branch, tag or config is one GIT_STRICT_READ_OPTS or
     CONFIG_STRICT_READ_OPTS names in full: git expands an abbreviation (branch --unset-up), so an
@@ -2819,6 +2919,11 @@ def git_reads(gc, strict=False):
         return False
     if strict and sub == 'grep' and any(opens_pager(t) for t in words):
         return False
+    if sub == 'archive':
+        # its -o file is a write: git_targets hands it to git_jail, which judges it first; where
+        # the checkout cannot be placed, neither can a relative -o, so it is no plain read
+        outs, read = archive_outputs(gc)
+        return read and not (strict and outs)
     if sub in GIT_READS:
         return True
     pos = [t for t in words if not t.startswith('-')]
@@ -2838,8 +2943,11 @@ def git_reads(gc, strict=False):
 
 
 def git_targets(gc):
-    """[Word]: the folders git `gc` creates besides the checkout it runs in (worktree add, clone)."""
+    """[Word]: the folders and files git `gc` writes besides the checkout it runs in (worktree add,
+    clone, archive's -o/--output file: archive_outputs)."""
     args = gc.rest
+    if gc.sub == 'archive':
+        return archive_outputs(gc)[0]
     if gc.sub == 'worktree' and args and args[0].text == 'add':
         rest, skip = args[1:], {'-b', '-B', '--reason', '--orphan'}
     elif gc.sub == 'clone':
