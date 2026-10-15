@@ -660,6 +660,64 @@ class StagedDeletions(LinkedCase):
         self.assertEqual(self.git('show', '--name-status', '--format=', 'HEAD'), 'M\tseed.txt')
 
 
+class AnotherWriterStagesDuringTheCall(LinkedCase):
+    """Another process (the PM data worktree has several writers)
+    stages a file after this call checked the index. The commit records only the paths this call
+    named (and what it rendered or a merge staged); the other file stays staged, uncommitted."""
+
+    def intrude_at(self, name, nth=1):
+        """Stage intruder.txt in the real index just before the `nth` call of C.`name`."""
+        self.put('intruder.txt', 'not yours\n')
+        real, calls = getattr(C, name), []
+
+        def wrapper(*a, **kw):
+            calls.append(1)
+            if len(calls) == nth:
+                self.git('add', '--', 'intruder.txt')
+            return real(*a, **kw)
+        p = mock.patch.object(C, name, wrapper)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def assert_left_staged(self, code, out, *committed):
+        self.assertEqual(code, 0, out)
+        self.assertEqual(sorted(self.git('show', '--name-only', '--format=', 'HEAD').split()),
+                         sorted(committed))
+        self.assertEqual(self.git('diff', '--cached', '--name-only'), 'intruder.txt')
+        self.assertIn('intruder.txt', out)
+        self.assertNotIn('intruder.txt', [ln for ln in out.splitlines()
+                                          if ln.startswith('files ')][0])
+
+    def test_staged_after_the_check_and_before_the_add(self):
+        self.intrude_at('staged_status', nth=2)
+        self.put('a.py', 'a = 1\n')
+        self.assert_left_staged(*self.commit('add a', 'a.py'), 'a.py')
+
+    def test_staged_after_the_add_and_before_the_commit(self):
+        self.intrude_at('staged_machine_path_error')
+        self.put('a.py', 'a = 1\n')
+        self.assert_left_staged(*self.commit('add a', 'a.py'), 'a.py')
+
+    def test_a_named_deletion_still_commits_beside_an_intruder(self):
+        self.intrude_at('staged_machine_path_error')
+        self.git('rm', '-q', '--', 'seed.txt')
+        code, out = self.commit('drop seed', 'seed.txt')
+        self.assert_left_staged(code, out, 'seed.txt')
+        self.assertEqual(self.git('show', '--name-status', '--format=', 'HEAD'), 'D\tseed.txt')
+
+    def test_the_committed_path_is_not_left_staged(self):
+        self.intrude_at('staged_machine_path_error')
+        self.put('a.py', 'a = 1\n')
+        self.commit('add a', 'a.py')
+        self.assertNotIn('a.py', self.git('status', '--porcelain'))
+
+
+@real_git('the commit is built in a private index (GIT_INDEX_FILE): checked against git\'s own '
+          'commit as well as the fake\'s')
+class AnotherWriterStagesDuringTheCallRealGit(AnotherWriterStagesDuringTheCall):
+    pass
+
+
 class TheOwnersIdentity(LinkedCase):
 
     def test_the_owner_commits_an_owner_only_path_under_his_own_identity(self):
@@ -960,6 +1018,23 @@ class MergeInProgress(MergeCase):
         self.assertEqual(self.git('log', '-1', '--format=%P').split(), [tip, base])
         self.assertEqual(self.git('show', 'HEAD:other.txt'), 'from main')
         self.assertIn('files     work.txt, other.txt', out)
+
+    def test_a_file_another_writer_stages_mid_call_stays_out_of_the_merge(self):
+        tip, base = self.start_merge()
+        self.put('intruder.txt', 'not yours\n')
+        real = C.staged_machine_path_error
+
+        def wrapper(*a, **kw):
+            self.git('add', '--', 'intruder.txt')
+            return real(*a, **kw)
+        with mock.patch.object(C, 'staged_machine_path_error', wrapper):
+            code, out = self.commit('merge main', 'work.txt')
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.git('log', '-1', '--format=%P').split(), [tip, base])
+        self.assertEqual(self.git('show', 'HEAD:other.txt'), 'from main')
+        self.assertEqual(self.git('show', 'HEAD:work.txt'), 'resolved')
+        self.assertNotIn('intruder.txt', self.git('ls-tree', '-r', '--name-only', 'HEAD'))
+        self.assertEqual(self.git('diff', '--cached', '--name-only'), 'intruder.txt')
 
     def test_a_foreign_file_staged_during_a_merge_is_refused(self):
         tip, _ = self.start_merge()
