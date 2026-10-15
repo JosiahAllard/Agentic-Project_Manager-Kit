@@ -32,7 +32,9 @@ commit(Request) -> Outcome(code, lines). Nothing here prints or exits; tools/com
   that cannot be read (other than an unborn branch), and a HEAD another writer moves before the
   commit refuse it. This call's commit, made on a HEAD moved after the last check, is undone
   (update-ref back to its parent; the merge state written back for a merge commit) and refused;
-  a commit at HEAD that is not this call's is never undone (commit_only).
+  a commit at HEAD that is not this call's is never undone. A hook may change the commit; it is
+  told for this call's by its parent, or by the reflog entry its GIT_REFLOG_ACTION tags
+  (commit_only).
 - Owner-only paths (.kit.json "owner", kitlib.config.owner) are committed only by the owner:
   --owner-authored, which refuses unless the author identity git will record (`git var
   GIT_AUTHOR_IDENT`) is "owner".email (unset, an agent_emails address or any other: refused).
@@ -69,6 +71,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import uuid
 
 from kitlib import config as kconfig
 from kitlib import attribution, machinepaths, verdict
@@ -725,6 +728,7 @@ def undo_commit(root, new, parent, saved, merged):
 
 
 READ_BACK_FORMAT = '--format=%H %T %P%n%B'     # the read-back of HEAD after `git commit`
+REFLOG_TAIL = 1 << 20      # bytes of logs/HEAD read for this call's entry: it is among the last
 
 
 def message_lines(text):
@@ -733,35 +737,75 @@ def message_lines(text):
     return [l.rstrip() for l in text.splitlines() if l.strip()]
 
 
+def reflog_tag():
+    """This call's GIT_REFLOG_ACTION for `git commit`: git writes it, then ': <subject>', as the
+    message of the reflog entry for the commit, so the entry is this call's alone."""
+    return 'commit (kit %d %s)' % (os.getpid(), uuid.uuid4().hex)
+
+
+def tagged_entry(root, tag):
+    """`(old, new)` of the one entry in HEAD's reflog (logs/HEAD of the work tree at `root`) whose
+    message starts with `tag`: the HEAD this call's `git commit` read and the commit it made; old is
+    '' on an unborn branch. None when there is no reflog, no such entry, or more than one (the fake
+    git writes no reflog)."""
+    path, _why = repo.git_path(root, 'logs/HEAD')
+    if not path:
+        return None
+    try:
+        with open(path, 'rb') as fh:
+            fh.seek(max(0, os.path.getsize(path) - REFLOG_TAIL))
+            data = fh.read()
+    except OSError:
+        return None
+    want, hits = (tag + ':').encode('utf-8'), []
+    for line in data.split(b'\n'):
+        meta, tab, message = line.partition(b'\t')
+        fields = meta.split()
+        if tab and message.startswith(want) and len(fields) >= 2:
+            old, new = (f.decode('ascii', 'replace') for f in fields[:2])
+            hits.append(('' if not old.strip('0') else old, new))
+    return hits[0] if len(hits) == 1 else None
+
+
 def commit_only(root, head, snap, msg):
     """`git commit` of exactly `snap` (index_snapshot) on `head` (head_commit) through
-    private_index; `(rc, out, err)` as _git gives them. The real index is never written: its
+    private_index; `(rc, out, err, commit id, note lines)`. The real index is never written: its
     entries for `snap` already match the new HEAD, and every other staged entry stays staged.
     HEAD must not move under the call: checked just before `git commit` (refused), and read back
-    after it. The commit read back is this call's only when its tree is the private index's tree
-    and its message is `msg`; then, made on a HEAD another writer moved, it is undone (undo_commit)
-    and refused. Anything else at HEAD (another writer committed after this call) is refused
-    without undoing anything: a commit that is not this call's is never undone."""
+    after it. A HEAD read back whose first parent is `head` is this call's commit, whatever a hook
+    changed in it: git commit moves HEAD only from the HEAD it read, so another writer's commit can
+    only sit on top of it. Otherwise this call's commit and the HEAD it was made on come from the
+    one reflog entry tagged with this call's GIT_REFLOG_ACTION (tagged_entry):
+    - this call's commit at HEAD, made on a HEAD another writer moved: undone (undo_commit) and
+      refused;
+    - this call's commit made on `head`, another writer's on top of it: it stands (a NOTE line);
+    - this call's commit made on a moved HEAD, another writer's on top: refused, NOT undone, naming
+      the commit it may revert.
+    With no such entry (no reflog, the fake git), the commit at HEAD is this call's only when its
+    tree is the private index's and its message is `msg`; then it is undone as above. Anything
+    else is refused without undoing anything: a commit that is not this call's is never undone."""
+    tag = reflog_tag()
     tmp = tempfile.mkdtemp(prefix='kit-commit-')
     try:
         env, why = private_index(root, tmp, head, snap)
         if env is None:
-            return 1, '', why
+            return 1, '', why, '', []
         r = cmd.call(['write-tree'], root, env=env)
         if r.rc != 0:
             return r.rc, '', 'git write-tree of the private index failed: %s' % (
-                r.err or 'exit %s' % r.rc)
+                r.err or 'exit %s' % r.rc), '', []
         tree = r.out.decode('utf-8', 'replace').strip()
         now = head_commit(root)
         if now != head:
             raise _Stop(REFUSED, head_moved_line(head, now), 'Nothing was committed; the files '
                         'this call named are still staged. Run this again.')
         saved = merge_state(root)
-        r = cmd.call(['commit', '-q', '-m', msg], root, env=env)
+        r = cmd.call(['commit', '-q', '-m', msg], root, env=dict(env, GIT_REFLOG_ACTION=tag))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+    gout = r.out.decode('utf-8', 'replace')
     if r.rc != 0:
-        return r.rc, r.out.decode('utf-8', 'replace'), r.err
+        return r.rc, gout, r.err, '', []
     rc, out, err = _git(root, 'log', '-1', READ_BACK_FORMAT, 'HEAD')
     first, _nl, body = out.partition('\n')
     ids = first.split()
@@ -769,19 +813,49 @@ def commit_only(root, head, snap, msg):
         raise _Stop(REFUSED, 'git commit ran, but HEAD could not be read back to check it was '
                     'made on %s: %s. Check `git log -3` by hand.'
                     % (head[:12] or 'the unborn branch', err.strip() or 'exit %s' % rc))
-    new, new_tree, parents = ids[0], ids[1], ids[2:]
-    if new_tree != tree or message_lines(body) != message_lines(msg):
-        raise _Stop(REFUSED, 'refused, and NOT undone: git commit ran, but HEAD is now %s, which '
-                    'is not the commit this call made: another writer committed after it. Check '
-                    '`git log -3` by hand to see whether this call\'s commit is in the history.'
-                    % new[:12])
-    if (parents[0] if parents else '') != head:
-        if not parents:
-            raise _Stop(REFUSED, head_moved_line(head, ''), 'NOT undone: this call\'s commit %s '
-                        'has no parent; check `git log` by hand.' % new[:12])
-        raise _Stop(REFUSED, head_moved_line(head, parents[0]),
-                    *undo_commit(root, new, parents[0], saved, len(parents) > 1))
-    return 0, r.out.decode('utf-8', 'replace'), r.err
+    now, now_tree, parents = ids[0], ids[1], ids[2:]
+    base = parents[0] if parents else ''
+    if base == head:
+        return 0, gout, r.err, now, []
+    if not parents:
+        raise _Stop(REFUSED, head_moved_line(head, ''), 'NOT undone: the commit at HEAD, %s, has '
+                    'no parent; check `git log` by hand.' % now[:12])
+    entry = tagged_entry(root, tag)
+    if entry is None:
+        if now_tree != tree or message_lines(body) != message_lines(msg):
+            raise _Stop(REFUSED, 'refused, and NOT undone: git commit ran, but HEAD is now %s, '
+                        'which this call cannot tell for its own commit (another writer committed '
+                        'after it, or a hook changed it). Check `git log -3` by hand: a commit of '
+                        'this call made on another writer\'s commit lacks their change.' % now[:12])
+        return _undo_moved(root, head, now, base, saved, len(parents) > 1)
+    ours_base, ours = entry
+    if ours == now:
+        if ours_base != base:
+            raise _Stop(REFUSED, 'refused, and NOT undone: HEAD %s has parent %s, but git logged '
+                        'this call\'s commit on %s. Check `git log -3` by hand.'
+                        % (now[:12], base[:12], ours_base[:12] or 'an unborn branch'))
+        return _undo_moved(root, head, now, base, saved, len(parents) > 1)
+    if ours_base == head:
+        rc, _out, _err = _git(root, 'merge-base', '--is-ancestor', ours, now)
+        if rc == 0:
+            return 0, gout, r.err, ours, [
+                'NOTE: another writer has since committed %s on top of this commit.' % now[:12]]
+        raise _Stop(REFUSED, 'refused, and NOT undone: this call committed %s on %s, but HEAD is '
+                    'now %s, which does not contain it. Check `git log -3` and `git reflog` by '
+                    'hand.' % (ours[:12], head[:12] or 'an unborn branch', now[:12]))
+    raise _Stop(REFUSED, head_moved_line(head, ours_base),
+                'NOT undone: this call\'s commit %s was made on %s, so it may undo changes from %s; '
+                'another writer has since committed %s on top of it. Check `git log -3` and '
+                'restore their change by hand.'
+                % (ours[:12], ours_base[:12] or 'an unborn branch',
+                   ours_base[:12] or 'that writer', now[:12]))
+
+
+def _undo_moved(root, head, new, parent, saved, merged):
+    """Refuse this call's commit `new`, made on `parent` after HEAD moved from `head`, undoing it
+    (undo_commit)."""
+    raise _Stop(REFUSED, head_moved_line(head, parent),
+                *undo_commit(root, new, parent, saved, merged))
 
 
 def main_checkout_error(lander_main_checkout, root, main_branch=None, rule_pointer=None):
@@ -935,13 +1009,14 @@ def _commit(req, lines):
                     'was checked. Nothing was committed; run this again.' % ', '.join(changed))
     lines.extend(l for l in warnings if l not in msg_warnings)
     msg = build_message(req.subject, body, trailers)
-    rc, out, err = commit_only(root, head, snap, msg)
+    rc, out, err, new, notes = commit_only(root, head, snap, msg)
     if rc != 0:
         raise _Stop(REFUSED, 'commit failed: %s' % (err or out.strip() or 'exit %s' % rc))
-    _rc, short, _err = _git(root, 'rev-parse', '--short', 'HEAD')
-    lines.append('committed %s  %s' % (short.strip(), req.subject))
+    _rc, short, _err = _git(root, 'rev-parse', '--short', new)
+    lines.append('committed %s  %s' % (short.strip() or new[:12], req.subject))
     lines.append('files     %s' % ', '.join(
         paths + sorted((merged & set(status_after)) - set(paths))))
+    lines.extend(notes)
     try:
         others = set(staged_status(root))    # against the new HEAD: what is still staged
     except _Stop:
