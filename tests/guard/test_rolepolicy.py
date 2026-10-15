@@ -348,6 +348,68 @@ class LockVerbs(Base):
             with self.subTest(args):
                 self.denied(self.shell('%s %s' % (LOCK, args), 'senior-worker'), 'role-lock')
 
+    def test_a_path_naming_the_lock_cli_given_to_another_tool_is_no_lock_call(self):
+        """KIT-GUARD-ROLE-LOCK-ARG-FALSE-POSITIVE: only the program, or the script python runs, is
+        a lock call; machine_lock.py as another tool's argument is a path."""
+        kit_tools, pm = self.w.kit_dir.replace('\\', '/') + '/tools', self.w.data.replace('\\', '/')
+        backlog = 'python %s/backlog.py -C %s --session kit ' % (kit_tools, pm)
+        refused = (backlog + 'set KIT-LOCK-SLOT-CPUSET --scope kitlib/lock --scope tests/lock '
+                             '--scope tools/machine_lock.py --scope docs/lock-api.md',
+                   backlog + 'set KIT-LOCK-RUN-ID-COLLISION-ENDED-RECORD --scope kitlib/lock '
+                             '--scope tools/machine_lock.py --scope tests/lock/test_run.py',
+                   backlog + 'add KIT-LOCK-STATUS-JSON-FIELD --title "status --json" '
+                             '--scope tools/machine_lock.py --scope kitlib/lock/api.py')
+        others = ('cat tools/machine_lock.py', 'git diff -- tools/machine_lock.py', 'rg hold tools/machine_lock.py',
+                  'python tools/check.py tools/machine_lock.py hold whole',
+                  'py -3 -X utf8 tools/check.py --path tools/machine_lock.py run',
+                  'Get-Content tools/machine_lock.py | Select-String hold')
+        for shell in ('bash', 'powershell'):
+            for role in ('pm', 'reviewer', 'lander'):
+                for text in refused + others:
+                    with self.subTest(shell=shell, role=role, text=text):
+                        self.assertIsNone(rolepolicy.check(self.shell(text, role, shell=shell), self.w.ctx()))
+            for text in refused:
+                with self.subTest(shell=shell, text=text):
+                    self.allowed(self.shell(text, 'pm', shell=shell))
+
+    def test_every_real_lock_call_is_still_read(self):
+        """The lock CLI as the program, or as python's script through the wrappers the guard
+        unwraps; code (-c, -m, standard input) or a program named by a variable may run any later
+        word, so there a word naming it still counts."""
+        lock = 'tools/machine_lock.py'
+        rows = (('bash', 'python %s/tools/machine_lock.py hold --force' % self.w.kit_dir.replace('\\', '/')),
+                ('bash', 'python "C:/Program Files/kit/tools/machine_lock.py" hold --force'),
+                ('bash', 'py -3 %s hold --force' % lock), ('bash', 'py -3.12 %s hold --force' % lock),
+                ('bash', 'pythonw %s hold --force' % lock), ('bash', 'pyw %s hold --force' % lock),
+                ('bash', 'python3 -X utf8 -W ignore %s hold --force' % lock),
+                ('bash', 'python -Wignore -B %s hold --force' % lock),
+                ('bash', 'python --check-hash-based-pycs always %s hold --force' % lock),
+                ('bash', 'python -- %s hold --force' % lock), ('bash', '%s hold --force' % lock),
+                ('bash', 'echo x | python %s hold --force' % lock), ('bash', 'cd x; py -3 %s hold --force' % lock),
+                ('bash', 'git status && python %s hold --force' % lock),
+                ('bash', 'env A=1 timeout 60 python %s hold --force' % lock),
+                ('bash', 'start "" /b python %s hold --force' % lock),
+                ('bash', 'bash -c "python %s hold --force"' % lock), ('bash', 'cmd /c "py %s hold --force"' % lock),
+                ('bash', 'python -c "import runpy, sys; runpy.run_path(sys.argv[1])" %s hold --force' % lock),
+                ('bash', 'python -m pdb %s hold --force' % lock), ('bash', 'python - %s hold --force < x.py' % lock),
+                ('powershell', 'python %s hold --force' % lock), ('powershell', '& py -3 %s hold --force' % lock),
+                ('powershell', 'Get-Date; python %s hold --force' % lock),
+                ('powershell', 'Start-Process python -ArgumentList "%s hold --force"' % lock),
+                ('powershell', 'Start-Process -FilePath py -ArgumentList "%s", "hold", "--force"' % lock),
+                ('powershell', '& "C:/Program Files/Python312/python.exe" %s hold --force' % lock),
+                ('powershell', 'cmd /c "python %s hold --force"' % lock),
+                ('powershell', 'pwsh -Command "python %s hold --force"' % lock))
+        for shell, text in rows:
+            with self.subTest(shell=shell, text=text):
+                self.denied(self.shell(text, 'pm', shell=shell), 'role-lock')
+        # a program named by a variable meets rule unreadable first; the policy reads it too
+        d = rolepolicy.check(self.shell('"$PY" %s hold --force' % lock, 'pm', shell='bash'), self.w.ctx())
+        self.assertEqual((d.verdict, d.rule), ('deny', 'role-lock'))
+        for shell, text in (('bash', 'py -3 %s run --kind build -- x' % lock),
+                            ('powershell', 'Start-Process python -ArgumentList "%s background -- x"' % lock)):
+            with self.subTest(shell=shell, text=text):
+                self.denied(self.shell(text, 'reviewer', shell=shell), 'role-lock')
+
 
 class LockMcp(Base):
     """The lock MCP's tools are held to the same verbs as the CLI (rolepolicy.MCP_VERBS)."""

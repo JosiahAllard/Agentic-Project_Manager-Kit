@@ -786,6 +786,33 @@ class FailClosed(Hub):
             (bash, "python - <<'EOF'\nfrom kitlib.guard import hub\nprint(hub.OWNER_VERBS)\nEOF"),
         ), False)
 
+    def test_a_hub_folder_in_a_path_is_not_the_hub_tool(self):
+        # KIT-GUARD-HUB-PATH-SEGMENT-FALSE-POSITIVE (R-1957): a folder named hub (hub/ followed by
+        # a separator) is a path, not the hub tool, also on a line that runs python and imports
+        todos, store, mid = 'Z:/repos/other/hub/todos', 'Z:/x/hub/store', 'Z:/x/a/hub/b/c.txt'
+        self.rows((
+            (bash, 'ls %s/' % todos), (ps, 'Get-ChildItem %s/' % todos), (bash, 'cat %s/T-1.json' % todos),
+            (ps, 'Get-Content %s/T-1.json' % todos), (bash, 'ls %s' % store), (bash, 'cat %s' % mid),
+            (ps, 'dir Z:\\x\\hub\\todos'), (ps, 'Get-ChildItem Z:\\x\\a\\hub\\b'),
+            (bash, 'ls %s/ && python -c "import json"' % todos),
+            (bash, 'python -c "import os; print(os.listdir(\'%s\'))"' % todos),
+            (ps, 'python -c "import os; print(os.listdir(\'%s\'))"' % todos),
+            (bash, 'python -c "import json; print(json.load(open(\'%s/q.json\')))"' % store),
+            (bash, "python - <<'EOF'\nimport os\nprint(os.listdir('hub/todos'))\nEOF"),
+            (bash, "python - <<'EOF'\nimport pathlib\nprint(pathlib.Path('%s').read_text())\nEOF" % mid),
+            (ps, "Get-ChildItem %s | python -c 'import sys; print(sys.stdin.read())'" % todos),
+        ), False)
+        for path in (todos + '/T-1.json', store + '/q.json', mid):
+            with self.subTest(path):
+                self.allowed(lambda sub, path=path: event('Read', {'file_path': path}, self.w.wt, sub))
+        # on purpose: a backslash after hub may be Python's line join (import tools.\<newline>hub
+        # in a string the shell decodes), and hub with no separator after it may be the name itself
+        self.rows((
+            (ps, 'python -c "import os; print(os.listdir(r\'Z:\\x\\hub\\todos\'))"'),
+            (bash, 'python -c "import os; print(os.listdir(\'Z:/x/hub\'))"'),
+            (bash, 'python -c "import os; print(os.listdir(\'Z:/x/hub/\'))"; echo hub'),
+        ), True)
+
     def test_hub_in_python_code_from_anywhere_on_the_line(self):
         # a pipe of any length, a module that runs code it reads (code, asyncio, timeit -s,
         # pdb -c), and a newline the shell decodes ($'...', PowerShell's backtick n) all reach
