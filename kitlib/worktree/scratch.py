@@ -9,21 +9,25 @@ this order before anything is touched:
   kitlib.config.user, read from the environment at run time; a root that is not an absolute
   existing folder, is reached through a link, is a drive root, the home folder or above it, or
   holds the main checkout is no root), no link or junction is on the way, and it is not inside
-  the main checkout (a workstream worktree keeps the slug form and its own checks);
+  the main checkout or a worktree folder (a workstream worktree keeps the slug form and its own
+  checks). The roots come from the caller's environment: they scope the verb, they do not protect
+  the tree; the checks below do;
 - it is a worktree registered to this repository, not locked, detached, holding no other
   registered worktree;
-- its HEAD is reachable from a branch, remote-tracking branch or tag (`reachable`): a commit no
-  ref reaches cannot be told apart from work, so it is refused;
+- its HEAD, and every commit in its HEAD reflog, is reachable from a branch, remote-tracking
+  branch or tag (`reachable`): a commit no ref reaches cannot be told apart from work, so it is
+  refused (a ref that does not peel to a commit is skipped; a failed read proves nothing);
 - nothing holds it, no link is inside it, and its ignored files are build output only (the
   workstream verbs' own rules, kitlib.worktree.remove);
 - every uncommitted file is already in git at the SAME path (`preserved`): its content, and its
   staged blob when it has one, equal `<ref>:<path>` for some ref under refs/heads or refs/remotes.
-  A rename, copy, conflict, type change or quoted path is refused.
+  A rename, copy, conflict, type change, quoted path or nested repository is refused.
 
-Then `restore` checks each file again, resets the index, checks the tracked ones out of HEAD and
-deletes the untracked ones, and the tree goes through kitlib.worktree.remove.git_remove (its
-last status read, then a plain `git worktree remove`: never forced). A status, list or hash that
-cannot be read refuses.
+Then `restore` checks each file again, resets the index, checks the tracked ones out of HEAD
+(literal pathspecs) and deletes the untracked ones, each checked once more just before (`_delete`:
+its content, and no link on the way); `unmoved` reads HEAD and the reflog again; and the tree goes
+through kitlib.worktree.remove.git_remove (its last status read, then a plain `git worktree
+remove`: never forced). A status, list, reflog or hash that cannot be read refuses.
 """
 import os
 
@@ -92,6 +96,11 @@ def target(ctx, argument, rts, dropped):
         ctx.say('refused   %s is inside the main checkout %s: a workstream worktree, never a'
                 ' scratch one; use the slug form without --scratch; %s' % (path, ctx.main, NOTHING))
         return REFUSED
+    home = next((h for h in remove.homes_of(ctx) if _strictly_under(path, h)), None)
+    if home:
+        ctx.say('refused   %s is inside the worktree folder %s: a workstream worktree, never a'
+                ' scratch one; use the slug form without --scratch; %s' % (path, home, NOTHING))
+        return REFUSED
     if not rts:
         ctx.say('refused   %s: no scratch root (AGENT_TEMP, TEMP, TMP or the shared temp folder)'
                 ' is usable%s; %s' % (path, ': ' + '; '.join(dropped) if dropped else '', NOTHING))
@@ -131,38 +140,91 @@ def target(ctx, argument, rts, dropped):
     return path, entry
 
 
-def reachable(ctx, path, head):
-    """The first ref (refs/heads, refs/remotes, refs/tags) whose history holds `head`, or None
-    after saying why the tree is refused."""
-    def unknown(args, rc, err):
-        ctx.say('refused   %s: whether a ref reaches %s is unknown (%s); %s'
-                % (path, head[:10], remove.failure(args, rc, err), NOTHING))
+def reflog(path):
+    """`([commit ids in the tree's HEAD reflog, oldest first], None)` or `(None, why)`. The file
+    (`<its git dir>/logs/HEAD`, which `git worktree remove` deletes with the tree) is read here:
+    no reflog file is no entries, as `git log -g` would print none."""
+    args = ('rev-parse', '--absolute-git-dir')
+    rc, out, err = remove.git(path, *args)
+    if rc != 0 or not out:
+        return None, remove.failure(args, rc, err)
+    log = os.path.join(out, 'logs', 'HEAD')
+    try:
+        with open(log, encoding='utf-8', errors='replace') as fh:
+            text = fh.read()
+    except FileNotFoundError:
+        return [], None
+    except OSError as e:
+        return None, 'its HEAD reflog %s could not be read (%s)' % (log, e)
+    oids = []
+    for line in text.splitlines():
+        pair = line.split('\t', 1)[0].split(' ')[:2]
+        if len(pair) != 2 or not all(len(o) in (40, 64) and all(c in '0123456789abcdef' for c in o)
+                                     for o in pair):
+            return None, 'its HEAD reflog %s has a line this verb cannot read: %r' % (log, line)
+        oids.extend(o for o in pair if o.strip('0') and o not in oids)
+    return oids, None
 
-    args = ('for-each-ref', '--format=%(objectname) %(refname)', 'refs/heads', 'refs/remotes',
-            'refs/tags')
+
+def _reaches(ctx, refs, oid):
+    """`(ref, None)` for a ref whose history holds `oid`; `(None, None)` when no ref does;
+    `(None, why)` when no ref proved it and a read failed (fail closed: never a NO)."""
+    for tip, name in refs:          # a tip at the commit answers without a walk
+        if tip == oid:
+            return name, None
+    failed = None
+    for _, name in refs:
+        # exit 1 is git's NO; anything else is a failed read: the next ref may still prove it.
+        rc, _, err = remove.git(ctx.main, 'merge-base', '--is-ancestor', oid, name)
+        if rc == 0:
+            return name, None
+        if rc != 1 and failed is None:
+            failed = remove.failure(('merge-base', '--is-ancestor', oid[:10], name), rc, err)
+    return None, failed
+
+
+def reachable(ctx, path, head, logged):
+    """The first ref (refs/heads, refs/remotes, refs/tags) whose history holds `head`, or None
+    after saying why the tree is refused. Every commit in `logged` (its HEAD reflog) must be
+    reached too: a commit made in the tree and left by a checkout is work no ref keeps."""
+    def unknown(oid, why):
+        ctx.say('refused   %s: whether a ref reaches %s is unknown (%s); %s'
+                % (path, oid[:10], why, NOTHING))
+
+    args = ('for-each-ref', '--format=%(objectname) %(objecttype) %(refname)', 'refs/heads',
+            'refs/remotes', 'refs/tags')
     rc, out, err = remove.git(ctx.main, *args)
     if rc != 0:
-        unknown(args[:1], rc, err)
+        unknown(head, remove.failure(args[:1], rc, err))
         return None
-    refs = [line.split(' ', 1) for line in out.splitlines() if ' ' in line]
-    for oid, name in refs:          # a tip at HEAD answers without a walk
-        if oid == head:
-            return name
-    for _, name in refs:
-        # exit 1 is git's NO; anything else is a failed read, never a NO (fail closed).
-        rc, _, err = remove.git(ctx.main, 'merge-base', '--is-ancestor', head, name)
-        if rc == 0:
-            return name
-        if rc != 1:
-            unknown(('merge-base', '--is-ancestor'), rc, err)
+    # A ref to a blob or tree holds no commit; a tag object may peel to one (merge-base peels it).
+    refs = [(p[0], p[2]) for p in (line.split(' ', 2) for line in out.splitlines())
+            if len(p) == 3 and p[1] in ('commit', 'tag')]
+    ref, why = _reaches(ctx, refs, head)
+    if ref is None:
+        if why:
+            unknown(head, why)
             return None
-    rc, count, _ = remove.git(ctx.main, 'rev-list', '--count', head, '--not', '--branches',
-                              '--remotes', '--tags')
-    ctx.say('refused   %s: no ref reaches its detached HEAD %s (%s commit(s) of its own would be'
-            ' lost); whether to drop them is the owner\'s call; %s'
-            % (path, head[:10], count if rc == 0 and count.isdigit() else 'an unknown number of',
-               NOTHING))
-    return None
+        rc, count, _ = remove.git(ctx.main, 'rev-list', '--count', head, '--not', '--branches',
+                                  '--remotes', '--tags')
+        ctx.say('refused   %s: no ref reaches its detached HEAD %s (%s commit(s) of its own would'
+                ' be lost); whether to drop them is the owner\'s call; %s'
+                % (path, head[:10], count if rc == 0 and count.isdigit() else 'an unknown number of',
+                   NOTHING))
+        return None
+    for oid in logged:
+        if oid == head:
+            continue
+        got, why = _reaches(ctx, refs, oid)
+        if got is None:
+            if why:
+                unknown(oid, why)
+            else:
+                ctx.say('refused   %s: its HEAD reflog holds %s, which no ref reaches (a commit'
+                        ' made there and left behind); whether to drop it is the owner\'s call; %s'
+                        % (path, oid[:10], NOTHING))
+            return None
+    return ref
 
 
 def hashes(tree, rels):
@@ -235,6 +297,8 @@ def preserved(ctx, path, work):
         xy, rel = line[:2], line[3:]
         if rel.startswith('"') or ' -> ' in rel:
             return None, '%r is a quoted path or a rename' % line
+        if xy == '??' and rel.endswith('/'):
+            return None, '%s is a folder git does not list into (a nested repository)' % rel
         if xy == '??':
             on_disk.append(rel)
             plan['delete'].append(rel)
@@ -290,26 +354,63 @@ def restore(ctx, path, plan, count):
         steps.append(('reset', '-q'))
     if plan['checkout']:
         steps.append(('checkout', '-q', 'HEAD', '--') + tuple(plan['checkout']))
+    # Literal pathspecs: a `[` in a file name is never a glob that names other files.
+    literal = dict(remove.git_env(), GIT_LITERAL_PATHSPECS='1')
     for args in steps:
-        rc, out, err = remove.git(path, *args)
+        rc, out, err = remove.git(path, *args, env=literal)
         if rc != 0:
             ctx.say('failed    %s: %s; git worktree remove was NOT run'
                     % (path, remove.failure(args[:1], rc, err or out)))
             return False
     for rel in plan['delete']:
-        full = os.path.join(path, *rel.split('/'))
-        try:
-            if holders.linked(full):
-                ctx.say('failed    %s: %s is a link; git was NOT run' % (path, rel))
-                return False
-            if os.path.lexists(full):
-                os.remove(full)
-        except OSError as e:
-            ctx.say('failed    %s: could not delete %s (%s); git was NOT run' % (path, rel, e))
+        if not _delete(ctx, path, rel, plan['blobs']):
             return False
     if count:
         ctx.say('restored  %d file(s) found in git at their paths: %s'
                 % (count, holders.listed(plan['where'])))
+    return True
+
+
+def _delete(ctx, path, rel, blobs):
+    """Delete the untracked file `rel` after checking it once more, just before: no link on the way
+    (each folder and the file) and the content checked earlier. True when done or already gone."""
+    parts = rel.split('/')
+    full = os.path.join(path, *parts)
+    try:
+        for i in range(1, len(parts) + 1):
+            if holders.linked(os.path.join(path, *parts[:i])):
+                ctx.say('failed    %s: %s is a link; git worktree remove was NOT run'
+                        % (path, '/'.join(parts[:i])))
+                return False
+        if not os.path.lexists(full):
+            return True
+        now, why = hashes(path, [rel])
+        if now is None or rel not in blobs or now.get(rel) != blobs[rel]:
+            ctx.say('failed    %s: %s changed after it was checked%s; git worktree remove was NOT'
+                    ' run' % (path, rel, ' (%s)' % why if why else ''))
+            return False
+        os.remove(full)
+    except OSError as e:
+        ctx.say('failed    %s: could not delete %s (%s); git worktree remove was NOT run'
+                % (path, rel, e))
+        return False
+    return True
+
+
+def unmoved(ctx, path, head, logged):
+    """True when the tree's HEAD and HEAD reflog are what was checked; else says why (a commit made
+    while the verb ran would otherwise be removed with the tree)."""
+    rc, now, err = remove.git(path, 'rev-parse', '--verify', 'HEAD')
+    if rc != 0 or now != head:
+        ctx.say('failed    %s: HEAD moved after it was checked (%s, was %s); git worktree remove'
+                ' was NOT run' % (path, now[:10] if rc == 0 else remove.failure(
+                    ('rev-parse',), rc, err), head[:10]))
+        return False
+    again, why = reflog(path)
+    if again != logged:
+        ctx.say('failed    %s: its HEAD reflog changed after it was checked%s; git worktree remove'
+                ' was NOT run' % (path, ' (%s)' % why if why else ''))
+        return False
     return True
 
 
@@ -328,7 +429,11 @@ def _remove_scratch(ctx, argument, environ):
         return found_target
     path, entry = found_target
     head = entry['head']
-    ref = reachable(ctx, path, head)
+    logged, why = reflog(path)
+    if logged is None:
+        ctx.say('refused   %s: %s; %s' % (path, why, NOTHING))
+        return REFUSED
+    ref = reachable(ctx, path, head, logged)
     if ref is None:
         return REFUSED
     ctx.say('scratch   %s: detached %s, in %s' % (path, head[:10], ref))
@@ -356,6 +461,8 @@ def _remove_scratch(ctx, argument, environ):
     if not restore(ctx, path, plan, len(work)):
         return REFUSED
     if not remove.clear_disposable(ctx, path):
+        return REFUSED
+    if not unmoved(ctx, path, head, logged):
         return REFUSED
     if not remove.git_remove(ctx, path, entry['path']):
         return REFUSED
