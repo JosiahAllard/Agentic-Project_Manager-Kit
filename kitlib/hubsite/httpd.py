@@ -18,6 +18,7 @@
   local_hosts(host, port)          the local listener's host_rule
   local_gate(creds)                the local listener's gate, over kitlib.hubsite.auth.Credentials
   pair_routes(creds)               the local listener's pairing routes (PAIR_ROUTE, PAIR_PATH)
+  stop_route(creds, request_stop, identity)    the local listener's stop route (STOP_ROUTE)
   static_file(static_dir, path)    the file a URL path names under static_dir, or None
 
 The address. Only LOOPBACK is bound: any other host in `addr` (a name, the empty string, the any
@@ -134,6 +135,7 @@ TUNNEL_VIA = 'tunnel'               # the tunnel listener's own source: no VIA_H
 PAIR_ROUTE = _api.BASE + '/pair'    # POST, the owner's token: a one-time link for the browser
 PAIR_PATH = '/pair'                 # GET ?code=...: redeems it and sets the session cookie
 UNPAIR_ROUTE = _api.BASE + '/unpair'    # POST, the owner's token: ends every browser session
+STOP_ROUTE = _api.BASE + '/stop'    # POST, the owner's token: the server closes (hub.py stop)
 BUSY = 'busy'
 RETRY_AFTER_S = 1
 INTERNAL = 'the server could not answer this request'
@@ -259,8 +261,7 @@ def pair_routes(creds):
     POST UNPAIR_ROUTE, the owner's token only, as PAIR_ROUTE: {"ok": true}; every browser
     session and every pairing code not yet redeemed ends (Credentials.unpair_all)."""
     def owners(request):
-        # role_for with no cookies: only a Bearer token can answer OWNER here
-        return request.role == auth.OWNER and creds.role_for(request.headers) == auth.OWNER
+        return _bearer_owner(creds, request)
 
     def new(request):
         if not owners(request):
@@ -287,6 +288,32 @@ def pair_routes(creds):
 
     return {('POST', PAIR_ROUTE): new, ('GET', PAIR_PATH): redeem,
             ('POST', UNPAIR_ROUTE): unpair}
+
+
+def _bearer_owner(creds, request):
+    """True when the request's Authorization header alone gives the owner role: role_for with
+    no cookies, so a browser session never counts, whatever else came with it."""
+    return request.role == auth.OWNER and creds.role_for(request.headers) == auth.OWNER
+
+
+def stop_route(creds, request_stop, identity):
+    """The route that asks the server to stop, for the local listener's `routes` alone: the
+    tunnel listener is never given it, so no request from off this machine can reach it.
+
+    POST STOP_ROUTE, the owner's token only, as PAIR_ROUTE (a browser session is refused, so
+    neither the page nor a script in its origin can end the server): calls request_stop() and
+    answers {"ok": true, "stopping": true} plus `identity` ({"pid", "ctime"} of the serving
+    process, so the caller can wait for that process and no other to end). The route only
+    asks: the server's own loop closes it (kitlib.hubsite.serve.run), the same clean close as
+    Ctrl+C, after this answer is sent."""
+    def stop(request):
+        if not _bearer_owner(creds, request):
+            return refusal(403, 'forbidden', "only the owner's token may stop the server, never "
+                           'a browser session', 'role')
+        request_stop()
+        return json_response(200, dict(identity, ok=True, stopping=True))
+
+    return {('POST', STOP_ROUTE): stop}
 
 
 def static_file(static_dir, path):

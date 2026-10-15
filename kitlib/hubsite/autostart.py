@@ -9,8 +9,11 @@ Nothing else is written: no machine config key, no token file. The same task nam
 installed task in place. A server that is already serving the store when the task fires makes the
 task's own start refuse (the store lock), and the running one goes on.
 Remove it with: Unregister-ScheduledTask -TaskName '<TASK_NAME>'.
+task_state() reads the task's state and start_task() starts it, for hub.py restart
+(kitlib.hubsite.control); neither ever stops or changes the task.
 """
 import os
+import subprocess
 import sys
 
 from kitlib.hubsite.serve import ServeError
@@ -20,6 +23,9 @@ from kitlib.proc import spawn
 
 TASK_NAME = 'PM kit hub server'
 VERB = 'serve'
+TASK_TIMEOUT_S = 60     # one PowerShell call that reads the task's state or starts it
+POWERSHELL = ['powershell', '-NoProfile', '-NonInteractive', '-Command']
+ABSENT = 'Absent'       # what task_state's script prints when there is no such task
 
 
 class AutostartError(ServeError):
@@ -85,3 +91,41 @@ def install(hub_py, python=None, whatif=False, run=spawn.run, isfile=os.path.isf
                              % (r.returncode, (r.stderr or '').strip()[:300]))
     return ["Installed the scheduled task '%s': it starts the hub server at sign-in. Remove it "
             "with: Unregister-ScheduledTask -TaskName '%s'" % (TASK_NAME, TASK_NAME)]
+
+
+def _powershell(script, what, run):
+    """stdout of one PowerShell call of `script`, through `run` (spawn.run when None, looked up
+    at the call so a test's patch reaches it). AutostartError naming `what` when PowerShell
+    cannot be run, runs out of TASK_TIMEOUT_S or exits other than 0."""
+    run = run or spawn.run
+    try:
+        r = run(POWERSHELL + [script], capture_output=True, text=True, timeout=TASK_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        raise AutostartError('%s: powershell timed out after %d s' % (what, TASK_TIMEOUT_S))
+    except OSError as e:
+        raise AutostartError('%s: powershell could not be run: %s' % (what, e))
+    if r.returncode != 0:
+        raise AutostartError('%s: powershell exit %d: %s'
+                             % (what, r.returncode, (r.stderr or '').strip()[:300]))
+    return r.stdout or ''
+
+
+def task_state(run=None):
+    """The state of the task TASK_NAME as the Task Scheduler names it ('Ready', 'Running',
+    'Disabled', 'Queued', ...), or None when there is no such task. It reads only. The task
+    is Running for as long as the server it started runs: the carrier waits for it."""
+    script = ("$t = Get-ScheduledTask -TaskName %s -ErrorAction SilentlyContinue; "
+              "if ($t) { [string]$t.State } else { '%s' }" % (window.q(TASK_NAME), ABSENT))
+    said = _powershell(script, "reading the state of the task '%s'" % TASK_NAME, run).strip()
+    if not said:
+        raise AutostartError("reading the state of the task '%s': powershell gave no answer"
+                             % TASK_NAME)
+    return None if said == ABSENT else said
+
+
+def start_task(run=None):
+    """Start the task TASK_NAME now, as its sign-in trigger would (hub.py restart). It only
+    starts: it never stops, registers or changes the task. AutostartError when it fails."""
+    script = "$ErrorActionPreference = 'Stop'; Start-ScheduledTask -TaskName %s" % (
+        window.q(TASK_NAME))
+    _powershell(script, "starting the task '%s'" % TASK_NAME, run)
