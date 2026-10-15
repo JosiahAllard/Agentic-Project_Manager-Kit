@@ -14,6 +14,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CODE = os.path.join(HERE, '..', '..', '..', 'optional', 'procwatch')
 sys.path.insert(0, CODE)
 sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.join(CODE, '..', '..'))      # the kit root, for kitlib
 import procwatch as PW  # noqa: E402
 
 MIN, HOUR = 60, 3600
@@ -63,6 +64,17 @@ class Classify(unittest.TestCase):
             else:
                 os.environ["PROCWATCH_ORIGINS"] = old
         self.assertEqual(ps[701]["origin"], "obs64.exe")
+
+    def test_agent_script_in_the_resolved_kit_temp_folder_is_an_agent_script(self):
+        # the kit temp folder comes from kitlib's work_temp (machine config `temp_dir`), not a guess
+        import kitlib.config.user as KU
+        old = KU.work_temp
+        KU.work_temp = lambda near, home=None, environ=None, platform=None: r"Q:\odd-kit-temp"
+        try:
+            ps = by_pid(world(proc(900, 77, "python.exe", r"python.exe Q:\odd-kit-temp\claude\x\job.py", age=2 * HOUR)))
+        finally:
+            KU.work_temp = old
+        self.assertEqual(ps[900]["rule"], "agent-script")
 
     def test_orphaned_tail_follow_and_grep_are_kill_ok_suspects(self):
         ps = by_pid(world(gitp(900, 77, "tail.exe", r"tail.exe -n +1 -f C:\t\x.output", 2 * HOUR, (60, GONE)),
