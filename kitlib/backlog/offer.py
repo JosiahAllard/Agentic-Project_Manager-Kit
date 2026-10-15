@@ -17,11 +17,12 @@ HELD = 'held'
 PARKED = 'parked'
 IN_FLIGHT = 'in flight'
 UNPRIORITISED_OPEN = 'unprioritised+open'
+REVIEW = 'to review'
 OWNER_PRIORITISED = 'owner to prioritise'
 UNCLASSIFIED = 'unclassifiable'
 NOT_READ = 'unreadable'
-BUCKETS = (PULLABLE, HELD, PARKED, IN_FLIGHT, UNPRIORITISED_OPEN, OWNER_PRIORITISED, UNCLASSIFIED,
-           NOT_READ)
+BUCKETS = (PULLABLE, HELD, PARKED, IN_FLIGHT, UNPRIORITISED_OPEN, REVIEW, OWNER_PRIORITISED,
+           UNCLASSIFIED, NOT_READ)
 EFFORT_ORDER = {'s': 0, 'm': 1, 'l': 2, '-': 3}
 PROBE_TIMEOUT = 60
 DEFAULT_CAP = 5
@@ -46,6 +47,9 @@ def classify(rec):
         return IN_FLIGHT, None
     if state != 'open':
         return UNCLASSIFIED, '`state: %s` parses but has no bucket' % state
+    if rec.has('review'):
+        # Marked by the Action Hub's add: never offered, priced or not, until `clear-review`.
+        return REVIEW, None
     priority = rec.get('priority')
     if priority is None or rmod._priority(priority) is not None:
         return UNCLASSIFIED, 'no readable `priority`'
@@ -104,6 +108,8 @@ class Banner(object):
                  '%d pullable' % self.count(PULLABLE),
                  '%d held' % self.count(HELD),
                  '%d unprioritised+open' % self.count(UNPRIORITISED_OPEN)]
+        if self.count(REVIEW):
+            parts.append('%d %s' % (self.count(REVIEW), REVIEW))
         for bucket in (PARKED, IN_FLIGHT, OWNER_PRIORITISED, NOT_READ, UNCLASSIFIED):
             if self.count(bucket):
                 parts.append('%d %s' % (self.count(bucket), bucket))
@@ -218,7 +224,7 @@ def unmet_requires(rec, snap, history, root, main_branch):
                 continue
             last = history(target)
             if last is None or not re.match(r'^\S+ closes ', last):
-                out.append((member, 'retired, so it will never land' if last else
+                out.append((member, 'retired or deleted, so it will never land' if last else
                             'no record has that id and none was closed'))
         elif kind == 'commit' and target:
             ok, why = refs.is_ancestor(target, 'refs/heads/%s' % main_branch, root)
@@ -350,6 +356,9 @@ def not_offered_why(rec, passed, session=None):
         return 'it is held on %s' % ', '.join(rec.all('blocked_on'))
     if bucket == PARKED:
         return 'it is parked'
+    if bucket == REVIEW:
+        return ('it is marked for review (review: %s): `clear-review %s --reason T` first'
+                % (rec.get('review'), rec.id))
     if bucket == UNPRIORITISED_OPEN:
         return 'it is unprioritised, so it has no rank and is never offered'
     if bucket == OWNER_PRIORITISED:
