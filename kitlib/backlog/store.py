@@ -687,7 +687,7 @@ class MainBackend(object):
     files stay written); an index left stale after the commit is IndexStale. Its git calls drop an
     inherited GIT_INDEX_FILE, GIT_DIR and GIT_WORK_TREE
     (_store_env). Elsewhere it commits nothing. With `clean` (a landing's close,
-    at_landing._pm_data_store) a write there first requires every path it writes to match HEAD in
+    at_landing.pm_data_store) a write there first requires every path it writes to match HEAD in
     the worktree and the index (_require_clean): else Dirty, and nothing is written, so it never
     deletes or commits a change another session made there and did not commit."""
 
