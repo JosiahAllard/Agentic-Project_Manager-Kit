@@ -292,6 +292,14 @@ class StateTest(unittest.TestCase):
         self.assertEqual(js("hubRetryMs(1, items)", 0.5), 1000)
         self.assertEqual(js("hubRetryMs(1, items)", 1.5), 1500)
 
+    def test_an_unpaired_browser_reads_again_slowly_and_never_gives_up(self):
+        # A refusal at a hub server restart must not end the page's reading for good, nor make it a tight loop.
+        got = js("[1, 2, 6, 30].map(n => hubRetryMs(n, items, true))", 0)
+        self.assertEqual(got, [45000, 45000, 45000, 45000])
+        self.assertEqual(js("hubRetryMs(1, items, true)", 1), 45000)            # a short Retry-After does not speed it up
+        self.assertEqual(js("hubRetryMs(1, items, true)", 120), 120000)         # a longer one is honoured
+        self.assertEqual(js("hubRetryMs(1, items, false)", 0), 2000)            # a paired browser's failures are unchanged
+
 
     def test_a_repository_showing_an_earlier_read_is_named_as_stale(self):
         got = js("hubState(items)", snapshot(views={"backlog": [
@@ -381,35 +389,76 @@ class DomTest(unittest.TestCase):
         self.assertEqual(made & {"img", "script", "a", "iframe", "object", "embed", "link", "style", "base", "meta", "svg", "form"},
                          set())
 
-    def test_an_unpaired_browser_is_told_to_pair_again_and_stops_reading(self):
+    def test_an_unpaired_browser_is_told_to_pair_again_and_reads_again_slowly_until_it_is(self):
         # The server answers a call that carries no session 403, naming the field `role`; it sends no 401.
+        # A refusal at a hub server restart must not leave the page dead until it is reloaded: it reads again
+        # every 45 s, says so, and carries on by itself once the server accepts the session.
         for status, field in ((403, "role"), (403, ""), (401, "")):
             for where in ("snapshot", "wait"):
                 got = dom("""
+                    const SNAP = %s;
                     const no = { status: %d, body: { ok: false, error: { code: "forbidden", message: "this request carries no owner or agent credential", field: %s } } };
-                    if (%s) server.route = c => c.path === "/snapshot" ? no : undefined;
+                    let refuse = SNAP;
+                    server.route = c => refuse && c.path === "/snapshot" ? no : undefined;
+                    const reads = () => calls.filter(c => c.path === "/snapshot").length;
+                    const now = () => ({ err: text($("#loaderr")), hidden: $("#loaderr").hidden, reads: reads(), sleeps: sleeps(), waiting: waits.length });
                     await start();
-                    if (!%s) await answerWait(no.status, no.body);
-                    const first = { err: text($("#loaderr")), hidden: $("#loaderr").hidden, calls: calls.length, sleeps: sleeps() };
-                    await fireTimers(); await fireTimers();
-                    return { first, calls: calls.length, waiting: waits.length, list: text($("#list")) };
-                """ % (status, json.dumps(field), json.dumps(where == "snapshot"), json.dumps(where == "snapshot")),
+                    if (!SNAP) { refuse = true; await answerWait(no.status, no.body); }
+                    const first = now();
+                    await fireTimers();
+                    const again = now();                  // still refused: read once more, and wait as long again
+                    refuse = false;
+                    await fireTimers();
+                    return { first, again, healed: now(), list: text($("#list")) };
+                """ % (json.dumps(where == "snapshot"), status, json.dumps(field)),
                     snapshot(collections={"todos": {"T-1": {"status": "open", "title": "kept on the page", "from": "pm"}}}),
                     hash="#todo")
                 with self.subTest(status=status, field=field, where=where):
-                    self.assertIn("not paired with the hub (yet, or any more: it was unpaired, or its session ran out)", got["first"]["err"])
-                    self.assertNotIn("restarted", got["first"]["err"])
-                    self.assertIn("`python tools/hub.py open`", got["first"]["err"])
-                    self.assertIn("in the kit folder", got["first"]["err"])
-                    self.assertNotIn("no longer paired", got["first"]["err"])
-                    self.assertNotIn("Trying again", got["first"]["err"])
-                    self.assertFalse(got["first"]["hidden"])
-                    self.assertEqual(got["first"]["sleeps"], [])                 # no later try is waiting
-                    self.assertEqual(got["calls"], got["first"]["calls"])        # and none is made
-                    self.assertEqual(got["waiting"], 0)
+                    first = got["first"]
+                    self.assertIn("not paired with the hub (yet, or any more: it was unpaired, or its session ran out)", first["err"])
+                    self.assertNotIn("restarted", first["err"])
+                    self.assertIn("`python tools/hub.py open`", first["err"])
+                    self.assertIn("in the kit folder", first["err"])
+                    self.assertNotIn("no longer paired", first["err"])
+                    self.assertNotIn("Trying again", first["err"])
+                    self.assertNotIn("stopped reading", first["err"])
+                    self.assertIn("every 45 s", first["err"])
+                    self.assertFalse(first["hidden"])
+                    self.assertEqual(first["sleeps"], [45000])                   # a slow retry, not a tight loop
+                    self.assertEqual(first["waiting"], 0)
+                    self.assertEqual(got["again"]["reads"], first["reads"] + 1)
+                    self.assertIn("not paired with the hub", got["again"]["err"])
+                    self.assertEqual(got["again"]["sleeps"], [45000])
+                    self.assertEqual((got["healed"]["err"], got["healed"]["hidden"]), ("", True))
+                    self.assertEqual(got["healed"]["waiting"], 1)                # reading the hub server again
+                    self.assertIn("kept on the page", got["list"])
                     if where == "wait":
-                        self.assertIn("kept on the page", got["list"])
-                        self.assertIn("may be out of date", got["first"]["err"])
+                        self.assertIn("may be out of date", first["err"])
+
+    def test_a_list_that_cannot_be_drawn_leaves_the_page_not_ready_and_says_why(self):
+        # A throw in render() on the first read: the counts stay drawn and the error is said at the top, but the
+        # page is not marked ready, so its controls stay hidden and the next snapshot is drawn even when its
+        # revision is lower, as after a hub server restart. Without that, the late-answer check drops it and the
+        # page says "Waiting for the hub server" with no line at the top.
+        got = dom("""
+            let armed = false, fixed = false;
+            const L = $("#list"), put = L.insertBefore.bind(L);
+            L.insertBefore = (n, r) => { if (armed) throw new Error("drawing failed"); return put(n, r); };
+            server.snap.revision = 9;
+            server.route = c => { if (c.path === "/snapshot" && !fixed) armed = true; return undefined; };
+            await start();
+            const broken = { err: text($("#loaderr")), hidden: $("#loaderr").hidden, n: text($("#n-t")), add: $("#addform").hidden, sleeps: sleeps() };
+            armed = false; fixed = true; server.snap.revision = 1;
+            await fireTimers();
+            return { broken, err: text($("#loaderr")), hidden: $("#loaderr").hidden, list: text($("#list")), add: $("#addform").hidden };
+        """, snapshot(collections={"todos": {"T-1": {"status": "open", "title": "drawn at last", "from": "pm"}}}), hash="#todo")
+        self.assertIn("could not show what the hub server sent (drawing failed)", got["broken"]["err"])
+        self.assertFalse(got["broken"]["hidden"])
+        self.assertEqual(got["broken"]["n"], "1")                                # the counts are drawn
+        self.assertTrue(got["broken"]["add"])                                    # not ready: no controls
+        self.assertEqual(got["broken"]["sleeps"], [2000])
+        self.assertIn("drawn at last", got["list"])
+        self.assertEqual((got["err"], got["hidden"], got["add"]), ("", True, False))
 
     def test_a_tunnel_access_refusal_is_not_unpaired_and_keeps_the_servers_words(self):
         # The tunnel listener refuses a call whose Cloudflare Access token it cannot accept with 403, field

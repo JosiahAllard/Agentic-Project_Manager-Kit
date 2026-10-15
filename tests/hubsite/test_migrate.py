@@ -117,6 +117,12 @@ class Case(unittest.TestCase):
         self.mirror = fill(os.path.join(self.tmp, 'mirror'), MIRROR)
         self.export = fill(os.path.join(self.tmp, 'export'), EXPORT, wrapped=True)
         self.root = os.path.join(self.tmp, 'store')
+        # validate reads the machine's repo names: a temp home, so this machine's are not used
+        self.home = os.path.join(self.tmp, 'home')
+        os.makedirs(self.home)
+        env = mock.patch.dict(os.environ, {'USERPROFILE': self.home, 'HOME': self.home})
+        env.start()
+        self.addCleanup(env.stop)
 
     def run_both(self, **kw):
         return migrate.migrate(self.root, [self.mirror, self.export], **kw)
@@ -378,6 +384,43 @@ class LockCase(Case):
         with self.assertRaises(MigrateError):
             migrate.validate(missing)
         self.assertFalse(os.path.exists(missing))
+
+
+class KnownReposCase(Case):
+    """validate judges a repo tag against the repo names the live server knows."""
+
+    def store_with(self, *repos):
+        return fill(os.path.join(self.tmp, 'tagged'),
+                    {'questions': {'Q-%03d' % i: question(repo=r) for i, r in enumerate(repos, 1)}})
+
+    def codes(self, findings):
+        return [(f.rel, f.code) for f in findings]
+
+    def test_check_passes_known_repos_so_a_known_tag_is_clean_and_an_unknown_one_is_flagged(self):
+        docs = {'questions': {'Q-001': question(repo='Gamerepo'), 'Q-002': question(repo='ghost')}}
+        for known in (['gamerepo'], lambda: ['gamerepo']):
+            self.assertEqual(self.codes(migrate.check(docs, known)),
+                             [('questions/Q-002', 'repo-alias')])
+        # no repos/ and no known repos: the one note that tags were not checked, as before
+        self.assertEqual([(f.rel, f.code) for f in migrate.check(docs)], [('', 'repo-alias')])
+
+    def test_validate_asks_the_machine_sources_for_the_known_repos(self):
+        root = self.store_with('gamerepo', 'ghost')
+        sessions = os.path.join(self.home, 'pm', 's.json')
+        write(sessions, json.dumps({'g': {'repo': 'Gamerepo'}}))
+        write(os.path.join(self.home, '.pm-kit', 'config.json'),
+              json.dumps({'pm_start': {'sessions_file': sessions}}))
+        with mock.patch('kitlib.pmstart._toplevel', lambda folder: None):   # no git
+            found = migrate.validate(root)
+        self.assertEqual(self.codes(found), [('questions/Q-002', 'repo-alias')])
+
+    def test_validate_with_no_machine_repos_gives_the_one_note_as_the_server_has_no_names(self):
+        found = migrate.validate(self.store_with('gamerepo', 'ghost'))
+        self.assertEqual(self.codes(found), [('', 'repo-alias')])
+
+    def test_validate_takes_known_repos_given_to_it(self):
+        found = migrate.validate(self.store_with('gamerepo', 'ghost'), known_repos=['gamerepo'])
+        self.assertEqual(self.codes(found), [('questions/Q-002', 'repo-alias')])
 
 
 class NotImportedCase(Case):

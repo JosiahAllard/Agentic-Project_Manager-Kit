@@ -326,7 +326,7 @@ retires them.
 
 `<kit>/tools/backlog.py -C <worktree> add` needs at least one `--scope <path>` (`none` for a record that touches no
 tracked file); without one it refuses (docs/backlog.md). It also needs `--found-on <branch>` (or
-`--found-on none` when no branch found it) and `--why-not-folded "<reason>"` (docs/backlog.md
+`--found-on none` when found on no branch, or on one that landed and was removed) and `--why-not-folded "<reason>"` (docs/backlog.md
 "The fold-in guard").
 
 The rulings ledger is once per machine: set `ledger_path` (and optionally `ledger_repos`) in

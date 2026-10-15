@@ -37,7 +37,7 @@ def add(store, rid, scope=None):
 
 def added(rid):
     """The subject `add` writes for a record filed with ADD_NONE."""
-    return 'backlog: add %s, found on no branch' % rid
+    return 'backlog: add %s, found on no branch (or on a branch since landed)' % rid
 
 
 def wrap_git(case, on):

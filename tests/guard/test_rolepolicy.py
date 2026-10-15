@@ -207,6 +207,13 @@ class ReadOnlyCheckout(Base):
                 self.assertIn('Run it with "%s" as the working directory' % W.fwd(self.w.temp), d.reason)
                 self.allowed(self.shell(text, 'reviewer', shell='bash', cwd=self.w.temp))
 
+    def test_inline_code_the_guard_proves_reads_only_runs_in_the_checkout(self):
+        """rules.py_reads_only: isolated (-I) code that only reads writes nothing, so the jail lets it
+        run in the read-only checkout; the same code without -I is still refused."""
+        code = "import json,sys; print(json.load(open(sys.argv[1]))['a'])"
+        self.allowed(self.shell('python3 -I -c "%s" x.json' % code, 'reviewer', shell='bash'))
+        self.denied(self.shell('python3 -c "%s" x.json' % code, 'reviewer', shell='bash'), 'write-jail')
+
 
 class Workdir(Base):
     def test_a_workdir_outside_the_checkout_is_refused(self):

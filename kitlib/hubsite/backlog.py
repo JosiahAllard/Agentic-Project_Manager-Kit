@@ -51,13 +51,14 @@ BAD_STORE = "the backlog store could not be opened"
 FETCH_FAILED = "the fetch failed"
 FETCH_EXITED = FETCH_FAILED + " (git exited %s)"
 READ_FAILED = "the read failed"
+NOT_READ = "not read yet"       # Views.held(): a repository no read has answered for yet
 _MAIN = object()    # handed to a backend's landed(): a main store answers with it
 _EXITED = re.compile(r"\bexited (-?\d{1,5})\b")
 _TIMED = re.compile(r"\btimed out after \d+ seconds\b")
 _GIT_SAID = re.compile(r"git [\w-]+: ")     # kitlib.hubbacklog.git's and the store's failures
 _DAY = re.compile(r"\d{4}-\d{2}-\d{2}$")
 PHRASES = (NO_CHECKOUT, NO_REPOS, NO_FOLDER, NOT_A_REPO, GIT_NOT_STARTED, GIT_TIMED_OUT, GIT_FAILED,
-           BAD_REF, BAD_STORE, FETCH_FAILED, READ_FAILED)
+           BAD_REF, BAD_STORE, FETCH_FAILED, READ_FAILED, NOT_READ)
 _CODED = re.compile("(?:%s|%s)$" % tuple(re.escape(p).replace("%s", r"-?\d{1,5}")
                                          for p in (GIT_EXITED, FETCH_EXITED)))
 
@@ -633,6 +634,9 @@ class Views(object):
     failed); `get(fresh=True)` is the same. Only one round runs at a time: a call that waited
     through a round started after it arrived takes that round's result instead of fetching again.
     `start()` runs a round at once and then every `refresh_s`, on a daemon thread, until `stop()`.
+    `held()` answers from what the reads so far left, however old, and starts no git, reads no
+    repository list and takes no lock (GET snapshot's answer while `timer_running()`:
+    kitlib.hubsite.serve).
 
     The answer is {"at", "repos", "error"}: "error" None, or NO_REPOS with the list's failure when
     the `repos` callable raised ("repos" is then the last good answer's). Each repository's entry
@@ -658,6 +662,7 @@ class Views(object):
         self._guard = threading.Lock()      # _locks
         self._round_at = None          # the clock when the last full round ended
         self._last = None              # the last answer whose repository list could be read
+        self._pairs = None             # the last repository list read (held() reads no list)
         self._fetched = {}
         self._fetch_error = {}
         self._fetching = threading.Lock()   # one round at a time
@@ -742,6 +747,7 @@ class Views(object):
             out = copy.deepcopy(self._last) if self._last else {"at": now.isoformat(), "repos": []}
             out["error"] = "%s: %s" % (NO_REPOS, exc.__class__.__name__)
             return out
+        self._pairs = pairs
         entries = []
         for name, root in pairs:
             held = self._held.get(name)
@@ -776,6 +782,7 @@ class Views(object):
             pairs = self.repos()
         except Exception:
             return                          # get() names it
+        self._pairs = pairs
         for name, root in pairs:
             if stop is not None and stop.is_set():
                 return
@@ -834,3 +841,39 @@ class Views(object):
                 return False
             self._thread = None
             return True
+
+    def timer_running(self):
+        """True while the timer's thread is alive. Takes no lock: `stop()` holds `_life` while it
+        waits for the thread, and a request must not wait on that."""
+        thread = self._thread
+        return thread is not None and thread.is_alive()
+
+    def held(self):
+        """What the reads so far left, in the order of the last repository list a read or round
+        read: get()'s answer, each repository's entry as its last read gave it however old, and
+        "at" the time of this call. A repository no read has answered yet (the round has not come
+        to it) is an entry with empty lists and "error" NOT_READ. None when no list has been read
+        yet, or none of its repositories has been read: there is nothing to show.
+
+        Starts no git, reads no repository list and takes no lock, so it answers while a round
+        is in git; it leaves what `get()` answered last as it was. A held entry is never changed
+        in place (`_read` replaces it whole), so the copy is of one read."""
+        pairs = self._pairs
+        if pairs is None:
+            return None
+        entries = []
+        read = 0
+        for name, root in pairs:
+            held = self._held.get(name)
+            if held and held[0] == root:
+                entry = copy.deepcopy(held[2])
+                read += 1
+            else:
+                entry = {"repo": name, "days": self.days, "open": [], "completed": [],
+                         "parked": [], "error": NOT_READ, "stale": False}
+            entry["fetched"] = self._fetched.get(name)
+            entry["fetch_error"] = self._fetch_error.get(name)
+            entries.append(entry)
+        if pairs and not read:
+            return None
+        return {"at": self.clock().isoformat(), "repos": entries, "error": None}

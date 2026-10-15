@@ -619,7 +619,13 @@ button.danger{color:var(--warn)}
       repos: list(views.repos).map(r => ({ id: String(r.name || ""), ...r })), backlog, completed, parked: backlog.filter(b => b.status === "parked"), usage, agents };
   }
   // The wait before the next try after `fails` failures in a row: the server's Retry-After when it gave one (1 s to 300 s), else 2 s doubling to 60 s.
-  const hubRetryMs = (fails, retryAfter) => { const r = Number(retryAfter); return r > 0 ? Math.max(1, Math.min(r, 300)) * 1000 : Math.min(60000, 1000 * 2 ** Math.min(Math.max(fails, 1), 6)); };
+  // An unpaired browser waits at least HUB_UNPAIRED_MS: it keeps reading, slowly, so that it carries on by itself once
+  // the server accepts its session again (a refusal at a hub server restart), and is never a tight loop.
+  const HUB_UNPAIRED_MS = 45000;
+  const hubRetryMs = (fails, retryAfter, unpaired) => {
+    const r = Number(retryAfter), asked = r > 0 ? Math.max(1, Math.min(r, 300)) * 1000 : 0;
+    return unpaired ? Math.max(HUB_UNPAIRED_MS, asked) : asked || Math.min(60000, 1000 * 2 ** Math.min(Math.max(fails, 1), 6));
+  };
   // pm-pure:end
 
   function pmFields(init){
@@ -1230,9 +1236,9 @@ button.danger{color:var(--warn)}
   $("#repo").addEventListener("change", e => { state.repo = e.target.value; render(); });
 
   // Loading. One snapshot fills every list. Then one long-poll at a time waits for the next change and the
-  // snapshot is read again. A failure is said at the top, in its own words: an unpaired browser stops reading
-  // (no later try can succeed until the owner pairs it again), a busy server is given the wait it asked for,
-  // and anything else is tried again after hubRetryMs.
+  // snapshot is read again. A failure is said at the top, in its own words: an unpaired browser is told how to
+  // pair and reads again only every HUB_UNPAIRED_MS (a refusal at a server restart heals by itself), a busy
+  // server is given the wait it asked for, and anything else is tried again after hubRetryMs.
   let rev = 0, lastKey = "", fails = 0;
   function loadSay(text){ const b = $("#loaderr"); b.textContent = text; b.hidden = !text; }
   const typing = () => { const a = document.activeElement; return !!a && a !== document.body && a.matches("input:not([type=checkbox]):not([type=radio]), textarea"); };
@@ -1251,7 +1257,15 @@ button.danger{color:var(--warn)}
     const unsince = Object.fromEntries(Object.entries(next.stale).map(([v, rows]) => [v, rows.map(o => ({ ...o, since: null }))]));
     const key = JSON.stringify({ ...next, revision: 0, seen: null, stale: unsince, usage: next.usage.map(u => ({ ...u, measured_at: null })), backlog: untimed(next.backlog), completed: untimed(next.completed), parked: untimed(next.parked) });
     const same = key === lastKey; lastKey = key;
-    if (first || !same || !typing()) render(); else seenLine();
+    // A list that cannot be drawn: the counts drawn before it stay, the page is left as ready as it was before
+    // this read (not ready on a first read, so its controls stay hidden and the next snapshot is drawn whatever
+    // its revision), the next read draws again, and the error goes up to be said at the top.
+    try { if (first || !same || !typing()) render(); else seenLine(); }
+    catch (e) {
+      lastKey = "";
+      if (first) { ready = false; try { render(); } catch (e2) {} }
+      throw e;
+    }
   }
   const sleep = ms => new Promise(done => setTimeout(done, ms));
   async function watch(){
@@ -1267,10 +1281,10 @@ button.danger{color:var(--warn)}
         fails = 0; loadSay("");
       } catch (e) {
         const old = ready ? " The lists may be out of date." : "";
-        if (e && e.unpaired) { loadSay("This browser is not paired with the hub (yet, or any more: it was unpaired, or its session ran out). " + PAIR_HOW + " This page has stopped reading the hub server." + old); return; }
         fails++; again = true;
-        const ms = hubRetryMs(fails, e && e.retryAfter), msg = (e && e.message) || "no reason given";
-        loadSay(e && e.status === 429 ? "The hub server is busy and asked this page to wait. Reading again in " + Math.round(ms / 1000) + " s." + old
+        const ms = hubRetryMs(fails, e && e.retryAfter, e && e.unpaired), msg = (e && e.message) || "no reason given";
+        loadSay(e && e.unpaired ? "This browser is not paired with the hub (yet, or any more: it was unpaired, or its session ran out). " + PAIR_HOW + " This page reads the hub server again every " + Math.round(ms / 1000) + " s, and carries on by itself once it is paired." + old
+          : e && e.status === 429 ? "The hub server is busy and asked this page to wait. Reading again in " + Math.round(ms / 1000) + " s." + old
           : e && e.code === "network" ? "Cannot reach the hub server (" + msg + ")." + old + " Trying again."
           : e && e.status ? "The hub server refused the read (" + msg + ")." + old + " Trying again."
           : "This page could not show what the hub server sent (" + msg + ")." + old + " Trying again.");

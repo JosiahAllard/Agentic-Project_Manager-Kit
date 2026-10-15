@@ -38,13 +38,25 @@ class Parse(unittest.TestCase):
 
     def test_mcp_and_other_tools(self):
         self.assertEqual(ADAPTER.parse('PreToolUse', event('mcp__x__lock_free', {}, 'C:/r')).kind, 'mcp')
-        for tool in ('Read', 'Grep', 'Agent', ''):
+        for tool in ('TodoWrite', 'WebFetch', 'Agent', ''):
             self.assertEqual(ADAPTER.parse('PreToolUse', event(tool, {}, 'C:/r')).kind, 'other', tool)
         for payload in (None, [], 0, '', False, 'x'):          # not an object: the hook denies it
             with self.subTest(payload=payload):
                 self.assertRaises(ValueError, ADAPTER.parse, 'PreToolUse', payload)
         self.assertEqual(ADAPTER.parse('SessionStart', {'cwd': 'C:/r'}), Action('session_start', cwd='C:/r'))
         self.assertEqual(ADAPTER.parse('SubagentStart', {'agent_id': 'a'}).kind, 'subagent_start')
+
+    def test_read_tools_are_reads_with_their_search_terms(self):
+        r = ADAPTER.parse('PreToolUse', event('Read', {'file_path': 'C:/r/a.py', 'offset': 3}, 'C:/r'))
+        self.assertEqual((r.kind, r.tool, r.path, r.params, r.cwd), ('read', 'Read', 'C:/r/a.py', None, 'C:/r'))
+        g = ADAPTER.parse('PreToolUse', event('Grep', {'pattern': 'x', 'path': 'C:/r', 'glob': '*.py'}, 'C:/r'))
+        self.assertEqual((g.kind, g.path, g.params), ('read', 'C:/r', {'search': 'contents', 'filter': '*.py'}))
+        g = ADAPTER.parse('PreToolUse', event('Grep', {'pattern': 'x'}, 'C:/r'))
+        self.assertEqual((g.path, g.params), (None, {'search': 'contents', 'filter': None}))
+        n = ADAPTER.parse('PreToolUse', event('Glob', {'pattern': '**/*.md'}, 'C:/r'))
+        self.assertEqual((n.kind, n.tool, n.path, n.params),
+                         ('read', 'Glob', None, {'search': 'names', 'wildcard': '**/*.md'}))
+        self.assertEqual(set(events.READ_TOOLS), {'Read', 'Grep', 'Glob'})
 
     def test_the_subagent_and_its_role(self):
         a = ADAPTER.parse('PreToolUse', bash('x', 'C:/r', sub=True))
@@ -93,7 +105,7 @@ class Render(unittest.TestCase):
         entry = ADAPTER.settings_entry('C:/k/boot/hook.py', executable='py')
         self.assertEqual(entry, {'PreToolUse': [{'matcher': MATCHER, 'hooks': [
             {'type': 'command', 'command': 'py', 'args': ['C:/k/boot/hook.py', 'claude', 'PreToolUse']}]}]})
-        for tool in list(events.FILE_TOOLS) + list(events.SHELL_TOOLS) + ['mcp__a__b']:
+        for tool in list(events.FILE_TOOLS) + list(events.SHELL_TOOLS) + list(events.READ_TOOLS) + ['mcp__a__b']:
             self.assertTrue(re.fullmatch(MATCHER, tool), tool)
 
 

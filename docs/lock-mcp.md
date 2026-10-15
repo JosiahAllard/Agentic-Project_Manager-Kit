@@ -21,7 +21,7 @@
 | `lock_snapshot` | `history_days`, `since`, `until` (all optional) | `api.snapshot()`: the Snapshot of docs/lock-api.md, with `revision`, `slots`, `runs`, `queue`, `holds` and `holds_error`, and `game`. |
 | `lock_wait_change` | `revision`, `timeout_s` (default 30, capped at 60) | `api.wait_change()`: the snapshot once the revision moves, or after the timeout. |
 | `lock_stats` | `days`, `since`, `until` (all optional) | `api.stats()`. |
-| `lock_run` | `id` | `{found, run}`: `api.run_record()`, live (`live: true`) or ended. An error result from the api (`invalid`) is the tool error. |
+| `lock_run` | `id` | `{found, run}`: `api.run_record()`, live (`live: true`) or ended. An error result from the api (`invalid`, or `store` for a live record that cannot be read) is the tool error. |
 | `lock_hold` | `id` | `{found, hold}`: `api.hold_record()`, live (`live_record: true`) or ended. Holds that cannot be read are the `store` tool error (`api.hold_record` returns that error result). |
 
 ## Write tools (owner-only)
