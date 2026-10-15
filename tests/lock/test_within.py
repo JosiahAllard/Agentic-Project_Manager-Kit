@@ -127,6 +127,41 @@ class PlanBehind(unittest.TestCase):
         self.assertEqual(got["r-y"]["start"], NOW + 7200)
         self.assertNotIn(7, got["r-x"]["cores"])
 
+    def test_one_that_also_needs_a_gpu_slot_bars_every_slot(self):
+        # Its gpu has no within, so a run behind it may not start before it on any slot.
+        self.L = lay.derive(lay.fake_hardware(threads=24, smt=2, gpus=1))
+        got = self.plan([holder("r-a", [4, 5, 6, 7], NOW - 100, 7300),
+                         waiter("r-w", 2, 3600, 2, within={"cpu": [4, 5, 6, 7]},
+                                need={"cpu": 2, "gpu": 1}),
+                         waiter("r-x", 2, 10800, 3)])
+        self.assertEqual(got["r-w"]["start"], NOW + 7200)
+        self.assertTrue(got["r-w"]["gpus"])
+        self.assertEqual(got["r-x"]["start"], NOW + 7200)
+
+    def test_a_parked_one_bars_every_slot(self):
+        got = self.plan([holder("r-a", [4, 5, 6, 7], NOW - 100, 7300),
+                         waiter("r-w", 2, 3600, 2, within={"cpu": [4, 5, 6, 7]}, parked=True,
+                                clear_at=NOW + 7200),
+                         waiter("r-x", 2, 10800, 3)])
+        self.assertEqual(got["r-w"]["start"], NOW + 7200)
+        self.assertEqual(got["r-x"]["start"], NOW + 7200)
+
+    def test_a_within_run_behind_one_with_the_same_set_does_not_start_first(self):
+        # Slot 7 is free now, but W1 may need it once A leaves: W2 waits for W1's start.
+        got = self.plan([holder("r-a", [4, 5], NOW - 100, 7300),
+                         waiter("r-w1", 3, 3600, 2, within={"cpu": [4, 5, 6, 7]}),
+                         waiter("r-w2", 1, 10800, 3, within={"cpu": [4, 5, 6, 7]})])
+        self.assertEqual((got["r-w1"]["start"], got["r-w1"]["cores"]), (NOW + 7200, [4, 5, 6]))
+        self.assertEqual((got["r-w2"]["start"], got["r-w2"]["cores"]), (NOW + 7200, [7]))
+
+    def test_a_within_run_behind_one_whose_set_overlaps_takes_slots_outside_it_now(self):
+        got = self.plan([holder("r-a", [4, 5], NOW - 100, 7300),
+                         waiter("r-w1", 3, 3600, 2, within={"cpu": [4, 5, 6, 7]}),
+                         waiter("r-w2", 2, 10800, 3, within={"cpu": [6, 7, 8, 9]})])
+        self.assertEqual((got["r-w1"]["start"], got["r-w1"]["cores"]), (NOW + 7200, [4, 5, 6]))
+        self.assertEqual((got["r-w2"]["start"], got["r-w2"]["cores"]), (NOW, [8, 9]))
+        self.assertTrue(got["r-w2"]["backfill"])
+
 
 class Holds(StoreCase):
     def owner_hold(self, slots):
