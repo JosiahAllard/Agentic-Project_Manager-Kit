@@ -36,6 +36,7 @@ The git patterns are an earlier per-repository git guard's ($g and its four rule
 kit's own git rules.
 """
 import fnmatch
+import os
 import re
 
 from kitlib import config as kconfig
@@ -43,6 +44,7 @@ from kitlib.git import repo
 
 from . import commands as cm
 from . import rules
+from . import shell as sh
 
 G = r'\bgit(?:\.exe)?\s+(?:-[Cc]\s+(?:"[^"]*"|\'[^\']*\'|\S+)\s+|--?\S+\s+)*'
 GIT_WORD_RE = re.compile(r'(?i)(?<![\w.-])git(?:\.exe)?(?![\w-])')  # git as a word, not .git or GIT_DIR
@@ -95,6 +97,11 @@ ANYWHERE = (
 PARSED_RULES = ('owner_lock', 'owner_setup', 'wrapped_gate', 'root_search', 'heavy', 'git_rules', 'shell_writes')
 WHY = 'The guard could not read this command; write the program name literally. Why: %s.'
 PLAIN = ' Write it plainly:'
+# when plain() cannot rewrite the line, the alternative is a script file, never the line again
+SCRIPT = (' Make every program name and nested shell text literal (a nested bash -c in single quotes; a '
+          'variable it needs exported), or write the commands to a script file with the Write tool, then run it:')
+SCRIPT_RUNS = {'bash': ('script.sh', 'bash "%s"'),
+               'powershell': ('script.ps1', 'powershell -NoProfile -ExecutionPolicy Bypass -File "%s"')}
 
 
 def heavy_patterns(cfg):
@@ -149,6 +156,16 @@ def plain(parsed, text):
     return t
 
 
+def plainly(ctx, parsed, text):
+    """(the reason's last sentence, the alternative): the line written plainly when plain() can
+    rewrite it, else a run of a script file in the temp folder: never the refused line itself."""
+    p = plain(parsed, text)
+    if p.strip() != text.strip():
+        return PLAIN, p
+    name, run = SCRIPT_RUNS['powershell' if parsed.shell == sh.PS else 'bash']
+    return SCRIPT, run % rules.fwd(os.path.join(ctx.tempdir, name))
+
+
 def cwd_at(parsed, pos, cwd):
     """The directory the top-level command holding text position `pos` runs in (a literal cd
     before it followed; None when a cd the text cannot place came first)."""
@@ -195,8 +212,8 @@ def check(event, ctx, text, cwd, role, parsed):
     def answer(d, rule):
         if d is not None:
             return rules.reworded(d, '%s %s' % (why, d.reason))
-        return rules.refuse('unreadable', role, '%s Its text matches the %s rule.%s' % (why, rule, PLAIN),
-                            plain(parsed, text))
+        last, alt = plainly(ctx, parsed, text)
+        return rules.refuse('unreadable', role, '%s Its text matches the %s rule.%s' % (why, rule, last), alt)
 
     main_rules = set(r for r, _p in MAIN_ONLY + SUBAGENT_MAIN)
     for rule, pat in list(ANYWHERE) + list(MAIN_ONLY) + list(SUBAGENT_MAIN):
@@ -244,11 +261,12 @@ def check(event, ctx, text, cwd, role, parsed):
         d = reread(m.start(), cwd_at(parsed, m.start(), cwd) or cwd)
         if d is not None:
             return answer(d, 'heavy')
+    last, alt = plainly(ctx, parsed, text)
     if role == 'subagent':
-        return rules.refuse('unreadable', role, why + PLAIN, plain(parsed, text))
+        return rules.refuse('unreadable', role, why + last, alt)
     if GIT_WORD_RE.search(text) and rules.agent_session(event, ctx):
         return rules.refuse('write-jail', role, '%s git on a line the guard cannot read may write a checkout it '
-                            'cannot place; run the git in its own call.%s' % (why, PLAIN), plain(parsed, text))
+                            'cannot place; run the git in its own call.%s' % (why, last), alt)
     owner = rules.is_owner_session(event, ctx)
     for c in parsed.commands:
         inv = cm.invocation(c)
@@ -263,10 +281,9 @@ def check(event, ctx, text, cwd, role, parsed):
             continue
         if main_like(ctx, c.cwd):
             return rules.refuse('unreadable', role, '%s It runs %s in a main checkout or a place git cannot '
-                                'tell.%s' % (why, hidden, PLAIN), plain(parsed, text))
+                                'tell.%s' % (why, hidden, last), alt)
         if not owner and rules.pmdata_recorded(ctx, c.cwd):
             return rules.refuse('git-push-pmdata', role, '%s It runs %s in a repository with a PM data record (%s): '
                                 'it may be git push --no-verify, which skips the pre-push hook that keeps PM data '
-                                'off public remotes.%s' % (why, hidden, rules.pmdata.FILE_NAME, PLAIN),
-                                plain(parsed, text))
+                                'off public remotes.%s' % (why, hidden, rules.pmdata.FILE_NAME, last), alt)
     return None

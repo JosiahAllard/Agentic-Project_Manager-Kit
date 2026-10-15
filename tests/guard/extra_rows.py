@@ -1,6 +1,7 @@
-"""Rows for tests/guard/test_rules.py: busy-wait loops, Windows paths in python heredocs,
-core.hooksPath changes (git config, -c, clone -c, GIT_CONFIG_*), ending processes by name, and
-the .NET and Gradle heavy defaults
+"""Rows for tests/guard/test_rules.py: busy-wait loops (and the unreadable alternative of a
+nested bash -c wait), Windows paths in python heredocs, core.hooksPath changes (git config, -c,
+clone -c, GIT_CONFIG_*), ending processes by name, the .NET and Gradle heavy defaults, and a
+python -c the guard proves reads only
 (docs/guard.md "Rules"). Same shape as ROWS there; the expected alternative is str.format text, so
 a PowerShell brace is doubled.
 
@@ -27,11 +28,48 @@ def heredoc_unquoted(program, body):
 ROWS = [
     # ---------------------------------------------------------------- busy-wait loops
     ('busy-wait: bash while sleep', lambda w: bash('while ! test -f done.txt; do sleep 5; done', w.wt),
-     'deny', 'busy-wait', "timeout 600 bash -c 'while ! test -f done.txt; do sleep 5; done'"),
+     'deny', 'busy-wait', 'SECONDS=0; while ! test -f done.txt; do [ $SECONDS -ge 600 ] && break; sleep 5; done'),
     ('busy-wait: bash until sleep, subagent', lambda w: bash('until grep -q ok log.txt; do sleep 1; done; echo hi', w.wt, sub=True),
-     'deny', 'busy-wait', "timeout 600 bash -c 'until grep -q ok log.txt; do sleep 1; done'"),
+     'deny', 'busy-wait', 'SECONDS=0; until grep -q ok log.txt; do [ $SECONDS -ge 600 ] && break; sleep 1; done'),
     ('busy-wait: bash loop with a redirect keeps it', lambda w: bash("while true; do date; sleep 60; done > log.txt 2>&1", w.wt),
-     'deny', 'busy-wait', "timeout 600 bash -c 'while true; do date; sleep 60; done' > log.txt 2>&1"),
+     'deny', 'busy-wait', 'SECONDS=0; while true; do [ $SECONDS -ge 600 ] && break; date; sleep 60; done > log.txt 2>&1'),
+    ('busy-wait: the bound goes in the outer loop, not a nested one', lambda w: bash(
+        'while true; do for i in 1 2; do sleep 1; done; done', w.wt, sub=True),
+     'deny', 'busy-wait', 'SECONDS=0; while true; do [ $SECONDS -ge 600 ] && break; for i in 1 2; do sleep 1; done; done'),
+    ('busy-wait: do on its own line', lambda w: bash('until test -f x\ndo\n  sleep 5\ndone', w.wt, sub=True),
+     'deny', 'busy-wait', 'SECONDS=0; until test -f x\ndo [ $SECONDS -ge 600 ] && break;\n  sleep 5\ndone'),
+    ('busy-wait: a loop in bash -c keeps its bash -c, single-quoted', lambda w: bash(
+        'bash -c "until [ -f x ]; do sleep 5; done"', w.wt, sub=True),
+     'deny', 'busy-wait', "bash -c 'SECONDS=0; until [ -f x ]; do [ $SECONDS -ge 600 ] && break; sleep 5; done'"),
+    ('busy-wait: a loop in bash -c from PowerShell', lambda w: ps('bash -c "while ! test -f x; do sleep 1; done"', w.wt),
+     'deny', 'busy-wait', "bash -c 'SECONDS=0; while ! test -f x; do [ $SECONDS -ge 600 ] && break; sleep 1; done'"),
+    ('busy-wait: a PowerShell loop in powershell -Command', lambda w: bash(
+        "powershell -Command 'while (-not (Test-Path x)) { Start-Sleep 5 }'", w.wt, sub=True),
+     'deny', 'busy-wait',
+     "powershell -Command '$deadline = (Get-Date).AddMinutes(10); while (-not (Test-Path x)) {{ if ((Get-Date) -gt $deadline) "
+     "{{ break }}; Start-Sleep 5 }}'"),
+    ('busy-wait alternative, bash, a subagent, its variable in scope', lambda w: bash(
+        'F=done.txt; SECONDS=0; until [ -f "$F" ]; do [ $SECONDS -ge 600 ] && break; sleep 5; done', w.wt, sub=True),
+     None, None, None),
+    ('busy-wait alternative, bash, in a main checkout', lambda w: bash(
+        'SECONDS=0; while ! test -f done.txt; do [ $SECONDS -ge 600 ] && break; sleep 5; done', w.main),
+     None, None, None),
+    ('busy-wait alternative, bash -c from PowerShell', lambda w: ps(
+        "bash -c 'SECONDS=0; while ! test -f x; do [ $SECONDS -ge 600 ] && break; sleep 1; done'", w.wt, sub=True),
+     None, None, None),
+    # a nested bash -c whose text holds a variable is unreadable: its alternative is a script
+    # file, never the refused line again
+    ('unreadable: a double-quoted bash -c wait, subagent', lambda w: bash(
+        'timeout 600 bash -c "until [ -f $F ]; do sleep 5; done"', w.wt, sub=True),
+     'deny', 'unreadable', 'bash "{temp}/script.sh"'),
+    ('unreadable: a double-quoted bash -c wait from PowerShell', lambda w: ps(
+        'bash -c "until [ -f $F ]; do sleep 5; done"', w.wt, sub=True),
+     'deny', 'unreadable', 'powershell -NoProfile -ExecutionPolicy Bypass -File "{temp}/script.ps1"'),
+    ('unreadable alternative, bash script, is allowed', lambda w: bash('bash "%s/script.sh"' % W.fwd(w.temp), w.wt, sub=True),
+     None, None, None),
+    ('unreadable alternative, PowerShell script, is allowed', lambda w: ps(
+        'powershell -NoProfile -ExecutionPolicy Bypass -File "%s/script.ps1"' % W.fwd(w.temp), w.wt, sub=True),
+     None, None, None),
     ('busy-wait: PowerShell while Start-Sleep', lambda w: ps('while (-not (Test-Path x)) { Start-Sleep -Seconds 5 }', w.wt),
      'deny', 'busy-wait',
      '$deadline = (Get-Date).AddMinutes(10); while (-not (Test-Path x)) {{ if ((Get-Date) -gt $deadline) {{ break }}; '
@@ -44,7 +82,10 @@ ROWS = [
      'deny', 'busy-wait', None),
     ('busy-wait: PowerShell Thread Sleep', lambda w: ps('while ($true) { [Threading.Thread]::Sleep(500) }', w.wt),
      'deny', 'busy-wait', None),
-    ('busy-wait alternative, bash, is allowed', lambda w: bash("timeout 600 bash -c 'while ! test -f done.txt; do sleep 5; done'", w.wt),
+    ('busy-wait alternative, bash, is allowed', lambda w: bash(
+        'SECONDS=0; while ! test -f done.txt; do [ $SECONDS -ge 600 ] && break; sleep 5; done', w.wt),
+     None, None, None),
+    ('busy-wait: a timeout bound is allowed', lambda w: bash("timeout 600 bash -c 'while ! test -f done.txt; do sleep 5; done'", w.wt),
      None, None, None),
     ('busy-wait alternative, PowerShell, is allowed', lambda w: ps(
         '$deadline = (Get-Date).AddMinutes(10); while (-not (Test-Path x)) { if ((Get-Date) -gt $deadline) { break }; Start-Sleep 5 }', w.wt),
@@ -215,4 +256,29 @@ ROWS = [
      LOCK + ' --kind build --repo demo --slug wt -- ./gradlew test'),
     ('heavy: dotnet --info', lambda w: bash('dotnet --info', w.wt), None, None, None),
     ('heavy: gradlew --version', lambda w: bash('./gradlew --version', w.wt), None, None, None),
+
+    # ---------------------------------------------------------------- python -c the guard proves reads only
+    ('main-checkout: python -I -c that only reads json, subagent', lambda w: bash(
+        'python -I -c "import json,sys; d=json.load(open(sys.argv[1])); print(len(d))" x.json', w.main, sub=True),
+     None, None, None),
+    ('main-checkout: python -I -c read-only, PowerShell, subagent', lambda w: ps(
+        'python -I -c "import json; print(json.load(open(\'x.json\', encoding=\'utf-8\'))[\'a\'])"', w.main, sub=True),
+     None, None, None),
+    ('main-checkout: py -3 -Ic read-only', lambda w: bash(
+        'py -3 -Ic "from os.path import exists; print(exists(\'x\'))"', w.main, sub=True), None, None, None),
+    ('main-checkout: python -c without -I may import from the directory', lambda w: bash(
+        'python -c "import json,sys; print(json.load(open(sys.argv[1])))" x.json', w.main, sub=True),
+     'deny', 'main-checkout', None),
+    ('main-checkout: python -I -c opening to write', lambda w: bash(
+        'python -I -c "open(\'x\', \'w\').write(\'y\')"', w.main, sub=True), 'deny', 'main-checkout', None),
+    ('main-checkout: python -I -c importing os', lambda w: bash(
+        'python -I -c "import os; os.remove(\'x\')"', w.main, sub=True), 'deny', 'main-checkout', None),
+    ('main-checkout: python -I -c reaching a module through sys', lambda w: bash(
+        'python -I -c "import sys; sys.modules[\'os\'].remove(\'x\')"', w.main, sub=True), 'deny', 'main-checkout', None),
+    ('main-checkout: python -I -c with text the shell fills in', lambda w: bash(
+        'python -I -c "$CODE"', w.main, sub=True), 'deny', 'main-checkout', None),
+    ('main-checkout: python -I -cCODE in one word', lambda w: bash(
+        'python -I -c"open(\'x\',\'w\').write(\'y\')"', w.main, sub=True), 'deny', 'main-checkout', None),
+    ('main-checkout: python -I - reads its code from a pipe', lambda w: bash(
+        'echo "print(1)" | python -I -', w.main, sub=True), 'deny', 'main-checkout', None),
 ]
