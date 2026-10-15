@@ -1073,6 +1073,164 @@ def hub_path_texts(text):
     return []
 
 
+# hub_not_paths: the options of a search whose parse the guard knows. Only options that take no
+# value are listed: one wrongly listed here would move the pattern onto a file the search opens.
+# Any other option, a word the shell may change (a variable, a wildcard) or an option that names
+# the pattern itself (-e, -f, /c:, /g:) and the search's words are all read as paths.
+HUB_GREP_FLAGS = frozenset('abcEFGHhiIlLnoPqrRsTUuvwxyzZ0123456789')
+HUB_GREP_LONG = frozenset((
+    'ignore-case', 'no-ignore-case', 'line-number', 'recursive', 'dereference-recursive', 'count',
+    'files-with-matches', 'files-without-match', 'only-matching', 'quiet', 'silent', 'no-messages',
+    'invert-match', 'word-regexp', 'line-regexp', 'with-filename', 'no-filename', 'extended-regexp',
+    'fixed-strings', 'basic-regexp', 'perl-regexp', 'byte-offset', 'text', 'null', 'null-data',
+    'initial-tab', 'color', 'colour'))
+HUB_RG_FLAGS = frozenset('abcFHiIlLnNopPqsSuUvwxz0')
+HUB_RG_LONG = frozenset((
+    'ignore-case', 'smart-case', 'case-sensitive', 'fixed-strings', 'word-regexp', 'line-regexp',
+    'invert-match', 'count', 'count-matches', 'files-with-matches', 'files-without-match',
+    'line-number', 'no-line-number', 'hidden', 'no-ignore', 'follow', 'only-matching', 'multiline',
+    'pcre2', 'vimgrep', 'heading', 'no-heading', 'with-filename', 'no-filename', 'text', 'null',
+    'quiet', 'column', 'no-messages', 'byte-offset', 'search-zip', 'unrestricted', 'trim', 'stats'))
+# Select-String's parameters (PowerShell 5.1 and 7): the switches, and the ones that take a value
+HUB_SLS_SWITCHES = ('-simplematch', '-casesensitive', '-quiet', '-list', '-notmatch', '-allmatches',
+                    '-raw', '-noemphasis')
+HUB_SLS_VALUES = ('-pattern', '-path', '-literalpath', '-inputobject', '-include', '-exclude',
+                  '-encoding', '-context', '-culture')
+# a bare name: no separator, drive, home, variable or wildcard; not `.` or `..`, not an option
+HUB_BARE_WORD_RE = re.compile(r'^(?!\.\.?$)[\w.][\w.-]*$')
+# the long options of a python script whose bare value names, never opens: `--session` gives a
+# session name (tools/launch.py, whose sessions include one named hub). A script's other options
+# may name a folder it opens, so only an option with a stated reason is listed here.
+HUB_PY_NAME_OPTS = frozenset(('--session',))
+
+
+def _hub_grep_pattern(args, short, long_):
+    """The pattern Word of grep or rg (`short`, `long_` the options that take no value), or None:
+    the first operand, when every option on the line is one of those (or a `--name=value` that
+    names no pattern) and no word is a variable."""
+    pattern = None
+    for k, w in enumerate(args):
+        t = w.text
+        if w.dyn:
+            return None
+        if t == '--':
+            if pattern is None and k + 1 < len(args) and not args[k + 1].dyn:
+                pattern = args[k + 1]
+            break
+        if t.startswith('--'):
+            name, eq, _ = t[2:].partition('=')
+            if not name or any(n.startswith(name) for n in ('regexp', 'file')):
+                return None
+            if eq or name in long_:
+                continue
+            return None
+        if t.startswith('-') and t != '-':
+            if all(c in short for c in t[1:]):
+                continue
+            return None
+        if pattern is None:
+            pattern = w
+    return pattern
+
+
+def _hub_findstr_pattern(args):
+    """findstr's pattern Word: its first operand, unless /c: or /g: gives the pattern."""
+    pattern = None
+    for w in args:
+        t = w.text.lower()
+        if w.dyn or t.startswith('-') or t.startswith(('/c:', '/g:')):
+            return None
+        if t.startswith('/'):
+            continue
+        if pattern is None:
+            pattern = w
+    return pattern
+
+
+def _hub_sls_patterns(args):
+    """Select-String's pattern Words: -Pattern's value (`-Pattern x`, `-Pattern:x`), else its
+    first positional word when every parameter before it is known."""
+    names = HUB_SLS_SWITCHES + HUB_SLS_VALUES
+    named, positional, k = [], None, 0
+    while k < len(args):
+        w = args[k]
+        t = w.text
+        if w.dyn:
+            return []
+        if t.startswith('-') and len(t) > 1:
+            p = cm.canon_param(t, names)
+            if p is None:
+                return []
+            if p in HUB_SLS_VALUES and ':' not in t:
+                if p == '-pattern' and k + 1 < len(args):
+                    named.append(args[k + 1])
+                k += 2
+                continue
+            if p == '-pattern':
+                named.append(w)
+            k += 1
+            continue
+        if positional is None:
+            positional = w
+        k += 1
+    if named:
+        return named
+    return [positional] if positional is not None else []
+
+
+def _hub_python_values(inv):
+    """The bare values of a python script's HUB_PY_NAME_OPTS: `--session value` and
+    `--session=value`. None when a flag before the script may run a module or code (`-Bm`, `-Ic`:
+    commands.python_script reads such a cluster as a plain flag)."""
+    found = cm.python_script(inv) if UI_PYTHON_RE.match(inv.name or '') else None
+    if not found or inv.args[found[0]].dyn or inv.args[found[0]].text == '-':
+        return []
+    args, out = inv.args, []
+    for w in args[:found[0]]:
+        if w.dyn or (w.text.startswith('-') and re.search('[mc]', w.text.lstrip('-'))):
+            return []
+    for j in range(found[0] + 1, len(args)):
+        w = args[j]
+        t = w.text
+        if t == '--':
+            break
+        if w.dyn:
+            continue
+        if t.startswith('--'):
+            name, eq, value = t.partition('=')
+            if eq and name in HUB_PY_NAME_OPTS and HUB_BARE_WORD_RE.match(value):
+                out.append(w)
+            continue
+        prev = args[j - 1]
+        if (j - 1 > found[0] and not prev.dyn and prev.text in HUB_PY_NAME_OPTS
+                and HUB_BARE_WORD_RE.match(t)):
+            out.append(w)
+    return out
+
+
+def hub_not_paths(inv):
+    """The ids of the Words of `inv` that hub-secrets does not read as paths into the store (the
+    token folder still counts): a search's pattern (grep, egrep, fgrep, rg, findstr,
+    Select-String) when the guard knows every option on the line, and the bare value of a python
+    script's `--session` (HUB_PY_NAME_OPTS). A pattern with a wildcard the shell may expand stays
+    a path. Nothing for a program the guard cannot name, or one run through Start-Process or
+    xargs."""
+    if inv is None or inv.dyn or inv.via:
+        return set()
+    name, args = inv.name, inv.args
+    if name in ('grep', 'egrep', 'fgrep'):
+        words = [_hub_grep_pattern(args, HUB_GREP_FLAGS, HUB_GREP_LONG)]
+    elif name == 'rg':
+        words = [_hub_grep_pattern(args, HUB_RG_FLAGS, HUB_RG_LONG)]
+    elif name == 'findstr':
+        words = [_hub_findstr_pattern(args)]
+    elif name in ('select-string', 'sls'):
+        words = _hub_sls_patterns(args)
+    else:
+        return {id(w) for w in _hub_python_values(inv)}
+    return {id(w) for w in words if w is not None and not hubg.has_glob(w.text)}
+
+
 def inline_code(cmd, inv):
     """The code python or node runs from its own command line (-c, -e) or from standard input
     (a heredoc, a here-string, the command piped in), as texts; [] for a script run or another
@@ -1135,6 +1293,7 @@ def hub_secret_shell(ctx, cmd, inv, places):
         if hit:
             return 'names %s' % hit
     runs_hub = hub_script_run(inv)
+    not_paths = hub_not_paths(inv)
     for w in list(cmd.words) + targets:
         for text in hub_path_texts(w.text):
             text = sh.home_text(text, ctx.home, w.dyn)
@@ -1148,6 +1307,8 @@ def hub_secret_shell(ctx, cmd, inv, places):
                 continue
             p_ = places()
             where = p_.glob_where(p) if hubg.has_glob(text) else p_.where(p)
+            if where == 'store' and id(w) in not_paths:
+                continue                        # exempt from the store, never the token folder
             if where == 'secret' or (where == 'store' and not runs_hub):
                 return 'reaches %s (%s)' % (p_.label(where), w.text)
     for text in inline_code(cmd, inv):
