@@ -439,9 +439,10 @@ class LockVerbs(Base):
                 self.denied(self.shell(text, 'reviewer', shell=shell), 'role-lock')
 
     def test_a_captured_reader_or_a_namesake_of_an_exempt_tool_runs_it(self):
-        """A PowerShell reader whose output a ( ) group, an assignment, -OutVariable or a
-        delay-bind { } block catches may hand the lock CLI to a program; and a script or reader
-        named like an exempt tool but found elsewhere is not that tool."""
+        """A reader whose output a ( ) or { } group, a loop or if piped on, or in PowerShell an
+        assignment, -OutVariable or a delay-bind { } block catches may hand the lock CLI to a
+        program; and a script or reader named like an exempt tool but found elsewhere is not that
+        tool."""
         lock = 'tools/machine_lock.py'
         rows = (('powershell', 'python (gi %s).FullName stop 42' % lock),
                 ('powershell', '& python (Get-ChildItem %s).FullName stop 42' % lock),
@@ -453,13 +454,23 @@ class LockVerbs(Base):
                 ('powershell', 'gci %s | Get-Content -Path { python $_.FullName stop 42 }' % lock),
                 ('powershell', 'gci %s | sls -Path { python $_.FullName stop 42 } -Pattern x' % lock),
                 ('powershell', 'python -c (gc %s -Raw) stop 42' % lock),
+                ('bash', '{ cat %s; } | python - stop 42' % lock), ('bash', '(cat %s) | python - stop 42' % lock),
+                ('bash', 'if true; then cat %s; fi | python - stop 42' % lock),
+                ('bash', 'for f in a; do cat %s; done | python - stop 42' % lock),
+                ('bash', 'while true; do cat %s; done > x.py' % lock),
+                ('bash', 'cat %s | { python - stop 42; }' % lock),
                 ('bash', 'python Z:/scratch/backlog.py %s stop 42' % lock),
                 ('bash', 'Z:/scratch/backlog.py %s stop 42' % lock),
                 ('bash', 'Z:/scratch/cat %s stop 42' % lock),
                 ('bash', './grep %s stop 42' % lock))
+        from kitlib.guard import commands as cm, shell as sh
         for shell, text in rows:
             with self.subTest(shell=shell, text=text):
-                self.denied(self.shell(text, 'reviewer', shell=shell), 'role-lock')
+                # the lock read itself: some rows meet role-shell first (python with no script)
+                parsed = cm.read(text, sh.PS if shell == 'powershell' else sh.BASH, self.w.wt)
+                self.assertIsNotNone(rolepolicy.lock_verb(parsed, 'read', self.w.kit_dir))
+                self.assertEqual(rolepolicy.check(self.shell(text, 'reviewer', shell=shell), self.w.ctx()).verdict,
+                                 'deny')
         for shell, text in (('bash', 'python tools/backlog.py set EX-LOCK --scope %s' % lock),
                             ('powershell', 'python ./tools/commit.py -m x %s' % lock),
                             ('powershell', 'Select-String -Path %s -Pattern hold' % lock),
