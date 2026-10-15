@@ -59,8 +59,8 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
    Work sets, Follow-ups. Check every other unpriced open record (an owner story, a record from
    the PM's brief) for duplicates, size and fit; price it 2-5 under the standing valuation
    rules (`set <ID> --priority <n> --priority-by agent`). One that needs the owner (priority 1, a
-   pre-emption, an owner-held area, a question only the owner can answer) goes to the PM as one
-   question; never ask the owner directly.
+   pre-emption, an owner-held area, a question only the owner can answer) goes in the one
+   work-set-start message to the PM (Look ahead), not a message per record; never ask the owner directly.
 7. Take a work set (below) and dispatch. Worktrees and branches you did not create may be live:
    ask before landing, reusing or removing any.
 8. `{{tool:cron-list}}`; no fill check yet -> `{{tool:cron-create}}` one, recurring, `17,47 * * * *`:
