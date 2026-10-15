@@ -2697,9 +2697,35 @@ PY_NODES = tuple(t for t in (getattr(ast, n, None) for n in (
     'JoinedStr', 'FormattedValue', 'BinOp', 'UnaryOp', 'BoolOp', 'Compare', 'IfExp', 'Tuple', 'List',
     'Dict', 'Set', 'ListComp', 'SetComp', 'DictComp', 'GeneratorExp', 'comprehension',
     'Load', 'Store', 'operator', 'unaryop', 'boolop', 'cmpop')) if t is not None)
+# Every public builtin name up to python 3.14, written out so the guard does not depend on the
+# python it runs on: the python a line starts may be newer than the guard's
+PY_BUILTIN_NAMES = frozenset((
+    'abs', 'aiter', 'all', 'anext', 'any', 'ascii', 'bin', 'bool', 'breakpoint', 'bytearray', 'bytes',
+    'callable', 'chr', 'classmethod', 'compile', 'complex', 'copyright', 'credits', 'delattr', 'dict',
+    'dir', 'divmod', 'enumerate', 'eval', 'exec', 'exit', 'filter', 'float', 'format', 'frozenset',
+    'getattr', 'globals', 'hasattr', 'hash', 'help', 'hex', 'id', 'input', 'int', 'isinstance',
+    'issubclass', 'iter', 'len', 'license', 'list', 'locals', 'map', 'max', 'memoryview', 'min', 'next',
+    'object', 'oct', 'open', 'ord', 'pow', 'print', 'property', 'quit', 'range', 'repr', 'reversed',
+    'round', 'set', 'setattr', 'slice', 'sorted', 'staticmethod', 'str', 'sum', 'super', 'tuple', 'type',
+    'vars', 'zip', 'Ellipsis', 'NotImplemented', 'True', 'False', 'None',
+    'ArithmeticError', 'AssertionError', 'AttributeError', 'BaseException', 'BaseExceptionGroup',
+    'BlockingIOError', 'BrokenPipeError', 'BufferError', 'BytesWarning', 'ChildProcessError',
+    'ConnectionAbortedError', 'ConnectionError', 'ConnectionRefusedError', 'ConnectionResetError',
+    'DeprecationWarning', 'EOFError', 'EncodingWarning', 'EnvironmentError', 'Exception',
+    'ExceptionGroup', 'FileExistsError', 'FileNotFoundError', 'FloatingPointError', 'FutureWarning',
+    'GeneratorExit', 'IOError', 'ImportError', 'ImportWarning', 'IndentationError', 'IndexError',
+    'InterruptedError', 'IsADirectoryError', 'KeyError', 'KeyboardInterrupt', 'LookupError',
+    'MemoryError', 'ModuleNotFoundError', 'NameError', 'NotADirectoryError', 'NotImplementedError',
+    'OSError', 'OverflowError', 'PendingDeprecationWarning', 'PermissionError', 'ProcessLookupError',
+    'PythonFinalizationError', 'RecursionError', 'ReferenceError', 'ResourceWarning', 'RuntimeError',
+    'RuntimeWarning', 'StopAsyncIteration', 'StopIteration', 'SyntaxError', 'SyntaxWarning',
+    'SystemError', 'SystemExit', 'TabError', 'TimeoutError', 'TypeError', 'UnboundLocalError',
+    'UnicodeDecodeError', 'UnicodeEncodeError', 'UnicodeError', 'UnicodeTranslateError',
+    'UnicodeWarning', 'UserWarning', 'ValueError', 'Warning', 'WindowsError', 'ZeroDivisionError'))
 # names a stored name or import alias may not take: it would hide the builtin only when the
-# binding runs, so a name read as the binding might reach the builtin
-PY_SHADOWED = frozenset(dir(builtins)) | frozenset(PY_DENIED_NAMES)
+# binding runs, so a name read as the binding might reach the builtin. The fixed list joined with
+# the running python's own, so a python newer or older than the guard's is covered either way
+PY_SHADOWED = PY_BUILTIN_NAMES | frozenset(dir(builtins)) | frozenset(PY_DENIED_NAMES)
 
 
 def _py_open_reads(call):
@@ -2731,17 +2757,19 @@ def py_reads_only(code, flags, ps=False):
     only from PY_VALUE_ATTRS, names only from PY_BUILTINS, the imports and the names the code
     stores, no identifier _py_ident_ok refuses, and open() only as a call that opens for reading.
     `ps`: the line reaches python through PowerShell, whose native-argument quoting can hand python
-    other text than the Word when it holds a double quote, so such code is not proved. Any text it
-    cannot parse, or any other shape, is not proved (False)."""
+    other text than the Word when it holds a double quote or a backslash (PowerShell 5.1 also
+    wraps an argument with a space in quotes without doubling a trailing backslash), so such code
+    is not proved. Each import name binds once. Any text it cannot parse, or any other shape, is
+    not proved (False)."""
     if code is None or code.dyn or 'I' not in flags or not flags <= PY_READ_FLAGS:
         return False
-    if ps and '"' in code.text:
+    if ps and ('"' in code.text or '\\' in code.text):
         return False
     try:
         tree = ast.parse(code.text, mode='exec')
     except Exception:                           # SyntaxError, ValueError, RecursionError: unread
         return False
-    mods, imported, stored, parents = {}, set(), set(), {}
+    mods, imported, stored, aliases, parents = {}, set(), set(), set(), {}
     for node in ast.walk(tree):
         if not isinstance(node, PY_NODES):
             return False
@@ -2759,9 +2787,11 @@ def py_reads_only(code, flags, ps=False):
                 return False                    # `*` too
             imported.update(a.asname or a.name for a in node.names)
         elif isinstance(node, ast.alias):
+            bound = node.asname or node.name
             if not all(_py_ident_ok(n) for n in (node.name, node.asname) if n) \
-                    or (node.asname or node.name) in PY_SHADOWED:
-                return False
+                    or bound in PY_SHADOWED or bound in aliases:
+                return False                    # a name two imports bind: which one is unknown
+            aliases.add(bound)
         elif isinstance(node, ast.keyword):
             if node.arg is not None and not _py_ident_ok(node.arg):
                 return False
@@ -2797,10 +2827,15 @@ def py_reads_only(code, flags, ps=False):
 def _python(cmd, name, args, cmd_word):
     kind, code, flags = py_program(name, args)
     if kind == 'code':
-        ps, c = False, cmd
-        while c is not None:                    # PowerShell anywhere on the way to python
-            ps, c = ps or c.shell == sh.PS, c.nested_in
-        return [] if py_reads_only(code, flags, ps) else [here(cmd_word)]
+        shells, c = set(), cmd
+        while c is not None:                    # every shell on the way to python
+            shells.add(c.shell)
+            c = c.nested_in
+        # through cmd.exe the Word is not what python gets: cmd ends a quoted part at a \" python
+        # reads as a quote, and keeps print(...) one word where the read splits it at the (
+        if sh.CMD in shells:
+            return [here(cmd_word)]
+        return [] if py_reads_only(code, flags, sh.PS in shells) else [here(cmd_word)]
     if kind == 'stdin':
         return [here(cmd_word)]
     if kind in ('module', 'script'):

@@ -131,17 +131,36 @@ class PyReadsOnly(unittest.TestCase):
                 'from json import load as print',
                 'import json as str',
                 'x = 1; x.f_globals',
-                'f_x = 1'):
+                'f_x = 1',
+                'import json as m; import re as m; print(m.dumps(1))',   # one name, two modules
+                'import json; from json import load as json',
+                'from json import load; from json import dumps as load',
+                'from json import load, load'):
+            with self.subTest(code):
+                self.assertFalse(proved(code))
+
+    def test_builtin_names_fixed(self):
+        """The builtins a stored name may not shadow are a list in the code, not only the running
+        python's: a name a newer python adds is refused on any python."""
+        self.assertLessEqual({'aiter', 'anext', 'breakpoint', 'ExceptionGroup', 'EncodingWarning',
+                              'PythonFinalizationError'}, rules.PY_BUILTIN_NAMES)
+        self.assertLessEqual(rules.PY_BUILTIN_NAMES, rules.PY_SHADOWED)
+        for code in ('PythonFinalizationError = 1', 'anext = 1', 'import json as aiter'):
             with self.subTest(code):
                 self.assertFalse(proved(code))
 
     def test_powershell_double_quote(self):
-        """Through PowerShell a double quote in the code is not proved: Windows PowerShell 5.1's
-        native-argument quoting can hand python other text than the guard read."""
+        """Through PowerShell or cmd.exe a double quote or a backslash in the code is not proved:
+        Windows PowerShell 5.1's native-argument quoting, and cmd.exe's quote reading, can hand
+        python other text than the guard read."""
         code = sh.Word('print("x")', False, 0, 0)
         self.assertTrue(rules.py_reads_only(code, {'I'}))
         self.assertFalse(rules.py_reads_only(code, {'I'}, ps=True))
         self.assertTrue(rules.py_reads_only(sh.Word("print('x')", False, 0, 0), {'I'}, ps=True))
+        for text in ("print('a b') #\\", "print('\\\\')", "print(1)\\"):
+            with self.subTest(text):
+                self.assertFalse(rules.py_reads_only(sh.Word(text, False, 0, 0), {'I'}, ps=True))
+        self.assertTrue(rules.py_reads_only(sh.Word("print('a b') #\\", False, 0, 0), {'I'}))
 
     def test_flags(self):
         code = 'import json; print(1)'

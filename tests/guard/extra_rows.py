@@ -295,4 +295,30 @@ ROWS = [
         'python -I -c \'print("x")\'', w.main, sub=True), None, None, None),
     ('main-checkout: python -I -c naming type', lambda w: bash(
         'python -I -c "print(type(1))"', w.main, sub=True), 'deny', 'main-checkout', None),
+    # PowerShell 5.1 wraps an argument with a space in quotes without doubling a trailing
+    # backslash: through it, code with a backslash is not proved either. Through cmd.exe no code
+    # is: cmd ends a quoted part at a quote python reads as text, and keeps print(...) one word
+    ('main-checkout: python -I -c ending in a backslash, PowerShell', lambda w: ps(
+        "python -I -c 'print(1) #%s'" % BS, w.main, sub=True), 'deny', 'main-checkout', None),
+    ('main-checkout: python -I -c with a backslash, bash -c from PowerShell', lambda w: ps(
+        "bash -c 'python -I -c \"print(1) #%s%s\"'" % (BS, BS), w.main, sub=True), 'deny', 'main-checkout', None),
+    ('main-checkout: python -I -c with no quote or backslash, PowerShell', lambda w: ps(
+        "python -I -c 'print(1)'", w.main, sub=True), None, None, None),
+    ('main-checkout: python -I -c ending in a backslash, bash', lambda w: bash(
+        "python -I -c 'print(1) #%s'" % BS, w.main, sub=True), None, None, None),
+    ('main-checkout: python -I -c with a backslash, cmd', lambda w: bash(
+        "cmd /c \"python -I -c print('a%sb')\"" % BS, w.main, sub=True), 'deny', 'main-checkout', None),
+    ('main-checkout: python -I -c with an escaped double quote, cmd', lambda w: bash(
+        "cmd /c 'python -I -c \"print(len(%s\"a b%s\"))\"'" % (BS, BS), w.main, sub=True),
+     'deny', 'main-checkout', None),
+    ('main-checkout: python -I -c opening to write inside one cmd word', lambda w: bash(
+        "cmd /c \"python -I -c print(open('x','w').write('y'))\"", w.main, sub=True),
+     'deny', 'main-checkout', None),
+    ('main-checkout: python -I -c opening to write inside one cmd word, PowerShell', lambda w: ps(
+        "cmd /c python -I -c print(open('x','w').write('y'))", w.main, sub=True),
+     'deny', 'main-checkout', None),
+    ('main-checkout: python -I -c in double quotes, cmd', lambda w: bash(
+        "cmd /c 'python -I -c \"print(1)\"'", w.main, sub=True), 'deny', 'main-checkout', None),
+    ('main-checkout: python -I -c through cmd, in a worktree', lambda w: bash(
+        "cmd /c \"python -I -c print(open('x','w').write('y'))\"", w.wt, sub=True), None, None, None),
 ]
