@@ -491,6 +491,10 @@ def homes(settings, host, repo=None, repo_path=None, remove=None, whatif=False, 
     checkout, the name is empty, or while a session runs whose home it is."""
     if remove is not None and not remove.strip():
         raise LaunchError('--remove needs a session name or a home-<name> folder name. Nothing was removed.')
+    if remove is not None and remove.strip().lower().startswith(home.PREFIX) \
+            and not remove.strip()[len(home.PREFIX):].strip('-. '):
+        raise LaunchError("--remove '%s' names no session: give the session name or home-<name>. Nothing was "
+                          'removed.' % remove)
     if bool(repo) == bool(repo_path):
         raise LaunchError('Give --repo <name in launcher.repos> or --repo-path <folder>, one of them.')
     folder = repo_path or settings.repo_path(repo)
@@ -525,11 +529,7 @@ def homes(settings, host, repo=None, repo_path=None, remove=None, whatif=False, 
         return out
     path = home.home_path(main, remove.strip())
     if remove.strip().lower().startswith(home.PREFIX) and home.canon(path) not in home.registered(main, git):
-        rest = remove.strip()[len(home.PREFIX):]
-        if not rest.strip('-. '):
-            raise LaunchError("--remove '%s' names no session: give the session name or home-<name>. Nothing was "
-                              'removed.' % remove)
-        path = home.home_path(main, rest)
+        path = home.home_path(main, remove.strip()[len(home.PREFIX):])
     live = running.get(home.canon(path))
     if live:
         raise LaunchError("a session named '%s' is running (PID %s) in its home worktree %s; stop it first. Nothing "

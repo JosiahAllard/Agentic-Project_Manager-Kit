@@ -230,7 +230,10 @@ class Verb(unittest.TestCase):
                          ['Would unlock and remove the home worktree %s.' % auto])
 
     def test_an_empty_name_or_a_bare_prefix_is_refused(self):
-        for name in ('', '  ', 'home-', 'HOME-'):
+        hh = home.home_path(self.repo, 'home')                      # home-home: the session named home has one
+        os.makedirs(hh)
+        self.git.entries.append((hh, 'HEAD %s\ndetached\nlocked' % HEAD))
+        for name in ('', '  ', 'home-', 'HOME-', 'home-.'):
             self.git.calls = []
             with self.assertRaisesRegex(LaunchError, 'Nothing was removed'):
                 self.homes(remove=name)

@@ -107,6 +107,7 @@ Nothing else removes a home: the nightly sweep skips it (`kitlib.worktree.sweep`
 
 ### Known limits
 
+- `home._reachable` checks only the home's current HEAD against refs/heads, refs/tags, refs/remotes and the like: a commit made in the home and then left by a checkout survives only in the home's reflog, and refs/worktree/* and refs/bisect/* are not seen, so `home.remove` does not refuse for it.
 - `home.remove` checks for ignored files with `git status --ignored`, then runs `git worktree remove`, which does not count ignored files: an ignored file written between the two calls is deleted with the folder.
 - The default consultant notes file is under `start.agent_temp`, `AGENT_TEMP` else `TEMP`: a launch that sees a different one of the two reads a different notes file.
 - The old notes file is copied whenever the new one is missing, with no marker that it was copied before, so deleting the new file brings the old copy back at the next launch; and a launch that fails removes its copy even if a concurrent launch that started meanwhile is using it (`start.consultant`).
