@@ -883,6 +883,71 @@ class PairCase(httpfix.ListenerCase):
         self.assertEqual(post(lis.port, httpd.UNPAIR_ROUTE, None, self.owner).status, 404)
 
 
+class StopRouteCase(httpfix.ListenerCase):
+    """httpd.stop_route: the owner's Bearer token alone asks the server to stop, and the route
+    only calls the function it was given."""
+    IDENTITY = {'pid': 4242, 'ctime': 133000000000000000}
+
+    def stoppable(self):
+        """A started listener with the pairing routes and the stop route; the list that grows by
+        one each time the route asks the server to stop."""
+        asked = []
+        lis = self.listener(start=False)
+        lis.routes.update(httpd.stop_route(lis.creds, lambda: asked.append(True),
+                                           dict(self.IDENTITY)))
+        self.assertTrue(lis.start())
+        return lis, asked
+
+    def paired(self, lis):
+        path = post(lis.port, httpd.PAIR_ROUTE, None, self.owner).json()['path']
+        return ('Cookie', get(lis.port, path).header('Set-Cookie')[0].split(';')[0])
+
+    def test_only_the_owners_token_asks_the_server_to_stop(self):
+        lis, asked = self.stoppable()
+        session = self.paired(lis)
+        self.assertEqual(get(lis.port, HEALTH, headers=[session]).status, 200)
+        refused = (('no credential', None, []), ('the agent', self.agent, []),
+                   ('a token that is no role', 'x' * 43, []),
+                   ('a browser session', None, [session]),
+                   ('the agent beside a session', self.agent, [session]),
+                   ("the owner's token as the session cookie", None,
+                    [('Cookie', '%s=%s' % (auth.cookie_name(lis.port), self.owner))]),
+                   ('a Basic scheme', None, [('Authorization', 'Basic ' + self.owner)]))
+        for what, token, headers in refused:
+            with self.subTest(what=what):
+                r = post(lis.port, httpd.STOP_ROUTE, None, token, headers=headers)
+                self.assertEqual((r.status, r.code()), (403, 'forbidden'), r.body)
+                self.assertEqual(r.json()['error']['field'], 'role')
+                self.assertNotIn(b'pid', r.body)
+        # a GET, or a POST without the write headers, asks nothing
+        self.assertEqual(get(lis.port, httpd.STOP_ROUTE, self.owner).status, 404)
+        r = send(lis.port, 'POST', httpd.STOP_ROUTE, [httpfix.bearer(self.owner),
+                                                     ('Content-Type', 'application/json')], b'')
+        self.assertEqual(r.status, 403)
+        r = send(lis.port, 'POST', httpd.STOP_ROUTE,
+                 [httpfix.bearer(self.owner), ('Origin', 'http://127.0.0.1:%d' % lis.port)], b'')
+        self.assertEqual(r.status, 415)
+        r = send(lis.port, 'POST', httpd.STOP_ROUTE,
+                 httpfix.write_headers(lis.port, self.owner, host='evil.example:%d' % lis.port),
+                 b'', host='evil.example:%d' % lis.port)
+        self.assertEqual(r.status, 403)
+        self.assertEqual(asked, [])
+        # the owner's token, with the session beside it or without
+        for headers in ([session], []):
+            r = post(lis.port, httpd.STOP_ROUTE, None, self.owner, headers=headers)
+            self.assertEqual(r.status, 200, r.body)
+            self.assertEqual(r.json(), {'ok': True, 'stopping': True, 'pid': 4242,
+                                        'ctime': 133000000000000000})
+        self.assertEqual(asked, [True, True])
+        # the route only asked: the listener still serves
+        self.assertEqual(get(lis.port, HEALTH, self.owner).status, 200)
+
+    def test_a_listener_given_no_stop_route_stops_nothing(self):
+        lis = self.listener()
+        r = post(lis.port, httpd.STOP_ROUTE, None, self.owner)
+        self.assertEqual((r.status, r.code()), (404, 'not_found'))
+
+
 class Clock(object):
     """A wall clock a test moves."""
 
