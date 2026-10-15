@@ -134,10 +134,13 @@ class FromTheExport(StubCase):
 
 class ExportNamingNoCheckout(StubCase):
     """An export whose marker names no main checkout: an older marker with no `checkout`, or one
-    naming a folder that is not a main checkout (no .git folder) or is gone. Nothing may name the
-    export, so write and check are refused and the session start's line carries no command."""
+    naming a folder that is not a main checkout (no .git folder), is gone, or is a git checkout
+    that is not the kit (a .git folder but no kit.json, or no tools folder: live_kit's own test).
+    Nothing may name the export, so write and check are refused and the session start's line
+    carries no command."""
 
-    MARKERS = ('{}', '{"checkout": "%(plain)s"}', '{"checkout": "%(gone)s"}')
+    MARKERS = ('{}', '{"checkout": "%(plain)s"}', '{"checkout": "%(gone)s"}',
+               '{"checkout": "%(nokitjson)s"}', '{"checkout": "%(notools)s"}')
 
     def setUp(self):
         super().setUp()
@@ -145,6 +148,12 @@ class ExportNamingNoCheckout(StubCase):
         self.put(os.path.join(self.export, 'tools', 'cmd_a.py'), "if __name__ == '__main__':\n    pass\n")
         self.plain = os.path.join(self.tmp, 'kit-plain')
         os.makedirs(os.path.join(self.plain, 'tools'))
+        self.nokitjson = os.path.join(self.tmp, 'repo-nokitjson')
+        os.makedirs(os.path.join(self.nokitjson, '.git'))
+        os.makedirs(os.path.join(self.nokitjson, 'tools'))
+        self.notools = os.path.join(self.tmp, 'repo-notools')
+        os.makedirs(os.path.join(self.notools, '.git'))
+        self.put(os.path.join(self.notools, 'kit.json'), '{}\n')
         root = mock.patch.object(stubs, 'KIT_ROOT', self.export)
         root.start()
         self.addCleanup(root.stop)
@@ -153,7 +162,9 @@ class ExportNamingNoCheckout(StubCase):
     def markers(self):
         for m in self.MARKERS:
             text = m % {'plain': self.plain.replace('\\', '/'),
-                        'gone': os.path.join(self.tmp, 'gone').replace('\\', '/')}
+                        'gone': os.path.join(self.tmp, 'gone').replace('\\', '/'),
+                        'nokitjson': self.nokitjson.replace('\\', '/'),
+                        'notools': self.notools.replace('\\', '/')}
             self.put(os.path.join(self.export, pluginsource.MARKER), text + '\n')
             yield text
 
@@ -179,6 +190,25 @@ class ExportNamingNoCheckout(StubCase):
                 self.assertTrue(line.startswith('could not check stubs (%s): ' % label), line)
                 self.assertNotIn('kit_stubs.py write', line)
                 self.assertNotIn('run python', line)
+
+    def test_a_repository_that_uses_no_stubs_gets_no_line_and_check_is_ok(self):
+        """Stubs are opt-in: a repository with no "stubs".tools and no stub (a PM data folder) is
+        not checked at all, so the export's marker does not matter to it."""
+        self.config()
+        for marker in self.markers():
+            with self.subTest(marker=marker):
+                self.assertIsNone(stubs.problem_line(self.root))
+                code, out = self.run_stubs('check')
+                self.assertEqual(code, stubs.OK, out)
+                self.assertIn('kit_stubs: uses no stubs', out)
+
+    def test_write_on_a_repository_that_uses_no_stubs_is_still_refused(self):
+        self.config()
+        for marker in self.markers():
+            with self.subTest(marker=marker):
+                code, out = self.run_stubs('write', tools=['cmd_a'])
+                self.assertEqual(code, stubs.CONFIG, out)
+                self.assertFalse(os.path.exists(self.stub('cmd_a')))
 
 
 class Unpinned(StubCase):
