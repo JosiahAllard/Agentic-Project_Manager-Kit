@@ -353,6 +353,24 @@ class ContextTest(unittest.TestCase):
         self.assertIn("could not check cap: LookupError", self.build({}, cwd=ROOT + "/zzz"))
         self.assertIn("could not check cap: ValueError", self.build({}, cwd="C:/elsewhere"))
 
+    def test_the_hub_key_line_names_the_sessions_key_of_this_coordinator(self):
+        # the key differs from the repo and the name: only the sessions.json key can give it
+        files = {"S.json": json.dumps({"_note": "x", "kitc": ENTRY,
+                                       "plain": {"repo": "alpha", "stem": "alpha-plain"}})}
+        lines = self.build({}, read=reader(files)).splitlines()
+        self.assertEqual([l for l in lines if "hub key" in l],
+                         ["- hub key: kitc (hub.py questions add --from kitc; wait --pending --for kitc)"])
+
+    def test_no_entry_gives_hub_key_unknown_and_every_other_check_still_runs(self):
+        for kw in ({"cwd": ROOT + "/zzz"}, {"cwd": "C:/elsewhere"}, {"pm_cfg": {}}):
+            text = self.build({}, **kw)
+            self.assertIn("- hub key: unknown (", text, kw)
+            self.assertNotIn("hub key: alpha", text)
+            self.assertIn("could not check cap:", text)
+        self.assertEqual(coordinatorstart.hub_key({"a": ENTRY}, ENTRY)[0].split()[:3], ["hub", "key:", "a"])
+        with self.assertRaises(LookupError):
+            coordinatorstart.hub_key({"a": dict(ENTRY)}, ENTRY)     # equal, but not the entry found
+
     def test_default_read_takes_a_bom_sessions_file(self):
         # regression-only: the default _read is utf-8-sig, so a PowerShell-saved sessions file loads
         with tempfile.TemporaryDirectory() as d:
