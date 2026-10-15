@@ -51,8 +51,8 @@ tools/land.py).
                  tree=, slot=) with the config of the base; a step that passed in the branch gate
                  of exactly this tree may count without running (kitlib.gate.reuse; never with
                  --fresh, --full or a batch). Red, or a gate where nothing ran: NOT LANDED, the
-                 merge dropped (it is only in the landing tree; main is still at the base), the
-                 lock released: FAILED / REFUSED
+                 merge dropped (it is only in the landing tree; the landing never moves main),
+                 the lock released: FAILED / REFUSED
   7b unchanged   green: the landing tree's HEAD still the merge, no tracked change, no untracked
                  file there, the stash stack still empty; else NOT LANDED as on red and nothing
                  pushed (the pushed commit is the gated one). What the owner does in the main
@@ -736,8 +736,9 @@ class Lander(object):
                 if not head or first != prev or second != t:
                     return G.Outcome(G.FAILED, [
                         'NOT LANDED: the merge of %s reported success, and HEAD of the landing tree '
-                        '(%s) is not a merge of %s onto %s; nothing was pushed, and %s is still at '
-                        '%s' % (b, (head or '?')[:10], t[:10], prev[:10], main_b, base[:10])],
+                        '(%s) is not a merge of %s onto %s; nothing was pushed, and the landing '
+                        'did not move %s from the base %s' % (
+                            b, (head or '?')[:10], t[:10], prev[:10], main_b, base[:10])],
                         undone=True)
                 self.merges.append(head)
                 self.merge = head
@@ -754,7 +755,8 @@ class Lander(object):
             why = '%s does not merge cleanly into %s: %s; the merge was aborted' % (
                 b, main_b, conflict)
             if self.merges:
-                why += ', and the merge of %s before it was undone (%s is still at %s)' % (
+                why += (', and the merge of %s before it was undone (the landing did not move %s '
+                        'from the base %s)') % (
                     ', '.join(self.branches[:len(self.merges)]), main_b, base[:10])
             return G.Outcome(G.FAILED, [why] + lines + [
                 'CONFLICT %s with main %s: the author merges main' % (b, base)],
@@ -839,8 +841,8 @@ class Lander(object):
             path = self.write_record(started, results)
         except gate_ok.RecordError as e:
             return ('the gate-OK record could not be written: %s; nothing was pushed, and the merge '
-                    'of %s was undone (%s is still at %s)' % (e, self.branch, main_b,
-                                                             self.expect_main[:10]))
+                    'of %s was undone (the landing did not move %s from the base %s)' % (
+                        e, self.branch, main_b, self.expect_main[:10]))
         self.say('gate-OK record: %s' % path)
         self.lock.set_phase(self.token, 'push')
         self.phase = 'push'
@@ -1037,10 +1039,12 @@ class Lander(object):
             self.release()
             if self.phase == 'merge' and not self.merges:
                 return G.Outcome(G.FAILED, lines + [
-                    'NOT LANDED: %s during the merge; it was aborted, and %s is still at %s' % (
+                    'NOT LANDED: %s during the merge; it was aborted, and the landing did not '
+                    'move %s from the base %s' % (
                         what, main_b, base[:10])], undone=True)
             return G.Outcome(G.FAILED, lines + [
-                'NOT LANDED: %s in phase %s; the merge of %s was undone, and %s is still at %s'
+                'NOT LANDED: %s in phase %s; the merge of %s was undone, and the landing did not '
+                'move %s from the base %s'
                 % (what, self.phase, self.branch, main_b, base[:10])], undone=True)
         except _Stuck as s:
             return self.stuck(str(s))
@@ -1164,13 +1168,14 @@ class Lander(object):
                 self.release()
                 return G.Outcome(G.FAILED, _not_landed(out.lines) + [
                     'NOT LANDED: the merged gate passed, and %s; nothing was pushed, and the merge '
-                    'of %s was undone (%s is still at %s)' % (
+                    'of %s was undone (the landing did not move %s from the base %s)' % (
                         changed, self.branch, main_b, base[:10])],
                     verdict=out.facts.get('verdict'), undone=True)
         if out.code != G.OK:
             self.release()
             return G.Outcome(out.code,
-                             out.lines + ['NOT LANDED: the merge of %s was undone; %s is still at %s'
+                             out.lines + ['NOT LANDED: the merge of %s was undone; the landing '
+                                          'did not move %s from the base %s'
                                           % (self.branch, main_b, base[:10])],
                              verdict=out.facts.get('verdict'), undone=True)
         why = self.push(started, out.facts.get('results'))
