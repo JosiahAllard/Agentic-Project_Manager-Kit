@@ -143,7 +143,15 @@ def target(ctx, argument, rts, dropped):
 def reflog(path):
     """`([commit ids in the tree's HEAD reflog, oldest first], None)` or `(None, why)`. The file
     (`<its git dir>/logs/HEAD`, which `git worktree remove` deletes with the tree) is read here:
-    no reflog file is no entries, as `git log -g` would print none."""
+    no reflog file is no entries, as `git log -g` would print none. That holds only for the files
+    ref format: a reftable repository never has the file, so any other format refuses."""
+    args = ('rev-parse', '--show-ref-format')
+    rc, out, err = remove.git(path, *args)
+    if rc != 0 or not out:
+        return None, remove.failure(args, rc, err)
+    if out != 'files':
+        return None, ('its refs are stored as %s, whose reflog this verb cannot read (only the'
+                      ' files format keeps logs/HEAD)' % out)
     args = ('rev-parse', '--absolute-git-dir')
     rc, out, err = remove.git(path, *args)
     if rc != 0 or not out:
