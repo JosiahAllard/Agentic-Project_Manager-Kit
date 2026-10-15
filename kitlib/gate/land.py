@@ -33,7 +33,10 @@ tools/land.py).
                  (kitlib.guard.ownercommits; rules of the base merged with the tip's), and the
                  branch's history free of the backlog store's root commit (`ref` and `branch`
                  stores; kitlib.backlog.at_landing). Any miss: REFUSED, the lock released, nothing
-                 merged
+                 merged. Last, the scope check (Lander.scope_check): every path the branch changes
+                 in a scope of a record it holds, in SCOPE_ALWAYS or in a folder store's folder;
+                 a miss is a WARNING after the LANDED line while SCOPE_REFUSES is False, else
+                 REFUSED as above
   5b tree        the landing tree (prepare_tree): a detached linked worktree the kit owns, locked
                  with the reason TREE_LOCK, at <main checkout>/<worktrees_dir>/_landing
                  (Lander(tree=) names another place). Made the first time; reused when clean,
@@ -125,6 +128,10 @@ import time
 
 from kitlib import gate as G
 from kitlib.backlog import at_landing
+from kitlib.backlog import record as rmod
+from kitlib.backlog import scope as scmod
+from kitlib.backlog import store as smod
+from kitlib.backlog.errors import Refusal
 import kitlib.config as kconfig
 from kitlib.config.types import ConfigError
 from kitlib.gate import cleanup, result, reuse, runner, stash
@@ -144,6 +151,16 @@ POLL_S = 5.0
 STEP_CMD = '    $ '      # a STUCK clear step's command line starts with this
 TREE_NAME = '_landing'   # the landing tree's folder, under the config's worktrees_dir
 TREE_LOCK = 'kit landing tree (kitlib.gate.land)'     # its git worktree lock reason
+# The scope check (step 5, Lander.scope_check): True refuses a branch that changes a path outside
+# the scopes of the records it holds (REFUSED, nothing merged); False lands it with a WARNING
+# after the LANDED line. It warns for now; making it refuse is this one line (a follow-up record).
+SCOPE_REFUSES = False
+# Paths every branch may change whatever records it holds, as scope members: tests, and the doc
+# index the doc-budget check makes every new doc add a line to. A folder store's own folder is
+# allowed too (Lander._scope_stores). The files tools/render_content.py writes are not: kitlib
+# cannot import tools/ to learn them, so a rendering change needs them in a record's scope.
+SCOPE_ALWAYS = ('tests/**', 'docs/INDEX.md')
+SCOPE_SHOWN = 10        # outside paths a scope-check line names; more are counted
 
 
 class _Stuck(Exception):
@@ -190,6 +207,49 @@ def _not_landed(lines):
     reworded, so a reader keying on `^GATE (OK|FAILED)` never takes a NOT LANDED for a pass."""
     return ['merged gate passed' + l[len('GATE OK'):] if l.startswith('GATE OK') else l
             for l in lines]
+
+
+def _covers(members, path):
+    """True when a scope member in `members` covers `path` (kitlib.backlog.scope.members_collide:
+    whole components, casefolded). A member the grammar cannot read covers nothing. Pure."""
+    for m in members:
+        try:
+            if scmod.members_collide(m, path):
+                return True
+        except scmod.UndecidableScope:
+            continue
+    return False
+
+
+def _path_error(path):
+    """None when a scope member can name `path` as itself, else why not: the scope check cannot
+    decide such a path, so it is outside every scope and left out of the widening command. Pure."""
+    why = scmod.path_shape_error(path, 'path', tab_ok=True)
+    if why:
+        return why
+    if any(ch in scmod.WILDCARD_CHARS for ch in path):
+        return 'a wildcard character in a path - a scope member cannot name it'
+    if path.casefold() == scmod.NONE:
+        return 'a path that reads as the `none` sentinel'
+    return None
+
+
+class _Held(object):
+    """What the scope check found for one branch: `held`, id -> [scope members, command(*args)
+    for its store's write]; `read`, a store holding a record was read; `unread`, why a store
+    could not be; `folders`, folder stores' own folders (always allowed)."""
+
+    def __init__(self):
+        self.held, self.read, self.unread, self.folders = {}, False, [], []
+
+    def hold(self, rid, members, command):
+        if rid in self.held:
+            self.held[rid][0].extend(m for m in members if m not in self.held[rid][0])
+        else:
+            self.held[rid] = [list(members), command]
+
+    def members(self):
+        return [m for members, _ in self.held.values() for m in members]
 
 
 class Lander(object):
@@ -250,6 +310,9 @@ class Lander(object):
                                     # writes its own (_locked); None: reuse nothing
         self.landed_at = None       # the remote's main once verified to hold the merge: the merge,
                                     # or a commit on top of it pushed right after
+        self.scope_notes = []       # scope-check NOTE lines, said before the LANDED line
+        self.scope_warnings = []    # scope-check misses while SCOPE_REFUSES is False, said after it
+        self.scope_reads = {}       # the stores the scope check read once per landing: key -> read
 
     @property
     def pairs(self):
@@ -496,7 +559,257 @@ class Lander(object):
             why = at_landing.ancestry_refusal(self.root, self.cfg, t, env=self.git_env)
             if why:
                 return why
+        return self.scope_check()
+
+    # ---------------------------------------------------------------- the scope check
+
+    def scope_check(self):
+        """The last locked check: every path each branch changes (merge base to tip, renames as a
+        delete and an add) falls in the scope of a record the branch holds - pulled by it, or
+        named by a `Closes:` trailer of its own commits while pulled by anyone - or in
+        SCOPE_ALWAYS or a folder store's folder. A branch's own commits are `tip --not` the base
+        and the batch's earlier tips, so a stacked branch is checked on its own paths. A miss, a
+        store it cannot read while some path is outside what it could read, or a check that
+        stops: with SCOPE_REFUSES the refusal; else a WARNING kept for after the LANDED line, and
+        None. A branch holding no record while a store with records was read: a NOTE kept for
+        before the LANDED line."""
+        for i, (b, t) in enumerate(self.pairs):
+            try:
+                why = self._scope_of(b, t, [self.expect_main] + self.tips[:i])
+            except Exception as e:      # noqa: BLE001 - a check that cannot finish is a miss
+                why = 'the scope check of %s stopped (%s)' % (b, _what(e))
+            if not why:
+                continue
+            if SCOPE_REFUSES:
+                return why
+            self.scope_warnings.append(
+                'WARNING: %s; the landing went ahead: the scope check only warns for now '
+                '(kitlib.gate.land SCOPE_REFUSES)' % why)
         return None
+
+    def _scope_base(self, t, bases):
+        """`(the merge base of tip t with every base, None)`, or `(None, why)`."""
+        if len(bases) == 1:
+            mb, why = refs.merge_base(t, bases[0], self.root)
+            return (mb or None), (why or 'no common commit with %s' % bases[0][:10])
+        r = cmd.call(['merge-base', t] + list(bases), self.root)
+        out = cmd.text(r.out).strip() if r.out else ''
+        if r.rc == 0 and refs.is_sha(out):
+            return out, None
+        return None, r.err or 'git merge-base exited %s' % r.rc
+
+    def _scope_of(self, b, t, bases):
+        """None when branch `b` at `t` keeps to its scopes; else why not (scope_check)."""
+        mb, why = self._scope_base(t, bases)
+        changed, why2 = runner.changed_between(self.root, mb, t) if mb else (None, why)
+        if changed is None:
+            return ('git cannot list the paths of %s to check them against the scopes of the '
+                    'records it holds: %s' % (b, why2 or why))
+        rest = [p for p in changed if not _covers(SCOPE_ALWAYS, p)]
+        if not rest:
+            return None
+        out, why = cmd.run_text(['log', '--format=%B%x00', t, '--not'] + list(bases) + ['--'],
+                                self.root, strip=False)
+        if out is None:
+            return ('git cannot read the Closes trailers of %s to check its paths against the '
+                    'scopes of the records it holds: %s' % (b, why))
+        values = []
+        for message in out.split('\0'):
+            values.extend(at_landing.closes_values(message))
+        named = set(at_landing.closes_ids(values))
+        found = self._scope_stores(b, t, named, changed)
+        rest = [p for p in rest if not _covers(found.folders, p)]
+        if not rest:
+            return None
+        if not found.held:
+            if found.unread:
+                return self._scope_unread(b, found)
+            if found.read:
+                self.scope_notes.append('NOTE: %s holds no pulled record; its paths were not '
+                                        'checked against a scope' % b)
+            return None
+        members = found.members()
+        outside = []
+        for p in rest:
+            err = _path_error(p)
+            if err or not _covers(members, p):
+                outside.append((p, err))
+        if not outside:
+            return None
+        if found.unread:            # a record it could not read may cover them
+            return self._scope_unread(b, found)
+        return self._scope_miss(b, t, mb, found, outside)
+
+    def _scope_unread(self, b, found):
+        return ('cannot read the backlog store to check %s\'s paths against the scopes of the '
+                'records it holds: %s' % (b, '; '.join(found.unread)))
+
+    def _scope_miss(self, b, t, mb, found, outside):
+        ids = sorted(found.held)
+        shown = ['%s (undecidable: %s)' % (p, err) if err else p
+                 for p, err in outside[:SCOPE_SHOWN]]
+        more = len(outside) - len(shown)
+        listed = ', '.join(shown) + (', and %d more (git diff --name-only --no-renames %s %s)'
+                                     % (more, mb, t) if more else '')
+        members, command = found.held[ids[0]]
+        new = [p for p, err in outside if not err]
+        if not new:
+            how = 'land them on their own branch'
+        else:
+            if len(outside) > SCOPE_SHOWN:
+                new = ['<each path, or a folder/** that covers them>']
+            args = ['set', ids[0]] + ['--scope "%s"' % m
+                                      for m in members + new if m != scmod.NONE]
+            how = ('widen a record\'s scope first (set checks the new members against every live '
+                   'pull\'s scope): %s; or land them on their own branch' % command(*args))
+        return '%s changes %d path(s) outside the scopes of the records it holds (%s): %s; %s' % (
+            b, len(outside), ', '.join(ids), listed, how)
+
+    def _scope_stores(self, b, t, named, changed):
+        """_Held: the records `b` holds in the configured store and the PM data branch's store,
+        with `named` the ids its `Closes:` trailers name. A folder store is read at the tip `t`
+        (its records travel with the branch), counting a record file the branch deleted
+        (`changed`) at its last version; a `ref` or `branch` store as the remote holds it."""
+        found = _Held()
+        root, cfg = self.root, self.cfg
+        try:
+            backend = smod.open_backend(root, cfg, fetch=False)
+        except (Refusal, OSError) as e:
+            found.unread.append('the configured store: %s' % _what(e))
+            backend = None
+
+        def close_cmd(*args):
+            return at_landing.close_command(root, *args)
+
+        if isinstance(backend, smod.MainBackend):
+            rel = backend.rel.replace('\\', '/').strip('/')
+            found.folders.append(rel + '/**')
+            records, _raw, why = smod.records_in_tree(root, t, rel)
+            if records is None:
+                found.unread.append('%s at %s: %s' % (rel, t[:10], why))
+            else:
+                gone = [p[len(rel) + 1:-3] for p in changed
+                        if p.startswith(rel + '/') and p.endswith('.md')
+                        and '/' not in p[len(rel) + 1:]]
+                self._scope_take(found, '%s at %s' % (rel, t[:10]), records, b, named, gone,
+                                 lambda rid: self._scope_last(root, t, rel, rid), close_cmd)
+        elif backend is not None:
+            got = self.scope_reads.get('configured')
+            if got is None:
+                got = self.scope_reads['configured'] = self._scope_ref_records(root, backend)
+            records, tip, why = got
+            if records is None:
+                found.unread.append(why)
+            elif tip:
+                self._scope_take(found, backend.describe(), records, b, named, (),
+                                 lambda rid: self._scope_last(root, tip, smod.STORE_DIR, rid),
+                                 close_cmd)
+        configured = backend.describe() if isinstance(backend, smod.RefBackend) else None
+        got = self.scope_reads.get('pm')
+        if got is None:
+            got = self.scope_reads['pm'] = self._scope_pm_records(configured)
+        pm_root, where, records, last, why = got
+        if why:
+            found.unread.append('the PM data branch\'s store: %s' % why)
+        elif records is not None:
+            self._scope_take(found, where, records, b, named, (), last,
+                             lambda *args: at_landing.backlog_command(pm_root, *args))
+        return found
+
+    def _scope_take(self, found, where, records, b, named, gone, last, command):
+        """Add to `found` the records of one store `b` holds: pulled by it, or pulled and in
+        `named`; an id in `named` or `gone` the store no longer holds counts at its last version
+        (`last(rid)`: the record before the commit that deleted it, or None). A store holding an
+        unreadable record is unread: that record may be the one that covers a path."""
+        bad = sorted(r.stem for r in records if not r.readable)
+        if bad:
+            found.unread.append('%s: %d record(s) unreadable (%s)' % (
+                where, len(bad), ', '.join(bad[:5])))
+            return
+        if records:
+            found.read = True
+        stems = set(r.stem for r in records)
+        candidates = list(records)
+        for rid in sorted((set(named) | set(gone)) - stems):
+            rec = last(rid) if smod.PLAIN_ID.match(rid) else None
+            if rec is not None and rec.readable:
+                candidates.append(rec)
+        for r in candidates:
+            if r.get('state') == 'pulled' and (r.get('pulled_by') == b or r.stem in named):
+                found.hold(r.stem, r.all('scope'), command)
+
+    def _scope_last(self, root, rev, rel, rid):
+        """The record `rid` as it was before the newest commit reachable from `rev` deleted
+        `<rel>/<rid>.md`, or None."""
+        gone = smod.last_removal(root, rev, rel, rid)
+        if gone is None:
+            return None
+        return self._scope_blob(root, '%s^:%s/%s.md' % (gone.sha, rel, rid), rid)
+
+    @staticmethod
+    def _scope_blob(root, spec, rid):
+        data, _ = cmd.run(['cat-file', '-p', spec], root)
+        if data is None:
+            return None
+        return smod.parse_blob(rid, data, spec.partition(':')[2])
+
+    def _scope_ref_records(self, root, backend):
+        """`(records, tip, None)` of a `ref` or `branch` store as its remote holds it (the local
+        ref without a remote), `([], '', None)` when there is none, or `(None, None, why)`. Moves
+        no ref: a missing store commit is fetched with an empty --refmap, as ancestry_refusal
+        does."""
+        if backend.remote:
+            tip, why = refs.ls_remote(backend.remote, backend.remote_ref, root,
+                                      timeout=FETCH_TIMEOUT)
+            if tip is None:
+                return None, None, '%s: %s' % (backend.describe(), why)
+            if tip and cmd.call(['cat-file', '-e', '%s^{commit}' % tip], root).rc != 0:
+                cmd.call(['fetch', '--quiet', '--no-tags', '--no-write-fetch-head', '--refmap=',
+                          backend.remote, backend.remote_ref], root, timeout=FETCH_TIMEOUT,
+                         env=self.git_env)
+                if cmd.call(['cat-file', '-e', '%s^{commit}' % tip], root).rc != 0:
+                    return None, None, '%s: cannot fetch %s' % (backend.describe(), tip[:10])
+        else:
+            tip, why = refs.ref_commit(backend.local_ref, root)
+            if tip is None:
+                return None, None, '%s: %s' % (backend.describe(), why)
+        if not tip:
+            return [], '', None
+        records, _raw, why = smod.records_in_tree(root, tip, smod.STORE_DIR)
+        if records is None:
+            return None, None, '%s at %s: %s' % (backend.describe(), tip[:10], why)
+        return records, tip, None
+
+    def _scope_pm_records(self, configured):
+        """`(pm root, where, records, last(rid), None)` of the PM data branch's store, `(None,
+        None, None, None, None)` when there is none, or `(..., why)`. A folder store there is read
+        in its worktree, as a landing's close reads it; a record deleted there and not committed
+        is read from HEAD."""
+        # at_landing._pm_data_store is private; making it public is a follow-up for the backlog
+        # store's owners, filed with the scope check.
+        pm_root, _cfg, backend, why = at_landing._pm_data_store(self.root, configured)
+        if why:
+            return None, None, None, None, why
+        if backend is None:
+            return None, None, None, None, None
+        if isinstance(backend, smod.RefBackend):
+            records, tip, why = self._scope_ref_records(pm_root, backend)
+            if records is None:
+                return None, None, None, None, why
+            return (pm_root, backend.describe(), records,
+                    lambda rid: self._scope_last(pm_root, tip, smod.STORE_DIR, rid) if tip
+                    else None, None)
+        try:
+            snap = backend.load(rmod.Rules())
+        except (Refusal, OSError) as e:
+            return None, None, None, None, '%s: %s' % (backend.describe(), _what(e))
+        rel = backend.rel.replace('\\', '/').strip('/')
+
+        def last(rid):
+            if backend.uncommitted_removal(rid):
+                return self._scope_blob(pm_root, 'HEAD:%s/%s.md' % (rel, rid), rid)
+            return self._scope_last(pm_root, 'HEAD', rel, rid)
+        return pm_root, backend.describe(), snap.records, last, None
 
     def onto_origin(self):
         """Step 5, after the fetch: the base becomes <remote>/<main> as fetched. A local main only
@@ -1071,8 +1384,10 @@ class Lander(object):
         else:
             how = 'already on %s: %s/%s %s has it' % (self.cfg.remote, self.cfg.remote,
                                                      self.cfg.main_branch, at[:10])
+        lines.extend(self.scope_notes)
         lines.append('LANDED %s on %s at %s (%s)' % (self.branch, self.cfg.main_branch,
                                                      self.merge, how))
+        lines.extend(self.scope_warnings)
         lines.append('WARNING: %s after the verified push; the landing stands' % what)
         try:                        # ls-remote showed `at`, so the tracking ref may say so; never
             if self.ref(self.origin_ref) != at:  # set back to the merge under commits on top
@@ -1185,7 +1500,7 @@ class Lander(object):
                              merge=self.merge)
         synced = self.sync_main()
         landed = ['LANDED %s on %s at %s (pushed and verified on %s)' % (
-            self.branch, main_b, self.merge, self.cfg.remote)]
+            self.branch, main_b, self.merge, self.cfg.remote)] + self.scope_warnings
         try:
             self.release(landed=True)
         except landing.LockError as e:  # the landing is done; only the lock file is left
@@ -1193,7 +1508,8 @@ class Lander(object):
                           'landing is running, then break it with: %s' % (e, self.break_command()))
         landed.extend(self.close_pulled())
         tidy = self.clean_up()
-        return G.Outcome(G.OK, out.lines + tidy + synced + landed, merge=self.merge,
+        return G.Outcome(G.OK, out.lines + tidy + synced + self.scope_notes + landed,
+                         merge=self.merge,
                          verdict=out.facts.get('verdict'), cleanup=self.cleanup)
 
     def on_remote(self, pushed):
