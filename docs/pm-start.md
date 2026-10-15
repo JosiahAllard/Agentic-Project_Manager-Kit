@@ -17,9 +17,12 @@ lines read the machine config's `hub` key (`kitlib.hubsite.settings`), or every 
 when there is no `hub` key. The check only asks the loopback server on `hub.port`, through
 `kitlib.hubsite.client`; it starts no process and never starts the server, and it imports
 `kitlib.hubsite.serve` only once the settings are read. Each ask (`GET /api/v1/health`,
-then `GET /api/v1/pending`) waits at most `HUB_SITE_TIMEOUT_S` (1.5 seconds). The lines:
-`hub: server up on port <n>, <k> pending` (`<k>` is 0 when the answer's `items` is not a list); when
-`<k>` is above 0, a line to process the items (`hub.py pending`); then either
+then `GET /api/v1/pending?for=pm`) waits at most `HUB_SITE_TIMEOUT_S` (1.5 seconds). The pending
+ask is the PM's items only, the list `hub.py pending --for pm` prints: an item routed to a creator
+that can still be reached is that session's to ack, and a PM ack would hide it from the creator's
+wait. The lines:
+`hub: server up on port <n>, <k> pending for the PM` (`<k>` is 0 when the answer's `items` is not a
+list); when `<k>` is above 0, a line to process the items (`hub.py pending --for pm`); then either
 `hub: wait --pending is running` or a warning, `hub: WARN no PM wait --pending --for pm is
 running, so items routed to the PM go unseen; ...`, telling the PM to start
 `hub.py wait --pending --for pm` in the background and start it again after it ends (docs/action-hub.md
@@ -36,7 +39,7 @@ each one line:
 - `GET /api/v1/health` answered, but not ok: `hub: server did not answer as the hub does (health not ok)`.
 - Any other failure of `GET /api/v1/health` (a timeout, a refusal, an answer that is not the hub's): `hub:
   server did not answer as the hub does (<exception class>)`; the class is all it names.
-- `GET /api/v1/pending` fails after `GET /api/v1/health` answered: `hub: server up on port <n>, pending not asked
+- `GET /api/v1/pending?for=pm` fails after `GET /api/v1/health` answered: `hub: server up on port <n>, pending not asked
   (<exception class>)`.
 - The `hub` key is there and cannot be used (the machine config check refuses it, or the hub
   settings do): `hub: the hub key of the machine config cannot be used: <the configuration error's

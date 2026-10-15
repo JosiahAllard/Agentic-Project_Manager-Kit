@@ -85,7 +85,7 @@ home folder, all absolute. A hand step changes the owner's own settings: give it
    config. The PM starts `python <kit>/tools/hub.py wait --pending --for pm` in the background
    (docs/action-hub.md "For the PM").
    Success: the page opens signed in, and the next session start says
-   `hub: server up on port 8790, 0 pending`.
+   `hub: server up on port 8790, 0 pending for the PM`.
 
 9. **Install each repository** (docs/install.md).
    Success: `git -C <repo> config core.hooksPath` prints `<kit>/githooks` (and, for a
