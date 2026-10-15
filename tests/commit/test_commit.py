@@ -788,6 +788,97 @@ class AnotherWriterStagesDuringTheCall(LinkedCase):
         self.assertEqual(self.git('show', 'HEAD:b.py'), 'theirs')
         self.assertIn('A  a.py', self.git('status', '--porcelain'))
 
+    def test_a_commit_stacked_on_ours_is_never_undone(self):
+        """Another writer commits on top of this call's commit before it reads HEAD back: their
+        commit is not this call's, so nothing is undone and the refusal says what happened."""
+        real, theirs = cmd.call, []
+
+        def wrapper(args, cwd, *a, **kw):
+            r = real(args, cwd, *a, **kw)
+            if args[:1] == ['commit'] and not theirs:
+                theirs.append(self.other_writer_commits())
+            return r
+        self.put('a.py', 'a = 1\n')
+        with mock.patch.object(C.cmd, 'call', wrapper):
+            code, out = self.commit('add a', 'a.py')
+        self.assertEqual(code, 1, out)
+        self.assertNotIn('Undone', out)
+        self.assertIn('NOT undone', out)
+        self.assertEqual(self.head(), theirs[0])
+        self.assertEqual(self.git('show', 'HEAD:b.py'), 'theirs')
+        self.assertEqual(self.git('show', 'HEAD:a.py'), 'a = 1')
+        self.assertEqual(self.git('log', '-1', '--format=%s', 'HEAD^'), 'add a')
+
+    def test_an_undo_that_fails_names_the_manual_fix(self):
+        real, theirs = cmd.call, []
+
+        def wrapper(args, cwd, *a, **kw):
+            if args[:1] == ['commit'] and not theirs:
+                theirs.append(self.other_writer_commits())
+            if args[:1] == ['update-ref']:
+                return cmd.Result(128, b'', 'fatal: injected update-ref')
+            return real(args, cwd, *a, **kw)
+        self.put('a.py', 'a = 1\n')
+        with mock.patch.object(C.cmd, 'call', wrapper):
+            code, out = self.commit('add a', 'a.py')
+        self.assertEqual(code, 1, out)
+        self.assertIn('NOT undone', out)
+        self.assertIn('git update-ref HEAD %s ' % theirs[0], out)
+        self.assertEqual(self.git('log', '-1', '--format=%P'), theirs[0])
+
+    def fake_read_back(self, rewrite):
+        """C._git's answer to the read-back after `git commit`, passed through `rewrite`."""
+        real = C._git
+
+        def wrapper(root, *args, **kw):
+            got = real(root, *args, **kw)
+            if args[:1] == ('log',) and C.READ_BACK_FORMAT in args:
+                return rewrite(got)
+            return got
+        p = mock.patch.object(C, '_git', wrapper)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_a_failed_read_back_refuses_and_says_to_check(self):
+        self.fake_read_back(lambda got: (128, '', 'fatal: injected'))
+        self.put('a.py', 'a = 1\n')
+        code, out = self.commit('add a', 'a.py')
+        self.assertEqual(code, 1, out)
+        self.assertIn('could not be read back', out)
+        self.assertIn('injected', out)
+
+    def test_our_commit_without_a_parent_is_not_undone(self):
+        def drop_parents(got):
+            first, nl, rest = got[1].partition('\n')
+            return got[0], ' '.join(first.split()[:2]) + nl + rest, got[2]
+        self.fake_read_back(drop_parents)
+        self.put('a.py', 'a = 1\n')
+        code, out = self.commit('add a', 'a.py')
+        self.assertEqual(code, 1, out)
+        self.assertIn('no parent', out)
+        self.assertIn('NOT undone', out)
+        self.assertEqual(self.git('show', 'HEAD:a.py'), 'a = 1')
+
+    def undo_case(self):
+        """(parent, a commit on it, the MERGE_HEAD path, saved merge state)."""
+        parent = self.head()
+        new = self.other_writer_commits()
+        path = C.repo.git_path(self.wt, 'MERGE_HEAD')[0]
+        return parent, new, path, {path: b'1234\n'}
+
+    def test_an_undone_merge_commit_gets_its_merge_state_back(self):
+        parent, new, path, saved = self.undo_case()
+        lines = C.undo_commit(self.wt, new, parent, saved, merged=True)
+        self.assertEqual(self.head(), parent, lines)
+        with open(path, 'rb') as fh:
+            self.assertEqual(fh.read(), b'1234\n')
+
+    def test_an_undone_single_parent_commit_does_not_bring_merge_state_back(self):
+        parent, new, path, saved = self.undo_case()
+        lines = C.undo_commit(self.wt, new, parent, saved, merged=False)
+        self.assertEqual(self.head(), parent, lines)
+        self.assertFalse(os.path.exists(path))
+
     # -- the private index
 
     def fail_git(self, verb):
