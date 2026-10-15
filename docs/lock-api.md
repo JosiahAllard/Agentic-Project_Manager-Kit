@@ -46,15 +46,17 @@
 - **`runs`**: every live run (waiting, held or background).
   - The record's id, state, repo, slug, kind, note, pid, ctime, since, held_since, expect_s, expect_from, hold, parent, pinned, pin and pin_note.
   - `resource` and `priority`: the run's exclusive resource and its priority (`"land"`), or null; see Run resources and landing priority.
+  - `within`: the thread list the run is confined to (`8-15`), or null; see Runs confined to a thread set.
   - `pin` is "pinned", null (no pin) or "overridden": an outer job's affinity limit won, so `pinned` is false and `threads` is what the command really runs on (`kitlib.proc.job.Job.check_pin`).
   - `cores`, `gpus` and `tree` (the pid tree).
   - `usage` {cpu_s, peak_cpu_cores, peak_mem_mb, peak_commit_mb, cpu_cores_now, mem_mb_now}.
   - `gpu_mem_mb`, from NVIDIA only; null elsewhere.
   - `expected_end` and `overrun` {s, planned_end}.
   - Waiting runs add `position`, `est_start`, `backfill` and `moved`.
-- **`queue`**: `entries` in plan order [{id, position, ticket, repo, slug, kind, needs, since, expect_s, est_start, backfill, parked, blocked_by, hold, moved, resource, priority, why}], and `error`.
+- **`queue`**: `entries` in plan order [{id, position, ticket, repo, slug, kind, needs, since, expect_s, est_start, backfill, parked, blocked_by, hold, moved, resource, priority, within_slots, why}], and `error`.
   - `moved` is {by, name, at, seq} when the owner moved the entry to the top (`move_to_top`), else null.
   - `resource` and `priority` are the entry's (`kitlib.lock.queue.entry_resource`, `entry_priority`), else null.
+  - `within_slots` is the sorted cpu slots the entry may take (`kitlib.lock.queue.entry_within`), else null.
   - `why` is the reason the entry waits. It names first any live run holding the resource the entry names (`resource R is held by ...`).
   - `entries` is null while the queue is unreadable. Then no run takes slots and a new run exits 10 (fail closed).
 - **`holds`**: [`kitlib.lock.holds.entry`], and `holds_error`.
@@ -142,6 +144,16 @@ A held run can hand back cpu slots its command no longer needs, while the comman
   - Backfill: a run behind a landing may start first only when it ends before the landing is planned to start, unless the landing's start was put off by its resource alone (`queue.plan`: its slots were free at an earlier time when its resource was not, and it is not parked). Such a start keeps out only the entries naming its resource; the others plan around the slots it is planned to take, so they start now on idle cores, and the landing starts no later than it would have. Example (`tests/lock/test_queue.py` `ResourceExclusion`): repo X's first landing holds a quarter of the cores for 30 more minutes and X's second waits for it; a landing of repo Y and a 60-minute ordinary run both start now, and X's third still waits for X's second. A landing whose slots are not free either stays a barrier as before. Nothing holding slots is stopped for a landing.
 - An entry written before these fields existed has neither key and plans as an ordinary run with no resource; a `priority` value on disk that is not in `PRIORITIES` plans as ordinary too.
 - Tests: `tests/lock/test_queue.py` (LandPriority, ResourceExclusion) and `tests/lock/test_run.py` (Resources).
+
+## Runs confined to a thread set
+
+`machine_lock.py run --within THREADS` (and `kitlib.lock.run.book(..., within=...)`) keeps a run on the cpu slots whose threads all lie inside THREADS, a Linux cpuset list of global thread ids such as `8-15` or `0-3,8-11` (docker's `--cpuset-cpus`, so a run for a container can name the container's cpuset). `background` and the MCP server's `lock_run` do not take it.
+
+- Only whole slots count: a slot with any thread outside the list is left out (`kitlib.lock.layout.within_slots`). Which slots those are depends on the layout in force, and a run that re-reads a changed layout before it holds its slots works them out again.
+- The planner (`kitlib.lock.queue.plan`) picks only from those slots and waits for them while other slots are free; a hold over slots outside them does not park the run (`kitlib.lock.holds.cover_plan`). The status text's waiting line adds `within cpu slots X (--within)`, and a refusal or wait reason adds `it runs only within cpu slots X (--within)` (`kitlib.lock.queue.busy_text`).
+- Exit 2 (usage), before the run joins the queue (`kitlib.lock.run.book`, `within_of`): a list that is not one (`kitlib.lock.layout.parse_threads`: empty, an open or backwards range, a stray comma, an id past 4095); a thread no cpu slot of the layout has; a list holding no whole slot; one holding fewer slots than the run takes (the message names `--cores N` that fits); `--within` with `--hold`; and a nested run that runs on its parent's cores when they are not all inside the list.
+- The run record carries `within` (the list as text, normalised: `8-15`) and `within_slots` {cpu: [slot]}; the queue entry carries `within` {cpu: [slot]}. Both are set only when the run names a list. An entry or record without them, written before they existed included, may take any slot. `SCHEMA_VERSION` stays 1.
+- Tests: `tests/lock/test_within.py`, and `tests/lock/test_cli.py` (`test_run_within_reaches_the_run_and_bad_syntax_is_usage`).
 
 ## Console windows
 
