@@ -56,8 +56,8 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
    Work sets, Follow-ups. Check every other unpriced open record (an owner story, a record from
    the PM's brief) for duplicates, size and fit; price it 2-5 under the standing valuation
    rules (`set <ID> --priority <n> --priority-by agent`). One that needs the owner (priority 1, a
-   pre-emption, an owner-held area, a question only the owner can answer) goes to the PM as one
-   question; never ask the owner directly.
+   pre-emption, an owner-held area, a question only the owner can answer) goes on the Action Hub
+   as one question from your session key (The owner, below); never ask the owner directly.
 7. Take a work set (below) and dispatch. Worktrees and branches you did not create may be live:
    ask before landing, reusing or removing any.
 8. `CronList`; no fill check yet -> `CronCreate` one, recurring, `17,47 * * * *`:
@@ -129,11 +129,16 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
 
 ## The owner
 
-- The owner does not watch your window. Anything that needs the owner (a question, a typed go, a
-  command to run) goes to the PM by SendMessage with the exact text or commands, working directory
-  and order; a request left only in your chat waits unseen. The owner still types a go in your
-  window where one is required. Questions batched, flat-numbered, each label restating its subject,
-  each with a recommendation; answers in the owner's own words.
+- The owner does not watch your window. A question for the owner you post on the Action Hub
+  yourself: `python <kit>/tools/hub.py questions add ... --from <your session key>` (the
+  sessions.json key the launcher started you under; the hub refuses any other), each with its
+  context, options and a recommendation, each title restating its subject. Keep one
+  `python <kit>/tools/hub.py wait --pending --for <your session key>` running in the background;
+  when it prints an answer, act on it yourself and start the wait again. The PM still logs the
+  ruling (<kit>/docs/action-hub.md "For the PM"). Anything else that needs the owner (a typed go, a
+  command to run) goes to the PM by SendMessage with the exact text or commands, working
+  directory and order; a request left only in your chat waits unseen. The owner still types a go
+  in your window where one is required. Answers in the owner's own words.
 - You decide and land anything that does not remove a user-facing control, change a schema or
   alter agent definitions, settings, hooks or project instructions; you set priorities 2-5.
   Owner decisions only for priority 1, a pre-emption, a schema change or `.claude/`, plus the

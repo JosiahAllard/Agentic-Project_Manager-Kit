@@ -130,8 +130,14 @@ connection dropped mid-request.
 ## For the PM
 
 The PM reads and writes the hub only through `tools/hub.py` or the hub MCP server (docs/hub-mcp.md),
-both with the agent's token; coordinators
-never write to it, they send questions and hand steps to the PM. Every verb takes `--port N` and
+both with the agent's token. A coordinator writes only its own questions: it posts each with
+`hub.py questions add --from <its launcher session key>`, keeps one `hub.py wait --pending --for
+<its key>` running in the background, and acts on the answer itself when it comes; it hands every
+other step (to-dos, notes, stories) to the PM. The server takes `--from` only when it is `pm` or a
+key of the launcher's sessions.json, read again on each add; any other value is refused, and a
+question without `--from` is the PM's. The answer stays pending for everyone, the PM included,
+until the PM logs the ruling in the rulings ledger and then on the question (`questions log`), as
+for any other answer. Every verb takes `--port N` and
 `--json` (the server's answer as one JSON line). The server alone decides what a role may do: the
 owner's verbs (answer, todos done, stories add and withdraw, to-pm add and send, inbox read) are
 refused to the agent.
@@ -141,7 +147,7 @@ Verbs (`tools/hub.py` docstring is the source), with the line each prints:
 | Verb | Prints |
 |---|---|
 | `questions [--status S] [--repo R]` | `Q-1 v2 open [repo] title` |
-| `questions add --title T [--repo R] [--context-file F] [--option "label::description" ...] [--recommended N] [--refs ID ...] [--urgent] [--story S-n] [--from NAME]` | `ASKED Q-2`, then any warning lines |
+| `questions add --title T [--repo R] [--context-file F] [--option "label::description" ...] [--recommended N] [--refs ID ...] [--urgent] [--story S-n] [--from KEY]` | `ASKED Q-2`, then any warning lines |
 | `questions log Q-1 <ruling id> --if-version V` | `LOGGED Q-1 <ruling id>` |
 | `answer Q-1 --choice N\|other [--note TEXT] [--if-version V]` (owner) | `ANSWERED Q-1 <label>` |
 | `todos [--status S] [--repo R]` | `T-1 open [repo] title` |
@@ -159,8 +165,8 @@ Verbs (`tools/hub.py` docstring is the source), with the line each prints:
 | `inbox` | `M-1 unread [repo] title` |
 | `inbox add --text T [--title T] [--repo R] [--ref ID] [--asked TEXT] [--refs ID ...] [--from NAME]` | `POSTED M-2` |
 | `inbox read M-1 [--undo] [--if-version V]` (owner) | `READ M-1` or `UNREAD M-1` |
-| `pending` | `<kind> <id> [repo] title` |
-| `wait [--since REV] [--timeout S] [--pending]` | `HUB <rev> <kind> <id> <title>` (pending) or `HUB <rev> <collection> <id> <op> <status>`; `HUB <rev> reset: the store is behind --since; read it again` after a reset |
+| `pending [--for KEY]` | `<kind> <id> [repo] title` |
+| `wait [--since REV] [--timeout S] [--pending [--for KEY]]` | `HUB <rev> <kind> <id> <title>` (pending) or `HUB <rev> <collection> <id> <op> <status>`; `HUB <rev> reset: the store is behind --since; read it again` after a reset |
 | `validate [--store PATH]` | `VALIDATE <LEVEL> <document> <field>: <message> [<code>]` |
 | `serve [--port N] [--store PATH]`, `status [--port N]`, `setup`, `open [--port N] [--print]`, `migrate` | see "Serving it" and "Data from the old hub" |
 
@@ -170,12 +176,20 @@ Notes on the table:
   require `--if-version`.
 - `hub.py pending` lists the owner input not yet handled: questions answered and not logged,
   stories submitted, To PM items sent, and to-dos done or added by the owner without `pm_ack`
-  (`kitlib.hubsite.store.pending_items`).
+  (`kitlib.hubsite.store.pending_items`). Each item carries `from` (in `--json`): the session key
+  it goes back to. A question or to-do goes to the launcher session key it was posted `--from`
+  while that key is still in sessions.json; everything else (a to-do's free-text `from`, the
+  owner's own items, stories, To PM items, and a question whose session has gone) goes to `pm`
+  (`kitlib.hubsite.api.Api.pending`). `pending --for KEY` lists only KEY's items; reading it marks
+  nothing, so the item stays pending for every reader until it is logged or acknowledged.
 - `hub.py wait --pending` waits until an item is pending (one already pending ends it at once) and
-  prints `HUB <rev> <kind> <id> <title>` for each; `wait [--since REV]` waits for any change and
-  prints `HUB <rev> <collection> <id> <op> <status>`. `--timeout S` exits 4 with no line when
-  nothing came. The PM keeps one `wait --pending` running in the background, handles what it
-  prints, then starts it again; a PM waiting there is what the page shows as listening.
+  prints `HUB <rev> <kind> <id> <title>` for each; with `--for KEY` it waits until an item for KEY
+  is pending and other sessions' items do not end it. `wait [--since REV]` waits for any change
+  and prints `HUB <rev> <collection> <id> <op> <status>`; `--for` without `--pending` is a usage
+  error. `--timeout S` exits 4 with no line when nothing came. The PM keeps one `wait --pending`
+  running in the background, without `--for` so that it also sees the coordinators' answers it
+  logs, handles what it prints, then starts it again; a PM waiting there is what the page shows
+  as listening.
 
 `--if-version V` is the version of the document the PM read and decided on (the `v2` of the
 `questions` and `stories` lines); a document that has moved on is refused (`REFUSED conflict`). At
@@ -186,7 +200,7 @@ server is up, how many items are pending and whether `wait --pending` runs.
 | Field | Written by | Meaning |
 |---|---|---|
 | status | PM, owner | `open`, then `answered` (owner), then `logged` (PM) |
-| repo, from, asked_at | PM | where it came from; asked_at is ISO time |
+| repo, from, asked_at | PM, coordinator | where it came from; `from` is `pm` or the asking coordinator's launcher session key, the session its answer goes back to; asked_at is ISO time |
 | title | PM | the question itself |
 | context | PM | everything needed to answer; nothing is assumed from chat |
 | options | PM | `[{label, description}]`, recommendation first |
@@ -196,7 +210,8 @@ server is up, how many items are pending and whether `wait --pending` runs.
 | answer | owner | `{choice: index or "other", label, note, at}` |
 | ruling | PM | the ruling id it was logged as |
 
-The PM files each answer, then logs it (`questions log`), pinning `--if-version`.
+The PM files each answer, then logs it (`questions log`), pinning `--if-version`; an answer to a
+coordinator's question too, which the coordinator has already acted on.
 
 ## inbox/M-NNN
 The owner's inbox: the PM's answer to every question the owner asks in a note (on a question, a
