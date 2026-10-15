@@ -1028,6 +1028,98 @@ class HooksAndTheReflog(LinkedCase):
         self.assertIn(ours[:12], out)
         self.assertIn(seen[0][:12], out)
         self.assertIn('restore', out)
+        self.assertNotIn('would have reverted', out)
+
+    # -- the real index after a hook changed the commit
+
+    def index_blob(self, path):
+        return self.git('ls-files', '-s', '--', path).split()[1]
+
+    def test_a_file_a_pre_commit_hook_stages_is_in_the_real_index_too(self):
+        """The hook's `git add` lands in the private index only: without the real index brought
+        into line, it holds a staged deletion of extra.txt that the next commit would make."""
+        self.hook('pre-commit', 'printf "hook\\n" > extra.txt && git add extra.txt')
+        self.put('a.py', 'a = 1\n')
+        code, out = self.commit('add a', 'a.py')
+        self.assertEqual(code, 0, out)
+        self.assertNotIn('WARNING', out)
+        self.assertEqual(self.git('diff', '--cached', '--name-only'), '')
+        self.assertEqual(self.index_blob('extra.txt'), self.git('rev-parse', 'HEAD:extra.txt'))
+
+    def test_a_named_file_a_formatter_hook_restages_is_in_the_real_index_too(self):
+        self.hook('pre-commit', 'printf "a = 2\\n" > a.py && git add a.py')
+        self.put('a.py', 'a = 1\n')
+        code, out = self.commit('add a', 'a.py')
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.git('show', 'HEAD:a.py'), 'a = 2')
+        self.assertEqual(self.git('diff', '--cached', '--name-only'), '')
+        self.assertEqual(self.index_blob('a.py'), self.git('rev-parse', 'HEAD:a.py'))
+
+    def test_a_hook_change_another_writer_also_staged_keeps_the_commit_and_refuses(self):
+        """Another writer stages extra.txt in the real index during the call, and the hook commits
+        its own copy: the commit stands, the real index keeps theirs, and the refusal names the
+        path and the command that would bring the index into line with the commit."""
+        self.hook('pre-commit', 'printf "hook\\n" > extra.txt && git add extra.txt')
+        start = self.head()
+
+        def theirs():
+            self.put('extra.txt', 'theirs\n')
+            self.git('add', '--', 'extra.txt')
+            return self.index_blob('extra.txt')
+        seen = self.around_commit(before=theirs)
+        self.put('a.py', 'a = 1\n')
+        code, out = self.commit('add a', 'a.py')
+        self.assertEqual(code, 1, out)
+        self.assertEqual(self.git('rev-parse', 'HEAD^'), start)
+        self.assertEqual(self.git('show', 'HEAD:extra.txt'), 'hook')
+        self.assertEqual(self.index_blob('extra.txt'), seen[0])
+        self.assertIn('extra.txt', out)
+        self.assertIn('git restore --staged --source=', out)
+        self.assertIn('committed ', out)
+
+    # -- the reflog checks
+
+    def test_a_logged_base_that_is_not_heads_parent_refuses_and_undoes_nothing(self):
+        real = C.tagged_entry
+
+        def wrong_base(root, tag):
+            got = real(root, tag)
+            return ('1' * 40, got[1])
+        self.around_commit(before=self.other_writer_commits)
+        self.put('a.py', 'a = 1\n')
+        with mock.patch.object(C, 'tagged_entry', wrong_base):
+            code, out = self.commit('add a', 'a.py')
+        self.assertEqual(code, 1, out)
+        self.assertIn('NOT undone', out)
+        self.assertIn('git logged', out)
+        self.assertEqual(self.git('show', 'HEAD:a.py'), 'a = 1')
+
+    def test_ours_on_the_checked_head_that_head_no_longer_contains_refuses(self):
+        """Another writer points HEAD back at the start and commits there: this call's commit,
+        made on the HEAD it checked, is no longer in HEAD's history."""
+        start = self.head()
+
+        def rewound():
+            self.git('update-ref', 'HEAD', start)
+            return self.other_writer_commits()
+        seen = self.around_commit(after=rewound)
+        self.put('a.py', 'a = 1\n')
+        code, out = self.commit('add a', 'a.py')
+        self.assertEqual(code, 1, out)
+        self.assertIn('does not contain it', out)
+        self.assertIn('NOT undone', out)
+        self.assertEqual(self.head(), seen[0])
+
+    def test_two_entries_with_one_tag_are_none(self):
+        path = C.repo.git_path(self.wt, 'logs/HEAD')[0]
+        tag, old, new = C.reflog_tag(), '2' * 40, '3' * 40
+        line = '%s %s A <a@example.invalid> 1 +0000\t%s: x\n' % (old, new, tag)
+        with open(path, 'a', encoding='utf-8', newline='\n') as fh:
+            fh.write(line)
+        self.assertEqual(C.tagged_entry(self.wt, tag), (old, new))
+        with open(path, 'a', encoding='utf-8', newline='\n') as fh:
+            fh.write(line)
+        self.assertIsNone(C.tagged_entry(self.wt, tag))
 
 
 class TheOwnersIdentity(LinkedCase):
