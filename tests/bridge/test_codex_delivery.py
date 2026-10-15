@@ -90,7 +90,17 @@ class CodexDeliveryTests(unittest.TestCase):
                         if error.code != 'private-pipe-accept-timeout':
                             raise
                     if self.done.is_set():
-                        return  # No helper ever connected; the test's own assertions judge that.
+                        # The test ended. One last look, then a helper that never connected is
+                        # an error tearDown fails on: every test that serves expects the helper,
+                        # and a before-write refusal with no request would pass without one.
+                        try:
+                            self.listener.accept(timeout=.1)
+                            break
+                        except ProcError as error:
+                            if error.code != 'private-pipe-accept-timeout':
+                                raise
+                        self.errors.append('serve: no helper connected')
+                        return
                     if time.monotonic() > guard:
                         raise TimeoutError('serve-guard')
                 data = bytearray()
