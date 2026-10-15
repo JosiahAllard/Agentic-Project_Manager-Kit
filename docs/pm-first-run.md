@@ -70,9 +70,10 @@ home folder, all absolute. A hand step changes the owner's own settings: give it
    config ... checklist skipped".
    Then give the PM repository, and each repository in `launcher.repos`, its agent memory folder:
    `python <kit>/tools/kit_stubs.py memory -C <repo>` prints the `autoMemoryDirectory` it would add
-   to `.claude/settings.json` (`<the main checkout's drive>/Agent-memory/<repo folder name>`;
+   to `.claude/settings.local.json` (`<the main checkout's drive>/Agent-memory/<repo folder name>`;
    `kitlib/stubs/memory.py`), and the owner runs the same command with `--apply`, which adds it only
-   when the file lacks the key. The owner commits `.claude/settings.json`; the kit never does. Set
+   when neither that file nor `.claude/settings.json` has the key. The key is a machine path, so it
+   goes in the git-ignored local file: there is nothing to commit. Set
    `pm_start.memory_dir` to the PM repository's folder (docs/pm-start.md "Config"). A machine
    config key to put the folder elsewhere is coming; until then the drive's root is used.
    Success: the session start has no `memory (...)` or `pm_start.memory_dir` line.

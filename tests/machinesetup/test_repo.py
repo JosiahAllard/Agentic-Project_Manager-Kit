@@ -440,7 +440,7 @@ class Memory(Base):
         Base.setUp(self)
         self.mem = os.path.join(os.path.realpath(self.fx.base), 'mem')
         self.want = self.mem.replace('\\', '/') + '/' + os.path.basename(self.root)
-        self.settings = os.path.join(self.root, '.claude', 'settings.json')
+        self.settings = os.path.join(self.root, '.claude', 'settings.local.json')
 
     def run_mem(self, apply=False, **kw):
         return self.run_it(apply=apply, memory_root=self.mem, **kw)
@@ -457,7 +457,11 @@ class Memory(Base):
         self.assertEqual(code, R.EXIT_OK, out)
         with open(self.settings, encoding='utf-8') as fh:
             self.assertEqual(json.load(fh), {'autoMemoryDirectory': self.want})
-        self.assertIn('.claude/settings.json', out.split('Next:')[1])
+        nxt = out.split('Next:')[1]
+        self.assertIn('.claude/settings.local.json', nxt)
+        self.assertIn('nothing to commit', nxt)
+        self.assertNotIn('owner commits', nxt)
+        self.assertFalse(os.path.exists(os.path.join(self.root, '.claude', 'settings.json')))
         self.assertFalse(os.path.exists(self.mem))
 
     def test_an_existing_value_is_kept_and_reported(self):
@@ -469,14 +473,14 @@ class Memory(Base):
         self.assertEqual(self.read('.claude/settings.json'), '{"autoMemoryDirectory": "~/mine", "model": "x"}\n')
 
     def test_a_settings_file_it_cannot_edit_refuses_before_anything_is_written(self):
-        self.fx.write('.claude/settings.json', '[1]\n')
+        self.fx.write('.claude/settings.local.json', '[1]\n')
         before = sorted(os.listdir(self.root))
         code, out = self.run_mem(apply=True)
         self.assertEqual(code, R.EXIT_REFUSED, out)
         self.assertIn(self.settings, out)
         self.assertFalse(os.path.exists(os.path.join(self.root, '.kit.json')))
         self.assertEqual(sorted(os.listdir(self.root)), before)
-        self.assertEqual(self.read('.claude/settings.json'), '[1]\n')
+        self.assertEqual(self.read('.claude/settings.local.json'), '[1]\n')
 
 
 class PmData(Base):
