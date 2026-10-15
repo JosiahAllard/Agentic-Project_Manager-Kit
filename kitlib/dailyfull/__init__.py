@@ -4,7 +4,7 @@ Every non-manual `.kit.json` "gate" step, run in full on `"daily_full".ref` in a
 of its own, in one machine-lock slot of `"daily_full".kind` (kitlib.gate.runner.gated: no lock code
 of its own). A failing step does not stop the run: every step runs. Each run writes
 `<out>/<stamp>/result.json`; summary_lines reads them back. One run at a time per tree: the tree's
-lock (kitlib.dailyfull.treelock) is held from before the fetch until the result is written.
+lock (kitlib.fs.treelock) is held from before the fetch until the result is written.
 
 Opt-in: nothing runs unless `"daily_full".enabled` is true in the main checkout's `.kit.json`. The
 kit never schedules it; a repository that wants it daily registers that itself.
@@ -18,7 +18,7 @@ import os
 from kitlib import gate as G
 from kitlib.config import load as load_config
 from kitlib.config.types import ConfigError
-from kitlib.dailyfull.treelock import TreeBusy, TreeLock, TreeLockError, describe, lock_name
+from kitlib.fs.treelock import TreeBusy, TreeLock, TreeLockError, describe, lock_name
 from kitlib.gate import detect
 from kitlib.gate import runner
 from kitlib.gate import steps as S
