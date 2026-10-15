@@ -143,6 +143,7 @@ from kitlib.backlog import store as smod
 from kitlib.backlog.errors import Refusal
 import kitlib.config as kconfig
 from kitlib.config.types import ConfigError
+from kitlib.content import oncommit
 from kitlib.gate import cleanup, result, reuse, runner, stash, strict_defaults, verdicts
 from kitlib.gate import steps as S
 from kitlib.git import cmd, refs, repo
@@ -684,14 +685,14 @@ class Lander(object):
 
     def full_gate_command(self, branch):
         """The command that gates `branch`'s worktree --full: `python "<gate.py>" -C "<worktree>"
-        --full`. The gate.py is the worktree's own when the running kit is a checkout of this
-        repository (the kit gating itself, so the branch is gated by its own gate code; docs/gate.md
-        "The caller's checkout"), else the running kit's. `<worktree>` stands in when no worktree
-        has the branch out."""
+        --full`. The gate.py is the worktree's own when the repository being landed is the kit
+        (its main checkout has the kit's layout, oncommit.is_kit: the branch is gated by its own
+        gate code; docs/gate.md "The caller's checkout"), whether the running kit is a checkout or
+        a plugin export; any other repository's is the running kit's. `<worktree>` stands in when
+        no worktree has the branch out."""
         wts, _ = repo.worktrees(self.root)
         wt = next((w.path for w in wts or [] if w.branch == branch), None) or '<worktree>'
-        same, _ = repo.same_repository(S.kit_live(), self.root)
-        gate_py = os.path.join(wt if same else S.kit_live(), 'tools', 'gate.py')
+        gate_py = os.path.join(wt if oncommit.is_kit(self.root) else S.kit_live(), 'tools', 'gate.py')
         return 'python "%s" -C "%s" --full' % (gate_py, wt)
 
     # ---------------------------------------------------------------- strict paths
