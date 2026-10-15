@@ -20,7 +20,7 @@ from optional.bridge.win.leader import ServiceLeader
 from optional.bridge.port import NativeSource
 from optional.bridge.win.service import BrokerService
 from kitlib.proc.job import Job
-from kitlib.proc.process import own_ctime,proc_ctime
+from kitlib.proc.process import close,open_process,own_ctime,proc_ctime
 from tests.bridge.test_pairing import chat
 
 RUNTIME_SOURCE='optional/bridge/hosts/claude/runtime.py'
@@ -213,6 +213,35 @@ class ClaudeRuntimeTests(unittest.TestCase):
         self.start_service()
         self.hook('bridge_connections',{})
         self.assertEqual(self.controller.pairs.registered(),())
+
+    def test_exited_frontend_held_open_by_another_handle_does_not_make_hook_routing_ambiguous(self):
+        # An exited process keeps its creation time readable while any handle to it is open
+        # anywhere on the machine; holding one here makes that window certain.
+        self.cli_mode()
+        child,native=self.frontend()
+        self.sources(native)
+        held=open_process(child.pid)
+        try:
+            self.assertTrue(held)
+            child.terminate();child.wait(timeout=3)
+            self.start_service()
+            self.hook('bridge_connections',{})
+            self.assertEqual([item.identity.native_session_id for item in self.controller.pairs.registered()],[self.cli])
+        finally:close(held)
+
+    def test_exited_frontend_held_open_by_another_handle_is_refused_and_dropped_from_cache(self):
+        self.cli_mode()
+        child,native=self.frontend()
+        self.sources(native)
+        held=open_process(child.pid)
+        try:
+            self.assertTrue(held)
+            child.terminate();child.wait(timeout=3)
+            with self.assertRaises(DeliveryError):self.sources(native)
+            _,other=self.frontend()
+            self.sources(other)
+            self.assertEqual(list(self.sources._frontends),[(other.pid,other.creation)])
+        finally:close(held)
 
     def test_runtime_lock_is_not_held_during_controller_or_pairing_callbacks(self):
         original=self.controller.enroll

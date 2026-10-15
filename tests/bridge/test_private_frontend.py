@@ -10,13 +10,13 @@ import unittest
 import uuid
 from unittest import mock
 
-from optional.bridge.core.messages import SenderAuthority
+from optional.bridge.core.messages import DeliveryError,SenderAuthority
 from optional.bridge.win.controller import Controller
-from optional.bridge.win.frontend import FrontendInspector
+from optional.bridge.win.frontend import FrontendInspector,NativeFrontend
 from optional.bridge.win.leader import ServiceLeader
 from optional.bridge.win.service import BrokerService
 from kitlib.proc.job import Job
-from kitlib.proc.process import own_ctime
+from kitlib.proc.process import close,handle_ctime,open_process,own_ctime
 from tests.bridge.test_pairing import chat
 
 FRONTEND_SOURCE='optional/bridge/mcp_frontend.py'
@@ -169,6 +169,47 @@ class PrivateFrontendTests(unittest.TestCase):
         self.initialize()
         self.assertEqual(len(self.service.frontends),1)
         self.assertNotIn(old,self.controller._sources)
+
+    def test_exited_frontend_is_removed_while_another_handle_keeps_its_process_object(self):
+        # An exited process stays openable, creation time and all, while any handle to it is
+        # open anywhere on the machine (a console host, a scanner, a process walker). Holding
+        # one here makes that window certain instead of a matter of machine load.
+        self.initialize()
+        old=next(iter(self.service.frontends.values()))[1].calls
+        held=open_process(self.process.pid)
+        self.assertTrue(held)
+        try:
+            self.process.terminate()
+            self.process.wait(timeout=3)
+            for stream in (self.process.stdin,self.process.stdout): stream.close()
+            self.process=self.job.start([sys.executable,'-I','-B',str(self.kit/FRONTEND_SOURCE),str(self.marker)],
+                stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NO_WINDOW,close_fds=True)
+            self.initialize()
+            self.assertEqual(len(self.service.frontends),1)
+            self.assertNotIn(old,self.controller._sources)
+        finally: close(held)
+
+    def test_request_verified_for_an_exited_frontend_registers_nothing(self):
+        # A request a helper sent before its frontend exited can be inspected after the exit,
+        # and the exited process still passes the inspector while a handle holds it.
+        exited=subprocess.Popen([sys.executable,'-I','-B','-c','pass'],
+            stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
+            creationflags=subprocess.CREATE_NO_WINDOW,close_fds=True)
+        held=open_process(exited.pid)
+        try:
+            self.assertTrue(held)
+            creation=handle_ctime(held)
+            exited.wait(timeout=10)
+            native=NativeFrontend(exited.pid,creation,os.getpid(),own_ctime(),'codex',Path(sys.executable))
+            self.service.inspector=mock.Mock(inspect=mock.Mock(return_value=native))
+            with self.assertRaises(DeliveryError):
+                self.service.handle(object(),{'protocol':1,'request':{'jsonrpc':'2.0','id':1,
+                    'method':'initialize','params':{'protocolVersion':'2025-06-18'}}})
+            self.service.inspector.inspect.assert_called_once()
+            self.assertFalse(self.service.frontends)
+            self.assertFalse(self.controller._sources)
+        finally: close(held)
 
     def test_private_prepared_metadata_replaces_wire_claims_and_is_consumed_on_refusal(self):
         from optional.bridge.port import NativeSource

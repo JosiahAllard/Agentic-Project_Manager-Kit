@@ -7,7 +7,9 @@ from pathlib import Path
 
 from optional.bridge.core.messages import DeliveryError
 from kitlib.proc.pipe import bind,local_free,process_image,process_sids
-from kitlib.proc.process import command_line,proc_ctime,process_parents
+from kitlib.proc.process import (PROCESS_QUERY_LIMITED_INFORMATION,SYNCHRONIZE,WAIT_TIMEOUT,
+    close,command_line,handle_ctime,open_process,proc_ctime,process_parents)
+from kitlib.proc.win32 import K32
 from .channel import NativeChannel,capture_inherited_channel,revalidate_channel
 from .evidence import regular,stable_bytes
 from .hosts import native_hosts as normalize_hosts
@@ -15,6 +17,16 @@ from .launch import PYTHON_FLAGS
 from optional.bridge.paths import FRONTEND_REL,RPC_WORKER_REL,kit_file
 from .rpc import MAX_BYTES,PipeClient,decode,encode,request
 from .transport import PipeTarget
+
+
+def running(pid,creation):
+    """True only while process (pid, creation) has not exited. An exited process stays openable,
+    with its creation time, while any handle to it is open anywhere on the machine, so a matching
+    creation time alone does not mean it still runs: its exit is read from the wait state."""
+    handle=open_process(pid,PROCESS_QUERY_LIMITED_INFORMATION|SYNCHRONIZE)
+    if not handle: return False
+    try: return handle_ctime(handle)==creation and K32.WaitForSingleObject(handle,0)==WAIT_TIMEOUT
+    finally: close(handle)
 
 
 def _path(value):
