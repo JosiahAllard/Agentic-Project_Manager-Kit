@@ -4,6 +4,7 @@
   start_entry a sessions.json entry by key: its repo, agent, stem and brief
   deep        a deep-worker: the 1M-context model, effort xhigh, a brief, a requester to report to
   consultant  one long-lived consultant per repo that answers engineering questions
+  homes       list a main checkout's home worktrees, or remove one
 
 Every function returns the lines it says; a refusal is a LaunchError (nothing started, nothing
 written). None of them stops a running session: a hand-off starts the successor and the PM stops
@@ -16,22 +17,25 @@ import sys
 from kitlib import agentname
 from kitlib import content as kcontent
 from kitlib.launcher import accounts as A
+from kitlib.git import cmd
 from kitlib.git import repo as gitrepo
 from kitlib.launcher import home, lookup, state, window
 from kitlib.launcher.settings import LaunchError
 
 PM_NAME = 'Project Manager'      # the PM session's name, as every first message names it
-DEFAULT_PROMPT = ('Start up now: run your start-up routine, read docs/ops/state.local.md, check in with the PM '
-                  '(the session named %s), then continue the queue in the state note.' % PM_NAME)
+DEFAULT_PROMPT = ('Start up now: run your start-up routine, read your state note (the path your role names), check '
+                  'in with the PM (the session named %s), then continue the queue in the state note.' % PM_NAME)
 HOME_NOTE = (' Your start folder %s is a home worktree of the main checkout %s, and a relative path resolves in '
              'it: do not write there; your branch work goes in your own worktree, and the main checkout, by '
              'absolute path, is read-only to you.')
 # the roles --home-worktree may start in a home: a session in a linked worktree may write only that
-# worktree and temp (docs/guard.md "Write jail"), so a coordinator's state note and a consultant's notes
-# file, which live in the main checkout, would be refused (docs/launcher.md "The home worktree")
-HOME_ROLES = (window.DEEP_WORKER,)
-HOME_REFUSED = ('--home-worktree is for deep-worker sessions only: a %s session started in a home worktree '
-                "cannot write its files in the main checkout (the guard's write jail); nothing was started.")
+# worktree and temp (docs/guard.md "Write jail"). A consultant's notes file is in agent temp
+# (consultant_notes_path); a coordinator's state note is still in the main checkout, so a coordinator
+# would be refused its writes (docs/launcher.md "The home worktree")
+HOME_ROLES = (window.DEEP_WORKER, window.CONSULTANT)
+HOME_REFUSED = ('--home-worktree is for deep-worker and consultant sessions only: a %s session started in a home '
+                "worktree cannot write its files in the main checkout (the guard's write jail; a coordinator's "
+                'state note is still there); nothing was started.')
 AUTOCOMPACT = (100000, 1000000)  # the CLI's range for --autocompact
 SLUG = re.compile(r'^[a-z0-9][a-z0-9-]{1,40}\Z')
 DEFAULT_AUTOCOMPACT = 170000   # a coordinator, another agent or a plain session; deep and consultant set their own
@@ -48,8 +52,26 @@ KIT_AGENTS = tuple(r.name for r in kcontent.roster(KIT))
 # the guard's role policy reads the same table (kitlib.content.ALIASES)
 AGENT_ALIASES = kcontent.ALIASES
 LONG_MODEL = 'opus[1m]'
-NOTES_DEFAULT = 'docs/ops/consultant-notes.local.md'
+# a consultant's notes file: <agent temp>/<repo>-consultant/notes.md (consultant_notes_path), outside
+# the repository, so the write jail leaves it open in a home worktree. The agent-temp sweep keeps any
+# <name>-consultant and <name>-coordinator folder (optional/agenttemp/agent_temp_sweep.py BUILT_IN_KEEP);
+# COORDINATOR_FOLDER is where a coordinator's state note goes (its role file names the path)
+CONSULTANT_FOLDER = '%s-consultant'
+COORDINATOR_FOLDER = '%s-coordinator'
+CONSULTANT_NOTES = 'notes.md'
+NOTES_DEFAULT = None             # --notes-path left out: consultant_notes_path
+OLD_NOTES = os.path.join('docs', 'ops', 'consultant-notes.local.md')   # the default before; copied, never deleted
 DIGEST = os.path.join('docs', 'conventions-digest.md')
+
+
+def agent_temp(host):
+    """The agents' temp folder: AGENT_TEMP, else TEMP, else the home folder."""
+    return host.env('AGENT_TEMP') or host.env('TEMP') or host.home
+
+
+def consultant_notes_path(host, repo):
+    """The default notes file of the consultant of `repo` (its slug)."""
+    return os.path.join(agent_temp(host), CONSULTANT_FOLDER % repo, CONSULTANT_NOTES)
 
 
 def cli(*args):
@@ -311,7 +333,7 @@ def deep(settings, host, repo_path, requester, slug, brief=None, brief_text=None
     A.check_headroom(settings, acct, host.now(), force, out)
     _refuse_live(host, name, 'stop it first or pick another --slug.')
     if brief_text:
-        brief_dir = brief_dir or os.path.join(host.env('AGENT_TEMP') or host.env('TEMP') or host.home, 'deep-briefs')
+        brief_dir = brief_dir or os.path.join(agent_temp(host), 'deep-briefs')
         brief_path = os.path.join(brief_dir, '%s-%s.md' % (name, host.now().strftime('%Y%m%dT%H%M%S')))
     prompt = ("You are %s, a deep-worker session started for the session named '%s'. Read your brief %s first and "
               "work only from it. Before changing anything, make your own git worktree and branch with the repo's "
@@ -358,7 +380,10 @@ def _with_lines(out):
 def consultant(settings, host, repo_path, repo=None, account='auto', autocompact=CONSULTANT_DEFAULT_AUTOCOMPACT,
                model=LONG_MODEL, effort='high', notes_path=NOTES_DEFAULT, force=False, replace=False, plan=False,
                home_worktree=False):
-    """The consultant session consultant-<repo>; one per repo unless --replace (an account hand-off)."""
+    """The consultant session consultant-<repo>; one per repo unless --replace (an account hand-off).
+    notes_path None is consultant_notes_path; then an old notes file in the repo (OLD_NOTES) is
+    copied to it on first use, just before the window opens, and never changed or deleted
+    (_copy_old_notes). With home_worktree, a notes file in the main checkout is refused."""
     if home_worktree:
         check_home_role(window.CONSULTANT)
     out = []
@@ -372,12 +397,20 @@ def consultant(settings, host, repo_path, repo=None, account='auto', autocompact
         raise LaunchError('--autocompact must be %d..%d tokens (never above 500k), not %s.'
                           % (CONSULTANT_AUTOCOMPACT + (autocompact,)))
     _check_common(model, effort, None)
+    default = notes_path is None
+    if default:
+        notes_path = consultant_notes_path(host, repo)
     if not (notes_path or '').strip() or re.search(r"[\r\n']", notes_path):
         raise LaunchError('--notes-path must be a file path on one line, without quotes.')
     name = 'consultant-' + repo
     notes = os.path.abspath(notes_path if os.path.isabs(notes_path) else os.path.join(repo_path, notes_path))
     if os.path.isdir(notes):
         raise LaunchError('--notes-path %s is a folder, not a file.' % notes)
+    in_repo = os.path.normcase(notes).startswith(os.path.normcase(repo_path.rstrip('\\/') + os.sep))
+    if home_worktree and in_repo:
+        raise LaunchError("--home-worktree: the notes file %s is in the main checkout %s, which a session started in "
+                          "a home worktree cannot write (the guard's write jail); leave out --notes-path (agent "
+                          'temp). Nothing was started.' % (notes, repo_path))
     acct = _pick_or(settings, host, account, out)
     A.launch_dir(settings, acct)
     A.check_headroom(settings, acct, host.now(), force, out)
@@ -392,7 +425,7 @@ def consultant(settings, host, repo_path, repo=None, account='auto', autocompact
     digest = os.path.join(repo_path, DIGEST)
     if not os.path.isfile(digest):
         out.append('Warning: no conventions digest at %s; the consultant will say so when it starts.' % digest)
-    if os.path.normcase(notes).startswith(os.path.normcase(repo_path.rstrip('\\/') + os.sep)):
+    if in_repo:
         if host.git_ignored(repo_path, notes) is False:
             out.append("Warning: git does not ignore %s; add it to the repo's .gitignore before the consultant's "
                        'first call.' % notes)
@@ -403,10 +436,93 @@ def consultant(settings, host, repo_path, repo=None, account='auto', autocompact
               "SendMessage each call to the session named %s as 'engineering call for delegated logging' with the "
               "question, answer and reason. Never edit code, commit, land or dispatch builds. After a compaction, "
               "reread the digest and the notes file." % (name, repo_path, notes, PM_NAME))
+    old = os.path.join(repo_path, OLD_NOTES)
+    copied = _copy_old_notes(old, notes, plan, out) if default and os.path.isfile(old) else False
+    if copied is not False and live:
+        out.append('Warning: the running %s still writes %s; what it writes after this copy stays there.'
+                   % (name, old))
     try:
         out += start(settings, host, repo_path=repo_path, account=acct, name=name, agent='pm-kit:consultant', model=model,
                      effort=effort, autocompact=autocompact, prompt=prompt, whatif=plan, home_worktree=home_worktree)
     except Exception:
+        if copied:
+            try:
+                os.remove(notes)
+                out.append('Launch failed; removed the copy %s (the old file %s is unchanged).' % (notes, old))
+            except OSError as e:
+                out.append('Launch failed; could not remove the copy %s (%s); the old file %s is unchanged.'
+                           % (notes, e, old))
         raise _with_lines(out)
     out.append('To stop it: %s' % stop_cmd(name))
     return out
+
+
+def _copy_old_notes(old, notes, plan, out):
+    """Copy the old notes file `old` to `notes` when `notes` does not exist: True when copied, None
+    when `plan` (it would be), False when `notes` exists (a warning names the old file). The old file
+    is only read. The copy is an exclusive create, so a notes file made meanwhile is never overwritten."""
+    kept = 'Warning: %s is no longer read; the notes file is %s. The old file is left as it is.' % (old, notes)
+    if os.path.exists(notes):
+        out.append(kept)
+        return False
+    if plan:
+        out.append('Would copy the old notes file %s to %s; the old file would be left as it is.' % (old, notes))
+        return None
+    try:
+        with open(old, 'rb') as f:
+            data = f.read()
+        os.makedirs(os.path.dirname(notes), exist_ok=True)
+        with open(notes, 'xb') as f:
+            f.write(data)
+    except FileExistsError:
+        out.append(kept)
+        return False
+    except OSError as e:
+        raise LaunchError('could not copy the old notes file %s to %s: %s; nothing was started.' % (old, notes, e), out)
+    out.append('Copied the old notes file %s to %s; the old file is left as it is and is no longer read.' % (old, notes))
+    return True
+
+
+def homes(settings, host, repo=None, repo_path=None, remove=None, whatif=False, git=None):
+    """The home worktrees of a main checkout (home.list_homes), or remove one (home.remove): `remove`
+    is a session name or its home-<name> folder. Refused when the folder is not a main checkout, or
+    while a session runs whose home it is."""
+    if bool(repo) == bool(repo_path):
+        raise LaunchError('Give --repo <name in launcher.repos> or --repo-path <folder>, one of them.')
+    folder = repo_path or settings.repo_path(repo)
+    if not os.path.isdir(folder):
+        raise LaunchError('No repo at %s' % folder)
+    place = host.place(folder)
+    if place.kind != gitrepo.MAIN:
+        raise LaunchError('%s is not a main checkout (%s); home worktrees belong to a main checkout. Nothing was '
+                          'changed.' % (folder, place.detail))
+    main = os.path.normpath(place.top)
+    git = git or cmd.call
+    running = {}
+    for p in _sessions(host):
+        n = lookup.rc_name(p.get('CommandLine'))
+        if n:
+            running.setdefault(home.canon(home.home_path(main, n)), []).append((n, p))
+    if remove is None:
+        found = home.list_homes(main, git)
+        if not found:
+            return ['No home worktrees in %s.' % main]
+        out = ['Home worktrees of %s:' % main]
+        for h in found:
+            dirty = h['dirty']
+            state = ('folder missing' if dirty is None else 'clean' if not dirty else
+                     '%d uncommitted, untracked or ignored file(s): %s' % (len(dirty), home.shown(dirty)))
+            line = '  %s  at %s  %s  %s' % (os.path.basename(h['path']), (h['head'] or '?')[:10],
+                                            'locked' if h['locked'] is not None else 'unlocked', state)
+            for n, p in running.get(home.canon(h['path']), ()):
+                line += '  in use by the running session %s (PID %s)' % (n, p.get('ProcessId'))
+            out.append(line)
+        return out
+    name = remove[len(home.PREFIX):] if remove.lower().startswith(home.PREFIX) else remove
+    path = home.home_path(main, name)
+    live = running.get(home.canon(path))
+    if live:
+        raise LaunchError("a session named '%s' is running (PID %s) in its home worktree %s; stop it first. Nothing "
+                          'was removed.' % ("', '".join(sorted({n for n, _ in live})),
+                                            ', '.join(str(p.get('ProcessId')) for _, p in live), path))
+    return home.remove(main, path, whatif, git)
