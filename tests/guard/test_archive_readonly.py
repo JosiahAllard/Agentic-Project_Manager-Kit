@@ -279,6 +279,25 @@ class ArchiveProgramSearch(ArchiveWorld):
                 with self.subTest(text):
                     self.archive_refused(shell, text)
 
+    def test_cmd_s_leading_at_and_delimiters_still_name_the_command(self):
+        # cmd drops a leading @ and its delimiters (, ; =) before the command name, as a prefix of
+        # the word or as words of their own: @set PATH=x is set, @ path x is path
+        archive = 'git -C %s archive HEAD' % self.main
+        for spell in ('@set PATH={x};%PATH%', '@set PATH={x}', '@set HOME={x}', '@SET GIT_DIR={x}',
+                      '@ set PATH={x}', ',set PATH={x}', ';set PATH={x}', '=set HOME={x}', '@@set HOME={x}',
+                      '@ path {x}', ', path {x}', '@;path {x}', '@call x.bat'):
+            line = spell.replace('{x}', self.scratch) + '& ' + archive
+            for shell, call in ((bash, "cmd //c '%s'"), (ps, "cmd /c '%s'")):
+                text = call % line
+                with self.subTest(text):
+                    self.archive_refused(shell, text)
+        # what changes nothing still reads: a bare @path prints PATH, @echo prints its words
+        for spell in ('@path', '@ path', '@echo hi', '@set'):
+            for shell, call in ((bash, "cmd //c '%s& %s'"), (ps, "cmd /c '%s& %s'")):
+                text = call % (spell, archive)
+                with self.subTest(text):
+                    self.assertIsNone(self.pm(shell(text, self.w.plain)))
+
     def test_powershell_content_on_the_environment_sets_path(self):
         # the environment provider's content and item cmdlets set or remove the variable a path
         # names, in every spelling of the env: drive
