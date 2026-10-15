@@ -36,6 +36,12 @@ class Views(object):
     def health(self):
         return {'git': 'ok', 'backlog': 'ok'}
 
+    def record(self, repo, id):
+        return {}
+
+    def record_template(self, repo):
+        return {}
+
 
 def seed_question(store, status='open'):
     return store.add('questions', {'status': status, 'title': 't', 'options': OPTIONS}).id
@@ -58,7 +64,8 @@ def seed_inbox(store):
     return store.add('inbox', {'text': 'x'}).id
 
 
-# (method, path under BASE): (seed -> id or None, body, query). `{id}` takes the seeded id.
+# (method, path under BASE): (seed -> id or None, body, query). `{id}` takes the seeded id,
+# `{repo}` the name REPO (`path`).
 ROWS = {
     ('GET', '/questions'): (None, None, None),
     ('POST', '/questions'): (None, {'title': 't', 'options': OPTIONS}, None),
@@ -85,6 +92,8 @@ ROWS = {
     ('POST', '/inbox/{id}/read'): (seed_inbox, None, None),
     ('GET', '/backlog'): (None, None, None),
     ('GET', '/completed'): (None, None, None),
+    ('GET', '/records/{repo}/new'): (None, None, None),
+    ('GET', '/records/{repo}/{id}'): (None, None, None),
     ('GET', '/notices'): (None, None, None),
     ('GET', '/repos'): (None, None, None),
     ('GET', '/usage'): (None, None, None),
@@ -96,8 +105,16 @@ ROWS = {
 }
 
 
+REPO = 'r'
+
+
 def key(route):
     return route.method, route.pattern[len(BASE):]
+
+
+def path(route, doc_id):
+    """route.pattern with its `{id}` and `{repo}` segments filled in."""
+    return route.pattern.replace('{id}', doc_id).replace('{repo}', REPO)
 
 
 class RolesCase(unittest.TestCase):
@@ -128,8 +145,7 @@ class RolesCase(unittest.TestCase):
                 with self.subTest(route=route.method + ' ' + route.pattern, role=role):
                     store, a, doc_id = self.fresh(seed)
                     before = store.snapshot()
-                    path = route.pattern.replace('{id}', doc_id)
-                    status, obj = a.call(route.method, path, role, body, query)
+                    status, obj = a.call(route.method, path(route, doc_id), role, body, query)
                     if route.role in (role, ANY):
                         self.assertEqual((status, obj.get('error')), (200, None))
                     else:
@@ -183,8 +199,7 @@ class RolesCase(unittest.TestCase):
                 with self.subTest(route=route.method + ' ' + route.pattern, role=repr(role)):
                     store, a, doc_id = self.fresh(seed)
                     before = store.snapshot()
-                    status, obj = a.call(route.method, route.pattern.replace('{id}', doc_id),
-                                         role, body, query)
+                    status, obj = a.call(route.method, path(route, doc_id), role, body, query)
                     self.assertEqual((status, obj['error']['code']), (403, 'forbidden'))
                     self.assertEqual(store.snapshot(), before)
 

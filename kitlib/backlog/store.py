@@ -447,7 +447,8 @@ class RefBackend(object):
         cmd.call(['update-ref', self.local_ref, new, cur or '0' * len(new)], self.root)
 
     def history(self, rid, snap):
-        """`<short sha> <subject>` of the last commit that closed or retired `rid`, or None."""
+        """`<short sha> <subject>` of the last commit that closed, retired or deleted `rid`, or
+        None."""
         if not snap.tip:
             return None
         return _last_closing(self.root, rid, snap.tip)
@@ -474,7 +475,7 @@ class RefBackend(object):
 
 
 def _last_closing(root, rid, rev):
-    pattern = '^(closes|retires) %s: ' % re.escape(rid)
+    pattern = '^(closes|retires|deletes) %s: ' % re.escape(rid)
     out, why = cmd.run_text(['log', '-1', '--format=%h %s', '-E', '--grep', pattern, rev, '--'],
                             root)
     if out is None:
@@ -1247,7 +1248,8 @@ class MainBackend(object):
 
     def uncommitted_removal(self, rid):
         """True when HEAD tracks `<dir>/<rid>.md` and the worktree no longer holds it: a write
-        here deleted it (`close`, `retire`, which commit nothing outside the PM data worktree)
+        here deleted it (`close`, `retire`, `delete`, which commit nothing outside the PM data
+        worktree)
         or a hand removed it. False on
         an unborn HEAD. Failure when git did not answer (killed, timed out): fail closed."""
         if not PLAIN_ID.match(rid):

@@ -57,7 +57,7 @@ import sys
 import time
 
 # The machine config's place comes from the kit library (kitlib.config.user), found at the kit's
-# root through the real path: an installed junction (~/.claude/tools/agenttemp) resolves into the kit.
+# root through the real path: a link to this folder resolves into the kit.
 # Without it nothing is swept: load() refuses (exit 2), never a traceback (exit 1 means a partial sweep).
 KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 sys.path.insert(0, KIT_ROOT)

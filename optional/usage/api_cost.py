@@ -1,6 +1,6 @@
 """Price all Claude Code usage since a UTC timestamp at API list rates (USD per million tokens).
 
-usage: python ~/.claude/tools/usage/api_cost.py [since] [--days 7] [--config-dir <dir> ...]
+usage: python <kit>/optional/usage/api_cost.py [since] [--days 7] [--config-dir <dir> ...]
 
 Reads every transcript under each config folder's projects/ (default: CLAUDE_CONFIG_DIR and
 ~/.claude; pass --config-dir once per account folder to cover them all; the folders read are

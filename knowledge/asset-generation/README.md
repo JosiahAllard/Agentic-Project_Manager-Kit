@@ -1,23 +1,24 @@
 # Asset generation: shared knowledge base
 
-Every agent on this machine reads this folder before generating anything and writes to it
-afterwards. It holds what we have learnt about making game assets with the owner's local
+Every agent on this machine reads this folder before generating anything and writes nothing
+into it: the folder is part of the kit and read-only for agents, and session records go to the
+repository's `docs/ops/assets.md`. A change to a file here goes through a kit branch. It holds what we have learnt about making game assets with the owner's local
 models: what works, what does not, and how to do it well. Nothing here is specific to one
 repository. Repository rules (asset policy, attribution format, art direction) live in each
 repository and win over this folder.
 
 | File | What it holds | Who writes |
 |---|---|---|
-| `MODELS.md` | The approved models, licences, measured speed, strengths and weaknesses | Update when a model is added or a measurement changes |
+| `MODELS.md` | The approved models, licences, measured speed, strengths and weaknesses | A kit branch, when a model is added or a measurement changes. Agents report it |
 | `BEST_PRACTICES.md` | Distilled recipes and rules of thumb | Owner only. Agents propose a rule once it has held up at least twice in a repo's `docs/ops/assets.md` |
 
 ## The tool
 
 ```
-python ~/.claude/tools/comfy/comfy_gen.py check
-python ~/.claude/tools/comfy/comfy_gen.py <image|edit|rembg|upscale|to3d|music|template> --help
-python ~/.claude/tools/comfy/render_glb.py  (run through Blender, see its docstring)
-python ~/.claude/tools/comfy/compare_sheet.py OUT.html [LABEL=]IMAGE ... [--cols N]
+python <kit>/optional/comfy/comfy_gen.py check
+python <kit>/optional/comfy/comfy_gen.py <image|edit|rembg|upscale|to3d|music|template> --help
+python <kit>/optional/comfy/render_glb.py  (run through Blender, see its docstring)
+python <kit>/optional/comfy/compare_sheet.py OUT.html [LABEL=]IMAGE ... [--cols N]
 ```
 
 - It only talks to ComfyUI on this machine (`127.0.0.1:8188`). The owner starts and stops
@@ -52,7 +53,7 @@ python ~/.claude/tools/comfy/compare_sheet.py OUT.html [LABEL=]IMAGE ... [--cols
    `render_glb.py`, and describe what you see. A validator or a file size is not a check.
 4. **Generated output is a source, not a finished asset.** Say what clean-up it needs
    (cut-out, tiling, retopology, scale, pivot, materials) and do it, or hand it on.
-5. **Record it, in the repository.** Agents write nothing under `~/.claude` (owner,
+5. **Record it, in the repository.** Agents write nothing into this folder (owner,
    2026-09-20). Add one keyword line per session, failures included, to the repo's
    `docs/ops/assets.md`: `date | command | model | what for | result | lesson`. When a lesson has
    held up twice, propose it to the owner for `BEST_PRACTICES.md`, citing those lines.

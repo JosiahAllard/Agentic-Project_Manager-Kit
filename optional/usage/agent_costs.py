@@ -1,6 +1,6 @@
 """List a project's agents by share of weighted usage since a date.
 
-usage: python ~/.claude/tools/usage/agent_costs.py <project transcript folder> [since] [top]
+usage: python <kit>/optional/usage/agent_costs.py <project transcript folder> [since] [top]
                                                     [--days 7]
 
 <project transcript folder> is a config folder's projects/<project> (it and its subagents/ are

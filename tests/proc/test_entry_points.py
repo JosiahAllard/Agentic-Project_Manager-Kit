@@ -47,8 +47,8 @@ BOOT_KITBOOT = (STARTS_NOTHING + 'the check every host entry runs before it impo
                 'import kitlib itself (tests/host/conformance.py holds that order)')
 COMFY = ('a standalone optional tool for the owner\'s local ComfyUI and Blender, standard library '
          'only and run from a console; it imports nothing of the kit (it works copied out of it)')
-USAGE = (STARTS_NOTHING + 'a standalone usage reader, installed by copying the folder to '
-         '~/.claude/tools/usage where no kit is on sys.path; its only kit use is _usage.home(), '
+USAGE = (STARTS_NOTHING + 'a standalone usage reader, run from the kit, or from a copy '
+         'of the folder where no kit is on sys.path; its only kit use is _usage.home(), '
          'which imports kitlib.config.user when the kit is there')
 POOL_WORKER = (STARTS_NOTHING + 'the test pool\'s interpreter imports nothing of the kit but the '
                'packages named on its command line, so each unit\'s modules can be unloaded after '
