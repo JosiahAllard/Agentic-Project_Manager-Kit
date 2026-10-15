@@ -4,7 +4,7 @@ hub site design, section 2 "HTTP API" and section 9).
   ROUTES     the table every transport iterates: Route(method, pattern, role, handler). A pattern
              is a full path under BASE; a `{name}` segment takes one path segment. role is OWNER,
              AGENT or ANY: who may call it.
-  Api(store, views=None, clock=None)
+  Api(store, views=None, clock=None, session_keys=None)
              .call(method, path, role, body=None, query=None, via='', raise_unexpected=False,
                    agent_words=False) -> (status, object)
              via names the transport (web, desktop-mcp, cli, tunnel, ...); every write records
@@ -28,7 +28,10 @@ route and the role, never taken from the body. A write to an existing document i
 version this module read (or the caller's `if_version`), so a check made on one version is never
 applied to another: the loser gets `conflict`. The `from` an agent gives a to-do is a name in
 printable ASCII (0x21 to 0x7E, single spaces inside it, the ends trimmed); anything else is
-`invalid`, and so is any spelling of `you`. On the two edit routes a null `repo` (and a to-do's
+`invalid`, and so is any spelling of `you`. A question's `from` is the session its answer goes
+back to: a key of the launcher's sessions.json, read on each add (Api's session_keys), or `pm`,
+which is also what an absent one is; any other is `invalid`, and the refusal names the known
+keys, never the file. On the two edit routes a null `repo` (and a to-do's
 null `detail`) clears the field exactly as "" does; any other null field is read as absent.
 
 Results. status is 200 with the route's object, or the status of STATUS[code] with
@@ -69,6 +72,13 @@ new Api (a server restart) starts at null, null and 0 until the next agent call.
 own calls never count. No lock is taken: each note is one assignment, and an open wait is one
 key put into and popped from a dict, which the interpreter does as one step each.
 
+Pending for one session. Every pending item carries `from`, the session key it is for
+(Api.pending). GET pending and GET wait (with pending=1) take `for=<key>`: only that key's
+items are listed, and such a wait is woken only by one of them, a reset or its timeout, so a
+coordinator is not woken by another session's answer. A filtered read changes nothing: the
+items it leaves out, and the ones it lists, stay pending for every reader until they are
+handled (a question until it is logged). Without `for` every item is listed, as before.
+
 Revision. A read's `revision` is taken before the data is copied, so it is never later than the
 data: a client that waits `since` it is told of any write the copy missed. GET health gives the
 store's folder to the owner only.
@@ -77,6 +87,7 @@ import collections
 import datetime
 import math
 import re
+import time
 
 from kitlib import hubvalidate
 
@@ -267,6 +278,17 @@ def _reason(e):
     return e.code if isinstance(e, HubError) else type(e).__name__
 
 
+def launcher_keys():
+    """The session keys of the launcher's sessions.json (kitlib.launcher), read now; an empty
+    set when the launcher's settings or that file cannot be read. HomeFenced (a test that
+    reached for the real home) is not caught: a test gives Api its own session_keys."""
+    try:
+        from kitlib.launcher import settings as lsettings, state as lstate
+        return {k for k, _ in lstate.entries(lstate.read_sessions(lsettings.load()))}
+    except Exception:               # noqa: BLE001 - unreadable: only the PM's key is known
+        return set()
+
+
 def _agent_from(text):
     """The `from` of a to-do an agent adds: text trimmed, AGENT_FROM when that leaves nothing.
     Only printable ASCII with single spaces inside is a name (so no character a reader cannot
@@ -287,12 +309,14 @@ def _agent_from(text):
 class Api(object):
     """The hub's verbs over `store` (a kitlib.hubsite.store.Store). `views` gives the derived
     views (module docstring) or is None; `clock` gives the time stamp of a write as an ISO
-    string (default: the store's clock)."""
+    string (default: the store's clock); `session_keys` gives the launcher's session keys as an
+    iterable, called afresh on each use (default: launcher_keys)."""
 
-    def __init__(self, store, views=None, clock=None):
+    def __init__(self, store, views=None, clock=None, session_keys=None):
         self.store = store
         self.views = views
         self.clock = clock or store.clock
+        self._session_keys = session_keys or launcher_keys
         self._seen = {'waited': None, 'pulled': None}
         self._waits = {}            # one key per agent wait that is blocked right now
 
@@ -420,8 +444,32 @@ class Api(object):
         except Exception as e:      # noqa: BLE001 - a view is another module's code
             raise HubError('unavailable', 'the %s view failed: %s' % (name, _reason(e)), 'views')
 
-    def pending(self):
-        return [p._asdict() for p in self.store.pending()]
+    def session_keys(self):
+        """The keys a question may come from: the launcher's session keys, read now, and
+        AGENT_FROM (the PM's), which is known even when they cannot be read."""
+        try:
+            keys = {k for k in self._session_keys() if isinstance(k, str)}
+        except Exception:           # noqa: BLE001 - unreadable: only the PM's key is known
+            keys = set()
+        return keys | {AGENT_FROM}
+
+    def pending(self, for_key=''):
+        """The pending items, each with the session key it is for as `from`: a question's or a
+        to-do's own `from` when that is a session key, else AGENT_FROM (so the owner's to-dos,
+        free-text names, stories and notes are the PM's). With for_key, only the items for that
+        key. Reading never changes an item: what a filtered read leaves out stays pending for
+        every other reader."""
+        found, keys, out = self.store.pending(), None, []
+        for p in found:
+            d = p._asdict()
+            sender = d.pop('sender')
+            mine = sender and sender not in (AGENT_FROM, OWNER_FROM)
+            if mine and keys is None:
+                keys = self.session_keys()          # read once, and only when it can matter
+            d['from'] = sender if mine and sender in keys else AGENT_FROM
+            if not for_key or d['from'] == for_key:
+                out.append(d)
+        return out
 
     def seen(self, req, what, opened=None, closed=None):
         """Note that an agent (a PM session) just waited or pulled (`what`). `opened` is a key
@@ -456,8 +504,15 @@ def questions_add(api, req):
                       'urgent', 'story'), required=('title',))
     for name in ('repo', 'from', 'title', 'context', 'story'):
         _text(b, name)
-    if 'from' in b:                 # the route is an agent's: the same rule as a to-do's from
-        b['from'] = _agent_from(b['from'])
+    # the session the answer goes back to: a launcher session key, read now, or the PM's
+    who = (b.get('from') or '').strip() or AGENT_FROM
+    if who != AGENT_FROM:
+        keys = api.session_keys()
+        if who not in keys:
+            raise _invalid('from %s is not a session the hub knows: a question comes from a '
+                           'launcher session key (known: %s)'
+                           % (ascii(who), ', '.join(sorted(keys))), 'from')
+    b['from'] = who
     _typed(b, 'options', (list,), 'a list of {label, description}')
     b.setdefault('options', [])
     b.update(status='open', asked_at=api.clock())
@@ -762,7 +817,7 @@ def _listing(name):
 
 
 def pending(api, req):
-    items = api.pending()
+    items = api.pending(_q(req, 'for'))
     api.seen(req, 'pulled')
     return {'items': items}
 
@@ -780,9 +835,12 @@ def wait(api, req):
         raise _invalid('timeout is a number of seconds from 0 to %d, not %r' % (WAIT_MAX_S, raw),
                        'timeout')
     want = _q_flag(req, 'pending')
+    for_key = _q(req, 'for')
+    if for_key and not want:
+        raise _invalid('for picks among the pending items: give pending=1 with it', 'for')
     # pending is read whether asked for or not: it is the read that refuses a closed store,
     # which Store.wait answers at once and with nothing (a client would loop on it)
-    found = api.pending()
+    found = api.pending(for_key)
     items = found if want else []
     if want:
         api.seen(req, 'pulled')
@@ -793,16 +851,36 @@ def wait(api, req):
         key = object()
         api.seen(req, 'waited', opened=key)
         try:
-            ch = api.store.wait(since, min(timeout, WAIT_MAX_S))
+            if for_key:
+                ch = _wait_for(api, since, min(timeout, WAIT_MAX_S), for_key)
+            else:
+                ch = api.store.wait(since, min(timeout, WAIT_MAX_S))
         finally:
             api.seen(req, 'waited', closed=key)
-        found = api.pending()
+        found = api.pending(for_key)
         items = found if want else []
+    # a wait for one key ends on its own items, a reset or the timeout, never on other writes
+    quiet = not ch.reset and not items and (bool(for_key) or not ch.events)
     return {'revision': ch.revision, 'reset': ch.reset,
-            'timed_out': not ch.events and not ch.reset and not items,
+            'timed_out': quiet,
             'changes': [{'collection': e.collection, 'id': e.id, 'op': e.op, 'status': e.status}
                         for e in ch.events],
             'pending': items}
+
+
+def _wait_for(api, since, timeout, for_key):
+    """Store.wait until a pending item is for for_key, the store resets, or timeout seconds
+    pass; a write that leaves no item for it waits on. The changes since `since`, all of them."""
+    end = time.monotonic() + timeout
+    at = since
+    while True:
+        ch = api.store.wait(at, max(0.0, end - time.monotonic()))
+        if ch.reset:
+            return ch
+        if api.pending(for_key) or time.monotonic() >= end:
+            break
+        at = ch.revision
+    return api.store.changes_since(since)
 
 
 def snapshot(api, req):
@@ -815,7 +893,7 @@ def snapshot(api, req):
             views[name] = None
             missing[name] = _reason(e)
     return {'revision': revision, 'collections': docs,
-            'pending': [p._asdict() for p in api.store.pending()],
+            'pending': api.pending(),
             'views': views, 'unavailable': missing, 'pm_seen': api.pm_seen()}
 
 

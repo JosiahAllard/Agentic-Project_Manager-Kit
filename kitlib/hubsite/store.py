@@ -92,7 +92,8 @@ ID_FLOOR = {'Q': 1000}
 Result = collections.namedtuple('Result', 'id version revision warnings')
 Event = collections.namedtuple('Event', 'rev collection id op status')
 Changes = collections.namedtuple('Changes', 'revision events reset')
-Pending = collections.namedtuple('Pending', 'kind id title repo at')
+# sender: the document's own `from` as stored ('' when it has none); the api routes on it
+Pending = collections.namedtuple('Pending', 'kind id title repo at sender', defaults=('',))
 
 
 class HubError(Exception):
@@ -459,13 +460,14 @@ def _s(v):
 def pending_items(docs):
     """[Pending] of owner input not yet handled in docs ({collection: {id: document}}), oldest
     first: questions answered and not logged, stories submitted, to_pm items sent, and to-dos
-    done or added by the owner (`from: you`) with no pm_ack. Inbox reads are not pending."""
+    done or added by the owner (`from: you`) with no pm_ack. Inbox reads are not pending. A
+    question's and a to-do's `sender` is its stored `from`; a story's and a note's is ''."""
     out = []
     for doc_id, d in docs.get('questions', {}).items():
         if d.get('status') == 'answered':
             ans = d.get('answer') if isinstance(d.get('answer'), dict) else {}
             out.append(Pending('question', doc_id, _s(d.get('title')), _s(d.get('repo')),
-                               _s(ans.get('at'))))
+                               _s(ans.get('at')), _s(d.get('from'))))
     for doc_id, d in docs.get('stories', {}).items():
         if d.get('status') == 'submitted':
             out.append(Pending('story', doc_id, _s(d.get('title')), _s(d.get('repo')),
@@ -478,5 +480,6 @@ def pending_items(docs):
     for doc_id, d in docs.get('todos', {}).items():
         if not d.get('pm_ack') and (d.get('status') == 'done' or d.get('from') == 'you'):
             out.append(Pending('todo', doc_id, _s(d.get('title')), _s(d.get('repo')),
-                               _s(d.get('done_at')) or _s(d.get('added_at'))))
+                               _s(d.get('done_at')) or _s(d.get('added_at')),
+                               _s(d.get('from'))))
     return sorted(out, key=lambda p: (p.at, p.kind, p.id))

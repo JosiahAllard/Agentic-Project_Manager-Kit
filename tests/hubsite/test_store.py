@@ -448,7 +448,14 @@ class PendingTest(StoreCase):
             store.Pending('question', 'Q-1', 't', 'pm', '2'),
             store.Pending('to_pm', 'P-1', 'first', '', '3'),
             store.Pending('todo', 'T-1', 'd', '', '4'),
-            store.Pending('todo', 'T-2', 'mine', '', '5')])
+            store.Pending('todo', 'T-2', 'mine', '', '5', 'you')])
+
+    def test_a_pending_question_and_to_do_carry_their_stored_from(self):
+        docs = {'questions': {'Q-1': question(status='answered', answer={'at': '1'},
+                                              **{'from': 'kit'})},
+                'todos': {'T-1': {'status': 'done', 'title': 'd', 'from': 'retribution',
+                                  'done_at': '2'}}}
+        self.assertEqual([p.sender for p in store.pending_items(docs)], ['kit', 'retribution'])
 
     def test_the_store_lists_and_clears_pending(self):
         s = self.open()

@@ -571,7 +571,7 @@ class ReadTest(ApiCase):
         self.ok('POST', '/questions/%s/answer' % qid, OWNER, {'choice': 0})
         self.assertEqual(self.ok('GET', '/pending', AGENT)['items'],
                          [{'kind': 'question', 'id': qid, 'title': 't', 'repo': 'kit',
-                           'at': NOW}])
+                           'at': NOW, 'from': 'pm'}])
 
     def test_snapshot(self):
         qid = self.question()
@@ -1473,18 +1473,30 @@ class ThirdFixTest(ApiCase):
         self.assertEqual(len(calls), 2)
         self.assertEqual(self.api.pm_seen(), {'waited': CLOCK(), 'pulled': None, 'waiting': 0})
 
-    def test_an_agents_from_on_a_question_or_an_inbox_item_follows_the_to_do_rule(self):
-        for path, coll, body in (('/questions', 'questions', {'title': 't', 'options': OPTIONS}),
-                                 ('/inbox', 'inbox', {'text': 'x'})):
-            for bad in ('you', 'Y o u', ' YOU ', 'уou', 'yｏu', 'pm͏', 'a\x00b',
-                        'a  b'):
-                with self.subTest(path=path, bad=bad):
-                    self.refused('invalid', 'from', 'POST', path, AGENT, dict(body, **{'from': bad}))
-            with self.subTest(path=path, ok=True):
-                did = self.ok('POST', path, AGENT, dict(body, **{'from': ' pm kit-2 '}))['id']
-                self.assertEqual(self.store.get(coll, did)['from'], 'pm kit-2')
-                did = self.ok('POST', path, AGENT, body)['id']
-                self.assertNotIn('from', self.store.get(coll, did))
+    def test_an_agents_from_on_an_inbox_item_follows_the_to_do_rule(self):
+        path, coll, body = '/inbox', 'inbox', {'text': 'x'}
+        for bad in ('you', 'Y o u', ' YOU ', 'уou', 'yｏu', 'pm͏', 'a\x00b',
+                    'a  b'):
+            with self.subTest(path=path, bad=bad):
+                self.refused('invalid', 'from', 'POST', path, AGENT, dict(body, **{'from': bad}))
+        with self.subTest(path=path, ok=True):
+            did = self.ok('POST', path, AGENT, dict(body, **{'from': ' pm kit-2 '}))['id']
+            self.assertEqual(self.store.get(coll, did)['from'], 'pm kit-2')
+            did = self.ok('POST', path, AGENT, body)['id']
+            self.assertNotIn('from', self.store.get(coll, did))
+
+    def test_an_agents_from_on_a_question_is_a_session_key_or_the_pm(self):
+        self.api = api.Api(self.store, clock=CLOCK, session_keys=lambda: {'kit-2'})
+        body = {'title': 't', 'options': OPTIONS}
+        for bad in ('you', 'Y o u', ' YOU ', 'уou', 'yｏu', 'pm͏', 'a\x00b',
+                    'a  b', 'pm kit-2', 'Kit-2'):
+            with self.subTest(bad=bad):
+                self.refused('invalid', 'from', 'POST', '/questions', AGENT,
+                             dict(body, **{'from': bad}))
+        did = self.ok('POST', '/questions', AGENT, dict(body, **{'from': ' kit-2 '}))['id']
+        self.assertEqual(self.store.get('questions', did)['from'], 'kit-2')
+        did = self.ok('POST', '/questions', AGENT, body)['id']
+        self.assertEqual(self.store.get('questions', did)['from'], 'pm')
 
     def test_an_owner_edit_of_an_acked_to_do_makes_it_pending_again(self):
         tid = self.ok('POST', '/todos', OWNER, {'title': 't'})['id']
