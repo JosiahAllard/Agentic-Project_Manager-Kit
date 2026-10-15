@@ -88,10 +88,10 @@ class Host(object):
         """Run the PowerShell line that registers a scheduled task (agenttemp.task_line)."""
         self._ps(line)
 
-    def sweep_dry_run(self, kit):
+    def sweep_dry_run(self, kit, home=None):
         """The sweep's report lines from one run without --apply (agenttemp.sweep_dry_run), under
-        this interpreter."""
-        return agenttemp.sweep_dry_run(kit, sys.executable)
+        this interpreter, reading the machine config of `home`."""
+        return agenttemp.sweep_dry_run(kit, sys.executable, home=home)
 
     def guard_entry(self, kit):
         """The guard's settings entry, as the kit's hook entry prints it for the default host:
@@ -166,7 +166,7 @@ def survey(plan, ctx):
                             'makes it)')
     folder, made = agenttemp.survey(plan, ctx)        # before the ACL: it may make the folder
     if folder:
-        _acl(plan, ctx, folder, made)
+        acl_step(plan, ctx, folder, made)
     if ctx.fresh:
         plan.note('extras', '%s left as is in fresh mode: the plugin\'s lock tool is used' % LOCK_ENV)
     else:
@@ -174,8 +174,11 @@ def survey(plan, ctx):
 
 
 def acl_step(plan, ctx, folder, made=False):
-    """The agent temp folder's ACL step alone (kitlib.machinesetup.survey_agent_temp)."""
+    """The agent temp folder's ACL step, then the sweep task (agenttemp.task_step): the task's dry
+    run can stop the run, so it is planned after the ACL hardening. Also called alone by
+    kitlib.machinesetup.survey_agent_temp."""
     _acl(plan, ctx, folder, made)
+    agenttemp.task_step(plan, ctx)
 
 
 def _shortcut(plan, ctx):
