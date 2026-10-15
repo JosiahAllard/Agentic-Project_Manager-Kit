@@ -340,6 +340,22 @@ class ValidateTest(StoreCase):
         r = s.add('questions', question(repo='ghost'))
         self.assertEqual([f.code for f in r.warnings], ['repo-alias'])
 
+    def test_the_configured_names_are_asked_only_for_a_repo_tag_and_once_a_write(self):
+        s = self.open()
+        asked = []
+        s.known_repos = lambda: asked.append(1) or ['Gamerepo']
+        s.put('repos', 'alpha', {'name': 'alpha'})
+        s.add('todos', {'status': 'open', 'title': 't', 'from': 'you'})
+        s.add('questions', question(repo='all'))
+        self.assertEqual(asked, [], 'a write with no repo tag asked for the names')
+        q = s.add('questions', question(repo='gamerepo'))
+        self.assertEqual(q.warnings, [])
+        self.assertEqual(asked, [1], 'the check before and after the change asks once')
+        # a stored repo tag elsewhere does not make another document's write ask
+        s.add('todos', {'status': 'open', 'title': 't', 'from': 'you'})
+        s.update('questions', q.id, {'title': 'changed'})
+        self.assertEqual(len(asked), 2)
+
     def test_an_s_ref_is_checked(self):
         s = self.open()
         r = s.add('questions', question(refs=['S-004']))

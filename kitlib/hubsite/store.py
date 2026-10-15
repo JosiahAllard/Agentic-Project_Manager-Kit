@@ -207,7 +207,8 @@ class Store(object):
 
     def __init__(self, root, clock=None, known_repos=None):
         self.root = os.path.abspath(root)
-        self.known_repos = known_repos or (lambda: ())   # callable() -> the PM's repo names
+        # callable() -> the PM's repo names; asked only on a write whose document has a repo tag
+        self.known_repos = known_repos or (lambda: ())
         self.clock = clock or _now
         self.took_over = {}
         self._lock = TreeLock(os.path.join(self.root, LOCK_NAME), what='hub store')
@@ -440,7 +441,14 @@ class Store(object):
         if errors:
             raise HubError('invalid', '; '.join(f.message for f in errors), errors[0].field)
         rel = '%s/%s' % (coll, doc_id)
-        known = self.known_repos()
+        names = []
+
+        def known():
+            # asked by hubvalidate only when this document's repo tag is checked, and once a
+            # write: a write with no repo tag never runs known_repos (its git) under the mutex
+            if not names:
+                names.append(self.known_repos())
+            return names[0]
         before = {_finding_key(f)
                   for f in hubvalidate.validate(self._docs, only={rel}, known_repos=known)}
         after = dict(self._docs)

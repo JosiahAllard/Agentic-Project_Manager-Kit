@@ -88,6 +88,23 @@ class DoneWhenTest(unittest.TestCase):
         self.assertEqual(codes(V.validate(docs, known_repos=['other'])),
                          [('questions/Q-1', 'repo-alias')])
 
+    def test_configured_repo_names_given_as_a_callable_are_asked_only_for_a_checked_tag(self):
+        asked = []
+
+        def names():
+            asked.append(1)
+            return ['gamerepo']
+
+        docs = {'questions': {'Q-1': question(repo='gamerepo'), 'Q-2': question(repo='ghost')},
+                'todos': {'T-1': {'status': 'open', 'title': 't', 'from': 'you'}},
+                'repos': {}}
+        self.assertEqual(V.validate(docs, only={'todos/T-1'}, known_repos=names), [])
+        self.assertEqual(asked, [], 'no checked document has a repo tag')
+        self.assertEqual(V.validate(docs, only={'questions/Q-1'}, known_repos=names), [])
+        self.assertEqual(codes(V.validate(docs, known_repos=names)),
+                         [('questions/Q-2', 'repo-alias')])
+        self.assertEqual(len(asked), 2)
+
 
 class CheckTest(unittest.TestCase):
     def test_commands_must_be_a_list_of_strings(self):
