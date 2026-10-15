@@ -15,10 +15,15 @@ dry run prints and the function --apply runs, plus the refusals that stop both. 
   its AGENT_TEMP variable, sweep config key and permissions (kitlib.machinesetup.agenttemp,
   extras), and the sweep task (opt-out: `sweep_task` false). Opt-in: the PM SessionStart hook
   (`pm_settings`), the machine schedule shortcut (`shortcut`), the procwatch task (`procwatch`).
-- The switch from an older kit clone (`old_kit`): the links (kitlib.machinesetup.links), each
-  config folder's settings.json (its old kit hooks removed or re-pointed, the guard's entry
-  added), the owner's email, and the extras: the shortcut, the agents' temp folder and
-  KIT_MACHINE_LOCK for comfy. No plugin install (tools/plugin_refresh.py --migrate does it).
+- The switch from an older kit clone (`old_kit`): each config folder's settings.json (its old kit
+  hooks removed or re-pointed, the guard's entry added), the owner's email, and the extras: the
+  shortcut, the agents' temp folder and KIT_MACHINE_LOCK for comfy. No plugin install
+  (tools/plugin_refresh.py --migrate does it).
+
+In both modes machine setup makes no link: kitlib.machinesetup.links reports each link an earlier
+setup left under a config folder, with the command that removes the link only, and the settings
+step re-points a path through `<config>/tools/<link>` to the kit's own file
+(settings.repoint_links).
 
 The committed repo setup is kitlib.machinesetup.repo (`--repo PATH`, run_repo), a mode of its own.
 run_agent_temp() does the agents' temp folder steps alone (tools/agent_temp_init.py).
@@ -127,15 +132,12 @@ def survey(ctx):
             plan.refuse('no config folder at %s' % d)
     if plan.refusals:
         return plan
-    if ctx.fresh:
-        plan.note('links', 'fresh: no older kit clone, no links switched')
-        if not ctx.config_dirs_given:
-            plan.note('links', 'config folders: every ~/.claude and ~/.claude-* folder (a backup copy '
-                               'too) and the launcher\'s account folders, the set tools/plugin_refresh.py '
-                               'runs in; name the ones to edit with --config-dir to leave any other out')
-    else:
-        for d in ctx.config_dirs:
-            links.survey(plan, d, ctx)
+    if ctx.fresh and not ctx.config_dirs_given:
+        plan.note('links', 'config folders: every ~/.claude and ~/.claude-* folder (a backup copy '
+                           'too) and the launcher\'s account folders, the set tools/plugin_refresh.py '
+                           'runs in; name the ones to edit with --config-dir to leave any other out')
+    for d in ctx.config_dirs:
+        links.survey(plan, d, ctx)                                   # notes only: no link is made
     for d in ctx.config_dirs:
         settings.survey(plan, d, ctx)
     if ctx.fresh:

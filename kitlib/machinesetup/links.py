@@ -1,29 +1,29 @@
-"""Machine links: a config folder's `tools`, `knowledge` and `skills` entries that point into the old
-kit clone become directory junctions into this kit (docs/machine-setup.md "Links").
+"""Machine links, report only (docs/machine-setup.md "Links"): machine setup makes no link. The kit
+runs from its own folder (the plugin root), so an account needs no `tools`, `knowledge` or `skills`
+entry that points into it. This step finds the ones an earlier setup left and says how to remove
+each: `cmd /c rmdir "<path>"`, which removes the link only, never its target (never `/s`). It adds
+no change, so a second run still has nothing to do; it runs in both modes.
 
-`tools` cannot be one junction onto a kit folder: the live lock path is
-`tools/machine_lock/machine_lock.py`, and the kit's tools/machine_lock.py finds kitlib beside the
-folder it was started from, spelled through the junction (os.path.abspath keeps it). So `tools` is a
-real folder holding one junction per entry, kitlib among them: `machine_lock` -> <kit>/tools,
-`kitlib` -> <kit>/kitlib, and comfy, procwatch, usage and agenttemp -> <kit>/optional/<name>.
+What it reports, in each config folder:
+- `tools`, `knowledge` or `skills` that is itself a link into this kit or the older kit clone: one
+  leftover line for the folder. One that is a link anywhere else (an account folder following
+  ~/.claude) is left alone and not reported; the folder it follows is.
+- In a real `tools` or `knowledge` folder, each entry that is a link into this kit or the older
+  clone. A real folder at one of the names an earlier setup linked (TOOL_LINKS, KNOWLEDGE_LINKS) is
+  noted and left as it is; nothing is renamed or deleted.
+- In a real `skills` folder, each link at a kit skill's name (a folder under SKILLS_DIR) into this
+  kit (MOVED_SKILLS_DIRS included) or the older clone; the plugin loads those skills. A link at
+  another name into either is noted and left: the kit has no such skill, so a repo-local skill
+  moves to its repo first.
+- Any other entry of the config folder (`agents`, `hooks`) that is a link into the older clone is
+  noted and left (docs/machine-setup.md "Not done here").
 
-A link is replaced; a real folder where a link goes is renamed aside (`<name>.old-<yyyymmdd>`),
-never deleted. A container (`tools`, `knowledge`, `skills`) that is a link somewhere else (another
-account's folder following ~/.claude) is left alone; one that is absent is not made.
-
-A skill link in a real `skills` folder that points into one of this kit's MOVED_SKILLS_DIRS (the
-skills' folder before the hosts/ move, and the rendered copy in the Claude shell before decision 29
-in docs/multi-host-plan.md section 7) is re-pointed to the same skill in SKILLS_DIR, the kit's
-content/skills, like one into the replaced kit clone (docs/machine-setup.md "Moved hook paths").
+TOOL_LINKS maps each name an earlier setup linked under `<config>/tools` to the kit folder it
+reached; settings.repoint_links re-points a settings path through one to the kit's own file.
 """
 import os
 
-try:
-    import _winapi
-except ImportError:                                                  # not Windows: survey only
-    _winapi = None
-
-from .common import MOVED_FROM, SHELL, free_name, is_link, link_target, norm, under
+from .common import MOVED_FROM, SHELL, is_link, link_target, under
 
 TOOL_LINKS = (('machine_lock', 'tools'), ('kitlib', 'kitlib'), ('comfy', 'optional/comfy'),
               ('procwatch', 'optional/procwatch'), ('usage', 'optional/usage'),
@@ -31,125 +31,77 @@ TOOL_LINKS = (('machine_lock', 'tools'), ('kitlib', 'kitlib'), ('comfy', 'option
 KNOWLEDGE_LINKS = (('asset-generation', 'knowledge/asset-generation'),)
 SKILLS_DIR = 'content/skills'                  # the skills, written once (no rendered copy)
 # Where the skills were before: claude/skills before the hosts/ move, then the Claude shell's
-# rendered copy until decision 29. A link into either is re-pointed to SKILLS_DIR.
+# rendered copy until decision 29. Both are under the kit, so a link into either is a leftover.
 MOVED_SKILLS_DIRS = (MOVED_FROM + '/skills', SHELL + '/skills')
 CONTAINERS = ('tools', 'knowledge', 'skills')
+REMOVE = 'cmd /c rmdir "%s"'                   # the link only; never /s
 
 
 def tool_link_names():
     return [n for n, _ in TOOL_LINKS]
 
 
-def make_junction(link, target):
-    if _winapi is None:
-        raise RuntimeError('directory junctions need Windows')
-    _winapi.CreateJunction(target, link)
-
-
 def kit_path(kit, rel):
-    """`rel` under the kit; an absolute path (a skill kept on the old kit) as it is."""
-    return rel if os.path.isabs(rel) else os.path.join(kit, *rel.split('/'))
+    """`rel` (posix, kit-relative) under the kit."""
+    return os.path.join(kit, *rel.split('/'))
 
 
-def _skill_specs(plan, names, kit, where, old_dir=None):
-    """(name, kit-relative target) per skill the kit has. One it lacks is noted; with `old_dir` (the
-    container is being replaced) it is linked again to `old_dir/<name>`, so it keeps loading."""
-    specs = []
-    for n in names:
-        if os.path.isdir(kit_path(kit, SKILLS_DIR + '/' + n)):
-            specs.append((n, SKILLS_DIR + '/' + n))
-            continue
-        if old_dir:
-            specs.append((n, os.path.join(old_dir, n)))
-        plan.note('links', '%s: the kit has no skill %s; left pointing at the old kit (a repo-local '
-                           'skill moves to its repo)' % (os.path.join(where, n), n))
-    return specs
+def kit_skills(kit):
+    """The names of the kit's skills: the folders under SKILLS_DIR."""
+    d = kit_path(kit, SKILLS_DIR)
+    try:
+        return set(n for n in os.listdir(d) if os.path.isdir(os.path.join(d, n)))
+    except OSError:
+        return set()
+
+
+def leftover(path, target):
+    """The note for a leftover link: where it points and the command that removes the link only."""
+    return 'leftover link %s -> %s: remove it with: %s' % (path, target, REMOVE % path)
+
+
+def _ours(target, ctx):
+    """True when `target` is in this kit or the older kit clone (none in the default mode)."""
+    return under(target, ctx.kit) or bool(ctx.old_kit and under(target, ctx.old_kit))
 
 
 def survey(plan, d, ctx):
-    kit, old = ctx.kit, ctx.old_kit
+    skills = kit_skills(ctx.kit)
     for container in CONTAINERS:
         c = os.path.join(d, container)
-        fresh = False
         if is_link(c):
             was = link_target(c)
-            if not under(was, old):
+            if not _ours(was, ctx):
                 continue                                             # follows another folder
-            if container == 'tools':
-                specs = list(TOOL_LINKS)
-            elif container == 'knowledge':
-                specs = list(KNOWLEDGE_LINKS)
-            else:
-                names = sorted(n for n in os.listdir(was) if os.path.isdir(os.path.join(was, n))) \
-                    if os.path.isdir(was) else []
-                specs = _skill_specs(plan, names, kit, c, old_dir=was)
-            kept = set(n for n, _ in specs)
-            dropped = sorted(n for n in (os.listdir(was) if os.path.isdir(was) else []) if n not in kept)
-            if dropped:
-                plan.note('links', '%s: not carried over from %s (still there, no longer reached through '
-                                   'this folder): %s' % (c, was, ', '.join(dropped)))
-            plan.add('links', '%s: replace the link (-> %s) with a folder of links' % (c, was),
-                     lambda c=c: (os.rmdir(c), os.mkdir(c)),
-                     undo='rmdir "%s" (only if empty), then mklink /J "%s" "%s"' % (c, c, was))
-            fresh = True
-        elif os.path.isdir(c):
-            if container == 'tools':
-                specs = list(TOOL_LINKS)
-            elif container == 'knowledge':
-                specs = list(KNOWLEDGE_LINKS)
-            else:
-                moved = [kit_path(kit, m) for m in MOVED_SKILLS_DIRS]
-                names = [n for n in sorted(os.listdir(c))
-                         if is_link(os.path.join(c, n))
-                         and any(under(link_target(os.path.join(c, n)), w) for w in [old] + moved)]
-                specs = _skill_specs(plan, names, kit, c)
-            mine = set(n for n, _ in specs)
-            for n in sorted(os.listdir(c)):
-                p = os.path.join(c, n)
-                if n not in mine and is_link(p) and under(link_target(p), old) \
-                        and not (container == 'skills' and n in names):
-                    plan.note('links', '%s -> %s: left as is (no kit counterpart in this step)'
-                                       % (p, link_target(p)))
-        else:
+            plan.note('links', leftover(c, was))
+            if container == 'skills':
+                other = sorted(n for n in (os.listdir(was) if os.path.isdir(was) else [])
+                               if os.path.isdir(os.path.join(was, n)) and n not in skills)
+                if other:
+                    plan.note('links', '%s also loads %s, which the kit has no skill for: a repo-local '
+                                       'skill moves to its repo before the link goes' % (c, ', '.join(other)))
             continue
-        for name, rel in specs:
-            _entry(plan, os.path.join(c, name), kit_path(kit, rel), rel, fresh, ctx.today)
+        if not os.path.isdir(c):
+            continue
+        known = {'tools': TOOL_LINKS, 'knowledge': KNOWLEDGE_LINKS}.get(container, ())
+        for n in sorted(os.listdir(c)):
+            p = os.path.join(c, n)
+            if is_link(p):
+                t = link_target(p)
+                if not _ours(t, ctx):
+                    continue
+                if container == 'skills' and n not in skills:
+                    plan.note('links', '%s -> %s: left as is: the kit has no skill %s (a repo-local skill '
+                                       'moves to its repo)' % (p, t, n))
+                else:
+                    plan.note('links', leftover(p, t))
+            elif os.path.isdir(p) and any(n == name for name, _ in known):
+                plan.note('links', '%s: a real folder, left as it is (machine setup makes no link; the kit '
+                                   'has its own copy at %s)' % (p, kit_path(ctx.kit, dict(known)[n])))
+    if not ctx.old_kit:
+        return
     for n in sorted(os.listdir(d)):
         p = os.path.join(d, n)
-        if n not in CONTAINERS and is_link(p) and under(link_target(p), old):
+        if n not in CONTAINERS and is_link(p) and under(link_target(p), ctx.old_kit):
             plan.note('links', '%s -> %s: left as is (no kit counterpart in this step; '
                                'docs/machine-setup.md "Not done here")' % (p, link_target(p)))
-
-
-def _entry(plan, e, want, rel, fresh, today):
-    if not os.path.isdir(want):
-        plan.refuse('the kit has no %s (%s would link to it)' % (rel, e))
-        return
-    if fresh or not os.path.lexists(e):
-        plan.add('links', '%s: link -> %s' % (e, want), lambda: make_junction(e, want),
-                 undo='rmdir "%s"' % e)
-    elif is_link(e):
-        was = link_target(e)
-        if norm(was) == norm(want):
-            return
-        plan.add('links', '%s: re-point the link %s -> %s' % (e, was, want),
-                 lambda: (os.rmdir(e), make_junction(e, want)),
-                 undo='rmdir "%s", then mklink /J "%s" "%s"' % (e, e, was))
-    elif os.path.isdir(e):
-        aside = free_name('%s.old-%s' % (e, today))
-        plan.add('links', '%s: a real folder: rename it to %s, then link -> %s'
-                 % (e, os.path.basename(aside), want),
-                 lambda: _aside_and_link(e, aside, want),
-                 undo='rmdir "%s" (the link only), then rename "%s" back to "%s"' % (e, aside, e))
-    else:
-        plan.refuse('%s is a file where a link to %s goes' % (e, want))
-
-
-def _aside_and_link(e, aside, want):
-    os.rename(e, aside)
-    try:
-        make_junction(e, want)
-    except BaseException:
-        if not os.path.lexists(e):
-            os.rename(aside, e)                                      # put the folder back
-        raise
