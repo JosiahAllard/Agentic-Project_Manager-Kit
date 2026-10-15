@@ -1297,5 +1297,68 @@ class Rules(Base):
                                  self.row(rolepolicy.OWNER_PATHS_READ_ONLY) in texts)
 
 
+class ComputedCheckoutReads(Base):
+    """git with a computed -C may be a main checkout, so the write jail passes only a plain read
+    (rules.git_jail_unknown, rules.git_reads strict). A computed word in a read that has no option
+    writing a file still reads; in log, show and diff (--output writes one) it reads only when
+    literal text before it keeps it from being an option (rules.strict_dyn_read). Writes stay
+    refused, for every session the jail holds (docs/guard.md "Write jail")."""
+
+    # (label, role, environ): two subagents and two marked main sessions
+    SESSIONS = (('senior-worker', 'senior-worker', {}), ('reviewer', 'reviewer', {}),
+                ('pm', None, {context.ROLE_ENV: 'pm'}), ('coordinator', None, {context.ROLE_ENV: 'coordinator'}))
+
+    def each(self, rows, check):
+        for shell, text in rows:
+            for label, role, environ in self.SESSIONS:
+                with self.subTest(text, shell=shell, session=label):
+                    check(self.shell(text, role, shell=shell), environ=dict(environ))
+
+    def test_a_read_with_computed_words_passes(self):
+        self.each([('powershell', 'git -C $p log -1 --format="$w %h %cr %s"'),     # observed refused 15:15
+                   ('powershell', 'git -C $p rev-parse $ref'),
+                   ('powershell', 'git -C $p show --stat "HEAD~$n"'),
+                   ('bash', 'git -C "$p" log -1 --format="$w %h"'),
+                   ('bash', 'git -C "$p" log --pretty="tformat:%h $w" -3'),
+                   ('bash', 'git -C "$p" show --stat "HEAD~$n"'),
+                   ('bash', 'git -C "$p" diff "origin/$b" -- "./$f"'),
+                   ('bash', 'git -C "$p" rev-parse "$ref"'),
+                   ('bash', 'git -C "$p" rev-parse $ref'),
+                   ('bash', 'git -C "$p" ls-files "$f"'),
+                   ('bash', 'git -C "$p" cat-file -p "$sha"'),
+                   ('bash', 'git -C "$p" merge-base HEAD "$b"'),
+                   ('bash', 'git -C "$p" for-each-ref --format="%(refname)" "$pat"')],
+                  lambda a, **kw: self.allowed(a, **kw))
+
+    def test_a_plain_read_still_passes(self):
+        self.each([('bash', 'git -C "$p" log --oneline -3'), ('bash', 'git -C "$p" branch --list'),
+                   ('powershell', 'git -C $p log -1 --format="%h %cr %s"')],
+                  lambda a, **kw: self.allowed(a, **kw))
+
+    def test_a_computed_word_that_may_be_an_option_that_writes_is_refused(self):
+        self.each([('bash', 'git -C "$p" log "$R"'),                       # $R may be --output=<file>
+                   ('bash', 'git -C "$p" show $sha'),
+                   ('bash', 'git -C "$p" diff "--outp$x"'),
+                   ('bash', 'git -C "$p" log "--output=$f"'),
+                   ('bash', 'git -C "$p" log --format=$w'),                # bash splits it: a second word
+                   ('bash', 'git -C "$p" log HEAD~$n'),
+                   ('bash', 'git -C "$p" log --format="$(cat f)"'),
+                   ('bash', 'git -C "$p" log --format="$w" --output=x.txt'),
+                   ('powershell', 'git -C $p log $f'),                      # an array is many arguments
+                   ('powershell', 'git -C $p log @f'),
+                   ('powershell', 'git -C $p log -1 --format="$w" --outp=x.txt'),
+                   # status, describe and branch are not loosened: they may write (an index refresh, a ref)
+                   ('bash', 'git -C "$p" status "$f"'),
+                   ('bash', 'git -C "$p" describe "$x"'),
+                   ('bash', 'git -C "$p" branch --list "$pat"')],
+                  lambda a, **kw: self.denied(a, 'write-jail', **kw))
+
+    def test_a_write_stays_refused(self):
+        self.each([('bash', 'git -C "$p" tag "v$n"'), ('bash', 'git -C "$p" symbolic-ref HEAD refs/heads/x'),
+                   ('bash', 'git -C "$p" branch -m main old'), ('powershell', 'git -C $p branch -m main "$b"'),
+                   ('bash', 'git -C "$p" config user.name "$n"')],
+                  lambda a, **kw: self.denied(a, 'write-jail', **kw))
+
+
 if __name__ == '__main__':
     unittest.main()
