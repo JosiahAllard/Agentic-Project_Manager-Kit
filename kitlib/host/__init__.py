@@ -9,6 +9,7 @@ import for that): kitlib never imports a host, the host is chosen at the edge.
   Action, Decision          one guarded event, and the verdict on it
   HostProfile               the host data the core reads (hosts.json "profile")
   Attribution               how its commits name it (hosts.json "profile".attribution)
+  SessionTrailer            the session line its commits carry (attribution.session_trailer)
   HostCapabilities          what the host's hooks can carry (hosts.json "capabilities")
   degrade(decision, caps)   the one way a verdict the host cannot show is lowered
   HostAdapter, SessionHost, CommandHost   what an adapter supplies
@@ -17,7 +18,7 @@ import for that): kitlib never imports a host, the host is chosen at the edge.
                             closed; and the one place a hook command line is written
   header                    the kit header every session and subagent start adds to the context
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, Protocol
 
 # `other`: a tool call no guard rule judges (a read, a search); the adapter still parses it, so a
@@ -46,6 +47,9 @@ class Action:
                    None: `cwd`
       retarget     the same edit aimed elsewhere, as the host's call text with `{path}` for the
                    path (an Instead line); '' when the host has no such form
+      params       an MCP call's input object as the host passed it (None: not an MCP call, or a
+                   host that does not pass it); the hub-browser rule reads its strings. It takes
+                   no part in equality or hashing
     """
     kind: str
     tool: str = ''
@@ -59,6 +63,7 @@ class Action:
     background: bool = False
     retarget: str = ''
     workdir: Optional[str] = None
+    params: Optional[dict] = field(default=None, compare=False, hash=False)
 
     def __post_init__(self):
         if self.kind not in KINDS:
@@ -82,16 +87,26 @@ class Decision:
 
 
 @dataclass(frozen=True)
+class SessionTrailer:
+    """The trailer naming the host session a commit was made in: `<key>: <url>`, `{id}` in `url`
+    replaced by the value of the environment variable `env` (hosts.json attribution.session_trailer)."""
+    key: str
+    env: str
+    url: str
+
+
+@dataclass(frozen=True)
 class Attribution:
     """How a host's agent commits are attributed: the trailer `Co-Authored-By: <name ...> <email>`.
     `model_env` the environment variable a model name falls back to (None: no fallback);
     `model_pattern` None for a free model name, given `<name> ` in front unless it already starts
     with it or is a co-author family, else a regex an explicit model id must match whole, always
-    written `<name> <id>`."""
+    written `<name> <id>`. `session_trailer` a SessionTrailer, or None when the host has none."""
     name: str
     email: str
     model_env: Optional[str]
     model_pattern: Optional[str]
+    session_trailer: Optional[SessionTrailer] = None
 
 
 @dataclass(frozen=True)

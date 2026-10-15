@@ -411,6 +411,39 @@ class DomTest(unittest.TestCase):
                         self.assertIn("kept on the page", got["list"])
                         self.assertIn("may be out of date", got["first"]["err"])
 
+    def test_a_tunnel_access_refusal_is_not_unpaired_and_keeps_the_servers_words(self):
+        # The tunnel listener refuses a call whose Cloudflare Access token it cannot accept with 403, field
+        # `access` (kitlib.hubsite.tunnel.REFUSED): a read or a write, and pairing again cannot help it.
+        words = "this listener needs a valid Cloudflare Access token"
+        for where in ("snapshot", "wait"):
+            got = dom("""
+                const no = { status: 403, body: { ok: false, error: { code: "forbidden", message: %s, field: "access" } } };
+                if (%s) server.route = c => c.path === "/snapshot" ? no : undefined;
+                await start();
+                if (!%s) await answerWait(no.status, no.body);
+                return { err: text($("#loaderr")), hidden: $("#loaderr").hidden, sleeps: sleeps() };
+            """ % (json.dumps(words), json.dumps(where == "snapshot"), json.dumps(where == "snapshot")),
+                snapshot(collections={"todos": {"T-1": {"status": "open", "title": "kept on the page", "from": "pm"}}}),
+                hash="#todo")
+            with self.subTest(where=where):
+                self.assertNotIn("not paired", got["err"])
+                self.assertNotIn("hub.py open", got["err"])
+                self.assertIn("refused the read (" + words + ")", got["err"])
+                self.assertIn("Trying again", got["err"])
+                self.assertFalse(got["hidden"])
+                self.assertEqual(len(got["sleeps"]), 1)                  # it is tried again, not given up
+        wrote = dom("""
+            server.route = c => c.method !== "POST" ? undefined
+              : { status: 403, body: { ok: false, error: { code: "forbidden", message: %s, field: "access" } } };
+            await start();
+            await type($("#pm-fields textarea"), "kept text");
+            await fire($("#pmform"), "submit");
+            return { said: text($("#pm-addstatus")), kept: $("#pm-fields textarea").value };
+        """ % json.dumps(words), snapshot(collections=LISTS), hash="#topm")
+        self.assertIn(words, wrote["said"])
+        self.assertNotIn("not paired", wrote["said"])
+        self.assertEqual(wrote["kept"], "kept text")
+
     def test_a_busy_server_is_given_its_wait_and_only_no_answer_reads_cannot_reach(self):
         got = dom("""
             let mode = "busy";
@@ -810,6 +843,32 @@ class DomTest(unittest.TestCase):
                 self.assertEqual(got["read"]["kept"], "my edit")
                 self.assertEqual(got["sent"], [1, 1, 3])                         # the version moves only on a read that came
                 self.assertFalse(got["open"])
+
+    def test_every_card_shows_its_id_and_the_id_box_finds_it(self):
+        snap = snapshot(collections=dict(LISTS, stories={"S-1": {"status": "review", "title": "a story", "story": "x"}}))
+        got = dom("""
+            await start();
+            const ids = {};
+            const idsIn = sel => [...document.querySelectorAll(sel + " .id")].map(e => text(e));
+            ids.questions = idsIn("#list article");
+            await click($("#sections [data-s=todo]")); ids.todos = idsIn("#list article");
+            await type($("#idq"), "t-2");
+            const found = [...document.querySelectorAll("#list article")].map(a => a.id);
+            await type($("#idq"), "zzz");
+            const none = text($("#list"));
+            await click($("#sections [data-s=questions]"));
+            const noneQ = text($("#list"));
+            await type($("#idq"), "");
+            await click($("#sections [data-s=todo]")); await type($("#idq"), "");
+            await click($("#sections [data-s=backlog]")); ids.stories = idsIn("#list article");
+            return { ids, found, none, noneQ };
+        """, snap)
+        self.assertEqual(got["ids"], {"questions": ["Q-1"], "todos": ["T-1", "T-2"], "stories": ["S-1"]})
+        self.assertEqual(got["found"], ["todo-T-2"])
+        self.assertIn('No match for "zzz"', got["none"])
+        self.assertNotIn("Nothing to do", got["none"])
+        self.assertIn('No match for "zzz"', got["noneQ"])
+        self.assertNotIn("No open questions", got["noneQ"])
 
     def test_a_lost_to_do_card_has_a_tick_box_that_says_the_to_do_is_gone(self):
         got = dom("""

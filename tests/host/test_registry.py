@@ -147,6 +147,19 @@ class Validation(Case):
                 lambda e: e['profile']['attribution'].update(model_env='NOT A NAME'),
                 lambda e: e['profile']['attribution'].update(model_pattern='('),
                 lambda e: e['profile']['attribution'].update(model_pattern=''),
+                lambda e: e['profile']['attribution'].update(session_trailer={}),
+                lambda e: e['profile']['attribution'].update(session_trailer='Claude-Session'),
+                lambda e: e['profile']['attribution']['session_trailer'].pop('env'),
+                lambda e: e['profile']['attribution']['session_trailer'].update(extra=1),
+                lambda e: e['profile']['attribution']['session_trailer'].update(key='Two Words'),
+                lambda e: e['profile']['attribution']['session_trailer'].update(key='Ends:'),
+                lambda e: e['profile']['attribution']['session_trailer'].update(key=''),
+                lambda e: e['profile']['attribution']['session_trailer'].update(env='NOT A NAME'),
+                lambda e: e['profile']['attribution']['session_trailer'].update(env=None),
+                lambda e: e['profile']['attribution']['session_trailer'].update(url='https://x/'),
+                lambda e: e['profile']['attribution']['session_trailer'].update(url='{id}{id}'),
+                lambda e: e['profile']['attribution']['session_trailer'].update(url='{id}/{other}'),
+                lambda e: e['profile']['attribution']['session_trailer'].update(url='a {id}'),
                 lambda e: e['profile'].pop('agent_name_format'),
                 lambda e: e['profile'].update(agent_name_format='{plugin}:'),
                 lambda e: e['profile'].update(agent_name_format='{name}:{plugin}'),
@@ -199,6 +212,22 @@ class Profiles(Case):
         self.assertEqual(len(registry.profiles(path)), 2)
         self.assertEqual(registry.union('process_names', path), ('claude.exe', 'node.exe', 'other.exe'))
         self.assertEqual(registry.union('session_env', path), ('CLAUDE_CODE_SESSION_ID', 'OTHER_SESSION'))
+
+    def test_the_kit_registry_names_claudes_session_trailer_and_codex_has_none(self):
+        hosts = registry.load()
+        st = hosts['claude'].profile.attribution.session_trailer
+        self.assertEqual((st.key, st.env, st.url), ('Claude-Session', 'CLAUDE_CODE_BRIDGE_SESSION_ID',
+                                                    'https://claude.ai/code/{id}'))
+        self.assertIsNone(hosts['codex'].profile.attribution.session_trailer)
+
+    def test_the_session_trailer_is_optional_and_null_is_none(self):
+        for change in (lambda a: a.pop('session_trailer', None),
+                       lambda a: a.update(session_trailer=None)):
+            data = kit_hosts()
+            change(data['claude']['profile']['attribution'])
+            with self.subTest(attribution=data['claude']['profile']['attribution']):
+                self.assertIsNone(registry.host('claude', self.put(data)).profile
+                                  .attribution.session_trailer)
 
     def test_the_kit_registry_names_claudes_session_variable(self):
         self.assertEqual(registry.union('session_env'), ('CLAUDE_CODE_SESSION_ID', 'CODEX_THREAD_ID'))

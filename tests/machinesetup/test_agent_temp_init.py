@@ -24,6 +24,21 @@ def at():
     return agenttemp
 
 
+class ShortcutPythonw(unittest.TestCase):
+    def test_the_shortcut_target_is_the_base_install_pythonw_even_from_a_venv(self):
+        from kitlib.launcher import pythonw as P
+        with mock.patch.object(sys, 'executable', 'C:\\venv\\Scripts\\python.exe'), \
+                mock.patch.object(P.os.path, 'isfile', return_value=True):
+            self.assertEqual(extras.pythonw(), P.base_pythonw())
+
+    def test_a_store_alias_base_install_falls_back_to_this_interpreter(self):
+        from kitlib.launcher import pythonw as P
+        alias = 'C:\\Store\\WindowsApps\\pythonw.exe'
+        with mock.patch.object(P, 'base_pythonw', return_value=alias), \
+                mock.patch.object(P.os.path, 'isfile', return_value=True):
+            self.assertEqual(extras.pythonw(), sys.executable)
+
+
 class DefaultFolder(unittest.TestCase):
     def test_default_agent_temp_is_kit_temp_on_the_kits_drive(self):
         for kit, drive in (('C:\\x\\kit', 'C:'), ('D:\\kit', 'D:'), ('Z:\\src\\kit', 'Z:')):
@@ -52,6 +67,24 @@ class SweepDryRun(unittest.TestCase):
         self.assertEqual(argv, ['py.exe', os.path.join(os.path.normpath(self.KIT), at().SWEEP)])
         self.assertNotIn('--apply', argv)
         self.assertEqual(argv, at().sweep_dry_run_argv(self.KIT, 'py.exe'))
+
+    def test_home_is_passed_on_to_the_sweep(self):
+        run, calls = self.fake()
+        at().sweep_dry_run(self.KIT, 'py.exe', home='C:\\h', run=run)
+        self.assertEqual(calls[0][0][-2:], ['--home', 'C:\\h'])
+        self.assertEqual(calls[0][0], at().sweep_dry_run_argv(self.KIT, 'py.exe', 'C:\\h'))
+        run, calls = self.fake()
+        at().sweep_dry_run(self.KIT, 'py.exe', run=run)
+        self.assertNotIn('--home', calls[0][0])
+
+    def test_the_sweep_is_run_and_read_as_utf8_whatever_the_locale(self):
+        run, calls = self.fake()
+        at().sweep_dry_run(self.KIT, 'py.exe', run=run)
+        kw = calls[0][1]
+        self.assertEqual(kw.get('encoding'), 'utf-8')
+        self.assertEqual(kw.get('errors'), 'replace')
+        self.assertEqual(kw['env']['PYTHONIOENCODING'], 'utf-8')
+        self.assertNotIn('text', kw)
 
     def test_creationflags_and_timeout_are_passed(self):
         run, calls = self.fake()
@@ -274,7 +307,7 @@ class Init(T.Base):
             self.assertIn(want, line)
         kinds = [c[0] for c in self.host.calls]
         self.assertLess(kinds.index('sweep-dry-run'), kinds.index('task'))   # the dry run first
-        self.assertIn(('sweep-dry-run', self.kit), self.host.calls)
+        self.assertIn(('sweep-dry-run', self.kit, self.home), self.host.calls)   # the run's --home reaches it
         dry = '  sweep dry run (nothing removed): claude/p/old-session  4.0 days  would'
         self.assertIn(dry, out)
         self.assertLess(out.index(dry), out.index('done: register the scheduled task'))
@@ -283,7 +316,7 @@ class Init(T.Base):
         code, out = self.run_new(apply=True, sweep_task=False)
         self.assertEqual(code, M.EXIT_OK, out)
         self.assertEqual(self.tasks(), [])
-        self.assertNotIn(('sweep-dry-run', self.kit), self.host.calls)
+        self.assertNotIn('sweep-dry-run', [c[0] for c in self.host.calls])
         self.assertIn('scheduled task agent-temp-sweep is not registered (--no-sweep-task)', out)
         self.assertIn('-RunLevel Limited', out)
 
@@ -316,6 +349,24 @@ class Init(T.Base):
         self.assertEqual(self.tasks(), [])
         self.assertIn('machine-setup: STOPPED at: run the sweep once without --apply', out)
         self.assertIn('the sweep dry run exit 2', out)
+
+    def test_the_acl_is_applied_before_the_sweep_dry_run(self):
+        code, out = self.run_new(apply=True)
+        self.assertEqual(code, M.EXIT_OK, out)
+        kinds = [c[0] for c in self.host.calls]
+        self.assertLess(kinds.index('icacls'), kinds.index('sweep-dry-run'), out)
+
+    def test_a_refusing_sweep_dry_run_still_leaves_the_acl_applied(self):
+        self.host.sweep_error = RuntimeError('the sweep dry run exit 2, so the task is not registered')
+        code, out = self.run_new(apply=True)
+        self.assertEqual(code, M.EXIT_REFUSED, out)
+        self.assertIn('icacls', [c[0] for c in self.host.calls], out)
+
+    def test_the_standalone_tool_applies_the_acl_before_the_dry_run_too(self):
+        self.host.sweep_error = RuntimeError('the sweep dry run exit 2, so the task is not registered')
+        code, out, _ = self.init_tool('--agent-temp', self.new, '--apply')
+        self.assertEqual(code, 1, out)
+        self.assertIn('icacls', [c[0] for c in self.host.calls], out)
 
     def test_the_dry_run_report_is_printed_even_when_registering_fails(self):
         with mock.patch.object(self.host, 'task_register', side_effect=RuntimeError('no pythonw')):
@@ -416,12 +467,26 @@ class Init(T.Base):
     def test_task_line_starts_no_console_window(self):
         """The task runs pythonw (no console of its own) on the kit's carrier, which starts the
         console python on the sweep with no window."""
-        line = at().task_line('C:\\kit')
-        self.assertTrue(line.startswith('$py = (Get-Command pythonw).Source; '), line)
-        self.assertNotIn('Get-Command python)', line)
+        line = at().task_line('C:\\kit', pythonw='C:\\Py\\pythonw.exe')
+        self.assertTrue(line.startswith("$py = 'C:\\Py\\pythonw.exe'; "), line)
+        self.assertNotIn('Get-Command', line)
         self.assertIn("-Execute $py -Argument '\"C:\\kit\\tools\\no_window.py\" python"
                       " \"C:\\kit\\optional\\agenttemp\\agent_temp_sweep.py\" --apply'", line)
         self.assertTrue(os.path.isfile(os.path.join(T.KIT, 'tools', 'no_window.py')))
+
+    def test_task_line_defaults_to_the_base_install_pythonw_not_a_path_lookup(self):
+        """The Store alias first on PATH is never asked: the literal is the base install's."""
+        from kitlib.launcher import pythonw as P
+        line = at().task_line('C:\\kit')
+        self.assertIn("$py = '%s'" % P.base_pythonw().replace("'", "''"), line)
+        self.assertNotIn('Get-Command', line)
+
+    def test_task_line_throws_in_powershell_for_a_store_alias_or_a_missing_file(self):
+        alias = 'C:\\Store\\WindowsApps\\pythonw.exe'
+        line = at().task_line('C:\\kit', pythonw=alias)
+        self.assertIn(alias, line)
+        self.assertIn("-match '\\\\WindowsApps\\\\'", line)
+        self.assertIn('Test-Path -LiteralPath $py', line)
 
     def test_acl_step_no_longer_refuses_when_the_folder_is_made_in_the_same_run(self):
         code, out = self.run_new()

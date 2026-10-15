@@ -905,6 +905,60 @@ class LanderMainCheckout(MainGit):
                 self.jailed(self.git(text))
 
 
+class RefDeleteHint(MainGit):
+    """`git update-ref -d` of a shared ref is refused (git-shared-ref) with a ref delete's own
+    Instead, never a worktree: every worktree shares the repository's refs (docs/guard.md
+    "Rules"). tests/guard/test_shared_ref.py has the rule's own cases."""
+
+    def git_at(self, text, cwd):
+        ev = event('Bash', {'command': text, 'description': 'test'}, cwd, True, 'worker')
+        return decide(ev, self.w.ctx(environ={}))
+
+    def test_a_branch_ref_delete_points_at_branch_d(self):
+        # from the session's worktree the Instead runs there; from the main checkout, there
+        m = self.main
+        for cwd, at in ((self.w.wt, W.fwd(self.w.wt)), (self.w.main, m)):
+            for text in ('git -C "%s" update-ref -d refs/heads/kit/x' % m,
+                         'git -C "%s" update-ref -m why -d refs/heads/kit/x' % m,
+                         'git -C "%s" update-ref -d refs/heads/kit/x 0123abc' % m):
+                with self.subTest(text, cwd=cwd):
+                    d = self.jailed(self.git_at(text, cwd), 'git-shared-ref')
+                    self.assertIn('Instead: git -C "%s" branch -d kit/x [' % at, d.reason)
+                    self.assertIn('shares this repository\'s refs', d.reason)
+                    self.assertNotIn('worktree add', d.instead)
+                    self.assertNotIn('update-ref', d.instead)
+                    with self.subTest('the Instead itself'):
+                        self.allowed(self.git_at(d.instead, cwd))
+
+    def test_another_ref_delete_shows_the_ref(self):
+        m, wt = self.main, W.fwd(self.w.wt)
+        for text, ref in (('git -C "%s" update-ref -d refs/tags/v1' % m, 'refs/tags/v1'),
+                          ('git -C "%s" update-ref -d refs/remotes/origin/x' % m, 'refs/remotes/origin/x'),
+                          ('git -C "%s" update-ref -d "$R"' % m, '<ref>'),
+                          ('git -C "%s" update-ref -d refs/heads/' % m, 'refs/heads/')):
+            with self.subTest(text):
+                d = self.jailed(self.git_at(text, self.w.wt), 'git-shared-ref')
+                self.assertIn('Instead: git -C "%s" show-ref %s [' % (wt, ref), d.reason)
+                self.assertIn('the PM\'s to delete', d.reason)
+
+    def test_a_shared_ref_update_shows_the_ref_and_never_a_worktree(self):
+        # a worktree shares the ref, so running the update there moves the same ref: the Instead
+        # shows it; only a ref the rule lets through (refs/tmp) keeps the worktree hint
+        m, wt = self.main, W.fwd(self.w.wt)
+        for text, cwd, at in (('git -C "%s" update-ref refs/heads/x HEAD' % m, self.w.wt, wt),
+                              ('git update-ref refs/heads/x HEAD', self.w.main, m)):
+            with self.subTest(text, cwd=cwd):
+                d = self.jailed(self.git_at(text, cwd), 'git-shared-ref')
+                self.assertIn('Instead: git -C "%s" show-ref refs/heads/x [' % at, d.reason)
+                self.assertNotIn('worktree add', d.instead)
+        d = self.jailed(self.git_at('git -C "%s" update-ref refs/tmp/x HEAD' % m, self.w.wt), 'git-main-history')
+        self.assertIn('Instead: git -C "%s" update-ref refs/tmp/x HEAD [' % wt, d.reason)
+        d = self.jailed(self.git_at('git update-ref refs/tmp/x HEAD', self.w.main), 'git-main-history')
+        self.assertIn('worktree add', d.instead)
+        d = self.jailed(self.git_at('git -C "%s" update-ref -d refs/tmp/x' % m, self.w.wt), 'git-main-history')
+        self.assertIn('Instead: git -C "%s" update-ref -d refs/tmp/x [' % wt, d.reason)
+
+
 class UnplacedGit(MainGit):
     """A git write whose checkout the text cannot place (GIT_DIR, GIT_WORK_TREE, --git-dir,
     --work-tree, core.worktree, a computed -C) is refused for every agent role: it may be a main
@@ -1329,6 +1383,84 @@ class UnplacedGit(MainGit):
         for text in ('$env:FOO ="x"; %s' % g, "Rename-Item env:FOO BAR; Set-Content \"$env:TEMP\\x.txt\" hi; %s" % g):
             with self.subTest(text):
                 self.allowed(self.git(text, 'worker', tool='PowerShell'))
+
+    def test_double_colons_in_a_powershell_string_are_text_not_a_static_call(self):
+        # an expandable string runs code only in $( ): "$b :: $f" and "$t::M()" are text, so a
+        # line that appends one to a plain variable leaves its git placed (observed with
+        # PowerShell 5.1: "$t::GetEnvironmentVariable('OS')" prints the call as text)
+        m, wt = self.main, W.fwd(self.w.wt)
+        g = 'git -C "%s" branch -m main old' % wt
+        loop = ('foreach ($b in $branches) { foreach ($f in $files) { if (git merge-base --is-ancestor $b '
+                'origin/master) { $hits += "$b :: $f" } } }')
+        texts = [loop, '$hits += "$b :: $f"; %s' % g, '$hits += "$t::SetItem($b)"; %s' % g,
+                 'Write-Output "${b}::x"; %s' % g, '$hits = @(); $hits += "$b :: $f"; %s' % g,
+                 # a backtick-escaped $( opens no subexpression; "" is a quote inside the one string
+                 'Write-Output "`$(x) :: $b"; %s' % g, 'Write-Output "$t""::$m"; %s' % g]
+        for text in texts:
+            with self.subTest(text):
+                p = cm.read(text, sh.PS, wt)
+                self.assertTrue(p.clean, text)
+                self.assertEqual([c.git_env for c in p.commands], [False] * len(p.commands), text)
+                self.allowed(self.git(text, 'worker', tool='PowerShell'))
+                for environ in (COORDINATOR, OLD_MARK):
+                    with self.subTest(text, mark=environ[context.ROLE_ENV]):
+                        self.allowed(self.marked(text, environ, 'PowerShell'))
+        # a git variable set beside the string, a static call outside a string or inside $( ),
+        # and an env write of the string's value still leave the git unplaceable
+        self.held_everywhere([
+            '$env:GIT_DIR += "%s/.git"; %s' % (m, g),
+            '$env:GIT_DIR += "$b :: $f"; %s' % g,
+            '$hits += "$b :: $f"; $env:GIT_DIR = "%s/.git"; %s' % (m, g),
+            '$hits += $t::$n("GIT_DIR", "$b :: $f"); %s' % g,
+            'Write-Output "$($t::$n(\'GIT_DIR\', \'x\'))"; %s' % g,
+            '$hits += "$b :: $($t::$n(\'GIT_DIR\', \'x\'))"; %s' % g,
+            'Set-Item env:GIT_DIR "$b :: $f"; %s' % g,
+            '[Environment]::SetEnvironmentVariable(\'GIT_DIR\', "$b :: $f"); %s' % g], tool='PowerShell')
+        # a string piped to Invoke-Expression is code, and a $ in it expands before it runs: the
+        # line is unreadable, with or without a :: (a worker's static call there reads as a git
+        # variable set unseen: write-jail, as the held rows above)
+        for text, rule in (('"$t::$n(\'GIT_DIR\', \'x\')" | iex; %s' % g, 'write-jail'),
+                           ('"a :: $b" | Invoke-Expression; %s' % g, 'unreadable'),
+                           ('"x $b" | iex; %s' % g, 'unreadable')):
+            with self.subTest(text):
+                self.assertFalse(cm.read(text, sh.PS, wt).clean, text)
+                self.jailed(self.git(text, 'worker', tool='PowerShell'), rule)
+                for environ in (COORDINATOR, OLD_MARK):
+                    with self.subTest(text, mark=environ[context.ROLE_ENV]):
+                        self.jailed(self.marked(text, environ, 'PowerShell'))
+        # a shell reading such a string from a pipe is unreadable the same way
+        text = '"git $b" | powershell -Command -'
+        self.assertFalse(cm.read(text, sh.PS, wt).clean, text)
+        self.jailed(self.git(text, 'worker', tool='PowerShell'), 'unreadable')
+        for environ in (COORDINATOR, OLD_MARK):
+            with self.subTest(text, mark=environ[context.ROLE_ENV]):
+                self.jailed(self.marked(text, environ, 'PowerShell'))
+        # a single-quoted string and a backtick-escaped $ do not expand: iex runs the text as
+        # written (x $b), and the git after it stays placed
+        for text in ("'x $b' | iex; %s" % g, '"x `$b" | iex; %s' % g):
+            with self.subTest(text):
+                p = cm.read(text, sh.PS, wt)
+                self.assertTrue(p.clean, text)
+                self.assertEqual([c.git_env for c in p.commands], [False] * len(p.commands), text)
+                self.allowed(self.git(text, 'worker', tool='PowerShell'))
+                for environ in (COORDINATOR, OLD_MARK):
+                    with self.subTest(text, mark=environ[context.ROLE_ENV]):
+                        self.allowed(self.marked(text, environ, 'PowerShell'))
+        # a string handed to Invoke-Expression is code, and a $( inside ${...} is a substitution:
+        # the line is unreadable
+        for text in ('iex "$t::$n(\'GIT_DIR\', \'x\')"; %s' % g, 'Write-Output "${a$(x)}::y"; %s' % g):
+            with self.subTest(text):
+                self.assertFalse(cm.read(text, sh.PS, wt).clean, text)
+                self.denied(self.git(text, 'worker', tool='PowerShell'))
+                self.denied(self.marked(text, COORDINATOR, 'PowerShell'))
+        # pinned as it is: a property cmdlet on a computed Environment:: path passes, as "env:$n"
+        # already did; the environment provider has no property operations, so it sets no variable
+        text = 'Set-ItemProperty -Path "Environment::$n" -Name GIT_DIR -Value x; %s' % g
+        self.allowed(self.git(text, 'worker', tool='PowerShell'))
+        self.allowed(self.marked(text, COORDINATOR, 'PowerShell'))
+        # a curly double quote may end the string where the guard reads on: it stays a static call
+        self.held_everywhere(['$hits += "$b :: “ x"; %s' % g, '$hits += "$b :: ” x"; %s' % g],
+                             tool='PowerShell')
 
     def test_text_piped_into_set_content_or_add_content_is_its_value(self):
         wt = W.fwd(self.w.wt)

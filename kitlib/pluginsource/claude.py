@@ -2,6 +2,8 @@
 the machine setup's plugin install uses them too.
 
   account_folders(home)          every Claude account folder on this machine, each once
+  installed_path(folder)         the folder that account's Claude Code loads the kit plugin from
+  installs(folders)              [(that folder, the account folder)] for each account with an install
   Runner(home, claude=None)      run `claude <args>` against one folder: .run(args, folder) -> (rc, text)
 
 A folder's claude runs with CLAUDE_CONFIG_DIR=<folder>, except Claude Code's own ~/.claude, for
@@ -12,6 +14,7 @@ With no `home`, each reads the user's home through kitlib.config.user.home_dir()
 tests fence (docs/test-tools.md "Home fence"): a test passes `home` (a temp folder), or the folders
 themselves to the caller (kitlib.pluginsource `folders`).
 """
+import json
 import os
 import shutil
 import subprocess
@@ -21,6 +24,8 @@ from kitlib import machinesetup
 
 TIMEOUT = 300
 _NOWIN = 0x08000000 if sys.platform == 'win32' else 0      # CREATE_NO_WINDOW
+INSTALLED = ('plugins', 'installed_plugins.json')   # Claude Code's install record, in an account folder
+USER_SCOPE = 'user'
 
 
 def account_folders(home=None):
@@ -41,6 +46,36 @@ def account_folders(home=None):
     except Exception:            # a missing or bad launcher config: pm_start reports it on its own
         pass
     return machinesetup.dedupe(os.path.abspath(d) for d in dirs if os.path.isdir(d))
+
+
+def installed_path(folder):
+    """The folder account folder `folder`'s Claude Code loads the kit plugin from, read from its
+    install record: the user-scope install's installPath, else the first record's absolute
+    installPath. None for no record, one that cannot be read, or no install of the kit. The
+    path is not checked on disk."""
+    from kitlib.pluginsource import PLUGIN_ID
+    try:
+        with open(os.path.join(folder, *INSTALLED), encoding='utf-8-sig') as fh:
+            recs = json.load(fh)['plugins'][PLUGIN_ID]
+        paths = [(r.get('scope'), r.get('installPath')) for r in recs]
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
+    paths = [(scope, p) for scope, p in paths if isinstance(p, str) and os.path.isabs(p)]
+    for scope, p in paths:
+        if scope == USER_SCOPE:
+            return p
+    return paths[0][1] if paths else None
+
+
+def installs(folders=None):
+    """[(install path, account folder)] for each folder of `folders` (default account_folders())
+    whose install record names the kit plugin, in that order."""
+    out = []
+    for f in (account_folders() if folders is None else folders):
+        path = installed_path(f)
+        if path is not None:
+            out.append((path, f))
+    return out
 
 
 def is_default(folder, home=None):

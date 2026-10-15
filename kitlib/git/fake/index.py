@@ -269,15 +269,30 @@ class IndexLock:
         self.fd = None
 
     def acquire(self):
-        try:
-            self.fd = os.open(self.lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_BINARY', 0), 0o666)
-        except FileExistsError:
-            raise GitExit(128, "fatal: Unable to create '%s': File exists.\n\nAnother git process seems "
-                               "to be running in this repository, e.g.\nan editor opened by 'git commit'. "
-                               "Please make sure all processes\nare terminated then try again. If it still "
-                               "fails, a git process\nmay have crashed in this repository earlier:\nremove "
-                               "the file manually to continue.\n" % self.lock.replace('\\', '/'))
-        return self
+        """Take the lock, or exit 128 "File exists" as git does when it is held. Windows denies
+        the create (PermissionError) while a delete of the last lock is still pending, the file
+        still listed because another handle is open on it; real git reports that as a held lock
+        (2.55.0.windows.5, probed 2026-10-14), and so does this. A denial with no file left (the
+        delete completed in between) is tried again, as refs.RefLock.acquire does."""
+        for attempt in range(51):
+            try:
+                self.fd = os.open(self.lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_BINARY', 0), 0o666)
+                return self
+            except FileExistsError:
+                raise self._held()
+            except PermissionError:
+                if os.path.lexists(self.lock):
+                    raise self._held()
+                if attempt == 50:
+                    raise
+                time.sleep(0.01)
+
+    def _held(self):
+        return GitExit(128, "fatal: Unable to create '%s': File exists.\n\nAnother git process seems "
+                            "to be running in this repository, e.g.\nan editor opened by 'git commit'. "
+                            "Please make sure all processes\nare terminated then try again. If it still "
+                            "fails, a git process\nmay have crashed in this repository earlier:\nremove "
+                            "the file manually to continue.\n" % self.lock.replace('\\', '/'))
 
     def commit(self, data):
         try:

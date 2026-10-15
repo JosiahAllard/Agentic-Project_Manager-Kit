@@ -122,16 +122,19 @@ class ExportStubs(unittest.TestCase):
         self.assertIsNone(self.pinned())
 
     def test_an_export_whose_marker_names_no_checkout_still_runs_live(self):
-        """An export made before markers named the checkout: no pin, and the old false stale
-        lines (a plugin refresh replaces it)."""
+        """An export made before markers named the checkout: no pin, and its kit-stubs step is
+        refused (exit 2, kitlib.stubs.live_kit) rather than calling every stub stale against the
+        export (a plugin refresh replaces it)."""
         path = os.path.join(self.export, pluginsource.MARKER)
         marker = pluginsource.read_marker(self.export)
         marker.pop('checkout', None)
         with open(path, 'w', encoding='utf-8') as fh:
             json.dump(marker, fh)
         code, said = self.probe()
-        self.assertEqual(code, stubs.PROBLEMS, said)
-        self.assertIn('runs the kit at %r' % os.path.normpath(self.main), said)
+        self.assertEqual(code, stubs.CONFIG, said)
+        self.assertIn('kit_stubs: refused: %s is an export of the kit' % os.path.normpath(self.export),
+                      said)
+        self.assertNotIn('stale', said)
         self.assertIsNone(self.pinned())
 
 

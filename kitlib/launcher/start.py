@@ -16,12 +16,22 @@ import sys
 from kitlib import agentname
 from kitlib import content as kcontent
 from kitlib.launcher import accounts as A
-from kitlib.launcher import lookup, state, window
+from kitlib.git import repo as gitrepo
+from kitlib.launcher import home, lookup, state, window
 from kitlib.launcher.settings import LaunchError
 
 PM_NAME = 'Project Manager'      # the PM session's name, as every first message names it
 DEFAULT_PROMPT = ('Start up now: run your start-up routine, read docs/ops/state.local.md, check in with the PM '
                   '(the session named %s), then continue the queue in the state note.' % PM_NAME)
+HOME_NOTE = (' Your start folder %s is a home worktree of the main checkout %s, and a relative path resolves in '
+             'it: do not write there; your branch work goes in your own worktree, and the main checkout, by '
+             'absolute path, is read-only to you.')
+# the roles --home-worktree may start in a home: a session in a linked worktree may write only that
+# worktree and temp (docs/guard.md "Write jail"), so a coordinator's state note and a consultant's notes
+# file, which live in the main checkout, would be refused (docs/launcher.md "The home worktree")
+HOME_ROLES = (window.DEEP_WORKER,)
+HOME_REFUSED = ('--home-worktree is for deep-worker sessions only: a %s session started in a home worktree '
+                "cannot write its files in the main checkout (the guard's write jail); nothing was started.")
 AUTOCOMPACT = (100000, 1000000)  # the CLI's range for --autocompact
 SLUG = re.compile(r'^[a-z0-9][a-z0-9-]{1,40}\Z')
 DEFAULT_AUTOCOMPACT = 170000   # a coordinator, another agent or a plain session; deep and consultant set their own
@@ -100,10 +110,11 @@ def window_text(settings, host, name, role, folder, command, config_dir):
 
 def start(settings, host, repo=None, repo_path=None, account=None, org=None, prompt=None, brief=None,
           default_prompt=DEFAULT_PROMPT, name=None, predecessor=None, no_agent=False, agent=None,
-          model=None, effort=None, autocompact=None, whatif=False):
+          model=None, effort=None, autocompact=None, whatif=False, home_worktree=False):
     """Open a session's window; the lines it says. The repo folder is --repo-path, or the
     launcher.repos entry for --repo. autocompact None is DEFAULT_AUTOCOMPACT; 0 passes no
-    --autocompact (the CLI's own window)."""
+    --autocompact (the CLI's own window). home_worktree: an agent session whose folder is a main
+    checkout starts in its home worktree instead (home_folder)."""
     if autocompact is None:
         autocompact = DEFAULT_AUTOCOMPACT
     if bool(repo) == bool(repo_path):
@@ -112,6 +123,9 @@ def start(settings, host, repo=None, repo_path=None, account=None, org=None, pro
     if agent and not window.AGENT.match(agent):
         raise LaunchError("--agent '%s' is not an agent name." % agent)
     _check_common(model, effort, autocompact)
+    role = window.role_for(agent, settings.coordinator_agent)
+    if home_worktree:
+        check_home_role(role)
     folder = repo_path or settings.repo_path(repo)
     if not os.path.isdir(folder):
         raise LaunchError('No repo at %s' % folder)
@@ -121,17 +135,73 @@ def start(settings, host, repo=None, repo_path=None, account=None, org=None, pro
                   'with the PM (the session named %s), and begin.' % (brief, PM_NAME)) if brief else default_prompt
     elif brief:
         prompt = 'Read your standing brief %s first. ' % brief + prompt
-    role = window.role_for(agent, settings.coordinator_agent)
     if predecessor:
         prompt = predecessor_text(predecessor, role == window.COORDINATOR) + prompt
     repo_label = repo or os.path.basename(os.path.normpath(folder))
     name = name or '%s-%s-%s' % (repo_label.lower(), agentname.bare(agent) or 'session', tag)
-    command = window.claude_command(name, prompt, run_as(agent), model, effort, autocompact)
+    out, add_dir = [], None
+    if home_worktree and role != window.PLAIN:
+        start_in, add_dir, out = home_folder(host, folder, name, whatif)
+        if add_dir:
+            prompt += HOME_NOTE % (start_in, add_dir)
+            folder = start_in
+    command = window.claude_command(name, prompt, run_as(agent), model, effort, autocompact, add_dir=add_dir)
     text = window_text(settings, host, name, role, folder, command, config_dir)
     if whatif:
-        return ['Would open a new window running:', '  powershell -NoExit -Command "%s"' % text]
+        return out + ['Would open a new window running:', '  powershell -NoExit -Command "%s"' % text]
     host.open_window(text)
-    return ['Started %s (%s) in a new minimized window. Remote Control name: %s' % (name, label, name)]
+    return out + ['Started %s (%s) in a new minimized window. Remote Control name: %s' % (name, label, name)]
+
+
+def check_home_role(role):
+    """A LaunchError unless a session of `role` may start in a home worktree (HOME_ROLES; a plain
+    session keeps its folder, so it passes)."""
+    if role != window.PLAIN and role not in HOME_ROLES:
+        raise LaunchError(HOME_REFUSED % role)
+
+
+def check_home_entry(settings, entry):
+    """check_home_role for the session a sessions.json entry starts (entry_start_args)."""
+    if isinstance(entry, dict):
+        agent = entry.get('agent')
+        agent = (agent if isinstance(agent, str) else settings.coordinator_agent) if agent else None
+        check_home_role(window.role_for(agent, settings.coordinator_agent))
+
+
+def home_folder(host, folder, name, whatif=False):
+    """(start folder, main checkout or None, lines) for a session named `name` whose folder is
+    `folder`. A main checkout gives the name's home worktree (home.py), made or refreshed here
+    unless `whatif`; any other folder (a linked worktree, a folder outside git) is used as given.
+    Refused (LaunchError, nothing started or created) when git cannot place the folder, a session
+    named `name` is running (the home is its folder; it is never moved under it), or git does not
+    ignore the home worktree's folder (it would show in the main checkout as untracked)."""
+    place = host.place(folder)
+    if place.kind == gitrepo.UNKNOWN:
+        raise LaunchError('--home-worktree: git cannot place %s (%s); nothing was started.' % (folder, place.detail))
+    if place.kind != gitrepo.MAIN:
+        return folder, None, ['--home-worktree: %s is not a main checkout (%s); the session starts there.'
+                              % (folder, 'a linked worktree' if place.kind == gitrepo.LINKED else 'not in git')]
+    main = os.path.normpath(place.top)
+    path = home.home_path(main, name)
+    live = [p for p in _sessions(host) if lookup.rc_name(p.get('CommandLine'))
+            and home.home_path(main, lookup.rc_name(p.get('CommandLine'))) == path]   # Deep-X, deep-x-: one home
+    if live:
+        running = sorted({lookup.rc_name(p.get('CommandLine')) for p in live})
+        raise LaunchError("--home-worktree: a session named '%s' is already running (PID %s) in its home worktree "
+                          "%s, the one '%s' would use; stop it first. Nothing was started."
+                          % ("', '".join(running), lookup.pids(live), path, name))
+    if host.git_ignored(main, path) is not True:      # git answers for a path that does not exist yet
+        raise LaunchError('--home-worktree: git in %s does not ignore %s; add %s/ to its .gitignore (an '
+                          'untracked folder in the main checkout stops a landing). Nothing was started.'
+                          % (main, path, home.folder().replace(os.sep, '/')))
+    if not whatif:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+    out = host.home_worktree(main, path, whatif)
+    local = os.path.join(main, home.state_folder(), 'settings.local.json')
+    if os.path.isfile(local):
+        out.append('Warning: %s is untracked and is not in the home worktree; the host reads it from the start '
+                   'folder, so this session runs without it.' % local)
+    return path, main, out
 
 
 def entry_start_args(settings, key, entry, account, prompt, predecessor=None, name=None, any_brief=False):
@@ -154,7 +224,7 @@ def entry_start_args(settings, key, entry, account, prompt, predecessor=None, na
     return args
 
 
-def start_entry(settings, host, key, account=None, prompt=None, whatif=False):
+def start_entry(settings, host, key, account=None, prompt=None, whatif=False, home_worktree=False):
     """Start the sessions.json entry `key`. On the entry's own account it keeps the entry's recorded
     name (a recycle's <stem>-a<N>-r<M> included), so liveness, which checks that name, sees it come
     back; on another account it is <stem>-a<N>. `account` may be a number, 'current' (the account this
@@ -184,7 +254,7 @@ def start_entry(settings, host, key, account=None, prompt=None, whatif=False):
         prompt = ('Start up now: run your start-up routine, read %s, check in with the PM (the session named '
                   '%s), then continue the queue in the state note.' % (entry['state'], PM_NAME))
     name = entry.get('name') if same and entry.get('name') else None
-    return out + start(settings, host, whatif=whatif,
+    return out + start(settings, host, whatif=whatif, home_worktree=home_worktree,
                        **entry_start_args(settings, key, entry, str(account), prompt, name=name))
 
 
@@ -196,14 +266,25 @@ def _pick_or(settings, host, account, out, limit=A.HEADROOM_LIMIT):
     return str(account)
 
 
+def _sessions(host):
+    """The launched sessions running now."""
+    return lookup.claude_sessions(host.processes())
+
+
+def _live(host, name):
+    """The launched sessions named exactly `name` that are running now."""
+    return lookup.find_exact(_sessions(host), name)
+
+
 def _refuse_live(host, name, why):
-    live = lookup.find_exact(lookup.claude_sessions(host.processes()), name)
+    live = _live(host, name)
     if live:
         raise LaunchError("A session named '%s' is already running (PID %s): %s" % (name, lookup.pids(live), why))
 
 
 def deep(settings, host, repo_path, requester, slug, brief=None, brief_text=None, account='auto',
-         autocompact=DEEP_AUTOCOMPACT, model=LONG_MODEL, effort='xhigh', force=False, plan=False, brief_dir=None):
+         autocompact=DEEP_AUTOCOMPACT, model=LONG_MODEL, effort='xhigh', force=False, plan=False, brief_dir=None,
+         home_worktree=False):
     """A deep-worker session named deep-<slug>. Every check runs before anything is written; a
     --brief-text file is removed again when the launch fails."""
     out = []
@@ -251,7 +332,8 @@ def deep(settings, host, repo_path, requester, slug, brief=None, brief_text=None
             out.append('Wrote the brief to %s' % brief_path)
     try:
         out += start(settings, host, repo_path=repo_path, account=acct, name=name, agent='pm-kit:deep-worker',
-                     model=model, effort=effort, autocompact=autocompact, prompt=prompt, whatif=plan)
+                     model=model, effort=effort, autocompact=autocompact, prompt=prompt, whatif=plan,
+                     home_worktree=home_worktree)
     except Exception:
         if wrote:
             try:
@@ -274,8 +356,11 @@ def _with_lines(out):
 
 
 def consultant(settings, host, repo_path, repo=None, account='auto', autocompact=CONSULTANT_DEFAULT_AUTOCOMPACT,
-               model=LONG_MODEL, effort='high', notes_path=NOTES_DEFAULT, force=False, replace=False, plan=False):
+               model=LONG_MODEL, effort='high', notes_path=NOTES_DEFAULT, force=False, replace=False, plan=False,
+               home_worktree=False):
     """The consultant session consultant-<repo>; one per repo unless --replace (an account hand-off)."""
+    if home_worktree:
+        check_home_role(window.CONSULTANT)
     out = []
     if not os.path.isdir(repo_path):
         raise LaunchError('No folder at %s' % repo_path)
@@ -296,7 +381,7 @@ def consultant(settings, host, repo_path, repo=None, account='auto', autocompact
     acct = _pick_or(settings, host, account, out)
     A.launch_dir(settings, acct)
     A.check_headroom(settings, acct, host.now(), force, out)
-    live = lookup.find_exact(lookup.claude_sessions(host.processes()), name)
+    live = _live(host, name)
     if live:
         if not replace:
             raise LaunchError("A session named '%s' is already running (PID %s): one consultant per repo. Ask it, "
@@ -320,7 +405,7 @@ def consultant(settings, host, repo_path, repo=None, account='auto', autocompact
               "reread the digest and the notes file." % (name, repo_path, notes, PM_NAME))
     try:
         out += start(settings, host, repo_path=repo_path, account=acct, name=name, agent='pm-kit:consultant', model=model,
-                     effort=effort, autocompact=autocompact, prompt=prompt, whatif=plan)
+                     effort=effort, autocompact=autocompact, prompt=prompt, whatif=plan, home_worktree=home_worktree)
     except Exception:
         raise _with_lines(out)
     out.append('To stop it: %s' % stop_cmd(name))

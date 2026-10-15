@@ -335,11 +335,13 @@ def covered(L, pool, span_s, hs, now=None, max_span_s=10 * 365 * 86400):
     return out
 
 
-def cover_plan(store, L, need, span_s, own=None, hs=None):
+def cover_plan(store, L, need, span_s, own=None, hs=None, within=None):
     """({pool: {slot: hold}}, [blocking strong hold], [blocking agent hold]) for a run needing
     `need` that expects to run span_s seconds from now: the slots it must not take (every hold's
     but its own, `own`), and the holds that leave it too few of a pool: strong ones first, then,
-    for a pool strong ones alone leave enough of, agent ones."""
+    for a pool strong ones alone leave enough of, agent ones. within: {pool: the only slots the
+    run may take} (its --within); for such a pool only those slots and the holds over them count
+    toward too few, while the cover stays every hold's."""
     hs = [h for h in (records(store, L) if hs is None else hs) if h["id"] != own]
     cover, blocking, ablocking = {}, [], []
     for pool in POOLS:
@@ -349,9 +351,14 @@ def cover_plan(store, L, need, span_s, own=None, hs=None):
                     max_span_s=store.settings.max_span_s)
         c = covered(L, pool, span_s, hs, max_span_s=store.settings.max_span_s)
         cover[pool] = c
-        if lay.size(L, pool) - len(s) < need[pool]:
+        room = set(range(lay.size(L, pool)))
+        if (within or {}).get(pool):
+            room &= set(within[pool])
+            s = {i: x for i, x in s.items() if i in room}
+            c = {i: x for i, x in c.items() if i in room}
+        if len(room) - len(s) < need[pool]:
             hit, into = s.values(), blocking
-        elif lay.size(L, pool) - len(c) < need[pool]:
+        elif len(room) - len(c) < need[pool]:
             hit, into = [x for x in c.values() if not strong(x)], ablocking
         else:
             continue

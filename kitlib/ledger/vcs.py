@@ -15,6 +15,7 @@ after the write leaves the entry written and says what was not done. Nothing her
 import collections
 import os
 import re
+import time
 
 from kitlib import config as kconfig
 from kitlib import commit as kcommit
@@ -25,6 +26,8 @@ from .errors import Refused, Usage
 MODEL_ENV = kcommit.MODEL_ENV
 TITLE_LIMIT = 60
 PUSH_TIMEOUT = 120      # seconds
+INDEX_LOCK_WAIT = 3.0   # seconds commit_one keeps retrying add+commit while git's index.lock is busy
+INDEX_LOCK_PAUSE = 0.1  # seconds between those tries
 DEFAULT_REMOTE = 'origin'   # the schema default of repo.remote, for a config that cannot be read
 
 Plan = collections.namedtuple('Plan', 'root rel trailer env')
@@ -92,15 +95,22 @@ def finish(plan, rid, title, decides, push=False):
 def commit_one(plan, subject, what, push=False):
     """Commit plan's file alone as `subject` with plan's trailer, then push the current branch
     when asked. Returns the lines to print; Refused names what was not done (`what` is written
-    either way)."""
-    _, why = cmd.run(['add', '--', plan.rel], plan.root, env=plan.env)
-    if why is None:
-        _, why = cmd.run(['commit', '-q', '-m', '%s\n\n%s\n' % (subject, plan.trailer), '--', plan.rel],
-                         plan.root, env=plan.env)
-        if why is not None:
-            cmd.run(['reset', '-q', '--', plan.rel], plan.root, env=plan.env)
-    if why is not None:
-        raise Refused('git failed: %s\n%s is written but NOT committed (left unstaged).' % (why, what))
+    either way). A busy `index.lock` (and only that) is retried for INDEX_LOCK_WAIT seconds."""
+    deadline = time.monotonic() + INDEX_LOCK_WAIT
+    head, _ = cmd.run(['rev-parse', '-q', '--verify', 'HEAD'], plan.root, env=plan.env)
+    while True:
+        why = _add_commit(plan, subject)
+        if why is None:
+            break
+        if not _index_busy(why) or time.monotonic() >= deadline:
+            if _index_busy(why):
+                why = 'index.lock busy for %s s: %s' % (INDEX_LOCK_WAIT, why)
+            raise Refused('git failed: %s\n%s is written but NOT committed (left unstaged).' % (why, what))
+        now, _ = cmd.run(['rev-parse', '-q', '--verify', 'HEAD'], plan.root, env=plan.env)
+        if now != head:         # a commit landed after all: never make a second one
+            raise Refused('git failed: %s\nHEAD moved during the commit; check `git log` before '
+                          'retrying (%s is written).' % (why, what))
+        time.sleep(INDEX_LOCK_PAUSE)
     sha, _ = cmd.run_text(['rev-parse', '--short', 'HEAD'], plan.root, env=plan.env)
     lines = ['commit %s' % sha]
     if push:
@@ -119,6 +129,23 @@ def commit_one(plan, subject, what, push=False):
                           % (why or 'no branch', what, sha))
         lines.append('pushed %s/%s' % (remote, branch))
     return lines
+
+
+def _add_commit(plan, subject):
+    """Stage and commit plan's file once; None on success, else why it failed (the file is left
+    unstaged after a failed commit)."""
+    _, why = cmd.run(['add', '--', plan.rel], plan.root, env=plan.env)
+    if why is None:
+        _, why = cmd.run(['commit', '-q', '-m', '%s\n\n%s\n' % (subject, plan.trailer), '--', plan.rel],
+                         plan.root, env=plan.env)
+        if why is not None:
+            cmd.run(['reset', '-q', '--', plan.rel], plan.root, env=plan.env)
+    return why
+
+
+def _index_busy(why):
+    """True when git's message says another process holds `index.lock` (and nothing else failed)."""
+    return 'index.lock' in why and ('File exists' in why or 'Unable to create' in why)
 
 
 def _remote(root):

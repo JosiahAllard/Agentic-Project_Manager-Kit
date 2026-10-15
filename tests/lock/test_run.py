@@ -782,6 +782,64 @@ class Resources(StoreCase):
             s.release()
         self.assertIn("run %s died holding resource %s; it is free" % (rid, LAND), said)
 
+    def test_a_dead_run_holding_slots_and_the_resource_frees_both_for_the_next_claimant(self):
+        self.confine(2)
+        rid = "r-20261006T120000Z-d1d1d1"
+        m = self.store.run_mutex(rid)
+        self.addCleanup(m.release)
+        self.store.write("queue.json", {"ticket": 1, "entries": [{
+            "id": rid, "ticket": 1, "state": "held", "pid": os.getpid(),
+            "ctime": process.own_ctime(), "repo": "kit", "slug": "gone", "kind": "engine-test",
+            "need": {"cpu": 1, "gpu": 0}, "expect_s": 600, "cores": [0], "gpus": [],
+            "held_at": time.time(), "resource": LAND, "priority": "land"}]})
+        m.release()                             # its wrapper is gone
+        said = []
+        self.store.say = said.append
+        s = self.book("next", resource=LAND, priority="land", no_wait=True)
+        try:
+            self.assertEqual([e["id"] for e in self.entries()], [s.id])
+        finally:
+            s.release()
+        [line] = [t for t in said if rid in t]
+        self.assertIn("died holding it; it is free; so is resource %s" % LAND, line)
+
+    def test_a_dead_waiter_naming_the_resource_is_dropped_and_does_not_keep_it(self):
+        self.confine(2)
+        rid = "r-20261006T120000Z-d2d2d2"
+        m = self.store.run_mutex(rid)
+        self.addCleanup(m.release)
+        self.store.write("queue.json", {"ticket": 1, "entries": [{
+            "id": rid, "ticket": 1, "state": "waiting", "pid": os.getpid(),
+            "ctime": process.own_ctime(), "repo": "kit", "slug": "gone", "kind": "engine-test",
+            "since": store_mod.iso(), "need": {"cpu": 1, "gpu": 0}, "expect_s": 600,
+            "cores": [], "gpus": [], "resource": LAND, "priority": "land"}]})
+        m.release()
+        said = []
+        self.store.say = said.append
+        s = self.book("next", resource=LAND, no_wait=True)
+        s.release()
+        self.assertIn("run %s's caller died while it waited; its queue entry is dropped" % rid,
+                      said)
+        self.assertEqual(self.entries(), [])
+
+    def test_an_unknown_priority_is_refused_before_anything_is_written(self):
+        # Refused, not defaulted to ordinary (the planner's default is only for old disk entries).
+        self.confine(2)
+        for prio in ("", "Land", "urgent", ("land",), True):
+            with self.subTest(priority=prio):
+                e = self.busy("t", resource=LAND, priority=prio)
+                self.assertEqual(e.code, 2)
+                self.assertIn("unknown priority", e.message)
+        self.assertIsNone(self.store.read("queue.json"))
+        self.assertEqual(os.listdir(self.store.path("active")) if os.path.isdir(
+            self.store.path("active")) else [], [])
+        s = self.book("t", priority="land", no_wait=True)       # known, with no resource
+        try:
+            [e] = self.entries()
+            self.assertEqual((e["priority"], e["resource"]), ("land", None))
+        finally:
+            s.release()
+
     def test_a_nested_run_naming_one_its_parent_lacks_joins_the_queue_for_it(self):
         anc = process.own_ancestors()
         pp, ct = os.getppid(), process.proc_ctime(os.getppid())

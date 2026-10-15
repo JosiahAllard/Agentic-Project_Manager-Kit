@@ -61,5 +61,5 @@ def parse(event_name, payload):
         return Action('shell', tool=tool, command=ti.get('command'), shell=SHELL_TOOLS[tool],
                       background=ti.get('run_in_background') is True, **base)
     if tool.startswith(MCP):
-        return Action('mcp', tool=tool, **base)
+        return Action('mcp', tool=tool, params=ti if isinstance(ti, dict) else None, **base)
     return Action('other', tool=tool, **base)

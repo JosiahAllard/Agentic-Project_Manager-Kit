@@ -20,10 +20,9 @@ import os
 import re
 import sys
 
-from kitlib import pmstart, sessionmark, stubs
+from kitlib import kitroot, pmstart, sessionmark, stubs
 from kitlib.config import user as kuser
 from kitlib.git import cmd as gitcmd
-from kitlib.host import registry
 
 KEY = "coordinator_start"
 ROLE_VAR = "PM_KIT_ROLE"
@@ -33,6 +32,7 @@ LEGACY_ROLE = "conductor"
 NAME_VAR = "PM_KIT_SESSION_NAME"  # optional: this session's Remote Control name (else the process tree)
 TIMEOUT = 10
 SOON_HOURS = 4
+LOCK_SCHEMA_VERSION = 1       # kitlib.lock.api.SCHEMA_VERSION, the snapshot schema machine() reads
 # Engineering decisions (docs/engineering-rulings.md): the filing format, the consultant as
 # recipient, and the owner-only list.
 ENG_LINE = ("ENG rulings: an engineering question (API shape, class versus record, signatures, module layout, "
@@ -194,26 +194,35 @@ def landing_lock(entry, run=_run, read=_read, root=None, lock_file=None):
         r.get("phase"), r.get("started_utc"))
 
 
-def machine(entry, run=_run, read=_read, now=None, home=None, root=None, lock_file=None):
-    """Owner reservations and bookings in force or starting within 4 h, free gpu and cpu slots, landing lock."""
-    home = home or kuser.home_dir()
+def machine(entry, run=_run, read=_read, now=None, kit=None, root=None, lock_file=None):
+    """Owner and agent holds in force or starting within 4 h, free gpu and cpu slots, landing lock.
+
+    Runs the kit's own `tools/machine_lock.py status --json` (kitlib.kitroot.lock_tool; `kit`
+    names another kit checkout) and reads its snapshot (kitlib.lock.api.snapshot, docs/lock-api.md
+    "Snapshot"): `holds` and `slots`. A slot is free when no run holds it and no hold covers it. A
+    payload of another schema_version raises ValueError rather than reading as an idle machine."""
     now = now or datetime.datetime.now().astimezone()
-    s = json.loads(run([sys.executable, registry.state_path(home, "tools", "machine_lock", "machine_lock.py"),
-                        "status", "--json"]))
+    s = json.loads(run([sys.executable, kitroot.lock_tool(kit), "status", "--json"]))
+    if s.get("schema_version") != LOCK_SCHEMA_VERSION:
+        raise ValueError("machine_lock status --json has schema_version %r, this check reads %d"
+                         % (s.get("schema_version"), LOCK_SCHEMA_VERSION))
     soon = now + datetime.timedelta(hours=SOON_HOURS)
-    res = s.get("reservations") or {}
     owner = []
-    for kind, items in (("owner reservation", (res.get("active") or []) + (res.get("upcoming") or [])),
-                        ("booking", (s.get("lock") or {}).get("bookings") or [])):
-        for v in items:
-            if _parse_time(v["start"]) <= soon and _parse_time(v["end"]) > now:
-                owner.append("%s %s-%s%s" % (kind, v.get("start_local", v["start"]), v.get("end_local", v["end"]),
+    for v in s.get("holds") or []:
+        if _parse_time(v["start"]) <= soon and _parse_time(v["end"]) > now:
+            owner.append("%s hold %s-%s%s" % ("agent" if v.get("owner") == "agent" else "owner",
+                                              v.get("start_local", v["start"]), v.get("end_local", v["end"]),
                                               ": " + v["note"] if v.get("note") else ""))
-    gpus, cores = s.get("gpus") or [], s.get("cores") or []
-    lines = ["machine: " + ("; ".join(owner) if owner else "no owner reservation or booking within %d h" % SOON_HOURS),
+    if s.get("holds_error"):
+        owner.append("holds unreadable: %s" % s["holds_error"])
+    slots = s.get("slots") or {}
+    gpus, cores = slots.get("gpu") or [], slots.get("cpu") or []
+
+    def free(pool):
+        return sum(1 for x in pool if not x.get("holder") and not x.get("hold"))
+    lines = ["machine: " + ("; ".join(owner) if owner else "no owner or agent hold within %d h" % SOON_HOURS),
              "machine: free gpu slots %d of %d; free cpu slots %d of %d" % (
-                 sum(1 for g in gpus if not g.get("holder_id")), len(gpus),
-                 sum(1 for c in cores if not c.get("holder_id")), len(cores))]
+                 free(gpus), len(gpus), free(cores), len(cores))]
     lock = landing_lock(entry, run, read, root, lock_file)
     if lock:
         lines.append(lock)
@@ -254,7 +263,7 @@ def others(entry, procs, env, pid):
             "otherwise stop and tell the PM" % ", ".join(names)]
 
 
-def context(cfg, env=None, cwd=None, now=None, procs=None, run=_run, read=_read, home=None,
+def context(cfg, env=None, cwd=None, now=None, procs=None, run=_run, read=_read, kit=None,
             pid=None, pm_cfg=None, live=True, stubs_check=stubs.problem_line):
     """The heading, one "- <text>" line per string in cfg["standing"], the ENG filing line (only when cfg["eng_filing"] is true), the pricing-pass line (only when cfg["pricing_pass"] is true), then the live checks (the stubs check prints only when the repo's stubs are missing or stale)."""
     env = os.environ if env is None else env
@@ -290,7 +299,7 @@ def context(cfg, env=None, cwd=None, now=None, procs=None, run=_run, read=_read,
 
         checks = [
             ("cap", lambda: cap(cfg, entry_once()["repo"], now.date())),
-            ("machine state", lambda: machine(entry_once(), run, read, now, home, cfg.get("repos_root"),
+            ("machine state", lambda: machine(entry_once(), run, read, now, kit, cfg.get("repos_root"),
                                               lock_file_for(cfg, entry_once().get("repo")))),
             ("other coordinators", lambda: others(entry_once(), procs_once(), env, pid)),
             ("stubs", lambda: stubs_line(entry_once(), cfg.get("repos_root"), stubs_check)),

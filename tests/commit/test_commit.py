@@ -25,6 +25,10 @@ TOOL = os.path.join(KIT, 'tools', 'commit.py')
 OWNER = 'owner@example.invalid'
 AGENT = 'agent@example.invalid'
 COAUTHOR = 'Co-Authored-By: Claude Test Model <noreply@anthropic.com>'
+# The variable the Claude harness names its claude.ai session in (hosts.json claude
+# attribution.session_trailer.env); a session running these tests may have it set.
+BRIDGE = 'CLAUDE_CODE_BRIDGE_SESSION_ID'
+SESSION_URL = 'https://claude.ai/code/'
 
 
 def setUpModule():
@@ -32,7 +36,7 @@ def setUpModule():
     env.start()
     unittest.addModuleCleanup(env.stop)
     for k in ('GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL', 'GIT_COMMITTER_NAME', 'GIT_COMMITTER_EMAIL',
-              C.MODEL_ENV):
+              C.MODEL_ENV, BRIDGE):
         os.environ.pop(k, None)
     os.environ['GIT_CONFIG_GLOBAL'] = os.devnull
     os.environ['GIT_CONFIG_NOSYSTEM'] = '1'
@@ -361,9 +365,12 @@ class AnOrdinaryCommit(LinkedCase):
         self.put('a.py', 'a = 1\n')
         code, out = self.commit('add a', 'a.py', b='why it changed~~Claude-Session: https://x/s')
         self.assertEqual(code, 0, out)
-        self.assertIn('\nClaude-Session: https://x/s\n', self.message())
+        self.assertIn('\nClaude-Session: https://x/s', self.message())
         self.assertNotIn('changed Claude-Session', self.message())
         self.assertNotIn('~', self.message())
+        # ...and in git's trailer block, not stranded at the end of the body.
+        self.assertEqual(self.git('log', '-1', '--format=%(trailers:key=Claude-Session,valueonly)'),
+                         'https://x/s')
 
     def test_a_body_without_a_double_tilde_is_unchanged(self):
         self.assertEqual(C.message_body('plain body, no marker', None, '.', '.'),
@@ -1042,6 +1049,112 @@ class TheCommandLine(LinkedCase):
         code, out = self.cli('-m', 's', '--model', 'M', 'missing.txt')
         self.assertEqual(code, 1, out)
         self.assertIn('git add failed', out)
+
+
+class TheSessionTrailer(LinkedCase):
+    """`Claude-Session: <url>` after Co-Authored-By, in git's trailer block: from the host's
+    session variable (hosts.json attribution.session_trailer), or lifted from the body's end."""
+
+    def session(self):
+        return self.git('log', '-1', '--format=%(trailers:key=Claude-Session,valueonly)')
+
+    def test_the_bridge_session_follows_the_coauthor_in_the_trailer_block(self):
+        self.put('a.py', 'a = 1\n')
+        code, out = self.commit('add a', 'a.py', env={BRIDGE: 'session_T1'})
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.message(), 'add a\n\n%s\nClaude-Session: %ssession_T1'
+                         % (COAUTHOR, SESSION_URL))
+        self.assertEqual(self.session(), SESSION_URL + 'session_T1')
+
+    def test_the_variable_is_read_from_the_process_environment_by_default(self):
+        self.put('a.py', 'a = 1\n')
+        with mock.patch.dict(os.environ, {BRIDGE: 'session_T2'}):
+            code, out = self.commit('add a', 'a.py')
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.session(), SESSION_URL + 'session_T2')
+
+    def test_no_or_a_blank_variable_writes_no_session_line(self):
+        for env in ({}, {BRIDGE: ''}, {BRIDGE: '   '}):
+            with self.subTest(env=env):
+                self.put('a.py', 'a = %r\n' % (env,))
+                code, out = self.commit('add a', 'a.py', env=env)
+                self.assertEqual(code, 0, out)
+                self.assertEqual(self.message(), 'add a\n\n' + COAUTHOR)
+
+    def test_a_malformed_id_writes_no_session_line_and_still_commits(self):
+        for bad in ('a b', 'x\ny', 'https://evil/x', 'id;rm', 'session_é'):
+            with self.subTest(bad=bad):
+                self.put('a.py', 'a = %r\n' % bad)
+                code, out = self.commit('add a', 'a.py', env={BRIDGE: bad})
+                self.assertEqual(code, 0, out)
+                self.assertEqual(self.message(), 'add a\n\n' + COAUTHOR)
+
+    def test_an_owner_authored_commit_carries_none(self):
+        self.as_author(OWNER)
+        self.put('a.py', 'a = 1\n')
+        code, out = self.commit('mine', 'a.py', owner_authored=True, env={BRIDGE: 'session_T1'})
+        self.assertEqual(code, 0, out)
+        self.assertNotIn('Claude-Session', self.message())
+
+    def test_a_codex_commit_carries_none(self):
+        self.put('a.py', 'a = 1\n')
+        code, out = self.commit('codex', 'a.py', model='gpt-6.1-sol', provider='codex',
+                                env={BRIDGE: 'session_T1'})
+        self.assertEqual(code, 0, out)
+        self.assertNotIn('Claude-Session', self.message())
+
+    def test_a_body_final_line_moves_into_the_trailer_block_with_no_variable(self):
+        self.put('a.py', 'a = 1\n')
+        code, out = self.commit('add a', 'a.py', b='why~~Claude-Session: https://x/s', env={})
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.message(), 'add a\n\nwhy\n\n%s\nClaude-Session: https://x/s'
+                         % COAUTHOR)
+        self.assertEqual(self.session(), 'https://x/s')
+
+    def test_a_body_file_ending_in_the_line_moves_it_too(self):
+        self.put('a.py', 'a = 1\n')
+        body = os.path.join(self.wt, 'body.txt')
+        with open(body, 'w', encoding='utf-8', newline='\r\n') as f:
+            f.write('why\nClaude-Session: https://x/s\n\n')
+        code, out = self.commit('add a', 'a.py', body_file=body, env={})
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.message(), 'add a\n\nwhy\n\n%s\nClaude-Session: https://x/s'
+                         % COAUTHOR)
+
+    def test_a_body_that_is_only_the_line_leaves_no_body(self):
+        self.put('a.py', 'a = 1\n')
+        code, out = self.commit('add a', 'a.py', b='Claude-Session: https://x/s', env={})
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.message(), 'add a\n\n%s\nClaude-Session: https://x/s' % COAUTHOR)
+
+    def test_the_same_line_in_the_body_and_the_variable_is_written_once(self):
+        self.put('a.py', 'a = 1\n')
+        code, out = self.commit('add a', 'a.py', b='why~~Claude-Session: %ssession_T1' % SESSION_URL,
+                                env={BRIDGE: 'session_T1'})
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.message().count('Claude-Session'), 1, self.message())
+        self.assertEqual(self.session(), SESSION_URL + 'session_T1')
+
+    def test_a_different_body_line_wins_over_the_variable(self):
+        self.put('a.py', 'a = 1\n')
+        code, out = self.commit('add a', 'a.py', b='why~~Claude-Session: https://x/s',
+                                env={BRIDGE: 'session_T1'})
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.message().count('Claude-Session'), 1, self.message())
+        self.assertEqual(self.session(), 'https://x/s')
+
+    def test_a_line_mid_body_stays_where_it_is(self):
+        self.put('a.py', 'a = 1\n')
+        code, out = self.commit('add a', 'a.py', b='Claude-Session: https://x/s~~then prose', env={})
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.message(), 'add a\n\nClaude-Session: https://x/s\nthen prose\n\n'
+                         + COAUTHOR)
+
+    def test_the_owner_approval_lines_come_first(self):
+        trailers = C.build_trailers(rules(), ['docs/'], False, 'M', session=['Claude-Session: u'])
+        self.assertEqual(trailers, ['%s: docs/' % rules().trailer,
+                                    'Co-Authored-By: Claude M <noreply@anthropic.com>',
+                                    'Claude-Session: u'])
 
 
 if __name__ == '__main__':

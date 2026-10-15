@@ -160,6 +160,8 @@ The machine's own settings, read by `kitlib.config.user`: `config.json` in the f
 
 A retired key is still accepted and ignored, so an older machine config loads: `ledger_refs` (`RETIRED` in `kitlib/config/user.py`); nothing reads it. Any other unknown key still refuses.
 
+Each kit copy on the machine reads this one file with its own key list, so a key "older kit copies reject" refuses the whole file in every copy that does not know it. `python tools/hub.py setup --check` lists each copy (the plugin export folders, the pins and each account folder's install, `kitlib.config.copies`) with the keys of the file plus `hub` that it would refuse, and writes nothing. It reads each copy's `SCHEMA` and `RETIRED` from the text of its `kitlib/config/user.py` and checks top-level keys only.
+
 - `owner_email` (email): the author email of the owner's own commits, for every repository whose .kit.json sets no "owner".email; unset there too: no commit is provable as the owner's, so every owner-only change is refused (docs/kit-json.md "With no file"); older kit copies reject the key
 - `ledger_path` (absolute path): the rulings ledger file; set here only
 - `ledger_repos` (list of a lower-case repo name): the repo columns `ledger.py add --repo` writes, besides `all`; unset: any lower-case name (docs/ledger.md)

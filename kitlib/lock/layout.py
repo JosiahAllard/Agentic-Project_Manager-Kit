@@ -511,3 +511,34 @@ def slots_text(pool, slots):
     if len(slots) == 1:
         return "%s slot %d" % (pool, slots[0])
     return "%s slots %s" % (pool, cpu.mask_text(cpu.bits_mask(slots)))
+
+
+THREADS_RE = re.compile(r"\s*(\d+)\s*(?:-\s*(\d+)\s*)?")
+MAX_THREAD = 64 * 64 - 1        # Windows: at most 64 processor groups of 64
+
+
+def parse_threads(text):
+    """A Linux cpuset list of global thread ids ('8-15,20', docker's --cpuset-cpus) -> the sorted
+    ids. ValueError for anything else: an empty list, an open or backwards range, a stray comma,
+    an id past MAX_THREAD."""
+    if not isinstance(text, str) or not text.strip():
+        raise ValueError("a thread list is like 8-15,20, not %r" % (text,))
+    got = set()
+    for part in text.split(","):
+        m = THREADS_RE.fullmatch(part)
+        if not m:
+            raise ValueError("a thread list is like 8-15,20, not %r" % text)
+        lo, hi = int(m.group(1)), int(m.group(2) or m.group(1))
+        if hi < lo:
+            raise ValueError("%s: the range runs backwards" % part.strip())
+        if hi > MAX_THREAD:
+            raise ValueError("%d: past the last thread id Windows has (%d)" % (hi, MAX_THREAD))
+        got.update(range(lo, hi + 1))
+    return sorted(got)
+
+
+def within_slots(L, threads):
+    """The cpu slots of layout L whose threads all lie in `threads` (a slot only partly inside is
+    left out)."""
+    have = set(threads)
+    return [i for i, ts in enumerate(L["slots_cpu"]) if ts and set(ts) <= have]

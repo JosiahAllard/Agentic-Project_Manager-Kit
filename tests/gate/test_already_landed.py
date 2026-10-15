@@ -1,25 +1,28 @@
-"""kitlib.gate.land when the owner commits on top of the gated merge in the main checkout and pushes
-while the merged gate runs (KIT-GATE-UNSTICK; docs/gate.md "Landing", steps 7 and 8).
+"""kitlib.gate.land when the owner commits in the main checkout, and pushes, while the merged gate
+runs (KIT-GATE-UNSTICK, then the landing tree; docs/gate.md "Landing", steps 5 to 9).
 
-Green, the merge on <remote>/<main> with commits on top, main == the tracking ref, a clean main
-checkout with HEAD on main: the landing is finished (records closed, lock released, cleanup), exit
-0 when the commits on top select no gate step, exit LANDED_UNGATED when they do. Anything else
-still ends STUCK, and a STUCK report whose merge is on the remote never says reset.
+The merge and its gate are in the kit's landing tree, never in the main checkout, so nothing the
+owner commits there is ever on top of the gated merge. A commit the owner pushes moves the remote's
+main, the push of the merge is refused (a landing never forces), and the landing ends NOT LANDED
+(FAILED): nothing reset, the lock released, the owner's commits, edits and files untouched, the
+branch kept to land again. No landing finishes on commits no gate saw: LANDED_UNGATED (exit 9) is
+no longer produced. A STUCK report (a push git cannot settle) never says reset.
 
 The merged gate is injected: it plays the owner, committing in the main checkout and pushing.
 Scratch repositories with a bare remote in temp and the scratch lock store only."""
+import os
 import sys
 import unittest
 from unittest import mock
 
 from kitlib import gate as G
-from kitlib.gate import land, result
+from kitlib.gate import result
 from kitlib.git import refs
-from kitlib.records import gate_ok
 from tests.gate import fixtures
 from tests.gate.test_land import BRANCH
 from tests.gate.test_land_store import StoreLandCase, pulled
 from tests.gate.test_stuck import _Stuck, commands, joined
+from tests.realgit import real_git
 
 GREEN = G.Outcome(G.OK, ['GATE OK'], verdict='GATE OK', results=[])
 RED = G.Outcome(G.FAILED, ['GATE FAILED: unit (unit: exit 1)'], verdict='GATE FAILED: unit',
@@ -64,36 +67,39 @@ class _OnTop(_Stuck):
 
     def land(self, gate, branches=None):
         if branches is None:
-            _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
-            return self.lander(BRANCH, self.main, tip, merged_gate=gate).run()
+            _, self.tip = self.branch('feature', {'a.py': 'x = 1\n'})
+            return self.lander(BRANCH, self.main, self.tip, merged_gate=gate).run()
         tips = [self.branch(b, {'%s.py' % b: 'x = 1\n'})[1] for b in branches]
         return self.lander(['kit/%s' % b for b in branches], self.main, tips,
                            merged_gate=gate).run()
 
-    def landed_line(self, out):
-        lines = [l for l in out.lines if l.startswith('LANDED ')]
-        self.assertEqual(len(lines), 1, out.lines)
-        return lines[0]
-
-    def assert_finished(self, out):
-        """Landed at the merge, with the owner's commit on top on main, the remote and the
-        tracking ref, and the lock released."""
-        self.assertFalse([l for l in out.lines if l.startswith('STUCK')], out.lines)
-        line = self.landed_line(out)
-        self.assertTrue(line.startswith('LANDED kit/feature on main at %s' % out.merge), line)
-        self.assertIn(self.extra[:10], line)
-        self.assertIn('owner edit', line)
-        self.assertEqual(self.repo.git('rev-parse', self.extra + '^1'), out.merge)
-        self.assertEqual(self.main_now(), self.extra)
+    def assert_refused(self, out):
+        """NOT LANDED because the owner's push moved the remote's main: the refusal names that
+        commit, nothing says reset, the remote holds the owner's commit and not the merge, and the
+        lock is released. Never LANDED, never exit 9, never STUCK."""
+        self.assertEqual(out.code, G.FAILED, out.lines)
+        self.assertNotEqual(out.code, G.LANDED_UNGATED)
+        text = joined(out)
+        self.assertIn('origin/main moved on to %s while the merged gate ran' % self.extra[:10],
+                      text)
+        self.assertIn('a landing never forces', text)
+        self.assertTrue(out.lines[-1].startswith('NOT LANDED: '), out.lines)
+        self.assertFalse([l for l in out.lines if l.startswith(('LANDED', 'STUCK', 'WARNING'))],
+                         out.lines)
+        self.assertNotIn('reset', text.lower(), out.lines)
         self.assertEqual(self.remote_main(), self.extra)
         self.assertEqual(self.repo.git('rev-parse', 'refs/remotes/origin/main'), self.extra)
+        self.assertTrue(out.merge)
+        self.assertFalse(self.ancestor(out.merge, self.extra), out.lines)
         self.assertIsNone(self.lock().read())
-        return line
+
+    def ancestor(self, a, b):
+        return self.repo.git('merge-base', a, b) == a
 
     def assert_no_reset(self, out):
-        """A STUCK report whose merge is on the remote: nothing in it says reset, since a reset
-        would put main behind a remote that already holds the merge (the hub-validate landing
-        printed `reset --keep <base>`). The lock is left at phase stuck."""
+        """A STUCK report: nothing in it says reset, since a reset could put main behind a remote
+        that already holds the merge (the hub-validate landing printed `reset --keep <base>`). The
+        lock is left at phase stuck."""
         self.assertEqual(out.code, G.STUCK, out.lines)
         self.assertNotIn('reset', joined(out).lower(), out.lines)
         self.assertEqual(self.lock().read()['phase'], 'stuck')
@@ -106,216 +112,140 @@ class _OnTop(_Stuck):
         self.assert_broken(printed)
 
 
-class Adopts(_OnTop):
-    def test_a_doc_commit_pushed_on_top_lands_with_exit_0(self):           # T1
+class OwnerPushes(_OnTop):
+    def test_a_doc_commit_pushed_mid_gate_is_not_landed(self):             # T1
         out = self.land(self.owner({'docs/note.md': 'owner\n'}))
-        self.assertEqual(out.code, G.OK, out.lines)
-        line = self.assert_finished(out)
-        self.assertIn('1 commit(s) on top', line)
-        self.assertFalse([l for l in out.lines if l.startswith('WARNING')], out.lines)
-        rec, why = gate_ok.verify(self.repo.root, out.merge)       # the gated merge's record
-        self.assertIsNone(why)
-        self.assertEqual(rec['base'], self.main)
+        self.assert_refused(out)
+        self.assertEqual(self.main_now(), self.extra)                  # the owner's commit kept
+        self.assertEqual(self.head_branch(), 'main')
+        self.assertEqual(self.repo.git('status', '--porcelain'), '')
         got, why = result.read(self.repo.root, BRANCH, 'land')
         self.assertIsNone(why)
-        self.assertEqual((got['verdict'], got['code']), ('pass', G.OK))
-        entry = out.cleanup[BRANCH]                                # the branch cleanup ran
-        self.assertEqual((entry['worktree'], entry['local_branch']), ('removed', 'deleted'),
-                         out.lines)
-        self.assertEqual(got['cleanup'], entry)
+        self.assertEqual((got['verdict'], got['code']), ('fail', G.FAILED))
+        self.assertEqual(self.repo.git('rev-parse', BRANCH), self.tip)  # kept, to land again
+        self.assertTrue(os.path.isdir(self.repo.path('.claude', 'worktrees', 'feature')))
 
-    def test_a_gated_path_pushed_on_top_lands_with_its_own_exit_code(self):  # T2
+    def test_a_gated_path_pushed_mid_gate_is_not_landed_and_never_exit_9(self):  # T2
         out = self.land(self.owner({'tools/x.py': 'y = 2\n'}))
-        self.assertEqual(out.code, G.LANDED_UNGATED, out.lines)
-        self.assertNotEqual(G.LANDED_UNGATED, G.OK)
-        self.assert_finished(out)
-        warn = [l for l in out.lines if l.startswith('WARNING')]
-        self.assertEqual(len(warn), 1, out.lines)
-        for part in ('not gated whole', self.extra[:10], 'tools/x.py', 'unit',
-                     'gate.py" -C "%s" --full' % self.repo.root):
-            self.assertIn(part, warn[0])
-        self.assertEqual(self.records(), [])                       # no gate-OK record written
+        self.assert_refused(out)
+        self.assertNotIn('not gated whole', joined(out))
         got, why = result.read(self.repo.root, BRANCH, 'land')
         self.assertIsNone(why)
-        self.assertEqual((got['verdict'], got['code']), ('landed-ungated', G.LANDED_UNGATED))
+        self.assertEqual((got['verdict'], got['code']), ('fail', G.FAILED))
 
-    def test_a_batch_with_a_commit_on_top_lands_each_branch(self):          # T7
+    def test_a_batch_with_a_commit_pushed_mid_gate_lands_no_branch(self):   # T7
         out = self.land(self.owner({'docs/note.md': 'owner\n'}), branches=['one', 'two'])
-        self.assertEqual(out.code, G.OK, out.lines)
-        line = self.landed_line(out)
-        self.assertTrue(line.startswith('LANDED kit/one, kit/two on main at %s' % out.merge), line)
-        self.assertIn(self.extra[:10], line)
-        self.assertEqual(self.remote_main(), self.extra)
-        self.assertIsNone(self.lock().read())
+        self.assert_refused(out)
         for b in ('kit/one', 'kit/two'):
             got, why = result.read(self.repo.root, b, 'land')
             self.assertIsNone(why)
-            self.assertEqual(got['verdict'], 'pass', b)
+            self.assertEqual(got['verdict'], 'fail', b)
 
-    def test_an_exception_after_the_merge_is_adopted_still_warns_with_exit_9(self):
-        # Phase pushed is set before the commits on top are checked against the gate steps: a
-        # failure in that window goes to landed_anyway, which must not say exit 0 for them.
-        with mock.patch.object(land.Lander, 'unseen', side_effect=RuntimeError('boom')):
-            out = self.land(self.owner({'docs/note.md': 'owner\n'}))
-        self.assertEqual(out.code, G.LANDED_UNGATED, out.lines)
-        self.assertFalse([l for l in out.lines if l.startswith('STUCK')], out.lines)
-        self.assertTrue(self.landed_line(out).startswith('LANDED kit/feature on main at %s'
-                                                         % out.merge), out.lines)
-        warn = ' '.join(l for l in out.lines if l.startswith('WARNING'))
-        for part in ('not gated whole', self.extra[:10], 'RuntimeError: boom',
-                     'gate.py" -C "%s" --full' % self.repo.root):
-            self.assertIn(part, warn)
-        self.assertEqual(self.remote_main(), self.extra)
-        self.assertEqual(self.repo.git('rev-parse', 'refs/remotes/origin/main'), self.extra)
-        self.assertIsNone(self.lock().read())
-        self.assertEqual(self.records(), [])
-
-    def test_paths_git_cannot_list_count_as_ungated(self):
-        with mock.patch.object(land.runner, 'changed_between', return_value=(None, 'boom')):
-            out = self.land(self.owner({'docs/note.md': 'owner\n'}))
-        self.assertEqual(out.code, G.LANDED_UNGATED, out.lines)
-        self.assert_finished(out)
-        warn = [l for l in out.lines if l.startswith('WARNING')]
-        self.assertEqual(len(warn), 1, out.lines)
-        self.assertIn('paths git cannot list', warn[0])
-        self.assertEqual(self.records(), [])
-
-
-class AlwaysStep(_OnTop):
-    """The kit's own gate: one step with `always`, so any commit on top is one no gate saw."""
-    GATE = fixtures.GATE
-
-    def test_an_always_step_counts_any_commit_on_top_as_ungated(self):
+    def test_landing_again_after_the_refusal_lands_on_the_owners_commit(self):
         out = self.land(self.owner({'docs/note.md': 'owner\n'}))
-        self.assertEqual(out.code, G.LANDED_UNGATED, out.lines)
-        self.assert_finished(out)
-        self.assertIn('unit', ' '.join(l for l in out.lines if l.startswith('WARNING')))
+        self.assert_refused(out)
+        again = self.lander(BRANCH, self.extra, self.tip).run()
+        self.assertEqual(again.code, G.OK, again.lines)
+        self.assertEqual(self.remote_main(), again.merge)
+        self.assertEqual(self.repo.git('rev-parse', again.merge + '^1'), self.extra)
+        self.assertEqual(self.main_now(), again.merge)
+        self.assertIsNone(self.lock().read())
 
 
-class StillStuck(_OnTop):
-    def test_a_commit_on_top_not_yet_pushed_is_stuck_and_not_reset(self):  # T3
+class OwnerWorkKept(_OnTop):
+    def test_a_commit_not_yet_pushed_is_kept_and_not_reset(self):          # T3
         def local():
             self.repo.write('docs/local.md', 'local\n')
             self.local = self.repo.commit('owner local', 'docs/local.md')
         out = self.land(self.owner({'docs/note.md': 'owner\n'}, after=local))
-        self.assert_no_reset(out)
-        self.assertEqual(self.main_now(), self.local)               # nothing moved
+        self.assert_refused(out)
+        self.assertEqual(self.main_now(), self.local)                  # nothing moved
         self.assertEqual(self.remote_main(), self.extra)
-        self.assertIn(self.local[:10], joined(out))
-        self.repo.git('push', '-q', 'origin', 'main')               # the owner settles it
-        self.run_printed(out)
-        self.assertEqual(self.main_now(), self.local)
 
-    def test_an_untracked_file_is_stuck_and_not_reset(self):               # T4
+    def test_an_untracked_file_is_kept_and_not_reset(self):                # T4
         def litter():
             self.repo.write('scratch.txt', 'left\n')
         out = self.land(self.owner({'docs/note.md': 'owner\n'}, after=litter))
-        self.assert_no_reset(out)
-        self.assertIn('scratch.txt', joined(out))
+        self.assert_refused(out)
         self.assertEqual(self.main_now(), self.extra)
-        self.run_printed(out)
-        self.assertEqual(self.main_now(), self.extra)
-        self.assertEqual(self.remote_main(), self.extra)
+        with open(self.repo.path('scratch.txt'), encoding='utf-8') as f:
+            self.assertEqual(f.read(), 'left\n')
 
-    def test_the_merge_pushed_alone_with_an_untracked_file_is_not_reset(self):
-        # origin == the merge exactly: the undo found main one merge ahead with no tracked change,
-        # and reset it behind the remote.
+    def test_an_untracked_file_in_the_main_checkout_does_not_stop_the_landing(self):
+        # The owner pushes nothing new (main is still the base there) and leaves a file: the merge
+        # is not in the main checkout, so the landing pushes it, and the main checkout is
+        # fast-forwarded to it with the file carried. At base this was STUCK, and once printed
+        # a reset behind the remote.
         def gate(lander):
             self.repo.git('push', '-q', 'origin', 'main')
             self.repo.write('scratch.txt', 'left\n')
             return GREEN
         out = self.land(gate)
-        self.assert_no_reset(out)
-        self.assertEqual(self.main_now(), out.merge)
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertFalse([l for l in out.lines if l.startswith(('STUCK', 'WARNING'))], out.lines)
         self.assertEqual(self.remote_main(), out.merge)
-        self.run_printed(out)
         self.assertEqual(self.main_now(), out.merge)
+        self.assertEqual(self.repo.git('status', '--porcelain'), '?? scratch.txt')
+        self.assertIsNone(self.lock().read())
 
-    def test_head_switched_after_the_push_is_stuck_and_not_reset(self):    # T5
-        def switch():
-            self.repo.git('switch', '-q', '-c', 'elsewhere')
-        out = self.land(self.owner({'docs/note.md': 'owner\n'}, after=switch))
-        self.assert_no_reset(out)
-        self.assertIn('switch back', joined(out))
-        self.run_printed(out)
-        self.assertEqual(self.head_branch(), 'main')
-        self.assertEqual(self.main_now(), self.extra)
-
-    def test_a_red_gate_whose_merge_the_owner_pushed_is_stuck_and_not_reset(self):  # T6
-        def gate(lander):
-            self.repo.git('push', '-q', 'origin', 'main')
-            return RED
-        out = self.land(gate)
-        self.assert_no_reset(out)
-        self.assertIn('without a passing', joined(out))
-        self.assertIn('revert -m 1 %s' % out.merge, joined(out))
-        self.assertEqual(self.main_now(), out.merge)
-        self.assertEqual(self.remote_main(), out.merge)
-        self.assertEqual(self.records(), [])
-        self.run_printed(out)
-        self.assertEqual(self.main_now(), out.merge)
-
-    def test_a_red_gate_under_a_commit_pushed_on_top_is_stuck_and_not_reset(self):
+    def test_a_red_gate_while_the_owner_pushes_is_not_landed_and_not_reset(self):  # T6
         out = self.land(self.owner({'docs/note.md': 'owner\n'}, verdict=RED))
-        self.assert_no_reset(out)
-        self.assertIn('without a passing', joined(out))
-        self.assertEqual(self.remote_main(), self.extra)
-        self.run_printed(out)
+        self.assertEqual(out.code, G.FAILED, out.lines)
+        self.assertTrue(out.lines[-1].startswith('NOT LANDED: '), out.lines)
+        self.assertNotIn('without a passing', joined(out))
+        self.assertNotIn('reset', joined(out).lower())
+        self.assertEqual(self.records(), [])
         self.assertEqual(self.main_now(), self.extra)
         self.assertEqual(self.remote_main(), self.extra)
+        self.assertIsNone(self.lock().read())
 
-    def test_stuck_with_merge_on_origin_prints_no_reset(self):
-        # The hub-validate shape: green, the owner's commit pushed on top of the merge, so the
-        # remote descends from it; an uncommitted edit keeps the landing from being finished, and
-        # the report goes through clear_steps. At base it printed `reset --keep <base>`.
+    def test_an_uncommitted_edit_is_kept_and_not_reset(self):
+        # The hub-validate shape: green, the owner's commit pushed, and an uncommitted edit in
+        # the main checkout. At base the report went through clear_steps and printed
+        # `reset --keep <base>`.
         def edit():
             self.repo.write('README.md', 'edited, not committed\n')
         out = self.land(self.owner({'docs/note.md': 'owner\n'}, after=edit))
-        self.assert_no_reset(out)
-        self.assertTrue(out.lines[0].startswith('STUCK: landing kit/feature'), out.lines)
-        self.assertIn('README.md', joined(out))
-        self.assertEqual(self.remote_main(), self.extra)
-        self.assertEqual(self.repo.git('rev-parse', self.extra + '^1'), out.merge)
-        self.run_printed(out)
-        self.assertEqual(self.main_now(), self.extra)               # nothing reset
-        self.assertEqual(self.remote_main(), self.extra)
+        self.assert_refused(out)
+        self.assertEqual(self.main_now(), self.extra)
         with open(self.repo.path('README.md'), encoding='utf-8') as f:
             self.assertEqual(f.read(), 'edited, not committed\n')
 
-    def test_stuck_on_the_remote_names_the_commits_on_top_and_the_full_gate(self):
-        def edit():
-            self.repo.write('README.md', 'edited, not committed\n')
-        out = self.land(self.owner({'docs/note.md': 'owner\n'}, after=edit))
-        self.assert_no_reset(out)
-        text = joined(out)
-        self.assertIn('%s owner edit' % self.extra[:10], text)
-        self.assertIn('gate.py" -C "%s" --full' % self.repo.root, text)
 
-    def merge_pushed_with_litter(self, lander):
-        self.repo.git('push', '-q', 'origin', 'main')
-        self.repo.write('scratch.txt', 'left\n')
-        return GREEN
+@real_git('the push of main refused as a non-fast-forward while HEAD is on another branch: the '
+          'fake raises Unsupported for git\'s hint')
+class HeadElsewhere(_OnTop):
+    def test_head_switched_after_the_push_is_kept_and_not_reset(self):     # T5
+        def switch():
+            self.repo.git('switch', '-q', '-c', 'elsewhere')
+        out = self.land(self.owner({'docs/note.md': 'owner\n'}, after=switch))
+        self.assert_refused(out)
+        self.assertEqual(self.head_branch(), 'elsewhere')
+        self.assertEqual(self.main_now(), self.extra)
 
-    def test_ls_remote_failing_once_in_the_undo_check_is_stuck_and_not_reset(self):
-        # The undo's own check could not read the remote's main; the tracking ref (set by the
-        # push) holds the merge, so no reset may run.
-        with from_callers('ls_remote', {'not_on_remote'}, (None, 'network down'), times=1):
-            out = self.land(self.merge_pushed_with_litter)
+
+class PushUnsettled(_OnTop):
+    """The owner's push and a remote git cannot read or place: whether the merge landed cannot be
+    told, so STUCK, and still nothing says reset."""
+
+    def test_ls_remote_failing_after_the_push_is_stuck_and_not_reset(self):
+        with from_callers('ls_remote', {'push'}, (None, 'network down')):
+            out = self.land(self.owner({'docs/note.md': 'owner\n'}))
         self.assert_no_reset(out)
-        self.assertEqual(self.main_now(), out.merge)
-        self.assertEqual(self.remote_main(), out.merge)
+        self.assertIn('unreadable (network down)', joined(out))
+        self.assertEqual(self.main_now(), self.extra)
         self.run_printed(out)
-        self.assertEqual(self.main_now(), out.merge)
+        self.assertEqual(self.main_now(), self.extra)
+        self.assertEqual(self.remote_main(), self.extra)
 
     def test_ls_remote_failing_throughout_is_stuck_and_not_reset(self):
-        with from_callers('ls_remote', {'adopt', 'not_on_remote', 'leftovers'},
-                          (None, 'network down')):
-            out = self.land(self.merge_pushed_with_litter)
+        with from_callers('ls_remote', {'push', 'leftovers'}, (None, 'network down')):
+            out = self.land(self.owner({'docs/note.md': 'owner\n'}))
         self.assert_no_reset(out)
-        self.assertEqual(self.main_now(), out.merge)
+        self.assertEqual(self.main_now(), self.extra)
         self.run_printed(out)
-        self.assertEqual(self.main_now(), out.merge)
-        self.assertEqual(self.remote_main(), out.merge)
+        self.assertEqual(self.main_now(), self.extra)
+        self.assertEqual(self.remote_main(), self.extra)
 
     def test_a_remote_main_git_cannot_place_prints_no_reset(self):
         # Whether the remote's main holds the merge cannot be told: the report says how to find
@@ -332,32 +262,11 @@ class StillStuck(_OnTop):
         self.run_printed(out)
         self.assertEqual(self.main_now(), self.extra)
 
-    def test_a_first_parent_line_that_is_not_this_landing_is_not_adopted(self):
-        # The owner merged the landing's merge into a commit of their own: the remote holds the
-        # merge, but not on main's first-parent line, so the landing is not finished; STUCK, and
-        # nothing is reset.
-        def gate(lander):
-            merge = self.repo.git('rev-parse', 'HEAD')
-            self.repo.git('reset', '-q', '--hard', self.main)
-            self.repo.write('docs/side.md', 'side\n')
-            self.side = self.repo.commit('owner side', 'docs/side.md')
-            self.repo.git('merge', '-q', '--no-ff', '-m', 'owner merge', merge)
-            self.top = self.repo.git('rev-parse', 'HEAD')
-            self.repo.git('push', '-q', 'origin', 'main')
-            return GREEN
-        out = self.land(gate)
-        self.assertFalse([l for l in out.lines if l.startswith('LANDED')], out.lines)
-        self.assert_no_reset(out)
-        self.assertEqual(self.repo.git('rev-parse', self.top + '^1'), self.side)
-        self.run_printed(out)
-        self.assertEqual(self.main_now(), self.top)
-        self.assertEqual(self.remote_main(), self.top)
-
 
 class ClosesRecords(StoreLandCase):
     GATE = GLOBBED
 
-    def test_the_pulled_record_is_closed_when_the_merge_is_adopted(self):  # T8
+    def test_the_pulled_record_stays_open_when_the_push_is_refused(self):  # T8
         self.seed(pulled('FOO'))
         _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
 
@@ -367,9 +276,9 @@ class ClosesRecords(StoreLandCase):
             self.repo.git('push', '-q', 'origin', 'main')
             return GREEN
         out = self.lander(BRANCH, self.main, tip, merged_gate=gate).run()
-        self.assertEqual(out.code, G.OK, out.lines)
-        self.assertEqual(self.stems(), [])
-        self.assertIn('closes FOO: landed %s' % out.merge, self.subjects())
+        self.assertEqual(out.code, G.FAILED, out.lines)
+        self.assertEqual(self.stems(), ['FOO'])
+        self.assertFalse([s for s in self.subjects() if 'closes FOO' in s])
         self.assertIsNone(self.lock().read())
 
 

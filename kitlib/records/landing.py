@@ -1,4 +1,4 @@
-"""The landing lock: one per repository, held from a landing's merge to its push or undo (ported
+"""The landing lock: one per repository, held from a landing's merge to its push or its end (ported
 from an earlier per-repository tools/landing_lock.py; made repo-neutral for the kit).
 
 The lock is the file `<git common dir>/<name>` (default `kit-landing.lock`; `lock_name(cfg)`
@@ -15,7 +15,8 @@ of two takers exactly one wins - and holds one JSON object:
   main_branch     the main branch it guards
   origin_at_take  refs/remotes/<remote>/<main> when it was taken
   main_at_take    refs/heads/<main> when it was taken
-  phase           merge | gate | push | undo | stuck
+  phase           merge | gate | push | stuck; undo is retired (no landing sets it), and a
+                  lock file an older kit left at it still reads
 
 `take` refuses at once while anyone holds it (Busy names the holder); `release` and `set_phase`
 refuse any token but the holder's, checked again just before the file is replaced or removed. The

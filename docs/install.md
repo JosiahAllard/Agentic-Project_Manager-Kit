@@ -119,7 +119,11 @@ or its PowerShell front end `installer/new-repo.ps1`, which passes its parameter
    It prints what it would write: `.kit.json` (`"repo".main_branch`, `"repo".name`, `"owner".email`,
    `"owner".agent_emails`), `.gitignore` and `.gitattributes`, a starter `docs/INDEX.md`, with
    `--stack` the stack's `tools/gate.json`, and with `--stubs` only the stubs (by
-   `kitlib.stubs`, as `kit_stubs.py write -C <target>`; without it the dry run says `stubs: none`).
+   `kitlib.stubs`, as `kit_stubs.py write -C <target>`; without it the dry run says `stubs: none`),
+   and under `memory:` the `autoMemoryDirectory` key of `.claude/settings.json`
+   (`<the main checkout's drive>/Agent-memory/<repo folder name>`, `kitlib/stubs/memory.py`): added
+   only when the file lacks it, kept when it names any absolute folder, refused when the file is not
+   JSON it can edit or the key is not an absolute folder. It never makes the folder, and the owner commits `.claude/settings.json`.
    `"repo".name` is the repository's rulings-ledger column (docs/backlog.md "Owner gates"): `--repo-name`,
    else the target folder's name lower-cased; either must match `[a-z0-9][a-z0-9-]*` or it
    refuses (exit 2). Both emails are required and must differ, or an agent's commit could pass
@@ -199,7 +203,8 @@ or its PowerShell front end `installer/new-repo.ps1`, which passes its parameter
   them with the `<PLACEHOLDER>` slots filled (docs/shipping.md "Stack templates"). Both profiles
   are optional: with no agent profile, every role reads the kit's `content/default-profile.md`
   plus the repository's README and instructions file (docs/agent-profile.md).
-- `.claude/settings.json`: the kit ships none (docs/go-live.md "Joint-review questions").
+- `.claude/settings.json`: the kit ships none (docs/go-live.md "Joint-review questions"); the
+  setup adds only its `autoMemoryDirectory` key (step 2).
 - `backlog/.gitkeep` is not needed (the backlog store is the ref `refs/backlog/main`), and
   `.github/workflows/instructions.yml` is not shipped: the stack workflows do not mention it.
 - Anything outside the repository: the ledger, the lock and the user config are per machine.
@@ -328,7 +333,13 @@ the machine config (docs/kit-json.md "Machine config keys"). The first `<kit>/to
 ```
 python <kit>/tools/kit_stubs.py write [-C DIR] [--tools a,b,...] [--replace] [--dry-run]
 python <kit>/tools/kit_stubs.py check [-C DIR] [--tools a,b,...]
+python <kit>/tools/kit_stubs.py memory [-C DIR] [--apply]
 ```
+
+`memory` is not about stubs: it prints the `autoMemoryDirectory` that `.claude/settings.json`
+would get (dry run), and with `--apply` adds it when the file lacks the key; exit 1 when the file
+cannot be edited (`kitlib/stubs/memory.py`; tests: `tests/stubs/test_memory.py`; docs/pm-start.md
+"Memory folder (`memory`)").
 
 Opt-in, for a repository that wants committed stubs (the old setup; decision 21 made the default
 none). Nothing in the kit needs them: the skills, roles and the default profile run
@@ -349,6 +360,13 @@ with the stub's arguments.
   for a gate started from the plugin's export too (`<kit>/tools/gate.py -C <checkout>`): it pins
   through the main checkout the export's marker names (`kitlib.pluginsource.export_checkout`,
   docs/plugin-source.md "Layout"; `tests/gate/test_export_stubs.py`).
+- Run from an export with no `KIT_LIVE_ROOT` (`<kit>/tools/kit_stubs.py` itself, or the session
+  start's stubs check, which runs in the plugin's export), the location is the main checkout the
+  export's marker names, when that folder holds `kit.json` and `tools/` (`kitlib.stubs.live_kit`).
+  An export whose marker names none is refused: `write`, and `check` on a repository that uses
+  stubs, exit 2 with `kit_stubs: refused: <export> is an export of the kit ...` and write nothing,
+  so no stub ever names an export a prune may remove (`tests/stubs/test_live_root.py`). A
+  repository that uses no stubs is never refused (`check` below).
 - The child runs in the caller's directory when that is inside the stub's checkout, else in the
   stub's checkout. So a kit tool's default `-C .` names the stub's checkout, and a linked
   worktree's stub acts on that worktree.
@@ -368,8 +386,12 @@ note: no exit code changes and nothing deletes the file.
 - `write` creates or replaces each stub. It keeps a file that is not a stub, and reports it,
   unless `--replace`. `--dry-run` writes nothing.
 - `check` exits 0 when every stub has exactly the text `write` would give it. A stub that runs
-  another kit location is `stale`.
-- Exit codes: 0 done or current; 1 a problem named; 2 usage or configuration.
+  another kit location is `stale`. A repository that uses no stubs (no `--tools`, no
+  `"stubs".tools` in its `.kit.json` and no stub in its tools folder, such as a PM data folder)
+  exits 0 with `kit_stubs: uses no stubs (...); nothing to check`, the rule the session start's
+  check follows (`kitlib.stubs` `_opted`).
+- Exit codes: 0 done, current, or no stubs used; 1 a problem named; 2 usage, configuration, or an
+  export whose marker names no main checkout.
 
 A committed stub carries the kit's absolute path, so a repository whose gate checks for machine
 paths must allow it (`machine_paths.allow`, docs/kit-json.md).

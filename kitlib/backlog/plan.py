@@ -294,8 +294,7 @@ def _fold_overlap(snap, ctx, rid, branch, scopes):
         notes.append('NOTE: branch %s is not a local branch (only on %s); its diff was not '
                      'compared' % (branch, ', '.join(remotes)))
     else:
-        for path in _branch_changes(ctx, branch, tip):
-            hits += _overlaps(scopes, [path], '(changed on %s)' % branch)
+        hits += _diff_hits(ctx, branch, tip, scopes)
     unread = [r.stem for r in snap.unreadable]
     if unread:
         raise Failure('cannot tell which records %s holds pulled: unreadable record(s): %s'
@@ -348,18 +347,91 @@ def _overlaps(scopes, others, source):
     return out
 
 
-def _branch_changes(ctx, branch, tip):
-    """The paths `branch` changed since its merge base with the code main (no rename pairing,
-    so a rename names both paths)."""
-    key = 'set `backlog.code_main` in .kit.json to the branch code lands on'
+def _diff_hits(ctx, branch, tip, scopes, base=None, mb=None):
+    """An overlap line for each member of `scopes` that overlaps a path `branch` (at `tip`)
+    changed since its merge base with the code main; one that cannot be compared counts."""
+    hits = []
+    for path in _branch_changes(ctx, branch, tip, base, mb):
+        hits += _overlaps(scopes, [path], '(changed on %s)' % branch)
+    return hits
+
+
+def _code_main(ctx):
+    """`(rev, sha)` of the code main as `refs.default_base` picks it; `sha` is '' when it does
+    not resolve. Failure when git cannot read it."""
     base, _note = refs.default_base(ctx.root, ctx.remote, ctx.code_main)
     sha, why = refs.resolve(base, ctx.root, known=True)
     if sha is None:
         raise Failure('cannot read the code main `%s`: %s' % (base, why))
+    return base, sha
+
+
+def _pull_fold_hits(ctx, scopes, holding, branch):
+    """The fold-in guard on `pull` (docs/backlog.md, "The fold-in guard"): `(hits, notes)`, the
+    overlaps of `scopes` with the paths each live pull's branch in `holding` changed since its
+    merge base with the code main, the caller's `branch` (any letter case) and its own pulls
+    aside; each branch is diffed once. A code main that does not resolve here (a store whose git
+    is not the code's) skips every diff with a NOTE, and so does a live branch that shares no
+    history with it (the code main is not that branch's history: backlog.code_main unset); a live
+    branch only a remote has is noted, not compared. Failure when git cannot read a ref, cannot
+    answer the merge-base question, or cannot diff."""
+    names = []
+    for other in holding:
+        name = other.get('pulled_by') or ''
+        if name and name.lower() != (branch or '').lower() and name not in names:
+            names.append(name)
+    if not names:
+        return [], []
+    base, sha = _code_main(ctx)
+    if not sha:
+        return [], ['NOTE: code main %s does not resolve here; branch diffs not compared' % base]
+    hits, notes = [], []
+    for name in sorted(names):
+        tip, why = refs.resolve('refs/heads/%s' % name, ctx.root, known=True)
+        if tip is None:
+            raise Failure('cannot read branch %s: %s' % (name, why))
+        if not tip:
+            notes.append('NOTE: branch %s is not a local branch (only on %s); its diff was not '
+                         'compared' % (name, ', '.join(_remotes_with(ctx, name)) or 'a remote'))
+            continue
+        mb, why = refs.merge_base(sha, tip, ctx.root)
+        if mb is None:
+            raise Failure('cannot find the merge base of %s and %s: %s' % (name, base, why))
+        if not mb:
+            notes.append('NOTE: code main %s shares no history with %s; set backlog.code_main; '
+                         'branch diffs not compared' % (base, name))
+            continue
+        hits += _diff_hits(ctx, name, tip, scopes, (base, sha), mb)
+    return hits, notes
+
+
+def _fold_message(rid, hits, form):
+    """The pull fold refusal's text: the overlapping pairs, where the work belongs, and the
+    override. The caller raises it as a Refusal (tests/backlog/test_refusal_kinds.py audits each
+    raise by name)."""
+    branches = []
+    for h in hits:
+        b = h.rpartition('(changed on ')[2].partition(')')[0]
+        if b not in branches:
+            branches.append(b)
+    where = ', '.join(branches)
+    return ('cannot pull %s: its scope overlaps the work of %s, so it belongs there:\n  %s\n'
+                   'fold it into %s, or pull it after %s lands. Overriding that takes the PM\'s '
+                   'ruling: `%s`' % (rid, where, '\n  '.join(hits), where, where, form))
+
+
+def _branch_changes(ctx, branch, tip, base=None, mb=None):
+    """The paths `branch` changed since its merge base with the code main (no rename pairing,
+    so a rename names both paths). `base` is `(rev, sha)` when the caller already resolved the
+    code main, `mb` the merge base when it already found it."""
+    key = 'set `backlog.code_main` in .kit.json to the branch code lands on'
+    base, sha = base or _code_main(ctx)
     if not sha:
         raise Failure('the code main `%s` does not resolve here, so the diff of %s cannot be '
                       'measured: %s' % (base, branch, key))
-    mb, why = refs.merge_base(sha, tip, ctx.root)
+    why = None
+    if not mb:
+        mb, why = refs.merge_base(sha, tip, ctx.root)
     if mb is None:
         raise Failure('cannot find the merge base of %s and %s: %s' % (branch, base, why))
     if not mb:
@@ -711,6 +783,8 @@ def plan_pull(snap, ctx, rid, reason=None, ruling=None, blocker=None):
     here. A `priority: -1` record needs `--ruling` (a hold release). One whose scope collides with
     a live pull on another branch (one on the caller's branch is no collision) needs `--reason` and `--ruling` (the PM's ruling, cited in `preempt`); one ruling
     covers a `-1` record that also collides. An unmet `requires:` refuses.
+    The fold-in guard (`_pull_fold_hits`): one whose scope overlaps a path another live pull's
+    branch changed needs `--reason` and `--ruling` too, offered or not, and records `preempt`.
     A pulled record refuses, unless its pull is dead and it is this session's: see
     `_plan_takeover`."""
     refuse_machine_paths('--reason', reason)
@@ -746,33 +820,38 @@ def plan_pull(snap, ctx, rid, reason=None, ruling=None, blocker=None):
     offers, passed, holding = current_offer(snap, ctx)
     offered = rec in [o.rec for o in offers]
     hits = live_hits(rec.all('scope'), holding, skip=rid, branch=branch)
+    folds, notes = _pull_fold_hits(ctx, rec.all('scope'), holding, branch)
     if not offered and reason is None:
         raise Refusal('`%s` is not in `next`\'s offer - %s. An out-of-order pull is allowed and '
                       'recorded: `pull %s --reason "<why>"%s`'
                       % (rid, omod.not_offered_why(rec, passed, ctx.session), rid,
-                         ' --ruling R-nnnn' if hits else ''))
+                         ' --ruling R-nnnn' if hits or folds else ''))
     if hits and ruling is None:
         raise Refusal('`%s` collides with a live pull: %s. `--reason` alone never overrides a '
                       'collision with a live pull: `pull %s --reason "<why>" --ruling R-nnnn`, '
                       'citing the PM\'s ruling that allows it' % (rid, '; '.join(hits), rid))
+    if folds and (ruling is None or reason is None):
+        raise Refusal(_fold_message(rid, folds, 'pull %s --reason "<why>" --ruling R-nnnn' % rid))
     if minus_one:
         lmod.refuse_unnamed_release(rid, rec, ruling, 'pull')
-    if minus_one or hits:
+    if minus_one or hits or folds:
         _check_ruling(rid, rec, ruling, 'pull', hold_only=True)
-    lines = ['PULLED %s - state: open -> pulled' % rid, '  pulled_at:  %s' % ctx.date(),
-             '  pulled_by:  %s' % branch]
+    lines = notes + ['PULLED %s - state: open -> pulled' % rid, '  pulled_at:  %s' % ctx.date(),
+                     '  pulled_by:  %s' % branch]
     today = ctx.date()
     changes = [('state', ['pulled']), ('pulled_at', [today]), ('pulled_by', [branch])]
     subject = 'backlog: pull %s onto %s' % (rid, branch)
-    if offered:
+    if offered and not folds:
         changes += [(k, []) for k in rmod.PREEMPT_KEYS]
     else:
         recorded = reason
-        if ruling is not None and (hits or not minus_one):
+        if ruling is not None and (hits or folds or not minus_one):
             recorded = '%s (PM %s)' % (reason, ruling)
         if blocker is not None:
             recorded += ' (unblocks %s)' % blocker
         lines += _collisions(rec, holding)
+        lines += ['warning: %s' % f for f in folds]
+        offers = [o for o in offers if o.rec is not rec]
         displaced = ['%s rank %s priority %s' % (o.rec.id, o.rank, o.rec.get('priority'))
                      for o in offers] or ['-']
         changes += [('preempt', [recorded]), ('preempt_by', [branch]), ('preempt_at', [today]),
@@ -788,7 +867,7 @@ def plan_pull(snap, ctx, rid, reason=None, ruling=None, blocker=None):
             subject += ', releasing the owner hold'
     pairs = rmod.apply_changes(rec.pairs(), changes)
     return Change({rid: _text(pairs, rec.body)}, subject, lines,
-                  ruling=ruling if (minus_one or hits or not offered) else None)
+                  ruling=ruling if (minus_one or hits or folds or not offered) else None)
 
 
 def live_hits(scopes, holding, skip=None, branch=None):
@@ -876,8 +955,9 @@ def _plan_takeover(snap, ctx, rec, reason, ruling, blocker):
     answered and no branch, remote-tracking branch or worktree has its `pulled_by`); then the
     pull moves to this branch, `pulled_at` restamped, any pre-emption lines kept as the first pull
     wrote them, with the scope-collision warnings a pre-empting pull prints. A takeover whose scope
-    collides with a live pull on another branch needs `--ruling R-nnnn`, as a pull does; it takes no other flag, and
-    no `--ruling` when nothing collides. A failed git probe
+    collides with a live pull on another branch, or folds into one's diff (`_pull_fold_hits`),
+    needs `--ruling R-nnnn`, as a pull does; it takes no other flag, and no `--ruling` when
+    nothing collides. A failed git probe
     holds the pull (fail closed). A `pulled_by` that landed on the main branch (a `Merge <branch>`
     merge in its history, committed on or after the `pulled_at` day) is not dead but unclosed:
     that refuses, and a git that cannot say fails."""
@@ -890,7 +970,8 @@ def _plan_takeover(snap, ctx, rec, reason, ruling, blocker):
     if rec not in dead:
         raise busy
     hits = live_hits(rec.all('scope'), holding, skip=rid, branch=ctx.current_branch())
-    given =[f for f, v in (('--reason', reason), ('--ruling', None if hits else ruling),
+    folds, notes = _pull_fold_hits(ctx, rec.all('scope'), holding, ctx.current_branch())
+    given =[f for f, v in (('--reason', reason), ('--ruling', None if hits or folds else ruling),
                             ('--blocker', blocker)) if v is not None]
     if given:
         raise Usage('`%s` is a dead pull of this session (pulled_by %s has no branch): `pull %s` '
@@ -899,19 +980,22 @@ def _plan_takeover(snap, ctx, rec, reason, ruling, blocker):
     if merge:
         raise Refusal('`%s` was pulled by %s, which has landed on %s (%s): close the record, do '
                       'not take it over' % (rid, old, ctx.main_branch, merge))
-    if hits:
-        if ruling is None:
-            raise Refusal('`%s` is a dead pull of this session, and its scope collides with a live '
-                          'pull: %s. Taking it over anyway takes `pull %s --ruling R-nnnn`, citing '
-                          'the PM\'s ruling that allows it' % (rid, '; '.join(hits), rid))
+    if hits and ruling is None:
+        raise Refusal('`%s` is a dead pull of this session, and its scope collides with a live '
+                      'pull: %s. Taking it over anyway takes `pull %s --ruling R-nnnn`, citing '
+                      'the PM\'s ruling that allows it' % (rid, '; '.join(hits), rid))
+    if folds and ruling is None:
+        raise Refusal(_fold_message(rid, folds, 'pull %s --ruling R-nnnn' % rid))
+    if hits or folds:
         _check_ruling(rid, rec, ruling, 'pull', hold_only=True)
     branch = ctx.current_branch()
     today = ctx.date()
     pairs = rmod.apply_changes(rec.pairs(), [('pulled_at', [today]), ('pulled_by', [branch])])
-    lines = ['PULLED %s - took over a dead pull from %s (it has no branch)' % (rid, old),
-             '  pulled_at:  %s -> %s' % (rec.get('pulled_at'), today),
-             '  pulled_by:  %s -> %s' % (old, branch)]
+    lines = notes + ['PULLED %s - took over a dead pull from %s (it has no branch)' % (rid, old),
+                     '  pulled_at:  %s -> %s' % (rec.get('pulled_at'), today),
+                     '  pulled_by:  %s -> %s' % (old, branch)]
     lines += _collisions(rec, holding)
+    lines += ['warning: %s' % f for f in folds]
     return Change({rid: _text(pairs, rec.body)},
                   'backlog: pull %s onto %s, taking over a dead pull from %s' % (rid, branch, old),
                   lines, ruling=ruling)

@@ -28,10 +28,10 @@ python tools/trailers.py [-C DIR] [--base REV] [--merged]
 
 - **Commits read:** every commit `HEAD` has that the base does not (`HEAD --not <base>`, merges included, so a sync merge counts); the base defaults as in gate.md "Default base".
 - **FAIL:** a commit made since the rule's cutoff (`TRAILER_FAIL_SINCE`) with no such trailer, or with no readable committer date. **WARNING, exit 0:** an older commit, and a commit carrying `Owner-Approved:` or `Owner-Authored: yes` whose AUTHOR email is `.kit.json` "owner".email, read from the base (an unset email proves nothing). The same claim on anyone else's commit is judged as no claim, with a WARNING.
-- **`--merged`:** a landing's merged-tree gate. The first-parent merges in `<base>..HEAD` are the lander's own and are exempt. Refused (exit 2) unless HEAD is the `.kit.json` "repo".main_branch itself, since on a branch they are its own sync merges.
+- **`--merged`:** a landing's merged-tree gate. The first-parent merges in `<base>..HEAD` are the lander's own and are exempt. It holds with HEAD on the `.kit.json` "repo".main_branch, or detached at a landing's merge: the landing tree `gate.py land` merges and gates in (docs/gate.md "Landing"), where HEAD's first-parent chain from the base is merges only and the oldest was made onto the base itself (`kitlib.trailerscheck.landing_head`). Refused (exit 2) on any other branch, and at any other detached HEAD, since there the merges are the branch's own sync merges.
 - **Config:** owner claims count only with `.kit.json` "owner".email set; without it an owner-authored commit fails.
 - **In the gate:** a plain `cmd` step: a FAIL stops the later steps unless the repo adds `"continue": true`, and its WARNING lines show as WARN only if the gate's `warn_lines` matches them.
-- **Exit:** 0 no failing commit, 1 a failing commit, 2 usage, refused config, git failed, or `--merged` off main.
+- **Exit:** 0 no failing commit, 1 a failing commit, 2 usage, refused config, git failed, or `--merged` neither on main nor at a landing's merge.
 
 ## pieces
 

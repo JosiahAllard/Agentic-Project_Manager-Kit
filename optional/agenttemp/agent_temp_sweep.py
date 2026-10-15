@@ -1,6 +1,6 @@
 """agent_temp_sweep.py: clears old entries from the agents' shared temp folder while nothing uses them.
 
-  agent_temp_sweep.py [--apply]
+  agent_temp_sweep.py [--apply] [--home DIR]
 
 Without --apply it only lists what it would remove (a dry run); with it, it removes. The folder and
 the age come from the "agent_temp_sweep" key of the machine config, never from code or
@@ -449,12 +449,22 @@ def _claim_and_remove(d, name, age, cutoff, now, rel=None):
 def main(argv=None, home=None, out=None, now=None, lister=None):
     """home, now and lister are the tests' (a scratch home folder, a clock moved forward, a fake
     process list)."""
-    out = out or sys.stdout
+    if out is None:
+        # piped, stdout is the locale code page: an entry name outside it must print, not raise
+        for stream in (sys.stdout, sys.stderr):
+            try:
+                stream.reconfigure(errors="replace")
+            except (AttributeError, ValueError, OSError):
+                pass
+        out = sys.stdout
     p = argparse.ArgumentParser(prog="agent_temp_sweep.py",
                                 description="Clear old, unused entries from the agents' temp folder "
                                             "(the folder and age come from the machine config).")
     p.add_argument("--apply", action="store_true", help="remove (default: only list, a dry run)")
+    p.add_argument("--home", help="the home folder whose machine config is read (default: the real "
+                                  "home; machine setup's --home passes it)")
     a = p.parse_args(argv)
+    home = a.home or home
     try:
         cfg = load_config(home)
         if cfg is None:

@@ -9,6 +9,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 import uuid
 
 from optional.bridge.hosts.codex.runtime import CodexSources
@@ -18,6 +19,7 @@ from optional.bridge.win.frontend import NativeFrontend
 from optional.bridge.win.leader import ServiceLeader
 from optional.bridge.port import NativeSource
 from kitlib.proc.job import Job
+from kitlib.proc.pipe import process_image
 from kitlib.proc.process import own_ctime, proc_ctime
 
 
@@ -197,6 +199,34 @@ class CodexRuntimeTests(unittest.TestCase):
                 replace(self.native,host_creation=self.native.host_creation+1),
                 replace(self.native,kind='claude')):
             with self.assertRaises(DeliveryError): self.factory(changed)
+
+    def test_frontend_whose_parent_is_not_the_host_fails_before_source_use(self):
+        # The frontend runs, is this user's and has the right image and creation time, but was
+        # started by another process: naming that process as host enrolls, naming this one fails.
+        script=('import subprocess,sys,time;'
+            'g=subprocess.Popen([sys.executable,"-I","-c","import time; time.sleep(60)"]);'
+            'print(g.pid,flush=True);time.sleep(60)')
+        middle=self.job.start([sys.executable,'-I','-c',script],stdout=subprocess.PIPE,
+            creationflags=subprocess.CREATE_NO_WINDOW)
+        self.addCleanup(middle.wait,2)
+        self.addCleanup(middle.stdout.close)
+        grandchild=int(middle.stdout.readline())
+        native=NativeFrontend(grandchild,proc_ctime(grandchild),os.getpid(),own_ctime(),
+            'codex',Path(sys.executable).resolve())
+        with self.assertRaises(DeliveryError): self.factory(native)
+        own=self.factory(replace(native,host_pid=middle.pid,host_creation=proc_ctime(middle.pid),
+            host_executable=process_image(middle.pid)))
+        self.assertTrue(own.observe.__self__.alive())
+
+    def test_liveness_check_takes_no_system_process_snapshot(self):
+        # require() runs on every observe and liveness check: it reads the frontend's parent from
+        # its own handle, so it holds when a Toolhelp snapshot would fail or be slow.
+        runtime=self.source.observe.__self__
+        self.assertTrue(runtime.alive())
+        with patch('kitlib.proc.process.snapshot',side_effect=OSError('no snapshot')) as snapshot:
+            self.assertTrue(runtime.alive())
+            runtime.require()
+        snapshot.assert_not_called()
 
     def test_factory_close_releases_source_authority_and_retained_native_handles(self):
         authority=self.observe()

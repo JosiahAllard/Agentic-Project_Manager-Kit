@@ -101,7 +101,7 @@ Before writing, `add --commit` refuses in any of these cases:
 - the branch is not that repository's `"repo".main_branch` and `--branch-ok` is not given;
 - the ledger file has uncommitted changes.
 
-A commit or push that fails after the write leaves the entry written and says what was not done.
+A commit that fails because git's `index.lock` is busy (another git process in that repository) is retried, add and commit together, for `INDEX_LOCK_WAIT` seconds (3) in `kitlib/ledger/vcs.py` `commit_one`; any other failure is not retried, and after the bound the refusal says `index.lock busy`. A commit or push that fails after the write leaves the entry written and says what was not done.
 
 ## Citing rulings
 

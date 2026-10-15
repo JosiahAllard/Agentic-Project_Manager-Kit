@@ -13,7 +13,7 @@ from kitlib.proc.pipe import (K,INVALID,SecurityAttributes,bind,close,
     create_file,descriptor,from_sddl,local_free,process_sids,protect_file)
 from kitlib.proc.process import own_ctime
 from .controller import Controller
-from .evidence import regular,stable_bytes
+from .evidence import regular,replace,stable_bytes
 from .frontend import FrontendInspector
 from .leader import ServiceLeader,LeaderError
 from .service import BrokerService
@@ -112,7 +112,7 @@ class Supervisor:
                 output.flush()
                 os.fsync(output.fileno())
             self._same_root()
-            os.replace(temporary,self.marker)
+            replace(temporary,self.marker)  # waits out a frontend reading the marker
         finally:
             if temporary.exists(): temporary.unlink()
 

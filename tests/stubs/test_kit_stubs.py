@@ -21,7 +21,11 @@ TOOL = os.path.join(KIT, 'tools', 'kit_stubs.py')
 class StubCase(unittest.TestCase):
 
     def setUp(self):
-        env = mock.patch.dict(os.environ, gitfixture.fixture_env(), clear=True)
+        # Not the run's own pin: a landing gate runs pinned (kitlib/gate/pin.py sets both), and
+        # these tests choose the live root themselves.
+        fixture = {k: v for k, v in gitfixture.fixture_env().items()
+                   if k not in ('KIT_LIVE_ROOT', 'KIT_PINNED')}
+        env = mock.patch.dict(os.environ, fixture, clear=True)
         env.start()
         self.addCleanup(env.stop)
         self.fx = gitfixture.TempRepo()
@@ -249,7 +253,10 @@ class ProblemLine(StubCase):
         for name in stubs.SHARED:
             self.put(self.stub(name), '# the repository\'s own %s\n' % name)
         self.assertIsNone(stubs.problem_line(self.root))
-        code, out = self.run_stubs('check')        # check still names them
+        code, out = self.run_stubs('check')        # no stub and no "stubs" section: none used
+        self.assertEqual(code, stubs.OK, out)
+        self.assertIn('kit_stubs: uses no stubs', out)
+        code, out = self.run_stubs('check', tools=['landed'])     # asked for: check names them
         self.assertEqual(code, stubs.PROBLEMS, out)
         self.assertIn('not a stub  %s' % self.stub('landed'), out)
 
@@ -355,6 +362,39 @@ class WriteAndCheck(StubCase):
         self.assertEqual(stubs.stub_kit(text), repr(os.path.normpath(KIT)))
 
 
+class NoStubsByDesign(StubCase):
+    """A repository that uses no stubs (a PM data folder: kit tools called by full path, no tools
+    folder, no "stubs" section): check follows the opt-in rule of problem_line."""
+
+    def setUp(self):
+        super().setUp()
+        self.config(backlog={'store': 'kit/backlog'}, repo={'name': 'pm', 'main_branch': 'pmdata'})
+
+    def test_check_on_a_repository_that_uses_no_stubs_is_ok(self):
+        code, out = self.run_stubs('check')
+        self.assertEqual(code, stubs.OK, out)
+        self.assertIn('kit_stubs: uses no stubs', out)
+        self.assertNotIn('missing', out)
+        self.assertFalse(os.path.exists(os.path.join(self.root, 'tools')))
+
+    def test_the_tools_argument_opts_check_in(self):
+        code, out = self.run_stubs('check', tools=['landed'])
+        self.assertEqual(code, stubs.PROBLEMS, out)
+        self.assertIn('missing  %s' % self.stub('landed'), out)
+
+    def test_one_stub_opts_check_in(self):
+        self.put(self.stub('landed'), stubs.stub_text('landed'))
+        code, out = self.run_stubs('check')
+        self.assertEqual(code, stubs.PROBLEMS, out)
+        self.assertIn('missing  ', out)
+        self.assertNotIn('missing  %s' % self.stub('landed'), out)
+
+    def test_write_still_writes_there(self):
+        code, out = self.run_stubs('write', tools=['landed'])
+        self.assertEqual(code, stubs.OK, out)
+        self.assertIn('wrote    %s' % self.stub('landed'), out)
+
+
 class AStubRunsTheKitTool(StubCase):
     """A written stub runs this kit's landed.py (read-only) on the stub's own checkout."""
 
@@ -443,6 +483,63 @@ class TheCommandLine(StubCase):
         code, out = self.call([TOOL, 'write', '--tools', 'no_such_tool'], self.root)
         self.assertEqual(code, 2, out)
         self.assertIn('kit_stubs: refused:', out)
+
+
+class TheMemoryVerb(StubCase):
+    """kit_stubs.py memory: the repository's autoMemoryDirectory (kitlib.stubs.memory). No case here
+    writes the key with --apply into a file that lacks it: that value would name the temp folder's
+    real drive (tests/stubs/test_memory.py writes against a faked main checkout instead)."""
+
+    def settings(self):
+        return os.path.join(self.root, '.claude', 'settings.json')
+
+    def test_the_dry_run_names_the_value_and_the_command_and_writes_nothing(self):
+        from kitlib.stubs import memory
+        code, out = self.call([TOOL, 'memory', '-C', self.root], self.tmp)
+        self.assertEqual(code, 0, out)
+        self.assertIn('would add autoMemoryDirectory = %s' % memory.wanted(self.root), out)
+        self.assertIn('memory -C "%s" --apply' % self.root, out)
+        self.assertFalse(os.path.exists(os.path.join(self.root, '.claude')))
+
+    def test_a_current_value_is_ok_with_apply_and_unchanged(self):
+        from kitlib.stubs import memory
+        raw = json.dumps({'autoMemoryDirectory': memory.wanted(self.root)})
+        self.put(self.settings(), raw)
+        code, out = self.call([TOOL, 'memory', '--apply'], self.root)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.read(self.settings()), raw)
+
+    def test_a_file_it_cannot_edit_exits_1(self):
+        self.put(self.settings(), '[1]')
+        code, out = self.call([TOOL, 'memory', '--apply'], self.root)
+        self.assertEqual(code, 1, out)
+        self.assertEqual(self.read(self.settings()), '[1]')
+
+    def test_usage(self):
+        # Each is refused for its own reason, not as an unknown verb or option.
+        memory_only = 'USAGE: memory takes -C and --apply only (it is a dry run without --apply)'
+        for args, why in ((['memory', '--tools', 'landed'], memory_only), (['memory', '--dry-run'], memory_only),
+                          (['memory', '--replace'], memory_only), (['write', '--apply'], 'USAGE: --apply is a memory option'),
+                          (['check', '--apply'], 'USAGE: --apply is a memory option')):
+            code, out = self.call([TOOL] + args, self.root)
+            self.assertEqual(code, 2, (args, out))
+            self.assertIn(why, out)
+
+    def test_a_broken_hosts_json_is_an_error_line_not_a_traceback(self):
+        import contextlib
+        import importlib.util
+        import io
+        from kitlib.host import registry
+        spec = importlib.util.spec_from_file_location('kit_stubs_cli', TOOL)
+        cli = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cli)
+        out = io.StringIO()
+        with mock.patch.object(registry, 'load', side_effect=registry.RegistryError('hosts.json broken')), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            code = cli.main(['memory', '-C', self.root])
+        self.assertEqual(code, 2, out.getvalue())
+        self.assertIn('kit_stubs: ERROR: hosts.json broken', out.getvalue())
+        self.assertNotIn('Traceback', out.getvalue())
 
 
 if __name__ == '__main__':

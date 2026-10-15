@@ -4,10 +4,12 @@ and 9).
   build(settings, sources, log=None) -> Hub     open the store, make the views, the Api and the
                                                 listeners; nothing is started. ServeError.
   Hub   .settings .store .api .views .creds .listeners .sync .backlog .notes .tunnel .port .url
+        .stopping                               the event the owner's stop route sets
         .start()                               start the git sync, the backlog timer, the listeners
         .watch()                                log a git sync failure that is new (below)
         .close(timeout=CLOSE_TIMEOUT_S)         the clean close (below); safe to call twice
-  run(hub, started=None, stop=None)             start, serve until `stop` is set or Ctrl+C, close
+  run(hub, started=None, stop=None)             start, serve until `stop` is set, the owner's
+                                                stop route is called or Ctrl+C, close
   Sources(...)                                  where each part comes from
   machine_sources(home=None, sync=True)         this machine's Sources, from its machine config
   SiteViews                                     the Api's `views` object over those sources
@@ -33,7 +35,9 @@ text is for the owner's console (it may name a folder):
      and GET health says so in a fixed phrase (the reason itself names folders).
   4. the Api over the store and a SiteViews, then the local listener on settings.port with
      httpd.local_hosts, httpd.local_gate, httpd.pair_routes over an auth.Credentials made for
-     the port that was really bound, and health_route. The Credentials keep the browser
+     the port that was really bound, httpd.stop_route (it sets Hub.stopping and answers this
+     process's pid and creation time; the tunnel listener never has it) and health_route. The
+     Credentials keep the browser
      sessions in the token folder's sessions file for that port (auth, persist=True), so a
      paired browser stays paired when the server starts again; a file it cannot read whole is a
      line in `Hub.notes`. With settings.port 0 (a new port each run) no sessions file is kept.
@@ -57,7 +61,9 @@ they were with no tunnel, and it never reads the Access header.
 
 The log. `log(level, text)` gets the listeners' lines (httpd: 'access', 'error'), the tunnel
 gate's ('note' or 'error' for a request it refused, at most one a reason a minute:
-kitlib.hubsite.tunnel) and the hub's own: 'error' for a close step that failed, ran out of
+kitlib.hubsite.tunnel), the tunnel listener's 'error' tunnel.HOST_LINE for a write refused
+because its Origin host is not its Host (httpd's origin_refused, tunnel.host_note: at most one
+a minute) and the hub's own: 'error' for a close step that failed, ran out of
 time or was cut short and for a git sync pass that failed, 'note' for what is no error (the
 wait for git begins at the close; the sync works again). Every line of the hub's own goes
 through scrub(), so none holds the user or password of a remote URL; the listeners' and the
@@ -71,7 +77,8 @@ changed, and a 'note' when the sync works again; run() calls it on every turn of
 A sync with push on and no remote to push to is failing from the start (gitsync.NO_REMOTE), so
 the first look logs that.
 
-The clean close, in this order (Hub.close; run() ends with it, also on Ctrl+C):
+The clean close, in this order (Hub.close; run() ends with it, also on Ctrl+C and on the
+owner's stop route):
   1. every listener's gate that has a stop() (the tunnel's: tunnel.Gate.stop), then every
      listener's door. The gate first: a tunnel request held on a fetch of the Access keys
      (up to access.FETCH_DEADLINE_S, longer than a step's `timeout`) is refused at once with
@@ -195,6 +202,7 @@ import threading
 from kitlib import hubbacklog, pmdata, pmstart, pmwatch
 from kitlib.config import user
 from kitlib.config.types import ConfigError
+from kitlib.proc import process
 
 from . import api as _api
 from . import access, auth, backlog, derived, gitsync, httpd, tunnel
@@ -229,6 +237,7 @@ USAGE_FAILED = 'the usage source could not be read'
 AGENTS_FAILED = 'the agent definitions could not be read'
 ROUND_FAILED = ('the backlog view could not be read after a round of the backlog timer, so '
                 'health does not follow the timer: %s: %s')
+STOP_ASKED = 'closing: the owner asked the server to stop (hub.py stop)'
 GIT_WAIT_THREAD = 'hub-close-git'       # the thread a wait for git is made on at the close
 _GIT_LIMITS = ('git may take %d s for a fetch and again for a push' % gitsync.NET_TIMEOUT)
 _AGAIN = 'Ctrl+C again ends the wait'
@@ -729,6 +738,10 @@ def build(settings, sources, log=None):
         notes.extend(creds.notes)
         local.gate = httpd.local_gate(creds)
         local.routes.update(httpd.pair_routes(creds))
+        # the local listener's alone: the tunnel listener is never given a stop route
+        stopping = threading.Event()
+        local.routes.update(httpd.stop_route(creds, stopping.set,
+                                             {'pid': os.getpid(), 'ctime': process.own_ctime()}))
         tunnelled, said = _make_tunnel(settings, sources, api, notes, log)
         health = ('GET', _api.BASE + '/health')
         if tunnelled is not None:
@@ -740,7 +753,7 @@ def build(settings, sources, log=None):
                 api, views, functools.partial(_tunnel_state, tunnelled), fixed=True)
         local.routes[health] = health_route(api, views, said)
         return Hub(settings, store, api, views, creds, listeners, sync, views_b, notes, log,
-                   tunnel=said)
+                   tunnel=said, stopping=stopping)
     except BaseException:
         for lis in listeners:
             lis.close_door()
@@ -754,10 +767,12 @@ class Hub(object):
     GET health says of the tunnel listener at this moment (TUNNEL_ON, TUNNEL_BOUND or
     TUNNEL_BOUND_WHY, or TUNNEL_OFF with the reason; '' for a Hub made without build), and
     TUNNEL_CLOSED from the moment close() was called when there was a tunnel listener (with
-    none it stays what it was). The `tunnel` given here is that text or a callable giving it."""
+    none it stays what it was). The `tunnel` given here is that text or a callable giving it.
+    `stopping` is the event the local listener's stop route sets (httpd.stop_route); run()
+    closes the hub once it is set. A Hub made without one gets an event nothing sets."""
 
     def __init__(self, settings, store, api, views, creds, listeners, sync, backlog_views, notes,
-                 log=None, tunnel=''):
+                 log=None, tunnel='', stopping=None):
         self.settings = settings
         self.store = store
         self.api = api
@@ -768,6 +783,7 @@ class Hub(object):
         self.backlog = backlog_views
         self.notes = notes
         self._tunnel = tunnel
+        self.stopping = stopping if stopping is not None else threading.Event()
         self._log = log
         self._life = threading.Lock()       # start() and close()
         self._started = False
@@ -993,13 +1009,15 @@ def _apart(fn, *args):
 
 
 def run(hub, started=None, stop=None):
-    """Start `hub`, call started(hub), serve until the event `stop` is set or Ctrl+C, then close
-    it: what Hub.close() answered. The hub is closed however this ends. ServeError when the hub
-    was started or closed already.
+    """Start `hub`, call started(hub), serve until the event `stop` is set, the owner's stop
+    route sets hub.stopping (hub.py stop) or Ctrl+C, then close it: what Hub.close() answered.
+    The hub is closed however this ends. ServeError when the hub was started or closed already.
 
     The wait is a timed one in a loop: on Windows a wait with no time limit is not interrupted
-    by Ctrl+C. Each turn of it calls hub.watch(), which logs a git sync failure that is new. No
-    signal handler is set, so only Ctrl+C (KeyboardInterrupt) and `stop` are a clean close. A
+    by Ctrl+C. Each turn of it looks at hub.stopping (set: a 'note' line, STOP_ASKED, and the
+    close), then calls hub.watch(), which logs a git sync failure that is new. No signal
+    handler is set, so only Ctrl+C (KeyboardInterrupt), `stop` and the stop route are a clean
+    close, and the stop route's is the same close as Ctrl+C's. A
     second Ctrl+C, during the close, is Hub.close's to answer (module docstring, "The clean
     close"): with a git sync started it ends the wait for git and this answers False; with
     none, or when it arrives in the last two steps of the close, it leaves here as a
@@ -1011,6 +1029,9 @@ def run(hub, started=None, stop=None):
         if started is not None:
             started(hub)
         while not stop.wait(POLL_S):
+            if hub.stopping.is_set():
+                hub._say(STOP_ASKED, 'note')
+                break
             hub.watch()
     except KeyboardInterrupt:
         pass
