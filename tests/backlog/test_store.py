@@ -14,6 +14,7 @@ from kitlib.git import cmd
 
 from tests.backlog.helpers import ADD_NONE, BRANCH, StoreCase, priced, race, rec
 from tests.gitfixture import TempRepo, fixture_env
+from tests.home import TempHomeCase
 from tests.realgit import real_git
 
 
@@ -846,7 +847,8 @@ class BranchStoreNoRemote(BranchStoreBase):
         self.assertEqual(self.landed_ids(), ('refs/heads/backlog', 'backlog', ['FOO']))
 
 
-class OtherBackends(unittest.TestCase):
+class OtherBackends(TempHomeCase):
+    """Under a temp home: a verb's machine-path refusal reads the machine config."""
 
     def test_open_backend_follows_the_store_key(self):
         from kitlib import config
