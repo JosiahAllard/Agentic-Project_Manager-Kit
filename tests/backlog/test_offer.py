@@ -227,5 +227,49 @@ class CollisionHolder(unittest.TestCase):
                          'kitlib/backlog/offer.py already taken by HOLD (in flight on ?)')
 
 
+class BlockerSummary(unittest.TestCase):
+    """`blocker_summary` ranks the live pulls and other sessions' records by how many passed-over
+    records they block."""
+
+    def passed_for(self, s, holding=(), **kw):
+        (_offers, passed), _refusals, _ranks = omod.next_offer(s, list(holding), **kw)
+        return passed
+
+    def test_the_pull_blocking_most_records_comes_first(self):
+        hold_a = priced('HOLDA', state='pulled', pulled_at='2026-10-01', pulled_by='kit/a',
+                        scope='a/**')
+        hold_b = priced('HOLDB', state='pulled', pulled_at='2026-10-01', pulled_by='kit/b',
+                        scope='b/**')
+        s = snap(hold_a, hold_b, priced('R1', priority='1', scope='b/x'),
+                 priced('R2', priority='2', scope='b/y'), priced('R3', priority='3', scope='a/x'))
+        passed = self.passed_for(s, holding=[s.get('HOLDA'), s.get('HOLDB')])
+        self.assertEqual(omod.blocker_summary(passed),
+                         ['blocks 2: kit/b (HOLDB)', 'blocks 1: kit/a (HOLDA)'])
+
+    def test_another_session_counts_and_an_offered_record_does_not(self):
+        s = snap(priced('AAA', priority='1', scope='binding/**', session='gamma'),
+                 priced('BBB', priority='2', scope='binding/x/**', session='kit'),
+                 priced('CCC', priority='3', scope='w/**', session='kit'),
+                 priced('DDD', priority='4', scope='w/y', session='kit'))
+        passed = self.passed_for(s, session='kit')
+        self.assertEqual(omod.blocker_summary(passed), ['blocks 1: session gamma (AAA)'])
+
+    def test_it_keeps_the_top_few_and_is_empty_with_no_collision(self):
+        self.assertEqual(omod.blocker_summary([]), [])
+        recs = [priced('H%d' % i, state='pulled', pulled_at='2026-10-01', pulled_by='kit/h%d' % i,
+                       scope='h%d/**' % i) for i in range(7)]
+        recs += [priced('R%d' % i, priority='1', scope='h%d/x' % i) for i in range(7)]
+        s = snap(*recs)
+        passed = self.passed_for(s, holding=[s.get('H%d' % i) for i in range(7)])
+        self.assertEqual(len(omod.blocker_summary(passed)), 5)
+        # H0..H6 block 1, 2, 3, 1, 2, 3, 1 records: top five by count, ties by name
+        more = [priced('X%d' % i, priority='1', scope=sc) for i, sc in
+                enumerate(['h1/y', 'h2/y', 'h2/z', 'h5/y', 'h5/z', 'h6/y'])]
+        s = snap(*(recs + more))
+        passed = self.passed_for(s, holding=[s.get('H%d' % i) for i in range(7)])
+        self.assertEqual(omod.blocker_summary(passed),
+                         ['blocks 3: kit/h2 (H2)', 'blocks 3: kit/h5 (H5)', 'blocks 2: kit/h1 (H1)',
+                          'blocks 2: kit/h6 (H6)', 'blocks 1: kit/h0 (H0)'])
+
 if __name__ == '__main__':
     unittest.main()
