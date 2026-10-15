@@ -46,7 +46,7 @@ AGENTS.md (or equivalent) where they exist.
 As any docs change: a docs-only worktree (`--find worktree`), edit, docs gate - except
 during a coordinator-announced measurement window, when you commit without it and
 report \"gate skipped: measurement window\" - commit by explicit path, report the
-hash. The lander lands it. Shell is for git, the docs gate and the repo's read-only tools
+hash. The coordinator lands it. Shell is for git, the docs gate and the repo's read-only tools
 (`preflight.py`, `doc_index.py`, `codemap.py`); no test runs, no other project
 scripts. After two or
 three rounds on one document, tell the caller your context is getting long and

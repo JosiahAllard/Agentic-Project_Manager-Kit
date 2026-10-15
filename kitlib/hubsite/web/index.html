@@ -213,6 +213,7 @@ button.danger{color:var(--warn)}
       <button class="primary" type="button" id="pm-sendall" disabled>Send all</button><span class="status" id="pm-sendstatus" role="status"></span>
     </div>
     <select id="repo" aria-label="Filter by repository"><option value="">All repos</option></select>
+    <input type="search" id="idq" placeholder="Find by id or title" aria-label="Find a question or to-do by id or title">
     <select id="brepo" aria-label="Backlog" hidden><option value="">All backlogs</option></select>
   </div>
 
@@ -242,7 +243,7 @@ button.danger{color:var(--warn)}
 <script>
 (function(){
   const $ = s => document.querySelector(s);
-  const state = { docs: [], inbox: [], ifilter: "unread", todos: [], stories: [], backlog: [], completed: [], period: 7, bprio: new Set(["1", "2", "3"]), bstat: new Set(["open", "blocked", "parked", "pulled"]), bq: "", usage: [], agents: [], parked: [], gone: {}, partial: {}, seen: null, repos: [], brepo: "", sfilter: "new", infotab: "usage", inboxtab: "questions", topm: [], pfilter: "queued", pmOlder: false, pmEdit: new Map(), todoEdit: new Map(), stale: {}, section: "questions", filter: "open", tfilter: "open", repo: "", editing: new Set() };
+  const state = { docs: [], inbox: [], ifilter: "unread", todos: [], stories: [], backlog: [], completed: [], period: 7, bprio: new Set(["1", "2", "3"]), bstat: new Set(["open", "blocked", "parked", "pulled"]), bq: "", idq: "", usage: [], agents: [], parked: [], gone: {}, partial: {}, seen: null, repos: [], brepo: "", sfilter: "new", infotab: "usage", inboxtab: "questions", topm: [], pfilter: "queued", pmOlder: false, pmEdit: new Map(), todoEdit: new Map(), stale: {}, section: "questions", filter: "open", tfilter: "open", repo: "", editing: new Set() };
   if (location.hash === "#inbox") state.section = "inbox";
   if (location.hash === "#todo") state.section = "todo";
   if (location.hash === "#topm") state.section = "topm";
@@ -389,6 +390,7 @@ button.danger{color:var(--warn)}
     $("#n-sp").textContent = state.parked.length + " parked"; $("#n-sp").hidden = !state.parked.length;
     const pb = pmBadge(state.topm); $("#n-pm").textContent = pb.n; $("#n-pm").classList.toggle("hot", pb.hot);
     $("#repo").hidden = sc === "info" || sc === "backlog" || sc === "topm";
+    $("#idq").hidden = !(q || sc === "todo");
     $("#tabs").hidden = !q; $("#itabs").hidden = sc !== "inbox"; $("#ttabs").hidden = sc !== "todo"; $("#pmtabs").hidden = sc !== "topm"; $("#pmform").hidden = sc !== "topm" || !ready; $("#stabs").hidden = $("#brepo").hidden = sc !== "backlog"; $("#ftabs").hidden = sc !== "info";
     if (sc === "topm") pmCompose.fill();     // the repos arrive after the form is built: the menu is filled without a click
     $("#addform").hidden = sc !== "todo" || !ready;
@@ -787,12 +789,13 @@ button.danger{color:var(--warn)}
     // A to-do with an open edit stays in the list whatever the tab or the repository filter, so what was
     // typed in it is never out of sight without a word (it may be ticked done elsewhere meanwhile).
     const editing = t => { const ed = t.from === "you" ? state.todoEdit.get(t.id) : null; return !!ed && !ed.gone; };
-    let rows = state.todos.filter(t => editing(t) || ((t.status === "done") === (state.tfilter === "done") && inR(t)));
+    let rows = state.todos.filter(t => editing(t) || ((t.status === "done") === (state.tfilter === "done") && inR(t) && inId(t)));
     rows.sort((a,b) => (b.urgent ? 1 : 0) - (a.urgent ? 1 : 0) || (state.tfilter === "done" ? String(b.done_at||"").localeCompare(String(a.done_at||"")) : String(a.added_at||"").localeCompare(String(b.added_at||""))));
     // The card of an edit whose to-do is gone stays at the top of both tabs: its to-do has no tab any more.
     const lost = lostCards(state.todoEdit);
     if (!rows.length && !lost.length) {
       const m = state.tfilter === "done" ? ["Nothing ticked off yet", "Items you mark done move here, and the PM follows up on them."] : ["Nothing to do", "Steps only you can do (commands to run, settings to change, files to delete) appear here, each with its exact command."];
+      if (ready && state.idq.trim()) { m[0] = "No match for \"" + state.idq.trim() + "\""; m[1] = "Clear the id box to see every to-do in this tab."; }
       show([], el("div", {class:"empty"}, el("strong", {text: ready ? m[0] : NOT_READY}), ready ? m[1] : NOT_READY_WHY));
       return;
     }
@@ -815,7 +818,7 @@ button.danger{color:var(--warn)}
       }
     });
     const body = el("div", {class:"body"},
-      el("div", {class:"meta"}, t.urgent ? el("span", {class:"chip urgent", text:"Urgent"}) : null, t.repo ? el("span", {class:"chip", text: t.repo}) : null, t.from ? el("span", {text: "from " + t.from}) : null, t.added_at ? el("span", {text: "added " + when(t.added_at)}) : null, isDone && t.done_at ? el("span", {class:"chip ok", text: "done " + when(t.done_at)}) : null));
+      el("div", {class:"meta"}, t.urgent ? el("span", {class:"chip urgent", text:"Urgent"}) : null, el("span", {class:"id", text: t.id}), t.repo ? el("span", {class:"chip", text: t.repo}) : null, t.from ? el("span", {text: "from " + t.from}) : null, t.added_at ? el("span", {text: "added " + when(t.added_at)}) : null, isDone && t.done_at ? el("span", {class:"chip ok", text: "done " + when(t.done_at)}) : null));
     body.append(el("h2", {}, el("label", {for: "t-" + t.id, text: t.title || "(untitled)"})));
     if (t.detail) body.append(el("p", {class:"ctx", text: t.detail}));
     for (const c of pmCommands(t)) {
@@ -862,7 +865,7 @@ button.danger{color:var(--warn)}
     ed.acts.append(el("label", {class:"urg"}, ur, " Urgent"), save, el("button", {class:"link", type:"button", text:"Cancel", onclick: () => { state.todoEdit.delete(t.id); render(); }}), status);
     return el("article", {class: "t" + (isDone ? " done" : "") + (t.urgent ? " urgent" : ""), id: "todo-" + t.id},
       el("input", {type:"checkbox", class:"chk", id:"t-" + t.id, checked: isDone, disabled: true, "aria-label": "Save or cancel the edit before ticking this"}),
-      el("div", {class:"body"}, ed.note, ti, de, ed.theirs, ed.acts));
+      el("div", {class:"body"}, el("div", {class:"meta"}, el("span", {class:"id", text: t.id})), ed.note, ti, de, ed.theirs, ed.acts));
   }
 
   const ACTIVE = ["submitted", "review", "questions"];
@@ -1001,6 +1004,7 @@ button.danger{color:var(--warn)}
     }[st.status] || el("span", {class:"chip", text: st.status || "?"});
     const parts = [el("div", {class:"meta"},
       st.urgent && live ? el("span", {class:"chip urgent", text:"Urgent"}) : null,
+      el("span", {class:"id", text: st.id}),
       st.repo ? el("span", {class:"chip", text: st.repo}) : null, stat,
       st.submitted_at ? el("span", {text: "submitted " + when(st.submitted_at)}) : null,
       st.added_at ? el("span", {text: "added " + when(st.added_at)}) : null),
@@ -1037,6 +1041,9 @@ button.danger{color:var(--warn)}
 
   // The Questions, Inbox and To-do repo menu: every repo the PM knows plus any the rows name.
   const inR = x => forRepo(x, state.repo);
+  // The id box (Questions and To-do): a card matches when the text is in its id or title.
+  const inId = x => { const q = state.idq.trim().toLowerCase(); return !q || (String(x.id) + " " + String(x.title || "")).toLowerCase().includes(q); };
+  $("#idq").addEventListener("input", e => { state.idq = e.target.value; render(); });
   function fillRepos(rows){
     const sel = $("#repo"), want = ["", ...knownRepos()];
     if ([...sel.options].map(o=>o.value).join("|") !== want.join("|")) sel.replaceChildren(...want.map(r => el("option", {value:r, text: r || "All repos"})));
@@ -1052,7 +1059,7 @@ button.danger{color:var(--warn)}
     document.querySelectorAll("#tabs .tab").forEach(t => t.setAttribute("aria-selected", String(t.dataset.f === state.filter)));
     fillRepos(state.docs);
 
-    let rows = state.docs.filter(d => pmQBucket(d) === state.filter && inR(d));
+    let rows = state.docs.filter(d => pmQBucket(d) === state.filter && inR(d) && inId(d));
     rows.sort((a,b) => (b.urgent ? 1 : 0) - (a.urgent ? 1 : 0) || (state.filter === "open"
       ? String(a.asked_at||"").localeCompare(String(b.asked_at||""))
       : String(b.answer?.at||"").localeCompare(String(a.answer?.at||""))));
@@ -1064,6 +1071,7 @@ button.danger{color:var(--warn)}
         logged: ["No logged answers yet", "Once the PM files an answer, it shows here."],
         other: ["Nothing here", "Questions with an unknown or missing status show here."]
       }[state.filter];
+      if (ready && state.idq.trim()) { msg[0] = "No match for \"" + state.idq.trim() + "\""; msg[1] = "Clear the id box to see every question in this tab."; }
       show(["repos"], el("div", {class:"empty"}, el("strong", {text: ready ? msg[0] : NOT_READY}), ready ? msg[1] : NOT_READY_WHY));
       return;
     }

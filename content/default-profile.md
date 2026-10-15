@@ -44,7 +44,7 @@ the gate's exit 0 and its `GATE OK` line; anything else is a failure. Report the
 the failing lines from the log the gate names, not the whole log.
 
 ## Landing
-Only the lander or the project manager lands; no other role merges or pushes to the main branch.
+Only the coordinator or the project manager submits a landing to the land queue; no other role merges or pushes to the main branch.
 There is no standing landing approval here: each landing needs the owner's go for that branch,
 relayed by the coordinator or project manager with the reviewer's verdict. Missing either: do not
 land; say what is missing. From the main checkout, on the main branch:

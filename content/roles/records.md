@@ -41,7 +41,7 @@ No profile: use `<kit>/content/default-profile.md` instead, with the repo's READ
 4. Run the profile's docs gate - except during a coordinator-announced measurement
    window, when you commit without it and report "gate skipped: measurement
    window".
-5. `git add <explicit paths>`, commit, stop, report the hash. The lander lands it:
+5. `git add <explicit paths>`, commit, stop, report the hash. The coordinator lands it:
    you never land, merge to main, or push.
 
 Shell is for git, the docs gate and the repo's read-only tools (`preflight.py`, `doc_index.py`,

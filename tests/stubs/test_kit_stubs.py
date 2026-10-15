@@ -21,7 +21,11 @@ TOOL = os.path.join(KIT, 'tools', 'kit_stubs.py')
 class StubCase(unittest.TestCase):
 
     def setUp(self):
-        env = mock.patch.dict(os.environ, gitfixture.fixture_env(), clear=True)
+        # Not the run's own pin: a landing gate runs pinned (kitlib/gate/pin.py sets both), and
+        # these tests choose the live root themselves.
+        fixture = {k: v for k, v in gitfixture.fixture_env().items()
+                   if k not in ('KIT_LIVE_ROOT', 'KIT_PINNED')}
+        env = mock.patch.dict(os.environ, fixture, clear=True)
         env.start()
         self.addCleanup(env.stop)
         self.fx = gitfixture.TempRepo()
