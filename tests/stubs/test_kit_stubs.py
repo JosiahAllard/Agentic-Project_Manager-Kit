@@ -355,6 +355,39 @@ class WriteAndCheck(StubCase):
         self.assertEqual(stubs.stub_kit(text), repr(os.path.normpath(KIT)))
 
 
+class NoStubsByDesign(StubCase):
+    """A repository that uses no stubs (a PM data folder: kit tools called by full path, no tools
+    folder, no "stubs" section): check follows the opt-in rule of problem_line."""
+
+    def setUp(self):
+        super().setUp()
+        self.config(backlog={'store': 'kit/backlog'}, repo={'name': 'pm', 'main_branch': 'pmdata'})
+
+    def test_check_on_a_repository_that_uses_no_stubs_is_ok(self):
+        code, out = self.run_stubs('check')
+        self.assertEqual(code, stubs.OK, out)
+        self.assertIn('kit_stubs: uses no stubs', out)
+        self.assertNotIn('missing', out)
+        self.assertFalse(os.path.exists(os.path.join(self.root, 'tools')))
+
+    def test_the_tools_argument_opts_check_in(self):
+        code, out = self.run_stubs('check', tools=['landed'])
+        self.assertEqual(code, stubs.PROBLEMS, out)
+        self.assertIn('missing  %s' % self.stub('landed'), out)
+
+    def test_one_stub_opts_check_in(self):
+        self.put(self.stub('landed'), stubs.stub_text('landed'))
+        code, out = self.run_stubs('check')
+        self.assertEqual(code, stubs.PROBLEMS, out)
+        self.assertIn('missing  ', out)
+        self.assertNotIn('missing  %s' % self.stub('landed'), out)
+
+    def test_write_still_writes_there(self):
+        code, out = self.run_stubs('write', tools=['landed'])
+        self.assertEqual(code, stubs.OK, out)
+        self.assertIn('wrote    %s' % self.stub('landed'), out)
+
+
 class AStubRunsTheKitTool(StubCase):
     """A written stub runs this kit's landed.py (read-only) on the stub's own checkout."""
 
