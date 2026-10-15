@@ -84,6 +84,31 @@ class Cli(StoreCase):
         self.assertEqual(self.call("run", "--kind", "no-such-kind", "--repo", "kit", "--slug",
                                    "t", cmd=[sys.executable, "-V"])[0], 2)
 
+    def test_run_within_reaches_the_run_and_bad_syntax_is_usage(self):
+        import datetime
+        from kitlib.lock import holds as hl
+        from kitlib.lock.store import utc_now
+        from .helpers import OWNER
+        now = utc_now()
+        hl.create(self.store, self.layout(), {"owner": "owner", "scope": "whole", "start": now,
+                                              "end": now + datetime.timedelta(hours=1)},
+                  OWNER, None)
+        code, _, err = self.call("run", "--kind", "engine-test", "--repo", "kit", "--slug", "t",
+                                 "--within", "8-15", "--cores", "1", "--no-wait",
+                                 cmd=[sys.executable, "-V"])
+        self.assertEqual(code, 11, err)             # sized and booked, then the owner hold refuses
+        ended = [self.store.read("ended/" + n) for n in os.listdir(self.store.path("ended"))
+                 if n.startswith("r-")]
+        self.assertEqual([(r["within"], r["within_slots"]) for r in ended],
+                         [("8-15", {"cpu": [4, 5, 6, 7]})])
+        for bad in ("8-", "x", ""):
+            with self.subTest(bad=bad):
+                code, _, err = self.call("run", "--kind", "engine-test", "--repo", "kit",
+                                         "--slug", "t", "--within", bad,
+                                         cmd=[sys.executable, "-V"])
+                self.assertEqual(code, 2)
+                self.assertIn("--within", err)
+
     def test_run_returns_the_command_code(self):
         self.confine(1)
         code, _, err = self.call("run", "--kind", "engine-test", "--repo", "kit", "--slug", "t",

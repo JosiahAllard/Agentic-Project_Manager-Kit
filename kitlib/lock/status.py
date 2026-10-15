@@ -141,10 +141,12 @@ def render(snap):
         else:
             plan = "not yet planned"
         mv = w.get("moved") or {}
-        out.append("waiting: %s/%s (%s, %s, run %s%s%s) since %s; %s%s%s" % (
+        out.append("waiting: %s/%s (%s, %s, run %s%s%s%s) since %s; %s%s%s" % (
             w["repo"], w["slug"], w["kind"], lay.need_text(w["needs"]), w["id"],
             ", priority %s" % w["priority"] if w.get("priority") else "",
             ", resource %s" % w["resource"] if w.get("resource") else "",
+            ", within %s (--within)" % lay.slots_text("cpu", w["within_slots"])
+            if w.get("within_slots") else "",
             _local(w["since"]), plan, "; moved to the top by %s at %s" % (
                 moved_by(mv), _local(mv.get("at"))) if mv else "",
             "; " + w["why"] if w.get("why") else ""))

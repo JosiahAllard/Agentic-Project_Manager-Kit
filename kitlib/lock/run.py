@@ -364,14 +364,16 @@ def pin_fields(job):
 
 
 # ------------------------------------------------------------------ waiting for a turn
-def acquire(store, run, L, need, wait_s, no_wait, prefer=None):
+def acquire(store, run, L, need, wait_s, no_wait, prefer=None, within=None):
     """Waits for run's turn in the queue and returns {pool: [slot]} once it holds `need`
     (its entry and record name them). Raises LockError with its entry gone: 11 when a strong
     hold (owner or game) leaves it too few for its wait, or its own whole hold is over or has
     not started; 6 (--no-wait) or 8 when agent holds or runs do; 10 when the queue or the holds
     cannot be read before it joined; 1 when stop cancelled it. It never starts on a slot a hold but its own
     covers within its expected time; one they leave too few of keeps its place, parked. With
-    no_wait it waits only for background runs to yield. prefer: its hold's slots."""
+    no_wait it waits only for background runs to yield. prefer: its hold's slots. within: {pool:
+    the only slots it may take} (book's within): its entry carries it (kitlib.lock.queue.plan)
+    and only holds over those slots park it."""
     s, say = store.settings, store.say
     deadline = time.monotonic() + (0 if no_wait else math.inf if wait_s is None else wait_s)
     span, hid = run.rec["expect_s"], run.rec.get("hold")
@@ -415,7 +417,8 @@ def acquire(store, run, L, need, wait_s, no_wait, prefer=None):
             raise LockError(EXIT_RESERVED, "refused: owner hold %s (quiet hours) is over or was "
                             "ended, and run %s runs only inside it (--hold). Exit 11."
                             % (hid, run.id))
-        cover, blocking, ablocking = hl.cover_plan(store, L, need, span, own=hid, hs=hs)
+        cover, blocking, ablocking = hl.cover_plan(store, L, need, span, own=hid, hs=hs,
+                                                   within=within)
         park, clear, why_kind = [], None, None
         if whole and h["_start"] > now:
             park, clear, why_kind = [h], h["_start"], "start"
@@ -473,6 +476,8 @@ def acquire(store, run, L, need, wait_s, no_wait, prefer=None):
                          clear_at=clear.timestamp() if park else None,
                          avoid_after={p: sorted(i for i, x in cover[p].items() if x["id"] not in ids)
                                       for p in POOLS if cover.get(p)} if park else {})
+                if within:
+                    e["within"] = within
                 planned = qm.plan(L, q)[0]
                 info = planned[run.id]
                 held = qm.holders(L, q, run.id)
@@ -1202,9 +1207,57 @@ def _relayout(store, L):
     return cur if lay.valid_layout(cur) and cur["key"] != L["key"] else L
 
 
+def within_of(L, within, kind, need, own, parent, machine):
+    """(the thread list as text, [cpu slot]) of book's within on layout L: the slots whose threads
+    all lie in it. machine: the thread ids this machine has. A thread it names that the owner's
+    division leaves out of every slot is no error; it is just not used. LockError 2 when it is not
+    a thread list, names a thread the machine does not have, holds no whole slot, holds fewer
+    slots than the run takes itself (own), or the run is nested and inherits its parent's cores
+    while they are not all inside it."""
+    try:
+        if isinstance(within, str):
+            ts = lay.parse_threads(within)
+        elif (isinstance(within, (list, tuple, set, frozenset, range)) and within
+              and all(type(t) is int and 0 <= t <= lay.MAX_THREAD for t in within)):
+            ts = sorted(set(within))
+        else:
+            raise ValueError("a thread list is like 8-15,20 (or a list of thread ids), not %r"
+                             % (within,))
+    except ValueError as e:
+        raise LockError(EXIT_USAGE, "usage: --within: %s. Exit 2." % e)
+    text = cpu.mask_text(cpu.bits_mask(ts))
+    stray = [t for t in ts if t not in machine]
+    if stray:
+        raise LockError(EXIT_USAGE, "usage: --within %s: thread%s %s %s not threads of this "
+                                    "machine (it has threads %s). Exit 2." % (
+                                        text, "" if len(stray) == 1 else "s",
+                                        cpu.mask_text(cpu.bits_mask(stray)),
+                                        "is" if len(stray) == 1 else "are",
+                                        cpu.mask_text(cpu.bits_mask(machine))))
+    slots = lay.within_slots(L, ts)
+    if not slots:
+        raise LockError(EXIT_USAGE, "usage: --within %s holds no whole cpu slot (a slot is %d "
+                                    "threads, all of them inside). Exit 2."
+                        % (text, L["cpu_slot_threads"]))
+    if own["cpu"] > len(slots):
+        raise LockError(EXIT_USAGE, "usage: --within %s holds %d whole cpu slot%s (%s), but a %s "
+                                    "run takes %d; ask for fewer with --cores %d or less. Exit 2."
+                        % (text, len(slots), "" if len(slots) == 1 else "s",
+                           lay.slots_text("cpu", slots), kind, own["cpu"], len(slots)))
+    if parent and need["cpu"] and not own["cpu"]:
+        pc = [i for i in parent.get("cores") or [] if type(i) is int]
+        if not pc or not set(pc) <= set(slots):
+            raise LockError(EXIT_USAGE, "usage: nested run refused: it runs on the cores of the "
+                                        "run it is nested in (run %s, %s), and they are not all "
+                                        "inside --within %s; start it outside that run. Exit 2."
+                            % (parent["id"], lay.slots_text("cpu", pc), text))
+    return text, slots
+
+
 def book(kind, repo, slug, cores=None, hold=None, gpu_share=None, wait_s=None, no_wait=False,
          expect_s=None, note=None, on_release_cmd=None, cmd=None, store=None, kinds_table=None,
-         env=None, rid=None, detached=False, log=None, gate=False, resource=None, priority=None):
+         env=None, rid=None, detached=False, log=None, gate=False, resource=None, priority=None,
+         within=None):
     """Waits for a run of kind `kind` for repo/slug to hold its slots and returns its Slot.
     Raises LockError (the CLI's exit code) when it does not. cores: fewer cpu slots than the
     kind's size, 1..that size, never more; the kind's size is its whole number of cores
@@ -1221,7 +1274,10 @@ def book(kind, repo, slug, cores=None, hold=None, gpu_share=None, wait_s=None, n
     entry and record carry it). A nested run naming one its parent does not hold joins the queue
     for it even when the parent covers all it needs. priority "land": its entry plans ahead of
     every ordinary waiting run (kitlib.lock.queue.plan). Library callers only: neither is on the
-    CLI or the MCP server."""
+    CLI or the MCP server. within: the threads the run must stay inside (the CLI's --within: a
+    Linux cpuset list such as '8-15', or global thread ids), e.g. a container's cpuset; it takes
+    only cpu slots whose threads all lie inside (within_of), and waits for those while others are
+    free. The record carries `within` (the list) and `within_slots`; its queue entry `within`."""
     store = store or Store()
     env = dict(os.environ if env is None else env)
     try:
@@ -1283,6 +1339,13 @@ def book(kind, repo, slug, cores=None, hold=None, gpu_share=None, wait_s=None, n
     own, has, why = nest_need(parent, kind, need)
     if own is None:
         raise LockError(EXIT_USAGE, "usage: nested run refused: %s. Exit 2." % why)
+    wtext = wslots = None
+    if within is not None:
+        if hold:
+            raise LockError(EXIT_USAGE, "usage: --within and --hold do not go together: a run "
+                                        "inside a hold takes the hold's slots. Exit 2.")
+        machine = set(lay.hardware(store)["threads"])
+        wtext, wslots = within_of(L, within, kind, need, own, parent, machine)
     shares = hl.shares_for(k, gpu_share)
     if parent and not any(own.values()) and (resource is None or parent.get("resource") == resource):
         return Slot(store, None, L, own, parent, None, env, on_release_cmd, k, shares, log, gate)
@@ -1303,7 +1366,8 @@ def book(kind, repo, slug, cores=None, hold=None, gpu_share=None, wait_s=None, n
                        parent=parent["id"] if parent else None, gpu_share=gpu_share,
                        **({"gate": True} if gate else {}),
                        **({"resource": resource} if resource else {}),
-                       **({"priority": priority} if priority else {}))
+                       **({"priority": priority} if priority else {}),
+                       **({"within": wtext, "within_slots": {"cpu": wslots}} if wtext else {}))
     except BaseException:
         mutex.release()
         raise
@@ -1342,9 +1406,12 @@ def book(kind, repo, slug, cores=None, hold=None, gpu_share=None, wait_s=None, n
             own, has, why = nest_need(parent, kind, need)
             if own is None:
                 raise LockError(EXIT_USAGE, "usage: nested run refused: %s. Exit 2." % why)
+            if wtext:
+                wtext, wslots = within_of(L, within, kind, need, own, parent, machine)
+                run.save(within=wtext, within_slots={"cpu": wslots})
             run.usage = Usage(L["cpu_slot_threads"], store.settings.usage_sample_s)
             run.save(need=own, has={p: n for p, n in has.items() if n}, layout=lay.slot_key(L))
-        acquire(store, run, L, own, wait_s, no_wait, prefer)
+        acquire(store, run, L, own, wait_s, no_wait, prefer, {"cpu": wslots} if wtext else None)
         if run.rec.get("hold_owner") == "agent":
             hl.claimed(store, run.id, hold)
         how = "not started"
