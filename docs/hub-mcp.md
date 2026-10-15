@@ -42,7 +42,8 @@ Endpoints are below `/api/v1` (`kitlib.hubsite.api.BASE`).
 hub's api as given (blank sends none). With it they list or wait for that key's pending items only:
 a session waits for its own answers with `hub_wait` `pending: true, for: <its launcher key>`, and
 `for: pm` is the PM's items and every answered question (docs/action-hub.md "Who handles a
-pending item"). A `for` that returns one of the key's items hands it over, as the CLI's does. The
+pending item"). A session key's `for` that returns one of that key's items hands it over, as the
+CLI's does; `for: pm` hands nothing over (`api.Api.handed`). The
 hub refuses `for` on a wait without `pending` (`invalid`, field `for`). Without `for` they see
 every pending item, including a coordinator's to-do routed to that coordinator and not yet acked:
 a pending `hub_wait` returns at once on such an item. `tests/hubmcp/test_server.py`
