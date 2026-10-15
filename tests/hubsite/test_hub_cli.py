@@ -1217,9 +1217,10 @@ class PendingCase(VerbCase):
         self.assertEqual(len(want['items']), 2, want)
         self.assertEqual(json.loads('\n'.join(self.ok('pending', '--json'))), want)
         self.assertEqual(self.ok('pending'), [
-            '%s %s [%s] %s' % (i['kind'], i['id'], i['repo'] or '-', i['title'])
+            '%s %s [%s] to=%s from=%s %s' % (i['kind'], i['id'], i['repo'] or '-', i['route'],
+                                             i['from'], i['title'])
             for i in want['items']])
-        self.assertIn('Q-1000 [kit] which way', self.ok('pending')[0])
+        self.assertIn('Q-1000 [kit] to=pm from=pm which way', self.ok('pending')[0])
 
 
 class WriteCase(VerbCase):
@@ -1434,8 +1435,8 @@ class WaitVerbCase(VerbCase):
         items = self.direct('/pending')['items']
         self.assertEqual([i['id'] for i in items], ['Q-1000'])
         self.assertEqual(self.ok('wait', '--pending', '--timeout', '5'),
-                         ['HUB %d %s Q-1000 which way' % (self.hub.store.revision,
-                                                         items[0]['kind'])])
+                         ['HUB %d %s Q-1000 to=pm from=pm which way' % (self.hub.store.revision,
+                                                                       items[0]['kind'])])
 
     def test_a_wait_argument_that_is_no_number_is_a_usage_error(self):
         for argv in (('wait', '--timeout', 'soon'), ('wait', '--timeout', '-1'),
@@ -1469,12 +1470,31 @@ class DirectQuestionCase(VerbCase):
             self.ok('answer', qid, '--choice', '0')
         got = json.loads('\n'.join(self.ok('pending', '--json', '--for', 'kit')))
         self.assertEqual([(i['id'], i['from']) for i in got['items']], [(mine, 'kit')])
-        self.assertEqual([line.split()[1] for line in self.ok('pending', '--for', 'pm')], [pms])
+        # the PM's list holds every answered question, each to be logged, whoever asked it
+        self.assertEqual(sorted(line.split()[1] for line in self.ok('pending', '--for', 'pm')),
+                         sorted([mine, theirs, pms]))
         self.assertEqual(sorted(line.split()[1] for line in self.ok('pending')),
                          sorted([mine, theirs, pms]))
         self.assertEqual(self.ok('wait', '--pending', '--for', 'other', '--timeout', '5'),
-                         ['HUB %d %s %s theirs' % (self.hub.store.revision,
-                                                   got['items'][0]['kind'], theirs)])
+                         ['HUB %d %s %s to=other from=other theirs' % (
+                             self.hub.store.revision, got['items'][0]['kind'], theirs)])
+
+    def test_pending_and_wait_lines_say_who_handles_each_item_and_whose_it_is(self):
+        mine, pms = self.asks('kit', 'mine'), self.ask('pms')[0].split()[1]
+        for qid in (mine, pms):
+            self.ok('answer', qid, '--choice', '0')
+        kind = self.direct('/pending')['items'][0]['kind']
+        # kit has never waited: the PM handles its answer too
+        self.assertEqual(sorted(self.ok('pending')),
+                         sorted(['%s %s [kit] to=pm from=kit mine' % (kind, mine),
+                                 '%s %s [kit] to=pm from=pm pms' % (kind, pms)]))
+        rev = self.hub.store.revision
+        self.assertEqual(self.ok('wait', '--pending', '--for', 'kit', '--timeout', '5'),
+                         ['HUB %d %s %s to=kit from=kit mine' % (rev, kind, mine)])
+        # handed over to kit: kit handles it now, and the PM still logs it
+        self.assertEqual(sorted(self.ok('wait', '--pending', '--for', 'pm', '--timeout', '5')),
+                         sorted(['HUB %d %s %s to=kit from=kit mine' % (rev, kind, mine),
+                                 'HUB %d %s %s to=pm from=pm pms' % (rev, kind, pms)]))
 
     def test_a_wait_for_a_key_with_nothing_for_it_times_out(self):
         self.ok('answer', self.asks('other', 'theirs'), '--choice', '0')

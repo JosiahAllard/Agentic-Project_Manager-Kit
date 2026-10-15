@@ -4,7 +4,7 @@ hub site design, section 2 "HTTP API" and section 9).
   ROUTES     the table every transport iterates: Route(method, pattern, role, handler). A pattern
              is a full path under BASE; a `{name}` segment takes one path segment. role is OWNER,
              AGENT or ANY: who may call it.
-  Api(store, views=None, clock=None, session_keys=None)
+  Api(store, views=None, clock=None, session_keys=None, now=None)
              .call(method, path, role, body=None, query=None, via='', raise_unexpected=False,
                    agent_words=False) -> (status, object)
              via names the transport (web, desktop-mcp, cli, tunnel, ...); every write records
@@ -75,13 +75,27 @@ key put into and popped from a dict, which the interpreter does as one step each
 
 Pending for one session. Every pending item carries `from`, the session key it is for
 (Api.pending). GET pending and GET wait (with pending=1) take `for=<key>`: only that key's
-items are listed, and such a wait is woken only by one of them, a reset or its timeout, so a
+items are listed (`for=pm`: see Routes), and such a wait is woken only by one of them, a reset or its timeout, so a
 coordinator is not woken by another session's answer. A filtered read changes nothing: the
 items it leaves out, and the ones it lists, stay pending for every reader until they are
 handled (a question until it is logged). Without `for` every item is listed, as before.
 GET wait (with pending=1) also takes `except=<id>,<id>`: the ids the caller has already acted
 on are left out, and such a wait is woken only by another item, so an answer that waits for the
 PM's log is not returned again at once. It too only hides: nothing is marked.
+
+Routes. Every pending item also carries `route`: who is to handle it now. It is its `from` key
+while that session can be reached, else `pm`, so the PM is the fallback for a creator that is
+gone. An item whose `from` is `pm` is the PM's. Otherwise, once a GET pending or GET wait `for`
+its key has handed the item to that key (an agent call), the route is the key for
+ACK_WINDOW_S after that first hand-over and `pm` from then on while it is still pending (the
+creator clears a to-do with its ack). Before any hand-over the route is the key while the key is
+reachable: a wait `for` it is blocked now, or one started or ended within REACH_GRACE_S. `for=pm`
+lists the items routed to `pm` and every answered question, whoever it is from (the PM logs each
+ruling); a wait `for=pm` is also woken when an item's route turns to `pm` with no write. All of
+this lives in this Api object: a new Api (a server restart) routes every item to `pm` until its
+creator waits again. As for PM seen, no lock is taken: each note is one dict step, a dict is
+copied before it is walked, and a key's map of blocked waits is never removed, so a wait that
+opens while another closes is not lost.
 
 Revision. A read's `revision` is taken before the data is copied, so it is never later than the
 data: a client that waits `since` it is told of any write the copy missed. GET health gives the
@@ -106,6 +120,9 @@ CALLERS = (OWNER, AGENT)            # what a caller may be
 STATUS = {'invalid': 400, 'forbidden': 403, 'not_found': 404, 'conflict': 409, 'store': 503,
           'unavailable': 503, 'internal': 500}
 WAIT_MAX_S = 55
+ACK_WINDOW_S = 30 * 60              # a creator's time to handle an item handed to it ("Routes")
+REACH_GRACE_S = WAIT_MAX_S + 30     # a key is reachable this long after its last wait ("Routes")
+ROUTE_SLACK_S = 0.01                # a PM wait looks again this long after a route's turn is due
 VIEWS = ('backlog', 'completed', 'notices', 'repos', 'usage', 'agents')
 OWNER_FROM = 'you'                  # a to-do's or a story's `from` when the owner wrote it
 AGENT_FROM = 'pm'                   # a to-do's `from` when an agent gives none
@@ -293,6 +310,17 @@ def launcher_keys():
         return set()
 
 
+def _for(d, for_key):
+    """Whether pending item d (with `from` and `route`) is listed for for_key: every item with
+    none; for AGENT_FROM, the ones routed to it and every question (the PM logs each ruling);
+    for another key, its own."""
+    if not for_key:
+        return True
+    if for_key == AGENT_FROM:
+        return d['route'] == AGENT_FROM or d['kind'] == 'question'
+    return d['from'] == for_key
+
+
 def _agent_from(text):
     """The `from` of a to-do an agent adds: text trimmed, AGENT_FROM when that leaves nothing.
     Only printable ASCII with single spaces inside is a name (so no character a reader cannot
@@ -314,15 +342,23 @@ class Api(object):
     """The hub's verbs over `store` (a kitlib.hubsite.store.Store). `views` gives the derived
     views (module docstring) or is None; `clock` gives the time stamp of a write as an ISO
     string (default: the store's clock); `session_keys` gives the launcher's session keys as an
-    iterable, called afresh on each use (default: launcher_keys)."""
+    iterable, called afresh on each use (default: launcher_keys); `now` gives monotonic seconds
+    for the routes (default: time.monotonic)."""
 
-    def __init__(self, store, views=None, clock=None, session_keys=None):
+    def __init__(self, store, views=None, clock=None, session_keys=None, now=None):
         self.store = store
         self.views = views
         self.clock = clock or store.clock
         self._session_keys = session_keys or launcher_keys
         self._seen = {'waited': None, 'pulled': None}
         self._waits = {}            # one key per agent wait that is blocked right now
+        # routes (module docstring "Routes"): one dict step per note, no lock
+        self.now = now or time.monotonic
+        self.ack_window_s = ACK_WINDOW_S
+        self.reach_grace_s = REACH_GRACE_S
+        self._listening = {}        # session key -> {wait token: True} for its blocked waits
+        self._heard = {}            # session key -> `now` its last wait started or ended
+        self._handed = {}           # (kind, id) -> (session key, `now` of the first hand-over)
 
     def call(self, method, path, role, body=None, query=None, via='', raise_unexpected=False,
              agent_words=False):
@@ -460,9 +496,21 @@ class Api(object):
     def pending(self, for_key=''):
         """The pending items, each with the session key it is for as `from`: a question's or a
         to-do's own `from` when that is a session key, else AGENT_FROM (so the owner's to-dos,
-        free-text names, stories and notes are the PM's). With for_key, only the items for that
-        key. Reading never changes an item: what a filtered read leaves out stays pending for
-        every other reader."""
+        free-text names, stories and notes are the PM's), and the key that is to handle it now
+        as `route` (module docstring "Routes"). With for_key, only the items for that key; for
+        AGENT_FROM, the items routed to it and every question. Reading never changes an item:
+        what a filtered read leaves out stays pending for every other reader."""
+        return [d for d in self._routed()[0] if _for(d, for_key)]
+
+    def route_change_in(self):
+        """Seconds until the route of a pending item next turns to AGENT_FROM with no write
+        (a hand-over's window or a key's grace running out), or None when none will."""
+        at = self._routed()[1]
+        return None if at is None else max(0.0, at - self.now())
+
+    def _routed(self):
+        """([item], `now` of the next route change or None): the pending items with `from` and
+        `route`. Hand-overs of items no longer pending are forgotten here."""
         found, keys, out = self.store.pending(), None, []
         for p in found:
             d = p._asdict()
@@ -471,9 +519,62 @@ class Api(object):
             if mine and keys is None:
                 keys = self.session_keys()          # read once, and only when it can matter
             d['from'] = sender if mine and sender in keys else AGENT_FROM
-            if not for_key or d['from'] == for_key:
-                out.append(d)
-        return out
+            out.append(d)
+        now, flips = self.now(), []
+        live = {(d['kind'], d['id']) for d in out}
+        for gone in [k for k in list(self._handed) if k not in live]:
+            self._handed.pop(gone, None)
+        for d in out:
+            d['route'], flip = self._route(d, now)
+            if flip is not None:
+                flips.append(flip)
+        return out, (min(flips) if flips else None)
+
+    def _route(self, d, now):
+        """(route, `now` it turns to AGENT_FROM or None) of item d."""
+        key = d['from']
+        if key == AGENT_FROM:
+            return AGENT_FROM, None
+        handed = self._handed.get((d['kind'], d['id']))
+        if handed is not None and handed[0] == key:
+            until = handed[1] + self.ack_window_s
+            return (key, until) if now < until else (AGENT_FROM, None)
+        if self._listening.get(key):
+            return key, None
+        heard = self._heard.get(key)
+        if heard is not None and now < heard + self.reach_grace_s:
+            return key, heard + self.reach_grace_s
+        return AGENT_FROM, None
+
+    def listen(self, req, opened=None, closed=None):
+        """Note that a wait `for` a session key other than AGENT_FROM started (`opened`, a
+        token for a wait that now blocks), ended (`closed`, that token) or was answered at once
+        (neither): the key is reachable (module docstring "Routes"). The owner's calls are not
+        noted."""
+        key = _q(req, 'for')
+        if req.role != AGENT or key in ('', AGENT_FROM):
+            return
+        self._heard[key] = self.now()
+        waits = self._listening.setdefault(key, {})
+        if opened is not None:
+            waits[opened] = True
+        if closed is not None:
+            waits.pop(closed, None)
+
+    def handed(self, req, items):
+        """Note that items went to the session key the request is `for` (an agent's call, a key
+        other than AGENT_FROM): each of that key's own is handed over, the first time only. An
+        item it now holds within the ack window gets the key as its `route` in `items` too, so
+        the answer says who has it after this call, not before."""
+        key = _q(req, 'for')
+        if req.role != AGENT or key in ('', AGENT_FROM):
+            return
+        now = self.now()
+        for d in items:
+            if d.get('from') == key:
+                got = self._handed.setdefault((d['kind'], d['id']), (key, now))
+                if got[0] == key and now < got[1] + self.ack_window_s:
+                    d['route'] = key
 
     def seen(self, req, what, opened=None, closed=None):
         """Note that an agent (a PM session) just waited or pulled (`what`). `opened` is a key
@@ -590,7 +691,11 @@ def todos_done(api, req):
     doc_id = req.params['id']
     d = api.doc('todos', doc_id, b)
     changes = {'status': 'done' if done else 'open', 'done_at': api.clock() if done else None}
-    return api.change('todos', doc_id, d, changes, req, changes)
+    out = api.change('todos', doc_id, d, changes, req, changes)
+    # a reopened or re-done to-do is pending afresh: an old hand-over must not outlive it when
+    # no read ran in between (_routed forgets only what it sees gone)
+    api._handed.pop(('todo', doc_id), None)
+    return out
 
 
 def todos_ack(api, req):
@@ -824,6 +929,7 @@ def _listing(name):
 def pending(api, req):
     items = api.pending(_q(req, 'for'))
     api.seen(req, 'pulled')
+    api.handed(req, items)
     return {'items': items}
 
 
@@ -858,19 +964,24 @@ def wait(api, req):
         api.seen(req, 'pulled')
     if items:
         api.seen(req, 'waited')
+        api.listen(req)
         ch = api.store.changes_since(since)
     else:
         key = object()
         api.seen(req, 'waited', opened=key)
+        api.listen(req, opened=key)
         try:
             if filtered:
-                ch = _wait_for(api, since, min(timeout, WAIT_MAX_S), mine)
+                ch = _wait_for(api, since, min(timeout, WAIT_MAX_S), mine,
+                               for_key == AGENT_FROM)
             else:
                 ch = api.store.wait(since, min(timeout, WAIT_MAX_S))
         finally:
             api.seen(req, 'waited', closed=key)
+            api.listen(req, closed=key)
         found = mine()
         items = found if want else []
+    api.handed(req, items)
     # a filtered wait ends on its own items, a reset or the timeout, never on other writes
     quiet = not ch.reset and not items and (filtered or not ch.events)
     return {'revision': ch.revision, 'reset': ch.reset,
@@ -880,14 +991,20 @@ def wait(api, req):
             'pending': items}
 
 
-def _wait_for(api, since, timeout, mine):
+def _wait_for(api, since, timeout, mine, routes=False):
     """Store.wait until mine() (the pending items this wait is for: its `for` key, less its
     `except` ids) is not empty, the store resets, or timeout seconds pass; a write that leaves
-    it empty waits on. The changes since `since`, all of them."""
+    it empty waits on. With routes (a wait for the PM) it also looks again when an item's route
+    next turns to the PM, which no write announces. The changes since `since`, all of them."""
     end = time.monotonic() + timeout
     at = since
     while True:
-        ch = api.store.wait(at, max(0.0, end - time.monotonic()))
+        left = max(0.0, end - time.monotonic())
+        if routes:
+            flip = api.route_change_in()
+            if flip is not None:
+                left = min(left, flip + ROUTE_SLACK_S)
+        ch = api.store.wait(at, left)
         if ch.reset:
             return ch
         if mine() or time.monotonic() >= end:

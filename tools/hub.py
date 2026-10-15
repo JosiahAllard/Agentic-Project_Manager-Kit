@@ -132,16 +132,20 @@ the server alone decides what a role may do.
   hub.py inbox add --text T [--title T] [--repo R] [--ref ID] [--asked TEXT] [--refs ID ...]
         [--from NAME]                                `POSTED M-2`
   hub.py inbox read M-1 [--undo] [--if-version V]   (owner) `READ M-1`, `UNREAD M-1`
-  hub.py pending [--for KEY]                        `<kind> <id> [repo] title` for each item of
-                                                     owner input the PM has not handled; --for:
-                                                     only the items that came back to session
-                                                     KEY (--json shows each item's `from`)
+  hub.py pending [--for KEY]                        `<kind> <id> [repo] to=R from=K title` for
+                                                     each item of owner input not yet handled: R
+                                                     is the session key to handle it now (pm
+                                                     when its creator K cannot be reached);
+                                                     --for KEY: only the items for session KEY
+                                                     (--for pm: the ones routed to the PM and
+                                                     every answered question)
   hub.py wait [--since REV] [--timeout S] [--pending [--for KEY] [--except ID...]]
       waits until the store changes after revision REV (default: the revision at the call), or,
       with --pending, until an item is pending (one that is pending already ends it at once);
       with --for KEY as well, until an item for session KEY is pending; with --except, items
       with those ids (ones already acted on, still pending until the PM logs them) are left out.
-      Prints `HUB <rev> <kind> <id> <title>` for each pending item and `HUB <rev> <collection>
+      The PM waits with --for pm. Prints `HUB <rev> <kind> <id> to=R from=K <title>` for each
+      pending item (R and K as for pending) and `HUB <rev> <collection>
       <id> <op> <status>` for each change, exit 0. With --timeout S: exit 4 and no line when S
       seconds pass with neither. Without it the wait has no end of its own.
   hub.py validate [--store PATH]
@@ -926,10 +930,16 @@ def _inbox(a, stop):
                  [_item(d, 'read' if d.get('read') else 'unread') for d in items])
 
 
+def _routed(p):
+    """`to=<route> from=<from>` of pending item p: the session key that is to handle it now and
+    the key it is for (docs/action-hub.md "Who handles a pending item"); `-` for one not given."""
+    return 'to=%s from=%s' % (p.get('route') or '-', p.get('from') or '-')
+
+
 def _pending(a, stop):
     got = _hub(a).get('/pending', client.ANY, {'for': a.for_key})
-    return _show(a, got, ['%s %s [%s] %s' % (p.get('kind'), p.get('id'), p.get('repo') or '-',
-                                              p.get('title') or '')
+    return _show(a, got, ['%s %s [%s] %s %s' % (p.get('kind'), p.get('id'), p.get('repo') or '-',
+                                                 _routed(p), p.get('title') or '')
                           for p in got.get('items') or []])
 
 
@@ -940,7 +950,8 @@ def _wait(a, stop):
             _show(a, got, [])
         return client.TIMED_OUT
     rev = got.get('revision')
-    lines = ['HUB %s %s %s %s' % (rev, p.get('kind'), p.get('id'), p.get('title') or '')
+    lines = ['HUB %s %s %s %s %s' % (rev, p.get('kind'), p.get('id'), _routed(p),
+                                     p.get('title') or '')
              for p in got.get('pending') or []]
     lines += ['HUB %s %s %s %s %s' % (rev, c.get('collection'), c.get('id'), c.get('op'),
                                       c.get('status') or '-')

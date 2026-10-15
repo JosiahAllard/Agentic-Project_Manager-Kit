@@ -152,7 +152,9 @@ class ForTest(DirectCase):
             self.answer(qid)
         self.assertEqual(self.ids(self.pending(**{'for': 'kit'})), [mine])
         self.assertEqual(self.ids(self.pending(**{'for': 'zeta'})), [theirs])
-        self.assertEqual(self.ids(self.pending(**{'for': 'pm'})), [pms])
+        # the PM's list holds every answered question: it logs each ruling (test_notify_creator)
+        self.assertEqual(sorted(self.ids(self.pending(**{'for': 'pm'}))),
+                         sorted([mine, theirs, pms]))
         self.assertEqual(sorted(self.ids(self.pending())), sorted([mine, theirs, pms]))
 
     def test_a_question_whose_session_went_away_is_the_pms(self):

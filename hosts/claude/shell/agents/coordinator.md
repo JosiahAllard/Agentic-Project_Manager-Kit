@@ -140,8 +140,12 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   (<kit>/docs/action-hub.md "For the PM"), and until it does the answer stays pending: without
   `--except` the wait prints it again at once. After a compaction or restart, an id the wait
   prints before the PM has logged it may be one you already acted on: check before acting again.
+  A command for the owner to run for your own work you file yourself:
+  `python <kit>/tools/hub.py todos add --title ... --command ... --from <your session key>`.
+  When the same wait prints it (the owner marked it done), act on it and `hub.py todos ack <id>`; one not acked within
+  30 minutes falls to the PM (<kit>/docs/action-hub.md "Who handles a pending item").
   Anything else that needs the owner (a typed go, a
-  command to run) goes to the PM by SendMessage with the exact text or commands, working
+  step for another repo) goes to the PM by SendMessage with the exact text or commands, working
   directory and order; a request left only in your chat waits unseen. The owner still types a go
   in your window where one is required. Answers in the owner's own words.
 - You decide and land anything that does not remove a user-facing control, change a schema or

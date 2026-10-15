@@ -67,16 +67,33 @@ class HubSiteTest(unittest.TestCase):
 
     def test_up_with_nothing_pending_says_port_and_count_and_the_wait_line(self):
         out = site(FakeClient())
-        self.assertEqual(out[0], "hub: server up on port 4321, 0 pending")
+        self.assertEqual(out[0], "hub: server up on port 4321, 0 pending for the PM")
         self.assertEqual(len(out), 2)
         self.assertIn("wait --pending", out[1])
         self.assertIn("in the background", out[1])
 
     def test_pending_items_are_counted_and_to_be_processed(self):
         out = site(FakeClient(pending=[{"id": "a"}, {"id": "b"}]))
-        self.assertEqual(out[0], "hub: server up on port 4321, 2 pending")
+        self.assertEqual(out[0], "hub: server up on port 4321, 2 pending for the PM")
         self.assertIn('hub.py" pending', out[1])
         self.assertIn("wait --pending", out[2])
+
+    def test_only_the_pms_items_are_counted_not_one_routed_to_a_reachable_creator(self):
+        class Routed(FakeClient):
+            def get(self, path, role=hubclient.ANY, query=None, timeout=None):
+                if path != "/pending":
+                    return FakeClient.get(self, path, role, query, timeout)
+                self.calls.append((path, timeout))
+                self.asked = query
+                pm = [{"id": "q1", "route": "pm"}]
+                return {"ok": True, "items": pm if (query or {}).get("for") == "pm"
+                        else pm + [{"id": "t1", "route": "kit"}]}
+        c = Routed()
+        out = site(c)
+        self.assertEqual(c.asked, {"for": "pm"})
+        self.assertEqual(out[0], "hub: server up on port 4321, 1 pending for the PM")
+        self.assertIn('process the 1 pending item(s): python "%s" pending --for pm, then handle'
+                      % pmstart.HUB_TOOL, out[1])
 
     def test_a_running_wait_replaces_the_start_line(self):
         procs = [{"Name": "python.exe", "CommandLine": 'python "x/tools/hub.py" wait --pending'}]
@@ -95,6 +112,15 @@ class HubSiteTest(unittest.TestCase):
                     hub + ' --timeout 30'):
             with self.subTest(cmd=cmd):
                 self.assertEqual(line(cmd), "hub: wait --pending is running")
+
+    def test_with_no_pm_wait_the_line_is_a_warning_naming_the_pms_wait_for_pm(self):
+        cmd = 'python "x/tools/hub.py" wait --pending --for coordinator-x'
+        for procs in ([], [{"Name": "python.exe", "CommandLine": cmd}]):
+            with self.subTest(procs=procs):
+                line = site(FakeClient(), procs=procs)[1]
+                self.assertTrue(line.startswith("hub: WARN no PM wait --pending --for pm is running"),
+                                line)
+                self.assertIn('hub.py" wait --pending --for pm (', line)
 
     def test_a_wait_without_pending_does_not_count(self):
         procs = [{"Name": "python.exe", "CommandLine": 'python "x/tools/hub.py" wait --timeout 5'}]
@@ -223,7 +249,7 @@ class HubSiteTest(unittest.TestCase):
                         return {"ok": True, "items": bad}
                     return FakeClient.get(self, path, *a, **k)
             out = site(Odd())
-            self.assertEqual(out[0], "hub: server up on port 4321, 0 pending", repr(bad))
+            self.assertEqual(out[0], "hub: server up on port 4321, 0 pending for the PM", repr(bad))
             self.assertEqual(len(out), 2, repr(bad))
 
     def test_each_ask_has_a_short_timeout(self):
@@ -246,6 +272,7 @@ class HubSiteTest(unittest.TestCase):
                 make_client=lambda port: hubclient.Client(
                     port, tokens=d, timeout=pmstart.HUB_SITE_TIMEOUT_S, ask=ask))
         self.assertTrue(asked)
+        self.assertIn("/api/v1/pending?for=pm", [a[2] for a in asked])   # the PM's items only
         self.assertTrue(all(a[3] == TOKEN for a in asked))      # the token was sent, never shown
         self.assertTrue(all(a[4] == pmstart.HUB_SITE_TIMEOUT_S and a[0] == 4321 for a in asked))
         self.assertNotIn(TOKEN, "\n".join(made))

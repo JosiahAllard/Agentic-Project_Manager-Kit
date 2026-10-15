@@ -215,19 +215,23 @@ def hub_site(procs=(), load=None, make_client=_hub_client):
     if health.get("ok") is False:
         return ["hub: server did not answer as the hub does (health not ok)"]
     try:
-        items = hub.get("/pending", timeout=HUB_SITE_TIMEOUT_S).get("items")
+        # the PM's items only: one routed to a reachable creator is that session's to ack, and a PM
+        # ack would hide it from the creator's wait (docs/action-hub.md "Who handles a pending item")
+        items = hub.get("/pending", query={"for": "pm"}, timeout=HUB_SITE_TIMEOUT_S).get("items")
         items = items if isinstance(items, list) else []
     except Exception as e:
         return ["hub: server up on port %d, pending not asked (%s)" % (port, type(e).__name__)]
-    lines = ["hub: server up on port %d, %d pending" % (port, len(items))]
+    lines = ["hub: server up on port %d, %d pending for the PM" % (port, len(items))]
     if items:
-        lines.append("hub: process the %d pending item(s): python \"%s\" pending, then handle, ack or log "
-                     "each" % (len(items), HUB_TOOL))
+        lines.append("hub: process the %d pending item(s): python \"%s\" pending --for pm, then "
+                     "handle, ack or log each" % (len(items), HUB_TOOL))
     if _wait_running(procs):
         lines.append("hub: wait --pending is running")
     else:
-        lines.append("hub: start in the background: python \"%s\" wait --pending (it exits with one HUB "
-                     "line per item; handle the items, then start it again)" % HUB_TOOL)
+        lines.append("hub: WARN no PM wait --pending --for pm is running, so items routed to the PM "
+                     "go unseen; start in the background: python \"%s\" wait --pending --for pm (it "
+                     "exits with one HUB line per item; handle the items, then start it again)"
+                     % HUB_TOOL)
     return lines
 
 
