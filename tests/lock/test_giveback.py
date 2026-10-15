@@ -452,7 +452,7 @@ class Narrowing(StoreCase):
         self.assertEqual(affinity(p), both)
 
     def test_a_record_read_that_collides_with_its_replace_is_not_gone(self):
-        # KIT-LOCK-GIVEBACK-FLAKE: an asker's open of the record that lands while the wrapper
+        # An asker's open of the record that lands while the wrapper
         # replaces it is refused (PermissionError). That is "not now": it looks again, and hears
         # the answer; only a record that is not there, or not held, is "gone".
         s, usable = self.held(2)

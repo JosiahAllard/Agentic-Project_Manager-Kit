@@ -188,8 +188,8 @@ def read_record(path):
     no such file, the run is gone (finish removes it). (None, True): there but not read now.
     The wrapper writes the record by os.replace, and on Windows an open that lands while it
     swaps the file is refused (PermissionError), never answered with no such file: that is
-    "not now", not "gone" (KIT-LOCK-GIVEBACK-FLAKE: under load an asker heard "gone" from a
-    run that went on to refuse). A file that is not a JSON object reads the same way."""
+    "not now", not "gone" (under load an asker heard "gone" from a run that went on to
+    refuse). A file that is not a JSON object reads the same way."""
     try:
         with open(path, encoding="utf-8") as f:
             d = json.load(f)
