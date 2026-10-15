@@ -2928,6 +2928,29 @@ def ps_native_unsure(w):
     return '"' in t or not t or (t.endswith('\\') and any(c.isspace() for c in t))
 
 
+def cmd_native_unsure(cmd, w):
+    """True when the C runtime may split the word `w` that cmd.exe passes on other than cmd reads
+    it: cmd toggles quoting at every `"` and keeps backslashes, the C runtime reads `\\"` as a quote
+    and `""` inside quotes as one; so only a word with no `"`, or one wholly in one pair of quotes
+    with no backslash before the closing one, is read the same (cmd reads a\\" -o f \\"b as one
+    word, git.exe gets a", -o, f, "b)."""
+    src = cmd.source or ''
+    raw = src[w.start:w.end] if w.start is not None and 0 <= w.start <= w.end <= len(src) else w.text
+    if '"' not in raw:
+        return False
+    return not (len(raw) >= 2 and raw[0] == raw[-1] == '"' and '"' not in raw[1:-1] and not raw[:-1].endswith('\\'))
+
+
+def native_unsure(cmd, w):
+    """True when the shell may hand the word `w` to a native program as other than one argument,
+    the word the guard reads (ps_native_unsure, cmd_native_unsure)."""
+    if cmd.shell == sh.PS:
+        return ps_native_unsure(w)
+    if cmd.shell == sh.CMD:
+        return cmd_native_unsure(cmd, w)
+    return False
+
+
 def archive_words(gc):
     """The Words after git archive `gc`'s subcommand as the shell hands them to git (bash drops
     every backslash it would, a leading one too: `\\-o` is -o; commands.passed)."""
@@ -2941,19 +2964,24 @@ def archive_filter_set(gc):
     does not, or the guard cannot tell: a git the text cannot place (gc.blind: --git-dir,
     --work-tree, --config-env, a GIT_DIR-like variable), any GIT_* variable outside
     commands.GIT_SAFE_NAMES or an environment change the guard cannot read (commands.mark_git_env),
-    a user config moved (HOME and the like, Command.home_env), and before the subcommand a word the
-    guard cannot read (computed; in PowerShell one ps_native_unsure splits) or a -c whose key, read
-    as the shell hands it to git (commands.passed), is not on ARCHIVE_SAFE_KEY_RE."""
+    a user config moved (HOME and the like, Command.home_env), PATH changed (Command.path_env), and
+    before the subcommand --exec-path (it and PATH say where git finds a filter's bare program
+    name, as Git for Windows' filter.lfs.process = git-lfs), a word the guard cannot read
+    (computed, or one PowerShell or cmd may split: native_unsure) or a -c whose key, read as the
+    shell hands it to git (commands.passed), is not on ARCHIVE_SAFE_KEY_RE."""
     cmd = gc.inv.cmd
-    if gc.blind or cmd.git_env or cmd.home_env:
+    if gc.blind or cmd.git_env or cmd.home_env or cmd.path_env:
         return True
     args = gc.inv.args
     pre = args[:len(args) - len(gc.rest) - 1]
     k = 0
     while k < len(pre):
-        if any(w.dyn or cmd.shell == sh.PS and ps_native_unsure(w) for w in pre[k:k + 2]):
+        if any(w.dyn or native_unsure(cmd, w) for w in pre[k:k + 2]):
             return True
         t = cm.passed(cmd, pre[k])
+        name = t.partition('=')[0]
+        if name.startswith('--exec-path') or len(name) > 2 and '--exec-path'.startswith(name):
+            return True
         if t == '-c':
             if k + 1 >= len(pre):
                 return True
@@ -3021,11 +3049,11 @@ def archive_outputs(gc):
     opens (archive_opened) and, failing closed, those the later pass would read (-vo <f>, an -o
     after `--prefix`'s value), and True when the archive only reads the repository it runs in: no
     --remote or --exec (they run a program), no option the guard does not know (a --no-* among
-    them) and no word that is not literal (an unquoted $X may hold -o) or that PowerShell may split
-    (ps_native_unsure). An unknown option does not end the scan, so an -o after it is still an
-    output. Every word is read as the shell hands it to git (archive_words)."""
+    them) and no word that is not literal (an unquoted $X may hold -o) or that PowerShell or cmd
+    may split (native_unsure). An unknown option does not end the scan, so an -o after it is still
+    an output. Every word is read as the shell hands it to git (archive_words)."""
     words = archive_words(gc)
-    read = not (gc.inv.cmd.shell == sh.PS and any(ps_native_unsure(w) for w in words))
+    read = not any(native_unsure(gc.inv.cmd, w) for w in words)
     outs, k = [], 0
     while k < len(words):
         w, t = words[k], words[k].text

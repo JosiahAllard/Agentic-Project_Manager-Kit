@@ -1344,7 +1344,9 @@ def mark_git_env(parsed):
     assignment, read HOME, printf -v HOME, for HOME in ..., let HOME=1, $((HOME=1)); see
     bash_var_targets), or 'a variable named at run time'
     for a builtin whose target is computed (read $n), else False: git then reads another user
-    config (rules.home_config and rules.git_alias_config judge git with it)."""
+    config (rules.home_config and rules.git_alias_config judge git with it). c.path_env is True
+    when the line sets PATH the same ways (or a name computed at run time): git then finds a
+    filter's bare program name (git-lfs) elsewhere (rules.archive_filter_set)."""
     cmds = parsed.commands
     sets = line_env_names(cmds)
     name = next((n for n in map(git_env_set, cmds) if n), None)
@@ -1353,9 +1355,11 @@ def mark_git_env(parsed):
     home = next((n for n in HOME_ENV_NAMES if n in sets), None)
     if home is None and COMPUTED_NAME in sets:
         home = 'a variable named at run time'
+    path = 'PATH' in sets or COMPUTED_NAME in sets
     for c in cmds:
         c.git_env = name or False
         c.home_env = home or False
+        c.path_env = path
 
 
 # The variables git for Windows finds the user config through: $XDG_CONFIG_HOME/git/config, and

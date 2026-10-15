@@ -220,6 +220,56 @@ class ArchiveConfigFailsClosed(ArchiveWorld):
                 self.assertIsNone(self.pm(bash(text, self.w.plain)))
 
 
+class ArchiveProgramSearch(ArchiveWorld):
+    """git looks a filter's bare program name up on the exec path, then PATH (Git for Windows sets
+    filter.lfs.process = git-lfs filter-process), and archive reads the attributes of the tree it
+    archives: --exec-path or a PATH change on the line makes the archive no read. So does a word
+    cmd.exe passes on that the C runtime may split other than cmd reads it (a quote after a
+    backslash, a quote inside a word)."""
+
+    def test_an_exec_path_is_no_read(self):
+        # a bare --exec-path prints the path and exits before the subcommand (git 2.55, observed)
+        for shell in (bash, ps):
+            for opt in ('--exec-path=%s' % self.scratch, '--exec-path="%s"' % self.scratch):
+                text = 'git %s -C %s archive HEAD' % (opt, self.main)
+                with self.subTest(shell=shell.__name__, text=text):
+                    self.refused(shell, text)
+        self.refused(bash, 'git -C %s --exec-pat\\h=%s archive HEAD' % (self.main, self.scratch))
+
+    def test_a_path_change_on_the_line_is_no_read(self):
+        archive = 'git -C %s archive HEAD' % self.main
+        for text in ('PATH=%s:$PATH %s', 'export PATH=%s:$PATH; %s', 'env PATH=%s %s', 'PATH+=:%s %s',
+                     'set -a; PATH=%s; %s', 'declare -x PATH=%s; %s', 'read PATH <<< %s; %s'):
+            text = text % (self.scratch, archive)
+            with self.subTest(text):
+                self.refused(bash, text)
+        for text in ('$env:Path = "%s;" + $env:Path; %s', '$env:PATH += ";%s"; %s',
+                     "[Environment]::SetEnvironmentVariable('Path', '%s'); %s", 'Set-Item env:Path %s; %s',
+                     'Set-Item -Path env:PATH -Value %s; %s'):
+            text = text % (self.scratch, archive)
+            with self.subTest(text):
+                self.refused(ps, text)
+        self.refused(bash, "cmd //c 'set PATH=%s& %s'" % (self.scratch, archive))
+
+    def test_a_word_cmd_and_the_c_runtime_read_apart_is_no_read(self):
+        # cmd reads a\" -o README.md \"b as one word; git.exe gets a", -o, README.md, "b
+        for text in ('git -C %s archive a\\" -o README.md \\"b HEAD',
+                     'git -C %s --namespace a\\" -c tar.x.command=x.sh \\"b archive HEAD',
+                     'git -C %s archive "a"" -o README.md" HEAD', 'git -C %s archive HEAD "x\\"'):
+            text = text % self.main
+            with self.subTest(text):
+                self.refused(bash, "cmd //c '%s'" % text)
+                self.refused(ps, "cmd /c '%s'" % text)
+
+    def test_reading_path_and_a_plain_cmd_keep_it_a_read(self):
+        archive = 'git -C %s archive HEAD' % self.main
+        for text in ('echo "$PATH" && %s' % archive, "cmd //c 'git -C \"%s\" archive HEAD'" % self.main,
+                     "cmd //c '%s'" % archive):
+            with self.subTest(text):
+                self.assertIsNone(self.pm(bash(text, self.w.plain)))
+        self.assertIsNone(self.pm(ps('Write-Output $env:Path; %s' % archive, self.w.plain)))
+
+
 class ArchiveHoles(ArchiveWorld):
     """The two writes into a main checkout the guard let through before this fix (rules.write_targets
     returned before _tar under PowerShell; rules.git_targets did not know archive -o), the tar -C
