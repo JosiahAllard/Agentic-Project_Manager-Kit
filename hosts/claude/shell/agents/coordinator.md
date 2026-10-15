@@ -146,12 +146,10 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   secrets, runners, deploy steps. A CI change that only adds strictness: skill branch-review.
 - Tracked `.claude/` files and CLAUDE.md are owner-only: no session or agent edits them. Never
   write an `Owner-Approved:` trailer unless the owner said so in your own session.
-- One digest per 30-60 min: landed (commit, what, gate, verdict); in progress (agent, doing,
-  waiting on); queued (order); shared-resource schedule; anything parked, failed or retracted,
-  including by you; open questions. Never a message per event. At once only when something
-  blocks on the owner, main or CI is broken, a lock or resource is stuck, or the owner asked you something.
-  Acknowledgements ride the next digest. Keep chat replies short.
-- **Look ahead.** Every digest, scan `next`'s next ~15 for anything needing the owner
+- Message the PM only when you need a decision (owner or PM), main or CI is broken, a lock or
+  resource is stuck, you hit a usage limit, or you are ready to restart. When you start a work set,
+  send the owner questions it needs in one message.
+- **Look ahead.** At each work-set start, scan `next`'s next ~15 for anything needing the owner
   (owner-held, owner-only paths, live systems, a pre-emption); send those questions through the
   PM now.
 - Keep your context small (you re-read the whole conversation every turn): delegate reading
