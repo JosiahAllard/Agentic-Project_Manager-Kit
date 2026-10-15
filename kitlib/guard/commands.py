@@ -617,6 +617,9 @@ def _stdin_text(cmd, parsed):
                 parsed.flag('a shell reading text that is not literal')
             return ' '.join(w.text for w in args)
         if inv is None and src.shell == sh.PS and src.words and quoted(src, src.words[0]):
+            # "$b" | iex runs the string after its $ expands: the text as written is not the code
+            if any(w.dyn for w in src.words):
+                parsed.flag('a shell reading text that is not literal')
             return ' '.join(w.text for w in src.words)
         parsed.flag('a shell reading its commands from a pipe')
         return None
@@ -822,6 +825,11 @@ PS_SCRIPT_TEXT_RE = re.compile(r'(?i)\b(?:invokescript|newscriptblock|expandstri
                                r'(?:^|\))\s*::\s*[A-Za-z_]')
 # a PowerShell string the shell passes as it is written: '...' or "..." with no $ or ` in it
 PS_PLAIN_STRING_RE = re.compile(r'''(?:'(?:[^']|'')*'|"(?:[^"$`]|"")*")''', re.S)
+# a "..." string as written that runs no code: $name and ${name} expand, `x is an escape, and no
+# $( opens a subexpression (the only code an expandable string runs). The curly double quotes
+# are left out: PowerShell may end the string at one where the guard's reading does not
+PS_TEXT_STRING_RE = re.compile('"(?:[^"`$“”„]|""|`[^“”„]|'
+                               '\\$(?!\\()(?:\\{[^}"$`“”„]*\\})?)*"', re.S)
 # item cmdlets whose env: item may be renamed, copied or made under a name a later path reads
 PS_ENV_NAMERS = frozenset(('rename-item', 'ren', 'rni', 'copy-item', 'copy', 'cp', 'cpi', 'move-item', 'mi',
                            'move', 'mv', 'new-item', 'ni', 'set-item', 'si'))
@@ -1305,8 +1313,8 @@ def _ps_env_unsafe(c, inv, line_sets):
         if NET_ENV_RE.search(w.text):
             if not (0 <= w.start < len(src) and NET_GET_LITERAL_RE.match(src, w.start)):
                 return True                     # [Environment]::<anything but a literal GetEnvironmentVariable>
-        elif w.dyn and '::' in w.text:
-            return True                         # $t::SetEnvironmentVariable, $t::$m(...)
+        elif w.dyn and '::' in w.text and not _ps_text_string(c, w):
+            return True                         # $t::SetEnvironmentVariable, $t::$m(...); "$b :: $f" is text
         if low in PS_COMMON_VAR_PARAMS or low.split(':', 1)[0] in PS_COMMON_VAR_PARAMS and ':' in low:
             k = words.index(w)
             val = low.split(':', 1)[1] if ':' in low else (words[k + 1].text.lower() if k + 1 < len(words) else '')
@@ -1351,6 +1359,13 @@ def _ps_plain_string(c, w):
     src = c.source or ''
     return (not w.dyn and 0 <= w.start < w.end <= len(src) and
             PS_PLAIN_STRING_RE.fullmatch(src, w.start, w.end) is not None)
+
+
+def _ps_text_string(c, w):
+    """True when the word is one PowerShell "..." string as written that expands only variables
+    (PS_TEXT_STRING_RE): a :: in it is text, never a static call ("$t::M()" prints the call)."""
+    src = c.source or ''
+    return 0 <= w.start < w.end <= len(src) and PS_TEXT_STRING_RE.fullmatch(src, w.start, w.end) is not None
 
 
 def _expression_follows(c):

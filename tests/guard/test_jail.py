@@ -1373,6 +1373,84 @@ class UnplacedGit(MainGit):
             with self.subTest(text):
                 self.allowed(self.git(text, 'worker', tool='PowerShell'))
 
+    def test_double_colons_in_a_powershell_string_are_text_not_a_static_call(self):
+        # an expandable string runs code only in $( ): "$b :: $f" and "$t::M()" are text, so a
+        # line that appends one to a plain variable leaves its git placed (observed with
+        # PowerShell 5.1: "$t::GetEnvironmentVariable('OS')" prints the call as text)
+        m, wt = self.main, W.fwd(self.w.wt)
+        g = 'git -C "%s" branch -m main old' % wt
+        loop = ('foreach ($b in $branches) { foreach ($f in $files) { if (git merge-base --is-ancestor $b '
+                'origin/master) { $hits += "$b :: $f" } } }')
+        texts = [loop, '$hits += "$b :: $f"; %s' % g, '$hits += "$t::SetItem($b)"; %s' % g,
+                 'Write-Output "${b}::x"; %s' % g, '$hits = @(); $hits += "$b :: $f"; %s' % g,
+                 # a backtick-escaped $( opens no subexpression; "" is a quote inside the one string
+                 'Write-Output "`$(x) :: $b"; %s' % g, 'Write-Output "$t""::$m"; %s' % g]
+        for text in texts:
+            with self.subTest(text):
+                p = cm.read(text, sh.PS, wt)
+                self.assertTrue(p.clean, text)
+                self.assertEqual([c.git_env for c in p.commands], [False] * len(p.commands), text)
+                self.allowed(self.git(text, 'worker', tool='PowerShell'))
+                for environ in (COORDINATOR, OLD_MARK):
+                    with self.subTest(text, mark=environ[context.ROLE_ENV]):
+                        self.allowed(self.marked(text, environ, 'PowerShell'))
+        # a git variable set beside the string, a static call outside a string or inside $( ),
+        # and an env write of the string's value still leave the git unplaceable
+        self.held_everywhere([
+            '$env:GIT_DIR += "%s/.git"; %s' % (m, g),
+            '$env:GIT_DIR += "$b :: $f"; %s' % g,
+            '$hits += "$b :: $f"; $env:GIT_DIR = "%s/.git"; %s' % (m, g),
+            '$hits += $t::$n("GIT_DIR", "$b :: $f"); %s' % g,
+            'Write-Output "$($t::$n(\'GIT_DIR\', \'x\'))"; %s' % g,
+            '$hits += "$b :: $($t::$n(\'GIT_DIR\', \'x\'))"; %s' % g,
+            'Set-Item env:GIT_DIR "$b :: $f"; %s' % g,
+            '[Environment]::SetEnvironmentVariable(\'GIT_DIR\', "$b :: $f"); %s' % g], tool='PowerShell')
+        # a string piped to Invoke-Expression is code, and a $ in it expands before it runs: the
+        # line is unreadable, with or without a :: (a worker's static call there reads as a git
+        # variable set unseen: write-jail, as the held rows above)
+        for text, rule in (('"$t::$n(\'GIT_DIR\', \'x\')" | iex; %s' % g, 'write-jail'),
+                           ('"a :: $b" | Invoke-Expression; %s' % g, 'unreadable'),
+                           ('"x $b" | iex; %s' % g, 'unreadable')):
+            with self.subTest(text):
+                self.assertFalse(cm.read(text, sh.PS, wt).clean, text)
+                self.jailed(self.git(text, 'worker', tool='PowerShell'), rule)
+                for environ in (COORDINATOR, OLD_MARK):
+                    with self.subTest(text, mark=environ[context.ROLE_ENV]):
+                        self.jailed(self.marked(text, environ, 'PowerShell'))
+        # a shell reading such a string from a pipe is unreadable the same way
+        text = '"git $b" | powershell -Command -'
+        self.assertFalse(cm.read(text, sh.PS, wt).clean, text)
+        self.jailed(self.git(text, 'worker', tool='PowerShell'), 'unreadable')
+        for environ in (COORDINATOR, OLD_MARK):
+            with self.subTest(text, mark=environ[context.ROLE_ENV]):
+                self.jailed(self.marked(text, environ, 'PowerShell'))
+        # a single-quoted string and a backtick-escaped $ do not expand: iex runs the text as
+        # written (x $b), and the git after it stays placed
+        for text in ("'x $b' | iex; %s" % g, '"x `$b" | iex; %s' % g):
+            with self.subTest(text):
+                p = cm.read(text, sh.PS, wt)
+                self.assertTrue(p.clean, text)
+                self.assertEqual([c.git_env for c in p.commands], [False] * len(p.commands), text)
+                self.allowed(self.git(text, 'worker', tool='PowerShell'))
+                for environ in (COORDINATOR, OLD_MARK):
+                    with self.subTest(text, mark=environ[context.ROLE_ENV]):
+                        self.allowed(self.marked(text, environ, 'PowerShell'))
+        # a string handed to Invoke-Expression is code, and a $( inside ${...} is a substitution:
+        # the line is unreadable
+        for text in ('iex "$t::$n(\'GIT_DIR\', \'x\')"; %s' % g, 'Write-Output "${a$(x)}::y"; %s' % g):
+            with self.subTest(text):
+                self.assertFalse(cm.read(text, sh.PS, wt).clean, text)
+                self.denied(self.git(text, 'worker', tool='PowerShell'))
+                self.denied(self.marked(text, COORDINATOR, 'PowerShell'))
+        # pinned as it is: a property cmdlet on a computed Environment:: path passes, as "env:$n"
+        # already did; the environment provider has no property operations, so it sets no variable
+        text = 'Set-ItemProperty -Path "Environment::$n" -Name GIT_DIR -Value x; %s' % g
+        self.allowed(self.git(text, 'worker', tool='PowerShell'))
+        self.allowed(self.marked(text, COORDINATOR, 'PowerShell'))
+        # a curly double quote may end the string where the guard reads on: it stays a static call
+        self.held_everywhere(['$hits += "$b :: “ x"; %s' % g, '$hits += "$b :: ” x"; %s' % g],
+                             tool='PowerShell')
+
     def test_text_piped_into_set_content_or_add_content_is_its_value(self):
         wt = W.fwd(self.w.wt)
         g = 'git -C "%s" branch -m main old' % wt
