@@ -59,7 +59,9 @@ class OldKitRun(T.Base):
                      (os.path.join(self.c2, 'tools', 'oldthing'), os.path.join(self.old, 'tools', 'usage'))):
             self.assertIn('leftover link %s -> %s: remove it with: cmd /c rmdir "%s"' % (p, t, p), out)
         self.assertIn('also loads worktree-start, which the kit has no skill for', out)
-        self.assertNotIn(os.path.join(self.c2, 'skills'), out)               # follows account 1: not reported
+        c2skills = os.path.join(self.c2, 'skills')                         # follows account 1: skipped, not a leftover
+        self.assertNotIn('leftover link %s ' % c2skills, out)
+        self.assertIn('skipped link %s -> ' % c2skills, out)
         self.assertNotIn('/s', [w for l in out.splitlines() if 'rmdir' in l for w in l.split()])
 
 
@@ -103,6 +105,30 @@ class Leftovers(unittest.TestCase):
                               % (self.usage, os.path.join(self.kit, 'optional', 'usage'), self.usage),
                               plan.notes['links'])
                 self.assertTrue(common.is_link(self.usage))                 # reported, not removed
+
+    def test_a_link_outside_the_kit_is_reported_as_skipped_never_silently(self):
+        """The default mode has no older clone to match, so a link an earlier setup made into a kit
+        clone that has moved since points outside ctx.kit: it is one "skipped link" line, never
+        nothing. So is a container that is a link elsewhere (another account folder)."""
+        tool = os.path.join(self.acct, 'tools', 'machine_lock')
+        into = os.path.join(self.old, 'tools')
+        os.makedirs(into)
+        T.junction(tool, into)
+        self.addCleanup(os.rmdir, tool)
+        other = os.path.join(self.home, '.claude-two')
+        os.makedirs(other)
+        follows = os.path.join(other, 'skills')
+        T.junction(follows, os.path.join(self.acct, 'skills'))
+        self.addCleanup(os.rmdir, follows)
+        for d, p, t in ((self.acct, tool, into), (other, follows, os.path.join(self.acct, 'skills'))):
+            with self.subTest(link=p):
+                plan = M.Plan(M.Plan.FRESH_SECTIONS)
+                links.survey(plan, d, self.ctx(True))
+                self.assertEqual((plan.changes, plan.refusals), ([], []))
+                said = [n for n in plan.notes.get('links', []) if n.startswith('skipped link %s -> %s: ' % (p, t))]
+                self.assertEqual(len(said), 1, plan.notes)
+                self.assertIn('cmd /c rmdir "%s"' % p, said[0])
+                self.assertTrue(common.is_link(p))                          # reported, not removed
 
 
 class StatusLineThroughToolsLink(unittest.TestCase):

@@ -7,9 +7,10 @@ no change, so a second run still has nothing to do; it runs in both modes.
 What it reports, in each config folder:
 - `tools`, `knowledge` or `skills` that is itself a link into this kit or the older kit clone: one
   leftover line for the folder. One that is a link anywhere else (an account folder following
-  ~/.claude) is left alone and not reported; the folder it follows is.
+  ~/.claude, or a kit clone that has moved since an earlier setup) is left alone, with one
+  "skipped link" line (`skipped`), never silently.
 - In a real `tools` or `knowledge` folder, each entry that is a link into this kit or the older
-  clone. A real folder at one of the names an earlier setup linked (TOOL_LINKS, KNOWLEDGE_LINKS) is
+  clone; an entry that links anywhere else is one "skipped link" line. A real folder at one of the names an earlier setup linked (TOOL_LINKS, KNOWLEDGE_LINKS) is
   noted and left as it is; nothing is renamed or deleted.
 - In a real `skills` folder, each link at a kit skill's name (a folder under SKILLS_DIR) into this
   kit (MOVED_SKILLS_DIRS included) or the older clone; the plugin loads those skills. A link at
@@ -60,6 +61,13 @@ def leftover(path, target):
     return 'leftover link %s -> %s: remove it with: %s' % (path, target, REMOVE % path)
 
 
+def skipped(path, target):
+    """The note for a link whose target is outside this kit (and the older clone): left as is, but
+    never silent, since a link an earlier setup made into a kit clone that has moved since is one."""
+    return ('skipped link %s -> %s: its target is outside this kit, left as is; if an earlier setup '
+            'made it, remove it with: %s' % (path, target, REMOVE % path))
+
+
 def _ours(target, ctx):
     """True when `target` is in this kit or the older kit clone (none in the default mode)."""
     return under(target, ctx.kit) or bool(ctx.old_kit and under(target, ctx.old_kit))
@@ -72,7 +80,8 @@ def survey(plan, d, ctx):
         if is_link(c):
             was = link_target(c)
             if not _ours(was, ctx):
-                continue                                             # follows another folder
+                plan.note('links', skipped(c, was))                  # e.g. follows another account folder
+                continue
             plan.note('links', leftover(c, was))
             if container == 'skills':
                 other = sorted(n for n in (os.listdir(was) if os.path.isdir(was) else [])
@@ -89,6 +98,7 @@ def survey(plan, d, ctx):
             if is_link(p):
                 t = link_target(p)
                 if not _ours(t, ctx):
+                    plan.note('links', skipped(p, t))
                     continue
                 if container == 'skills' and n not in skills:
                     plan.note('links', '%s -> %s: left as is: the kit has no skill %s (a repo-local skill '
