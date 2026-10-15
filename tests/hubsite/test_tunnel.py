@@ -268,6 +268,12 @@ class TunnelTokenTest(TunnelCase):
         self.assertEqual(self.ask('POST', httpd.PAIR_ROUTE, token=self.good).status, 404)
         self.assertEqual(self.ask('GET', httpd.PAIR_PATH + '?code=x', token=self.good).status,
                          404)
+        # no stop here either, not even with the owner's token beside the access token: the stop
+        # route is on the local listener only
+        r = self.ask('POST', httpd.STOP_ROUTE, token=self.good, headers=[bearer(self.owner)])
+        self.assertEqual(r.status, 404, r.body)
+        self.assertFalse(self.hub.stopping.is_set())
+        self.assertEqual(get(self.lport, HEALTH, self.owner).status, 200)
         self.assertEqual(self.refusals(), [])
         self.assertEqual(self.asked, [ak.TEAM])
         self.assertNoSecret(self.good)

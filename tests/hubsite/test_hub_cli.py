@@ -93,9 +93,9 @@ class UsageCase(CliCase):
     def test_no_verb_and_an_unknown_verb_are_usage_errors(self):
         code, out, err = self.run_cli()
         self.assertEqual((code, out), (2, ''))
-        self.assertIn('USAGE: give a verb: serve, status, setup, open, unpair, migrate, '
-                      'questions, answer, todos, stories, to-pm, inbox, pending, wait or '
-                      'validate\n', err)
+        self.assertIn('USAGE: give a verb: serve, status, setup, open, unpair, stop, restart, '
+                      'migrate, questions, answer, todos, stories, to-pm, inbox, pending, wait '
+                      'or validate\n', err)
         self.assertEqual(sorted(HUB.VERBS), sorted(HUB.VERB_NAMES))     # every verb it has
         self.assertEqual(self.run_cli('launch')[0], 2)
         self.assertEqual(self.run_cli('serve', '--bind', '0.0.0.0')[0], 2)
@@ -105,14 +105,18 @@ class UsageCase(CliCase):
         for argv in (('serve', '--port', 'x'), ('serve', '--port', '70000'),
                      ('serve', '--port', '-1'), ('status', '--port', '0'),
                      ('open', '--port', '65536'), ('status', '--port', ''),
-                     ('unpair', '--port', '0'), ('unpair', '--all')):
+                     ('unpair', '--port', '0'), ('unpair', '--all'),
+                     ('stop', '--port', '0'), ('restart', '--port', 'x'),
+                     ('stop', '--timeout', '-1'), ('restart', '--timeout', 'soon'),
+                     ('stop', '--all')):
             code, out, err = self.run_cli(*argv)
             self.assertEqual((code, out), (2, ''), argv)
             self.assertIn('USAGE: ', err)
 
     def test_a_machine_config_that_cannot_be_used_is_exit_2(self):
         self.config({'hub': {'port': 'eighty'}})
-        for argv in (('serve', '--port', '0'), ('status',), ('setup',), ('open',), ('unpair',)):
+        for argv in (('serve', '--port', '0'), ('status',), ('setup',), ('open',), ('unpair',),
+                     ('stop',), ('restart',)):
             code, out, err = self.run_cli(*argv)
             self.assertEqual((code, out), (2, ''), argv)
             self.assertIn('machine config: ', err)
@@ -881,6 +885,172 @@ class ClientCase(CliCase):
         self.assertIn('REFUSED: the server on port %d answered 403 forbidden' % hub.port, err)
 
 
+class StopRestartCase(CliCase):
+    """hub.py stop and hub.py restart (kitlib.hubsite.control). No test here reads or starts
+    the real scheduled task: its state and its start are replaced in every restart."""
+
+    def running(self):
+        """A hub that serve.run serves on a thread, as `hub.py serve` does: the hub and the
+        thread. Its port is a free one."""
+        cfg = hub_settings.settings(None)._replace(port=0, store=self.store_dir)
+        hub = serve.build(cfg, serve.Sources(tokens=self.tokens,
+                                             static_dir=os.path.join(self.home, 'web')))
+        up, stop = threading.Event(), threading.Event()
+        runner = threading.Thread(target=serve.run, args=(hub, lambda h: up.set(), stop),
+                                  name='test-run', daemon=True)
+        runner.start()
+        self.addCleanup(runner.join, 30)
+        self.addCleanup(stop.set)
+        self.assertTrue(up.wait(30), 'the server never started')
+        return hub, runner
+
+    def fake_task(self, state):
+        """The task's state is `state`; a start of it is noted in the list returned. hub.port
+        is a port nothing listens on, so a restart that went on to wait for a new server would
+        never ask the machine's own."""
+        self.config({'hub': {'port': self.dead_port()}})
+        started = []
+        states = mock.patch.object(HUB.control.autostart, 'task_state', lambda: state)
+        starts = mock.patch.object(HUB.control.autostart, 'start_task',
+                                   lambda: started.append(True))
+        states.start()
+        starts.start()
+        self.addCleanup(states.stop)
+        self.addCleanup(starts.stop)
+        return started
+
+    def test_stop_ends_the_running_server_and_waits_for_its_process(self):
+        self.assertEqual(self.run_cli('setup')[0], 0)
+        hub, runner = self.running()
+        asked = []
+
+        def alive(pid, ctime):
+            asked.append((pid, ctime))
+            return runner.is_alive()
+
+        with mock.patch.object(HUB.control.process, 'alive', alive):
+            code, out, err = self.run_cli('stop', '--port', str(hub.port))
+        self.assertEqual((code, err), (0, ''))
+        self.assertEqual(out, 'STOPPED: the hub server on port %d (pid %d) has closed and its '
+                              'process has ended\n' % (hub.port, os.getpid()))
+        runner.join(30)
+        self.assertFalse(runner.is_alive())
+        self.assertFalse(self.locked())
+        self.assertTrue(asked, 'the process was never asked about')
+        self.assertEqual(asked[0][0], os.getpid())
+
+    def test_stop_with_nothing_listening_is_nothing_to_stop(self):
+        self.assertEqual(self.run_cli('setup')[0], 0)
+        port = self.dead_port()
+        code, out, err = self.run_cli('stop', '--port', str(port))
+        self.assertEqual((code, err), (0, ''))
+        self.assertEqual(out, 'nothing to stop: no hub server is listening on port %d\n' % port)
+
+    def test_stop_and_restart_need_the_owners_token(self):
+        port = self.dead_port()
+        started = self.fake_task('Ready')
+        for verb in ('stop', 'restart'):
+            code, out, err = self.run_cli(verb, '--port', str(port))
+            self.assertEqual((code, out), (1, ''), verb)
+            self.assertIn('REFUSED: no owner token', err)
+        self.assertEqual(started, [])
+
+    def test_a_stop_the_server_refuses_is_refused_and_it_serves_on(self):
+        hub = self.server(tokens=os.path.join(self.home, 'other-tokens'))
+        self.assertEqual(self.run_cli('setup')[0], 0)
+        code, out, err = self.run_cli('stop', '--port', str(hub.port))
+        self.assertEqual((code, out), (1, ''))
+        self.assertIn('REFUSED: the server on port %d answered 403 forbidden' % hub.port, err)
+        self.assertFalse(hub.stopping.is_set())
+
+    def test_stop_passes_the_port_the_token_and_the_timeout(self):
+        self.assertEqual(self.run_cli('setup')[0], 0)
+        self.config({'hub': {'port': 8799}})
+        calls = []
+
+        def stop(port, token, timeout, **kw):
+            calls.append((port, token, timeout))
+            return HUB.control.Stopped(False, None, False)
+
+        with mock.patch.object(HUB.control, 'stop', stop):
+            self.assertEqual(self.run_cli('stop')[0], 0)
+            self.assertEqual(self.run_cli('stop', '--port', '8801', '--timeout', '7.5')[0], 0)
+        owner = auth.read_token(self.tokens, auth.OWNER)
+        self.assertEqual(calls, [(8799, owner, HUB.control.DEFAULT_TIMEOUT_S),
+                                 (8801, owner, 7.5)])
+        self.assertEqual(HUB.control.DEFAULT_TIMEOUT_S, 300)
+
+    def test_restart_with_no_task_starts_nothing_and_prints_the_start_command(self):
+        self.assertEqual(self.run_cli('setup')[0], 0)
+        port = self.dead_port()
+        started = self.fake_task(None)
+        code, out, err = self.run_cli('restart', '--port', str(port))
+        self.assertEqual((code, err), (3, ''))
+        self.assertIn('nothing to stop: no hub server is listening on port %d' % port, out)
+        self.assertIn(HUB.hub_autostart.TASK_NAME, out)
+        self.assertTrue(out.endswith('start it with: %s\n' % HUB.START), out)
+        self.assertEqual(started, [])
+
+    def test_restart_of_a_server_started_by_hand_stops_it_and_starts_nothing(self):
+        self.assertEqual(self.run_cli('setup')[0], 0)
+        hub, runner = self.running()
+        started = self.fake_task('Ready')
+        with mock.patch.object(HUB.control.process, 'alive',
+                               lambda pid, ctime: runner.is_alive()):
+            code, out, err = self.run_cli('restart', '--port', str(hub.port))
+        self.assertEqual((code, err), (3, ''))
+        self.assertIn('STOPPED: the hub server on port %d' % hub.port, out)
+        self.assertIn('started by hand', out)
+        self.assertTrue(out.endswith('start it with: %s\n' % HUB.START), out)
+        self.assertEqual(started, [])
+        runner.join(30)
+        self.assertFalse(runner.is_alive())
+
+    def test_restart_with_a_disabled_task_starts_nothing(self):
+        self.assertEqual(self.run_cli('setup')[0], 0)
+        started = self.fake_task('Disabled')
+        code, out, err = self.run_cli('restart', '--port', str(self.dead_port()))
+        self.assertEqual((code, err), (3, ''))
+        self.assertIn('disabled', out)
+        self.assertEqual(started, [])
+
+    def test_restart_says_where_the_task_s_server_answers(self):
+        self.assertEqual(self.run_cli('setup')[0], 0)
+        self.config({'hub': {'port': 8799}})
+        calls = []
+
+        def restart(port, token, timeout, new_port=None, **kw):
+            calls.append((port, timeout, new_port))
+            return HUB.control.Restarted(HUB.control.Stopped(True, 77, False),
+                                         HUB.control.RESTARTED, new_port)
+
+        with mock.patch.object(HUB.control, 'restart', restart):
+            code, out, err = self.run_cli('restart', '--port', '8801', '--timeout', '9')
+        self.assertEqual((code, err), (0, ''))
+        self.assertEqual(calls, [(8801, 9.0, 8799)])
+        self.assertIn('STOPPED: the hub server on port 8801 (pid 77)', out)
+        self.assertIn('RESTARTED: the hub server answers on port 8799', out)
+
+    def test_a_timeout_is_exit_4_and_says_nothing_was_killed(self):
+        self.assertEqual(self.run_cli('setup')[0], 0)
+        port = self.dead_port()
+        for verb, phase in (('stop', HUB.control.CLOSING_PHASE),
+                            ('restart', HUB.control.ANSWER_PHASE)):
+            with self.subTest(verb=verb):
+                def fail(*args, **kw):
+                    raise HUB.control.TimedOut(phase, 'port %d did not close within 1 s; '
+                                                      'nothing was killed' % port)
+
+                with mock.patch.object(HUB.control, verb, fail):
+                    code, out, err = self.run_cli(verb, '--port', str(port))
+                self.assertEqual((code, out), (4, ''))
+                self.assertIn('TIMED OUT: port %d did not close within 1 s; nothing was killed'
+                              % port, err)
+                # a server the task started has no console: its start-up lines go nowhere
+                self.assertEqual('hub.py serve' in err and 'console' in err, verb == 'restart',
+                                 err)
+
+
 class ClosedConsoleCase(CliCase):
     """`serve` beside a console that was closed while it served: every line of it is lost, and
     the server ends as it would have."""
@@ -1273,7 +1443,8 @@ class ArgumentCase(CliCase):
         self.assertEqual(sorted({v[0] for v in self.VERBS}),
                          sorted(set(HUB.VERB_NAMES)
                                 - {'serve', 'status', 'setup', 'open', 'migrate', 'validate',
-                               'unpair'}))     # unpair with no server: ClientCase
+                                   'unpair',    # unpair with no server: ClientCase
+                                   'stop', 'restart'}))     # with no server: StopRestartCase
 
     def test_the_port_is_the_configured_one_unless_given(self):
         self.assertEqual(self.run_cli('setup')[0], 0)

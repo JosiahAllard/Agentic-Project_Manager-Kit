@@ -151,6 +151,15 @@ class Routes(Case):
             self.assertEqual(role, api.ANY if method == "GET" else api.AGENT, name)
             self.assertEqual(name in READS, method == "GET", name)
 
+    def test_no_tool_and_no_api_route_stops_or_restarts_the_server(self):
+        # the stop route is the loopback listener's own (httpd.stop_route), for hub.py's owner
+        # token alone: no MCP tool, pinned or shipped, and no api route a tunnel serves
+        paths = [t[3] for t in srv.TOOLS.values()] + [p for _, p in hubmcp.OWNER_ROUTES.values()]
+        for path in paths:
+            self.assertNotIn(path.rstrip("/").rsplit("/", 1)[-1], ("stop", "restart"), path)
+        for route in api.ROUTES:
+            self.assertFalse(route.pattern.endswith(("/stop", "/restart")), route.pattern)
+
     def test_a_write_carries_the_agent_token_and_names_itself_mcp(self):
         s = self.server()
         payload, is_error = self.rpc(s, "hub_question_log",

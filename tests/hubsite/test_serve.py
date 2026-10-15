@@ -22,6 +22,7 @@ from kitlib.hubsite import access, auth, backlog, client, gitsync, httpd, serve,
 from kitlib.hubsite import settings as hub_settings
 from kitlib.hubsite.api import BASE
 from kitlib.hubsite.store import Store, StoreBusy
+from kitlib.proc import process
 from tests.hubsite import access_keys as ak
 from tests.hubsite import httpfix
 from tests.hubsite import test_gitsync as gitcase       # its Case: a data work tree on the fake git
@@ -631,6 +632,86 @@ class CloseCase(ServeCase):
         self.assertEqual(httpfix.http_threads(), [])
         with self.assertRaises(serve.ServeError):
             serve.run(hub)
+
+
+class StopCase(ServeCase):
+    """The stop route of a built server (httpd.STOP_ROUTE): the owner's token ends run() as
+    Ctrl+C does, and nothing else does."""
+
+    def running(self, settings=None, **src):
+        """A built hub that run() serves on a thread: the hub, the thread, and the list run()'s
+        answer goes to."""
+        hub = self.build(settings, **src)
+        up, stop, out = threading.Event(), threading.Event(), []
+        runner = threading.Thread(target=lambda: out.append(serve.run(hub, lambda h: up.set(),
+                                                                      stop)),
+                                  name='test-run', daemon=True)
+        runner.start()
+        self.addCleanup(runner.join, TIMEOUT)
+        self.addCleanup(stop.set)
+        self.assertTrue(up.wait(TIMEOUT), 'the server never started')
+        return hub, runner, out
+
+    def test_the_owners_stop_ends_run_with_a_clean_close(self):
+        hub, runner, out = self.running(sync=self.sync_factory(),
+                                        backlog=lambda s: FakeBacklog(self.calls))
+        self.assertFalse(hub.stopping.is_set())
+        r = post(hub.port, httpd.STOP_ROUTE, {}, self.owner)
+        self.assertEqual(r.status, 200, r.body)
+        self.assertEqual(r.json(), {'ok': True, 'stopping': True, 'pid': os.getpid(),
+                                    'ctime': process.own_ctime()})
+        runner.join(TIMEOUT)
+        self.assertFalse(runner.is_alive(), 'run() did not end after the stop')
+        self.assertEqual(out, [True])
+        # the same close as Ctrl+C: the last sync pass after the listeners, then the store
+        self.assertEqual(self.calls, ['sync.start', 'backlog.start', 'backlog.stop', 'sync.stop',
+                                      'sync.sync_once'])
+        self.assertEqual(httpfix.http_threads(), [])
+        self.assertFalse(self.locked())
+        with self.assertRaises(serve.NotRunning):
+            serve.ask(hub.port, 'GET', HEALTH, self.owner)
+        self.assertIn(('note', serve.STOP_ASKED), self.lines)
+        self.assertEqual(self.errors(), [])
+
+    def test_no_one_but_the_owners_token_stops_the_server(self):
+        hub, runner, out = self.running()
+        path = post(hub.port, httpd.PAIR_ROUTE, {}, self.owner).json()['path']
+        session = ('Cookie', get(hub.port, path).header('Set-Cookie')[0].split(';')[0])
+        self.assertIn('store', get(hub.port, HEALTH, headers=[session]).json())
+        for what, token, headers in (('no credential', None, []), ('the agent', self.agent, []),
+                                     ('a browser session', None, [session]),
+                                     ('the agent beside a session', self.agent, [session])):
+            with self.subTest(what=what):
+                r = post(hub.port, httpd.STOP_ROUTE, {}, token, headers=headers)
+                self.assertEqual((r.status, r.code()), (403, 'forbidden'), r.body)
+        # writes the listener refuses before any route: no Origin, not JSON, another host
+        r = send(hub.port, 'POST', httpd.STOP_ROUTE,
+                 [bearer(self.owner), ('Content-Type', httpd.JSON)], b'{}')
+        self.assertEqual(r.status, 403)
+        r = send(hub.port, 'POST', httpd.STOP_ROUTE,
+                 [bearer(self.owner), ('Origin', 'http://127.0.0.1:%d' % hub.port)], b'{}')
+        self.assertEqual(r.status, 415)
+        evil = 'evil.example:%d' % hub.port
+        r = send(hub.port, 'POST', httpd.STOP_ROUTE,
+                 [bearer(self.owner), ('Content-Type', httpd.JSON), ('Origin', 'http://' + evil)],
+                 b'{}', host=evil)
+        self.assertEqual(r.status, 403)
+        self.assertFalse(hub.stopping.is_set())
+        self.assertTrue(runner.is_alive())
+        self.assertEqual(out, [])
+        self.assertEqual(get(hub.port, HEALTH, self.owner).status, 200)
+
+    def test_a_paired_browser_stays_paired_across_a_stop(self):
+        probe = self.build()                # port 0 keeps no sessions: find a port, then ask it
+        port = probe.port
+        self.assertIs(probe.close(), True)
+        hub, runner, out = self.running(self.settings._replace(port=port))
+        value = hub.creds.pair(hub.creds.new_pairing_code())
+        self.assertEqual(post(port, httpd.STOP_ROUTE, {}, self.owner).status, 200)
+        runner.join(TIMEOUT)
+        self.assertEqual(out, [True])
+        reread = auth.Credentials(self.tokens, port=port, persist=True)
+        self.assertEqual(reread.role_for({}, {auth.cookie_name(port): value}), auth.OWNER)
 
 
 class ViewsCase(ServeCase):
