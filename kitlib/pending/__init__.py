@@ -5,15 +5,27 @@ no sections; numbers stay stable and are never reused. A done item stays in plac
 `N. DONE MM-DD (note). Was: <text>`; an item whose text begins DONE or CLOSED is done. Lines
 outside the item touched keep their exact bytes (a BOM, CRLF line ends).
 
-Pure over text (`parse`, `add`, `done`, `edit`, `open_items`) plus `read_raw` and `write_atomic`;
-nothing here prints or exits. A refusal raises kitlib.ledger.errors Usage or Refused.
+Pure over text (`parse`, `add`, `done`, `edit`, `open_items`) plus `read_raw`, `write_atomic` and
+`locked`; nothing here prints or exits. A refusal raises kitlib.ledger.errors Usage or Refused.
+
+One writer at a time: a change holds `locked(path)` from its read to its write (tools/pending.py
+holds it over prepare, read, write and commit), so two writers never number two items alike and
+neither replace drops the other's change. The lock is kitlib.fs.writelock's, named LOCK_PREFIX; a
+busy lock is waited on for LOCK_WAIT seconds, then refused with nothing written. write_atomic's
+replace retries a PermissionError (a reader holding the file open) for kitlib.fs.replace.WAIT s.
 """
 import collections
+import contextlib
 import os
 import re
 import tempfile
 
+from kitlib.fs import replace as fsreplace
+from kitlib.fs import writelock
 from kitlib.ledger.errors import Refused, Usage
+
+LOCK_WAIT = 30.0             # seconds a writer waits for another writer's lock before it is refused
+LOCK_PREFIX = 'kit-pending'  # the lock file's name in the git common dir: kit-pending-<name>-<hash>.lock
 
 ITEM_RE = re.compile(r'^(\d+)\. (.*)$')
 DONE_RE = re.compile(r'^(DONE|CLOSED)\b')
@@ -40,11 +52,27 @@ def write_atomic(path, text):
     try:
         with os.fdopen(fd, 'w', encoding='utf-8', newline='') as f:
             f.write(text)
-        os.replace(tmp, path)
+        fsreplace.replace(tmp, path)
     except BaseException:
         if os.path.exists(tmp):
             os.remove(tmp)
         raise
+
+
+@contextlib.contextmanager
+def locked(path, wait=None):
+    """Hold the pending file's write lock for the block (kitlib.fs.writelock: nests in one thread,
+    excludes every other). Busy for `wait` seconds (default LOCK_WAIT), or not to be had: Refused,
+    and the block never runs."""
+    wait = LOCK_WAIT if wait is None else wait
+    try:
+        with writelock.locked(path, LOCK_PREFIX, wait, what='pending write'):
+            yield
+    except writelock.Busy as e:
+        raise Refused('%s is being written by another process: its write lock %s is %s; waited %s s, '
+                      'nothing was written. Try again.' % (path, e.lock, e.holder, e.wait))
+    except writelock.WriteLockError as e:
+        raise Refused('cannot take the write lock of %s: %s; nothing was written' % (path, e))
 
 
 def parse(raw):
