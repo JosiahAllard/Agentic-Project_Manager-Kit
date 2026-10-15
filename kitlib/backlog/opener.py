@@ -17,6 +17,7 @@ from kitlib.config import ConfigError, load as load_config
 from kitlib.git import repo as gitrepo
 
 from . import plan as pmod
+from . import pull_branch as pullmod
 from . import record as rmod
 from . import retarget as retmod
 from . import store as smod
@@ -75,7 +76,8 @@ def planner(args, ctx):
     if v == 'unblock':
         return lambda s: pmod.plan_unblock(s, ctx, args.id, args.ruling, args.on, args.reason)
     if v == 'pull':
-        return lambda s: pmod.plan_pull(s, ctx, args.id, args.reason, args.ruling, args.blocker)
+        return lambda s: pullmod.plan_pull(s, ctx, args.id, args.reason, args.ruling,
+                                           args.blocker)
     if v == 'release':
         return lambda s: pmod.plan_release(s, ctx, args.id, args.reason)
     if v == 'close':

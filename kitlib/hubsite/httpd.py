@@ -2,7 +2,7 @@
 
   Listener(addr, api, gate, static_dir=None, host_rule=None, routes=None, via='', log=None,
            max_waits=MAX_WAITS, max_body=MAX_BODY, max_connections=MAX_CONNECTIONS,
-           origin_scheme='http', via_header=True, agent_words=False)
+           origin_scheme='http', via_header=True, agent_words=False, origin_refused=None)
       .port .url .waiting          the bound port (addr may name port 0), its URL, waits blocked now
       .closing                     close_door() was called
       .start()                     serve on a thread; .stop(timeout) = close_door() then join()
@@ -18,6 +18,7 @@
   local_hosts(host, port)          the local listener's host_rule
   local_gate(creds)                the local listener's gate, over kitlib.hubsite.auth.Credentials
   pair_routes(creds)               the local listener's pairing routes (PAIR_ROUTE, PAIR_PATH)
+  stop_route(creds, request_stop, identity)    the local listener's stop route (STOP_ROUTE)
   static_file(static_dir, path)    the file a URL path names under static_dir, or None
 
 The address. Only LOOPBACK is bound: any other host in `addr` (a name, the empty string, the any
@@ -36,7 +37,9 @@ One request, in this order, for every method and every path:
   3. The method: GET, HEAD and POST; anything else is a 405. No response carries a CORS header.
   4. A POST is a write: Content-Type application/json (415), exactly one Origin whose scheme is
      the listener's origin_scheme (`http` for the local listener, which speaks nothing else;
-     `https` for one that only a TLS front reaches) and whose host equals the Host header (403),
+     `https` for one that only a TLS front reaches) and whose host equals the Host header (403;
+     when the two hosts differ, origin_refused(origin host, Host) is called first, if the
+     listener was given one: the tunnel listener logs it, kitlib.hubsite.tunnel.host_note),
      a Content-Length (411) of at most max_body bytes (413, the body is not read) and a body
      that is JSON or empty (400). Once the door is closed (close_door) a write that arrives on
      an open connection, or whose body is still arriving, is a 503 `store`; the rest of its
@@ -131,6 +134,8 @@ VIA_HEADER = 'X-Hub-Via'
 TUNNEL_VIA = 'tunnel'               # the tunnel listener's own source: no VIA_HEADER may claim it
 PAIR_ROUTE = _api.BASE + '/pair'    # POST, the owner's token: a one-time link for the browser
 PAIR_PATH = '/pair'                 # GET ?code=...: redeems it and sets the session cookie
+UNPAIR_ROUTE = _api.BASE + '/unpair'    # POST, the owner's token: ends every browser session
+STOP_ROUTE = _api.BASE + '/stop'    # POST, the owner's token: the server closes (hub.py stop)
 BUSY = 'busy'
 RETRY_AFTER_S = 1
 INTERNAL = 'the server could not answer this request'
@@ -172,10 +177,12 @@ class Request(object):
     http.server parsed, itself: every value of a repeated header is in it. `path` is the target
     before its `?`, never percent-decoded. `query` ({name: first value}), `role`, `via` and
     `body` (the decoded JSON of a write, else None) are filled in as the request passes each
-    step; a gate sees them empty."""
+    step; a gate sees them empty. `reply_headers` ((name, value) pairs) is what the gate adds to
+    whatever answer the request gets, refusals too; they go before the answer's own headers, so
+    a header the answer sets as well (a route's Set-Cookie) comes last and wins."""
 
     __slots__ = ('method', 'target', 'path', 'query_text', 'query', 'headers', 'client', 'port',
-                 'role', 'via', 'body')
+                 'role', 'via', 'body', 'reply_headers')
 
     def __init__(self, method, target, headers, client='', port=None):
         self.method = method
@@ -188,6 +195,7 @@ class Request(object):
         self.role = None
         self.via = ''
         self.body = None
+        self.reply_headers = ()
 
     def header(self, name):
         """The header's value when it was sent exactly once, else None."""
@@ -227,26 +235,36 @@ def local_hosts(host, port):
 def local_gate(creds):
     """The local listener's gate: the role `creds` (auth.Credentials) gives the request's
     Authorization header or session cookie, or None. It never answers a Response: a request
-    with no credential still reaches the page's files, and the Api refuses it everything else."""
+    with no credential still reaches the page's files, and the Api refuses it everything else.
+    A session cookie that renewed its session (Credentials.resolve) is sent again with the
+    answer, auth.cookie_header on creds.port, so the browser's copy lives as long."""
     def gate(request):
         cookies = auth.parse_cookies('; '.join(request.headers.get_all('Cookie') or ()))
-        return creds.role_for(request.headers, cookies)
+        role, renewed = creds.resolve(request.headers, cookies)
+        if renewed is not None:
+            request.reply_headers = (('Set-Cookie', auth.cookie_header(renewed, creds.port)),)
+        return role
     return gate
 
 
 def pair_routes(creds):
-    """The routes that pair the PC's browser, for a Listener's `routes`.
+    """The routes that pair the PC's browser, and unpair every one, for a Listener's `routes`.
 
     POST PAIR_ROUTE, the owner's token only: {"ok", "path", "ttl"}; `path` is PAIR_PATH with a
     fresh one-time code, good for `ttl` seconds. The Authorization header alone must give the
     owner role: a session cookie is refused, so a paired browser (or a script in the page's
-    origin) cannot make the code of its own successor and a session ends at auth.SESSION_TTL_S.
+    origin) cannot make the code of its own successor and a session ends at auth.SESSION_TTL_S
+    unless it is used (auth, "Sessions").
     GET PAIR_PATH?code=...: redeems the code, sets the session cookie (auth.cookie_header on
     creds.port) and sends the browser to "/"; a code that is unknown, expired or already used
-    is a 403."""
+    is a 403.
+    POST UNPAIR_ROUTE, the owner's token only, as PAIR_ROUTE: {"ok": true}; every browser
+    session and every pairing code not yet redeemed ends (Credentials.unpair_all)."""
+    def owners(request):
+        return _bearer_owner(creds, request)
+
     def new(request):
-        # role_for with no cookies: only a Bearer token can answer OWNER here
-        if request.role != auth.OWNER or creds.role_for(request.headers) != auth.OWNER:
+        if not owners(request):
             return refusal(403, 'forbidden', "only the owner's token may pair a browser, never "
                            'a browser session', 'role')
         code = creds.new_pairing_code()
@@ -261,7 +279,41 @@ def pair_routes(creds):
         return Response(303, b'', JSON, (('Location', '/'),
                                          ('Set-Cookie', auth.cookie_header(value, creds.port))))
 
-    return {('POST', PAIR_ROUTE): new, ('GET', PAIR_PATH): redeem}
+    def unpair(request):
+        if not owners(request):
+            return refusal(403, 'forbidden', "only the owner's token may unpair the browsers, "
+                           'never a browser session', 'role')
+        creds.unpair_all()
+        return json_response(200, {'ok': True})
+
+    return {('POST', PAIR_ROUTE): new, ('GET', PAIR_PATH): redeem,
+            ('POST', UNPAIR_ROUTE): unpair}
+
+
+def _bearer_owner(creds, request):
+    """True when the request's Authorization header alone gives the owner role: role_for with
+    no cookies, so a browser session never counts, whatever else came with it."""
+    return request.role == auth.OWNER and creds.role_for(request.headers) == auth.OWNER
+
+
+def stop_route(creds, request_stop, identity):
+    """The route that asks the server to stop, for the local listener's `routes` alone: the
+    tunnel listener is never given it, so no request from off this machine can reach it.
+
+    POST STOP_ROUTE, the owner's token only, as PAIR_ROUTE (a browser session is refused, so
+    neither the page nor a script in its origin can end the server): calls request_stop() and
+    answers {"ok": true, "stopping": true} plus `identity` ({"pid", "ctime"} of the serving
+    process, so the caller can wait for that process and no other to end). The route only
+    asks: the server's own loop closes it (kitlib.hubsite.serve.run), the same clean close as
+    Ctrl+C, after this answer is sent."""
+    def stop(request):
+        if not _bearer_owner(creds, request):
+            return refusal(403, 'forbidden', "only the owner's token may stop the server, never "
+                           'a browser session', 'role')
+        request_stop()
+        return json_response(200, dict(identity, ok=True, stopping=True))
+
+    return {('POST', STOP_ROUTE): stop}
 
 
 def static_file(static_dir, path):
@@ -485,7 +537,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.send_response_only(response.status)
             self.send_header('Content-Type', response.content_type)
             self.send_header('Content-Length', str(len(response.body)))
-            for name, value in SECURITY_HEADERS + response.headers:
+            extra = request.reply_headers if request is not None else ()
+            for name, value in SECURITY_HEADERS + tuple(extra) + response.headers:
                 self.send_header(name, value)
             self.send_header('Connection', 'close')
             self.end_headers()
@@ -571,6 +624,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             parts = None
         if parts is None or not host or parts.scheme != listener.origin_scheme \
                 or parts.netloc.lower() != host.lower():
+            if parts is not None and host and parts.netloc.lower() != host.lower():
+                listener._origin_refused(parts.netloc, host)
             return refusal(403, 'forbidden', 'a write must carry an Origin header that names '
                            'this server, the host of its Host header', 'origin')
         if self.headers.get_all('Transfer-Encoding'):
@@ -641,7 +696,7 @@ class Listener(object):
     def __init__(self, addr, api, gate, static_dir=None, host_rule=None, routes=None, via='',
                  log=None, max_waits=MAX_WAITS, max_body=MAX_BODY,
                  max_connections=MAX_CONNECTIONS, origin_scheme='http', via_header=True,
-                 agent_words=False):
+                 agent_words=False, origin_refused=None):
         if origin_scheme not in ORIGIN_SCHEMES:
             raise ValueError('origin_scheme is one of %s, not %r'
                              % (', '.join(ORIGIN_SCHEMES), origin_scheme))
@@ -667,6 +722,7 @@ class Listener(object):
         self.max_body = max_body
         self.max_connections = max_connections
         self.origin_scheme = origin_scheme
+        self._on_origin = origin_refused if callable(origin_refused) else None
         self._log = log
         self._cond = threading.Condition(threading.Lock())    # the counters and _threads
         self._active = 0            # requests being answered
@@ -752,6 +808,16 @@ class Listener(object):
             return self._cond.wait_for(lambda: self._active - self._waits <= 0, timeout)
 
     # ---- the threads --------------------------------------------------------------------------
+
+    def _origin_refused(self, origin_host, host):
+        """Tell origin_refused, when the listener has one, of a write refused because the host
+        of its Origin is not its Host. What it raises is dropped: the refusal stands."""
+        if self._on_origin is None:
+            return
+        try:
+            self._on_origin(origin_host, host)
+        except Exception:           # noqa: BLE001 - a note that fails must not fail a request
+            pass
 
     def _say(self, level, text):
         if self._log is None:

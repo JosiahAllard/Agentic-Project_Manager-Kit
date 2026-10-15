@@ -12,6 +12,7 @@ import sys
 # Exec form uses isolated Python, so only this immutable installed kit is added.
 ROOT=Path(__file__).resolve().parents[4]  # optional/bridge/hosts/claude/hook.py
 if str(ROOT) not in sys.path: sys.path.insert(0,str(ROOT))
+import kitlib  # noqa: E402,F401  (installs the CreateProcess hook before anything starts)
 
 from optional.bridge.hosts.claude.terminal import MAX_HOOK_BYTES, TerminalError
 from optional.bridge.win.evidence import document

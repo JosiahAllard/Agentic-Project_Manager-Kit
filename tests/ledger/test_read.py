@@ -1,4 +1,4 @@
-"""kitlib.ledger.read: the one reader the digest feed, the backlog gates and ruling_cites share."""
+"""kitlib.ledger.read: the one reader of the rulings ledger's entries."""
 import os
 import tempfile
 import unittest

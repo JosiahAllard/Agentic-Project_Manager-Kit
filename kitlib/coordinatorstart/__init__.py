@@ -3,15 +3,16 @@
 Pure functions that return data; the hook (boot/hook.py claude SessionStart coordinator) prints it. The text
 comes from the "coordinator_start" key of the machine config and is emitted only when the
 environment variable PM_KIT_ROLE is "coordinator". After the standing lines come the optional ENG
-filing and pricing-pass lines (each switched on in the config), then the live checks (rulings, cap,
+filing and pricing-pass lines (each switched on in the config), then the live checks (cap,
 machine state, other coordinators, and stubs: a line only when a repo that uses stubs has them not current),
 run as in kitlib.pmstart: each is a pure function over fakeable inputs (process list, file reads,
-a subprocess runner, now), and a failed one is one "could not check X: reason" line.
+a subprocess runner, now), and a failed one is one "could not check X: reason" line. No check
+reads the rulings ledger.
 
 Install values come from the config, never from the code: "repos_root" (the folder whose top-level
-folders are the repositories, matched against the session's cwd), "ledger" (else the machine
-config's ledger_path) and "landing_lock" ({repo: the landing lock's file name in that repo's git
-common dir}; a repo not named there gets no landing-lock line).
+folders are the repositories, matched against the session's cwd) and "landing_lock" ({repo: the
+landing lock's file name in that repo's git common dir}; a repo not named there gets no
+landing-lock line).
 """
 import datetime
 import json
@@ -23,7 +24,6 @@ from kitlib import pmstart, sessionmark, stubs
 from kitlib.config import user as kuser
 from kitlib.git import cmd as gitcmd
 from kitlib.host import registry
-from kitlib.ledger import safepath
 
 KEY = "coordinator_start"
 ROLE_VAR = "PM_KIT_ROLE"
@@ -32,9 +32,8 @@ LEGACY_KEY = "conductor_start"   # the old names, read until the live config and
 LEGACY_ROLE = "conductor"
 NAME_VAR = "PM_KIT_SESSION_NAME"  # optional: this session's Remote Control name (else the process tree)
 TIMEOUT = 10
-LEDGER_CAP = 20
-DECIDES_CHARS = 200
 SOON_HOURS = 4
+LOCK_SCHEMA_VERSION = 1       # kitlib.lock.api.SCHEMA_VERSION, the snapshot schema machine() reads
 # Engineering decisions (docs/engineering-rulings.md): the filing format, the consultant as
 # recipient, and the owner-only list.
 ENG_LINE = ("ENG rulings: an engineering question (API shape, class versus record, signatures, module layout, "
@@ -155,47 +154,6 @@ def find_entry(sessions, cwd, name=None, root=None):
     return hits[0], "%d sessions entries match repo %s; took the first (%s)" % (len(hits), top, hits[0].get("name"))
 
 
-def rulings(entry, ledger_path, read=_read):
-    """Ledger entries newer than the coordinator's state note's highest R-id, for its repo or all.
-    A ledger path the ledger's path checks refuse (kitlib.ledger.safepath) is one line saying why."""
-    note = _need(entry, "state")
-    ids = [int(m) for m in re.findall(r"R-(\d{4})", read(note))]
-    if not ids:
-        return ["no R-id in your state note %s: cannot tell which rulings are new" % note]
-    top, repo = max(ids), str(entry.get("repo", "")).lower()
-    why = safepath.refusal(ledger_path)
-    if why is not None:
-        return [why]
-    found, cur = [], None
-    for line in read(ledger_path).splitlines():
-        m = re.match(r"## R-(\d{4}) \| [^|]*\| ([^|]*) \|", line)
-        if m:
-            cur = None
-            if int(m.group(1)) > top and m.group(2).strip().lower() in (repo, "all"):
-                cur = ["R-" + m.group(1), None, None]
-                found.append(cur)
-        elif cur is not None:
-            if line.startswith("Decides:"):
-                cur[1] = line[8:].strip()
-            elif cur[2] is None and line.strip():
-                cur[2] = line.strip()
-    if not found:
-        return ["no rulings newer than R-%04d for %s or all" % (top, repo)]
-    lines = ["%s: %s" % (r[0], (r[1] or r[2] or "(no Decides)")[:DECIDES_CHARS]) for r in found]
-    if len(lines) > LEDGER_CAP:
-        more = len(lines) - LEDGER_CAP
-        lines = lines[:LEDGER_CAP] + ["... and %d more newer rulings: read %s" % (more, ledger_path)]
-    return ["rulings newer than R-%04d (your state note) for %s or all:" % (top, repo)] + lines
-
-
-def ledger_file(cfg, home=None):
-    """The config's "ledger", else the machine config's ledger_path; KeyError when neither is set."""
-    path = cfg.get("ledger") or kuser.ledger_path(home)
-    if not path:
-        raise KeyError("ledger not configured")
-    return path
-
-
 def cap(cfg, repo, today):
     caps = _need(cfg, "cap").get(repo) or _need(cfg, "cap").get(repo.lower())
     if not caps:
@@ -238,25 +196,35 @@ def landing_lock(entry, run=_run, read=_read, root=None, lock_file=None):
 
 
 def machine(entry, run=_run, read=_read, now=None, home=None, root=None, lock_file=None):
-    """Owner reservations and bookings in force or starting within 4 h, free gpu and cpu slots, landing lock."""
+    """Owner and agent holds in force or starting within 4 h, free gpu and cpu slots, landing lock.
+
+    Reads `machine_lock.py status --json` (kitlib.lock.api.snapshot, docs/lock-api.md "Snapshot"):
+    `holds` and `slots`. A slot is free when no run holds it and no hold covers it. A payload of
+    another schema_version raises ValueError rather than reading as an idle machine."""
     home = home or kuser.home_dir()
     now = now or datetime.datetime.now().astimezone()
     s = json.loads(run([sys.executable, registry.state_path(home, "tools", "machine_lock", "machine_lock.py"),
                         "status", "--json"]))
+    if s.get("schema_version") != LOCK_SCHEMA_VERSION:
+        raise ValueError("machine_lock status --json has schema_version %r, this check reads %d"
+                         % (s.get("schema_version"), LOCK_SCHEMA_VERSION))
     soon = now + datetime.timedelta(hours=SOON_HOURS)
-    res = s.get("reservations") or {}
     owner = []
-    for kind, items in (("owner reservation", (res.get("active") or []) + (res.get("upcoming") or [])),
-                        ("booking", (s.get("lock") or {}).get("bookings") or [])):
-        for v in items:
-            if _parse_time(v["start"]) <= soon and _parse_time(v["end"]) > now:
-                owner.append("%s %s-%s%s" % (kind, v.get("start_local", v["start"]), v.get("end_local", v["end"]),
+    for v in s.get("holds") or []:
+        if _parse_time(v["start"]) <= soon and _parse_time(v["end"]) > now:
+            owner.append("%s hold %s-%s%s" % ("agent" if v.get("owner") == "agent" else "owner",
+                                              v.get("start_local", v["start"]), v.get("end_local", v["end"]),
                                               ": " + v["note"] if v.get("note") else ""))
-    gpus, cores = s.get("gpus") or [], s.get("cores") or []
-    lines = ["machine: " + ("; ".join(owner) if owner else "no owner reservation or booking within %d h" % SOON_HOURS),
+    if s.get("holds_error"):
+        owner.append("holds unreadable: %s" % s["holds_error"])
+    slots = s.get("slots") or {}
+    gpus, cores = slots.get("gpu") or [], slots.get("cpu") or []
+
+    def free(pool):
+        return sum(1 for x in pool if not x.get("holder") and not x.get("hold"))
+    lines = ["machine: " + ("; ".join(owner) if owner else "no owner or agent hold within %d h" % SOON_HOURS),
              "machine: free gpu slots %d of %d; free cpu slots %d of %d" % (
-                 sum(1 for g in gpus if not g.get("holder_id")), len(gpus),
-                 sum(1 for c in cores if not c.get("holder_id")), len(cores))]
+                 free(gpus), len(gpus), free(cores), len(cores))]
     lock = landing_lock(entry, run, read, root, lock_file)
     if lock:
         lines.append(lock)
@@ -332,7 +300,6 @@ def context(cfg, env=None, cwd=None, now=None, procs=None, run=_run, read=_read,
             return box["e"][0]
 
         checks = [
-            ("rulings", lambda: rulings(entry_once(), ledger_file(cfg, home), read)),
             ("cap", lambda: cap(cfg, entry_once()["repo"], now.date())),
             ("machine state", lambda: machine(entry_once(), run, read, now, home, cfg.get("repos_root"),
                                               lock_file_for(cfg, entry_once().get("repo")))),

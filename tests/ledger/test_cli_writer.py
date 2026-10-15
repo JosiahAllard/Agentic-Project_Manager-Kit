@@ -19,7 +19,7 @@ def rid(n):
     return 'R-%04d' % n
 
 
-class CliWriterTest(unittest.TestCase):
+class CliBase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -37,6 +37,30 @@ class CliWriterTest(unittest.TestCase):
         return subprocess.run([sys.executable, TOOL] + list(args), capture_output=True, text=True,
                               env=env, timeout=60)
 
+
+class RemovedFlagsTest(CliBase):
+    """`add --items` and `check --root` are gone, and `check` runs no orphan scan."""
+
+    def test_add_items_is_a_usage_error_and_writes_nothing(self):
+        r = self.run_tool(*(ADD + ['--items', 'X']))
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn('--items', r.stderr)
+        self.assertFalse(os.path.exists(self.ledger))
+
+    def test_check_root_is_a_usage_error(self):
+        self.assertEqual(self.run_tool(*ADD).returncode, 0)
+        r = self.run_tool('check', '--base', 'none', '--root', self.home)
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn('--root', r.stderr)
+
+    def test_check_prints_no_orphan_line(self):
+        self.assertEqual(self.run_tool(*ADD).returncode, 0)
+        r = self.run_tool('check', '--base', 'none')
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertNotIn('orphan', r.stdout + r.stderr)
+
+
+class CliWriterTest(CliBase):
     def test_add_prints_the_new_id_and_show_grep_check_read_it(self):
         r = self.run_tool(*ADD)
         self.assertEqual((r.returncode, r.stdout.strip()), (0, rid(1)), r.stderr)

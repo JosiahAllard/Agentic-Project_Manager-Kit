@@ -2,7 +2,7 @@
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "pm-kit",
   "version": "0.4.0",
-  "description": "The PM kit as a Codex plugin (ARCHITECTURE.md, Packaging; hosts/codex/README.md): its hooks, skills and the read-only machine lock MCP server. Rendered from kit.json and content/ by tools/render_content.py; never edit it by hand.",
+  "description": "The PM kit as a Codex plugin (ARCHITECTURE.md, Packaging; hosts/codex/README.md): its hooks, skills, the read-only machine lock MCP server and the hub MCP server. Rendered from kit.json and content/ by tools/render_content.py; never edit it by hand.",
   "extensions": {
     "com.openai": {
       "hooks": "./hooks/hooks.json"

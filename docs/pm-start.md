@@ -16,8 +16,8 @@ Hub (`kitlib.pmstart` `hub_site`, tests `tests/pmstart/test_hub_site.py`; docs/a
 lines read the machine config's `hub` key (`kitlib.hubsite.settings`), or every default (port 8790)
 when there is no `hub` key. The check only asks the loopback server on `hub.port`, through
 `kitlib.hubsite.client`; it starts no process and never starts the server, and it imports
-`kitlib.hubsite.serve` only once the settings are read. Each ask (`GET /health`,
-then `GET /pending`) waits at most `HUB_SITE_TIMEOUT_S` (1.5 seconds). The lines:
+`kitlib.hubsite.serve` only once the settings are read. Each ask (`GET /api/v1/health`,
+then `GET /api/v1/pending`) waits at most `HUB_SITE_TIMEOUT_S` (1.5 seconds). The lines:
 `hub: server up on port <n>, <k> pending` (`<k>` is 0 when the answer's `items` is not a list); when
 `<k>` is above 0, a line to process the items (`hub.py pending`); then either
 `hub: wait --pending is running` or a line telling the PM to start
@@ -29,10 +29,10 @@ each one line:
   "<kit>/tools/hub.py" serve`.
 - No token file (neither the agent's nor the owner's can be read): `hub: no hub token file is there
   to read: run python "<kit>/tools/hub.py" setup`.
-- `GET /health` answered, but not ok: `hub: server did not answer as the hub does (health not ok)`.
-- Any other failure of `GET /health` (a timeout, a refusal, an answer that is not the hub's): `hub:
+- `GET /api/v1/health` answered, but not ok: `hub: server did not answer as the hub does (health not ok)`.
+- Any other failure of `GET /api/v1/health` (a timeout, a refusal, an answer that is not the hub's): `hub:
   server did not answer as the hub does (<exception class>)`; the class is all it names.
-- `GET /pending` fails after `GET /health` answered: `hub: server up on port <n>, pending not asked
+- `GET /api/v1/pending` fails after `GET /api/v1/health` answered: `hub: server up on port <n>, pending not asked
   (<exception class>)`.
 - The `hub` key is there and cannot be used (the machine config check refuses it, or the hub
   settings do): `hub: the hub key of the machine config cannot be used: <the configuration error's
@@ -141,8 +141,6 @@ The machine config (docs/kit-json.md "Machine config keys"), key `pm_start`; wit
 }}
 ```
 
-- `hub_mirror`: the absolute folder of the old hub's mirror for an install without `pm_data`
-  (docs/action-hub.md "Data from the old hub"). The checklist does not read it.
 - `reminders_file`: `[{"due": "YYYY-MM-DD", "text": "..."}]`.
 - `sessions_file`: `{"<key>": {"name": "<remote-control name>", "repo": "<repo>"}}`; an entry
   with `autostart: false` is not checked.

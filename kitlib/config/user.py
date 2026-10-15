@@ -116,14 +116,9 @@ MARK_ROOT = Obj({
     'why': Field(Str(), None, 'the reason, a ruling or a measurement'),
 }, required=('path', 'mode'), what='{path, mode, why}')
 
-# ledger_refs: where tools/ledger_refs.py looks for citations of a ruling id (docs/ledger.md "ledger_refs").
-LEDGER_REFS = Obj({
-    'repos': Field(MapOf(Obj({
-        'path': Field(AbsPath(), None, 'the repository'),
-        'ref': Field(Str(), None, 'the committed ref searched, origin/main say'),
-    }, required=('path', 'ref'), what='{path, ref}'), what='name'), {}, 'repositories searched at a ref'),
-    'folders': Field(MapOf(AbsPath(), what='name'), {}, 'folders or files searched as they are on disk'),
-}, what='object {repos: map name -> {path, ref}, folders: map name -> absolute path}')
+# Keys the machine config no longer has. A file written before the removal still loads: the key
+# is dropped whatever it holds, never refused and never returned. An unknown key is still refused.
+RETIRED = ('ledger_refs',)
 
 # One line per key. A key another module owns is registered as Owned(<that module>), which checks it.
 SCHEMA = {
@@ -131,7 +126,6 @@ SCHEMA = {
     'ledger_path': Field(AbsPath(), None, 'the rulings ledger file; set here only'),
     'ledger_repos': Field(ListOf(Str(pattern=r'[a-z0-9][a-z0-9-]*', what='a lower-case repo name')), None, 'the repo columns `ledger.py add --repo` writes, besides `all`; unset: any lower-case name (docs/ledger.md)'),
     'pending_path': Field(AbsPath(), None, "the owner's pending-steps file tools/pending.py edits (docs/pending.md)"),
-    'ledger_refs': Field(LEDGER_REFS, None, 'where tools/ledger_refs.py looks for citations of a ruling id; unset: the ledger file only (docs/ledger.md "ledger_refs")'),
     'standing_delegation': Field(Str(pattern=r'R-[0-9]{4,}', what='a ruling id R-nnnn'), None, 'the ledger entry that delegates in general; the backlog refuses it as the ruling behind any one change. Unset: no id is refused for that'),
     'scrub_patterns': Field(ListOf(Regex()), None, "case-insensitive patterns for the install's own names (repositories, owner, accounts) that the shipped-text tests and tests/scrub/test_generic.py also refuse"),
     'guard_mcp_prefix': Field(Str(), None, 'the lock MCP tool-name prefix the guard denies owner-only tools under; unset: the kit default (docs/guard.md "Lock MCP")'),
@@ -140,7 +134,7 @@ SCHEMA = {
     'guard_mark_roots': Field(MarkMap(ListOf(MARK_ROOT), what='mark'), None, 'more write-jail roots for the main sessions of one launcher mark, as {mark: [{path, mode, why}]}; a root that is, holds or lies inside either machine config folder, the current or the retired one, is ignored unless it is read-only (docs/guard.md "Write jail")'),
     'pm_data': Field(Owned('kitlib.pmdata'), None, 'the worktree of the PM data branch: {path, branch, remote} (docs/pm-data-branch.md "Layout")'),
     'hub': Field(Owned('kitlib.hubsite.settings'), None, 'the Action Hub site settings: port, tunnel_port, store, commit_every_s, push (unset: on only when store is unset and pm_data is set), backlog_refresh_s, access: {team, aud, emails}, relay: {source}; unset: every default, and the site still runs; older kit copies reject the key; set it only after every folder runs a kit that knows it'),
-    'pm_start': Field(Owned('kitlib.pmstart'), None, 'the PM session-start checklist settings (docs/pm-start.md "Config"); among them hub_mirror: the absolute folder of the old hub\'s mirror for an install without pm_data (docs/action-hub.md "Data from the old hub")'),
+    'pm_start': Field(Owned('kitlib.pmstart'), None, 'the PM session-start checklist settings (docs/pm-start.md "Config")'),
     'coordinator_start': Field(Owned('kitlib.coordinatorstart'), None, 'the coordinator session-start settings'),
     'conductor_start': Field(Owned('kitlib.coordinatorstart'), None, 'the old name of coordinator_start, read when coordinator_start is absent; removed after the switch'),
     'pm_watch': Field(Owned('kitlib.pmwatch'), None, 'the PM watcher settings'),
@@ -482,6 +476,8 @@ def user_config(home=None, location=None):
     data = {}
     if text is not None:
         data = parse_json(text, path)
+        if isinstance(data, dict):
+            data = {k: v for k, v in data.items() if k not in RETIRED}
         errs = []
         Obj(SCHEMA, what='machine config').check(data, path, errs)
         if errs:
@@ -497,7 +493,7 @@ def failing_keys(data):
     may print them where the value must not appear (kitlib.preflight.configline)."""
     out = []
     for k, v in data.items():
-        if is_note(k):
+        if is_note(k) or k in RETIRED:
             continue
         f = SCHEMA.get(k)
         errs = []

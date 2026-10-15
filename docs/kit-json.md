@@ -13,7 +13,7 @@ A repository's kit configuration, read and checked whole by `kitlib.config.load`
 - A `landing.lanes` entry is keyed by the lane name and has four keys (`LANE` in `kitlib/config/schema.py`): `branch_prefix` (list of string; a branch on the lane starts with one), `paths` (list of glob; every path the branch changes matches one), `why` (string; the ruling that made the lane) and `merged_args` (list of string; added to every step command of the lane's merged-tree gate, after the step's own `merged_args`, with the same `{root}`-style substitutions). `tools/land.py` reads `main_branch` and `remote` from `repo`, the lanes, `wait_s` and `batch_max` from `landing`, and the gate steps from `gate` (docs/gate.md, Landing).
 - No old spelling is read: the hook module is the top-level `hook` (not `gate.hook`), and owner settings are `owner` (not `doc_budget` keys).
 - `backlog.code_main` matters where the store's checkout is on a branch that shares no history with the code, as the kit's pmdata store is (its `repo.main_branch` is `pmdata`): there `backlog.py add --found-on <branch>` (`plan_add` in `kitlib/backlog/plan.py`) finds no merge base and stops with an ERROR naming the key, until the PM sets it to the code's main branch. `--found-on none` needs no base.
-- Retired keys are still accepted and ignored, so an older install loads: `backlog` may still carry `retired_docs` and `rename_script` (`RETIRED` in `kitlib/config/schema.py`); nothing reads them.
+- Retired keys are still accepted and ignored, so an older install loads: `backlog` may still carry `retired_docs`, `rename_script` and `ledger_repo` (`RETIRED` in `kitlib/config/schema.py`); nothing reads them. A whole `ruling_cites` section is accepted the same way and dropped unchecked (`RETIRED_SECTIONS` there); any other unknown section still refuses.
 - A repo lists its own heavy programs in `heavy.programs`; the kit defaults are general tools only (godot, blender, dotnet, gradle). For example `{"program": "run_tests.bat", "kind": "engine-test", "why": "runs the engine test suite"}`, `{"program": "graph_build*", "kind": "worldgraph", "why": "rebuilds the world graph"}` and `{"program": "local_model*", "kind": "local-ai", "unless_args": ["--help"], "why": "loads a model onto the gpu"}`.
 
 ## With no file
@@ -23,7 +23,7 @@ A repository's kit configuration, read and checked whole by `kitlib.config.load`
 Three defaults are read rather than fixed (`kitlib.config.load`, from `kitlib.git.defaults` and the machine config). Each applies whenever the file does not set the key, with a file or without one:
 
 - `repo.main_branch`: the branch `refs/remotes/<remote>/HEAD` points at (`git clone` writes it; `git remote set-head origin --auto` writes it in a clone that has none). With no such ref: `main` when `refs/heads/main` or `<remote>/main` exists, else `master` when only that exists, else `main`. Read from the git files (the `.git` folder, or the `gitdir:` file of a linked worktree and its `commondir`; loose refs and `packed-refs`), never by starting git; a repository whose refs are in a reftable is asked once (`git symbolic-ref`). A `<remote>/HEAD` naming a branch that starts with `-` or `/` or holds `..` is not read. Read once per load, so a guard hook pays one file read or two for it.
-- `repo.name`: the last part of the remote's URL in the repository's config, `.git` dropped; with no remote, the main checkout's folder name. The URL is the first one in the common config, else, while that config turns `extensions.worktreeConfig` on, the first one in the work tree's own `config.worktree` (`kitlib/git/defaults.py` `remote_url`). It names the gate log folder (`<kit temp>/<name>-gate`), the worktree sweep's log and scheduled task, and the lock line's `--repo`; `landed.py` reads the gate logs under each checkout's folder name too, where a gate wrote them before the name was read from the remote. The rulings ledger's repo column is never derived: the ledger (`backlog.ledger_repo`) and the ruling citation check (`ruling_cites.repo`) read a written `repo.name` only, the citation check then the folder name as before.
+- `repo.name`: the last part of the remote's URL in the repository's config, `.git` dropped; with no remote, the main checkout's folder name. The URL is the first one in the common config, else, while that config turns `extensions.worktreeConfig` on, the first one in the work tree's own `config.worktree` (`kitlib/git/defaults.py` `remote_url`). It names the gate log folder (`<kit temp>/<name>-gate`), the worktree sweep's log and scheduled task, and the lock line's `--repo`; `landed.py` reads the gate logs under each checkout's folder name too, where a gate wrote them before the name was read from the remote.
 - `owner.email`: the machine config's `owner_email` (below). With neither, or with a machine config that cannot be read, no commit can be proven to be the owner's, so every change to an owner-only path is refused; it is never allowed. `tools/machine_setup.py` stores it (`--owner-email`, or the address the owner confirms at its `--apply` console question, which offers `git config user.email`; docs/machine-setup.md "Owner email").
 
 Protections on with no file:
@@ -36,7 +36,7 @@ Off with no file, each switched on by its key: `repo.push_block` (a push to main
 
 ## `.kit.json` keys
 
-- `repo.name` (string, may be empty, default ""): repository name for reports and the ledger; unset or empty: the last part of the remote's URL, else the main checkout's folder name (the ledger reads a written name only)
+- `repo.name` (string, may be empty, default ""): repository name for reports; unset or empty: the last part of the remote's URL, else the main checkout's folder name
 - `repo.main_branch` (string, default "main"): the branch landings target; unset: the branch <remote>/HEAD names, else main, else master when only that exists (docs/kit-json.md "With no file")
 - `repo.remote` (string, default "origin"): the remote main is pushed to
 - `repo.worktrees_dir` (repo path, default ".claude/worktrees"): where agent worktrees live
@@ -58,7 +58,6 @@ Off with no file, each switched on by its key: `repo.push_block` (a push to main
 - `backlog.store` (ref|branch|main or repo path, default "ref"): the record store: ref (refs/backlog/main), branch (the backlog branch), main (docs/backlog) or a folder (docs/backlog.md)
 - `backlog.phases` (list of string, default []): phase names in order
 - `backlog.id_grammar` (upper|mixed, default "upper"): item id spelling
-- `backlog.ledger_repo` (string): the ledger repo column; default the repo name
 - `backlog.code_main` (string): the branch code lands on, which `add --found-on` measures a branch's diff from; default repo.main_branch
 - `board.state_file` (repo path): the board state file, under the git dir (default <git common dir>/kit/board-state.md)
 - `checkout_guard.rule_pointer` (string): where a refusal points for the rule
@@ -124,8 +123,6 @@ Off with no file, each switched on by its key: `repo.push_block` (a push to main
 - `redfirst.runners` (list of {glob, kind, pythonpath, dir, project, csproj, args, lock}, default [{"glob": "tests/*test_*.py", "kind": "python"}]): which runner takes a test file, first match wins; none written: this default, then <tools_dir>/*test_*.py as python with the tools folder as pythonpath, unless tools_dir is . or that glob is listed (docs/redfirst.md); a runner's lock is the kinds-table kind the run books around its command (unset: the kind of the heavy-list entry the command matches)
 - `redfirst.hold_wait` (int >= 0, default 60): seconds a held throwaway tree is re-checked before it is left
 - `review_pack.coauthor` (bool, default false): list the branch's commits with no Co-Authored-By trailer, judged by the trailers rule; a failing one blocks
-- `ruling_cites.repo` (string): the ledger repo column cited
-- `ruling_cites.skip` (list of string): globs of paths not checked; unset: <tools_dir>/test_*.py and <tools_dir>/fixtures/*
 - `stubs.tools` (list of string): kit tools stubbed into the repo; stubs are opt-in (none by default), and setting this opts in
 - `testlist.junit` (list of string, default ["**/build/test-results/**/*.xml"]): JUnit result globs
 - `testlist.trx` (list of string, default ["**/*.trx"]): .NET result globs
@@ -161,11 +158,14 @@ Off with no file, each switched on by its key: `repo.push_block` (a push to main
 
 The machine's own settings, read by `kitlib.config.user`: `config.json` in the folder `kitlib.config.user.DIR_NAME` names under the home folder, or, while that folder has none, in the retired folder ("Moving the machine config folder"); `python -c "from kitlib.config import user; print(user.config_file())"`, run in the kit, prints the path of the file read. Messages name the file read (`user.display()`), help text `user.DISPLAY`, and this page and the others write `<config-dir>` for that folder. No `.kit.json` key and no ledger environment variable overrides them. `~` follows USERPROFILE on Windows and HOME elsewhere (`os.path.expanduser`), so an environment that changes that variable reads another machine config. One key does not follow it: `machine_lock` is read from the config under the profile folder Windows itself reports (`kitlib.lock.site.load`, through `kitlib.lock.store.machine_home`), where the machine's lock store lives, so every session that shares the store reads one `machine_lock`, whatever its USERPROFILE. Every other key is read under the environment's home.
 
+A retired key is still accepted and ignored, so an older machine config loads: `ledger_refs` (`RETIRED` in `kitlib/config/user.py`); nothing reads it. Any other unknown key still refuses.
+
+Each kit copy on the machine reads this one file with its own key list, so a key "older kit copies reject" refuses the whole file in every copy that does not know it. `python tools/hub.py setup --check` lists each copy (the plugin export folders, the pins and each account folder's install, `kitlib.config.copies`) with the keys of the file plus `hub` that it would refuse, and writes nothing. It reads each copy's `SCHEMA` and `RETIRED` from the text of its `kitlib/config/user.py` and checks top-level keys only.
+
 - `owner_email` (email): the author email of the owner's own commits, for every repository whose .kit.json sets no "owner".email; unset there too: no commit is provable as the owner's, so every owner-only change is refused (docs/kit-json.md "With no file"); older kit copies reject the key
 - `ledger_path` (absolute path): the rulings ledger file; set here only
 - `ledger_repos` (list of a lower-case repo name): the repo columns `ledger.py add --repo` writes, besides `all`; unset: any lower-case name (docs/ledger.md)
 - `pending_path` (absolute path): the owner's pending-steps file tools/pending.py edits (docs/pending.md)
-- `ledger_refs` (object {repos: map name -> {path, ref}, folders: map name -> absolute path}): where tools/ledger_refs.py looks for citations of a ruling id; unset: the ledger file only (docs/ledger.md "ledger_refs")
 - `standing_delegation` (a ruling id R-nnnn): the ledger entry that delegates in general; the backlog refuses it as the ruling behind any one change. Unset: no id is refused for that
 - `scrub_patterns` (list of regex): case-insensitive patterns for the install's own names (repositories, owner, accounts) that the shipped-text tests and tests/scrub/test_generic.py also refuse
 - `guard_mcp_prefix` (string): the lock MCP tool-name prefix the guard denies owner-only tools under; unset: the kit default (docs/guard.md "Lock MCP")
@@ -174,12 +174,11 @@ The machine's own settings, read by `kitlib.config.user`: `config.json` in the f
 - `guard_mark_roots` (map mark -> list of {path, mode, why}): more write-jail roots for the main sessions of one launcher mark, as {mark: [{path, mode, why}]}; a root that is, holds or lies inside either machine config folder, the current or the retired one, is ignored unless it is read-only (docs/guard.md "Write jail")
 - `pm_data` (object, checked by kitlib.pmdata): the worktree of the PM data branch: {path, branch, remote} (docs/pm-data-branch.md "Layout")
 - `hub` (object, checked by kitlib.hubsite.settings): the Action Hub site settings: port, tunnel_port, store, commit_every_s, push (unset: on only when store is unset and pm_data is set), backlog_refresh_s, access: {team, aud, emails}, relay: {source}; unset: every default, and the site still runs; older kit copies reject the key; set it only after every folder runs a kit that knows it
-- `pm_start` (object, checked by kitlib.pmstart): the PM session-start checklist settings (docs/pm-start.md "Config"); among them hub_mirror: the absolute folder of the old hub's mirror for an install without pm_data (docs/action-hub.md "Data from the old hub")
+- `pm_start` (object, checked by kitlib.pmstart): the PM session-start checklist settings (docs/pm-start.md "Config")
 - `coordinator_start` (object, checked by kitlib.coordinatorstart): the coordinator session-start settings
 - `conductor_start` (object, checked by kitlib.coordinatorstart): the old name of coordinator_start, read when coordinator_start is absent; removed after the switch
   Its install values (`kitlib.coordinatorstart`; nothing in the code supplies them):
   - `repos_root` (path): the folder whose top-level folders are the repositories; the session's cwd picks the repo under it. Unset: every check that needs the coordinator's repo prints "could not check ...: repos_root not configured".
-  - `ledger` (path): the rulings ledger the "rulings newer than" check reads; unset: the machine `ledger_path`; neither: "could not check rulings: ledger not configured".
   - `landing_lock` ({repo: file name}): the landing lock's file in that repo's git common dir, shown as the landing-lock line. A repo not named here, or an unset key, gets no landing-lock line, and nothing says it was dropped.
 - `pm_watch` (object, checked by kitlib.pmwatch): the PM watcher settings
 - `launcher` (object, checked by kitlib.launcher): the session launcher settings: state folder, repos, account folders (docs/launcher.md "Settings")

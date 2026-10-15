@@ -8,9 +8,12 @@ checkout>" --sweep-merged --apply` daily at 03:00 as the registering user (`-Run
 MAIN checkout (a branch worktree's copy is unreviewed and goes away with the branch). No console
 window opens: the task's program is `pythonw.exe` running the carrier beside the tool (`CARRIER`,
 tools/no_window.py), which starts the python.exe beside that pythonw with a hidden console
-(kitlib.proc.spawn.carry). The pythonw is the one `Get-Command pythonw` finds when the line runs;
-the line throws, registering nothing, when there is none or it is the Microsoft Store alias
-(`NOT_THE_STORE_ALIAS`).
+(kitlib.proc.spawn.carry). The pythonw is the one in the base install of the python that runs
+this (kitlib.launcher.pythonw.base_pythonw), written into the line as a literal path, never what
+`Get-Command pythonw` finds: with an app execution alias first on PATH that is
+`...\\WindowsApps\\pythonw.exe`, not the real install. Nothing is printed or registered when that
+pythonw is under WindowsApps or is not a file (`run`: refused); the line still throws, registering
+nothing, on a WindowsApps path (`NOT_THE_STORE_ALIAS`), so a hand-edited copy is checked too.
 
 Nothing is registered without `--register --owner-confirmed`; a bare `--register` is refused before
 anything else is read. Agents never type `--owner-confirmed`.
@@ -19,6 +22,7 @@ import os
 
 from kitlib.config import ConfigError, load
 from kitlib.git import repo as gitrepo
+from kitlib.launcher.pythonw import base_pythonw, refusal
 from kitlib.proc.spawn import CARRIER      # tools/no_window.py, beside the tool the task runs
 
 from .remove import OK, REFUSED, Outcome, GitReadError, canon, main_checkout
@@ -29,8 +33,8 @@ SWEEP = '--sweep-merged --apply'
 # PowerShell ends a single-quoted string at any of these, not only at ' (its own
 # CodeGeneration.EscapeSingleQuotedStringContent doubles all five).
 SINGLE_QUOTES = ("'", '‘', '’', '‚', '‛')
-# `$py` is what `Get-Command pythonw` found (FIND_PYTHONW); a failed lookup leaves it empty.
-FIND_PYTHONW = '$py = (Get-Command pythonw).Source'
+# `$py` is the resolved pythonw.exe, a literal (PYTHONW_IS % its quoted path).
+PYTHONW_IS = '$py = %s'
 NOT_THE_STORE_ALIAS = (r"if (-not $py -or $py -match '\\WindowsApps\\') { throw ('pythonw is ' + $py +"
                        r" ': no pythonw, or the Microsoft Store alias; nothing was registered') }")
 
@@ -59,14 +63,15 @@ def description(name):
     return '%s: nightly sweep of landed, idle, unheld worktrees' % name
 
 
-def command(root, name, tool):
-    """The one PowerShell line that registers the task, its working directory `root`."""
+def command(root, name, tool, pythonw):
+    """The one PowerShell line that registers the task to run `pythonw`, its working directory
+    `root`."""
     return ("%s; %s; Register-ScheduledTask -TaskName %s"
             " -Trigger (New-ScheduledTaskTrigger -Daily -At %s)"
             " -Action (New-ScheduledTaskAction -Execute $py -Argument %s -WorkingDirectory %s)"
             " -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable)"
             " -User $env:USERNAME -RunLevel Limited -Description %s"
-            % (FIND_PYTHONW, NOT_THE_STORE_ALIAS, quoted(task_name(name)), AT,
+            % (PYTHONW_IS % quoted(pythonw), NOT_THE_STORE_ALIAS, quoted(task_name(name)), AT,
                quoted(argument(tool, root)), quoted(root), quoted(description(name))))
 
 
@@ -112,9 +117,10 @@ def resolve(root, tool):
     return main, name
 
 
-def run(argv, runner, root, tool):
+def run(argv, runner, root, tool, pythonw=None):
     """The verb. `runner(args) -> exit code` runs PowerShell (tests pass a fake); `root` is the
-    default repository (the caller's directory); `tool` the worktree_remove.py the task runs."""
+    default repository (the caller's directory); `tool` the worktree_remove.py the task runs;
+    `pythonw` the task's program (default: kitlib.launcher.pythonw.base_pythonw())."""
     got = parse(argv)
     if got is None:
         return Outcome(USAGE, ['usage:    worktree_sweep_task.py [-C <main checkout>]'
@@ -127,7 +133,11 @@ def run(argv, runner, root, tool):
     if isinstance(found, str):
         return Outcome(REFUSED, ['refused   %s; nothing was registered' % found])
     main, name = found
-    line = command(main, name, tool)
+    pythonw = pythonw or base_pythonw()
+    why = refusal(pythonw)
+    if why:
+        return Outcome(REFUSED, ['refused   %s; nothing was registered' % why])
+    line = command(main, name, tool, pythonw)
     if not register:
         return Outcome(OK, [line, 'printed   nothing was registered; the owner registers it with'
                                   ' --register --owner-confirmed'])

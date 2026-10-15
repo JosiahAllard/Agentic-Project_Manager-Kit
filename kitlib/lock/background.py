@@ -23,8 +23,8 @@ from kitlib.lock import layout as lay
 from kitlib.lock import queue as qm
 from kitlib.lock import game
 from kitlib.lock.run import (BG_ENV, NEST_ENV, ORIGIN_ENV, PICK, POOLS, XLA_DEFAULT_FRACTION,
-                             XLA_FRACTION_ENV, Run, child_code, docker_cpu_env, export_threads,
-                             pin_fields, settle)
+                             XLA_FRACTION_ENV, Run, child_code, claim_id, docker_cpu_env,
+                             export_threads, pin_fields, settle)
 from kitlib.lock.store import EXIT_REQUIRE, EXIT_USAGE, LockError, Store, iso, write_json
 from kitlib.proc.job import Job, cores_text
 
@@ -84,8 +84,8 @@ def run_background(cmd, repo, slug, expect_s=None, note=None, store=None, env=No
                    detached=False, log=None):
     """Runs cmd as a background run until it exits other than PAUSE_EXIT, stop ends it, or it
     yields late. Returns its exit code (1 for yield-late or a failed start, 130 on Ctrl+C).
-    Raises LockError (exit 2 with no gpu here, 10 when the store or queue cannot be had before
-    it joined)."""
+    Raises LockError (exit 2 with no gpu here or a rid not shaped as a run id, 10 when its id is
+    taken (run.claim_id) or the store or queue cannot be had before it joined)."""
     store = store or Store()
     s, say = store.settings, store.say
     L = lay.in_force(store)["layout"]
@@ -93,27 +93,28 @@ def run_background(cmd, repo, slug, expect_s=None, note=None, store=None, env=No
         raise LockError(EXIT_USAGE, "usage: a background run is gpu training, and this machine "
                                     "has no gpu the lock knows of")
     env = dict(os.environ if env is None else env)
-    run = Run(store, L, repo, slug, None, note, cmd, "bg", rid, detached, env, log)
-    ctl_dir = store.path("background", run.id + ".d")
-    ctl = os.path.join(ctl_dir, "control.json")
-    for k in (NEST_ENV, ORIGIN_ENV, BG_ROOT_ENV):   # bg_client would prefer BG_ROOT (containers)
-        env.pop(k, None)
-    env[BG_ENV] = "%s:%d:%d" % (run.id, run.rec["pid"], run.rec["ctime"])
-    env[BG_CONTROL_ENV], env[BG_DIR_ENV] = ctl, ctl_dir
-    if not env.get(XLA_FRACTION_ENV):
-        env[XLA_FRACTION_ENV] = XLA_DEFAULT_FRACTION
+    # The id first, its run mutex held: a refusal here (an id taken, exit 10; one not shaped as a
+    # run id, exit 2) writes nothing, so another run's record and control.json are never touched.
+    rid, mutex = claim_id(store, rid)
+    try:
+        run = Run(store, L, repo, slug, None, note, cmd, "bg", rid, detached, env, log)
+        ctl_dir = store.path("background", run.id + ".d")
+        ctl = os.path.join(ctl_dir, "control.json")
+        for k in (NEST_ENV, ORIGIN_ENV, BG_ROOT_ENV):   # bg_client would prefer BG_ROOT
+            env.pop(k, None)
+        env[BG_ENV] = "%s:%d:%d" % (run.id, run.rec["pid"], run.rec["ctime"])
+        env[BG_CONTROL_ENV], env[BG_DIR_ENV] = ctl, ctl_dir
+        if not env.get(XLA_FRACTION_ENV):
+            env[XLA_FRACTION_ENV] = XLA_DEFAULT_FRACTION
+    except BaseException:
+        mutex.release()
+        raise
     need = {"cpu": L["medium_cores"], "gpu": 1}
     seq, beat, job, p, first, free_since = 0, 0.0, None, None, True, time.monotonic()
-    code, how, pause, stopping, told, mutex = 1, "stopped", None, None, None, None
+    code, how, pause, stopping, told = 1, "stopped", None, None, None
     demand_since, fg_gpu, fg_cpu, qbad, unfreed, joined = None, [], [], None, False, False
     hs_known, hbad = None, None
     try:
-        try:
-            mutex = store.run_mutex(run.id)
-        except OSError as e:
-            code, how = EXIT_REQUIRE, "not acquired"
-            raise LockError(EXIT_REQUIRE, "require-lock: the run's mutex could not be made (%s); "
-                                          "the command was not run" % e)
         run.rec.update(need=need, background=True, expect_s=expect_s, kind="background")
         try:
             os.makedirs(ctl_dir, exist_ok=True)

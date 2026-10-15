@@ -164,6 +164,7 @@ NTDLL.NtQueryInformationProcess.restype = ctypes.c_long
 NTDLL.NtQueryInformationProcess.argtypes = (H, ctypes.c_int, wintypes.LPVOID, wintypes.ULONG,
                                             ctypes.POINTER(wintypes.ULONG))
 PROCESS_COMMAND_LINE_INFORMATION = 60       # Windows 8.1+: a UNICODE_STRING and its text
+PROCESS_BASIC_INFORMATION_CLASS = 0         # PROCESS_BASIC_INFORMATION (below)
 
 # The TCP connection table with each row's owning pid (kitlib.proc.tcp)
 IPHLP.GetExtendedTcpTable.restype = DW
@@ -177,6 +178,15 @@ MIB_TCP_STATE_ESTAB = 5
 class UNICODE_STRING(ctypes.Structure):
     _fields_ = [("Length", wintypes.USHORT), ("MaximumLength", wintypes.USHORT),
                 ("Buffer", ctypes.c_void_p)]
+
+
+class PROCESS_BASIC_INFORMATION(ctypes.Structure):
+    _fields_ = [("ExitStatus", ctypes.c_long), ("PebBaseAddress", ctypes.c_void_p),
+                ("AffinityMask", ctypes.c_size_t), ("BasePriority", ctypes.c_long),
+                ("UniqueProcessId", ctypes.c_size_t),
+                ("InheritedFromUniqueProcessId", ctypes.c_size_t)]
+
+
 ADV.ConvertStringSecurityDescriptorToSecurityDescriptorW.restype = BOOL
 ADV.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = (
     wintypes.LPCWSTR, DW, ctypes.POINTER(wintypes.LPVOID), wintypes.LPVOID)

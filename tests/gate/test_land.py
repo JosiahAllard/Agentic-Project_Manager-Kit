@@ -159,7 +159,9 @@ class PushCase(LandCase):
                         out.lines)
         rec = self.lock().read()
         self.assertEqual(rec['phase'], 'stuck')                 # no landing starts on top of it
-        self.assertEqual(self.main_now(), out.merge)            # left for a person, not guessed at
+        self.assertTrue(out.merge)                              # the merge was made and gated,
+        self.assertEqual(self.main_now(), self.main)            # in the landing tree: the main
+        # checkout was never merged into, so nothing is left there to guess at
         self.assertEqual(self.remote_main(), self.main)
         # the next landing is refused while it is stuck
         nxt = self.lander(BRANCH, self.main, tip).run()

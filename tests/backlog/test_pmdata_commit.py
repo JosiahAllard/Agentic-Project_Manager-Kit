@@ -1,11 +1,13 @@
 """A write to the PM data branch's folder store commits its own record paths
 (docs/backlog-store.md "The main backend"); other folder stores still commit nothing."""
 import contextlib
+import errno
 import io
 import os
 import re
 import shutil
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -19,10 +21,80 @@ from kitlib.backlog.errors import Failure, Uncommitted, Usage
 from tools import backlog as backlog_tool
 
 from tests.backlog.helpers import ADD_FLAGS, ADD_NONE, BRANCH, priced
-from tests.gitfixture import TempRepo
+from tests.gitfixture import TempRepo, fixture_env
 
 DIR = 'kit/backlog'
 REASON = 'the work is finished'
+
+
+def commit_beside(wt, files, message):
+    """Commit `files` ({path as git spells it: text or bytes, or None to delete}) on HEAD in the
+    worktree `wt` without git's index lock there, as a writer that moves HEAD by plumbing alone does
+    (`update-ref`): the files are written or removed, the commit is built in an index of its own
+    and HEAD moved by compare-and-swap. A store write there holds the index lock from before it
+    reads HEAD's commit (MainBackend._lock_index), so a `git commit` or another store write in the
+    middle of one now fails or waits; this is the other commit such a write can still meet. The
+    worktree's own index is left as it was: stale for those paths (`git reset -q -- <path>` is
+    the mover's own repair). Returns the new commit."""
+    tmp = tempfile.mkdtemp(prefix='kit-beside-')
+    env = fixture_env({'GIT_INDEX_FILE': os.path.join(tmp, 'index')})
+
+    def git(*args):
+        r = cmd.call(list(args), wt, env=env)
+        if r.rc != 0:
+            raise AssertionError('git %s failed: %s' % (' '.join(args), r.err))
+        return r.out.decode('utf-8').strip()
+    try:
+        for path, text in files.items():
+            full = os.path.join(wt, *path.split('/'))
+            if text is None:
+                os.remove(full)
+            else:
+                os.makedirs(os.path.dirname(full), exist_ok=True)
+                data = text if isinstance(text, bytes) else text.encode('utf-8')
+                with open(full, 'wb') as f:
+                    f.write(data)
+        old = git('rev-parse', 'HEAD')
+        git('read-tree', old)
+        lines = []
+        for path, text in sorted(files.items()):
+            if text is None:
+                lines.append('0 %s\t%s' % ('0' * 40, path))
+            else:
+                lines.append('100644 %s\t%s' % (git('hash-object', '-w', '--', path), path))
+        r = cmd.call(['update-index', '--index-info'], wt, env=env,
+                     stdin=('\n'.join(lines) + '\n').encode('utf-8'))
+        if r.rc != 0:
+            raise AssertionError('git update-index failed: %s' % r.err)
+        new = git('commit-tree', git('write-tree'), '-p', old, '-m', message)
+        git('update-ref', 'HEAD', new, old)
+        return new
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def commit_change(store, ctx, plan, message):
+    """commit_beside of what `plan(snap, ctx)` would write in `store` (a MainBackend store):
+    another writer's change to records, committed while a write of this store's holds the lock."""
+    change = plan(store.load(), ctx)
+    return commit_beside(store.backend.root, dict(
+        (store.backend.path_of(stem), text) for stem, text in change.writes.items()), message)
+
+
+def index_move_fails(index, error=None):
+    """A patch under which moving a file over the worktree's index file `index`
+    (MainBackend._sync_index's last step, _IndexLock.install; nothing else moves a file over it
+    while a write holds its lock) raises `error` (default an OSError), every other move done. It
+    stands in for what a held index.lock gave before the write took the lock itself: the commit
+    made and the index not updated."""
+    real = os.replace
+    index = os.path.normcase(os.path.abspath(index))
+
+    def replace(src, dst):
+        if os.path.normcase(os.path.abspath(dst)) == index:
+            raise error or OSError('the index is in use')
+        return real(src, dst)
+    return mock.patch.object(smod.os, 'replace', replace)
 
 
 class PmDataStore(unittest.TestCase):
@@ -122,22 +194,123 @@ class PmDataStore(unittest.TestCase):
         self.assertEqual(self.head(), before)
         self.assertEqual(self.status(), [])
 
+    # -- a clean backend writes over no uncommitted change ----------------------------------------
+
+    def clean_store(self):
+        backend = smod.MainBackend(self.wt, DIR, clean=True)
+        return smod.Store(backend, rmod.Rules(), session='kit-test')
+
+    def test_a_clean_write_over_an_uncommitted_edit_is_dirty_and_writes_nothing(self):
+        with open(self.path('BAR'), 'a', encoding='utf-8', newline='\n') as f:
+            f.write('\nedited by hand\n')
+        before, status = self.head(), self.status()
+        with self.assertRaises(errors.Dirty) as cm:
+            self.clean_store().write(lambda s: pmod.plan_close(s, self.ctx, 'BAR', REASON))
+        exc = cm.exception
+        self.assertIsInstance(exc, Failure)
+        self.assertNotIsInstance(exc, Uncommitted)
+        self.assertEqual(exc.paths, [DIR + '/BAR.md'])
+        self.assertEqual(exc.compare, 'git -C "%s" diff HEAD -- "%s/BAR.md"' % (self.wt, DIR))
+        self.assertIn('nothing was written', str(exc))
+        self.assertIn(exc.compare, str(exc))
+        self.assertEqual((self.head(), self.status()), (before, status))
+        with open(self.path('BAR'), encoding='utf-8') as f:
+            self.assertIn('edited by hand', f.read())
+
+    def test_a_clean_write_names_only_the_paths_that_differ(self):
+        """A record never committed and a staged change are dirty too; a path the write touches
+        that matches HEAD is not named."""
+        self.repo.write('%s/NEW.md' % DIR, priced('NEW')['NEW'], root=self.wt)
+        with open(self.path('BAZ'), 'a', encoding='utf-8', newline='\n') as f:
+            f.write('\nstaged by hand\n')
+        self.git('add', '--', DIR + '/BAZ.md')
+
+        def plan(s):
+            change = pmod.plan_close(s, self.ctx, 'NEW', REASON)
+            change.writes.update(pmod.plan_close(s, self.ctx, 'BAZ', REASON).writes)
+            change.writes.update(pmod.plan_close(s, self.ctx, 'BAR', REASON).writes)
+            return change
+        with self.assertRaises(errors.Dirty) as cm:
+            self.clean_store().write(plan)
+        self.assertEqual(cm.exception.paths, [DIR + '/BAZ.md', DIR + '/NEW.md'])
+        self.assertEqual(cm.exception.compare, 'git -C "%s" status --short -- "%s/BAZ.md" '
+                         '"%s/NEW.md"' % (self.wt, DIR, DIR))
+        self.assertTrue(os.path.exists(self.path('BAR')))
+
+    def test_a_clean_write_over_clean_paths_commits_as_ever(self):
+        before = self.head()
+        _, tip = self.clean_store().write(lambda s: pmod.plan_close(s, self.ctx, 'BAR', REASON))
+        self.assert_committed(before, tip, [('D', DIR + '/BAR.md')])
+
+    def test_a_clean_write_where_only_the_index_is_stale_names_the_index_repair(self):
+        """HEAD moved by a command that left the index alone (commit_beside): the worktree holds
+        what HEAD holds and the index does not. The write is refused all the same, nothing
+        written, but the Dirty names the index repair, not a compare with HEAD that would show
+        nothing; that repair makes status clean, and the write then commits."""
+        commit_beside(self.wt, {DIR + '/BAR.md': self.read('BAR') + b'\nmoved by plumbing\n'},
+                      'moved by plumbing')
+        before, status = self.head(), self.status()
+        self.assertNotEqual(status, [])
+        with self.assertRaises(errors.Dirty) as cm:
+            self.clean_store().write(lambda s: pmod.plan_close(s, self.ctx, 'BAR', REASON))
+        exc = cm.exception
+        repair = 'git -C "%s" reset -q -- "%s/BAR.md"' % (self.wt, DIR)
+        self.assertEqual((exc.paths, exc.compare, exc.repair), ([DIR + '/BAR.md'], '', repair))
+        self.assertEqual(str(exc), (
+            '{d}/BAR.md not written in {wt}, and nothing was written: the index there is stale '
+            'for {d}/BAR.md (the worktree holds what HEAD holds and the index does not: a store '
+            'write whose index update failed, or a command that moved HEAD and left the index '
+            'alone), so a plain `git commit` there would revert it; repair the index first (the '
+            'worktree files are left alone): {r}').format(d=DIR, wt=self.wt, r=repair))
+        self.assertEqual((self.head(), self.status()), (before, status))
+        self.assertTrue(os.path.exists(self.path('BAR')))
+        self.git('reset', '-q', '--', DIR + '/BAR.md')     # the repair, as it names it
+        self.assertEqual(self.status(), [])
+        _, tip = self.clean_store().write(lambda s: pmod.plan_close(s, self.ctx, 'BAR', REASON))
+        self.assert_committed(before, tip, [('D', DIR + '/BAR.md')])
+
+    def test_a_clean_write_with_no_index_file_names_a_whole_index_repair(self):
+        """No index file at all (every tracked file then reads as a staged deletion): the repair
+        is a reset of the whole index, since one of the write's paths alone would leave every
+        other file staged as deleted."""
+        os.remove(self.worktree_index())
+        before = self.head()
+        with self.assertRaises(errors.Dirty) as cm:
+            self.clean_store().write(lambda s: pmod.plan_close(s, self.ctx, 'BAR', REASON))
+        self.assertEqual((cm.exception.compare, cm.exception.repair),
+                         ('', 'git -C "%s" reset -q' % self.wt))
+        self.assertEqual(self.head(), before)
+        self.git('reset', '-q')
+        self.assertEqual(self.status(), [])
+
+    def test_a_write_that_is_not_clean_still_writes_over_an_edit(self):
+        """`clean` is the landing's (at_landing._pm_data_store): a backlog.py write keeps
+        committing the record as the worktree holds it."""
+        with open(self.path('BAR'), 'a', encoding='utf-8', newline='\n') as f:
+            f.write('\nedited by hand\n')
+        before = self.head()
+        _, tip = self.store.write(lambda s: pmod.plan_close(s, self.ctx, 'BAR', REASON))
+        self.assert_committed(before, tip, [('D', DIR + '/BAR.md')])
+
     # -- races and failures ----------------------------------------------------------------------
 
     def test_a_head_moved_by_another_commit_is_built_on_not_lost(self):
+        """The other commit moves HEAD without the index lock (commit_beside): the write builds
+        on it, and the index the write did not touch stays as that commit left it."""
         real = self.backend._head
         moved = []
 
         def head_then_move():
             sha = real()
             if not moved:
-                self.repo.write('other.txt', 'other\n', root=self.wt)
-                moved.append(self.repo.commit('someone else', 'other.txt', cwd=self.wt))
+                moved.append(commit_beside(self.wt, {'other.txt': 'other\n'}, 'someone else'))
             return sha
         with mock.patch.object(self.backend, '_head', side_effect=head_then_move):
             _, tip = self.store.write(
                 lambda s: pmod.plan_add(s, self.ctx, 'FOO', 'a summary', ['area/foo/**'],
                                         **ADD_NONE))
+        self.assertEqual(self.git('ls-files', '--', 'other.txt'), '')   # the mover's own index
+        self.git('reset', '-q', '--', 'other.txt')                      # its repair
         self.assert_committed(moved[0], tip, [('A', DIR + '/FOO.md')])
 
     def test_a_write_that_fails_partway_commits_nothing(self):
@@ -174,8 +347,9 @@ class PmDataStore(unittest.TestCase):
         self.assertTrue(os.path.isfile(self.path('FOO')))
 
     def test_a_retry_never_overwrites_another_writers_commit_of_the_same_record(self):
-        """Two writers on BAR: the other commits while this one is between its first attempt's
-        HEAD read and its update-ref. The retry sees HEAD's BAR changed since its base and stops,
+        """Two writers on BAR: the other (one that moves HEAD without the index lock,
+        commit_beside) commits while this one is between its first attempt's HEAD read and its
+        update-ref. The retry sees HEAD's BAR changed since its base and stops,
         Overtaken (an Uncommitted), naming the path; the other writer's commit stands."""
         other = smod.Store(smod.MainBackend(self.wt, DIR), rmod.Rules(), session='kit-other')
         other_ctx = pmod.Context(other, self.wt, branch=BRANCH)
@@ -187,8 +361,8 @@ class PmDataStore(unittest.TestCase):
             sha = real()
             calls.append(sha)
             if len(calls) == 2:                       # 1: publish's base; 2: the first attempt
-                theirs.append(other.write(lambda s: pmod.plan_set(
-                    s, other_ctx, 'BAR', [('summary', ['theirs'])]))[1])
+                theirs.append(commit_change(other, other_ctx, lambda s, ctx: pmod.plan_set(
+                    s, ctx, 'BAR', [('summary', ['theirs'])]), 'theirs\n'))
             return sha
         with mock.patch.object(self.backend, '_head', side_effect=head_then_the_other_writes), \
                 mock.patch.object(smod.time, 'sleep'):
@@ -203,7 +377,7 @@ class PmDataStore(unittest.TestCase):
 
     def test_a_commit_between_the_read_and_the_first_attempt_is_never_overwritten(self):
         """Two writers on BAR: this one has checked the files against what it read, then the
-        other writes and commits BAR before this one's first commit attempt reads HEAD. The base
+        other (without the index lock, commit_beside) writes and commits BAR before this one's first commit attempt reads HEAD. The base
         is HEAD from before the check, so the first attempt sees BAR changed and stops, Overtaken;
         the other writer's commit stands and the error names no catch-up to run."""
         other = smod.Store(smod.MainBackend(self.wt, DIR), rmod.Rules(), session='kit-other')
@@ -212,8 +386,8 @@ class PmDataStore(unittest.TestCase):
         theirs = []
 
         def the_other_writes_then_write(*args):
-            theirs.append(other.write(lambda s: pmod.plan_set(
-                s, other_ctx, 'BAR', [('summary', ['theirs'])]))[1])
+            theirs.append(commit_change(other, other_ctx, lambda s, ctx: pmod.plan_set(
+                s, ctx, 'BAR', [('summary', ['theirs'])]), 'theirs\n'))
             return real(*args)
         with mock.patch.object(self.backend, '_write_files',
                                side_effect=the_other_writes_then_write), \
@@ -234,14 +408,16 @@ class PmDataStore(unittest.TestCase):
 
     def overtaken(self, theirs, mine, after_my_files=None):
         """The Overtaken of this store's write `mine(snap, ctx)`, another store's `theirs(snap,
-        ctx)` having been written and committed after this one checked the files and before its
-        first commit attempt. `after_my_files()` runs once this write's files are on disk."""
+        ctx)` having been written and committed (without the index lock, commit_change) after
+        this one checked the files and before its first commit attempt. `after_my_files()` runs
+        once this write's files are on disk."""
         other = smod.Store(smod.MainBackend(self.wt, DIR), rmod.Rules(), session='kit-other')
         other_ctx = pmod.Context(other, self.wt, branch=BRANCH)
         real = self.backend._write_files
+        index = self.git('ls-files', '-s', '--', DIR)
 
         def the_other_writes_then_write(*args):
-            self.winner = other.write(lambda s: theirs(s, other_ctx))[1]
+            self.winner = commit_change(other, other_ctx, theirs, 'theirs\n')
             real(*args)
             if after_my_files is not None:
                 after_my_files()
@@ -252,7 +428,15 @@ class PmDataStore(unittest.TestCase):
                 self.store.write(lambda s: mine(s, self.ctx))
         self.assertIsNotNone(self.winner)
         self.assertEqual(self.head(), self.winner)
+        self.repair_beside(index, cm.exception.changed)
         return cm.exception
+
+    def repair_beside(self, index, paths):
+        """The index after an Overtaken write is `index` (the store's entries before it: the
+        refused write staged nothing); then the winner's own repair (commit_beside left the index
+        stale for `paths`) makes it HEAD's for them."""
+        self.assertEqual(self.git('ls-files', '-s', '--', DIR), index)
+        self.git('reset', '-q', '--', *paths)
 
     def test_an_overtaken_write_is_put_back_so_a_read_and_the_next_write_keep_the_winner(self):
         """The refused write's file goes back to HEAD's content: `load` returns the winner's
@@ -305,15 +489,16 @@ class PmDataStore(unittest.TestCase):
 
     def overtaken_publish(self, theirs, writes, **patches):
         """The Overtaken of this backend's publish of `writes` ({stem: text or None}) on what it
-        reads now, another store's `theirs(snap, ctx)` having been written and committed after
-        this one checked the files. `patches`: backend methods replaced for the publish."""
+        reads now, another store's `theirs(snap, ctx)` having been written and committed (without
+        the index lock, commit_change) after this one checked the files. `patches`: backend methods replaced for the publish."""
         other = smod.Store(smod.MainBackend(self.wt, DIR), rmod.Rules(), session='kit-other')
         other_ctx = pmod.Context(other, self.wt, branch=BRANCH)
         real = self.backend._write_files
 
         def the_other_writes_then_write(*args):
-            self.winner = other.write(lambda s: theirs(s, other_ctx))[1]
+            self.winner = commit_change(other, other_ctx, theirs, 'theirs\n')
             real(*args)
+        index = self.git('ls-files', '-s', '--', DIR)
         snap = self.store.load()
         with contextlib.ExitStack() as stack:
             stack.enter_context(mock.patch.object(self.backend, '_write_files',
@@ -324,6 +509,7 @@ class PmDataStore(unittest.TestCase):
             with self.assertRaises(errors.Overtaken) as cm:
                 self.backend.publish(snap, writes, 'two records\n')
         self.assertEqual(self.head(), self.winner)
+        self.repair_beside(index, cm.exception.changed)
         return cm.exception
 
     def read(self, stem):
@@ -379,16 +565,19 @@ class PmDataStore(unittest.TestCase):
         refused write wrote (never a part of HEAD's content), it is named as left, and no
         other file stays in the store folder."""
         mine = priced('BAR', summary='mine')['BAR']
-        real = os.replace
+        real, moves = os.replace, []
 
-        def replace(src, dst):
+        def replace(src, dst):                       # the write's own move goes through
             if os.path.basename(dst) == 'BAR.md':
-                raise OSError('disk full')
+                moves.append(src)
+                if len(moves) > 1:
+                    raise OSError('disk full')
             return real(src, dst)
         with mock.patch.object(smod.os, 'replace', replace):
             exc = self.overtaken_publish(
                 lambda s, ctx: pmod.plan_set(s, ctx, 'BAR', [('summary', ['theirs'])]),
                 {'BAR': mine})
+        self.assertEqual(len(moves), 2)                 # the write, then the refused put back
         self.assertEqual(exc.left, [DIR + '/BAR.md'])
         with open(self.path('BAR'), 'rb') as f:
             self.assertEqual(f.read(), mine.encode('utf-8'))
@@ -462,20 +651,16 @@ class PmDataStore(unittest.TestCase):
         return index
 
     def test_an_index_left_stale_after_the_commit_is_its_own_result(self):
-        """The commit lands but the real index cannot be updated (index.lock held): IndexStale,
-        not Uncommitted, saying HEAD has the commit, and its repair command makes status clean."""
-        lock = self.worktree_index() + '.lock'
-        with open(lock, 'w') as f:
-            f.write('')
+        """The commit lands but the real index cannot be updated (the updated copy cannot be moved
+        over it): IndexStale, not Uncommitted, saying HEAD has the commit, the lock file is gone,
+        and its repair command makes status clean."""
         before = self.head()
-        try:
-            with mock.patch.object(smod.time, 'sleep'):
-                with self.assertRaises(Failure) as cm:
-                    self.store.write(
-                        lambda s: pmod.plan_add(s, self.ctx, 'FOO', 'a summary', ['area/foo/**'],
-                                                **ADD_NONE))
-        finally:
-            os.remove(lock)
+        with index_move_fails(self.worktree_index()):
+            with self.assertRaises(Failure) as cm:
+                self.store.write(
+                    lambda s: pmod.plan_add(s, self.ctx, 'FOO', 'a summary', ['area/foo/**'],
+                                            **ADD_NONE))
+        self.assertFalse(os.path.exists(self.worktree_index() + '.lock'))
         exc = cm.exception
         self.assertEqual(type(exc).__name__, 'IndexStale', str(exc))
         self.assertIsInstance(exc, errors.IndexStale)
@@ -501,16 +686,10 @@ class PmDataStore(unittest.TestCase):
         backend = smod.MainBackend(self.wt, spaced)
         store = smod.Store(backend, rmod.Rules(), session='kit-test')
         ctx = pmod.Context(store, self.wt, branch=BRANCH)
-        lock = self.worktree_index() + '.lock'
-        with open(lock, 'w') as f:
-            f.write('')
-        try:
-            with mock.patch.object(smod.time, 'sleep'):
-                with self.assertRaises(errors.IndexStale) as cm:
-                    store.write(lambda s: pmod.plan_add(s, ctx, 'FOO', 'a summary',
-                                                        ['area/foo/**'], **ADD_NONE))
-        finally:
-            os.remove(lock)
+        with index_move_fails(self.worktree_index()):
+            with self.assertRaises(errors.IndexStale) as cm:
+                store.write(lambda s: pmod.plan_add(s, ctx, 'FOO', 'a summary',
+                                                    ['area/foo/**'], **ADD_NONE))
         repair = cm.exception.repair
         self.assertEqual(repair, 'git -C "%s" reset -q -- "%s/FOO.md"' % (self.wt, spaced))
         self.assertNotEqual(self.status(), [])
@@ -540,6 +719,215 @@ class PmDataStore(unittest.TestCase):
         self.assertFalse(os.path.exists(stray))
         self.assertEqual(pending, [])
         self.assert_committed(before, tip, [('A', DIR + '/FOO.md')])
+
+    # -- git's index lock -------------------------------------------------------------------------
+
+    def lock_path(self):
+        return self.worktree_index() + '.lock'
+
+    def test_a_git_commit_during_a_close_cannot_commit_the_index_it_has_not_updated(self):
+        """A `git commit` in the PM data worktree between the close's commit and its index update
+        would commit an index still holding the closed record (putting it back on HEAD) and leave
+        its deletion staged for whoever commits next. The write holds git's index lock from
+        before it reads HEAD's commit until the index holds the write, so that commit stops: the
+        close stands, a change staged there stays staged, and the lock is given up."""
+        self.repo.write('notes.txt', 'staged\n', root=self.wt)
+        self.git('add', '--', 'notes.txt')
+        store = self.clean_store()
+        real = store.backend._publish_commit
+        lock = self.lock_path()
+        seen = []
+
+        def commit_then_intrude(*args, **kw):
+            done = real(*args, **kw)
+            seen.append(os.path.exists(lock))
+            seen.append(cmd.call(['commit', '-q', '-m', 'intruder'], self.wt, env=fixture_env()))
+            return done
+        before = self.head()
+        with mock.patch.object(store.backend, '_publish_commit', side_effect=commit_then_intrude):
+            _, tip = store.write(lambda s: pmod.plan_close(s, self.ctx, 'BAR', REASON))
+        held, intruder = seen
+        self.assertNotEqual(intruder.rc, 0, 'the intruding git commit was made')
+        self.assertIn('index.lock', intruder.err)
+        self.assertTrue(held)
+        self.assertEqual(self.head(), tip)
+        self.assertEqual(self.git('rev-parse', tip + '^'), before)
+        self.assertEqual(self.changed_in(tip), [('D', DIR + '/BAR.md')])
+        self.assertEqual(self.status(), ['A  notes.txt'])
+        self.assertFalse(os.path.exists(lock))
+
+    def test_a_held_index_lock_is_busy_and_nothing_is_written(self):
+        """Another git command holds the lock for all of INDEX_WAIT: Busy (a Failure, not an
+        Uncommitted), naming the lock; no file, commit or index entry changed, and the lock file
+        is left as it was found."""
+        lock = self.lock_path()
+        with open(lock, 'w') as f:
+            f.write('another git\n')
+        self.addCleanup(os.remove, lock)
+        before, status = self.head(), self.status()
+        with mock.patch.object(smod, 'INDEX_WAIT', 0.2):
+            with self.assertRaises(errors.Busy) as cm:
+                self.store.write(lambda s: pmod.plan_close(s, self.ctx, 'BAR', REASON))
+        exc = cm.exception
+        self.assertIsInstance(exc, Failure)
+        self.assertNotIsInstance(exc, Uncommitted)
+        self.assertEqual(os.path.normcase(exc.lock), os.path.normcase(lock))
+        self.assertIn(exc.lock, str(exc))
+        self.assertIn('nothing was written', str(exc))
+        self.assertEqual((self.head(), self.status()), (before, status))
+        self.assertTrue(os.path.exists(self.path('BAR')))
+        with open(lock) as f:
+            self.assertEqual(f.read(), 'another git\n')
+
+    def test_a_lock_given_up_while_the_write_waits_is_taken(self):
+        lock = self.lock_path()
+        with open(lock, 'w') as f:
+            f.write('')
+        timer = threading.Timer(0.3, os.remove, [lock])
+        timer.start()
+        self.addCleanup(timer.join)
+        before = self.head()
+        with mock.patch.object(smod, 'INDEX_WAIT', 30):
+            _, tip = self.store.write(lambda s: pmod.plan_close(s, self.ctx, 'BAR', REASON))
+        self.assert_committed(before, tip, [('D', DIR + '/BAR.md')])
+
+    def test_a_second_write_waits_for_the_first_and_is_busy_when_it_does_not_end(self):
+        """Two store writes in the PM data worktree run one after the other: one that starts
+        while another holds the lock waits INDEX_WAIT seconds for it, then stops Busy with
+        nothing written; the first commits as ever."""
+        other = smod.Store(smod.MainBackend(self.wt, DIR), rmod.Rules(), session='kit-other')
+        other_ctx = pmod.Context(other, self.wt, branch=BRANCH)
+        real = self.backend._write_files
+        refused = []
+
+        def the_other_writes_then_write(*args):
+            with self.assertRaises(errors.Busy) as cm:
+                other.write(lambda s: pmod.plan_set(s, other_ctx, 'BAZ', [('summary', ['theirs'])]))
+            refused.append(cm.exception)
+            return real(*args)
+        before = self.head()
+        with mock.patch.object(smod, 'INDEX_WAIT', 0.2), \
+                mock.patch.object(self.backend, '_write_files',
+                                  side_effect=the_other_writes_then_write):
+            _, tip = self.store.write(lambda s: pmod.plan_set(s, self.ctx, 'BAR',
+                                                              [('summary', ['mine'])]))
+        self.assertEqual(len(refused), 1)
+        self.assertIn('%s/BAZ.md not written' % DIR, str(refused[0]))
+        self.assert_committed(before, tip, [('M', DIR + '/BAR.md')])
+        self.assertNotIn(b'theirs', self.read('BAZ'))
+
+    def test_catch_up_apply_holds_the_index_lock_too(self):
+        self.leave_pending()
+        lock = self.lock_path()
+        real = self.backend._publish_commit
+        held = []
+
+        def commit(*args, **kw):
+            held.append(os.path.exists(lock))
+            return real(*args, **kw)
+        with mock.patch.object(self.backend, '_publish_commit', side_effect=commit):
+            tip = self.backend.commit_paths([DIR + '/NEW.md'], 'backlog: catch up\n')
+        self.assertEqual(held, [True])
+        self.assertFalse(os.path.exists(lock))
+        self.assertEqual(self.changed_in(tip), [('A', DIR + '/NEW.md')])
+        with open(lock, 'w') as f:
+            f.write('')
+        self.addCleanup(os.remove, lock)
+        with mock.patch.object(smod, 'INDEX_WAIT', 0.2):
+            with self.assertRaises(errors.Busy):
+                self.backend.commit_paths([DIR + '/BAZ.md'], 'backlog: catch up\n')
+        self.assertEqual(self.head(), tip)
+        self.assertIn(('modified', DIR + '/BAZ.md'), self.backend.pending())
+
+    def test_a_move_over_the_index_refused_for_a_moment_is_retried(self):
+        """Windows refuses the move while a reader has the index open: it is tried again, and
+        the write ends clean."""
+        real = os.replace
+        refused = []
+
+        index = os.path.normcase(self.worktree_index())
+
+        def replace(src, dst):
+            if os.path.normcase(os.path.abspath(dst)) == index and len(refused) < 2:
+                refused.append(dst)
+                raise PermissionError(13, 'Access is denied', dst)
+            return real(src, dst)
+        before = self.head()
+        with mock.patch.object(smod.os, 'replace', replace):
+            _, tip = self.store.write(lambda s: pmod.plan_close(s, self.ctx, 'BAR', REASON))
+        self.assertEqual(len(refused), 2)
+        self.assert_committed(before, tip, [('D', DIR + '/BAR.md')])
+        self.assertFalse(os.path.exists(self.lock_path()))
+
+    def test_a_move_over_the_index_refused_for_good_is_index_stale(self):
+        """Still refused after REPLACE_WAIT: the write is committed, so IndexStale (not Busy,
+        which says nothing was written), and the lock file is removed."""
+        before = self.head()
+        with index_move_fails(self.worktree_index(), PermissionError(13, 'Access is denied')), \
+                mock.patch.object(smod, 'REPLACE_WAIT', 0.2):
+            with self.assertRaises(errors.IndexStale) as cm:
+                self.store.write(lambda s: pmod.plan_close(s, self.ctx, 'BAR', REASON))
+        exc = cm.exception
+        self.assertIn('Access is denied', str(exc))
+        self.assertEqual(self.git('rev-parse', exc.commit + '^'), before)
+        self.assertEqual(exc.commit, self.head())
+        self.assertFalse(os.path.exists(self.lock_path()))
+        self.assertNotEqual(self.status(), [])
+        self.git('reset', '-q', '--', DIR + '/BAR.md')
+        self.assertEqual(self.status(), [])
+
+    def test_a_write_with_no_index_file_is_index_stale_with_a_whole_index_repair(self):
+        """No index file to copy into the lock file: the write is committed and IndexStale, and
+        its repair resets the whole index, which makes status clean; a reset of the write's own
+        path would build an index of that path alone."""
+        index = self.worktree_index()
+        os.remove(index)
+        before = self.head()
+        with self.assertRaises(errors.IndexStale) as cm:
+            self.store.write(lambda s: pmod.plan_close(s, self.ctx, 'BAR', REASON))
+        exc = cm.exception
+        self.assertEqual(exc.repair, 'git -C "%s" reset -q' % self.wt)
+        self.assertIn('cannot copy the index into its lock file', str(exc))
+        self.assertTrue(str(exc).endswith(exc.repair), str(exc))
+        self.assertEqual(self.git('rev-parse', exc.commit + '^'), before)
+        self.assertEqual(self.changed_in(exc.commit), [('D', DIR + '/BAR.md')])
+        self.assertFalse(os.path.exists(index + '.lock'))
+        self.git('reset', '-q', '--', DIR + '/BAR.md')     # what the repair said before
+        self.assertIn('D  %s/BAZ.md' % DIR, self.status())
+        os.remove(index)
+        self.git('reset', '-q')                            # the repair, as it names it
+        self.assertEqual(self.status(), [])
+
+    def test_a_lock_file_that_cannot_be_removed_is_named_on_the_refusal(self):
+        """The write stops (Dirty here) and the lock file it made cannot be removed: the
+        refusal says so, since no git command can write that index until it is gone."""
+        with open(self.path('BAR'), 'a', encoding='utf-8', newline='\n') as f:
+            f.write('\nedited by hand\n')
+        lock = self.lock_path()
+        real = os.remove
+
+        def remove(path):
+            if os.path.normcase(os.path.abspath(path)) == os.path.normcase(lock):
+                raise PermissionError(13, 'Access is denied', path)
+            return real(path)
+        with mock.patch.object(smod.os, 'remove', remove), \
+                mock.patch.object(smod, 'REPLACE_WAIT', 0.2):
+            with self.assertRaises(errors.Dirty) as cm:
+                self.clean_store().write(lambda s: pmod.plan_close(s, self.ctx, 'BAR', REASON))
+        self.assertTrue(os.path.exists(lock))
+        os.remove(lock)
+        held = os.path.normpath(self.git('rev-parse', '--path-format=absolute', '--git-path',
+                                         'index')) + '.lock'
+        self.assertEqual(os.path.normcase(held), os.path.normcase(lock))
+        self.assertEqual(str(cm.exception), (
+            '{d}/BAR.md not written in {wt}, and nothing was written: {d}/BAR.md differs from '
+            'HEAD there (a change made there and not committed: a hand edit, a staged change or '
+            'a record never committed), which this write would delete or commit over; compare '
+            'with HEAD first: git -C "{wt}" diff HEAD -- "{d}/BAR.md"; and git\'s index lock '
+            '{h} could not be removed ({e}): no git command can write that index until it is; '
+            'remove it by hand').format(d=DIR, wt=self.wt, h=held,
+                                        e=PermissionError(13, 'Access is denied', held)))
+        self.assertEqual(cm.exception.paths, [DIR + '/BAR.md'])
 
     # -- which stores commit ---------------------------------------------------------------------
 
@@ -666,21 +1054,16 @@ class PmDataStore(unittest.TestCase):
                          'Session: kit-test')
 
     def test_a_write_committed_with_a_stale_index_is_reported_written_and_exits_0(self):
-        """The index is locked: `add` and `catch-up --apply` still commit, so each prints its
-        WROTE / CAUGHT UP line with the commit, then a WARNING carrying the repair; exit 0."""
+        """The index cannot be updated after the commit: `add` and `catch-up --apply` still
+        commit, so each prints its WROTE / CAUGHT UP line with the commit, then a WARNING carrying
+        the repair; exit 0."""
         self.tool('catch-up')                             # writes .kit.json
         self.repo.write('%s/NEW.md' % DIR, priced('NEW')['NEW'], root=self.wt)
-        lock = self.worktree_index() + '.lock'
-        with open(lock, 'w') as f:
-            f.write('')
-        try:
-            with mock.patch.object(smod.time, 'sleep'):
-                rc, out = self.tool('add', 'FOO', '--summary', 'a summary', '--scope',
-                                    'area/foo/**', *ADD_FLAGS)
-                added = self.head()
-                rc2, out2 = self.tool('catch-up', '--apply', DIR + '/NEW.md')
-        finally:
-            os.remove(lock)
+        with index_move_fails(self.worktree_index()):
+            rc, out = self.tool('add', 'FOO', '--summary', 'a summary', '--scope',
+                                'area/foo/**', *ADD_FLAGS)
+            added = self.head()
+            rc2, out2 = self.tool('catch-up', '--apply', DIR + '/NEW.md')
         self.assertEqual(rc, 0, out)
         self.assertEqual(self.changed_in(added), [('A', DIR + '/FOO.md')])
         lines = out.splitlines()
@@ -702,6 +1085,281 @@ class PmDataStore(unittest.TestCase):
         self.assertTrue(lines[-1].startswith('WARNING: '), out2)
         self.assertTrue(lines[-1].endswith(
             'git -C "%s" reset -q -- "%s/NEW.md"' % (self.wt, DIR)), out2)
+
+
+class _FullDisk(object):
+    """A file opened for writing whose every write fails as a full disk does."""
+
+    def __init__(self, f):
+        self.f = f
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.f.close()
+
+    def write(self, data):
+        raise OSError(errno.ENOSPC, 'No space left on device')
+
+    def close(self):
+        self.f.close()
+
+
+def nth_write_fails(n):
+    """Patches under which the `n`th file the store module opens for writing (by `open` or
+    `os.fdopen`) is opened, so a truncating open has truncated it, and then refuses every write."""
+    count = [0]
+    real_open, real_fdopen = open, os.fdopen
+
+    def wrap(f, mode):
+        if 'w' in mode:
+            count[0] += 1
+            if count[0] == n:
+                return _FullDisk(f)
+        return f
+    return (mock.patch.object(smod, 'open', create=True,
+                              new=lambda p, mode='r', *a, **k: wrap(real_open(p, mode, *a, **k),
+                                                                   mode)),
+            mock.patch.object(smod.os, 'fdopen',
+                              new=lambda fd, mode='r', *a, **k: wrap(real_fdopen(fd, mode, *a, **k),
+                                                                    mode)))
+
+
+class WriteWhole(unittest.TestCase):
+    """A store write that fails part way leaves every record whole and names the one it could not
+    write (MainBackend._write_files, _restore, _replace_file)."""
+
+    setUp = PmDataStore.setUp
+    git = PmDataStore.git
+    head = PmDataStore.head
+
+    def leftovers(self):
+        return [n for n in os.listdir(os.path.join(self.wt, *DIR.split('/')))
+                if n.endswith('.put-back')]
+
+    def test_a_write_that_fails_leaves_the_record_whole_and_named(self):
+        """BAR is written, then the write into BAZ fails: BAZ still holds its bytes (never a
+        truncated file), BAR is put back, the Failure names BAZ, and no temp file is left."""
+        snap = self.backend.load(rmod.Rules())
+        before = dict(snap.raw)
+        writes = dict((stem, before[stem].decode('utf-8') + '\nchanged\n') for stem in ('BAR', 'BAZ'))
+        head = self.head()
+        first, second = nth_write_fails(2)
+        with first, second, self.assertRaises(Failure) as cm:
+            self.backend.publish(snap, writes, 'both\n')
+        now = self.backend._read()
+        self.assertEqual(now['BAZ'], before['BAZ'])
+        self.assertEqual(now['BAR'], before['BAR'])
+        self.assertIn('%s/BAZ.md' % DIR, str(cm.exception))
+        self.assertIn('No space left on device', str(cm.exception))
+        self.assertIn('the files already written were put back', str(cm.exception))
+        self.assertEqual(self.leftovers(), [])
+        self.assertEqual(self.head(), head)
+
+    def test_a_restore_that_fails_leaves_the_record_whole_and_named(self):
+        """BAR is written, BAZ's write fails, and putting BAR back fails too: BAR holds the new
+        content whole (not a truncated file), BAZ its old bytes, and the Failure names BAZ as the
+        record it could not write and BAR as not put back."""
+        snap = self.backend.load(rmod.Rules())
+        before = dict(snap.raw)
+        writes = dict((stem, before[stem].decode('utf-8') + '\nchanged\n') for stem in ('BAR', 'BAZ'))
+        with mock.patch.object(smod, '_replace_file', side_effect=self.fail_from_second()):
+            with self.assertRaises(Failure) as cm:
+                self.backend.publish(snap, writes, 'both\n')
+        now = self.backend._read()
+        self.assertEqual(now['BAZ'], before['BAZ'])
+        self.assertEqual(now['BAR'], writes['BAR'].encode('utf-8'))
+        self.assertIn('cannot write %s/BAZ.md' % DIR, str(cm.exception))
+        self.assertIn('could not be put back: %s/BAR.md' % DIR, str(cm.exception))
+
+    def publish_fails(self, writes):
+        """The Failure of publishing `writes` ({stem: text or None}) on a fresh snapshot."""
+        snap = self.backend.load(rmod.Rules())
+        with self.assertRaises(Failure) as cm:
+            self.backend.publish(snap, writes, 'w\n')
+        return str(cm.exception)
+
+    def test_a_delete_that_fails_leaves_the_record_and_names_it(self):
+        before = self.backend._read()
+        real = os.remove
+
+        def remove(path):
+            if os.path.basename(path) == 'BAR.md':
+                raise PermissionError(errno.EACCES, 'in use')
+            return real(path)
+        with mock.patch.object(smod.os, 'remove', remove):
+            msg = self.publish_fails({'BAR': None})
+        self.assertIn('cannot write %s/BAR.md (it is left as it was)' % DIR, msg)
+        self.assertEqual(self.backend._read(), before)
+
+    def test_a_folder_that_cannot_be_made_is_named(self):
+        real = os.makedirs
+
+        def makedirs(path, *a, **k):              # git's own folders (the fake git) still made
+            if os.path.normcase(path) == os.path.normcase(self.backend.dir):
+                raise PermissionError(errno.EACCES, 'denied')
+            return real(path, *a, **k)
+        with mock.patch.object(smod.os, 'makedirs', makedirs):
+            msg = self.publish_fails({'BAR': 'x\n'})
+        self.assertIn('cannot write %s' % self.backend.dir, msg)
+
+    def test_a_temp_file_that_cannot_be_made_leaves_the_record_whole(self):
+        before = self.backend._read()
+        with mock.patch.object(smod.tempfile, 'mkstemp', side_effect=OSError(errno.ENOSPC, 'full')):
+            msg = self.publish_fails({'BAR': 'x\n'})
+        self.assertIn('cannot write %s/BAR.md (it is left as it was)' % DIR, msg)
+        self.assertEqual(self.backend._read(), before)
+        self.assertEqual(self.leftovers(), [])
+
+    def test_a_new_file_that_cannot_be_deleted_again_is_named(self):
+        """NEW is written, ZED's write fails, and removing NEW (it was not there before) fails:
+        NEW is named as not put back."""
+        real = os.remove
+
+        def remove(path):
+            if os.path.basename(path) == 'NEW.md':
+                raise PermissionError(errno.EACCES, 'in use')
+            return real(path)
+        with mock.patch.object(smod, '_replace_file', side_effect=self.fail_from_second()), \
+                mock.patch.object(smod.os, 'remove', remove):
+            msg = self.publish_fails({'NEW': 'new\n', 'ZED': 'zed\n'})
+        self.assertIn('cannot write %s/ZED.md' % DIR, msg)
+        self.assertIn('could not be put back: %s/NEW.md' % DIR, msg)
+        self.assertEqual(self.backend._read().get('NEW'), b'new\n')
+
+    def test_outside_the_pm_data_worktree_the_failure_names_no_catch_up(self):
+        before = self.backend._read()
+        with mock.patch.object(smod, '_replace_file',
+                               side_effect=OSError(errno.ENOSPC, 'full')):
+            with self.assertRaises(Failure) as cm:
+                self.backend._write_files({'BAR': 'x\n'}, before, [DIR + '/BAR.md'], None)
+        self.assertIn('cannot write %s/BAR.md' % DIR, str(cm.exception))
+        self.assertNotIn('not committed', str(cm.exception))
+        self.assertNotIn('catch-up', str(cm.exception))
+
+    def fail_from_second(self):
+        """_replace_file that works once (BAR's write) and then fails, leaving its target alone."""
+        real, calls = smod._replace_file, [0]
+
+        def replace(full, data):
+            calls[0] += 1
+            if calls[0] == 1:
+                return real(full, data)
+            raise OSError(errno.EIO, 'the disk went away')
+        return replace
+
+
+class ReplaceFile(unittest.TestCase):
+    """_replace_file: whole or not at all, a refused move retried, a temp file it cannot remove
+    named."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix='kit-replace-')
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        self.full = os.path.join(self.dir, 'FOO.md')
+        with open(self.full, 'wb') as f:
+            f.write(b'old\n')
+
+    def content(self):
+        with open(self.full, 'rb') as f:
+            return f.read()
+
+    def others(self):
+        return sorted(n for n in os.listdir(self.dir) if n != 'FOO.md')
+
+    def test_the_temp_file_is_beside_the_target_and_is_no_record(self):
+        made = []
+        real = tempfile.mkstemp
+
+        def mkstemp(*a, **k):
+            fd, path = real(*a, **k)
+            made.append(path)
+            return fd, path
+        with mock.patch.object(smod.tempfile, 'mkstemp', mkstemp):
+            smod._replace_file(self.full, b'new\n')
+        self.assertEqual(self.content(), b'new\n')
+        self.assertEqual(os.path.dirname(made[0]), self.dir)
+        self.assertFalse(made[0].endswith('.md'), made[0])
+        self.assertEqual(self.others(), [])
+
+    def test_a_failed_write_into_the_temp_file_leaves_the_target_whole(self):
+        _, fdopen = nth_write_fails(1)
+        with fdopen, self.assertRaises(OSError) as cm:
+            smod._replace_file(self.full, b'new\n')
+        self.assertEqual(cm.exception.errno, errno.ENOSPC)
+        self.assertEqual(self.content(), b'old\n')
+        self.assertEqual(self.others(), [])
+
+    def test_a_temp_file_that_cannot_be_removed_is_named(self):
+        _, fdopen = nth_write_fails(1)
+        real = os.remove
+
+        def remove(path):
+            if path.endswith('.put-back'):
+                raise PermissionError(errno.EACCES, 'in use')
+            return real(path)
+        with fdopen, mock.patch.object(smod.os, 'remove', remove):
+            with self.assertRaises(OSError) as cm:
+                smod._replace_file(self.full, b'new\n')
+        left = self.others()
+        self.assertEqual(len(left), 1, left)
+        self.assertEqual(cm.exception.errno, errno.ENOSPC)
+        self.assertIn('No space left on device', str(cm.exception))
+        self.assertIn(os.path.join(self.dir, left[0]), str(cm.exception))
+        self.assertIn('in use', str(cm.exception))
+        self.assertEqual(self.content(), b'old\n')
+
+    def test_a_move_refused_for_a_while_is_retried(self):
+        real, calls = os.replace, [0]
+
+        def replace(src, dst):
+            calls[0] += 1
+            if calls[0] <= 2:
+                raise PermissionError(errno.EACCES, 'held open by a reader')
+            return real(src, dst)
+        with mock.patch.object(smod.os, 'replace', replace), \
+                mock.patch.object(smod.time, 'sleep') as sleep:
+            smod._replace_file(self.full, b'new\n')
+        self.assertEqual(calls[0], 3)
+        self.assertEqual(self.content(), b'new\n')
+        self.assertEqual(self.others(), [])
+        self.assertEqual(sleep.call_count, 2)
+        self.assertTrue(all(c.args[0] <= 0.05 for c in sleep.call_args_list))
+
+    def test_a_move_refused_past_the_wait_leaves_the_target_whole(self):
+        calls = [0]
+
+        def replace(src, dst):
+            calls[0] += 1
+            raise PermissionError(errno.EACCES, 'held open by a reader')
+        with mock.patch.object(smod.os, 'replace', replace), \
+                mock.patch.object(smod, 'REPLACE_WAIT', 0.2):
+            with self.assertRaises(PermissionError):
+                smod._replace_file(self.full, b'new\n')
+        self.assertGreater(calls[0], 1)
+        self.assertEqual(self.content(), b'old\n')
+        self.assertEqual(self.others(), [])
+
+    def test_an_interrupt_before_the_move_leaves_no_temp_file(self):
+        with mock.patch.object(smod.os, 'replace', side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                smod._replace_file(self.full, b'new\n')
+        self.assertEqual(self.content(), b'old\n')
+        self.assertEqual(self.others(), [])
+
+    def test_any_other_refusal_is_not_retried(self):
+        calls = [0]
+
+        def replace(src, dst):
+            calls[0] += 1
+            raise OSError(errno.EIO, 'the disk went away')
+        with mock.patch.object(smod.os, 'replace', replace):
+            with self.assertRaises(OSError):
+                smod._replace_file(self.full, b'new\n')
+        self.assertEqual(calls[0], 1)
+        self.assertEqual(self.content(), b'old\n')
+        self.assertEqual(self.others(), [])
 
 
 if __name__ == '__main__':

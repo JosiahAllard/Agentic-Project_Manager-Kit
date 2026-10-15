@@ -4,13 +4,26 @@ One private web page, served on your own PC, where you, the owner, answer the PM
 through hand steps and write new stories when it suits you. Nobody waits on it. The page is
 `kitlib/hubsite/web/index.html`; the server is `tools/hub.py serve` (`kitlib.hubsite`), which keeps
 the hub's documents in a store folder in git and answers an HTTP API on the loopback address. The
-PM uses the same API through the `tools/hub.py` verbs.
+PM uses the same API through the `tools/hub.py` verbs; agents can also reach it through the hub MCP
+server (docs/hub-mcp.md), which carries the agent's token and none of the owner's verbs.
 
 ## Using the hub
 
 Start the server with `python tools/hub.py serve`, then `python tools/hub.py open`: it opens the
 page signed in as you (a one-time pairing link sets the browser's session cookie; `--print` prints
-the link instead). A browser that is no longer paired is told to run `hub open` again.
+the link instead). `serve` prints the full `open` command on its start line. A paired browser stays
+paired when the server restarts: the server keeps each session, as a keyed hash and never the
+cookie itself, in a `browser-sessions-<port>.json` file beside the token files
+(`kitlib/hubsite/auth.py`, "Sessions"). `serve --port 0` binds a new port each run, so it keeps
+no such file and its browsers are paired again after a restart (`kitlib/hubsite/serve.py`,
+`build`). A session lasts 30 days (`auth.SESSION_TTL_S`) and is
+renewed to a full 30 days when the browser uses it with less than half of that left, so a browser
+you use at least every two weeks never needs pairing again. `python tools/hub.py unpair` ends
+every browser's session (the owner's token only; with no server running it empties that file
+itself), and a new `owner.token` ends them all too. A browser that is not paired (a first visit,
+or after an unpair or a session that ran out) is told so on the page and to run
+`python tools/hub.py open` in the kit folder and open the link it prints. The server's health is
+`GET /api/v1/health`.
 
 - **Inbox.** Two tabs. Questions: what the PM and the coordinators ask you, each with its context,
   options and a recommendation; pick one and add a note if you like. Its own tabs are Open,
@@ -42,7 +55,8 @@ repository.
 
 - `hub.py setup` makes the owner's and the agent's token files where they are absent and prints
   where they are; it never writes the machine config.
-- `hub.py serve` serves until Ctrl+C, which commits the last changes and releases the store lock.
+- `hub.py serve` serves until Ctrl+C or `hub.py stop`, either of which commits the last changes
+  and releases the store lock.
   The port is `hub.port` of the machine config (default 8790); the store is `hub.store`, else
   `hub/` in the PM data worktree (docs/pm-data-branch.md). `--store PATH` serves a scratch copy
   with git sync off. The server needs no `hub` key: without one every default holds. A trial
@@ -73,10 +87,30 @@ repository.
 - Autostart (opt-in): `python tools/hub.py setup --autostart` registers a scheduled task that
   runs `hub serve` at logon; `--whatif` shows what it would do and changes nothing. Without the
   flag nothing is registered. It is refused, with nothing registered, when no store folder is
-  set. The server then runs windowless, so Ctrl+C does not apply: end it with
-  `Stop-ScheduledTask -TaskName 'PM kit hub server'` and start it again with
-  `Start-ScheduledTask`. A server that was cut off without a clean close leaves its store lock,
-  which the next start takes over with a note (docs/hub-remote-access.md).
+  set. The server then runs windowless, so Ctrl+C does not apply: `hub.py restart` stops it
+  cleanly and starts the task again, and `hub.py stop` stops it (docs/hub-remote-access.md
+  "8. Restart the hub"). A server that was cut off without a clean close leaves its store lock,
+  which the next start takes over with a note.
+- `hub.py stop [--port N] [--timeout S]` and `hub.py restart [--port N] [--timeout S]`
+  (`kitlib.hubsite.control`) post `POST /api/v1/stop` (`kitlib.hubsite.httpd.STOP_ROUTE`) with
+  the owner's Bearer token. The route takes that token only, never a browser session (403
+  `forbidden` otherwise), and only on the local listener: through the tunnel it answers 404 (403
+  `access` first without a valid Access token). It answers `ok`, `stopping`, and the server's
+  `pid` and `ctime`, then the server closes as on Ctrl+C. `stop` waits until the port is free and
+  that process has ended: `STOPPED: ...`, or `nothing to stop: ...` (exit 0) when nothing answers
+  on the port. A server stopped a moment ago may still be closing then: it frees its port before
+  its last git pass and the store's close (`kitlib.hubsite.control`). `restart` reads the
+  scheduled task's state first and starts the task again only when the task ran the server it
+  stopped (the task is `Running` or `Queued`), or when nothing ran and the task is ready; then it
+  waits until the new server answers on `hub.port` (`RESTARTED: ...`). A task that cannot be read
+  or started after the stop prints the `STOPPED` line, why, and the start command (exit 1).
+  Neither ever kills a process: past `--timeout` (default 300 s, approximate: one request in
+  flight may run past it) they print `TIMED OUT: ...` and exit 4.
+- `python tools/hub.py setup --check` writes nothing: it says whether `hub.access` is unset, set
+  or cannot serve, fetches the Access keys once when it can serve (`access keys: ...`), and lists
+  each kit copy on the machine that would refuse the `hub` key (`kitlib.config.copies`). It ends
+  `READY: ...` (exit 0) or `NOT READY: ...` (exit 1). Run it before writing the `hub` key
+  (docs/hub-remote-access.md "Before you start").
 - `hub.py validate [--store PATH]` checks the store folder against the field tables below, with
   no server, and prints `VALIDATE <LEVEL> <document> <field>: <message> [<code>]`.
 
@@ -86,14 +120,17 @@ The machine config's `hub` key: docs/kit-json.md "Machine config keys". Its sett
 
 Exit codes of every verb: 0 ok, 1 refused (also a Ctrl+C other than the one that closes a
 running server, or a server that did not close cleanly), 2 usage error or an unreadable machine
-config, 3 the server is not running (the start command is printed), 4 a `wait --timeout` that ran
-out. A `wait` whose server closes mid-wait ends with 3 and the start command when the next poll
+config, 3 the server is not running (the start command is printed), or a `restart` that started
+nothing (no task, a disabled one, or a server started by hand: it says which and prints the
+start command), 4 a `wait --timeout` that ran out, or a `stop` or `restart` that ran out of time
+(nothing was killed). A `wait` whose server closes mid-wait ends with 3 and the start command when the next poll
 is refused, or with 1 (`REFUSED: port N did not answer as the hub does: ...`) when the
 connection dropped mid-request.
 
 ## For the PM
 
-The PM reads and writes the hub only through `tools/hub.py` (the agent's token); coordinators
+The PM reads and writes the hub only through `tools/hub.py` or the hub MCP server (docs/hub-mcp.md),
+both with the agent's token; coordinators
 never write to it, they send questions and hand steps to the PM. Every verb takes `--port N` and
 `--json` (the server's answer as one JSON line). The server alone decides what a role may do: the
 owner's verbs (answer, todos done, stories add and withdraw, to-pm add and send, inbox read) are

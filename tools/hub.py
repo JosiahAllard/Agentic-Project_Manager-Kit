@@ -1,8 +1,9 @@
 """hub.py: the hub server of this machine (kitlib.hubsite) and the verbs that ask it.
 
   hub.py serve [--port N] [--store PATH]
-      serves the hub on the loopback address until Ctrl+C, which closes it cleanly: the last
-      changes are committed and the store lock is released. Prints one start line and, after a
+      serves the hub on the loopback address until Ctrl+C or hub.py stop, which close it
+      cleanly: the last changes are committed and the store lock is released. Prints one start
+      line and, after a
       clean close, one closing line; notes (NOTE: ...) and errors (ERROR: ...) go to stderr: the
       start-up notes, a git sync pass that failed with git's reason, the wait for git at the
       close before it begins (it is given no time limit) and each step of the close that failed
@@ -41,9 +42,50 @@
       console window; refused, before any file is written, from a kit worktree or with no
       pythonw.exe beside python. --whatif prints the task's PowerShell and any refusal and
       changes nothing, not even a token file.
+  hub.py setup --check
+      reads, never writes (no token file, no machine config, no task): it says whether the
+      machine is ready for the `hub` key and the tunnel. One line for hub.access: `access: not
+      set (hub.access)`, `access: set`, or `access: cannot serve: ` and the fixed phrase of
+      kitlib.hubsite.tunnel.check. With settings that can serve, one fetch of the team's Access
+      keys (kitlib.hubsite.access.probe, its `access keys: ` line). Then one line for each kit
+      copy on this machine (kitlib.config.copies: the plugin export folders, the pins and each
+      account folder's install, kitlib.pluginsource.installs): `knows every key`, `would refuse `
+      and the keys, or `cannot tell: ` and why (an install whose folder is gone names the
+      refresh command), checked against the machine config's keys plus `hub`; a copy that
+      refuses a key refuses the whole file. Last, `READY: ...` and exit 0, or `NOT READY: ...`
+      and exit 1: a copy in use would refuse a key or cannot be read, the Access settings
+      cannot serve, or the keys were not fetched. Export folders not in use decide nothing; a
+      NOTE counts those that would refuse. Refresh the plugin and restart the sessions of
+      older copies before setting `hub` (docs/hub-remote-access.md "Before you start").
   hub.py open [--port N] [--print]
       opens the hub page in the browser, signed in as the owner through a one-time pairing link
-      the running server gives for the owner's token. --print prints the link instead.
+      the running server gives for the owner's token. --print prints the link instead. A paired
+      browser stays paired across a restart of the server; its session (auth.SESSION_TTL_S, 30
+      days) is renewed when it is used with less than half of that left
+      (kitlib.hubsite.auth, "Sessions").
+  hub.py unpair [--port N]
+      ends the session of every browser paired with the server on the port, and every pairing
+      link not yet used; the owner's token only. With no server running there it empties the
+      sessions file that server reads at its start (in the token folder) itself and says so.
+      A new owner token also unpairs every browser.
+  hub.py stop [--port N] [--timeout S]
+      asks the server on the port to close as Ctrl+C closes it (kitlib.hubsite.control), then
+      waits until nothing listens on the port and its process has ended: `STOPPED: ...`. The
+      owner's token only; a browser session never stops the server. With nothing answering
+      there: `nothing to stop: ...`, exit 0; a server stopped a moment ago may still be closing
+      then, as it frees its port before its last git pass and the store's close. --timeout S
+      (default 300, approximate: one request in flight may run past it): exit 4 with
+      `TIMED OUT: ...` when it has not closed by then; nothing is ever killed, the server goes
+      on closing.
+  hub.py restart [--port N] [--timeout S]
+      stops the server on the port (default hub.port) as stop does, then starts the scheduled
+      task kitlib.hubsite.autostart.TASK_NAME again and waits until the new server answers on
+      hub.port: `RESTARTED: ...`. It reads the task's state first and starts the task only when
+      the task ran the server it stopped, or nothing ran and the task is ready: no task, a
+      disabled one or a server started by hand starts nothing, says why and prints the start
+      command, exit 3. A task whose state cannot be read or that cannot be started after the
+      stop: the STOPPED line, why, and the start command, exit 1. --timeout S covers the whole
+      restart: exit 4 as for stop (the console advice only when the new server never answered).
   hub.py migrate --from DIR [--from DIR ...] [--store PATH] [--dry-run]
       copies the documents of each DIR (the mirror folder, or an export of one account's copy)
       into the store (hub.store, else hub/ in the PM data worktree; --store PATH: that folder)
@@ -111,8 +153,9 @@ A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.hubsite, p
 Exit codes: 0 ok; 1 refused (`REFUSED: ...`, or `REFUSED <code>: <message>` when the server
 refused the call), a store with an error finding, a server that did not close cleanly, or a
 Ctrl+C other than the one that closes a running server; 2 usage error or a machine config that
-cannot be read; 3 the server is not running (the start command is printed); 4 `wait --timeout`
-ran out with nothing to say.
+cannot be read; 3 the server is not running (the start command is printed), or `restart`
+started nothing; 4 `wait --timeout` ran out with nothing to say, or `stop` or `restart` ran out
+of time (nothing was killed).
 """
 import argparse
 import json
@@ -123,16 +166,20 @@ import webbrowser
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from kitlib import hubvalidate                                     # noqa: E402
+from kitlib.config import copies, user                             # noqa: E402
 from kitlib.config.types import ConfigError                        # noqa: E402
-from kitlib.hubsite import api, auth, client, httpd, serve, settings   # noqa: E402
+from kitlib.hubsite import access, api, auth, client, httpd, serve, settings, tunnel   # noqa: E402
 from kitlib.hubsite import autostart as hub_autostart              # noqa: E402
+from kitlib.hubsite import control                                 # noqa: E402
 from kitlib.hubsite import migrate as hub_migrate                  # noqa: E402
 
 START = 'python "%s" serve' % os.path.abspath(__file__)
+OPEN = 'python "%s" open' % os.path.abspath(__file__)
 HEALTH = api.BASE + '/health'
 # every verb, in the order the usage error names them
-VERB_NAMES = ('serve', 'status', 'setup', 'open', 'migrate', 'questions', 'answer', 'todos',
-              'stories', 'to-pm', 'inbox', 'pending', 'wait', 'validate')
+VERB_NAMES = ('serve', 'status', 'setup', 'open', 'unpair', 'stop', 'restart', 'migrate',
+              'questions', 'answer', 'todos', 'stories', 'to-pm', 'inbox', 'pending', 'wait',
+              'validate')
 NO_VERB = 'give a verb: %s or %s' % (', '.join(VERB_NAMES[:-1]), VERB_NAMES[-1])
 
 
@@ -344,7 +391,7 @@ def _client_verbs(sub):
 def parser():
     p = Parser(prog='hub.py', description='The hub server of this machine.')
     sub = p.add_subparsers(dest='verb')
-    s = sub.add_parser('serve', help='serve the hub until Ctrl+C')
+    s = sub.add_parser('serve', help='serve the hub until Ctrl+C or hub.py stop')
     s.add_argument('--port', type=_port(0), help='the port (default: hub.port; 0: a free one)')
     s.add_argument('--store', type=_folder,
                    help='serve this folder as a scratch copy: git sync is off for the run, so '
@@ -357,10 +404,26 @@ def parser():
                    help='also register the scheduled task that starts the server at sign-in')
     u.add_argument('--whatif', action='store_true',
                    help='with --autostart: print the task, change nothing (no token file either)')
+    u.add_argument('--check', action='store_true',
+                   help='write nothing: say whether the Access settings serve and which kit '
+                        'copies would refuse the hub key')
     o = sub.add_parser('open', help='open the hub page, signed in as the owner')
     o.add_argument('--port', type=_port(1), help='the port (default: hub.port)')
     o.add_argument('--print', dest='show', action='store_true',
                    help='print the one-time link instead of opening it')
+    n = sub.add_parser('unpair', help='end the session of every paired browser (the owner)')
+    n.add_argument('--port', type=_port(1), help='the port (default: hub.port)')
+    for name, what in (('stop', 'ask the running server to close cleanly, and wait (the owner)'),
+                       ('restart', 'stop the server and start its scheduled task again (the '
+                                   'owner)')):
+        r = sub.add_parser(name, help=what)
+        r.add_argument('--port', type=_port(1), help='the port (default: hub.port)')
+        r.add_argument('--timeout', type=_seconds, default=control.DEFAULT_TIMEOUT_S, metavar='S',
+                       help='give up after about this many seconds, ending nothing (default: '
+                            '%d); a request in flight may run past it by up to %d s, a read of '
+                            "the task's state by up to %d s"
+                            % (control.DEFAULT_TIMEOUT_S, serve.ASK_TIMEOUT_S,
+                               hub_autostart.TASK_TIMEOUT_S))
     m = sub.add_parser('migrate', help="copy the earlier hub's documents into the store")
     m.add_argument('--from', dest='sources', action='append', type=_source, required=True,
                    metavar='DIR', help='a folder to copy from: the mirror folder or an export '
@@ -413,7 +476,8 @@ def _serve(a, stop):
     def started(h):
         for note in h.notes:
             _log('note', note)
-        _say('hub serving %s on %s (Ctrl+C stops it)' % (h.store.root, h.url))
+        _say('hub serving %s on %s (Ctrl+C stops it); to pair a browser run: %s'
+             % (h.store.root, h.url, OPEN))
 
     try:
         clean = serve.run(hub, started, stop)
@@ -448,7 +512,55 @@ def _status(a, stop):
     return 0
 
 
+def _check():
+    """setup --check: reads only. 0 when ready, 1 when not."""
+    from kitlib import pluginsource
+    s = settings.load()
+    why = []
+    try:
+        tunnel.check(s.access)
+    except tunnel.TunnelConfigError as e:
+        if e.unset:
+            print('access: not set (hub.access): the tunnel listener stays off')
+        else:
+            print('access: cannot serve: %s' % e)
+            why.append('the Access settings cannot serve')
+    else:
+        print('access: set')
+        ok, line = access.probe(s.access.team)
+        print(line)
+        if not ok:
+            why.append('the Access keys were not fetched')
+    keys = copies.config_keys(user.readable_file(), (settings.KEY,))
+    try:
+        root = pluginsource.load().export_dir
+    except pluginsource.RefreshError as e:
+        print('kit copies: cannot look: %s' % e)
+        why.append('the kit copies could not be looked at')
+    else:
+        report = copies.check(copies.find(root, pluginsource.current_folder(root),
+                                          pluginsource.installs()), keys,
+                              pluginsource.refresh_cmd())
+        print('kit copies, checked against the keys %s:' % ', '.join(keys))
+        for line in report.lines:
+            print('  %s' % line)
+        if not report.ready:
+            why.append('a kit copy in use would refuse a key or cannot be read')
+        if report.stale:
+            print('NOTE: %d export folder(s) not in use would refuse a key or cannot be read: '
+                  'a session started from one before the last refresh still runs it; restart '
+                  'such sessions before setting %s' % (report.stale, settings.KEY))
+    if why:
+        print('NOT READY: %s' % '; '.join(why))
+        return client.REFUSED
+    print('READY: every kit copy in use knows these keys, and the Access settings serve or are '
+          'not set')
+    return 0
+
+
 def _setup(a, stop):
+    if a.check:
+        return _check()
     if (a.autostart or a.whatif) and not settings.load().store:
         raise serve.ServeError('no store folder is set, so a server started at sign-in would '
                                'fail: set hub.store or pm_data in the machine config; '
@@ -497,6 +609,112 @@ def _open(a, stop):
     if not webbrowser.open(url):
         raise serve.ServeError('no browser could be opened: use hub.py open --print')
     print('opened the hub page in the browser')
+    return 0
+
+
+def _unpair(a, stop):
+    port = a.port or settings.load().port
+    folder = auth.folder()
+    token = auth.read_token(folder, auth.OWNER)
+    if not token:
+        raise serve.ServeError('no owner token in %s: run hub.py setup' % folder)
+    try:
+        status, obj = serve.ask(port, 'POST', httpd.UNPAIR_ROUTE, token)
+    except serve.NotRunning as e:
+        # no server holds the sessions in memory: the file the next one reads is emptied here
+        failed = []
+        creds = auth.Credentials(folder, port=port, persist=True,
+                                 log=lambda level, text: failed.append(text))
+        creds.unpair_all()
+        if failed:
+            raise serve.ServeError(failed[0])
+        print('%s: unpaired every browser in %s, the sessions file the server on that port '
+              'reads at its start' % (e, creds.path))
+        # a server may have bound the port and read the file between the first ask and the write
+        try:
+            status, obj = serve.ask(port, 'POST', httpd.UNPAIR_ROUTE, token)
+        except serve.NotRunning:
+            return 0
+    if status != 200 or obj.get('ok') is not True:
+        return _refused(port, status, obj)
+    print('unpaired every browser of the hub server on port %d' % port)
+    return 0
+
+
+# restart that starts nothing: why, by control's outcome
+NOT_STARTED = {
+    control.NO_TASK: "there is no scheduled task '%s' (hub.py setup --autostart makes it), so "
+                     "nothing was started" % hub_autostart.TASK_NAME,
+    control.DISABLED: "the scheduled task '%s' is disabled, so nothing was started"
+                      % hub_autostart.TASK_NAME,
+    control.HAND_STARTED: "the server was started by hand, not by the scheduled task '%s', so "
+                          "nothing was started" % hub_autostart.TASK_NAME,
+}
+# a server the task starts has no console: what it says at start-up goes nowhere
+NO_CONSOLE = ('a server the scheduled task starts has no console, so its start-up lines are not '
+              'shown: run hub.py serve in a console to see why it does not answer: %s' % START)
+
+
+def _owner_token():
+    folder = auth.folder()
+    token = auth.read_token(folder, auth.OWNER)
+    if not token:
+        raise serve.ServeError('no owner token in %s: run hub.py setup' % folder)
+    return token
+
+
+def _stopped(port, stopped):
+    if not stopped.ran:
+        print('nothing to stop: nothing answers on port %d; %s' % (port, control.STILL_CLOSING))
+    elif stopped.pid is None:
+        print('STOPPED: the hub server on port %d has closed' % port)
+    else:
+        print('STOPPED: the hub server on port %d (pid %d) has closed and its process has ended'
+              % (port, stopped.pid))
+
+
+def _stop(a, stop):
+    port = a.port or settings.load().port
+    token = _owner_token()
+    try:
+        got = control.stop(port, token, a.timeout)
+    except control.Refused as e:
+        return _refused(e.port, e.status, e.answer)
+    except control.TimedOut as e:
+        print(serve.scrub('TIMED OUT: %s' % e), file=sys.stderr)
+        return client.TIMED_OUT
+    _stopped(port, got)
+    return 0
+
+
+def _restart(a, stop):
+    new_port = settings.load().port
+    port = a.port or new_port
+    token = _owner_token()
+    try:
+        got = control.restart(port, token, a.timeout, new_port)
+    except control.Refused as e:
+        return _refused(e.port, e.status, e.answer)
+    except control.StartFailed as e:
+        # the stop went through: say so, then why nothing was started and how to start it
+        _stopped(port, e.stopped)
+        print(serve.scrub('the scheduled task could not be started: %s' % e.reason),
+              file=sys.stderr)
+        print('start it with: %s' % START, file=sys.stderr)
+        return 1
+    except control.TimedOut as e:
+        print(serve.scrub('TIMED OUT: %s' % e), file=sys.stderr)
+        if e.phase == control.ANSWER_PHASE:
+            # the task was started and its server never answered: why is in its start-up lines
+            print(NO_CONSOLE, file=sys.stderr)
+        return client.TIMED_OUT
+    _stopped(port, got.stopped)
+    if got.outcome != control.RESTARTED:
+        print(NOT_STARTED[got.outcome])
+        print('start it with: %s' % START)
+        return client.NOT_RUNNING
+    print("RESTARTED: the hub server answers on port %d (the scheduled task '%s' started it)"
+          % (got.port, hub_autostart.TASK_NAME))
     return 0
 
 
@@ -717,7 +935,8 @@ def _wait(a, stop):
 
 
 VERBS = {'serve': _serve, 'status': _status, 'setup': _setup, 'open': _open,
-         'migrate': _migrate, 'questions': _questions, 'answer': _answer, 'todos': _todos,
+         'unpair': _unpair, 'stop': _stop, 'restart': _restart, 'migrate': _migrate,
+         'questions': _questions, 'answer': _answer, 'todos': _todos,
          'stories': _stories, 'to-pm': _to_pm, 'inbox': _inbox, 'pending': _pending,
          'wait': _wait, 'validate': _validate}
 
@@ -730,6 +949,8 @@ def main(argv=None, stop=None):
     a = p.parse_args(argv)
     if not a.verb:
         p.error(NO_VERB)
+    if a.verb == 'setup' and a.check and (a.autostart or a.whatif):
+        p.error('--check takes no other option: it writes nothing')
     if a.verb == 'setup' and a.whatif and not a.autostart:
         p.error('--whatif needs --autostart')
     try:

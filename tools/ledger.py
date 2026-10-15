@@ -1,8 +1,8 @@
 """ledger.py: the rulings ledger named by the machine config's `ledger_path` (docs/ledger.md).
 
   ledger.py add --repo REPO --prov PROV --q Q --a A --decides D --source S [--supersedes R-nnnn]
-                [--items A,B] [--when 'YYYY-MM-DD HH:MMZ'] [--commit | --push] [--title T]
-                [--branch-ok] [--model NAME] [--host NAME]
+                [--when 'YYYY-MM-DD HH:MMZ'] [--commit | --push] [--title T] [--branch-ok]
+                [--model NAME] [--host NAME]
       append one entry, print its id. --repo is `all` or one of the machine config's
       `ledger_repos` (unset: any lower-case name). --commit commits the ledger file alone as
       `ledger: R-nnnn <title>`; --push also pushes the current branch to `repo.remote`
@@ -11,11 +11,10 @@
       turn an entry into its tombstone in place, print its id.
   ledger.py show R-nnnn          print one entry.
   ledger.py grep TEXT            print the header of every entry holding TEXT (any case).
-  ledger.py check [--base REV] [--root DIR]
+  ledger.py check [--base REV]
       validate the ledger and check it only grew since REV (default <repo.remote>/<main branch> of the
       ledger's repository; origin unless set), and that the standing digest (STANDING.md beside the ledger) cites
-      only live entries; then WARN (never fail) on each live entry for the repository at DIR
-      (default: the current directory) whose Items names a record open nowhere.
+      only live entries.
   ledger.py list --prov PROV --since YYYY-MM-DD
       one line per ruling of that provenance dated on or after the day: `R-nnnn | date | Decides`.
       `--prov delegated` feeds the PM's daily digest of delegated engineering rulings.
@@ -33,7 +32,6 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from kitlib import ledger                                          # noqa: E402
-from kitlib.backlog import ledger as backlog_ledger                # noqa: E402
 from kitlib.config import user                                     # noqa: E402
 from kitlib.config.types import ConfigError                        # noqa: E402
 from kitlib.host import registry                                    # noqa: E402
@@ -60,7 +58,6 @@ def parser():
     for f in ('q', 'a', 'decides', 'source'):
         ad.add_argument('--' + f, required=True)
     ad.add_argument('--supersedes', default='-')
-    ad.add_argument('--items', help='comma-separated backlog record ids this ruling names')
     ad.add_argument('--when', help="UTC 'YYYY-MM-DD HH:MMZ' (default: now); for backfill")
     ad.add_argument('--commit', action='store_true', help='commit only the ledger file after the add')
     ad.add_argument('--push', action='store_true', help='implies --commit, then push the branch to repo.remote (origin by default)')
@@ -83,7 +80,6 @@ def parser():
     gr.add_argument('text')
     ck = sub.add_parser('check', help='validate, and check the ledger only grew since a revision')
     ck.add_argument('--base', help='revision to compare with (default <repo.remote>/<main branch>; origin unless set)')
-    ck.add_argument('--root', help='repository whose backlog the orphan scan reads (default: the current directory)')
     st = sub.add_parser('standing', help="the standing digest's rule lines for a topic word")
     st.add_argument('word')
     return p
@@ -132,9 +128,8 @@ def run(a, p, path, repos):
         plan = None
         if a.commit or a.push:
             plan = vcs.prepare(path, branch_ok=a.branch_ok, model=a.model, provider=host_of(a))
-        items = [i.strip() for i in (a.items or '').split(',') if i.strip()] or None
-        got = write.add(path, a.repo, a.prov, a.q, a.a, a.decides, a.source, a.supersedes, items,
-                        a.when, repos)
+        got = write.add(path, a.repo, a.prov, a.q, a.a, a.decides, a.source, a.supersedes,
+                        when=a.when, repos=repos)
         print(got.id)
         sys.stdout.flush()
         for w in got.warnings:
@@ -169,8 +164,6 @@ def run(a, p, path, repos):
     if old is None:
         print('append-only NOT CHECKED: cannot read the ledger at %s (%s)'
               % (base, ' '.join((why or '').split())))
-    for line in backlog_ledger.orphan_report(path, os.path.abspath(a.root or os.getcwd())):
-        print(line)
     print('ledger: %d entries, %s' % (write.count(text), 'OK' if not errs else '%d problem(s)' % len(errs)))
     return 1 if errs else 0
 

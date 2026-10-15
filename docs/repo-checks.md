@@ -1,6 +1,6 @@
-# Repo checks: forbidden, ruling_cites, trailers, pieces
+# Repo checks: forbidden, trailers, pieces
 
-Four repository checks ported from the PM kit. Held for the joint review: no repository's gate runs them until its `.kit.json` adds the step. Each is a thin entry point in `tools/` over a `kitlib` package; `-C DIR` (default `.`) names the checkout, resolved with `kitlib.git.repo.toplevel`. Exit 2 is also every `USAGE:` error.
+Three repository checks ported from the PM kit. Held for the joint review: no repository's gate runs them until its `.kit.json` adds the step. Each is a thin entry point in `tools/` over a `kitlib` package; `-C DIR` (default `.`) names the checkout, resolved with `kitlib.git.repo.toplevel`. Exit 2 is also every `USAGE:` error.
 
 ## forbidden
 
@@ -18,19 +18,6 @@ python tools/forbidden.py [-C DIR] --add                                     one
 - **`--add`** reads one line on stdin (never an argument, so the token is in no history or process list), refuses one under 4 characters, and rewrites the store with the new digest and checksum.
 - **Exit:** 0 clean (or added), 1 a hit, 2 refused config, a store missing, empty or failing its self-test, nothing readable, or git failed.
 
-## ruling_cites
-
-`tools/ruling_cites.py`, logic `kitlib/rulingcites`. Fails a branch that ADDS a `PM R-nnnn` citation (with the ids continuing it: `PM R-nnnn/R-mmmm`, `PM R-nnnn, R-mmmm and R-pppp`) the PM's rulings ledger cannot back: an id with no ledger header, a header whose repo column is neither this repository's ledger name nor `all`, or a tombstone (the finding names the live id its `see` chain ends at, or says drop it). A bare `R-nnnn` is not read.
-
-```
-python tools/ruling_cites.py [-C DIR] [--base REV]
-```
-
-- **Added lines only.** A citation on a line the branch adds (diff against the merge base of `--base`, default `.kit.json` "repo".main_branch, working tree included) or in an untracked, non-ignored file fails; the same finding on an untouched line is a `WARNING:` line.
-- **The ledger** is the file the machine config's `ledger_path` names (`kitlib.config.ledger_path`), read with `kitlib.backlog.ledger.read_entries`. No configured ledger, or one that cannot be read, is one `WARNING: ruling citations NOT CHECKED` line and exit 0.
-- **`.kit.json` "ruling_cites":** `repo` (the ledger name; unset: "repo".name, else the checkout's folder; lower-cased) and `skip` (globs not read; unset: `<tools_dir>/test_*.py` and `<tools_dir>/fixtures/*`; `[]` skips nothing).
-- **Exit:** 0 no added bad citation, 1 an added one, 2 refused config (`.kit.json` or the machine config) or git failed.
-
 ## trailers
 
 `tools/trailers.py`, logic `kitlib/trailerscheck` over the rule in `kitlib/reviewpack/trailers.py` (the one review_pack judges by). Fails a branch holding a commit with no `Co-Authored-By: <name> <noreply@anthropic.com>` trailer.
@@ -41,10 +28,10 @@ python tools/trailers.py [-C DIR] [--base REV] [--merged]
 
 - **Commits read:** every commit `HEAD` has that the base does not (`HEAD --not <base>`, merges included, so a sync merge counts); the base defaults as in gate.md "Default base".
 - **FAIL:** a commit made since the rule's cutoff (`TRAILER_FAIL_SINCE`) with no such trailer, or with no readable committer date. **WARNING, exit 0:** an older commit, and a commit carrying `Owner-Approved:` or `Owner-Authored: yes` whose AUTHOR email is `.kit.json` "owner".email, read from the base (an unset email proves nothing). The same claim on anyone else's commit is judged as no claim, with a WARNING.
-- **`--merged`:** a landing's merged-tree gate. The first-parent merges in `<base>..HEAD` are the lander's own and are exempt. Refused (exit 2) unless HEAD is the `.kit.json` "repo".main_branch itself, since on a branch they are its own sync merges.
+- **`--merged`:** a landing's merged-tree gate. The first-parent merges in `<base>..HEAD` are the lander's own and are exempt. It holds with HEAD on the `.kit.json` "repo".main_branch, or detached at a landing's merge: the landing tree `gate.py land` merges and gates in (docs/gate.md "Landing"), where HEAD's first-parent chain from the base is merges only and the oldest was made onto the base itself (`kitlib.trailerscheck.landing_head`). Refused (exit 2) on any other branch, and at any other detached HEAD, since there the merges are the branch's own sync merges.
 - **Config:** owner claims count only with `.kit.json` "owner".email set; without it an owner-authored commit fails.
 - **In the gate:** a plain `cmd` step: a FAIL stops the later steps unless the repo adds `"continue": true`, and its WARNING lines show as WARN only if the gate's `warn_lines` matches them.
-- **Exit:** 0 no failing commit, 1 a failing commit, 2 usage, refused config, git failed, or `--merged` off main.
+- **Exit:** 0 no failing commit, 1 a failing commit, 2 usage, refused config, git failed, or `--merged` neither on main nor at a landing's merge.
 
 ## pieces
 
@@ -66,8 +53,6 @@ A repository runs these as `cmd` steps in its `.kit.json` "gate" (docs/gate.md, 
 ```json
 {"name": "forbidden", "always": true,
  "cmd": ["{python}", "{here}/forbidden.py", "-C", "{root}", "--base", "{base}", "--worktree"]},
-{"name": "ruling-cites", "always": true,
- "cmd": ["{python}", "{here}/ruling_cites.py", "-C", "{root}", "--base", "{base}"]},
 {"name": "trailers", "always": true,
  "cmd": ["{python}", "{here}/trailers.py", "-C", "{root}", "--base", "{base}"],
  "merged_args": ["--merged"]}
@@ -77,7 +62,6 @@ An empty `{base}` falls back to each tool's own default base.
 
 ## Not ported
 
-- `_repo_guard.check_same_repo` and the `KIT_REPO_ROOT` root override in all three: one kit copy, no environment override; `-C` replaces them.
+- `_repo_guard.check_same_repo` and the `KIT_REPO_ROOT` root override: one kit copy, no environment override; `-C` replaces them.
 - The forbidden tool's module-level `STORE` path: the store comes from `.kit.json` per checkout.
-- ruling_cites' `backlog.RULINGS_LEDGER` constant: the ledger path is the machine config's alone.
 - The pieces fallback to `tools/pieces.json` when `.kit.json` has no "pieces": `kitlib.config` reads a section only from `.kit.json` or the file it names. Its test (`test_the_legacy_file_counts`) is replaced by one asserting the file alone is no table.

@@ -30,7 +30,7 @@ from optional.bridge.win.controller import Controller
 from optional.bridge.win.frontend import NativeFrontend
 from optional.bridge.port import NativeSource
 from optional.bridge.win.transport import PipeTarget
-from kitlib.proc.process import handle_ctime,process_parents
+from kitlib.proc.process import handle_ctime,parent_pid
 from .account import CodexAccount
 from .calls import CodexCalls
 from .context import CodexObserver,_sha
@@ -74,7 +74,7 @@ class _Runtime:
                 or handle_ctime(self._frontend_handle)!=self.native.creation
                 or wait(self._frontend_handle,0)!=258 or process_image(self.native.pid)!=self._frontend_image
                 or process_sids(self.native.pid)[0]!=self.observer.user
-                or process_parents().get(self.native.pid)!=self.native.host_pid):
+                or parent_pid(self._frontend_handle)!=self.native.host_pid):
             raise DeliveryError('codex-native-frontend-changed')
         self.observer.require_host()
 
@@ -310,9 +310,9 @@ class CodexSources:
         except Exception:
             return False
 
-    def delivery_adapter(self, *, timeout=5):
+    def delivery_adapter(self, *, timeout=5, start_timeout=3):
         """Private bootstrap adapter; no SEND from a configured callback alone."""
-        return _DirectDesktopAdapter(self,timeout=timeout)
+        return _DirectDesktopAdapter(self,timeout=timeout,start_timeout=start_timeout)
 
     @contextmanager
     def _delivery_lease(self,message):
@@ -375,9 +375,9 @@ class CodexSources:
 
 
 class _DirectDesktopAdapter(CodexDesktopAdapter):
-    def __init__(self,factory, *, timeout):
+    def __init__(self,factory, *, timeout, start_timeout):
         self.factory=factory
-        super().__init__(lease=factory._delivery_lease,timeout=timeout)
+        super().__init__(lease=factory._delivery_lease,timeout=timeout,start_timeout=start_timeout)
 
     def describe(self):
         if not self.factory._has_desktop_facility():

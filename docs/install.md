@@ -225,8 +225,7 @@ get a stub, because they act on the machine, the owner's files or the kit itself
   it describes, but what it shows is the kit's roles): run by the kit's maintainers or the PM
   (docs/test-tools.md, docs/lock-release.md, docs/backlog-lint.md, docs/ROSTER.md, docs/content.md).
 - `launch.py`, `machine_setup.py`, `pm_data.py`, `pm_watch.py`, `hub.py`, `hub_mirror.py`, `pending.py`,
-  `ledger_refs.py`, `worktree_sweep_task.py`: the owner's and the PM's, on the machine config and
-  the machine.
+  `worktree_sweep_task.py`: the owner's and the PM's, on the machine config and the machine.
 - `no_window.py`: the carrier a scheduled task runs under `pythonw` so that no console window
   opens (docs/daily-full.md "The schedule").
 
@@ -346,7 +345,10 @@ with the stub's arguments.
 - That location is the live kit checkout (`kitlib.stubs.kit_root`). When `kit_stubs.py` runs
   from a pinned export of pushed main (a gate's `kit-stubs` step under a pinned gate.py or
   land.py, docs/gate.md "Pinned tools"), it is `KIT_LIVE_ROOT` (`kitlib.pluginsource.live_root`), never the
-  export: `write` names the main checkout and `check` holds stubs that name it current.
+  export: `write` names the main checkout and `check` holds stubs that name it current. That holds
+  for a gate started from the plugin's export too (`<kit>/tools/gate.py -C <checkout>`): it pins
+  through the main checkout the export's marker names (`kitlib.pluginsource.export_checkout`,
+  docs/plugin-source.md "Layout"; `tests/gate/test_export_stubs.py`).
 - The child runs in the caller's directory when that is inside the stub's checkout, else in the
   stub's checkout. So a kit tool's default `-C .` names the stub's checkout, and a linked
   worktree's stub acts on that worktree.
@@ -358,7 +360,10 @@ with the stub's arguments.
 
 Which tools get a stub: `--tools`, else `.kit.json` "stubs".tools, else every name in
 `kitlib.stubs.SHARED` that the kit has as a command (a `tools/<name>.py` with a `__main__` block,
-`kit_stubs` excepted). A name the kit has no command for is refused (exit 2).
+`kit_stubs` excepted). A name the kit has no command for is refused (exit 2), but for a tool the
+kit removed (`kitlib.stubs.RETIRED`) named in "stubs".tools: that name is dropped, and `write` and
+`check` print `retired  <path> (delete it)` for a stub of it still in the repository. The line is a
+note: no exit code changes and nothing deletes the file.
 
 - `write` creates or replaces each stub. It keeps a file that is not a stub, and reports it,
   unless `--replace`. `--dry-run` writes nothing.

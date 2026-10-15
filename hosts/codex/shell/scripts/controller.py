@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.join(HERE, '..', 'boot'))                 # the plugi
 import kitboot                                                       # noqa: E402
 kitboot.boot(here=os.path.join(SRC, 'boot', 'kitboot.py')            # the kit, checked, before kitlib
              if os.path.isfile(os.path.join(SRC, 'kit.json')) else None)
+import kitlib  # noqa: E402,F401  (after the boot check: installs the CreateProcess hook)
 
 
 def main():

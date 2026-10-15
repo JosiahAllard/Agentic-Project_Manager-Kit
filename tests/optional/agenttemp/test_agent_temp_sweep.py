@@ -460,6 +460,28 @@ class Cli(Case):
         self.assertEqual(code, 2)
         self.assertIn('nothing to sweep', err)
 
+    def test_home_option_names_the_home_whose_machine_config_is_read(self):
+        self.config({S.KEY: {'dir': self.dir}})
+        put(os.path.join(self.dir, 'old.log'))
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(sys, 'stderr', err):
+            code = S.main(['--home', self.home], out=out, now=LATER)     # no home= argument
+        self.assertEqual(code, 0, out.getvalue() + err.getvalue())
+        self.assertIn('would    old.log', out.getvalue())
+
+    def test_an_entry_name_outside_the_pipe_code_page_does_not_fail_the_run(self):
+        self.config({S.KEY: {'dir': self.dir}})
+        name = '中文-☃.log'                 # in no Western code page
+        put(os.path.join(self.dir, name))
+        pipe = io.BytesIO()
+        stdout = io.TextIOWrapper(pipe, encoding='cp1252', errors='strict', write_through=True)
+        err = io.StringIO()
+        with mock.patch.object(sys, 'stdout', stdout), mock.patch.object(sys, 'stderr', err):
+            code = S.main([], home=self.home, now=LATER)                 # out=None: the process's stdout
+        stdout.flush()
+        self.assertEqual(code, 0, err.getvalue())
+        self.assertIn(b'would', pipe.getvalue())
+
     def test_an_unsafe_dir_is_refused(self):
         self.config({S.KEY: {'dir': self.home}})
         code, _out, err = self.main('--apply')

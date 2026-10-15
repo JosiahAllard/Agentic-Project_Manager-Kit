@@ -9,9 +9,14 @@ branch checked out) takes part too: the PM's records of this repository live the
                     branch's recorded root (pmdata_refusal; docs/pm-data-branch.md), else None
   close_landed      after the push is verified: close every record the landed branch still holds
                     pulled, in the configured store (one commit each, "closes <ID>: landed <merge
-                    sha>") and in the PM data store (the record file deleted in that worktree, not
-                    committed); what cannot be closed is a WARNING line naming the command, and
-                    the landing stands
+                    sha>") and in the PM data store (the record file deleted in that worktree and
+                    the deletion committed on the PM data branch); and every record a `Closes:
+                    <ID>[, <ID>]` line in the messages of the branch's commits names
+                    (closes_trailers), while pulled, whoever pulled it (a holder that is a live
+                    branch other than main and outside the batch is a WARNING: tell its builder).
+                    What
+                    cannot be closed is a WARNING line naming the command, and the landing
+                    stands; trailer ids no store holds are one NOTE line
   landable_commands the `backlog.py landable` command of each store that takes part
 
 Neither creates a store or adds the store's fetch refspec when the remote has no store, and
@@ -24,10 +29,11 @@ from kitlib import pluginsource, pmdata
 from kitlib.git import cmd, refs
 from kitlib.git import repo as gitrepo
 
+from . import offer
 from . import plan as pmod
 from . import record as rmod
 from . import store as smod
-from .errors import IndexStale, Overtaken, Refusal, Uncommitted
+from .errors import Dirty, IndexStale, Overtaken, Refusal, Uncommitted
 
 SESSION = 'gate-land'
 KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -162,13 +168,61 @@ def ancestry_refusal(root, cfg, tip, env=None):
     return None
 
 
-def _close_plan(ctx, rid, branch, reason):
-    """plan_close, run only while `rid` is still pulled by `branch` in the fresh snapshot."""
+def closes_ids(values):
+    """The record ids in `Closes:` trailer values: each value split on commas, the first word of
+    each part, kept when it is a plain id (store.PLAIN_ID), so `A, B (both done)` is A and B and
+    `#12` is nothing. Pure."""
+    out = []
+    for value in values:
+        for part in value.split(','):
+            words = part.split()
+            if words and smod.PLAIN_ID.match(words[0]) and words[0] not in out:
+                out.append(words[0])
+    return out
+
+
+CLOSES_KEY = 'Closes:'
+
+
+def closes_values(message):
+    """The values of the `Closes:` lines of one commit message, anywhere in it: a line that
+    starts with `Closes:` (the key case-sensitive, at the line's start), its value unfolded, so
+    each following line that starts with a space or tab joins it. Prose (`closes D2`, or `Closes:
+    D2` inside a sentence) is not such a line. Not git's trailer parser, which reads only the
+    last paragraph: tools/commit.py writes the attribution as a paragraph of its own. Pure."""
+    out = []
+    for line in message.splitlines():
+        if out and out[-1] is not None and line[:1] in (' ', '\t'):
+            out[-1] += ' ' + line.strip()
+        elif line.startswith(CLOSES_KEY):
+            out.append(line[len(CLOSES_KEY):].strip())
+        else:
+            out.append(None)
+    return [v for v in out if v is not None]
+
+
+def closes_trailers(root, tip, base):
+    """`(ids, None)`: the ids the `Closes:` lines name (closes_values, closes_ids) in the messages
+    of the commits `tip` has and `base` does not, merges included; or `(None, why)`."""
+    out, why = cmd.run_text(['log', '--format=%B%x00', tip, '--not', base, '--'], root,
+                            strip=False)
+    if out is None:
+        return None, why
+    values = []
+    for message in out.split('\0'):
+        values.extend(closes_values(message))
+    return closes_ids(values), None
+
+
+def _close_plan(ctx, rid, branch, reason, named=False):
+    """plan_close, run only while `rid` is still pulled by `branch` in the fresh snapshot; or, when
+    a `Closes:` trailer of the branch names it (`named`), while it is still pulled by anyone."""
     def plan(snap):
         rec = snap.get(rid)
-        if rec is None or rec.get('state') != 'pulled' or rec.get('pulled_by') != branch:
-            return smod.Change({}, '', ['%s is no longer pulled by %s; left as it is'
-                                        % (rid, branch)])
+        if rec is None or rec.get('state') != 'pulled' or (
+                not named and rec.get('pulled_by') != branch):
+            return smod.Change({}, '', ['%s is no longer pulled%s; left as it is'
+                                        % (rid, '' if named else ' by %s' % branch)])
         return pmod.plan_close(snap, ctx, rid, reason)
     return plan
 
@@ -215,7 +269,7 @@ def _pm_data_store(root, configured):
         return None, None, None, None
     try:
         pm_cfg = kconfig.load(pm_root)
-        backend = smod.open_backend(pm_root, pm_cfg, fetch=True)
+        backend = smod.open_backend(pm_root, pm_cfg, fetch=True, clean=True)
     except (kconfig.ConfigError, Refusal, OSError) as exc:
         return None, None, None, 'cannot open the backlog store in %s: %s' % (pm_root, exc)
     if configured is not None and backend.describe() == configured:
@@ -223,19 +277,45 @@ def _pm_data_store(root, configured):
     return pm_root, pm_cfg, backend, None
 
 
-def close_landed(root, cfg, branch, merge, session=SESSION):
+class _Seen(object):
+    """What the stores close_landed reads say about the ids the trailers name: `held`, the ids
+    some store holds; `read`, how many stores were read; `unread`, whether one could not be."""
+
+    def __init__(self):
+        self.held, self.read, self.unread = set(), 0, False
+
+
+def close_landed(root, cfg, branch, merge, session=SESSION, tip=None, base=None, batch=()):
     """Close every record `branch`, which landed as `merge`, holds pulled: in the configured store
-    when it is a `ref` or `branch` store, and in the PM data branch's store (_pm_data_store). The
-    lines to print (`closed ...`, and a `WARNING: ...` naming the command for each record or store
-    that could not be closed). [] when neither store takes part or nothing is pulled."""
-    lines = []
+    when it is a `ref` or `branch` store, and in the PM data branch's store (_pm_data_store). With
+    `tip` and `base` (the branch tip merged and the main it was merged onto), every record a
+    `Closes:` trailer in `tip --not base` names (closes_trailers) is closed too while it is
+    pulled, whoever pulled it: a pull made in the main checkout records the main branch, which no
+    landing matches. The lines to print (`closed ...`, and a `WARNING: ...` naming the command for
+    each record or store that could not be closed, or trailers that could not be read; one
+    `NOTE: ...` naming the trailer ids no store read holds, when every store taking part was read).
+    `batch`: the branches landing with `branch`, whose builders a trailer close needs no telling.
+    The code repository's mains (`cfg`'s guarded_mains) are main in the PM data store too, whose
+    own configured main is its data branch.
+    [] when neither store takes part and no trailer names a record, or nothing is pulled."""
+    lines, named, seen = [], [], _Seen()
+    quiet = tuple(cfg.guarded_mains()) + tuple(batch)    # holders nobody needs to tell
+    if tip and base:
+        named, why = closes_trailers(root, tip, base)
+        if named is None:
+            named = []
+            lines.append('WARNING: %s landed, and the Closes trailers of its commits could not be '
+                         'read (%s), so only the records it holds pulled are closed; see the '
+                         'Closes lines in: git log --format=%%B %s --not %s'
+                         % (branch, _one_line(why), tip, base))
     backend = ref_store(root, cfg, fetch=True)
     if backend is not None:
         lines.extend(_close_in(backend, root, cfg, branch, merge, session,
-                               lambda *args: close_command(root, *args)))
+                               lambda *args: close_command(root, *args), named, seen, quiet))
     pm_root, pm_cfg, pm_backend, why = _pm_data_store(
         root, backend.describe() if backend is not None else None)
     if why:
+        seen.unread = True
         lines.append('WARNING: %s landed, and the PM data branch\'s backlog store was not read '
                      '(%s), so no record it holds pulled there was closed; see which from that '
                      'worktree with: %s' % (branch, _one_line(why),
@@ -243,15 +323,23 @@ def close_landed(root, cfg, branch, merge, session=SESSION):
                                                             branch)))
     elif pm_backend is not None:
         lines.extend(_close_in(pm_backend, pm_root, pm_cfg, branch, merge, session,
-                               lambda *args: backlog_command(pm_root, *args)))
+                               lambda *args: backlog_command(pm_root, *args), named, seen,
+                               quiet))
+    unknown = [rid for rid in named if rid not in seen.held]
+    if unknown and seen.read and not seen.unread:
+        lines.append('NOTE: %s landed, and a Closes trailer of its commits names %s, which no '
+                     'backlog store this landing reads holds (a typo, or a case that differs from '
+                     'the record\'s file name?), so nothing was closed for %s'
+                     % (branch, ', '.join(unknown), 'it' if len(unknown) == 1 else 'them'))
     return lines
 
 
-def _after_put_back(store, rid, branch, command, reason):
+def _after_put_back(store, rid, branch, command, reason, named=False):
     """What is true of `rid` once a refused close was put back, read from the store again: the
     other commit may have closed or removed the record, released it, or left its file
     unreadable. The close command is given only while `branch` still holds the record
-    pulled."""
+    pulled; or, when a `Closes:` trailer of the branch names it (`named`), while anyone does,
+    as _close_plan would close it."""
     try:
         now = store.load().get(rid)
     except (Refusal, OSError) as exc:
@@ -263,25 +351,37 @@ def _after_put_back(store, rid, branch, command, reason):
     if not now.readable:
         return ('%s cannot be read as that commit left it, so it was not closed; see it with: %s'
                 % (rid, command('show', rid)))
-    if now.get('state') == 'pulled' and now.get('pulled_by') == branch:
+    holder = now.get('pulled_by')
+    if now.get('state') == 'pulled' and (named or holder == branch):
         return ('%s is still pulled by %s and was not closed; close it with: %s'
-                % (rid, branch, command('close', rid, '--reason', '"%s"' % reason)))
-    return ('%s is now %s and no longer pulled by %s, so it was not closed; see it with: %s'
-            % (rid, now.get('state') or 'in an unreadable state', branch, command('show', rid)))
+                % (rid, holder or '?', command('close', rid, '--reason', '"%s"' % reason)))
+    return ('%s is now %s and no longer pulled%s, so it was not closed; see it with: %s'
+            % (rid, now.get('state') or 'in an unreadable state',
+               '' if named else ' by %s' % branch, command('show', rid)))
 
 
-def _close_in(backend, root, cfg, branch, merge, session, command):
+def _close_in(backend, root, cfg, branch, merge, session, command, named=(), seen=None,
+              quiet=()):
     """close_landed for one store: `backend` of the repository or worktree `root` with `cfg`;
-    `command(*args)` is the printed command line for a write the landing could not make."""
+    `command(*args)` is the printed command line for a write the landing could not make. `named`:
+    the ids the branch's `Closes:` trailers name; one this store does not hold is another store's
+    or none (close_landed's NOTE, from `seen`, a _Seen); one it holds and not pulled is a WARNING
+    naming the command; one pulled by a branch that is neither main nor a dead pull (no local,
+    remote-tracking or worktree branch by that name: offer.live_branches) is closed, with a
+    WARNING that the holder's builder must be told, unless the holder is in `quiet` (the code
+    repository's mains and the batch's branches: _live_holder_warning)."""
+    seen = seen if seen is not None else _Seen()
     reason = 'landed %s' % merge
     unread = backlog_command(root, 'landable', branch)
     if getattr(backend, 'remote', None):
         remote_tip, why = refs.ls_remote(backend.remote, backend.remote_ref, root,
                                          timeout=FETCH_TIMEOUT)
         if remote_tip is None:
+            seen.unread = True
             return [_store_unread(branch, '%s on %s: %s' % (backend.remote_ref, backend.remote,
                                                             why), unread)]
         if not remote_tip:
+            seen.read += 1                  # no store, so it holds none of them
             return []                       # no store: create none, add no refspec
     section = cfg.section('backlog')
     store = smod.Store(backend, rmod.Rules(section['id_grammar'], section['phases']),
@@ -290,15 +390,41 @@ def _close_in(backend, root, cfg, branch, merge, session, command):
         snap = store.load()
         smod.require_readable(snap)
     except Refusal as exc:
+        seen.unread = True
         return [_store_unread(branch, '%s: %s' % (exc.label, exc), unread)]
-    held = sorted(r.stem for r in snap.readable           # the store's lookup key (Snapshot.by_id)
-                  if r.get('state') == 'pulled' and r.get('pulled_by') == branch)
+    seen.read += 1
+    seen.held.update(rid for rid in named if snap.get(rid) is not None)
+    held = set(r.stem for r in snap.readable               # the store's lookup key (Snapshot.by_id)
+               if r.get('state') == 'pulled' and r.get('pulled_by') == branch)
+
+    def close_args(rid):
+        args = ['close', rid, '--reason', '"%s"' % reason]
+        rec = snap.get(rid)
+        if rec is not None and rmod.is_owner_held(rec):
+            args += ['--ruling', 'R-nnnn']          # his ruling ends the hold (plan_close)
+        return args
+
+    lines = []
+    by_trailer = {}                         # id -> its pulled_by, for a record held by another
+    for rid in named:
+        rec = snap.get(rid)
+        if rec is None or rid in held:
+            continue
+        if rec.get('state') != 'pulled':
+            lines.append('WARNING: %s landed, and a Closes trailer of its commits names %s, which '
+                         'is %s, not pulled, so it was not closed; close it with: %s'
+                         % (branch, rid, rec.get('state') or '?', command(*close_args(rid))))
+            continue
+        by_trailer[rid] = rec.get('pulled_by') or '?'
     ctx = pmod.Context(store, root, remote=cfg.remote, main_branch=cfg.main_branch, branch=branch)
     folder = isinstance(backend, smod.MainBackend)
-    lines = []
-    for rid in held:
+    live = []                               # offer.live_branches' answer, once it is needed
+    for rid in sorted(held | set(by_trailer)):
+        how = (', which a Closes trailer of its commits names' if rid in by_trailer
+               else ', which it holds pulled')
         try:
-            change, tip = store.write(_close_plan(ctx, rid, branch, reason))
+            change, tip = store.write(_close_plan(ctx, rid, branch, reason,
+                                                  named=rid in by_trailer))
         except Overtaken as exc:            # another commit changed the record: never blind
             if exc.left:                    # a file the close could not put back to HEAD
                 lines.append('WARNING: %s landed, and the close of %s in the backlog store %s was '
@@ -310,7 +436,8 @@ def _close_in(backend, root, cfg, branch, merge, session, command):
                 lines.append('WARNING: %s landed, and the close of %s in the backlog store %s was '
                              'refused and its files were put back (%s: %s); %s'
                              % (branch, rid, backend.describe(), exc.label, _one_line(str(exc)),
-                                _after_put_back(store, rid, branch, command, reason)))
+                                _after_put_back(store, rid, branch, command, reason,
+                                                named=rid in by_trailer)))
             continue
         except Uncommitted as exc:          # deleted in the PM data worktree, its commit failed
             lines.append('WARNING: %s landed, and %s was closed in the backlog store %s but not '
@@ -318,35 +445,70 @@ def _close_in(backend, root, cfg, branch, merge, session, command):
                          % (branch, rid, backend.describe(), _one_line(str(exc)),
                             command('catch-up', '--apply',
                                     smod.quoted(exc.paths or [backend.path_of(rid)]))))
+            if rid in by_trailer:           # closed all the same: its holder must be told
+                lines.extend(_live_holder_warning(branch, rid, by_trailer[rid], cfg, live, root,
+                                                  quiet))
             continue
         except IndexStale as exc:           # committed; only that worktree's index is behind
             lines.append('WARNING: %s landed, and %s was closed in the backlog store %s (%s); '
                          'repair the index with: %s'
                          % (branch, rid, backend.describe(), _one_line(str(exc)), exc.repair))
+            if rid in by_trailer:
+                lines.extend(_live_holder_warning(branch, rid, by_trailer[rid], cfg, live, root,
+                                                  quiet))
+            continue
+        except Dirty as exc:                # another session's uncommitted change: never over it
+            first = ('repair the index with: %s, then' % exc.repair if exc.repair
+                     else 'once that change is committed or put back,')
+            lines.append('WARNING: %s landed, and %s%s, was not closed (%s: %s); %s close it '
+                         'with: %s'
+                         % (branch, rid, how, exc.label, _one_line(str(exc)), first,
+                            command(*close_args(rid))))
             continue
         except Exception as exc:            # one record's failure never stops the others
             what = ('%s: %s' % (exc.label, exc) if isinstance(exc, Refusal)
                     else '%s: %s' % (type(exc).__name__, exc))
-            args = ['close', rid, '--reason', '"%s"' % reason]
-            rec = snap.get(rid)
-            if rec is not None and rmod.is_owner_held(rec):
-                args += ['--ruling', 'R-nnnn']      # his ruling ends the hold (plan_close)
-            lines.append('WARNING: %s landed, and %s, which it holds pulled, was not closed (%s); '
-                         'close it with: %s' % (branch, rid, _one_line(what), command(*args)))
+            lines.append('WARNING: %s landed, and %s%s, was not closed (%s); close it with: %s'
+                         % (branch, rid, how, _one_line(what), command(*close_args(rid))))
             continue
         if not change.writes:
             lines.extend(change.lines)
             continue
+        whose = ('; named by a Closes trailer of %s; it was pulled by %s' % (branch, by_trailer[rid])
+                 if rid in by_trailer else '')
         if folder:
-            lines.append('closed %s in the backlog store %s: %s (%s)'
+            lines.append('closed %s in the backlog store %s: %s (%s)%s'
                          % (rid, backend.describe(), reason,
                             'committed %s' % tip[:10] if tip
-                            else 'the record file is deleted, not committed'))
+                            else 'the record file is deleted, not committed', whose))
         else:
-            lines.append('closed %s in the backlog store: %s (store at %s)'
-                         % (rid, reason, (tip or '?')[:10]))
+            lines.append('closed %s in the backlog store: %s (store at %s)%s'
+                         % (rid, reason, (tip or '?')[:10], whose))
         lines.extend('  ' + line for line in change.lines if line != 'CLOSED %s' % rid)
+        if rid in by_trailer:
+            lines.extend(_live_holder_warning(branch, rid, by_trailer[rid], cfg, live, root,
+                                              quiet))
     return lines
+
+
+def _live_holder_warning(branch, rid, holder, cfg, live, root, quiet=()):
+    """[] when `holder`, who had `rid` pulled before a Closes trailer of `branch` closed it, is
+    the landed branch, the store's main branch or one in `quiet` (the code repository's mains: a
+    pull made in the main checkout; a branch of the same batch), unnamed, or a dead pull (git
+    answered and no branch has that name); else the WARNING that the holder's builder must be
+    told. `live`: offer.live_branches' answer, filled on first use; a probe that fails counts the
+    holder live (fail toward telling)."""
+    if holder in (branch, cfg.main_branch, '?', '') or holder in quiet:
+        return []
+    if not live:
+        live.extend(offer.live_branches(root, cfg.remote))
+    names, why = live
+    if names is not None and holder not in names:
+        return []
+    probe = ('' if names is not None else
+             ' (git could not tell whether that branch is still live: %s)' % _one_line(why))
+    return ['WARNING: %s landed, and its Closes trailer closed %s while %s holds it pulled%s; '
+            'tell the builder of %s that %s is closed' % (branch, rid, holder, probe, holder, rid)]
 
 
 def landable_commands(root, cfg, branch):

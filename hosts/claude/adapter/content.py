@@ -15,7 +15,7 @@ docs/multi-host-plan.md section 7).
 manifests(kit, content) writes the files that carry the kit's one version (kit.json; ARCHITECTURE.md
 "Packaging"), each JSON with indent 2 and a final newline:
 - `.claude-plugin/plugin.json`: kit.json's name and version, every agent file, SKILLS_REL (the
-  kit's own `content/skills/`), HOOKS_REL and the machine-lock MCP server. It stays at the kit
+  kit's own `content/skills/`), HOOKS_REL and the MCP servers (MCP_SERVERS: the machine lock's and the hub's). It stays at the kit
   root: the plugin root is the whole kit, since its hooks and MCP server run kitlib and tools beside them (${CLAUDE_PLUGIN_ROOT}).
 - `.claude-plugin/marketplace.json`: the checkout as a local marketplace of that one plugin
   (`"source": "./"`), its version as `metadata.version`.
@@ -41,8 +41,8 @@ MANIFEST_REL = '.claude-plugin/plugin.json'
 MARKETPLACE_REL = '.claude-plugin/marketplace.json'
 PLUGIN_ROOT = '${CLAUDE_PLUGIN_ROOT}'
 DESCRIPTION = ('The PM kit as a Claude Code plugin (ARCHITECTURE.md, Packaging): the agents rendered into '
-               'hosts/claude/shell/agents/, the skills in content/skills/, its hooks and the machine lock MCP '
-               'server; templates, optional tools and knowledge ship beside them (docs/shipping.md). '
+               'hosts/claude/shell/agents/, the skills in content/skills/, its hooks and the machine lock and hub '
+               'MCP servers; templates, optional tools and knowledge ship beside them (docs/shipping.md). '
                'Rendered from kit.json and content/ by tools/render_content.py; never edit it by hand.')
 ENTRY = 'boot/hook.py'
 # The plugin's hooks: (event, matcher or None, the part boot/hook.py runs or None). The kit header
@@ -53,7 +53,8 @@ HOOKS = (
     ('SessionStart', 'startup|resume|compact', 'coordinator'),
     ('SubagentStart', None, None),
 )
-MCP_SERVERS = {'machine-lock': {'command': 'python', 'args': [PLUGIN_ROOT + '/mcp/lock_server.py']}}
+MCP_SERVERS = {'machine-lock': {'command': 'python', 'args': [PLUGIN_ROOT + '/mcp/lock_server.py']},
+               'hub': {'command': 'python', 'args': [PLUGIN_ROOT + '/mcp/hub_server.py']}}
 TOOLS = {
     'read': 'Read', 'edit': 'Edit', 'write': 'Write', 'search': 'Grep', 'find': 'Glob',
     'bash': 'Bash', 'powershell': 'PowerShell', 'worktree': 'EnterWorktree', 'artifact': 'Artifact',
@@ -190,7 +191,7 @@ class ClaudeContent:
                            'Plugin install).',
             'owner': {'name': 'PM kit'}, 'metadata': {'version': kit['version']},
             'plugins': [{'name': kit['name'], 'source': './',
-                         'description': 'The PM kit: agents, skills and the machine lock MCP server.'}],
+                         'description': 'The PM kit: agents, skills and the machine lock and hub MCP servers.'}],
         }
         dump = lambda data: (json.dumps(data, indent=2) + '\n').encode('utf-8')     # noqa: E731
         return {MANIFEST_REL: dump(plugin), MARKETPLACE_REL: dump(market),

@@ -4,14 +4,14 @@ section 1 "Hub store format").
 Layout under the store folder `root` (the caller resolves it; nothing here reads config):
 
     <root>/<collection>/<id>.json   one document: its fields, sorted keys, 2-space indent, UTF-8,
-                                    one final newline (the text kitlib.hubmirror writes, so a
-                                    mirror folder opens as a store with no conversion), plus the
-                                    store's own `version` (int) and `updated_at`; a document with
-                                    no `version` (a mirror file) is at version 0
+                                    one final newline (the text the old hub's data folder
+                                    holds, so that folder opens as a store with no conversion),
+                                    plus the store's own `version` (int) and `updated_at`; a
+                                    document with no `version` (an old-hub file) is at version 0
     <root>/_meta.json               {revision, counters: {Q, M, T, P, S}}
     <root>/_store.lock              the single-writer lock (below); never a document
 
-Only schema.COLLECTIONS are read and written; any other folder (parked/ from the mirror) is left
+Only schema.COLLECTIONS are read and written; any other folder (parked/ from the old hub) is left
 alone.
 
 One writer. Store.open takes kitlib.dailyfull.treelock.TreeLock on `_store.lock` for the life of
@@ -43,7 +43,7 @@ one (Alpha beside alpha) is refused, HubError invalid.
 Revision and versions. `revision` counts writes over the store's life; it can skip a number.
 Each document's `version` counts its own writes. `if_version` pins a write: None writes
 unconditionally, an int must equal the document's version, and 0 matches a document that does
-not exist yet or that the store has never written (a mirror file); a mismatch is HubError
+not exist yet or that the store has never written (an old-hub file); a mismatch is HubError
 conflict. put creates or replaces; update merges top-level
 keys and delete removes, both HubError not_found on a missing document.
 
@@ -107,8 +107,7 @@ class StoreBusy(HubError):
 
 
 def normal_text(fields):
-    """A document's file text: sorted keys, 2-space indent, UTF-8 kept, one final newline (the
-    same text kitlib.hubmirror.normal_text gives, kept here as that module retires)."""
+    """A document's file text: sorted keys, 2-space indent, UTF-8 kept, one final newline."""
     return json.dumps(fields, indent=2, sort_keys=True, ensure_ascii=False) + '\n'
 
 

@@ -116,8 +116,8 @@ class FakeHost(object):
     sweep_report = ('claude/p/old-session  4.0 days  would',)        # the sweep dry run's lines
     sweep_error = None                                               # raised by sweep_dry_run when set
 
-    def sweep_dry_run(self, kit):
-        self.calls.append(('sweep-dry-run', kit))
+    def sweep_dry_run(self, kit, home=None):
+        self.calls.append(('sweep-dry-run', kit, home))
         if self.sweep_error:
             raise self.sweep_error
         return list(self.sweep_report)

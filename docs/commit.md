@@ -33,6 +33,10 @@ The message is the subject, then the body, then the trailers:
 - An `--owner-authored` commit carries `Owner-Authored: yes` instead of `Co-Authored-By`.
 - The model comes from `--model`, else `CLAUDE_AGENT_MODEL`. A blank value counts as unset.
 - `"Claude "` is added unless the name is a `"commit".coauthor_families` family, or starts with one followed by a space, `.` or `-`.
+- The session line comes last (`kitlib.commit.session_lines`). Lines of the form `<key>: <value>` that end the body, `<key>` being a host's `attribution.session_trailer` key in `hosts.json` (`Claude-Session`), are taken out of the body and written in the trailer block, where git reads them as trailers. This holds with or without the environment variable below, so a `-b "...~~Claude-Session: <url>"` is a trailer, not a body line. The same line anywhere else in the body stays in the body.
+  - With no such line, an agent's commit on Claude gets `Claude-Session: https://claude.ai/code/<id>`, `<id>` being `CLAUDE_CODE_BRIDGE_SESSION_ID`. Nothing is written when that variable is unset, blank, or not a plain id (letters, digits, `_`, `-`).
+  - The URL prefix and the variable name are harness facts observed on 2026-10-14, not a documented contract. A host change to either is a `hosts.json` edit.
+  - An `--owner-authored` commit gets no session line from the environment. Codex has no session trailer (`"session_trailer": null`).
 - The body comes from `-b TEXT`, where a typed `\n` becomes a newline (`~~` also becomes a newline; for a literal `~~` use --body-file), or from `--body-file FILE`, read as UTF-8 with CRLF changed to LF.
   - `-m` takes the subject once; a second `-m` is a usage error (exit 2) pointing at `-b` / `--body-file`, and nothing is committed.
   - A `-b` whose whole value names an existing file, or looks like an absolute path, is a usage error.

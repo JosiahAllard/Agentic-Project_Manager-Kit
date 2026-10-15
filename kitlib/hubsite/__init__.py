@@ -13,6 +13,7 @@
   tunnel   the listener a tunnel program points at: its Cloudflare Access gate, its write source
   serve    the server: the store, the api, the views and the listeners, started and closed
   client   the client of the hub server on this machine: one call, its refusal, the exit codes
-  migrate  the earlier hub's documents (the mirror folder, an export) copied into the store
+  migrate  the earlier hub's documents (the old hub's data folder, an export) copied into the store
   autostart the opt-in scheduled task that starts the server at sign-in (hub.py setup --autostart)
+  control  hub.py stop and restart: ask the server to close, wait for it, start the task again
 """

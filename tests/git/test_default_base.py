@@ -9,7 +9,6 @@ from kitlib.docs import budget
 from kitlib.git import cmd, refs
 from kitlib.preflight import settings as pfsettings
 from kitlib.reviewpack import _pack
-from kitlib.rulingcites import check as cites_check
 from kitlib.worktree import new as newwt
 from tests import gitfixture
 from tests.home import no_machine_owner
@@ -100,16 +99,6 @@ class Callers(unittest.TestCase):
         text = '\n'.join(lines)
         self.assertNotIn('measuring against', text)
         self.assertIn('base     main @ %s' % self.repo.initial[:7], text)
-
-    def test_ruling_cites_names_the_base(self):
-        with mock.patch('kitlib.rulingcites.ledgermod.read_entries', return_value=([], None)), \
-                mock.patch('kitlib.rulingcites.added_lines', return_value={}) as added:
-            outcome = cites_check(self.repo.root, ledger='ledger.md')
-            explicit = cites_check(self.repo.root, base='main', ledger='ledger.md')
-        self.assertEqual(added.call_args_list, [mock.call(self.repo.root, TRACKING),
-                                                mock.call(self.repo.root, 'main')])
-        self.assertIn('measuring against', outcome.lines[0])
-        self.assertNotIn('measuring against', '\n'.join(explicit.lines))
 
 
 class PreflightMeasure(unittest.TestCase):

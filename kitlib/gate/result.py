@@ -22,8 +22,8 @@ The record (SCHEMA 1), every key always present:
   run_id          one run's id: the running record and its final record share it
   started_at      when the run started; finished_at when it ended, or null while running
                   (UTC, YYYY-MM-DDTHH:MM:SSZ)
-  verdict         running; or final: pass, fail, refused, stuck, busy, usage, landed-ungated (a
-                  landing that landed with commits on top no gate saw; exit LANDED_UNGATED),
+  verdict         running; or final: pass, fail, refused, stuck, busy, usage, landed-ungated (an
+                  old record's only: exit LANDED_UNGATED is retired, no landing writes it),
                   not-run (a machine lock refusal), error (an exception or Ctrl+C ended the run)
   code            the exit code gate.py gives that outcome; null for running and error
   log             the run's log folder, or null

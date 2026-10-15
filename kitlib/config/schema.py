@@ -123,7 +123,7 @@ RUNNER = Obj({
 
 SECTIONS = {
     'repo': {
-        'name': Field(Str(nonempty=False), '', 'repository name for reports and the ledger; unset or empty: the last part of the remote\'s URL, else the main checkout\'s folder name (the ledger reads a written name only)'),
+        'name': Field(Str(nonempty=False), '', 'repository name for reports; unset or empty: the last part of the remote\'s URL, else the main checkout\'s folder name'),
         'main_branch': Field(Str(), 'main', 'the branch landings target; unset: the branch <remote>/HEAD names, else main, else master when only that exists (docs/kit-json.md "With no file")'),
         'remote': Field(Str(), 'origin', 'the remote main is pushed to'),
         'worktrees_dir': Field(RelPath(), registry.default_profile().worktrees_directory,
@@ -154,7 +154,6 @@ SECTIONS = {
                        'the record store: ref (refs/backlog/main), branch (the backlog branch), main (docs/backlog) or a folder (docs/backlog.md)'),
         'phases': Field(Strs, [], 'phase names in order'),
         'id_grammar': Field(Enum('upper', 'mixed'), 'upper', 'item id spelling'),
-        'ledger_repo': Field(Str(), None, 'the ledger repo column; default the repo name'),
         'code_main': Field(Str(), None, 'the branch code lands on, which `add --found-on` measures a branch\'s diff from; default repo.main_branch'),
     },
     'board': {
@@ -269,10 +268,6 @@ SECTIONS = {
     'review_pack': {
         'coauthor': Field(Bool(), False, 'list the branch\'s commits with no Co-Authored-By trailer, judged by the trailers rule; a failing one blocks'),
     },
-    'ruling_cites': {
-        'repo': Field(Str(), None, 'the ledger repo column cited'),
-        'skip': Field(Strs, None, 'globs of paths not checked; unset: <tools_dir>/test_*.py and <tools_dir>/fixtures/*'),
-    },
     'stubs': {
         'tools': Field(Strs, None, 'kit tools stubbed into the repo; stubs are opt-in (none by default), and setting this opts in'),
     },
@@ -327,7 +322,10 @@ MAPS = {'roles': (ROLE, 'role', 'agent type (or main, subagent) -> permissions, 
 
 # Keys no tool reads any more, per section. A config that still carries one loads: the key is
 # dropped unchecked (not an unknown-key refusal), so an install written before the removal works.
-RETIRED = {'backlog': ('retired_docs', 'rename_script')}
+RETIRED = {'backlog': ('retired_docs', 'rename_script', 'ledger_repo')}
+# Whole sections no tool reads any more. A config that still carries one loads: the section is
+# dropped unchecked, whatever it holds. Any other unknown section still refuses.
+RETIRED_SECTIONS = ('ruling_cites',)
 
 
 def section_type(name):

@@ -45,7 +45,9 @@ from kitlib.proc.job import Job, JobError, cores_text
 
 POOLS, PICK = lay.POOLS, qm.PICK
 NEST_ENV = "MACHINE_LOCK_RUN"
-NEST_RE = re.compile(r"^(r-\d{8}T\d{6}Z-[0-9a-f]{6}):(\d+):(\d+)$")
+RUN_ID_RE = re.compile(r"r-\d{8}T\d{6}Z-[0-9a-f]{6}")   # store.new_id("r")
+NEST_RE = re.compile(r"^(%s):(\d+):(\d+)$" % RUN_ID_RE.pattern)
+CLAIM_TRIES = 16            # claim_id: how many ids it draws before it gives up
 ORIGIN_ENV = "MACHINE_LOCK_ORIGIN"      # a detached run's launcher ancestry, pid:ctime;...
 BG_ENV = "MACHINE_LOCK_BG"
 CPUSET_ENV, CPUMASK_ENV, CPUS_ENV = "MACHINE_LOCK_CPUSET", "MACHINE_LOCK_CPUMASK", "MACHINE_LOCK_CPUS"
@@ -224,8 +226,55 @@ class Usage:
                 "cpu_cores_now": round(self.now_cores, 2), "mem_mb_now": int(self.now_mem // 2**20)}
 
 
+def check_run_id(rid):
+    """Raises LockError (usage, exit 2) unless rid is None or shaped as store.new_id("r") makes a
+    run id: a given id names files under the store, so nothing else may reach a path."""
+    if rid is not None and not (isinstance(rid, str) and RUN_ID_RE.fullmatch(rid)):
+        raise LockError(EXIT_USAGE, "usage: %r is not a run id (r-<UTC second>-<6 hex>)" % (rid,))
+
+
+def id_left(store, rid):
+    """The first file of an earlier run with id rid still in the store (its record, stop file,
+    ended record or background folder), or None."""
+    for p in (store.path("active", rid + ".json"), store.path("active", rid + ".stop"),
+              store.path("ended", rid + ".json"), store.path("background", rid + ".d")):
+        if os.path.lexists(p):
+            return p
+    return None
+
+
+def claim_id(store, rid=None, tries=CLAIM_TRIES):
+    """(id, its run mutex, held): the id a new run takes, claimed before any of its records exist.
+    An id is taken while another holds its run mutex or anything of an earlier run with it is
+    left (id_left). The files are looked at once the mutex is held: no live run then has the id,
+    and a run that had it wrote its ended record before it let the mutex go (settle). A drawn id
+    that is taken is drawn again, up to `tries` times; a given one (rid, as --detached-id) is
+    refused. Raises LockError: usage (exit 2) for a rid not shaped as a run id, exit 10 when no id
+    is had. A refusal writes nothing."""
+    check_run_id(rid)
+    why = None
+    for _ in range(1 if rid else tries):
+        cand = rid or new_id("r")
+        try:
+            mutex = store.run_mutex(cand)
+        except OSError as e:
+            why = str(e)
+            continue
+        left = id_left(store, cand)
+        if left is None:
+            return cand, mutex
+        mutex.release()
+        why = "%s exists" % left
+    if rid:
+        raise LockError(EXIT_REQUIRE, "require-lock: run id %s is taken (%s); the command was "
+                                      "not run" % (rid, why))
+    raise LockError(EXIT_REQUIRE, "require-lock: no free run id in %d draws (the last: %s); the "
+                                  "command was not run" % (tries, why))
+
+
 class Run:
-    """A run's record, active/<id>.json while it lives, ended/<id>.json after."""
+    """A run's record, active/<id>.json while it lives, ended/<id>.json after. Its id comes from
+    claim_id (book, run_background); one made here is not checked against the store."""
 
     def __init__(self, store, L, repo, slug, kind, note, cmd, state, rid=None, detached=False,
                  env=None, log=None):
@@ -315,14 +364,16 @@ def pin_fields(job):
 
 
 # ------------------------------------------------------------------ waiting for a turn
-def acquire(store, run, L, need, wait_s, no_wait, prefer=None):
+def acquire(store, run, L, need, wait_s, no_wait, prefer=None, within=None):
     """Waits for run's turn in the queue and returns {pool: [slot]} once it holds `need`
     (its entry and record name them). Raises LockError with its entry gone: 11 when a strong
     hold (owner or game) leaves it too few for its wait, or its own whole hold is over or has
     not started; 6 (--no-wait) or 8 when agent holds or runs do; 10 when the queue or the holds
     cannot be read before it joined; 1 when stop cancelled it. It never starts on a slot a hold but its own
     covers within its expected time; one they leave too few of keeps its place, parked. With
-    no_wait it waits only for background runs to yield. prefer: its hold's slots."""
+    no_wait it waits only for background runs to yield. prefer: its hold's slots. within: {pool:
+    the only slots it may take} (book's within): its entry carries it (kitlib.lock.queue.plan)
+    and only holds over those slots park it."""
     s, say = store.settings, store.say
     deadline = time.monotonic() + (0 if no_wait else math.inf if wait_s is None else wait_s)
     span, hid = run.rec["expect_s"], run.rec.get("hold")
@@ -366,7 +417,8 @@ def acquire(store, run, L, need, wait_s, no_wait, prefer=None):
             raise LockError(EXIT_RESERVED, "refused: owner hold %s (quiet hours) is over or was "
                             "ended, and run %s runs only inside it (--hold). Exit 11."
                             % (hid, run.id))
-        cover, blocking, ablocking = hl.cover_plan(store, L, need, span, own=hid, hs=hs)
+        cover, blocking, ablocking = hl.cover_plan(store, L, need, span, own=hid, hs=hs,
+                                                   within=within)
         park, clear, why_kind = [], None, None
         if whole and h["_start"] > now:
             park, clear, why_kind = [h], h["_start"], "start"
@@ -424,6 +476,8 @@ def acquire(store, run, L, need, wait_s, no_wait, prefer=None):
                          clear_at=clear.timestamp() if park else None,
                          avoid_after={p: sorted(i for i, x in cover[p].items() if x["id"] not in ids)
                                       for p in POOLS if cover.get(p)} if park else {})
+                if within:
+                    e["within"] = within
                 planned = qm.plan(L, q)[0]
                 info = planned[run.id]
                 held = qm.holders(L, q, run.id)
@@ -668,7 +722,8 @@ class Slot:
         self.env.pop(ORIGIN_ENV, None)
         # Only the command start(give_back=True) starts may give slots back (kitlib.lock.giveback).
         self.env.pop(gbk.GIVE_ENV, None)
-        self.offer, self.offer_bad, self.given = None, 0, []
+        # ack_due: a give-back's ack (the record's given_back) is still to be written.
+        self.offer, self.offer_bad, self.given, self.ack_due = None, 0, [], False
         # The window monitor (start, watch_stop) and what it saw: None until it stops.
         self.watch, self.windows, self.windows_error, self.windows_gone = None, None, None, 0
         mask = None
@@ -832,9 +887,15 @@ class Slot:
 
     def serve_give_back(self):
         """Does the offered command's give-back request, if one waits (kitlib.lock.giveback):
-        narrow the job, then the record, then the queue entry; else refuse, changing nothing.
+        narrow the job, then the record, then the queue entry, then the ack; else refuse,
+        changing nothing. First it writes an ack an earlier poll could not.
         Returns why it was refused, or None. Never raises: a failure refuses."""
         req = {}
+        if self.ack_due:
+            # A give-back is done but its ack write failed: the record in memory carries it.
+            with contextlib.suppress(OSError):
+                self.run.save()
+                self.ack_due = False
         try:
             req = gbk.read_request(self.offer) if self.offer else None
             if req is None:
@@ -869,11 +930,12 @@ class Slot:
         given = sorted(set(self.given) | set(req["cpu"]))
         env = dict(self.env)
         export_threads(env, self.job)
-        done = dict(pin_fields(self.job), given_back={
-            "id": req["id"], "cpu": given, "cores": keep, "cpumask": env[CPUMASK_ENV],
-            "cpuset": env[CPUSET_ENV], "at": iso()})
+        ack = {"id": req["id"], "cpu": given, "cores": keep, "cpumask": env[CPUMASK_ENV],
+               "cpuset": env[CPUSET_ENV], "at": iso()}
         try:
-            gbk.shrink(self.store, self.run, keep, done)
+            # False: the slots are given back but the ack is not on disk yet; it stays in the
+            # record in memory and serve_give_back writes it again on the next poll.
+            self.ack_due = not gbk.shrink(self.store, self.run, keep, pin_fields(self.job), ack)
         except Exception as e:              # noqa: BLE001 - the queue still holds every slot
             # Widening the job's pin moves its processes back onto every slot (Job.repin).
             if self.job.repin(old):
@@ -1145,9 +1207,57 @@ def _relayout(store, L):
     return cur if lay.valid_layout(cur) and cur["key"] != L["key"] else L
 
 
+def within_of(L, within, kind, need, own, parent, machine):
+    """(the thread list as text, [cpu slot]) of book's within on layout L: the slots whose threads
+    all lie in it. machine: the thread ids this machine has. A thread it names that the owner's
+    division leaves out of every slot is no error; it is just not used. LockError 2 when it is not
+    a thread list, names a thread the machine does not have, holds no whole slot, holds fewer
+    slots than the run takes itself (own), or the run is nested and inherits its parent's cores
+    while they are not all inside it."""
+    try:
+        if isinstance(within, str):
+            ts = lay.parse_threads(within)
+        elif (isinstance(within, (list, tuple, set, frozenset, range)) and within
+              and all(type(t) is int and 0 <= t <= lay.MAX_THREAD for t in within)):
+            ts = sorted(set(within))
+        else:
+            raise ValueError("a thread list is like 8-15,20 (or a list of thread ids), not %r"
+                             % (within,))
+    except ValueError as e:
+        raise LockError(EXIT_USAGE, "usage: --within: %s. Exit 2." % e)
+    text = cpu.mask_text(cpu.bits_mask(ts))
+    stray = [t for t in ts if t not in machine]
+    if stray:
+        raise LockError(EXIT_USAGE, "usage: --within %s: thread%s %s %s not threads of this "
+                                    "machine (it has threads %s). Exit 2." % (
+                                        text, "" if len(stray) == 1 else "s",
+                                        cpu.mask_text(cpu.bits_mask(stray)),
+                                        "is" if len(stray) == 1 else "are",
+                                        cpu.mask_text(cpu.bits_mask(machine))))
+    slots = lay.within_slots(L, ts)
+    if not slots:
+        raise LockError(EXIT_USAGE, "usage: --within %s holds no whole cpu slot (a slot is %d "
+                                    "threads, all of them inside). Exit 2."
+                        % (text, L["cpu_slot_threads"]))
+    if own["cpu"] > len(slots):
+        raise LockError(EXIT_USAGE, "usage: --within %s holds %d whole cpu slot%s (%s), but a %s "
+                                    "run takes %d; ask for fewer with --cores %d or less. Exit 2."
+                        % (text, len(slots), "" if len(slots) == 1 else "s",
+                           lay.slots_text("cpu", slots), kind, own["cpu"], len(slots)))
+    if parent and need["cpu"] and not own["cpu"]:
+        pc = [i for i in parent.get("cores") or [] if type(i) is int]
+        if not pc or not set(pc) <= set(slots):
+            raise LockError(EXIT_USAGE, "usage: nested run refused: it runs on the cores of the "
+                                        "run it is nested in (run %s, %s), and they are not all "
+                                        "inside --within %s; start it outside that run. Exit 2."
+                            % (parent["id"], lay.slots_text("cpu", pc), text))
+    return text, slots
+
+
 def book(kind, repo, slug, cores=None, hold=None, gpu_share=None, wait_s=None, no_wait=False,
          expect_s=None, note=None, on_release_cmd=None, cmd=None, store=None, kinds_table=None,
-         env=None, rid=None, detached=False, log=None, gate=False, resource=None, priority=None):
+         env=None, rid=None, detached=False, log=None, gate=False, resource=None, priority=None,
+         within=None):
     """Waits for a run of kind `kind` for repo/slug to hold its slots and returns its Slot.
     Raises LockError (the CLI's exit code) when it does not. cores: fewer cpu slots than the
     kind's size, 1..that size, never more; the kind's size is its whole number of cores
@@ -1164,7 +1274,10 @@ def book(kind, repo, slug, cores=None, hold=None, gpu_share=None, wait_s=None, n
     entry and record carry it). A nested run naming one its parent does not hold joins the queue
     for it even when the parent covers all it needs. priority "land": its entry plans ahead of
     every ordinary waiting run (kitlib.lock.queue.plan). Library callers only: neither is on the
-    CLI or the MCP server."""
+    CLI or the MCP server. within: the threads the run must stay inside (the CLI's --within: a
+    Linux cpuset list such as '8-15', or global thread ids), e.g. a container's cpuset; it takes
+    only cpu slots whose threads all lie inside (within_of), and waits for those while others are
+    free. The record carries `within` (the list) and `within_slots`; its queue entry `within`."""
     store = store or Store()
     env = dict(os.environ if env is None else env)
     try:
@@ -1191,6 +1304,7 @@ def book(kind, repo, slug, cores=None, hold=None, gpu_share=None, wait_s=None, n
                         % (priority, ", ".join(qm.PRIORITIES)))
     if resource is not None and not (isinstance(resource, str) and resource):
         raise LockError(EXIT_USAGE, "usage: a resource is a non-empty string, not %r" % (resource,))
+    check_run_id(rid)
     L = lay.in_force(store)["layout"]
     try:                            # a size the layout cannot give fails closed
         kinds_mod.check_cap(table, L["agent_cap"])
@@ -1225,30 +1339,40 @@ def book(kind, repo, slug, cores=None, hold=None, gpu_share=None, wait_s=None, n
     own, has, why = nest_need(parent, kind, need)
     if own is None:
         raise LockError(EXIT_USAGE, "usage: nested run refused: %s. Exit 2." % why)
+    wtext = wslots = None
+    if within is not None:
+        if hold:
+            raise LockError(EXIT_USAGE, "usage: --within and --hold do not go together: a run "
+                                        "inside a hold takes the hold's slots. Exit 2.")
+        machine = set(lay.hardware(store)["threads"])
+        wtext, wslots = within_of(L, within, kind, need, own, parent, machine)
     shares = hl.shares_for(k, gpu_share)
     if parent and not any(own.values()) and (resource is None or parent.get("resource") == resource):
         return Slot(store, None, L, own, parent, None, env, on_release_cmd, k, shares, log, gate)
     if own["gpu"] and bg_ancestor(env):
         raise LockError(EXIT_USAGE, "usage: a gpu lock inside a background run would pause that "
                                     "run; refused")
-    run = Run(store, L, repo, slug, kind, note, cmd, "waiting", rid, detached, env, log)
-    hist = None if expect_s is not None else store.history_expect(repo, kind)
-    run.rec.update(expect_s=expect_s if expect_s is not None else hist if hist is not None
-                   else k["warn_min"] * 60,
-                   expect_from="--expect" if expect_s is not None else "history"
-                   if hist is not None else "guide",
-                   need=own, has={p: n for p, n in has.items() if n}, hold=hold,
-                   parent=parent["id"] if parent else None, gpu_share=gpu_share,
-                   **({"gate": True} if gate else {}),
-                   **({"resource": resource} if resource else {}),
-                   **({"priority": priority} if priority else {}))
-    mutex, done, code, how = None, False, EXIT_REQUIRE, "not acquired"
+    # The id first, its run mutex held: an id another run has, live or ended, is never written
+    # over, and a refusal here writes nothing (claim_id).
+    rid, mutex = claim_id(store, rid)
     try:
-        try:
-            mutex = store.run_mutex(run.id)
-        except OSError as e:
-            raise LockError(EXIT_REQUIRE, "require-lock: the run's mutex could not be made (%s); "
-                                          "the command was not run" % e)
+        run = Run(store, L, repo, slug, kind, note, cmd, "waiting", rid, detached, env, log)
+        hist = None if expect_s is not None else store.history_expect(repo, kind)
+        run.rec.update(expect_s=expect_s if expect_s is not None else hist if hist is not None
+                       else k["warn_min"] * 60,
+                       expect_from="--expect" if expect_s is not None else "history"
+                       if hist is not None else "guide",
+                       need=own, has={p: n for p, n in has.items() if n}, hold=hold,
+                       parent=parent["id"] if parent else None, gpu_share=gpu_share,
+                       **({"gate": True} if gate else {}),
+                       **({"resource": resource} if resource else {}),
+                       **({"priority": priority} if priority else {}),
+                       **({"within": wtext, "within_slots": {"cpu": wslots}} if wtext else {}))
+    except BaseException:
+        mutex.release()
+        raise
+    done, code, how = False, EXIT_REQUIRE, "not acquired"
+    try:
         prefer = None
         if hold:
             # The claim first, so the run plans around every hold but its own.
@@ -1282,9 +1406,12 @@ def book(kind, repo, slug, cores=None, hold=None, gpu_share=None, wait_s=None, n
             own, has, why = nest_need(parent, kind, need)
             if own is None:
                 raise LockError(EXIT_USAGE, "usage: nested run refused: %s. Exit 2." % why)
+            if wtext:
+                wtext, wslots = within_of(L, within, kind, need, own, parent, machine)
+                run.save(within=wtext, within_slots={"cpu": wslots})
             run.usage = Usage(L["cpu_slot_threads"], store.settings.usage_sample_s)
             run.save(need=own, has={p: n for p, n in has.items() if n}, layout=lay.slot_key(L))
-        acquire(store, run, L, own, wait_s, no_wait, prefer)
+        acquire(store, run, L, own, wait_s, no_wait, prefer, {"cpu": wslots} if wtext else None)
         if run.rec.get("hold_owner") == "agent":
             hl.claimed(store, run.id, hold)
         how = "not started"

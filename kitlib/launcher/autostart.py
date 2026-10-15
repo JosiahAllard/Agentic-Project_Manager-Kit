@@ -9,9 +9,9 @@ task in place, and the task under its old name, OLD_TASK_NAME, is unregistered i
 switch, W2b). Remove it with: Unregister-ScheduledTask -TaskName '<TASK_NAME>'.
 """
 import os
-import sys
 
 from kitlib.host import registry
+from kitlib.launcher import pythonw as pythonw_mod
 from kitlib.launcher import window
 from kitlib.launcher.settings import LaunchError
 from kitlib.proc import spawn
@@ -65,20 +65,29 @@ def in_worktree(path):
     return False
 
 
-def install(launch_py, python=None, whatif=False, run=spawn.run, isfile=os.path.isfile):
+def install(launch_py, python=None, whatif=False, run=spawn.run, isfile=os.path.isfile, base_prefix=None):
     """Register the task; the lines it says. whatif: print the script, register nothing. Refused
     from a kit worktree: the task would point at a launch.py that goes when the worktree does.
-    Refused, with nothing registered, when the pythonw.exe the task would run is not a file: the
-    task would register and then never start at sign-in. whatif says so in a third line."""
+    The task's pythonw.exe is the one beside `python` when it is given, else the one in this
+    interpreter's base install (kitlib.launcher.pythonw.base_pythonw; `base_prefix` stands in for
+    sys.base_prefix in tests), never a PATH lookup. Refused, with nothing registered, when that
+    pythonw.exe is under WindowsApps (the Store alias) or is not a file: the task would register
+    and then not start at sign-in. whatif says so in a third line."""
     if in_worktree(launch_py):
         raise LaunchError('install-autostart from the main kit checkout, not a worktree: %s' % launch_py)
-    python = python or sys.executable
+    given = python is not None
+    python = python or pythonw_mod.base_pythonw(base_prefix)
     text = task_script(python, launch_py)
     test = 'python "%s" after-reboot --test' % launch_py
     pythonw = pythonw_beside(python)
-    missing = None if isfile(pythonw) else (
-        'no pythonw.exe beside %s (looked for %s): the task runs it so that no console window '
-        'opens at sign-in; nothing registered' % (python, pythonw))
+    if pythonw_mod.under_windows_apps(pythonw):
+        missing = '%s; nothing registered' % pythonw_mod.refusal(pythonw, isfile)
+    elif not isfile(pythonw):
+        where = 'beside %s (looked for %s)' % (python, pythonw) if given else 'at %s' % pythonw
+        missing = ('no pythonw.exe %s: the task runs it so that no console window opens at '
+                   'sign-in; nothing registered' % where)
+    else:
+        missing = None
     if whatif:
         return ['Would run in PowerShell:', '  ' + text] + (
             ['install-autostart would refuse: %s' % missing] if missing else [])

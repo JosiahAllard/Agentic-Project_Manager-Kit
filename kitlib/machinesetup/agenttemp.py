@@ -3,7 +3,8 @@ environment variable AGENT_TEMP naming it, the machine config's `agent_temp_swee
 (optional/agenttemp/agent_temp_sweep.py) reads, and the scheduled task that runs the sweep. Each is
 read first and planned only when it differs. An existing config key or another AGENT_TEMP value is
 noted, never overwritten. The task is registered by default: the change first runs the sweep once
-without --apply (sweep_dry_run) and prints what it would remove, then registers. With
+without --apply (sweep_dry_run) and prints what it would remove, then registers (task_step, after
+the folder's ACL step). With
 `sweep_task` false (--no-sweep-task) a note carries the PowerShell line that registers it instead.
 A task already registered is left as is. Nothing here prints or exits.
 """
@@ -13,7 +14,8 @@ import subprocess
 
 from kitlib.config import ConfigError
 from kitlib.config import user as kuser
-from kitlib.worktree.task import CARRIER, FIND_PYTHONW, NOT_THE_STORE_ALIAS, quoted
+from kitlib.launcher.pythonw import base_pythonw
+from kitlib.worktree.task import CARRIER, NOT_THE_STORE_ALIAS, PYTHONW_IS, quoted
 
 from . import machineconfig
 from .common import Report, is_link, norm
@@ -24,6 +26,8 @@ MAX_AGE_DAYS = 3
 TASK = 'agent-temp-sweep'
 AT = '04:00'
 SWEEP = os.path.join('optional', 'agenttemp', 'agent_temp_sweep.py')
+NOT_A_FILE = ("if (-not (Test-Path -LiteralPath $py -PathType Leaf)) { throw ('no pythonw.exe at ' + $py"
+              " + '; nothing was registered') }")
 
 
 def default_agent_temp(kit):
@@ -35,21 +39,25 @@ def default_agent_temp(kit):
     return drive + '\\' + kuser.TEMP_DIR_NAME
 
 
-def task_line(kit):
+def task_line(kit, pythonw=None):
     """The one PowerShell line that registers TASK: daily at AT as the registering user
     (-RunLevel Limited, -StartWhenAvailable), running `python "<kit>\\SWEEP" --apply` in the kit
     with no console window: the task's program is pythonw.exe running the carrier
     `<kit>\\tools\\<CARRIER>` (kitlib.proc.spawn.carry), which starts the python.exe beside it.
-    It throws, registering nothing, when pythonw is missing or is the Microsoft Store alias."""
+    `pythonw` is written in as a literal path, default the base install's
+    (kitlib.launcher.pythonw.base_pythonw), never a PATH lookup, which finds the Microsoft Store
+    alias first. The line is PowerShell text, so it checks for itself: it throws, registering
+    nothing, when that pythonw is not a file or is under WindowsApps."""
     kit = os.path.normpath(kit)
+    pythonw = pythonw or base_pythonw()
     arg = '"%s" python "%s" --apply' % (os.path.join(kit, 'tools', CARRIER),
                                         os.path.join(kit, SWEEP))
-    return ("%s; %s; Register-ScheduledTask -TaskName %s"
+    return ("%s; %s; %s; Register-ScheduledTask -TaskName %s"
             " -Trigger (New-ScheduledTaskTrigger -Daily -At %s)"
             " -Action (New-ScheduledTaskAction -Execute $py -Argument %s -WorkingDirectory %s)"
             " -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable)"
             " -User $env:USERNAME -RunLevel Limited -Description %s"
-            % (FIND_PYTHONW, NOT_THE_STORE_ALIAS, quoted(TASK), AT, quoted(arg), quoted(kit),
+            % (PYTHONW_IS % quoted(pythonw), NOT_THE_STORE_ALIAS, NOT_A_FILE, quoted(TASK), AT, quoted(arg), quoted(kit),
                quoted('daily sweep of the agents\' temp folder')))
 
 
@@ -177,10 +185,11 @@ def unsafe_dir(d, home, kit=None):
 
 
 def survey(plan, ctx):
-    """Plan the folder, AGENT_TEMP, the config key and the task. (folder, made): the folder the ACL
-    step sets up (None when there is none or a step refused), and whether this run makes it. Every
-    source of the folder passes the sweep's refusals (unsafe_dir) first: the folder gets the config
-    key and an ACL with inheritance removed."""
+    """Plan the folder, AGENT_TEMP and the config key (the task is task_step, planned after the ACL
+    step, so a sweep dry run that stops the run cannot leave the folder without its ACL). (folder,
+    made): the folder the ACL step sets up (None when there is none or a step refused), and whether
+    this run makes it. Every source of the folder passes the sweep's refusals (unsafe_dir) first:
+    the folder gets the config key and an ACL with inheritance removed."""
     folder, source = choose(ctx)
     if not folder:
         plan.note('extras', 'agent temp init skipped: the kit %s is on no drive letter; pass '
@@ -198,7 +207,6 @@ def survey(plan, ctx):
         return None, False
     _env(plan, ctx, folder, source)
     _key(plan, ctx, folder)
-    _task(plan, ctx)
     return folder, made
 
 
@@ -260,23 +268,30 @@ def write_sweep_key(home, snap, folder):
     machineconfig.set_key(home, snap, KEY, {'dir': folder, 'max_age_days': MAX_AGE_DAYS})
 
 
-def sweep_dry_run_argv(kit, python):
-    """The command line of one dry run of the sweep: `python <kit>/SWEEP`, no --apply."""
-    return [python, os.path.join(os.path.normpath(kit), SWEEP)]
+def sweep_dry_run_argv(kit, python, home=None):
+    """The command line of one dry run of the sweep: `python <kit>/SWEEP`, no --apply; with `home`,
+    `--home <home>` so it reads the machine config of the home the run sets up."""
+    argv = [python, os.path.join(os.path.normpath(kit), SWEEP)]
+    return argv + ['--home', home] if home else argv
 
 
 DRY_RUN_TIMEOUT = 120
 
 
-def sweep_dry_run(kit, python, timeout=DRY_RUN_TIMEOUT, run=None):
+def sweep_dry_run(kit, python, timeout=DRY_RUN_TIMEOUT, run=None, home=None):
     """Run the sweep once without --apply (it removes nothing) and return its report lines, so the
-    owner sees what the task's first run would remove before it is registered. RuntimeError when it
-    refuses (exit 2: no config key, a bad config, an unsafe or unlistable folder), exits any way but
-    0 or 3 (3: the process list could not be read, so it would keep every claude/ folder), or takes
-    over `timeout` seconds. run: the tests' subprocess.run."""
+    owner sees what the task's first run would remove before it is registered. `home`: the home
+    folder whose machine config it reads (the sweep's --home; none: the real one). The sweep prints
+    and the lines are read as UTF-8 (PYTHONIOENCODING, errors replaced), not the locale code page,
+    so an entry name outside it cannot fail the run. RuntimeError when it refuses (exit 2: no
+    config key, a bad config, an unsafe or unlistable folder), exits any way but 0 or 3 (3: the
+    process list could not be read, so it would keep every claude/ folder), or takes over `timeout`
+    seconds. run: the tests' subprocess.run."""
     run = run or subprocess.run
+    env = dict(os.environ, PYTHONIOENCODING='utf-8')
     try:
-        r = run(sweep_dry_run_argv(kit, python), capture_output=True, text=True, timeout=timeout,
+        r = run(sweep_dry_run_argv(kit, python, home), capture_output=True, encoding='utf-8',
+                errors='replace', env=env, timeout=timeout,
                 creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     except subprocess.TimeoutExpired:
         raise RuntimeError('the sweep dry run took over %s s' % timeout)
@@ -287,7 +302,9 @@ def sweep_dry_run(kit, python, timeout=DRY_RUN_TIMEOUT, run=None):
     return said
 
 
-def _task(plan, ctx):
+def task_step(plan, ctx):
+    """Plan the sweep task: the dry run, then the registration. Called after survey and the
+    folder's ACL step (extras.survey, extras.acl_step), never before."""
     host = ctx.host
     line = task_line(ctx.kit)
     try:
@@ -306,7 +323,7 @@ def _task(plan, ctx):
         return
 
     def dry_run():
-        said = host.sweep_dry_run(ctx.kit)
+        said = host.sweep_dry_run(ctx.kit, ctx.home)
         return Report('sweep dry run (nothing removed): ' + l for l in said)
 
     plan.add('extras', 'run the sweep once without --apply: %s'

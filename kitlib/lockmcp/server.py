@@ -15,6 +15,7 @@ import traceback
 
 from kitlib.lock import api
 from kitlib.lock.store import ID_RE
+from kitlib import mcpwire
 from kitlib.lockmcp import SERVER_NAME
 
 SERVER_VERSION = "0.1.0"
@@ -266,31 +267,4 @@ class Server:
         return _err(mid, -32601, "method not found: %s" % method)
 
 
-def _ok(mid, result):
-    return {"jsonrpc": "2.0", "id": mid, "result": result}
-
-
-def _err(mid, code, message):
-    return {"jsonrpc": "2.0", "id": mid, "error": {"code": code, "message": message}}
-
-
-def serve(server, rfile, wfile):
-    """Reads one JSON message per line from rfile (binary) and writes each response as one line to
-    wfile (binary) until rfile ends. A line that is not JSON gets a parse error (-32700)."""
-    for raw in iter(rfile.readline, b""):
-        line = raw.strip()
-        if not line:
-            continue
-        try:
-            msg = json.loads(line.decode("utf-8"))
-        except (ValueError, UnicodeDecodeError):
-            resp = _err(None, -32700, "parse error")
-        else:
-            try:
-                resp = server.handle(msg)
-            except Exception as e:        # never down: the client gets an internal error
-                mid = msg.get("id") if isinstance(msg, dict) else None
-                resp = _err(mid, -32603, "internal error: %s: %s" % (type(e).__name__, e))
-        if resp is not None:
-            wfile.write(json.dumps(resp, ensure_ascii=True, default=str).encode("utf-8") + b"\n")
-            wfile.flush()
+_ok, _err, serve = mcpwire.ok, mcpwire.err, mcpwire.serve   # the wire both MCP servers share

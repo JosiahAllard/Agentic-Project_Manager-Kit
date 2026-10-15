@@ -177,7 +177,7 @@ def _hardware(store, L, hw):
             "source": hw.get("source"), "problems": hw.get("problems") or []}
 
 
-def _layout(store, lf, hw):
+def _layout(store, lf, hw, runs):
     L, want = lf["layout"], lf["wanted"]
     try:
         default = lay.default_division(hw)
@@ -191,7 +191,8 @@ def _layout(store, lf, hw):
             "wanted_division": want["division"], "wanted_key": want["key"],
             "owner_division": lay.read_division(store)[0] or {},
             "source": lf["source"], "warning": lf["warning"],
-            "hardware_change": {"pending": lf["pending"], "changed": want["key"] != L["key"]}}
+            "hardware_change": {"pending": lf["pending"], "changed": want["key"] != L["key"]},
+            "other_labels": lay.other_labels(runs, L)}
 
 
 def _usage(r):
@@ -237,7 +238,8 @@ def snapshot(store=None, history_days=7, since=None, until=None):
                                      "since", "held_since", "expect_s", "expect_from", "hold",
                                      "parent", "need", "has", "shares", "pinned", "pin", "pin_note",
                                      "threads", "child", "blocked_by", "detached", "session",
-                                     "releasing", "log", "moved", "resource", "priority")}
+                                     "releasing", "log", "moved", "resource", "priority",
+                                     "within")}
         row.update(cores=qm.entry_holds(L, e, "cpu") if e else r.get("cores") or [],
                    gpus=qm.entry_holds(L, e, "gpu") if e else r.get("gpus") or [],
                    tree=tree, usage=_usage(r),
@@ -295,14 +297,15 @@ def snapshot(store=None, history_days=7, since=None, until=None):
             "expect_s": e.get("expect_s"), "est_start": _epoch_iso(info.get("start")),
             "backfill": bool(info.get("backfill")), "parked": bool(e.get("parked")),
             "blocked_by": e.get("blocked_by"), "hold": e.get("hold"), "moved": e.get("moved"),
-            "resource": qm.entry_resource(e), "priority": qm.entry_priority(e), "why": why})
+            "resource": qm.entry_resource(e), "priority": qm.entry_priority(e),
+            "within_slots": sorted(qm.entry_within(e, "cpu") or []) or None, "why": why})
     try:
         kinds, kerr = kinds_mod.load(store.kinds_path, agent_cap=L["agent_cap"]), None
     except kinds_mod.KindsError as e:
         kinds, kerr = {}, str(e)
     gs = game.state(store, L, hs)
     return {"schema_version": SCHEMA_VERSION, "revision": rev, "at": iso(now), "store": store.root,
-            "hardware": _hardware(store, L, hw), "layout": _layout(store, lf, hw),
+            "hardware": _hardware(store, L, hw), "layout": _layout(store, lf, hw, runs),
             "slots": slots, "runs": run_rows,
             "queue": {"entries": queue_rows if qerr is None else None, "error": qerr},
             "holds": [hl.entry(h, now) for h in hs], "holds_error": herr, "game": gs,
