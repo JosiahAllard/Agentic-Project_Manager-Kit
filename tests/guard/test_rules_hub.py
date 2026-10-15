@@ -785,7 +785,8 @@ class FailClosed(Hub):
 
     def rows(self, rows, deny):
         for shell, line in rows:
-            with self.subTest(line):
+            # a keyword, not the message: a nested session subTest keeps the line in its report
+            with self.subTest(line=line):
                 make = lambda sub, shell=shell, line=line: shell(line, self.w.wt, sub)
                 if deny:
                     self.denied(make, 'hub-owner-verb')
@@ -1248,6 +1249,99 @@ class FailClosed(Hub):
             (bash, '"python" Z:/k/tools/commit.py -C $PWD -m "Hub store: x" a.py'),
         ), False)
 
+    def test_a_separator_inside_one_of_pythons_words(self):
+        # round-6 review item 1: a ; | & or newline the shell keeps inside one of python's words
+        # (quoted, escaped, or inside a nested shell's string) ended the read of the line's text
+        # before python's -m; python's parsed words are read too (rules.hub_word_module_names),
+        # and a line the parser cannot read whole is read past every separator
+        # (rules.HUB_PY_MODULE_ANY_RE)
+        self.rows((
+            (bash, "cd tools && python -X ';' -m hub answer Q-1"),
+            (bash, 'cd tools && python -X a\\;b -m hub answer Q-1'),
+            (bash, "cd tools && python -X 'a|b' -m hub answer Q-1"),
+            (ps, "cd tools && python -X 'a|b' -m hub answer Q-1"),
+            (ps, "cd tools; python -X 'a|b' -m hub answer Q-1"),
+            (ps, 'cmd /c "cd tools && python -X a;b -m hub answer Q-1"'),
+            (bash, 'cmd //c "cd tools && python -X a;b -m hub answer Q-1"'),
+            (bash, "cd tools && python -X 'a&b' -m hub answer Q-1"),
+            (bash, 'cd tools && python -X "a;b" -m hub answer Q-1'),
+            (bash, "cd tools && python -X $'a\\nb' -m hub answer Q-1"),
+            (bash, "cd tools && python -X 'a\nb' -m hub answer Q-1"),
+            (bash, "cd tools && python -W 'a;b' -m hub answer Q-1"),
+            (ps, "cd tools; python -X 'a;b' -m hub answer Q-1"),
+            (ps, 'cd tools; python -X "a;b" -m hub answer Q-1'),
+            (ps, 'cd tools; python -X a`;b -m hub answer Q-1'),
+            # every spelling of python's -m after such a word
+            (bash, "cd tools && python -X ';' -Bm hub answer Q-1"),
+            (bash, "cd tools && python -X ';' -mhub answer Q-1"),
+            (bash, "cd tools && python -X ';' -m 'hub' answer Q-1"),
+            (bash, "cd tools && python -X ';' -m runpy hub answer Q-1"),
+            (bash, "cd tools && python -X ';' -mrunpy hub answer Q-1"),
+            (bash, "cd tools && python -X ';' -m trace --count --module=hub answer Q-1"),
+            (bash, "cd tools && python -X ';' -m trace --count --module hub answer Q-1"),
+            # inside a nested shell's string
+            (bash, 'bash -c "cd tools && python -X \';\' -m hub answer Q-1"'),
+            (ps, 'powershell -Command "cd tools; python -X \'a;b\' -m hub answer Q-1"'),
+            # a quoted word before commit.py is not plain, so the -m after it is python's
+            (bash, "cd tools && python -X 'a b' commit.py -X ';' -m hub answer Q-1"),
+            # Windows PowerShell 5.1 passes a word holding a double quote on unescaped, so python
+            # gets -X a; and then -m hub as words of their own
+            (ps, 'cd tools; python -X \'a;" -m hub "b\' answer Q-1'),
+            # and the program's C runtime drops a quote inside a word: python gets -Bm
+            (ps, 'cd tools; python \'-B"m"\' hub answer Q-1'),
+            # a line the parser cannot read whole (an unclosed quote)
+            (bash, "cd tools && python -X ';' -m hub answer Q-1 \""),
+            (ps, "cd tools; python -X 'a;b' -m hub answer Q-1 \""),
+            # a python in a quoted folder with a space in it
+            (ps, 'cd tools; & "C:\\Program Files\\Python312\\python.exe" -X \'a;b\' -m hub answer Q-1'),
+            (bash, 'cd tools && "C:/Program Files/Python312/python.exe" -X \'a;b\' -m hub answer Q-1'),
+        ), True)
+        # cmd ends a command at an unquoted |, so b, not python, gets -m hub: the guard reads
+        # cmd's string as cmd does and passes it; a | cmd quotes or escapes is python's word
+        self.rows(((ps, 'cmd /c "cd tools && python -X a|b -m hub answer Q-1"'),), False)
+        self.rows((
+            (bash, 'cmd //c \'cd tools && python -X "a|b" -m hub answer Q-1\''),
+            (bash, 'cmd //c \'cd tools && python -X a^|b -m hub answer Q-1\''),
+            (ps, 'cmd /c "cd tools && python -X a^|b -m hub answer Q-1"'),
+            (ps, 'cmd /c \'cd tools && python -X "a|b" -m hub answer Q-1\''),
+            (ps, 'cmd /c "cd tools && python -X a^&b -m hub answer Q-1"'),
+        ), True)
+        # over-reach, fail-closed (round-6 review item 3): a ; glued to a python word is read as cmd
+        # reads it, ending only the command's name, so the next python word counts as python's
+        # argument and commit.py's -m as python's own
+        self.rows(((bash, 'which python; python Z:/k/tools/commit.py -C $PWD -m "Hub store: x" a.py'),), True)
+        # a separator inside a message, or in python's words with no hub module named, passes
+        self.rows((
+            (bash, 'python -X utf8 Z:/k/tools/commit.py -C $PWD -m "Hub store: a; b | c & d" a.py'),
+            (ps, 'python Z:/k/tools/commit.py -C $PWD -m "Hub store: a; b | c" a.py'),
+            (bash, 'python Z:/k/tools/backlog.py add K-1 -m "Hub store; a | b" --summary x'),
+            (bash, "cd tools && python -X utf8 Z:/k/tools/commit.py -X ';' -m hub answer Q-1"),
+            (bash, "cd tools && python -X ';' -m hubby answer Q-1"),
+            (bash, "python -X 'a;b' -m unittest"), (ps, "python -X 'a|b' -m json.tool x.json"),
+        ), False)
+
+    def test_a_python_in_a_quoted_folder_with_a_space(self):
+        # round-6 review item 2: the quote that opens a quoted python path with a space in it is
+        # the parser's own word (rules.hub_quoted_spans), so commit.py's -m after it is a message
+        self.rows((
+            (ps, '& "C:\\Program Files\\Python312\\python.exe" Z:/k/tools/commit.py -C $PWD '
+                 '-m "Hub store: x" a.py'),
+            (ps, '& "C:\\Program Files\\Python312\\python.exe" -X utf8 Z:/k/tools/commit.py -C $PWD '
+                 '-m "Hub store: x" a.py'),
+            (bash, '"C:/Program Files/Python312/python.exe" Z:/k/tools/commit.py -C $PWD -m "Hub store: x" a.py'),
+            (bash, '"C:/Program Files/Python312/python.exe" -X utf8 Z:/k/tools/commit.py -C $PWD '
+                   '-m "Hub store: x" a.py'),
+            (bash, "'C:/Program Files/Python312/python.exe' Z:/k/tools/commit.py -C $PWD -m \"Hub store: x\" a.py"),
+        ), False)
+        # but the folder's python still runs hub as a module, and a quoted run glued after its
+        # closing quote is still read as part of python's own name
+        self.rows((
+            (ps, 'cd tools; & "C:\\Program Files\\Python312\\python.exe" -m hub answer Q-1'),
+            (bash, 'cd tools && "C:/Program Files/Python312/python.exe" -m hub answer Q-1'),
+            (ps, 'cd tools; & "C:\\Program Files\\Python312\\python.exe"" commit.py x" -m hub answer Q-1'),
+            (bash, 'cd tools && "C:/Program Files/Python312/python.exe"" commit.py x" -m hub answer Q-1'),
+        ), True)
+
     def test_backlog_paths_naming_the_hub_tool(self):
         # backlog.py records paths (--scope, --body-file, a positional) and runs none of them, so a
         # path word to hub.py passes there as in commit.py's paths, on every verb
@@ -1456,6 +1550,26 @@ class Plumbing(unittest.TestCase):
     def test_params_do_not_change_equality(self):
         from kitlib.host import Action
         self.assertEqual(Action('mcp', tool='t', params={'a': 1}), Action('mcp', tool='t'))
+
+
+class CrtWords(unittest.TestCase):
+    """rules.hub_crt_words: the C runtime's split of a native program's command-line text."""
+
+    def test_splits(self):
+        from kitlib.guard.rules import hub_crt_words
+        for text, words in (
+                ('a b\tc', ['a', 'b', 'c']),
+                ('"a;" -m hub "b"', ['a;', '-m', 'hub', 'b']),
+                ('a;" -m hub "b', ['a; -m hub b']),
+                ('-B"m"', ['-Bm']),
+                ('"a ""b"" c"', ['a "b" c']),
+                ('a\\\\"b c"', ['a\\b c']),
+                ('a\\"b', ['a"b']),
+                ('a\\b', ['a\\b']),
+                ('""', ['']),
+                ('', [])):
+            with self.subTest(text=text):
+                self.assertEqual(hub_crt_words(text), words)
 
 
 if __name__ == '__main__':
