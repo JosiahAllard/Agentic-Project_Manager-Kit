@@ -63,6 +63,10 @@ Rules, in the order they are checked:
                    data record, and any push from a copy of PM data without one; a remote
                    repointed (git-remote-rewrite) in a repository with one; all in any session
                    but the owner's own
+  git-shared-ref   git update-ref by an agent session (a subagent or a jailed mark but pm) from any
+                   checkout, of a ref other than refs/tmp/<name>, a per-worktree ref, or in a linked
+                   worktree its HEAD and the branch checked out there (never a guarded main); a
+                   ref or a repository the text does not name is refused too
   git-hooks-path   a change of core.hooksPath (git config, git -c, clone -c, GIT_CONFIG_*), in
                    any session
   owner-identity   the owner's email given to a commit, in any session but the owner's own
@@ -3085,6 +3089,7 @@ GIT_LONGS = {
               'unsafe-paths', 'ignore-space-change', 'ignore-whitespace'),
     'stash': ('message', 'patch', 'staged', 'keep-index', 'no-keep-index', 'include-untracked', 'all', 'quiet',
               'pathspec-from-file', 'pathspec-file-nul', 'index'),
+    'update-ref': ('no-deref', 'stdin', 'create-reflog', 'batch-updates'),
 }
 GIT_LONGS['stage'] = GIT_LONGS['add']
 GIT_LONG_VALUES = {'message', 'file', 'author', 'date', 'template', 'reuse-message', 'reedit-message', 'fixup',
@@ -3187,6 +3192,10 @@ def git_rules(event, ctx, cmd, inv, cwd, role):
         return git_push(event, ctx, gc, role)
     if sub == 'branch':
         d = git_branch_delete(ctx, gc, role)
+        if d:
+            return d
+    if sub == 'update-ref':
+        d = git_shared_ref(event, ctx, cmd, gc, cwd, role)    # from any place: every worktree shares refs
         if d:
             return d
     place = ctx.place(gc.dir) if gc.dir and not gc.unknown else \
@@ -3762,18 +3771,230 @@ def ref_delete_hint(ctx, gc, top, cwd, short, longs, pos):
     """(sentence, command) for `git update-ref -d <ref>`, or None. Every worktree of a repository
     shares its refs, so neither a worktree nor the lander carries a ref delete to main: a branch
     goes with git branch -d, which refuses an unmerged one; any other ref is shown, and the PM
-    deletes it. Both run in the session's own worktree of this main checkout when it has one."""
+    deletes it; a guarded main is never offered to branch -d. Both run in the session's own
+    worktree of this main checkout when it has one. None too for a ref git_shared_ref lets any
+    session delete (scratch_ref): only where it runs is wrong, and git_in_worktree says so."""
     if gc.sub != 'update-ref' or 'd' not in short or 'stdin' in longs or gc.blind:
         return None
     ref = pos[0] if pos else None
     name = ref.text if ref is not None and not ref.dyn else None
+    if name and scratch_ref(name):
+        return None
     at = quote(own_worktree(ctx, cwd, top) or top)
     shared = 'Every worktree shares this repository\'s refs, so no worktree or landing carries a ref delete to main.'
     if name and name.startswith('refs/heads/') and len(name) > len('refs/heads/'):
+        branch = name[len('refs/heads/'):]
+        if branch.lower() in main_names(ctx, top):
+            return ('%s %s is the main branch: only a landing moves it, and no session deletes it. To show it:' %
+                    (shared, name), 'git -C %s show-ref %s' % (at, name))
         return ('%s Delete a branch with git branch -d, which refuses an unmerged one; unmerged work goes to '
-                'the PM, never deleted:' % shared, 'git -C %s branch -d %s' % (at, name[len('refs/heads/'):]))
+                'the PM, never deleted:' % shared, 'git -C %s branch -d %s' % (at, branch))
     return ('%s A ref other than a branch is the PM\'s to delete; to show it:' % shared,
             'git -C %s show-ref %s' % (at, name or '<ref>'))
+
+
+# git_shared_ref: the update-ref options it reads (GIT_LONGS['update-ref'] spells the long ones),
+# the refs any agent session may write (scratch_ref), and the names git reads as one loose ref file
+UPDATE_REF_SHORTS = set('mdz')
+PER_WORKTREE_REFS = ('refs/bisect/', 'refs/worktree/', 'refs/rewritten/')
+PSEUDOREF_RE = re.compile(r'^[A-Z][A-Z0-9_]*_HEAD$')
+REF_NAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._/-]*$')
+REF_CHAIN_MAX = 5           # symbolic refs followed before the guard stops reading
+
+
+def ref_name_ok(name):
+    """True for a ref name the guard reads as one file under the repository's git directory: plain
+    characters only, no `..`, empty or dot-led component, and no component ending in .lock or a dot."""
+    if not name or not REF_NAME_RE.match(name):
+        return False
+    parts = name.split('/')
+    return all(p and not p.startswith('.') and not p.endswith('.') and not p.endswith('.lock') for p in parts)
+
+
+def per_worktree_ref(name):
+    """True for a ref git keeps in each worktree's own git directory: HEAD, a <NAME>_HEAD
+    pseudoref, refs/bisect/, refs/worktree/ and refs/rewritten/."""
+    return name == 'HEAD' or bool(PSEUDOREF_RE.match(name)) or name.startswith(PER_WORKTREE_REFS)
+
+
+def scratch_ref(name):
+    """True for a ref any agent session may write or delete from any checkout: refs/tmp/<name>
+    and the per-worktree refs but HEAD."""
+    return ref_name_ok(name) and name != 'HEAD' and (name.startswith('refs/tmp/') or per_worktree_ref(name))
+
+
+def main_names(ctx, where):
+    """The guarded mains of the repository at `where`, lower-cased, main and master always among
+    them (a missing or unreadable .kit.json guards those two)."""
+    names = {'main', 'master'}
+    cfg = ctx.config(where) if where and os.path.isabs(where) else None
+    if cfg is not None:
+        names.update(str(b).lower() for b in _guarded_mains(cfg) if b)
+    return names
+
+
+def shared_ref_held(event, ctx):
+    """True for a session git_shared_ref holds: an agent session (agent_session) but the PM's."""
+    return agent_session(event, ctx) and str(session_mark(event, ctx) or '').lower() != 'pm'
+
+
+def _ref_file(place, name):
+    """(path of the loose file of `name`, None) under the git directory that holds it, or
+    (None, why) when a link inside it carries the path elsewhere."""
+    base = place.git_dir if per_worktree_ref(name) else place.common
+    if not base:
+        return None, 'git gave no git directory for %s' % name
+    path = os.path.join(base, *name.split('/'))
+    want = paths.norm(os.path.join(jail.real(base), *name.split('/')))
+    if jail.real(path) != want:
+        return None, 'a link in the git directory carries %s to %s' % (name, fwd(jail.real(path)))
+    return path, None
+
+
+def _read_ref(path):
+    """(text of the loose ref file, None); ('', None) when there is none; (None, why) when it
+    cannot be read."""
+    try:
+        with open(path, 'rb') as f:
+            return f.read(4096).decode('utf-8', 'replace').strip(), None
+    except FileNotFoundError:
+        return '', None
+    except OSError as e:
+        return None, 'its file cannot be read (%s)' % e
+
+
+def _ref_chain(place, name, deref):
+    """([name, the refs it points to...], None), the refs a write of `name` reaches, or (None,
+    why). Without --no-deref git writes where a symbolic ref points, so each is read in turn."""
+    chain = [name]
+    for _ in range(REF_CHAIN_MAX + 1):
+        path, why = _ref_file(place, chain[-1])
+        if why:
+            return None, why
+        if not deref:
+            return chain, None
+        text, why = _read_ref(path)
+        if text is None:
+            return None, '%s: %s' % (chain[-1], why)
+        if not text:
+            if chain[-1] == 'HEAD':
+                return None, 'the worktree\'s HEAD file %s is missing' % fwd(path)
+            return chain, None
+        if not text.startswith('ref:'):
+            return chain, None
+        target = text[4:].strip()
+        if not ref_name_ok(target):
+            return None, '%s points at %r, a name the guard does not read' % (chain[-1], target)
+        chain.append(target)
+    return None, '%s is a chain of more than %d symbolic refs' % (name, REF_CHAIN_MAX)
+
+
+def _own_branch(ctx, place, at):
+    """The branch checked out in the linked worktree `place` (refs/heads/<name>), or None: a
+    detached or unreadable HEAD, a guarded main, the PM data worktree or one the guard cannot tell."""
+    if place.kind != repo.LINKED or not place.git_dir or ctx.is_pm_data(at) or ctx.pm_data_error(at):
+        return None
+    path, why = _ref_file(place, 'HEAD')
+    text, why = _read_ref(path) if path else (None, why)
+    if not text or not text.startswith('ref:'):
+        return None
+    own = text[4:].strip()
+    if not own.startswith('refs/heads/') or not ref_name_ok(own):
+        return None
+    if own[len('refs/heads/'):].lower() in main_names(ctx, at):
+        return None
+    return own
+
+
+def _ref_ok(name, delete, linked, own):
+    if scratch_ref(name):
+        return True
+    if delete or not linked:
+        return False
+    return name == 'HEAD' or (own is not None and name == own)
+
+
+def _update_ref_unread(gc, short, longs, pos):
+    """Why the guard cannot tell which ref `git update-ref` writes, or None."""
+    if gc.inv is not None and gc.inv.via == 'xargs':
+        return 'xargs adds words the text does not show'
+    if 'stdin' in longs:
+        return 'it reads the refs to write from its input'
+    unknown = sorted(longs - set(GIT_LONGS['update-ref']))
+    if unknown:
+        return 'it gives an option the guard does not read (--%s)' % unknown[0]
+    odd = sorted(short - UPDATE_REF_SHORTS)
+    if odd:
+        return 'it gives an option the guard does not read (-%s)' % odd[0]
+    if not pos:
+        return 'it names no ref'
+    for w in gc.rest:
+        if w.dyn or w.alt is not None or w.synth:
+            return 'a word before the ref holds something only the shell knows (%s)' % w.text
+        if w is pos[0]:
+            break
+    if not ref_name_ok(pos[0].text):
+        return '%r is not a ref name the guard reads' % pos[0].text
+    return None
+
+
+def git_shared_ref(event, ctx, cmd, gc, cwd, role):
+    """`git update-ref` by a held session (shared_ref_held), from any checkout: every worktree of a
+    repository shares its refs, so a worktree reaches main as surely as the main checkout. It may
+    write scratch_ref names, and in a linked worktree its HEAD and the branch checked out there
+    (never a guarded main); it deletes only scratch_ref names. A symbolic ref is judged by every
+    ref it points to (unless --no-deref). A repository whose git directory lies in a temp root
+    (jail.temp_roots) is a scratch repository and is not judged."""
+    if not shared_ref_held(event, ctx):
+        return None
+    text = bare(cmd)
+    short, longs, pos = _opts('update-ref', gc.rest)
+    delete = 'd' in short
+    unread = _update_ref_unread(gc, short, longs, pos)
+    after = False
+    for w in gc.rest:
+        if after and (w.dyn or w.alt is not None or w.synth):
+            delete = True                       # a word only the shell knows may be -d
+        after = after or (bool(pos) and w is pos[0])
+    if not unread and (gc.blind or gc.unknown or not gc.dir):
+        unread = 'the repository it runs in is unknown (%s)' % (gc.blind or 'a directory the text does not name')
+    place = ctx.place(gc.dir) if gc.dir and not gc.unknown and not gc.blind else None
+    if place is not None and place.common and any(
+            jail.inside(jail.real(place.common), jail.real(r)) for r in jail.temp_roots(ctx)):
+        return None
+    if not unread and place.kind not in (repo.MAIN, repo.LINKED):
+        unread = 'git cannot place %s (%s)' % (fwd(gc.dir), place.detail or place.kind)
+    if not unread and place.common and os.path.isdir(os.path.join(place.common, 'reftable')):
+        unread = 'the repository keeps its refs in a reftable, which the guard does not read'
+    top = (ctx.main_top(gc.dir) if gc.dir and not gc.unknown else None) or (place.top if place else None)
+    at = own_worktree(ctx, cwd, top) if top else own_worktree(ctx, cwd)
+    at = at or top or (ctx.main_top(cwd) if cwd else None) or cwd
+    shared = 'every worktree of this repository shares its refs, so a change made from any of them is made for all'
+    allowed = 'An agent session writes refs/tmp/<name> (its scratch space), the per-worktree refs (refs/bisect/, ' \
+              'refs/worktree/, refs/rewritten/, <NAME>_HEAD) and, in its own worktree, HEAD and the branch ' \
+              'checked out there; any other ref is the PM\'s.'
+    if unread:
+        hint = ref_delete_hint(ctx, gc, top or at, cwd, short, longs, pos) if 'd' in short else None
+        if hint:
+            return refuse('git-shared-ref', role, '`%s`: %s, and %s. %s' % (text, unread, shared, hint[0]), hint[1])
+        return refuse('git-shared-ref', role, '`%s`: the guard cannot tell which ref it writes: %s; %s. Name one '
+                      'ref literally. %s To keep a commit in your scratch space:' % (text, unread, shared, allowed),
+                      'git -C %s update-ref refs/tmp/<name> <new-oid>' % quote(at))
+    name = pos[0].text
+    linked = place.kind == repo.LINKED
+    own = _own_branch(ctx, place, gc.dir)
+    chain, why = _ref_chain(place, name, 'no-deref' not in longs)
+    if chain is not None:
+        bad = [r for r in chain if not _ref_ok(r, delete, linked, own)]
+        if not bad:
+            return None
+        why = '%s is not one it may %s' % (bad[0] if bad[0] == name else '%s, where %s points,' % (bad[0], name),
+                                           'delete' if delete else 'write')
+    hint = ref_delete_hint(ctx, gc, top or at, cwd, short, longs, pos) if 'd' in short else None
+    if hint:
+        return refuse('git-shared-ref', role, '`%s` deletes %s: %s. %s' % (text, name, why, hint[0]), hint[1])
+    return refuse('git-shared-ref', role, '`%s` %s %s: %s; %s. %s To show it:' % (
+        text, 'deletes' if delete else 'moves', name, why, shared, allowed), 'git -C %s show-ref %s' % (quote(at), name))
 
 
 def git_unplaced(ctx, cmd, gc, cwd):
