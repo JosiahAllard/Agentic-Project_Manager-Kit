@@ -610,8 +610,9 @@ class Setup(object):
                'commit %s.gitignore,' % ('the stubs, ' if c.stubs else ''),
                '     %s as usual' % usual]
         if self.memory_added:
-            out.append('     The owner commits .claude/settings.json too (its autoMemoryDirectory; '
-                       'docs/pm-first-run.md)')
+            from kitlib.stubs import memory
+            out.append('     The owner commits %s too (its %s; docs/pm-first-run.md)'
+                       % (memory.SETTINGS_REL, memory.KEY))
         tools = os.path.join(c.kit, 'tools')
         if c.stubs:
             out.append('  2. python "%s" check -C "%s"   (exit 0: every stub current)'

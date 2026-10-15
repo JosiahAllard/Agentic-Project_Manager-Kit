@@ -29,12 +29,14 @@ import ntpath
 import os
 import re
 
+from kitlib.host import registry
 from kitlib.machinesetup import settings as jsonfile
 
 KEY = 'autoMemoryDirectory'
 FOLDER = 'Agent-memory'
 OK, OTHER, MISSING, BAD = 'ok', 'other', 'missing', 'bad'
-SETTINGS = ('.claude', 'settings.json')
+SETTINGS = (registry.default_profile().state_directory, 'settings.json')
+SETTINGS_REL = '/'.join(SETTINGS)       # the file as the owner's commit names it
 ABSOLUTE = re.compile(r'^(?:[A-Za-z]:[\\/]|\\\\|//|~[\\/])')
 TMP = '.kit-memory.tmp'
 
@@ -223,7 +225,7 @@ def problem_line(checkout, label=None, override=None, main_top=None, kit=None):
     if m.state == BAD:
         return 'could not check memory (%s): %s' % (label, m.why)
     return ('memory (%s): %s has no %s; its memory folder is %s. Add it: %s (then the owner commits '
-            '.claude/settings.json)' % (label, m.path, KEY, m.want, owner_command(checkout, kit)))
+            '%s)' % (label, m.path, KEY, m.want, owner_command(checkout, kit), SETTINGS_REL))
 
 
 def run(checkout, apply=False, kit=None, override=None, main_top=None):
@@ -245,4 +247,4 @@ def run(checkout, apply=False, kit=None, override=None, main_top=None):
         lines = _apply(m)
     except Refused as e:
         return Outcome(1, ['memory: refused: %s' % e])
-    return Outcome(0, lines + ['memory: the owner commits .claude/settings.json'])
+    return Outcome(0, lines + ['memory: the owner commits %s' % SETTINGS_REL])

@@ -24,7 +24,7 @@ class Value(unittest.TestCase):
     def test_the_root_is_on_the_checkouts_own_drive(self):
         self.assertEqual(memory.memory_root('D:\\work\\proj'), 'D:/Agent-memory')
         self.assertEqual(memory.memory_root('E:\\x'), 'E:/Agent-memory')
-        self.assertEqual(memory.memory_root('d:/GitHub/proj'), 'd:/Agent-memory')
+        self.assertEqual(memory.memory_root('d:/src/proj'), 'd:/Agent-memory')
 
     def test_a_unc_checkout_uses_its_share(self):
         self.assertEqual(memory.memory_root('\\\\srv\\share\\code\\proj'), '//srv/share/Agent-memory')
@@ -33,9 +33,9 @@ class Value(unittest.TestCase):
         self.assertEqual(memory.memory_root('D:\\work\\proj', override='F:\\mem\\'), 'F:/mem')
 
     def test_the_repo_is_the_main_checkouts_folder_name(self):
-        wt = 'D:\\GitHub\\Proj\\.claude\\worktrees\\x'
-        self.assertEqual(memory.repo_name(wt, main_top=fake_top('D:\\GitHub\\Proj')), 'Proj')
-        self.assertEqual(memory.wanted(wt, main_top=fake_top('D:\\GitHub\\Proj')),
+        wt = 'D:\\src\\Proj\\.claude\\worktrees\\x'
+        self.assertEqual(memory.repo_name(wt, main_top=fake_top('D:\\src\\Proj')), 'Proj')
+        self.assertEqual(memory.wanted(wt, main_top=fake_top('D:\\src\\Proj')),
                          'D:/Agent-memory/Proj')
 
     def test_no_main_checkout_gives_no_value(self):
@@ -54,7 +54,7 @@ class Value(unittest.TestCase):
 class Files(unittest.TestCase):
     """survey, apply and problem_line on a throwaway checkout whose main checkout is faked to D:."""
 
-    TOP = 'D:\\GitHub\\proj'
+    TOP = 'D:\\src\\proj'
     WANT = 'D:/Agent-memory/proj'
 
     def setUp(self):
