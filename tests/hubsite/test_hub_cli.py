@@ -944,7 +944,10 @@ class StopRestartCase(CliCase):
         port = self.dead_port()
         code, out, err = self.run_cli('stop', '--port', str(port))
         self.assertEqual((code, err), (0, ''))
-        self.assertEqual(out, 'nothing to stop: no hub server is listening on port %d\n' % port)
+        self.assertTrue(out.startswith('nothing to stop: nothing answers on port %d' % port), out)
+        # a server stopped a moment ago has freed its port, but may still hold the store
+        self.assertIn('may still be closing', out)
+        self.assertNotIn('no hub server is listening', out)
 
     def test_stop_and_restart_need_the_owners_token(self):
         port = self.dead_port()
@@ -986,7 +989,7 @@ class StopRestartCase(CliCase):
         started = self.fake_task(None)
         code, out, err = self.run_cli('restart', '--port', str(port))
         self.assertEqual((code, err), (3, ''))
-        self.assertIn('nothing to stop: no hub server is listening on port %d' % port, out)
+        self.assertIn('nothing to stop: nothing answers on port %d' % port, out)
         self.assertIn(HUB.hub_autostart.TASK_NAME, out)
         self.assertTrue(out.endswith('start it with: %s\n' % HUB.START), out)
         self.assertEqual(started, [])
@@ -1049,6 +1052,42 @@ class StopRestartCase(CliCase):
                 # a server the task started has no console: its start-up lines go nowhere
                 self.assertEqual('hub.py serve' in err and 'console' in err, verb == 'restart',
                                  err)
+
+    def test_the_console_advice_follows_a_timeout_waiting_for_the_new_server_alone(self):
+        # a server that never answered after the start may have said why at start-up, in a
+        # console it does not have; a stop or a task that has not ended says nothing there
+        self.assertEqual(self.run_cli('setup')[0], 0)
+        port = self.dead_port()
+        for phase in (HUB.control.CLOSING_PHASE, HUB.control.PROCESS_PHASE,
+                      HUB.control.TASK_PHASE, HUB.control.ANSWER_PHASE):
+            with self.subTest(phase=phase):
+                def fail(*args, **kw):
+                    raise HUB.control.TimedOut(phase, 'ran out; nothing was killed')
+
+                with mock.patch.object(HUB.control, 'restart', fail):
+                    code, out, err = self.run_cli('restart', '--port', str(port))
+                self.assertEqual((code, out), (4, ''))
+                self.assertIn('TIMED OUT: ran out; nothing was killed', err)
+                self.assertEqual(HUB.NO_CONSOLE in err, phase == HUB.control.ANSWER_PHASE, err)
+
+    def test_a_task_that_cannot_be_started_after_the_stop_says_the_server_stopped(self):
+        self.assertEqual(self.run_cli('setup')[0], 0)
+        port = self.dead_port()
+        for reason in ("starting the task 'x': powershell exit 1: denied",
+                       "reading the state of the task 'x': powershell timed out after 60 s"):
+            with self.subTest(reason=reason):
+                def fail(*args, **kw):
+                    raise HUB.control.StartFailed(HUB.control.Stopped(True, 77, False),
+                                                  HUB.hub_autostart.AutostartError(reason))
+
+                with mock.patch.object(HUB.control, 'restart', fail):
+                    code, out, err = self.run_cli('restart', '--port', str(port))
+                self.assertEqual(code, 1)
+                self.assertEqual(out, 'STOPPED: the hub server on port %d (pid 77) has closed and '
+                                      'its process has ended\n' % port)
+                self.assertNotIn('REFUSED', err)
+                self.assertIn('the scheduled task could not be started: %s' % reason, err)
+                self.assertTrue(err.endswith('start it with: %s\n' % HUB.START), err)
 
 
 class ClosedConsoleCase(CliCase):

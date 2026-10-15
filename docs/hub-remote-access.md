@@ -200,7 +200,15 @@ The server reads the `hub` key at its start only.
 
 Only the owner's token can stop the server, never a browser session, and only on the local
 port: through the tunnel the stop route answers 404 (`kitlib.hubsite.serve.build` adds it to the
-local listener alone).
+local listener alone), and a request there with no valid Access token gets the 403 `access`
+refusal first, as every request on the tunnel port does.
+
+`stop` and `restart` say `nothing to stop: nothing answers on port N` when nothing answers on the
+port. A server stopped a moment ago may still be running then: it frees its port first and then
+makes its last git pass and closes the store, which can take some minutes (each git fetch and push
+may take up to 120 s, `kitlib.hubsite.gitsync.NET_TIMEOUT`). A `serve` started in that time is
+refused while that server still holds the store. `--timeout S` is approximate: a request in flight
+may run past it (`kitlib.hubsite.control`).
 
 The start-up notes say that the tunnel listener is on, or why it is off.
 
@@ -223,8 +231,11 @@ The start-up notes say that the tunnel listener is on, or why it is off.
    - `tunnel: off: <why>`: no listener. The reasons are fixed phrases: no Access settings, no team
      name, no audience tag, no allowed email, a team that is not one DNS label, emails that are not
      a list, the tunnel port could not be bound (another program holds it), or the listener could
-     not be made. The server console has the detail. Mend the field step 7 names and do step 8
-     again.
+     not be made. The start-up notes of the server have the detail: a server you started with
+     `hub.py serve` shows them in its console, but one the scheduled task started (`setup
+     --autostart`) has no console, so they are not shown. For that one, stop it (`python
+     tools/hub.py stop`) and run `python tools/hub.py serve` in a console to see them. Mend the
+     field step 7 names and do step 8 again.
 
 2. On the phone, open `https://<hostname>` and sign in as `<owner email>`. The page loads, and
    `status` shows `tunnel: on` once it did.

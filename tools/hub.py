@@ -1,8 +1,9 @@
 """hub.py: the hub server of this machine (kitlib.hubsite) and the verbs that ask it.
 
   hub.py serve [--port N] [--store PATH]
-      serves the hub on the loopback address until Ctrl+C, which closes it cleanly: the last
-      changes are committed and the store lock is released. Prints one start line and, after a
+      serves the hub on the loopback address until Ctrl+C or hub.py stop, which close it
+      cleanly: the last changes are committed and the store lock is released. Prints one start
+      line and, after a
       clean close, one closing line; notes (NOTE: ...) and errors (ERROR: ...) go to stderr: the
       start-up notes, a git sync pass that failed with git's reason, the wait for git at the
       close before it begins (it is given no time limit) and each step of the close that failed
@@ -70,16 +71,21 @@
   hub.py stop [--port N] [--timeout S]
       asks the server on the port to close as Ctrl+C closes it (kitlib.hubsite.control), then
       waits until nothing listens on the port and its process has ended: `STOPPED: ...`. The
-      owner's token only; a browser session never stops the server. With no server there:
-      `nothing to stop: ...`, exit 0. --timeout S (default 300): exit 4 with `TIMED OUT: ...`
-      when it has not closed by then; nothing is ever killed, the server goes on closing.
+      owner's token only; a browser session never stops the server. With nothing answering
+      there: `nothing to stop: ...`, exit 0; a server stopped a moment ago may still be closing
+      then, as it frees its port before its last git pass and the store's close. --timeout S
+      (default 300, approximate: one request in flight may run past it): exit 4 with
+      `TIMED OUT: ...` when it has not closed by then; nothing is ever killed, the server goes
+      on closing.
   hub.py restart [--port N] [--timeout S]
       stops the server on the port (default hub.port) as stop does, then starts the scheduled
       task kitlib.hubsite.autostart.TASK_NAME again and waits until the new server answers on
       hub.port: `RESTARTED: ...`. It reads the task's state first and starts the task only when
       the task ran the server it stopped, or nothing ran and the task is ready: no task, a
       disabled one or a server started by hand starts nothing, says why and prints the start
-      command, exit 3. --timeout S covers the whole restart: exit 4 as for stop.
+      command, exit 3. A task whose state cannot be read or that cannot be started after the
+      stop: the STOPPED line, why, and the start command, exit 1. --timeout S covers the whole
+      restart: exit 4 as for stop (the console advice only when the new server never answered).
   hub.py migrate --from DIR [--from DIR ...] [--store PATH] [--dry-run]
       copies the documents of each DIR (the mirror folder, or an export of one account's copy)
       into the store (hub.store, else hub/ in the PM data worktree; --store PATH: that folder)
@@ -385,7 +391,7 @@ def _client_verbs(sub):
 def parser():
     p = Parser(prog='hub.py', description='The hub server of this machine.')
     sub = p.add_subparsers(dest='verb')
-    s = sub.add_parser('serve', help='serve the hub until Ctrl+C')
+    s = sub.add_parser('serve', help='serve the hub until Ctrl+C or hub.py stop')
     s.add_argument('--port', type=_port(0), help='the port (default: hub.port; 0: a free one)')
     s.add_argument('--store', type=_folder,
                    help='serve this folder as a scratch copy: git sync is off for the run, so '
@@ -413,8 +419,11 @@ def parser():
         r = sub.add_parser(name, help=what)
         r.add_argument('--port', type=_port(1), help='the port (default: hub.port)')
         r.add_argument('--timeout', type=_seconds, default=control.DEFAULT_TIMEOUT_S, metavar='S',
-                       help='give up after this many seconds, ending nothing (default: %d)'
-                            % control.DEFAULT_TIMEOUT_S)
+                       help='give up after about this many seconds, ending nothing (default: '
+                            '%d); a request in flight may run past it by up to %d s, a read of '
+                            "the task's state by up to %d s"
+                            % (control.DEFAULT_TIMEOUT_S, serve.ASK_TIMEOUT_S,
+                               hub_autostart.TASK_TIMEOUT_S))
     m = sub.add_parser('migrate', help="copy the earlier hub's documents into the store")
     m.add_argument('--from', dest='sources', action='append', type=_source, required=True,
                    metavar='DIR', help='a folder to copy from: the mirror folder or an export '
@@ -656,7 +665,7 @@ def _owner_token():
 
 def _stopped(port, stopped):
     if not stopped.ran:
-        print('nothing to stop: no hub server is listening on port %d' % port)
+        print('nothing to stop: nothing answers on port %d; %s' % (port, control.STILL_CLOSING))
     elif stopped.pid is None:
         print('STOPPED: the hub server on port %d has closed' % port)
     else:
@@ -686,9 +695,18 @@ def _restart(a, stop):
         got = control.restart(port, token, a.timeout, new_port)
     except control.Refused as e:
         return _refused(e.port, e.status, e.answer)
+    except control.StartFailed as e:
+        # the stop went through: say so, then why nothing was started and how to start it
+        _stopped(port, e.stopped)
+        print(serve.scrub('the scheduled task could not be started: %s' % e.reason),
+              file=sys.stderr)
+        print('start it with: %s' % START, file=sys.stderr)
+        return 1
     except control.TimedOut as e:
         print(serve.scrub('TIMED OUT: %s' % e), file=sys.stderr)
-        print(NO_CONSOLE, file=sys.stderr)
+        if e.phase == control.ANSWER_PHASE:
+            # the task was started and its server never answered: why is in its start-up lines
+            print(NO_CONSOLE, file=sys.stderr)
         return client.TIMED_OUT
     _stopped(port, got.stopped)
     if got.outcome != control.RESTARTED:

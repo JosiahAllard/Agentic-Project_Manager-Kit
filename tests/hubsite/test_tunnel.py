@@ -240,6 +240,20 @@ class TunnelTokenTest(TunnelCase):
         self.assertEqual(self.refusals(), [self.tunnel_line('expired')])
         self.assertNoSecret(old, self.good)
 
+    def test_the_stop_route_with_no_valid_access_token_is_the_access_refusal(self):
+        # T-tun-2: the gate answers first, so the stop route is never reached here, not even
+        # with the owner's token in the Authorization header
+        stranger = ak.token(ak.KEY_B)
+        for token in (None, '', stranger):
+            for headers in ((), (bearer(self.owner),)):
+                with self.subTest(token=token is not None and (token or 'empty'),
+                                  owner=bool(headers)):
+                    r = self.refused('POST', httpd.STOP_ROUTE, token=token, headers=headers)
+                    self.assertEqual(r.json()['error']['field'], 'access')
+        self.assertFalse(self.hub.stopping.is_set())
+        self.assertEqual(get(self.lport, HEALTH, self.owner).status, 200)
+        self.assertNoSecret(stranger)
+
     def test_a_valid_token_is_served_as_the_owner(self):
         r = self.ask('GET', HEALTH, token=self.good)
         self.assertEqual(r.status, 200)

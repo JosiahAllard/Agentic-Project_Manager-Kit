@@ -249,22 +249,49 @@ class RestartTest(Case):
         with self.assertRaises(serve.ServeError) as cm:
             self.restart(ask, ['Running'])
         self.assertNotIsInstance(cm.exception, control.TimedOut)
-        self.assertIn('no hub server on port %d' % PORT, str(cm.exception))
-        self.assertIn('--port', str(cm.exception))
+        said = str(cm.exception)
+        self.assertIn('nothing answers on port %d' % PORT, said)
+        self.assertIn('--port', said)
+        # a server stopped a moment ago has freed its port but may still be closing
+        self.assertIn('still be closing', said)
+        self.assertNotIn('its server is on another port', said)
+        self.assertEqual(self.start.calls, [])
+
+    def test_a_queued_task_s_server_is_waited_for_and_started_again(self):
+        # Queued is the task's as Running is: not a server started by hand
+        ask = self.asker({stop_key(): [STOPPING], health_key(): [serve.NotRunning(PORT)],
+                          health_key(NEW_PORT): [HEALTHY]})
+        got = self.restart(ask, ['Queued', 'Queued', 'Running', 'Ready'])
+        self.assertEqual(got.outcome, control.RESTARTED)
+        self.assertEqual(len(self.start.calls), 1)
+        # the start waits until the task has left Queued and Running
+        self.assertEqual(len(self.states.calls), 4)
+
+    def test_a_task_state_that_fails_after_the_stop_carries_what_was_stopped(self):
+        ask = self.asker({stop_key(): [STOPPING], health_key(): [serve.NotRunning(PORT)]})
+        with self.assertRaises(control.StartFailed) as cm:
+            self.restart(ask, ['Running', autostart.AutostartError('powershell exit 1')])
+        self.assertIsInstance(cm.exception, autostart.AutostartError)
+        self.assertEqual(cm.exception.stopped, control.Stopped(True, PID, False))
+        self.assertIn('powershell exit 1', str(cm.exception.reason))
         self.assertEqual(self.start.calls, [])
 
     def test_a_task_state_that_cannot_be_read_stops_nothing(self):
         ask = self.asker({stop_key(): [STOPPING]})
-        with self.assertRaises(autostart.AutostartError):
+        with self.assertRaises(autostart.AutostartError) as cm:
             self.restart(ask, [autostart.AutostartError('powershell exit 1')])
+        self.assertNotIsInstance(cm.exception, control.StartFailed)
         self.assertEqual(ask.calls, [])
         self.assertEqual(self.start.calls, [])
 
     def test_a_start_that_fails_is_its_autostart_error(self):
         ask = self.asker({stop_key(): [serve.NotRunning(PORT)]})
         start = Script(self.said, 'start_task', [autostart.AutostartError('no access')])
-        with self.assertRaises(autostart.AutostartError):
+        with self.assertRaises(control.StartFailed) as cm:
             self.restart(ask, ['Ready'], start=start)
+        self.assertIsInstance(cm.exception, autostart.AutostartError)
+        self.assertEqual(cm.exception.stopped, control.Stopped(False, None, False))
+        self.assertIn('no access', str(cm.exception))
         self.assertEqual(ask.calls, [('POST', httpd.STOP_ROUTE, PORT, TOKEN)])
 
     def test_a_task_that_never_ends_times_out_and_is_not_started(self):

@@ -94,14 +94,18 @@ repository.
 - `hub.py stop [--port N] [--timeout S]` and `hub.py restart [--port N] [--timeout S]`
   (`kitlib.hubsite.control`) post `POST /api/v1/stop` (`kitlib.hubsite.httpd.STOP_ROUTE`) with
   the owner's Bearer token. The route takes that token only, never a browser session (403
-  `forbidden` otherwise), and only on the local listener: through the tunnel it answers 404. It
-  answers `ok`, `stopping`, and the server's `pid` and `ctime`, then the server closes as on
-  Ctrl+C. `stop` waits until the port is free and that process has ended: `STOPPED: ...`, or
-  `nothing to stop: ...` (exit 0) when nothing listens. `restart` reads the scheduled task's state
-  first and starts the task again only when the task ran the server it stopped, or when nothing
-  ran and the task is ready; then it waits until the new server answers on `hub.port`
-  (`RESTARTED: ...`). Neither ever kills a process: past `--timeout` (default 300 s) they print
-  `TIMED OUT: ...` and exit 4.
+  `forbidden` otherwise), and only on the local listener: through the tunnel it answers 404 (403
+  `access` first without a valid Access token). It answers `ok`, `stopping`, and the server's
+  `pid` and `ctime`, then the server closes as on Ctrl+C. `stop` waits until the port is free and
+  that process has ended: `STOPPED: ...`, or `nothing to stop: ...` (exit 0) when nothing answers
+  on the port. A server stopped a moment ago may still be closing then: it frees its port before
+  its last git pass and the store's close (`kitlib.hubsite.control`). `restart` reads the
+  scheduled task's state first and starts the task again only when the task ran the server it
+  stopped (the task is `Running` or `Queued`), or when nothing ran and the task is ready; then it
+  waits until the new server answers on `hub.port` (`RESTARTED: ...`). A task that cannot be read
+  or started after the stop prints the `STOPPED` line, why, and the start command (exit 1).
+  Neither ever kills a process: past `--timeout` (default 300 s, approximate: one request in
+  flight may run past it) they print `TIMED OUT: ...` and exit 4.
 - `python tools/hub.py setup --check` writes nothing: it says whether `hub.access` is unset, set
   or cannot serve, fetches the Access keys once when it can serve (`access keys: ...`), and lists
   each kit copy on the machine that would refuse the `hub` key (`kitlib.config.copies`). It ends
