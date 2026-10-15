@@ -1784,7 +1784,7 @@ IO_FILE_RE = re.compile(r'(?i)\[(?:System\.)?IO\.(?:File|Directory)\]::'
 # a .NET type whose constructor opens a file to write: [IO.StreamWriter]::new(...), New-Object IO.FileStream ...
 NET_TYPE_RE = re.compile(r'(?i)(?<![\w.])(?:System\.)?IO\.(?:StreamWriter|FileStream)(?![\w.])')
 NET_ABS_RE = re.compile(r'^[A-Za-z]:[\\/]')     # a path .NET reads the same from any directory
-# \\?\C:\x and \\.\C:\x are C:\x (a device path); any other \\ or // path is a share the guard cannot place
+# \\?\<drive>:\x and \\.\<drive>:\x are <drive>:\x (a device path); any other \\ or // path is a share the guard cannot place
 NET_DEVICE_RE = re.compile(r'^[\\/]{2}[?.][\\/](?=[A-Za-z]:[\\/])')
 WIN_OPT_RE = re.compile(r'^/[A-Za-z]+(?::\S*)?$')
 
@@ -2174,14 +2174,14 @@ def net_writes(cmd):
             out.append(NetWrite(sh.Word(src[s:e] if text is None else text, text is None, s, e), end))
     for x in out:
         m = None if x.word.dyn else NET_DEVICE_RE.match(x.word.text)
-        if m:                                   # \\?\C:\x is C:\x; the span stays the argument's
+        if m:                                   # \\?\<drive>:\x is <drive>:\x; the span stays the argument's
             x.word = sh.Word(x.word.text[m.end():], False, x.word.start, x.word.end)
     return out, unread
 
 
 def net_placed(w):
     """True when the .NET argument Word `w` is a literal absolute path on a drive (NET_ABS_RE;
-    net_writes reads \\\\?\\C:\\x as C:\\x). A share (\\\\host\\C$\\x) is not: the guard cannot tell
+    net_writes reads \\\\?\\<drive>:\\x as <drive>:\\x). A share (\\\\host\\<drive>$\\x) is not: the guard cannot tell
     which folder it is, so dotnet_unplaced judges it as a path it cannot place."""
     return not w.dyn and bool(NET_ABS_RE.match(w.text))
 
