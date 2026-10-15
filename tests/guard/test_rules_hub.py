@@ -1029,6 +1029,19 @@ class FailClosed(Hub):
             (bash, 'cd tools && python -X * commit.py -m hub answer Q-1'),
             (ps, 'cd tools; python -X $v commit.py -m hub answer Q-1'),
             (ps, "cd tools; python -X 'a commit.py' -m hub answer Q-1"),
+            # bash splits words on space and tab only: a no-break space, a control or an em space
+            # between -X's value and commit.py is part of that value, so the -m is python's
+            (bash, 'cd tools && python -X a commit.py -m hub answer Q-1'),
+            (bash, 'cd tools && python -X a\x1fcommit.py -m hub answer Q-1'),
+            (bash, 'cd tools && python -X a\vcommit.py -m hub answer Q-1'),
+            (bash, 'cd tools && python -X a\fcommit.py -m hub answer Q-1'),
+            (bash, 'cd tools && python -X a commit.py -m hub answer Q-1'),
+            (bash, 'cd tools && python -Xa commit.py -m hub answer Q-1'),
+            (bash, 'cd tools && python -X a commit.py -m hub answer Q-1'),
+            # and inside a nested shell, read by its words as well as the line's text
+            (bash, "bash -c 'cd tools && python -X a commit.py -m hub answer Q-1'"),
+            (bash, 'bash -c "cd tools && python -X \'a commit.py\' -m hub answer Q-1"'),
+            (ps, 'cmd /c "cd tools && python -X a commit.py -m hub answer Q-1"'),
         ), True)
 
     def test_hub_in_python_code_from_anywhere_on_the_line(self):
@@ -1195,12 +1208,23 @@ class FailClosed(Hub):
                    '-C $PWD -m "Hub store: x" a.py'),
             (ps, '& D:\\Programs\\Python\\Python312\\python.exe Z:/k/tools/commit.py '
                  '-C $PWD -m "Hub store: x" a.py'),
+            (bash, '"D:/Programs/Python312/python.exe" Z:/k/tools/commit.py -C $PWD -m "Hub store: x" a.py'),
         ), False)
         # but a python in that folder still runs hub as a module
         self.rows((
             (bash, 'D:/Programs/Python312/python.exe -m hub answer Q-1'),
             (ps, '& D:\\Programs\\Python312\\python.exe -m hub answer Q-1'),
             (bash, 'cd tools && C:/Python312/python.exe -X a\\ commit.py -m hub answer Q-1'),
+            # a python word before / or \ with no python word after it in that word is the program:
+            # cmd ends a command's name at an unquoted /, so `python/x` runs python with /x
+            (bash, 'cd tools && python/x -m hub answer Q-1'),
+            (ps, 'cd tools; python/x -m hub answer Q-1'),
+            (ps, 'cd tools; python\\x -m hub answer Q-1'),
+            (ps, 'cmd /c "cd tools && python/x -m hub answer Q-1"'),
+            (bash, 'cmd //c "cd tools && python/x -m hub answer Q-1"'),
+            # and what is glued to it is the program's own name (argv[0]), never its script
+            (bash, 'cmd //c "cd tools && python/commit.py -m hub answer Q-1"'),
+            (ps, 'cmd /c "cd tools && python\\commit.py -m hub answer Q-1"'),
         ), True)
 
     def test_backlog_paths_naming_the_hub_tool(self):

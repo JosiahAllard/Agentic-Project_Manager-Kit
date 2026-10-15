@@ -594,8 +594,11 @@ HUB_PY_MODULE_RE = re.compile(r'''(?i)(?P<mid>[^;|&\n]*?)(?:(?<![\w-])-[A-Za-z]*
 HUB_PY_MESSAGE_SCRIPTS = frozenset(('commit.py', 'backlog.py', 'ledger.py'))
 HUB_PY_PLAIN_WORD_RE = re.compile(r'''^(['"]?)([\w./\\:+,=-]+)\1$''')
 # a word before that script word (an option or its value) the shell passes as written: no quote,
-# escape, backtick, variable, wildcard or brace, which could join or split words
-HUB_PY_OPT_WORD_RE = re.compile(r'^[\w./:+,=-]+$')
+# escape, backtick, variable, wildcard or brace, which could join or split words; ASCII only, so
+# no Unicode space or control is taken for part of a plain word
+HUB_PY_OPT_WORD_RE = re.compile(r'^[\w./:+,=-]+$', re.ASCII)
+# the text glued to a python word up to bash's word break (space, tab) or a command's end
+HUB_PY_GLUED_RE = re.compile(r'[^ \t\n;|&]*')
 # hub quoted as a name ('hub', ".hub") counts in a command whose text also loads a module by name:
 # __import__('tools', fromlist=['hub']), importlib.import_module('.hub', 'tools'), run_module('hub')
 HUB_QUOTED_RE = re.compile(r'''(?i)['"]\.*hub['"]''')
@@ -910,13 +913,18 @@ def hub_module_names(text):
     word is tried, so one inside another's arguments (`$(python -m hub)`) is read too. The -m is
     python's own unless python's words before it reach a script word first (hub_py_script_first):
     `python <kit>/tools/commit.py -m "Hub store: x"` gives commit.py its message. A python word
-    followed by / or by \\ and a letter is a folder's name (`.../Python312/python.exe`), not a
-    program: the program's own word after it is tried."""
-    for w in HUB_PY_WORD_RE.finditer(text):
-        if re.match(r'/|\\\w', text[w.end():w.end() + 2]):
+    with another python word after it in the same word (no space or tab between) is a folder's
+    name (`.../Python312/python.exe`): the later word is tried instead. Any other text glued to a
+    python word is the program's own name, not a script: cmd ends a command's name at an
+    unquoted / and passes the whole word as argv[0] (`cmd /c python/commit.py -m hub` runs
+    python's -m)."""
+    words = list(HUB_PY_WORD_RE.finditer(text))
+    for k, w in enumerate(words):
+        glued = HUB_PY_GLUED_RE.match(text, w.end()).end()
+        if k + 1 < len(words) and words[k + 1].start() < glued:
             continue
         m = HUB_PY_MODULE_RE.match(text, w.end())
-        if m and not hub_py_script_first(m.group('mid')):
+        if m and not hub_py_script_first(m.group('mid')[glued - w.end():]):
             return text[w.start():m.end()].strip()
     return None
 
@@ -927,10 +935,11 @@ def hub_py_script_first(mid):
     before any option that takes code or a module (a cluster holding c or m) or `--`. A -W or -X
     at a cluster's end takes the next word; --check-hash-based-pycs takes one. Every word before
     the script word, option values included, must be plain (HUB_PY_OPT_WORD_RE): the split here is
-    on whitespace, and an escaped space, a quote, a backtick, a variable or an expansion lets the
-    shell hand python other words (`-X a\\ commit.py -m hub` gives -X the value `a commit.py`).
-    Anything else is python's -m: fail-closed."""
-    toks = mid.split()
+    on space and tab, as bash splits (str.split would also split on a no-break space or a control
+    bash keeps inside a word), and an escaped space, a quote, a backtick, a variable or an
+    expansion lets the shell hand python other words (`-X a\\ commit.py -m hub` gives -X the value
+    `a commit.py`). Anything else is python's -m: fail-closed."""
+    toks = [t for t in re.split(r'[ \t]+', mid) if t]
     i = 0
     while i < len(toks):
         t = toks[i]
