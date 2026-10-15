@@ -9,6 +9,7 @@ the tracked CLAUDE.md, AGENTS.md and .claude/ files, and the host keys auto memo
 so a session keeps them.
 
   folder()             the host's worktrees folder (hosts.json), read when called, never at import
+  state_folder()       the host's state folder (hosts.json), the same way
   home_path(main, n)   the home worktree's folder of the session named n: one home per session name
   ensure(main, path)   create it, lock it, or move a clean one to the main checkout's HEAD; the
                        lines it says, or a LaunchError (nothing created)
@@ -32,15 +33,29 @@ _BAD = re.compile(r'[^a-z0-9._-]+')
 SHOWN = 10          # dirty files named, at most
 
 
+def _profile():
+    """The default host's profile; a hosts.json it cannot read is a LaunchError, not a traceback."""
+    try:
+        return registry.default_profile()
+    except registry.RegistryError as e:
+        raise LaunchError('--home-worktree: %s; nothing was started.' % e) from None
+
+
 def folder():
     """The default host's worktrees_directory (hosts.json), as a relative OS path. Read when a home
     is wanted, so a launch.py verb that makes none (stop, after-reboot) never reads hosts.json."""
-    return os.path.normpath(registry.default_profile().worktrees_directory)
+    return os.path.normpath(_profile().worktrees_directory)
+
+
+def state_folder():
+    """The default host's state_directory (hosts.json), as a relative OS path, read like folder()."""
+    return os.path.normpath(_profile().state_directory)
 
 
 def home_path(main, name):
     """`<main>/<folder()>/home-<name>`, the session name lowercased and anything but a-z, 0-9, '.',
-    '_' and '-' made '-'. The full name: deep-x and deep-x-r2 get two homes."""
+    '_' and '-' made '-'. The full name: deep-x and deep-x-r2 get two homes, but names that differ
+    only in case or a trailing '-'/'.' share one (start.home_folder compares homes, not names)."""
     slug = _BAD.sub('-', name.lower()).strip('-.') or 'session'
     return os.path.join(os.path.normpath(main), folder(), PREFIX + slug)
 

@@ -17,7 +17,6 @@ from kitlib import agentname
 from kitlib import content as kcontent
 from kitlib.launcher import accounts as A
 from kitlib.git import repo as gitrepo
-from kitlib.host import registry
 from kitlib.launcher import home, lookup, state, window
 from kitlib.launcher.settings import LaunchError
 
@@ -184,10 +183,13 @@ def home_folder(host, folder, name, whatif=False):
                               % (folder, 'a linked worktree' if place.kind == gitrepo.LINKED else 'not in git')]
     main = os.path.normpath(place.top)
     path = home.home_path(main, name)
-    live = _live(host, name)
+    live = [p for p in _sessions(host) if lookup.rc_name(p.get('CommandLine'))
+            and home.home_path(main, lookup.rc_name(p.get('CommandLine'))) == path]   # Deep-X, deep-x-: one home
     if live:
+        running = sorted({lookup.rc_name(p.get('CommandLine')) for p in live})
         raise LaunchError("--home-worktree: a session named '%s' is already running (PID %s) in its home worktree "
-                          "%s; stop it first. Nothing was started." % (name, lookup.pids(live), path))
+                          "%s, the one '%s' would use; stop it first. Nothing was started."
+                          % ("', '".join(running), lookup.pids(live), path, name))
     if host.git_ignored(main, path) is not True:      # git answers for a path that does not exist yet
         raise LaunchError('--home-worktree: git in %s does not ignore %s; add %s/ to its .gitignore (an '
                           'untracked folder in the main checkout stops a landing). Nothing was started.'
@@ -195,7 +197,7 @@ def home_folder(host, folder, name, whatif=False):
     if not whatif:
         os.makedirs(os.path.dirname(path), exist_ok=True)
     out = host.home_worktree(main, path, whatif)
-    local = os.path.join(main, os.path.normpath(registry.default_profile().state_directory), 'settings.local.json')
+    local = os.path.join(main, home.state_folder(), 'settings.local.json')
     if os.path.isfile(local):
         out.append('Warning: %s is untracked and is not in the home worktree; the host reads it from the start '
                    'folder, so this session runs without it.' % local)
@@ -264,9 +266,14 @@ def _pick_or(settings, host, account, out, limit=A.HEADROOM_LIMIT):
     return str(account)
 
 
+def _sessions(host):
+    """The launched sessions running now."""
+    return lookup.claude_sessions(host.processes())
+
+
 def _live(host, name):
     """The launched sessions named exactly `name` that are running now."""
-    return lookup.find_exact(lookup.claude_sessions(host.processes()), name)
+    return lookup.find_exact(_sessions(host), name)
 
 
 def _refuse_live(host, name, why):
