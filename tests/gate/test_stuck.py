@@ -3,6 +3,10 @@ and the commands a STUCK report prints fit what is left. Each clear-command test
 commands in the scratch repository and asserts the state they leave. Also: a green merged gate
 that is not landed prints no bare `GATE OK`, and a merge interrupted part way is undone.
 
+The merge and its gate run in the landing tree (kitlib.gate.land, step 5b), so whatever stops a
+landing before its push leaves nothing in the main checkout to undo: the lock is released and
+the landing is NOT LANDED, never STUCK. STUCK is left for a push that may have landed.
+
 Scratch repositories with a bare remote in temp and the scratch lock store only."""
 import os
 import re
@@ -83,60 +87,64 @@ class InterruptedStuck(_Stuck):
         self.assertIsNone(self.lock().read())
         self.assertEqual(self.main_now(), out.merge)            # landed, and left landed
 
-    def test_ctrl_c_when_the_undo_cannot_verify_is_stuck_not_130(self):
-        _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
-
-        def edits_then_interrupted(lander):
-            self.repo.write('README.md', 'changed by the gate\n')
-            raise KeyboardInterrupt
-        out = self.lander(BRANCH, self.main, tip, merged_gate=edits_then_interrupted).run()
-        self.assertEqual(out.code, G.STUCK, out.lines)
-        self.assertIn('Ctrl+C', out.lines[0])
-        self.assertEqual(self.lock().read()['phase'], 'stuck')
+    def assert_released_and_kept(self):
+        """Nothing was pushed, the lock is released (no hand step), and the main checkout was
+        never merged into: still on main at the base, its own edit kept."""
+        self.assertIsNone(self.lock().read())
         self.assertEqual(self.remote_main(), self.main)
-        for c in commands(out):                     # the tracked change is kept by reset --keep
-            printed = self.sh(c)
-        self.assert_broken(printed)
         self.assertEqual(self.main_now(), self.main)
         self.assertEqual(self.head_branch(), 'main')
         with open(self.repo.path('README.md'), encoding='utf-8') as f:
             self.assertEqual(f.read(), 'changed by the gate\n')
 
-    def test_system_exit_when_the_undo_cannot_verify_is_stuck(self):
+    def test_ctrl_c_during_the_gate_is_released_and_raised_not_stuck(self):
+        # An edit in the main checkout while the merged gate ran is the owner's, not the gate's:
+        # the gate runs in the landing tree, so there is no undo to verify, and Ctrl+C is Ctrl+C
+        # (exit 130) once the lock is released.
+        _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
+
+        def edits_then_interrupted(lander):
+            self.repo.write('README.md', 'changed by the gate\n')
+            raise KeyboardInterrupt
+        with self.assertRaises(KeyboardInterrupt):
+            self.lander(BRANCH, self.main, tip, merged_gate=edits_then_interrupted).run()
+        self.assert_released_and_kept()
+
+    def test_system_exit_during_the_gate_is_not_landed_not_stuck(self):
         _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
 
         def edits_then_exits(lander):
             self.repo.write('README.md', 'changed by the gate\n')
             raise SystemExit(0)
         out = self.lander(BRANCH, self.main, tip, merged_gate=edits_then_exits).run()
-        self.assertEqual(out.code, G.STUCK, out.lines)
+        self.assertEqual(out.code, G.FAILED, out.lines)
         self.assertIn('SystemExit', out.lines[0])
+        self.assertTrue(out.lines[0].startswith('NOT LANDED'), out.lines)
+        self.assertEqual(commands(out), [])
+        self.assert_released_and_kept()
 
 
 # ---------------------------------------------------------------- 2 clear commands fit the cause
 
 class HeadOnAnotherBranch(_Stuck):
-    def test_switch_back_first_and_never_reset_the_other_branch(self):
+    def test_a_switch_in_the_main_checkout_lands_and_never_moves_the_other_branch(self):
+        # The gated merge is in the landing tree, so a switch in the main checkout changes
+        # nothing the push depends on: it lands, and the main checkout, on another branch, is
+        # not fast-forwarded (a WARNING says to switch back first).
         _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
 
         def switches(lander):
             self.repo.git('switch', '-q', '-c', 'elsewhere')
             return G.Outcome(G.OK, ['GATE OK'], verdict='GATE OK', results=[])
         out = self.lander(BRANCH, self.main, tip, merged_gate=switches).run()
-        self.assertEqual(out.code, G.STUCK, out.lines)
+        self.assertEqual(out.code, G.OK, out.lines)
         self.assertIn('switch back', joined(out))
-        cmds = commands(out)
-        switch = [i for i, c in enumerate(cmds) if ' switch main' in c]
-        resets = [i for i, c in enumerate(cmds) if ' reset ' in c]
-        self.assertEqual(len(switch), 1, cmds)
-        self.assertTrue(all(i > switch[0] for i in resets), cmds)
-        for c in cmds:
-            printed = self.sh(c)
-        self.assert_broken(printed)
-        self.assertEqual(self.head_branch(), 'main')
-        self.assertEqual(self.main_now(), self.main)
-        self.assertEqual(self.repo.git('rev-parse', 'refs/heads/elsewhere'), out.merge)  # untouched
-        self.assertEqual(self.remote_main(), self.main)
+        self.assertEqual(commands(out), [])
+        self.assertIsNone(self.lock().read())
+        self.assertEqual(self.head_branch(), 'elsewhere')                          # untouched
+        self.assertEqual(self.repo.git('rev-parse', 'refs/heads/elsewhere'), self.main)
+        self.assertEqual(self.main_now(), self.main)                    # not fast-forwarded
+        self.assertEqual(self.remote_main(), out.merge)
 
 
 class _Mode(H._CommittedTools):
@@ -150,25 +158,19 @@ class _Mode(H._CommittedTools):
 
 
 class CommitsBeyondTheMerge(_Stuck, _Mode):
-    def test_extra_commits_are_named_and_kept_before_the_reset(self):
+    def test_extra_commits_are_named_and_never_reach_main(self):
         _, tip = self.branch('feature', {'MODE': 'commit\n'})
-        out = self.lander(BRANCH, self.main, tip).run()
-        self.assertEqual(out.code, G.STUCK, out.lines)
-        extra = self.main_now()
-        self.assertNotEqual(extra, out.merge)
-        self.assertIn('made by the gate', joined(out))
+        lander = self.lander(BRANCH, self.main, tip)
+        out = lander.run()
+        self.assertEqual(out.code, G.FAILED, out.lines)
+        extra = lander.tree_head()                  # the commit the step made, in the tree
+        self.assertNotEqual(extra, lander.merge)
         self.assertIn(extra[:10], joined(out))
-        cmds = commands(out)
-        keep = [i for i, c in enumerate(cmds) if ' branch ' in c]
-        reset = [i for i, c in enumerate(cmds) if ' reset ' in c]
-        self.assertEqual(len(keep), 1, cmds)
-        self.assertTrue(reset and keep[0] < reset[0], cmds)
-        for c in cmds:
-            printed = self.sh(c)
-        self.assert_broken(printed)
+        self.assertEqual(self.repo.git('log', '-1', '--format=%s', extra), 'made by the gate')
+        self.assertEqual(commands(out), [])         # nothing to clear by hand
+        self.assertIsNone(self.lock().read())
         self.assertEqual(self.main_now(), self.main)
-        branch = cmds[keep[0]].split(' branch ')[1].split()[0]
-        self.assertEqual(self.repo.git('rev-parse', 'refs/heads/%s' % branch), extra)  # kept
+        self.assertEqual(self.remote_main(), self.main)
 
 
 class PushUnknown(_Stuck):
@@ -190,15 +192,19 @@ class PushUnknown(_Stuck):
         out = self.land_unreadable(tip)
         cmds = self.assert_fetch_first(out)
         self.sh(cmds[0])
-        self.assertEqual(self.sh(cmds[1]), out.merge)       # it landed: skip to the last step
+        self.assertEqual(self.sh(cmds[1]), out.merge)       # it landed: bring main to it
+        self.assertEqual(len(cmds), 4, cmds)                # fetch, check, fast-forward, break
+        self.assertIn(' merge --ff-only origin/main', cmds[2])
+        self.sh(cmds[2])
         self.assert_broken(self.sh(cmds[-1]))
         self.assertEqual(self.main_now(), out.merge)
         self.assertEqual(self.remote_main(), out.merge)
 
-    def test_a_remote_main_neither_base_nor_merge_is_checked_before_any_reset(self):
-        # The tracking ref is known not to hold the merge, so the reset steps are printed; but
-        # what the fetch shows may be neither the merge nor the base (someone else pushed on
-        # top of it), so the remote branches holding the merge are listed before any reset.
+    def test_a_remote_main_neither_base_nor_merge_is_checked_and_nothing_reset(self):
+        # The tracking ref is known not to hold the merge; what the fetch shows may be neither
+        # the merge nor the base (someone else pushed on top of it), so the remote branches
+        # holding the merge are listed. The main checkout was never merged into: no step resets
+        # or keeps anything, whatever the check shows.
         _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
         real = land.Lander.on_remote
 
@@ -213,7 +219,9 @@ class PushUnknown(_Stuck):
         contains = [i for i, c in enumerate(cmds) if ' branch -r --contains %s' % out.merge in c]
         undo = [i for i, c in enumerate(cmds) if ' reset ' in c or ' branch kit-stuck' in c]
         self.assertEqual(len(contains), 1, cmds)
-        self.assertTrue(undo and contains[0] < undo[0], cmds)
+        self.assertEqual(undo, [], cmds)
+        self.assertIn('nothing is to be undone', joined(out))
+        self.assertIn('break_lock()', cmds[-1])
 
 
 @real_git('pre-receive hook')
@@ -266,12 +274,16 @@ class HalfMerge(LandCase):
         def git(lander, *args, **kw):
             if args[:1] == ('merge',) and '--abort' not in args:
                 if in_progress:                       # stopped before the merge commit
-                    real(lander, 'merge', '--no-ff', '--no-commit', tip)
+                    real(lander, 'merge', '--no-ff', '--no-commit', '-m', 'Merge', tip,
+                         cwd=kw.get('cwd'))
+                    trees.append(kw.get('cwd'))
+                    self.assertTrue(refs.merge_in_progress(kw.get('cwd'))[0])   # stopped mid-merge
                 else:                                 # stopped after it
                     real(lander, *args, **kw)
                 raise KeyboardInterrupt
             return real(lander, *args, **kw)
-        said = []
+        said, trees = [], []
+        self.trees = trees
         with mock.patch.object(land.Lander, 'git', git):
             with self.assertRaises(KeyboardInterrupt):
                 self.lander(BRANCH, self.main, tip, say=said.append).run()
@@ -289,6 +301,11 @@ class HalfMerge(LandCase):
         said = self.interrupt_merge(tip, in_progress=True)
         self.assert_back()
         self.assertTrue(any('aborted' in s for s in said), said)
+        tree = self.trees[0]                        # the merge was in the landing tree, and its
+        self.assertTrue(tree and os.path.isdir(tree), self.trees)  # abort left nothing there
+        merging, _ = refs.merge_in_progress(tree)
+        self.assertFalse(merging)
+        self.assertEqual(self.repo.git('-C', tree, 'status', '--porcelain'), '')
 
     def test_ctrl_c_after_the_merge_commit_undoes_it(self):
         _, tip = self.branch('feature', {'a.py': 'x = 1\n'})

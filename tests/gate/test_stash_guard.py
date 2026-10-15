@@ -196,18 +196,21 @@ class LandingRefuses(_Stack, LandCase):
         self.assertIn('GATE OK', out.lines)
 
     def test_an_entry_made_while_the_merged_gate_ran_undoes_the_merge(self):
-        """A green merged gate, a clean main checkout at the merge, and a stash entry that was not
-        there when the landing started: nothing is pushed, and the merge is undone."""
+        """A green merged gate on the merge in the landing tree, the main checkout at the base, and
+        a stash entry that was not there when the landing started: nothing is pushed, and the
+        merge is undone."""
         _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
-        seen = []
+        seen, seen_main = [], []
 
         def gate(lander):
-            seen.append(self.main_now())
+            seen.append(lander.tree_head())
+            seen_main.append(self.main_now())
             self.stash_entry(self.main)
             return GREEN
         out = self.lander(BRANCH, self.main, tip, merged_gate=gate).run()
         self.assertEqual(len(seen), 1)
         self.assertNotEqual(seen[0], self.main)                       # the merge was there, gated
+        self.assertEqual(seen_main, [self.main])      # and the main checkout stayed at the base
         self.assertIn('NOT LANDED: the merged gate passed, and the stash stack is not empty',
                       joined(out))
         self.assertIn('while the gate ran', joined(out))
