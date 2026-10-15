@@ -80,6 +80,24 @@ class PullTakeover(StoreCase):
                       change.lines)
         self.assertEqual(self.get('DEAD').get('pulled_by'), BRANCH)
 
+    def test_a_marked_dead_pull_is_refused_until_the_mark_is_cleared(self):
+        self.seed(self.pulled('DEAD', GONE, review='owner-hub 2026-10-15'))
+        with self.assertRaises(Refusal) as cm:
+            self.verb('pull', 'DEAD')
+        self.assertIn('marked for review', str(cm.exception))
+        self.assertIn('clear-review DEAD', str(cm.exception))
+        self.assertEqual(self.get('DEAD').get('pulled_by'), GONE)
+        self.verb('clear_review', 'DEAD', 'the coordinator read it')
+        self.verb('pull', 'DEAD')
+        self.assertEqual(self.get('DEAD').get('pulled_by'), BRANCH)
+
+    def test_a_marked_live_pull_still_refuses_already_in_flight(self):
+        self.repo.git('branch', 'kit/live-one')
+        self.seed(self.pulled('LIVE', 'kit/live-one', review='owner-hub 2026-10-15'))
+        with self.assertRaises(Refusal) as cm:
+            self.verb('pull', 'LIVE')
+        self.assertIn('already in flight', str(cm.exception))
+
     def test_a_failed_branch_probe_holds_the_pull(self):
         self.seed(self.pulled('DEAD', GONE))
         with mock.patch.object(omod, 'live_branches', return_value=(None, 'git failed')):

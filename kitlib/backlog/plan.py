@@ -997,7 +997,8 @@ def _plan_takeover(snap, ctx, rec, reason, ruling, blocker):
     wrote them, with the scope-collision warnings a pre-empting pull prints. A takeover whose scope
     collides with a live pull on another branch, or folds into one's diff (`_pull_fold_hits`),
     needs `--ruling R-nnnn`, as a pull does; it takes no other flag, and no `--ruling` when
-    nothing collides. A failed git probe
+    nothing collides. A dead pull marked for review refuses, as `pull` of a marked record does,
+    until `clear-review`. A failed git probe
     holds the pull (fail closed). A `pulled_by` that landed on the main branch (a `Merge <branch>`
     merge in its history, committed on or after the `pulled_at` day) is not dead but unclosed:
     that refuses, and a git that cannot say fails."""
@@ -1009,6 +1010,10 @@ def _plan_takeover(snap, ctx, rec, reason, ruling, blocker):
     holding, dead, _why = omod.in_flight_split(snap, ctx.root, ctx.remote)
     if rec not in dead:
         raise busy
+    if rec.has('review'):
+        raise Refusal('`%s` is a dead pull of this session, and it is marked for review (review: '
+                      '%s); a coordinator clears it with `clear-review %s --reason T` before '
+                      'anyone takes it over' % (rid, rec.get('review'), rid))
     hits = live_hits(rec.all('scope'), holding, skip=rid, branch=ctx.current_branch())
     folds, notes = _pull_fold_hits(ctx, rec.all('scope'), holding, ctx.current_branch())
     given =[f for f, v in (('--reason', reason), ('--ruling', None if hits or folds else ruling),

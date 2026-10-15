@@ -4,9 +4,11 @@ reads `closes` and `retires` (store._last_closing), so `add` again needs `--reop
 names the deleting commit and a `requires: item:` on it is never met. Retire's owner gates; a
 live pull refuses, a dead one goes with the record."""
 import unittest
+from unittest import mock
 
+from kitlib.backlog import offer as omod
 from kitlib.backlog import plan as pmod
-from kitlib.backlog.errors import NotFound, Refusal, Usage
+from kitlib.backlog.errors import Failure, NotFound, Refusal, Usage
 
 from tests.backlog.helpers import ADD_NONE, TODAY, StoreCase, priced, rec
 
@@ -110,6 +112,16 @@ class States(DeleteCase):
         change = self.verb('delete', 'DEAD', WHY)
         self.assertIsNone(self.get('DEAD'))
         self.assertIn('  dead pull on `tools/gone` dropped with the record', change.lines)
+
+    def test_a_failed_branch_probe_fails_and_deletes_nothing(self):
+        # Fail closed: a git that cannot say whether the pull is live is a Failure, not a delete.
+        self.seed(priced('DEAD', state='pulled', pulled_at=TODAY, pulled_by='tools/gone'))
+        with mock.patch.object(omod, 'live_branches', return_value=(None, 'git failed')):
+            with self.assertRaises(Failure) as cm:
+                self.verb('delete', 'DEAD', WHY)
+        self.assertIn('cannot tell whether the pull of `DEAD` by `tools/gone` is live: git failed',
+                      str(cm.exception))
+        self.assertEqual(self.get('DEAD').get('state'), 'pulled')
 
     def test_a_parked_record_is_deleted_and_its_kept_branch_left_alone(self):
         self.seed(rec('FOO', state='parked', q='Q-101', parked_at='2026-10-01'))

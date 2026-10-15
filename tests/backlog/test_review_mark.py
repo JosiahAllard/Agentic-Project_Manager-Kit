@@ -103,6 +103,23 @@ class PullAndNext(ReviewCase):
         self.verb('clear_review', 'BAR', 'the coordinator read it')
         self.assertNotIn('to review', omod.Banner(self.store.load()).lines()[0])
 
+    def test_the_banner_counts_a_marked_record_at_minus_one_as_open(self):
+        # A marked record at `-1` is in the `to review` bucket, not `owner to prioritise`, and is
+        # still open: the `N at priority -1 (M of them open)` line must not call it not open.
+        self.seed(rec('MIN', priority='-1', owner_ask='which?', review=MARK),
+                  rec('OWN', priority='-1', owner_ask='which one?'))
+        line = omod.Banner(self.store.load()).lines()[0]
+        self.assertIn('1 to review', line)
+        self.assertIn('1 owner to prioritise', line)
+        self.assertNotIn('at priority -1', line)
+
+    def test_a_pulled_minus_one_record_still_shows_the_open_split(self):
+        self.seed(rec('MIN', priority='-1', owner_ask='which?', review=MARK),
+                  rec('PUL', priority='-1', owner_ask='which one?', state='pulled',
+                      pulled_at='2026-10-01', pulled_by='tools/gone'))
+        line = omod.Banner(self.store.load()).lines()[0]
+        self.assertIn('2 at priority -1 (1 of them open)', line)
+
     def test_a_marked_record_can_be_priced_and_stays_marked(self):
         self.seed(rec('FOO', review=MARK))
         self.verb('set', 'FOO', [('priority', ['2']), ('priority_by', ['agent'])])

@@ -114,9 +114,11 @@ class Banner(object):
             if self.count(bucket):
                 parts.append('%d %s' % (self.count(bucket), bucket))
         minus_one = sum(1 for r in self.snap.readable if r.get('priority') == rmod.OWNER_PRIORITY)
-        if minus_one != self.count(OWNER_PRIORITISED):
-            parts.append('%d at priority -1 (%d of them open)'
-                         % (minus_one, self.count(OWNER_PRIORITISED)))
+        # An open `-1` record marked for review sits in REVIEW, not OWNER_PRIORITISED: still open.
+        open_minus_one = self.count(OWNER_PRIORITISED) + sum(
+            1 for r in self.buckets[REVIEW] if r.get('priority') == rmod.OWNER_PRIORITY)
+        if minus_one != open_minus_one:
+            parts.append('%d at priority -1 (%d of them open)' % (minus_one, open_minus_one))
         out = [' | '.join(parts)]
         groups, multi = self.held_groups()
         if self.count(HELD):
