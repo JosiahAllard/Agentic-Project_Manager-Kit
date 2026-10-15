@@ -512,11 +512,30 @@ class TheMemoryVerb(StubCase):
         self.assertEqual(self.read(self.settings()), '[1]')
 
     def test_usage(self):
-        for args in (['memory', '--tools', 'landed'], ['memory', '--dry-run'], ['memory', '--replace'],
-                     ['write', '--apply'], ['check', '--apply']):
+        # Each is refused for its own reason, not as an unknown verb or option.
+        memory_only = 'USAGE: memory takes -C and --apply only (it is a dry run without --apply)'
+        for args, why in ((['memory', '--tools', 'landed'], memory_only), (['memory', '--dry-run'], memory_only),
+                          (['memory', '--replace'], memory_only), (['write', '--apply'], 'USAGE: --apply is a memory option'),
+                          (['check', '--apply'], 'USAGE: --apply is a memory option')):
             code, out = self.call([TOOL] + args, self.root)
             self.assertEqual(code, 2, (args, out))
-            self.assertIn('USAGE:', out)
+            self.assertIn(why, out)
+
+    def test_a_broken_hosts_json_is_an_error_line_not_a_traceback(self):
+        import contextlib
+        import importlib.util
+        import io
+        from kitlib.host import registry
+        spec = importlib.util.spec_from_file_location('kit_stubs_cli', TOOL)
+        cli = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cli)
+        out = io.StringIO()
+        with mock.patch.object(registry, 'load', side_effect=registry.RegistryError('hosts.json broken')), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            code = cli.main(['memory', '-C', self.root])
+        self.assertEqual(code, 2, out.getvalue())
+        self.assertIn('kit_stubs: ERROR: hosts.json broken', out.getvalue())
+        self.assertNotIn('Traceback', out.getvalue())
 
 
 if __name__ == '__main__':

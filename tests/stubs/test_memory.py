@@ -44,6 +44,16 @@ class Value(unittest.TestCase):
     def test_the_machine_config_has_no_override_yet(self):
         self.assertIsNone(memory.config_override())
 
+    def test_importing_the_module_reads_no_hosts_json(self):
+        import importlib
+        from unittest import mock
+        from kitlib.host import registry
+        self.addCleanup(importlib.reload, memory)
+        with mock.patch.object(registry, 'load', side_effect=registry.RegistryError('hosts.json broken')):
+            importlib.reload(memory)            # a broken hosts.json fails the call that needs it, not the import
+            with self.assertRaises(registry.RegistryError):
+                memory.settings_rel()
+
     def test_the_module_names_no_drive_and_no_path(self):
         with open(memory.__file__, encoding='utf-8') as fh:
             src = fh.read()
@@ -160,6 +170,10 @@ class Files(unittest.TestCase):
         self.assertIn(memory.owner_command(self.root, kit='K'), line)
         self.assertEqual(memory.owner_command(self.root, kit='K'),
                          'python "%s" memory -C "%s" --apply' % (os.path.join('K', 'tools', 'kit_stubs.py'), self.root))
+        # An owner step, worded as the checklist's other owner-only commands (kitlib.pmstart.fglock):
+        # an agent that ran it would dirty another repository's main checkout.
+        self.assertIn('Ask the owner (via the hub) to run, in their own PowerShell window: '
+                      + memory.owner_command(self.root, kit='K'), line)
 
     def test_run_dry_run_writes_nothing_and_names_the_command(self):
         got = memory.run(self.root, main_top=fake_top(self.TOP), kit='K')
