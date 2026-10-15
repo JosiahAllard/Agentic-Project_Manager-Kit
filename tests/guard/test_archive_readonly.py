@@ -1,5 +1,5 @@
 """git archive reads the repository it runs in; only its -o/--output file and the folder a tar
-fed by it extracts into are written (KIT-GUARD-ARCHIVE-READONLY; docs/guard.md "Write jail").
+fed by it extracts into are written (docs/guard.md "Write jail", the git bullet, and "Shell writes").
 
 The repro from the PM's session: `git -C <kit> archive <sha> | tar -x -C <scratch>` was refused as
 a write to the kit checkout. These rows pin both sides: the archive passes, the tar side is judged
