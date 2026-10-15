@@ -452,8 +452,7 @@ def _kit_tool(path, name, kit):
         p = p[2:]
     if p.lower() == 'tools/' + name:
         return True
-    norm = lambda x: os.path.normcase(os.path.normpath(x))
-    return bool(kit) and norm(path) == norm(os.path.join(kit, 'tools', name))
+    return bool(kit) and paths.norm(path) == paths.norm(os.path.join(kit, 'tools', name))
 
 
 def _reader(inv):
