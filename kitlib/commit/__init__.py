@@ -27,7 +27,11 @@ commit(Request) -> Outcome(code, lines). Nothing here prints or exits; tools/com
 - The commit records only the paths this call named, rendered or let a merge carry (commit_only):
   it is made from a private index (GIT_INDEX_FILE), HEAD's tree plus those paths' staged entries,
   so a file another writer stages after the check above is not swept in. The real index is not
-  written; what is still staged after the commit is named in a WARNING line.
+  written; what is still staged after the commit is named in a WARNING line. HEAD and those
+  entries are read once, before the machine-path check; an entry staged again after it, a HEAD
+  that cannot be read (other than an unborn branch), and a HEAD another writer moves before the
+  commit refuse it. A commit git made on a HEAD moved after the last check is undone (update-ref
+  back to its parent, the merge state written back) and refused.
 - Owner-only paths (.kit.json "owner", kitlib.config.owner) are committed only by the owner:
   --owner-authored, which refuses unless the author identity git will record (`git var
   GIT_AUTHOR_IDENT`) is "owner".email (unset, an agent_emails address or any other: refused).
@@ -602,36 +606,69 @@ def left_staged_line(others):
             '%s' % ', '.join(sorted(others)))
 
 
-def private_index(root, tmp, keep):
-    """`(env, None)` for a `git commit` that records exactly `keep` ({path: status letter}): an
-    index at `<tmp>/index` holding HEAD's tree (empty on an unborn branch) with each kept path's
-    entry copied from the real index, a deletion ('D') removed; or `(None, why)`. Every other entry
-    of the real index, staged by anyone, is left out of the commit and left as it is."""
-    env = dict(cmd.scrubbed_env(), GIT_INDEX_FILE=os.path.join(tmp, 'index'))
-    rc, out, _err = _git(root, 'rev-parse', '-q', '--verify', 'HEAD^{commit}')
-    head = out.strip() if rc == 0 else ''
-    r = cmd.call(['read-tree', head] if head else ['read-tree', '--empty'], root, env=env)
-    if r.rc != 0:
-        return None, 'git read-tree into a private index failed: %s' % (r.err or 'exit %s' % r.rc)
+def head_commit(root):
+    """HEAD's commit id, or '' on an unborn branch (HEAD names a branch that does not exist yet).
+    Any other failure to read HEAD raises _Stop: an empty tree is never guessed."""
+    rc, out, err = _git(root, 'rev-parse', '-q', '--verify', 'HEAD^{commit}')
+    if rc == 0 and out.strip():
+        return out.strip()
+    src, ref, _e = _git(root, 'symbolic-ref', '-q', 'HEAD')
+    if src == 0 and ref.strip():
+        rrc, rout, _e = _git(root, 'rev-parse', '-q', '--verify', ref.strip())
+        if rrc == 1 and not rout.strip():
+            return ''
+    raise _Stop(REFUSED, 'refused: git could not read HEAD (rev-parse HEAD: %s). Nothing was '
+                'committed.' % (err.strip() or 'exit %s' % rc))
+
+
+def index_snapshot(root, keep):
+    """`{path: (mode, oid), or None for a deletion}`: the real index's entry for each path of
+    `keep` ({path: status letter}), read in one `git ls-files --stage`. Raises _Stop when git cannot
+    list the index or a kept path is not one stage-0 entry (unmerged, or changed meanwhile)."""
     rc, out, err = _git(root, 'ls-files', '--stage', '-z')
     if rc != 0:
-        return None, 'git ls-files --stage failed: %s' % (err or 'exit %s' % rc)
+        raise _Stop(REFUSED, 'git ls-files --stage failed: %s. Nothing was committed.'
+                    % (err or 'exit %s' % rc))
     entries = {}
     for row in out.split('\0'):
         meta, tab, name = row.partition('\t')
         if tab and name in keep:
-            entries.setdefault(name, []).append(meta)
-    zero = '0' * (len(head) or 40)
-    lines = []
+            entries.setdefault(name, []).append(meta.split())
+    snap = {}
     for path in sorted(keep):
         metas = entries.get(path, [])
         if keep[path] == 'D' and not metas:
-            lines.append('0 %s\t%s' % (zero, path))
-        elif len(metas) == 1 and metas[0].split()[2] == '0':
-            mode, oid, _stage = metas[0].split()
-            lines.append('%s %s\t%s' % (mode, oid, path))
+            snap[path] = None
+        elif len(metas) == 1 and len(metas[0]) == 3 and metas[0][2] == '0':
+            snap[path] = (metas[0][0], metas[0][1])
         else:
-            return None, '%s is not one staged entry in the index (unmerged, or changed meanwhile)' % path
+            raise _Stop(REFUSED, 'refused: %s is not one staged entry in the index (unmerged, or '
+                        'changed during this call). Nothing was committed; run this again.' % path)
+    return snap
+
+
+def private_index_file(tmp):
+    """The private index's path in the folder `tmp`. Its name starts `next-index-`, the name
+    git gives the index of a partial commit, so the kit's pre-commit hook
+    (kitlib.githooks.render.partial) treats this commit as one."""
+    return os.path.join(tmp, 'next-index-%d' % os.getpid())
+
+
+def private_index(root, tmp, head, snap):
+    """`(env, None)` for a `git commit` that records exactly `snap` (index_snapshot): a private
+    index (private_index_file) holding `head`'s tree (empty for '', an unborn branch) with each
+    snapshot entry set, a deletion (None) removed; or `(None, why)`. Every other entry of the real
+    index, staged by anyone, is left out of the commit and left as it is. read-tree records no
+    stat information, so `git commit` may read tracked work-tree files again to compare them; the
+    cost grows with the work tree, and was accepted over `read-tree -m`, which refuses an
+    unmerged real index."""
+    env = dict(cmd.scrubbed_env(), GIT_INDEX_FILE=private_index_file(tmp))
+    r = cmd.call(['read-tree', head] if head else ['read-tree', '--empty'], root, env=env)
+    if r.rc != 0:
+        return None, 'git read-tree into a private index failed: %s' % (r.err or 'exit %s' % r.rc)
+    zero = '0' * (len(head) or 40)
+    lines = ['0 %s\t%s' % (zero, p) if e is None else '%s %s\t%s' % (e[0], e[1], p)
+             for p, e in sorted(snap.items())]
     if lines:
         r = cmd.call(['update-index', '--index-info'], root, env=env,
                      stdin=('\n'.join(lines) + '\n').encode('utf-8'))
@@ -641,19 +678,85 @@ def private_index(root, tmp, keep):
     return env, None
 
 
-def commit_only(root, keep, msg):
-    """`git commit` of exactly `keep` ({path: status letter}) through private_index; `(rc, out,
-    err)` as _git gives them. The real index is never written: its entries for `keep` already match
-    the new HEAD, and every other staged entry stays staged."""
+MERGE_STATE = ('MERGE_HEAD', 'MERGE_MSG', 'MERGE_MODE')
+
+
+def merge_state(root):
+    """`{path: bytes}` of the merge-state files that exist now (MERGE_STATE), to put back when a
+    commit is undone."""
+    saved = {}
+    for name in MERGE_STATE:
+        path, _why = repo.git_path(root, name)
+        try:
+            with open(path, 'rb') as fh:
+                saved[path] = fh.read()
+        except (OSError, TypeError):
+            pass
+    return saved
+
+
+def head_moved_line(head, now):
+    return ('refused: HEAD moved during this call (another writer committed %s on top of %s); '
+            'this commit would have reverted their change.' % (now[:12] or 'nothing',
+                                                                 head[:12] or 'an unborn branch'))
+
+
+def undo_commit(root, new, parent, saved):
+    """Point HEAD back at `parent` if it is still `new` (update-ref with the old value), and write
+    back the merge-state files `saved` that the commit removed. The refusal lines either way."""
+    rc, _out, err = _git(root, 'update-ref', '-m', 'commit.py: undo a commit made on a moved HEAD',
+                         'HEAD', parent, new)
+    if rc != 0:
+        return ['refused, and NOT undone: commit %s was made on the moved HEAD and lacks the other '
+                'writer\'s change; git update-ref failed: %s. Undo it by hand: git update-ref HEAD '
+                '%s %s' % (new[:12], err.strip() or 'exit %s' % rc, parent, new)]
+    for path, data in saved.items():
+        if not os.path.exists(path):
+            try:
+                with open(path, 'wb') as fh:
+                    fh.write(data)
+            except OSError as e:
+                return ['Undone: HEAD is back at %s, but %s could not be written back (%s).'
+                        % (parent[:12], path, e.strerror)]
+    return ['Undone: HEAD is back at %s; nothing was committed, and the files this call named '
+            'are still staged. Run this again.' % parent[:12]]
+
+
+def commit_only(root, head, snap, msg):
+    """`git commit` of exactly `snap` (index_snapshot) on `head` (head_commit) through
+    private_index; `(rc, out, err)` as _git gives them. The real index is never written: its
+    entries for `snap` already match the new HEAD, and every other staged entry stays staged.
+    HEAD must not move under the call: checked just before `git commit` (refused), and after it,
+    where a commit made on a HEAD another writer moved is undone (undo_commit) and refused."""
     tmp = tempfile.mkdtemp(prefix='kit-commit-')
     try:
-        env, why = private_index(root, tmp, keep)
+        env, why = private_index(root, tmp, head, snap)
         if env is None:
             return 1, '', why
+        now = head_commit(root)
+        if now != head:
+            raise _Stop(REFUSED, head_moved_line(head, now), 'Nothing was committed; the files '
+                        'this call named are still staged. Run this again.')
+        saved = merge_state(root)
         r = cmd.call(['commit', '-q', '-m', msg], root, env=env)
-        return r.rc, r.out.decode('utf-8', 'replace'), r.err
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+    if r.rc != 0:
+        return r.rc, r.out.decode('utf-8', 'replace'), r.err
+    rc, out, err = _git(root, 'log', '-1', '--format=%H %P', 'HEAD')
+    ids = out.split()
+    if rc != 0 or not ids:
+        raise _Stop(REFUSED, 'git commit ran, but HEAD could not be read back to check it was '
+                    'made on %s: %s. Check `git log -2` by hand.'
+                    % (head[:12] or 'the unborn branch', err.strip() or 'exit %s' % rc))
+    new, parents = ids[0], ids[1:]
+    if (parents[0] if parents else '') != head:
+        if not parents:
+            raise _Stop(REFUSED, head_moved_line(head, ''), 'NOT undone: commit %s has no parent; '
+                        'check `git log` by hand.' % new[:12])
+        raise _Stop(REFUSED, head_moved_line(head, parents[0]),
+                    *undo_commit(root, new, parents[0], saved))
+    return 0, r.out.decode('utf-8', 'replace'), r.err
 
 
 def main_checkout_error(lander_main_checkout, root, main_branch=None, rule_pointer=None):
@@ -793,13 +896,21 @@ def _commit(req, lines):
     others = set(staged_now) - set(status_after)
     if not status_after:
         raise _Stop(REFUSED, 'nothing to commit in: %s' % ', '.join(paths))
+    # What is committed is this one read of HEAD and of the index; the index must still hold it
+    # after the machine-path check, so the blobs checked are the blobs committed.
+    head = head_commit(root)
+    snap = index_snapshot(root, status_after)
     refusal, warnings = staged_machine_path_error(root, status_after, status_before)
     # The message check printed the same machine-config WARNING already: once is enough.
     if refusal:
         raise _Stop(REFUSED, *[l for l in refusal if l not in msg_warnings])
+    changed = sorted(p for p, e in index_snapshot(root, status_after).items() if snap[p] != e)
+    if changed:
+        raise _Stop(REFUSED, 'refused: %s was staged again during this call, after its staged copy '
+                    'was checked. Nothing was committed; run this again.' % ', '.join(changed))
     lines.extend(l for l in warnings if l not in msg_warnings)
     msg = build_message(req.subject, body, trailers)
-    rc, out, err = commit_only(root, status_after, msg)
+    rc, out, err = commit_only(root, head, snap, msg)
     if rc != 0:
         raise _Stop(REFUSED, 'commit failed: %s' % (err or out.strip() or 'exit %s' % rc))
     _rc, short, _err = _git(root, 'rev-parse', '--short', 'HEAD')
