@@ -39,6 +39,10 @@ or after an unpair or a session that ran out) is told so on the page and to run
   while a story is still submitted), Current backlog (each repository's open work, with priority,
   status and text filters), Parked (backlog items a coordinator has parked waiting on you, with
   their question, branch and age) and Completed (1, 7, 30 or 90 days).
+- **Docs.** The agents' documents (a plan, research, a visual choice), newest first, from the
+  store's `pages/` and `page_html/` ("pages/<id> and page_html/<id>" below). Read here opens one in
+  a full-screen reader; Close shuts it, and so does Esc while the focus is outside the document. Read only: nothing on the page writes or deletes a
+  document.
 - **Info.** Usage (each account's plan usage) and Agents (each agent's model and effort).
 
 Under the header a line says whether a PM is listening: "A PM is listening." while a PM holds a
@@ -48,9 +52,9 @@ count (`Api.seen` in `kitlib/hubsite/api.py`). The page reads everything at once
 the server), so what the PM writes shows without a reload. A view the server cannot give says so
 at the top.
 
-Links ending `#inbox`, `#todo`, `#topm`, `#backlog` (or `#stories`), `#parked` or `#info` open that
-section; `#usage` and `#agents` open that Info tab. The Questions, Answers and To do lists filter by
-repository.
+Links ending `#inbox`, `#todo`, `#topm`, `#backlog` (or `#stories`), `#parked`, `#docs` or `#info` open that
+section; `#usage` and `#agents` open that Info tab. The Questions, Answers, To do and Docs lists filter by
+repository; Questions, To do and Docs also by id or title.
 
 ## Serving it
 
@@ -157,7 +161,7 @@ Verbs (`tools/hub.py` docstring is the source), with the line each prints:
 | `questions log Q-1 <ruling id> --if-version V` | `LOGGED Q-1 <ruling id>` |
 | `answer Q-1 --choice N\|other [--note TEXT] [--if-version V]` (owner) | `ANSWERED Q-1 <label>` |
 | `todos [--status S] [--repo R]` | `T-1 open [repo] title` |
-| `todos add --title T [--detail D] [--command C ...] [--repo R] [--refs ID ...] [--urgent] [--from NAME \| --owner]` | `ADDED T-2` |
+| `todos add --title T [--detail D] [--command C ...] [--steps F] [--repo R] [--refs ID ...] [--urgent] [--from NAME \| --owner]` | `ADDED T-2` |
 | `todos done T-1 [--undo] [--if-version V]` (owner) | `DONE T-1` or `REOPENED T-1` |
 | `todos ack T-1` | `ACKED T-1` |
 | `stories [--status S] [--repo R]` | `S-1 v2 submitted [repo] title` |
@@ -299,6 +303,15 @@ short acknowledgement. `to-pm reply` sets `done`.
 | urgent | true sorts it to the top; the owner can set it on their own items |
 | pm_ack | PM: set once it has followed up on a done item or picked up an owner-added one; takes it off the pending list |
 
+A new to-do (`POST /todos`, so `hub.py todos add` and the MCP tool `hub_todo_add` alike) may also
+carry `steps`, which is not stored: `kitlib.hubsite.api.todo_steps` turns each step into a command
+appended after `commands` and adds one summary line per step at the end of `detail` (the steps and
+their commands: docs/hub-mcp.md "To-do steps"). `hub.py todos add --steps F` reads the list from F,
+a UTF-8 JSON file. The server refuses, as `invalid` naming the field: a bad step (`steps`), a
+`commands` entry holding a lone surrogate (U+D800 to U+DFFF, `commands`), and, on an agent's to-do,
+text the owner's to-do rules forbid (`todosteps.check`: plain Notepad, a hand edit described in
+prose, coordinator work). The owner's own to-dos are not judged by those rules.
+
 ## stories/S-NNN
 The owner writes a story and picks the backlog it belongs in. It reaches the backlog only through
 that repo's coordinator.
@@ -336,6 +349,43 @@ repo list (`GET /api/v1/repos`, `kitlib.hubsite.derived.repos`) is every reposit
 (`kitlib.pmstart.known_repos`: each session's repo in `sessions_file`, the PM's repository, this
 kit's repository and the optional `pm_start.repos`) with the aliases the store holds. An item whose
 repo is `all` is for every repo and shows under each one.
+
+## pages/<id> and page_html/<id>
+An agent's document: `pages/<id>` is its card, `page_html/<id>` = {html} its body. In `pages`,
+`kitlib/hubsite/schema.py` requires only `title` (a string); the page also reads `repo`, `from`,
+`summary`, `refs` (a list of ids), `at` and the store's own `updated_at`, each as text, and orders
+the list by `updated_at`, else `at`, newest first (`pageRows` in `kitlib/hubsite/web/index.html`).
+The ids have no prefix: the store assigns none (`Store.add` refuses `pages`), so a writer gives one
+with `put`. Nothing creates a page yet: no `tools/hub.py` verb, hub MCP tool or API route writes
+either collection, so a page exists only when `tools/hub.py migrate` copies one in from the old
+hub ("Data from the old hub" below) or it is placed in the store by hand.
+
+`GET /api/v1/snapshot` carries both collections whole, every body included
+(`test_snapshot_carries_pages_and_their_bodies` in `tests/hubsite/test_api.py`). A page with no
+body is listed with its Read here button disabled; a body with no page is not shown.
+
+The body is agent-written html. The page draws it nowhere but in the reader's one frame, made in
+script with a `sandbox` attribute that grants nothing (no scripts, forms, same-origin, popups or
+navigation of the hub page) and given the body through `srcdoc` behind a meta policy,
+`default-src 'none'; style-src 'unsafe-inline'; img-src data:; form-action 'none'; base-uri 'none'`
+(`DOC_CSP` in `kitlib/hubsite/web/index.html`; `DocsTest` and
+`PageTextTest.test_the_reader_is_one_locked_frame` in `tests/hubsite/test_page.py`). The policy
+blocks what the body loads by itself: images other than `data:`, CSS files, fonts, scripts, frames
+and form posts. A diagram therefore shows only as an inline `<svg>` or a `data:` image. Links are
+not blocked. A link clicked inside the reader moves the frame itself to that address, and the
+policy no longer applies there; the sandbox still blocks scripts and forms on that page. Some
+browsers may also look up the host names of links in advance (DNS prefetch). Agent documents are
+trusted to that level. The publish step is planned to remove links, `meta refresh` and `<link>`
+from a body.
+
+Esc closes the reader only while the focus is outside the frame: keys typed inside the sandboxed
+document never reach the hub page. The Close button always works. An open reader keeps the body it
+was opened with until it is closed, even when a later read of the snapshot changes or removes the page.
+
+`python tools/hub.py validate` (`_check_pages` in `kitlib/hubvalidate/__init__.py`) warns when a
+page's title is missing or empty, when a `page_html` has no string `html`, and when a `page_html`
+has no `pages` document (only when the `pages` collection exists). It does not warn about a page
+with no body.
 
 ## Views read live
 Never stored; read from their sources (`kitlib.hubsite.derived`, `kitlib.hubsite.backlog`):

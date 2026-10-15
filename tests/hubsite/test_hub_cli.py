@@ -16,7 +16,7 @@ import threading
 import unittest
 from unittest import mock
 
-from kitlib.hubsite import auth, httpd, schema, serve, tunnel
+from kitlib.hubsite import auth, httpd, schema, serve, todosteps, tunnel
 from kitlib.hubsite import settings as hub_settings
 from kitlib.hubsite.store import Store, StoreBusy
 from tests.hubsite import httpfix
@@ -1336,6 +1336,23 @@ class WriteCase(VerbCase):
         self.assertEqual(len(self.ok('todos', '--status', 'open')), 2)
         code, out, err = self.run_cli('todos', 'add', '--title', 't', '--owner', '--from', 'x')
         self.assertEqual((code, out), (2, ''))
+
+    def test_todos_add_steps_reads_a_json_file_and_the_server_renders_it(self):
+        steps = [{'open': 'C:\\w\\a.txt', 'line': 3}, {'run': 'python t.py'}]
+        good = self.file('steps.json', json.dumps(steps))
+        self.assertEqual(self.ok('todos', 'add', '--title', 't', '--detail', 'Why.',
+                                 '--command', 'first', '--steps', good), ['ADDED T-001'])
+        d = self.direct('/todos')['items'][0]
+        self.assertEqual(d['commands'], ['first'] + todosteps.render(steps))
+        self.assertEqual(d['detail'],
+                         'Why.\n\nopen C:\\w\\a.txt at line 3 in Notepad++\nrun python t.py')
+        self.assertNotIn('steps', d)
+        bad = self.file('bad.json', json.dumps([{'open': 'rel.txt'}]))
+        err = self.refused('todos', 'add', '--title', 't', '--steps', bad)
+        self.assertTrue(err.startswith('REFUSED invalid: steps[0]'), err)
+        err = self.refused('todos', 'add', '--title', 't', '--steps', self.file('x.json', '[1'))
+        self.assertIn('cannot read the steps file', err)
+        self.assertEqual(len(self.direct('/todos')['items']), 1)
 
     def test_stories_are_submitted_set_and_withdrawn(self):
         story = self.file('story.md', 'As the owner I want it.\n')

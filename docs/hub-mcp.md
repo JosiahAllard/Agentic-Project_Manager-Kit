@@ -72,7 +72,7 @@ and `hub_inbox_post` is a name in printable ASCII (`api._agent_from`).
 
 ## To-do steps
 
-`hub_todo_add` takes `steps`, a list of what the owner is to do, and `kitlib.hubsite.todosteps` turns each into a PowerShell command the owner pastes (`render`), appended after any `commands` given. One line per step (`summary`), such as `replace 2 lines in <file>` or `run python t.py`, ends the to-do's detail, after a blank line. A step has exactly one verb key:
+The hub's `POST /todos` takes `steps` (`kitlib/hubsite/api.py` `todo_steps`), from `hub_todo_add`, from `tools/hub.py todos add --steps F` (docs/action-hub.md) or from any other client: a list of what the owner is to do, and `kitlib.hubsite.todosteps` turns each into a PowerShell command the owner pastes (`render`), appended after any `commands` given. One line per step (`summary`), such as `replace 2 lines in <file>` or `run python t.py`, ends the to-do's detail, after a blank line. A step has exactly one verb key:
 
 | step | command |
 |---|---|
@@ -94,7 +94,9 @@ The edit command is one Windows PowerShell 5.1 `& { ... }` block (`todosteps` mo
 - the text asks the owner to open a file and change it by hand ("open X and apply the edits", "make the following changes"): give `edit` steps;
 - a command is coordinator work, judged per segment between `&&`, `||`, `;`, `|` and newlines: `git worktree add`/`remove`/`move`/`prune`, `gate.py`, `land.py`, `new_worktree.py`, `worktree_remove.py`, `sync_base.py`, a branch or tag delete, `update-ref -d` or `--stdin`, and a push that deletes, forces, mirrors or prunes.
 
-The rules match words, so they can refuse a to-do that only mentions one of these in a command; `git merge` and a plain push are not refused. Until the hub's own `POST /todos` applies them, they hold for `hub_todo_add` only (`kitlib.hubmcp.server` `_t_hub_todo_add`).
+The rules match words, so they can refuse a to-do that only mentions one of these in a command; `git merge` and a plain push are not refused. The hub's `POST /todos` applies them to every agent's to-do (`api.todo_steps`; the owner's own text is not judged), and refuses a lone surrogate in any `commands` entry for either role, as `invalid` field `commands`. `hub_todo_add` runs the same check before it calls the hub, so a refused to-do never reaches it, and posts `steps` as given for the hub to render (`kitlib.hubmcp.server` `_t_hub_todo_add`).
+
+The hub server loads this code when it starts, and the MCP server when its client starts it, so after a change to it lands restart both together (`hub.py restart`, docs/action-hub.md "Serving it"): a new MCP server with an older hub is refused with "this route takes no 'steps' field", and an older MCP server with a newer hub posts already-rendered commands, which the hub's check can refuse when an edit's text holds a word the rules match.
 
 ## The owner's tools (pinned, not shipped)
 

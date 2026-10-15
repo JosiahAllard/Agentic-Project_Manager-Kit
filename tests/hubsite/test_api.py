@@ -9,7 +9,7 @@ import tempfile
 import threading
 import unittest
 
-from kitlib.hubsite import api
+from kitlib.hubsite import api, todosteps
 from kitlib.hubsite.api import AGENT, BASE, OWNER
 from kitlib.hubsite.store import HubError, Store
 
@@ -406,6 +406,74 @@ class TodoTest(ApiCase):
         self.refused('invalid', 'status', 'GET', '/todos', AGENT, None, {'status': 'answered'})
 
 
+class TodoStepsTest(ApiCase):
+    """POST /todos takes steps and judges an agent's to-do (api.todo_steps), for every client,
+    not only the MCP tool."""
+
+    def test_steps_become_commands_after_the_given_ones_and_a_summary(self):
+        steps = [{'edit': 'C:\\w\\a.txt', 'old': 'x\ny', 'new': 'z'}, {'run': 'python t.py'}]
+        for role in (AGENT, OWNER):
+            with self.subTest(role=role):
+                obj = self.ok('POST', '/todos', role, {'title': 't', 'detail': 'Why.',
+                                                       'commands': ['first'], 'steps': steps})
+                d = self.store.get('todos', obj['id'])
+                self.assertNotIn('steps', d)
+                self.assertEqual(d['commands'], ['first'] + todosteps.render(steps))
+                self.assertEqual(d['detail'],
+                                 'Why.\n\nreplace 2 lines in C:\\w\\a.txt\nrun python t.py')
+
+    def test_steps_without_a_detail_make_the_summary_the_detail(self):
+        steps = [{'open': 'C:\\w\\a.txt', 'line': 3}]
+        for extra in ({}, {'detail': ''}, {'detail': None}):
+            with self.subTest(extra=extra):
+                obj = self.ok('POST', '/todos', AGENT, dict(extra, title='t', steps=steps))
+                d = self.store.get('todos', obj['id'])
+                self.assertEqual(d['detail'], 'open C:\\w\\a.txt at line 3 in Notepad++')
+                self.assertEqual(d['commands'], todosteps.render(steps))
+
+    def test_bad_steps_and_refused_text_are_refused_naming_the_field(self):
+        for body, field in (({'steps': [{'open': 'rel.txt'}]}, 'steps'),
+                            ({'steps': []}, 'steps'),
+                            ({'steps': 'run x'}, 'steps'),
+                            ({'steps': [{'edit': 'C:\\w\\a.txt', 'old': 'a\ud800', 'new': 'b'}]},
+                             'steps'),
+                            ({'steps': [{'run': 'notepad x'}]}, 'steps'),
+                            ({'commands': ['dir'], 'steps': [{'run': 'echo a\ud800b'}]}, 'steps'),
+                            ({'commands': ['git worktree add x']}, 'commands'),
+                            ({'commands': ['notepad C:\\a.txt']}, 'commands'),
+                            ({'commands': ['dir'], 'detail': 'Open it and apply the change.'},
+                             'detail')):
+            with self.subTest(body=body):
+                obj = self.refused('invalid', field, 'POST', '/todos', AGENT,
+                                   dict(body, title='t'))
+                self.assertTrue(obj['error']['message'], obj)
+
+    def test_a_lone_surrogate_in_a_command_is_refused_for_either_role(self):
+        for role in (AGENT, OWNER):
+            for c in ('echo a\ud800b', '\udc00'):
+                with self.subTest(role=role, command=c):
+                    obj = self.refused('invalid', 'commands', 'POST', '/todos', role,
+                                       {'title': 't', 'commands': ['dir', c]})
+                    self.assertIn('commands[1] holds a lone surrogate', obj['error']['message'])
+        self.ok('POST', '/todos', AGENT, {'title': 't', 'commands': ['echo \U0001f600']})
+
+    def test_commands_must_be_a_list(self):
+        self.refused('invalid', 'commands', 'POST', '/todos', AGENT,
+                     {'title': 't', 'commands': 'dir'})
+
+    def test_the_owners_own_text_is_not_judged_by_the_agent_rules(self):
+        obj = self.ok('POST', '/todos', OWNER, {'title': 't',
+                                                'commands': ['notepad C:\\a.txt'],
+                                                'detail': 'Open it and apply the change.'})
+        self.assertEqual(self.store.get('todos', obj['id'])['commands'], ['notepad C:\\a.txt'])
+
+    def test_edit_text_is_never_judged(self):
+        steps = [{'edit': 'C:\\w\\a.txt', 'old': 'git worktree add x', 'new': 'notepad'}]
+        obj = self.ok('POST', '/todos', AGENT, {'title': 't', 'steps': steps})
+        self.assertEqual(self.store.get('todos', obj['id'])['commands'],
+                         todosteps.render(steps))
+
+
 class StoryTest(ApiCase):
     def test_add(self):
         obj = self.ok('POST', '/stories', OWNER, {'repo': 'kit', 'title': 't', 'story': 's',
@@ -612,6 +680,16 @@ class ReadTest(ApiCase):
         self.assertEqual(obj['views']['backlog'], [{'repo': 'r', 'items': []}])
         self.assertEqual(obj['unavailable'], dict.fromkeys(('repos', 'usage', 'agents'),
                                                            'unavailable'))
+
+    def test_snapshot_carries_pages_and_their_bodies(self):
+        """The page's Docs section reads both from the snapshot: a change that trims either must change this."""
+        body = '<h1>Plan</h1><svg viewBox="0 0 1 1"></svg>'
+        self.store.put('pages', 'plan-1', {'title': 'The plan', 'repo': 'kit', 'at': '2026-10-15T00:00:00Z'})
+        self.store.put('page_html', 'plan-1', {'html': body})
+        for role in (OWNER, AGENT):
+            cols = self.ok('GET', '/snapshot', role)['collections']
+            self.assertEqual(cols['pages']['plan-1']['title'], 'The plan', role)
+            self.assertEqual(cols['page_html']['plan-1']['html'], body, role)
 
     def test_health(self):
         obj = self.ok('GET', '/health', OWNER)

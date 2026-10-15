@@ -50,7 +50,9 @@ than the baseline fails, a file with no baseline fails on its first hit, and few
   docs/content.md): backlog-ops, branch-review, branch-sync,
   coordinator-dispatch, doc-claims-discipline, flaky-test-triage, land-branch (uses
   `tools/land.py`), machine-lock-run, mutation-testing, session-handoff,
-  shell-and-worktree-traps, subagent-dispatch. branch-review and coordinator-dispatch hold the
+  shell-and-worktree-traps, subagent-dispatch, specialty-3d-assets, specialty-tech-art,
+  specialty-sound, specialty-review, specialty-research, specialty-records, specialty-spec.
+  branch-review and coordinator-dispatch hold the
   coordinator's procedure, loaded only when needed. Skills name kit tools by path
   (`tests/skills` checks each exists); `tools/doc_index.py`, `tools/doc_budget.py` and
   `tools/gate.json` are each repository's own.

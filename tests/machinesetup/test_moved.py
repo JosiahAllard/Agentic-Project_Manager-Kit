@@ -161,13 +161,16 @@ class MovedHooks(unittest.TestCase):
 
 @unittest.skipUnless(sys.platform == 'win32', 'directory junctions are Windows only')
 class MovedSkillLinks(unittest.TestCase):
-    def test_a_skill_link_into_the_pre_move_folder_is_repointed(self):
-        self.repointed(common.MOVED_FROM + '/skills')
+    """Machine setup makes no link (docs/machine-setup.md "Links"): a skill link into a folder the
+    skills have left is a leftover, reported with the command that removes it, not re-pointed."""
 
-    def test_a_skill_link_into_the_claude_shells_old_copy_is_repointed(self):
-        self.repointed(common.SHELL + '/skills')          # the rendered copy before decision 29
+    def test_a_skill_link_into_the_pre_move_folder_is_a_leftover(self):
+        self.reported(common.MOVED_FROM + '/skills')
 
-    def repointed(self, moved):
+    def test_a_skill_link_into_the_claude_shells_old_copy_is_a_leftover(self):
+        self.reported(common.SHELL + '/skills')           # the rendered copy before decision 29
+
+    def reported(self, moved):
         root = tempfile.mkdtemp(prefix='machinesetup-moved-links-')
         self.addCleanup(shutil.rmtree, root, True)
         kit, old, home = (os.path.join(root, n) for n in ('kit', 'old-kit', 'home'))
@@ -184,11 +187,12 @@ class MovedSkillLinks(unittest.TestCase):
         ctx = M.Context(home, kit, old_kit=old, config_dirs=[acct], host=T.FakeHost(kit), today=T.TODAY)
         plan = M.Plan()
         links.survey(plan, acct, ctx)
-        self.assertEqual(plan.refusals, [])
-        self.assertEqual(len(plan.changes), 1, [c.text for c in plan.changes])
-        self.assertIn('re-point the link', plan.changes[0].text)
-        plan.changes[0].do()
-        self.assertEqual(common.norm(common.link_target(link)), common.norm(want))
+        self.assertEqual((plan.changes, plan.refusals), ([], []))
+        self.assertIn(links.leftover(link, was), plan.notes['links'])
+        self.assertIn('cmd /c rmdir "%s"' % link, links.leftover(link, was))
+        self.assertTrue(common.is_link(link))                               # reported, left in place
+        self.assertTrue(os.path.isfile(os.path.join(want, 'SKILL.md')))
+        os.rmdir(link)                                                     # the link only
 
 
 class Retired(unittest.TestCase):

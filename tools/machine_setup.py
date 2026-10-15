@@ -7,8 +7,11 @@ It writes nothing into any repository: a repository works with the kit with noth
                                                        the machine config, the agents' temp folder
   machine_setup.py ... --apply                         make them
   machine_setup.py --old-kit DIR [--apply]             switch the Claude config folders from an
-                                                       older kit clone instead (links, settings,
-                                                       the owner's email, the extras)
+                                                       older kit clone instead (settings, the
+                                                       owner's email, the extras)
+                                                       In both modes no link is made: each link an
+                                                       earlier setup left is reported with the
+                                                       command that removes the link only
   machine_setup.py --repo PATH --owner-email EMAIL --agent-email EMAIL [--apply]
                                                        the committed repo setup instead: writes
                                                        .kit.json, the ignore lines, a starter
@@ -66,7 +69,7 @@ def parser():
     p = argparse.ArgumentParser(prog='machine_setup.py', description=__doc__.split('\n')[0],
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     mode = p.add_mutually_exclusive_group()
-    mode.add_argument('--old-kit', help='the older kit clone the machine links point into')
+    mode.add_argument('--old-kit', help='the older kit clone to switch the config folders from')
     mode.add_argument('--fresh', action='store_true', help='the default mode (its old name)')
     mode.add_argument('--repo', help='the committed repo setup of this repository instead')
     p.add_argument('--owner-email', default=None, help="the owner's email (the machine config; with "

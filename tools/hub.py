@@ -114,8 +114,12 @@ the server alone decides what a role may do.
   hub.py answer Q-1 --choice N|other [--note TEXT] [--if-version V]     (owner)
                                                      `ANSWERED Q-1 <label>`
   hub.py todos [--status S] [--repo R]              `T-1 open [repo] title` for each
-  hub.py todos add --title T [--detail D] [--command C ...] [--repo R] [--refs ID ...]
-        [--urgent] [--from NAME | --owner]           `ADDED T-2`; --owner: the owner's own to-do
+  hub.py todos add --title T [--detail D] [--command C ...] [--steps F] [--repo R]
+        [--refs ID ...] [--urgent] [--from NAME | --owner]
+                                                     `ADDED T-2`; --owner: the owner's own to-do;
+                                                     --steps F: a UTF-8 JSON file holding the
+                                                     list of steps the hub makes into commands
+                                                     (docs/hub-mcp.md "To-do steps")
   hub.py todos done T-1 [--undo] [--if-version V]   (owner) `DONE T-1`, `REOPENED T-1`
   hub.py todos ack T-1                              `ACKED T-1`
   hub.py stories [--status S] [--repo R]            `S-1 v2 submitted [repo] title` for each
@@ -333,6 +337,9 @@ def _client_verbs(sub):
     x.add_argument('--detail')
     x.add_argument('--command', dest='commands', action='append', metavar='C',
                    help='a command the to-do names (repeatable)')
+    x.add_argument('--steps', dest='steps_file', metavar='F',
+                   help='a UTF-8 JSON file holding a list of steps: {edit, old, new}, '
+                        '{open, line} or {run}; the hub makes them commands after --command')
     _repo(x)
     x.add_argument('--refs', nargs='+', metavar='ID')
     x.add_argument('--urgent', action='store_true')
@@ -825,6 +832,15 @@ def _text_of(path, what):
         raise serve.ServeError('cannot read the %s file %s: %s' % (what, path, type(e).__name__))
 
 
+def _json_of(path, what):
+    """The JSON value of a UTF-8 file (a BOM is skipped); the server judges its shape."""
+    try:
+        with open(path, encoding='utf-8-sig') as f:
+            return json.load(f)
+    except (OSError, ValueError) as e:
+        raise serve.ServeError('cannot read the %s file %s: %s' % (what, path, type(e).__name__))
+
+
 def _body(**fields):
     """The fields that were given: None, an empty list and a flag that is off are left out."""
     return {k: v for k, v in fields.items()            # 0 is a value: a place, a version
@@ -863,6 +879,8 @@ def _todos(a, stop):
     if a.sub == 'add':
         body = _body(title=a.title, detail=a.detail, commands=a.commands,
                      repo=getattr(a, 'repo', None), refs=a.refs, urgent=a.urgent)
+        if a.steps_file:
+            body['steps'] = _json_of(a.steps_file, 'steps')
         if a.who:
             body['from'] = a.who
         got = hub.post('/todos', client.OWNER if a.owner else client.AGENT, body)

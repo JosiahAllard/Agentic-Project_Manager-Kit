@@ -295,18 +295,18 @@ An account set up by `machine_setup.py` has per-item junctions under `~/.claude`
 skills, hooks and agents the plugin now loads. Remove them in stages, in this order.
 
 **Stage 1.** At install, remove the kit's `~/.claude/skills/*` junctions, or each skill appears twice.
-Only the 12 kit skill names are touched (the directories under `content/skills`); any other link stays.
+Only the 19 kit skill names are touched (the directories under `content/skills`); any other link stays.
 `cmd /c rmdir` removes the link only, never the target:
 
 ```powershell
-$kit = 'backlog-ops','branch-review','branch-sync','coordinator-dispatch','doc-claims-discipline','flaky-test-triage','land-branch','machine-lock-run','mutation-testing','session-handoff','shell-and-worktree-traps','subagent-dispatch'
+$kit = 'backlog-ops','branch-review','branch-sync','coordinator-dispatch','doc-claims-discipline','flaky-test-triage','land-branch','machine-lock-run','mutation-testing','session-handoff','shell-and-worktree-traps','subagent-dispatch','specialty-3d-assets','specialty-tech-art','specialty-sound','specialty-review','specialty-research','specialty-records','specialty-spec'
 Get-ChildItem "$env:USERPROFILE\.claude\skills" -Force |
   Where-Object { $_.LinkType -eq 'Junction' -and $_.Name -in $kit } |
   ForEach-Object { cmd /c rmdir "$($_.FullName)" }
 Get-ChildItem "$env:USERPROFILE\.claude\skills" -Force | Where-Object { $_.LinkType -and $_.Name -in $kit }
 ```
 
-The last command must print nothing. Then `ListSkills` shows each of the 12 names once.
+The last command must print nothing. Then `ListSkills` shows each of the 19 names once.
 
 **Stage 1b.** Gated on the KIT-AGENTS-IN-PLUGIN rename landing; do not do this before.
 
@@ -320,9 +320,17 @@ cmd /c rmdir "$env:USERPROFILE\.claude\agents"
 `settings.json` no longer calls a guard through `~/.claude/hooks`. Check by searching
 `$env:USERPROFILE\.claude\settings.json` for `\.claude\\hooks`: it must have no hit.
 
-**Stage 3.** The `tools/*` and `knowledge/*` junctions stay for now: `~/.claude/tools/machine_lock` is the live
-lock path, and `machine_setup.py --apply` recreates those links. Record KIT-JUNCTIONS-TOOLS-KNOWLEDGE
-retires them.
+**Stage 3.** The `tools/*` and `knowledge/*` junctions go last. Machine setup makes no link: it
+reports each one an earlier setup left, and re-points a `settings.json` path through
+`~/.claude/tools/<name>` (the status line's, for one) to the kit's own file (docs/machine-setup.md
+"Links"). Run it with `--apply` first, then remove each link with the line its dry run prints, which
+removes the link only, never the target (never `/s`):
+
+```
+leftover link <path> -> <target>: remove it with: cmd /c rmdir "<path>"
+```
+
+A second dry run then reports no leftover link.
 
 `<kit>/tools/backlog.py -C <worktree> add` needs at least one `--scope <path>` (`none` for a record that touches no
 tracked file); without one it refuses (docs/backlog.md). It also needs `--found-on <branch>` (or

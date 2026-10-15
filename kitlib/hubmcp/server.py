@@ -32,7 +32,6 @@ from kitlib.hubsite import auth as hubauth
 from kitlib.hubsite import client as hubclient
 from kitlib.hubsite import serve as hubserve
 from kitlib.hubsite import settings as hubsettings
-from kitlib.hubsite import todosteps
 
 SERVER_VERSION = "0.1.0"
 PROTOCOLS = ("2025-06-18", "2025-03-26", "2024-11-05")    # newest first
@@ -318,19 +317,14 @@ class Server:
         return {"ok": True, "items": self.client().inbox()}
 
     def _t_hub_todo_add(self, a):
-        """Steps become commands, after the given ones, and their summary ends the detail; the
-        owner's to-do rules (todosteps.check) refuse the agent's text before any call."""
-        a = dict(a)
-        steps = a.pop("steps", None)
+        """The hub makes the steps into commands and detail (kitlib.hubsite.api.todo_steps), so
+        they go to it as given. The same check runs here first, so a to-do it refuses (a bad
+        step, a lone surrogate in a command, text the owner's to-do rules forbid) is refused
+        with the hub's own words and never reaches the hub."""
         try:
-            todosteps.check(dict(a, steps=steps))
-            if steps is not None:
-                a["commands"] = list(a.get("commands") or []) + todosteps.render(steps)
-                lines = "\n".join(todosteps.summary(steps))
-                a["detail"] = (a["detail"].rstrip() + "\n\n" + lines) if a.get("detail") \
-                    else lines
-        except (todosteps.StepError, todosteps.Refused) as e:
-            raise ToolError("invalid", str(e), e.field)
+            hubapi.todo_steps(a)
+        except hubapi.HubError as e:
+            raise ToolError(e.code, e.message, e.field)
         return self._route("hub_todo_add", a)
 
     # ---------------------------------------------------------------- JSON-RPC
