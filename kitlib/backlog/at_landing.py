@@ -488,6 +488,24 @@ def _after_put_back(store, rid, branch, command, reason, named=False, act=None):
                '' if named else ' by %s' % branch, past, command('show', rid)))
 
 
+def _refused_advice(exc, backend, root, act, args, command):
+    """How to make a write the store refused: `command(*args)`, except on the implicit default
+    `ref` store (store.default_store_refusal), which refuses that command too: there it is the
+    same write against the PM data worktree the refusal names, or, with none, the command once
+    .kit.json names its store."""
+    if not (isinstance(exc, Refusal) and getattr(backend, 'implicit', False)):
+        return '%s it with: %s' % (act.verb, command(*args))
+    try:
+        pm_root, _why = pm_data_root(root)
+    except Exception:                       # noqa: BLE001 - the advice is best effort
+        pm_root = None
+    if pm_root:
+        return '%s it in the PM data worktree with: %s' % (
+            act.verb, backlog_command(pm_root.replace('\\', '/'), *args))
+    return '%s it, once .kit.json names its "backlog".store, with: %s' % (act.verb,
+                                                                          command(*args))
+
+
 def _close_in(backend, root, cfg, branch, merge, session, command, named=(), seen=None,
               quiet=(), part=None):
     """close_landed for one store: `backend` of the repository or worktree `root` with `cfg`;
@@ -617,9 +635,10 @@ def _close_in(backend, root, cfg, branch, merge, session, command, named=(), see
         except Exception as exc:            # one record's failure never stops the others
             what = ('%s: %s' % (exc.label, exc) if isinstance(exc, Refusal)
                     else '%s: %s' % (type(exc).__name__, exc))
-            lines.append('WARNING: %s landed, and %s%s, was not %s (%s); %s it with: %s'
-                         % (branch, rid, how, act.past, _one_line(what), act.verb,
-                            command(*act_args(act, rid))))
+            lines.append('WARNING: %s landed, and %s%s, was not %s (%s); %s'
+                         % (branch, rid, how, act.past, _one_line(what),
+                            _refused_advice(exc, backend, root, act, act_args(act, rid),
+                                            command)))
             seen.not_done(rid, act)
             continue
         if not change.writes:

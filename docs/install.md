@@ -116,8 +116,9 @@ or its PowerShell front end `installer/new-repo.ps1`, which passes its parameter
    powershell -NoProfile -File installer\new-repo.ps1 -Target <checkout> -OwnerEmail <owner> -AgentEmail <agents> [-MainBranch main] [-RepoName <name>] [-Stack python] [-Stubs]
    ```
 
-   It prints what it would write: `.kit.json` (`"repo".main_branch`, `"repo".name`, `"owner".email`,
-   `"owner".agent_emails`), `.gitignore` and `.gitattributes`, a starter `docs/INDEX.md`, with
+   It prints what it would write: `.kit.json` (`"repo".main_branch`, `"repo".name`,
+   `"backlog".store` `"ref"`, `"owner".email`, `"owner".agent_emails`), `.gitignore` and
+   `.gitattributes`, a starter `docs/INDEX.md`, with
    `--stack` the stack's `tools/gate.json`, and with `--stubs` only the stubs (by
    `kitlib.stubs`, as `kit_stubs.py write -C <target>`; without it the dry run says `stubs: none`),
    and under `memory:` the `autoMemoryDirectory` key
@@ -186,7 +187,9 @@ or its PowerShell front end `installer/new-repo.ps1`, which passes its parameter
      a `"` in either (usage, 2). A repository already set up (its `.kit.json` makes the setup
      refuse) runs that command directly.
 4. **An existing repository with its own copies of the tools** skips the setup. It needs a
-   `.kit.json` only when it wants more than the defaults (docs/kit-json.md); its
+   `.kit.json` only when it wants more than the defaults (docs/kit-json.md), and one that
+   writes backlog records names its store there (`"backlog": {"store": "ref"}` or a folder:
+   the default store alone is read-only, docs/backlog.md "Stores"); its
    own copies are then removed, since agents run the kit's tools from `<kit>`. A repository that
    wants stubs in their place instead runs
    `python <kit>/tools/kit_stubs.py write -C <repo> --replace`, then a commit.
@@ -207,7 +210,7 @@ or its PowerShell front end `installer/new-repo.ps1`, which passes its parameter
   plus the repository's README and instructions file (docs/agent-profile.md).
 - `.claude/settings.json`: the kit ships none (docs/go-live.md "Joint-review questions"); the
   setup adds only its `autoMemoryDirectory` key, to the ignored `.claude/settings.local.json` (step 2).
-- `backlog/.gitkeep` is not needed (the backlog store is the ref `refs/backlog/main`), and
+- `backlog/.gitkeep` is not needed (the setup's `.kit.json` names the ref store `refs/backlog/main`), and
   `.github/workflows/instructions.yml` is not shipped: the stack workflows do not mention it.
 - Anything outside the repository: the ledger, the lock and the user config are per machine.
 

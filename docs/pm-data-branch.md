@@ -17,7 +17,7 @@ One git repository holds the public kit and one user's private PM data (rulings 
 
 The root commit is recorded when the branch is made, so the guard still knows it if the branch is renamed or deleted. The branch is called `pmdata`, not `pm`, so `pm/<slug>` work branches keep working (git refuses `refs/heads/pm/x` while `refs/heads/pm` exists; `pmdata/<slug>` would collide the same way, so no work branch uses that prefix). A test asserts `init` refuses the name `pm`.
 
-The data worktree's `.kit.json` (on `pmdata`) sets `repo.main_branch: "pmdata"` and `repo.remote` to the private remote, so every tool that reads "the main branch" and "the remote" there means the data branch and the private remote. Its `backlog.store` must be a folder, `main` or `branch`, never `ref`: the repository's one `refs/backlog/main` belongs to the kit, and the data branch must not share it. `pm_data.py init` refuses a `.kit.json` that says `ref`.
+The data worktree's `.kit.json` (on `pmdata`) sets `repo.main_branch: "pmdata"` and `repo.remote` to the private remote, so every tool that reads "the main branch" and "the remote" there means the data branch and the private remote. Its `backlog.store` must be a folder, `main` or `branch`, never `ref`: the repository's one `refs/backlog/main` is not the data branch's, and the data branch must not share it. A checkout of the same repository whose `.kit.json` names no store reads that ref and is refused a write there, pointed at this worktree's store (docs/backlog.md "Stores"). `pm_data.py init` refuses a `.kit.json` that says `ref`.
 
 ## Making the branch (`tools/pm_data.py init`)
 

@@ -4,7 +4,9 @@ setup writes nothing into a repository by default, and this mode keeps the old c
 a repository that wants it. Nothing here prints or exits: run() gives the exit code and the lines.
 
 The target is an existing git checkout, named by its top level. It writes these and nothing else:
-  <target>/.kit.json          "repo".main_branch and .name, "owner".email and .agent_emails, and
+  <target>/.kit.json          "repo".main_branch and .name, "backlog".store "ref" (named, so the
+                              backlog tool writes it: kitlib.backlog.store.open_backend), "owner".email
+                              and .agent_emails, and
                               with a stack "gate": "tools/gate.json". The name is `repo_name`,
                               else the folder's name lower-cased; either must be a lower-case repo
                               name, or it refuses.
@@ -222,6 +224,7 @@ class Setup(object):
         self.text = ('{\n'
                      '  "repo": {"main_branch": "%s", "name": "%s"},\n'
                      '%s'
+                     '  "backlog": {"store": "ref"},\n'
                      '  "owner": {"email": "%s", "agent_emails": ["%s"]}\n'
                      '}\n' % (c.main_branch, self.repo_name, gate_line, c.owner_email, c.agent_email))
         self.line_files = [self._plan_line_file('.gitignore', self.stack_lines['gitignore']),

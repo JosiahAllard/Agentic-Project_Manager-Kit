@@ -9,7 +9,7 @@ import unittest
 
 from kitlib.backlog import record as rmod
 from kitlib.backlog import store as smod
-from tests.backlog.helpers import ADD_FLAGS
+from tests.backlog.helpers import ADD_FLAGS, kit_json_ref
 from tests.gitfixture import TempRepo, fixture_env, rmtree
 from kitlib.config import user as kuser
 
@@ -25,6 +25,7 @@ class Cli(unittest.TestCase):
         home = self.home = tempfile.mkdtemp(prefix='kit-home-')
         self.addCleanup(rmtree, home)
         self.env = fixture_env({'USERPROFILE': home, 'HOME': home})
+        kit_json_ref(self.repo)              # the store these writes go to is named
 
     def run_tool(self, *args):
         p = subprocess.run([sys.executable, TOOL, '-C', self.repo.root] + list(args),
@@ -219,10 +220,7 @@ class RulingCitesUnchecked(unittest.TestCase):
         self.ledger = os.path.join(self.home, 'rulings.md')
         with open(self.ledger, 'w', encoding='utf-8', newline='\n') as f:
             f.write(self.LEDGER)
-        with open(os.path.join(self.repo.root, '.kit.json'), 'w', encoding='utf-8') as f:
-            json.dump({'backlog': {'ledger_repo': 'kit'}}, f)    # the ledger's repo column here
-        self.repo.git('add', '.kit.json')
-        self.repo.git('commit', '-q', '-m', 'kit config')
+        kit_json_ref(self.repo, {'backlog': {'ledger_repo': 'kit'}})  # the ledger's repo column
 
     def configure(self, **extra):
         os.makedirs(kuser.config_dir(self.home), exist_ok=True)

@@ -104,6 +104,7 @@ Any denial: stop and report it.
 
 - The store is read and written only through `python <kit>/tools/backlog.py -C <worktree>` (docs/backlog.md; the
   place is `"backlog".store` in `.kit.json`), never by hand. Skill backlog-ops has the forms.
+  With no store named, the default `ref` store is read-only; `"backlog": {"store": "ref"}` opts in to writing it.
 - Priority: `-` = not yet assessed (every new record), `1`-`5` = assessed (5 highest), `-1` =
   assessed, only the owner can settle; no other unvalued state. An agent prices (`--priority-by agent`, 2-5) at start the unpriced open
   records that are not follow-ups, after checking each for duplicates, size and fit; a follow-up stays unpriced

@@ -55,7 +55,7 @@ Off with no file, each switched on by its key: `repo.push_block` (a push to main
 - `roles.<role>.edit_main_checkout` (bool): may edit files in a main checkout; unset: the base role (main: true, any other: false)
 - `roles.<role>.mode` (controller|write|read|test|lander): the role policy this role is held to, over its role file's `mode` (docs/guard.md "Role policy"); unset: the role file's, else none
 - `roles.<role>.why` (string): the ruling that grants it
-- `backlog.store` (ref|branch|main or repo path, default "ref"): the record store: ref (refs/backlog/main), branch (the backlog branch), main (docs/backlog) or a folder (docs/backlog.md)
+- `backlog.store` (ref|branch|main or repo path, default "ref"): the record store: ref (refs/backlog/main), branch (the backlog branch), main (docs/backlog) or a folder (docs/backlog.md); the default ref is read-only, so a repository that writes records names its store
 - `backlog.phases` (list of string, default []): phase names in order
 - `backlog.id_grammar` (upper|mixed, default "upper"): item id spelling
 - `backlog.code_main` (string): the branch code lands on, which `add --found-on` measures a branch's diff from; default repo.main_branch
