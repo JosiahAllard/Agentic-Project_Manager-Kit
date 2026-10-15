@@ -213,6 +213,21 @@ class LoopCase(unittest.TestCase):
              api.WAIT_MAX_S + client.WAIT_MARGIN_S),
             (api.BASE + '/wait?pending=1&since=7&timeout=5', 5 + client.WAIT_MARGIN_S)])
 
+    def test_for_key_goes_on_every_turn_of_a_wait_and_on_pending(self):
+        idle = {'timed_out': True, 'revision': 7, 'changes': [], 'pending': []}
+        hit = {'timed_out': False, 'revision': 9, 'changes': [], 'pending': [{'id': 'Q-1000'}]}
+        hub = self.hub([dict(idle), hit, {'items': [{'id': 'Q-1000'}]}, {'items': []}],
+                       api.WAIT_MAX_S)
+        self.assertEqual(hub.wait(pending=True, for_key='kit'), hit)
+        self.assertEqual(hub.pending(for_key='kit'), [{'id': 'Q-1000'}])
+        self.assertEqual(hub.pending(), [])
+        top = '%g' % api.WAIT_MAX_S
+        self.assertEqual([a[1] for a in self.asked], [
+            api.BASE + '/wait?for=kit&pending=1&timeout=' + top,
+            api.BASE + '/wait?for=kit&pending=1&since=7&timeout=' + top,
+            api.BASE + '/pending?for=kit',
+            api.BASE + '/pending'])
+
 
 class WireCase(unittest.TestCase):
     def test_a_call_names_a_neutral_client_and_goes_to_the_loopback_port_only(self):

@@ -23,7 +23,9 @@ then `GET /api/v1/pending`) waits at most `HUB_SITE_TIMEOUT_S` (1.5 seconds). Th
 `hub: wait --pending is running` or a line telling the PM to start
 `hub.py wait --pending` in the background and start it again after it ends. "Running" is matched by
 command text only: any `python` process on the machine whose command line holds `hub.py`, `wait`
-and `--pending` counts, so another session's `wait --pending` makes this line say running. Failures,
+and `--pending`, and no `--for` other than `--for pm`, counts (`_wait_running` in
+`kitlib/pmstart/__init__.py`): a session's `wait --pending --for <key>` waits on its own answers
+and is not the PM's, but another PM session's plain `wait --pending` makes this line say running. Failures,
 each one line:
 - Nothing listens: `hub: hub server down (nothing listens on port <n>): start it with python
   "<kit>/tools/hub.py" serve`.

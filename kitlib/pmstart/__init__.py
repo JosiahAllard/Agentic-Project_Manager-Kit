@@ -162,9 +162,14 @@ def _hub_client(port):
     return client.Client(port, tokens=folder, timeout=HUB_SITE_TIMEOUT_S)
 
 
+# a wait's `--for KEY` or `--for=KEY`, the key quoted or not
+_WAIT_FOR = re.compile(r'--for(?:=|\s+)"?([^\s"]*)')
+
+
 def _wait_running(procs):
-    """Whether a `hub.py wait --pending` process is in `procs` (a list, or a function giving
-    one: asked only when the server is up; a list that cannot be had counts as none)."""
+    """Whether the PM's `hub.py wait --pending` process is in `procs` (a list, or a function
+    giving one: asked only when the server is up; a list that cannot be had counts as none). A
+    wait `--for` a key other than `pm` is another session's, waiting on its own answers."""
     try:
         procs = procs() if callable(procs) else procs
     except Exception:
@@ -172,7 +177,8 @@ def _wait_running(procs):
     for p in procs or []:
         cmd = p.get("CommandLine") or ""
         if (p.get("Name") or "").lower().startswith("python") and "hub.py" in cmd \
-                and " wait" in cmd and "--pending" in cmd:
+                and " wait" in cmd and "--pending" in cmd \
+                and all(k == "pm" for k in _WAIT_FOR.findall(cmd)):
             return True
     return False
 

@@ -12,7 +12,9 @@ Layout under the store folder `root` (the caller resolves it; nothing here reads
     <root>/_store.lock              the single-writer lock (below); never a document
 
 Only schema.COLLECTIONS are read and written; any other folder (parked/ from the old hub) is left
-alone.
+alone. A question whose `recommended` is text that stands for a number (kitlib.hubsite.migrate's
+rule, schema.whole_recommended) is read as that number, so its next write stores the number; its
+file is not rewritten until then.
 
 One writer. Store.open takes kitlib.fs.treelock.TreeLock on `_store.lock` for the life of
 the Store: an msvcrt byte-range lock the system drops when the holder exits, however it exits. A
@@ -35,7 +37,9 @@ skipped, never a document newer than the revision. Store.open also raises each i
 highest id on disk, treating an unreadable or empty _meta.json as missing, and removes the temp
 files a crash left. An id is never given twice, unless _meta.json is lost or rolled back after the
 document holding the highest id was deleted: the counter is then rebuilt from the ids still on
-disk. A put of a server-style id (Q-005) raises its counter too, committed with the meta.
+disk. A put of a server-style id (Q-005) raises its counter too, committed with the meta. A
+counter never starts below ID_FLOOR: the first question add gives is Q-1000, whatever the
+store holds below it.
 
 Ids are file names, and NTFS ignores case: a new id that differs only in case from an existing
 one (Alpha beside alpha) is refused, HubError invalid.
@@ -80,11 +84,16 @@ RING = 512                      # events held for changes_since and wait
 REPLACE_S = 2.0                 # how long os.replace is retried while a reader holds the file
 REFUSED = ('handstep-commands',)    # warn-level hubvalidate codes the store refuses (section 9)
 TMP_SUFFIX = '.tmp'
+# The lowest id add gives, by prefix (1 when absent). The rulings ledger cites questions up to
+# Q-978 from before the store, whose counter had fallen below them; new questions start at
+# Q-1000 so no id the ledger cites is given again (an owner ruling).
+ID_FLOOR = {'Q': 1000}
 
 Result = collections.namedtuple('Result', 'id version revision warnings')
 Event = collections.namedtuple('Event', 'rev collection id op status')
 Changes = collections.namedtuple('Changes', 'revision events reset')
-Pending = collections.namedtuple('Pending', 'kind id title repo at')
+# sender: the document's own `from` as stored ('' when it has none); the api routes on it
+Pending = collections.namedtuple('Pending', 'kind id title repo at sender', defaults=('',))
 
 
 class HubError(Exception):
@@ -246,7 +255,9 @@ class Store(object):
             for n in names:
                 path = os.path.join(folder, n)
                 if n.lower().endswith('.json') and len(n) > 5 and os.path.isfile(path):
-                    docs[n[:-5]] = _read_json(path)
+                    # a legacy question's text `recommended` is read as the number it stands for
+                    # (migrate's rule), so schema.check does not refuse every later update of it
+                    docs[n[:-5]] = schema.whole_recommended(coll, _read_json(path))[0]
             self._docs[coll] = docs
         meta_path = os.path.join(self.root, META_NAME)
         try:
@@ -259,7 +270,8 @@ class Store(object):
         for coll, prefix in schema.ID_PREFIX.items():
             n = saved.get(prefix, 0)
             n = n if isinstance(n, int) and not isinstance(n, bool) else 0
-            self._counters[prefix] = max([n] + [_id_number(prefix, d) for d in self._docs[coll]])
+            self._counters[prefix] = max([n, ID_FLOOR.get(prefix, 1) - 1]
+                                         + [_id_number(prefix, d) for d in self._docs[coll]])
         self._known = self._revision
 
     def close(self):
@@ -447,13 +459,14 @@ def _s(v):
 def pending_items(docs):
     """[Pending] of owner input not yet handled in docs ({collection: {id: document}}), oldest
     first: questions answered and not logged, stories submitted, to_pm items sent, and to-dos
-    done or added by the owner (`from: you`) with no pm_ack. Inbox reads are not pending."""
+    done or added by the owner (`from: you`) with no pm_ack. Inbox reads are not pending. A
+    question's and a to-do's `sender` is its stored `from`; a story's and a note's is ''."""
     out = []
     for doc_id, d in docs.get('questions', {}).items():
         if d.get('status') == 'answered':
             ans = d.get('answer') if isinstance(d.get('answer'), dict) else {}
             out.append(Pending('question', doc_id, _s(d.get('title')), _s(d.get('repo')),
-                               _s(ans.get('at'))))
+                               _s(ans.get('at')), _s(d.get('from'))))
     for doc_id, d in docs.get('stories', {}).items():
         if d.get('status') == 'submitted':
             out.append(Pending('story', doc_id, _s(d.get('title')), _s(d.get('repo')),
@@ -466,5 +479,6 @@ def pending_items(docs):
     for doc_id, d in docs.get('todos', {}).items():
         if not d.get('pm_ack') and (d.get('status') == 'done' or d.get('from') == 'you'):
             out.append(Pending('todo', doc_id, _s(d.get('title')), _s(d.get('repo')),
-                               _s(d.get('done_at')) or _s(d.get('added_at'))))
+                               _s(d.get('done_at')) or _s(d.get('added_at')),
+                               _s(d.get('from'))))
     return sorted(out, key=lambda p: (p.at, p.kind, p.id))
