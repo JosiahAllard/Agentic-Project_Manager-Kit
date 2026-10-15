@@ -333,7 +333,8 @@ def _fold_overlap(snap, ctx, rid, branch, scopes):
     `branch` changed since its merge base with the code main, or the scope of a record `branch`
     holds pulled; a member that cannot be compared counts as an overlap. Refusal too when
     `branch` is neither a local branch, nor a branch of any remote as last fetched, nor a branch
-    that landed on the code main (a `Merge <branch>` merge in its history, `landing_merge`).
+    that landed on the code main (a `Merge <branch>` merge on its first-parent chain,
+    `landing_merge`); Failure, not that Refusal, when the code main does not resolve.
     Returns the NOTE lines: a branch only remotes have has the diff of each remote's tip
     compared; a landed branch has no diff to compare; the pulled scopes are checked either way.
     Every ref name is matched in any letter case, against git's own list of names
@@ -346,8 +347,12 @@ def _fold_overlap(snap, ctx, rid, branch, scopes):
     if note:
         notes.append(note)
     if not tips:
-        _base, sha = _code_main(ctx)
-        merge = sha and landing_merge(ctx.root, ctx.code_main, branch, rev=sha, any_case=True)
+        base, sha = _code_main(ctx)
+        if not sha:
+            raise Failure('the code main `%s` does not resolve here, so whether %s landed cannot '
+                          'be told: set `backlog.code_main` in .kit.json to the branch code lands '
+                          'on' % (base, branch))
+        merge = landing_merge(ctx.root, ctx.code_main, branch, rev=sha, any_case=True)
         if not merge:
             raise Refusal('cannot add %s: `--found-on %s` names a branch that exists neither '
                           'here nor on a remote (as last fetched): pass an existing branch, or '
@@ -1089,13 +1094,15 @@ def _collisions(rec, holding):
 def landing_merge(root, main_branch, branch, since=None, rev=None, any_case=False):
     """The landing merge of `branch` on `main_branch` (`<short sha> <subject>`, the subject
     `Merge <branch>` or `Merge <branch>: <summary>` as kitlib/gate/land.py writes it), or None
-    when its history has none. `since` (a `YYYY-MM-DD` day, the record's `pulled_at`) skips a
-    merge committed on an earlier day: an older landing of a branch whose name was later reused.
+    when its history has none. Only merges on the first-parent chain count: a `Merge <branch>`
+    merge brought in inside another branch was not made on `main_branch`. `since` (a
+    `YYYY-MM-DD` day, the record's `pulled_at`) skips a merge committed on an earlier day: an
+    older landing of a branch whose name was later reused.
     A merge on that day still counts. `rev` is the history searched (None: the local
     `main_branch`); `any_case` matches the branch name in any letter case. Failure when git
     cannot say."""
     want = 'Merge %s' % branch
-    args = ['log', '--merges', '--format=%h %cs %s', '-F', '--grep', want]
+    args = ['log', '--merges', '--first-parent', '--format=%h %cs %s', '-F', '--grep', want]
     if any_case:
         args.append('-i')
     out, why = cmd.run_text(args + [rev or 'refs/heads/%s' % main_branch, '--'], root)
