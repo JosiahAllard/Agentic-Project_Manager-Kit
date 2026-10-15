@@ -699,10 +699,12 @@ def merge_state(root):
     return saved
 
 
-def head_moved_line(head, now):
+def head_moved_line(head, now, made=False):
+    """The refusal's first line; `made`: this call's commit was made on `now` and still exists."""
     return ('refused: HEAD moved during this call (another writer committed %s on top of %s); '
-            'this commit would have reverted their change.' % (now[:12] or 'nothing',
-                                                                 head[:12] or 'an unborn branch'))
+            '%s' % (now[:12] or 'nothing', head[:12] or 'an unborn branch',
+                    'this call\'s commit was made on theirs.' if made
+                    else 'this commit would have reverted their change.'))
 
 
 def undo_commit(root, new, parent, saved, merged):
@@ -769,16 +771,20 @@ def tagged_entry(root, tag):
 
 def commit_only(root, head, snap, msg):
     """`git commit` of exactly `snap` (index_snapshot) on `head` (head_commit) through
-    private_index; `(rc, out, err, commit id, note lines)`. The real index is never written: its
-    entries for `snap` already match the new HEAD, and every other staged entry stays staged.
+    private_index; `(rc, out, err, commit id, note lines, trees)`. `trees` is None when the commit
+    holds exactly the tree built, else `(tree built, tree committed)`: a hook changed it, and
+    align_index brings the real index's entries for the paths that differ into line. Every other
+    staged entry stays staged.
     HEAD must not move under the call: checked just before `git commit` (refused), and read back
-    after it. A HEAD read back whose first parent is `head` is this call's commit, whatever a hook
-    changed in it: git commit moves HEAD only from the HEAD it read, so another writer's commit can
-    only sit on top of it. Otherwise this call's commit and the HEAD it was made on come from the
-    one reflog entry tagged with this call's GIT_REFLOG_ACTION (tagged_entry):
+    after it. A HEAD read back whose first parent is `head` and that holds the tree and message
+    built is this call's commit. When a hook may have changed it, the reflog entry tagged with this
+    call's GIT_REFLOG_ACTION (tagged_entry) decides: with no entry, or one naming that HEAD, it is
+    this call's (git commit moves HEAD only from the HEAD it read). Otherwise this call's commit
+    and the HEAD it was made on come from that entry:
     - this call's commit at HEAD, made on a HEAD another writer moved: undone (undo_commit) and
       refused;
     - this call's commit made on `head`, another writer's on top of it: it stands (a NOTE line);
+      refused, NOT undone, when HEAD no longer contains it;
     - this call's commit made on a moved HEAD, another writer's on top: refused, NOT undone, naming
       the commit it may revert.
     With no such entry (no reflog, the fake git), the commit at HEAD is this call's only when its
@@ -789,11 +795,11 @@ def commit_only(root, head, snap, msg):
     try:
         env, why = private_index(root, tmp, head, snap)
         if env is None:
-            return 1, '', why, '', []
+            return 1, '', why, '', [], None
         r = cmd.call(['write-tree'], root, env=env)
         if r.rc != 0:
             return r.rc, '', 'git write-tree of the private index failed: %s' % (
-                r.err or 'exit %s' % r.rc), '', []
+                r.err or 'exit %s' % r.rc), '', [], None
         tree = r.out.decode('utf-8', 'replace').strip()
         now = head_commit(root)
         if now != head:
@@ -805,7 +811,7 @@ def commit_only(root, head, snap, msg):
         shutil.rmtree(tmp, ignore_errors=True)
     gout = r.out.decode('utf-8', 'replace')
     if r.rc != 0:
-        return r.rc, gout, r.err, '', []
+        return r.rc, gout, r.err, '', [], None
     rc, out, err = _git(root, 'log', '-1', READ_BACK_FORMAT, 'HEAD')
     first, _nl, body = out.partition('\n')
     ids = first.split()
@@ -815,14 +821,17 @@ def commit_only(root, head, snap, msg):
                     % (head[:12] or 'the unborn branch', err.strip() or 'exit %s' % rc))
     now, now_tree, parents = ids[0], ids[1], ids[2:]
     base = parents[0] if parents else ''
-    if base == head:
-        return 0, gout, r.err, now, []
+    as_built = now_tree == tree and message_lines(body) == message_lines(msg)
+    if base == head and as_built:
+        return 0, gout, r.err, now, [], None
+    entry = tagged_entry(root, tag)
+    if base == head and (entry is None or entry[1] == now):
+        return 0, gout, r.err, now, [], (tree, now_tree)
     if not parents:
         raise _Stop(REFUSED, head_moved_line(head, ''), 'NOT undone: the commit at HEAD, %s, has '
                     'no parent; check `git log` by hand.' % now[:12])
-    entry = tagged_entry(root, tag)
     if entry is None:
-        if now_tree != tree or message_lines(body) != message_lines(msg):
+        if not as_built:
             raise _Stop(REFUSED, 'refused, and NOT undone: git commit ran, but HEAD is now %s, '
                         'which this call cannot tell for its own commit (another writer committed '
                         'after it, or a hook changed it). Check `git log -3` by hand: a commit of '
@@ -838,12 +847,14 @@ def commit_only(root, head, snap, msg):
     if ours_base == head:
         rc, _out, _err = _git(root, 'merge-base', '--is-ancestor', ours, now)
         if rc == 0:
+            trc, made, _err = _git(root, 'rev-parse', '%s^{tree}' % ours)
             return 0, gout, r.err, ours, [
-                'NOTE: another writer has since committed %s on top of this commit.' % now[:12]]
+                'NOTE: another writer has since committed %s on top of this commit.' % now[:12]], (
+                    tree, made.strip() if trc == 0 else '')
         raise _Stop(REFUSED, 'refused, and NOT undone: this call committed %s on %s, but HEAD is '
                     'now %s, which does not contain it. Check `git log -3` and `git reflog` by '
                     'hand.' % (ours[:12], head[:12] or 'an unborn branch', now[:12]))
-    raise _Stop(REFUSED, head_moved_line(head, ours_base),
+    raise _Stop(REFUSED, head_moved_line(head, ours_base, made=True),
                 'NOT undone: this call\'s commit %s was made on %s, so it may undo changes from %s; '
                 'another writer has since committed %s on top of it. Check `git log -3` and '
                 'restore their change by hand.'
@@ -856,6 +867,70 @@ def _undo_moved(root, head, new, parent, saved, merged):
     (undo_commit)."""
     raise _Stop(REFUSED, head_moved_line(head, parent),
                 *undo_commit(root, new, parent, saved, merged))
+
+
+def _tree_entry(mode, oid):
+    return None if not mode.strip('0') else (mode, oid)
+
+
+def align_index(root, trees, ours):
+    """`(note lines, refusal lines)` after bringing the real index into line with this call's
+    commit `ours` for each path a hook changed in it; `trees` is commit_only's `(tree built, tree
+    committed)`. A hook's `git add` reaches only the private index, so without this the real index
+    keeps the copy from before the hook and the next commit reverts the hook's change. A path whose
+    real-index entry is still the built tree's is set to the committed entry. One another writer
+    staged during the call is left as they staged it, and refused (the commit stands), naming the
+    command that takes the commit's copy. The read and the write of the index are two git calls:
+    a path staged between them is overwritten."""
+    built, made = trees
+    if made == built:
+        return [], []
+    rc, out, err = _git(root, 'diff-tree', '-r', '-z', '--no-renames', built, made) if made else (
+        None, '', 'its tree could not be read')
+    if rc != 0:
+        return [], ['refused: commit %s stands, but a hook may have changed it, and it could not be '
+                    'compared with what this call built (%s). Check `git diff --cached` against it '
+                    'by hand.' % (ours[:12], err.strip() or 'exit %s' % rc)]
+    cols, changed = out.split('\0'), {}
+    for i in range(0, len(cols) - 1, 2):
+        meta = cols[i].lstrip(':').split()
+        if len(meta) >= 4:
+            changed[cols[i + 1]] = (_tree_entry(meta[0], meta[2]), _tree_entry(meta[1], meta[3]))
+    rc, out, err = _git(root, 'ls-files', '--stage', '-z')
+    if rc != 0:
+        return [], ['refused: commit %s stands, but a hook changed %s in it, and the index could '
+                    'not be read to bring it into line (%s). Run: git restore --staged --source=%s '
+                    '-- %s' % (ours[:12], ', '.join(sorted(changed)), err.strip() or 'exit %s' % rc,
+                               ours[:12], ' '.join(sorted(changed)))]
+    staged = {}
+    for row in out.split('\0'):
+        meta, tab, name = row.partition('\t')
+        if tab and name in changed:
+            staged.setdefault(name, []).append(tuple(meta.split()))
+    fit, kept = [], []
+    for path in sorted(changed):
+        old, new = changed[path]
+        rows = staged.get(path, [])
+        same = (not rows and old is None) or (
+            len(rows) == 1 and len(rows[0]) == 3 and rows[0][2] == '0' and rows[0][:2] == old)
+        (fit if same else kept).append(path)
+    if fit:
+        zero = '0' * len(ours)
+        info = ['0 %s\t%s' % (zero, p) if changed[p][1] is None
+                else '%s %s\t%s' % (changed[p][1][0], changed[p][1][1], p) for p in fit]
+        r = cmd.call(['update-index', '--index-info'], root,
+                     stdin=('\n'.join(info) + '\n').encode('utf-8'))
+        if r.rc != 0:
+            kept, fit = sorted(kept + fit), []
+    notes = ['index     set to the commit\'s copy of what a hook changed: %s' % ', '.join(fit)
+             ] if fit else []
+    if not kept:
+        return notes, []
+    return notes, ['refused: commit %s stands, but a hook changed %s in it, and the index holds '
+                   'another copy (another writer staged it during this call, or the index could '
+                   'not be written): the next commit of it would replace the hook\'s change. To '
+                   'take the commit\'s copy: git restore --staged --source=%s -- %s'
+                   % (ours[:12], ', '.join(kept), ours[:12], ' '.join(kept))]
 
 
 def main_checkout_error(lander_main_checkout, root, main_branch=None, rule_pointer=None):
@@ -1009,7 +1084,7 @@ def _commit(req, lines):
                     'was checked. Nothing was committed; run this again.' % ', '.join(changed))
     lines.extend(l for l in warnings if l not in msg_warnings)
     msg = build_message(req.subject, body, trailers)
-    rc, out, err, new, notes = commit_only(root, head, snap, msg)
+    rc, out, err, new, notes, trees = commit_only(root, head, snap, msg)
     if rc != 0:
         raise _Stop(REFUSED, 'commit failed: %s' % (err or out.strip() or 'exit %s' % rc))
     _rc, short, _err = _git(root, 'rev-parse', '--short', new)
@@ -1017,6 +1092,8 @@ def _commit(req, lines):
     lines.append('files     %s' % ', '.join(
         paths + sorted((merged & set(status_after)) - set(paths))))
     lines.extend(notes)
+    aligned, misaligned = align_index(root, trees, new) if trees else ([], [])
+    lines.extend(aligned)
     try:
         others = set(staged_status(root))    # against the new HEAD: what is still staged
     except _Stop:
@@ -1034,3 +1111,5 @@ def _commit(req, lines):
             lines.append(iline)
         if not (ok and iok):
             lines.append('          fix it in a follow-up commit before this branch can land')
+    if misaligned:
+        raise _Stop(REFUSED, *misaligned)

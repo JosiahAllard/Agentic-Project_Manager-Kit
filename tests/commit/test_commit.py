@@ -1043,6 +1043,7 @@ class HooksAndTheReflog(LinkedCase):
         code, out = self.commit('add a', 'a.py')
         self.assertEqual(code, 0, out)
         self.assertNotIn('WARNING', out)
+        self.assertIn('index     set to the commit\'s copy of what a hook changed: extra.txt', out)
         self.assertEqual(self.git('diff', '--cached', '--name-only'), '')
         self.assertEqual(self.index_blob('extra.txt'), self.git('rev-parse', 'HEAD:extra.txt'))
 
