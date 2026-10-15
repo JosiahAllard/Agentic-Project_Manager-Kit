@@ -305,10 +305,10 @@ def pm_data_root(root):
     return None, 'no worktree has the PM data branch %s checked out' % record.branch
 
 
-def _pm_data_store(root, configured):
+def pm_data_store(root, configured):
     """`(store root, Config, backend, None)` of the PM data branch's store, `(None,) * 4` when
     there is none or it is the configured store (`configured`: its describe(), or None), or
-    `(None, None, None, why)` when it cannot be opened."""
+    `(None, None, None, why)` when it cannot be opened. Public: kitlib/gate/land.py calls it."""
     pm_root, why = pm_data_root(root)
     if pm_root is None:
         return None, None, None, why
@@ -322,6 +322,10 @@ def _pm_data_store(root, configured):
     if configured is not None and backend.describe() == configured:
         return None, None, None, None
     return pm_root, pm_cfg, backend, None
+
+
+# The old private name, kept until kitlib/gate/land.py calls pm_data_store.
+_pm_data_store = pm_data_store
 
 
 class _Seen(object):
@@ -357,7 +361,7 @@ class _Part(object):
 
 def close_landed(root, cfg, branch, merge, session=SESSION, tip=None, base=None, batch=()):
     """Close every record `branch`, which landed as `merge`, holds pulled: in the configured store
-    when it is a `ref` or `branch` store, and in the PM data branch's store (_pm_data_store). With
+    when it is a `ref` or `branch` store, and in the PM data branch's store (pm_data_store). With
     `tip` and `base` (the branch tip merged and the main it was merged onto), every record a
     `Closes:` trailer in `tip --not base` names (closes_trailers) is closed too while it is
     pulled, whoever pulled it: a pull made in the main checkout records the main branch, which no
@@ -397,7 +401,7 @@ def close_landed(root, cfg, branch, merge, session=SESSION, tip=None, base=None,
         lines.extend(_close_in(backend, root, cfg, branch, merge, session,
                                lambda *args: close_command(root, *args), named, seen, quiet,
                                part))
-    pm_root, pm_cfg, pm_backend, why = _pm_data_store(
+    pm_root, pm_cfg, pm_backend, why = pm_data_store(
         root, backend.describe() if backend is not None else None)
     if why:
         seen.unread = True

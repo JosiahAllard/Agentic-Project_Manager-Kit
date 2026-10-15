@@ -8,7 +8,7 @@
   writes  add ID --summary S --scope P... --found-on BRANCH|none --why-not-folded T
               [--effort s|m|l] [--ref R] [--reopen]
           set ID [--<field> V]... [--unset K]... [--ruling R] [--body-file F] [--hold-ruling R]
-          block ID --on M... [--reason T] [--owner-ask Q] [--ruling R]
+          block ID --on M... [--reason T] [--owner-ask Q]   (adds; unblock removes)
           retarget OLD NEW [--apply]                (a moved path; a dry run without --apply)
           unblock ID [--on M] [--reason T] [--ruling R]      (several blockers: --on and --reason)
           pull ID [--reason T] [--ruling R] [--blocker ID]   release ID --reason T
@@ -108,7 +108,7 @@ def build_parser():
     v.add_argument('--on', action='append', default=[])
     v.add_argument('--reason', default=None)
     v.add_argument('--owner-ask', default=None)
-    v.add_argument('--ruling', default=None)
+    v.add_argument('--ruling', default=None)    # refused (plan_block): the message names unblock
     v = sub.add_parser('retarget')
     v.add_argument('old')
     v.add_argument('new')

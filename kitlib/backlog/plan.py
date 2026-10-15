@@ -155,10 +155,14 @@ def reason_error(reason, flag):
     return None
 
 
-def current_offer(snap, ctx):
-    """`(offers, passed, holding)` as `next` would print them for `ctx.session`."""
+def current_offer(snap, ctx, branch=None):
+    """`(offers, passed, holding)` as `next` would print them for `ctx.session`. With `branch`,
+    the live pulls that branch holds take no scope in the offer (a record overlapping them is
+    bundled onto the branch that already holds that scope, not passed over); `holding` is still
+    every live pull."""
     holding, _dead, _why = omod.in_flight_split(snap, ctx.root, ctx.remote)
-    result, refusals, _ranks = omod.next_offer(snap, holding, session=ctx.session,
+    taken = [r for r in holding if not (branch and r.get('pulled_by') == branch)]
+    result, refusals, _ranks = omod.next_offer(snap, taken, session=ctx.session,
                                                unmet=ctx.unmet(snap))
     if refusals:
         raise Failure('`next` cannot compute an offer, so there is nothing to check this against: '
@@ -419,19 +423,19 @@ def _pull_fold_hits(ctx, scopes, holding, branch):
     return hits, notes
 
 
-def _fold_message(rid, hits, form):
-    """The pull fold refusal's text: the overlapping pairs, where the work belongs, and the
-    override. The caller raises it as a Refusal (tests/backlog/test_refusal_kinds.py audits each
-    raise by name)."""
+def _fold_message(rid, hits, form, verb='pull'):
+    """The fold refusal's text (`verb` `pull`, or `widen` for `set --scope`): the overlapping
+    pairs, where the work belongs, and the override. The caller raises it as a Refusal
+    (tests/backlog/test_refusal_kinds.py audits each raise by name)."""
     branches = []
     for h in hits:
         b = h.rpartition('(changed on ')[2].partition(')')[0]
         if b not in branches:
             branches.append(b)
     where = ', '.join(branches)
-    return ('cannot pull %s: its scope overlaps the work of %s, so it belongs there:\n  %s\n'
-                   'fold it into %s, or pull it after %s lands. Overriding that takes the PM\'s '
-                   'ruling: `%s`' % (rid, where, '\n  '.join(hits), where, where, form))
+    return ('cannot %s %s: its scope overlaps the work of %s, so it belongs there:\n  %s\n'
+                   'fold it into %s, or %s it after %s lands. Overriding that takes the PM\'s '
+                   'ruling: `%s`' % (verb, rid, where, '\n  '.join(hits), where, verb, where, form))
 
 
 def _branch_changes(ctx, branch, tip, base=None, mb=None):
@@ -471,8 +475,11 @@ def plan_set(snap, ctx, rid, changes, unset=(), ruling=None, body=None, hold_rul
     - `state: pulled` is entered only by `pull` and left only by `release`.
     - `hold_ruling` R re-cites the record's hold ruling to R and changes nothing else.
     - On a pulled record, `scope` members no old member covers (widened_members) that collide
-      with a live pull need `--ruling` (the commit's `Ruling:` line), and that ruling covers the
-      widening alone. Narrowing, and widening into free scope, are free.
+      with a live pull, or overlap a path another live pull's branch changed (the fold-in guard,
+      `_pull_fold_hits`, the record's own branch aside), need `--ruling` (the commit's `Ruling:`
+      line), and that ruling covers the widening alone. Narrowing, and widening into free scope,
+      are free.
+    - `scope` replaces the whole list; the output names each member it removed.
     """
     for key, vals in changes:
         refuse_machine_paths('--' + key, *vals)
@@ -531,17 +538,23 @@ def plan_set(snap, ctx, rid, changes, unset=(), ruling=None, body=None, hold_rul
     released_minus_one = rec.get('priority') == rmod.OWNER_PRIORITY and \
         get('priority') != [rmod.OWNER_PRIORITY]
     releases = unheld or released_minus_one
-    widen_hits = []
+    widen_hits, folds, notes = [], [], []
     if 'scope' in keys and was_pulled:
         added = widened_members(rec.all('scope'), get('scope'))
         if added:
             holding, _dead, _why = omod.in_flight_split(snap, ctx.root, ctx.remote)
             widen_hits = live_hits(added, holding, skip=rid, branch=rec.get('pulled_by'))
-    if widen_hits:
+            # The fold-in guard, as `pull` runs it (KIT-BACKLOG-SET-SCOPE-FOLD-GUARD).
+            folds, notes = _pull_fold_hits(ctx, added, holding, rec.get('pulled_by'))
+    if widen_hits or folds:
         if ruling is None:
-            raise Refusal('`%s` is pulled, and this widens its scope into a live pull: %s. '
-                          'Narrowing is free; widening into a live pull takes `--ruling R-nnnn`, '
-                          'citing the PM\'s ruling that allows it' % (rid, '; '.join(widen_hits)))
+            if widen_hits:
+                raise Refusal('`%s` is pulled, and this widens its scope into a live pull: %s. '
+                              'Narrowing is free; widening into a live pull takes `--ruling '
+                              'R-nnnn`, citing the PM\'s ruling that allows it'
+                              % (rid, '; '.join(widen_hits)))
+            raise Refusal(_fold_message(rid, folds, 'set %s --scope ... --ruling R-nnnn' % rid,
+                                        'widen'))
         if priced or releases:
             raise Usage('`--ruling %s` would allow both this scope widening and %s. One ruling, '
                         'one change: widen the scope in its own `set`'
@@ -573,7 +586,7 @@ def plan_set(snap, ctx, rid, changes, unset=(), ruling=None, body=None, hold_rul
         dropped = get('priority_ruling')[0]
         pairs = [(k, v) for k, v in pairs if k != 'priority_ruling']
 
-    lines = ['SET %s' % rid]
+    lines = notes + ['SET %s' % rid]
     for key in sorted(set(keys) | set(unset) | ({'priority_ruling'} if dropped or priced and
                                                 ruling else set()) |
                       ({'hold_ruling'} if ruling and releases else set())):
@@ -582,6 +595,14 @@ def plan_set(snap, ctx, rid, changes, unset=(), ruling=None, body=None, hold_rul
     if body is not None:
         lines.append('  body:       replaced (%d bytes)' % len(body.encode('utf-8')))
     lines += ['  widened into a live pull on %s: %s' % (ruling, h) for h in widen_hits]
+    lines += ['  folds into the work of %s on %s: %s'
+              % (h.rpartition('(changed on ')[2].partition(')')[0], ruling, h) for h in folds]
+    if 'scope' in keys:
+        # `--scope` replaces the whole list; say plainly what that dropped.
+        gone = [m for m in rec.all('scope') if m not in get('scope')]
+        if gone:
+            lines.append('  removed %d scope %s: %s' % (len(gone), 'entry' if len(gone) == 1
+                                                         else 'entries', ', '.join(gone)))
     if dropped is not None:
         lines.append('  priority_ruling %s dropped: `priority_by: agent` carries no ruling' % dropped)
     acts = [a for a, on in (('priority', priced), ('unblock', unheld),
@@ -630,10 +651,13 @@ def _plan_recite(snap, ctx, rec, ruling):
 # --- block / unblock ------------------------------------------------------------------------------
 
 def plan_block(snap, ctx, rid, members, owner_ask=None, ruling=None, reason=None):
-    """`block` REPLACES `blocked_on`; leaving `owner` out on a record blocked on him releases his
-    hold, as `unblock` does, and takes the same `--ruling`. `reason`, when given, goes into the
-    commit subject and onto one line appended to the body (`Blocked on M (date): T`), so `show`
-    says why the record is held; no header key is written for it."""
+    """`block` ADDS `members` to `blocked_on`, in order, after the blockers already there (one
+    already present is not repeated); it never removes one, so it never releases the owner's hold
+    and takes no `--ruling` (USAGE): removing a blocker is `unblock --on`'s job
+    (KIT-BACKLOG-BLOCK-REPLACES-BLOCKERS). `ruling` stays a parameter so the USAGE names it.
+    `reason`, when given, goes into the commit subject and onto one line appended to the body
+    (`Blocked on M (date): T`), so `show` says why the record is held; no header key is written
+    for it."""
     refuse_machine_paths('--owner-ask', owner_ask)
     if reason is not None:
         refuse_machine_paths('--reason', reason)
@@ -655,31 +679,25 @@ def plan_block(snap, ctx, rid, members, owner_ask=None, ruling=None, reason=None
     if rec.get('state') == 'pulled':
         raise Refusal('`%s` is in flight (pulled by %s): `release` it first, then block it'
                       % (rid, rec.get('pulled_by')))
-    unheld = clears_owner_blocker(rec, members)
-    if unheld and ruling is None:
-        raise Refusal('`%s` is blocked on the owner, and this block leaves him out, which clears '
-                      'his hold - it needs `--ruling R-nnnn`, as `unblock` does' % rid)
     if ruling is not None:
-        if not unheld:
-            raise Usage('`--ruling %s` was given, and this block releases no hold of the owner\'s'
-                        % ruling)
-        _check_ruling(rid, rec, ruling, 'block', hold_only=True)
+        raise Usage('`--ruling %s` was given, and `block` only adds blockers, so it releases no '
+                    'hold of the owner\'s: `unblock %s --on owner --ruling R-nnnn` does that'
+                    % (ruling, rid))
     if 'owner' in members and not owner_ask and not rec.has('owner_ask'):
         raise Usage('blocking on the owner needs `--owner-ask "<the question>"`')
-    changes = [('state', ['blocked']), ('blocked_on', list(members))]
+    old = [m for m in rec.all('blocked_on') if m != '-']
+    after = list(old)
+    for m in members:
+        if m not in after:
+            after.append(m)
+    changes = [('state', ['blocked']), ('blocked_on', after)]
     if owner_ask:
         changes.append(('owner_ask', [owner_ask]))
-    drop = unheld and not owner_ask and rec.get('priority') != rmod.OWNER_PRIORITY
-    pairs = [(k, v) for k, v in rec.pairs() if not (drop and k == 'owner_ask')]
-    if ruling is not None:
-        changes.append(('hold_ruling', [ruling]))
-    pairs = rmod.apply_changes(pairs, changes)
+    pairs = rmod.apply_changes(rec.pairs(), changes)
     lines = ['BLOCKED %s on %s' % (rid, ', '.join(members))]
-    if drop and rec.has('owner_ask'):
-        lines.append('  owner_ask dropped: nothing waits on him now. It was: %s' % rec.get('owner_ask'))
+    if old:
+        lines.append('  blocked_on: %s -> %s' % (', '.join(old), ', '.join(after)))
     subject = 'backlog: block %s on %s' % (rid, ', '.join(members))
-    if ruling is not None:
-        subject += ', releasing the owner hold'
     body = rec.body
     if reason is not None:
         subject += ': %s' % reason
@@ -687,7 +705,10 @@ def plan_block(snap, ctx, rid, members, owner_ask=None, ruling=None, reason=None
         body = (body or '').rstrip('\n')
         body = (body + '\n\n' if body.strip() else '') + note + '\n'
         lines.append('  reason (in the body): %s' % reason)
-    return Change({rid: _text(pairs, body)}, subject, lines, ruling=ruling)
+    text = _text(pairs, body)
+    if text == rec.text:
+        return Change({}, subject, lines + ['  (no change)'])
+    return Change({rid: text}, subject, lines)
 
 
 def plan_unblock(snap, ctx, rid, ruling=None, on=None, reason=None):
@@ -816,7 +837,9 @@ def plan_clear_review(snap, ctx, rid, reason):
 def plan_pull(snap, ctx, rid, reason=None, ruling=None, blocker=None):
     """Take an open, priced record and record the branch. One in `next`'s offer pulls plainly;
     one outside it needs `--reason` and records `preempt` and the `displaced` offer, computed
-    here. A `priority: -1` record needs `--ruling` (a hold release). One whose scope collides with
+    here; the offer it is checked against leaves out the caller's branch's own pulls, so a record
+    overlapping only them is offered (KIT-BACKLOG-SAME-BRANCH-COLLISION).
+    A `priority: -1` record needs `--ruling` (a hold release). One whose scope collides with
     a live pull on another branch (one on the caller's branch is no collision) needs `--reason` and `--ruling` (the PM's ruling, cited in `preempt`); one ruling
     covers a `-1` record that also collides. An unmet `requires:` refuses.
     The fold-in guard (`_pull_fold_hits`): one whose scope overlaps a path another live pull's
@@ -857,7 +880,7 @@ def plan_pull(snap, ctx, rid, reason=None, ruling=None, blocker=None):
     if missing:
         raise Refusal('`%s` requires %s, which is unmet: %s' % ((rid,) + missing[0]))
     branch = ctx.current_branch()
-    offers, passed, holding = current_offer(snap, ctx)
+    offers, passed, holding = current_offer(snap, ctx, branch)
     offered = rec in [o.rec for o in offers]
     hits = live_hits(rec.all('scope'), holding, skip=rid, branch=branch)
     folds, notes = _pull_fold_hits(ctx, rec.all('scope'), holding, branch)
