@@ -160,6 +160,16 @@ class Planner(StoreCase):
         self.assertEqual(self.remote_tip(), tip)
         self.assertEqual(self.get('FOO').all('scope'), [OLD + '/**'])
 
+    def test_retarget_dry_prints_the_machine_config_warning_as_the_write_does(self):
+        self.seed(rec('FOO', scope=OLD + '/**'))
+        note = 'WARNING: machine config X could not be read'
+        with mock.patch.object(pmod.machinepaths, 'folders', return_value=((), note)):
+            change = opener.retarget_dry(args('retarget', old=OLD, new=NEW), self.store)
+            self.assertEqual(change.lines.count(note), 1, change.lines)
+            written, _tip = self.store.write(
+                lambda s: opener.retmod.plan_retarget(s, OLD, NEW))
+        self.assertEqual(written.lines.count(note), 1, written.lines)
+
     def test_retarget_dry_refuses_a_bad_path_as_the_write_does(self):
         self.seed(rec('FOO', scope=OLD + '/**'))
         with self.assertRaises(errors.Usage):

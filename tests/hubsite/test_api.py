@@ -165,10 +165,10 @@ class QuestionTest(ApiCase):
         obj = self.ok('POST', '/questions', AGENT, {
             'title': 'Which?', 'repo': 'kit', 'from': 'pm', 'context': 'c', 'options': OPTIONS,
             'recommended': 1, 'refs': ['S-001'], 'urgent': True, 'story': 'S-001'})
-        self.assertEqual((obj['id'], obj['version'], obj['ok']), ('Q-001', 1, True))
+        self.assertEqual((obj['id'], obj['version'], obj['ok']), ('Q-1000', 1, True))
         self.assertEqual(obj['revision'], self.store.revision)
         self.assertIsInstance(obj['warnings'], list)
-        d = self.store.get('questions', 'Q-001')
+        d = self.store.get('questions', 'Q-1000')
         self.assertEqual((d['status'], d['asked_at'], d['title'], d['recommended'], d['urgent']),
                          ('open', NOW, 'Which?', 1, True))
         self.assertNotIn('answer', d)
@@ -262,6 +262,30 @@ class QuestionTest(ApiCase):
         self.assertEqual((status, obj['error']['code']), (409, 'conflict'))
         self.assertEqual(self.store.get('questions', qid)['status'], 'logged')
         self.assertNotIn('answer', self.store.get('questions', qid))
+
+    def test_a_version_0_question_whose_recommended_is_text_is_logged_at_if_version_0(self):
+        # the shape of a question an earlier hub wrote: no `version` (read as 0), answered, and
+        # its `recommended` the text of a number or an option's label
+        for doc_id, text in (('Q-925', '1'), ('Q-926', 'second')):
+            with self.subTest(recommended=text):
+                root = tempfile.mkdtemp(prefix='kit-hubapi-legacy-')
+                self.addCleanup(shutil.rmtree, root, True)
+                legacy = {'title': 't', 'status': 'answered', 'repo': 'kit', 'options': OPTIONS,
+                          'recommended': text, 'asked_at': NOW,
+                          'answer': {'choice': 1, 'label': 'second', 'at': NOW}}
+                os.makedirs(os.path.join(root, 'questions'))
+                path = os.path.join(root, 'questions', doc_id + '.json')
+                with open(path, 'w', encoding='utf-8') as f:
+                    json.dump(legacy, f)
+                store = Store.open(root, clock=CLOCK)
+                self.addCleanup(store.close)
+                hub = api.Api(store, clock=CLOCK)
+                status, obj = hub.call('POST', BASE + '/questions/%s/log' % doc_id, AGENT,
+                                       {'ruling': 'decision-7', 'if_version': 0}, None)
+                self.assertEqual((status, obj.get('error')), (200, None), obj)
+                self.assertEqual((obj['status'], obj['version']), ('logged', 1))
+                with open(path, encoding='utf-8') as f:
+                    self.assertEqual(json.load(f)['recommended'], 1, 'stored as the number')
 
     def test_log(self):
         qid = self.question()
@@ -571,7 +595,7 @@ class ReadTest(ApiCase):
         self.ok('POST', '/questions/%s/answer' % qid, OWNER, {'choice': 0})
         self.assertEqual(self.ok('GET', '/pending', AGENT)['items'],
                          [{'kind': 'question', 'id': qid, 'title': 't', 'repo': 'kit',
-                           'at': NOW}])
+                           'at': NOW, 'from': 'pm'}])
 
     def test_snapshot(self):
         qid = self.question()
@@ -1473,18 +1497,30 @@ class ThirdFixTest(ApiCase):
         self.assertEqual(len(calls), 2)
         self.assertEqual(self.api.pm_seen(), {'waited': CLOCK(), 'pulled': None, 'waiting': 0})
 
-    def test_an_agents_from_on_a_question_or_an_inbox_item_follows_the_to_do_rule(self):
-        for path, coll, body in (('/questions', 'questions', {'title': 't', 'options': OPTIONS}),
-                                 ('/inbox', 'inbox', {'text': 'x'})):
-            for bad in ('you', 'Y o u', ' YOU ', 'уou', 'yｏu', 'pm͏', 'a\x00b',
-                        'a  b'):
-                with self.subTest(path=path, bad=bad):
-                    self.refused('invalid', 'from', 'POST', path, AGENT, dict(body, **{'from': bad}))
-            with self.subTest(path=path, ok=True):
-                did = self.ok('POST', path, AGENT, dict(body, **{'from': ' pm kit-2 '}))['id']
-                self.assertEqual(self.store.get(coll, did)['from'], 'pm kit-2')
-                did = self.ok('POST', path, AGENT, body)['id']
-                self.assertNotIn('from', self.store.get(coll, did))
+    def test_an_agents_from_on_an_inbox_item_follows_the_to_do_rule(self):
+        path, coll, body = '/inbox', 'inbox', {'text': 'x'}
+        for bad in ('you', 'Y o u', ' YOU ', 'уou', 'yｏu', 'pm͏', 'a\x00b',
+                    'a  b'):
+            with self.subTest(path=path, bad=bad):
+                self.refused('invalid', 'from', 'POST', path, AGENT, dict(body, **{'from': bad}))
+        with self.subTest(path=path, ok=True):
+            did = self.ok('POST', path, AGENT, dict(body, **{'from': ' pm kit-2 '}))['id']
+            self.assertEqual(self.store.get(coll, did)['from'], 'pm kit-2')
+            did = self.ok('POST', path, AGENT, body)['id']
+            self.assertNotIn('from', self.store.get(coll, did))
+
+    def test_an_agents_from_on_a_question_is_a_session_key_or_the_pm(self):
+        self.api = api.Api(self.store, clock=CLOCK, session_keys=lambda: {'kit-2'})
+        body = {'title': 't', 'options': OPTIONS}
+        for bad in ('you', 'Y o u', ' YOU ', 'уou', 'yｏu', 'pm͏', 'a\x00b',
+                    'a  b', 'pm kit-2', 'Kit-2'):
+            with self.subTest(bad=bad):
+                self.refused('invalid', 'from', 'POST', '/questions', AGENT,
+                             dict(body, **{'from': bad}))
+        did = self.ok('POST', '/questions', AGENT, dict(body, **{'from': ' kit-2 '}))['id']
+        self.assertEqual(self.store.get('questions', did)['from'], 'kit-2')
+        did = self.ok('POST', '/questions', AGENT, body)['id']
+        self.assertEqual(self.store.get('questions', did)['from'], 'pm')
 
     def test_an_owner_edit_of_an_acked_to_do_makes_it_pending_again(self):
         tid = self.ok('POST', '/todos', OWNER, {'title': 't'})['id']

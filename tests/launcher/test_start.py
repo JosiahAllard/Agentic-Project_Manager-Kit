@@ -227,7 +227,7 @@ class Consultant(Base):
 
     def test_prompt_reads_digest_and_notes_then_idles(self):
         out = self.cons()
-        notes = os.path.abspath(os.path.join(self.repo, start.NOTES_DEFAULT))
+        notes = start.consultant_notes_path(self.host, 'myrepo')        # agent temp: tests/launcher/test_consultant_notes.py
         self.assertIn('You are consultant-myrepo, a consultant session', out)
         self.assertIn('digest docs/conventions-digest.md, then your notes file %s ' % notes, out)
         self.assertIn("reply ''ready'', and stay idle until asked", out)
@@ -312,10 +312,11 @@ class Consultant(Base):
 
     def test_a_notes_file_git_would_commit_warns(self):
         self.host.ignored = False
-        self.assertIn('Warning: git does not ignore', self.cons())
+        self.assertIn('Warning: git does not ignore', self.cons(notes_path='docs/ops/c.local.md'))
+        self.assertNotIn('Warning', self.cons())         # the default is in agent temp, outside the repo
         for ignored in (True, None):                     # ignored, or git could not say
             self.host.ignored = ignored
-            self.assertNotIn('Warning', self.cons())
+            self.assertNotIn('Warning', self.cons(notes_path='docs/ops/c.local.md'))
 
     def test_launch_passes_consultant_settings_and_writes_nothing(self):
         self.cons(plan=False)

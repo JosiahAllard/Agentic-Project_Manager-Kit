@@ -63,6 +63,10 @@ Rules, in the order they are checked:
                    data record, and any push from a copy of PM data without one; a remote
                    repointed (git-remote-rewrite) in a repository with one; all in any session
                    but the owner's own
+  git-shared-ref   git update-ref by an agent session (a subagent or a jailed mark but pm) from any
+                   checkout, of a ref other than refs/tmp/<name>, a per-worktree ref, or in a linked
+                   worktree its HEAD and the branch checked out there (never a guarded main); a
+                   ref or a repository the text does not name is refused too
   git-hooks-path   a change of core.hooksPath (git config, git -c, clone -c, GIT_CONFIG_*), in
                    any session
   owner-identity   the owner's email given to a commit, in any session but the owner's own
@@ -1777,7 +1781,11 @@ EVALS = {'node': ('-e', '--eval', '-p', '--print'), 'ruby': ('-e',)}
 # a .NET file call that writes (OpenRead and OpenText only read)
 IO_FILE_RE = re.compile(r'(?i)\[(?:System\.)?IO\.(?:File|Directory)\]::'
                         r'(?:Write|Append|Create|Copy|Move|Delete|Replace|Open(?!Read\b|Text\b))')
-NET_ABS_RE = re.compile(r'^(?:[A-Za-z]:[\\/]|[\\/]{2})')     # a path .NET reads the same from any directory
+# a .NET type whose constructor opens a file to write: [IO.StreamWriter]::new(...), New-Object IO.FileStream ...
+NET_TYPE_RE = re.compile(r'(?i)(?<![\w.])(?:System\.)?IO\.(?:StreamWriter|FileStream)(?![\w.])')
+NET_ABS_RE = re.compile(r'^[A-Za-z]:[\\/]')     # a path .NET reads the same from any directory
+# \\?\<drive>:\x and \\.\<drive>:\x are <drive>:\x (a device path); any other \\ or // path is a share the guard cannot place
+NET_DEVICE_RE = re.compile(r'^[\\/]{2}[?.][\\/](?=[A-Za-z]:[\\/])')
 WIN_OPT_RE = re.compile(r'^/[A-Za-z]+(?::\S*)?$')
 
 
@@ -1860,6 +1868,8 @@ class NetWrite(object):
 
 
 NET_QUOTES = '‘’‚‛“”„'     # PowerShell reads these as quotes too
+NET_DASHES = '-–—―'              # and these as the dash an operator starts with
+NET_UNARY = frozenset(('not', 'bnot', 'join', 'split', 'csplit', 'isplit'))   # -op operand
 
 
 def _net_string_end(src, k):
@@ -1955,16 +1965,273 @@ def _net_lost(span):
     return '"' in span and '$(' in span
 
 
+def net_mentioned(cmd):
+    """True when the PowerShell command names a .NET file call or type that writes (IO_FILE_RE,
+    NET_TYPE_RE): net_writes reads it."""
+    return cmd.shell == sh.PS and bool(IO_FILE_RE.search(cmd.text) or NET_TYPE_RE.search(cmd.text))
+
+
+def _net_word(raw):
+    """The text of a command-mode argument `raw`: a plain string (_net_literal) or a bare word,
+    else None."""
+    text = _net_literal(raw)
+    if text is None and re.match(r'^[^\s\'"`$(){}\[\]@#;,|&<>%s]+$' % NET_QUOTES, raw):
+        return raw
+    return text
+
+
+def _net_list(src, k):
+    """([(text or None, start, end)], end): the command-mode argument at offset `k` of `src`, a
+    word or a comma list of them ('a', 'b'), read as _net_args reads a call's; a bare word ends at
+    a '(' (PowerShell starts a new argument there)."""
+    args, n = [], len(src)
+    while True:
+        start, depth = k, 0
+        while k < n:
+            c = src[k]
+            if c in '\'"':
+                k = _net_string_end(src, k)
+                continue
+            if c == '`':
+                k += 2
+                continue
+            if c in '([{':
+                if c == '(' and depth == 0 and k > start and src[k - 1] != '$':
+                    break
+                depth += 1
+            elif c in ')]}':
+                if depth == 0:
+                    break
+                depth -= 1
+            elif depth == 0 and c in ', \t\r\n;|&':
+                break
+            k += 1
+        k = min(k, n)
+        if k > start:
+            args.append((_net_word(src[start:k]), start, k))
+        j = k
+        while j < n and src[j] in ' \t':
+            j += 1
+        if j >= n or src[j] != ',':
+            return args, k
+        k = j + 1
+        while k < n and src[k] in ' \t\r\n':
+            k += 1
+
+
+NEW_OBJECT_PARAMS = ('typename', 'argumentlist', 'property', 'comobject', 'strict')
+
+
+def _net_new_object(cmd, inv):
+    """(type (text or None, start, end), [argument], end, lost) of the New-Object call `inv`, or
+    None when the guard does not read it: its -TypeName and -ArgumentList, named or positional,
+    each a word, a comma list, (...) or @(...)."""
+    src, n = cmd.source, len(cmd.source)
+    k, vals, slots, lost = inv.word.end, {}, ['typename', 'argumentlist'], ''
+    while True:
+        while k < n and src[k] in ' \t':
+            k += 1
+        if k >= n or src[k] in ';|&\r\n)}':
+            break
+        m = re.compile(r'-([A-Za-z]+)(:?)').match(src, k)
+        if m and src[k + 1:k + 2].isalpha():
+            body = m.group(1).lower()
+            names = ['argumentlist'] if body == 'args' else [p for p in NEW_OBJECT_PARAMS if p.startswith(body)]
+            if len(names) != 1:                 # a common parameter (-ErrorAction Stop, -Verbose)
+                body = PS_COMMON_ALIASES.get(body, body)
+                if not any(p.startswith(body) for p in PS_COMMON_VALUES + PS_COMMON_SWITCHES):
+                    return None
+                names = ['skip' if any(p.startswith(body) for p in PS_COMMON_VALUES) else 'strict']
+            k = m.end()
+            if names[0] == 'strict':
+                continue
+            while not m.group(2) and k < n and src[k] in ' \t':
+                k += 1
+            param = names[0]
+            if param in slots:
+                slots.remove(param)
+        elif slots:
+            param = slots.pop(0)
+        else:
+            return None
+        stops = ' \t;|&\r\n)}'
+        if src.startswith('@(', k) or src.startswith('(', k):
+            open_ = k + (2 if src[k] == '@' else 1)
+            args, k = _net_args(src, open_)
+            lost += src[open_:k]
+        else:
+            args, k = _net_list(src, k)
+            lost += ''.join(src[s:e] for _t, s, e in args)
+            stops += '('                        # IO.StreamWriter('x'): the list starts a new argument
+        if k < n and src[k] not in stops:
+            return None                         # ('a') + 'b': an expression the guard does not read
+        vals[param] = args
+    kind = vals.get('typename') or []
+    if len(kind) != 1:
+        return None
+    return kind[0], vals.get('argumentlist', []), k, _net_lost(lost)
+
+
+FILE_MODE_RE = re.compile(r'(?i)^(?:\[(?:System\.)?IO\.FileMode\]::)?(\w+)$')
+FILE_ACCESS_RE = re.compile(r'(?i)^(?:\[(?:System\.)?IO\.FileAccess\]::)?(\w+)$')
+
+
+def _net_arg_name(src, arg, pattern):
+    """The enum value name the argument names ('Open', [IO.FileMode]::Open), lower case, or ''."""
+    text, s, e = arg
+    m = pattern.match(text if text is not None else src[s:e].strip())
+    return m.group(1).lower() if m else ''
+
+
+def _net_ctor(src, kind, args, end, out):
+    """Add the path a StreamWriter or FileStream constructor with `args` writes to `out`; True
+    when the guard does not read it: no arguments, or a StreamWriter's first argument that is not a
+    plain string (a Stream it writes through, judged where it is opened, or a path the line
+    computes). A FileStream opened to read only (FileMode Open, FileAccess Read) writes nothing,
+    unless it names FileOptions (a sixth argument: DeleteOnClose deletes the file)."""
+    if not args:
+        return True
+    text, s, e = args[0]
+    if kind == 'filestream' and 3 <= len(args) < 6 and _net_arg_name(src, args[1], FILE_MODE_RE) == 'open' and \
+            _net_arg_name(src, args[2], FILE_ACCESS_RE) == 'read':
+        return False
+    if text is None and (kind == 'streamwriter' or src[s:e].lower() == '$null'):
+        return kind == 'streamwriter'
+    out.append(NetWrite(sh.Word(src[s:e] if text is None else text, text is None, s, e), end))
+    return False
+
+
+def _net_operand_end(src, k):
+    """The offset just past the operand that starts at src[k]: its strings and brackets whole, up to
+    a space, a comma, a statement end or an unopened closing bracket."""
+    n, depth = len(src), 0
+    while k < n:
+        c = src[k]
+        if c in '\'"':
+            k = _net_string_end(src, k)
+            continue
+        if c == '`':
+            k += 2
+            continue
+        if c in '([{':
+            depth += 1
+        elif c in ')]}':
+            if depth == 0:
+                break
+            depth -= 1
+        elif depth == 0 and c in ' \t\r\n,;|&':
+            break
+        k += 1
+    return min(k, n)
+
+
+def _net_cast_operand(src, k):
+    """The offset of what follows the ']' at src[k - 1], past the spaces, <# #> comments and backtick
+    line continuations PowerShell reads as space there."""
+    n = len(src)
+    while k < n:
+        if src[k] in ' \t':
+            k += 1
+        elif src.startswith('<#', k):
+            close = src.find('#>', k + 2)
+            k = n if close < 0 else close + 2
+        elif src[k] == '`' and src[k + 1:k + 2] == '\n':
+            k += 2
+        elif src[k] == '`' and src[k + 1:k + 3] == '\r\n':
+            k += 3
+        else:
+            break
+    return k
+
+
+def _net_cast(src, k):
+    """The NetWrite of the StreamWriter cast whose type name ends at src[k] (its ']'), or None when
+    no operand follows (the type passed as a value: [IO.StreamWriter], [IO.StreamWriter].Name,
+    $x -is [IO.StreamWriter] -and $y, @([IO.StreamWriter], 1), List[IO.StreamWriter]). What follows
+    the ']' is an operand unless it ends the statement or the expression (a line end, a line comment,
+    . ) ] } ; | , ..) or is
+    a binary operator (-and, -eq, -f); a unary one (-join, -split, -not, -bnot, -1, +, !) opens an
+    operand, as a comment or a line continuation before it does not end one (_net_cast_operand).
+    PowerShell converts the operand by the constructor that takes a string, so a plain string
+    ('x.txt', or ('x.txt')) is the path; any other operand ($p, ('a' + $b), 'x'.Replace(...): a member
+    access or an index binds before the cast) is a path the line computes."""
+    n = len(src)
+    if src[k:k + 1] != ']':
+        return None
+    k = _net_cast_operand(src, k + 1)
+    if k >= n or src[k] in '\r\n#)]};|,':
+        return None                             # ']': a type argument, List[IO.StreamWriter]
+    if src[k] == '.' and not (src[k - 1] != ']' and src[k + 1:k + 2].isdigit()):
+        return None                             # .Name, ..5; but [IO.StreamWriter] .5 is a cast of 0.5
+    if src[k] in NET_DASHES:
+        op = re.compile(r'[A-Za-z]*').match(src, k + 1).group(0).lower()
+        if op and op not in NET_UNARY:
+            return None                         # a binary operator, or one PowerShell rejects
+    end = max(_net_operand_end(src, k), k + 1)
+    lit = None
+    if src[k] in '\'"':
+        close = _net_string_end(src, k)
+        lit = (_net_literal(src[k:close]), k, close) if close == end else None
+    elif src[k] == '(':
+        args, close = _net_args(src, k + 1)
+        if close == end and src[close - 1:close] == ')' and len(args) == 1 and not _net_lost(src[k + 1:close]):
+            lit = args[0]
+    if lit is not None and lit[0] is not None:
+        return NetWrite(sh.Word(lit[0], False, lit[1], lit[2]), end)
+    return NetWrite(sh.Word(src[k:end], True, k, end), end)
+
+
 def net_writes(cmd):
-    """([NetWrite], unread): each path the PowerShell command's .NET file calls (IO_FILE_RE) write,
-    and True when a match is a write the guard does not read the path of, so write_targets judges
-    the directory the command runs in, as it did for every such call: one inside a quoted word, a
-    method named with no '(' after it (called later, through .Invoke or a variable), a call with
-    fewer arguments than the ones it writes (_net_written), and one whose arguments the parse may
-    have lost its place in (_net_lost). A $null argument (Replace's backup) writes nothing."""
+    """([NetWrite], unread): each path the PowerShell command's .NET file calls (IO_FILE_RE) and
+    StreamWriter and FileStream constructors (NET_TYPE_RE: ::new(...), New-Object, or a StreamWriter
+    cast, [IO.StreamWriter]'x.txt', whose operand is a path the line computes unless it is a plain
+    string, _net_cast) write, and True
+    when a match is a write the guard does not read the path of, so write_targets judges the
+    directory the command runs in, as it did for every such call, and dotnet_process_dir the one
+    its process started in: one inside a quoted word, a method named with no '(' after it (called
+    later, through .Invoke or a variable), a call with fewer arguments than the ones it writes
+    (_net_written), one whose arguments the parse may have lost its place in (_net_lost), a type
+    named any other way (a FileStream cast, [type] as a value) and a New-Object call _net_new_object does
+    not read. A $null argument (Replace's backup) writes nothing."""
     if cmd.shell != sh.PS:
         return [], False
     out, unread, src = [], False, cmd.source
+    read = []                                   # the span of the type a New-Object call names
+    inv = cm.invocation(cmd) if NET_TYPE_RE.search(cmd.text) else None
+    if inv is not None and inv.name == 'new-object':
+        got = _net_new_object(cmd, inv)
+        kind = got and got[0][0] and re.match(r'(?i)^(?:System\.)?IO\.(StreamWriter|FileStream)$', got[0][0])
+        if kind:
+            read.append(got[0][1:])
+            unread = _net_ctor(src, kind.group(1).lower(), got[1], got[2], out) or got[3]
+    for m in NET_TYPE_RE.finditer(cmd.text):
+        pos, after = cmd.start + m.start(), cmd.start + m.end()
+        if any(s <= pos < e for s, e in read):
+            continue
+        w = next((x for x in cmd.words if x.start <= pos < x.end), None)
+        call = re.compile(r'\]::(\w+)').match(src, after)
+        if w is None or src[w.start:w.start + 1] in '\'"' + NET_QUOTES or src[pos - 1:pos] != '[':
+            unread = True                       # in a string, a type name passed as a value
+            continue
+        if not call:
+            # [IO.StreamWriter]'x.txt', [IO.StreamWriter]$p: a cast opens its operand (_net_cast)
+            cast = _net_cast(src, after) if m.group(0).lower().endswith('streamwriter') else None
+            if cast is None:
+                unread = True                   # [type] passed as a value, a FileStream cast
+            else:
+                out.append(cast)
+            continue
+        if call.group(1).lower() != 'new':
+            continue                            # a static member: [IO.StreamWriter]::Null
+        k = call.end()
+        while k < len(src) and src[k] in ' \t':
+            k += 1
+        if src[k:k + 1] != '(':
+            unread = True
+            continue
+        args, end = _net_args(src, k + 1)
+        kind = re.search(r'(?i)(StreamWriter|FileStream)$', m.group(0)).group(1).lower()
+        unread = _net_ctor(src, kind, args, end, out) or _net_lost(src[k + 1:end]) or unread
     for m in IO_FILE_RE.finditer(cmd.text):
         pos = cmd.start + m.start()
         w = next((x for x in cmd.words if x.start <= pos < x.end), None)
@@ -1987,11 +2254,17 @@ def net_writes(cmd):
             if text is None and src[s:e].lower() == '$null':
                 continue
             out.append(NetWrite(sh.Word(src[s:e] if text is None else text, text is None, s, e), end))
+    for x in out:
+        m = None if x.word.dyn else NET_DEVICE_RE.match(x.word.text)
+        if m:                                   # \\?\<drive>:\x is <drive>:\x; the span stays the argument's
+            x.word = sh.Word(x.word.text[m.end():], False, x.word.start, x.word.end)
     return out, unread
 
 
 def net_placed(w):
-    """True when the .NET argument Word `w` is a literal absolute path (NET_ABS_RE)."""
+    """True when the .NET argument Word `w` is a literal absolute path on a drive (NET_ABS_RE;
+    net_writes reads \\\\?\\<drive>:\\x as <drive>:\\x). A share (\\\\host\\<drive>$\\x) is not: the guard cannot tell
+    which folder it is, so dotnet_unplaced judges it as a path it cannot place."""
     return not w.dyn and bool(NET_ABS_RE.match(w.text))
 
 
@@ -2349,7 +2622,7 @@ def write_targets(cmd, inv):
         if r.target.text.lower() in NULL_TARGETS:
             continue
         out.append(r.target)
-    if cmd.shell == sh.PS and IO_FILE_RE.search(cmd.text):
+    if net_mentioned(cmd):
         net, unread = net_writes(cmd)
         out.extend(x.word for x in net if net_placed(x.word))
         # The rest are dotnet_unplaced's, and the directory the command runs in is judged too,
@@ -2682,11 +2955,11 @@ def shell_writes(event, ctx, cmd, inv, cwd, role):
     d = git_jail(event, ctx, cmd, inv, cwd, role)
     if d:
         return d
-    d = dotnet_unplaced(event, ctx, cmd, cwd, role)
+    d = dotnet_unplaced(event, ctx, cmd, cwd, role) or dotnet_process_dir(event, ctx, cmd, cwd, role)
     if d:
         return d
     net = {}
-    if cmd.shell == sh.PS and IO_FILE_RE.search(cmd.text):
+    if net_mentioned(cmd):
         net = dict(((x.word.start, x.word.end), x) for x in net_writes(cmd)[0])
     into = copy_into(cmd, inv)
     for w in write_targets(cmd, inv):
@@ -2745,7 +3018,7 @@ def dotnet_unplaced(event, ctx, cmd, cwd, role):
     (write-jail); the owner's own session is not judged. A relative path is first judged where the
     PowerShell location puts it (edit_target), and the alternative is the call on that absolute
     path."""
-    if cmd.shell != sh.PS or not IO_FILE_RE.search(cmd.text):
+    if not net_mentioned(cmd):
         return None
     for x in net_writes(cmd)[0]:
         w = x.word
@@ -2771,12 +3044,55 @@ def dotnet_unplaced(event, ctx, cmd, cwd, role):
         why = '%s through .NET. %s' % (what, NET_RELATIVE)
         if w.dyn:
             why += ' The guard does not read a path the line computes.'
+        elif re.match(r'^[\\/]{2}', w.text):
+            why += ' The guard cannot tell which folder a share path names.'
         if fixed:
             return refuse(rule, role, why + ' The same write on the absolute path:', rewrite(fixed))
         base = own_worktree(ctx, cwd) or cmd.cwd
         if base:
             return refuse(rule, role, why + ' Give it a literal absolute path:', rewrite(fwd(base) + '/<file>'))
         return refuse(rule, role, why + ' Give it a literal absolute path; to see where this session runs:', 'pwd')
+    return None
+
+
+def dotnet_process_dir(event, ctx, cmd, cwd, role):
+    """A .NET write the guard does not read the path of, or one it cannot place (net_writes,
+    net_placed), judged in each directory its process may have started in (edit_target): the
+    directory the call runs in (`cwd`) and the PowerShell location of each command it is nested
+    in. .NET reads a relative path there (NET_RELATIVE), so a Set-Location into a worktree does not
+    take the write with it; write_targets judges the PowerShell location itself. A session that
+    runs outside a worktree of its own (in the main checkout, or outside any repository) is told to
+    give the call literal absolute paths, not to make a worktree (that does not move where its
+    process starts)."""
+    if not net_mentioned(cmd):
+        return None
+    net, unread = net_writes(cmd)
+    if not unread and all(net_placed(x.word) for x in net):
+        return None
+    dirs, outer = [cwd], cmd.nested_in
+    while outer is not None:
+        dirs.append(outer.cwd)
+        outer = outer.nested_in
+    seen = set([paths.norm(cmd.cwd)] if cmd.cwd else [])
+    for d in dirs:
+        if not d or paths.norm(d) in seen:
+            continue
+        seen.add(paths.norm(d))
+        what = ('`%s` may write through .NET in %s, the directory its process started in (.NET reads a relative '
+                'path there, and Set-Location does not move it; give the call literal absolute paths)'
+                % (bare(cmd), fwd(d)))
+        target = paths.norm(d, fold=False)
+        res = edit_target(event, ctx, target, cwd, role, what, run=bare(cmd))
+        place = ctx.place(target) if res and res.rule == 'main-checkout' and own_worktree(ctx, cwd) is None \
+            else None
+        if place is not None and place.kind == repo.MAIN and not ctx.is_pm_data(place.top):
+            # the session runs outside a worktree: a worktree it makes does not move where its process starts
+            return refuse('main-checkout', role, '%s is in the main checkout %s; this role may not edit a main '
+                          'checkout. A new worktree does not move the directory this PowerShell process '
+                          'started in, so call each .NET method directly with literal absolute paths inside '
+                          'a worktree. To see where this session runs:' % (what, place.top), 'pwd')
+        if res:
+            return res
     return None
 
 
@@ -3085,6 +3401,7 @@ GIT_LONGS = {
               'unsafe-paths', 'ignore-space-change', 'ignore-whitespace'),
     'stash': ('message', 'patch', 'staged', 'keep-index', 'no-keep-index', 'include-untracked', 'all', 'quiet',
               'pathspec-from-file', 'pathspec-file-nul', 'index'),
+    'update-ref': ('no-deref', 'stdin', 'create-reflog', 'batch-updates'),
 }
 GIT_LONGS['stage'] = GIT_LONGS['add']
 GIT_LONG_VALUES = {'message', 'file', 'author', 'date', 'template', 'reuse-message', 'reedit-message', 'fixup',
@@ -3187,6 +3504,10 @@ def git_rules(event, ctx, cmd, inv, cwd, role):
         return git_push(event, ctx, gc, role)
     if sub == 'branch':
         d = git_branch_delete(ctx, gc, role)
+        if d:
+            return d
+    if sub == 'update-ref':
+        d = git_shared_ref(event, ctx, cmd, gc, cwd, role)    # from any place: every worktree shares refs
         if d:
             return d
     place = ctx.place(gc.dir) if gc.dir and not gc.unknown else \
@@ -3762,18 +4083,270 @@ def ref_delete_hint(ctx, gc, top, cwd, short, longs, pos):
     """(sentence, command) for `git update-ref -d <ref>`, or None. Every worktree of a repository
     shares its refs, so neither a worktree nor the lander carries a ref delete to main: a branch
     goes with git branch -d, which refuses an unmerged one; any other ref is shown, and the PM
-    deletes it. Both run in the session's own worktree of this main checkout when it has one."""
+    deletes it; a guarded main is never offered to branch -d. Both run in the session's own
+    worktree of this main checkout when it has one. None too for a ref git_shared_ref lets any
+    session delete (scratch_ref): only where it runs is wrong, and git_in_worktree says so."""
     if gc.sub != 'update-ref' or 'd' not in short or 'stdin' in longs or gc.blind:
         return None
     ref = pos[0] if pos else None
     name = ref.text if ref is not None and not ref.dyn else None
+    if name and scratch_ref(name):
+        return None
     at = quote(own_worktree(ctx, cwd, top) or top)
     shared = 'Every worktree shares this repository\'s refs, so no worktree or landing carries a ref delete to main.'
     if name and name.startswith('refs/heads/') and len(name) > len('refs/heads/'):
+        branch = name[len('refs/heads/'):]
+        if branch.lower() in main_names(ctx, top):
+            return ('%s %s is the main branch: only a landing moves it, and no session deletes it. To show it:' %
+                    (shared, name), 'git -C %s show-ref %s' % (at, name))
         return ('%s Delete a branch with git branch -d, which refuses an unmerged one; unmerged work goes to '
-                'the PM, never deleted:' % shared, 'git -C %s branch -d %s' % (at, name[len('refs/heads/'):]))
+                'the PM, never deleted:' % shared, 'git -C %s branch -d %s' % (at, branch))
     return ('%s A ref other than a branch is the PM\'s to delete; to show it:' % shared,
             'git -C %s show-ref %s' % (at, name or '<ref>'))
+
+
+# git_shared_ref: the update-ref options it reads (GIT_LONGS['update-ref'] spells the long ones),
+# the refs any agent session may write (scratch_ref), and the names git reads as one loose ref file
+UPDATE_REF_SHORTS = set('mdz')
+PER_WORKTREE_REFS = ('refs/bisect/', 'refs/worktree/', 'refs/rewritten/')
+PSEUDOREF_RE = re.compile(r'^[A-Z][A-Z0-9_]*_HEAD$')
+REF_NAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._/-]*$')
+REF_CHAIN_MAX = 5           # symbolic refs followed before the guard stops reading
+SCRATCH_WALK_MAX = 4096     # entries of a temp repository's git directory read for a link, at most
+REPARSE_POINT = 0x400       # FILE_ATTRIBUTE_REPARSE_POINT: a symlink, a junction or another link
+
+
+def ref_name_ok(name):
+    """True for a ref name the guard reads as one file under the repository's git directory: plain
+    characters only, no `..`, empty or dot-led component, and no component ending in .lock or a dot."""
+    if not name or not REF_NAME_RE.match(name):
+        return False
+    parts = name.split('/')
+    return all(p and not p.startswith('.') and not p.endswith('.') and not p.endswith('.lock') for p in parts)
+
+
+def per_worktree_ref(name):
+    """True for a ref git keeps in each worktree's own git directory: HEAD, a <NAME>_HEAD
+    pseudoref, refs/bisect/, refs/worktree/ and refs/rewritten/."""
+    return name == 'HEAD' or bool(PSEUDOREF_RE.match(name)) or name.startswith(PER_WORKTREE_REFS)
+
+
+def scratch_ref(name):
+    """True for a ref any agent session may write or delete from any checkout: refs/tmp/<name>
+    and the per-worktree refs but HEAD."""
+    return ref_name_ok(name) and name != 'HEAD' and (name.startswith('refs/tmp/') or per_worktree_ref(name))
+
+
+def main_names(ctx, where):
+    """The guarded mains of the repository at `where`, lower-cased, main and master always among
+    them (a missing or unreadable .kit.json guards those two)."""
+    names = {'main', 'master'}
+    cfg = ctx.config(where) if where and os.path.isabs(where) else None
+    if cfg is not None:
+        names.update(str(b).lower() for b in _guarded_mains(cfg) if b)
+    return names
+
+
+def shared_ref_held(event, ctx):
+    """True for a session git_shared_ref holds: an agent session (agent_session) but the PM's."""
+    return agent_session(event, ctx) and str(session_mark(event, ctx) or '').lower() != 'pm'
+
+
+def _ref_file(place, name):
+    """(path of the loose file of `name`, None) under the git directory that holds it, or
+    (None, why) when a link inside it carries the path elsewhere."""
+    base = place.git_dir if per_worktree_ref(name) else place.common
+    if not base:
+        return None, 'git gave no git directory for %s' % name
+    path = os.path.join(base, *name.split('/'))
+    want = paths.norm(os.path.join(jail.real(base), *name.split('/')))
+    if jail.real(path) != want:
+        return None, 'a link in the git directory carries %s to %s' % (name, fwd(jail.real(path)))
+    return path, None
+
+
+def _in_temp(ctx, path):
+    real = jail.real(path)
+    return any(jail.inside(real, jail.real(r)) for r in jail.temp_roots(ctx))
+
+
+def _scratch_repo(ctx, place):
+    """True when `place` is a scratch repository: its git directories lie in a temp root
+    (jail.temp_roots) and no link inside them may carry a ref write out. Every entry but what
+    objects/ holds is read, at most SCRATCH_WALK_MAX; any symlink, junction or other reparse
+    point, an entry that does not read, or a longer walk answers False, and the rule judges the
+    repository as any other. A hard link is not seen: git writes a ref file and packed-refs to a
+    lock file it renames over the old one, so a write does not go through a hard link."""
+    if place is None or not place.common:
+        return False
+    roots = [place.common]
+    if place.git_dir and not jail.inside(jail.real(place.git_dir), jail.real(place.common)):
+        roots.append(place.git_dir)
+    if not all(_in_temp(ctx, r) for r in roots):
+        return False
+    seen, stack = 0, list(roots)
+    while stack:
+        d = stack.pop()
+        try:
+            with os.scandir(d) as it:
+                entries = list(it)
+            for e in entries:
+                seen += 1
+                if seen > SCRATCH_WALK_MAX or e.is_symlink() or \
+                        getattr(e.stat(follow_symlinks=False), 'st_file_attributes', 0) & REPARSE_POINT:
+                    return False
+                if e.is_dir(follow_symlinks=False) and not (d in roots and e.name.lower() == 'objects'):
+                    stack.append(e.path)
+        except OSError:
+            return False
+    return True
+
+
+def _read_ref(path):
+    """(text of the loose ref file, None); ('', None) when there is none; (None, why) when it
+    cannot be read."""
+    try:
+        with open(path, 'rb') as f:
+            return f.read(4096).decode('utf-8', 'replace').strip(), None
+    except FileNotFoundError:
+        return '', None
+    except OSError as e:
+        return None, 'its file cannot be read (%s)' % e
+
+
+def _ref_chain(place, name, deref):
+    """([name, the refs it points to...], None), the refs a write of `name` reaches, or (None,
+    why). Without --no-deref git writes where a symbolic ref points, so each is read in turn."""
+    chain = [name]
+    for _ in range(REF_CHAIN_MAX + 1):
+        path, why = _ref_file(place, chain[-1])
+        if why:
+            return None, why
+        if not deref:
+            return chain, None
+        text, why = _read_ref(path)
+        if text is None:
+            return None, '%s: %s' % (chain[-1], why)
+        if not text:
+            if chain[-1] == 'HEAD':
+                return None, 'the worktree\'s HEAD file %s is missing' % fwd(path)
+            return chain, None
+        if not text.startswith('ref:'):
+            return chain, None
+        target = text[4:].strip()
+        if not ref_name_ok(target):
+            return None, '%s points at %r, a name the guard does not read' % (chain[-1], target)
+        chain.append(target)
+    return None, '%s is a chain of more than %d symbolic refs' % (name, REF_CHAIN_MAX)
+
+
+def _own_branch(ctx, place, at):
+    """The branch checked out in the linked worktree `place` (refs/heads/<name>), or None: a
+    detached or unreadable HEAD, a guarded main, the PM data worktree or one the guard cannot tell."""
+    if place.kind != repo.LINKED or not place.git_dir or ctx.is_pm_data(at) or ctx.pm_data_error(at):
+        return None
+    path, why = _ref_file(place, 'HEAD')
+    text, why = _read_ref(path) if path else (None, why)
+    if not text or not text.startswith('ref:'):
+        return None
+    own = text[4:].strip()
+    if not own.startswith('refs/heads/') or not ref_name_ok(own):
+        return None
+    if own[len('refs/heads/'):].lower() in main_names(ctx, at):
+        return None
+    return own
+
+
+def _ref_ok(name, delete, linked, own):
+    if scratch_ref(name):
+        return True
+    if delete or not linked:
+        return False
+    return name == 'HEAD' or (own is not None and name == own)
+
+
+def _update_ref_unread(gc, short, longs, pos):
+    """Why the guard cannot tell which ref `git update-ref` writes, or None."""
+    if gc.inv is not None and gc.inv.via == 'xargs':
+        return 'xargs adds words the text does not show'
+    if 'stdin' in longs:
+        return 'it reads the refs to write from its input'
+    unknown = sorted(longs - set(GIT_LONGS['update-ref']))
+    if unknown:
+        return 'it gives an option the guard does not read (--%s)' % unknown[0]
+    odd = sorted(short - UPDATE_REF_SHORTS)
+    if odd:
+        return 'it gives an option the guard does not read (-%s)' % odd[0]
+    if not pos:
+        return 'it names no ref'
+    for w in gc.rest:
+        if w.dyn or w.alt is not None or w.synth:
+            return 'a word before the ref holds something only the shell knows (%s)' % w.text
+        if w is pos[0]:
+            break
+    if not ref_name_ok(pos[0].text):
+        return '%r is not a ref name the guard reads' % pos[0].text
+    return None
+
+
+def git_shared_ref(event, ctx, cmd, gc, cwd, role):
+    """`git update-ref` by a held session (shared_ref_held), from any checkout: every worktree of a
+    repository shares its refs, so a worktree reaches main as surely as the main checkout. It may
+    write scratch_ref names, and in a linked worktree its HEAD and the branch checked out there
+    (never a guarded main); it deletes only scratch_ref names. A symbolic ref is judged by every
+    ref it points to (unless --no-deref). A scratch repository (_scratch_repo: in a temp root, no
+    link out of its git directory) is not judged. Neither the PM data worktree nor, while the
+    guard cannot tell it (ctx.pm_data_error), any linked worktree gets the HEAD allowance."""
+    if not shared_ref_held(event, ctx):
+        return None
+    text = bare(cmd)
+    short, longs, pos = _opts('update-ref', gc.rest)
+    delete = 'd' in short
+    unread = _update_ref_unread(gc, short, longs, pos)
+    after = False
+    for w in gc.rest:
+        if after and (w.dyn or w.alt is not None or w.synth):
+            delete = True                       # a word only the shell knows may be -d
+        after = after or (bool(pos) and w is pos[0])
+    if not unread and (gc.blind or gc.unknown or not gc.dir):
+        unread = 'the repository it runs in is unknown (%s)' % (gc.blind or 'a directory the text does not name')
+    place = ctx.place(gc.dir) if gc.dir and not gc.unknown and not gc.blind else None
+    if _scratch_repo(ctx, place):
+        return None
+    if not unread and place.kind not in (repo.MAIN, repo.LINKED):
+        unread = 'git cannot place %s (%s)' % (fwd(gc.dir), place.detail or place.kind)
+    if not unread and place.common and os.path.isdir(os.path.join(place.common, 'reftable')):
+        unread = 'the repository keeps its refs in a reftable, which the guard does not read'
+    top = (ctx.main_top(gc.dir) if gc.dir and not gc.unknown else None) or (place.top if place else None)
+    at = own_worktree(ctx, cwd, top) if top else own_worktree(ctx, cwd)
+    at = at or top or (ctx.main_top(cwd) if cwd else None) or cwd
+    shared = 'every worktree of this repository shares its refs, so a change made from any of them is made for all'
+    allowed = 'An agent session writes refs/tmp/<name> (its scratch space), the per-worktree refs (refs/bisect/, ' \
+              'refs/worktree/, refs/rewritten/, <NAME>_HEAD) and, in its own worktree, HEAD and the branch ' \
+              'checked out there; any other ref is the PM\'s.'
+    if unread:
+        hint = ref_delete_hint(ctx, gc, top or at, cwd, short, longs, pos) if 'd' in short else None
+        if hint:
+            return refuse('git-shared-ref', role, '`%s`: %s, and %s. %s' % (text, unread, shared, hint[0]), hint[1])
+        return refuse('git-shared-ref', role, '`%s`: the guard cannot tell which ref it writes: %s; %s. Name one '
+                      'ref literally. %s To keep a commit in your scratch space:' % (text, unread, shared, allowed),
+                      'git -C %s update-ref refs/tmp/<name> <new-oid>' % quote(at))
+    name = pos[0].text
+    # the PM data worktree answers as MAIN; while the guard cannot tell it, any linked worktree may be it
+    linked = place.kind == repo.LINKED and not ctx.pm_data_error(gc.dir)
+    own = _own_branch(ctx, place, gc.dir)
+    chain, why = _ref_chain(place, name, 'no-deref' not in longs)
+    if chain is not None:
+        bad = [r for r in chain if not _ref_ok(r, delete, linked, own)]
+        if not bad:
+            return None
+        why = '%s is not one it may %s' % (bad[0] if bad[0] == name else '%s, where %s points,' % (bad[0], name),
+                                           'delete' if delete else 'write')
+    hint = ref_delete_hint(ctx, gc, top or at, cwd, short, longs, pos) if 'd' in short else None
+    if hint:
+        return refuse('git-shared-ref', role, '`%s` deletes %s: %s. %s' % (text, name, why, hint[0]), hint[1])
+    return refuse('git-shared-ref', role, '`%s` %s %s: %s; %s. %s To show it:' % (
+        text, 'deletes' if delete else 'moves', name, why, shared, allowed), 'git -C %s show-ref %s' % (quote(at), name))
 
 
 def git_unplaced(ctx, cmd, gc, cwd):

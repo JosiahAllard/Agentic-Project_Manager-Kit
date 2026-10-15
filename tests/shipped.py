@@ -1,6 +1,7 @@
-"""What the shipped-text scrub tests share: the forbidden patterns (no ruling ids, user or machine
-paths, and none of the install's own names: the machine config's `scrub_patterns`) and the
-frontmatter parse, as in tests/agents/test_agents.py."""
+"""What the shipped-text scrub tests share: the forbidden patterns (no ruling ids or user-profile
+paths in BASE_FORBIDDEN; the machine config's `machine_path_folders` as machine paths, run with
+them; then the install's own names, its `scrub_patterns`) and the frontmatter parse, as in
+tests/agents/test_agents.py."""
 import re
 import unittest
 from pathlib import Path
@@ -9,6 +10,18 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 NO_INSTALL_NAMES = "no install names to scrub for: %s"
+
+
+def machine_path_pattern(folders):
+    """The compiled pattern for a drive-rooted path into one of `folders` (the machine config's
+    `machine_path_folders`), case-insensitive, separators as kitlib.machinepaths reads them; None
+    when there are none."""
+    if not folders:
+        return None
+    from kitlib.machinepaths import SEP
+    names = '|'.join(re.escape(f) for f in folders)
+    return re.compile(r"(?<![A-Za-z0-9])[A-Za-z]:" + SEP + r"(?:" + names + r")(?![A-Za-z0-9_])",
+                      re.I)
 
 
 def install_patterns(home=None):
@@ -33,28 +46,68 @@ def install_patterns(home=None):
     return [(re.compile(p, re.I), "install name") for p in pats]
 
 
+_NOTED = []
+
+
+def note_unset_folders(folders):
+    """Print kitlib.machinepaths.UNSET_NOTE once per test process when the real machine config
+    names no `machine_path_folders` (none, or no config file): the shipped-text scan and the
+    built-in scrub then refuse user-profile paths only, and the note makes that visible in the
+    suite's output. Returns `folders`."""
+    if not folders and not _NOTED:
+        from kitlib.machinepaths import UNSET_NOTE
+        _NOTED.append(True)
+        print(UNSET_NOTE)
+    return folders
+
+
+def real_machine_folders():
+    """The real machine config's `machine_path_folders` through the home fence's one exception
+    (tests.real_install_config); () when there is no config file or it sets none (and the one
+    NOTE, note_unset_folders)."""
+    from tests import real_install_config
+    cfg, _why = real_install_config()
+    return note_unset_folders(tuple((cfg or {}).get('machine_path_folders') or ()))
+
+
+def machine_patterns(home=None):
+    """One "machine path" pattern for the machine config's `machine_path_folders`
+    (machine_path_pattern), or none when it names none. Under `home` when given, else the real
+    machine config's (real_machine_folders). Never skips: like BASE_FORBIDDEN it runs before the
+    install names' skip (scan)."""
+    if home is None:
+        folders = real_machine_folders()
+    else:
+        from kitlib.config.user import user_config
+        folders = user_config(home)["machine_path_folders"]
+    rx = machine_path_pattern(folders)
+    return [(rx, "machine path")] if rx else []
+
+
+# The one coded machine folder is a user profile: the kit codes no other folder name. The machine
+# config's `machine_path_folders` are the install's own (machine_patterns), run with the base.
 BASE_FORBIDDEN = [(re.compile(r"\bR-\d+"), "ruling id"),
-                  (re.compile(r"[A-Za-z]:[\\/]+Users[\\/]", re.I), "Windows user path"),
-                  (re.compile(r"[A-Za-z]:[\\/]+(GitHub|AgentTemp|research)[\\/]", re.I),
-                   "machine path")]
+                  (re.compile(r"[A-Za-z]:[\\/]+Users[\\/]", re.I), "Windows user path")]
 
 
 def forbidden(home=None):
-    """BASE_FORBIDDEN plus the install's own names (install_patterns). With no install names this
-    skips as install_patterns does, before any pattern runs: a test that scans text uses scan or
-    violations, which run BASE_FORBIDDEN first."""
-    return BASE_FORBIDDEN + install_patterns(home)
+    """BASE_FORBIDDEN, the machine folders (machine_patterns) and the install's own names
+    (install_patterns). With no install names this skips as install_patterns does, before any
+    pattern runs: a test that scans text uses scan or violations, which run the base patterns and
+    the machine folders first."""
+    return BASE_FORBIDDEN + machine_patterns(home) + install_patterns(home)
 
 
 def scan(named_texts, home=None, base=BASE_FORBIDDEN):
     """[(name, what)] for every forbidden pattern found in each (name, text) of named_texts.
-    The `base` patterns (BASE_FORBIDDEN unless a test keeps its own) always run. The install's
-    own names (install_patterns) run after them; when there are none to read, a base finding is
-    returned so the test fails on it, and only a clean base scan raises install_patterns' named
-    skip (unittest.SkipTest, NO_INSTALL_NAMES)."""
+    The `base` patterns (BASE_FORBIDDEN unless a test keeps its own) and the machine config's
+    folders (machine_patterns) always run. The install's own names (install_patterns) run after
+    them; when there are none to read, a finding of the first two is returned so the test fails
+    on it, and only a clean scan of them raises install_patterns' named skip (unittest.SkipTest,
+    NO_INSTALL_NAMES)."""
     named_texts = list(named_texts)
     found = [(name, what) for name, text in named_texts
-             for rx, what in base if rx.search(text)]
+             for rx, what in list(base) + machine_patterns(home) if rx.search(text)]
     try:
         names = install_patterns(home)
     except unittest.SkipTest:

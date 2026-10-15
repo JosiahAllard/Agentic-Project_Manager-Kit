@@ -22,6 +22,7 @@ from tools import backlog as backlog_tool
 
 from tests.backlog.helpers import ADD_FLAGS, ADD_NONE, BRANCH, priced
 from tests.gitfixture import TempRepo, fixture_env
+from tests.home import temp_home
 
 DIR = 'kit/backlog'
 REASON = 'the work is finished'
@@ -99,9 +100,11 @@ def index_move_fails(index, error=None):
 
 class PmDataStore(unittest.TestCase):
     """A repository with a PM data record and a linked worktree with its branch checked out,
-    holding a committed folder store under kit/backlog."""
+    holding a committed folder store under kit/backlog, under a temp home: a verb's machine-path
+    refusal reads the machine config (kitlib.backlog.plan.refuse_machine_paths)."""
 
     def setUp(self):
+        temp_home(self)
         self.repo = TempRepo()
         self.addCleanup(self.repo.cleanup)
         root = self.repo.head()
