@@ -393,3 +393,96 @@ class EngReviewTest(unittest.TestCase):
         txt = pmstart.checklist(dict(CFG, eng_review="x"), NOW, procs=[], **fakes)
         self.assertIn("could not check eng_review:", txt)
         self.assertIn(HUB_KEPT_OFF, txt)
+
+
+class MemoryTest(unittest.TestCase):
+    """pmstart.memory: each launcher repo's and the PM repo's autoMemoryDirectory
+    (kitlib.stubs.memory.problem_line), and pm_start.memory_dir against the PM repo's value. Every
+    reader is faked; the folders are throwaway ones."""
+
+    def setUp(self):
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        self.a, self.b = os.path.join(d.name, "a"), os.path.join(d.name, "b")
+        os.makedirs(self.a)
+        os.makedirs(self.b)
+
+    def test_a_repo_with_the_key_has_no_line_and_one_without_has_the_command(self):
+        def check(path, label=None):
+            return None if path == self.a else "memory (%s): add autoMemoryDirectory: python x" % label
+        got = pmstart.memory(CFG, repos={"a": self.a, "b": self.b}, check=check, pm_repo=lambda c: None)
+        self.assertEqual(got, ["memory (b): add autoMemoryDirectory: python x"])
+
+    def test_a_missing_folder_and_a_check_that_raises_are_could_not_check_lines(self):
+        gone = os.path.join(self.a, "gone")
+
+        def check(path, label=None):
+            raise OSError("disk gone")
+        got = pmstart.memory(CFG, repos={"a": self.a, "g": gone}, check=check, pm_repo=lambda c: None)
+        self.assertEqual(got, ["could not check memory (a): OSError: disk gone",
+                               "could not check memory (g): no repository folder %s" % gone])
+
+    def test_the_pm_repo_is_checked_and_memory_dir_must_match_its_value(self):
+        seen = []
+
+        def check(path, label=None):
+            seen.append((path, label))
+            return None
+        folder = lambda path: "X:/Agent-memory/pm"
+        got = pmstart.memory(dict(CFG, memory_dir="M"), repos={}, check=check, pm_repo=lambda c: self.a, folder=folder)
+        self.assertEqual(seen, [(self.a, "PM repo")])
+        self.assertEqual(got, ["pm_start.memory_dir is M; the PM repo's memory folder is X:/Agent-memory/pm: "
+                               "set pm_start.memory_dir to X:/Agent-memory/pm"])
+        same = pmstart.memory(dict(CFG, memory_dir="x:\\Agent-memory\\pm\\"), repos={}, check=check,
+                              pm_repo=lambda c: self.a, folder=folder)
+        self.assertEqual(same, [])
+        unset = pmstart.memory({}, repos={}, check=check, pm_repo=lambda c: self.a, folder=folder)
+        self.assertEqual(unset, ["pm_start.memory_dir is not set; the PM repo's memory folder is "
+                                 "X:/Agent-memory/pm: set pm_start.memory_dir to X:/Agent-memory/pm"])
+
+    def test_memory_dir_is_compared_with_the_folder_the_pm_repos_settings_name(self):
+        # The owner chose another folder (the OTHER state): memory_dir naming it is no problem.
+        from unittest import mock
+        from kitlib.stubs import memory as kmemory
+        chosen = kmemory.Memory(kmemory.OTHER, "p", "Q:/mine", "X:/Agent-memory/pm", None, None, None, None)
+        with mock.patch.object(kmemory, "survey", lambda top, *a, **k: chosen), \
+                mock.patch.object(kmemory, "wanted", lambda top, *a, **k: "X:/Agent-memory/pm"):
+            got = pmstart.memory(dict(CFG, memory_dir="q:\\mine"), repos={}, check=lambda p, label=None: None,
+                                 pm_repo=lambda c: self.a)
+            self.assertEqual(got, [])
+            got = pmstart.memory(dict(CFG, memory_dir="X:/Agent-memory/pm"), repos={},
+                                 check=lambda p, label=None: None, pm_repo=lambda c: self.a)
+            self.assertEqual(got, ["pm_start.memory_dir is X:/Agent-memory/pm; the PM repo's memory folder is "
+                                   "Q:/mine: set pm_start.memory_dir to Q:/mine"])
+
+    def test_a_pm_repo_check_that_raises_keeps_the_repo_lines(self):
+        def check(path, label=None):
+            if label == "PM repo":
+                raise OSError("disk gone")
+            return "memory (%s): add it" % label
+        from unittest import mock
+        from kitlib.stubs import memory as kmemory
+        ok = kmemory.Memory(kmemory.OK, "p", "X:/m", "X:/m", None, None, None, None)
+        with mock.patch.object(kmemory, "survey", lambda top, *a, **k: ok), \
+                mock.patch.object(kmemory, "wanted", lambda top, *a, **k: "X:/m"):
+            got = pmstart.memory(dict(CFG, memory_dir="X:/m"), repos={"b": self.b}, check=check,
+                                 pm_repo=lambda c: self.a)
+        self.assertEqual(got, ["memory (b): add it", "could not check memory (PM repo): OSError: disk gone"])
+
+    def test_the_pm_repo_is_the_main_checkout_holding_the_sessions_file(self):
+        self.assertIsNone(pmstart.pm_memory_repo(CFG))      # s.json is not there: no PM repo
+        p = os.path.join(self.a, "sessions.json")
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.write("{}")
+        top = pmstart.pm_memory_repo(dict(CFG, sessions_file=p), main_top=lambda path: "T:\\pm")
+        self.assertEqual(top, "T:\\pm")
+
+    def test_in_the_checklist(self):
+        fakes = dict(handoff={"globber": lambda p: []}, reminders={"read": lambda p: "[]"},
+                     liveness={"read": lambda p: "{}"})
+        txt = pmstart.checklist(CFG, NOW, procs=[], **fakes, memory={
+            "repos": {"b": self.b}, "check": lambda p, label=None: "memory (b): add it", "pm_repo": lambda c: None})
+        self.assertIn("- memory (b): add it", txt)
+        txt = pmstart.checklist(CFG, NOW, procs=[], **fakes, memory={
+            "repos": {"b": self.b}, "check": lambda p, label=None: 1 / 0, "pm_repo": lambda c: None})
+        self.assertIn("could not check memory (b): ZeroDivisionError", txt)

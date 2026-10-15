@@ -24,6 +24,9 @@ it would do and writes nothing. check: OK when every wanted stub exists with exa
 would give it; a stub that runs another kit location is stale. Stubs are opt-in: check on a
 repository that uses none (no "stubs".tools, no `tools` given, no stub) is OK and says so.
 
+The `memory` verb of tools/kit_stubs.py is kitlib.stubs.memory: the agent memory folder a
+repository names in its .claude/settings.json, not a stub.
+
 Exit codes: OK 0; PROBLEMS 1 (a file kept, missing, stale or not a stub, each named); CONFIG 2 (the
 configuration was refused, or the kit is an export whose marker names no main checkout).
 """
