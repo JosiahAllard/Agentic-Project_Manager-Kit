@@ -844,6 +844,23 @@ class DomTest(unittest.TestCase):
                 self.assertEqual(got["sent"], [1, 1, 3])                         # the version moves only on a read that came
                 self.assertFalse(got["open"])
 
+    def test_every_card_shows_its_id_and_the_id_box_finds_it(self):
+        snap = snapshot(collections=dict(LISTS, stories={"S-1": {"status": "review", "title": "a story", "story": "x"}}))
+        got = dom("""
+            await start();
+            const ids = {};
+            const idsIn = sel => [...document.querySelectorAll(sel + " .id")].map(e => text(e));
+            ids.questions = idsIn("#list article");
+            await click($("#sections [data-s=todo]")); ids.todos = idsIn("#list article");
+            await type($("#idq"), "t-2");
+            const found = [...document.querySelectorAll("#list article")].map(a => a.id);
+            await type($("#idq"), "");
+            await click($("#sections [data-s=backlog]")); ids.stories = idsIn("#list article");
+            return { ids, found };
+        """, snap)
+        self.assertEqual(got["ids"], {"questions": ["Q-1"], "todos": ["T-1", "T-2"], "stories": ["S-1"]})
+        self.assertEqual(got["found"], ["todo-T-2"])
+
     def test_a_lost_to_do_card_has_a_tick_box_that_says_the_to_do_is_gone(self):
         got = dom("""
             await start();
