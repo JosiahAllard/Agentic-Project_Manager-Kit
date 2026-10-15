@@ -30,8 +30,9 @@ commit(Request) -> Outcome(code, lines). Nothing here prints or exits; tools/com
   written; what is still staged after the commit is named in a WARNING line. HEAD and those
   entries are read once, before the machine-path check; an entry staged again after it, a HEAD
   that cannot be read (other than an unborn branch), and a HEAD another writer moves before the
-  commit refuse it. A commit git made on a HEAD moved after the last check is undone (update-ref
-  back to its parent, the merge state written back) and refused.
+  commit refuse it. This call's commit, made on a HEAD moved after the last check, is undone
+  (update-ref back to its parent; the merge state written back for a merge commit) and refused;
+  a commit at HEAD that is not this call's is never undone (commit_only).
 - Owner-only paths (.kit.json "owner", kitlib.config.owner) are committed only by the owner:
   --owner-authored, which refuses unless the author identity git will record (`git var
   GIT_AUTHOR_IDENT`) is "owner".email (unset, an agent_emails address or any other: refused).
@@ -701,16 +702,17 @@ def head_moved_line(head, now):
                                                                  head[:12] or 'an unborn branch'))
 
 
-def undo_commit(root, new, parent, saved):
-    """Point HEAD back at `parent` if it is still `new` (update-ref with the old value), and write
-    back the merge-state files `saved` that the commit removed. The refusal lines either way."""
+def undo_commit(root, new, parent, saved, merged):
+    """Point HEAD back at `parent` if it is still `new` (update-ref with the old value), and, when
+    `new` is a merge commit (`merged`: it consumed the merge state), write back the merge-state
+    files `saved` that it removed. The refusal lines either way."""
     rc, _out, err = _git(root, 'update-ref', '-m', 'commit.py: undo a commit made on a moved HEAD',
                          'HEAD', parent, new)
     if rc != 0:
         return ['refused, and NOT undone: commit %s was made on the moved HEAD and lacks the other '
                 'writer\'s change; git update-ref failed: %s. Undo it by hand: git update-ref HEAD '
                 '%s %s' % (new[:12], err.strip() or 'exit %s' % rc, parent, new)]
-    for path, data in saved.items():
+    for path, data in (saved.items() if merged else ()):
         if not os.path.exists(path):
             try:
                 with open(path, 'wb') as fh:
@@ -722,17 +724,34 @@ def undo_commit(root, new, parent, saved):
             'are still staged. Run this again.' % parent[:12]]
 
 
+READ_BACK_FORMAT = '--format=%H %T %P%n%B'     # the read-back of HEAD after `git commit`
+
+
+def message_lines(text):
+    """`text` as git's whitespace cleanup leaves it, near enough to compare: each line's trailing
+    whitespace dropped, and blank lines dropped."""
+    return [l.rstrip() for l in text.splitlines() if l.strip()]
+
+
 def commit_only(root, head, snap, msg):
     """`git commit` of exactly `snap` (index_snapshot) on `head` (head_commit) through
     private_index; `(rc, out, err)` as _git gives them. The real index is never written: its
     entries for `snap` already match the new HEAD, and every other staged entry stays staged.
-    HEAD must not move under the call: checked just before `git commit` (refused), and after it,
-    where a commit made on a HEAD another writer moved is undone (undo_commit) and refused."""
+    HEAD must not move under the call: checked just before `git commit` (refused), and read back
+    after it. The commit read back is this call's only when its tree is the private index's tree
+    and its message is `msg`; then, made on a HEAD another writer moved, it is undone (undo_commit)
+    and refused. Anything else at HEAD (another writer committed after this call) is refused
+    without undoing anything: a commit that is not this call's is never undone."""
     tmp = tempfile.mkdtemp(prefix='kit-commit-')
     try:
         env, why = private_index(root, tmp, head, snap)
         if env is None:
             return 1, '', why
+        r = cmd.call(['write-tree'], root, env=env)
+        if r.rc != 0:
+            return r.rc, '', 'git write-tree of the private index failed: %s' % (
+                r.err or 'exit %s' % r.rc)
+        tree = r.out.decode('utf-8', 'replace').strip()
         now = head_commit(root)
         if now != head:
             raise _Stop(REFUSED, head_moved_line(head, now), 'Nothing was committed; the files '
@@ -743,19 +762,25 @@ def commit_only(root, head, snap, msg):
         shutil.rmtree(tmp, ignore_errors=True)
     if r.rc != 0:
         return r.rc, r.out.decode('utf-8', 'replace'), r.err
-    rc, out, err = _git(root, 'log', '-1', '--format=%H %P', 'HEAD')
-    ids = out.split()
-    if rc != 0 or not ids:
+    rc, out, err = _git(root, 'log', '-1', READ_BACK_FORMAT, 'HEAD')
+    first, _nl, body = out.partition('\n')
+    ids = first.split()
+    if rc != 0 or len(ids) < 2:
         raise _Stop(REFUSED, 'git commit ran, but HEAD could not be read back to check it was '
-                    'made on %s: %s. Check `git log -2` by hand.'
+                    'made on %s: %s. Check `git log -3` by hand.'
                     % (head[:12] or 'the unborn branch', err.strip() or 'exit %s' % rc))
-    new, parents = ids[0], ids[1:]
+    new, new_tree, parents = ids[0], ids[1], ids[2:]
+    if new_tree != tree or message_lines(body) != message_lines(msg):
+        raise _Stop(REFUSED, 'refused, and NOT undone: git commit ran, but HEAD is now %s, which '
+                    'is not the commit this call made: another writer committed after it. Check '
+                    '`git log -3` by hand to see whether this call\'s commit is in the history.'
+                    % new[:12])
     if (parents[0] if parents else '') != head:
         if not parents:
-            raise _Stop(REFUSED, head_moved_line(head, ''), 'NOT undone: commit %s has no parent; '
-                        'check `git log` by hand.' % new[:12])
+            raise _Stop(REFUSED, head_moved_line(head, ''), 'NOT undone: this call\'s commit %s '
+                        'has no parent; check `git log` by hand.' % new[:12])
         raise _Stop(REFUSED, head_moved_line(head, parents[0]),
-                    *undo_commit(root, new, parents[0], saved))
+                    *undo_commit(root, new, parents[0], saved, len(parents) > 1))
     return 0, r.out.decode('utf-8', 'replace'), r.err
 
 
