@@ -527,6 +527,60 @@ def stubs(repos=None, check=None):
     return lines
 
 
+def pm_memory_repo(cfg, main_top=None):
+    """The main checkout of the PM's own repository (the one holding sessions_file), or None when
+    sessions_file is not set or not there. `main_top` is kitlib.git.repo.main_checkout_toplevel
+    unless given."""
+    path = cfg.get("sessions_file")
+    if not path or not os.path.isfile(path):
+        return None
+    if main_top is None:
+        from kitlib.git.repo import main_checkout_toplevel as main_top
+    return main_top(os.path.dirname(os.path.abspath(path)))
+
+
+def _same_folder(a, b):
+    return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
+
+
+def memory(cfg, repos=None, check=None, pm_repo=None, want=None):
+    """The agent memory folder (kitlib.stubs.memory; docs/pm-start.md): one line per repository in
+    launcher.repos, and for the PM's own repository, whose .claude/settings.json has no
+    autoMemoryDirectory (with the command that adds it) or cannot be read; then one line when
+    pm_start.memory_dir is not the PM repository's memory folder. None when all match. A folder
+    that is not there, or a check that raises, is that repo's own "could not check memory" line."""
+    from kitlib.stubs import memory as kmemory
+    if check is None:
+        check = kmemory.problem_line
+    want = want or kmemory.wanted
+    repos = launcher_repos() if repos is None else repos
+    lines = []
+    for name in sorted(repos):
+        path = repos[name]
+        if not os.path.isdir(path):
+            lines.append("could not check memory (%s): no repository folder %s" % (name, path))
+            continue
+        try:
+            line = check(path, label=name)
+        except Exception as e:
+            line = "could not check memory (%s): %s: %s" % (name, type(e).__name__, e)
+        if line:
+            lines.append(line)
+    top = (pm_repo or pm_memory_repo)(cfg)
+    if not top:
+        return lines
+    if not any(_same_folder(top, p) for p in repos.values()):     # a launcher repo has its line already
+        line = check(top, label="PM repo")
+        if line:
+            lines.append(line)
+    folder = want(top)
+    have = cfg.get("memory_dir")
+    if folder and not (have and _same_folder(have, folder)):
+        lines.append("pm_start.memory_dir %s; the PM repo's memory folder is %s: set pm_start.memory_dir to %s"
+                     % ("is %s" % have if have else "is not set", folder, folder))
+    return lines
+
+
 def repo_prep(repos=None, prep=None):
     """The first-use repo prep (kitlib.git.prep.run; docs/new-worktree.md "First-use prep") of each
     repository in launcher.repos, the repositories the kit's workers make worktrees in: its lines,
@@ -651,6 +705,9 @@ def checklist(cfg, now=None, procs=None, **fakes):
         ("kit_sync", lambda: kit_sync(fakes.get("pm_data", pm_data_settings)())),
         ("plugin_current", lambda: plugin_current(**fakes.get("plugin_current", {}))),
         ("stubs", lambda: stubs(**fakes.get("stubs", {}))),
+        # A stubs fake's repos stand for launcher.repos here too.
+        ("memory", lambda: memory(cfg, **fakes.get("memory", {k: v for k, v in fakes.get("stubs", {}).items()
+                                                              if k == "repos"}))),
         ("repo_prep", lambda: repo_prep(**fakes.get("repo_prep", {}))),
         ("agent_temp", lambda: agent_temp_lines(**fakes.get("agent_temp", {}))),
         ("console_tasks", lambda: consoletasks.check(cfg, **fakes.get("console_tasks", {}))),
