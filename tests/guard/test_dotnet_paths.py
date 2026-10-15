@@ -220,6 +220,22 @@ class StartDirectory(Base):
         self.allowed(self.run_ps("Set-Location '{wt}'; [IO.File]::WriteAllText.Invoke('x.txt', 'y')",
                                  cwd=self.w.main, sub=False))
 
+    def test_a_session_in_the_main_checkout_is_not_offered_a_new_worktree(self):
+        # its commands start in the main checkout whatever worktree it makes; offered a new one before
+        d = self.denied(self.run_ps("Set-Location '{wt}'; [IO.File]::WriteAllText.Invoke('x.txt', 'y')",
+                                    cwd=self.w.main), 'main-checkout')
+        self.assertNotIn('worktree add', d.instead)
+        self.assertIn('literal absolute paths', d.reason.split('this role may not edit a main checkout.')[1])
+        self.assertEqual(d.instead, 'pwd')
+
+    def test_an_outer_location_between_the_event_and_the_call(self):
+        # the nested shell starts in the main checkout, where the outer Set-Location put it; the event
+        # and the call's own location are the worktree
+        self.denied(self.run_ps("Set-Location '{main}'; pwsh -NoProfile -Command \"Set-Location '{wt}'; "
+                                "[IO.File]::WriteAllText.Invoke('x.txt', 'y')\""), 'main-checkout')
+        self.allowed(self.run_ps("pwsh -NoProfile -Command \"Set-Location '{wt}'; "
+                                 "[IO.File]::WriteAllText.Invoke('x.txt', 'y')\""))
+
 
 class DevicePaths(Base):
     """\\\\?\\C:\\x and \\\\.\\C:\\x are C:\\x to .NET, judged as that path; a share (\\\\host\\C$\\x)
@@ -246,6 +262,16 @@ class DevicePaths(Base):
         self.denied(self.run_ps(r"[IO.File]::WriteAllText('\\?\UNC\localhost\share\x.txt', 'y')"),
                     'main-checkout')
 
+    def test_other_device_spellings(self):
+        # a volume, a GUID volume, the NT object path and a drive-relative device path name no folder
+        # the guard can place
+        for text in (r"[IO.File]::WriteAllText('\\?\GLOBALROOT\Device\HarddiskVolume3\x.txt', 'y')",
+                     r"[IO.File]::WriteAllText('\\?\Volume{{0b9c1a2e-0000-0000-0000-100000000000}}\x.txt', 'y')",
+                     r"[IO.File]::WriteAllText('\??\{main}\x.txt', 'y')",
+                     r"[IO.File]::WriteAllText('\\?\%s:x.txt', 'y')" % self.w.main[0]):
+            with self.subTest(text=text):
+                self.denied(self.run_ps(text), 'main-checkout')
+
 
 class Constructors(Base):
     """A StreamWriter or FileStream opened on a path ([IO.StreamWriter]::new, New-Object, a cast
@@ -258,7 +284,14 @@ class Constructors(Base):
                  r"$s = New-Object -TypeName System.IO.FileStream -ArgumentList '{main}\x.txt', 'Create'",
                  r"$s = New-Object -ArgumentList '{main}\x.txt' -TypeName IO.StreamWriter",
                  r"$s = New-Object IO.FileStream -Args @('{main}\x.txt', 'Create')",
-                 r"$s = [System.IO.StreamWriter]'{main}\x.txt'")
+                 r"$s = [System.IO.StreamWriter]'{main}\x.txt'",
+                 # a cast of a parenthesized string: allowed from a worktree before
+                 r"$s = [System.IO.StreamWriter]('{main}\x.txt')",
+                 r"$s = [IO.StreamWriter] ( '{main}\x.txt' )",
+                 # a FileStream opened to read that deletes the file when closed (FileOptions): allowed before
+                 r"$f = [IO.FileStream]::new('{main}\x.txt', 'Open', 'Read', 'None', 4096, 'DeleteOnClose')",
+                 r"$f = New-Object IO.FileStream('{main}\x.txt', [IO.FileMode]::Open, [IO.FileAccess]::Read, "
+                 r"[IO.FileShare]::None, 4096, [IO.FileOptions]::DeleteOnClose)")
 
     def test_into_the_main_checkout(self):
         for text in self.INTO_MAIN:
@@ -277,10 +310,43 @@ class Constructors(Base):
             with self.subTest(text=text):
                 self.denied(self.run_ps(text), 'main-checkout')
 
+    def test_a_cast_of_anything_but_a_plain_string(self):
+        # PowerShell converts the operand, whatever it is, by the StreamWriter(string) constructor;
+        # a member access binds before the cast. Allowed from a worktree before.
+        for text in ('$s = [IO.StreamWriter]$p', '$s = [IO.StreamWriter] $p.FullName',
+                     '$s = [IO.StreamWriter]($p)', "$s = [IO.StreamWriter]('a' + $b)",
+                     '$s = [IO.StreamWriter]"$d\\x.txt"', '$s = [IO.StreamWriter][string]$p',
+                     "$s = [IO.StreamWriter]'{wt}\\x.txt'.Replace('wt', 'x')",
+                     "$s = [IO.StreamWriter]('{wt}\\x.txt').Replace('wt', 'x')",
+                     "$s = [IO.StreamWriter]'{wt}\\x.txt'[0]",
+                     "$s = [IO.StreamWriter]‘x.txt’", "$s = [IO.StreamWriter]('{wt}\\a', '{wt}\\b')"):
+            with self.subTest(text=text):
+                d = self.denied(self.run_ps(text), 'main-checkout')
+                self.assertIn('a path the line computes', d.reason)
+        self.allowed(self.run_ps(r"$s = [IO.StreamWriter]'{wt}\x.txt' + 'y'"))     # the cast binds first
+
+    def test_a_cast_of_a_filestream_or_the_type_as_a_value(self):
+        # nothing a cast opens, judged where the line runs, as before
+        for text in ('$t = [IO.StreamWriter]', '[IO.StreamWriter].Name', 'if ($x -is [IO.StreamWriter]) {{ 1 }}',
+                     '$a = @([IO.StreamWriter], [IO.FileStream])', "[IO.FileStream]'x.txt'"):
+            with self.subTest(text=text):
+                self.allowed(self.run_ps(text))
+                self.denied(self.run_ps(text, cwd=self.w.main), 'main-checkout')
+
+    def test_a_new_object_call_the_guard_does_not_read(self):
+        # an unknown parameter, a third positional argument, an expression after the list:
+        # judged where the line runs
+        for text in (r"$s = New-Object IO.StreamWriter -Foo '{wt}\x.txt'",
+                     r"$s = New-Object IO.StreamWriter '{wt}\x.txt' 'y' 'z'",
+                     r"$s = New-Object IO.StreamWriter ('{wt}\ok') + 'x'"):
+            with self.subTest(text=text):
+                self.denied(self.run_ps(text, cwd=self.w.main), 'main-checkout')
+
     def test_a_stream_or_a_read(self):
         for text in ('$s = [IO.StreamWriter]::new($fs)', '$s = New-Object IO.StreamWriter($fs)',
                      '$s = [IO.StreamWriter]::new($ms, [Text.Encoding]::UTF8)', '$s = [IO.StreamWriter]::Null',
                      "$f = [IO.FileStream]::new($p, 'Open', 'Read', 'ReadWrite')",
+                     "$f = [IO.FileStream]::new($p, 'Open', 'Read', 'ReadWrite', 4096)",
                      '$f = New-Object IO.FileStream($p, [IO.FileMode]::Open, [IO.FileAccess]::Read)',
                      r"$s = New-Object IO.StreamReader('{main}\x.txt')",
                      r"$s = [IO.StreamReader]::new('{main}\x.txt')"):

@@ -2085,11 +2085,12 @@ def _net_ctor(src, kind, args, end, out):
     """Add the path a StreamWriter or FileStream constructor with `args` writes to `out`; True
     when the guard does not read it: no arguments, or a StreamWriter's first argument that is not a
     plain string (a Stream it writes through, judged where it is opened, or a path the line
-    computes). A FileStream opened to read only (FileMode Open, FileAccess Read) writes nothing."""
+    computes). A FileStream opened to read only (FileMode Open, FileAccess Read) writes nothing,
+    unless it names FileOptions (a sixth argument: DeleteOnClose deletes the file)."""
     if not args:
         return True
     text, s, e = args[0]
-    if kind == 'filestream' and len(args) >= 3 and _net_arg_name(src, args[1], FILE_MODE_RE) == 'open' and \
+    if kind == 'filestream' and 3 <= len(args) < 6 and _net_arg_name(src, args[1], FILE_MODE_RE) == 'open' and \
             _net_arg_name(src, args[2], FILE_ACCESS_RE) == 'read':
         return False
     if text is None and (kind == 'streamwriter' or src[s:e].lower() == '$null'):
@@ -2098,16 +2099,69 @@ def _net_ctor(src, kind, args, end, out):
     return False
 
 
+def _net_operand_end(src, k):
+    """The offset just past the operand that starts at src[k]: its strings and brackets whole, up to
+    a space, a comma, a statement end or an unopened closing bracket."""
+    n, depth = len(src), 0
+    while k < n:
+        c = src[k]
+        if c in '\'"':
+            k = _net_string_end(src, k)
+            continue
+        if c == '`':
+            k += 2
+            continue
+        if c in '([{':
+            depth += 1
+        elif c in ')]}':
+            if depth == 0:
+                break
+            depth -= 1
+        elif depth == 0 and c in ' \t\r\n,;|&':
+            break
+        k += 1
+    return min(k, n)
+
+
+def _net_cast(src, k):
+    """The NetWrite of the StreamWriter cast whose type name ends at src[k] (its ']'), or None when
+    no operand follows (the type passed as a value: [IO.StreamWriter], [IO.StreamWriter].Name).
+    PowerShell converts the operand by the constructor that takes a string, so a plain string
+    ('x.txt', or ('x.txt')) is the path; any other operand ($p, ('a' + $b), 'x'.Replace(...): a member
+    access or an index binds before the cast) is a path the line computes."""
+    n = len(src)
+    if src[k:k + 1] != ']':
+        return None
+    k += 1
+    while k < n and src[k] in ' \t':
+        k += 1
+    if k >= n or not (src[k] in '$(@[\'"' + NET_QUOTES or src[k].isdigit()):
+        return None
+    end = _net_operand_end(src, k)
+    lit = None
+    if src[k] in '\'"':
+        close = _net_string_end(src, k)
+        lit = (_net_literal(src[k:close]), k, close) if close == end else None
+    elif src[k] == '(':
+        args, close = _net_args(src, k + 1)
+        if close == end and src[close - 1:close] == ')' and len(args) == 1 and not _net_lost(src[k + 1:close]):
+            lit = args[0]
+    if lit is not None and lit[0] is not None:
+        return NetWrite(sh.Word(lit[0], False, lit[1], lit[2]), end)
+    return NetWrite(sh.Word(src[k:end], True, k, end), end)
+
+
 def net_writes(cmd):
     """([NetWrite], unread): each path the PowerShell command's .NET file calls (IO_FILE_RE) and
     StreamWriter and FileStream constructors (NET_TYPE_RE: ::new(...), New-Object, or a StreamWriter
-    cast from a plain string, [IO.StreamWriter]'x.txt') write, and True
+    cast, [IO.StreamWriter]'x.txt', whose operand is a path the line computes unless it is a plain
+    string, _net_cast) write, and True
     when a match is a write the guard does not read the path of, so write_targets judges the
     directory the command runs in, as it did for every such call, and dotnet_process_dir the one
     its process started in: one inside a quoted word, a method named with no '(' after it (called
     later, through .Invoke or a variable), a call with fewer arguments than the ones it writes
     (_net_written), one whose arguments the parse may have lost its place in (_net_lost), a type
-    named any other way (any other cast, [type] as a value) and a New-Object call _net_new_object does
+    named any other way (a FileStream cast, [type] as a value) and a New-Object call _net_new_object does
     not read. A $null argument (Replace's backup) writes nothing."""
     if cmd.shell != sh.PS:
         return [], False
@@ -2130,14 +2184,12 @@ def net_writes(cmd):
             unread = True                       # in a string, a type name passed as a value
             continue
         if not call:
-            # [IO.StreamWriter]'x.txt': PowerShell converts a string by the constructor that takes it
-            cast = re.compile(r'\][ \t]*([\'"])').match(src, after)
-            end = _net_string_end(src, cast.start(1)) if cast else None
-            text = _net_literal(src[cast.start(1):end]) if cast else None
-            if text is None or not m.group(0).lower().endswith('streamwriter'):
-                unread = True                   # a cast of a value, [type] passed as a value
+            # [IO.StreamWriter]'x.txt', [IO.StreamWriter]$p: a cast opens its operand (_net_cast)
+            cast = _net_cast(src, after) if m.group(0).lower().endswith('streamwriter') else None
+            if cast is None:
+                unread = True                   # [type] passed as a value, a FileStream cast
             else:
-                out.append(NetWrite(sh.Word(text, False, cast.start(1), end), end))
+                out.append(cast)
             continue
         if call.group(1).lower() != 'new':
             continue                            # a static member: [IO.StreamWriter]::Null
@@ -2978,7 +3030,9 @@ def dotnet_process_dir(event, ctx, cmd, cwd, role):
     net_placed), judged in each directory its process may have started in (edit_target): the
     directory the call runs in (`cwd`) and the PowerShell location of each command it is nested
     in. .NET reads a relative path there (NET_RELATIVE), so a Set-Location into a worktree does not
-    take the write with it; write_targets judges the PowerShell location itself."""
+    take the write with it; write_targets judges the PowerShell location itself. A session that
+    runs in the main checkout is told to give the call literal absolute paths, not to make a
+    worktree (its process starts in the main checkout either way)."""
     if not net_mentioned(cmd):
         return None
     net, unread = net_writes(cmd)
@@ -2996,7 +3050,16 @@ def dotnet_process_dir(event, ctx, cmd, cwd, role):
         what = ('`%s` may write through .NET in %s, the directory its process started in (.NET reads a relative '
                 'path there, and Set-Location does not move it; give the call literal absolute paths)'
                 % (bare(cmd), fwd(d)))
-        res = edit_target(event, ctx, paths.norm(d, fold=False), cwd, role, what, run=bare(cmd))
+        target = paths.norm(d, fold=False)
+        res = edit_target(event, ctx, target, cwd, role, what, run=bare(cmd))
+        place = ctx.place(target) if res and res.rule == 'main-checkout' and own_worktree(ctx, cwd) is None \
+            else None
+        if place is not None and place.kind == repo.MAIN and not ctx.is_pm_data(place.top):
+            # the session runs in the main checkout: a worktree it makes does not move where its process starts
+            return refuse('main-checkout', role, '%s is in the main checkout %s; this role may not edit a main '
+                          'checkout. This session runs there, so a new worktree does not move where its '
+                          'PowerShell process started: call each .NET method directly with literal absolute '
+                          'paths inside a worktree. To see where this session runs:' % (what, place.top), 'pwd')
         if res:
             return res
     return None
