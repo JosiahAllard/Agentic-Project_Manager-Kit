@@ -33,7 +33,7 @@ Logic: `kitlib/ledger/files.py` (`of_config`, `path_of`, `readable`, `others`); 
 - **The frozen ledger:** with `ledger_dir` set, the `ledger_path` file, if any, holds the `R-nnnn` entries written before the split. `show`, `grep`, `list` and `check` read it; `add` and `retire` never write it, and `retire R-nnnn` is refused. It is kept for one release.
 - **`ledger_dir` unset:** `ledger_path` is the one ledger, read and written as before the split, `all` included.
 - **Routing:** an `H-<repo>-nnnn` id is in `<repo>`'s file and an `R-nnnn` id in the `ledger_path` file (`path_of`). Reading every file means the frozen ledger first, then each repository's file in `ledger_repos` order (`readable`). A repository's file that does not exist yet holds no entries.
-- **Coordinator start:** with `ledger_dir` set, the coordinator's session start names its repository's file as the reference for how that repository works (`kitlib.coordinatorstart.ledger_lines`; a host adapter's start, such as `hosts/codex/adapter/start.py`, through `kitlib.hoststart.shared_checks`). The repository's name is matched against `ledger_repos` without case; a name not there gets the folder and the names instead. The file is named, never opened.
+- **Coordinator start:** with `ledger_dir` set, the coordinator's session start names its repository's file as the reference for how that repository works (`kitlib.coordinatorstart.ledger_lines`; a host adapter's start, such as `hosts/codex/adapter/start.py`, through `kitlib.hoststart.shared_checks`). The repository's name is matched against `ledger_repos` lower-cased with every `_` as `-` (`ledger_name`); a name not there gets the folder and the names instead. A machine config that cannot be read, or one with no `ledger_dir`, adds no line. The file is named, never opened.
 
 ## CLI
 
@@ -120,7 +120,11 @@ Logic: `kitlib/ledger/write.py` (`locked`, `held`, `lock_path`); tests `tests/le
 
 One writer per ledger file at a time. `add` and `retire` hold the file's write lock from their read to their write, so two writers at once never take the same next id and neither atomic replace drops the other's entry. `add --commit` holds it over the checks, the add and the commit, so no other writer's entry lands in its commit; `--push` runs after it is given up. `vcs.finish` commits under it too.
 
-- **The lock:** an OS byte-range lock (`kitlib/dailyfull/treelock.py` `TreeLock`) on `.<file name>.lock` beside the file, recording the holder's pid and when it took the lock. The system drops it when the holder exits, so a dead holder never blocks. The lock file is never removed and never committed: an untracked file beside the ledger is neither a change `add --commit` refuses nor part of `git commit -- <file>`.
+- **The lock:** an OS byte-range lock (`kitlib/dailyfull/treelock.py` `TreeLock`) on a lock file recording the holder's pid and when it took the lock. The system drops it when the holder exits, so a dead holder never blocks. Where the lock file is:
+  - **Ledger in a git checkout** (a main checkout or a linked worktree): `kit-ledger-<file name, lower-cased>-<hash>.lock` in the repository's git common dir (`kitlib.git.repo.classify`), the hash taken from the file's real path with case folded, so every spelling of one file gets one lock, and two worktrees of one repository share it. Nothing is left in the checkout, so `git status` stays clean.
+  - **Ledger outside any git checkout:** `.<file name>.lock` beside the file.
+  - **git cannot tell which:** the write is refused, naming the ledger, with nothing written.
+  - The lock file is never removed: one per ledger file stays behind.
 - **Busy:** a writer waits `LOCK_WAIT` seconds (30), trying every `LOCK_PAUSE` (0.05), then is refused naming the holder, with nothing written.
 - **Nesting:** the lock nests within one thread, whatever spelling of the path; every other thread and process waits.
 - **git's `index.lock`:** two files in one repository still share git's index. A commit that fails because `index.lock` is busy is retried for `INDEX_LOCK_WAIT` seconds (3) in `kitlib/ledger/vcs.py` `commit_file`; any other failure is not retried, and after the bound the refusal says `index.lock busy`. A commit or push that fails after the write leaves the entry written and says what was not done.

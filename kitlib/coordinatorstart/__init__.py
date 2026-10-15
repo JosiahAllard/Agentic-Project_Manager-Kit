@@ -233,17 +233,25 @@ def machine(entry, run=_run, read=_read, now=None, kit=None, root=None, lock_fil
 
 def ledger_lines(machine, repo):
     """[the line naming `repo`'s ledger file] from the machine config `machine`
-    (kitlib.config.user.user_config's): [] without `ledger_dir`. `repo` is matched against
-    `ledger_repos` without case; a repo not named there gets the folder and the names instead.
-    Nothing is read."""
+    (kitlib.config.user.user_config's): [] without `ledger_dir`. `repo` (the sessions file's
+    folder name) is matched against `ledger_repos` lower-cased with every '_' as '-' (so
+    My_Tools-Repo is my-tools-repo); a repo not named there gets the
+    folder and the names instead. Nothing is read."""
     if not machine.get("ledger_dir"):
         return []
     files = kuser.files_of(machine)
-    key = str(repo or "").lower()
+    repo = str(repo or "")
+    key = ledger_name(repo)
     if key in files:
         return ["ledger (reference, HOW this repo works): %s" % files[key]]
+    named = key if key == repo else "%s (from %s)" % (key, repo)
     return ["ledger (reference, HOW each repo works): one file per ledger_repos name in %s (%s); none is named %s"
-            % (machine["ledger_dir"], ", ".join(files), repo)]
+            % (machine["ledger_dir"], ", ".join(files), named)]
+
+
+def ledger_name(repo):
+    """The ledger_repos name a repository folder name `repo` maps to: lower-cased, '_' as '-'."""
+    return str(repo or "").lower().replace("_", "-")
 
 
 def stubs_line(entry, root=None, check=stubs.problem_line):
@@ -282,7 +290,7 @@ def others(entry, procs, env, pid):
 
 def context(cfg, env=None, cwd=None, now=None, procs=None, run=_run, read=_read, kit=None,
             pid=None, pm_cfg=None, live=True, stubs_check=stubs.problem_line, machine_cfg=None):
-    """The heading, one "- <text>" line per string in cfg["standing"], the ENG filing line (only when cfg["eng_filing"] is true), the pricing-pass line (only when cfg["pricing_pass"] is true), then the live checks (the ledger check prints only with `ledger_dir` set, the stubs check only when the repo's stubs are missing or stale). `machine_cfg`: the machine config (default kitlib.config.user.user_config(), read by the ledger check)."""
+    """The heading, one "- <text>" line per string in cfg["standing"], the ENG filing line (only when cfg["eng_filing"] is true), the pricing-pass line (only when cfg["pricing_pass"] is true), then the live checks (the ledger check prints only with `ledger_dir` set, and nothing when the machine config cannot be read; the stubs check only when the repo's stubs are missing or stale). `machine_cfg`: the machine config (default kitlib.config.user.user_config(), read by the ledger check)."""
     env = os.environ if env is None else env
     lines = [str(t) for t in cfg.get("standing") or []]
     if cfg.get("eng_filing") is True:
@@ -315,7 +323,10 @@ def context(cfg, env=None, cwd=None, now=None, procs=None, run=_run, read=_read,
             return box["e"][0]
 
         def ledger():
-            m = machine_cfg if machine_cfg is not None else kuser.user_config()
+            try:            # unreadable: no line, as with no ledger_dir (the start adds nothing new)
+                m = machine_cfg if machine_cfg is not None else kuser.user_config()
+            except Exception:
+                return []
             return ledger_lines(m, entry_once()["repo"]) if m.get("ledger_dir") else []
 
         checks = [

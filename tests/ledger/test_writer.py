@@ -463,7 +463,8 @@ class WriteLockTest(Base):
             self.assertIn('nothing was written', seen[0])
             self.assertEqual(self.add(decides='Free again.').id, rid(3))
 
-    def test_the_lock_file_sits_beside_the_ledger(self):
+    def test_outside_any_git_checkout_the_lock_file_sits_beside_the_ledger(self):
+        self.assertEqual(write.gitrepo.classify(self.dir).kind, write.gitrepo.NONE)
         self.add()
         self.assertTrue(os.path.isfile(os.path.join(os.path.dirname(self.path), '.LEDGER.md.lock')))
 

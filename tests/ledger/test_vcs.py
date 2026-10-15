@@ -154,24 +154,58 @@ class VcsTest(unittest.TestCase):
 
     def seed_rulings(self):
         """A committed file in rulings/ before the ledger's first commit: the folder is tracked,
-        so `git status -- rulings/LEDGER.md` beside an untracked lock file is a plain question
-        (the fake git answers no status pathspec inside an untracked folder)."""
+        so `git status -- rulings/LEDGER.md` is a plain question (the fake git answers no status
+        pathspec inside an untracked folder)."""
         self.repo.write('rulings/README.md', 'rulings\n')
         self.repo.commit('rulings folder', 'rulings/README.md')
 
-    def test_the_untracked_lock_file_is_neither_dirt_to_prepare_nor_committed(self):
+    def status(self):
+        return self.repo.git('status', '--porcelain', '--untracked-files=all', '--ignored')
+
+    def test_an_add_or_retire_leaves_no_untracked_file_in_the_ledgers_checkout(self):
         self.seed_rulings()
-        lock = os.path.join(os.path.dirname(self.path), '.LEDGER.md.lock')
+        before = self.status()
         for n in (1, 2):
             with write.locked(self.path):
-                plan = self.prepare()               # the lock file is there: not a refusal
-                self.assertTrue(os.path.isfile(lock))
+                plan = self.prepare()
                 got = self.add(decides='Entry %d.' % n)
                 vcs.finish(plan, got.id, None, 'x', push=False)
             self.assertEqual(self.repo.git('show', '--name-only', '--format=', 'HEAD'), 'rulings/LEDGER.md')
+            self.assertEqual(self.status(), before)
+        write.retire(self.path, rid(1), 'spent', 'why')
+        new = [line.strip() for line in self.status().splitlines() if line not in before.splitlines()]
+        self.assertEqual(new, ['M rulings/LEDGER.md'])
         self.assertEqual(self.repo.git('ls-files', '--', 'rulings').splitlines(),
                          ['rulings/LEDGER.md', 'rulings/README.md'])
-        self.assertEqual(self.repo.git('status', '--porcelain', '--', 'rulings'), '?? rulings/.LEDGER.md.lock')
+
+    def test_the_lock_is_in_the_git_common_dir_one_per_file_under_any_spelling(self):
+        common = os.path.normcase(os.path.realpath(self.repo.common_dir()))
+        lock = write.lock_path(self.path)
+        self.assertEqual(os.path.normcase(os.path.dirname(lock)), common)
+        self.assertTrue(os.path.basename(lock).startswith('kit-ledger-ledger.md-'), lock)
+        self.assertEqual(write.lock_path(self.path.replace('\\', '/').upper()), lock)
+        other = write.lock_path(self.repo.path('rulings', 'other.md'))
+        self.assertNotEqual(other, lock)
+        self.add()
+        self.assertTrue(os.path.isfile(lock))
+
+    def test_a_ledger_in_a_linked_worktree_locks_in_the_shared_common_dir(self):
+        self.seed_rulings()
+        wt = self.repo.worktree('wt')
+        lock = write.lock_path(os.path.join(wt, 'rulings', 'LEDGER.md'))
+        common = os.path.normcase(os.path.realpath(self.repo.common_dir()))
+        self.assertEqual(os.path.normcase(os.path.dirname(lock)), common)
+        self.assertNotEqual(lock, write.lock_path(self.path))      # another file, another lock
+
+    def test_a_git_that_cannot_say_where_the_checkout_is_refuses_and_writes_nothing(self):
+        bad = write.gitrepo.Place(write.gitrepo.UNKNOWN, None, 'git did not answer: timed out', None, None)
+        with mock.patch.object(write.gitrepo, 'classify', return_value=bad):
+            with self.assertRaises(Refused) as cm:
+                self.add()
+        self.assertIn('nothing was written', str(cm.exception))
+        self.assertIn('timed out', str(cm.exception))
+        self.assertFalse(os.path.exists(self.path))
+        self.assertFalse(os.path.exists(os.path.dirname(self.path)))
 
     def test_two_processes_adding_and_committing_at_once_give_one_commit_per_entry(self):
         self.one_commit_per_entry('commit', self.env)

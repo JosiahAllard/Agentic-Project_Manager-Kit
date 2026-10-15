@@ -75,10 +75,17 @@ class Checks(unittest.TestCase):
         split = {'ledger_dir': 'D:/pm/rulings', 'ledger_repos': ['demo']}
         self.assertFalse([r for r in self.coordinator(machine_config=split) if 'ledger' in r])
 
-    def test_a_machine_config_that_cannot_be_read_is_a_row(self):
+    def test_a_machine_config_that_cannot_be_read_adds_no_row(self):
         with mock.patch.object(coordinatorstart.kuser, 'user_config', side_effect=ValueError('broken')):
             rows = self.coordinator(repo_name='demo', machine_config=None)
-        self.assertIn('could not check machine config: ValueError: broken', rows)
+        self.assertEqual(rows, self.coordinator(repo_name='demo', machine_config={}))
+        self.assertFalse([r for r in rows if 'machine config' in r or 'ledger' in r], rows)
+
+    def test_the_ledger_name_is_normalised(self):
+        split = {'ledger_dir': 'D:/pm/rulings', 'ledger_repos': ['my-tools-repo', 'pm']}
+        rows = self.coordinator(repo_name='My-Tools_Repo', machine_config=split)
+        self.assertIn('ledger (reference, HOW this repo works): %s'
+                      % os.path.join('D:/pm/rulings', 'my-tools-repo.md'), rows)
 
     def test_machine_summary_uses_api_snapshot(self):
         rows = hoststart.machine_lines({'revision': 2, 'runs': [{}], 'holds': [], 'queue': {'entries': [], 'error': None}})

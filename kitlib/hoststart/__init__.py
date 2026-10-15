@@ -31,6 +31,15 @@ def _config(loader, label, rows):
         return {}
 
 
+def _quiet(loader):
+    """`loader()`, or {} when it fails or gives None: for a config read only to add an optional
+    line (the ledger line needs `ledger_dir`), so a broken config adds no row."""
+    try:
+        return loader() or {}
+    except Exception:
+        return {}
+
+
 def machine_lines(snapshot):
     """Summarize the shared lock API's snapshot, without inferring process liveness."""
     if not isinstance(snapshot, dict) or not isinstance(snapshot.get('revision'), int):
@@ -51,7 +60,8 @@ def shared_checks(role, cwd, repo_name=None, state_note=None, now=None, pm_confi
                   coordinator_config=None, lock_reader=None, session_host=None, machine_config=None):
     """A tuple of check lines. Missing connections/configuration are reported, never guessed.
     `machine_config`: the machine config the coordinator's ledger line reads (default
-    kitlib.config.user.user_config(), read only for a coordinator with a repo_name)."""
+    kitlib.config.user.user_config(), read only for a coordinator with a repo_name; one that
+    cannot be read adds no row)."""
     if role not in {'pm', 'coordinator'}:
         return ()
     now = now or datetime.datetime.now().astimezone()
@@ -69,8 +79,7 @@ def shared_checks(role, cwd, repo_name=None, state_note=None, now=None, pm_confi
         checks.append(('standing', lambda: coordinatorstart.context(cfg, live=False).splitlines()))
         if repo_name:
             checks.append(('cap', lambda: coordinatorstart.cap(cfg, repo_name, now.date())))
-            machine = (machine_config if machine_config is not None
-                       else _config(kuser.user_config, 'machine', rows))
+            machine = machine_config if machine_config is not None else _quiet(kuser.user_config)
             checks.append(('ledger', lambda: coordinatorstart.ledger_lines(machine, repo_name)))
         if state_note:
             note = os.path.realpath(state_note)

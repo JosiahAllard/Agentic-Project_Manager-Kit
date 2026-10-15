@@ -9,15 +9,17 @@ here prints or exits: Usage and Refused (kitlib.ledger.errors) carry the refusal
 
 One writer at a time (docs/ledger.md "Write lock"): add and retire hold `locked(path)` from their
 read to their write, so two writers never take the same next id and neither replace loses the
-other's entry. The lock is kitlib.dailyfull.treelock's OS byte-range lock on `.<name>.lock` beside
-the ledger file, one per file, so writers of two repos never wait on each other: the system drops
-it when its holder exits, so a dead holder never blocks. A busy lock
+other's entry. The lock is kitlib.dailyfull.treelock's OS byte-range lock on a file in the ledger
+repository's git common dir (lock_path; beside the file only outside any git checkout), one per
+ledger file, so writers of two repos never wait on each other and no checkout gets an untracked
+file: the system drops it when its holder exits, so a dead holder never blocks. A busy lock
 is waited on for LOCK_WAIT seconds, then refused with nothing written. It nests within one thread
 (tools/ledger.py holds it over prepare, add and commit) and excludes every other thread.
 """
 import collections
 import contextlib
 import datetime
+import hashlib
 import os
 import re
 import tempfile
@@ -25,6 +27,7 @@ import threading
 import time
 
 from kitlib.dailyfull.treelock import TreeBusy, TreeLock, TreeLockError
+from kitlib.git import repo as gitrepo
 
 from . import fmt as E
 from . import safepath
@@ -39,10 +42,24 @@ _held = threading.local()    # .locks: {lock file identity: [TreeLock, depth]} o
 
 
 def lock_path(path):
-    """The write lock's file for the ledger at `path`: `.<name>.lock` in its folder. It is never
-    tracked and never removed (a remove and a re-create would give two files, each with a holder)."""
+    """The write lock's file for the ledger at `path`. In a git checkout (kitlib.git.repo.classify
+    of its folder, MAIN or LINKED): `kit-ledger-<name>-<hash>.lock` in the repository's git common
+    dir, never in the work tree, so a write leaves no untracked file in the checkout; the hash is
+    of the file's real, case-folded path, so every spelling of one file names one lock. Outside any
+    checkout (NONE): `.<name>.lock` beside the file. Refused when git cannot tell (UNKNOWN). Never
+    removed (a remove and a re-create would give two files, each with a holder)."""
     folder, name = os.path.split(os.path.abspath(path))
-    return os.path.join(folder, '.%s.lock' % name)
+    place = gitrepo.classify(folder)
+    if place.kind == gitrepo.NONE:
+        return os.path.join(folder, '.%s.lock' % name)
+    if place.kind not in (gitrepo.MAIN, gitrepo.LINKED) or not place.common:
+        raise Refused('cannot tell whether the ledger %s is in a git checkout, so where its write '
+                      'lock is: %s; nothing was written' % (path, place.detail))
+    name = os.path.normcase(name)
+    key = os.path.join(gitrepo.real(folder), name)
+    tag = ''.join(c if c.isalnum() or c in '-_.' else '_' for c in name) or 'ledger'
+    digest = hashlib.sha1(key.encode('utf-8')).hexdigest()[:12]
+    return os.path.join(place.common, 'kit-ledger-%s-%s.lock' % (tag, digest))
 
 
 def _identity(lock):
@@ -63,7 +80,10 @@ def _locks():
 
 def held(path):
     """True when this thread holds the write lock of the ledger at `path`."""
-    key = _identity(lock_path(path))
+    try:
+        key = _identity(lock_path(path))
+    except Refused:             # git cannot say where the lock is: nobody could have taken it
+        return False
     return key is not None and key in _locks()
 
 

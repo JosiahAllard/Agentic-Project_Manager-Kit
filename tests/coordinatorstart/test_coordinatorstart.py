@@ -421,10 +421,21 @@ class LedgerLineTest(unittest.TestCase):
         self.assertEqual(coordinatorstart.ledger_lines(self.SPLIT, "Alpha"),
                          ["ledger (reference, HOW this repo works): %s" % os.path.join(self.DIR, "alpha.md")])
 
+    def test_the_sessions_repo_name_is_lower_cased_with_underscores_as_hyphens(self):
+        machine = dict(self.SPLIT, ledger_repos=["my-tools-repo", "side-repo", "pm"])
+        for repo, name in (("My-Tools_Repo", "my-tools-repo"), ("my_tools_repo", "my-tools-repo"),
+                           ("side-repo", "side-repo"), ("Side_Repo", "side-repo")):
+            with self.subTest(repo=repo):
+                self.assertEqual(coordinatorstart.ledger_lines(machine, repo),
+                                 ["ledger (reference, HOW this repo works): %s"
+                                  % os.path.join(self.DIR, name + ".md")])
+
     def test_a_repo_not_in_ledger_repos_gets_the_folder_and_the_names(self):
         line, = coordinatorstart.ledger_lines(self.SPLIT, "Some_Folder")
         self.assertEqual(line, "ledger (reference, HOW each repo works): one file per ledger_repos name in %s "
-                               "(kit, alpha, pm); none is named Some_Folder" % self.DIR)
+                               "(kit, alpha, pm); none is named some-folder (from Some_Folder)" % self.DIR)
+        line, = coordinatorstart.ledger_lines(self.SPLIT, "beta")
+        self.assertTrue(line.endswith("(kit, alpha, pm); none is named beta"), line)
 
     def test_no_line_without_ledger_dir(self):
         for machine in ({}, {"ledger_path": "D:/pm/LEDGER.md", "ledger_repos": ["alpha"]},
@@ -448,12 +459,13 @@ class LedgerLineTest(unittest.TestCase):
         self.assertNotIn("ledger", coordinatorstart.context(dict(self.CAP, standing=["s"]), live=False,
                                                             machine_cfg=self.SPLIT))
 
-    def test_a_config_that_cannot_be_read_is_one_could_not_line(self):
+    def test_a_config_that_cannot_be_read_adds_no_line(self):
         with mock.patch.object(coordinatorstart.kuser, "user_config",
                                side_effect=ConfigError("bad key")):
-            text = ContextTest().build(self.CAP, machine_cfg=None)
-        self.assertIn("- could not check ledger: ConfigError: bad key", text)
-        self.assertIn("- agent cap 4", text)
+            broken = ContextTest().build(self.CAP, machine_cfg=None)
+        self.assertEqual(broken, ContextTest().build(self.CAP, machine_cfg={}))
+        self.assertNotIn("ledger", broken)
+        self.assertIn("- agent cap 4", broken)
 
     def test_without_ledger_dir_the_sessions_entry_is_not_needed(self):
         # No sessions file: cap and the others cannot run, and the ledger check adds no line.
