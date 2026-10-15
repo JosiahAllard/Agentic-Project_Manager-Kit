@@ -42,6 +42,7 @@ from kitlib import kitroot
 from kitlib import gate as G
 from kitlib.config import user as kuser
 from kitlib.gate import land, runner
+from kitlib.git import cmd as gitcmd
 from kitlib.git import prep
 from kitlib.git.fake import repo as fakerepo
 from kitlib.guard import prepush
@@ -317,7 +318,10 @@ class AnyPlatform(Cycle, unittest.TestCase):
     def pre_commit_passed(self, wt):
         """The commit asked for its pre-commit hook; the kit's, run in the worktree as git runs it
         (by sh, at the work tree's root), passes: the repository has no .kit.json naming the ledger
-        check and is not a kit checkout."""
+        check and is not a kit checkout. On real git (KIT_FAKE_GIT=0) git ran the hook itself, as
+        in OnWindows, and the fake's hook_exists is never asked."""
+        if not gitcmd.fake_active():
+            return
         self.assertIn('pre-commit', self.hooks_asked)
         sh = shutil.which('sh')
         if sh is None:
@@ -328,7 +332,10 @@ class AnyPlatform(Cycle, unittest.TestCase):
 
     def pre_push_passed(self, merge, start):
         """The landing's push asked for its pre-push hook; the kit's (kitlib.guard.prepush), given
-        the line git hands it for that push, allows it: a fast-forward of main."""
+        the line git hands it for that push, allows it: a fast-forward of main. On real git git
+        ran the hook itself."""
+        if not gitcmd.fake_active():
+            return
         self.assertIn('pre-push', self.hooks_asked)
         line = 'refs/heads/main %s refs/heads/main %s' % (merge, start)
         self.assertEqual(prepush.check(self.clone, [line], remote='origin', url=self.remote), (True, None))
