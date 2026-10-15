@@ -14,9 +14,9 @@ task_state() reads the task's state and start_task() starts it, for hub.py resta
 """
 import os
 import subprocess
-import sys
 
 from kitlib.hubsite.serve import ServeError
+from kitlib.launcher import pythonw as pythonw_mod
 from kitlib.launcher import window
 from kitlib.launcher.autostart import in_worktree, pythonw_beside
 from kitlib.proc import spawn
@@ -60,13 +60,15 @@ def task_script(python, hub_py):
 def refusals(hub_py, python=None, isfile=os.path.isfile):
     """Why the task cannot be installed for `hub_py` with `python` (default: this one), each as one
     line; empty when it can. hub.py setup asks before it writes a token file."""
-    python = python or sys.executable
+    python = python or pythonw_mod.base_pythonw()
     out = []
     if in_worktree(hub_py):
         out.append('install it from the main kit checkout, not a worktree: the task would run a '
                    'hub.py that goes when the worktree does (%s)' % hub_py)
     pythonw = pythonw_beside(python)
-    if not isfile(pythonw):
+    if pythonw_mod.under_windows_apps(pythonw):
+        out.append(pythonw_mod.refusal(pythonw, isfile))
+    elif not isfile(pythonw):
         out.append('no pythonw.exe beside %s (looked for %s): the task runs it so that no console '
                    'window opens at sign-in' % (python, pythonw))
     return out
@@ -76,7 +78,7 @@ def install(hub_py, python=None, whatif=False, run=spawn.run, isfile=os.path.isf
     """Register the task; the lines it says. whatif: the script and why a real install would
     refuse, registering nothing (so it runs from a worktree too). Refused with nothing
     registered from a kit worktree, or when the pythonw.exe the task would run is not a file."""
-    python = python or sys.executable
+    python = python or pythonw_mod.base_pythonw()
     text = task_script(python, hub_py)
     why = refusals(hub_py, python, isfile)
     if whatif:

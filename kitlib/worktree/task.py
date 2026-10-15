@@ -35,9 +35,6 @@ SWEEP = '--sweep-merged --apply'
 SINGLE_QUOTES = ("'", '‘', '’', '‚', '‛')
 # `$py` is the resolved pythonw.exe, a literal (PYTHONW_IS % its quoted path).
 PYTHONW_IS = '$py = %s'
-# The old lookup, kept only for kitlib/machinesetup/agenttemp.py's task line, which still finds
-# pythonw on PATH (the WindowsApps alias when that folder is first); the sweep task never uses it.
-FIND_PYTHONW = '$py = (Get-Command pythonw).Source'
 NOT_THE_STORE_ALIAS = (r"if (-not $py -or $py -match '\\WindowsApps\\') { throw ('pythonw is ' + $py +"
                        r" ': no pythonw, or the Microsoft Store alias; nothing was registered') }")
 

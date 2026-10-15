@@ -16,6 +16,8 @@ try:
 except ImportError:                                                  # not Windows
     winreg = None
 
+from kitlib.launcher import pythonw as pythonw_mod
+
 from . import agenttemp
 from .common import kit_file, norm, under
 
@@ -152,10 +154,10 @@ def run_tree(cmd, timeout=None, **kw):
 
 
 def pythonw():
-    """The windowless python beside this one (python.exe -> pythonw.exe), else this one."""
-    d, b = os.path.split(sys.executable)
-    w = os.path.join(d, b.replace('python', 'pythonw', 1)) if b.lower().startswith('python') else ''
-    return w if w and os.path.isfile(w) else sys.executable
+    """The windowless python of this interpreter's base install (kitlib.launcher.pythonw), never
+    a venv's or the Store alias; this interpreter when that is not a usable file."""
+    w = pythonw_mod.base_pythonw()
+    return sys.executable if pythonw_mod.refusal(w) else w
 
 
 def survey(plan, ctx):
