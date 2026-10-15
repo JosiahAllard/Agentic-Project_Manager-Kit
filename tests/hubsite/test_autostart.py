@@ -2,6 +2,7 @@
 starts the hub server at sign-in. No test registers a task: the PowerShell runner is injected, and
 the CLI tests replace install."""
 import os
+import subprocess
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -25,12 +26,15 @@ def absent(path):
 
 
 class Recorder(object):
-    def __init__(self, code=0, stderr=''):
-        self.calls, self.code, self.stderr = [], code, stderr
+    def __init__(self, code=0, stderr='', stdout='', raises=None):
+        self.calls, self.code, self.stderr, self.stdout = [], code, stderr, stdout
+        self.raises = raises
 
     def __call__(self, argv, **kw):
         self.calls.append((argv, kw))
-        return SimpleNamespace(returncode=self.code, stdout='', stderr=self.stderr)
+        if self.raises is not None:
+            raise self.raises
+        return SimpleNamespace(returncode=self.code, stdout=self.stdout, stderr=self.stderr)
 
 
 class TaskScript(unittest.TestCase):
@@ -112,6 +116,64 @@ class Install(unittest.TestCase):
 
     def test_the_error_is_a_serve_error_so_hub_py_prints_it_as_refused(self):
         self.assertTrue(issubclass(autostart.AutostartError, serve.ServeError))
+
+
+class TaskState(unittest.TestCase):
+    """task_state and start_task, which hub.py restart uses: the PowerShell runner is injected, so
+    no test reads or starts a real task."""
+
+    POWERSHELL = ['powershell', '-NoProfile', '-NonInteractive', '-Command']
+
+    def test_the_state_is_the_task_s_own_word_and_an_absent_task_is_none(self):
+        for said, state in (('Running\r\n', 'Running'), ('Ready\n', 'Ready'),
+                            ('Disabled', 'Disabled'), ('Queued\n', 'Queued'), ('Absent\n', None)):
+            run = Recorder(stdout=said)
+            self.assertEqual(autostart.task_state(run=run), state, said)
+            argv, kw = run.calls[0]
+            self.assertEqual(argv[:4], self.POWERSHELL)
+            self.assertIn("Get-ScheduledTask -TaskName '%s'" % autostart.TASK_NAME, argv[4])
+            self.assertIn('SilentlyContinue', argv[4])
+            self.assertNotIn('Start-ScheduledTask', argv[4])
+            self.assertNotIn('Stop-ScheduledTask', argv[4])
+            self.assertEqual(kw.get('timeout'), autostart.TASK_TIMEOUT_S)
+
+    def test_a_state_that_cannot_be_read_is_an_autostart_error(self):
+        for run, words in ((Recorder(code=1, stderr='no access'), 'powershell exit 1: no access'),
+                           (Recorder(stdout=''), 'no answer'),
+                           (Recorder(raises=subprocess.TimeoutExpired('powershell', 1)),
+                            'timed out'),
+                           (Recorder(raises=FileNotFoundError('no powershell')),
+                            'no powershell')):
+            with self.subTest(words=words):
+                with self.assertRaises(autostart.AutostartError) as cm:
+                    autostart.task_state(run=run)
+                self.assertIn(words, str(cm.exception))
+
+    def test_start_task_starts_the_task_by_name_and_nothing_else(self):
+        run = Recorder()
+        self.assertIsNone(autostart.start_task(run=run))
+        argv, kw = run.calls[0]
+        self.assertEqual(argv[:4], self.POWERSHELL)
+        self.assertIn("Start-ScheduledTask -TaskName '%s'" % autostart.TASK_NAME, argv[4])
+        self.assertIn("$ErrorActionPreference = 'Stop'", argv[4])
+        for word in ('Stop-ScheduledTask', 'Register', 'Unregister', 'Disable'):
+            self.assertNotIn(word, argv[4])
+        self.assertEqual(len(run.calls), 1)
+
+    def test_a_start_that_fails_is_an_autostart_error(self):
+        for run, words in ((Recorder(code=1, stderr='The system cannot find the file'),
+                            'The system cannot find the file'),
+                           (Recorder(raises=subprocess.TimeoutExpired('powershell', 1)),
+                            'timed out')):
+            with self.subTest(words=words):
+                with self.assertRaises(autostart.AutostartError) as cm:
+                    autostart.start_task(run=run)
+                self.assertIn(words, str(cm.exception))
+
+    def test_the_runner_is_looked_up_when_called_so_a_patch_reaches_it(self):
+        with mock.patch.object(autostart.spawn, 'run', Recorder(stdout='Ready\n')) as run:
+            self.assertEqual(autostart.task_state(), 'Ready')
+        self.assertEqual(len(run.calls), 1)
 
 
 class SetupAutostartCli(CliCase):
