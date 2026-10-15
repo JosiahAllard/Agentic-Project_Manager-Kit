@@ -56,8 +56,8 @@ _EXITED = re.compile(r"\bexited (-?\d{1,5})\b")
 _TIMED = re.compile(r"\btimed out after \d+ seconds\b")
 _GIT_SAID = re.compile(r"git [\w-]+: ")     # kitlib.hubbacklog.git's and the store's failures
 _DAY = re.compile(r"\d{4}-\d{2}-\d{2}$")
-PHRASES = (NO_CHECKOUT, NO_FOLDER, NOT_A_REPO, GIT_NOT_STARTED, GIT_TIMED_OUT, GIT_FAILED, BAD_REF,
-           BAD_STORE, FETCH_FAILED, READ_FAILED)
+PHRASES = (NO_CHECKOUT, NO_REPOS, NO_FOLDER, NOT_A_REPO, GIT_NOT_STARTED, GIT_TIMED_OUT, GIT_FAILED,
+           BAD_REF, BAD_STORE, FETCH_FAILED, READ_FAILED)
 _CODED = re.compile("(?:%s|%s)$" % tuple(re.escape(p).replace("%s", r"-?\d{1,5}")
                                          for p in (GIT_EXITED, FETCH_EXITED)))
 
@@ -338,6 +338,8 @@ BAD_REPO = "not a repository name"
 BAD_BRANCH = "not a branch name"
 BRANCH_FAILED = "the branch could not be read"
 HISTORY_CAP = 50    # versions of a parked record's file read for its last `pulled_by:` (fallback)
+REMOVAL_CAP = 2000  # commits of the store's history walked for the commit that took a record out:
+                    # an id removed further back reads as no such record
 # A record id as a URL segment may give it: either id grammar's characters (kitlib.backlog.record
 # ID_GRAMMARS), so no `/`, `\`, `%`, `:` or space can reach a git path; `..` is refused apart.
 _RID = re.compile(r"[A-Za-z0-9][A-Za-z0-9.-]{0,127}\Z")
@@ -408,9 +410,13 @@ def removed_how(subject):
 
 
 def last_pull(root, commit, path, cap=HISTORY_CAP):
-    """The last `pulled_by:` the file at `path` held in the history of `commit`, newest version
-    first, at most `cap` versions read; None when none held one. A record parked before parking
-    kept its branch lost `pulled_by:` when it was parked: this finds the branch it was on."""
+    """The branch the parked record at `path` was parked from: the `pulled_by:` of the pull it was
+    parked out of. A record parked before parking kept its branch lost `pulled_by:` when it was
+    parked; this reads it back from the file's history in `commit`, newest version first, at most
+    `cap` versions. The walk goes back through parked and pulled versions only: the first version
+    in any other state (open, or no state line) ends it with None, so a pull that was given up
+    before the parking is never shown as the branch it was parked from. None too when no version
+    within the cap holds one."""
     shas = _git_text(root, ["log", "-n", str(cap), "--format=%H", commit, "--", path]).split()
     if not shas:
         return None
@@ -419,10 +425,34 @@ def last_pull(root, commit, path, cap=HISTORY_CAP):
     except Exception as exc:
         raise ReadError(say(exc, root))
     for text in texts:
-        got = hubbacklog.first(hubbacklog.parse(text), "pulled_by")
+        rec = hubbacklog.parse(text)
+        if hubbacklog.first(rec, "state", "open") not in ("parked", "pulled"):
+            return None
+        got = hubbacklog.first(rec, "pulled_by")
         if got:
             return got
     return None
+
+
+def removal(root, commit, path, cap=None):
+    """"<sha> <committer date ISO> <subject>" of the newest commit, among the first `cap` commits
+    of `commit`'s history (default REMOVAL_CAP), that deleted the file at `path`; "" when none
+    did. The walk is bounded: git is given no pathspec and no --diff-filter, so `-n` counts
+    every commit it walks (with either it counts only the commits that match, and an id the
+    store never held would walk the whole history); the deletion is picked out of the
+    --name-status lines here. A merge shows no diff here, so a record closed on
+    a merged branch is found at the branch's own commit. Rename detection is off: a deletion is
+    never read as half of a rename."""
+    cap = REMOVAL_CAP if cap is None else cap
+    out = _git_text(root, ["log", "-n", str(cap), "--no-renames", "--name-status",
+                           "--format=%x01%H %cI %s", commit])
+    head, gone = None, "D\t" + path
+    for line in out.split("\n"):
+        if line.startswith("\x01"):
+            head = line[1:]
+        elif head and line == gone:
+            return head
+    return ""
 
 
 def _worktree(root, branch):
@@ -487,7 +517,8 @@ def read_record(name, root, rid, opener=open_read):
     The branch is shown for a pulled record (its `pulled_by:`, "source" "pulled_by") and a parked
     one: its `parked_from:` when it has one, else the last `pulled_by:` its file held
     (`last_pull`, "source" "history"). RecordError not_found NO_RECORD when the store has no such
-    record; ReadError when the store cannot be read."""
+    record, or took it out further back than its last REMOVAL_CAP commits (`removal`); ReadError
+    when the store cannot be read."""
     from kitlib.backlog import record as brecord
     import hashlib
     try:
@@ -502,8 +533,7 @@ def read_record(name, root, rid, opener=open_read):
     text = _blob(root, "%s:%s" % (commit, path))
     removed = None
     if not text:
-        line = _git_text(root, ["log", "--diff-filter=D", "-1", "--format=%H %cI %s", commit,
-                                "--", path])
+        line = removal(root, commit, path)
         if not line:
             raise RecordError("not_found", NO_RECORD, "id")
         sha, at, subject = (line.split(" ", 2) + ["", ""])[:3]

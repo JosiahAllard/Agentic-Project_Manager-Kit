@@ -134,12 +134,30 @@ class TheBranch(RecordCase):
 
     def test_fallback_reads_at_most_the_cap_of_versions(self):
         repo = self.main_repo(A=record("A", "first", state="pulled", pulled_by="kit/work"))
-        self.put(repo, "edit", A=record("A", "first", state="open"))
         self.put(repo, "backlog: park A on Q-123",
                  A=record("A", "first", state="parked", q="Q-123"))
+        self.put(repo, "edit while parked",
+                 A=record("A", "first", state="parked", q="Q-123", priority="2"))
         path = "docs/backlog/A.md"
         self.assertEqual(backlog.last_pull(repo.root, repo.head(), path), "kit/work")
         self.assertIsNone(backlog.last_pull(repo.root, repo.head(), path, cap=2))
+
+    def test_fallback_never_shows_a_pull_given_up_before_the_parking(self):
+        # Pulled on a branch, released to open, parked later: the record was never parked from
+        # that branch, so it shows none.
+        repo = self.main_repo(**{"EX-7": record("EX-7", "first", state="pulled",
+                                                pulled_by="kit/work")})
+        self.put(repo, "backlog: release EX-7", **{"EX-7": record("EX-7", "first", state="open")})
+        self.put(repo, "backlog: park EX-7 on Q-123",
+                 **{"EX-7": record("EX-7", "first", state="parked", q="Q-123")})
+        repo.worktree("work")
+        self.assertIsNone(backlog.last_pull(repo.root, repo.head(), "docs/backlog/EX-7.md"))
+        self.assertIsNone(self.read(repo, "EX-7")["branch"])
+        # A version with no state line is open too.
+        self.put(repo, "backlog: no state", **{"EX-7": record("EX-7", "first")})
+        self.put(repo, "backlog: park EX-7 again",
+                 **{"EX-7": record("EX-7", "first", state="parked", q="Q-123")})
+        self.assertIsNone(self.read(repo, "EX-7")["branch"])
 
     def test_a_parked_record_never_pulled_has_no_branch(self):
         repo = self.main_repo(A=record("A", "first", state="parked", q="Q-123"))
@@ -213,6 +231,38 @@ class ACompletedRecord(RecordCase):
         self.assertEqual((got["where"], got["removed"]),
                          ("completed", {"how": "closed", "commit": None, "at": "2026-01-02",
                                         "subject": None}))
+
+    def test_the_search_for_a_removal_walks_at_most_the_cap_of_commits(self):
+        repo = self.main_repo(**{"EX-9": record("EX-9", "done")})
+        self.put(repo, "closes EX-9: done", **{"EX-9": None})
+        closing = repo.head()
+        for n in range(3):
+            self.put(repo, "later %d" % n, **{"EX-%d" % (20 + n): record("EX-%d" % (20 + n), "x")})
+        path = "docs/backlog/EX-9.md"
+        self.assertTrue(backlog.removal(repo.root, repo.head(), path, cap=4).startswith(closing))
+        self.assertEqual(backlog.removal(repo.root, repo.head(), path, cap=3), "")
+        with mock.patch.object(backlog, "REMOVAL_CAP", 3):
+            self.assert_refused(lambda: self.read(repo, "EX-9"), "not_found", backlog.NO_RECORD,
+                                "id")
+        self.assertEqual(self.read(repo, "EX-9")["removed"]["commit"], closing)
+
+    def test_an_id_never_held_asks_git_for_a_bounded_walk_only(self):
+        repo = self.main_repo(**{"EX-1": record("EX-1", "first")})
+        real, asked = gitcmd.run_text, []
+
+        def recording(args, cwd, *a, **kw):
+            asked.append(list(args))
+            return real(args, cwd, *a, **kw)
+        with mock.patch.object(gitcmd, "run_text", side_effect=recording):
+            self.assert_refused(lambda: self.read(repo, "EX-404"), "not_found",
+                                backlog.NO_RECORD, "id")
+        logs = [a for a in asked if a and a[0] == "log"]
+        self.assertEqual(len(logs), 1)
+        self.assertIn("-n", logs[0])
+        self.assertEqual(logs[0][logs[0].index("-n") + 1], str(backlog.REMOVAL_CAP))
+        # A pathspec or a --diff-filter would make -n count matches, not commits walked.
+        self.assertNotIn("--", logs[0])
+        self.assertFalse([a for a in logs[0] if a.startswith("--diff-filter")])
 
     def test_a_record_added_again_after_removal_is_open(self):
         repo, _ = self.removed_by("closes A: it works")
@@ -293,6 +343,9 @@ class WhatIsRefused(RecordCase):
         with self.assertRaises(backlog.ReadError) as got:
             v.record("r", "A")
         self.assertEqual(got.exception.said, backlog.NO_REPOS)
+        self.assertTrue(backlog.fixed(backlog.NO_REPOS))
+        self.assertEqual(backlog.say(got.exception), backlog.NO_REPOS)  # not READ_FAILED
+        self.assertNotIn("somewhere", backlog.say(got.exception))
 
     def test_a_store_with_no_ref_yet_has_no_records(self):
         repo = self.main_repo(A=record("A", "first"))
