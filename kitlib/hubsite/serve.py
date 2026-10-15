@@ -439,9 +439,21 @@ def _entry(e, items):
             'fetch_error': e.get('fetch_error')}
 
 
+def _record_call(fn, *args):
+    """fn(*args), a record view of kitlib.hubsite.backlog, with what it raises put as the Api
+    answers it: a RecordError as its own code (not_found, invalid) and fixed phrase, a ReadError
+    as `unavailable` with its fixed phrase (backlog.say). Neither names a path or what was asked."""
+    try:
+        return fn(*args)
+    except backlog.RecordError as e:
+        raise HubError(e.code, e.said, e.field)
+    except backlog.ReadError as e:
+        raise HubError('unavailable', backlog.say(e), 'views')
+
+
 class SiteViews(object):
     """The Api's `views` (module docstring, "Views"). A view is bound only where its source
-    exists: `backlog_views` for backlog and completed, sources.repos and .agents for theirs.
+    exists: `backlog_views` for backlog, completed, record and record_template, sources.repos and .agents for theirs.
     notices, usage and health are always there (kitlib.hubsite.derived answers a missing notice
     folder with no notices and a missing usage source with its own phrase). `sync` is the git
     sync or None, `sync_off` the fixed phrase health gives when there is none. `log(level,
@@ -462,6 +474,8 @@ class SiteViews(object):
         if backlog_views is not None:
             self.backlog = self._open
             self.completed = self._completed
+            self.record = self._record
+            self.record_template = self._record_template
         if sources.repos is not None:
             self.repos = self._repos
         if sources.agents:
@@ -511,6 +525,13 @@ class SiteViews(object):
             one['days'] = limit if since is None else days
             out.append(one)
         return out
+
+    def _record(self, repo, id):
+        """One record, read now (kitlib.hubsite.backlog Views.record), its failures as HubErrors."""
+        return _record_call(self._backlog.record, repo, id)
+
+    def _record_template(self, repo):
+        return _record_call(self._backlog.record_template, repo)
 
     def _notices(self):
         return derived.notices(self._sources.notices)

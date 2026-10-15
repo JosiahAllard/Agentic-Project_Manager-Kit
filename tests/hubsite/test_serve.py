@@ -894,6 +894,81 @@ class ViewsCase(ServeCase):
         self.assertEqual(get(hub.port, BASE + '/notices', self.owner).json()['items'], [])
 
 
+class RecordBacklog(FakeBacklog):
+    """FakeBacklog with backlog.Views's two record reads; `raises` is what they raise instead."""
+    raises = None
+
+    def record(self, repo, rid):
+        self.calls.append(('record', repo, rid))
+        if self.raises is not None:
+            raise self.raises
+        return {'repo': repo, 'id': rid, 'where': 'open'}
+
+    def record_template(self, repo):
+        self.calls.append(('record_template', repo))
+        if self.raises is not None:
+            raise self.raises
+        return {'repo': repo, 'fields': []}
+
+
+class RecordViewsCase(ServeCase):
+    def site(self, raises=None):
+        source = RecordBacklog([])
+        source.raises = raises
+        return serve.SiteViews(None, serve.Sources(), source), source
+
+    def test_the_record_views_are_bound_only_with_a_backlog(self):
+        bare = serve.SiteViews(None, serve.Sources())
+        self.assertFalse(hasattr(bare, 'record'))
+        self.assertFalse(hasattr(bare, 'record_template'))
+        views, source = self.site()
+        self.assertEqual(views.record('kit', 'KIT-1'), {'repo': 'kit', 'id': 'KIT-1',
+                                                        'where': 'open'})
+        self.assertEqual(views.record_template('kit'), {'repo': 'kit', 'fields': []})
+        self.assertEqual(source.calls, [('record', 'kit', 'KIT-1'), ('record_template', 'kit')])
+        self.assertEqual(source.reads, [], 'a record read is not a backlog read')
+
+    def test_what_the_record_read_raises_is_a_hub_error_with_its_fixed_phrase(self):
+        for raised, want in (
+                (backlog.RecordError('not_found', backlog.NO_RECORD, 'id'),
+                 ('not_found', backlog.NO_RECORD, 'id')),
+                (backlog.RecordError('not_found', backlog.NO_REPO, 'repo'),
+                 ('not_found', backlog.NO_REPO, 'repo')),
+                (backlog.RecordError('invalid', backlog.BAD_ID, 'id'),
+                 ('invalid', backlog.BAD_ID, 'id')),
+                (backlog.ReadError(backlog.NO_CHECKOUT), ('unavailable', backlog.NO_CHECKOUT,
+                                                          'views')),
+                (backlog.ReadError('C:\\secret\\folder'), ('unavailable', backlog.READ_FAILED,
+                                                          'views'))):
+            views, _ = self.site(raised)
+            for call in (lambda: views.record('kit', 'KIT-1'),
+                         lambda: views.record_template('kit')):
+                with self.subTest(raised=raised):
+                    with self.assertRaises(serve.HubError) as got:
+                        call()
+                    e = got.exception
+                    self.assertEqual((e.code, e.message, e.field), want)
+
+    def test_the_routes_answer_over_http(self):
+        source = RecordBacklog(self.calls)
+        hub = self.build(backlog=lambda refresh_s: source)
+        hub.start()
+        r = get(hub.port, BASE + '/records/Alpha/A-1', self.agent)
+        self.assertEqual(r.status, 200, r.body)
+        self.assertEqual((r.json()['repo'], r.json()['id']), ('Alpha', 'A-1'))
+        r = get(hub.port, BASE + '/records/Alpha/new', self.owner)
+        self.assertEqual((r.status, r.json()['fields']), (200, []))
+        source.raises = backlog.RecordError('not_found', backlog.NO_RECORD, 'id')
+        r = get(hub.port, BASE + '/records/Alpha/A-404', self.agent)
+        self.assertEqual((r.status, r.json()['error']['message']), (404, backlog.NO_RECORD))
+        r = get(hub.port, BASE + '/records/Alpha/%2e%2e', self.agent)
+        self.assertEqual((r.status, r.json()['error']['code']), (400, 'invalid'))
+        self.assertNotIn('%2e', r.body.decode('utf-8'))
+        self.assertEqual([c for c in self.calls if isinstance(c, tuple)],
+                         [('record', 'Alpha', 'A-1'), ('record_template', 'Alpha'),
+                          ('record', 'Alpha', 'A-404')])
+
+
 class ReasonCase(ServeCase):
     """Why a git sync pass failed: the owner's and the server log's, never an agent's, and
     nowhere with the user or password of a remote URL."""
