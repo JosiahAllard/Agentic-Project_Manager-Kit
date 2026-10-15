@@ -1775,6 +1775,15 @@ class MachineCase(unittest.TestCase):
                                   ('rev-parse', '--show-toplevel'))])
         self.assertEqual(listed, [(['a', 'b'], 'the/pm/root', {'a': 'p'})] * 2)
 
+    def test_an_unreadable_sessions_file_gives_no_repo_names_and_a_write_still_lands(self):
+        self.config({'pm_start': {'sessions_file': os.path.join(self.home, 'missing', 's.json')}})
+        src = serve.machine_sources(self.home)
+        self.assertEqual(src.known_repos(), ())
+        root = os.path.join(self.home, 'store')
+        store = Store.open(root, known_repos=src.known_repos)
+        self.addCleanup(store.close)
+        self.assertEqual(store.put('repos', 'alpha', {'name': 'alpha'}).warnings, [])
+
     def test_a_pm_data_object_that_cannot_be_used_is_a_config_error(self):
         self.config({'pm_data': 5})
         with self.assertRaises(ConfigError):

@@ -375,10 +375,11 @@ def agents_dir(environ=None):
 
 def _configured_repos(cfg):
     """pmstart.known_repos of the pm_start config `cfg`; () when it cannot say (KeyError no
-    sessions_file, ValueError bad "repos")."""
+    sessions_file, ValueError bad "repos" or bad JSON, OSError unreadable sessions file or no
+    git): a store write must never fail because the repo names cannot be read."""
     try:
         return pmstart.known_repos(cfg)
-    except (KeyError, ValueError):
+    except (KeyError, ValueError, OSError):
         return ()
 
 
