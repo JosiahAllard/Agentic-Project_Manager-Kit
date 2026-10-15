@@ -25,6 +25,9 @@ TODAY = '2026-10-07'
 
 
 def pulled(rid, by=BRANCH, **over):
+    # a.py, the path most landings here change, is in the default scope: the landing's scope check
+    # (kitlib.gate.land SCOPE_REFUSES) then has nothing to say unless a test asks it to.
+    over.setdefault('scope', ['area/%s/**' % rid.lower(), 'a.py'])
     return priced(rid, state='pulled', pulled_at=TODAY, pulled_by=by, **over)
 
 
@@ -727,7 +730,12 @@ class PmDataClose(StoreLandCase):
     def test_no_worktree_on_the_pm_data_branch_is_a_warning_and_the_landing_stands(self):
         out = self.land()
         warn = [l for l in out.lines if l.startswith('WARNING')]
-        self.assertEqual(len(warn), 1, out.lines)
+        self.assertEqual(len(warn), 2, out.lines)
+        # The scope check could not read that store either (it warns while SCOPE_REFUSES is False).
+        self.assertTrue(warn[0].startswith(
+            'WARNING: cannot read the backlog store to check %s\'s paths' % BRANCH), warn[0])
+        self.assertIn('no worktree has the PM data branch pmdata checked out', warn[0])
+        warn = warn[1:]
         self.assertIn('no worktree has the PM data branch pmdata checked out', warn[0])
         self.assertIn('landable %s' % BRANCH, warn[0])
         self.assertEqual(self.main_now(), out.merge)
@@ -812,7 +820,12 @@ class CloseEdges(StoreLandCase):
         before = self.seed(pulled('FOO'), {'BAD': 'not a header line\n'})
         out = self.land()
         warn = self.warnings(out)
-        self.assertEqual(len(warn), 1, out.lines)
+        self.assertEqual(len(warn), 2, out.lines)
+        # The scope check could not read the store either (it warns while SCOPE_REFUSES is False).
+        self.assertTrue(warn[0].startswith(
+            'WARNING: cannot read the backlog store to check %s\'s paths' % BRANCH), warn[0])
+        self.assertIn('1 record(s) unreadable (BAD)', warn[0])
+        warn = warn[1:]
         self.assertIn('could not be read', warn[0])
         self.assertIn('backlog.py" -C "%s" landable %s' % (self.repo.root, BRANCH), warn[0])
         self.assertEqual(self.remote_store(), before)

@@ -40,7 +40,9 @@ class ClosesByTrailer(StoreLandCase):
         return [l for l in out.lines if l.startswith('WARNING')]
 
     def notes(self, out):
-        return [l for l in out.lines if l.startswith('NOTE')]
+        # The Closes-trailer NOTEs; not the landing scope check's (tests/gate/test_land_scope.py).
+        return [l for l in out.lines if l.startswith('NOTE')
+                and 'its paths were not checked against a scope' not in l]
 
     def test_a_record_a_trailer_names_is_closed_though_main_pulled_it(self):
         self.seed(pulled('D2', by='main'), pulled('KEEP', by='main'), pulled('FOO'))
@@ -106,7 +108,8 @@ class ClosesByTrailer(StoreLandCase):
         self.assertIn('close HELD --reason "landed %s"' % out.merge, warn[0])
 
     def test_a_batch_reads_the_trailers_of_each_branch(self):
-        self.seed(pulled('ONE', by='main'), pulled('TWO', by='main'), pulled('KEEP', by='main'))
+        self.seed(pulled('ONE', by='main'), pulled('TWO', by='main', scope=['b.py']),
+                  pulled('KEEP', by='main'))
         tip_a = self.branch_with('a\n\nCloses: ONE\n%s\n' % TRAILERS)
         tip_b = self.branch_with('b\n\nCloses: TWO\n%s\n' % TRAILERS, name='other', path='b.py')
         out = self.lander([BRANCH, 'kit/other'], self.main, [tip_a, tip_b]).run()
@@ -123,7 +126,7 @@ class ClosesByTrailer(StoreLandCase):
         # kit/other starts at a1, kit/feature's `Closes: ONE` commit, and lands after it: its
         # messages are read down to kit/feature's merge, so ONE, closed already, is not read
         # again as an id no store holds (a NOTE).
-        self.seed(pulled('ONE', by='main'), pulled('KEEP', by='main'))
+        self.seed(pulled('ONE', by='main', scope=['a.py', 'a2.py']), pulled('KEEP', by='main'))
         wt = self.repo.worktree('feature')
         self.repo.write('a.py', 'x = 1\n', root=wt)
         a1 = self.repo.commit('a1\n\nCloses: ONE\n%s\n' % TRAILERS, 'a.py', cwd=wt)
@@ -143,7 +146,7 @@ class ClosesByTrailer(StoreLandCase):
         self.assertEqual(self.warnings(out), [])
 
     def test_a_holder_landing_in_the_same_batch_is_no_builder_to_tell(self):
-        self.seed(pulled('TWO', by='kit/other'), pulled('KEEP', by='main'))
+        self.seed(pulled('TWO', by='kit/other', scope=['a.py', 'b.py']), pulled('KEEP', by='main'))
         tip_a = self.branch_with('a\n\nCloses: TWO\n%s\n' % TRAILERS)
         tip_b = self.branch_with('b\n\n%s\n' % TRAILERS, name='other', path='b.py')
         out = self.lander([BRANCH, 'kit/other'], self.main, [tip_a, tip_b]).run()
