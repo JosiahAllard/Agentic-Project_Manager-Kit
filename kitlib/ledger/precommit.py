@@ -5,16 +5,17 @@ githooks/pre-commit (a shell front end) runs githooks/pre-commit.py only when th
 `check` here. A repository opts in with `.kit.json` `ledger.pre_commit_check` set in `.kit.json`
 itself (the front end reads no section file); otherwise nothing runs.
 
-Opted in, the check judges only a commit that changes the ledger file the machine config's
-`ledger_path` names, or the standing digest beside it (kitlib.ledger.standing.path_beside): any
-other commit passes after one `git diff --cached`. Such a commit is refused when either file has
-unstaged changes, whichever of them was staged (`tools/ledger.py check` reads the working files of
-both, so both must be what the commit holds); otherwise it runs
+Opted in, the check judges only a commit that changes a ledger file or the standing digest
+(`targets`, from the machine config through kitlib.ledger.files: the `ledger_path` file and the
+digest beside it, or with `ledger_dir` every repo's file, the frozen `ledger_path` and the digest
+in that folder): any other commit passes after one `git diff --cached`. Such a commit is refused
+when any of them has unstaged changes, whichever was staged (`tools/ledger.py check` reads the
+working files of all, so all must be what the commit holds); otherwise it runs
 `tools/ledger.py check --base HEAD` (well formed, append-only, standing digest), and a failure
 refuses the commit.
 
 Fails closed, opted in: a `.kit.json` the kit cannot load whose text names `pre_commit_check`, a
-machine config that cannot be read or sets no `ledger_path`, and git or the check not running all
+machine config that cannot be read or sets no ledger file, and git or the check not running all
 refuse. A `.kit.json` that cannot be loaded and does not name `pre_commit_check` is a note and no
 check.
 
@@ -30,7 +31,7 @@ from kitlib.config import ConfigError
 from kitlib.git import cmd
 from kitlib.proc import spawn
 
-from . import standing
+from . import files
 
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 LEDGER_TOOL = os.path.join(KIT, 'tools', 'ledger.py')
@@ -62,12 +63,14 @@ def command(root):
 
 
 def targets(home=None):
-    """`(ledger path, standing digest path)` from the machine config. Raises ConfigError when the
-    config cannot be read or sets no `ledger_path`."""
-    path = config.ledger_path(home)
-    if not path:
+    """The ledger files and the standing digest, from the machine config: `(ledger path, digest
+    path)` for the one-file ledger; with `ledger_dir`, every repo's file, then the frozen
+    `ledger_path` when set, then the digest. Raises ConfigError when the config cannot be read or
+    sets neither `ledger_path` nor `ledger_dir`."""
+    found = files.of_config(config.user_config(home))
+    if found is None:
         raise ConfigError('no ledger_path in %s' % config.user.display(home))
-    return path, standing.path_beside(path)
+    return tuple(found.repos.values()) + ((found.frozen,) if found.frozen else ()) + (found.digest,)
 
 
 def _key(path):
