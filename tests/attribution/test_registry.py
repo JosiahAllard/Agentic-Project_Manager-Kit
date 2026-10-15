@@ -9,7 +9,7 @@ import tempfile
 import unittest
 
 from kitlib import attribution
-from kitlib.host import Attribution, registry
+from kitlib.host import Attribution, SessionTrailer, registry
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -17,10 +17,21 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 class KitHosts(unittest.TestCase):
     def test_claudes_attribution_is_data(self):
         a = registry.host('claude').profile.attribution
-        self.assertEqual(a, Attribution('Claude', 'noreply@anthropic.com', 'CLAUDE_AGENT_MODEL', None))
+        self.assertEqual(a, Attribution(
+            'Claude', 'noreply@anthropic.com', 'CLAUDE_AGENT_MODEL', None,
+            SessionTrailer('Claude-Session', 'CLAUDE_CODE_BRIDGE_SESSION_ID',
+                           'https://claude.ai/code/{id}')))
         self.assertEqual(attribution.model_environment(), 'CLAUDE_AGENT_MODEL')
         self.assertEqual(attribution.model_environment('claude'), 'CLAUDE_AGENT_MODEL')
         self.assertFalse(attribution.requires_model_id())
+
+    def test_the_session_line_is_claudes_alone(self):
+        env = {'CLAUDE_CODE_BRIDGE_SESSION_ID': 'session_A1'}
+        self.assertEqual(attribution.session_trailer(env),
+                         'Claude-Session: https://claude.ai/code/session_A1')
+        self.assertIsNone(attribution.session_trailer(env, 'codex'))
+        self.assertIsNone(attribution.session_trailer({}))
+        self.assertEqual(attribution.session_keys(), ('Claude-Session',))
 
     def test_trailers_are_exactly_as_before(self):
         self.assertEqual(attribution.coauthor('Opus 5.5'),

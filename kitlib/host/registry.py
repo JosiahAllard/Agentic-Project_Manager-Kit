@@ -29,7 +29,7 @@ import json
 import os
 import re
 
-from kitlib.host import Attribution, HostCapabilities, HostProfile
+from kitlib.host import Attribution, HostCapabilities, HostProfile, SessionTrailer
 
 
 def kit_path(here=None):
@@ -54,6 +54,7 @@ TIERS = ('light', 'standard', 'strong', 'deep')
 _NAME = re.compile(r'[a-z][a-z0-9-]*\Z')
 _ENV_NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]*\Z')
 _ENV_PREFIX = re.compile(r'[A-Z][A-Z0-9_]*_\Z')
+_TRAILER_KEY = re.compile(r'[A-Za-z][A-Za-z0-9-]*\Z')
 _EMAIL = re.compile(r'[^\s<>@]+@[^\s<>@]+\Z')
 _MODULE = re.compile(r'[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*\Z')
 _KEYS = {'adapter', 'shell', 'platforms', 'capabilities', 'profile', 'hook', 'tiers'}
@@ -176,8 +177,28 @@ def _hook(name, raw, capabilities):
     return HookSpec(event, field, tools, h['fast_path'])
 
 
+def _session_trailer(w, raw):
+    """None for null; else exactly key/env/url: a trailer key (letters, digits, `-`), a variable
+    name, and a URL with no space holding `{id}` once and no other field."""
+    if raw is None:
+        return None
+    t = _object(w, raw, ('key', 'env', 'url'))
+    key, env, url = _text(w + '.key', t['key']), t['env'], _text(w + '.url', t['url'])
+    if not _TRAILER_KEY.match(key):
+        raise RegistryError('hosts.json: %s.key must be a trailer key (letters, digits and -)' % w)
+    if not (isinstance(env, str) and _ENV_NAME.match(env)):
+        raise RegistryError('hosts.json: %s.env must be an environment variable name' % w)
+    rest = url.replace('{id}', '', 1)
+    if '{id}' not in url or '{' in rest or '}' in rest or any(c.isspace() for c in url):
+        raise RegistryError('hosts.json: %s.url must hold {id} once, no other field and no space' % w)
+    return SessionTrailer(key, env, url)
+
+
 def _attribution(w, raw):
-    a = _object(w, raw, ('name', 'email', 'model_env', 'model_pattern'))
+    # session_trailer is the one optional key: a host without it has none.
+    keys = ('name', 'email', 'model_env', 'model_pattern')
+    a = _object(w, raw, keys + (('session_trailer',) if isinstance(raw, dict)
+                                and 'session_trailer' in raw else ()))
     name, email = _text(w + '.name', a['name']), _text(w + '.email', a['email'])
     if name != ' '.join(name.split()) or not _EMAIL.match(email):
         raise RegistryError('hosts.json: %s needs a single-spaced name and a plain email' % w)
@@ -190,7 +211,8 @@ def _attribution(w, raw):
             re.compile(pattern)
         except re.error as e:
             raise RegistryError('hosts.json: %s.model_pattern is not a regex: %s' % (w, e)) from None
-    return Attribution(name, email, model_env, pattern)
+    return Attribution(name, email, model_env, pattern,
+                       _session_trailer(w + '.session_trailer', a.get('session_trailer')))
 
 
 def _name_format(where, value):

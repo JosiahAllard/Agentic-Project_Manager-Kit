@@ -9,6 +9,7 @@ import for that): kitlib never imports a host, the host is chosen at the edge.
   Action, Decision          one guarded event, and the verdict on it
   HostProfile               the host data the core reads (hosts.json "profile")
   Attribution               how its commits name it (hosts.json "profile".attribution)
+  SessionTrailer            the session line its commits carry (attribution.session_trailer)
   HostCapabilities          what the host's hooks can carry (hosts.json "capabilities")
   degrade(decision, caps)   the one way a verdict the host cannot show is lowered
   HostAdapter, SessionHost, CommandHost   what an adapter supplies
@@ -86,16 +87,26 @@ class Decision:
 
 
 @dataclass(frozen=True)
+class SessionTrailer:
+    """The trailer naming the host session a commit was made in: `<key>: <url>`, `{id}` in `url`
+    replaced by the value of the environment variable `env` (hosts.json attribution.session_trailer)."""
+    key: str
+    env: str
+    url: str
+
+
+@dataclass(frozen=True)
 class Attribution:
     """How a host's agent commits are attributed: the trailer `Co-Authored-By: <name ...> <email>`.
     `model_env` the environment variable a model name falls back to (None: no fallback);
     `model_pattern` None for a free model name, given `<name> ` in front unless it already starts
     with it or is a co-author family, else a regex an explicit model id must match whole, always
-    written `<name> <id>`."""
+    written `<name> <id>`. `session_trailer` a SessionTrailer, or None when the host has none."""
     name: str
     email: str
     model_env: Optional[str]
     model_pattern: Optional[str]
+    session_trailer: Optional[SessionTrailer] = None
 
 
 @dataclass(frozen=True)
