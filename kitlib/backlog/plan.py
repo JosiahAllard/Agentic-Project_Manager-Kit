@@ -170,17 +170,19 @@ def own_branch(ctx, branch=None):
     return branch
 
 
-def offer_for(snap, ctx, branch=None, cap=omod.DEFAULT_CAP, seeds=()):
+def offer_for(snap, ctx, branch=None, cap=omod.DEFAULT_CAP, seeds=(), holding=None):
     """`(offers, passed, holding, own)`: the offer `next` prints for `ctx.session`, with the live
-    pulls of `own` (own_branch) taking no scope in it; `holding` is still every live pull."""
+    pulls of `own` (own_branch) taking no scope in it; `holding` is still every live pull (read
+    here unless the caller passes the live pulls it already read). `next` and `pull` both build
+    their offer here, so they cannot disagree on it."""
     own = own_branch(ctx, branch)
-    holding, _dead, _why = omod.in_flight_split(snap, ctx.root, ctx.remote)
+    if holding is None:
+        holding, _dead, _why = omod.in_flight_split(snap, ctx.root, ctx.remote)
     taken = [r for r in holding if not (own and r.get('pulled_by') == own)]
     result, refusals, _ranks = omod.next_offer(snap, taken, cap=cap, seeds=seeds,
                                                session=ctx.session, unmet=ctx.unmet(snap))
     if refusals:
-        raise Failure('`next` cannot compute an offer, so there is nothing to check this against: '
-                      '%s' % '; '.join(refusals))
+        raise Failure('`next` cannot compute an offer: %s' % '; '.join(refusals))
     return result[0], result[1], holding, own
 
 
@@ -188,16 +190,17 @@ def current_offer(snap, ctx, branch=None):
     """`(offers, passed, holding, also)` for a pull onto `branch`: the offer `next` prints as that
     branch (offer_for), and `also`, the records `next` offers without it (as the main checkout
     prints it), [] when the two are the same. A pull takes a record either one offers, so a
-    coordinator's `next` and a worker's `pull` never disagree on what is in order."""
+    coordinator's `next` and a worker's `pull` never disagree on what is in order.
+    `also` only widens what a pull takes: when it cannot be computed (one of the branch's own
+    pulls has a scope that cannot be compared, which the branch's offer never reads) it is [],
+    so a record `next` offered as the branch still pulls plainly and nothing else is let in."""
     offers, passed, holding, own = offer_for(snap, ctx, branch)
     also = []
     if own is not None and any(r.get('pulled_by') == own for r in holding):
         result, refusals, _ranks = omod.next_offer(snap, holding, session=ctx.session,
                                                    unmet=ctx.unmet(snap))
-        if refusals:
-            raise Failure('`next` cannot compute an offer, so there is nothing to check this '
-                          'against: %s' % '; '.join(refusals))
-        also = [o.rec for o in result[0]]
+        if not refusals:
+            also = [o.rec for o in result[0]]
     return offers, passed, holding, also
 
 
