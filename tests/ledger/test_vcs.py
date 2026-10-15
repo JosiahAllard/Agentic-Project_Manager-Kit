@@ -1,18 +1,18 @@
 """kitlib.ledger.vcs: `add --commit/--push` commits the ledger file alone, and `check --base` reads it.
 
 Real git in a throwaway repository (tests/gitfixture.py). Ids are built by rid(n) (tests/scrub)."""
+import json
 import os
 import unittest
+from unittest import mock
 
+from kitlib.config import user as kuser
 from kitlib.ledger import vcs, write
 from kitlib.ledger.errors import Refused, Usage
 from tests.gitfixture import TempRepo, fixture_env
+from tests.ledger.test_writer import race, rid
 
 MODEL = 'Test Model 1'
-
-
-def rid(n):
-    return 'R-%04d' % n
 
 
 class VcsTest(unittest.TestCase):
@@ -151,6 +151,104 @@ class VcsTest(unittest.TestCase):
     def test_default_base_follows_repo_remote(self):
         self.use_private_remote()
         self.assertEqual(vcs.default_base(self.path), 'private/main')
+
+    def seed_rulings(self):
+        """A committed file in rulings/ before the ledger's first commit: the folder is tracked,
+        so `git status -- rulings/LEDGER.md` is a plain question (the fake git answers no status
+        pathspec inside an untracked folder)."""
+        self.repo.write('rulings/README.md', 'rulings\n')
+        self.repo.commit('rulings folder', 'rulings/README.md')
+
+    def status(self):
+        return self.repo.git('status', '--porcelain', '--untracked-files=all', '--ignored')
+
+    def test_an_add_or_retire_leaves_no_untracked_file_in_the_ledgers_checkout(self):
+        self.seed_rulings()
+        before = self.status()
+        for n in (1, 2):
+            with write.locked(self.path):
+                plan = self.prepare()
+                got = self.add(decides='Entry %d.' % n)
+                vcs.finish(plan, got.id, None, 'x', push=False)
+            self.assertEqual(self.repo.git('show', '--name-only', '--format=', 'HEAD'), 'rulings/LEDGER.md')
+            self.assertEqual(self.status(), before)
+        write.retire(self.path, rid(1), 'spent', 'why')
+        new = [line.strip() for line in self.status().splitlines() if line not in before.splitlines()]
+        self.assertEqual(new, ['M rulings/LEDGER.md'])
+        self.assertEqual(self.repo.git('ls-files', '--', 'rulings').splitlines(),
+                         ['rulings/LEDGER.md', 'rulings/README.md'])
+
+    def test_the_lock_is_in_the_git_common_dir_one_per_file_under_any_spelling(self):
+        common = os.path.normcase(os.path.realpath(self.repo.common_dir()))
+        lock = write.lock_path(self.path)
+        self.assertEqual(os.path.normcase(os.path.dirname(lock)), common)
+        self.assertTrue(os.path.basename(lock).startswith('kit-ledger-ledger.md-'), lock)
+        self.assertEqual(write.lock_path(self.path.replace('\\', '/').upper()), lock)
+        other = write.lock_path(self.repo.path('rulings', 'other.md'))
+        self.assertNotEqual(other, lock)
+        self.add()
+        self.assertTrue(os.path.isfile(lock))
+
+    def test_a_ledger_in_a_linked_worktree_locks_in_the_shared_common_dir(self):
+        self.seed_rulings()
+        wt = self.repo.worktree('wt')
+        lock = write.lock_path(os.path.join(wt, 'rulings', 'LEDGER.md'))
+        common = os.path.normcase(os.path.realpath(self.repo.common_dir()))
+        self.assertEqual(os.path.normcase(os.path.dirname(lock)), common)
+        self.assertNotEqual(lock, write.lock_path(self.path))      # another file, another lock
+
+    def test_a_git_that_cannot_say_where_the_checkout_is_refuses_and_writes_nothing(self):
+        bad = write.gitrepo.Place(write.gitrepo.UNKNOWN, None, 'git did not answer: timed out', None, None)
+        with mock.patch.object(write.gitrepo, 'classify', return_value=bad):
+            with self.assertRaises(Refused) as cm:
+                self.add()
+        self.assertIn('nothing was written', str(cm.exception))
+        self.assertIn('timed out', str(cm.exception))
+        self.assertFalse(os.path.exists(self.path))
+        self.assertFalse(os.path.exists(os.path.dirname(self.path)))
+
+    def test_two_processes_adding_and_committing_at_once_give_one_commit_per_entry(self):
+        self.one_commit_per_entry('commit', self.env)
+
+    def test_two_cli_adds_with_commit_at_once_give_one_commit_per_entry(self):
+        home = os.path.join(self.repo.base, 'home')
+        os.makedirs(kuser.config_dir(home))
+        with open(kuser.config_file(home), 'w', encoding='utf-8') as f:
+            json.dump({'ledger_path': self.path, 'ledger_repos': ['alpha']}, f)
+        self.one_commit_per_entry('cli', dict(self.env, USERPROFILE=home, HOME=home))
+
+    def one_commit_per_entry(self, mode, env):
+        self.seed_rulings()
+        before = int(self.repo.git('rev-list', '--count', 'HEAD'))
+        got = race(self, self.repo.base, mode, self.path, ['first', 'second'], env=env)
+        for rc, out, err in got:
+            self.assertEqual(rc, 0, err)
+        ids = sorted(out.splitlines()[0] for _, out, _ in got)
+        self.assertEqual(ids, [rid(1), rid(2)])
+        self.assertEqual(int(self.repo.git('rev-list', '--count', 'HEAD')), before + 2)
+        for n, sha in enumerate(reversed(self.repo.git('rev-list', '-2', 'HEAD').split()), 1):
+            subject = self.repo.git('log', '-1', '--format=%s', sha)
+            self.assertTrue(subject.startswith('ledger: %s ' % rid(n)), subject)
+            added = [line for line in self.repo.git('show', '--format=', sha).splitlines()
+                     if line.startswith('+## ')]
+            self.assertEqual(len(added), 1, added)          # its own entry and no other
+            self.assertTrue(added[0].startswith('+## %s |' % rid(n)), added)
+        self.assertEqual(self.repo.git('status', '--porcelain', '--', 'rulings/LEDGER.md'), '')
+
+    def test_finish_commits_under_the_lock_and_pushes_after_it_is_given_up(self):
+        plan = self.prepare()
+        got = self.add()
+        seen = []
+        real = vcs.cmd.run
+
+        def spy(args, *a, **kw):
+            if args[:1] in (['commit'], ['push']):
+                seen.append((args[0], write.held(self.path)))
+            return real(args, *a, **kw)
+        with mock.patch.object(vcs.cmd, 'run', spy):
+            lines = vcs.finish(plan, got.id, None, 'x', push=True)
+        self.assertEqual(lines[-1], 'pushed origin/main')
+        self.assertEqual(seen, [('commit', True), ('push', False)])
 
 
 if __name__ == '__main__':
