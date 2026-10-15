@@ -691,7 +691,11 @@ def todos_done(api, req):
     doc_id = req.params['id']
     d = api.doc('todos', doc_id, b)
     changes = {'status': 'done' if done else 'open', 'done_at': api.clock() if done else None}
-    return api.change('todos', doc_id, d, changes, req, changes)
+    out = api.change('todos', doc_id, d, changes, req, changes)
+    # a reopened or re-done to-do is pending afresh: an old hand-over must not outlive it when
+    # no read ran in between (_routed forgets only what it sees gone)
+    api._handed.pop(('todo', doc_id), None)
+    return out
 
 
 def todos_ack(api, req):

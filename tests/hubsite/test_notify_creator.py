@@ -162,6 +162,16 @@ class HandOverTest(RouteCase):
         self.heard()
         self.assertEqual(self.routes(), {tid: 'kit'}, 'the old hand-over was kept')
 
+    def test_a_reopen_and_redo_with_no_read_between_drops_the_old_hand_over(self):
+        self.heard()
+        tid = self.todo()
+        self.pending(**{'for': 'kit'})                 # handed over at t
+        self.ok('POST', '/todos/%s/done' % tid, OWNER, {'done': False})
+        self.ok('POST', '/todos/%s/done' % tid, OWNER, {})   # no read between the two
+        self.t[0] += api.ACK_WINDOW_S + 1
+        self.heard()
+        self.assertEqual(self.routes(), {tid: 'kit'}, 'the expired hand-over skipped the creator')
+
 
 class QuestionRouteTest(RouteCase):
     def test_an_answered_question_from_a_live_creator_is_in_both_lists(self):
