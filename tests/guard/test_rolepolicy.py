@@ -438,6 +438,35 @@ class LockVerbs(Base):
             with self.subTest(shell=shell, text=text):
                 self.denied(self.shell(text, 'reviewer', shell=shell), 'role-lock')
 
+    def test_a_captured_reader_or_a_namesake_of_an_exempt_tool_runs_it(self):
+        """A PowerShell reader whose output a ( ) group, an assignment, -OutVariable or a
+        delay-bind { } block catches may hand the lock CLI to a program; and a script or reader
+        named like an exempt tool but found elsewhere is not that tool."""
+        lock = 'tools/machine_lock.py'
+        rows = (('powershell', 'python (gi %s).FullName stop 42' % lock),
+                ('powershell', '& python (Get-ChildItem %s).FullName stop 42' % lock),
+                ('powershell', 'Start-Process python -ArgumentList (gi %s).FullName,stop,42' % lock),
+                ('powershell', '$c = Get-Content %s; $c | python - stop 42' % lock),
+                ('powershell', 'Get-Content %s -OutVariable c; $c | python - stop 42' % lock),
+                ('powershell', 'Get-Content %s -ov c; $c | python - stop 42' % lock),
+                ('powershell', 'gc %s -PipelineVariable c | ForEach-Object { $c | python - stop 42 }' % lock),
+                ('powershell', 'gci %s | Get-Content -Path { python $_.FullName stop 42 }' % lock),
+                ('powershell', 'gci %s | sls -Path { python $_.FullName stop 42 } -Pattern x' % lock),
+                ('powershell', 'python -c (gc %s -Raw) stop 42' % lock),
+                ('bash', 'python Z:/scratch/backlog.py %s stop 42' % lock),
+                ('bash', 'Z:/scratch/backlog.py %s stop 42' % lock),
+                ('bash', 'Z:/scratch/cat %s stop 42' % lock),
+                ('bash', './grep %s stop 42' % lock))
+        for shell, text in rows:
+            with self.subTest(shell=shell, text=text):
+                self.denied(self.shell(text, 'reviewer', shell=shell), 'role-lock')
+        for shell, text in (('bash', 'python tools/backlog.py set EX-LOCK --scope %s' % lock),
+                            ('powershell', 'python ./tools/commit.py -m x %s' % lock),
+                            ('powershell', 'Select-String -Path %s -Pattern hold' % lock),
+                            ('powershell', 'Get-Content %s | Select-String hold | sls -Pattern x' % lock)):
+            with self.subTest(shell=shell, text=text):
+                self.assertIsNone(rolepolicy.check(self.shell(text, 'reviewer', shell=shell), self.w.ctx()))
+
 
 class LockMcp(Base):
     """The lock MCP's tools are held to the same verbs as the CLI (rolepolicy.MCP_VERBS)."""
