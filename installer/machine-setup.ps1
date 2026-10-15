@@ -14,7 +14,8 @@
 # the machine config (-OwnerEmail, else the machine config's; with neither, -Apply asks in the
 # console, offering `git config user.email`, never stored unconfirmed), and the agents' temp folder. -PmSettings writes the PM SessionStart hook
 # to that file; -Shortcut makes the machine schedule shortcut. -OldKit switches the config folders
-# from an older kit clone instead: links, settings, the owner's email, the extras.
+# from an older kit clone instead: settings, the owner's email, the extras. Neither mode makes a
+# link: each link an earlier setup left is reported with the command that removes the link only.
 # -Procwatch registers (or updates) the "Claude procwatch" scheduled task, report only; -ProcwatchKill
 # also lets it end the SAFE rules' processes (docs/machine-setup.md "Procwatch task").
 # -Apply registers the agent-temp-sweep scheduled task by default, after one dry run of the sweep

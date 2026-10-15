@@ -320,9 +320,17 @@ cmd /c rmdir "$env:USERPROFILE\.claude\agents"
 `settings.json` no longer calls a guard through `~/.claude/hooks`. Check by searching
 `$env:USERPROFILE\.claude\settings.json` for `\.claude\\hooks`: it must have no hit.
 
-**Stage 3.** The `tools/*` and `knowledge/*` junctions stay for now: `~/.claude/tools/machine_lock` is the live
-lock path, and `machine_setup.py --apply` recreates those links. Record KIT-JUNCTIONS-TOOLS-KNOWLEDGE
-retires them.
+**Stage 3.** The `tools/*` and `knowledge/*` junctions go last. Machine setup makes no link: it
+reports each one an earlier setup left, and re-points a `settings.json` path through
+`~/.claude/tools/<name>` (the status line's, for one) to the kit's own file (docs/machine-setup.md
+"Links"). Run it with `--apply` first, then remove each link with the line its dry run prints, which
+removes the link only, never the target (never `/s`):
+
+```
+leftover link <path> -> <target>: remove it with: cmd /c rmdir "<path>"
+```
+
+A second dry run then reports no leftover link.
 
 `<kit>/tools/backlog.py -C <worktree> add` needs at least one `--scope <path>` (`none` for a record that touches no
 tracked file); without one it refuses (docs/backlog.md). It also needs `--found-on <branch>` (or
