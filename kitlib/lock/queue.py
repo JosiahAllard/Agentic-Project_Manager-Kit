@@ -287,8 +287,10 @@ def plan(L, q, now=None):
     lowest. It may not start before a run planned ahead of it and still be running when that one
     starts (backfill), unless it is own_turn, or that one's start was put off by its resource
     alone (its slots were free at an earlier time; it is not parked): such a start bars only the
-    entries naming that resource, and the rest plan around its slots. A parked entry (holds not its own leave it too
-    little now) is planned from clear_at, around avoid_after, so no run behind it passes it."""
+    entries naming that resource, and the rest plan around its slots. A run waiting on its
+    `within` bars a run behind it from its within slots only (barrier_guard): that one may start
+    first on slots outside them. A parked entry (holds not its own leave it too little now) is
+    planned from clear_at, around avoid_after, so no run behind it passes it."""
     now = time.time() if now is None else now
     sizes = {p: lay.size(L, p) for p in POOLS}
     # ivs: (start, end, {pool: slots it keeps from others}, resource or None, entry id). A
@@ -318,6 +320,7 @@ def plan(L, q, now=None):
         free = sizes["gpu"] - len(hard_gpu | entry_slots(e, "avoid", "gpu"))
         return (3 if g and g <= free else 4, 0, e.get("ticket") or 0)
 
+    # starts: (planned start, guard) of the entries planned so far; guard as barrier_guard.
     out, starts = {}, []
     for pos, e in enumerate(sorted(waiting, key=order), 1):
         info = out[e["id"]] = {"position": pos, "start": None, "cores": [], "gpus": [],
@@ -332,11 +335,16 @@ def plan(L, q, now=None):
         avoid = {p: entry_slots(e, key, p) for p in POOLS}
         prefer = {p: entry_slots(e, "prefer", p) for p in POOLS}
         within = {p: entry_within(e, p) for p in POOLS}
-        times = {t0} | {iv[1] for iv in ivs if iv[1] > t0} | {s for s in starts if s > t0}
+        times = {t0} | {iv[1] for iv in ivs if iv[1] > t0} | {s for s, _g in starts if s > t0}
         held_by_rsc = False         # an earlier time had its slots free and only its resource not
         for t in sorted(times):
-            if not own and any(t < s < t + exp for s in starts):
+            barred = {p: set() for p in POOLS}
+            bars = [] if own else [g for s, g in starts if t < s < t + exp]
+            if any(g is None for g in bars):
                 continue
+            for g in bars:
+                for p in POOLS:
+                    barred[p] |= g[p]
             rsc_busy = rsc and any(r == rsc and o != parent and s0 < t + exp and s1 > t
                                    for s0, s1, _sl, r, o in ivs)
             busy = {p: set() for p in POOLS}
@@ -347,7 +355,7 @@ def plan(L, q, now=None):
             pick = {}
             for p in POOLS:
                 free = [i for i in range(sizes[p]) if i not in busy[p] and i not in avoid[p]
-                        and (within[p] is None or i in within[p])]
+                        and i not in barred[p] and (within[p] is None or i in within[p])]
                 if len(free) < entry_need(e, p):
                     break
                 pick[p] = sorted(sorted(free, key=lambda i: (i not in prefer[p], i in soft[p], i))
@@ -357,7 +365,7 @@ def plan(L, q, now=None):
                     held_by_rsc = True
                     continue
                 info.update(start=t, cores=pick["cpu"], gpus=pick["gpu"], now=t <= now,
-                            backfill=not own and any(t < s for s in starts))
+                            backfill=not own and any(t < s for s, _g in starts))
                 ivs.append((t, t + exp, {p: set(pick[p]) for p in POOLS}, rsc, e["id"]))
                 break
         # A start its resource put off (its slots were free earlier) is no backfill barrier: its
@@ -365,10 +373,29 @@ def plan(L, q, now=None):
         # naming its resource is still kept out by ivs. A parked entry stays a barrier.
         if info["start"] is not None:
             if not held_by_rsc or e.get("parked"):
-                starts.append(info["start"])
+                starts.append((info["start"], barrier_guard(e, within)))
         elif e.get("parked"):
-            starts.append(t0)
+            starts.append((t0, None))
     return out, soft
+
+
+def barrier_guard(e, within):
+    """What waiting entry e's planned start bars a run behind it from taking before it: None for
+    every slot (the backfill rule), or {pool: slots} when it waits on its `within`: the slots it
+    is planned on are in ivs already, and any other slot of its within set may be the one it gets
+    if a holder leaves early, so its within set is barred and the rest of the machine is not. A
+    pool it needs with no within there, or a parked e, makes a full barrier."""
+    if e.get("parked") or all(within[p] is None for p in POOLS):
+        return None
+    guard = {}
+    for p in POOLS:
+        if within[p] is not None:
+            guard[p] = set(within[p])
+        elif entry_need(e, p):
+            return None
+        else:
+            guard[p] = set()
+    return guard
 
 
 def busy_text(L, q, e, planned):

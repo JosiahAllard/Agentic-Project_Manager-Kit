@@ -1207,11 +1207,13 @@ def _relayout(store, L):
     return cur if lay.valid_layout(cur) and cur["key"] != L["key"] else L
 
 
-def within_of(L, within, kind, need, own, parent):
+def within_of(L, within, kind, need, own, parent, machine):
     """(the thread list as text, [cpu slot]) of book's within on layout L: the slots whose threads
-    all lie in it. LockError 2 when it is not a thread list, names a thread no slot of L has, holds
-    no whole slot, holds fewer slots than the run takes itself (own), or the run is nested and
-    inherits its parent's cores while they are not all inside it."""
+    all lie in it. machine: the thread ids this machine has. A thread it names that the owner's
+    division leaves out of every slot is no error; it is just not used. LockError 2 when it is not
+    a thread list, names a thread the machine does not have, holds no whole slot, holds fewer
+    slots than the run takes itself (own), or the run is nested and inherits its parent's cores
+    while they are not all inside it."""
     try:
         if isinstance(within, str):
             ts = lay.parse_threads(within)
@@ -1224,15 +1226,14 @@ def within_of(L, within, kind, need, own, parent):
     except ValueError as e:
         raise LockError(EXIT_USAGE, "usage: --within: %s. Exit 2." % e)
     text = cpu.mask_text(cpu.bits_mask(ts))
-    known = {t for s in L["slots_cpu"] for t in s}
-    stray = [t for t in ts if t not in known]
+    stray = [t for t in ts if t not in machine]
     if stray:
         raise LockError(EXIT_USAGE, "usage: --within %s: thread%s %s %s not threads of this "
-                                    "layout (its cpu slots cover threads %s). Exit 2." % (
+                                    "machine (it has threads %s). Exit 2." % (
                                         text, "" if len(stray) == 1 else "s",
                                         cpu.mask_text(cpu.bits_mask(stray)),
                                         "is" if len(stray) == 1 else "are",
-                                        cpu.mask_text(cpu.bits_mask(known))))
+                                        cpu.mask_text(cpu.bits_mask(machine))))
     slots = lay.within_slots(L, ts)
     if not slots:
         raise LockError(EXIT_USAGE, "usage: --within %s holds no whole cpu slot (a slot is %d "
@@ -1343,7 +1344,8 @@ def book(kind, repo, slug, cores=None, hold=None, gpu_share=None, wait_s=None, n
         if hold:
             raise LockError(EXIT_USAGE, "usage: --within and --hold do not go together: a run "
                                         "inside a hold takes the hold's slots. Exit 2.")
-        wtext, wslots = within_of(L, within, kind, need, own, parent)
+        machine = set(lay.hardware(store)["threads"])
+        wtext, wslots = within_of(L, within, kind, need, own, parent, machine)
     shares = hl.shares_for(k, gpu_share)
     if parent and not any(own.values()) and (resource is None or parent.get("resource") == resource):
         return Slot(store, None, L, own, parent, None, env, on_release_cmd, k, shares, log, gate)
@@ -1405,7 +1407,7 @@ def book(kind, repo, slug, cores=None, hold=None, gpu_share=None, wait_s=None, n
             if own is None:
                 raise LockError(EXIT_USAGE, "usage: nested run refused: %s. Exit 2." % why)
             if wtext:
-                wtext, wslots = within_of(L, within, kind, need, own, parent)
+                wtext, wslots = within_of(L, within, kind, need, own, parent, machine)
                 run.save(within=wtext, within_slots={"cpu": wslots})
             run.usage = Usage(L["cpu_slot_threads"], store.settings.usage_sample_s)
             run.save(need=own, has={p: n for p, n in has.items() if n}, layout=lay.slot_key(L))
