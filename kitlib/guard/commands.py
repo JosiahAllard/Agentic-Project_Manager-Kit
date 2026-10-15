@@ -333,6 +333,36 @@ def invocation(cmd):
     return None
 
 
+# what cmd drops before a command name: @ (no echo) and its delimiters , ; =
+CMD_LEAD_RE = re.compile(r'^[@;,=]+')
+
+
+def cmd_invocation(cmd, inv):
+    """`inv`, cmd's invocation of `cmd`, with the @ and delimiters cmd drops before a command name
+    (CMD_LEAD_RE) left out, as a prefix of the program word or as words of their own: @set, ;set
+    and @ set all run set, @ path runs path. Another shell's, a computed or quoted program word,
+    and one with nothing to drop come back as they are. The environment rules read cmd's set, path
+    and call through it; invocation itself still names @git as `@git` (the program rules do not
+    read the lead)."""
+    if cmd.shell != sh.CMD or inv is None or inv.dyn or inv.word is None:
+        return inv
+    words, i = cmd.words, inv.index
+
+    def placed_quoted(w):               # a word with no place in the source reads as unquoted
+        return w.start is not None and quoted(cmd, w)
+    while (i + 1 < len(words) and not words[i].dyn and not placed_quoted(words[i])
+           and CMD_LEAD_RE.sub('', words[i].text) == ''):
+        i += 1
+    w = words[i]
+    if w.dyn or placed_quoted(w):
+        return inv if i == inv.index else Invocation(base_name(w.text), w.text, words[i + 1:], cmd, w.dyn, i,
+                                                      via=inv.via, word=w)
+    t = CMD_LEAD_RE.sub('', w.text)
+    if not t or (i == inv.index and t == w.text):
+        return inv
+    return Invocation(base_name(t), t, words[i + 1:], cmd, w.dyn, i, via=inv.via, word=w)
+
+
 ENV_VALUE_OPTS = ('-u', '--unset')
 
 
@@ -597,20 +627,24 @@ def _stdin_text(cmd, parsed):
 
 # $env:FOO = v, $env:FOO='v' (one word to the parser), ${env:FOO} += v: read from the source
 PS_ENV_SET_RE = re.compile(r'(?i)\$(?:\{env:([^}]+)\}|env:(\w+))\s*(?:[-+*/%]|\?\?)?=(?!=)\s*(.*)')
-PS_ENV_ITEM_RE = re.compile(r'(?i)^(?:-\w+:)?env:[\\/]?(.+)$')
+# the environment provider's drive in every spelling a path may give it: env:, Environment:: and
+# the module-qualified Microsoft.PowerShell.Core\Environment:: (any qualifier, either slash: fail
+# closed), each with an optional separator before the name
+ENV_DRIVE = r'(?:env:|(?:[\w.]+[\\/])?environment::)[\\/]?'
+PS_ENV_ITEM_RE = re.compile(r'(?i)^(?:-\w+:)?' + ENV_DRIVE + r'(.+)$')
 PS_VALUE_OPT_RE = re.compile(r'(?i)^-va(?:l(?:ue?)?)?(?::(.*))?$')      # -Va, -Val, -Value, -Value:x
 NET_SET_ENV_RE = re.compile(r'(?i)SetEnvironmentVariable\s*\(\s*[\'"]([^\'"]+)[\'"]\s*,\s*(?:\'([^\']*)|"([^"]*))')
 BASH_ASSIGN_RE = ASSIGN_RE                                               # FOO=x and FOO+=x
 # the cmdlets that set an env: item (Set-Content env:FOO x, New-Item -Path env: -Name FOO), the env:
 # drive named bare, and New-Item's -Name (-N, -Na, -Nam, -Name, -Name:x)
 PS_ENV_SETTERS = ('set-item', 'si', 'new-item', 'ni', 'set-content', 'sc', 'add-content', 'ac')
-PS_ENV_DRIVE_RE = re.compile(r'(?i)^(?:-\w+:)?env:[\\/]?$')
+PS_ENV_DRIVE_RE = re.compile(r'(?i)^(?:-\w+:)?' + ENV_DRIVE + r'$')
 PS_NAME_OPT_RE = re.compile(r'(?i)^-n(?:a(?:me?)?)?(?::(.*))?$')
 # any cmdlet that may make an env: item under a new name (Rename-Item env:X -NewName FOO, Copy-Item)
 PS_ENV_ITEM_CMDLETS = PS_ENV_SETTERS + ('rename-item', 'ren', 'rni', 'copy-item', 'copy', 'cp', 'cpi', 'move-item',
                                         'mi', 'move', 'mv', 'set-variable', 'sv')
-PS_ENV_REF_RE = re.compile(r'(?i)^(?:-\w+:)?env:[\\/]?')
-PS_ENV_DRIVE_PREFIX_RE = re.compile(r'(?i)^env:[\\/]?')
+PS_ENV_REF_RE = re.compile(r'(?i)^(?:-\w+:)?' + ENV_DRIVE)
+PS_ENV_DRIVE_PREFIX_RE = re.compile(r'(?i)^' + ENV_DRIVE)
 PS_OPT_PREFIX_RE = re.compile(r'^-\w+:')
 GIT_ENV_NAME_RE = re.compile(r'(?i)^' + GIT_ENV_NAMES + r'$')
 
@@ -636,7 +670,8 @@ def env_assignments(c, names):
     """[(variable, value text)] of the environment variables matching the regex `names` (case
     ignored) that the command sets: an assignment before the program (FOO=1 prog, env FOO=1 prog),
     export/declare/setx, $env:FOO = ..., ${env:FOO} += ..., Set-Item, Set-Content or Add-Content
-    env:FOO, New-Item env:FOO or New-Item -Path env: -Name FOO, or
+    env:FOO, New-Item env:FOO or New-Item -Path env: -Name FOO (the drive in any spelling of
+    ENV_DRIVE: Environment::FOO, Microsoft.PowerShell.Core\\Environment::FOO), or
     [Environment]::SetEnvironmentVariable('FOO', ...). A word that only mentions one (echo
     "FOO=1", curl -d foo=1, a commit message) does not."""
     name_re = re.compile(r'(?i)^(?:%s)$' % names)
@@ -657,7 +692,7 @@ def env_assignments(c, names):
                 g = NET_SET_ENV_RE.search(src, w.start)
                 if g and g.start() < (w.end or len(src)) and name_re.match(g.group(1)):
                     out.append((g.group(1), g.group(2) if g.group(2) is not None else g.group(3) or ''))
-    inv = invocation(c)
+    inv = cmd_invocation(c, invocation(c))
     if c.shell == sh.BASH:
         lead = []
         for w in words:                          # FOO+=x is an assignment the program finder does not skip
@@ -721,7 +756,7 @@ def git_env_set(c):
         m = GIT_ENV_NET_RE.search(c.source[c.start:c.end]) if 0 <= c.start <= c.end <= len(c.source) else None
         if m:
             return m.group(1)
-    inv = invocation(c)
+    inv = cmd_invocation(c, invocation(c))
     if inv is None:
         return None
     if inv.name in EXPORTERS:
@@ -768,8 +803,8 @@ PS_ITEM_SWITCHES = ('-force', '-recurse', '-passthru', '-whatif', '-confirm', '-
 PS_ITEM_ALIASES = {'-lp': '-literalpath'}
 PS_CD_CMDLETS = ('set-location', 'sl', 'cd', 'chdir', 'push-location', 'pushd')
 PS_SCRIPT_RE = re.compile(r'(?i)\.psm?1$')
-# the env: drive, bare or provider-qualified (Environment::FOO)
-ENV_DRIVE_RE = re.compile(r'(?i)^(?:env:|(?:microsoft\.powershell\.core\\)?environment::)[\\/]?')
+# the env: drive, bare or provider-qualified (Environment::FOO): ENV_DRIVE
+ENV_DRIVE_RE = re.compile(r'(?i)^' + ENV_DRIVE)
 # a path that starts with an environment variable's value: $env:TEMP, "$env:TEMP\x", ${env:TEMP}/x
 PS_ENV_READ_RE = re.compile(r'(?i)^\$(?:env:([A-Za-z_]\w*)|\{env:([A-Za-z_]\w*)\})(?=$|[\\/])')
 PS_ENV_REF_ANY_RE = re.compile(r'(?i)\$(?:\{env:([^}]*)\}|env:([\w`]*))')
@@ -790,6 +825,12 @@ PS_PLAIN_STRING_RE = re.compile(r'''(?:'(?:[^']|'')*'|"(?:[^"$`]|"")*")''', re.S
 # item cmdlets whose env: item may be renamed, copied or made under a name a later path reads
 PS_ENV_NAMERS = frozenset(('rename-item', 'ren', 'rni', 'copy-item', 'copy', 'cp', 'cpi', 'move-item', 'mi',
                            'move', 'mv', 'new-item', 'ni', 'set-item', 'si'))
+# every cmdlet that may set, clear or remove the env: item its path names: the item and content
+# cmdlets (Set-Content, Add-Content, Clear-Content, Clear-Item, Remove-Item and their aliases) and
+# the property cmdlets (which the provider may refuse: fail closed)
+PS_ENV_ITEM_NAMERS = PS_ITEM_CMDLETS | PS_ENV_NAMERS | frozenset((
+    'set-itemproperty', 'sp', 'new-itemproperty', 'clear-itemproperty', 'clp', 'remove-itemproperty', 'rp',
+    'rename-itemproperty', 'rnp', 'copy-itemproperty', 'cpp', 'move-itemproperty', 'mp'))
 NET_ENV_RE = re.compile(r'(?i)\[(?:system\.)?environment\]')
 NET_GET_LITERAL_RE = re.compile(r'''(?i)\[(?:system\.)?environment\]::GetEnvironmentVariable\s*\(\s*'''
                                 r'''(?:'[^']*'|"[^"$`]*")\s*[,)]''')
@@ -849,16 +890,42 @@ def ps_env_targets(c):
 
 def line_env_names(commands):
     """The upper-case names of the environment variables the line's commands set literally, every
-    name an item cmdlet on env: names (Rename-Item env:FOO TEMP, Copy-Item env:A env:TEMP,
-    New-Item env:TEMP): such a name may then hold any text, and every name a bash builtin assigns
-    from its arguments (bash_var_targets: read HOME, printf -v HOME, for HOME in ...)."""
+    name an item, content or property cmdlet on the env drive names, in any spelling of it
+    (_ps_env_item_names: Rename-Item env:FOO TEMP, Copy-Item env:A env:TEMP, New-Item env:TEMP,
+    Set-Content Environment::PATH x, Clear-Item env:HOME): such a name may then hold any text,
+    every name a bash builtin assigns from its arguments (bash_var_targets: read HOME, printf -v
+    HOME, for HOME in ...), and PATH for cmd's path command (cmd_path_set)."""
     names = set()
     for c in commands:
         names.update(n.upper() for n, _v in env_assignments(c, r'[A-Za-z_]\w*'))
         names.update(n.upper() for n in ps_env_targets(c))
         names.update(_ps_env_item_names(c))
         names.update(bash_var_targets(c))
+        if cmd_path_set(c):
+            names.add('PATH')
     return names
+
+
+# cmd's own path command as the first word: path X, PATH=X, path;X, path ; (which empties PATH),
+# @path X, with any leading cmd delimiter. Whatever follows the name, other than a letter or digit,
+# counts (fail closed); only a bare path, which prints PATH, does not.
+CMD_PATH_RE = re.compile(r'(?i)^[@;,=\s]*path(?![A-Za-z0-9_\-])')
+
+
+def cmd_path_set(c):
+    """True when the cmd command `c` is cmd's path command with anything after it (CMD_PATH_RE):
+    it sets PATH for the rest of the line. The words before it that are only @ and delimiters
+    (CMD_LEAD_RE: @ path X, , path X) are passed over, as cmd drops them. A bare path (or @path,
+    @ path) with no other word only prints it."""
+    if c.shell != sh.CMD or not c.words:
+        return False
+    words, k = c.words, 0
+    while k + 1 < len(words) and not words[k].dyn and CMD_LEAD_RE.sub('', words[k].text) == '':
+        k += 1
+    first = words[k].text
+    if not CMD_PATH_RE.match(first):
+        return False
+    return not (k == len(words) - 1 and CMD_LEAD_RE.sub('', first).lower() == 'path')
 
 
 # a bash builtin's target the text does not name (read $n): bash_var_targets gives it as this name,
@@ -975,8 +1042,15 @@ def _var_target(c, w):
 
 
 def _ps_env_item_names(c):
+    """The upper-case names a PowerShell item, content or property cmdlet (PS_ENV_ITEM_NAMERS)
+    may set, clear or remove on the environment drive (ENV_DRIVE_RE, every spelling): each
+    literal name after the drive (Set-Content Environment::PATH x, Clear-Item env:HOME,
+    Remove-Item Microsoft.PowerShell.Core\\Environment::PATH), COMPUTED_NAME for a drive word with
+    no literal name after it there (a wildcard, a bare drive with -Include), and, for a cmdlet of
+    PS_ENV_NAMERS that may make an item under a new name, every literal word of the command once
+    one names the drive (Rename-Item env:X TEMP)."""
     inv = invocation(c) if c.shell == sh.PS else None
-    if inv is None or inv.name not in PS_ENV_NAMERS:
+    if inv is None or inv.name not in PS_ENV_ITEM_NAMERS:
         return set()
     vals = []
     for w in inv.args:
@@ -991,9 +1065,13 @@ def _ps_env_item_names(c):
     out = set()
     for t in vals:
         m = ENV_DRIVE_RE.match(t)
+        if not m and inv.name not in PS_ENV_NAMERS:
+            continue                            # Set-Content env:PATH x: x is the value, no name
         rest = t[m.end():] if m else t
         if LITERAL_NAME_RE.match(rest):
             out.add(rest.upper())
+        elif m and inv.name not in PS_ENV_NAMERS:
+            out.add(COMPUTED_NAME)              # Clear-Item env:PAT*, Remove-Item env:\ -Include PATH
     return out
 
 
@@ -1021,7 +1099,7 @@ def _env_unsafe(c, line_sets):
     words = c.words
     if not words:
         return False
-    inv = invocation(c)
+    inv = cmd_invocation(c, invocation(c))
     if c.shell == sh.BASH:
         if _bash_env_unsafe(c, inv):
             return True
@@ -1344,7 +1422,10 @@ def mark_git_env(parsed):
     assignment, read HOME, printf -v HOME, for HOME in ..., let HOME=1, $((HOME=1)); see
     bash_var_targets), or 'a variable named at run time'
     for a builtin whose target is computed (read $n), else False: git then reads another user
-    config (rules.home_config and rules.git_alias_config judge git with it)."""
+    config (rules.home_config and rules.git_alias_config judge git with it). c.path_env is True
+    when the line sets PATH the same ways, cmd's path command included (or a name computed at
+    run time, or a wildcard on the env drive): git then finds a
+    filter's bare program name (git-lfs) elsewhere (rules.archive_filter_set)."""
     cmds = parsed.commands
     sets = line_env_names(cmds)
     name = next((n for n in map(git_env_set, cmds) if n), None)
@@ -1353,9 +1434,11 @@ def mark_git_env(parsed):
     home = next((n for n in HOME_ENV_NAMES if n in sets), None)
     if home is None and COMPUTED_NAME in sets:
         home = 'a variable named at run time'
+    path = 'PATH' in sets or COMPUTED_NAME in sets
     for c in cmds:
         c.git_env = name or False
         c.home_env = home or False
+        c.path_env = path
 
 
 # The variables git for Windows finds the user config through: $XDG_CONFIG_HOME/git/config, and
