@@ -238,5 +238,41 @@ class WaitForTest(DirectCase):
         self.assertEqual(len(got['changes']), 1)
 
 
+class PmSeenForTest(DirectCase):
+    """pm_seen ("A PM is listening.") counts only the PM's own waits and reads: none with
+    `for`, or `for=pm`. Another session's wait for its own key is not the PM listening."""
+
+    def seen_during_wait(self, **query):
+        real, during = self.store.wait, []
+
+        def blocked(since, timeout):
+            during.append(self.api.pm_seen())
+            return real(since, 0)
+        self.store.wait = blocked
+        try:
+            q = {'pending': '1', 'timeout': '0.2'}      # a for wait loops until its timeout
+            q.update(query)
+            self.ok('GET', '/wait', AGENT, query=q)
+        finally:
+            self.store.wait = real
+        return during[0]
+
+    def test_a_wait_for_another_session_is_not_the_pm_listening(self):
+        self.assertEqual(self.seen_during_wait(**{'for': 'kit'}),
+                         {'waited': None, 'pulled': None, 'waiting': 0})
+        self.assertEqual(self.api.pm_seen(), {'waited': None, 'pulled': None, 'waiting': 0})
+
+    def test_a_read_for_another_session_is_not_the_pm_pulling(self):
+        self.pending(**{'for': 'zeta'})
+        self.assertEqual(self.api.pm_seen(), {'waited': None, 'pulled': None, 'waiting': 0})
+
+    def test_a_wait_for_pm_or_with_no_for_is_the_pm_listening(self):
+        for query in ({'for': 'pm'}, {}):
+            with self.subTest(query=query):
+                self.assertEqual(self.seen_during_wait(**query)['waiting'], 1)
+                self.assertEqual(self.api.pm_seen()['waiting'], 0)
+                self.assertEqual(self.api.pm_seen()['waited'], NOW)
+
+
 if __name__ == '__main__':
     unittest.main()

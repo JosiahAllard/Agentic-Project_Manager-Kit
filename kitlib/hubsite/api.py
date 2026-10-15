@@ -69,7 +69,8 @@ PM seen. GET snapshot carries `pm_seen`: {"waited", "pulled", "waiting"}. waited
 read the pending work (GET pending, or GET wait with pending=1), waiting the number of agent
 waits blocked in Store.wait right now. All three live in this Api object, not in the store: a
 new Api (a server restart) starts at null, null and 0 until the next agent call. The owner's
-own calls never count. No lock is taken: each note is one assignment, and an open wait is one
+own calls never count, nor does a call with `for` a key other than `pm` (another session's
+wait for its own answers is not the PM listening). No lock is taken: each note is one assignment, and an open wait is one
 key put into and popped from a dict, which the interpreter does as one step each.
 
 Pending for one session. Every pending item carries `from`, the session key it is for
@@ -474,9 +475,10 @@ class Api(object):
     def seen(self, req, what, opened=None, closed=None):
         """Note that an agent (a PM session) just waited or pulled (`what`). `opened` is a key
         for a wait that now blocks, `closed` the key of one that ended. The owner's calls are
-        not noted. An ended wait stops counting before the clock is read, and a clock that
-        fails then leaves the earlier time: it never hides how the wait itself ended."""
-        if req.role != AGENT:
+        not noted, nor another session's (`for` a key other than AGENT_FROM). An ended wait
+        stops counting before the clock is read, and a clock that fails then leaves the earlier
+        time: it never hides how the wait itself ended."""
+        if req.role != AGENT or _q(req, 'for') not in ('', AGENT_FROM):
             return
         if closed is not None:
             self._waits.pop(closed, None)

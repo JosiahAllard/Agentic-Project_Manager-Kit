@@ -42,7 +42,8 @@ or after an unpair or a session that ran out) is told so on the page and to run
 - **Info.** Usage (each account's plan usage) and Agents (each agent's model and effort).
 
 Under the header a line says whether a PM is listening: "A PM is listening." while a PM holds a
-`wait` open, else when one last asked. The page reads everything at once
+`wait` open, else when one last asked; another session's wait `--for` its own key does not
+count (`Api.seen` in `kitlib/hubsite/api.py`). The page reads everything at once
 (`GET /api/v1/snapshot`), then waits for the next change (`GET /api/v1/wait`, about 55 seconds on
 the server), so what the PM writes shows without a reload. A view the server cannot give says so
 at the top.
