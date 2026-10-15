@@ -150,7 +150,9 @@ class ExportNamingNoCheckout(StubCase):
         os.makedirs(os.path.join(self.plain, 'tools'))
         self.nokitjson = os.path.join(self.tmp, 'repo-nokitjson')
         os.makedirs(os.path.join(self.nokitjson, '.git'))
-        os.makedirs(os.path.join(self.nokitjson, 'tools'))
+        # The tool the configuration names is there, so only live_kit's kit.json test refuses it.
+        self.put(os.path.join(self.nokitjson, 'tools', 'cmd_a.py'),
+                 "if __name__ == '__main__':\n    pass\n")
         self.notools = os.path.join(self.tmp, 'repo-notools')
         os.makedirs(os.path.join(self.notools, '.git'))
         self.put(os.path.join(self.notools, 'kit.json'), '{}\n')
@@ -158,6 +160,11 @@ class ExportNamingNoCheckout(StubCase):
         root.start()
         self.addCleanup(root.stop)
         self.config(stubs={'tools': ['cmd_a']})
+
+    def why(self):
+        """live_kit's refusal of the export: the text every refusal below must carry, so none
+        passes on another error (a tool the configuration names missing from the folder named)."""
+        return ('%s is an export of the kit' % os.path.normpath(self.export))
 
     def markers(self):
         for m in self.MARKERS:
@@ -173,7 +180,7 @@ class ExportNamingNoCheckout(StubCase):
             with self.subTest(marker=marker):
                 code, out = self.run_stubs('write')
                 self.assertEqual(code, stubs.CONFIG, out)
-                self.assertIn('kit_stubs: refused:', out)
+                self.assertIn('kit_stubs: refused: %s' % self.why(), out)
                 self.assertFalse(os.path.exists(self.stub('cmd_a')))
 
     def test_check_is_refused(self):
@@ -181,15 +188,30 @@ class ExportNamingNoCheckout(StubCase):
             with self.subTest(marker=marker):
                 code, out = self.run_stubs('check')
                 self.assertEqual(code, stubs.CONFIG, out)
+                self.assertIn('kit_stubs: refused: %s' % self.why(), out)
 
     def test_problem_line_names_no_write_command(self):
         label = os.path.basename(self.root)
         for marker in self.markers():
             with self.subTest(marker=marker):
                 line = stubs.problem_line(self.root)
-                self.assertTrue(line.startswith('could not check stubs (%s): ' % label), line)
+                want = 'could not check stubs (%s): %s' % (label, self.why())
+                self.assertTrue(line.startswith(want), line)
                 self.assertNotIn('kit_stubs.py write', line)
                 self.assertNotIn('run python', line)
+
+    def test_live_kit_refuses_a_git_checkout_that_is_not_the_kit(self):
+        """export_checkout accepts any folder with a .git folder; live_kit's own test needs both
+        kit.json and a tools folder."""
+        for name, folder in (('nokitjson', self.nokitjson), ('notools', self.notools)):
+            self.put(os.path.join(self.export, pluginsource.MARKER),
+                     json.dumps({'checkout': folder.replace('\\', '/')}) + '\n')
+            with self.subTest(checkout=name):
+                self.assertEqual(os.path.normpath(pluginsource.export_checkout(self.export)),
+                                 os.path.normpath(folder))
+                kit, why = stubs.live_kit(self.export)
+                self.assertIsNone(kit)
+                self.assertTrue(why.startswith(self.why()), why)
 
     def test_a_repository_that_uses_no_stubs_gets_no_line_and_check_is_ok(self):
         """Stubs are opt-in: a repository with no "stubs".tools and no stub (a PM data folder) is
