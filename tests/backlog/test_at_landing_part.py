@@ -115,6 +115,7 @@ class PartLanding(StoreLandCase):
         self.assertEqual(len(notes), 1, out.lines)
         self.assertIn('Part-of line', notes[0])
         self.assertIn('FOOO', notes[0])
+        self.assertIn('it released FOO', notes[0])     # what the landing did, by name
         self.assertEqual(self.warnings(out), [])
 
     def test_a_part_of_value_with_no_plain_id_still_releases(self):
@@ -138,6 +139,53 @@ class PartLanding(StoreLandCase):
         self.assertEqual(len(notes), 1, out.lines)
         self.assertIn('FOO', notes[0])
         self.assertIn('both a Closes line and a Part-of line', notes[0])
+        self.assertIn('was closed, not released', notes[0])
+
+    def test_an_id_in_closes_and_part_of_that_no_store_holds_is_not_said_closed(self):
+        self.seed(pulled('FOO'))
+        out = self.land(self.branch_with('fix\n\nPart-of: NOPE\nCloses: NOPE\n%s\n' % TRAILERS))
+        self.assert_open('FOO')
+        both = [n for n in self.notes(out) if 'both a Closes line and a Part-of line' in n]
+        self.assertEqual(len(both), 1, out.lines)
+        self.assertIn('NOPE', both[0])
+        self.assertIn('was not closed', both[0])
+        self.assertNotIn('closed, not released', both[0])
+
+    def test_an_id_in_closes_and_part_of_in_a_store_not_read_is_not_said_closed(self):
+        self.seed(pulled('FOO'))
+        tip = self.branch_with('fix\n\nPart-of: FOO\nCloses: FOO\n%s\n' % TRAILERS)
+        cfg = kconfig.load_at(self.repo.root, self.main)
+        with mock.patch.object(smod, 'require_readable',
+                               side_effect=at_landing.Refusal('a record cannot be read')):
+            lines = at_landing.close_landed(self.repo.root, cfg, BRANCH, 'f' * 40, tip=tip,
+                                            base=self.main)
+        self.assertEqual(self.get('FOO').get('state'), 'pulled')
+        both = [l for l in lines if 'both a Closes line and a Part-of line' in l]
+        self.assertEqual(len(both), 1, lines)
+        self.assertIn('was not closed', both[0])
+        self.assertNotIn('closed, not released', both[0])
+
+    def test_a_stacked_batch_reads_part_of_only_from_the_branch_that_carries_it(self):
+        # kit/other starts at a1, kit/feature's `Part-of: ONE` commit, and lands after it: its
+        # messages are read down to kit/feature's merge, so its own pull still closes.
+        self.seed(pulled('ONE', scope=['a.py', 'a2.py']),
+                  pulled('TWO', by='kit/other', scope=['b.py']))
+        wt = self.repo.worktree('feature')
+        self.repo.write('a.py', 'x = 1\n', root=wt)
+        a1 = self.repo.commit('a1\n\nPart-of: ONE\n%s\n' % TRAILERS, 'a.py', cwd=wt)
+        self.repo.write('a2.py', 'x = 2\n', root=wt)
+        tip_a = self.repo.commit('a2\n\n%s\n' % TRAILERS, 'a2.py', cwd=wt)
+        other = os.path.join(self.repo.root, '.claude', 'worktrees', 'other')
+        self.repo.git('worktree', 'add', '-q', other, '-b', 'kit/other', a1)
+        self.repo.write('b.py', 'y = 1\n', root=other)
+        tip_b = self.repo.commit('b\n\n%s\n' % TRAILERS, 'b.py', cwd=other)
+        out = self.lander([BRANCH, 'kit/other'], self.main, [tip_a, tip_b]).run()
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertEqual(self.stems(), ['ONE'])
+        self.assert_open('ONE')
+        self.assertEqual([l.split()[1] for l in self.started(out, 'closed')], ['TWO'], out.lines)
+        self.assertEqual(self.warnings(out), [])
+        self.assertEqual(self.notes(out), [])
 
     def test_part_of_naming_a_record_another_branch_holds_leaves_it(self):
         self.seed(pulled('FOO'), pulled('QUX', by='kit/other'))
@@ -231,8 +279,8 @@ class PartLandingInThePmDataStore(StoreLandCase):
     pm_root = tls.PmDataClose.pm_root
     branch_with = PartLanding.branch_with
 
-    def land_part(self):
-        tip = self.branch_with('fix\n\nPart-of: FOO\n%s\n' % TRAILERS)
+    def land_part(self, rid='FOO'):
+        tip = self.branch_with('fix\n\nPart-of: %s\n%s\n' % (rid, TRAILERS))
         out = self.lander(BRANCH, self.main, tip).run()
         self.assertEqual(out.code, G.OK, out.lines)
         self.assertEqual(self.remote_main(), out.merge)
@@ -285,6 +333,18 @@ class PartLandingInThePmDataStore(StoreLandCase):
         self.assertNotIn(' close FOO', warn[0])
         self.assertFalse([l for l in out.lines if l.startswith(('closed ', 'released '))],
                          out.lines)
+
+    def test_a_stray_part_of_note_does_not_say_a_refused_release_was_made(self):
+        wt = self.pm_worktree(pulled('FOO'))
+        self.repo.commit('seed the PM data store', 'kit/backlog', '.kit.json', cwd=wt)
+        with open(self.record(wt, 'FOO'), 'a', encoding='utf-8', newline='\n') as f:
+            f.write('\nthe PM wrote this by hand\n')
+        out = self.land_part('FOOO')
+        self.assertEqual(len([l for l in out.lines if l.startswith('WARNING')]), 1, out.lines)
+        notes = [l for l in out.lines if l.startswith('NOTE') and 'FOOO' in l]
+        self.assertEqual(len(notes), 1, out.lines)
+        self.assertNotIn('was released', notes[0])
+        self.assertIn('FOO, which it held pulled, was not released', notes[0])
 
 
 class PartOfValues(unittest.TestCase):
