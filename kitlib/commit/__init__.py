@@ -29,6 +29,10 @@ commit(Request) -> Outcome(code, lines). Nothing here prints or exits; tools/com
   added when the name lacks it - unless the name is a family in .kit.json
   "commit".coauthor_families or starts with one followed by a space, '.' or '-'.
   The model is required: --model, else CLAUDE_AGENT_MODEL (blank is unset).
+- Last, the session line (session_lines): `<key>: <value>` lines that end the body (the hosts'
+  attribution.session_trailer keys, `Claude-Session`) move into the trailer block, where git
+  reads them; with none, an agent's commit gets its host's own, `Claude-Session:
+  https://claude.ai/code/<id>` from CLAUDE_CODE_BRIDGE_SESSION_ID when that is set to a plain id.
 - The main checkout is refused (kitlib.git.checkout.main_refusal); --lander-main-checkout is the
   one way past it, and a usage error anywhere else.
 - Render on commit (kitlib.content.oncommit; docs/content.md "Render on commit"): in a work tree
@@ -188,12 +192,41 @@ def model_requirement_error(rules, owner_authored, owner_approved, paths):
     return None
 
 
-def build_trailers(rules, owner_approved, owner_authored, model, families=(), provider=None):
+def build_trailers(rules, owner_approved, owner_authored, model, families=(), provider=None,
+                   session=()):
     """`<owner trailer>: <value>` lines (the configured "owner".trailer), then Co-Authored-By on
-    an agent's commit, or `Owner-Authored: yes` on the owner's own."""
+    an agent's commit, or `Owner-Authored: yes` on the owner's own, then the `session` lines."""
     trailers = ['%s: %s' % (rules.trailer, o) for o in owner_approved]
     trailers.append(OWNER_AUTHORED_TRAILER if owner_authored else coauthor(model, families, provider))
+    trailers.extend(session)
     return trailers
+
+
+def lift_session_lines(body, keys):
+    """`(body, lines)`: the `<key>: <value>` lines (a key of `keys`, any case; one value with no
+    space) that END the body, taken off it. They go in the trailer block: left in the body, the
+    blank line before the trailers keeps git from reading them as trailers (a `-b "...~~
+    Claude-Session: <url>"`). A line anywhere else in the body stays where it is."""
+    if not body or not keys:
+        return body, []
+    line_re = re.compile(r'(?:%s): \S+\Z' % '|'.join(re.escape(k) for k in keys), re.IGNORECASE)
+    rows = body.rstrip().split('\n')
+    lifted = []
+    while rows and line_re.match(rows[-1].strip()):
+        lifted.insert(0, rows.pop().strip())
+    return '\n'.join(rows).rstrip(), lifted
+
+
+def session_lines(body, owner_authored, env=None, provider=None):
+    """`(body, session trailer lines)`: a body-final session line is lifted out of the body
+    (lift_session_lines) and wins; otherwise an agent's commit gets the host's own
+    (kitlib.attribution.session_trailer, from `env`, default os.environ). The owner's own commit
+    gets none from the environment."""
+    body, lifted = lift_session_lines(body, attribution.session_keys())
+    if lifted or owner_authored:
+        return body, lifted
+    line = attribution.session_trailer(os.environ if env is None else env, provider)
+    return body, [line] if line else []
 
 
 def build_message(subject, body, trailers):
@@ -566,7 +599,9 @@ def _commit(req, lines):
         err = owner_identity_error(rules, author_email(root))
         if err:
             raise _Stop(REFUSED, err)
-    trailers = build_trailers(rules, approved, req.owner_authored, model, opts['coauthor_families'], req.provider)
+    body, session = session_lines(body, req.owner_authored, req.env, req.provider)
+    trailers = build_trailers(rules, approved, req.owner_authored, model, opts['coauthor_families'],
+                              req.provider, session)
 
     # A listed path is always added again. The one skip: a listed path staged as a deletion and
     # absent from the work tree (`git add` would fail "pathspec did not match"); its deletion is

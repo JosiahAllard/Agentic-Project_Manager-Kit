@@ -35,7 +35,8 @@
         "name": "Codex",
         "email": "noreply@openai.com",
         "model_env": null,
-        "model_pattern": "[A-Za-z0-9][A-Za-z0-9._:/-]*"
+        "model_pattern": "[A-Za-z0-9][A-Za-z0-9._:/-]*",
+        "session_trailer": null
       },
       "agent_name_format": "kit-{name}",
       "session_process": "codex.exe",
