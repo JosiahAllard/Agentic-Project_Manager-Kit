@@ -59,12 +59,12 @@ Each calls a route the agent's token may call (`kitlib.hubsite.api.ROUTES`, role
 | step | command |
 |---|---|
 | `{edit: <absolute file>, old: <text>, new: <text>}` | replaces the one place `old` is with `new`; prints `ok <file>`, or `MISS <file>: <why>` with the file unchanged |
-| `{open: <absolute file>, line: <n>}` (`line` optional) | opens the file in Notepad++ (`todosteps.NOTEPADPP`), or prints `MISS` when Notepad++ is not there |
+| `{open: <absolute file>, line: <n>}` (`line` optional) | opens the file in Notepad++ (`todosteps.NOTEPADPP`, looked for under `$env:ProgramFiles`, then `${env:ProgramFiles(x86)}`, when the command runs), or prints `MISS` when neither holds it |
 | `{run: <command>}` | the command, verbatim |
 
 The edit command is one Windows PowerShell 5.1 `& { ... }` block (`todosteps` module docstring):
 
-- `old` and `new` go in as readable single-quoted literals. A text holding a single quote (U+0027 or U+2018 to U+201B, which PowerShell reads as one), a control character other than a newline, a tab (pasted into a console, it can start completion) or a character outside the Basic Multilingual Plane goes in as base64 of its UTF-8 bytes instead, with its first `todosteps.PREVIEW` characters shown readable, control characters escaped, in a `<# #>` comment.
+- `old` and `new` go in as readable single-quoted literals. A text holding a single quote (U+0027 or U+2018 to U+201B, which PowerShell reads as one), a control character other than a newline (C0, DEL and C1, U+0080 to U+009F), a tab (pasted into a console, it can start completion), the line and paragraph separators U+2028 and U+2029, a bidi control or invisible character (U+202A to U+202E, U+2066 to U+2069, U+200B to U+200F, U+FEFF, and the no-break space U+00A0) or a character outside the Basic Multilingual Plane goes in as base64 of its UTF-8 bytes instead, with a readable preview, control and invisible characters escaped, in a `<# #>` comment. The preview shows only the first 60 characters (`todosteps.PREVIEW`); the rest of the text is in the base64 alone. A file or text holding a lone surrogate (U+D800 to U+DFFF) is refused as a bad step.
 - A block whose texts hold no newline is one line. A text with a newline makes the block span lines, and the owner pastes the whole block as one unit.
 - Newlines reach the script as LF and take the file's own ending: CRLF when the file has one, LF otherwise. A file with both is a `MISS` when `old` or `new` holds a newline.
 - The file is read as bytes: a UTF-8 or UTF-16 BOM, or none, and then it must be valid UTF-8 (an ANSI file is a `MISS`). It is written back with the same BOM and encoding.
