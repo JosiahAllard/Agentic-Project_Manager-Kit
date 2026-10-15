@@ -544,7 +544,7 @@ def plan_set(snap, ctx, rid, changes, unset=(), ruling=None, body=None, hold_rul
         if added:
             holding, _dead, _why = omod.in_flight_split(snap, ctx.root, ctx.remote)
             widen_hits = live_hits(added, holding, skip=rid, branch=rec.get('pulled_by'))
-            # The fold-in guard, as `pull` runs it (KIT-BACKLOG-SET-SCOPE-FOLD-GUARD).
+            # The fold-in guard, as `pull` runs it.
             folds, notes = _pull_fold_hits(ctx, added, holding, rec.get('pulled_by'))
     if widen_hits or folds:
         if ruling is None:
@@ -653,8 +653,7 @@ def _plan_recite(snap, ctx, rec, ruling):
 def plan_block(snap, ctx, rid, members, owner_ask=None, ruling=None, reason=None):
     """`block` ADDS `members` to `blocked_on`, in order, after the blockers already there (one
     already present is not repeated); it never removes one, so it never releases the owner's hold
-    and takes no `--ruling` (USAGE): removing a blocker is `unblock --on`'s job
-    (KIT-BACKLOG-BLOCK-REPLACES-BLOCKERS). `ruling` stays a parameter so the USAGE names it.
+    and takes no `--ruling` (USAGE): removing a blocker is `unblock --on`'s job. `ruling` stays a parameter so the USAGE names it.
     `reason`, when given, goes into the commit subject and onto one line appended to the body
     (`Blocked on M (date): T`), so `show` says why the record is held; no header key is written
     for it."""
@@ -838,7 +837,7 @@ def plan_pull(snap, ctx, rid, reason=None, ruling=None, blocker=None):
     """Take an open, priced record and record the branch. One in `next`'s offer pulls plainly;
     one outside it needs `--reason` and records `preempt` and the `displaced` offer, computed
     here; the offer it is checked against leaves out the caller's branch's own pulls, so a record
-    overlapping only them is offered (KIT-BACKLOG-SAME-BRANCH-COLLISION).
+    overlapping only them is offered.
     A `priority: -1` record needs `--ruling` (a hold release). One whose scope collides with
     a live pull on another branch (one on the caller's branch is no collision) needs `--reason` and `--ruling` (the PM's ruling, cited in `preempt`); one ruling
     covers a `-1` record that also collides. An unmet `requires:` refuses.

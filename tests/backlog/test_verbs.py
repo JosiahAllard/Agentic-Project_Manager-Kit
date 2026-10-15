@@ -160,7 +160,7 @@ class RulingShapeOnly(VerbCase):
 class BlockUnblock(VerbCase):
 
     def test_block_adds_to_blocked_on_and_unblock_removes(self):
-        # KIT-BACKLOG-BLOCK-REPLACES-BLOCKERS: a second block once wiped the first's blockers.
+        # A second block once wiped the first's blockers.
         self.seed(rec('FOO'), rec('BAR'), rec('BAZ'))
         self.verb('block', 'FOO', ['item:BAR'])
         change = self.verb('block', 'FOO', ['live-client'])

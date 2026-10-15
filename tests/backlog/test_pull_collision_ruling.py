@@ -82,7 +82,7 @@ class PullCollision(StoreCase):
         self.assertEqual(change.ruling, 'R-9001')
 
     def test_a_pull_that_overlaps_a_record_on_the_callers_own_branch_pulls_plainly(self):
-        # KIT-BACKLOG-SAME-BRANCH-COLLISION: bundling overlapping records onto one branch is not a
+        # Bundling overlapping records onto one branch is not a
         # collision, in the offer either: the branch already holds that scope, so its own pulls
         # are left out of the offer `pull` checks against. It once took `--reason` ("passed over
         # ... already taken by MINE (in flight on <the caller's branch>)").

@@ -203,7 +203,7 @@ class PullFold(_Branches):
 
 
 class SetScopeFold(_Branches):
-    """KIT-BACKLOG-SET-SCOPE-FOLD-GUARD: `set --scope` that widens a pulled record runs the fold-in
+    """`set --scope` that widens a pulled record runs the fold-in
     guard as `pull` does, on the members it adds, so `set` is not a door around it."""
 
     def setUp(self):
