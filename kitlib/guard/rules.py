@@ -895,7 +895,8 @@ def hub_commit_family(args):
 def hub_backlog_family(args):
     """True when tools/backlog.py's arguments `args` name the hub tool only in the value of a
     message option (HUB_BACKLOG_MESSAGES, written in full: argparse's own abbreviations are not
-    read as one)."""
+    read as one) or as a path word (hub_path_word: a word of its own, or an option's =value, as
+    --scope, --body-file and show take them; backlog.py records and reads paths, it runs none)."""
     k = 0
     while k < len(args):
         t = args[k]
@@ -905,7 +906,7 @@ def hub_backlog_family(args):
                 k += 1
             k += 1
             continue
-        if hub_text_names(t):
+        if hub_text_names(t) and not hub_path_word(t if value is None else value):
             return False
         k += 1
     return True
