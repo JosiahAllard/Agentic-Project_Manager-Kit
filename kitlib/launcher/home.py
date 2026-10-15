@@ -1,19 +1,21 @@
 """A launched session's home worktree (docs/launcher.md "The home worktree").
 
 With `--home-worktree`, a session whose folder is a repository's MAIN checkout starts instead in
-`<main>/.claude/worktrees/home-<stem>`: a linked worktree of the same repository, detached at the
+`<main>/<the host's worktrees folder>/home-<session name>`: a linked worktree of the same repository, detached at the
 main checkout's HEAD and held with `git worktree lock`. A relative path any process of the session
 resolves (a .NET relative write the guard cannot see, a subagent's shell: subagents start in the
 session's folder) then lands in that worktree, never in the main checkout. The worktree carries
 the tracked CLAUDE.md, AGENTS.md and .claude/ files, and the host keys auto memory by repository,
 so a session keeps them.
 
-  stem_of(name)        a session name without its account tag and recycle count: one home per stem
-  home_path(main, s)   the home worktree's folder
+  folder()             the host's worktrees folder (hosts.json), read when called, never at import
+  home_path(main, n)   the home worktree's folder of the session named n: one home per session name
   ensure(main, path)   create it, lock it, or move a clean one to the main checkout's HEAD; the
                        lines it says, or a LaunchError (nothing created)
 
-Detached and locked: the nightly sweep never takes one (kitlib.worktree.sweep sweep_skip), and
+A home belongs to one session name, and the launcher refuses to start a name that is already
+running (kitlib.launcher.start home_folder), so ensure() never moves a home under a running
+session. Detached and locked: the nightly sweep never takes one (kitlib.worktree.sweep sweep_skip), and
 `git worktree remove` refuses a locked worktree. A dirty home (a stray write landed there) is left
 as it is and named, never cleaned.
 """
@@ -24,26 +26,23 @@ from kitlib.git import cmd
 from kitlib.host import registry
 from kitlib.launcher.settings import LaunchError
 
-FOLDER = os.path.normpath(registry.default_profile().worktrees_directory)   # the host's worktrees folder (hosts.json)
 PREFIX = 'home-'
 LOCK_REASON = 'launcher home worktree of %s: start folder of launched sessions'
-_TAIL = re.compile(r'(?:-r\d+)?$')
-_ACCOUNT = re.compile(r'-[ao]\d+$')
 _BAD = re.compile(r'[^a-z0-9._-]+')
 SHOWN = 10          # dirty files named, at most
 
 
-def stem_of(name):
-    """`name` without a trailing `-r<k>` (a recycle) and then `-a<N>`/`-o<N>` (the account), so a
-    successor and its predecessor share one home."""
-    return _ACCOUNT.sub('', _TAIL.sub('', name, count=1), count=1) or name
+def folder():
+    """The default host's worktrees_directory (hosts.json), as a relative OS path. Read when a home
+    is wanted, so a launch.py verb that makes none (stop, after-reboot) never reads hosts.json."""
+    return os.path.normpath(registry.default_profile().worktrees_directory)
 
 
-def home_path(main, stem):
-    """`<main>/.claude/worktrees/home-<stem>`, the stem lowercased and anything but a-z, 0-9, '.',
-    '_' and '-' made '-'."""
-    slug = _BAD.sub('-', stem.lower()).strip('-.') or 'session'
-    return os.path.join(os.path.normpath(main), FOLDER, PREFIX + slug)
+def home_path(main, name):
+    """`<main>/<folder()>/home-<name>`, the session name lowercased and anything but a-z, 0-9, '.',
+    '_' and '-' made '-'. The full name: deep-x and deep-x-r2 get two homes."""
+    slug = _BAD.sub('-', name.lower()).strip('-.') or 'session'
+    return os.path.join(os.path.normpath(main), folder(), PREFIX + slug)
 
 
 def _git(args, cwd, git):
@@ -104,7 +103,8 @@ def ensure(main, path, whatif=False, git=cmd.call):
             return ['Would create the home worktree %s, detached at %s, and lock it.' % (path, head[:10])]
         _, why = _git(['worktree', 'add', '--detach', path, head], main, git)
         if why is not None:
-            raise LaunchError('git worktree add %s failed: %s' % (path, why))
+            raise LaunchError('git worktree add %s failed: %s. If another launch of this session is making it '
+                              'at this moment, wait for that one; nothing was started.' % (path, why))
         out.append('Created the home worktree %s, detached at %s.' % (path, head[:10]))
         _, why = _git(['worktree', 'lock', '--reason', reason, path], main, git)
         if why is not None:

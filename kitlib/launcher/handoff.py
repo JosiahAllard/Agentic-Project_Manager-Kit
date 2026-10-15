@@ -94,6 +94,9 @@ def handoff(settings, host, session=None, account=None, all_=False, recycle=Fals
         keys = [k for k, v in real if v.get('agent')] + [k for k, v in real if not v.get('agent')]
     else:
         keys = [session]
+    if home_worktree:                                  # every successor checked before any starts
+        for key in keys:
+            S.check_home_entry(settings, sessions.get(key))
     done, stops = [], []
     for key in keys:
         entry = sessions.get(key)

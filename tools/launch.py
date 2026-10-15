@@ -28,8 +28,8 @@ from kitlib.launcher import accounts, autostart, handoff, reboot, settings as S,
 from kitlib.launcher.host import Host                               # noqa: E402
 
 USAGE = 2
-HOME_HELP = ("an agent session whose folder is a main checkout starts in its home worktree "
-             "home-<stem> in the host's worktrees folder instead (docs/launcher.md \"The home worktree\")")
+HOME_HELP = ("deep-worker sessions only: one whose folder is a main checkout starts in its home worktree "
+             "home-<session name> in the host's worktrees folder instead (docs/launcher.md \"The home worktree\")")
 
 
 class Parser(argparse.ArgumentParser):
