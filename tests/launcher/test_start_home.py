@@ -6,8 +6,10 @@ tests/launcher/test_home.py covers home.ensure."""
 import os
 import sys
 import unittest
+from unittest import mock
 
 from kitlib.git import repo as gitrepo
+from kitlib.host import registry
 from kitlib.launcher import handoff, home, start, window
 from kitlib.launcher import settings as S
 from tests.launcher.fakes import FakeHost, Home, session
@@ -126,6 +128,28 @@ class StartInHome(HomeBase):
         self.assertEqual(self.host.opened, [])
         self.no_folder()
 
+    def test_a_running_session_whose_name_differs_only_in_case_is_refused(self):
+        for running, name in ((NAME, NAME.upper()), (NAME.title(), NAME), (NAME, NAME + '-')):
+            self.host = FakeHost(self.h.root, procs=[session(4242, running, agent=DEEP)], ignored=True)
+            self.host.where = gitrepo.MAIN
+            with self.assertRaisesRegex(S.LaunchError, "a session named '%s' is already running \\(PID 4242\\) in "
+                                                       "its home worktree .*, the one '%s' would use"
+                                        % (running, name)):
+                self.go(whatif=False, name=name)
+            self.assertEqual(self.host.homes, [])
+            self.assertEqual(self.host.opened, [])
+        self.no_folder()
+
+    def test_a_broken_hosts_json_is_a_launch_error(self):
+        def broken():
+            raise registry.RegistryError('hosts.json is broken')
+        with mock.patch.object(registry, 'default_profile', broken):
+            for whatif in (True, False):
+                with self.assertRaisesRegex(S.LaunchError, 'hosts.json is broken; nothing was started'):
+                    self.go(whatif=whatif)
+        self.assertEqual(self.host.opened, [])
+        self.assertEqual(self.host.homes, [])
+
     def test_a_local_settings_file_is_warned_about(self):
         local = os.path.join(self.repo, os.path.dirname(home.folder()), 'settings.local.json')
         os.makedirs(os.path.dirname(local))
@@ -196,6 +220,16 @@ class DeepInHome(HomeBase):
         out = self.deep('net-race')
         self.assert_starts_in_home(out, 'deep-net-race')
         self.assertIn('Read your brief %s first' % self.brief, out)
+
+    def test_a_slug_with_a_trailing_dash_is_refused_while_its_twin_runs(self):
+        self.host = FakeHost(self.h.root, procs=[session(4242, 'deep-x1', agent=DEEP)], ignored=True)
+        self.host.where = gitrepo.MAIN
+        for whatif in (True, False):        # --slug takes no upper case; start --name does (above)
+            with self.assertRaisesRegex(S.LaunchError, "a session named 'deep-x1' is already running \\(PID 4242\\) "
+                                                       "in its home worktree .*, the one 'deep-x1-' would use"):
+                self.deep('x1-', plan=whatif)
+        self.assertEqual(self.host.homes, [])
+        self.assertEqual(self.host.opened, [])
 
     def test_each_slug_gets_its_own_home(self):
         for slug in ('x1', 'x1-r2', 'x1-a1'):

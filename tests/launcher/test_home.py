@@ -36,13 +36,22 @@ class Names(unittest.TestCase):
 
     def test_importing_it_never_reads_hosts_json(self):
         """stop and after-reboot import the launcher; a broken hosts.json must not stop them."""
-        def broken():
-            raise ValueError('hosts.json is broken')
-        with mock.patch.object(registry, 'default_profile', broken):
+        with mock.patch.object(registry, 'default_profile', broken_registry):
             importlib.reload(home)
-            with self.assertRaisesRegex(ValueError, 'broken'):
-                home.folder()
+            for read in (home.folder, home.state_folder):
+                with self.assertRaisesRegex(LaunchError, '^--home-worktree: hosts.json is broken; nothing was '
+                                                         'started.$'):
+                    read()
         importlib.reload(home)
+
+    def test_names_that_differ_only_in_case_or_a_trailing_dash_share_a_home(self):
+        main = os.path.join('Z:' + os.sep, 'repo')
+        for a, b in (('deep-x', 'Deep-X'), ('deep-x', 'deep-x-'), ('deep-x', 'DEEP-X.')):
+            self.assertEqual(home.home_path(main, a), home.home_path(main, b), (a, b))
+
+
+def broken_registry():
+    raise registry.RegistryError('hosts.json is broken')
 
 
 class ScriptedGit(object):
