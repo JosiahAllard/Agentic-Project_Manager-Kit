@@ -7,7 +7,8 @@ by its -C target, and an archive whose -o writes a main checkout stays refused."
 import os
 import unittest
 
-from kitlib.guard import context
+from kitlib.guard import context, rules
+from kitlib.guard import shell as sh
 
 from . import world as W
 from .claudehost import decide
@@ -45,6 +46,12 @@ class ArchiveWorld(unittest.TestCase):
         self.assertIsNotNone(d)
         self.assertEqual('write-jail', d.rule, d.reason)
         self.assertIsNotNone(self.sub(shell(text, self.w.wt, sub=True)))
+
+    def archive_refused(self, shell, text):
+        """refused, and the PM's refusal names the git archive (not another command of the line)."""
+        self.refused(shell, text)
+        d = self.pm(shell(text, self.w.plain))
+        self.assertTrue(d.reason.startswith('`git'), d.reason)
 
 
 class ArchiveReadOnly(ArchiveWorld):
@@ -257,17 +264,84 @@ class ArchiveProgramSearch(ArchiveWorld):
                      'git -C %s --namespace a\\" -c tar.x.command=x.sh \\"b archive HEAD',
                      'git -C %s archive "a"" -o README.md" HEAD', 'git -C %s archive HEAD "x\\"'):
             text = text % self.main
+            for shell, call in ((bash, "cmd //c '%s'"), (ps, "cmd /c '%s'")):
+                with self.subTest(shell=shell.__name__, text=text):
+                    self.refused(shell, call % text)
+
+    def test_cmd_s_path_command_is_no_read(self):
+        # cmd's own path command sets PATH: path X, path=X, path;X, and path ; (which clears it)
+        archive = 'git -C %s archive HEAD' % self.main
+        for spell in ('path {x};%PATH%', 'PATH {x}', 'Path={x}', 'path ;', 'path;{x}', 'path,{x}',
+                      '@path {x}', '(path {x})'):
+            line = spell.replace('{x}', self.scratch) + '& ' + archive
+            for shell, call in ((bash, "cmd //c '%s'"), (ps, "cmd /c '%s'")):
+                text = call % line
+                with self.subTest(text):
+                    self.archive_refused(shell, text)
+
+    def test_powershell_content_on_the_environment_sets_path(self):
+        # the environment provider's content and item cmdlets set or remove the variable a path
+        # names, in every spelling of the env: drive
+        archive = 'git -C %s archive HEAD' % self.main
+        drives = ('Environment::Path', 'ENVIRONMENT::path', 'Microsoft.PowerShell.Core\\Environment::Path',
+                  'microsoft.powershell.core\\ENVIRONMENT::\\PATH', 'Env:Path', 'env:\\PATH')
+        for verb, value in (('Set-Content', " -Value ';%s'" % self.scratch),
+                            ('Add-Content', " -Value ';%s'" % self.scratch), ('Clear-Content', '')):
+            for drive in drives:
+                for form in ('%s', '-Path %s', '-LiteralPath %s', '-Path:%s'):
+                    text = '%s %s%s; %s' % (verb, form % drive, value, archive)
+                    with self.subTest(text):
+                        self.archive_refused(ps, text)
+        for item in ("sc Environment::Path ';%s'" % self.scratch, "ac Environment::Path ';%s'" % self.scratch,
+                     'clc Environment::Path', 'Clear-Item Environment::Path', 'cli env:Path',
+                     'Remove-Item Environment::Path', 'ri Microsoft.PowerShell.Core\\Environment::Path',
+                     'del -Path Environment::Path', 'New-Item -Path Environment:: -Name PATH -Value %s' % self.scratch,
+                     'Set-Content -Path Environment::Path -Value %s' % self.scratch,
+                     "Add-Content Microsoft.PowerShell.Core\\Environment::Path ';%s'" % self.scratch):
+            text = '%s; %s' % (item, archive)
             with self.subTest(text):
-                self.refused(bash, "cmd //c '%s'" % text)
-                self.refused(ps, "cmd /c '%s'" % text)
+                self.archive_refused(ps, text)
+        # these two are refused already, with the provider cmdlet named as the writer
+        for item in ('rm env:Path', 'Set-Content -Path Environment::Path -Value "%s;$env:Path"' % self.scratch):
+            text = '%s; %s' % (item, archive)
+            with self.subTest(text):
+                self.refused(ps, text)
+
+    def test_powershell_content_on_the_environment_moves_the_user_config(self):
+        # HOMEDRIVE is left out: changing it is refused by itself, as a move of the drive a path names
+        archive = 'git -C %s archive --format=x HEAD' % self.main
+        for name in ('HOME', 'XDG_CONFIG_HOME', 'USERPROFILE', 'HOMEPATH'):
+            for item in ('Set-Content Environment::%s %s' % (name, self.scratch),
+                         'Add-Content -LiteralPath Microsoft.PowerShell.Core\\Environment::%s x' % name,
+                         'Clear-Content env:%s' % name, 'Clear-Item -Path Environment::%s' % name,
+                         'Remove-Item env:%s' % name):
+                text = '%s; %s' % (item, archive)
+                with self.subTest(text):
+                    self.archive_refused(ps, text)
 
     def test_reading_path_and_a_plain_cmd_keep_it_a_read(self):
         archive = 'git -C %s archive HEAD' % self.main
         for text in ('echo "$PATH" && %s' % archive, "cmd //c 'git -C \"%s\" archive HEAD'" % self.main,
-                     "cmd //c '%s'" % archive):
+                     "cmd //c '%s'" % archive, "cmd //c 'path& %s'" % archive):
             with self.subTest(text):
                 self.assertIsNone(self.pm(bash(text, self.w.plain)))
-        self.assertIsNone(self.pm(ps('Write-Output $env:Path; %s' % archive, self.w.plain)))
+        for text in ('Write-Output $env:Path; %s' % archive, "cmd /c 'path& %s'" % archive,
+                     'Get-Content Environment::Path; %s' % archive, 'Get-Content env:HOME; %s' % archive):
+            with self.subTest(text):
+                self.assertIsNone(self.pm(ps(text, self.w.plain)))
+
+
+class CmdWordPosition(unittest.TestCase):
+    """rules.cmd_native_unsure reads a word's raw source span; a word with no valid span is unsure
+    (the guard cannot see the quotes cmd removed)."""
+
+    def test_a_word_with_no_source_position_is_unsure(self):
+        _parsed, cmds = sh.parse('git archive HEAD', sh.CMD, 'C:/w')
+        cmd = cmds[0]
+        for start, end in ((None, None), (5, 999), (12, 3), (-1, 4)):
+            with self.subTest(start=start, end=end):
+                self.assertTrue(rules.cmd_native_unsure(cmd, sh.Word('HEAD', False, start, end)))
+        self.assertFalse(rules.cmd_native_unsure(cmd, cmd.words[2]))
 
 
 class ArchiveHoles(ArchiveWorld):
