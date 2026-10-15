@@ -569,6 +569,11 @@ HUB_SHAPE = 'python, its plain options, then tools/hub.py or -m tools.hub, then 
 # x.hub is HUB_NAME_RES's (tests.hub.test_x is not hub).
 HUB_BARE_RE = re.compile(r'(?i)(?<![\w-])(?<!\w\.)hub(?![\w-])')
 HUB_IMPORT_RE = re.compile(r'(?i)\bimport\b')
+# the interpreters whose word makes a line one that runs python for hub_code_names (a program's
+# base name, cm.base_name: case and .exe folded, any path before it): UI_PYTHON_RE's, plus ipython
+# and pypy, with a version (pypy3, pypy3.10, ipython3). Kept apart from UI_PYTHON_RE, whose other
+# readers (the allowed shape, the path family, inline_code) take only CPython
+HUB_CODE_PYTHON_RE = re.compile(r'^(python|pythonw|py|pyw|ipython|pypy)(\d+(\.\d+)*)?$')
 # The path family, the one other form the guard reads in full (hub_path_family; docs/guard.md
 # "Hub secrets"): a single simple command of a program that only reads or records a file, naming
 # the hub tool only as a path argument (a word of its own whose last part is hub.py), or naming it
@@ -946,8 +951,9 @@ def hub_path_family(parsed):
 
 
 def hub_code_names(parsed, text, shaped):
-    """`hub` standing alone (HUB_BARE_RE) anywhere on a line that runs python and holds `import`
-    (HUB_IMPORT_RE), else None. Line-wide, so no reading of where python takes its code from
+    """`hub` standing alone (HUB_BARE_RE) anywhere on a line that runs python (a word
+    HUB_CODE_PYTHON_RE names: python, py, ipython, pypy) and holds `import` (HUB_IMPORT_RE), else
+    None. Line-wide, so no reading of where python takes its code from
     (-c, -m code, -m timeit -s, a pipe of any length, a heredoc, a here-string) is needed: the
     texts are the line's own `text` (allowed-shape commands blanked) and, for every other command
     at any depth, its source, its words as the shell passes them (bash's $'...' and PowerShell's
@@ -955,7 +961,7 @@ def hub_code_names(parsed, text, shaped):
     the allowed-shape commands, which run no python code given on the line. The guard's own
     kitlib.guard.hub is read as another name first."""
     rest = [c for c in parsed.commands if not any(c is s for s in shaped)]
-    if not any(not w.dyn and UI_PYTHON_RE.match(cm.base_name(w.text)) for c in rest for w in c.words):
+    if not any(not w.dyn and HUB_CODE_PYTHON_RE.match(cm.base_name(w.text)) for c in rest for w in c.words):
         return None
     texts = [text]
     for c in rest:

@@ -811,13 +811,18 @@ class FailClosed(Hub):
             (ps, '"import tools.\\`nhub as h; h.main()" | python - answer Q-1'),
             (ps, 'Write-Output "from tools import \\`nhub as h`nh.main()" | python'),
             (ps, "'from tools import \\','hub as h; h.main()' | python - answer Q-1"),
+            # ipython and pypy (a version, .exe and a path too) run python code as well
+            (bash, "pypy3 -c 'from tools import \\\nhub'"),
+            (bash, "echo 'from tools import \\\nhub' | ipython"),
+            (ps, "'from tools import \\','hub as h; h.main()' | ipython"),
+            (bash, "pypy3.10.exe -c 'import tools.\\\nhub'"), (bash, "C:/x/pypy.exe -c 'from tools import \\\nhub'"),
             # over-reach: python and import anywhere on the line, hub anywhere else on it
             (bash, 'python -c "import json"; echo hub'),
         ), True)
         self.rows((
             (bash, 'python -m code < x.py'), (ps, 'Get-Content x | python -m code'),
             (bash, "python -c 'from tools import (os,' -c 'x'"),
-            (bash, "echo 'import json' | python -m code"),
+            (bash, "echo 'import json' | python -m code"), (bash, 'ipython -c "print(1)"'),
             (bash, 'python "%s" questions add --title "import x"' % self.hub),
         ), False)
 
