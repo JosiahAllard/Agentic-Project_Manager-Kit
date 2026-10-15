@@ -1,4 +1,4 @@
-"""Git around the ledger file: `add --commit/--push` and `check --base` (docs/ledger.md "Commit").
+"""Git around the ledger file: `add --commit/--push` and `check --base` (docs/ledger.md "Commit and push").
 
 The ledger's repository is the git work tree its folder is in. `prepare` runs every refusal before
 anything is written: no model for the trailer, no work tree, a broken `.kit.json` there, a

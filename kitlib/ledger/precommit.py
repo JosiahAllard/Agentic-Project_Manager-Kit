@@ -69,7 +69,7 @@ def targets(home=None):
     sets neither `ledger_path` nor `ledger_dir`."""
     found = files.of_config(config.user_config(home))
     if found is None:
-        raise ConfigError('no ledger_path in %s' % config.user.display(home))
+        raise ConfigError('no ledger_path or ledger_dir in %s' % config.user.display(home))
     return tuple(found.repos.values()) + ((found.frozen,) if found.frozen else ()) + (found.digest,)
 
 
