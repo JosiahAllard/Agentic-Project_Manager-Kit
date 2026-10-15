@@ -1944,13 +1944,23 @@ def _net_written(method, count):
     return [i for i in idx if i < count], all(i < count for i in idx)
 
 
+def _net_lost(span):
+    """True when _net_args may have lost its place in the argument text `span`, so the literal it
+    read as an argument may be part of another: a smart quote (PowerShell closes one with a plain
+    quote), a here-string (@" or @'), a comment (#), or a subexpression or braced variable ($( or
+    ${) where a double quote also appears (a " inside it does not end the outer string)."""
+    if any(c in NET_QUOTES for c in span) or '@"' in span or "@'" in span or '#' in span:
+        return True
+    return '"' in span and ('$(' in span or '${' in span)
+
+
 def net_writes(cmd):
     """([NetWrite], unread): each path the PowerShell command's .NET file calls (IO_FILE_RE) write,
     and True when a match is a write the guard does not read the path of, so write_targets judges
     the directory the command runs in, as it did for every such call: one inside a quoted word, a
-    method named with no '(' after it (called later, through .Invoke or a variable), and a call
-    with fewer arguments than the ones it writes (_net_written). A $null argument (Replace's
-    backup) writes nothing."""
+    method named with no '(' after it (called later, through .Invoke or a variable), a call with
+    fewer arguments than the ones it writes (_net_written), and one whose arguments the parse may
+    have lost its place in (_net_lost). A $null argument (Replace's backup) writes nothing."""
     if cmd.shell != sh.PS:
         return [], False
     out, unread, src = [], False, cmd.source
@@ -1970,7 +1980,7 @@ def net_writes(cmd):
             continue
         args, end = _net_args(src, k + 1)
         written, found = _net_written(method, len(args))
-        unread = unread or not found
+        unread = unread or not found or _net_lost(src[k + 1:end])
         for i in written:
             text, s, e = args[i]
             if text is None and src[s:e].lower() == '$null':
@@ -2340,8 +2350,10 @@ def write_targets(cmd, inv):
         out.append(r.target)
     if cmd.shell == sh.PS and IO_FILE_RE.search(cmd.text):
         net, unread = net_writes(cmd)
-        out.extend(x.word for x in net if net_placed(x.word))     # the rest: dotnet_unplaced
-        if unread:
+        out.extend(x.word for x in net if net_placed(x.word))
+        # The rest are dotnet_unplaced's, and the directory the command runs in is judged too,
+        # as it was for every .NET call: the repository's roles there answer for any session.
+        if unread or any(not net_placed(x.word) for x in net):
             out.append(here(cmd.words[0] if cmd.words else None))
     if inv is None:
         return out
@@ -2748,7 +2760,7 @@ def dotnet_unplaced(event, ctx, cmd, cwd, role):
             d = edit_target(event, ctx, fixed, cwd, role, what, rewrite=rewrite)
             if d:
                 return d
-        cfg = ctx.config(fixed) if fixed else None
+        cfg = ctx.config(fixed or cmd.cwd) if fixed or cmd.cwd else None
         if not kconfig.permissions(event, kconfig.roles(cfg)).get('edit_main_checkout'):
             rule = 'main-checkout'
         elif agent_session(event, ctx):

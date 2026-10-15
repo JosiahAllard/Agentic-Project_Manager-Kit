@@ -131,11 +131,67 @@ class Unread(Base):
                 d = self.denied(self.run_ps(text, cwd=self.w.main), 'main-checkout')
                 self.assertIn('is in the main checkout', d.reason)
 
+    def test_called_later_from_a_worktree(self):
+        self.allowed(self.run_ps(self.NOT_CALLED_HERE[0]))
+        self.allowed(self.run_ps(self.NOT_CALLED_HERE[1]))
+
     def test_a_jailed_session_that_moves_outside_its_folders(self):
         away = 'Set-Location "%s"; ' % W.fwd(self.w.home)
         for text in self.NOT_CALLED_HERE + self.MISSED:
             with self.subTest(text=text):
                 self.denied(self.run_ps(away + text, env=COORDINATOR, sub=False), 'write-jail')
+
+
+class MoreWriters(Base):
+    """OpenWrite, Open and a relative Move destination are writes on a path the guard cannot place."""
+
+    def test_from_a_worktree(self):
+        for text in ("[IO.File]::OpenWrite('x.txt')", "[IO.File]::Open('x.txt', 'Create')",
+                     r"[IO.File]::Move('{wt}\a.txt', 'b.txt')"):
+            with self.subTest(text=text):
+                self.denied(self.run_ps(text), 'main-checkout')
+
+
+# Calls whose arguments the guard's parse loses its place in, so it would read a decoy literal
+# ('{wt}\ok') where .NET writes the main checkout: a " inside $(...) in a double-quoted string, a
+# smart quote that PowerShell closes with a plain ', and a here-string.
+DESYNC = ('[IO.File]::Copy("{wt}\\s.txt$(if(0){{", \'{wt}\\ok\')"}})", \'{main}\\x\')',
+          '[IO.File]::Copy(‘{wt}\\s.txt\' + \', "{wt}\\ok")\'.Substring(0,0), \'{main}\\x\')',
+          '[IO.File]::Copy(@"\nx", \'{wt}\\ok\') + ("\n"@, \'{main}\\x\')')
+
+
+class LostPlace(Base):
+    """A call whose argument parse may have lost its place is also judged where the line runs."""
+
+    def test_a_subagent_in_the_main_checkout(self):
+        for text in DESYNC:
+            with self.subTest(text=text):
+                self.denied(self.run_ps(text, cwd=self.w.main), 'main-checkout')
+
+    def test_a_comment_and_a_braced_variable(self):
+        for text in ('[IO.File]::Copy(\'{wt}\\s.txt\' <#, \'{wt}\\ok\'\n, #> \'{main}\\x\')',
+                     '[IO.File]::Copy("{wt}\\s.txt${{a", \'{wt}\\ok\', "}}", \'{main}\\x\')'):
+            with self.subTest(text=text):
+                self.denied(self.run_ps(text, cwd=self.w.main), 'main-checkout')
+
+
+class LockedMain(Base):
+    """A repository whose roles keep the main session out of its main checkout: a .NET write
+    there that the guard cannot place is judged where the line runs, for every session."""
+
+    def setUp(self):
+        self.w = W.World(kit={'repo': {'name': 'demo', 'push_block': True},
+                              'roles': {'main': {'edit_main_checkout': False, 'why': 'test'}}})
+        self.addCleanup(self.w.cleanup)
+
+    def test_a_computed_path(self):
+        self.denied(self.run_ps("$p='x'; [IO.File]::WriteAllText($p,'y')", cwd=self.w.main, sub=False),
+                    'main-checkout')
+
+    def test_a_lost_place(self):
+        for text in DESYNC:
+            with self.subTest(text=text):
+                self.denied(self.run_ps(text, cwd=self.w.main, sub=False), 'main-checkout')
 
 
 if __name__ == '__main__':
