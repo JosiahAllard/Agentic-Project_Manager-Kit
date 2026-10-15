@@ -4080,6 +4080,19 @@ GIT_LISTING_OPTS = GIT_LIST_FLAGS | {'-i', '--ignore-case', '--sort', '--format'
 GIT_STRICT_READ_OPTS = {'branch': (GIT_LISTING_OPTS | {'--all', '--remotes', '-vv', '--verbose', '--abbrev',
                                                        '--no-abbrev'}, re.compile(r'-[ailrv]+$')),
                         'tag': (GIT_LISTING_OPTS, re.compile(r'-(?=.)[il]*(?:n\d*)?$'))}
+# strict reads (strict_dyn_read): reads no option of which writes a file or runs a program the line
+# names, so a computed word (any number of words) leaves them reads; and reads with such an option
+# (log, show and diff: --output), where a computed word stays a read only when the text pins it to
+# one argument that is no option, or the value of one of GIT_DYN_VALUE_OPTS
+GIT_DYN_ANY_READS = {'rev-parse', 'ls-files', 'cat-file', 'merge-base', 'for-each-ref'}
+GIT_DYN_PINNED_READS = {'log', 'show', 'diff'}
+GIT_DYN_VALUE_OPTS = ('--format=', '--pretty=')
+# characters a pinned word may carry outside quotes: none the shell expands, splits or joins on
+# (bash globs and braces, PowerShell's array comma and splat @), and no backslash or backtick
+DYN_SAFE_BARE = {sh.BASH: frozenset('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_./~^:=%+-@,'),
+                 sh.PS: frozenset('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_./~^:=%+-')}
+DYN_VAR_RE = re.compile(r'\$(?:\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Za-z_][A-Za-z0-9_]*|[0-9])')
+DYN_PS_VAR_RE = re.compile(r'(?i)\$(?:\{[A-Za-z_][A-Za-z0-9_:]*\}|(?:env:|script:|global:|local:)?[A-Za-z_][A-Za-z0-9_]*)')
 
 
 def opens_pager(t):
@@ -4144,6 +4157,89 @@ def native_unsure(cmd, w):
     if cmd.shell == sh.CMD:
         return cmd_native_unsure(cmd, w)
     return False
+
+
+def dyn_head(cmd, w):
+    """The literal text before the first variable of the computed word `w`, read from its source
+    when the shell (bash or PowerShell) is sure to hand it to git as one argument that starts with
+    that text: outside quotes only DYN_SAFE_BARE characters, inside '...' anything but the quote,
+    inside "..." plain text and $name or ${name} only (no $( or backtick that runs code, no "$@" or
+    other variable that is many words, no backslash, no embedded quote); else None. A word with no
+    variable, or no valid place in the source, is None too (fail closed)."""
+    src = cmd.source or ''
+    if cmd.shell not in DYN_SAFE_BARE or w.start is None or w.end is None or not 0 <= w.start < w.end <= len(src):
+        return None
+    raw, ps = src[w.start:w.end], cmd.shell == sh.PS
+    if ps and (cm.PS_SPLAT_RE.match(raw) or any(c in raw for c in '“”„‘’‚‛')):
+        return None
+    var_re, bare = (DYN_PS_VAR_RE if ps else DYN_VAR_RE), DYN_SAFE_BARE[cmd.shell]
+    head, seen, i, quote = [], False, 0, None
+    while i < len(raw):
+        c = raw[i]
+        if quote == "'":
+            if c == "'":
+                if ps and raw[i + 1:i + 2] == "'":
+                    return None                 # '' is a quote inside the word
+                quote = None
+            elif not seen:
+                head.append(c)
+            i += 1
+            continue
+        if c in '\\`':
+            return None
+        if c == '"':
+            if quote == '"' and ps and raw[i + 1:i + 2] == '"':
+                return None                     # "" is a quote inside the word
+            quote = None if quote == '"' else '"'
+            i += 1
+            continue
+        if c == "'" and quote is None:
+            quote = "'"
+            i += 1
+            continue
+        if c == '$':
+            m = var_re.match(raw, i)
+            if quote != '"' or not m:
+                return None
+            seen = True
+            i = m.end()
+            continue
+        if quote is None and c not in bare:
+            return None
+        if not seen:
+            head.append(c)
+        i += 1
+    if quote is not None or not seen:
+        return None
+    return ''.join(head)
+
+
+def strict_dyn_read(gc):
+    """True when every computed word of git read `gc` leaves it a read whatever it stands for
+    (git_reads strict): a GIT_DYN_ANY_READS subcommand in bash or PowerShell, or a
+    GIT_DYN_PINNED_READS one whose every computed word is one argument (dyn_head) that starts with
+    literal text that keeps it from being an option (HEAD~$n, origin/$b, ./$f) or with
+    --format= or --pretty=. Residual (inferred): PowerShell 5.1 splits an argument whose value
+    holds a double quote (ps_native_unsure), which the text cannot show."""
+    cmd = gc.inv.cmd if gc.inv is not None else None
+    if cmd is None or cmd.shell not in DYN_SAFE_BARE:
+        return False
+    if gc.sub in GIT_DYN_ANY_READS:
+        return True
+    if gc.sub not in GIT_DYN_PINNED_READS:
+        return False
+    for w in (w for w in gc.rest if w.dyn):
+        head = dyn_head(cmd, w)
+        if not head or (head.startswith('-') and not head.startswith(GIT_DYN_VALUE_OPTS)):
+            return False
+    return True
+
+
+def ps_splat(gc, w):
+    """True when the word `w` of git `gc` is a PowerShell splat (@a) the shell spreads into words
+    the text does not show; a quoted '@a' is plain text."""
+    return (gc.inv is not None and gc.inv.cmd.shell == sh.PS and not w.dyn and cm.PS_SPLAT_RE.match(w.text)
+            and (w.start is None or not cm.quoted(gc.inv.cmd, w)))
 
 
 def archive_words(gc):
@@ -4304,12 +4400,14 @@ def strict_read_opts(sub, words):
 
 def git_reads(gc, strict=False):
     """True when git `gc` changes nothing in the checkout it runs in. `strict` (a checkout the text
-    cannot place) counts only what is plainly a read: no computed word, no --output file, no grep
-    -O (opens_pager), and branch, tag and config only with options it names in full
-    (strict_read_opts)."""
+    cannot place) counts only what is plainly a read: no computed word but those strict_dyn_read
+    allows, no PowerShell splat (ps_splat), no --output file, no grep -O (opens_pager), and
+    branch, tag and config only with options it names in full (strict_read_opts)."""
     sub = gc.sub
     words = [w.text for w in gc.rest]
-    if strict and (any(w.dyn for w in gc.rest) or any(writes_output_file(t) for t in words)):
+    if strict and (any(ps_splat(gc, w) for w in gc.rest) or any(writes_output_file(t) for t in words)):
+        return False
+    if strict and any(w.dyn for w in gc.rest) and not strict_dyn_read(gc):
         return False
     if strict and sub == 'grep' and any(opens_pager(t) for t in words):
         return False
@@ -4467,7 +4565,7 @@ def git_jail_unknown(ctx, cmd, gc, cwd, role):
     computed -C; a -C after any of them does not place it), by any role: it may be a main
     checkout, and the main-checkout git rules judge only history writes there, so a symbolic-ref
     or branch -m that re-points main's HEAD would pass them. Only a plain read passes
-    (git_reads strict). The hint names what hides the place (git_unplaced): drop it, or name a
+    (git_reads strict; a computed word only as strict_dyn_read allows). The hint names what hides the place (git_unplaced): drop it, or name a
     computed -C literally."""
     if git_reads(gc, strict=True):
         return None
