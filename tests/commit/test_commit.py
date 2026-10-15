@@ -711,6 +711,133 @@ class AnotherWriterStagesDuringTheCall(LinkedCase):
         self.commit('add a', 'a.py')
         self.assertNotIn('a.py', self.git('status', '--porcelain'))
 
+    # -- HEAD: the tree the commit is built on
+
+    def test_an_unborn_branch_commits_only_the_named_file(self):
+        self.git('symbolic-ref', 'HEAD', 'refs/heads/unborn')
+        self.git('read-tree', '--empty')
+        self.put('a.py', 'a = 1\n')
+        code, out = self.commit('first', 'a.py')
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.git('ls-tree', '-r', '--name-only', 'HEAD'), 'a.py')
+        self.assertEqual(self.git('log', '-1', '--format=%P'), '')
+
+    def fail_head_read(self, rc):
+        real = C._git
+
+        def wrapper(root, *args, **kw):
+            if args[:1] == ('rev-parse',) and 'HEAD^{commit}' in args:
+                return rc, '', 'fatal: injected'
+            return real(root, *args, **kw)
+        p = mock.patch.object(C, '_git', wrapper)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def assert_refused_unchanged(self, head, code, out, *texts):
+        self.assertEqual(code, 1, out)
+        for text in texts:
+            self.assertIn(text, out)
+        self.assertEqual(self.head(), head)
+
+    def test_a_failing_head_read_refuses_and_commits_nothing(self):
+        head = self.head()
+        self.fail_head_read(128)
+        self.put('a.py', 'a = 1\n')
+        self.assert_refused_unchanged(head, *self.commit('add a', 'a.py'), 'HEAD', 'injected')
+        self.assertEqual(self.git('show', 'HEAD:seed.txt'), '0')
+
+    def test_a_head_read_that_did_not_run_refuses(self):
+        head = self.head()
+        self.fail_head_read(None)
+        self.put('a.py', 'a = 1\n')
+        self.assert_refused_unchanged(head, *self.commit('add a', 'a.py'), 'HEAD')
+
+    def other_writer_commits(self):
+        """Another writer commits b.py in this worktree; its commit's id."""
+        self.put('b.py', 'theirs\n')
+        self.git('add', '--', 'b.py')
+        self.git('commit', '-q', '-m', 'theirs', '--', 'b.py')
+        return self.git('rev-parse', 'HEAD')
+
+    def test_head_moved_before_the_commit_refuses(self):
+        real, theirs = C.staged_machine_path_error, []
+
+        def wrapper(*a, **kw):
+            theirs.append(self.other_writer_commits())
+            return real(*a, **kw)
+        self.put('a.py', 'a = 1\n')
+        with mock.patch.object(C, 'staged_machine_path_error', wrapper):
+            code, out = self.commit('add a', 'a.py')
+        self.assert_refused_unchanged(theirs[0], code, out, 'HEAD moved')
+        self.assertEqual(self.git('show', 'HEAD:b.py'), 'theirs')
+        self.assertIn('A  a.py', self.git('status', '--porcelain'))
+
+    def test_head_moved_just_before_git_commit_is_undone(self):
+        """The other writer commits after every check and before `git commit` reads HEAD: the
+        commit made on top of theirs (whose tree lacks their change) is undone."""
+        real, theirs = cmd.call, []
+
+        def wrapper(args, cwd, *a, **kw):
+            if args[:1] == ['commit'] and not theirs:
+                theirs.append(self.other_writer_commits())
+            return real(args, cwd, *a, **kw)
+        self.put('a.py', 'a = 1\n')
+        with mock.patch.object(C.cmd, 'call', wrapper):
+            code, out = self.commit('add a', 'a.py')
+        self.assert_refused_unchanged(theirs[0], code, out, 'HEAD moved')
+        self.assertEqual(self.git('show', 'HEAD:b.py'), 'theirs')
+        self.assertIn('A  a.py', self.git('status', '--porcelain'))
+
+    # -- the private index
+
+    def fail_git(self, verb):
+        real = cmd.call
+
+        def wrapper(args, cwd, *a, **kw):
+            if args[:1] == [verb] and 'GIT_INDEX_FILE' in (kw.get('env') or {}):
+                return cmd.Result(128, b'', 'fatal: injected %s' % verb)
+            return real(args, cwd, *a, **kw)
+        p = mock.patch.object(C.cmd, 'call', wrapper)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_a_failing_read_tree_refuses(self):
+        head = self.head()
+        self.fail_git('read-tree')
+        self.put('a.py', 'a = 1\n')
+        self.assert_refused_unchanged(head, *self.commit('add a', 'a.py'))
+
+    def test_a_failing_update_index_refuses(self):
+        head = self.head()
+        self.fail_git('update-index')
+        self.put('a.py', 'a = 1\n')
+        self.assert_refused_unchanged(head, *self.commit('add a', 'a.py'))
+
+    def test_the_private_index_is_named_as_a_partial_commit_for_the_hook(self):
+        from kitlib.githooks import render
+        self.assertTrue(render.partial({'GIT_INDEX_FILE': C.private_index_file('x')}))
+
+    def test_a_restage_after_the_machine_path_check_refuses(self):
+        """The blobs checked are the blobs committed: a named file staged again with other
+        content after the check refuses the commit."""
+        head, real = self.head(), C.staged_machine_path_error
+
+        def wrapper(*a, **kw):
+            got = real(*a, **kw)
+            self.put('a.py', 'a = 2\n')
+            self.git('add', '--', 'a.py')
+            return got
+        self.put('a.py', 'a = 1\n')
+        with mock.patch.object(C, 'staged_machine_path_error', wrapper):
+            code, out = self.commit('add a', 'a.py')
+        self.assert_refused_unchanged(head, code, out, 'a.py')
+
+    def test_a_named_file_missing_from_the_work_tree_commits_its_deletion(self):
+        os.remove(os.path.join(self.wt, 'seed.txt'))
+        code, out = self.commit('drop seed', 'seed.txt')
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.git('show', '--name-status', '--format=', 'HEAD'), 'D\tseed.txt')
+
 
 @real_git('the commit is built in a private index (GIT_INDEX_FILE): checked against git\'s own '
           'commit as well as the fake\'s')
