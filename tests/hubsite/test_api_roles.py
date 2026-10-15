@@ -222,5 +222,110 @@ class RolesCase(unittest.TestCase):
         self.assertEqual(store.get('questions', doc_id)['status'], 'open')
 
 
+# a value of `strong` that is not exactly True: none of them makes a caller strong
+NOT_TRUE = (False, None, 0, 1, '', 'true', 'yes', [True], (True,), {'strong': True})
+
+
+class ApproverRoleTest(unittest.TestCase):
+    """APPROVER (KIT-HUB-APPROVALS stage B1): a route for the owner who logged in through
+    Cloudflare Access. No route of ROUTES names it yet, so each test adds one of its own."""
+
+    fresh = RolesCase.fresh
+
+    def approver_route(self, calls):
+        def handler(a, req):
+            calls.append(req)
+            return {'ok': True, 'strong': req.strong}
+        return api.Route('POST', BASE + '/decide-test', api.APPROVER, handler)
+
+    def call(self, role, strong, body=None, **kw):
+        calls = []
+        routes = api.ROUTES + (self.approver_route(calls),)
+        with mock.patch.object(api, 'ROUTES', routes):
+            _, a, _ = self.fresh(None)
+            if strong is _ABSENT:
+                status, obj = a.call('POST', BASE + '/decide-test', role, body, **kw)
+            else:
+                status, obj = a.call('POST', BASE + '/decide-test', role, body, strong=strong,
+                                     **kw)
+        return status, obj, calls
+
+    def test_approver_is_a_route_role_and_never_a_caller(self):
+        self.assertIn(api.APPROVER, api.ROLES)
+        self.assertNotIn(api.APPROVER, api.CALLERS)
+        self.assertNotIn(api.APPROVER, (OWNER, AGENT, ANY))
+        status, obj, calls = self.call(api.APPROVER, True)
+        self.assertEqual((status, obj['error']['code']), (403, 'forbidden'))
+        self.assertEqual(calls, [])
+
+    def test_only_the_strong_owner_reaches_an_approver_route(self):
+        status, obj, calls = self.call(OWNER, True)
+        self.assertEqual(status, 200, obj)
+        self.assertEqual((obj['ok'], obj['strong']), (True, True))
+        self.assertEqual(len(calls), 1)
+        self.assertIs(calls[0].strong, True)
+        self.assertEqual(calls[0].role, OWNER)
+
+    def test_the_owner_who_is_not_strong_is_refused(self):
+        for strong in NOT_TRUE + (_ABSENT,):
+            for words in ({}, {'agent_words': True}):
+                with self.subTest(strong=repr(strong), words=words):
+                    status, obj, calls = self.call(OWNER, strong, {'x': 1}, **words)
+                    self.assertEqual((status, obj['error']['code'], obj['error']['field']),
+                                     (403, 'forbidden', 'role'))
+                    self.assertIn('Access', obj['error']['message'])
+                    self.assertEqual(calls, [], 'the handler ran for a caller who is not strong')
+
+    def test_an_agent_is_refused_strong_or_not(self):
+        for strong in (True,) + NOT_TRUE + (_ABSENT,):
+            with self.subTest(strong=repr(strong)):
+                status, obj, calls = self.call(AGENT, strong)
+                self.assertEqual((status, obj['error']['code']), (403, 'forbidden'))
+                self.assertEqual(calls, [])
+
+    def test_strong_opens_no_other_route(self):
+        # strong adds nothing to what a role may do on an OWNER, AGENT or ANY route
+        _, a, _ = self.fresh(None)
+        status, obj = a.call('POST', BASE + '/questions', OWNER,
+                             {'title': 't', 'options': OPTIONS}, strong=True)
+        self.assertEqual((status, obj['error']['code']), (403, 'forbidden'))
+        store, a, doc_id = self.fresh(seed_todo)
+        status, obj = a.call('POST', BASE + '/todos/%s/done' % doc_id, AGENT, {'done': True},
+                             strong=True)
+        self.assertEqual((status, obj['error']['code']), (403, 'forbidden'))
+        self.assertEqual(store.get('todos', doc_id)['status'], 'open')
+        # and a caller who is not strong keeps every route it had
+        for strong in (True, False):
+            store, a, doc_id = self.fresh(seed_todo)
+            status, obj = a.call('POST', BASE + '/todos/%s/done' % doc_id, OWNER,
+                                 {'done': True}, strong=strong)
+            self.assertEqual((status, obj.get('error')), (200, None))
+
+    def test_strong_is_never_read_from_the_body_or_the_query(self):
+        for body, query in (({'strong': True}, None), (None, {'strong': '1'}),
+                            ({'strong': True}, {'strong': 'true'})):
+            with self.subTest(body=body, query=query):
+                status, obj, calls = self.call(OWNER, _ABSENT, body, query=query)
+                self.assertEqual((status, obj['error']['code']), (403, 'forbidden'))
+                self.assertEqual(calls, [])
+
+    def test_every_handler_sees_whether_its_caller_is_strong(self):
+        seen = []
+
+        def handler(a, req):
+            seen.append(req.strong)
+            return {'ok': True}
+        routes = api.ROUTES + (api.Route('GET', BASE + '/strong-test', ANY, handler),)
+        with mock.patch.object(api, 'ROUTES', routes):
+            _, a, _ = self.fresh(None)
+            for role, strong in ((OWNER, True), (OWNER, False), (AGENT, True), (OWNER, 1)):
+                a.call('GET', BASE + '/strong-test', role, strong=strong)
+            a.call('GET', BASE + '/strong-test', OWNER)
+        self.assertEqual(seen, [True, False, False, False, False])
+
+
+_ABSENT = object()                      # the call names no `strong` at all
+
+
 if __name__ == '__main__':
     unittest.main()
