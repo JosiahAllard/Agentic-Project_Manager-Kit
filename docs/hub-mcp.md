@@ -38,6 +38,11 @@ Endpoints are below `/api/v1` (`kitlib.hubsite.api.BASE`).
 | `hub_view` | `view` (notices, repos, usage or agents) | `GET /<view>` |
 | `hub_health` | none | `GET /health` |
 
+`hub_pending` and `hub_wait` take no `for` key, so they see every pending item, including a
+coordinator's to-do routed to that coordinator and not yet acked: a pending `hub_wait` returns at
+once on such an item. The PM's own wait is `hub.py wait --pending --for pm` (docs/action-hub.md
+"Who handles a pending item").
+
 ## Agent write tools
 
 Each calls a route the agent's token may call (`kitlib.hubsite.api.ROUTES`, role AGENT); `tests/hubmcp/test_server.py` `Routes.test_every_shipped_tool_maps_to_a_route_that_is_not_the_owners` checks every shipped tool against `api.match`.
