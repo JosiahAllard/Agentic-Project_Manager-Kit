@@ -3800,6 +3800,8 @@ PER_WORKTREE_REFS = ('refs/bisect/', 'refs/worktree/', 'refs/rewritten/')
 PSEUDOREF_RE = re.compile(r'^[A-Z][A-Z0-9_]*_HEAD$')
 REF_NAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._/-]*$')
 REF_CHAIN_MAX = 5           # symbolic refs followed before the guard stops reading
+SCRATCH_WALK_MAX = 4096     # entries of a temp repository's git directory read for a link, at most
+REPARSE_POINT = 0x400       # FILE_ATTRIBUTE_REPARSE_POINT: a symlink, a junction or another link
 
 
 def ref_name_ok(name):
@@ -3849,6 +3851,43 @@ def _ref_file(place, name):
     if jail.real(path) != want:
         return None, 'a link in the git directory carries %s to %s' % (name, fwd(jail.real(path)))
     return path, None
+
+
+def _in_temp(ctx, path):
+    real = jail.real(path)
+    return any(jail.inside(real, jail.real(r)) for r in jail.temp_roots(ctx))
+
+
+def _scratch_repo(ctx, place):
+    """True when `place` is a scratch repository: its git directories lie in a temp root
+    (jail.temp_roots) and no link inside them may carry a ref write out. Every entry but what
+    objects/ holds is read, at most SCRATCH_WALK_MAX; any symlink, junction or other reparse
+    point, an entry that does not read, or a longer walk answers False, and the rule judges the
+    repository as any other. A hard link is not seen: git writes a ref file and packed-refs to a
+    lock file it renames over the old one, so a write does not go through a hard link."""
+    if place is None or not place.common:
+        return False
+    roots = [place.common]
+    if place.git_dir and not jail.inside(jail.real(place.git_dir), jail.real(place.common)):
+        roots.append(place.git_dir)
+    if not all(_in_temp(ctx, r) for r in roots):
+        return False
+    seen, stack = 0, list(roots)
+    while stack:
+        d = stack.pop()
+        try:
+            with os.scandir(d) as it:
+                entries = list(it)
+            for e in entries:
+                seen += 1
+                if seen > SCRATCH_WALK_MAX or e.is_symlink() or \
+                        getattr(e.stat(follow_symlinks=False), 'st_file_attributes', 0) & REPARSE_POINT:
+                    return False
+                if e.is_dir(follow_symlinks=False) and not (d in roots and e.name.lower() == 'objects'):
+                    stack.append(e.path)
+        except OSError:
+            return False
+    return True
 
 
 def _read_ref(path):
@@ -3943,8 +3982,9 @@ def git_shared_ref(event, ctx, cmd, gc, cwd, role):
     repository shares its refs, so a worktree reaches main as surely as the main checkout. It may
     write scratch_ref names, and in a linked worktree its HEAD and the branch checked out there
     (never a guarded main); it deletes only scratch_ref names. A symbolic ref is judged by every
-    ref it points to (unless --no-deref). A repository whose git directory lies in a temp root
-    (jail.temp_roots) is a scratch repository and is not judged."""
+    ref it points to (unless --no-deref). A scratch repository (_scratch_repo: in a temp root, no
+    link out of its git directory) is not judged. Neither the PM data worktree nor, while the
+    guard cannot tell it (ctx.pm_data_error), any linked worktree gets the HEAD allowance."""
     if not shared_ref_held(event, ctx):
         return None
     text = bare(cmd)
@@ -3959,8 +3999,7 @@ def git_shared_ref(event, ctx, cmd, gc, cwd, role):
     if not unread and (gc.blind or gc.unknown or not gc.dir):
         unread = 'the repository it runs in is unknown (%s)' % (gc.blind or 'a directory the text does not name')
     place = ctx.place(gc.dir) if gc.dir and not gc.unknown and not gc.blind else None
-    if place is not None and place.common and any(
-            jail.inside(jail.real(place.common), jail.real(r)) for r in jail.temp_roots(ctx)):
+    if _scratch_repo(ctx, place):
         return None
     if not unread and place.kind not in (repo.MAIN, repo.LINKED):
         unread = 'git cannot place %s (%s)' % (fwd(gc.dir), place.detail or place.kind)
@@ -3981,7 +4020,8 @@ def git_shared_ref(event, ctx, cmd, gc, cwd, role):
                       'ref literally. %s To keep a commit in your scratch space:' % (text, unread, shared, allowed),
                       'git -C %s update-ref refs/tmp/<name> <new-oid>' % quote(at))
     name = pos[0].text
-    linked = place.kind == repo.LINKED
+    # the PM data worktree answers as MAIN; while the guard cannot tell it, any linked worktree may be it
+    linked = place.kind == repo.LINKED and not ctx.pm_data_error(gc.dir)
     own = _own_branch(ctx, place, gc.dir)
     chain, why = _ref_chain(place, name, 'no-deref' not in longs)
     if chain is not None:

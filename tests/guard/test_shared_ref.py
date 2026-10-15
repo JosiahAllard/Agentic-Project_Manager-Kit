@@ -11,6 +11,8 @@ rule reads them as it reads a real repository's."""
 import os
 import unittest
 
+from kitlib.git import repo
+
 from . import test_jail as tj
 from . import world as W
 from .claudehost import decide
@@ -70,7 +72,12 @@ class SharedRefsFromAWorktree(SharedRefBase):
                            'git update-ref --no-deref refs/heads/main HEAD',
                            'git update-ref --create-reflog refs/heads/main HEAD',
                            'git.exe update-ref -d refs/heads/main',
-                           'cd "%s" && git update-ref -d refs/heads/main' % self.wt])
+                           'cd "%s" && git update-ref -d refs/heads/main' % self.wt,
+                           # a global option's value is not the subcommand (commands.GIT_VALUE_OPTS)
+                           'git --attr-source HEAD update-ref -d refs/heads/main',
+                           'git --attr-source=HEAD update-ref -d refs/heads/main',
+                           'git --shallow-file x update-ref -d refs/heads/main',
+                           'git --namespace x update-ref -d refs/heads/main'])
         self.each_refused(['git update-ref -d refs/heads/main', '& git.exe update-ref refs/heads/main HEAD'],
                           tool='PowerShell')
 
@@ -215,6 +222,137 @@ class SharedRefsFromAWorktree(SharedRefBase):
         self.allowed(self.worker(d.instead))
         d = self.refused(self.worker('git update-ref -d refs/tmp/x', cwd=self.w.main), 'git-main-history')
         self.assertIn('worktree add', d.instead)
+
+
+def junction(test, target, link):
+    try:
+        import _winapi
+        _winapi.CreateJunction(target, link)
+    except (ImportError, AttributeError, OSError) as e:
+        test.skipTest('no junction: %s' % e)
+
+
+class SharedRefScratchRepositories(SharedRefBase):
+    """A repository whose git directory lies in a temp root is a scratch repository the rule does
+    not judge, unless a link inside its git directory carries a ref write out of it."""
+
+    def setUp(self):
+        SharedRefBase.setUp(self)
+        self.scratch = os.path.join(self.w.temp, 'scratch')
+        self.scratch_git = os.path.join(self.scratch, '.git')
+        put(os.path.join(self.scratch_git, 'HEAD'), 'ref: refs/heads/main\n')
+        os.makedirs(os.path.join(self.scratch_git, 'refs', 'tmp'))
+        os.makedirs(os.path.join(self.common, 'refs', 'heads'), exist_ok=True)
+        world = self.w.classify
+
+        def classify(path):
+            p = os.path.normcase(os.path.abspath(path))
+            for top in (self.scratch, os.path.join(self.w.temp, 'alias')):
+                if p == os.path.normcase(top) or p.startswith(os.path.normcase(top) + os.sep):
+                    git = os.path.join(top, '.git')
+                    return repo.Place(repo.MAIN, top, '', git, git)
+            return world(path)
+        self.w.classify = classify
+        self.at = W.fwd(self.scratch)
+
+    # held sessions that may write a temp repository's checkout: a subagent, the lander included,
+    # meets git-main-history there first (a scratch repository answers as a main checkout)
+    def held(self, text):
+        for env in (tj.COORDINATOR, tj.DEEP):
+            yield env, self.session(text, env)
+
+    def each_refused(self, texts, **kw):
+        for text in texts:
+            for who, d in self.held(text):
+                with self.subTest(text, who=who):
+                    self.refused(d)
+
+    def each_allowed(self, texts, **kw):
+        for text in texts:
+            for who, d in self.held(text):
+                with self.subTest(text, who=who):
+                    self.allowed(d)
+
+    def test_a_scratch_repository_is_not_judged(self):
+        self.each_allowed(['git -C "%s" update-ref refs/heads/main HEAD' % self.at,
+                           'git -C "%s" update-ref -d refs/heads/main' % self.at,
+                           'git -C "%s" update-ref --stdin' % self.at])
+
+    def test_a_junction_out_of_its_refs_is_judged(self):
+        # .git/refs/heads of the scratch repository is main's: a write there moves main
+        heads = os.path.join(self.scratch_git, 'refs', 'heads')
+        junction(self, os.path.join(self.common, 'refs', 'heads'), heads)
+        self.each_refused(['git -C "%s" update-ref refs/heads/main HEAD' % self.at,
+                           'git -C "%s" update-ref -d refs/heads/main' % self.at,
+                           'git -C "%s" update-ref refs/heads/kit/x HEAD' % self.at,
+                           'git -C "%s" update-ref --stdin' % self.at,
+                           'git -C "%s" update-ref -z --stdin' % self.at,
+                           'git -C "%s" update-ref HEAD HEAD~1' % self.at])       # HEAD points at refs/heads/main
+        # a ref no link carries stays in the scratch repository, and refs/tmp is any session's
+        self.each_allowed(['git -C "%s" update-ref refs/tmp/x HEAD' % self.at])
+
+    def test_a_junction_deeper_in_its_refs_is_judged(self):
+        os.makedirs(os.path.join(self.scratch_git, 'refs', 'heads'))
+        os.makedirs(os.path.join(self.common, 'refs', 'heads', 'kit'))
+        junction(self, os.path.join(self.common, 'refs', 'heads', 'kit'),
+                 os.path.join(self.scratch_git, 'refs', 'heads', 'kit'))
+        self.each_refused(['git -C "%s" update-ref refs/heads/kit/sib HEAD' % self.at,
+                           'git -C "%s" update-ref --stdin' % self.at])
+
+    def test_a_junction_of_its_whole_ref_store_is_judged(self):
+        refs = os.path.join(self.scratch_git, 'refs')
+        os.rmdir(os.path.join(refs, 'tmp'))
+        os.rmdir(refs)
+        junction(self, os.path.join(self.common, 'refs'), refs)
+        self.each_refused(['git -C "%s" update-ref refs/heads/main HEAD' % self.at,
+                           'git -C "%s" update-ref -d refs/heads/main' % self.at])
+
+    def test_a_git_directory_that_is_main_s_is_judged(self):
+        alias = os.path.join(self.w.temp, 'alias')
+        os.makedirs(alias)
+        junction(self, self.common, os.path.join(alias, '.git'))
+        self.each_refused(['git -C "%s" update-ref refs/heads/main HEAD' % W.fwd(alias),
+                           'git -C "%s" update-ref --stdin' % W.fwd(alias)])
+
+
+class SharedRefPmData(SharedRefBase):
+    """The PM data worktree is answered as a main checkout: no session's HEAD or branch is there,
+    so neither moves; a place the guard cannot tell from it gets no HEAD allowance either."""
+
+    def setUp(self):
+        SharedRefBase.setUp(self)
+        put(os.path.join(self.w.data_git_dir, 'HEAD'), 'ref: refs/heads/pmdata\n')
+        self.data = W.fwd(self.w.data)
+
+    def rows(self):
+        return ['git -C "%s" update-ref --no-deref HEAD 0123abc' % self.data,
+                'git -C "%s" update-ref HEAD 0123abc' % self.data,
+                'git -C "%s" update-ref refs/heads/pmdata 0123abc' % self.data]
+
+    def denied(self, d):
+        self.assertIsNotNone(d, 'allowed')
+        self.assertEqual(d.verdict, 'deny', d.reason)
+
+    def test_the_pm_data_worktree_gets_no_head_allowance(self):
+        self.w.user_config({'pm_data': {'path': self.w.data}})
+        self.each_refused(self.rows())
+        for text in self.rows():
+            with self.subTest(text, agent_type='lander'):
+                self.denied(self.worker(text, agent_type='lander'))
+
+    def test_a_pm_data_worktree_the_guard_cannot_tell_gets_none(self):
+        # while the guard cannot tell which linked worktree is the PM data worktree, none gets
+        # the HEAD allowance: its own worktree may be it
+        self.w.user_config({'pm_data': {'path': 'relative/pmdata'}})
+        for text in ('git update-ref --no-deref HEAD 0123abc', 'git update-ref HEAD 0123abc',
+                     'git update-ref refs/heads/kit/wt 0123abc'):
+            with self.subTest(text):
+                self.refused(self.session(text, tj.COORDINATOR))
+        self.allowed(self.session('git update-ref refs/tmp/x HEAD', tj.COORDINATOR))
+        for text in self.rows():
+            for env in (None, tj.COORDINATOR):
+                with self.subTest(text, env=env):
+                    self.denied(self.worker(text) if env is None else self.session(text, env))
 
 
 class SharedRefSessions(SharedRefBase):
