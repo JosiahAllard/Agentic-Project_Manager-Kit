@@ -185,7 +185,7 @@ class LandingTree(TrailersCase):
         code, out = self.run_tool('--base', 'main', '--merged')
         self.assertEqual(code, 2, out)
         self.assertIn('REFUSED', out)
-        self.assertIn('detached', out)
+        self.assertIn('HEAD is detached and not a landing merge', out)
 
     def test_a_detached_sync_merge_is_refused(self):
         # the branch's own merge of main: its first parent is the branch commit, not the base
@@ -199,6 +199,22 @@ class LandingTree(TrailersCase):
         code, out = self.run_tool('--base', 'main', '--merged')
         self.assertEqual(code, 2, out)
         self.assertIn('REFUSED', out)
+        self.assertIn('not a landing merge', out)
+        self.assertIn('that are not merges', out)
+
+    def test_a_merge_onto_an_older_main_is_refused(self):
+        # every first-parent commit a merge, and the oldest not made onto the base
+        self.commit('1', 'work\n\n' + TRAILERED_MSG)
+        old = self.merge_detached('feature')
+        self.git('checkout', '-q', 'main')
+        self.write('g.txt', 'g')
+        self.commit_all('main moves\n\n' + TRAILERED_MSG)
+        self.git('checkout', '-q', '--detach', old)
+        self.git('merge', '--no-ff', '-q', '-m', 'Merge feature', 'feature')
+        self.assertEqual(self.git('rev-parse', 'HEAD^1').strip(), old)
+        code, out = self.run_tool('--base', 'main', '--merged')
+        self.assertEqual(code, 2, out)
+        self.assertIn('does not start at the base', out)
 
     def test_a_merge_on_top_of_a_branch_commit_is_refused(self):
         # a landing-shaped merge whose first-parent chain from the base holds a plain commit
@@ -212,6 +228,7 @@ class LandingTree(TrailersCase):
         code, out = self.run_tool('--base', base, '--merged')
         self.assertEqual(code, 2, out)
         self.assertIn('REFUSED', out)
+        self.assertIn('that are not merges', out)
 
     def test_detached_at_the_base_is_refused(self):
         base = self.git('rev-parse', 'main').strip()
@@ -219,6 +236,7 @@ class LandingTree(TrailersCase):
         code, out = self.run_tool('--base', base, '--merged')
         self.assertEqual(code, 2, out)
         self.assertIn('REFUSED', out)
+        self.assertIn('with no merge on it', out)
 
     def test_a_landing_shaped_merge_on_a_feature_branch_is_refused(self):
         # the same shape on a named branch is a branch's merge, never the lander's
@@ -229,4 +247,4 @@ class LandingTree(TrailersCase):
         code, out = self.run_tool('--base', base, '--merged')
         self.assertEqual(code, 2, out)
         self.assertIn('REFUSED', out)
-        self.assertIn('refs/heads/other', out)
+        self.assertIn('HEAD is on the branch other', out)
