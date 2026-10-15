@@ -46,7 +46,7 @@ class Names(unittest.TestCase):
 
     def test_names_that_differ_only_in_case_or_a_trailing_dash_share_a_home(self):
         main = os.path.join('Z:' + os.sep, 'repo')
-        for a, b in (('deep-x', 'Deep-X'), ('deep-x', 'deep-x-'), ('deep-x', 'DEEP-X.')):
+        for a, b in (('deep-x', 'Deep-X'), ('deep-x', 'deep-x-'), ('deep-x', 'deep-x'.upper() + '.')):
             self.assertEqual(home.home_path(main, a), home.home_path(main, b), (a, b))
 
 
