@@ -42,7 +42,7 @@ class CodexDeliveryTests(unittest.TestCase):
         self.message = OutboundMessage('fixture-operation', 'fixture-task', self.sender, self.recipient,
             'private-content\n\U0001f30e\u00e9' * 1200)
         self.requests, self.errors, self.threads = [], [], []
-        self.checks = 0
+        self.checks, self.check_times = 0, []
         self.done = threading.Event()
 
     def tearDown(self):
@@ -55,7 +55,18 @@ class CodexDeliveryTests(unittest.TestCase):
 
     def check(self):
         self.checks += 1
+        self.check_times.append(time.monotonic())
         return True
+
+    def response_elapsed(self):
+        """Seconds since the response phase began.
+
+        The adapter checks the lease once on entry, then NativeToolsPipe.call checks it as
+        before_write and sets the response deadline straight after, so the second check is
+        the commit. The helper start before it has its own budget (start_timeout); timing
+        from before send() made these response bounds also count a slow start under load."""
+        self.assertGreaterEqual(len(self.check_times), 2, 'the call never reached the commit')
+        return time.monotonic()-self.check_times[1]
 
     @contextmanager
     def lease(self, message):
@@ -226,12 +237,11 @@ class CodexDeliveryTests(unittest.TestCase):
             child = original(job, command, **options)
             children.append(child)
             return child
-        began = time.monotonic()
         with patch('optional.bridge.hosts.codex.delivery_transport.Job.start', start):
             with self.assertRaises(DeliveryError) as caught:
                 CodexDesktopAdapter(lease=self.lease, timeout=.7).send(self.message)
         self.assertNotIsInstance(caught.exception, BeforeWriteError)
-        self.assertLess(time.monotonic()-began, 4)
+        self.assertLess(self.response_elapsed(), 4)
         self.assertTrue(children)
         self.assertTrue(all(child.poll() is not None for child in children))
 
@@ -311,11 +321,10 @@ class CodexDeliveryTests(unittest.TestCase):
 
     def test_native_oversize_frame_is_uncertain_and_bounded(self):
         self.serve(raw=struct.pack('<I', MAX_FRAME+1))
-        began = time.monotonic()
         with self.assertRaises(DeliveryError) as caught:
             CodexDesktopAdapter(lease=self.lease, timeout=2).send(self.message)
         self.assertNotIsInstance(caught.exception, BeforeWriteError)
-        self.assertLess(time.monotonic()-began, 4)
+        self.assertLess(self.response_elapsed(), 4)
         self.assertEqual(len(self.requests), 1)
 
     def test_duplicate_native_fields_never_form_correlated_receipt(self):
@@ -387,12 +396,11 @@ class CodexDeliveryTests(unittest.TestCase):
             child = original(job, command, **options)
             children.append(child)
             return child
-        began = time.monotonic()
         with patch('optional.bridge.hosts.codex.delivery_transport.Job.start', start):
             with self.assertRaises(DeliveryError) as caught:
                 CodexDesktopAdapter(lease=self.lease, timeout=.7).send(self.message)
         self.assertNotIsInstance(caught.exception, BeforeWriteError)
-        self.assertLess(time.monotonic()-began, 4)
+        self.assertLess(self.response_elapsed(), 4)
         self.assertTrue(all(child.poll() is not None for child in children))
 
     def test_receipt_reconciliation_recovers_exact_call_id_after_unknown_outcome(self):
@@ -458,14 +466,13 @@ class CodexDeliveryTests(unittest.TestCase):
             children.append(child)
             child.stdin, child.stdout = GuardStream(child.stdin, child), GuardStream(child.stdout, child)
             return child
-        began = time.monotonic()
         try:
             with patch('optional.bridge.hosts.codex.delivery_transport.Job.start', start), patch(
                     'optional.bridge.hosts.codex.delivery_transport.Job.terminate', return_value=False):
                 with self.assertRaises(DeliveryError):
                     CodexDesktopAdapter(lease=self.lease, timeout=.7).send(self.message)
             self.assertEqual(closed_while_live, [])
-            self.assertLess(time.monotonic()-began, 4)
+            self.assertLess(self.response_elapsed(), 4)
             self.assertTrue(all(child.poll() is not None for child in children))
             self.assertTrue(all(job.h is None for job in jobs))
         finally:
