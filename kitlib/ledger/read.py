@@ -2,10 +2,11 @@
 digest feed `list` in kitlib.ledger, `check`'s standing-digest check in kitlib.ledger.standing, and
 kitlib.backlog.ledger, which re-exports `Entry` and `read_entries`).
 
-A header is read leniently, `## R-nnnn | <when> | <repo> | <kind>`; `strict` says it also has the
+A header is read leniently, `## <id> | <when> | <repo> | <kind>` (the id R-nnnn or H-<repo>-nnnn,
+kitlib.ledger.fmt.ID); `strict` says it also has the
 form the writer produces (kitlib.ledger.fmt, docs/ledger.md "Format"). Beneath a header only the
 `Decides:` line and the last non-blank line are read. A last line `Items: A, B` names records; no
-such line, or a malformed one, names nobody. A tombstone (`Retired: <class> - <why> (see R-n|-)` as
+such line, or a malformed one, names nobody. A tombstone (`Retired: <class> - <why> (see <id>|-)` as
 the whole body) has `retired` set to `(class, successor)`. Pure over text, except `read_file`,
 which runs the ledger's path checks first (kitlib.ledger.safepath).
 """
@@ -14,11 +15,13 @@ import re
 
 from . import safepath
 
-HEADER_RE = re.compile(r'^## (R-[0-9]{4,}) \|([^|]*)\|([^|]*)\|(.*)$')
-STRICT_RE = re.compile(r'^## (R-\d{4,}) \| (\d{4}-\d{2}-\d{2}) \d{2}:\d{2}Z \| ([^|]*) \| ([a-z-]+)\s*$')
+from .fmt import ID
+
+HEADER_RE = re.compile(r'^## (%s) \|([^|]*)\|([^|]*)\|(.*)$' % ID)
+STRICT_RE = re.compile(r'^## (%s) \| (\d{4}-\d{2}-\d{2}) \d{2}:\d{2}Z \| ([^|]*) \| ([a-z-]+)\s*$' % ID)
 ITEMS_LINE_RE = re.compile(r'^Items:(.*)$')
 ITEM_ID_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]*$')
-TOMBSTONE_RE = re.compile(r'^Retired: (spent|superseded|duplicate) - (.+) \(see (R-[0-9]{4,}|-)\)$')
+TOMBSTONE_RE = re.compile(r'^Retired: (spent|superseded|duplicate) - (.+) \(see (%s|-)\)$' % ID)
 
 # id, date (the day when strict, else the raw when-field), repo and kind (stripped, lower-case),
 # decides (None: no line), items (tuple or None), malformed (the bad Items line or None), retired
@@ -91,5 +94,5 @@ def read_entries(path):
         return None, why
     found = {e.id: e for e in parse(text)}
     if not found:
-        return None, '%s holds no `## R-nnnn | <date> | <repo> | <kind>` header' % path
+        return None, '%s holds no `## R-nnnn | <date> | <repo> | <kind>` header (or H-<repo>-nnnn)' % path
     return found, None
