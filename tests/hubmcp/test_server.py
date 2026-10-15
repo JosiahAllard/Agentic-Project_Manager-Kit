@@ -113,7 +113,13 @@ class Pinned(Case):
 
     def test_the_not_available_answer_says_what_it_waits_on(self):
         payload, _ = self.server().call("hub_answer", {})
-        self.assertIn(srv.GUARD_WAIT, payload["error"]["message"])
+        said = payload["error"]["message"]
+        self.assertIn(srv.GUARD_WAIT, said)
+        # the guard's hub-mcp rule is in place (kitlib/guard/hub.py): the wait is for the tools
+        # themselves, never for the guard
+        self.assertIn("the guard already denies them", said)
+        self.assertIn("not shipped yet", said)
+        self.assertNotIn("land once", said)
 
     def test_no_tool_reads_the_owner_token(self):
         roles = []
