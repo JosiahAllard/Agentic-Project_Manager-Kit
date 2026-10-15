@@ -327,10 +327,24 @@ def _pm_data_store(root, configured):
 class _Seen(object):
     """What the stores close_landed reads say about the ids the trailers name: `held`, the
     Closes ids some store holds; `part_held`, the Part-of ids the landed branch holds pulled in
-    some store; `read`, how many stores were read; `unread`, whether one could not be."""
+    some store; `read`, how many stores were read; `unread`, whether one could not be. And what
+    the landing did, so its NOTE lines claim only that: `closed` and `released`, the ids whose
+    close or release was written (committed or not: a WARNING says which); `unreleased`, the ids
+    it set out to release and did not."""
 
     def __init__(self):
         self.held, self.part_held, self.read, self.unread = set(), set(), 0, False
+        self.closed, self.released, self.unreleased = set(), [], []
+
+    def done(self, rid, act):
+        if act.release:
+            self.released.append(rid)
+        else:
+            self.closed.add(rid)
+
+    def not_done(self, rid, act):
+        if act.release:
+            self.unreleased.append(rid)
 
 
 class _Part(object):
@@ -358,8 +372,8 @@ def close_landed(root, cfg, branch, merge, session=SESSION, tip=None, base=None,
     branch holds pulled is released (`state: open`, its pull cleared, so `next` offers it again;
     `released ...` lines, and the WARNINGs name the release command). Without one the branch's
     pulls close. NOTE lines name a Part-of id the branch holds pulled in no store read (a typo,
-    or another branch's record: left as it is), and an id both a Closes and a Part-of line name
-    (closed). When the lines cannot be read, the branch's pulls close (the WARNING says so).
+    or another branch's record: left as it is) with what was released, and an id both a Closes and
+    a Part-of line name (closed, never released); each says only what this landing did. When the lines cannot be read, the branch's pulls close (the WARNING says so).
     [] when neither store takes part and no trailer names a record, or nothing is pulled."""
     lines, named, seen, part = [], [], _Seen(), _Part()
     quiet = tuple(cfg.guarded_mains()) + tuple(batch)    # holders nobody needs to tell
@@ -402,19 +416,27 @@ def close_landed(root, cfg, branch, merge, session=SESSION, tip=None, base=None,
                      'backlog store this landing reads holds (a typo, or a case that differs from '
                      'the record\'s file name?), so nothing was closed for %s'
                      % (branch, ', '.join(unknown), 'it' if len(unknown) == 1 else 'them'))
-    both = [rid for rid in part.ids if rid in named]
-    if both:
-        lines.append('NOTE: %s landed, and %s %s named by both a Closes line and a Part-of line '
-                     'of its commits; the Closes line wins, so %s closed, not released'
-                     % (branch, ', '.join(both), 'is' if len(both) == 1 else 'are',
-                        'it is' if len(both) == 1 else 'they are'))
+    for rid in (r for r in part.ids if r in named):
+        lines.append('NOTE: %s landed, and %s is named by both a Closes line and a Part-of line '
+                     'of its commits; the Closes line wins, so %s'
+                     % (branch, rid, 'it was closed, not released' if rid in seen.closed else
+                        'it was not released, and it was not closed either (see the lines '
+                        'above)'))
     stray = [rid for rid in part.ids if rid not in named and rid not in seen.part_held]
     if stray and seen.read and not seen.unread:
+        did = []
+        if seen.released:
+            did.append('it released %s, which no Closes line names' % ', '.join(seen.released))
+        if seen.unreleased:
+            did.append('%s, which it held pulled, %s not released (see the lines above)'
+                       % (', '.join(seen.unreleased),
+                          'was' if len(seen.unreleased) == 1 else 'were'))
         lines.append('NOTE: %s landed, and a Part-of line of its commits names %s, which it does '
                      'not hold pulled in any backlog store this landing reads (a typo, or another '
-                     'branch\'s record?), so nothing was released for %s; every record it held '
-                     'pulled and no Closes line names was released'
-                     % (branch, ', '.join(stray), 'it' if len(stray) == 1 else 'them'))
+                     'branch\'s record?), so the landing left %s as %s; %s'
+                     % (branch, ', '.join(stray), 'it' if len(stray) == 1 else 'them',
+                        'it is' if len(stray) == 1 else 'they are',
+                        '; '.join(did) or 'it held no record pulled that no Closes line names'))
     return lines
 
 
@@ -560,6 +582,7 @@ def _close_in(backend, root, cfg, branch, merge, session, command, named=(), see
                                 _one_line(str(exc)),
                                 _after_put_back(store, rid, branch, command, reason,
                                                 named=rid in by_trailer, act=act)))
+            seen.not_done(rid, act)
             continue
         except Uncommitted as exc:          # written in the PM data worktree, its commit failed
             lines.append('WARNING: %s landed, and %s was %s in the backlog store %s but not '
@@ -570,6 +593,7 @@ def _close_in(backend, root, cfg, branch, merge, session, command, named=(), see
             if rid in by_trailer:           # closed all the same: its holder must be told
                 lines.extend(_live_holder_warning(branch, rid, by_trailer[rid], cfg, live, root,
                                                   quiet))
+            seen.done(rid, act)
             continue
         except IndexStale as exc:           # committed; only that worktree's index is behind
             lines.append('WARNING: %s landed, and %s was %s in the backlog store %s (%s); '
@@ -579,6 +603,7 @@ def _close_in(backend, root, cfg, branch, merge, session, command, named=(), see
             if rid in by_trailer:
                 lines.extend(_live_holder_warning(branch, rid, by_trailer[rid], cfg, live, root,
                                                   quiet))
+            seen.done(rid, act)
             continue
         except Dirty as exc:                # another session's uncommitted change: never over it
             first = ('repair the index with: %s, then' % exc.repair if exc.repair
@@ -587,6 +612,7 @@ def _close_in(backend, root, cfg, branch, merge, session, command, named=(), see
                          'with: %s'
                          % (branch, rid, how, act.past, exc.label, _one_line(str(exc)), first,
                             act.verb, command(*act_args(act, rid))))
+            seen.not_done(rid, act)
             continue
         except Exception as exc:            # one record's failure never stops the others
             what = ('%s: %s' % (exc.label, exc) if isinstance(exc, Refusal)
@@ -594,10 +620,13 @@ def _close_in(backend, root, cfg, branch, merge, session, command, named=(), see
             lines.append('WARNING: %s landed, and %s%s, was not %s (%s); %s it with: %s'
                          % (branch, rid, how, act.past, _one_line(what), act.verb,
                             command(*act_args(act, rid))))
+            seen.not_done(rid, act)
             continue
         if not change.writes:
             lines.extend(change.lines)
+            seen.not_done(rid, act)
             continue
+        seen.done(rid, act)
         whose = ('; named by a Closes trailer of %s; it was pulled by %s' % (branch, by_trailer[rid])
                  if rid in by_trailer else '')
         if folder:
