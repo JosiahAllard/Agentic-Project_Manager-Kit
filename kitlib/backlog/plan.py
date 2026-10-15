@@ -239,7 +239,7 @@ def _fold_arguments(ctx, found_on, why_not_folded):
     branch-name check."""
     if found_on is None:
         raise Usage('`add` requires `--found-on BRANCH|none`: the branch the finding was made on, '
-                    'or `none` when no branch found it')
+                    'or `none` when no branch found it or it landed and was removed')
     if why_not_folded is None:
         raise Usage('`add` requires `--why-not-folded TEXT`: why the finding is not fixed on the '
                     'branch that found it')
@@ -288,7 +288,7 @@ def _fold_overlap(snap, ctx, rid, branch, scopes):
         if not remotes:
             raise Refusal('cannot add %s: `--found-on %s` names a branch that exists neither '
                           'here nor on a remote (as last fetched): pass an existing branch, or '
-                          '`none` when no branch found it\na branch that has landed and been '
+                          '`none` when no branch found it or it landed and was removed\na branch that has landed and been '
                           'removed is written as `none`, with the branch named in '
                           '--why-not-folded' % (rid, branch))
         notes.append('NOTE: branch %s is not a local branch (only on %s); its diff was not '
