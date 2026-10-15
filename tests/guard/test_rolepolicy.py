@@ -43,6 +43,16 @@ def write_roles(kit_dir, modes):
             f.write(role_file(name, m))
 
 
+def kit_tree(root):
+    """Make `root` look like a kit checkout to kitlib.content.oncommit.is_kit (content/roles/ and
+    tools/render_content.py), with the kit's record and commit tools beside it."""
+    os.makedirs(os.path.join(root, 'content', 'roles'), exist_ok=True)
+    os.makedirs(os.path.join(root, 'tools'), exist_ok=True)
+    for name in ('render_content.py', 'backlog.py', 'commit.py'):
+        with open(os.path.join(root, 'tools', name), 'w', encoding='utf-8') as f:
+            f.write('')
+
+
 class Base(unittest.TestCase):
     modes = MODES
 
@@ -444,6 +454,7 @@ class LockVerbs(Base):
         program; and a script or reader named like an exempt tool but found elsewhere is not that
         tool."""
         lock = 'tools/machine_lock.py'
+        kit_tree(self.w.wt)                     # the session works in a worktree of the kit repository
         rows = (('powershell', 'python (gi %s).FullName stop 42' % lock),
                 ('powershell', '& python (Get-ChildItem %s).FullName stop 42' % lock),
                 ('powershell', 'Start-Process python -ArgumentList (gi %s).FullName,stop,42' % lock),
@@ -477,6 +488,83 @@ class LockVerbs(Base):
                             ('powershell', 'Get-Content %s | Select-String hold | sls -Pattern x' % lock)):
             with self.subTest(shell=shell, text=text):
                 self.assertIsNone(rolepolicy.check(self.shell(text, 'reviewer', shell=shell), self.w.ctx()))
+
+    def test_the_kit_tools_are_exempt_only_under_a_kit_checkout_or_the_kit_folder(self):
+        """rolepolicy._kit_tool: backlog.py and commit.py, made absolute against the command's
+        working directory (an earlier cd followed), pass only as tools/ of the kit folder or of a
+        checkout (main or worktree) of the session's repository when that repository is the kit's."""
+        lock = 'tools/machine_lock.py'
+        wt, main, data, plain = (p.replace('\\', '/') for p in (self.w.wt, self.w.main, self.w.data, self.w.plain))
+        kit_tree(self.w.wt)
+        kit_tree(self.w.main)
+        kit_tree(self.w.plain)                  # a kit's files, but no checkout of the session's repository
+        os.makedirs(os.path.join(self.w.data, 'tools'))     # a checkout of it, but not the kit's files
+        allowed = ('python %s/tools/backlog.py set EX-LOCK --scope %s' % (wt, lock),
+                   'python "%s/tools/backlog.py" add EX-LOCK --scope %s' % (wt, lock),
+                   'python %s/tools/commit.py -m x %s' % (wt, lock),
+                   'py -3 %s/tools/backlog.py set EX-LOCK --scope %s' % (main, lock),
+                   'python %s/tools/commit.py -m x %s' % (self.w.kit_dir.replace('\\', '/'), lock),
+                   'cd %s && python tools/backlog.py set EX-LOCK --scope %s' % (main, lock),
+                   'python tools/backlog.py set EX-LOCK --scope %s' % lock)
+        for shell in ('bash', 'powershell'):
+            for text in allowed:
+                with self.subTest(shell=shell, text=text):
+                    self.assertIsNone(rolepolicy.check(self.shell(text, 'reviewer', shell=shell), self.w.ctx()))
+        refused = (('bash', 'cd %s && python tools/backlog.py %s stop 42' % (plain, lock)),
+                   ('powershell', 'cd %s; python tools/backlog.py %s stop 42' % (plain, lock)),
+                   ('powershell', 'Set-Location %s; python .\\tools\\commit.py %s stop 42' % (plain, lock)),
+                   ('bash', 'cd %s && tools/backlog.py %s stop 42' % (plain, lock)),
+                   ('powershell', 'cd %s; .\\tools\\backlog.py %s stop 42' % (plain, lock)),
+                   ('bash', 'backlog.py %s stop 42' % lock),
+                   ('bash', 'python %s/tools/backlog.py %s stop 42' % (plain, lock)),
+                   ('bash', 'python %s/tools/backlog.py %s stop 42' % (data, lock)),
+                   ('bash', 'cd %s/tools && python backlog.py %s stop 42' % (plain, lock)))
+        for shell, text in refused:
+            with self.subTest(shell=shell, text=text):
+                d = self.denied(self.shell(text, 'reviewer', shell=shell), 'role-lock')
+                self.assertIn('machine_lock.py stop is not', d.reason)
+
+    def test_a_relative_kit_tool_in_a_checkout_that_is_not_the_kits_runs_the_lock(self):
+        lock = 'tools/machine_lock.py'
+        for shell, text in (('bash', 'python tools/backlog.py %s stop 42' % lock),
+                            ('powershell', 'python ./tools/commit.py %s stop 42' % lock)):
+            with self.subTest(shell=shell, text=text):
+                self.denied(self.shell(text, 'reviewer', shell=shell), 'role-lock')
+
+    def test_a_command_that_names_no_program_but_names_the_lock_cli_is_refused(self):
+        """Fail-closed (rolepolicy.NO_PROGRAM): PowerShell reads an assignment written without
+        spaces as one word with no program, so the reader in it is never seen; any such command
+        whose words name machine_lock.py is a lock call, in every mode."""
+        lock = 'tools/machine_lock.py'
+        rows = (('powershell', '$c=gc %s -Raw; python -c "$c" stop 42' % lock),
+                ('powershell', '$c=git show HEAD:%s; python -c ($c -join "`n") stop 42' % lock),
+                ('powershell', '$c=sls -Path %s -Pattern .; python -c ($c.Line -join "`n") stop 42' % lock),
+                ('powershell', '$x+=gc %s -Raw; python -c $x stop 42' % lock),
+                ('powershell', '$x, $y = gc %s -Raw; python -c $x stop 42' % lock),
+                ('powershell', '${x}=gc %s -Raw; python -c $x stop 42' % lock),
+                ('powershell', '$global:x=gc %s -Raw; python -c $x stop 42' % lock),
+                ('powershell', "$a = '%s','stop','42'; python @a" % lock),
+                ('powershell', '$p = "%s"; & python $p stop 42' % lock),
+                ('bash', 'x=$(<%s); python -c "$x" stop 42' % lock))
+        from kitlib.guard import commands as cm, shell as sh
+        for shell, text in rows:
+            for role in ('reviewer', 'senior-worker', 'pm'):
+                with self.subTest(shell=shell, role=role, text=text):
+                    parsed = cm.read(text, sh.PS if shell == 'powershell' else sh.BASH, self.w.wt)
+                    self.assertIsNotNone(rolepolicy.lock_verb(parsed, 'write', self.w.kit_dir))
+                    d = rolepolicy.check(self.shell(text, role, shell=shell), self.w.ctx())
+                    self.assertIsNotNone(d, text)
+                    self.assertEqual((d.verdict, d.rule), ('deny', 'role-lock'), d.reason)
+
+    def test_psdefaultparametervalues_on_the_line_catches_a_reader(self):
+        """It can give every later command an -OutVariable (rolepolicy._output_stays)."""
+        lock = 'tools/machine_lock.py'
+        for text in ("$PSDefaultParameterValues['*:OutVariable']='c'; gc %s -Raw; python -c \"$c\" stop 42" % lock,
+                     "$PSDefaultParameterValues['*:OutVariable'] = 'c'; gc %s -Raw; python -c \"$c\" stop 42" % lock):
+            with self.subTest(text):
+                d = rolepolicy.check(self.shell(text, 'reviewer'), self.w.ctx())
+                self.assertIsNotNone(d, text)
+                self.assertEqual((d.verdict, d.rule), ('deny', 'role-lock'), d.reason)
 
 
 class LockMcp(Base):
