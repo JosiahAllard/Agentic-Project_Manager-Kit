@@ -828,8 +828,10 @@ def commit_only(root, head, snap, msg):
     if base == head and (entry is None or entry[1] == now):
         return 0, gout, r.err, now, [], (tree, now_tree)
     if not parents:
-        raise _Stop(REFUSED, head_moved_line(head, ''), 'NOT undone: the commit at HEAD, %s, has '
-                    'no parent; check `git log` by hand.' % now[:12])
+        raise _Stop(REFUSED, 'refused: after git commit, HEAD is %s, a commit with no parent, '
+                    'which this call cannot tell for its own commit on %s.'
+                    % (now[:12], head[:12] or 'an unborn branch'),
+                    'NOT undone: check `git log` and `git reflog` by hand.')
     if entry is None:
         if not as_built:
             raise _Stop(REFUSED, 'refused, and NOT undone: git commit ran, but HEAD is now %s, '
@@ -878,9 +880,9 @@ def align_index(root, trees, ours):
     commit `ours` for each path a hook changed in it; `trees` is commit_only's `(tree built, tree
     committed)`. A hook's `git add` reaches only the private index, so without this the real index
     keeps the copy from before the hook and the next commit reverts the hook's change. A path whose
-    real-index entry is still the built tree's is set to the committed entry. One another writer
-    staged during the call is left as they staged it, and refused (the commit stands), naming the
-    command that takes the commit's copy. The read and the write of the index are two git calls:
+    real-index entry is still the built tree's is set to the committed entry. One holding another
+    copy (staged before or during the call) is left as staged, and refused (the commit stands),
+    naming the command that takes the commit's copy. The read and the write of the index are two git calls:
     a path staged between them is overwritten."""
     built, made = trees
     if made == built:
@@ -927,8 +929,9 @@ def align_index(root, trees, ours):
     if not kept:
         return notes, []
     return notes, ['refused: commit %s stands, but a hook changed %s in it, and the index holds '
-                   'another copy (another writer staged it during this call, or the index could '
-                   'not be written): the next commit of it would replace the hook\'s change. To '
+                   'a copy other than the one this call committed (someone staged it before or '
+                   'during this call, or the index could not be written): the next commit of it '
+                   'would replace the hook\'s change. To '
                    'take the commit\'s copy: git restore --staged --source=%s -- %s'
                    % (ours[:12], ', '.join(kept), ours[:12], ' '.join(kept))]
 

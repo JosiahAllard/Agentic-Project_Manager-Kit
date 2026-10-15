@@ -1078,7 +1078,56 @@ class HooksAndTheReflog(LinkedCase):
         self.assertIn('git restore --staged --source=', out)
         self.assertIn('committed ', out)
 
+    def test_a_path_a_pre_commit_hook_removes_is_removed_from_the_real_index_too(self):
+        """The hook's `git rm` drops seed.txt from the private index only: the real index must
+        drop it too (a mode-0 index line), or the next commit would add it back."""
+        self.hook('pre-commit', 'git rm -q seed.txt')
+        self.put('a.py', 'a = 1\n')
+        code, out = self.commit('add a', 'a.py')
+        self.assertEqual(code, 0, out)
+        self.assertIn('index     set to the commit\'s copy of what a hook changed: seed.txt', out)
+        self.assertEqual(self.git('ls-tree', '--name-only', 'HEAD', '--', 'seed.txt'), '')
+        self.assertEqual(self.git('ls-files', '--stage', '--', 'seed.txt'), '')
+        self.assertEqual(self.git('diff', '--cached', '--name-only'), '')
+
+    def test_a_failing_index_write_after_a_hook_change_refuses_every_path(self):
+        """update-index on the real index fails: the commit stands, nothing is reported as set,
+        and the refusal names every path the hook changed."""
+        self.hook('pre-commit', 'printf "hook\\n" > extra.txt && printf "a = 2\\n" > a.py && '
+                  'git add extra.txt a.py')
+        start, real = self.head(), cmd.call
+
+        def wrapper(args, cwd, *a, **kw):
+            if args[:2] == ['update-index', '--index-info'] and not kw.get('env'):
+                return cmd.Result(128, b'', 'fatal: injected update-index')
+            return real(args, cwd, *a, **kw)
+        self.put('a.py', 'a = 1\n')
+        with mock.patch.object(C.cmd, 'call', wrapper):
+            code, out = self.commit('add a', 'a.py')
+        self.assertEqual(code, 1, out)
+        self.assertEqual(self.git('rev-parse', 'HEAD^'), start)
+        self.assertNotIn('index     set to', out)
+        self.assertIn('a.py, extra.txt', out)
+        self.assertIn('git restore --staged --source=', out)
+        self.assertIn('-- a.py extra.txt', out)
+
     # -- the reflog checks
+
+    def test_a_parentless_head_after_the_commit_refuses_with_its_own_line(self):
+        def orphan():
+            tree = self.git('rev-parse', 'HEAD^{tree}')
+            new = self.git('commit-tree', tree, '-m', 'orphan')
+            self.git('update-ref', 'HEAD', new)
+            return new
+        seen = self.around_commit(after=orphan)
+        self.put('a.py', 'a = 1\n')
+        code, out = self.commit('add a', 'a.py')
+        self.assertEqual(code, 1, out)
+        self.assertIn('NOT undone', out)
+        self.assertIn('%s, a commit with no parent' % seen[0][:12], out)
+        self.assertNotIn('committed nothing', out)
+        self.assertNotIn('would have reverted', out)
+        self.assertEqual(self.head(), seen[0])
 
     def test_a_logged_base_that_is_not_heads_parent_refuses_and_undoes_nothing(self):
         real = C.tagged_entry
