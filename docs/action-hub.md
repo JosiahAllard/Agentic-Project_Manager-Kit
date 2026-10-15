@@ -338,12 +338,18 @@ kit's repository and the optional `pm_start.repos`) with the aliases the store h
 repo is `all` is for every repo and shows under each one.
 
 ## Views read live
-Never stored; the server reads each from its source on request (`kitlib.hubsite.derived`,
-`kitlib.hubsite.backlog`):
+Never stored; read from their sources (`kitlib.hubsite.derived`, `kitlib.hubsite.backlog`):
 - backlog and completed: each repository's backlog store (`.kit.json` backlog.store), every open
   record and every record closed in the last 90 days, fetched every `hub.backlog_refresh_s`.
   Parked is the backlog items whose state is parked. A repository's folder is
-  `pm_start.repo_paths[name]`, else the PM repository's sibling.
+  `pm_start.repo_paths[name]`, else the PM repository's sibling. While that timer runs,
+  `GET /api/v1/snapshot` (the page's load) answers these two from what the timer's reads left,
+  however old (one round per `backlog_refresh_s`; inferred: older if a round is slow), and starts no git. A
+  repository the first round has not reached shows with error "not read yet"; before any read
+  the snapshot lists the view in `unavailable` as `NotReadYet`, which the page shows as "The
+  backlog view is unavailable: NotReadYet" (the page text is inferred from `unavailable` being
+  shown as `gone`). `GET /api/v1/backlog?fresh=1` runs a fetch round and reads live. With no
+  timer (`backlog_refresh_s` unset) the snapshot reads as the routes do.
 - usage: `launch.py usage` (docs/launcher.md "Usage").
 - agents: the agent definitions in `claude/agents`.
 
