@@ -349,15 +349,15 @@ class LockVerbs(Base):
                 self.denied(self.shell('%s %s' % (LOCK, args), 'senior-worker'), 'role-lock')
 
     def test_a_path_naming_the_lock_cli_given_to_another_tool_is_no_lock_call(self):
-        """KIT-GUARD-ROLE-LOCK-ARG-FALSE-POSITIVE: only the program, or the script python runs, is
-        a lock call; machine_lock.py as another tool's argument is a path."""
+        """Only the program, or the script python runs, is a lock call; machine_lock.py as another
+        tool's argument is a path."""
         kit_tools, pm = self.w.kit_dir.replace('\\', '/') + '/tools', self.w.data.replace('\\', '/')
         backlog = 'python %s/backlog.py -C %s --session kit ' % (kit_tools, pm)
-        refused = (backlog + 'set KIT-LOCK-SLOT-CPUSET --scope kitlib/lock --scope tests/lock '
+        refused = (backlog + 'set EX-LOCK-SLOTS --scope kitlib/lock --scope tests/lock '
                              '--scope tools/machine_lock.py --scope docs/lock-api.md',
-                   backlog + 'set KIT-LOCK-RUN-ID-COLLISION-ENDED-RECORD --scope kitlib/lock '
+                   backlog + 'set EX-LOCK-RUN-ID --scope kitlib/lock '
                              '--scope tools/machine_lock.py --scope tests/lock/test_run.py',
-                   backlog + 'add KIT-LOCK-STATUS-JSON-FIELD --title "status --json" '
+                   backlog + 'add EX-LOCK-STATUS --title "status --json" '
                              '--scope tools/machine_lock.py --scope kitlib/lock/api.py')
         others = ('cat tools/machine_lock.py', 'git diff -- tools/machine_lock.py', 'rg hold tools/machine_lock.py',
                   'python tools/check.py tools/machine_lock.py hold whole',

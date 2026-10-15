@@ -787,8 +787,8 @@ class FailClosed(Hub):
         ), False)
 
     def test_a_hub_folder_in_a_path_is_not_the_hub_tool(self):
-        # KIT-GUARD-HUB-PATH-SEGMENT-FALSE-POSITIVE (R-1957): a folder named hub (hub/ followed by
-        # a separator) is a path, not the hub tool, also on a line that runs python and imports
+        # a folder named hub (hub/ followed by a separator) is a path, not the hub tool, also on a
+        # line that runs python and imports
         todos, store, mid = 'Z:/repos/other/hub/todos', 'Z:/x/hub/store', 'Z:/x/a/hub/b/c.txt'
         self.rows((
             (bash, 'ls %s/' % todos), (ps, 'Get-ChildItem %s/' % todos), (bash, 'cat %s/T-1.json' % todos),

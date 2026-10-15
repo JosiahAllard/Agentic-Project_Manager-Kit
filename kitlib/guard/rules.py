@@ -567,7 +567,7 @@ HUB_SHAPE = 'python, its plain options, then tools/hub.py or -m tools.hub, then 
 # import list between `import` and `hub`, and takes code from many places (-c, -m code, a pipe of
 # any length), so neither the import nor where the code comes from is modelled (hub_code_names).
 # x.hub is HUB_NAME_RES's (tests.hub.test_x is not hub). A folder named hub, hub/ (a path:
-# Z:/x/hub/todos), is not the tool; hub\ still counts, as a backslash may be Python's line join.
+# <dir>/hub/todos), is not the tool; hub\ still counts, as a backslash may be Python's line join.
 HUB_BARE_RE = re.compile(r'(?i)(?<![\w-])(?<!\w\.)hub(?![\w/-])')
 HUB_IMPORT_RE = re.compile(r'(?i)\bimport\b')
 # the interpreters whose word makes a line one that runs python for hub_code_names (a program's
