@@ -46,16 +46,6 @@ a constructor argument, and the defaults read this machine.
                      'broken' (why), and the ledger rule then denies every subagent write. A
                      missing file is an empty config, not a broken one. The file is the one
                      config_location() names; a BAD location sets 'broken' too (fail closed).
-                     A file that does not parse (not JSON, or not an object) is read through
-                     its last good copy (last_good) when there is one: every key the bad save
-                     left alone keeps the copy's value, a changed key reads as unset, and a
-                     change to a key in WHOLE keeps 'broken'.
-  last_good()        the LastGood copy standing in for a machine config that does not parse, or
-                     None. The copy is LAST_GOOD beside the file read, written here alone
-                     (keep_last_good, each time the strict reader takes a file the copy does not
-                     match) and refused to agents like the file itself (jail.config_dirs). The
-                     keys a bad save changed are changed_keys of the two texts.
-  stand_in()         the sentence a refusal adds while the copy stands in, else None.
   config_location()  kitlib.config.user.locate(home), taken once per Ctx, so every read of
                      the machine config in one hook call reads the same file.
   kit                the kit the guard runs from (kitlib.kitroot.root(): the checkout this module
@@ -75,11 +65,8 @@ a constructor argument, and the defaults read this machine.
 The pm_data argument replaces the machine-config read (a callable returning
 kitlib.pmdata.machine_settings's answer, or raising its errors).
 """
-import collections
-import difflib
 import json
 import os
-import re
 import tempfile
 
 from kitlib import config as kconfig
@@ -121,120 +108,6 @@ def _default_lock_held(environ, store):
     except Exception as e:                       # an unreadable store proves nothing
         return False, '%s: %s' % (type(e).__name__, e)
     return (True, None) if parent else (False, why)
-
-
-# ---------------------------------------------------------------- the machine config's last good copy
-
-LAST_GOOD = 'config.last-good.json'
-# Keys a guard rule reads where an unset value would loosen the rule (the ledger, the lock MCP's
-# owner-only tools, the agent marks, the hub's store and ports): a bad save that changes one keeps
-# the whole machine config broken. Any other changed key reads as unset: guard_mark_roots then adds
-# no root, pm_data stays unreadable (pm_data_error), and the guard reads none of the rest.
-WHOLE = ('ledger_path', 'guard_mcp_prefix', 'guard_mcp_tools', 'guard_agent_marks', 'hub')
-MAX_TEXT = 1 << 20                              # a larger file is not diffed: no stand-in
-_WS = re.compile(r'[ \t\n\r]*')
-_DECODER = json.JSONDecoder()
-
-
-class LastGood(collections.namedtuple('LastGood', 'path values changed why')):
-    """The last good copy standing in for a machine config that does not parse: `path` the copy,
-    `values` its strict read (kitlib.config.user.user_config), `changed` the keys the bad save
-    changed (changed_keys), `why` why the file read does not parse."""
-
-
-def last_good_path(location):
-    """The last good copy of the machine config file the kitlib.config.user.Location reads."""
-    return os.path.join(os.path.dirname(location.path), LAST_GOOD)
-
-
-def _read(path):
-    """The text of `path` (utf-8, a BOM dropped), or None when it does not exist."""
-    try:
-        with open(path, encoding='utf-8-sig') as f:
-            return f.read()
-    except FileNotFoundError:
-        return None
-
-
-def keep_last_good(home, location):
-    """Keep the machine config file `location` reads as its last good copy (last_good_path) when
-    the copy differs: the text is written to a temporary file beside it, read back by the strict
-    reader, and moved over the copy. Best effort: any failure leaves the old copy as it was."""
-    if location.error:
-        return
-    dest = last_good_path(location)
-    try:
-        text = _read(location.path)
-        if text is None or len(text) > MAX_TEXT or text == _read(dest):
-            return
-        fd, tmp = tempfile.mkstemp(prefix=LAST_GOOD + '.', suffix='.tmp', dir=os.path.dirname(dest))
-        try:
-            with os.fdopen(fd, 'w', encoding='utf-8', newline='') as f:
-                f.write(text)
-            kuser.user_config(home, location=location._replace(path=tmp))
-            os.replace(tmp, dest)
-            tmp = None
-        finally:
-            if tmp:
-                os.remove(tmp)
-    except (OSError, ValueError, kconfig.ConfigError):
-        pass
-
-
-def _members(text):
-    """[(key, start, end)] for each top-level member of the JSON object `text`, from its key's
-    opening quote to its value's end; None when `text` is no JSON object."""
-    try:
-        i = _WS.match(text, 0).end()
-        if text[i:i + 1] != '{':
-            return None
-        i = _WS.match(text, i + 1).end()
-        out = []
-        if text[i:i + 1] == '}':
-            return out
-        while text[i:i + 1] == '"':
-            key, j = json.decoder.scanstring(text, i + 1)
-            j = _WS.match(text, j).end()
-            if text[j:j + 1] != ':':
-                return None
-            _value, end = _DECODER.raw_decode(text, _WS.match(text, j + 1).end())
-            out.append((key, i, end))
-            k = _WS.match(text, end).end()
-            if text[k:k + 1] == '}':
-                return out
-            if text[k:k + 1] != ',':
-                return None
-            i = _WS.match(text, k + 1).end()
-        return None
-    except (ValueError, RecursionError):
-        return None
-
-
-def changed_keys(good, bad, names):
-    """The top-level keys a save turning the text `good` (a JSON object) into `bad` changed, by
-    lines: a member of `good` with a removed or replaced line inside it, or a line inserted inside
-    it, and every name of `names` or of `good`'s keys written, quoted or not, in a line `bad` adds.
-    None when `good` is no JSON object or either text is larger than MAX_TEXT."""
-    members = _members(good) if len(good) <= MAX_TEXT and len(bad) <= MAX_TEXT else None
-    if members is None:
-        return None
-    old, new = good.splitlines(True), bad.splitlines(True)
-    at = [0]
-    for line in old:
-        at.append(at[-1] + len(line))
-    words = set(names) | {k for k, _s, _e in members}
-    changed = set()
-    ops = difflib.SequenceMatcher(None, old, new, autojunk=False).get_opcodes()
-    for op, i1, i2, j1, j2 in ops:
-        if op == 'equal':
-            continue
-        a, b = at[i1], at[i2]
-        for key, start, end in members:
-            if (start < b and a < end) if i1 < i2 else start < a < end:
-                changed.add(key)
-        added = ''.join(new[j1:j2])
-        changed.update(w for w in words if re.search(r'(?<![\w-])%s(?![\w-])' % re.escape(w), added))
-    return changed
 
 
 def _machine_pm_data(home, location=None):
@@ -283,8 +156,7 @@ class Ctx(object):
         self._places, self._configs, self._config_errors = {}, {}, {}
         self._user = None
         self._location = None
-        self._pm_data = pm_data or self._machine_pm_data
-        self._last_good = None                   # (LastGood or None,), read once
+        self._pm_data = pm_data or (lambda: _machine_pm_data(self.home, self.config_location()))
         self._pm_settings = None                 # (settings or None, error or None), read once
         self._pm_records = {}                    # paths.norm(common) -> (Record or None, error or None)
         self._pm_places = {}                     # key of a place answered as the PM data worktree -> its branch
@@ -470,94 +342,7 @@ class Ctx(object):
                 self._user = kuser.user_config(self.home, location=self.config_location())
             except kconfig.ConfigError as e:
                 self._user = self._tolerant(str(e))
-            else:
-                keep_last_good(self.home, self.config_location())
         return self._user
-
-    def last_good(self):
-        """The LastGood copy standing in for the machine config, read once; None when the file
-        parses, cannot be read or is absent, or when there is no copy the strict reader takes."""
-        if self._last_good is None:
-            self._last_good = (self._read_last_good(),)
-        return self._last_good[0]
-
-    def _read_last_good(self):
-        loc = self.config_location()
-        if loc.error:
-            return None
-        try:
-            text = _read(loc.path)
-        except (OSError, ValueError):
-            return None
-        if text is None:
-            return None
-        try:
-            data = json.loads(text)
-        except (ValueError, RecursionError) as e:
-            why = 'it is not valid JSON: %s' % e
-        else:
-            if isinstance(data, dict):
-                return None
-            why = 'it must be an object, not %s' % type(data).__name__
-        copy = last_good_path(loc)
-        try:
-            good = _read(copy)
-            if good is None:
-                return None
-            values = kuser.user_config(self.home, location=loc._replace(path=copy))
-            if _read(copy) != good:             # replaced while it was read
-                return None
-        except (OSError, ValueError, kconfig.ConfigError):
-            return None
-        changed = changed_keys(good, text, set(kuser.SCHEMA))
-        if changed is None:
-            return None
-        return LastGood(copy, values, frozenset(changed), why)
-
-    def stand_in(self):
-        """The sentence a refusal adds while the last good copy stands in for keys of a machine
-        config that does not parse; None when it does not (a change to a key in WHOLE keeps the
-        config broken, and the ledger rule's own message names the copy)."""
-        lg = self.last_good()
-        if lg is None or any(k in lg.changed for k in WHOLE):
-            return None
-        loc = self.config_location()
-        return ('The machine config %s does not parse (%s); the guard reads its last good copy %s '
-                'for every key the bad save left alone (changed: %s).' % (
-                    loc.display(), lg.why, loc.display(lg.path), ', '.join(sorted(lg.changed)) or 'none'))
-
-    def _machine_pm_data(self):
-        """_machine_pm_data of the machine config, its pm_data read from the last good copy while
-        that stands in and the bad save left pm_data alone."""
-        loc = self.config_location()
-        try:
-            return _machine_pm_data(self.home, loc)
-        except kconfig.ConfigError as e:
-            lg = self.last_good()
-            if lg is None:
-                raise
-            if pmdata.KEY in lg.changed:
-                raise kconfig.ConfigError('%s; its last good copy %s does not stand in for %s, which '
-                                          'the bad save changed' % (e, loc.display(lg.path), pmdata.KEY))
-            return pmdata.check_settings(lg.values.get(pmdata.KEY), '%s key %s' % (lg.path, pmdata.KEY))
-
-    def _from_copy(self, out, why):
-        """`out` (every key unset, 'error' set) filled from the last good copy for the keys the
-        bad save left alone; 'broken' (`why`) when there is no copy or the save changed a key in
-        WHOLE."""
-        lg = self.last_good()
-        if lg is None:
-            out['broken'] = why
-            return out
-        whole = [k for k in WHOLE if k in lg.changed]
-        if whole:
-            out['broken'] = '%s, and its last good copy %s does not stand in for %s, which the bad save changed' % (
-                why, self.config_location().display(lg.path), ', '.join(whole))
-            return out
-        for k in kuser.SCHEMA:
-            if k not in lg.changed:
-                out[k] = lg.values.get(k)
-        return out
 
     def _tolerant(self, why):
         out = {k: None for k in kuser.SCHEMA}
@@ -578,9 +363,11 @@ class Ctx(object):
         try:
             data = json.loads(text)
         except ValueError as e:
-            return self._from_copy(out, 'it is not valid JSON: %s' % e)
+            out['broken'] = 'it is not valid JSON: %s' % e
+            return out
         if not isinstance(data, dict):
-            return self._from_copy(out, 'it must be an object, not %s' % type(data).__name__)
+            out['broken'] = 'it must be an object, not %s' % type(data).__name__
+            return out
         for k in kuser.SCHEMA:
             v = data.get(k)
             if isinstance(v, str) and v.strip():
