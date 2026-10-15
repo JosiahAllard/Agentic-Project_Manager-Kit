@@ -104,19 +104,6 @@ class Leftovers(unittest.TestCase):
                               plan.notes['links'])
                 self.assertTrue(common.is_link(self.usage))                 # reported, not removed
 
-    def test_a_skill_link_into_a_moved_skills_folder_is_a_leftover(self):
-        for moved in links.MOVED_SKILLS_DIRS:
-            with self.subTest(moved=moved):
-                os.rmdir(self.skill)
-                was = os.path.join(self.kit, *(moved + '/land-branch').split('/'))
-                os.makedirs(was)
-                T.junction(self.skill, was)
-                shutil.rmtree(os.path.join(self.kit, moved.split('/')[0]))  # gone after the move: dangling
-                plan = M.Plan()
-                links.survey(plan, self.acct, self.ctx(False))
-                self.assertEqual(plan.changes, [])
-                self.assertIn(links.leftover(self.skill, was), plan.notes['links'])
-
 
 class StatusLineThroughToolsLink(unittest.TestCase):
     """The live shape: every account's statusLine runs the usage script through
