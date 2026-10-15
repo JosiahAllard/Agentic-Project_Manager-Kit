@@ -453,9 +453,9 @@ class PendingTest(StoreCase):
     def test_a_pending_question_and_to_do_carry_their_stored_from(self):
         docs = {'questions': {'Q-1': question(status='answered', answer={'at': '1'},
                                               **{'from': 'kit'})},
-                'todos': {'T-1': {'status': 'done', 'title': 'd', 'from': 'retribution',
+                'todos': {'T-1': {'status': 'done', 'title': 'd', 'from': 'zeta',
                                   'done_at': '2'}}}
-        self.assertEqual([p.sender for p in store.pending_items(docs)], ['kit', 'retribution'])
+        self.assertEqual([p.sender for p in store.pending_items(docs)], ['kit', 'zeta'])
 
     def test_the_store_lists_and_clears_pending(self):
         s = self.open()

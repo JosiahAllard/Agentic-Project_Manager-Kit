@@ -86,7 +86,7 @@ REFUSED = ('handstep-commands',)    # warn-level hubvalidate codes the store ref
 TMP_SUFFIX = '.tmp'
 # The lowest id add gives, by prefix (1 when absent). The rulings ledger cites questions up to
 # Q-978 from before the store, whose counter had fallen below them; new questions start at
-# Q-1000 so no id the ledger cites is given again (owner ruling on KIT-HUB-DIRECT-QUESTIONS).
+# Q-1000 so no id the ledger cites is given again (an owner ruling).
 ID_FLOOR = {'Q': 1000}
 
 Result = collections.namedtuple('Result', 'id version revision warnings')

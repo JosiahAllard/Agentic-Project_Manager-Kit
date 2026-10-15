@@ -23,7 +23,7 @@ class DirectCase(unittest.TestCase):
         self.addCleanup(shutil.rmtree, root, True)
         self.store = Store.open(root, clock=CLOCK)
         self.addCleanup(self.store.close)
-        self.keys = {'kit', 'retribution'}
+        self.keys = {'kit', 'zeta'}
         self.reads = []
         self.api = api.Api(self.store, clock=CLOCK, session_keys=self.session_keys)
 
@@ -83,7 +83,7 @@ class FromTest(DirectCase):
                                    {'title': 't', 'options': OPTIONS, 'from': who})
                 said = obj['error']['message']
                 self.assertIn('not a session the hub knows', said)
-                self.assertIn('kit, pm, retribution', said)
+                self.assertIn('kit, pm, zeta', said)
                 self.assertNotIn('sessions.json', said)
                 self.assertNotIn('\\', said)
 
@@ -131,7 +131,7 @@ class FromTest(DirectCase):
 
 class ForTest(DirectCase):
     def test_pending_items_carry_the_key_they_are_for(self):
-        mine, theirs, pms = self.ask(**{'from': 'kit'}), self.ask(**{'from': 'retribution'}), \
+        mine, theirs, pms = self.ask(**{'from': 'kit'}), self.ask(**{'from': 'zeta'}), \
             self.ask()
         for qid in (mine, theirs, pms):
             self.answer(qid)
@@ -141,24 +141,24 @@ class ForTest(DirectCase):
         owners = self.ok('POST', '/todos', OWNER, {'title': 'mine'})['id']
         story = self.ok('POST', '/stories', OWNER, {'repo': 'kit', 'title': 't', 'story': 's'})
         got = {p['id']: p['from'] for p in self.pending()}
-        self.assertEqual(got, {mine: 'kit', theirs: 'retribution', pms: 'pm', kit_todo: 'kit',
+        self.assertEqual(got, {mine: 'kit', theirs: 'zeta', pms: 'pm', kit_todo: 'kit',
                                owners: 'pm', story['id']: 'pm'})
         self.assertNotIn('sender', self.pending()[0])
 
     def test_pending_for_a_key_lists_only_its_items_and_without_for_lists_all(self):
-        mine, theirs = self.ask(**{'from': 'kit'}), self.ask(**{'from': 'retribution'})
+        mine, theirs = self.ask(**{'from': 'kit'}), self.ask(**{'from': 'zeta'})
         pms = self.ask()
         for qid in (mine, theirs, pms):
             self.answer(qid)
         self.assertEqual(self.ids(self.pending(**{'for': 'kit'})), [mine])
-        self.assertEqual(self.ids(self.pending(**{'for': 'retribution'})), [theirs])
+        self.assertEqual(self.ids(self.pending(**{'for': 'zeta'})), [theirs])
         self.assertEqual(self.ids(self.pending(**{'for': 'pm'})), [pms])
         self.assertEqual(sorted(self.ids(self.pending())), sorted([mine, theirs, pms]))
 
     def test_a_question_whose_session_went_away_is_the_pms(self):
-        qid = self.ask(**{'from': 'retribution'})
+        qid = self.ask(**{'from': 'zeta'})
         self.answer(qid)
-        self.keys.discard('retribution')
+        self.keys.discard('zeta')
         self.assertEqual([(p['id'], p['from']) for p in self.pending()], [(qid, 'pm')])
         self.assertEqual(self.ids(self.pending(**{'for': 'pm'})), [qid])
 
@@ -189,7 +189,7 @@ class WaitForTest(DirectCase):
         self.refused('for', 'GET', '/wait', AGENT, query={'for': 'kit', 'timeout': '0'})
 
     def test_another_sessions_answer_does_not_end_a_wait_for_kit(self):
-        theirs = self.ask(**{'from': 'retribution'})
+        theirs = self.ask(**{'from': 'zeta'})
         self.answer(theirs)
         start = time.monotonic()
         got = self.wait(0.3, **{'for': 'kit'})
@@ -199,7 +199,7 @@ class WaitForTest(DirectCase):
         self.assertEqual(self.ids(self.wait(5)['pending']), [theirs])
 
     def test_a_wait_for_kit_sleeps_through_other_writes_and_wakes_on_its_answer(self):
-        mine, theirs = self.ask(**{'from': 'kit'}), self.ask(**{'from': 'retribution'})
+        mine, theirs = self.ask(**{'from': 'kit'}), self.ask(**{'from': 'zeta'})
         since = self.store.revision
         out = {}
 
@@ -224,7 +224,7 @@ class WaitForTest(DirectCase):
 
     def test_a_wait_for_kit_that_times_out_says_so_even_after_other_writes(self):
         since = self.store.revision
-        theirs = self.ask(**{'from': 'retribution'})
+        theirs = self.ask(**{'from': 'zeta'})
         self.answer(theirs)
         got = self.wait(0.2, **{'for': 'kit', 'since': str(since)})
         self.assertEqual((got['pending'], got['timed_out']), ([], True))
@@ -232,7 +232,7 @@ class WaitForTest(DirectCase):
 
     def test_a_wait_without_for_is_unchanged(self):
         since = self.store.revision
-        self.ask(**{'from': 'retribution'})
+        self.ask(**{'from': 'zeta'})
         got = self.ok('GET', '/wait', AGENT, query={'since': str(since), 'timeout': '5'})
         self.assertEqual((got['timed_out'], got['pending']), (False, []))
         self.assertEqual(len(got['changes']), 1)
