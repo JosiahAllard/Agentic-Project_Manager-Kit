@@ -435,6 +435,59 @@ class BareWordsInTheDataFolder(Hub):
             (bash, 'python -m http.server --directory hub'),
         ), deny=True)
 
+    def test_a_search_after_the_end_of_options(self):
+        self.rows((
+            (bash, 'grep -n -- hub launcher/coordinators.json'),
+            (bash, 'rg -i -- hub launcher'),
+        ), deny=False)
+        self.rows((
+            (bash, 'grep -n -- x hub'),
+            (bash, 'grep -n -- x hub/todos/T-1.json'),
+        ), deny=True)
+
+    def test_findstrs_slash_options_are_skipped(self):
+        self.rows((
+            (ps, 'findstr /n /a:4 hub launcher\\coordinators.json'),
+            (bash, 'findstr /i /s hub launcher/coordinators.json'),
+        ), deny=False)
+        self.rows((
+            (ps, 'findstr /a:4 x hub\\todos\\T-1.json'),
+            (bash, 'findstr /i x hub/todos/T-1.json'),
+        ), deny=True)
+
+    def test_only_the_session_options_value_is_exempt(self):
+        # a script's other options may name a folder it opens: `--force hub` puts hub after a
+        # flag, `--dir hub` hands it over; neither is exempt
+        self.rows((
+            (bash, 'python tools/cleanup.py --force hub'),
+            (bash, 'python tools/x.py --dir hub'),
+            (bash, 'python tools/x.py --dir=hub'),
+            (ps, 'python tools/x.py --what-if hub'),
+        ), deny=True)
+
+    def test_a_module_run_through_a_flag_cluster_is_not_a_script(self):
+        # -Bm and -Im run a module, -Ic code: the next word is not a script with options
+        self.rows((
+            (bash, 'python -Bm http.server --session hub'),
+            (bash, 'python -Im http.server --session hub'),
+            (bash, 'python -um tools.x --session hub'),
+            (bash, 'python -Ic pass --session hub'),
+        ), deny=True)
+
+    def test_no_exemption_reaches_the_token_folder(self):
+        # from the home's .pm-kit folder a bare `hub` is the token folder
+        pmkit = os.path.join(self.w.home, '.pm-kit')
+        os.makedirs(pmkit, exist_ok=True)
+        launch = W.fwd(os.path.join(self.w.kit_dir, 'tools', 'launch.py'))
+        for shell, line, cwd in (
+                (bash, 'python %s handoff --session hub --what-if' % launch, pmkit),
+                (bash, 'python %s handoff --session=hub' % launch, pmkit),
+                (bash, 'cd ~/.pm-kit && python %s handoff --session hub' % launch, self.w.data),
+                (bash, 'grep -n hub launcher.json', pmkit),
+                (ps, 'Select-String -Pattern hub -Path x.json', pmkit)):
+            with self.subTest(line=line, cwd=cwd):
+                self.denied(lambda sub, shell=shell, line=line, cwd=cwd: shell(line, cwd, sub), 'hub-secrets')
+
 
 # ---------------------------------------------------------------- hub-owner-verb
 
