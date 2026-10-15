@@ -565,7 +565,7 @@ def kit_export(ctx, root, action, cwd):
         export = pluginsource.settings(user.get(pluginsource.CONFIG_KEY), ctx.environ).export_dir
     except (pluginsource.RefreshError, OSError, ValueError, TypeError):
         return False
-    parent, name = os.path.split(os.path.normpath(root))
+    parent, name = os.path.split(paths.norm(root, fold=False))
     if not EXPORT_NAME_RE.fullmatch(name) or paths.norm(parent) != paths.norm(export):
         return False
     if not all(os.path.isfile(os.path.join(root, f)) for f in EXPORT_FILES):

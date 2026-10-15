@@ -982,11 +982,11 @@ class KitExport(Base):
         """refusals.md row 116, verbatim but for the folders: the coordinator's backlog add whose
         --summary named the lock CLI (`machine_lock run`; `machine_lock.py run` too)."""
         data = self.w.data.replace('\\', '/')
-        row = ('python "%s/tools/backlog.py" -C "%s" --session kit add KIT-LOCK-RUN-BAT-RESOLVE --summary '
+        row = ('python "%s/tools/backlog.py" -C "%s" --session kit add EX-LOCK-RUN-BAT-RESOLVE --summary '
                '"%s on Windows: \'-- ./gradlew\' fails WinError 193 ... or the heavy guard remedy should name '
                'the absolute .bat ..." --scope kitlib/lock/run.py --found-on none --why-not-folded "..."')
         self.passes([row % (self.root, data, 'machine_lock run'), row % (self.root, data, 'machine_lock.py run'),
-                     'python %s/tools/backlog.py -C %s --session kit add KIT-X --summary '
+                     'python %s/tools/backlog.py -C %s --session kit add EX-X --summary '
                      '"tools/hub.py answer and machine_lock.py stop"' % (self.root, data),
                      'python %s/tools/ledger.py add --repo kit --prov owner --q "may machine_lock.py run stop 42?" '
                      '--a "yes: tools/hub.py answer" --decides "machine_lock run" --source chat' % self.root])

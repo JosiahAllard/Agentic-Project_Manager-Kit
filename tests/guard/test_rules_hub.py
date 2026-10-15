@@ -1115,7 +1115,7 @@ class FailClosed(Hub):
         ), False)
 
     def test_family_commands_on_a_plain_line(self):
-        # KIT-GUARD-STRING-LITERAL-FALSE-POSITIVES: a line of plain commands joined by ;, &&, || or
+        # the string-literal false positives: a line of plain commands joined by ;, &&, || or
         # a newline, where every command naming the hub tool is a family command, passes
         # (rules.hub_family); git commit and ledger.py are family commands, their messages text
         wt = W.fwd(self.w.wt)
