@@ -1353,6 +1353,16 @@ class ComputedCheckoutReads(Base):
                    ('bash', 'git -C "$p" branch --list "$pat"')],
                   lambda a, **kw: self.denied(a, 'write-jail', **kw))
 
+    def test_a_powershell_word_that_runs_on_after_its_closing_quote_is_refused(self):
+        # PowerShell ends an argument that opens with a quote at its closing quote: what follows is
+        # another argument, which may be --output=<file> (rules.dyn_head)
+        self.each([('powershell', 'git -C $p log \'HEAD\'"$f"'), ('powershell', 'git -C $p log "HEAD~"$f'),
+                   ('powershell', 'git -C $p show "x$n"\'y\''), ('powershell', 'git -C $p diff "origin/$b""$f"')],
+                  lambda a, **kw: self.denied(a, 'write-jail', **kw))
+        # a word that opens with bare text runs on through its quotes as one argument
+        self.each([('powershell', 'git -C $p log HEAD~"$n"'), ('powershell', 'git -C $p show "HEAD~$n"')],
+                  lambda a, **kw: self.allowed(a, **kw))
+
     def test_a_write_stays_refused(self):
         self.each([('bash', 'git -C "$p" tag "v$n"'), ('bash', 'git -C "$p" symbolic-ref HEAD refs/heads/x'),
                    ('bash', 'git -C "$p" branch -m main old'), ('powershell', 'git -C $p branch -m main "$b"'),

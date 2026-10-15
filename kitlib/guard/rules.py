@@ -570,20 +570,29 @@ HUB_MODULE = 'tools.hub'
 # tool as a module or a script is refused, unless the command is the one shape hub_shape reads in
 # full. HUB_NAME_RES are the namings, each searched with the case ignored, in the line's own text
 # and in every command's words as the shell passes them (hub_named):
-#   hub.py as a word or a path's last part (tools/hub.py, ./hub.py; test_rules_hub.py is not it);
+#   hub.py as a word or a path's last part (tools/hub.py, ./hub.py; test_rules_hub.py is not it),
+#   and the compiled hub python runs as well (hub.pyc, __pycache__/hub.cpython-312.pyc) or hub.pyw;
 #   a dotted name ending in hub (tools.hub, 'tools.hub'; tests.hub.test_x and tools.hubsite are not);
 #   an import of hub: import hub, import os, tools.hub as h, from tools import (x, hub),
 #   from .hub import main, from tools.hub import main;
-#   python's -m (or a cluster ending in m, --module, `runpy`) naming hub itself: cd tools && python -m hub.
+#   python's -m (or a cluster ending in m, --module, `runpy`) naming hub itself: cd tools && python -m hub
+#   (hub_module_names).
 HUB_NAME_RES = (
-    re.compile(r'(?i)(?<![\w-])hub\.py\b'),
+    re.compile(r'(?i)(?<![\w-])hub(?:\.py[cw]?|\.[\w-]+\.pyc)\b'),
     re.compile(r'(?i)(?<=\w)\.hub(?![\w.-])'),
     re.compile(r'(?i)import\s+(?:[\w. \t]+,\s*)*(?:\w+\s*\.\s*)*hub(?![\w-])'),
     re.compile(r'(?i)\bfrom\s+(?:\w+\s*\.\s*)*\.*\s*hub\s+import\b'),
     re.compile(r'(?i)\bfrom\s+[\w.]+\s+import\s*\(?\s*(?:[\w \t]+,\s*)*hub(?![\w-])'),
-    re.compile(r'''(?i)(?<![\w.-])py(?:thon)?w?(?:\d+(?:\.\d+)*)?(?:\.exe)?(?![\w.-])[^;|&\n]*?'''
-               r'''(?:(?<![\w-])-[A-Za-z]*m[ \t]*|(?<![\w-])--module(?:[ \t]+|=)|\brunpy[ \t]+)['"]?hub(?![\w.-])'''),
 )
+# hub_module_names: a python word (python, py, pythonw, python3.12.exe), then on the same command
+# (`mid`, no ; | & or newline) a -m naming hub
+HUB_PY_WORD_RE = re.compile(r'(?i)(?<![\w.-])py(?:thon)?w?(?:\d+(?:\.\d+)*)?(?:\.exe)?(?![\w.-])')
+HUB_PY_MODULE_RE = re.compile(r'''(?i)(?P<mid>[^;|&\n]*?)(?:(?<![\w-])-[A-Za-z]*m[ \t]*|'''
+                              r'''(?<![\w-])--module(?:[ \t]+|=)|\brunpy[ \t]+)['"]?hub(?![\w.-])''')
+# the kit's record tools, whose own -m is a message: `python <kit>/tools/commit.py -m "Hub store: x"`
+# runs commit.py, and python reads no option after its script word
+HUB_PY_MESSAGE_SCRIPTS = frozenset(('commit.py', 'backlog.py', 'ledger.py'))
+HUB_PY_PLAIN_WORD_RE = re.compile(r'''^(['"]?)([\w./\\:+,=-]+)\1$''')
 # hub quoted as a name ('hub', ".hub") counts in a command whose text also loads a module by name:
 # __import__('tools', fromlist=['hub']), importlib.import_module('.hub', 'tools'), run_module('hub')
 HUB_QUOTED_RE = re.compile(r'''(?i)['"]\.*hub['"]''')
@@ -607,6 +616,8 @@ HUB_SHAPE = 'python, its plain options, then tools/hub.py or -m tools.hub, then 
 # <dir>/hub/todos), is not the tool; hub\ still counts, as a backslash may be Python's line join.
 HUB_BARE_RE = re.compile(r'(?i)(?<![\w-])(?<!\w\.)hub(?![\w/-])')
 HUB_IMPORT_RE = re.compile(r'(?i)\bimport\b')
+# a line that can make `cat` run another program, so a heredoc cat takes is read (hub_written_bodies)
+HUB_CAT_REDEFINED_RE = re.compile(r'(?<![\w-])cat\s*\(\s*\)|\bfunction\s+cat\b|\bhash\b|\balias\b|\benable\b')
 # the interpreters whose word makes a line one that runs python for hub_code_names (a program's
 # base name, cm.base_name: case and .exe folded, any path before it): UI_PYTHON_RE's, plus ipython
 # and pypy, with a version (pypy3, pypy3.10, ipython3). Kept apart from UI_PYTHON_RE, whose other
@@ -639,11 +650,16 @@ HUB_LEDGER_MESSAGES = ('--q', '--a', '--decides', '--source', '--title', '--why'
 # the text the parser leaves after a command's span that the path family takes: stream dups (2>&1)
 HUB_DUPS_RE = re.compile(r'^(?:\s*[\d*]?>&[\d-])*\s*$')
 # A plain line (hub_family): commands joined only by these operators, so no command's output or
-# state reaches another but through a file, a variable or the shell's own memory, each refused below
+# state reaches another but through a file, a variable or the shell's own memory, each refused
+# below, or through what git keeps (a commit's message, the index), which a later command may read
+# and run: that is a script the agent wrote, a documented limit (hub_named), not modelled
 HUB_LINE_OPS = frozenset((None, ';', '&&', '||', '\n'))
 # words that define or change what a later name runs (an alias, a function, a variable, a module,
-# an item on a provider drive), read the shell's memory (history, the call stack), run text as a
-# command, or open a compound command whose body the line's own order does not show
+# an item on a provider drive, a drive of its own: New-PSDrive f -PSProvider Function makes
+# f:\Get-Content a function), read the shell's memory (history, the call stack), run text as a
+# command, or open a compound command whose body the line's own order does not show. A write to
+# the env drive in any spelling is an environment variable set (commands.line_env_names); the
+# alias, function and variable drives are HUB_LINE_DRIVES
 HUB_LINE_DENIED = frozenset((
     'alias', 'unalias', 'function', 'filter', 'hash', 'enable', 'source', '.', 'shopt', 'eval', 'exec',
     'builtin', 'declare', 'typeset', 'local', 'readonly', 'export', 'set', 'unset', 'read', 'mapfile',
@@ -653,7 +669,7 @@ HUB_LINE_DENIED = frozenset((
     'set-alias', 'sal', 'new-alias', 'nal', 'import-alias', 'ipal', 'import-module', 'ipmo',
     'invoke-expression', 'iex', 'get-variable', 'set-variable', 'new-variable', 'clear-variable',
     'remove-variable', 'gv', 'sv', 'nv', 'clv', 'rv', 'get-history', 'ghy', 'h', 'r', 'invoke-history',
-    'ihy', 'get-pscallstack', 'set-item', 'si', 'new-item', 'ni'))
+    'ihy', 'get-pscallstack', 'set-item', 'si', 'new-item', 'ni', 'new-psdrive', 'ndr', 'mount'))
 # text naming a provider drive or preference that changes what a name runs or where output goes
 HUB_LINE_DRIVES = ('alias:', 'function:', 'variable:', 'psvariable', 'psdefault', 'pscallstack')
 # PowerShell's common parameters that store a command's output or messages in a variable, matched
@@ -872,11 +888,58 @@ def hub_text_names(text, loader=False):
         m = rx.search(text)
         if m:
             return m.group(0).strip()
+    found = hub_module_names(text)
+    if found:
+        return found
     if loader and HUB_LOADER_RE.search(text):
         m = HUB_QUOTED_RE.search(text)
         if m:
             return m.group(0)
     return None
+
+
+def hub_module_names(text):
+    """The text of `text` from a python word to a -m (a cluster ending in m, --module, runpy)
+    naming hub on the same command (HUB_PY_WORD_RE, HUB_PY_MODULE_RE), else None. Every python
+    word is tried, so one inside another's arguments (`$(python -m hub)`) is read too. The -m is
+    python's own unless python's words before it reach a script word first (hub_py_script_first):
+    `python Z:/k/tools/commit.py -m "Hub store: x"` gives commit.py its message."""
+    for w in HUB_PY_WORD_RE.finditer(text):
+        m = HUB_PY_MODULE_RE.match(text, w.end())
+        if m and not hub_py_script_first(m.group('mid')):
+            return text[w.start():m.end()].strip()
+    return None
+
+
+def hub_py_script_first(mid):
+    """True when python's words `mid` (between the python word and a -m naming hub) reach a
+    record tool's script word (HUB_PY_MESSAGE_SCRIPTS, a plain word: no variable, no wildcard)
+    before any option that takes code or a module (a cluster holding c or m) or `--`. A -W or -X
+    at a cluster's end takes the next word; --check-hash-based-pycs takes one. Anything else is
+    python's -m: fail-closed."""
+    toks = mid.split()
+    i = 0
+    while i < len(toks):
+        t = toks[i]
+        if t == '--':
+            return False
+        if t.startswith('--'):
+            i += 2 if t == '--check-hash-based-pycs' else 1
+            continue
+        if t.startswith('-') and len(t) > 1:
+            skip = 1
+            for k, ch in enumerate(t[1:], 1):
+                if ch in 'cmCM':
+                    return False
+                if ch in 'WX':
+                    if k == len(t) - 1:
+                        skip = 2
+                    break
+            i += skip
+            continue
+        m = HUB_PY_PLAIN_WORD_RE.match(t)
+        return bool(m) and ntpath.basename(m.group(2)).lower() in HUB_PY_MESSAGE_SCRIPTS
+    return False
 
 
 def hub_glob_names(cmd):
@@ -1194,8 +1257,10 @@ def hub_line_plain(parsed):
 def hub_family(parsed):
     """The commands of a plain line (hub_line_plain) that are path family commands
     (hub_family_cmd, git with no --output file), else []: on such a line no command's output,
-    name or state reaches another, so a family command there names the hub tool no more than it
-    does alone, and the line's other commands are read as before (hub_named)."""
+    name or state reaches another through the shell, so a family command there names the hub tool
+    no more than it does alone, and the line's other commands are read as before (hub_named).
+    State git keeps (a commit's message, the index) may still reach a later command that reads
+    and runs it; that is a script the agent wrote (hub_named's limit), not modelled."""
     if not hub_line_plain(parsed):
         return []
     return [c for c in parsed.commands if hub_family_cmd(parsed, c, outlet=True)]
@@ -1210,16 +1275,23 @@ def hub_code_names(parsed, text, shaped):
     at any depth, its source, its words as the shell passes them (bash's $'...' and PowerShell's
     backtick escapes decoded, Word.alt too) and its redirects' targets and bodies. `shaped` are
     the allowed-shape and path family commands, which run no python code given on the line. The guard's own
-    kitlib.guard.hub is read as another name first."""
+    kitlib.guard.hub is read as another name first. A heredoc that cat writes to a file
+    (hub_written_bodies) is data, as a file the Write tool writes is: its body is not read here
+    (hub_text_names still reads it for an import of hub or a path to hub.py)."""
     rest = [c for c in parsed.commands if not any(c is s for s in shaped)]
     if not any(not w.dyn and HUB_CODE_PYTHON_RE.match(cm.base_name(w.text)) for c in rest for w in c.words):
         return None
+    written = hub_written_bodies(parsed)
+    for r in written:
+        t = r.target
+        text = text[:t.start] + ' ' * (t.end - t.start) + text[t.end:]
     texts = [text]
     for c in rest:
         texts.append(c.text or '')
         texts.extend(w.text for w in c.words)
         texts.extend(w.alt for w in c.words if w.alt is not None)
-        texts.extend(r.target.text for r in c.redirects if r.target is not None)
+        texts.extend(r.target.text for r in c.redirects
+                     if r.target is not None and not any(r is b for b in written))
     texts = [hub_unexempt(t) for t in texts]
     if not any(HUB_IMPORT_RE.search(t) for t in texts):
         return None
@@ -1228,6 +1300,48 @@ def hub_code_names(parsed, text, shaped):
         if m:
             return m.group(0)
     return None
+
+
+def hub_written_bodies(parsed):
+    """The heredoc redirects of the line `parsed` whose body cat only writes to a file: a bash
+    command of the line's own text (no substitution, group or nested shell) whose program is cat
+    itself, every word literal, in no pipe, its output sent with > or >> to a literal file that is
+    no device (/dev/..., /proc/..., CON), and the body quoted (<<'EOF') or holding no $( or
+    backtick bash would run. Anything else may reach python: its body stays read, as on a line
+    that can make cat another program (a function named cat, hash, alias, a PATH set)."""
+    out = []
+    if HUB_CAT_REDEFINED_RE.search(parsed.text):
+        return out
+    for c in parsed.commands:
+        bodies = [r for r in c.redirects if r.body and r.target is not None]
+        if not bodies or c.shell != sh.BASH or c.depth != 0 or c.source != parsed.text:
+            continue
+        if (c.groups or c.subs or c.nested_in is not None or c.pipe_from is not None or c.piped_in
+                or c.piped_out or c.path_env):
+            continue
+        inv = cm.invocation(c)
+        if inv is None or inv.via is not None or (inv.name or '').lower() != 'cat' or c.words[0].text != 'cat':
+            continue
+        if any(w.dyn or w.synth for w in c.words):
+            continue
+        others = [r for r in c.redirects if not r.body]
+        if not any(r.writes and r.fd in ('1', '&') for r in others):
+            continue
+        if not all(r.writes and r.target is not None and not r.target.dyn and not r.target.synth
+                   and not hub_device_target(r.target.text) for r in others):
+            continue
+        if any(r.target.dyn and ('$(' in r.target.text or '`' in r.target.text) for r in bodies):
+            continue
+        out.extend(bodies)
+    return out
+
+
+def hub_device_target(text):
+    """True when a redirect target `text` is a device or a process's file, not a file on disk."""
+    t = text.replace('\\', '/').lower()
+    base = t.rstrip('/').rsplit('/', 1)[-1].split('.', 1)[0].rstrip(':')
+    return (t.startswith(('/dev/', '/proc/', '//./', '//?/')) or
+            base in ('con', 'prn', 'aux', 'nul', 'conin$', 'conout$') or re.fullmatch(r'(com|lpt)\d', base) is not None)
 
 
 def hub_command_texts(cmd):
@@ -4164,13 +4278,19 @@ def dyn_head(cmd, w):
     when the shell (bash or PowerShell) is sure to hand it to git as one argument that starts with
     that text: outside quotes only DYN_SAFE_BARE characters, inside '...' anything but the quote,
     inside "..." plain text and $name or ${name} only (no $( or backtick that runs code, no "$@" or
-    other variable that is many words, no backslash, no embedded quote); else None. A word with no
-    variable, or no valid place in the source, is None too (fail closed)."""
+    other variable that is many words, no backslash, no embedded quote); else None. PowerShell
+    ends an argument that opens with a quote at its closing quote and passes what follows as
+    another ('HEAD'"$f" is two), so such a word with text after its closing quote is None. A word
+    with no variable, or no valid place in the source, is None too (fail closed)."""
     src = cmd.source or ''
     if cmd.shell not in DYN_SAFE_BARE or w.start is None or w.end is None or not 0 <= w.start < w.end <= len(src):
         return None
     raw, ps = src[w.start:w.end], cmd.shell == sh.PS
     if ps and (cm.PS_SPLAT_RE.match(raw) or any(c in raw for c in '“”„‘’‚‛')):
+        return None
+    # a doubled quote or a backtick inside returns None below, so the first matching quote after
+    # the opening one is its close
+    if ps and raw[0] in '\'"' and raw.find(raw[0], 1) != len(raw) - 1:
         return None
     var_re, bare = (DYN_PS_VAR_RE if ps else DYN_VAR_RE), DYN_SAFE_BARE[cmd.shell]
     head, seen, i, quote = [], False, 0, None

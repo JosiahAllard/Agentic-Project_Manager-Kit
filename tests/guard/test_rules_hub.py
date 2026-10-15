@@ -947,6 +947,59 @@ class FailClosed(Hub):
             (bash, 'python -c "import os; print(os.listdir(\'Z:/x/hub/\'))"; echo hub'),
         ), True)
 
+    def test_hub_in_a_folder_name_a_message_or_a_file_written_is_not_the_hub_tool(self):
+        # observed refusals (2026-10-15): hub inside a folder or file name (hub-conductor,
+        # docs/hub-mcp.md), a heredoc that cat writes to a file (data, as a file the Write tool
+        # writes: rules.hub_code_names), commit.py's -m message after its script word (python's own
+        # -m comes before the script: rules.hub_module_names), and a log row quoting such a command
+        body = ("import json, os\nroot = 'hub-conductor/docs-tab-check/test-store'\n"
+                "hub = os.path.join(root, 'questions')\nprint(hub, 'Hub store ready')\n")
+        gen = "mkdir -p hub-conductor/docs-tab-check/test-store && cat > gen.py <<'EOF'\n" + body + "EOF\n"
+        commit = ('python Z:/k/tools/commit.py -C $PWD -m "Hub store: pass the PM\'s configured repo names" '
+                  '--model M kitlib/hubsite/store.py')
+        self.rows((
+            (bash, gen), (bash, gen + 'python gen.py'), (bash, gen + 'python gen.py --out docs/hub-mcp.md'),
+            (bash, "mkdir -p hub-conductor/x && cat >> gen.py <<EOF\nimport os\n# write the hub store\nEOF"),
+            (bash, 'cat docs/hub-mcp.md'), (bash, 'mkdir -p hub-conductor/refusals && python -c "import json"'),
+            # hub followed by a hyphen, or inside a backslash path, in python code with an import
+            (bash, 'python -c "import os; print(os.listdir(\'Z:/x/hub-conductor\'))"'),
+            (ps, 'python -c "import os; print(os.listdir(r\'Z:\\x\\hub-conductor\\y\'))"'),
+            (bash, 'python -c "import os; print(os.listdir(r\'Z:\\x\\hub-conductor\\y\'))"'),
+            (ps, 'python -c "import os; print(os.path.exists(\'docs/hub-mcp.md\'))"'),
+            (bash, 'git commit -m "Hub store: fix x"'), (bash, 'git commit -m "Hub store: import the todos"'),
+            (bash, 'cd %s && %s' % (W.fwd(self.w.wt), commit)), (bash, commit),
+            (bash, 'python Z:/k/tools/backlog.py add K-1 -m "Hub store" --summary x'),
+            (bash, 'python -I "Z:/k/tools/ledger.py" add -m hub --q x'),
+            (ps, 'cd %s; %s' % (W.fwd(self.w.wt), commit)),
+            (ps, "Add-Content -Encoding utf8 -LiteralPath refusals.md -Value '| 2026-10-15 | worker | Bash | "
+                 "%s | names the hub tool (... -m \"Hub) [kit guard: rule=hub-owner-verb role=subagent] |'"
+                 % commit.replace("'", "''")),
+            (ps, "Add-Content -Encoding utf8 -LiteralPath refusals.md -Value '| 2026-10-15 | planner | Bash | "
+                 "mkdir -p Z:/AgentTemp/hub-conductor/x && cat > gen.py <<''EOF'' ... EOF | names the hub tool "
+                 "(hub) [kit guard: rule=hub-owner-verb role=subagent] |'"),
+        ), False)
+        # what reaches python stays read: a heredoc python or a pipe takes, a hub path or import in
+        # a file cat writes, and python's own -m before any script word
+        self.rows((
+            (bash, "cat <<'EOF' | python -\nimport json\nprint('hub page')\nEOF"),
+            (bash, "cat > gen.py <<'EOF' | python -\nimport json\nprint('hub page')\nEOF"),
+            (bash, "cat > gen.py <<'EOF'\nimport tools.hub as h\nh.main(['answer', 'Q-1'])\nEOF\npython gen.py"),
+            (bash, "cat > gen.py <<'EOF'\nimport json\nEOF\npython - <<'EOF'\nimport json\nprint('hub')\nEOF"),
+            (bash, "cat > $f <<'EOF'\nimport json\nprint('hub')\nEOF\npython gen.py"),
+            (bash, "cat > /dev/stdout <<'EOF'\nimport json\nprint('hub')\nEOF\npython gen.py"),
+            (bash, "cat > gen.py <<EOF\nimport json\n$(python -c 'print(1)')\nprint('hub')\nEOF\npython gen.py"),
+            (bash, "cat() { python -; }; cat > gen.py <<'EOF'\nimport json\nprint('hub')\nEOF"),
+            (bash, "{ cat > gen.py <<'EOF'\nimport json\nprint('hub')\nEOF\n} ; python gen.py"),
+            (bash, 'python Z:/k/tools/commit.py -m "$(python -m hub answer Q-1)" x.py'),
+            (bash, 'python -- Z:/k/tools/commit.py -m hub'), (bash, 'python -m Z:/k/tools/commit.py -m hub'),
+            (bash, 'cd tools && python -W ignore -m hub answer Q-1'), (bash, 'cd tools && python -Bm hub answer Q-1'),
+            (bash, 'cd tools && python C:/Python/Lib/cProfile.py -m hub answer Q-1'),
+            (bash, 'cd tools && python "$S" -m hub answer Q-1'), (bash, 'cd tools && python $S -m hub answer Q-1'),
+            (bash, 'cd tools && python -m cProfile -m hub answer Q-1'),
+            (bash, 'cd tools && python -c "x" Z:/k/tools/commit.py -m hub answer Q-1'),
+            (ps, 'cd tools; python -X dev -m hub answer Q-1'),
+        ), True)
+
     def test_hub_in_python_code_from_anywhere_on_the_line(self):
         # a pipe of any length, a module that runs code it reads (code, asyncio, timeit -s,
         # pdb -c), and a newline the shell decodes ($'...', PowerShell's backtick n) all reach
@@ -1073,6 +1126,32 @@ class FailClosed(Hub):
             (bash, 'python -c "import x" Z:/k/tools/commit.py -m "tools.hub" tools/x.py'),
         ), True)
 
+    def test_git_commit_message_spellings(self):
+        # every spelling of git commit's message is text (rules.hub_git_words): a flag cluster
+        # ending in m with its value apart or joined, --message apart or with =
+        self.rows((
+            (bash, 'git commit -am "fix tools.hub"'), (bash, 'git commit -qam "fix tools.hub" tools/hub.py'),
+            (bash, 'git commit -amtools.hub'), (bash, 'git commit -mtools.hub tools/hub.py'),
+            (bash, 'git commit --message "fix tools.hub" tools/hub.py'),
+            (bash, 'git commit --message="fix tools.hub" tools/hub.py'),
+            (ps, 'git commit -am "fix tools.hub"'), (ps, 'git commit --message="fix tools.hub"'),
+        ), False)
+        # the cluster's other letters and the words after the message are still read
+        self.rows((
+            (bash, 'git commit -am x tools.hub'), (bash, 'git commit -amx tools.hub'),
+            (bash, 'git commit --message=x tools.hub'), (bash, 'git commit --message x tools.hub'),
+            (bash, 'git commit -em "fix tools.hub"'), (bash, 'git commit -pm x tools/hub.py'),
+            (bash, 'git commit -m x -- tools.hub'),
+        ), True)
+
+    def test_the_compiled_hub_tool(self):
+        # python runs a .pyc as it runs hub.py (rules.HUB_NAME_RES)
+        self.rows((
+            (bash, 'python tools/__pycache__/hub.cpython-312.pyc answer Q-1'),
+            (bash, 'cd tools/__pycache__ && python hub.cpython-312.pyc answer Q-1'),
+            (bash, 'python tools/hub.pyc answer Q-1'), (ps, 'python tools\\hub.pyw answer Q-1'),
+        ), True)
+
     def test_backlog_paths_naming_the_hub_tool(self):
         # backlog.py records paths (--scope, --body-file, a positional) and runs none of them, so a
         # path word to hub.py passes there as in commit.py's paths, on every verb
@@ -1150,7 +1229,23 @@ class FailClosed(Hub):
             (bash, 'git show HEAD:tools/hub.py --output=x.py; python x.py answer Q-1'),
             (bash, 'git commit -m x tools.hub'),
             (bash, 'python Z:/k/tools/ledger.py add --repo tools.hub --q x'),
+            # a drive made on the line, or a write to a provider drive, can define what a later
+            # name runs (a function, PATH) on PowerShell: a drive maker is refused on the line
+            # (rules.HUB_LINE_DENIED), a write to env: is a variable set (commands.line_env_names),
+            # and function: by its provider's name is a drive (rules.HUB_LINE_DRIVES)
+            (ps, 'New-PSDrive -Name f -PSProvider Function -Root \\; Get-Content tools/hub.py'),
+            (ps, 'ndr f Function \\; Get-Content tools/hub.py'),
+            (ps, 'mount f Function \\; Get-Content tools/hub.py'),
+            (ps, 'Set-Content env:PATH Z:\\x; git diff tools/hub.py'),
+            (ps, 'Set-Content -Path Env:\\Path -Value Z:\\x; git diff tools/hub.py'),
+            (ps, 'Add-Content -Path:env:PATH -Value ;Z:\\x; git diff tools/hub.py'),
+            (ps, "Copy-Item Z:\\x\\f.ps1 Microsoft.PowerShell.Core\\Function::cat; Get-Content tools/hub.py"),
         ), True)
+        # a write to a file beside a family command stays plain
+        self.rows((
+            (ps, 'Get-Content tools/hub.py; Set-Content notes.txt x'),
+            (ps, 'git show HEAD:tools/hub.py; Add-Content -Path notes.txt -Value x'),
+        ), False)
 
 
 # ---------------------------------------------------------------- hub-mcp
