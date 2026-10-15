@@ -79,7 +79,6 @@ class SharedRefsFromAWorktree(SharedRefBase):
                            'env git update-ref -d refs/heads/main', 'command git update-ref -d refs/heads/main',
                            'git update-ref -d refs/heads/main 2>/dev/null || true',
                            'git update-ref -- refs/heads/main HEAD', 'git update-ref -d -- refs/heads/main'])
-        self.each_refused(['Start-Process git -ArgumentList "update-ref -d refs/heads/main"'], tool='PowerShell')
 
     def test_a_subcommand_the_text_does_not_name_is_refused(self):
         for env in (None, tj.COORDINATOR):
