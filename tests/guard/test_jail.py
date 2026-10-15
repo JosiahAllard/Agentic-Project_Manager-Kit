@@ -905,6 +905,49 @@ class LanderMainCheckout(MainGit):
                 self.jailed(self.git(text))
 
 
+class RefDeleteHint(MainGit):
+    """`git update-ref -d` in a main checkout is refused with a ref delete's own Instead, never a
+    worktree: every worktree shares the repository's refs (docs/guard.md "Write jail")."""
+
+    def git_at(self, text, cwd):
+        ev = event('Bash', {'command': text, 'description': 'test'}, cwd, True, 'worker')
+        return decide(ev, self.w.ctx(environ={}))
+
+    def test_a_branch_ref_delete_points_at_branch_d(self):
+        # from the session's worktree the Instead runs there; from the main checkout, there
+        m = self.main
+        for cwd, at in ((self.w.wt, W.fwd(self.w.wt)), (self.w.main, m)):
+            for text in ('git -C "%s" update-ref -d refs/heads/kit/x' % m,
+                         'git -C "%s" update-ref -m why -d refs/heads/kit/x' % m,
+                         'git -C "%s" update-ref -d refs/heads/kit/x 0123abc' % m):
+                with self.subTest(text, cwd=cwd):
+                    d = self.jailed(self.git_at(text, cwd), 'git-main-history')
+                    self.assertIn('Instead: git -C "%s" branch -d kit/x [' % at, d.reason)
+                    self.assertIn('shares this repository\'s refs', d.reason)
+                    self.assertNotIn('worktree add', d.instead)
+                    self.assertNotIn('update-ref', d.instead)
+                    with self.subTest('the Instead itself'):
+                        self.allowed(self.git_at(d.instead, cwd))
+
+    def test_another_ref_delete_shows_the_ref(self):
+        m, wt = self.main, W.fwd(self.w.wt)
+        for text, ref in (('git -C "%s" update-ref -d refs/tags/v1' % m, 'refs/tags/v1'),
+                          ('git -C "%s" update-ref -d refs/remotes/origin/x' % m, 'refs/remotes/origin/x'),
+                          ('git -C "%s" update-ref -d "$R"' % m, '<ref>'),
+                          ('git -C "%s" update-ref -d refs/heads/' % m, 'refs/heads/')):
+            with self.subTest(text):
+                d = self.jailed(self.git_at(text, self.w.wt), 'git-main-history')
+                self.assertIn('Instead: git -C "%s" show-ref %s [' % (wt, ref), d.reason)
+                self.assertIn('the PM\'s to delete', d.reason)
+
+    def test_a_ref_update_keeps_the_worktree_hint(self):
+        m, wt = self.main, W.fwd(self.w.wt)
+        d = self.jailed(self.git_at('git -C "%s" update-ref refs/heads/x HEAD' % m, self.w.wt), 'git-main-history')
+        self.assertIn('Instead: git -C "%s" update-ref refs/heads/x HEAD [' % wt, d.reason)
+        d = self.jailed(self.git_at('git update-ref refs/heads/x HEAD', self.w.main), 'git-main-history')
+        self.assertIn('worktree add', d.instead)
+
+
 class UnplacedGit(MainGit):
     """A git write whose checkout the text cannot place (GIT_DIR, GIT_WORK_TREE, --git-dir,
     --work-tree, core.worktree, a computed -C) is refused for every agent role: it may be a main

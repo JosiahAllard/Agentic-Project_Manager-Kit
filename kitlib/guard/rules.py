@@ -1774,8 +1774,10 @@ CMD_WRITERS = {'copy', 'xcopy', 'robocopy', 'move', 'del', 'erase', 'md', 'mkdir
                'ren', 'rename', 'type'}
 COPIERS = {'robocopy', 'xcopy'}                 # Windows programs every shell runs
 EVALS = {'node': ('-e', '--eval', '-p', '--print'), 'ruby': ('-e',)}
+# a .NET file call that writes (OpenRead and OpenText only read)
 IO_FILE_RE = re.compile(r'(?i)\[(?:System\.)?IO\.(?:File|Directory)\]::'
-                        r'(?:Write|Append|Create|Copy|Move|Delete|Replace|Open)')
+                        r'(?:Write|Append|Create|Copy|Move|Delete|Replace|Open(?!Read\b|Text\b))')
+NET_ABS_RE = re.compile(r'^(?:[A-Za-z]:[\\/]|[\\/]{2})')     # a path .NET reads the same from any directory
 WIN_OPT_RE = re.compile(r'^/[A-Za-z]+(?::\S*)?$')
 
 
@@ -1845,6 +1847,159 @@ def _split_commas(w):
 def here(w):
     """A Word for the directory a command runs in: the file it writes there is not named."""
     return sh.Word('.', False, w.start if w is not None else 0, w.end if w is not None else 0)
+
+
+class NetWrite(object):
+    """One path a .NET file call writes (net_writes): `word` its argument, dyn when the line
+    computes it (a variable, an expression, a string with $ or a backtick), with its span in the
+    source; `end` the offset just past the call's closing parenthesis."""
+    __slots__ = ('word', 'end')
+
+    def __init__(self, word, end):
+        self.word, self.end = word, end
+
+
+NET_QUOTES = '‘’‚‛“”„'     # PowerShell reads these as quotes too
+
+
+def _net_string_end(src, k):
+    """The offset just past the PowerShell string that starts at src[k] (' or ")."""
+    q, n = src[k], len(src)
+    k += 1
+    while k < n:
+        c = src[k]
+        if q == '"' and c == '`':
+            k += 2
+            continue
+        if c == q:
+            if src[k + 1:k + 2] == q:
+                k += 2
+                continue
+            return k + 1
+        k += 1
+    return n
+
+
+def _net_literal(raw):
+    """The text of the argument `raw` when it is a plain string ('...', or "..." with no $ or
+    backtick), else None."""
+    if any(c in NET_QUOTES for c in raw):
+        return None
+    m = re.match(r"^'((?:[^']|'')*)'$", raw, re.S)
+    if m:
+        return m.group(1).replace("''", "'")
+    m = re.match(r'^"((?:[^"$`]|"")*)"$', raw, re.S)
+    return m.group(1).replace('""', '"') if m else None
+
+
+def _net_args(src, k):
+    """([(text or None, start, end)], end): the arguments of the call whose '(' is just before
+    offset `k` of `src` (text None: not a plain string, _net_literal), and the offset just past
+    its closing parenthesis (len(src) when it has none)."""
+    args, n = [], len(src)
+    while True:
+        while k < n and src[k] in ' \t\r\n':
+            k += 1
+        start, depth = k, 0
+        while k < n:
+            c = src[k]
+            if c in '\'"':
+                k = _net_string_end(src, k)
+                continue
+            if c == '`':
+                k += 2
+                continue
+            if c in '([{':
+                depth += 1
+            elif c in ')]}':
+                if depth == 0:
+                    break
+                depth -= 1
+            elif c == ',' and depth == 0:
+                break
+            k += 1
+        raw = src[start:min(k, n)].rstrip()
+        if raw:
+            args.append((_net_literal(raw), start, start + len(raw)))
+        if k >= n:
+            return args, n
+        if src[k] != ',':
+            return args, k + 1
+        k += 1
+
+
+def _net_written(method, count):
+    """(indexes, all found): the indexes of the arguments a .NET File or Directory method writes -
+    Copy its destination, Move both, Replace all three, any other its first - among the `count`
+    arguments read, and False when one of them is past the last (the guard did not read the call
+    as .NET will)."""
+    if method.startswith('copy'):
+        idx = (1,)
+    elif method.startswith('move'):
+        idx = (0, 1)
+    elif method.startswith('replace'):
+        idx = (0, 1, 2)
+    else:
+        idx = (0,)
+    return [i for i in idx if i < count], all(i < count for i in idx)
+
+
+def _net_lost(span):
+    """True when _net_args may have lost its place in the argument text `span`, so the literal it
+    read as an argument may be part of another: a smart quote (PowerShell closes one with a plain
+    quote), a here-string (@" or @'), a comment (#), a braced variable (${: PowerShell reads its
+    name up to the }, quotes included), or a subexpression ($() where a double quote also appears
+    (a " inside it does not end the outer string)."""
+    if any(c in NET_QUOTES for c in span) or '@"' in span or "@'" in span or '#' in span or '${' in span:
+        return True
+    return '"' in span and '$(' in span
+
+
+def net_writes(cmd):
+    """([NetWrite], unread): each path the PowerShell command's .NET file calls (IO_FILE_RE) write,
+    and True when a match is a write the guard does not read the path of, so write_targets judges
+    the directory the command runs in, as it did for every such call: one inside a quoted word, a
+    method named with no '(' after it (called later, through .Invoke or a variable), a call with
+    fewer arguments than the ones it writes (_net_written), and one whose arguments the parse may
+    have lost its place in (_net_lost). A $null argument (Replace's backup) writes nothing."""
+    if cmd.shell != sh.PS:
+        return [], False
+    out, unread, src = [], False, cmd.source
+    for m in IO_FILE_RE.finditer(cmd.text):
+        pos = cmd.start + m.start()
+        w = next((x for x in cmd.words if x.start <= pos < x.end), None)
+        if w is None or src[w.start:w.start + 1] in '\'"' + NET_QUOTES:
+            unread = True
+            continue
+        rest = re.compile(r'\w*').match(src, cmd.start + m.end())
+        method = (m.group(0).rpartition('::')[2] + rest.group(0)).lower()
+        k = rest.end()
+        while k < len(src) and src[k] in ' \t':
+            k += 1
+        if src[k:k + 1] != '(':
+            unread = True
+            continue
+        args, end = _net_args(src, k + 1)
+        written, found = _net_written(method, len(args))
+        unread = unread or not found or _net_lost(src[k + 1:end])
+        for i in written:
+            text, s, e = args[i]
+            if text is None and src[s:e].lower() == '$null':
+                continue
+            out.append(NetWrite(sh.Word(src[s:e] if text is None else text, text is None, s, e), end))
+    return out, unread
+
+
+def net_placed(w):
+    """True when the .NET argument Word `w` is a literal absolute path (NET_ABS_RE)."""
+    return not w.dyn and bool(NET_ABS_RE.match(w.text))
+
+
+def net_retarget(cmd, x, path):
+    """The command `cmd` through the end of its .NET call, with the NetWrite `x`'s argument
+    replaced by `path`."""
+    start = cmd.words[0].start if cmd.words else cmd.start
+    return (cmd.source[start:x.word.start] + literal_word(path) + cmd.source[x.word.end:x.end]).strip()
 
 
 def _cluster_values(args, value_shorts, value_longs, k):
@@ -2195,7 +2350,12 @@ def write_targets(cmd, inv):
             continue
         out.append(r.target)
     if cmd.shell == sh.PS and IO_FILE_RE.search(cmd.text):
-        out.append(here(cmd.words[0] if cmd.words else None))
+        net, unread = net_writes(cmd)
+        out.extend(x.word for x in net if net_placed(x.word))
+        # The rest are dotnet_unplaced's, and the directory the command runs in is judged too,
+        # as it was for every .NET call: the repository's roles there answer for any session.
+        if unread or any(not net_placed(x.word) for x in net):
+            out.append(here(cmd.words[0] if cmd.words else None))
     if inv is None:
         return out
     out.extend(inv.writes)
@@ -2522,6 +2682,12 @@ def shell_writes(event, ctx, cmd, inv, cwd, role):
     d = git_jail(event, ctx, cmd, inv, cwd, role)
     if d:
         return d
+    d = dotnet_unplaced(event, ctx, cmd, cwd, role)
+    if d:
+        return d
+    net = {}
+    if cmd.shell == sh.PS and IO_FILE_RE.search(cmd.text):
+        net = dict(((x.word.start, x.word.end), x) for x in net_writes(cmd)[0])
     into = copy_into(cmd, inv)
     for w in write_targets(cmd, inv):
         if cmd.shell == sh.BASH and not w.dyn and BASH_DEVICE_RE.match(w.text):
@@ -2553,6 +2719,8 @@ def shell_writes(event, ctx, cmd, inv, cwd, role):
         stand_in = w.text == '.' and cmd.source[w.start:w.end] != '.'     # here(): no word to aim
         part = any((x.start, x.end) == (w.start, w.end) and x.text != w.text for x in cmd.words)
         rewrite = None if stand_in or part else (lambda path, w=w: retarget(cmd, w, path))   # part: -tDIR
+        if (w.start, w.end) in net and not w.dyn:
+            rewrite = lambda path, x=net[(w.start, w.end)]: net_retarget(cmd, x, path)
         for t in into_folder(target, w, into, cmd.cwd) if target else [target]:
             d = edit_target(event, ctx, t, cwd, role, what, why, rewrite=rewrite, run=bare(cmd))
             if d:
@@ -2561,6 +2729,54 @@ def shell_writes(event, ctx, cmd, inv, cwd, role):
             d = ps_drive_jail(event, ctx, cwd, role, what, why, rewrite)
             if d:
                 return d
+    return None
+
+
+NET_RELATIVE = ('.NET reads a relative path against the process\'s working directory '
+                '([Environment]::CurrentDirectory), not the PowerShell location: Set-Location and cd do not move it, '
+                'so the file may land in the checkout the session started in.')
+
+
+def dotnet_unplaced(event, ctx, cmd, cwd, role):
+    """A .NET file call (net_writes) that writes a path the guard cannot place: a relative path,
+    a rooted one with no drive, or a path the line computes. .NET resolves it against the
+    process's directory (NET_RELATIVE), which the guard cannot tell, from a worktree too. Refused
+    for a role that may not edit a main checkout (main-checkout) and for an agent session
+    (write-jail); the owner's own session is not judged. A relative path is first judged where the
+    PowerShell location puts it (edit_target), and the alternative is the call on that absolute
+    path."""
+    if cmd.shell != sh.PS or not IO_FILE_RE.search(cmd.text):
+        return None
+    for x in net_writes(cmd)[0]:
+        w = x.word
+        if net_placed(w):
+            continue
+        plain = not w.dyn and w.text and w.text[0] not in '\\/~' and ':' not in w.text
+        fixed = paths.norm(os.path.join(cmd.cwd, w.text), fold=False) if plain and cmd.cwd else None
+        start = cmd.words[0].start if cmd.words else cmd.start
+        what = '`%s` writes %s' % (cmd.source[start:x.end],
+                                   'a path the line computes (%s)' % w.text if w.dyn else w.text)
+        rewrite = lambda path, x=x: net_retarget(cmd, x, path)
+        if fixed:
+            d = edit_target(event, ctx, fixed, cwd, role, what, rewrite=rewrite)
+            if d:
+                return d
+        cfg = ctx.config(fixed or cmd.cwd) if fixed or cmd.cwd else None
+        if not kconfig.permissions(event, kconfig.roles(cfg)).get('edit_main_checkout'):
+            rule = 'main-checkout'
+        elif agent_session(event, ctx):
+            rule = 'write-jail'
+        else:
+            continue
+        why = '%s through .NET. %s' % (what, NET_RELATIVE)
+        if w.dyn:
+            why += ' The guard does not read a path the line computes.'
+        if fixed:
+            return refuse(rule, role, why + ' The same write on the absolute path:', rewrite(fixed))
+        base = own_worktree(ctx, cwd) or cmd.cwd
+        if base:
+            return refuse(rule, role, why + ' Give it a literal absolute path:', rewrite(fwd(base) + '/<file>'))
+        return refuse(rule, role, why + ' Give it a literal absolute path; to see where this session runs:', 'pwd')
     return None
 
 
@@ -2876,7 +3092,7 @@ GIT_LONG_VALUES = {'message', 'file', 'author', 'date', 'template', 'reuse-messa
                    'receive-pack', 'exec', 'set-upstream-to', 'sort', 'format', 'contains', 'no-contains',
                    'points-at', 'pathspec-from-file', 'directory', 'whitespace', 'include', 'build-fake-ancestor'}
 GIT_SHORT_VALUES = {'commit': 'mFCct', 'restore': 's', 'clean': 'e', 'push': 'o', 'stash': 'm', 'branch': 'u',
-                    'apply': 'pC'}
+                    'apply': 'pC', 'update-ref': 'm'}
 
 
 def _canon_long(sub, body):
@@ -2987,7 +3203,7 @@ def git_rules(event, ctx, cmd, inv, cwd, role):
             why = lander_check(event, ctx, cmd, inv, gc)[1] if place.kind == repo.MAIN else None
             if why is not None:
                 return lander_refusal(ctx, cmd, gc, 'git-main-history', role, why)
-            how, instead = git_in_worktree(ctx, cmd, gc, top, cwd)
+            how, instead = ref_delete_hint(ctx, gc, top, cwd, short, longs, pos) or git_in_worktree(ctx, cmd, gc, top, cwd)
             return refuse('git-main-history', role, '`%s` writes history or files in %s; this role may not change a '
                           'main checkout. %s' % (text, where, how), instead)
     no_wt, wt = new_worktree(ctx, place.top)
@@ -3540,6 +3756,24 @@ def git_in_worktree(ctx, cmd, gc, main_top, cwd):
     if no_wt:
         return no_wt, instead
     return 'Work in a worktree and run git %s there; the lander brings it to main:' % gc.sub, instead
+
+
+def ref_delete_hint(ctx, gc, top, cwd, short, longs, pos):
+    """(sentence, command) for `git update-ref -d <ref>`, or None. Every worktree of a repository
+    shares its refs, so neither a worktree nor the lander carries a ref delete to main: a branch
+    goes with git branch -d, which refuses an unmerged one; any other ref is shown, and the PM
+    deletes it. Both run in the session's own worktree of this main checkout when it has one."""
+    if gc.sub != 'update-ref' or 'd' not in short or 'stdin' in longs or gc.blind:
+        return None
+    ref = pos[0] if pos else None
+    name = ref.text if ref is not None and not ref.dyn else None
+    at = quote(own_worktree(ctx, cwd, top) or top)
+    shared = 'Every worktree shares this repository\'s refs, so no worktree or landing carries a ref delete to main.'
+    if name and name.startswith('refs/heads/') and len(name) > len('refs/heads/'):
+        return ('%s Delete a branch with git branch -d, which refuses an unmerged one; unmerged work goes to '
+                'the PM, never deleted:' % shared, 'git -C %s branch -d %s' % (at, name[len('refs/heads/'):]))
+    return ('%s A ref other than a branch is the PM\'s to delete; to show it:' % shared,
+            'git -C %s show-ref %s' % (at, name or '<ref>'))
 
 
 def git_unplaced(ctx, cmd, gc, cwd):
