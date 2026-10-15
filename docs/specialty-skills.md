@@ -1,12 +1,12 @@
 # Specialty skills: task specialties as skills, not agent types
 
-Status: DRAFT for owner review. Nothing here is built. Written for the state after R-1983
-(senior-worker opus/high, strong-worker opus/medium) and R-1984 (weak-worker, haiku 5.5) land; those
-rows come from the owner's rulings, not from main.
+Status: DRAFT for owner review. Nothing here is built. Written for the state after two pending
+changes land: senior-worker on opus/high with strong-worker on opus/medium (the tier change), and a
+weak-worker on haiku 5.5 (the weak-worker change). Those rows come from the owner's rulings, not from main.
 
 ## Owner ruling
 
-R-1985, as relayed by the PM: "specialties become skills instead of agent types; written as a spec
+The owner's ruling, as relayed by the PM: "specialties become skills instead of agent types; written as a spec
 first". Goal: more task specialties without more agent types. A specialty is a skill a generic agent
 loads because its brief names it. The agent type sets model, effort and permissions; the skill sets
 know-how. Every inference is marked "inference"; the rest is read from the code.
@@ -36,7 +36,7 @@ know-how. Every inference is marked "inference"; the rest is read from the code.
    `{{user_folder}}`, `{{instructions_file}}` (19 token uses, by grep) and need host-neutral
    rewording. The bodies are 10.5, 9.8 and 10.5 KB; a skill is a short checklist plus companion
    files (as `coordinator-dispatch/roster.md`).
-7. R-1983 changes the creative mapping: asset-smith and tech-artist are strong/high today, and
+7. The tier change alters the creative mapping: asset-smith and tech-artist are strong/high today, and
    strong-worker becomes opus/medium, so their equivalent is senior-worker (opus/high).
 8. `kitlib/gate/land.py` `is_author` compares reviewer and author agent types as free text; no
    landing code names `reviewer`. Review must stay on a read type: a worker type reviewing a
@@ -50,13 +50,13 @@ know-how. Every inference is marked "inference"; the rest is read from the code.
 
 | type | tier / effort | mode, group | note |
 |---|---|---|---|
-| weak-worker, worker, strong-worker, senior-worker | per R-1983/R-1984 | write, builder | the brief picks one per task; specialty skills ride on these |
+| weak-worker, worker, strong-worker, senior-worker | per the tier and weak-worker changes | write, builder | the brief picks one per task; specialty skills ride on these |
 | read type (reviewer + researcher) | standard / high | read, read-only | skills `specialty-review`, `specialty-research` |
 | docs type (records + spec-writer) | standard / see Q3 | write, docs | skills `specialty-records`, `specialty-spec` |
 | lander, test-runner, coordinator, pm, consultant, deep-worker | unchanged | unchanged | |
 
 Retired: asset-smith, tech-artist, sound-smith, researcher, reviewer, records, spec-writer (7 files);
-added: read type, docs type. Role files: 16 now, 12 with weak-worker (R-1984).
+added: read type, docs type. Role files: 16 now, 12 with weak-worker.
 
 ## Specialty skills
 
@@ -135,7 +135,7 @@ widening of a strict path. Keep both.
 
 1. "Which role, which tier" gains a step: match the task to a specialty skill; the brief names it
    ("Load skill `specialty-sound` first") and names the worker tier. The tier ladder stays the
-   owner's R-1983/R-1984 text; this adds only the specialty's minimum tier.
+   owner's tier text; this adds only the specialty's minimum tier.
 2. "Roles and what each is for": drop 7 names, add the read and docs types, one line listing the
    specialty skills.
 3. "Choosing": delete "Effort is not settable per dispatch" only if Q3 verifies a host input. The
@@ -224,12 +224,12 @@ type fails loudly in the host.
 
 ## Build split
 
-Order: A, then B (after R-1983/R-1984 land: `docs/ROSTER.md` and `roster.md` conflicts), then C, D.
+Order: A, then B (after the tier and weak-worker changes land: `docs/ROSTER.md` and `roster.md` conflicts), then C, D.
 
 | branch | files | risk | size | waits for |
 |---|---|---|---|---|
 | A skills | `content/skills/specialty-*/` (7), rendered `hosts/codex/shell/skills/`; tests/skills, tests/content | strict `content/skills/**`; High | L | Q2, Q5, Q7 |
-| B types and dispatch (atomic hard cut) | delete 7 `content/roles/*.md`, add 2; `coordinator-dispatch`, `subagent-dispatch`, `branch-review`, `coordinator.md`; rendered `hosts/*/shell/agents/**`, `plugin.json`; ROSTER, guard, content, go-live docs; `templates/common/AGENTS.md`; tests; `command_canary.py` | strict `content/roles/**`, `content/skills/**`, `hosts/*/shell/agents/**`, `hosts/*/adapter/**`; High | L | A, R-1983/R-1984, Q1, Q3, Q4, Q6 |
+| B types and dispatch (atomic hard cut) | delete 7 `content/roles/*.md`, add 2; `coordinator-dispatch`, `subagent-dispatch`, `branch-review`, `coordinator.md`; rendered `hosts/*/shell/agents/**`, `plugin.json`; ROSTER, guard, content, go-live docs; `templates/common/AGENTS.md`; tests; `command_canary.py` | strict `content/roles/**`, `content/skills/**`, `hosts/*/shell/agents/**`, `hosts/*/adapter/**`; High | L | A, the tier changes, Q1, Q3, Q4, Q6 |
 | C guard | none planned; only if Q2 is B (role file `writes:`, `tests/guard/test_rolepolicy.py`) | strict `kitlib/guard/**` if touched; High | S | Q2 |
 | D repo migration | to-do 1 to 3 (owner paths); non-owner docs in repos (a) and (b) | docs Low; owner paths owner-only | S | B landed |
 
