@@ -1681,5 +1681,125 @@ class FetchKeysTest(unittest.TestCase):
         self.assertEqual(server.hits, ['/keys'])
 
 
+class ProbeTest(unittest.TestCase):
+    """access.probe: one fetch of the team's keys for the owner's status check, with the fetcher
+    injected. It never raises and is ok only with a usable key in hand."""
+
+    HOST = '%s.cloudflareaccess.com' % K.TEAM.lower()
+    SECRET = 'a-made-up-secret-word'
+
+    def setUp(self):
+        self.calls = []
+
+    def fetcher(self, answer):
+        """A fetcher that records (team, timeout) and gives `answer`, or raises it."""
+        def fetch(team, timeout):
+            self.calls.append((team, timeout))
+            if isinstance(answer, BaseException):
+                raise answer
+            return answer
+        return fetch
+
+    def probe(self, answer, team=K.TEAM, **kw):
+        ok, line = access.probe(team, fetch=self.fetcher(answer), **kw)
+        self.assertIsInstance(ok, bool)
+        self.assertTrue(line.startswith('access keys: '), line)
+        self.assertNotIn(self.SECRET, line)
+        return ok, line
+
+    def test_a_good_document_is_ok_and_counts_its_keys(self):
+        self.assertEqual(self.probe(K.document(A, B)),
+                         (True, 'access keys: 2 fetched from %s' % self.HOST))
+        self.assertEqual(self.calls, [(K.TEAM.lower(), access.FETCH_TIMEOUT_S)])
+
+    def test_a_team_in_capitals_is_fetched_from_the_lower_case_host(self):
+        ok, line = self.probe(K.document(A), team=K.TEAM.upper())
+        self.assertEqual((ok, line), (True, 'access keys: 1 fetched from %s' % self.HOST))
+        self.assertEqual(self.calls, [(K.TEAM.lower(), access.FETCH_TIMEOUT_S)])
+
+    def test_an_error_from_the_network_is_a_reason_line(self):
+        error = urllib.error.URLError(self.SECRET)
+        self.assertEqual(self.probe(error), (
+            False, 'access keys: not fetched from %s: keys-fetch (URLError)' % self.HOST))
+        self.assertEqual(len(self.calls), 1)
+
+    def test_a_fetch_failure_gives_its_reason_and_detail(self):
+        self.assertEqual(self.probe(access.AccessError('keys-fetch', 'status 503')), (
+            False, 'access keys: not fetched from %s: keys-fetch (status 503)' % self.HOST))
+        self.assertEqual(self.probe(access.AccessError('keys-fetch')), (
+            False, 'access keys: not fetched from %s: keys-fetch' % self.HOST))
+        # a reason that is not one of REASONS is no reason to repeat
+        self.assertEqual(self.probe(access.AccessError(self.SECRET)), (
+            False, 'access keys: not fetched from %s: keys-fetch' % self.HOST))
+
+    def test_whatever_the_fetcher_raises_is_a_failure_named_by_its_class(self):
+        for error in (RuntimeError(self.SECRET), ValueError(self.SECRET), KeyError(self.SECRET),
+                      OSError(5, self.SECRET), ssl.SSLError(self.SECRET)):
+            with self.subTest(error=type(error).__name__):
+                self.assertEqual(self.probe(error), (
+                    False, 'access keys: not fetched from %s: keys-fetch (%s)'
+                    % (self.HOST, type(error).__name__)))
+
+    def test_a_document_without_usable_key_names_is_a_failure(self):
+        for document in ({}, {'keys': []}, [K.jwk(A)], None, {'keys': [{'kty': 'RSA'}]}):
+            with self.subTest(document=document):
+                self.assertEqual(self.probe(document), (
+                    False, 'access keys: not fetched from %s: keys-malformed (%s)'
+                    % (self.HOST, 'no keys array' if not (isinstance(document, dict) and
+                                                          document.get('keys'))
+                       else 'a key with no kid of its own')))
+
+    def test_keys_none_of_which_can_check_a_token_are_a_failure(self):
+        unusable = {'keys': [{'kid': 'ec', 'kty': 'EC'},
+                             dict(K.jwk(A), alg='RS384')]}
+        self.assertEqual(self.probe(unusable), (
+            False, 'access keys: 2 fetched from %s, none of them a usable RS256 signing key '
+                   '(bad-key)' % self.HOST))
+        # beside a usable one they are counted, and the probe is ok
+        mixed = {'keys': unusable['keys'][:1] + [K.jwk(B)]}
+        self.assertEqual(self.probe(mixed), (
+            True, 'access keys: 2 fetched from %s, 1 of them not usable' % self.HOST))
+
+    def test_a_team_that_is_not_one_dns_label_is_refused_before_any_fetch(self):
+        for team in ('two.labels', K.TEAM + '.cloudflareaccess.com', 'a team', '-x',
+                     'evil.example.invalid/', 'x' * 64, 7, b'team'):
+            with self.subTest(team=team):
+                ok, line = self.probe(K.document(A), team=team)
+                self.assertEqual((ok, line), (
+                    False, 'access keys: not fetched: the Access team name is not one DNS '
+                           'label (hub.access.team)'))
+                self.assertNotIn('two.labels', line)
+        for team in ('', None):
+            with self.subTest(team=team):
+                self.assertEqual(self.probe(K.document(A), team=team), (
+                    False, 'access keys: not fetched: no Access team name is set '
+                           '(hub.access.team)'))
+        self.assertEqual(self.calls, [], 'a refused team was fetched')
+
+    def test_a_fetch_with_no_answer_is_given_up(self):
+        entered, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+
+        def fetch(team, timeout):
+            entered.set()
+            release.wait(30)
+            return K.document(A)
+
+        started = time.monotonic()
+        ok, line = access.probe(K.TEAM, fetch=fetch, wait=0.2)
+        self.assertLess(time.monotonic() - started, 10)
+        self.assertTrue(entered.is_set())
+        self.assertEqual((ok, line), (
+            False, 'access keys: not fetched from %s: keys-fetch (no answer in 0.2 s)'
+            % self.HOST))
+        self.assertEqual(access.PROBE_WAIT_S, access.FETCH_DEADLINE_S)
+
+    def test_a_probe_with_no_fetcher_uses_fetch_keys(self):
+        with mock.patch.object(access, 'fetch_keys', self.fetcher(K.document(A))):
+            self.assertEqual(access.probe(K.TEAM),
+                             (True, 'access keys: 1 fetched from %s' % self.HOST))
+        self.assertEqual(self.calls, [(K.TEAM.lower(), access.FETCH_TIMEOUT_S)])
+
+
 if __name__ == '__main__':
     unittest.main()

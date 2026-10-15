@@ -411,6 +411,39 @@ class DomTest(unittest.TestCase):
                         self.assertIn("kept on the page", got["list"])
                         self.assertIn("may be out of date", got["first"]["err"])
 
+    def test_a_tunnel_access_refusal_is_not_unpaired_and_keeps_the_servers_words(self):
+        # The tunnel listener refuses a call whose Cloudflare Access token it cannot accept with 403, field
+        # `access` (kitlib.hubsite.tunnel.REFUSED): a read or a write, and pairing again cannot help it.
+        words = "this listener needs a valid Cloudflare Access token"
+        for where in ("snapshot", "wait"):
+            got = dom("""
+                const no = { status: 403, body: { ok: false, error: { code: "forbidden", message: %s, field: "access" } } };
+                if (%s) server.route = c => c.path === "/snapshot" ? no : undefined;
+                await start();
+                if (!%s) await answerWait(no.status, no.body);
+                return { err: text($("#loaderr")), hidden: $("#loaderr").hidden, sleeps: sleeps() };
+            """ % (json.dumps(words), json.dumps(where == "snapshot"), json.dumps(where == "snapshot")),
+                snapshot(collections={"todos": {"T-1": {"status": "open", "title": "kept on the page", "from": "pm"}}}),
+                hash="#todo")
+            with self.subTest(where=where):
+                self.assertNotIn("not paired", got["err"])
+                self.assertNotIn("hub.py open", got["err"])
+                self.assertIn("refused the read (" + words + ")", got["err"])
+                self.assertIn("Trying again", got["err"])
+                self.assertFalse(got["hidden"])
+                self.assertEqual(len(got["sleeps"]), 1)                  # it is tried again, not given up
+        wrote = dom("""
+            server.route = c => c.method !== "POST" ? undefined
+              : { status: 403, body: { ok: false, error: { code: "forbidden", message: %s, field: "access" } } };
+            await start();
+            await type($("#pm-fields textarea"), "kept text");
+            await fire($("#pmform"), "submit");
+            return { said: text($("#pm-addstatus")), kept: $("#pm-fields textarea").value };
+        """ % json.dumps(words), snapshot(collections=LISTS), hash="#topm")
+        self.assertIn(words, wrote["said"])
+        self.assertNotIn("not paired", wrote["said"])
+        self.assertEqual(wrote["kept"], "kept text")
+
     def test_a_busy_server_is_given_its_wait_and_only_no_answer_reads_cannot_reach(self):
         got = dom("""
             let mode = "busy";

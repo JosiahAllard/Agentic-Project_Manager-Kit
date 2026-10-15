@@ -2,7 +2,7 @@
 
   Listener(addr, api, gate, static_dir=None, host_rule=None, routes=None, via='', log=None,
            max_waits=MAX_WAITS, max_body=MAX_BODY, max_connections=MAX_CONNECTIONS,
-           origin_scheme='http', via_header=True, agent_words=False)
+           origin_scheme='http', via_header=True, agent_words=False, origin_refused=None)
       .port .url .waiting          the bound port (addr may name port 0), its URL, waits blocked now
       .closing                     close_door() was called
       .start()                     serve on a thread; .stop(timeout) = close_door() then join()
@@ -36,7 +36,9 @@ One request, in this order, for every method and every path:
   3. The method: GET, HEAD and POST; anything else is a 405. No response carries a CORS header.
   4. A POST is a write: Content-Type application/json (415), exactly one Origin whose scheme is
      the listener's origin_scheme (`http` for the local listener, which speaks nothing else;
-     `https` for one that only a TLS front reaches) and whose host equals the Host header (403),
+     `https` for one that only a TLS front reaches) and whose host equals the Host header (403;
+     when the two hosts differ, origin_refused(origin host, Host) is called first, if the
+     listener was given one: the tunnel listener logs it, kitlib.hubsite.tunnel.host_note),
      a Content-Length (411) of at most max_body bytes (413, the body is not read) and a body
      that is JSON or empty (400). Once the door is closed (close_door) a write that arrives on
      an open connection, or whose body is still arriving, is a 503 `store`; the rest of its
@@ -595,6 +597,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             parts = None
         if parts is None or not host or parts.scheme != listener.origin_scheme \
                 or parts.netloc.lower() != host.lower():
+            if parts is not None and host and parts.netloc.lower() != host.lower():
+                listener._origin_refused(parts.netloc, host)
             return refusal(403, 'forbidden', 'a write must carry an Origin header that names '
                            'this server, the host of its Host header', 'origin')
         if self.headers.get_all('Transfer-Encoding'):
@@ -665,7 +669,7 @@ class Listener(object):
     def __init__(self, addr, api, gate, static_dir=None, host_rule=None, routes=None, via='',
                  log=None, max_waits=MAX_WAITS, max_body=MAX_BODY,
                  max_connections=MAX_CONNECTIONS, origin_scheme='http', via_header=True,
-                 agent_words=False):
+                 agent_words=False, origin_refused=None):
         if origin_scheme not in ORIGIN_SCHEMES:
             raise ValueError('origin_scheme is one of %s, not %r'
                              % (', '.join(ORIGIN_SCHEMES), origin_scheme))
@@ -691,6 +695,7 @@ class Listener(object):
         self.max_body = max_body
         self.max_connections = max_connections
         self.origin_scheme = origin_scheme
+        self._on_origin = origin_refused if callable(origin_refused) else None
         self._log = log
         self._cond = threading.Condition(threading.Lock())    # the counters and _threads
         self._active = 0            # requests being answered
@@ -776,6 +781,16 @@ class Listener(object):
             return self._cond.wait_for(lambda: self._active - self._waits <= 0, timeout)
 
     # ---- the threads --------------------------------------------------------------------------
+
+    def _origin_refused(self, origin_host, host):
+        """Tell origin_refused, when the listener has one, of a write refused because the host
+        of its Origin is not its Host. What it raises is dropped: the refusal stands."""
+        if self._on_origin is None:
+            return
+        try:
+            self._on_origin(origin_host, host)
+        except Exception:           # noqa: BLE001 - a note that fails must not fail a request
+            pass
 
     def _say(self, level, text):
         if self._log is None:

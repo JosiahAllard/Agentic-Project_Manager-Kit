@@ -12,6 +12,7 @@ installs from (docs/plugin-source.md).
   RefreshLock                      <root>/refresh.pid, one refresh at a time
   pick_folders(folders, wanted)    the account folders --folder names, and the names that are not one
   refresh(...)                     the whole run tools/plugin_refresh.py makes
+  installs(folders)                [(install path, account folder)] of each account's kit install
   current_lines(kit, s, folders)   the pm_start warning lines (no export, not migrated, behind, failed)
   poll(kit, s, last, ...)          the pm_watch check: an event line per new main, and the spawn
                                    of a refresh when plugin.auto_refresh is on
@@ -833,11 +834,22 @@ def _old_cache_lines(kit, sha, folders, out):
 
 # ---------------------------------------------------------------- pm_start and pm_watch
 
+def _host():
+    from kitlib.pluginsource import claude
+    return claude
+
+
 def _folders(folders):
     if folders is None:
-        from kitlib.pluginsource import claude
-        folders = claude.account_folders()
+        folders = _host().account_folders()
     return list(folders)
+
+
+def installs(folders=None):
+    """[(install path, account folder)]: where each account folder of `folders` (default every
+    one) loads the kit plugin from, for the folders that have it installed. Reads each folder's
+    install record only."""
+    return _host().installs(_folders(folders))
 
 
 def unmigrated(state, folders):
