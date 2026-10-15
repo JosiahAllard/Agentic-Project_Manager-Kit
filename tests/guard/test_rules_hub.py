@@ -886,7 +886,6 @@ class FailClosed(Hub):
             (bash, 'python Z:/k/tools/commit.py -m x --body-file tools/hub.py tools/x.py'),
             (bash, 'python Z:/k/tools/commit.py -m x --model tools.hub tools/x.py'),
             (bash, 'python Z:/k/tools/commit.py -m x --unknown tools/hub.py'),
-            (bash, 'python Z:/k/tools/backlog.py show tools/hub.py'),
             # the script word is the commit.py or backlog.py path itself, naming no hub
             (bash, 'python tools/hub.py/../commit.py -m x a.py'), (bash, 'python tools.hub/backlog.py list'),
             (ps, 'python tools\\hub.py\\..\\commit.py -m x a.py'),
@@ -934,6 +933,31 @@ class FailClosed(Hub):
             (bash, 'git commit -m "fix tools.hub"'), (bash, 'echo "tools.hub" | python Z:/k/tools/commit.py -m x a'),
             (bash, 'python Z:/k/tools/commit.py -m "fix tools.hub" tools/x.py; python -m tools.hub answer Q-1'),
             (bash, 'python -c "import x" Z:/k/tools/commit.py -m "tools.hub" tools/x.py'),
+        ), True)
+
+    def test_backlog_paths_naming_the_hub_tool(self):
+        # backlog.py records paths (--scope, --body-file, a positional) and runs none of them, so a
+        # path word to hub.py passes there as in commit.py's paths, on every verb
+        backlog = 'python Z:/k/tools/backlog.py -C Z:/pm --session kit '
+        self.rows((
+            (bash, backlog + 'add EX-HUBMIRROR-RETIRE --summary "drop the leftovers in tools/hub.py" --found-on none '
+                             '--why-not-folded "needs tools/hub.py" --scope tools/hub.py --scope tests/hubsite'),
+            (bash, backlog + 'set EX-RETIRE --scope tools/hub.py --scope kitlib/hubsite'),
+            (bash, backlog + 'set EX-RETIRE --scope=tools/hub.py'),
+            (bash, backlog + 'add EX-RETIRE --body-file tools/hub.py --found-on none --why-not-folded x'),
+            (bash, backlog + 'close EX-RETIRE --reason "fixed in tools/hub.py"'),
+            (bash, backlog + 'show tools/hub.py'),
+            (ps, backlog + 'set EX-RETIRE --scope tools\\hub.py'),
+        ), False)
+        # the hub tool run, imported or named as a module, beside backlog.py or in its words
+        self.rows((
+            (bash, backlog + 'set EX-RETIRE --scope tools.hub'),
+            (bash, backlog + 'set EX-RETIRE --scope=tools.hub'),
+            (bash, backlog + 'set EX-RETIRE --scope tools/hub.py; python tools/hub.py answer Q-1'),
+            (bash, backlog + 'set EX-RETIRE --scope tools/hub.py && python -c "import tools.hub"'),
+            (bash, 'python tools/hub.py answer Q-1 --scope tools/hub.py'),
+            (bash, 'python -c "import tools.hub" Z:/k/tools/backlog.py set EX-RETIRE --scope tools/hub.py'),
+            (bash, 'python -m tools.hub answer Q-1'),
         ), True)
 
     def test_whole_tree_commits_pass(self):
