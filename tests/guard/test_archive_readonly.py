@@ -39,6 +39,13 @@ class ArchiveWorld(unittest.TestCase):
         self.assertEqual(rule, d.rule, d.reason)
         self.assertTrue(d.reason.startswith('`%s' % program), d.reason)
 
+    def refused(self, shell, text):
+        """The PM's session refuses `text` in the write jail; a subagent's refuses it too."""
+        d = self.pm(shell(text, self.w.plain))
+        self.assertIsNotNone(d)
+        self.assertEqual('write-jail', d.rule, d.reason)
+        self.assertIsNotNone(self.sub(shell(text, self.w.wt, sub=True)))
+
 
 class ArchiveReadOnly(ArchiveWorld):
     # ---------------------------------------------------------------- the repro passes
@@ -105,12 +112,6 @@ class ArchiveFilters(ArchiveWorld):
     observed), so a filter set on the line makes the archive a program run, as --exec does: -c,
     --config-env, an include.path that may set one, a computed -c, and the GIT_CONFIG_* variables."""
 
-    def refused(self, shell, text):
-        d = self.pm(shell(text, self.w.plain))
-        self.assertIsNotNone(d)
-        self.assertEqual('write-jail', d.rule, d.reason)
-        self.assertIsNotNone(self.sub(shell(text, self.w.wt, sub=True)))
-
     def test_a_tar_filter_set_with_c_is_no_read(self):
         for shell in (bash, ps):
             for cfg in ('-c tar.x.command="sh -c \'echo x > README.md\'"', '-c tar.x.command=x.sh',
@@ -141,6 +142,82 @@ class ArchiveFilters(ArchiveWorld):
                 text = 'git -C %s %s archive HEAD' % (self.main, cfg)
                 with self.subTest(shell=shell.__name__, text=text):
                     self.assertIsNone(self.pm(shell(text, self.w.plain)))
+
+
+class ArchiveConfigFailsClosed(ArchiveWorld):
+    """An archive is a read only when the line leaves git's config alone: every -c or --config-env
+    but a key on rules.ARCHIVE_SAFE_KEY_RE, each word read as the shell hands it to git, a word the
+    guard cannot read, a moved user config (HOME and the like) and an unplaced git (--git-dir) make it
+    no read, as on the main branch, where no archive in a main checkout was one."""
+
+    def test_a_key_bash_unescapes_is_read_as_git_gets_it(self):
+        for cfg in ('-c tar.x.comman\\d=x.sh', '-\\c tar.x.command=x.sh', '-c \\tar.x.command=x.sh',
+                    '-c\\ tar.x.command=x.sh', '--config-en\\v=tar.x.command=V'):
+            text = 'V=x.sh git -C %s %s archive --format=x HEAD' % (self.main, cfg)
+            with self.subTest(text):
+                self.refused(bash, text)
+        for cfg in ('-`c tar.x.command=x.sh', '-c tar.x.comman`d=x.sh', '--`config-env=tar.x.command=V'):
+            text = 'git -C %s %s archive --format=x HEAD' % (self.main, cfg)
+            with self.subTest(text):
+                self.refused(ps, text)
+
+    def test_any_key_off_the_safe_list_is_no_read(self):
+        attrs = '-c core.attributesFile=%s/attrs' % self.scratch
+        for shell in (bash, ps):
+            for cfg in (attrs + ' -c filter.x.smudge=x.sh', '-c filter.lfs.smudge=x.sh', '-c filter.x.process=x.sh',
+                        '-c filter.x.clean=x.sh', attrs, '-p -c core.pager=x.sh', '-c core.fsmonitor=x.sh',
+                        '-c core.quotepath=false -c filter.x.smudge=x.sh', '-c', '-c ""'):
+                text = 'git -C %s %s archive HEAD' % (self.main, cfg)
+                with self.subTest(shell=shell.__name__, text=text):
+                    self.refused(shell, text)
+
+    def test_a_word_the_guard_cannot_read_is_no_read(self):
+        for text in ('git -C %s -$O archive HEAD', 'git -C %s --namespace $N archive HEAD',
+                     'git -C %s -c "$K" archive HEAD'):
+            text = text % self.main
+            with self.subTest(text):
+                self.refused(bash, text)
+        # Windows PowerShell 5.1 passes '\"a -c b' to a program as three words and drops ''
+        for text in ('git -C %s --namespace \'\\"a -c tar.x.command=x.sh\' archive HEAD',
+                     'git -C %s --namespace \'p "q -c\' archive HEAD', 'git -C %s --namespace \'\' archive HEAD',
+                     'git -C %s archive HEAD \'\\"a -o README.md\'', 'git -C %s archive \'x y\\\' HEAD'):
+            text = text % self.main
+            with self.subTest(text):
+                self.refused(ps, text)
+
+    def test_an_o_bash_unescapes_is_an_output(self):
+        # bash drops every backslash here: git gets -o README.md and truncates it in the checkout
+        for opt in ('\\-o README.md', '\\--output=README.md', '-\\o README.md', '\\--outp README.md'):
+            text = 'git -C %s archive %s HEAD' % (self.main, opt)
+            with self.subTest(text):
+                self.refused(bash, text)
+
+    def test_a_user_config_moved_on_the_line_is_no_read(self):
+        for name in ('HOME', 'XDG_CONFIG_HOME', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'GIT_CONFIG_GLOBAL',
+                     'GIT_CONFIG_SYSTEM'):
+            for text in ('%s=%s git -C %s archive --format=x HEAD', 'export %s=%s; git -C %s archive --format=x HEAD'):
+                text = text % (name, self.scratch, self.main)
+                with self.subTest(text):
+                    self.refused(bash, text)
+            text = '$env:%s = "%s"; git -C %s archive --format=x HEAD' % (name, self.scratch, self.main)
+            with self.subTest(text):
+                self.refused(ps, text)
+
+    def test_an_unplaced_git_is_no_read(self):
+        other = '%s/r/.git' % self.scratch
+        for text in ('cd %s && git --git-dir=%s archive --format=x HEAD', 'cd %s && git --git-dir %s archive HEAD',
+                     'cd %s && git --work-tree=. --git-dir=%s archive HEAD'):
+            text = text % (self.main, other)
+            with self.subTest(text):
+                self.refused(bash, text)
+        self.refused(ps, 'Set-Location %s; git --git-dir=%s archive --format=x HEAD' % (self.main, other))
+
+    def test_safe_keys_bash_unescapes_keep_it_a_read(self):
+        for text in ('git -C %s -c core.quote\\path=false archive HEAD', 'git -C %s -c "tar.umask=0022" archive HEAD',
+                     'git -C %s -c core.autocrlf=false -c core.eol=lf archive HEAD'):
+            text = text % self.main
+            with self.subTest(text):
+                self.assertIsNone(self.pm(bash(text, self.w.plain)))
 
 
 class ArchiveHoles(ArchiveWorld):
@@ -219,10 +296,10 @@ class ArchiveHoles(ArchiveWorld):
         self.assertIsNotNone(d)
         self.assertEqual('write-jail', d.rule, d.reason)
 
-    def test_an_unplaced_archive_reads_only_without_o(self):
+    def test_an_unplaced_archive_is_no_read(self):
+        # --git-dir may name a repository whose own config sets a filter (ArchiveConfigFailsClosed)
         gd = '--git-dir="%s/.git"' % self.main
-        self.assertIsNone(self.sub(bash('git %s archive HEAD' % gd, self.w.wt, sub=True)))
-        for text in ('git %s archive -o %s/a.tar HEAD' % (gd, self.scratch),
+        for text in ('git %s archive HEAD' % gd, 'git %s archive -o %s/a.tar HEAD' % (gd, self.scratch),
                      'git %s archive --o=%s/a.tar HEAD' % (gd, self.scratch)):
             with self.subTest(text):
                 d = self.sub(bash(text, self.w.wt, sub=True))

@@ -2913,21 +2913,61 @@ ARCHIVE_VALUES = {'format', 'prefix', 'add-file', 'add-virtual-file', 'output', 
 ARCHIVE_FLAGS = set('vl0123456789')
 # --remote runs git-upload-archive (a program --exec names) instead of reading this repository
 ARCHIVE_RUNS = {'remote', 'exec'}
-# the settings that make archive run a program in the checkout it reads: a tar.<format>.command
-# filter, and an include that may set one (keys lower-case, as git_prefix_configs gives them)
-ARCHIVE_FILTER_RE = re.compile(r'^(?:tar\..+\.command|include\.path|includeif\..+\.path)$')
+# the -c keys (lower-case) an archive may carry and stay a read: none names a program, a filter or
+# another file to read config or attributes from. Any other key may make archive run a program in
+# the checkout it reads (tar.<format>.command; filter.<driver>.smudge or .process with
+# core.attributesFile or the checkout's own attributes; include.path), so it fails closed
+ARCHIVE_SAFE_KEY_RE = re.compile(r'^(?:core\.quotepath|core\.autocrlf|core\.eol|tar\.umask|tar\..+\.remote)$')
+
+
+def ps_native_unsure(w):
+    """True when Windows PowerShell 5.1 may hand the word `w` to a program as other than one
+    argument (observed): a double quote in it ('\\"a -c b' arrives as "a, -c, b), an empty word
+    (dropped), or a blank in it and a backslash at its end (it takes in the words after it)."""
+    t = w.text
+    return '"' in t or not t or (t.endswith('\\') and any(c.isspace() for c in t))
+
+
+def archive_words(gc):
+    """The Words after git archive `gc`'s subcommand as the shell hands them to git (bash drops
+    every backslash it would, a leading one too: `\\-o` is -o; commands.passed)."""
+    cmd = gc.inv.cmd
+    return [sh.Word(cm.passed(cmd, w), w.dyn, w.start, w.end, w.synth) for w in gc.inv.args[len(gc.inv.args) -
+                                                                                          len(gc.rest):]]
 
 
 def archive_filter_set(gc):
-    """True when the line may give git archive `gc` a filter program (ARCHIVE_FILTER_RE) the
-    checkout's own config does not: a -c or --config-env naming one, a computed -c, or a variable
-    of commands.GIT_ENV_NAMES set on the line (GIT_CONFIG_PARAMETERS, GIT_CONFIG_KEY_<n>; the line
-    marks only the first it sets, so any of them counts) or an environment change the guard cannot
-    read (commands.mark_git_env)."""
-    if gc.inv.cmd.git_env:
+    """True when the line may give git archive `gc` a program to run that the checkout's own config
+    does not, or the guard cannot tell: a git the text cannot place (gc.blind: --git-dir,
+    --work-tree, --config-env, a GIT_DIR-like variable), any GIT_* variable outside
+    commands.GIT_SAFE_NAMES or an environment change the guard cannot read (commands.mark_git_env),
+    a user config moved (HOME and the like, Command.home_env), and before the subcommand a word the
+    guard cannot read (computed; in PowerShell one ps_native_unsure splits) or a -c whose key, read
+    as the shell hands it to git (commands.passed), is not on ARCHIVE_SAFE_KEY_RE."""
+    cmd = gc.inv.cmd
+    if gc.blind or cmd.git_env or cmd.home_env:
         return True
-    return any(first.dyn or last.dyn or ARCHIVE_FILTER_RE.match(key)
-               for key, _val, first, last in git_prefix_configs(gc))
+    args = gc.inv.args
+    pre = args[:len(args) - len(gc.rest) - 1]
+    k = 0
+    while k < len(pre):
+        if any(w.dyn or cmd.shell == sh.PS and ps_native_unsure(w) for w in pre[k:k + 2]):
+            return True
+        t = cm.passed(cmd, pre[k])
+        if t == '-c':
+            if k + 1 >= len(pre):
+                return True
+            body, k = cm.passed(cmd, pre[k + 1]), k + 2
+        elif t.startswith('--config-env'):
+            return True
+        elif t.startswith('-c'):
+            body, k = t[2:], k + 1
+        else:
+            k += 1
+            continue
+        if not ARCHIVE_SAFE_KEY_RE.match(body.partition('=')[0].lower()):
+            return True
+    return False
 
 
 def tail_word(w, value):
@@ -2981,10 +3021,12 @@ def archive_outputs(gc):
     opens (archive_opened) and, failing closed, those the later pass would read (-vo <f>, an -o
     after `--prefix`'s value), and True when the archive only reads the repository it runs in: no
     --remote or --exec (they run a program), no option the guard does not know (a --no-* among
-    them) and no word that is not literal (an unquoted $X may hold -o). An unknown option does not
-    end the scan, so an -o after it is still an output."""
-    words = gc.rest
-    outs, read, k = [], True, 0
+    them) and no word that is not literal (an unquoted $X may hold -o) or that PowerShell may split
+    (ps_native_unsure). An unknown option does not end the scan, so an -o after it is still an
+    output. Every word is read as the shell hands it to git (archive_words)."""
+    words = archive_words(gc)
+    read = not (gc.inv.cmd.shell == sh.PS and any(ps_native_unsure(w) for w in words))
+    outs, k = [], 0
     while k < len(words):
         w, t = words[k], words[k].text
         if w.dyn:
@@ -4421,14 +4463,15 @@ def git_config_call(gc):
 
 def git_prefix_configs(gc):
     """[(key, value text, first Word, last Word)] of the -c and --config-env settings before the
-    git subcommand (key lower-case)."""
+    git subcommand (key lower-case), each word read as the shell hands it to git (commands.passed:
+    bash's `-\\c core.hooksPat\\h=x` is -c core.hooksPath=x)."""
     a = list(gc.inv.args)
     a = a[:len(a) - len(gc.rest) - 1]
     out, k = [], 0
     while k < len(a):
-        t = a[k].text
+        t = cm.passed(gc.inv.cmd, a[k])
         if t in ('-c', '--config-env') and k + 1 < len(a):
-            key, _eq, val = a[k + 1].text.partition('=')
+            key, _eq, val = cm.passed(gc.inv.cmd, a[k + 1]).partition('=')
             out.append((key.lower(), val, a[k], a[k + 1]))
             k += 2
             continue
