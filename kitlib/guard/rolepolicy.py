@@ -37,8 +37,10 @@ The owner's own session (nothing marks it) is never held, and its calls read no 
                   command or informational option, or tell it to stay open (-i, -Interactive,
                   -NoExit and any prefix of it, /k). Standard input fed by a pipe, a heredoc, a
                   here-string or `<` is the script: bare, `-` and bash's `-s` then pass
-    role-lock     the lock CLI (any word naming machine_lock.py, but in a program that never runs
-                  its words - backlog.py, commit.py, a reader, git diff: _lock_words) run with a
+    role-lock     the lock CLI (a command word naming machine_lock.py, but in a program that
+                  never runs its words - the kit's backlog.py and commit.py, a bare reader whose
+                  output reaches no program, git diff: _lock_words; a name inside an environment
+                  assignment's value or python -c code is not read) run with a
                   verb outside the mode's LOCK_VERBS, or with --force in any
                   abbreviation; a lock MCP tool (lock_mcp_tool) whose verb
                   (MCP_VERBS) is outside them, or that the lock server does not have
@@ -199,7 +201,7 @@ def check(action, ctx):
         name, why, instead = gap
         return _deny('role-shell', tag, '`%s` %s; a hook cannot answer an interpreter that waits for input. '
                      'Give it the script or command to run:' % (name, why), instead)
-    found = lock_verb(parsed, m)
+    found = lock_verb(parsed, m, ctx.kit)
     if found:
         verb, allowed = found
         return _deny('role-lock', tag, 'machine_lock.py %s is not one of the lock verbs the %s role (mode %s) '
@@ -425,9 +427,11 @@ def _python_script(args):
 
 
 # Programs that never run the words they are given, so a path naming the lock CLI there is a path
-# (_lock_path_only). The kit's record and commit tools, as the program or as python's script:
+# (_lock_path_only). The kit's record and commit tools, as the program or as python's script, and
+# only at the kit's own tools/ (_kit_tool):
 LOCK_PATH_SCRIPTS = frozenset(('backlog.py', 'commit.py'))
-# readers that take no command, script block or pager (rg only without --pre):
+# readers, named bare (_reader), that take no command or pager (rg only without --pre). PowerShell's
+# take a script block for a delay-bind parameter (-Path { ... }), which _ps_caught refuses:
 LOCK_PATH_READERS = frozenset((
     'cat', 'head', 'tail', 'wc', 'grep', 'egrep', 'fgrep', 'rg', 'findstr', 'ls', 'dir', 'stat',
     'type', 'get-content', 'gc', 'select-string', 'sls', 'get-childitem', 'gci', 'get-item', 'gi',
@@ -440,39 +444,84 @@ def _lock_names(t):
     return rules.LOCK_SCRIPT in t.lower()
 
 
-def _output_stays(cmd, commands):
-    """True when `cmd`'s output reaches no program that could run it as code: no file it writes
-    (> or >>), no command substitution or nested shell around it, and every command it pipes
-    into a reader (LOCK_PATH_READERS) whose output stays too."""
-    if cmd.nested_in is not None or any(r.writes for r in cmd.redirects):
-        return False
-    if not cmd.piped_out:
+def _kit_tool(path, name, kit):
+    """True when `path` names the kit's own tools/<name>: `tools/<name>` (or `./tools/<name>`)
+    from the kit's checkout, or <kit>/tools/<name>. A script of that name anywhere else is not it."""
+    p = path.replace('\\', '/')
+    while p.startswith('./'):
+        p = p[2:]
+    if p.lower() == 'tools/' + name:
         return True
-    into = [c for c in commands if c.pipe_from is cmd]
-    for c in into:
-        inv = cm.invocation(c)
-        if inv is None or inv.dyn or inv.name not in LOCK_PATH_READERS or not _output_stays(c, commands):
+    norm = lambda x: os.path.normcase(os.path.normpath(x))
+    return bool(kit) and norm(path) == norm(os.path.join(kit, 'tools', name))
+
+
+def _reader(inv):
+    """True when `inv` is a reader (LOCK_PATH_READERS) named bare, so found as that command (a
+    `./grep` or `scratch/cat` is some other program), and rg without --pre (it runs a program on
+    every file)."""
+    if inv is None or inv.dyn or inv.name not in LOCK_PATH_READERS or '/' in inv.path or '\\' in inv.path:
+        return False
+    return inv.name != 'rg' or not any(a == '--pre' or a.startswith('--pre=') for a in inv.argv)
+
+
+def _ps_caught(cmd):
+    """True when PowerShell may hand `cmd`'s output or items on other than down a plain pipe:
+    its program is not the first word (`$c = gc x`, `& gc x`), a ( ) or { } is next to it (a
+    delay-bind `-Path { ... }` runs the block for each piped item), a word holds { or }, or it
+    sets -OutVariable or -PipelineVariable (a later command reads the variable). When unsure, it
+    is caught."""
+    if cmd.shell != sh.PS:
+        return False
+    inv = cm.invocation(cmd)
+    if inv is None or inv.index > 0 or cmd.next_op in ('(', '{') or cmd.prev_op in (')', '}'):
+        return True
+    for t in cmd.argv:
+        p = t.split(':', 1)[0].lower()
+        if '{' in t or '}' in t or p in ('-ov', '-pv') or len(p) >= 3 and (
+                '-outvariable'.startswith(p) or '-pipelinevariable'.startswith(p)):
+            return True
+    return False
+
+
+def _output_stays(cmd, commands):
+    """True when `cmd`'s output reaches no program that could run it as code: it sits in no ( )
+    or { } group, command substitution or nested shell, PowerShell catches it no other way
+    (_ps_caught), and across the whole line no command writes a file (> or >>) and every pipe ends
+    in a bare reader (_reader) that is itself in no group and not caught. The whole line, since a
+    loop or an if piped into python pipes every command inside it."""
+    if cmd.nested_in is not None or cmd.groups or _ps_caught(cmd):
+        return False
+    for c in commands:
+        if any(r.writes for r in c.redirects):
             return False
-    return bool(into)
+        into = [d for d in commands if d.pipe_from is c]
+        if c.piped_out and not into:
+            return False                        # into a group or a block: no pipe link to read
+        if c.piped_in or c.prev_op == '|':
+            into.append(c)
+        for d in into:
+            if d.groups or d.nested_in is not None or _ps_caught(d) or not _reader(cm.invocation(d)):
+                return False
+    return True
 
 
-def _lock_path_only(inv, commands):
-    """True when `inv` is a program that never runs its words (LOCK_PATH_SCRIPTS,
+def _lock_path_only(inv, commands, kit=None):
+    """True when `inv` is a program that never runs its words (the kit's LOCK_PATH_SCRIPTS,
     LOCK_PATH_READERS, git's LOCK_PATH_GIT subcommands), so a word naming the lock CLI there is a
     path, not a lock call. A reader's or git's output must not reach a program (_output_stays):
-    `cat tools/machine_lock.py | python - stop 42` runs the lock."""
+    `cat tools/machine_lock.py | python - stop 42` runs the lock. `kit` is the kit folder."""
     if inv.dyn:
         return False
     name, args = inv.name, inv.argv
     if name in LOCK_PATH_SCRIPTS:
-        return True
+        return _kit_tool(inv.path, name, kit)
     if rules.HUB_CODE_PYTHON_RE.match(name):
         k = _python_script(args)
-        return k is not None and cm.base_name(args[k]) in LOCK_PATH_SCRIPTS
+        return k is not None and cm.base_name(args[k]) in LOCK_PATH_SCRIPTS and _kit_tool(
+            args[k], cm.base_name(args[k]), kit)
     if name in LOCK_PATH_READERS:
-        if name == 'rg' and any(a == '--pre' or a.startswith('--pre=') for a in args):
-            return False                        # rg --pre runs a program on every file
-        return _output_stays(inv.cmd, commands)
+        return _reader(inv) and _output_stays(inv.cmd, commands)
     g = cm.git_call(inv)
     if g is None or g.sub_dyn or g.sub not in LOCK_PATH_GIT:
         return False
@@ -482,31 +531,35 @@ def _lock_path_only(inv, commands):
     return _output_stays(inv.cmd, commands)
 
 
-def _lock_words(inv, commands=()):
+def _lock_words(inv, commands=(), kit=None):
     """The words a lock CLI call hands machine_lock.py, or None when `inv` runs none. Fail-closed:
-    any word naming machine_lock.py - the program, python's script, an argument of a launcher
-    (winpty, uv run, setsid, watch, Git Bash's start, Start-Process cmd -ArgumentList "/c ...")
-    or of a script - is a lock call, and the words after it are its words, except in a program
-    that never runs its words (_lock_path_only: `backlog.py set --scope tools/machine_lock.py`,
-    cat, rg, Get-Content, git diff). `commands` is the line's commands, for the pipes."""
+    a command word naming machine_lock.py - the program, python's script, an argument of a
+    launcher (winpty, uv run, setsid, watch, Git Bash's start, Start-Process cmd -ArgumentList
+    "/c ...") or of a script - is a lock call, and the words after it are its words, except in a
+    program that never runs its words (_lock_path_only: the kit's `backlog.py set --scope
+    tools/machine_lock.py`, cat, rg, Get-Content, git diff). Not read (a known limit): the value of an environment assignment (GIT_PAGER='python
+    tools/machine_lock.py stop 42' git log, GIT_EXTERNAL_DIFF=...) and a name inside python -c
+    code (run(['python', 'tools/machine_lock.py', 'stop', '42'])). `commands` is the line's
+    commands, for the pipes; `kit` the kit folder."""
     seq = []
     for w in [inv.path] + inv.argv:
         seq.extend(w.split() if any(c.isspace() for c in w) else [w])  # an -ArgumentList string, a title
     k = next((i for i, t in enumerate(seq) if cm.base_name(t) == rules.LOCK_SCRIPT), None)
-    if k is None or _lock_path_only(inv, commands):
+    if k is None or _lock_path_only(inv, commands, kit):
         return None
     return seq[k + 1:]
 
 
-def lock_verb(parsed, m):
+def lock_verb(parsed, m, kit=None):
     """(verb, allowed) for the first lock CLI call whose verb (and sub-verb: `hold agent`) mode
     `m` may not run (LOCK_VERBS), or that forces; None when every one is allowed. `allowed` is the
-    mode's verbs as text. Only the words before `--` are the lock's (after it, `run`'s command)."""
+    mode's verbs as text. Only the words before `--` are the lock's (after it, `run`'s command).
+    `kit` is the kit folder whose tools/backlog.py and tools/commit.py are exempt (_kit_tool)."""
     table = LOCK_VERBS[m]
     allowed = verbs_text(table)
     for cmd in parsed.commands:
         inv = cm.invocation(cmd)
-        words = _lock_words(inv, parsed.commands) if inv is not None else None
+        words = _lock_words(inv, parsed.commands, kit) if inv is not None else None
         if words is None:
             continue
         head = words[:words.index('--')] if '--' in words else words
