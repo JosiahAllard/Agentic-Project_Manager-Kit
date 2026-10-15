@@ -3,12 +3,14 @@
 queue.json is {"ticket": the last ticket given, "entries": [entry]}; an entry is
 {id, ticket, state: waiting | held | bg, pid, ctime, repo, slug, kind, need {cpu, gpu},
 expect_s, since, held_at, cores, gpus, hold, avoid, prefer, parked, blocked_by, clear_at,
-avoid_after, parent, resource, priority, moved}. It is read and written only under the store's
+avoid_after, parent, resource, priority, moved, within}. It is read and written only under the store's
 "queue" mutex. moved is set only on a waiting entry the owner moved to the top (move_to_top):
 {by, name, at, seq}. resource and priority are set only by a library caller of kitlib.lock.run.book
 (None otherwise; an entry written before they existed has neither and loads as such): resource
 names an exclusive resource the run holds for its whole life, priority "land" plans it ahead of
-ordinary waiting runs (plan).
+ordinary waiting runs (plan). within is set only on the entry of a run booked with within
+(kitlib.lock.run.book, the CLI's --within): {pool: the only slots it may take}; an entry without
+it (or written before it existed) may take any slot.
 
 Planning (plan) gives each waiting entry, in queue order, the earliest time what it needs is free
 for its whole expected time, around what holders and runs planned ahead of it take. A run may
@@ -98,6 +100,14 @@ def entry_slots(e, key, pool):
     """The slots of `pool` that entry e's `key` names (avoid: what holds not its own cover over
     its time; avoid_after: the same once what parks it ends; prefer: its own hold's)."""
     return {i for i in ((e.get(key) or {}).get(pool) or []) if type(i) is int}
+
+
+def entry_within(e, pool):
+    """The only slots of `pool` entry e may take (its run's --within), or None: any slot. An entry
+    without within, or with no slots of `pool` in it, is not confined (book() never writes an
+    empty one)."""
+    w = entry_slots(e, "within", pool) if isinstance(e.get("within"), dict) else set()
+    return w or None
 
 
 def entry_resource(e):
@@ -270,7 +280,8 @@ def plan(L, q, now=None):
     ticket order. A moved entry is never planned ahead of an own_turn one: a nested run held back
     behind it would keep its parent's slots for ever. Each gets the earliest of now, a holder's
     planned end (holder_end), or a planned run's end or start, at which what it needs is free for
-    its whole expected time, never a slot its `avoid` names, and no other entry naming its
+    its whole expected time, never a slot its `avoid` names or one outside its `within`
+    (entry_within: it waits for those even while others are free), and no other entry naming its
     resource holds it or is planned to over that time (its parent's hold of it is its own). It
     picks its own hold's slots first, then those no background run holds (they yield), then the
     lowest. It may not start before a run planned ahead of it and still be running when that one
@@ -320,6 +331,7 @@ def plan(L, q, now=None):
             key = "avoid_after"
         avoid = {p: entry_slots(e, key, p) for p in POOLS}
         prefer = {p: entry_slots(e, "prefer", p) for p in POOLS}
+        within = {p: entry_within(e, p) for p in POOLS}
         times = {t0} | {iv[1] for iv in ivs if iv[1] > t0} | {s for s in starts if s > t0}
         held_by_rsc = False         # an earlier time had its slots free and only its resource not
         for t in sorted(times):
@@ -334,7 +346,8 @@ def plan(L, q, now=None):
                         busy[p] |= r[p]
             pick = {}
             for p in POOLS:
-                free = [i for i in range(sizes[p]) if i not in busy[p] and i not in avoid[p]]
+                free = [i for i in range(sizes[p]) if i not in busy[p] and i not in avoid[p]
+                        and (within[p] is None or i in within[p])]
                 if len(free) < entry_need(e, p):
                     break
                 pick[p] = sorted(sorted(free, key=lambda i: (i not in prefer[p], i in soft[p], i))
@@ -367,17 +380,21 @@ def busy_text(L, q, e, planned):
     for p in POOLS:
         if not entry_need(e, p):
             continue
-        avoid = entry_slots(e, "avoid", p)
-        free = [i for i in range(lay.size(L, p)) if i not in held[p] and i not in avoid]
+        avoid, within = entry_slots(e, "avoid", p), entry_within(e, p)
+        free = [i for i in range(lay.size(L, p)) if i not in held[p] and i not in avoid
+                and (within is None or i in within)]
         if len(free) >= entry_need(e, p):
             continue
         by = {}
         for i, x in sorted(held[p].items()):
-            by.setdefault(x["id"], (x, []))[1].append(i)
+            if within is None or i in within:
+                by.setdefault(x["id"], (x, []))[1].append(i)
         parts += ["%s %s held by %s" % (lay.slots_text(p, sl), "is" if len(sl) == 1 else "are",
                                         run_text(x)) for x, sl in by.values()]
-        if avoid:
-            parts.append("a hold covers %s" % lay.slots_text(p, sorted(avoid)))
+        if avoid & (within or avoid):
+            parts.append("a hold covers %s" % lay.slots_text(p, sorted(avoid & (within or avoid))))
+        if within is not None:
+            parts.append("it runs only within %s (--within)" % lay.slots_text(p, within))
     me = planned.get(e["id"]) or {}
     ahead = [x for x in q["entries"] if x["id"] in planned and x["id"] != e["id"]
              and planned[x["id"]]["position"] < me.get("position", 0)]
@@ -391,12 +408,15 @@ def busy_text(L, q, e, planned):
 
 
 def short_pools(L, q, e):
-    """The pools foreground holders and holds leave entry e too little of now."""
+    """The pools foreground holders and holds leave entry e too little of now (counting only the
+    slots its within allows)."""
     held = holders(L, q, e["id"])
     out = []
     for p in POOLS:
         fg = {i for i, x in held[p].items() if x["state"] != "bg"} | entry_slots(e, "avoid", p)
-        if entry_need(e, p) and lay.size(L, p) - len(fg) < entry_need(e, p):
+        within = entry_within(e, p)
+        room = set(range(lay.size(L, p))) if within is None else within & set(range(lay.size(L, p)))
+        if entry_need(e, p) and len(room - fg) < entry_need(e, p):
             out.append(p)
     return out
 

@@ -43,7 +43,7 @@ class Threads(unittest.TestCase):
         self.assertEqual(lay.parse_threads("3,3,2"), [2, 3])
 
     def test_parse_threads_refuses_what_is_not_one(self):
-        for bad in ("", "8-", "-3", "a", "5-2", "1,,2", "1-2-3", None):
+        for bad in ("", "8-", "-3", "a", "5-2", "1,,2", "1-2-3", "0-99999", None):
             with self.subTest(bad=bad):
                 with self.assertRaises(ValueError):
                     lay.parse_threads(bad)
@@ -174,6 +174,16 @@ class Book(StoreCase):
         self.assertEqual(self.code(within="8-14", cores=1, no_wait=True).code, 11)
         rec = self.ended()[0]
         self.assertEqual((rec["within"], rec["within_slots"]), ("8-14", {"cpu": [4, 5, 6]}))
+
+    def test_an_owner_hold_over_the_within_slots_refuses_with_11_while_others_are_free(self):
+        now = utc_now()
+        hl.create(self.store, self.layout(), {
+            "owner": "owner", "scope": "slots", "start": now,
+            "end": now + datetime.timedelta(hours=1), "slots": {"cpu": [4, 5, 6, 7], "gpu": []}},
+            OWNER, None)
+        e = self.code(within="8-15", cores=1, no_wait=True)
+        self.assertEqual(e.code, 11, e.message)       # the hold keeps it out, not a busy queue (6)
+        self.assertEqual((self.store.read("queue.json") or {}).get("entries", []), [])
 
     def test_threads_may_be_given_as_numbers(self):
         self.everything_held()
