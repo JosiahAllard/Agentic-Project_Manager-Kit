@@ -15,6 +15,8 @@
       (hosts.json "attribution".model_env).
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.pending, prints and exits.
+A change holds the file's write lock (kitlib.pending.locked) from before its read until its commit,
+so two concurrent changes never lose one; a lock busy for kitlib.pending.LOCK_WAIT s is refused.
 Exit codes: 0 ok; 1 no file configured or unreadable, a refused change, a file that cannot be
 written, or a commit or push that failed after the file was written (printed as written but NOT
 committed, or committed but NOT pushed); 2 usage error.
@@ -91,32 +93,39 @@ def run(a, path):
             print(line)
         return 0
     plan = None
-    if a.commit or a.push:
-        plan = vcs.prepare(path, branch_ok=a.branch_ok, model=a.model, noun=NOUN,
-                           provider=host_of(a))
-    raw = pending.read_raw(path)
-    if a.cmd == 'add':
-        new, n = pending.add(raw, a.text)
-        label = 'added %d' % n
-    elif a.cmd == 'done':
-        new = pending.done(raw, a.n, a.when or datetime.date.today().strftime('%m-%d'), a.note)
-        label = 'done %d' % a.n
-    else:
-        new = pending.edit(raw, a.n, a.text)
-        label = 'edited %d' % a.n
-    try:
-        pending.write_atomic(path, new)
-    except OSError as e:
-        return fail('refused: cannot write %s: %s' % (path, e.strerror or e))
-    print(label)
-    sys.stdout.flush()
-    if plan is not None:
+    with pending.locked(path):          # read to commit: no other writer between (kitlib.pending)
+        if a.commit or a.push:
+            plan = vcs.prepare(path, branch_ok=a.branch_ok, model=a.model, noun=NOUN,
+                               provider=host_of(a))
+        raw = pending.read_raw(path)
+        if a.cmd == 'add':
+            new, n = pending.add(raw, a.text)
+            label = 'added %d' % n
+        elif a.cmd == 'done':
+            new = pending.done(raw, a.n, a.when or datetime.date.today().strftime('%m-%d'), a.note)
+            label = 'done %d' % a.n
+        else:
+            new = pending.edit(raw, a.n, a.text)
+            label = 'edited %d' % a.n
         try:
-            lines = vcs.commit_one(plan, 'pending: ' + label, NOUN, push=a.push)
+            pending.write_atomic(path, new)
+        except OSError as e:
+            return fail('refused: cannot write %s: %s' % (path, e.strerror or e))
+        print(label)
+        sys.stdout.flush()
+        if plan is None:
+            return 0
+        try:
+            sha = vcs.commit_file(plan, 'pending: ' + label, NOUN)
         except Refused as e:                    # the file is written: not a refusal
             return fail(str(e))
-        for line in lines:
-            print(line)
+    print('commit %s' % sha)
+    if a.push:                                  # the push needs no lock: the commit is made
+        sys.stdout.flush()
+        try:
+            print(vcs.push_branch(plan, NOUN, sha))
+        except Refused as e:
+            return fail(str(e))
     return 0
 
 

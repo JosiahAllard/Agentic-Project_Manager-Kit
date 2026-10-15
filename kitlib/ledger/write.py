@@ -9,25 +9,24 @@ here prints or exits: Usage and Refused (kitlib.ledger.errors) carry the refusal
 
 One writer at a time (docs/ledger.md "Write lock"): add and retire hold `locked(path)` from their
 read to their write, so two writers never take the same next id and neither replace loses the
-other's entry. The lock is kitlib.dailyfull.treelock's OS byte-range lock on a file in the ledger
+other's entry. The lock is kitlib.fs.writelock's: an OS byte-range lock on a file in the ledger
 repository's git common dir (lock_path; beside the file only outside any git checkout), one per
 ledger file, so writers of two repos never wait on each other and no checkout gets an untracked
 file: the system drops it when its holder exits, so a dead holder never blocks. A busy lock
 is waited on for LOCK_WAIT seconds, then refused with nothing written. It nests within one thread
-(tools/ledger.py holds it over prepare, add and commit) and excludes every other thread.
+(tools/ledger.py holds it over prepare, add and commit) and excludes every other thread. The
+replace retries a PermissionError (a reader holding the file open) for kitlib.fs.replace.WAIT s.
 """
 import collections
 import contextlib
 import datetime
-import hashlib
 import os
 import re
 import tempfile
-import threading
-import time
 
-from kitlib.dailyfull.treelock import TreeBusy, TreeLock, TreeLockError
-from kitlib.git import repo as gitrepo
+from kitlib.fs import replace as fsreplace
+from kitlib.fs import writelock
+from kitlib.git import repo as gitrepo     # noqa: F401  (tests patch write.gitrepo.classify)
 
 from . import fmt as E
 from . import safepath
@@ -37,54 +36,23 @@ Added = collections.namedtuple('Added', 'id warnings')
 
 LOCK_WAIT = 30.0     # seconds a writer waits for another writer's lock before it is refused
 LOCK_PAUSE = 0.05    # seconds between its tries
-
-_held = threading.local()    # .locks: {lock file identity: [TreeLock, depth]} of this thread
+LOCK_PREFIX = 'kit-ledger'    # the lock file's name in the git common dir: kit-ledger-<name>-<hash>.lock
 
 
 def lock_path(path):
-    """The write lock's file for the ledger at `path`. In a git checkout (kitlib.git.repo.classify
-    of its folder, MAIN or LINKED): `kit-ledger-<name>-<hash>.lock` in the repository's git common
-    dir, never in the work tree, so a write leaves no untracked file in the checkout; the hash is
-    of the file's real, case-folded path, so every spelling of one file names one lock. Outside any
-    checkout (NONE): `.<name>.lock` beside the file. Refused when git cannot tell (UNKNOWN). Never
-    removed (a remove and a re-create would give two files, each with a holder)."""
-    folder, name = os.path.split(os.path.abspath(path))
-    place = gitrepo.classify(folder)
-    if place.kind == gitrepo.NONE:
-        return os.path.join(folder, '.%s.lock' % name)
-    if place.kind not in (gitrepo.MAIN, gitrepo.LINKED) or not place.common:
-        raise Refused('cannot tell whether the ledger %s is in a git checkout, so where its write '
-                      'lock is: %s; nothing was written' % (path, place.detail))
-    name = os.path.normcase(name)
-    key = os.path.join(gitrepo.real(folder), name)
-    tag = ''.join(c if c.isalnum() or c in '-_.' else '_' for c in name) or 'ledger'
-    digest = hashlib.sha1(key.encode('utf-8')).hexdigest()[:12]
-    return os.path.join(place.common, 'kit-ledger-%s-%s.lock' % (tag, digest))
-
-
-def _identity(lock):
-    """The lock file's identity (volume, file index), so every spelling of one path is one key;
-    None when the file does not exist."""
+    """The write lock's file for the ledger at `path` (kitlib.fs.writelock.lock_path): in a git
+    checkout `kit-ledger-<name>-<hash>.lock` in the repository's git common dir, outside any
+    checkout `.<name>.lock` beside the file. Refused when git cannot tell."""
     try:
-        st = os.stat(lock)
-    except OSError:
-        return None
-    return (st.st_dev, st.st_ino)
-
-
-def _locks():
-    if not hasattr(_held, 'locks'):
-        _held.locks = {}
-    return _held.locks
+        return writelock.lock_path(path, LOCK_PREFIX)
+    except writelock.NoPlace as e:
+        raise Refused('cannot tell whether the ledger %s is in a git checkout, so where its write '
+                      'lock is: %s; nothing was written' % (path, e.detail))
 
 
 def held(path):
     """True when this thread holds the write lock of the ledger at `path`."""
-    try:
-        key = _identity(lock_path(path))
-    except Refused:             # git cannot say where the lock is: nobody could have taken it
-        return False
-    return key is not None and key in _locks()
+    return writelock.held(path, LOCK_PREFIX)
 
 
 @contextlib.contextmanager
@@ -92,42 +60,20 @@ def locked(path, wait=None):
     """Hold the ledger's write lock for the block. Taken already by this thread: nests. Busy: tried
     every LOCK_PAUSE for `wait` seconds (default LOCK_WAIT), then Refused naming the holder."""
     refuse_unsafe(path)
-    lock = lock_path(path)
-    try:
-        os.makedirs(os.path.dirname(lock), exist_ok=True)
-        with open(lock, 'ab'):          # exists before its identity is read; a holder's record stays
-            pass
-    except OSError as e:
-        raise Refused('cannot make the ledger write lock %s: %s; nothing was written' % (lock, e))
-    key = _identity(lock)
-    mine = _locks()
-    if key in mine:
-        mine[key][1] += 1
-        try:
-            yield
-        finally:
-            mine[key][1] -= 1
-        return
     wait = LOCK_WAIT if wait is None else wait
-    deadline = time.monotonic() + wait
-    tl = TreeLock(lock, what='ledger write')
-    while True:
-        try:
-            tl.acquire()
-            break
-        except TreeBusy as e:
-            if time.monotonic() >= deadline:
-                raise Refused('the ledger %s is being written by another process: its write lock %s is '
-                              '%s; waited %s s, nothing was written. Try again.' % (path, lock, e, wait))
-        except TreeLockError as e:
-            raise Refused('cannot take the ledger write lock: %s; nothing was written' % e)
-        time.sleep(LOCK_PAUSE)
-    mine[key] = [tl, 1]
     try:
-        yield
-    finally:
-        del mine[key]
-        tl.release()
+        with writelock.locked(path, LOCK_PREFIX, wait, what='ledger write', pause=LOCK_PAUSE):
+            yield
+    except writelock.NoPlace as e:
+        raise Refused('cannot tell whether the ledger %s is in a git checkout, so where its write '
+                      'lock is: %s; nothing was written' % (path, e.detail))
+    except writelock.CannotMake as e:
+        raise Refused('cannot make the ledger write lock %s: %s; nothing was written' % (e.lock, e.detail))
+    except writelock.Busy as e:
+        raise Refused('the ledger %s is being written by another process: its write lock %s is '
+                      '%s; waited %s s, nothing was written. Try again.' % (path, e.lock, e.holder, e.wait))
+    except writelock.CannotTake as e:
+        raise Refused('cannot take the ledger write lock: %s; nothing was written' % e.detail)
 
 
 def refuse_unsafe(path):
@@ -157,7 +103,7 @@ def write_atomic(path, text):
     try:
         with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as f:
             f.write(text)
-        os.replace(tmp, path)
+        fsreplace.replace(tmp, path)
     except BaseException:
         if os.path.exists(tmp):
             os.remove(tmp)

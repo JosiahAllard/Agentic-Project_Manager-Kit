@@ -14,7 +14,7 @@ Layout under the store folder `root` (the caller resolves it; nothing here reads
 Only schema.COLLECTIONS are read and written; any other folder (parked/ from the old hub) is left
 alone.
 
-One writer. Store.open takes kitlib.dailyfull.treelock.TreeLock on `_store.lock` for the life of
+One writer. Store.open takes kitlib.fs.treelock.TreeLock on `_store.lock` for the life of
 the Store: an msvcrt byte-range lock the system drops when the holder exits, however it exits. A
 second open, in this process or another, raises StoreBusy naming the holder. A dead holder's lock
 is already gone, so the next open succeeds; `took_over` is the record it left. Inside the process
@@ -70,7 +70,7 @@ import threading
 import time
 
 from kitlib import hubvalidate
-from kitlib.dailyfull.treelock import TreeBusy, TreeLock, TreeLockError, describe
+from kitlib.fs.treelock import TreeBusy, TreeLock, TreeLockError, describe
 
 from . import schema
 
