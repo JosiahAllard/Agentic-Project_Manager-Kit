@@ -786,6 +786,33 @@ class FailClosed(Hub):
             (bash, "python - <<'EOF'\nfrom kitlib.guard import hub\nprint(hub.OWNER_VERBS)\nEOF"),
         ), False)
 
+    def test_a_hub_folder_in_a_path_is_not_the_hub_tool(self):
+        # a folder named hub (hub/ followed by a separator) is a path, not the hub tool, also on a
+        # line that runs python and imports
+        todos, store, mid = 'Z:/repos/other/hub/todos', 'Z:/x/hub/store', 'Z:/x/a/hub/b/c.txt'
+        self.rows((
+            (bash, 'ls %s/' % todos), (ps, 'Get-ChildItem %s/' % todos), (bash, 'cat %s/T-1.json' % todos),
+            (ps, 'Get-Content %s/T-1.json' % todos), (bash, 'ls %s' % store), (bash, 'cat %s' % mid),
+            (ps, 'dir Z:\\x\\hub\\todos'), (ps, 'Get-ChildItem Z:\\x\\a\\hub\\b'),
+            (bash, 'ls %s/ && python -c "import json"' % todos),
+            (bash, 'python -c "import os; print(os.listdir(\'%s\'))"' % todos),
+            (ps, 'python -c "import os; print(os.listdir(\'%s\'))"' % todos),
+            (bash, 'python -c "import json; print(json.load(open(\'%s/q.json\')))"' % store),
+            (bash, "python - <<'EOF'\nimport os\nprint(os.listdir('hub/todos'))\nEOF"),
+            (bash, "python - <<'EOF'\nimport pathlib\nprint(pathlib.Path('%s').read_text())\nEOF" % mid),
+            (ps, "Get-ChildItem %s | python -c 'import sys; print(sys.stdin.read())'" % todos),
+        ), False)
+        for path in (todos + '/T-1.json', store + '/q.json', mid):
+            with self.subTest(path):
+                self.allowed(lambda sub, path=path: event('Read', {'file_path': path}, self.w.wt, sub))
+        # on purpose: a backslash after hub may be Python's line join (import tools.\<newline>hub
+        # in a string the shell decodes), and hub with no separator after it may be the name itself
+        self.rows((
+            (ps, 'python -c "import os; print(os.listdir(r\'Z:\\x\\hub\\todos\'))"'),
+            (bash, 'python -c "import os; print(os.listdir(\'Z:/x/hub\'))"'),
+            (bash, 'python -c "import os; print(os.listdir(\'Z:/x/hub/\'))"; echo hub'),
+        ), True)
+
     def test_hub_in_python_code_from_anywhere_on_the_line(self):
         # a pipe of any length, a module that runs code it reads (code, asyncio, timeit -s,
         # pdb -c), and a newline the shell decodes ($'...', PowerShell's backtick n) all reach
@@ -859,7 +886,6 @@ class FailClosed(Hub):
             (bash, 'python Z:/k/tools/commit.py -m x --body-file tools/hub.py tools/x.py'),
             (bash, 'python Z:/k/tools/commit.py -m x --model tools.hub tools/x.py'),
             (bash, 'python Z:/k/tools/commit.py -m x --unknown tools/hub.py'),
-            (bash, 'python Z:/k/tools/backlog.py show tools/hub.py'),
             # the script word is the commit.py or backlog.py path itself, naming no hub
             (bash, 'python tools/hub.py/../commit.py -m x a.py'), (bash, 'python tools.hub/backlog.py list'),
             (ps, 'python tools\\hub.py\\..\\commit.py -m x a.py'),
@@ -908,6 +934,40 @@ class FailClosed(Hub):
             (bash, 'python Z:/k/tools/commit.py -m "fix tools.hub" tools/x.py; python -m tools.hub answer Q-1'),
             (bash, 'python -c "import x" Z:/k/tools/commit.py -m "tools.hub" tools/x.py'),
         ), True)
+
+    def test_backlog_paths_naming_the_hub_tool(self):
+        # backlog.py records paths (--scope, --body-file, a positional) and runs none of them, so a
+        # path word to hub.py passes there as in commit.py's paths, on every verb
+        backlog = 'python Z:/k/tools/backlog.py -C Z:/pm --session kit '
+        self.rows((
+            (bash, backlog + 'add EX-HUBMIRROR-RETIRE --summary "drop the leftovers in tools/hub.py" --found-on none '
+                             '--why-not-folded "needs tools/hub.py" --scope tools/hub.py --scope tests/hubsite'),
+            (bash, backlog + 'set EX-RETIRE --scope tools/hub.py --scope kitlib/hubsite'),
+            (bash, backlog + 'set EX-RETIRE --scope=tools/hub.py'),
+            (bash, backlog + 'add EX-RETIRE --body-file tools/hub.py --found-on none --why-not-folded x'),
+            (bash, backlog + 'close EX-RETIRE --reason "fixed in tools/hub.py"'),
+            (ps, backlog + 'set EX-RETIRE --scope tools\\hub.py'),
+            # backlog.py in a folder named hub is still backlog.py, not the hub tool
+            (bash, 'python tools/hub/backlog.py set EX-RETIRE --scope tools/hub.py'),
+        ), False)
+        # the hub tool run, imported or named as a module, beside backlog.py or in its words
+        self.rows((
+            (bash, backlog + 'set EX-RETIRE --scope tools.hub'),
+            (bash, backlog + 'set EX-RETIRE --scope=tools.hub'),
+            (bash, backlog + 'set EX-RETIRE --scope tools/hub.py; python tools/hub.py answer Q-1'),
+            (bash, backlog + 'set EX-RETIRE --scope tools/hub.py && python -c "import tools.hub"'),
+            (bash, 'python tools/hub.py answer Q-1 --scope tools/hub.py'),
+            (bash, 'python -c "import tools.hub" Z:/k/tools/backlog.py set EX-RETIRE --scope kitlib/x'),
+            (bash, 'python -m tools.hub answer Q-1'),
+        ), True)
+
+    def test_backlog_show_of_a_hub_path(self):
+        # backlog.py show only prints what it is given; a positional path word to hub.py passes
+        self.rows((
+            (bash, 'python Z:/k/tools/backlog.py show tools/hub.py'),
+            (ps, 'python Z:/k/tools/backlog.py show tools\\hub.py'),
+        ), False)
+        self.rows(((bash, 'python Z:/k/tools/backlog.py show tools.hub'),), True)
 
     def test_whole_tree_commits_pass(self):
         # a commit or staging that names no hub path passes whatever it holds (tools/hub.py among

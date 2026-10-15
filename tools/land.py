@@ -14,6 +14,10 @@
       Landed: each branch's remote branch, worktree and local branch go, never forced (what main
       does not contain, or work, or a holder, keeps it); --keep-branch keeps all three. --fresh
       runs every step of the merged gate (no gate reuse, docs/gate.md "Gate reuse").
+      A branch that changes a strict path (kitlib/gate/strict_defaults.py, read from main) lands
+      alone, only with a verdict queued for its tip (tools/verdict.py add) by a strong-tier
+      reviewer who is not its author, and its merged gate runs --full --fresh whatever was
+      passed (docs/gate.md "Strict paths").
       --submit: the same landing, started detached and windowless; prints one line, SUBMITTED
       ... wait: <the gate.py wait-result command that waits for its result record>, and exits 0
   land.py --queue [-C DIR]
