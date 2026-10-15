@@ -254,8 +254,8 @@ class Arguments(Case):
 
 
 class TodoSteps(Case):
-    """hub_todo_add takes steps (kitlib.hubsite.todosteps): it posts their commands and summary,
-    and refuses what an agent's to-do may not hold before any call."""
+    """hub_todo_add takes steps (kitlib.hubsite.todosteps): it posts them as given, for the hub
+    to render (api.todo_steps), and refuses what an agent's to-do may not hold before any call."""
 
     def test_the_schema_takes_steps_as_a_list_of_objects(self):
         steps = srv.TOOLS["hub_todo_add"][1]["properties"]["steps"]
@@ -263,28 +263,12 @@ class TodoSteps(Case):
                                  "description": steps["description"]})
         self.assertIn("edit", steps["description"])
 
-    def test_steps_post_as_commands_after_the_given_ones_with_a_summary(self):
+    def test_steps_post_as_given_for_the_hub_to_render(self):
         steps = [{"edit": "C:\\w\\a.txt", "old": "x\ny", "new": "z"}, {"run": "python t.py"}]
-        payload, is_error = self.rpc(self.server(), "hub_todo_add",
-                                     {"title": "t", "detail": "Why.", "commands": ["first"],
-                                      "steps": steps})
+        args = {"title": "t", "detail": "Why.", "commands": ["first"], "steps": steps}
+        payload, is_error = self.rpc(self.server(), "hub_todo_add", args)
         self.assertFalse(is_error, payload)
-        body = self.ask.calls[-1]["body"]
-        self.assertNotIn("steps", body)
-        self.assertEqual(body["commands"][0], "first")
-        self.assertEqual(body["commands"][1:], todosteps.render(steps))
-        self.assertEqual(body["detail"], "Why.\n\nreplace 2 lines in C:\\w\\a.txt\nrun python t.py")
-
-    def test_steps_without_a_detail_make_the_summary_the_detail(self):
-        steps = [{"open": "C:\\w\\a.txt", "line": 3}]
-        for extra in ({}, {"detail": ""}):
-            with self.subTest(extra=extra):
-                payload, is_error = self.rpc(self.server(), "hub_todo_add",
-                                             dict(extra, title="t", steps=steps))
-                self.assertFalse(is_error, payload)
-                body = self.ask.calls[-1]["body"]
-                self.assertEqual(body["detail"], "open C:\\w\\a.txt at line 3 in Notepad++")
-                self.assertEqual(body["commands"], todosteps.render(steps))
+        self.assertEqual(self.ask.calls[-1]["body"], args)
 
     def test_bad_steps_and_refused_text_never_reach_the_hub(self):
         for args, field in (({"steps": [{"open": "rel.txt"}]}, "steps"),
@@ -294,6 +278,7 @@ class TodoSteps(Case):
                             ({"steps": [{"run": "notepad x"}]}, "steps"),
                             ({"steps": [{"run": "echo a\ud800b"}]}, "steps"),
                             ({"commands": ["git worktree add x"]}, "commands"),
+                            ({"commands": ["dir", "echo a\ud800b"]}, "commands"),
                             ({"detail": "Open it and apply the change."}, "detail")):
             with self.subTest(args=args):
                 payload, is_error = self.rpc(self.server(), "hub_todo_add",
@@ -434,6 +419,17 @@ class Live(httpfix.ListenerCase):
         self.assertTrue(is_error)
         self.assertEqual(payload["error"]["code"], "invalid")      # not answered yet: the hub says
         self.assertEqual(payload["status"], 400)
+        self.assertEqual(self.errors(), [])
+
+    def test_a_to_do_with_steps_is_rendered_by_the_hub(self):
+        steps = [{"open": "C:\\w\\a.txt", "line": 3}]
+        payload, is_error = self.mcp.call("hub_todo_add", {"title": "t", "commands": ["first"],
+                                                           "steps": steps})
+        self.assertFalse(is_error, payload)
+        doc = self.store.docs("todos")[payload["id"]]
+        self.assertEqual(doc["commands"], ["first"] + todosteps.render(steps))
+        self.assertEqual(doc["detail"], "open C:\\w\\a.txt at line 3 in Notepad++")
+        self.assertNotIn("steps", doc)
         self.assertEqual(self.errors(), [])
 
     def test_inbox_and_health_read_through_the_listener(self):

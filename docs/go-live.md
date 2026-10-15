@@ -118,7 +118,7 @@ Per Claude account, once reviewed. Nothing here has been run.
    `content/skills` (`claude plugin install` from the kit checkout, or add the kit as the account's plugin source),
    then remove the per-skill links as docs/install.md "After the plugin install: remove the per-item junctions" says.
    On a machine with no older kit clone, `machine-setup.ps1` enables it for every account and makes no per-skill links.
-   Check with `ListSkills` that the twelve names in docs/shipping.md appear once each.
+   Check with `ListSkills` that the nineteen names in docs/shipping.md appear once each.
 2. Statusline: in the account's `settings.json`, point `statusLine.command` at
    `optional/usage/statusline-usage.ps1` in the kit checkout (it was the old kit's copy), and
    any scheduled call of `write-usage-status.ps1` at the kit's copy. Machine setup plans the

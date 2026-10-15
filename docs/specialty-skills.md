@@ -1,6 +1,6 @@
 # Specialty skills: task specialties as skills, not agent types
 
-Status: decided (ready to build); the owner accepted all eight recommendations ("Decisions"). Nothing here is built. Written for the state after two pending
+Status: decided (ready to build); the owner accepted all eight recommendations ("Decisions"). Built: the seven `content/skills/specialty-*` skills (branch A); the types and the cutover (branch B) are not. Written for the state after two pending
 changes land: senior-worker on opus/high with strong-worker on opus/medium (the tier change), and a
 weak-worker on haiku 5.5 (the weak-worker change). Those rows come from the owner's rulings, not from main.
 
