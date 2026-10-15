@@ -467,6 +467,12 @@ class LedgerLineTest(unittest.TestCase):
         self.assertNotIn("ledger", broken)
         self.assertIn("- agent cap 4", broken)
 
+    def test_a_bug_reading_the_config_is_reported_not_dropped(self):
+        with mock.patch.object(coordinatorstart.kuser, "user_config", side_effect=TypeError("bug")):
+            text = ContextTest().build(self.CAP, machine_cfg=None)
+        self.assertIn("- could not check ledger: TypeError: bug", text)
+        self.assertIn("- agent cap 4", text)
+
     def test_without_ledger_dir_the_sessions_entry_is_not_needed(self):
         # No sessions file: cap and the others cannot run, and the ledger check adds no line.
         text = ContextTest().build({}, pm_cfg={}, machine_cfg={})

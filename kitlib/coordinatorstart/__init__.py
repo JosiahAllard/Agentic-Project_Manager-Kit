@@ -323,9 +323,11 @@ def context(cfg, env=None, cwd=None, now=None, procs=None, run=_run, read=_read,
             return box["e"][0]
 
         def ledger():
-            try:            # unreadable: no line, as with no ledger_dir (the start adds nothing new)
+            # A config that cannot be read (user_config raises ConfigError for every such case):
+            # no line, as with no ledger_dir. Any other error is a bug and is reported below.
+            try:
                 m = machine_cfg if machine_cfg is not None else kuser.user_config()
-            except Exception:
+            except kuser.ConfigError:
                 return []
             return ledger_lines(m, entry_once()["repo"]) if m.get("ledger_dir") else []
 

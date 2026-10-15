@@ -5,6 +5,7 @@ import unittest
 from unittest import mock
 
 from kitlib import hoststart, pmstart, coordinatorstart
+from kitlib.config import ConfigError
 
 
 class Checks(unittest.TestCase):
@@ -76,10 +77,17 @@ class Checks(unittest.TestCase):
         self.assertFalse([r for r in self.coordinator(machine_config=split) if 'ledger' in r])
 
     def test_a_machine_config_that_cannot_be_read_adds_no_row(self):
-        with mock.patch.object(coordinatorstart.kuser, 'user_config', side_effect=ValueError('broken')):
+        with mock.patch.object(coordinatorstart.kuser, 'user_config', side_effect=ConfigError('broken')):
             rows = self.coordinator(repo_name='demo', machine_config=None)
         self.assertEqual(rows, self.coordinator(repo_name='demo', machine_config={}))
         self.assertFalse([r for r in rows if 'machine config' in r or 'ledger' in r], rows)
+
+    def test_a_bug_reading_the_machine_config_is_reported_not_dropped(self):
+        with mock.patch.object(coordinatorstart.kuser, 'user_config', side_effect=TypeError('bug')):
+            rows = self.coordinator(repo_name='demo', machine_config=None)
+            with self.assertRaises(TypeError):
+                hoststart._quiet(coordinatorstart.kuser.user_config)
+        self.assertIn('could not check ledger: TypeError: bug', rows)
 
     def test_the_ledger_name_is_normalised(self):
         split = {'ledger_dir': 'D:/pm/rulings', 'ledger_repos': ['my-tools-repo', 'pm']}

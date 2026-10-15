@@ -32,11 +32,13 @@ def _config(loader, label, rows):
 
 
 def _quiet(loader):
-    """`loader()`, or {} when it fails or gives None: for a config read only to add an optional
-    line (the ledger line needs `ledger_dir`), so a broken config adds no row."""
+    """`loader()`, or {} when it gives None or raises ConfigError (kitlib.config.user.user_config's
+    one error for a config that cannot be read): for a config read only to add an optional line
+    (the ledger line needs `ledger_dir`), so a broken config adds no row. Any other error is a bug
+    and propagates."""
     try:
         return loader() or {}
-    except Exception:
+    except kuser.ConfigError:
         return {}
 
 
@@ -61,7 +63,7 @@ def shared_checks(role, cwd, repo_name=None, state_note=None, now=None, pm_confi
     """A tuple of check lines. Missing connections/configuration are reported, never guessed.
     `machine_config`: the machine config the coordinator's ledger line reads (default
     kitlib.config.user.user_config(), read only for a coordinator with a repo_name; one that
-    cannot be read adds no row)."""
+    cannot be read adds no row, and any other error reading it is a 'could not check ledger' row)."""
     if role not in {'pm', 'coordinator'}:
         return ()
     now = now or datetime.datetime.now().astimezone()
@@ -79,8 +81,8 @@ def shared_checks(role, cwd, repo_name=None, state_note=None, now=None, pm_confi
         checks.append(('standing', lambda: coordinatorstart.context(cfg, live=False).splitlines()))
         if repo_name:
             checks.append(('cap', lambda: coordinatorstart.cap(cfg, repo_name, now.date())))
-            machine = machine_config if machine_config is not None else _quiet(kuser.user_config)
-            checks.append(('ledger', lambda: coordinatorstart.ledger_lines(machine, repo_name)))
+            checks.append(('ledger', lambda: coordinatorstart.ledger_lines(
+                machine_config if machine_config is not None else _quiet(kuser.user_config), repo_name)))
         if state_note:
             note = os.path.realpath(state_note)
             root = os.path.realpath(cwd)
