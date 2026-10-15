@@ -1228,11 +1228,10 @@ class WriteCase(VerbCase):
         self.assertEqual(self.ok(
             'questions', 'add', '--title', 'which way', '--repo', 'kit', '--context-file', context,
             '--option', 'left::go left', '--option', 'right::go right', '--recommended', '0',
-            '--refs', 'B-1', 'B-2', '--urgent', '--from', 'coordinator'), ['ASKED Q-1000'])
+            '--refs', 'B-1', 'B-2', '--urgent', '--from', 'pm'), ['ASKED Q-1000'])
         doc = self.direct('/questions')['items'][0]
         self.assertEqual((doc['context'], doc['recommended'], doc['refs'], doc['urgent'],
-                          doc['from']), ('the context\nof it\n', 0, ['B-1', 'B-2'], True,
-                                         'coordinator'))
+                          doc['from']), ('the context\nof it\n', 0, ['B-1', 'B-2'], True, 'pm'))
         self.assertEqual(doc['options'], [{'label': 'left', 'description': 'go left'},
                                           {'label': 'right', 'description': 'go right'}])
         self.assertEqual(self.ok('questions'), ['Q-1000 v1 open [kit] which way'])
@@ -1445,6 +1444,57 @@ class WaitVerbCase(VerbCase):
             code, out, err = self.run_cli(*argv)
             self.assertEqual((code, out), (2, ''), argv)
             self.assertIn('USAGE: ', err)
+
+
+class DirectQuestionCase(VerbCase):
+    """questions add --from <session key>, pending --for and wait --pending --for, with the
+    session keys read from the temp home's launcher sessions.json."""
+
+    def setUp(self):
+        VerbCase.setUp(self)
+        state = os.path.join(self.home, 'launcher-state')
+        os.makedirs(state)
+        self.config({'launcher': {'state_dir': state}})
+        with open(os.path.join(state, 'sessions.json'), 'w', encoding='utf-8') as f:
+            json.dump({'_note': 'x', 'kit': {'repo': 'kit'}, 'other': {'repo': 'other'}}, f)
+
+    def asks(self, sender, title):
+        return self.ok('questions', 'add', '--title', title, '--repo', 'kit', '--from', sender,
+                       '--option', 'a::b', '--option', 'c::d')[0].split()[1]
+
+    def test_a_question_from_a_launcher_key_comes_back_to_it_alone(self):
+        mine, theirs, pms = self.asks('kit', 'mine'), self.asks('other', 'theirs'), \
+            self.ask('pms')[0].split()[1]
+        for qid in (mine, theirs, pms):
+            self.ok('answer', qid, '--choice', '0')
+        got = json.loads('\n'.join(self.ok('pending', '--json', '--for', 'kit')))
+        self.assertEqual([(i['id'], i['from']) for i in got['items']], [(mine, 'kit')])
+        self.assertEqual([line.split()[1] for line in self.ok('pending', '--for', 'pm')], [pms])
+        self.assertEqual(sorted(line.split()[1] for line in self.ok('pending')),
+                         sorted([mine, theirs, pms]))
+        self.assertEqual(self.ok('wait', '--pending', '--for', 'other', '--timeout', '5'),
+                         ['HUB %d %s %s theirs' % (self.hub.store.revision,
+                                                   got['items'][0]['kind'], theirs)])
+
+    def test_a_wait_for_a_key_with_nothing_for_it_times_out(self):
+        self.ok('answer', self.asks('other', 'theirs'), '--choice', '0')
+        code, out, err = self.run_cli('wait', '--pending', '--for', 'kit', '--timeout', '0',
+                                      '--port', self.port)
+        self.assertEqual((code, out, err), (4, '', ''))
+
+    def test_a_question_from_an_unknown_key_is_refused(self):
+        err = self.refused('questions', 'add', '--title', 't', '--from', 'coordinator',
+                           '--option', 'a::b', '--option', 'c::d')
+        self.assertTrue(err.startswith('REFUSED invalid: '), err)
+        self.assertIn('known: kit, other, pm', err)
+        self.assertNotIn('sessions.json', err)
+        self.assertEqual(self.direct('/questions')['items'], [])
+
+    def test_for_without_pending_is_a_usage_error(self):
+        code, out, err = self.run_cli('wait', '--for', 'kit', '--timeout', '0',
+                                      '--port', self.port)
+        self.assertEqual((code, out), (2, ''))
+        self.assertIn('USAGE: --for picks among the pending items', err)
 
 
 class ArgumentCase(CliCase):

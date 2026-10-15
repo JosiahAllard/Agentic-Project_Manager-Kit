@@ -19,14 +19,16 @@ Client.wait() answers with `timed_out` true.
 Client(port, tokens, via=serve.VIA_CLI)
   get(path, role, query), post(path, role, body)   one call; `path` is below api.BASE
   listing(collection, status, repo)     the items of GET /<collection>
-  pending()                             the items of GET /pending
+  pending(for_key)                      the items of GET /pending (for_key: only that session
+                                        key's)
   inbox()                               the inbox documents, from GET /snapshot (the api has no
                                         route that lists them)
   version(collection, id)               the version of one document now, for a write that pins it
-  wait(since, timeout, pending)         the long-poll: GET /wait again and again, each for at
+  wait(since, timeout, pending, for_key) the long-poll: GET /wait again and again, each for at
                                         most api.WAIT_MAX_S, until the server answers with a
                                         change, a pending item or a reset, or `timeout` seconds
-                                        passed (None: no limit)
+                                        passed (None: no limit); with for_key, until a pending
+                                        item of that session key
 """
 import time
 import urllib.parse
@@ -114,8 +116,9 @@ class Client(object):
         got = self.get('/' + collection, role, {'status': status, 'repo': repo})
         return got.get('items') or []
 
-    def pending(self):
-        return self.get('/pending').get('items') or []
+    def pending(self, for_key=None):
+        """The pending items, each with `from`; with for_key only that session key's."""
+        return self.get('/pending', ANY, {'for': for_key or None}).get('items') or []
 
     def inbox(self):
         docs = (self.get('/snapshot').get('collections') or {}).get('inbox') or {}
@@ -129,15 +132,17 @@ class Client(object):
         raise Refused(404, {'ok': False, 'error': {
             'code': 'not_found', 'message': 'no %s in %s' % (doc_id, collection), 'field': 'id'}})
 
-    def wait(self, since=None, timeout=None, pending=False):
+    def wait(self, since=None, timeout=None, pending=False, for_key=None):
         """The last answer of GET /wait: {revision, reset, timed_out, changes, pending}.
-        `timed_out` is true only when `timeout` seconds passed with nothing to say."""
+        `timed_out` is true only when `timeout` seconds passed with nothing to say. for_key
+        (with pending) waits for that session key's pending items only."""
         end = None if timeout is None else self._clock() + max(0.0, float(timeout))
         while True:
             left = _api.WAIT_MAX_S if end is None else end - self._clock()
             turn = max(0.0, min(float(left), float(_api.WAIT_MAX_S)))
             got = self.get('/wait', ANY, {'since': since, 'timeout': '%g' % turn,
-                                          'pending': 1 if pending else None},
+                                          'pending': 1 if pending else None,
+                                          'for': for_key or None},
                            timeout=turn + WAIT_MARGIN_S)
             if not got.get('timed_out'):
                 return got
