@@ -119,7 +119,11 @@ or its PowerShell front end `installer/new-repo.ps1`, which passes its parameter
    It prints what it would write: `.kit.json` (`"repo".main_branch`, `"repo".name`, `"owner".email`,
    `"owner".agent_emails`), `.gitignore` and `.gitattributes`, a starter `docs/INDEX.md`, with
    `--stack` the stack's `tools/gate.json`, and with `--stubs` only the stubs (by
-   `kitlib.stubs`, as `kit_stubs.py write -C <target>`; without it the dry run says `stubs: none`).
+   `kitlib.stubs`, as `kit_stubs.py write -C <target>`; without it the dry run says `stubs: none`),
+   and under `memory:` the `autoMemoryDirectory` key of `.claude/settings.json`
+   (`<the main checkout's drive>/Agent-memory/<repo folder name>`, `kitlib/stubs/memory.py`): added
+   only when the file lacks it, kept when it names any absolute folder, refused when the file is not
+   JSON it can edit or the key is not an absolute folder. It never makes the folder, and the owner commits `.claude/settings.json`.
    `"repo".name` is the repository's rulings-ledger column (docs/backlog.md "Owner gates"): `--repo-name`,
    else the target folder's name lower-cased; either must match `[a-z0-9][a-z0-9-]*` or it
    refuses (exit 2). Both emails are required and must differ, or an agent's commit could pass
@@ -199,7 +203,8 @@ or its PowerShell front end `installer/new-repo.ps1`, which passes its parameter
   them with the `<PLACEHOLDER>` slots filled (docs/shipping.md "Stack templates"). Both profiles
   are optional: with no agent profile, every role reads the kit's `content/default-profile.md`
   plus the repository's README and instructions file (docs/agent-profile.md).
-- `.claude/settings.json`: the kit ships none (docs/go-live.md "Joint-review questions").
+- `.claude/settings.json`: the kit ships none (docs/go-live.md "Joint-review questions"); the
+  setup adds only its `autoMemoryDirectory` key (step 2).
 - `backlog/.gitkeep` is not needed (the backlog store is the ref `refs/backlog/main`), and
   `.github/workflows/instructions.yml` is not shipped: the stack workflows do not mention it.
 - Anything outside the repository: the ledger, the lock and the user config are per machine.
@@ -328,7 +333,13 @@ the machine config (docs/kit-json.md "Machine config keys"). The first `<kit>/to
 ```
 python <kit>/tools/kit_stubs.py write [-C DIR] [--tools a,b,...] [--replace] [--dry-run]
 python <kit>/tools/kit_stubs.py check [-C DIR] [--tools a,b,...]
+python <kit>/tools/kit_stubs.py memory [-C DIR] [--apply]
 ```
+
+`memory` is not about stubs: it prints the `autoMemoryDirectory` that `.claude/settings.json`
+would get (dry run), and with `--apply` adds it when the file lacks the key; exit 1 when the file
+cannot be edited (`kitlib/stubs/memory.py`; tests: `tests/stubs/test_memory.py`; docs/pm-start.md
+"Memory folder (`memory`)").
 
 Opt-in, for a repository that wants committed stubs (the old setup; decision 21 made the default
 none). Nothing in the kit needs them: the skills, roles and the default profile run

@@ -431,6 +431,54 @@ class Stubs(Base):
         self.assertIn('REFUSED - kitlib.stubs refused the stubs above (exit 2); nothing was written', out)
 
 
+class Memory(Base):
+    """The repository's .claude/settings.json autoMemoryDirectory (kitlib.stubs.memory). The memory
+    root is overridden to a folder beside the throwaway repository, so the value never names a real
+    drive's root; no memory folder is made."""
+
+    def setUp(self):
+        Base.setUp(self)
+        self.mem = os.path.join(os.path.realpath(self.fx.base), 'mem')
+        self.want = self.mem.replace('\\', '/') + '/' + os.path.basename(self.root)
+        self.settings = os.path.join(self.root, '.claude', 'settings.json')
+
+    def run_mem(self, apply=False, **kw):
+        return self.run_it(apply=apply, memory_root=self.mem, **kw)
+
+    def test_the_dry_run_names_the_value_and_writes_nothing(self):
+        code, out = self.run_mem()
+        self.assertEqual(code, R.EXIT_OK, out)
+        self.assertIn('memory:', out)
+        self.assertIn('would add autoMemoryDirectory = %s to %s' % (self.want, self.settings), out)
+        self.assertFalse(os.path.exists(os.path.dirname(self.settings)))
+
+    def test_apply_writes_the_key_and_the_next_steps_name_the_file(self):
+        code, out = self.run_mem(apply=True)
+        self.assertEqual(code, R.EXIT_OK, out)
+        with open(self.settings, encoding='utf-8') as fh:
+            self.assertEqual(json.load(fh), {'autoMemoryDirectory': self.want})
+        self.assertIn('.claude/settings.json', out.split('Next:')[1])
+        self.assertFalse(os.path.exists(self.mem))
+
+    def test_an_existing_value_is_kept_and_reported(self):
+        self.fx.write('.claude/settings.json', '{"autoMemoryDirectory": "~/mine", "model": "x"}\n')
+        code, out = self.run_mem(apply=True)
+        self.assertEqual(code, R.EXIT_OK, out)
+        self.assertIn('kept', out.split('memory:')[1])
+        self.assertIn('~/mine', out)
+        self.assertEqual(self.read('.claude/settings.json'), '{"autoMemoryDirectory": "~/mine", "model": "x"}\n')
+
+    def test_a_settings_file_it_cannot_edit_refuses_before_anything_is_written(self):
+        self.fx.write('.claude/settings.json', '[1]\n')
+        before = sorted(os.listdir(self.root))
+        code, out = self.run_mem(apply=True)
+        self.assertEqual(code, R.EXIT_REFUSED, out)
+        self.assertIn(self.settings, out)
+        self.assertFalse(os.path.exists(os.path.join(self.root, '.kit.json')))
+        self.assertEqual(sorted(os.listdir(self.root)), before)
+        self.assertEqual(self.read('.claude/settings.json'), '[1]\n')
+
+
 class PmData(Base):
     """--pm-data: the kit's tools/pm_data.py runs as a child after the files; a copy of the kit
     with a stand-in pm_data.py, so nothing is made in any repository."""
