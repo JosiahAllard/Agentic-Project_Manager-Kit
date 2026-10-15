@@ -67,7 +67,6 @@ import collections
 import datetime
 import json
 import os
-import re
 
 from kitlib import hubvalidate
 
@@ -91,8 +90,6 @@ Skipped = collections.namedtuple('Skipped', 'source rel why')
 # a question written with its `recommended`, the text `old`, as the number `new`; label: `old`
 # is the label of the option at position `new`, not a number written as text
 Turned = collections.namedtuple('Turned', 'rel old new label', defaults=(False,))
-_WHOLE = re.compile(r'[0-9]{1,9}')  # a whole number small enough to be a position; more digits
-_DIGITS = re.compile(r'[0-9]+')     # than that are kept as text
 
 
 class Result(collections.namedtuple(
@@ -132,26 +129,6 @@ def _own(fields):
     """A document's fields without what the store or ArtifactData sets (id, version,
     updated_at): what two copies of a document are compared by."""
     return {k: v for k, v in fields.items() if k != 'id' and k not in schema.STORE_KEYS}
-
-
-def _whole(coll, fields):
-    """(fields, old, label): a question whose `recommended` is text that stands for a number
-    (the module docstring) is given back as a copy with the number; old is that text and label
-    is True when it was an option's label. Any other document is given back as it is, with old
-    None."""
-    old = fields.get('recommended') if coll == 'questions' else None
-    if not isinstance(old, str) or not old:
-        return fields, None, False              # '' names no option, whatever an option's label is
-    options = fields.get('options')
-    at = [i for i, o in enumerate(options if isinstance(options, list) else [])
-          if isinstance(o, dict) and o.get('label') == old]
-    if _WHOLE.fullmatch(old):
-        if at and at != [int(old)]:
-            return fields, None, False          # the number, or one of those options: it does not say
-        return dict(fields, recommended=int(old)), old, bool(at)
-    if len(at) != 1 or _DIGITS.fullmatch(old):  # too long to be a number here: left as it is
-        return fields, None, False
-    return dict(fields, recommended=at[0]), old, True
 
 
 def _doc_files(folder):
@@ -401,10 +378,11 @@ def migrate(root, sources, dry_run=False):
         for (coll, doc_id), found in sorted(versions.items()):
             rel = '%s/%s' % (coll, doc_id)
             cur = have[coll].get(doc_id)
-            was = {s: _whole(coll, f)[1:] for s, f in found}
-            found = [(s, _whole(coll, f)[0]) for s, f in found]
+            was = {s: schema.whole_recommended(coll, f)[1:] for s, f in found}
+            found = [(s, schema.whole_recommended(coll, f)[0]) for s, f in found]
             if cur is not None:
-                mine = _own(_whole(coll, cur)[0])       # compared as a source is: text as number
+                # compared as a source is: text as number
+                mine = _own(schema.whole_recommended(coll, cur)[0])
                 differs = [(s, f) for s, f in found if _own(f) != mine]
                 if not differs:
                     same.append(rel)
