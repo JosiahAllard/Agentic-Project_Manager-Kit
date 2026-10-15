@@ -1,10 +1,15 @@
 """The rulings-ledger format: split, parse, render and validate (docs/ledger.md "Format").
 
-An entry is a header `## R-nnnn | YYYY-MM-DD HH:MMZ | <repo> | <prov>` then the fields Q, A,
+An entry is a header `## <id> | YYYY-MM-DD HH:MMZ | <repo> | <prov>` then the fields Q, A,
 Decides, Source and Supersedes, one `Key: value` line each (a continuation line starts with two
 spaces). An older entry may end with an `Items: A, B` line: it is still parsed and validated, and
 `render` writes none. A tombstone keeps its header and has one body line,
-`Retired: <class> - <why> (see R-nnnn|-)`. Ids are numbered from 1 in file order, one apart.
+`Retired: <class> - <why> (see <id>|-)`. Ids are numbered from 1 in file order, one apart.
+
+Two id forms (docs/ledger.md "Files"): `H-<repo>-nnnn` in a per-repo file `<ledger_dir>/<repo>.md`,
+whose every entry has that repo column, and `R-nnnn` in the one-file ledger (`ledger_path`), frozen
+once the per-repo files exist. validate's `repo` names the per-repo file being checked; None is
+the one-file ledger.
 
 Pure functions over text; kitlib.ledger.write reads and writes the file.
 """
@@ -23,21 +28,36 @@ FIELDS = ('Q', 'A', 'Decides', 'Source', 'Supersedes')
 OPTIONAL = ('Items',)
 ITEM_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]*$')
 WHEN_RE = re.compile(r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}Z$')
-HEAD_RE = re.compile(r'^## (R-\d{4,}) \| (\d{4}-\d{2}-\d{2} \d{2}:\d{2}Z) \| ([a-z0-9-]+) \| ([a-z-]+)$')
+# A ruling id: R-nnnn (the one-file ledger) or H-<repo>-nnnn (a per-repo file). No group.
+ID = r'(?:R-\d{4,}|H-[a-z0-9][a-z0-9-]*-\d{4,})'
+HEAD_RE = re.compile(r'^## (%s) \| (\d{4}-\d{2}-\d{2} \d{2}:\d{2}Z) \| ([a-z0-9-]+) \| ([a-z-]+)$' % ID)
 RETIRE_CLASSES = ('spent', 'superseded', 'duplicate')
-TOMBSTONE_RE = re.compile(r'^Retired: (spent|superseded|duplicate) - (.+) \(see (R-\d{4,}|-)\)$')
-RID_RE = re.compile(r'\bR-\d{4,}\b')
-UNDER_RE = re.compile(r'\bunder (R-\d{4,})\b')
+TOMBSTONE_RE = re.compile(r'^Retired: (spent|superseded|duplicate) - (.+) \(see (%s|-)\)$' % ID)
+RID_RE = re.compile(r'\b%s\b' % ID)
+UNDER_RE = re.compile(r'\bunder (%s)\b' % ID)
 # A Decides longer than this draws a warning, never a refusal: one line is the aim.
 DECIDES_NUDGE = 400
 
 
+def is_id(text):
+    """True when `text` is one ruling id of either form."""
+    return bool(re.fullmatch(ID, text or ''))
+
+
 def num(rid):
-    return int(rid[2:])
+    return int(rid.rsplit('-', 1)[1])
 
 
-def fmt_id(n):
-    return 'R-%04d' % n
+def repo_of(rid):
+    """The repo of an H-<repo>-nnnn id; None for an R-nnnn id."""
+    if rid.startswith('R-'):
+        return None
+    return rid[2:].rsplit('-', 1)[0]
+
+
+def fmt_id(n, repo=None):
+    """Id number `n`: H-<repo>-nnnn in `repo`'s file, R-nnnn in the one-file ledger (repo None)."""
+    return 'R-%04d' % n if repo is None else 'H-%s-%04d' % (repo, n)
 
 
 def template_text():
@@ -48,7 +68,7 @@ def template_text():
 
 def split_entries(text):
     """`(preamble, [(id or None, raw block)])`; a block keeps its exact text."""
-    parts = re.split(r'(?m)^(?=## R-)', text)
+    parts = re.split(r'(?m)^(?=## [RH]-)', text)
     out = []
     for b in parts[1:]:
         m = HEAD_RE.match(b.split('\n', 1)[0])
@@ -128,40 +148,66 @@ def render_tombstone(header_line, cls, why, by):
     return '%s\nRetired: %s - %s (see %s)\n' % (header_line, cls, why, by or '-')
 
 
-def next_id(blocks):
+def next_id(blocks, repo=None):
     nums = [num(i) for i, _ in blocks if i]
-    return fmt_id(max(nums) + 1 if nums else 1)
+    return fmt_id(max(nums) + 1 if nums else 1, repo)
 
 
-def validate(text, repos=None):
+def provs_of(texts):
+    """{id: provenance} of every well-formed header in `texts` (the other ledger files), for the
+    `under <id>` check of validate."""
+    out = {}
+    for text in texts:
+        for rid, block in split_entries(text)[1]:
+            m = HEAD_RE.match(block.split('\n', 1)[0])
+            if rid and m:
+                out.setdefault(rid, m.group(4))
+    return out
+
+
+def validate(text, repos=None, repo=None, others=()):
     """Every problem in the ledger text, as lines; [] when it is valid. `repos` None checks the repo
-    column's shape only."""
+    column's shape only. `repo` set: the text is that repo's per-repo file (H-<repo>-nnnn ids, every
+    repo column `repo`), and a delegated entry may be `under` an owner entry of `others` (the other
+    files' texts) as well as an earlier one of this file; None: the one-file ledger (R-nnnn)."""
     errs = []
     _, blocks = split_entries(text)
     parsed = {}
     for n, (rid, block) in enumerate(blocks, 1):
-        if rid != fmt_id(n):
+        if rid != fmt_id(n, repo):
             errs.append('entry %d: id %s, expected %s (ids run in order from %s)'
-                        % (n, rid, fmt_id(n), fmt_id(1)))
+                        % (n, rid, fmt_id(n, repo), fmt_id(1, repo)))
         e, more = parse_block(block, repos)
         errs += more
         if e:
             parsed[rid] = e
+            if repo is not None and e['repo'] != repo:
+                errs.append('%s: repo column %r in the file of %r (each file holds its own repo)'
+                            % (rid, e['repo'], repo))
     known = set(parsed)
+    elsewhere = provs_of(others) if repo is not None else {}
     for rid, e in parsed.items():
         if e.get('retired'):
             continue                    # a tombstone carries no Source or Supersedes to check
         if e['prov'] == 'delegated':
             m = UNDER_RE.search(e.get('Source', ''))
             if not m:
-                errs.append("%s: a delegated entry's Source must say 'under R-nnnn'" % rid)
-            elif num(m.group(1)) >= num(rid) or parsed.get(m.group(1), {}).get('prov') not in OWNER_PROVS:
+                errs.append("%s: a delegated entry's Source must say 'under <id>'" % rid)
+            elif not _owner_before(m.group(1), rid, parsed, elsewhere):
                 errs.append('%s: delegated under %s, which is not an earlier owner entry' % (rid, m.group(1)))
         if e.get('Supersedes', '-') != '-':
             for ref in RID_RE.findall(e['Supersedes']):
                 if ref not in known or num(ref) >= num(rid):
-                    errs.append('%s: supersedes %s, which is not an earlier entry' % (rid, ref))
+                    errs.append('%s: supersedes %s, which is not an earlier entry%s'
+                                % (rid, ref, ' of this file' if repo is not None else ''))
     return errs
+
+
+def _owner_before(under, rid, parsed, elsewhere):
+    """True when `under` is an owner entry: an earlier one of this file, or one of another file."""
+    if under in parsed:
+        return num(under) < num(rid) and parsed[under].get('prov') in OWNER_PROVS
+    return elsewhere.get(under) in OWNER_PROVS
 
 
 def check_append_only(old, new):

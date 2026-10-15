@@ -7,6 +7,7 @@ import datetime
 import os
 
 from kitlib import coordinatorstart, pmstart
+from kitlib.config import user as kuser
 
 
 def _rows(checks):
@@ -30,6 +31,17 @@ def _config(loader, label, rows):
         return {}
 
 
+def _quiet(loader):
+    """`loader()`, or {} when it gives None or raises ConfigError (kitlib.config.user.user_config's
+    one error for a config that cannot be read): for a config read only to add an optional line
+    (the ledger line needs `ledger_dir`), so a broken config adds no row. Any other error is a bug
+    and propagates."""
+    try:
+        return loader() or {}
+    except kuser.ConfigError:
+        return {}
+
+
 def machine_lines(snapshot):
     """Summarize the shared lock API's snapshot, without inferring process liveness."""
     if not isinstance(snapshot, dict) or not isinstance(snapshot.get('revision'), int):
@@ -47,8 +59,11 @@ def machine_lines(snapshot):
 
 
 def shared_checks(role, cwd, repo_name=None, state_note=None, now=None, pm_config=None,
-                  coordinator_config=None, lock_reader=None, session_host=None):
-    """A tuple of check lines. Missing connections/configuration are reported, never guessed."""
+                  coordinator_config=None, lock_reader=None, session_host=None, machine_config=None):
+    """A tuple of check lines. Missing connections/configuration are reported, never guessed.
+    `machine_config`: the machine config the coordinator's ledger line reads (default
+    kitlib.config.user.user_config(), read only for a coordinator with a repo_name; one that
+    cannot be read adds no row, and any other error reading it is a 'could not check ledger' row)."""
     if role not in {'pm', 'coordinator'}:
         return ()
     now = now or datetime.datetime.now().astimezone()
@@ -66,6 +81,8 @@ def shared_checks(role, cwd, repo_name=None, state_note=None, now=None, pm_confi
         checks.append(('standing', lambda: coordinatorstart.context(cfg, live=False).splitlines()))
         if repo_name:
             checks.append(('cap', lambda: coordinatorstart.cap(cfg, repo_name, now.date())))
+            checks.append(('ledger', lambda: coordinatorstart.ledger_lines(
+                machine_config if machine_config is not None else _quiet(kuser.user_config), repo_name)))
         if state_note:
             note = os.path.realpath(state_note)
             root = os.path.realpath(cwd)
@@ -79,11 +96,6 @@ def shared_checks(role, cwd, repo_name=None, state_note=None, now=None, pm_confi
                 inside = False
             if not os.path.isabs(state_note) or inside:
                 rows.append('state note must be an absolute path outside the checkout')
-            else:
-                entry = {'repo': repo_name or '', 'state': note}
-                checks.append(('rulings', lambda: coordinatorstart.rulings(entry, coordinatorstart.ledger_file(cfg))))
-        else:
-            rows.append('rulings: no external state note bound to this session; new-ruling comparison unavailable')
     if lock_reader is not None:
         checks.append(('machine', lambda: machine_lines(lock_reader())))
     else:
