@@ -297,7 +297,9 @@ class ArchiveProgramSearch(ArchiveWorld):
                      'Remove-Item Environment::Path', 'ri Microsoft.PowerShell.Core\\Environment::Path',
                      'del -Path Environment::Path', 'New-Item -Path Environment:: -Name PATH -Value %s' % self.scratch,
                      'Set-Content -Path Environment::Path -Value %s' % self.scratch,
-                     "Add-Content Microsoft.PowerShell.Core\\Environment::Path ';%s'" % self.scratch):
+                     "Add-Content Microsoft.PowerShell.Core\\Environment::Path ';%s'" % self.scratch,
+                     'Set-ItemProperty -Path Environment::Path -Name x -Value y', 'sp env:Path x y',
+                     'Clear-Item Environment::PAT*', 'Remove-Item Environment::\\ -Include PATH'):
             text = '%s; %s' % (item, archive)
             with self.subTest(text):
                 self.archive_refused(ps, text)
@@ -322,7 +324,8 @@ class ArchiveProgramSearch(ArchiveWorld):
     def test_reading_path_and_a_plain_cmd_keep_it_a_read(self):
         archive = 'git -C %s archive HEAD' % self.main
         for text in ('echo "$PATH" && %s' % archive, "cmd //c 'git -C \"%s\" archive HEAD'" % self.main,
-                     "cmd //c '%s'" % archive, "cmd //c 'path& %s'" % archive):
+                     "cmd //c '%s'" % archive, "cmd //c 'path& %s'" % archive,
+                     "cmd //c '@path>nul& %s'" % archive, "cmd //c 'pathping -n x& %s'" % archive):
             with self.subTest(text):
                 self.assertIsNone(self.pm(bash(text, self.w.plain)))
         for text in ('Write-Output $env:Path; %s' % archive, "cmd /c 'path& %s'" % archive,

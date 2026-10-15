@@ -2949,9 +2949,12 @@ def cmd_native_unsure(cmd, w):
     it: cmd toggles quoting at every `"` and keeps backslashes, the C runtime reads `\\"` as a quote
     and `""` inside quotes as one; so only a word with no `"`, or one wholly in one pair of quotes
     with no backslash before the closing one, is read the same (cmd reads a\\" -o f \\"b as one
-    word, git.exe gets a", -o, f, "b)."""
+    word, git.exe gets a", -o, f, "b). A word with no valid place in the source is unsure: its
+    text has cmd's quotes taken out already (fail closed)."""
     src = cmd.source or ''
-    raw = src[w.start:w.end] if w.start is not None and 0 <= w.start <= w.end <= len(src) else w.text
+    if w.start is None or w.end is None or not 0 <= w.start <= w.end <= len(src):
+        return True
+    raw = src[w.start:w.end]
     if '"' not in raw:
         return False
     return not (len(raw) >= 2 and raw[0] == raw[-1] == '"' and '"' not in raw[1:-1] and not raw[:-1].endswith('\\'))
