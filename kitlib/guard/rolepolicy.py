@@ -37,8 +37,9 @@ The owner's own session (nothing marks it) is never held, and its calls read no 
                   command or informational option, or tell it to stay open (-i, -Interactive,
                   -NoExit and any prefix of it, /k). Standard input fed by a pipe, a heredoc, a
                   here-string or `<` is the script: bare, `-` and bash's `-s` then pass
-    role-lock     the lock CLI (machine_lock.py, as the program or python's script: _lock_words)
-                  run with a verb outside the mode's LOCK_VERBS, or with --force in any
+    role-lock     the lock CLI (any word naming machine_lock.py, but in a program that never runs
+                  its words - backlog.py, commit.py, a reader, git diff: _lock_words) run with a
+                  verb outside the mode's LOCK_VERBS, or with --force in any
                   abbreviation; a lock MCP tool (lock_mcp_tool) whose verb
                   (MCP_VERBS) is outside them, or that the lock server does not have
   context(action, ctx)  the Ctx the shared rules then use: for a read, test or lander role, a view
@@ -423,33 +424,78 @@ def _python_script(args):
     return None
 
 
-def _lock_words(inv):
-    """The words a lock CLI call hands machine_lock.py, or None when `inv` runs none. A call is
-    machine_lock.py as the program (a direct path, &, Start-Process, cmd's or Git Bash's start)
-    or as the script python runs; a path naming it given to another tool (`backlog.py set --scope
-    tools/machine_lock.py`, cat, git) is not one. Code (-c, -m, `-`) and a program named by a
-    variable may run any later word, so there any word naming it still counts."""
+# Programs that never run the words they are given, so a path naming the lock CLI there is a path
+# (_lock_path_only). The kit's record and commit tools, as the program or as python's script:
+LOCK_PATH_SCRIPTS = frozenset(('backlog.py', 'commit.py'))
+# readers that take no command, script block or pager (rg only without --pre):
+LOCK_PATH_READERS = frozenset((
+    'cat', 'head', 'tail', 'wc', 'grep', 'egrep', 'fgrep', 'rg', 'findstr', 'ls', 'dir', 'stat',
+    'type', 'get-content', 'gc', 'select-string', 'sls', 'get-childitem', 'gci', 'get-item', 'gi',
+    'test-path', 'get-filehash'))
+# git subcommands that only read or stage a path given after the subcommand:
+LOCK_PATH_GIT = frozenset(('add', 'blame', 'diff', 'log', 'ls-files', 'show', 'status'))
+
+
+def _lock_names(t):
+    return rules.LOCK_SCRIPT in t.lower()
+
+
+def _output_stays(cmd, commands):
+    """True when `cmd`'s output reaches no program that could run it as code: no file it writes
+    (> or >>), no command substitution or nested shell around it, and every command it pipes
+    into a reader (LOCK_PATH_READERS) whose output stays too."""
+    if cmd.nested_in is not None or any(r.writes for r in cmd.redirects):
+        return False
+    if not cmd.piped_out:
+        return True
+    into = [c for c in commands if c.pipe_from is cmd]
+    for c in into:
+        inv = cm.invocation(c)
+        if inv is None or inv.dyn or inv.name not in LOCK_PATH_READERS or not _output_stays(c, commands):
+            return False
+    return bool(into)
+
+
+def _lock_path_only(inv, commands):
+    """True when `inv` is a program that never runs its words (LOCK_PATH_SCRIPTS,
+    LOCK_PATH_READERS, git's LOCK_PATH_GIT subcommands), so a word naming the lock CLI there is a
+    path, not a lock call. A reader's or git's output must not reach a program (_output_stays):
+    `cat tools/machine_lock.py | python - stop 42` runs the lock."""
+    if inv.dyn:
+        return False
     name, args = inv.name, inv.argv
-    if name == 'start' and inv.via != 'start-process':     # Git Bash's start: [/opts] ["title"] prog
-        while args and (args[0].startswith('/') or not args[0]):
-            args = args[1:]
-        if not args:
-            return None
-        name, args = cm.base_name(args[0]), args[1:]
-    if name == rules.LOCK_SCRIPT:
-        k = -1
-    elif inv.dyn or rules.HUB_CODE_PYTHON_RE.match(name):
-        k = None if inv.dyn else _python_script(args)
-        if k is None:
-            k = next((i for i, t in enumerate(args) if cm.base_name(t) == rules.LOCK_SCRIPT), None)
-        if k is None or cm.base_name(args[k]) != rules.LOCK_SCRIPT:
-            return None
-    else:
+    if name in LOCK_PATH_SCRIPTS:
+        return True
+    if rules.HUB_CODE_PYTHON_RE.match(name):
+        k = _python_script(args)
+        return k is not None and cm.base_name(args[k]) in LOCK_PATH_SCRIPTS
+    if name in LOCK_PATH_READERS:
+        if name == 'rg' and any(a == '--pre' or a.startswith('--pre=') for a in args):
+            return False                        # rg --pre runs a program on every file
+        return _output_stays(inv.cmd, commands)
+    g = cm.git_call(inv)
+    if g is None or g.sub_dyn or g.sub not in LOCK_PATH_GIT:
+        return False
+    first = len(args) - len(g.rest)             # the words after the subcommand
+    if any(_lock_names(t) and (i < first or t.startswith('-')) for i, t in enumerate(args)):
+        return False                            # in -c or an option's value: config git may run
+    return _output_stays(inv.cmd, commands)
+
+
+def _lock_words(inv, commands=()):
+    """The words a lock CLI call hands machine_lock.py, or None when `inv` runs none. Fail-closed:
+    any word naming machine_lock.py - the program, python's script, an argument of a launcher
+    (winpty, uv run, setsid, watch, Git Bash's start, Start-Process cmd -ArgumentList "/c ...")
+    or of a script - is a lock call, and the words after it are its words, except in a program
+    that never runs its words (_lock_path_only: `backlog.py set --scope tools/machine_lock.py`,
+    cat, rg, Get-Content, git diff). `commands` is the line's commands, for the pipes."""
+    seq = []
+    for w in [inv.path] + inv.argv:
+        seq.extend(w.split() if any(c.isspace() for c in w) else [w])  # an -ArgumentList string, a title
+    k = next((i for i, t in enumerate(seq) if cm.base_name(t) == rules.LOCK_SCRIPT), None)
+    if k is None or _lock_path_only(inv, commands):
         return None
-    rest = []
-    for w in args[k + 1:]:
-        rest.extend(w.split() if ' ' in w else [w])     # a Start-Process "-ArgumentList" string
-    return rest
+    return seq[k + 1:]
 
 
 def lock_verb(parsed, m):
@@ -460,7 +506,7 @@ def lock_verb(parsed, m):
     allowed = verbs_text(table)
     for cmd in parsed.commands:
         inv = cm.invocation(cmd)
-        words = _lock_words(inv) if inv is not None else None
+        words = _lock_words(inv, parsed.commands) if inv is not None else None
         if words is None:
             continue
         head = words[:words.index('--')] if '--' in words else words
