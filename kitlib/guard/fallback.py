@@ -11,7 +11,8 @@ unreadable line is never a way around a rule, and a plain line is never denied b
     line written plainly. The location-dependent git patterns are checked when the call's
     directory is a main checkout or one git cannot place; the push --no-verify pattern when that
     directory's repository has a PM data record (or git cannot place it), in every session but
-    the owner's own. The push-to-main pattern in a repository that does not set
+    the owner's own. The update-ref pattern (git-shared-ref) is checked wherever the call runs, in a
+    session rules.shared_ref_held holds. The push-to-main pattern in a repository that does not set
     repo.push_block (one with no .kit.json among them) gives only the re-read's own deny (a delete
     or a forced push of main); no deny lets the line run.
   - a heavy program's name: the same, and a program named by a variable is denied as heavy with
@@ -63,11 +64,13 @@ MAIN_ONLY = (
                         r'|(?=[^|;&]*\s(?:--worktree|-[a-zA-Z]*W[a-zA-Z]*)\b))'),
 )
 SUBAGENT_MAIN = (
-    ('git-main-history', G + r'(?:commit|merge|rebase|cherry-pick|revert|am|pull|apply)\b'),
+    ('git-main-history', G + r'(?:commit|merge|rebase|cherry-pick|revert|am|pull|apply|update-ref)\b'),
 )
 ANYWHERE = (
     ('git-branch-force-delete', G + r'branch\s+[^|;&]*(-D|--delete\s+--force|-[a-zA-Z]*D[a-zA-Z]*)\b'),
     ('git-worktree-remove', G + r'worktree\s+remove\b'),
+    # every worktree shares the refs: a held session's update-ref is judged wherever it runs
+    ('git-shared-ref', G + r'update-ref\b'),
     ('git-push-main', G + r'push\b[^|;&]*(\s|:|/)(?:main|master)\b'),
     ('git-push-pmdata', G + r'push\b[^|;&]*\s--no(?:-v|-?(?![\w-]))'),
     ('git-push-pmdata', G + r'send-pack\b'),
@@ -211,6 +214,8 @@ def check(event, ctx, text, cwd, role, parsed):
         if rule in main_rules and not main_like(ctx, where):
             continue
         if rule == 'owner-setup' and rules.is_owner_session(event, ctx):
+            continue
+        if rule == 'git-shared-ref' and not rules.shared_ref_held(event, ctx):
             continue
         if rule == 'git-push-pmdata' and (rules.is_owner_session(event, ctx) or (
                 pat != XARGS_BARE_GIT and not rules.pmdata_recorded(ctx, where or cwd))):

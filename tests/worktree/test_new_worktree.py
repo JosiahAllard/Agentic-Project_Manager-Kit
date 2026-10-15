@@ -736,7 +736,10 @@ class LocalMainBehindOrigin(LandingCase):
                       'starts at origin/master %s and local master is not updated' % pushed[:7], out)
         self.assertIn('branch    fix/fresh from pushed origin/master @ %s (not master: it is '
                       'behind)' % pushed[:7], out)
-        self.assertNotIn('landing', out)
+        # The phrases, not the bare word: the "next" line names the kit's own folder, which can sit
+        # under .claude/worktrees/_landing when a landing gate runs this suite.
+        self.assertNotIn('landing   in progress', out)
+        self.assertNotIn('a landing is in progress', out)
 
     def test_local_main_is_not_updated(self):
         self.push_ahead(1)
