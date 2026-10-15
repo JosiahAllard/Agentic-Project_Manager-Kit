@@ -46,11 +46,37 @@ Each calls a route the agent's token may call (`kitlib.hubsite.api.ROUTES`, role
 |---|---|---|
 | `hub_ask` | `title`; `context`, `options`, `recommended`, `repo`, `from`, `refs`, `urgent`, `story` | `POST /questions` |
 | `hub_question_log` | `id`, `ruling`, `if_version` | `POST /questions/<id>/log` |
-| `hub_todo_add` | `title`; `detail`, `commands`, `repo`, `refs`, `urgent`, `from` | `POST /todos` |
+| `hub_todo_add` | `title`; `detail`, `commands`, `steps` ("To-do steps"), `repo`, `refs`, `urgent`, `from` | `POST /todos` |
 | `hub_todo_ack` | `id`; `if_version` | `POST /todos/<id>/ack` |
 | `hub_story_set` | `id`, `status` (`api.AGENT_STORY_STATUSES`), `if_version`; `reviewer`, `review_note`, `backlog_id`, `closed_note` | `POST /stories/<id>` |
 | `hub_to_pm_reply` | `id`; `reply`, `ruling`, `if_version` | `POST /to_pm/<id>/reply` |
 | `hub_inbox_post` | `text`; `title`, `ref`, `asked`, `repo`, `from`, `refs` | `POST /inbox` |
+
+## To-do steps
+
+`hub_todo_add` takes `steps`, a list of what the owner is to do, and `kitlib.hubsite.todosteps` turns each into a PowerShell command the owner pastes (`render`), appended after any `commands` given. One line per step (`summary`), such as `replace 2 lines in C:\w\a.txt` or `run python t.py`, ends the to-do's detail, after a blank line. A step has exactly one verb key:
+
+| step | command |
+|---|---|
+| `{edit: <absolute file>, old: <text>, new: <text>}` | replaces the one place `old` is with `new`; prints `ok <file>`, or `MISS <file>: <why>` with the file unchanged |
+| `{open: <absolute file>, line: <n>}` (`line` optional) | opens the file in Notepad++ (`todosteps.NOTEPADPP`), or prints `MISS` when Notepad++ is not there |
+| `{run: <command>}` | the command, verbatim |
+
+The edit command is one Windows PowerShell 5.1 `& { ... }` block (`todosteps` module docstring):
+
+- `old` and `new` go in as readable single-quoted literals. A text holding a single quote (U+0027 or U+2018 to U+201B, which PowerShell reads as one), a control character other than a newline, a tab (pasted into a console, it can start completion) or a character outside the Basic Multilingual Plane goes in as base64 of its UTF-8 bytes instead, with its first `todosteps.PREVIEW` characters shown readable, control characters escaped, in a `<# #>` comment.
+- A block whose texts hold no newline is one line. A text with a newline makes the block span lines, and the owner pastes the whole block as one unit.
+- Newlines reach the script as LF and take the file's own ending: CRLF when the file has one, LF otherwise. A file with both is a `MISS` when `old` or `new` holds a newline.
+- The file is read as bytes: a UTF-8 or UTF-16 BOM, or none, and then it must be valid UTF-8 (an ANSI file is a `MISS`). It is written back with the same BOM and encoding.
+- `old` must occur exactly once (an ordinal count, overlapping matches included); any other count, or any error, is a `MISS` and nothing is written.
+
+`todosteps.check` refuses an agent's to-do whose own text (title, detail, `commands`, `run` steps; never edit text) does any of these, as `invalid` naming the field:
+
+- a command runs plain Notepad (Notepad++ is not matched): give an `open` step;
+- the text asks the owner to open a file and change it by hand ("open X and apply the edits", "make the following changes"): give `edit` steps;
+- a command is coordinator work, judged per segment between `&&`, `||`, `;`, `|` and newlines: `git worktree add`/`remove`/`move`/`prune`, `gate.py`, `land.py`, `new_worktree.py`, `worktree_remove.py`, `sync_base.py`, a branch or tag delete, `update-ref -d` or `--stdin`, and a push that deletes, forces, mirrors or prunes.
+
+The rules match words, so they can refuse a to-do that only mentions one of these in a command; `git merge` and a plain push are not refused. Until the hub's own `POST /todos` applies them, they hold for `hub_todo_add` only (`kitlib.hubmcp.server` `_t_hub_todo_add`).
 
 ## The owner's tools (pinned, not shipped)
 

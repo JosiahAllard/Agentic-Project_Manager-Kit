@@ -120,7 +120,8 @@ class Literals(unittest.TestCase):
             with self.subTest(quote=hex(ord(q))):
                 cmd = one(edit(old='it%ss' % q, new='x'))
                 self.assertEqual(payloads(cmd), ['it%ss' % q])
-                self.assertNotIn(q, cmd[cmd.index('#>'):])    # only the preview shows it
+                self.assertIn("it%ss" % q, cmd[:cmd.index('#>')])     # the preview shows it
+                self.assertNotIn('it%ss' % q, cmd[cmd.index('#>'):])
 
     def test_control_characters_tabs_and_astral_text_fall_back_to_base64(self):
         for text in ('a\x1bb', 'a\tb', 'a\x00b', 'smile \U0001F600', 'a\u2028b', 'a\x85b'):
