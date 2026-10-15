@@ -1392,7 +1392,7 @@ class DomTest(unittest.TestCase):
 
 
 DOC_CSP = ("<meta http-equiv=\"Content-Security-Policy\" "
-           "content=\"default-src 'none'; style-src 'unsafe-inline'; img-src data:\">")
+           "content=\"default-src 'none'; style-src 'unsafe-inline'; img-src data:; form-action 'none'; base-uri 'none'\">")
 # A diagram as a published document carries it: an inline svg, and an svg given as a data: image.
 DIAGRAM = ('<h1>Plan</h1><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10"/></svg>'
            '<img alt="flow" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciLz4=">')
@@ -1572,7 +1572,7 @@ class PageTextTest(unittest.TestCase):
         self.assertEqual(re.findall(r"\bsandbox\s*:\s*[^,}]*", self.script), ['sandbox: ""'])   # set once, to nothing
         self.assertNotRegex(self.script, r"\.sandbox\b")                  # and never changed afterwards
         self.assertIn('const DOC_CSP = "<meta http-equiv=\\"Content-Security-Policy\\" content=\\"default-src \'none\'; '
-                      'style-src \'unsafe-inline\'; img-src data:\\">";', self.script)
+                      'style-src \'unsafe-inline\'; img-src data:; form-action \'none\'; base-uri \'none\'\\">";', self.script)
         self.assertNotIn("createElement(\"iframe\"", self.script)
         self.assertEqual(self.p.count("<iframe"), 0)
 

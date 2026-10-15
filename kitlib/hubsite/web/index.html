@@ -1189,9 +1189,10 @@ button.danger{color:var(--warn)}
 
   // Docs: the agents' documents (pages/<id>), listed as text like every other card. A body (page_html/<id>) is
   // agent-written html: it is shown only in the reader's one frame, made below with a sandbox that grants nothing
-  // (no scripts, no forms, no same-origin, no navigation of the page) and a policy in front of the body that lets
-  // it load nothing from the network: inline styles and images given inline as data only.
-  const DOC_CSP = "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'; img-src data:\">";
+  // (no scripts, no forms, no same-origin, no navigation of the page) and a policy in front of the body that blocks
+  // its own loads (inline styles and data: images only). A clicked link still navigates the frame itself, outside
+  // this policy (the sandbox still holds there); docs/action-hub.md says what that leaves open.
+  const DOC_CSP = "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'; img-src data:; form-action 'none'; base-uri 'none'\">";
   const docBody = id => Object.prototype.hasOwnProperty.call(state.pageHtml, id) && typeof state.pageHtml[id] === "string" ? state.pageHtml[id] : null;
   let docOpen = null;
   function renderDocs(){

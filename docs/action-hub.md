@@ -41,7 +41,7 @@ or after an unpair or a session that ran out) is told so on the page and to run
   their question, branch and age) and Completed (1, 7, 30 or 90 days).
 - **Docs.** The agents' documents (a plan, research, a visual choice), newest first, from the
   store's `pages/` and `page_html/` ("pages/<id> and page_html/<id>" below). Read here opens one in
-  a full-screen reader; Close or Esc shuts it. Read only: nothing on the page writes or deletes a
+  a full-screen reader; Close shuts it, and so does Esc while the focus is outside the document. Read only: nothing on the page writes or deletes a
   document.
 - **Info.** Usage (each account's plan usage) and Agents (each agent's model and effort).
 
@@ -358,9 +358,20 @@ body is listed with its Read here button disabled; a body with no page is not sh
 The body is agent-written html. The page draws it nowhere but in the reader's one frame, made in
 script with a `sandbox` attribute that grants nothing (no scripts, forms, same-origin, popups or
 navigation of the hub page) and given the body through `srcdoc` behind a meta policy,
-`default-src 'none'; style-src 'unsafe-inline'; img-src data:`: the body can load nothing from
-the network, and a diagram shows only as an inline `<svg>` or a `data:` image
-(`DocsTest` and `PageTextTest.test_the_reader_is_one_locked_frame` in `tests/hubsite/test_page.py`).
+`default-src 'none'; style-src 'unsafe-inline'; img-src data:; form-action 'none'; base-uri 'none'`
+(`DOC_CSP` in `kitlib/hubsite/web/index.html`; `DocsTest` and
+`PageTextTest.test_the_reader_is_one_locked_frame` in `tests/hubsite/test_page.py`). The policy
+blocks what the body loads by itself: images other than `data:`, CSS files, fonts, scripts, frames
+and form posts. A diagram therefore shows only as an inline `<svg>` or a `data:` image. Links are
+not blocked. A link clicked inside the reader moves the frame itself to that address, and the
+policy no longer applies there; the sandbox still blocks scripts and forms on that page. Some
+browsers may also look up the host names of links in advance (DNS prefetch). Agent documents are
+trusted to that level. The publish step is planned to remove links, `meta refresh` and `<link>`
+from a body.
+
+Esc closes the reader only while the focus is outside the frame: keys typed inside the sandboxed
+document never reach the hub page. The Close button always works. An open reader keeps the body it
+was opened with until it is closed, even when a later read of the snapshot changes or removes the page.
 
 `python tools/hub.py validate` (`_check_pages` in `kitlib/hubvalidate/__init__.py`) warns when a
 page's title is missing or empty, when a `page_html` has no string `html`, and when a `page_html`
