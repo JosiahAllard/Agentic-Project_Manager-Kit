@@ -340,22 +340,12 @@ def _fold_overlap(snap, ctx, rid, branch, scopes):
     (`_ref_names`), so a packed ref is found as a loose one is. Failure when git cannot answer
     or there is no base to measure from."""
     notes, hits = [], []
-    names = _ref_names(ctx, branch)
-    tip, why = refs.resolve(_spelling(names, 'refs/heads/%s' % branch), ctx.root, known=True)
-    if tip is None:
-        raise Failure('cannot read branch %s: %s' % (branch, why))
-    remotes = [] if tip else _remotes_with(ctx, branch, names)
-    if tip:
-        hits += _diff_hits(ctx, branch, tip, scopes)
-    elif remotes:
-        seen = set()
-        for _remote, ref, rtip in remotes:
-            if rtip not in seen:
-                seen.add(rtip)
-                hits += _diff_hits(ctx, ref[len('refs/remotes/'):], rtip, scopes)
-        notes.append('NOTE: branch %s is not a local branch; its diff was compared as last '
-                     'fetched from %s' % (branch, ', '.join(r for r, _ref, _tip in remotes)))
-    else:
+    tips, note = _branch_tips(ctx, branch, _ref_names(ctx, branch))
+    for label, tip in tips:
+        hits += _diff_hits(ctx, label, tip, scopes)
+    if note:
+        notes.append(note)
+    if not tips:
         _base, sha = _code_main(ctx)
         merge = sha and landing_merge(ctx.root, ctx.code_main, branch, rev=sha, any_case=True)
         if not merge:
@@ -380,6 +370,26 @@ def _fold_overlap(snap, ctx, rid, branch, scopes):
                       'there:\n  %s\nfold it into %s, or file it after %s lands'
                       % (rid, branch, '\n  '.join(hits), branch, branch))
     return notes
+
+
+def _branch_tips(ctx, branch, names):
+    """`(tips, note)`: `tips` is `[(label, commit)]` to diff for `branch`, shared by `add` and
+    `pull`: its local tip, else the tip of each remote that has it as last fetched (each distinct
+    commit once, labelled `<remote>/<branch>`), with a NOTE naming those remotes; `[]` and no
+    note when neither has it. `names` is `_ref_names`. Failure when git cannot read a ref."""
+    tip, why = refs.resolve(_spelling(names, 'refs/heads/%s' % branch), ctx.root, known=True)
+    if tip is None:
+        raise Failure('cannot read branch %s: %s' % (branch, why))
+    if tip:
+        return [(branch, tip)], None
+    remotes = _remotes_with(ctx, branch, names)
+    tips = []
+    for _remote, ref, rtip in remotes:
+        if rtip not in [t for _label, t in tips]:
+            tips.append((ref[len('refs/remotes/'):], rtip))
+    note = remotes and ('NOTE: branch %s is not a local branch; its diff was compared as last '
+                        'fetched from %s' % (branch, ', '.join(r for r, _ref, _t in remotes)))
+    return tips, note or None
 
 
 def _remotes_with(ctx, branch, names=None):
@@ -473,9 +483,11 @@ def _pull_fold_hits(ctx, scopes, holding, branch):
     merge base with the code main, the caller's `branch` (any letter case) and its own pulls
     aside; each branch is diffed once. A code main that does not resolve here (a store whose git
     is not the code's) skips every diff with a NOTE, and so does a live branch that shares no
-    history with it (the code main is not that branch's history: backlog.code_main unset); a live
-    branch only a remote has is noted, not compared. Failure when git cannot read a ref, cannot
-    answer the merge-base question, or cannot diff."""
+    history with it (the code main is not that branch's history: backlog.code_main unset). A
+    live branch only remotes have is diffed at each remote's tip as last fetched, with a NOTE,
+    as `add` does (`_branch_tips`); one neither here nor on a remote is noted, not compared.
+    Failure when git cannot read a ref, cannot answer the merge-base question, or cannot
+    diff."""
     names = []
     for other in holding:
         name = other.get('pulled_by') or ''
@@ -487,23 +499,23 @@ def _pull_fold_hits(ctx, scopes, holding, branch):
     if not sha:
         return [], ['NOTE: code main %s does not resolve here; branch diffs not compared' % base]
     hits, notes = [], []
+    refnames = _ref_names(ctx, ', '.join(sorted(names)))
     for name in sorted(names):
-        tip, why = refs.resolve('refs/heads/%s' % name, ctx.root, known=True)
-        if tip is None:
-            raise Failure('cannot read branch %s: %s' % (name, why))
-        if not tip:
-            notes.append('NOTE: branch %s is not a local branch (only on %s); its diff was not '
-                         'compared' % (name, ', '.join(r for r, _ref, _tip in
-                                                       _remotes_with(ctx, name)) or 'a remote'))
-            continue
-        mb, why = refs.merge_base(sha, tip, ctx.root)
-        if mb is None:
-            raise Failure('cannot find the merge base of %s and %s: %s' % (name, base, why))
-        if not mb:
-            notes.append('NOTE: code main %s shares no history with %s; set backlog.code_main; '
-                         'branch diffs not compared' % (base, name))
-            continue
-        hits += _diff_hits(ctx, name, tip, scopes, (base, sha), mb)
+        tips, note = _branch_tips(ctx, name, refnames)
+        if note:
+            notes.append(note)
+        if not tips:
+            notes.append('NOTE: branch %s is neither a local branch nor on a remote; its diff was '
+                         'not compared' % name)
+        for label, tip in tips:
+            mb, why = refs.merge_base(sha, tip, ctx.root)
+            if mb is None:
+                raise Failure('cannot find the merge base of %s and %s: %s' % (label, base, why))
+            if not mb:
+                notes.append('NOTE: code main %s shares no history with %s; set '
+                             'backlog.code_main; branch diffs not compared' % (base, label))
+                continue
+            hits += _diff_hits(ctx, label, tip, scopes, (base, sha), mb)
     return hits, notes
 
 
