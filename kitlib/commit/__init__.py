@@ -24,6 +24,10 @@ commit(Request) -> Outcome(code, lines). Nothing here prints or exits; tools/com
   staged itself (merge_owned), so only the resolved conflicts are named. An owner-only path is the
   merge's only when its staged state is exactly the merged branch's copy and that branch changed
   it (a deletion included; a conflict resolved to that copy too); named, it is refused as below.
+- The commit records only the paths this call named, rendered or let a merge carry (commit_only):
+  it is made from a private index (GIT_INDEX_FILE), HEAD's tree plus those paths' staged entries,
+  so a file another writer stages after the check above is not swept in. The real index is not
+  written; what is still staged after the commit is named in a WARNING line.
 - Owner-only paths (.kit.json "owner", kitlib.config.owner) are committed only by the owner:
   --owner-authored, which refuses unless the author identity git will record (`git var
   GIT_AUTHOR_IDENT`) is "owner".email (unset, an agent_emails address or any other: refused).
@@ -56,8 +60,10 @@ import collections
 import os
 import posixpath
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 
 from kitlib import config as kconfig
 from kitlib import attribution, machinepaths, verdict
@@ -590,6 +596,66 @@ def staged_machine_path_error(root, status_after, status_before):
     return unstage_added(root, staged, status_before, lines), []
 
 
+def left_staged_line(others):
+    """The warning for files another writer staged during this call, which it left staged."""
+    return ('WARNING: staged by another writer during this call, left staged and not committed: '
+            '%s' % ', '.join(sorted(others)))
+
+
+def private_index(root, tmp, keep):
+    """`(env, None)` for a `git commit` that records exactly `keep` ({path: status letter}): an
+    index at `<tmp>/index` holding HEAD's tree (empty on an unborn branch) with each kept path's
+    entry copied from the real index, a deletion ('D') removed; or `(None, why)`. Every other entry
+    of the real index, staged by anyone, is left out of the commit and left as it is."""
+    env = dict(cmd.scrubbed_env(), GIT_INDEX_FILE=os.path.join(tmp, 'index'))
+    rc, out, _err = _git(root, 'rev-parse', '-q', '--verify', 'HEAD^{commit}')
+    head = out.strip() if rc == 0 else ''
+    r = cmd.call(['read-tree', head] if head else ['read-tree', '--empty'], root, env=env)
+    if r.rc != 0:
+        return None, 'git read-tree into a private index failed: %s' % (r.err or 'exit %s' % r.rc)
+    rc, out, err = _git(root, 'ls-files', '--stage', '-z')
+    if rc != 0:
+        return None, 'git ls-files --stage failed: %s' % (err or 'exit %s' % rc)
+    entries = {}
+    for row in out.split('\0'):
+        meta, tab, name = row.partition('\t')
+        if tab and name in keep:
+            entries.setdefault(name, []).append(meta)
+    zero = '0' * (len(head) or 40)
+    lines = []
+    for path in sorted(keep):
+        metas = entries.get(path, [])
+        if keep[path] == 'D' and not metas:
+            lines.append('0 %s\t%s' % (zero, path))
+        elif len(metas) == 1 and metas[0].split()[2] == '0':
+            mode, oid, _stage = metas[0].split()
+            lines.append('%s %s\t%s' % (mode, oid, path))
+        else:
+            return None, '%s is not one staged entry in the index (unmerged, or changed meanwhile)' % path
+    if lines:
+        r = cmd.call(['update-index', '--index-info'], root, env=env,
+                     stdin=('\n'.join(lines) + '\n').encode('utf-8'))
+        if r.rc != 0:
+            return None, 'git update-index on the private index failed: %s' % (
+                r.err or 'exit %s' % r.rc)
+    return env, None
+
+
+def commit_only(root, keep, msg):
+    """`git commit` of exactly `keep` ({path: status letter}) through private_index; `(rc, out,
+    err)` as _git gives them. The real index is never written: its entries for `keep` already match
+    the new HEAD, and every other staged entry stays staged."""
+    tmp = tempfile.mkdtemp(prefix='kit-commit-')
+    try:
+        env, why = private_index(root, tmp, keep)
+        if env is None:
+            return 1, '', why
+        r = cmd.call(['commit', '-q', '-m', msg], root, env=env)
+        return r.rc, r.out.decode('utf-8', 'replace'), r.err
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main_checkout_error(lander_main_checkout, root, main_branch=None, rule_pointer=None):
     """None if this commit may go ahead in `root`, else the refusal or usage error (exit 2).
     Without the flag: refused in the main checkout, and wherever git cannot tell. With it: a usage
@@ -720,7 +786,11 @@ def _commit(req, lines):
     if err:
         raise _Stop(REFUSED, *unstage_added(root, sorted(named), status_before, [
             'refused: the rendered files could not be staged: %s.' % err]))
-    status_after = staged_status(root)
+    # Only what this call named, rendered or the merge staged is committed: anything another
+    # writer staged since the check above stays staged, out of this commit.
+    staged_now = staged_status(root)
+    status_after = {p: s for p, s in staged_now.items() if p in named or p in merged}
+    others = set(staged_now) - set(status_after)
     if not status_after:
         raise _Stop(REFUSED, 'nothing to commit in: %s' % ', '.join(paths))
     refusal, warnings = staged_machine_path_error(root, status_after, status_before)
@@ -729,13 +799,19 @@ def _commit(req, lines):
         raise _Stop(REFUSED, *[l for l in refusal if l not in msg_warnings])
     lines.extend(l for l in warnings if l not in msg_warnings)
     msg = build_message(req.subject, body, trailers)
-    rc, out, err = _git(root, 'commit', '-q', '-m', msg, timeout=None)
+    rc, out, err = commit_only(root, status_after, msg)
     if rc != 0:
         raise _Stop(REFUSED, 'commit failed: %s' % (err or out.strip() or 'exit %s' % rc))
     _rc, short, _err = _git(root, 'rev-parse', '--short', 'HEAD')
     lines.append('committed %s  %s' % (short.strip(), req.subject))
     lines.append('files     %s' % ', '.join(
         paths + sorted((merged & set(status_after)) - set(paths))))
+    try:
+        others = set(staged_status(root))    # against the new HEAD: what is still staged
+    except _Stop:
+        pass                                 # the commit stands; the earlier read says enough
+    if others:
+        lines.append(left_staged_line(others))
     if ran is not None:
         lines.append('rendered  %s' % (', '.join(p for p in rendered if p not in paths)
                                        or 'no rendered file changed'))
