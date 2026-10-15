@@ -81,7 +81,9 @@ class DryRunAndApply(Base):
         self.assertEqual(code, R.EXIT_OK, out)
         with open(os.path.join(self.root, '.kit.json'), encoding='utf-8') as fh:
             data = json.load(fh)
+        # The store is named, so the backlog tool writes it (the default alone is read-only).
         self.assertEqual(data, {'repo': {'main_branch': 'master', 'name': 'repo'},
+                                'backlog': {'store': 'ref'},
                                 'owner': {'email': OWNER, 'agent_emails': [AGENT]}})
         got = stubs.run(self.root, 'check')
         self.assertEqual(got.code, stubs.OK, got.lines)

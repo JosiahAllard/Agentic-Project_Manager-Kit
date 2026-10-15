@@ -11,7 +11,7 @@ A backlog add, edit, pull or close is one tool call that takes seconds. No work 
 - Each repo keeps its own backlog, in its own repo: no extra repo, nothing shared between projects.
 - Records are `backlog/<ID>.md` (same format as today) on the ref `refs/backlog/main`.
 - The ref has no shared history with main. It never merges, rebases or fast-forwards with main; the two move independently.
-- `.kit.json` `"backlog": {"store": "ref" | "branch" | "main"}`, default `ref`.
+- `.kit.json` `"backlog": {"store": "ref" | "branch" | "main"}`, default `ref`, which a write must name: the default alone is read-only (docs/backlog.md "Stores").
   - `ref`: hidden from branch lists and PR menus, not fetched by a default clone (the tool adds the fetch refspec, only once a fetch found the store on the remote: kitlib/backlog/store.py `RefBackend.load`; a refspec for a ref the remote lacks fails every plain `git fetch`).
   - `branch`: the same on a visible `backlog` branch, browsable on GitHub.
   - `main`: today's behaviour, records in main through landings.

@@ -252,12 +252,15 @@ def find_remote(root, remote):
 class RefBackend(object):
     """Records under `backlog/` in the tree of a ref. With a remote the remote's `remote_ref` is
     the store and `local_ref` caches it; without one (the repository has no remote at all)
-    `local_ref` is the store."""
+    `local_ref` is the store. `implicit`: the store is `.kit.json`'s default, not one it names
+    (open_backend), so it reads as usual and publish refuses (default_store_refusal)."""
 
-    def __init__(self, root, remote, remote_ref, local_ref, no_remote_ref=None, fetch=True):
+    def __init__(self, root, remote, remote_ref, local_ref, no_remote_ref=None, fetch=True,
+                 implicit=False):
         self.root = root
         self.remote_ref = remote_ref
         self.fetch = fetch
+        self.implicit = implicit
         self.remote = find_remote(root, remote)
         self.local_ref = local_ref if self.remote else (no_remote_ref or local_ref)
 
@@ -363,7 +366,10 @@ class RefBackend(object):
         return cmd.text(self._git(args, stdin=message.encode('utf-8'))).strip()
 
     def publish(self, snap, writes, message):
-        """The new tip; Conflict when the store is no longer at snap.tip."""
+        """The new tip; Conflict when the store is no longer at snap.tip. Refused, nothing built,
+        when the store is the implicit default (default_store_refusal)."""
+        if self.implicit:
+            raise Refusal(default_store_refusal(self.root))
         new = self.build(snap, writes, message)
         if new is None:
             return snap.tip
@@ -1284,15 +1290,44 @@ def catch_up(backend, paths, session):
                                                    session or '-'))
 
 
+def default_store_refusal(root):
+    """Why a write to the implicit `ref` store is refused, and where to write instead: the PM data
+    worktree and its store when the repository has one (at_landing.pm_data_root), else the
+    `.kit.json` setting that opts in. Records written there by default were lost to the live
+    store once (KIT-BACKLOG-STALE-REF-WRITER), so a ref store is written only when named."""
+    from . import at_landing                         # at_landing imports this module
+    head = ('%s is the default backlog store: this repository\'s .kit.json names no '
+            '"backlog".store, so nothing was written' % STORE_REF)
+    opt_in = 'or set "backlog": {"store": "ref"} in .kit.json to write this store'
+    try:
+        pm_root, why = at_landing.pm_data_root(root)
+    except Exception as exc:                         # noqa: BLE001 - the advice is best effort
+        pm_root, why = None, str(exc)
+    if pm_root is None:
+        where = '; the PM data worktree was not found (%s)' % why if why else ''
+        return '%s%s; %s' % (head, where, opt_in.replace('or set', 'set', 1))
+    from kitlib.config import ConfigError, load as load_config
+    try:
+        live = load_config(pm_root).section('backlog')['store']
+    except (ConfigError, OSError):
+        live = None
+    store = ' (store %s)' % live if live else ''
+    return ('%s; write to the live store in the PM data worktree%s with -C "%s", %s'
+            % (head, store, pm_root.replace('\\', '/'), opt_in))
+
+
 def open_backend(root, cfg, fetch=True, store=None, clean=False):
     """The backend `.kit.json` "backlog".store names (absent: the schema default, `ref`), or
     `store` when given (`migrate --to`): `ref` the hidden ref, `branch` the `backlog` branch,
     `main` docs/backlog in `root`, any other path that folder in `root`. `clean`: a folder
-    store's MainBackend writes over no uncommitted change (Dirty); a ref store ignores it."""
+    store's MainBackend writes over no uncommitted change (Dirty); a ref store ignores it.
+    The `ref` store reached by the default alone (neither `store` nor `.kit.json` names it) is
+    read-only: its publish refuses (default_store_refusal)."""
+    implicit = not store and cfg.written('backlog', 'store') is None
     store = store or cfg.section('backlog')['store']
     remote = cfg.remote
     if store == 'ref':
-        return RefBackend(root, remote, STORE_REF, STORE_REF, fetch=fetch)
+        return RefBackend(root, remote, STORE_REF, STORE_REF, fetch=fetch, implicit=implicit)
     if store == 'branch':
         return RefBackend(root, remote, 'refs/heads/' + BRANCH,
                           'refs/remotes/%s/%s' % (remote, BRANCH),
