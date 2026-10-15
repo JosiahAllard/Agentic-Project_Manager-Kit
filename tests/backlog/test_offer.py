@@ -227,10 +227,6 @@ class CollisionHolder(unittest.TestCase):
                          'kitlib/backlog/offer.py already taken by HOLD (in flight on ?)')
 
 
-if __name__ == '__main__':
-    unittest.main()
-
-
 class BlockerSummary(unittest.TestCase):
     """`blocker_summary` ranks the live pulls and other sessions' records by how many passed-over
     records they block."""
@@ -266,4 +262,14 @@ class BlockerSummary(unittest.TestCase):
         s = snap(*recs)
         passed = self.passed_for(s, holding=[s.get('H%d' % i) for i in range(7)])
         self.assertEqual(len(omod.blocker_summary(passed)), 5)
+        # H0..H6 block 1, 2, 3, 1, 2, 3, 1 records: top five by count, ties by name
+        more = [priced('X%d' % i, priority='1', scope=sc) for i, sc in
+                enumerate(['h1/y', 'h2/y', 'h2/z', 'h5/y', 'h5/z', 'h6/y'])]
+        s = snap(*(recs + more))
+        passed = self.passed_for(s, holding=[s.get('H%d' % i) for i in range(7)])
+        self.assertEqual(omod.blocker_summary(passed),
+                         ['blocks 3: kit/h2 (H2)', 'blocks 3: kit/h5 (H5)', 'blocks 2: kit/h1 (H1)',
+                          'blocks 2: kit/h6 (H6)', 'blocks 1: kit/h0 (H0)'])
 
+if __name__ == '__main__':
+    unittest.main()
