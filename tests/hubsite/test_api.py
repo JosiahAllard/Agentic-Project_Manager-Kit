@@ -613,6 +613,16 @@ class ReadTest(ApiCase):
         self.assertEqual(obj['unavailable'], dict.fromkeys(('repos', 'usage', 'agents'),
                                                            'unavailable'))
 
+    def test_snapshot_carries_pages_and_their_bodies(self):
+        """The page's Docs section reads both from the snapshot: a change that trims either must change this."""
+        body = '<h1>Plan</h1><svg viewBox="0 0 1 1"></svg>'
+        self.store.put('pages', 'plan-1', {'title': 'The plan', 'repo': 'kit', 'at': '2026-10-15T00:00:00Z'})
+        self.store.put('page_html', 'plan-1', {'html': body})
+        for role in (OWNER, AGENT):
+            cols = self.ok('GET', '/snapshot', role)['collections']
+            self.assertEqual(cols['pages']['plan-1']['title'], 'The plan', role)
+            self.assertEqual(cols['page_html']['plan-1']['html'], body, role)
+
     def test_health(self):
         obj = self.ok('GET', '/health', OWNER)
         self.assertEqual((obj['ok'], obj['version'], obj['revision'], obj['store'], obj['git'],
@@ -1598,6 +1608,98 @@ class IdGuardTest(ApiCase):
         mid = self.ok('POST', '/inbox', AGENT, {'text': 'x'})['id']
         self.ok('POST', '/inbox/%s/read' % mid, OWNER)
         self.assertEqual(seen, [mid])
+
+
+class RecordViews(object):
+    """The two record views as kitlib.hubsite.serve.SiteViews gives them: known names answer, the
+    rest raise the HubErrors SiteViews maps kitlib.hubsite.backlog's refusals to."""
+
+    def __init__(self):
+        self.calls = []
+
+    def record(self, repo, id):
+        self.calls.append(('record', repo, id))
+        if repo != 'kit':
+            raise HubError('not_found', 'repo not known', 'repo')
+        if id != 'EX-1':
+            raise HubError('not_found', 'no such record', 'id')
+        return {'repo': 'kit', 'id': id, 'where': 'open'}
+
+    def record_template(self, repo):
+        self.calls.append(('record_template', repo))
+        return {'repo': repo, 'fields': []}
+
+
+class RecordRouteTest(ApiCase):
+    def setUp(self):
+        ApiCase.setUp(self)
+        self.views = RecordViews()
+        self.api = api.Api(self.store, views=self.views, clock=CLOCK)
+
+    def test_a_record_and_the_template(self):
+        for role in (OWNER, AGENT):
+            with self.subTest(role=role):
+                self.assertEqual(self.ok('GET', '/records/kit/EX-1', role),
+                                 {'repo': 'kit', 'id': 'EX-1', 'where': 'open',
+                                  'revision': self.store.revision})
+                self.assertEqual(self.ok('GET', '/records/kit/new', role)['fields'], [])
+        self.assertEqual(self.views.calls[:2], [('record', 'kit', 'EX-1'),
+                                                ('record_template', 'kit')])
+
+    def test_the_literal_new_wins_over_an_id(self):
+        self.assertIs(api.match('GET', BASE + '/records/kit/new')[0].handler, api.record_new)
+        self.assertIs(api.match('GET', BASE + '/records/kit/NEW')[0].handler, api.record)
+
+    def test_a_record_or_repository_that_is_not_there_is_a_404_naming_nothing_asked(self):
+        for role in (OWNER, AGENT):
+            with self.subTest(role=role):
+                obj = self.refused('not_found', 'id', 'GET', '/records/kit/EX-404', role)
+                self.assertEqual(obj['error']['message'], 'no such record')
+                obj = self.refused('not_found', 'repo', 'GET', '/records/other/EX-1', role)
+                self.assertEqual(obj['error']['message'], 'repo not known')
+
+    def test_a_segment_that_can_be_no_name_is_refused_before_the_view(self):
+        for path, field in (('/records/kit/..', 'id'), ('/records/kit/%2e%2e', 'id'),
+                            ('/records/kit/a\\b', 'id'), ('/records/kit/.git', 'id'),
+                            ('/records/kit/A..B', 'id'), ('/records/kit/' + 'A' * 129, 'id'),
+                            ('/records/../EX-1', 'repo'), ('/records/C:/EX-1', 'repo'),
+                            ('/records/%2e%2e/new', 'repo'), ('/records/-x/new', 'repo')):
+            for role in (OWNER, AGENT):
+                with self.subTest(path=path, role=role):
+                    obj = self.refused('invalid', field, 'GET', path, role)
+                    self.assertEqual(obj['error']['message'], api.SEGMENT_SAYS[field])
+        self.assertEqual(self.views.calls, [])
+        # a path with more segments is no record route
+        self.refused('not_found', 'path', 'GET', '/records/kit/a/b', OWNER)
+        self.assertEqual(self.views.calls, [])
+
+    def test_a_view_that_raises_anything_else_is_unavailable_with_its_class_only(self):
+        class Broken(object):
+            def record(self, repo, id):
+                raise OSError('C:\\secret\\folder is gone')
+
+            def record_template(self, repo):
+                raise ValueError('C:\\secret\\.kit.json')
+        self.api = api.Api(self.store, views=Broken(), clock=CLOCK)
+        for path, name, cls in (('/records/kit/EX-1', 'record', 'OSError'),
+                                ('/records/kit/new', 'record_template', 'ValueError')):
+            for role in (OWNER, AGENT):
+                with self.subTest(path=path, role=role):
+                    obj = self.refused('unavailable', 'views', 'GET', path, role)
+                    self.assertEqual(obj['error']['message'],
+                                     'the %s view failed: %s' % (name, cls))
+
+    def test_no_record_view_is_not_available(self):
+        self.api = api.Api(self.store, views=Views(), clock=CLOCK)
+        for path in ('/records/kit/EX-1', '/records/kit/new'):
+            with self.subTest(path=path):
+                self.refused('unavailable', 'views', 'GET', path, AGENT)
+
+    def test_the_record_views_are_not_part_of_the_snapshot(self):
+        self.assertNotIn('record', api.VIEWS)
+        self.assertNotIn('record_template', api.VIEWS)
+        self.ok('GET', '/snapshot', OWNER)
+        self.assertEqual(self.views.calls, [])
 
 
 if __name__ == '__main__':

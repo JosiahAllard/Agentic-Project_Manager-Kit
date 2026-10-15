@@ -57,8 +57,8 @@ _EXITED = re.compile(r"\bexited (-?\d{1,5})\b")
 _TIMED = re.compile(r"\btimed out after \d+ seconds\b")
 _GIT_SAID = re.compile(r"git [\w-]+: ")     # kitlib.hubbacklog.git's and the store's failures
 _DAY = re.compile(r"\d{4}-\d{2}-\d{2}$")
-PHRASES = (NO_CHECKOUT, NO_FOLDER, NOT_A_REPO, GIT_NOT_STARTED, GIT_TIMED_OUT, GIT_FAILED, BAD_REF,
-           BAD_STORE, FETCH_FAILED, READ_FAILED, NOT_READ)
+PHRASES = (NO_CHECKOUT, NO_REPOS, NO_FOLDER, NOT_A_REPO, GIT_NOT_STARTED, GIT_TIMED_OUT, GIT_FAILED,
+           BAD_REF, BAD_STORE, FETCH_FAILED, READ_FAILED, NOT_READ)
 _CODED = re.compile("(?:%s|%s)$" % tuple(re.escape(p).replace("%s", r"-?\d{1,5}")
                                          for p in (GIT_EXITED, FETCH_EXITED)))
 
@@ -330,6 +330,276 @@ def views(repos, now, opener=open_read, fetch=False, days=DAYS, cache=None):
             "repos": [repo_view(name, root, now, opener, fetch, days, cache) for name, root in repos]}
 
 
+# ------------------------------------------------------------------ one record (the record page)
+# What a record read refuses with: fixed phrases, never a path, an id or git's words.
+NO_RECORD = "no such record"
+NO_REPO = "repo not known"
+BAD_ID = "not a record id"
+BAD_REPO = "not a repository name"
+BAD_BRANCH = "not a branch name"
+BRANCH_FAILED = "the branch could not be read"
+HISTORY_CAP = 50    # versions of a parked record's file read for its last `pulled_by:` (fallback)
+REMOVAL_CAP = 2000  # commits of the store's history walked for the commit that took a record out:
+                    # an id removed further back reads as no such record
+# A record id as a URL segment may give it: either id grammar's characters (kitlib.backlog.record
+# ID_GRAMMARS), so no `/`, `\`, `%`, `:` or space can reach a git path; `..` is refused apart.
+_RID = re.compile(r"[A-Za-z0-9][A-Za-z0-9.-]{0,127}\Z")
+_REPO_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}\Z")
+# A branch a record names (`pulled_by:`, `parked_from:`), before git is asked about it.
+_BRANCH = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,199}\Z")
+_HOW = (("closes ", "closed"), ("retires ", "retired"), ("backlog: delete ", "deleted"))
+
+
+class RecordError(Exception):
+    """A record read that cannot be answered for what was asked: `code` is the hub's error code
+    (`not_found` or `invalid`), `said` one of the fixed phrases above, `field` the name asked
+    about (`repo` or `id`). None of them holds what the caller sent."""
+
+    def __init__(self, code, said, field):
+        Exception.__init__(self, said)
+        self.code, self.said, self.field = code, said, field
+
+
+def check_id(rid):
+    """`rid` when it can be a record id (a fullmatch of either id grammar, at most 128 characters,
+    no `..`), else RecordError invalid. Checked before any git is asked."""
+    if not isinstance(rid, str) or not _RID.match(rid) or ".." in rid:
+        raise RecordError("invalid", BAD_ID, "id")
+    return rid
+
+
+def check_repo(repo):
+    """`repo` when it can be a repository name (letters, digits, `.`, `_`, `-`; no `..`), else
+    RecordError invalid. A name is never made into a path: it only picks a configured one."""
+    if not isinstance(repo, str) or not _REPO_NAME.match(repo) or ".." in repo:
+        raise RecordError("invalid", BAD_REPO, "repo")
+    return repo
+
+
+def branch_name(name):
+    """True when `name` (from a record) can be asked of git as refs/heads/<name>."""
+    return (isinstance(name, str) and bool(_BRANCH.match(name)) and ".." not in name
+            and "//" not in name and not name.endswith(("/", ".", ".lock")))
+
+
+def _git_text(root, args):
+    """git's stdout text, or ReadError (its fixed phrase) when git gives no answer."""
+    out, why = gitcmd.run_text(args, root)
+    if out is None:
+        raise ReadError(kind(why, GIT_FAILED))
+    return out
+
+
+def _blob(root, spec):
+    try:
+        return hubbacklog.blobs(root, [spec])[0]
+    except Exception as exc:
+        raise ReadError(say(exc, root))
+
+
+def _store_path(folder, rid):
+    return "%s/%s.md" % (folder.strip("/"), rid) if folder.strip("/") else "%s.md" % rid
+
+
+def removed_how(subject):
+    """How a commit with `subject` took a record out of the store: closed, retired or deleted
+    (kitlib.backlog.plan's subjects), else removed."""
+    for start, how in _HOW:
+        if subject.startswith(start):
+            return how
+    return "removed"
+
+
+def last_pull(root, commit, path, cap=HISTORY_CAP):
+    """The branch the parked record at `path` was parked from: the `pulled_by:` of the pull it was
+    parked out of. A record parked before parking kept its branch lost `pulled_by:` when it was
+    parked; this reads it back from the file's history in `commit`, newest version first, at most
+    `cap` versions. The walk goes back through parked and pulled versions only: the first version
+    in any other state (open, or no state line) ends it with None, so a pull that was given up
+    before the parking is never shown as the branch it was parked from. None too when no version
+    within the cap holds one."""
+    shas = _git_text(root, ["log", "-n", str(cap), "--format=%H", commit, "--", path]).split()
+    if not shas:
+        return None
+    try:
+        texts = hubbacklog.blobs(root, ["%s:%s" % (sha, path) for sha in shas])
+    except Exception as exc:
+        raise ReadError(say(exc, root))
+    for text in texts:
+        rec = hubbacklog.parse(text)
+        if hubbacklog.first(rec, "state", "open") not in ("parked", "pulled"):
+            return None
+        got = hubbacklog.first(rec, "pulled_by")
+        if got:
+            return got
+    return None
+
+
+def removal(root, commit, path, cap=None):
+    """"<sha> <committer date ISO> <subject>" of the newest commit, among the first `cap` commits
+    of `commit`'s history (default REMOVAL_CAP), that deleted the file at `path`; "" when none
+    did. The walk is bounded: git is given no pathspec and no --diff-filter, so `-n` counts
+    every commit it walks (with either it counts only the commits that match, and an id the
+    store never held would walk the whole history); the deletion is picked out of the
+    --name-status lines here. A merge shows no diff here, so a record closed on
+    a merged branch is found at the branch's own commit. Rename detection is off: a deletion is
+    never read as half of a rename."""
+    cap = REMOVAL_CAP if cap is None else cap
+    out = _git_text(root, ["log", "-n", str(cap), "--no-renames", "--name-status",
+                           "--format=%x01%H %cI %s", commit])
+    head, gone = None, "D\t" + path
+    for line in out.split("\n"):
+        if line.startswith("\x01"):
+            head = line[1:]
+        elif head and line == gone:
+            return head
+    return ""
+
+
+def _worktree(root, branch):
+    """Where `branch` is checked out, relative to `root` with `/` (its folder's own name when it
+    is outside `root`), or None. Never an absolute path."""
+    out = _git_text(root, ["worktree", "list", "--porcelain"])
+    path, want = None, "branch refs/heads/" + branch
+    for line in out.split("\n"):
+        if line.startswith("worktree "):
+            path = line[len("worktree "):]
+        elif line == want and path:
+            full = os.path.normcase(os.path.abspath(path))
+            top = os.path.normcase(os.path.abspath(root))
+            if full == top:
+                return "."
+            if full.startswith(top.rstrip("\\/") + os.sep):
+                return os.path.relpath(os.path.abspath(path), os.path.abspath(root)).replace("\\", "/")
+            return os.path.basename(full.rstrip("\\/"))
+    return None
+
+
+def branch_block(root, branch, source):
+    """What git says of `branch` in the repository at `root`, read only: {"name", "source",
+    "exists", "tip" (short), "subject", "date", "worktree", "ahead", "behind", "error"}. ahead and
+    behind count against the main branch (`main_commit`). A failure is never raised: "error" is
+    BAD_BRANCH or BRANCH_FAILED and the keys it could not read stay None."""
+    out = {"name": branch, "source": source, "exists": None, "tip": None, "subject": None,
+           "date": None, "worktree": None, "ahead": None, "behind": None, "error": None}
+    if not branch_name(branch):
+        out["error"] = BAD_BRANCH
+        return out
+    r = gitcmd.call(["rev-parse", "--verify", "-q", "refs/heads/%s^{commit}" % branch], root)
+    if r.rc is None or r.rc not in (0, 1):
+        out["error"] = BRANCH_FAILED
+        return out
+    out["exists"] = r.rc == 0
+    if not out["exists"]:
+        return out
+    tip = gitcmd.text(r.out).strip()
+    try:
+        line = _git_text(root, ["log", "-1", "--format=%h %cI %s", tip])
+        out["tip"], out["date"], out["subject"] = (line.split(" ", 2) + ["", ""])[:3]
+        out["worktree"] = _worktree(root, branch)
+        counts = _git_text(root, ["rev-list", "--left-right", "--count",
+                                  "%s...%s" % (main_commit(root), tip)]).split()
+        out["behind"], out["ahead"] = int(counts[0]), int(counts[1])
+    except (ReadError, ValueError, IndexError):
+        out["error"] = BRANCH_FAILED
+    return out
+
+
+def read_record(name, root, rid, opener=open_read):
+    """The record `rid` of the repository `name` at `root`, as the record page shows it:
+
+    {"repo", "id", "version" (store commit `:` sha1 of the record's text), "where" ("open", or
+    "completed": a `closed:` line, or a file taken out of the store), "readable" (False when a
+    header line is not `key: value`), "fields" ([key, value] pairs in file order), "body",
+    "blockers" ([{"value", "kind", "target"}]; target the id an `item:` names), "hold"
+    ({"owner_ask", "hold_ruling", "q"}), "branch" (`branch_block`, or None), "removed" (None, or
+    {"how": closed|retired|deleted|removed, "commit", "at", "subject"})}.
+
+    The branch is shown for a pulled record (its `pulled_by:`, "source" "pulled_by") and a parked
+    one: its `parked_from:` when it has one, else the last `pulled_by:` its file held
+    (`last_pull`, "source" "history"). RecordError not_found NO_RECORD when the store has no such
+    record, or took it out further back than its last REMOVAL_CAP commits (`removal`); ReadError
+    when the store cannot be read."""
+    from kitlib.backlog import record as brecord
+    import hashlib
+    try:
+        commit, folder = opener(root, False)[:2]
+    except ReadError:
+        raise
+    except Exception as exc:
+        raise ReadError(say(exc, root))
+    if commit is None:
+        raise RecordError("not_found", NO_RECORD, "id")
+    path = _store_path(folder, rid)
+    text = _blob(root, "%s:%s" % (commit, path))
+    removed = None
+    if not text:
+        line = removal(root, commit, path)
+        if not line:
+            raise RecordError("not_found", NO_RECORD, "id")
+        sha, at, subject = (line.split(" ", 2) + ["", ""])[:3]
+        text = _blob(root, "%s^:%s" % (sha, path))
+        removed = {"how": removed_how(subject), "commit": sha, "at": at, "subject": subject}
+    rec = brecord.parse(path, text, rid)
+    if not rec.has("id"):
+        raise RecordError("not_found", NO_RECORD, "id")  # not a record: an index or a readme
+    closed = rec.get("closed")
+    if removed is None and closed:
+        removed = {"how": "closed", "commit": None, "at": closed, "subject": None}
+    where = "completed" if removed else "open"
+    state = rec.get("state") or "open"
+    branch = None
+    if where == "open" and state == "pulled" and rec.get("pulled_by"):
+        branch = branch_block(root, rec.get("pulled_by"), "pulled_by")
+    elif where == "open" and state == "parked":
+        if rec.get("parked_from"):
+            branch = branch_block(root, rec.get("parked_from"), "parked_from")
+        else:
+            found = last_pull(root, commit, path)
+            if found:
+                branch = branch_block(root, found, "history")
+    blockers = [{"value": v, "kind": brecord.blocker_kind(v),
+                 "target": v[len("item:"):] if v.startswith("item:") else None}
+                for v in rec.all("blocked_on")]
+    return {"repo": name, "id": rid,
+            "version": "%s:%s" % (commit, hashlib.sha1(text.encode("utf-8")).hexdigest()),
+            "where": where, "readable": rec.readable,
+            "fields": [[k, v] for k, v in rec.pairs()], "body": rec.body,
+            "blockers": blockers,
+            "hold": {"owner_ask": rec.get("owner_ask"), "hold_ruling": rec.get("hold_ruling"),
+                     "q": rec.get("q")},
+            "branch": branch, "removed": removed}
+
+
+def record_template(name, root):
+    """What a new record of the repository `name` at `root` may hold, for a page to build its
+    blank form from: {"repo", "id_grammar", "id_pattern", "phases", "fields" ([{"key", "count"
+    (1, 0-1, 1+ or 0+), "required", "written_by"}] in kitlib.backlog.record.FIELDS order),
+    "states", "blocked_on" ({"plain", "prefixes"}), "efforts", "priorities", "priority_by"}.
+    ReadError when the repository's .kit.json cannot be read."""
+    from kitlib.backlog import plan as bplan
+    from kitlib.backlog import record as brecord
+    if not os.path.isdir(root):
+        raise ReadError(NO_FOLDER)
+    try:
+        section = kconfig.load(root).section("backlog")
+        rules = brecord.Rules(section["id_grammar"], section["phases"])
+    except (kconfig.ConfigError, KeyError, ValueError, TypeError):
+        raise ReadError(BAD_STORE)
+    written = bplan.WRITTEN_BY
+    return {"repo": name, "id_grammar": rules.id_grammar, "id_pattern": rules.id_pattern,
+            "phases": list(rules.phases),
+            "fields": [{"key": k, "count": count, "required": k in brecord.REQUIRED,
+                        "written_by": written.get(k)}
+                       for k, (count, _check) in brecord.FIELDS.items()],
+            "states": list(brecord.STATES),
+            "blocked_on": {"plain": list(brecord.BLOCKED_ON_PLAIN),
+                           "prefixes": list(brecord.BLOCKED_ON_PREFIXES)},
+            "efforts": ["s", "m", "l", "-"],
+            "priorities": ["1", "2", "3", "4", "5", brecord.OWNER_PRIORITY, "-"],
+            "priority_by": ["owner", "pm", "agent", "-"]}
+
+
 def repo_list(names, pm_root, paths=None):
     """[(name, root or None)] for repository names, each found as kitlib.hubbacklog.repo_root does."""
     return [(n, hubbacklog.repo_root(n, pm_root, paths)) for n in names]
@@ -404,6 +674,35 @@ class Views(object):
     def repos(self):
         got = self._repos() if callable(self._repos) else self._repos
         return [(name, root) for name, root in got]
+
+    def _named(self, repo):
+        """(name, root) of the configured repository `repo` names, matched without case. The
+        name is checked first (`check_repo`) and only ever picks a configured pair: the root
+        never comes from the caller. RecordError not_found NO_REPO when none is configured by
+        that name; ReadError NO_CHECKOUT when it has no checkout on this machine."""
+        check_repo(repo)
+        try:
+            pairs = self.repos()
+        except Exception:
+            raise ReadError(NO_REPOS)
+        for name, root in pairs:
+            if isinstance(name, str) and name.lower() == repo.lower():
+                if not root:
+                    raise ReadError(NO_CHECKOUT)
+                return name, root
+        raise RecordError("not_found", NO_REPO, "repo")
+
+    def record(self, repo, rid):
+        """One record of a configured repository (`read_record`), read now: never cached, never
+        fetched. Both names are checked before any file or git is touched."""
+        check_id(rid)
+        name, root = self._named(repo)
+        return read_record(name, root, rid, self.opener)
+
+    def record_template(self, repo):
+        """What a new record of a configured repository may hold (`record_template`)."""
+        name, root = self._named(repo)
+        return record_template(name, root)
 
     def _lock(self, name):
         """The lock that makes a repository's read single-flight: one per name, made once."""

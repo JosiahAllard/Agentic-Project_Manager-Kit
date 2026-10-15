@@ -40,6 +40,12 @@ class Views(object):
     def health(self):
         return {'git': None, 'backlog': None}
 
+    def record(self, repo, id):
+        return {}
+
+    def record_template(self, repo):
+        return {}
+
 
 class Reply(object):
     def __init__(self, status, headers, body):

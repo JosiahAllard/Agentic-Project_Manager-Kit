@@ -84,7 +84,8 @@ def is_link(path):
 
 
 def link_target(path):
-    """Where a junction or symlink points, as stored (a dangling one too)."""
+    """Where a junction or symlink points, as stored (a dangling one too). A relative symlink target
+    is relative to the link's own folder, not the current directory, so it is joined to that."""
     try:
         t = os.readlink(path)
     except OSError:
@@ -92,6 +93,8 @@ def link_target(path):
     for prefix in ('\\\\?\\', '\\??\\'):
         if t.startswith(prefix):
             return t[len(prefix):]
+    if not os.path.isabs(t):
+        return os.path.normpath(os.path.join(os.path.dirname(path), t))
     return t
 
 
