@@ -46,14 +46,14 @@ class BlockReason(StoreCase):
         self.assertEqual(change.subject, 'backlog: block FOO on live-client')
         self.assertEqual(self.get('FOO').body.strip(), 'Existing notes.')
 
-    def test_a_reason_rides_along_with_a_ruling(self):
+    def test_a_reason_on_an_owner_held_record_adds_beside_the_owner(self):
+        # `block` adds, so the owner's hold stays and no ruling is taken.
         self.seed(rec('FOO', **test_verbs.OWNER_BLOCKED))
-        change = self.verb('block', 'FOO', ['live-client'], ruling='R-9001', reason=WHY)
-        self.assertEqual(change.subject, 'backlog: block FOO on live-client, releasing the owner '
-                                         'hold: %s' % WHY)
-        self.assertEqual(change.ruling, 'R-9001')
+        change = self.verb('block', 'FOO', ['live-client'], reason=WHY)
+        self.assertEqual(change.subject, 'backlog: block FOO on live-client: %s' % WHY)
+        self.assertIsNone(change.ruling)
         r = self.get('FOO')
-        self.assertEqual(r.get('hold_ruling'), 'R-9001')
+        self.assertEqual((r.all('blocked_on'), r.get('hold_ruling')), (['owner', 'live-client'], None))
         self.assertIn('Blocked on live-client (%s): %s' % (TODAY, WHY), r.body)
 
     def test_a_reason_with_a_machine_path_is_usage(self):
