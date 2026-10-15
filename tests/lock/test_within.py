@@ -5,6 +5,7 @@ slots alone. Entries and records written before `within` existed load and plan a
 import datetime
 import os
 import unittest
+from unittest import mock
 
 from .helpers import OWNER, StoreCase, clean_env
 
@@ -94,6 +95,37 @@ class Plan(unittest.TestCase):
         self.assertIn("it runs only within cpu slots 2-3 (--within)", text)
         q["entries"][1].pop("within")
         self.assertEqual(qm.short_pools(self.L, q, q["entries"][1]), [])
+
+
+@unittest.skipUnless(os.name == "nt", "the lock is Windows only")
+class PlanBehind(unittest.TestCase):
+    """A waiting --within run keeps later runs off its own slots only: one that fits outside them
+    starts now, one that would need a slot inside them waits for it (the backfill rule)."""
+    def setUp(self):
+        # 24 threads, 2 to a core: 12 cpu slots; no gpu.
+        self.L = lay.derive(lay.fake_hardware(threads=24, smt=2, gpus=0))
+
+    def plan(self, entries):
+        return qm.plan(self.L, {"ticket": 9, "entries": entries}, now=NOW)[0]
+
+    def test_a_run_behind_it_that_fits_outside_its_slots_starts_now(self):
+        got = self.plan([holder("r-a", [4, 5, 6, 7], NOW - 100, 7300),
+                         waiter("r-w", 2, 3600, 2, within={"cpu": [4, 5, 6, 7]}),
+                         waiter("r-x", 2, 10800, 3)])
+        self.assertEqual((got["r-w"]["start"], got["r-w"]["cores"]), (NOW + 7200, [4, 5]))
+        self.assertEqual((got["r-x"]["start"], got["r-x"]["cores"]), (NOW, [0, 1]))
+        self.assertTrue(got["r-x"]["backfill"])
+
+    def test_a_run_behind_it_that_needs_a_slot_inside_them_still_waits(self):
+        # W will take 4-6 once A leaves; 7 is free now but W's, so Y (7 slots) waits for W.
+        got = self.plan([holder("r-a", [4, 5], NOW - 100, 7300),
+                         waiter("r-w", 3, 3600, 2, within={"cpu": [4, 5, 6, 7]}),
+                         waiter("r-x", 2, 10800, 3),
+                         waiter("r-y", 7, 10800, 4)])
+        self.assertEqual((got["r-w"]["start"], got["r-w"]["cores"]), (NOW + 7200, [4, 5, 6]))
+        self.assertEqual((got["r-x"]["start"], got["r-x"]["cores"]), (NOW, [0, 1]))
+        self.assertEqual(got["r-y"]["start"], NOW + 7200)
+        self.assertNotIn(7, got["r-x"]["cores"])
 
 
 class Holds(StoreCase):
@@ -194,7 +226,7 @@ class Book(StoreCase):
     def test_refusals_are_usage_and_write_nothing(self):
         for within, kw, says in (
                 ("8-", {}, "--within"),
-                ("30-40", {}, "not threads of this layout"),
+                ("30-40", {}, "not threads of this machine"),
                 ("9", {}, "no whole cpu slot"),
                 ("8-9", {}, "--cores 1"),                # engine-test is 2 slots
                 ("8-15", {"kind": "cpu-eval"}, "--cores 4"),
@@ -204,6 +236,42 @@ class Book(StoreCase):
                 self.assertEqual(e.code, 2, e.message)
                 self.assertIn(says, e.message)
                 self.nothing_written()
+
+    def test_threads_the_division_leaves_out_are_not_refused(self):
+        # The owner's division keeps the first 6 slots (threads 0-11); 12-15 are on the machine.
+        self.store.write("machine.json", {"cpu_slots": 6})
+        for within, says in (("12-15", "no whole cpu slot"), ("8-30", "not threads of this machine")):
+            with self.subTest(within=within):
+                e = self.code(within=within, cores=1, no_wait=True)
+                self.assertEqual(e.code, 2, e.message)
+                self.assertIn(says, e.message)
+                self.nothing_written()
+        self.everything_held()
+        e = self.code(within="8-15", cores=1, no_wait=True)
+        self.assertEqual(e.code, 11, e.message)
+        rec = self.ended()[0]
+        self.assertEqual((rec["within"], rec["within_slots"]), ("8-15", {"cpu": [4, 5]}))
+
+    def relaid(self, division):
+        """Patches book's second look at the layout to find `division` adopted meanwhile."""
+        L2 = lay.derive(self.hw, division)
+        return mock.patch.object(rm, "_relayout", lambda store, L: L2)
+
+    def test_a_layout_adopted_before_it_waits_works_its_slots_out_again(self):
+        self.everything_held()
+        with self.relaid({"cpu_slot_threads": 4}):            # slot k is threads 4k..4k+3
+            e = self.code(within="8-15", cores=1, no_wait=True)
+        self.assertEqual(e.code, 11, e.message)
+        rec = self.ended()[0]
+        self.assertEqual((rec["within"], rec["within_slots"]), ("8-15", {"cpu": [2, 3]}))
+
+    def test_a_layout_adopted_before_it_waits_can_refuse_it(self):
+        self.everything_held()
+        with self.relaid({"cpu_slot_threads": 8}):            # 8-14 holds no slot of 8 threads
+            e = self.code(within="8-14", cores=1, no_wait=True)
+        self.assertEqual(e.code, 2, e.message)
+        self.assertIn("no whole cpu slot", e.message)
+        self.assertEqual((self.store.read("queue.json") or {}).get("entries", []), [])
 
     def test_a_nested_run_inheriting_cores_outside_within_is_refused(self):
         anc = process.own_ancestors()
