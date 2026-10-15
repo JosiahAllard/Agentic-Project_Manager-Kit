@@ -29,6 +29,9 @@ It writes nothing into any repository: a repository works with the kit with noth
                              would remove; a task already registered is left as is)
            --register-sweep-task  the default now; still accepted
            --shortcut        the machine schedule shortcut on the desktop (always with --old-kit)
+           --procwatch       register (or update) the "Claude procwatch" scheduled task: every 15 min,
+                             report only, its log in the agents' temp folder
+           --procwatch-kill  with --procwatch: the task also ends the SAFE rules' processes
            --desktop DIR (default: the user's Desktop)   --home DIR (default: the user's home)
            --kit DIR (default: the checkout this file is in)
   repo options (--repo): --agent-email EMAIL (required) --main-branch NAME (default main)
@@ -55,7 +58,7 @@ from kitlib.machinesetup import repo as mrepo                       # noqa: E402
 KIT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO_ONLY = ('agent_email', 'main_branch', 'repo_name', 'stack', 'stubs', 'pm_data', 'private_remote')
 MACHINE_ONLY = ('config_dir', 'pm_settings', 'agent_temp', 'register_sweep_task', 'no_sweep_task',
-                'shortcut',
+                'shortcut', 'procwatch', 'procwatch_kill',
                 'desktop', 'home')
 
 
@@ -80,6 +83,10 @@ def parser():
     p.add_argument('--register-sweep-task', action='store_true',
                    help='the default; still accepted')
     p.add_argument('--shortcut', action='store_true', help='the machine schedule shortcut on the desktop')
+    p.add_argument('--procwatch', action='store_true',
+                   help='register or update the procwatch scheduled task (report only)')
+    p.add_argument('--procwatch-kill', action='store_true',
+                   help="with --procwatch: the task also ends the SAFE rules' processes")
     p.add_argument('--agent-email', default=None, help='--repo: the agents\' commit email')
     p.add_argument('--main-branch', default=None, help='--repo: the main branch (default main)')
     p.add_argument('--repo-name', default=None, help="--repo: the repository's short name")
@@ -118,6 +125,8 @@ def main(argv=None):
         return usage('--%s goes with --repo only' % given[0].replace('_', '-'))
     if a.no_sweep_task and a.register_sweep_task:
         return usage('give --no-sweep-task or --register-sweep-task, not both')
+    if a.procwatch_kill and not a.procwatch:
+        return usage('--procwatch-kill goes with --procwatch')
     if a.pm_settings and a.old_kit is not None:
         return usage('--pm-settings goes with the default mode only, not --old-kit')
     if a.old_kit is not None and not os.path.isdir(a.old_kit):
@@ -126,7 +135,8 @@ def main(argv=None):
     ctx = machinesetup.Context(home, a.kit, a.old_kit, config_dirs=a.config_dir,
                                agent_temp=a.agent_temp, desktop=a.desktop,
                                pm_settings=a.pm_settings, sweep_task=not a.no_sweep_task,
-                               owner_email=a.owner_email, shortcut=True if a.shortcut else None)
+                               owner_email=a.owner_email, shortcut=True if a.shortcut else None,
+                               procwatch=a.procwatch, procwatch_kill=a.procwatch_kill)
     if a.apply and not ctx.owner_email and interactive() and mowner.needs_prompt(ctx):
         ctx.owner_email = ask_owner_email(mowner.suggestion(ctx))
     code, _ = machinesetup.run(ctx, apply=a.apply, out=out)

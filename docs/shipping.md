@@ -107,5 +107,5 @@ sessions in its own `docs/ops/assets.md`, and lessons that hold up go into BEST_
   the general case.
 - `godot-render-check` is not a plugin skill: it ships, made generic, in the Godot stack template
   (repository values come from its docs), keeping the plugin's skills generic.
-- `jobrun.py`/`jobrun.sh`: not shipped; `kitlib/proc` and the machine lock cover them.
+- `jobrun.py`/`jobrun.sh`: not shipped. The shell-prefix wrapper they were part of was dropped by the owner's ruling, and nothing in the kit wraps an agent's Bash calls; `kitlib/proc` covers a process the kit starts itself, and the machine lock covers heavy runs.
 - The source's `docs/` and `.claude/` profiles under the common template were not ported.

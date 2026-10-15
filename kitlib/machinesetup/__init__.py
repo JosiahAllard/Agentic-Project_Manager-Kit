@@ -14,7 +14,7 @@ dry run prints and the function --apply runs, plus the refusals that stop both. 
   stored in the machine config (kitlib.machinesetup.owner); the agents' temp folder is made with
   its AGENT_TEMP variable, sweep config key and permissions (kitlib.machinesetup.agenttemp,
   extras), and the sweep task (opt-out: `sweep_task` false). Opt-in: the PM SessionStart hook
-  (`pm_settings`), the machine schedule shortcut (`shortcut`).
+  (`pm_settings`), the machine schedule shortcut (`shortcut`), the procwatch task (`procwatch`).
 - The switch from an older kit clone (`old_kit`): the links (kitlib.machinesetup.links), each
   config folder's settings.json (its old kit hooks removed or re-pointed, the guard's entry
   added), the owner's email, and the extras: the shortcut, the agents' temp folder and
@@ -41,11 +41,12 @@ class Context(object):
     environment, the guard's settings entry, `git config user.email` and the `claude` runner; tests
     pass a fake. No `old_kit` is the default mode (`fresh` says the same and may not go with
     `old_kit`); `pm_settings` goes with the default mode only. `owner_email` is --owner-email.
-    `shortcut` None: the machine schedule shortcut in the old kit switch only."""
+    `shortcut` None: the machine schedule shortcut in the old kit switch only. `procwatch`: also
+    register the procwatch task (kitlib.machinesetup.procwatch); `procwatch_kill` makes it kill."""
 
     def __init__(self, home, kit, old_kit=None, config_dirs=None, agent_temp=None, desktop=None,
                  host=None, today=None, fresh=False, pm_settings=None, sweep_task=True,
-                 owner_email=None, shortcut=None):
+                 owner_email=None, shortcut=None, procwatch=False, procwatch_kill=False):
         if fresh and old_kit:
             raise ValueError('give old_kit or fresh, not both')
         fresh = not old_kit
@@ -64,6 +65,10 @@ class Context(object):
         self.config_dirs = dedupe(os.path.abspath(d) for d in config_dirs)
         self.agent_temp = agent_temp
         self.sweep_task = bool(sweep_task)
+        if procwatch_kill and not procwatch:
+            raise ValueError('procwatch_kill goes with procwatch')
+        self.procwatch = bool(procwatch)
+        self.procwatch_kill = bool(procwatch_kill)
         self.desktop = desktop
         self.host = host or extras.Host()
         self.today = today or datetime.date.today().strftime('%Y%m%d')
