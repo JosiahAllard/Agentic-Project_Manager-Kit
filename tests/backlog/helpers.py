@@ -10,6 +10,7 @@ from kitlib.backlog import plan as pmod
 from kitlib.backlog import record as rmod
 from kitlib.backlog import store as smod
 from tests.gitfixture import TempRepo, fixture_env
+from tests.home import temp_home
 
 BASE = [
     ('id', 'FOO'),
@@ -122,7 +123,9 @@ def _branch(repo):
 
 
 class StoreCase(unittest.TestCase):
-    """A ref store on a temp repository with a bare remote (`remote = False`: none)."""
+    """A ref store on a temp repository with a bare remote (`remote = False`: none), under a temp
+    home (self.home): the free-text machine-path refusal reads the machine config's
+    machine_path_folders (kitlib.backlog.plan.refuse_machine_paths)."""
     remote = True
     object_format = None
 
@@ -131,6 +134,7 @@ class StoreCase(unittest.TestCase):
         patch = mock.patch.dict(os.environ, fixture_env(), clear=True)
         patch.start()
         self.addCleanup(patch.stop)
+        self.home = temp_home(self)
         self.repo = TempRepo(bare_remote=self.remote, object_format=self.object_format,
                              prepare=_branch, prepare_key='backlog.helpers.StoreCase')
         self.addCleanup(self.repo.cleanup)

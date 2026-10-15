@@ -14,6 +14,8 @@
                      the environment of a child that must run as a real run does, unfenced. Its
                      home is the caller's business: a temp folder, unless the child only computes
                      the home's path.
+  machine_config(home, body)  write the machine config under a temp home (a dict as JSON, or
+                     the file's text as it is).
   child_home()       a temp folder to be the home of the processes tests start, for a helper that
                      builds a child's environment and has no test case to clean up with: one per
                      process, removed at exit.
@@ -70,6 +72,15 @@ class TempHomeCase(unittest.TestCase):
     def setUp(self):
         super().setUp()
         self.home = temp_home(self)
+
+
+def machine_config(home, body):
+    """Write the machine config under `home` (a temp home): `body` is a dict, written as JSON, or
+    the file's text as it is (to plant one the kit cannot read)."""
+    import json
+    os.makedirs(os.path.join(home, kuser.DIR_NAME), exist_ok=True)
+    with open(kuser.config_file(home), 'w', encoding='utf-8') as fh:
+        fh.write(body if isinstance(body, str) else json.dumps(body))
 
 
 def fence_decoy(case):
