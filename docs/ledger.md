@@ -101,7 +101,17 @@ Before writing, `add --commit` refuses in any of these cases:
 - the branch is not that repository's `"repo".main_branch` and `--branch-ok` is not given;
 - the ledger file has uncommitted changes.
 
-A commit that fails because git's `index.lock` is busy (another git process in that repository) is retried, add and commit together, for `INDEX_LOCK_WAIT` seconds (3) in `kitlib/ledger/vcs.py` `commit_one`; any other failure is not retried, and after the bound the refusal says `index.lock busy`. A commit or push that fails after the write leaves the entry written and says what was not done.
+## Write lock
+
+Logic: `kitlib/ledger/write.py` (`locked`, `held`, `lock_path`); tests `tests/ledger/test_writer.py` `WriteLockTest` and `tests/ledger/test_vcs.py`.
+
+One writer at a time. `add` and `retire` hold the ledger's write lock from their read to their write, so two writers at once never take the same next id and neither atomic replace drops the other's entry. `add --commit` holds it over the checks, the add and the commit, so no other writer's entry lands in its commit; `--push` runs after it is given up. `vcs.finish` commits under it too.
+
+- **The lock:** an OS byte-range lock (`kitlib/dailyfull/treelock.py` `TreeLock`) on `.<file name>.lock` beside the ledger, recording the holder's pid and when it took the lock. The system drops it when the holder exits, so a dead holder never blocks. The file is never removed and never committed: an untracked file beside the ledger is neither a change `add --commit` refuses nor part of `git commit -- <file>`.
+- **Busy:** a writer waits `LOCK_WAIT` seconds (30), trying every `LOCK_PAUSE` (0.05), then is refused naming the holder, with nothing written.
+- **Nesting:** the lock nests within one thread, whatever spelling of the path; every other thread and process waits.
+
+A commit that fails because git's `index.lock` is busy (another git process in that repository) is retried, add and commit together, for `INDEX_LOCK_WAIT` seconds (3) in `kitlib/ledger/vcs.py` `commit_file`; any other failure is not retried, and after the bound the refusal says `index.lock busy`. A commit or push that fails after the write leaves the entry written and says what was not done.
 
 ## Citing rulings
 

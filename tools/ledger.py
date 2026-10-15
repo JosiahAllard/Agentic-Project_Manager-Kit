@@ -126,17 +126,24 @@ def run(a, p, path, repos):
         return 0 if lines else 1
     if a.cmd == 'add':
         plan = None
-        if a.commit or a.push:
-            plan = vcs.prepare(path, branch_ok=a.branch_ok, model=a.model, provider=host_of(a))
-        got = write.add(path, a.repo, a.prov, a.q, a.a, a.decides, a.source, a.supersedes,
-                        when=a.when, repos=repos)
-        print(got.id)
-        sys.stdout.flush()
-        for w in got.warnings:
-            sys.stderr.write('warning: %s\n' % w)
-        if plan is not None:
-            for line in vcs.finish(plan, got.id, a.title, a.decides, push=a.push):
-                print(line)
+        provider = host_of(a) if (a.commit or a.push) else None
+        # One write lock over prepare, add and commit (docs/ledger.md "Write lock"): no other
+        # writer's entry lands between this add and its commit. The push waits for no one.
+        with write.locked(path):
+            if a.commit or a.push:
+                plan = vcs.prepare(path, branch_ok=a.branch_ok, model=a.model, provider=provider)
+            got = write.add(path, a.repo, a.prov, a.q, a.a, a.decides, a.source, a.supersedes,
+                            when=a.when, repos=repos)
+            print(got.id)
+            sys.stdout.flush()
+            for w in got.warnings:
+                sys.stderr.write('warning: %s\n' % w)
+            if plan is not None:
+                sha = vcs.commit_entry(plan, got.id, a.title, a.decides)
+                print('commit %s' % sha)
+                sys.stdout.flush()
+        if plan is not None and a.push:
+            print(vcs.push_branch(plan, 'the ledger entry %s' % got.id, sha))
         return 0
     if a.cmd == 'retire':
         print(write.retire(path, a.id, a.cls, a.why, a.by, a.ruling, repos))

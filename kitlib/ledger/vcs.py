@@ -4,9 +4,10 @@ The ledger's repository is the git work tree its folder is in. `prepare` runs ev
 anything is written: no model for the trailer, no work tree, a broken `.kit.json` there, a
 detached HEAD, a branch other than that repository's main branch (unless branch_ok), or uncommitted
 changes to the ledger file (another edit would be swept in). `finish` then commits the ledger file
-alone (`git commit -- <file>`, never -a: other staged files stay staged and out of the commit) as
+under its write lock, alone (`git commit -- <file>`, never -a: other staged files stay staged and out of the commit) as
 `ledger: R-nnnn <title>` with the kit's Co-Authored-By trailer (kitlib.commit.coauthor), and with
-push sends the current branch to that repository's `repo.remote` (`origin` by default). A failure
+push sends the current branch to that repository's `repo.remote` (`origin` by default) once the
+lock is given up. A failure
 after the write leaves the entry written and says what was not done. Nothing here prints or exits.
 
 `prepare(..., noun=)` and `commit_one` serve any one file a kit tool writes and then commits alone
@@ -21,6 +22,7 @@ from kitlib import config as kconfig
 from kitlib import commit as kcommit
 from kitlib.git import cmd, refs, repo
 
+from . import write
 from .errors import Refused, Usage
 
 MODEL_ENV = kcommit.MODEL_ENV
@@ -86,16 +88,39 @@ def prepare(path, branch_ok=False, model=None, env=None, noun='the ledger', prov
 
 
 def finish(plan, rid, title, decides, push=False):
-    """Commit the ledger file alone, then push when asked. Returns the lines to print; Refused
-    names what was not done (the entry itself is written either way)."""
-    subject = 'ledger: %s %s' % (rid, short_title(title or decides))
-    return commit_one(plan, subject, 'the ledger entry %s' % rid, push)
+    """Commit the ledger file alone under its write lock (kitlib.ledger.write.locked, docs/ledger.md
+    "Write lock"), then, the lock given up, push when asked: a slow push never holds the other
+    writers. Returns the lines to print; Refused names what was not done (the entry itself is
+    written either way)."""
+    sha = commit_entry(plan, rid, title, decides)
+    lines = ['commit %s' % sha]
+    if push:
+        lines.append(push_branch(plan, 'the ledger entry %s' % rid, sha))
+    return lines
+
+
+def commit_entry(plan, rid, title, decides):
+    """Commit the ledger file alone as `ledger: <rid> <title>` while holding its write lock (nested
+    when the caller holds it already); returns the short sha."""
+    with write.locked(os.path.join(plan.root, plan.rel)):
+        return commit_file(plan, 'ledger: %s %s' % (rid, short_title(title or decides)),
+                           'the ledger entry %s' % rid)
 
 
 def commit_one(plan, subject, what, push=False):
     """Commit plan's file alone as `subject` with plan's trailer, then push the current branch
     when asked. Returns the lines to print; Refused names what was not done (`what` is written
     either way). A busy `index.lock` (and only that) is retried for INDEX_LOCK_WAIT seconds."""
+    sha = commit_file(plan, subject, what)
+    lines = ['commit %s' % sha]
+    if push:
+        lines.append(push_branch(plan, what, sha))
+    return lines
+
+
+def commit_file(plan, subject, what):
+    """Commit plan's file alone as `subject` with plan's trailer; returns the short sha. A busy
+    `index.lock` (and only that) is retried for INDEX_LOCK_WAIT seconds."""
     deadline = time.monotonic() + INDEX_LOCK_WAIT
     head, _ = cmd.run(['rev-parse', '-q', '--verify', 'HEAD'], plan.root, env=plan.env)
     while True:
@@ -112,23 +137,26 @@ def commit_one(plan, subject, what, push=False):
                           'retrying (%s is written).' % (why, what))
         time.sleep(INDEX_LOCK_PAUSE)
     sha, _ = cmd.run_text(['rev-parse', '--short', 'HEAD'], plan.root, env=plan.env)
-    lines = ['commit %s' % sha]
-    if push:
-        branch, why = refs.current_branch(plan.root)
-        remote = DEFAULT_REMOTE
-        if branch:
-            try:
-                remote = _remote(plan.root)
-            except Refused as e:
-                why = str(e)
-                branch = None
-        if branch:
-            _, why = cmd.run(['push', '-q', remote, branch], plan.root, timeout=PUSH_TIMEOUT, env=plan.env)
-        if not branch or why is not None:
-            raise Refused('git push failed: %s\n%s is written and committed (%s) but NOT pushed.'
-                          % (why or 'no branch', what, sha))
-        lines.append('pushed %s/%s' % (remote, branch))
-    return lines
+    return sha
+
+
+def push_branch(plan, what, sha):
+    """Push the current branch of plan's repository to its `repo.remote`; returns the line to
+    print, or Refused saying `what` is committed as `sha` but not pushed."""
+    branch, why = refs.current_branch(plan.root)
+    remote = DEFAULT_REMOTE
+    if branch:
+        try:
+            remote = _remote(plan.root)
+        except Refused as e:
+            why = str(e)
+            branch = None
+    if branch:
+        _, why = cmd.run(['push', '-q', remote, branch], plan.root, timeout=PUSH_TIMEOUT, env=plan.env)
+    if not branch or why is not None:
+        raise Refused('git push failed: %s\n%s is written and committed (%s) but NOT pushed.'
+                      % (why or 'no branch', what, sha))
+    return 'pushed %s/%s' % (remote, branch)
 
 
 def _add_commit(plan, subject):

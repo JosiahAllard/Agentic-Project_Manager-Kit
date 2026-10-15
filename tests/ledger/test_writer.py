@@ -23,8 +23,9 @@ RACE_TIMEOUT = 60.0  # the hard bound on a child; past it the test kills the pid
 
 # A racing child: write_atomic sleeps HOLD first, so two children that read the ledger together
 # both read it before either writes. Each says it is ready, waits for the go file, then adds one
-# entry (mode `add`) or, with the vcs seam, prepares, adds and commits it under the ledger lock
-# (mode `commit`). It prints the id it was given.
+# entry (mode `add`), or, with the vcs seam, prepares, adds and commits it under the ledger lock
+# (mode `commit`), or runs tools/ledger.py add --commit (mode `cli`). It prints the id it was given
+# first.
 RACE_CHILD = r'''
 import contextlib, os, sys, time
 sys.path.insert(0, sys.argv[1])
@@ -35,6 +36,15 @@ def slow(p, text):
     time.sleep(float(hold))
     real(p, text)
 write.write_atomic = slow
+if mode != 'add':
+    # Also sleep between the add and the commit: a writer that gives the lock up there lets the
+    # other's entry into its commit.
+    real_add = write.add
+    def slow_add(*a, **kw):
+        got = real_add(*a, **kw)
+        time.sleep(float(hold))
+        return got
+    write.add = slow_add
 open(ready, 'w').close()
 deadline = time.monotonic() + 30
 while not os.path.exists(go):
@@ -45,6 +55,14 @@ args = dict(repo='alpha', prov='selected', q='q', a='a', decides=decides, source
             when='2026-10-06 08:00Z')
 if mode == 'add':
     print(write.add(path, **args).id)
+elif mode == 'cli':
+    # tools/ledger.py itself, as `add --commit` (the ledger is the machine config's).
+    import runpy
+    tool = os.path.join(sys.argv[1], 'tools', 'ledger.py')
+    sys.argv = [tool, 'add', '--repo', 'alpha', '--prov', 'selected', '--q', 'q', '--a', 'a',
+                '--decides', decides, '--source', 's', '--when', args['when'], '--commit',
+                '--model', 'Test Model 1']
+    runpy.run_path(tool, run_name='__main__')
 else:
     # Without write.locked (the code before the lock) the same steps run unlocked: the race.
     with getattr(write, 'locked', lambda p: contextlib.nullcontext())(path):
