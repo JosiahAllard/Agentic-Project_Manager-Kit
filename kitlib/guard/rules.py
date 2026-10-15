@@ -2876,7 +2876,7 @@ GIT_LONG_VALUES = {'message', 'file', 'author', 'date', 'template', 'reuse-messa
                    'receive-pack', 'exec', 'set-upstream-to', 'sort', 'format', 'contains', 'no-contains',
                    'points-at', 'pathspec-from-file', 'directory', 'whitespace', 'include', 'build-fake-ancestor'}
 GIT_SHORT_VALUES = {'commit': 'mFCct', 'restore': 's', 'clean': 'e', 'push': 'o', 'stash': 'm', 'branch': 'u',
-                    'apply': 'pC'}
+                    'apply': 'pC', 'update-ref': 'm'}
 
 
 def _canon_long(sub, body):
@@ -2987,7 +2987,7 @@ def git_rules(event, ctx, cmd, inv, cwd, role):
             why = lander_check(event, ctx, cmd, inv, gc)[1] if place.kind == repo.MAIN else None
             if why is not None:
                 return lander_refusal(ctx, cmd, gc, 'git-main-history', role, why)
-            how, instead = git_in_worktree(ctx, cmd, gc, top, cwd)
+            how, instead = ref_delete_hint(ctx, gc, top, cwd, short, longs, pos) or git_in_worktree(ctx, cmd, gc, top, cwd)
             return refuse('git-main-history', role, '`%s` writes history or files in %s; this role may not change a '
                           'main checkout. %s' % (text, where, how), instead)
     no_wt, wt = new_worktree(ctx, place.top)
@@ -3540,6 +3540,24 @@ def git_in_worktree(ctx, cmd, gc, main_top, cwd):
     if no_wt:
         return no_wt, instead
     return 'Work in a worktree and run git %s there; the lander brings it to main:' % gc.sub, instead
+
+
+def ref_delete_hint(ctx, gc, top, cwd, short, longs, pos):
+    """(sentence, command) for `git update-ref -d <ref>`, or None. Every worktree of a repository
+    shares its refs, so neither a worktree nor the lander carries a ref delete to main: a branch
+    goes with git branch -d, which refuses an unmerged one; any other ref is shown, and the PM
+    deletes it. Both run in the session's own worktree of this main checkout when it has one."""
+    if gc.sub != 'update-ref' or 'd' not in short or 'stdin' in longs or gc.blind:
+        return None
+    ref = pos[0] if pos else None
+    name = ref.text if ref is not None and not ref.dyn else None
+    at = quote(own_worktree(ctx, cwd, top) or top)
+    shared = 'Every worktree shares this repository\'s refs, so no worktree or landing carries a ref delete to main.'
+    if name and name.startswith('refs/heads/') and len(name) > len('refs/heads/'):
+        return ('%s Delete a branch with git branch -d, which refuses an unmerged one; unmerged work goes to '
+                'the PM, never deleted:' % shared, 'git -C %s branch -d %s' % (at, name[len('refs/heads/'):]))
+    return ('%s A ref other than a branch is the PM\'s to delete; to show it:' % shared,
+            'git -C %s show-ref %s' % (at, name or '<ref>'))
 
 
 def git_unplaced(ctx, cmd, gc, cwd):
