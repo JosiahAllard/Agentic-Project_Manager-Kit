@@ -9,6 +9,8 @@ import unittest
 from kitlib import coordinatorstart
 from kitlib.config import user as kuser
 from kitlib.lockmcp import PLUGIN_NAME
+from kitlib.lock import api
+from tests.lock.helpers import OWNER, StoreCase
 
 # the coordinator rules hook as the plugin's hooks.json runs it (boot/hook.py, its coordinator part)
 HOOK = [os.path.join(os.path.dirname(__file__), "..", "..", "boot", "hook.py"), "claude", "SessionStart", "coordinator"]
@@ -168,19 +170,35 @@ class CapReviewTest(unittest.TestCase):
             coordinatorstart.cap({"cap": {}}, "alpha", TODAY)
 
 
-STATUS = {"reservations": {"active": [], "upcoming": [
-              {"start": "2026-10-06T20:00:00Z", "end": "2026-10-06T22:00:00Z", "start_local": "16:00",
-               "end_local": "18:00", "note": "gaming"},
-              {"start": "2026-10-07T20:00:00Z", "end": "2026-10-07T22:00:00Z", "start_local": "x", "end_local": "y"}]},
-          "lock": {"bookings": [{"start": "2026-10-06T18:00:00Z", "end": "2026-10-06T19:00:00Z",
-                                 "start_local": "14:00", "end_local": "15:00"}]},
-          "gpus": [{"idx": 0, "holder_id": "a"}, {"idx": 1, "holder_id": None}],
-          "cores": [{"holder_id": "a"}, {"holder_id": None}, {"holder_id": None}]}
 LOCK = {"lane": "full", "branches": ["b1"], "pid": None, "phase": "gate", "started_utc": "T"}
 
 
-class MachineTest(unittest.TestCase):
-    def run_fake(self, status=STATUS):
+class StatusCase(StoreCase):
+    """A status payload from the current producer, api.snapshot() (what `machine_lock.py status
+    --json` prints, docs/lock-api.md "Snapshot"), on a scratch store."""
+
+    def status(self, *specs):
+        for s in specs:
+            self.assertTrue(api.hold_create(OWNER, s, self.store)["ok"])
+        return api.snapshot(self.store)
+
+    def free(self, snap, pool):
+        d = snap["slots"][pool]
+        return sum(1 for x in d if not x["holder"] and not x["hold"]), len(d)
+
+
+def idle_status():
+    """The producer's snapshot of an idle scratch store, for tests that are not about holds."""
+    case = StatusCase()
+    case.setUp()
+    try:
+        return case.status()
+    finally:
+        case.doCleanups()
+
+
+class MachineTest(StatusCase):
+    def run_fake(self, status):
         calls = []
 
         def run(args, timeout=10):
@@ -189,19 +207,39 @@ class MachineTest(unittest.TestCase):
         return run, calls
 
     def test_summary_and_landing_lock(self):
-        run, calls = self.run_fake()
+        snap = self.status({"owner": "owner", "scope": "half", "for_s": 7200, "note": "gaming"},
+                           {"owner": "owner", "scope": "half", "start": api.iso(
+                               api.utc_now() + datetime.timedelta(hours=9)), "for_s": 3600})
+        [soon, later] = snap["holds"]
+        run, calls = self.run_fake(snap)
         read = reader({os.path.join(ROOT + "/alpha/.git", "alpha-landing.lock"): json.dumps(LOCK)})
-        out = coordinatorstart.machine(ENTRY, run, read, NOW, "H", ROOT, "alpha-landing.lock")
-        self.assertEqual(out[0], "machine: owner reservation 16:00-18:00: gaming; booking 14:00-15:00")
-        self.assertEqual(out[1], "machine: free gpu slots 1 of 2; free cpu slots 2 of 3")
+        out = coordinatorstart.machine(ENTRY, run, read, api.utc_now(), "H", ROOT, "alpha-landing.lock")
+        self.assertEqual(out[0], "machine: owner hold %s-%s: gaming" % (soon["start_local"], soon["end_local"]))
+        self.assertNotIn(later["start_local"] + "-", out[0])
+        (gf, gn), (cf, cn) = self.free(snap, "gpu"), self.free(snap, "cpu")
+        self.assertLess(cf, cn)             # the half hold covers cpu slots, so they are not free
+        self.assertEqual(out[1], "machine: free gpu slots %d of %d; free cpu slots %d of %d" % (gf, gn, cf, cn))
         self.assertIn("HELD - lane full, branches b1, a token holder, phase gate", out[2])
         self.assertEqual(calls[0][-2:], ["status", "--json"])
         self.assertTrue(calls[0][1].replace("\\", "/").endswith("H/.claude/tools/machine_lock/machine_lock.py"))
 
+    def test_a_run_holding_a_slot_is_not_free(self):
+        snap = self.status()
+        snap["slots"]["cpu"][0]["holder"] = "r-1"
+        run, _ = self.run_fake(snap)
+        out = coordinatorstart.machine(ENTRY, run, reader({}), api.utc_now(), "H")
+        n = len(snap["slots"]["cpu"])
+        self.assertIn("free cpu slots %d of %d" % (n - 1, n), out[1])
+
+    def test_an_unknown_schema_is_refused_not_read_as_an_idle_machine(self):
+        run, _ = self.run_fake({"reservations": {}, "gpus": [], "cores": []})
+        with self.assertRaises(ValueError):
+            coordinatorstart.machine(ENTRY, run, reader({}), NOW, "H")
+
     def test_lock_free_and_no_landing_lock_configured(self):
-        run, _ = self.run_fake(dict(STATUS, reservations={}, lock={}))
+        run, _ = self.run_fake(self.status())
         out = coordinatorstart.machine(ENTRY, run, reader({}), NOW, "H", ROOT, "alpha-landing.lock")
-        self.assertIn("no owner reservation or booking within 4 h", out[0])
+        self.assertIn("no owner or agent hold within 4 h", out[0])
         self.assertEqual(out[2], "landing lock (alpha): free")
         for root, lock_file in ((ROOT, None), (None, "alpha-landing.lock")):
             out = coordinatorstart.machine(ENTRY, run, reader({}), NOW, "H", root, lock_file)
@@ -257,9 +295,10 @@ class ContextTest(unittest.TestCase):
 
     def build(self, cfg, **kw):
         files = {"S.json": json.dumps({"alpha": ENTRY})}
+        status = idle_status()
 
         def run(args, timeout=10):
-            return json.dumps(STATUS) if "machine_lock.py" in args[1] else "G"
+            return json.dumps(status) if "machine_lock.py" in args[1] else "G"
         base = dict(env={"CLAUDE_CONFIG_DIR": "C:/u/.claude-account2"}, cwd=ROOT + "/alpha", now=NOW,
                     procs=[], run=run, read=reader(files), home="H", pid=1, pm_cfg=self.PM)
         base.update(kw)
@@ -270,7 +309,8 @@ class ContextTest(unittest.TestCase):
         text = self.build(cfg)
         # The cap check is the first live check: its line follows the standing line.
         self.assertEqual(text.split("\n")[:3], ["Coordinator session start:", "- wind down", "- agent cap 4"])
-        self.assertIn("- machine: free gpu slots 1 of 2", text)
+        gf, gn = StatusCase().free(idle_status(), "gpu")
+        self.assertIn("- machine: free gpu slots %d of %d" % (gf, gn), text)
         self.assertNotIn("also running", text)
         self.assertNotIn("usage", text.lower())
 
