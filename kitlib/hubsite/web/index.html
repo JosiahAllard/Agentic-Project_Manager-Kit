@@ -795,6 +795,7 @@ button.danger{color:var(--warn)}
     const lost = lostCards(state.todoEdit);
     if (!rows.length && !lost.length) {
       const m = state.tfilter === "done" ? ["Nothing ticked off yet", "Items you mark done move here, and the PM follows up on them."] : ["Nothing to do", "Steps only you can do (commands to run, settings to change, files to delete) appear here, each with its exact command."];
+      if (ready && state.idq.trim()) { m[0] = "No match for \"" + state.idq.trim() + "\""; m[1] = "Clear the id box to see every to-do in this tab."; }
       show([], el("div", {class:"empty"}, el("strong", {text: ready ? m[0] : NOT_READY}), ready ? m[1] : NOT_READY_WHY));
       return;
     }
@@ -1070,6 +1071,7 @@ button.danger{color:var(--warn)}
         logged: ["No logged answers yet", "Once the PM files an answer, it shows here."],
         other: ["Nothing here", "Questions with an unknown or missing status show here."]
       }[state.filter];
+      if (ready && state.idq.trim()) { msg[0] = "No match for \"" + state.idq.trim() + "\""; msg[1] = "Clear the id box to see every question in this tab."; }
       show(["repos"], el("div", {class:"empty"}, el("strong", {text: ready ? msg[0] : NOT_READY}), ready ? msg[1] : NOT_READY_WHY));
       return;
     }
