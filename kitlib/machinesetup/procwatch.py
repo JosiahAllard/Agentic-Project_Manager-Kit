@@ -15,8 +15,9 @@ from kitlib.launcher.pythonw import base_pythonw
 from kitlib.worktree.task import CARRIER, NOT_THE_STORE_ALIAS, PYTHONW_IS, quoted
 
 from . import agenttemp
+from .settings import host_name
 
-TASK = 'Claude procwatch'
+TASK = host_name().capitalize() + ' procwatch'    # "Claude procwatch": the name the task already has
 EVERY_MINUTES = 15
 SCRIPT = os.path.join('optional', 'procwatch', 'procwatch.py')
 LOG_NAME = 'procwatch.log'

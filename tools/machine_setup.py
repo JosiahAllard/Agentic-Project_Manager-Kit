@@ -84,7 +84,7 @@ def parser():
                    help='the default; still accepted')
     p.add_argument('--shortcut', action='store_true', help='the machine schedule shortcut on the desktop')
     p.add_argument('--procwatch', action='store_true',
-                   help='register or update the "Claude procwatch" task (report only)')
+                   help='register or update the procwatch scheduled task (report only)')
     p.add_argument('--procwatch-kill', action='store_true',
                    help="with --procwatch: the task also ends the SAFE rules' processes")
     p.add_argument('--agent-email', default=None, help='--repo: the agents\' commit email')
