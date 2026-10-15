@@ -115,5 +115,28 @@ class Reads(Base):
         self.allowed(self.run_ps('[IO.File]::WriteAllText'))
 
 
+class Unread(Base):
+    """A .NET write the guard cannot read the path of - a method named with no '(' after it (called
+    later through .Invoke or a variable), or a call whose written argument the guard does not find -
+    is judged where the line runs, as every .NET call was before; it is never a write of nothing."""
+
+    NOT_CALLED_HERE = ("[IO.File]::WriteAllText.Invoke('x.txt', 'y')",
+                       "$m = [IO.File]::WriteAllText; $m.Invoke('x.txt', 'y')",
+                       '[IO.File]::WriteAllText')
+    MISSED = ("[IO.File]::Copy(\"$('\"')\", '{main}\\x')",)
+
+    def test_from_the_main_checkout(self):
+        for text in self.NOT_CALLED_HERE + self.MISSED:
+            with self.subTest(text=text):
+                d = self.denied(self.run_ps(text, cwd=self.w.main), 'main-checkout')
+                self.assertIn('is in the main checkout', d.reason)
+
+    def test_a_jailed_session_that_moves_outside_its_folders(self):
+        away = 'Set-Location "%s"; ' % W.fwd(self.w.home)
+        for text in self.NOT_CALLED_HERE + self.MISSED:
+            with self.subTest(text=text):
+                self.denied(self.run_ps(away + text, env=COORDINATOR, sub=False), 'write-jail')
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -1929,8 +1929,10 @@ def _net_args(src, k):
 
 
 def _net_written(method, count):
-    """The indexes of the arguments a .NET File or Directory method writes: Copy its destination,
-    Move both, Replace all three, any other its first."""
+    """(indexes, all found): the indexes of the arguments a .NET File or Directory method writes -
+    Copy its destination, Move both, Replace all three, any other its first - among the `count`
+    arguments read, and False when one of them is past the last (the guard did not read the call
+    as .NET will)."""
     if method.startswith('copy'):
         idx = (1,)
     elif method.startswith('move'):
@@ -1939,14 +1941,16 @@ def _net_written(method, count):
         idx = (0, 1, 2)
     else:
         idx = (0,)
-    return [i for i in idx if i < count]
+    return [i for i in idx if i < count], all(i < count for i in idx)
 
 
 def net_writes(cmd):
     """([NetWrite], unread): each path the PowerShell command's .NET file calls (IO_FILE_RE) write,
-    and True when a match is not a call the guard reads (inside a quoted word: write_targets
-    judges the directory the command runs in, as it did for every such call). A method named with
-    no '(' after it is not called and writes nothing; a $null argument (Replace's backup) is none."""
+    and True when a match is a write the guard does not read the path of, so write_targets judges
+    the directory the command runs in, as it did for every such call: one inside a quoted word, a
+    method named with no '(' after it (called later, through .Invoke or a variable), and a call
+    with fewer arguments than the ones it writes (_net_written). A $null argument (Replace's
+    backup) writes nothing."""
     if cmd.shell != sh.PS:
         return [], False
     out, unread, src = [], False, cmd.source
@@ -1962,9 +1966,12 @@ def net_writes(cmd):
         while k < len(src) and src[k] in ' \t':
             k += 1
         if src[k:k + 1] != '(':
+            unread = True
             continue
         args, end = _net_args(src, k + 1)
-        for i in _net_written(method, len(args)):
+        written, found = _net_written(method, len(args))
+        unread = unread or not found
+        for i in written:
             text, s, e = args[i]
             if text is None and src[s:e].lower() == '$null':
                 continue
