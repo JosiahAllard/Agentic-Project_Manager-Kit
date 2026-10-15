@@ -1,6 +1,6 @@
 """kitlib.worktree.scratch (`tools/worktree_remove.py <path> --scratch`): a detached scratch
 worktree under an agent temp root, removed only when its commit is reachable from a ref and every
-uncommitted file is already in git at the same path (docs/worktree-remove.md "Scratch worktrees").
+uncommitted file is already in git at the same path (docs/worktree-remove.md "Tools", `--scratch`).
 
 Every worktree here is one the test made: its repository and its temp root are fixture folders.
 """
@@ -12,6 +12,7 @@ from unittest import mock
 
 from kitlib.worktree import remove, scratch
 from tests import gitfixture
+from tests.realgit import real_git
 
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 TOOL = os.path.join(KIT, 'tools', 'worktree_remove.py')
@@ -265,6 +266,240 @@ class Refused(ScratchCase):
         with mock.patch.object(scratch, 'hashes', return_value=(None, 'boom')):
             rc, out = self.run_scratch(path)
         self.assertKept(path, rc, out, 'boom')
+
+
+NEW_TEST = 'def test_new():\n    assert False\n'
+
+
+class SamePath(ScratchCase):
+    """The core rule: content counts only at its own path, and only in refs/heads or refs/remotes."""
+
+    def test_the_same_content_at_another_path_is_refused(self):
+        path = self.scratch_tree()
+        self.fx.write('tests/other_test.py', NEW_TEST, root=path)
+        rc, out = self.run_scratch(path)
+        self.assertKept(path, rc, out, 'tests/other_test.py: it is not in git at that path')
+        self.assertTrue(os.path.isfile(os.path.join(path, 'tests', 'other_test.py')))
+
+    def test_content_held_only_by_a_tag_is_refused(self):
+        wt = os.path.realpath(self.fx.worktree('tagged'))
+        self.fx.write('tests/tag_only.py', 'tagged\n', root=wt)
+        self.git('tag', 'only-tag', self.fx.commit('tag only', 'tests/tag_only.py', cwd=wt))
+        self.git('worktree', 'remove', wt)
+        self.git('branch', '-D', 'kit/tagged')
+        path = self.scratch_tree()
+        self.fx.write('tests/tag_only.py', 'tagged\n', root=path)
+        rc, out = self.run_scratch(path)
+        self.assertKept(path, rc, out, 'tests/tag_only.py: it is not in git at that path')
+
+    def test_an_added_file_then_deleted_from_disk_is_restored(self):
+        path = self.scratch_tree()
+        self.fx.write('tests/new_test.py', NEW_TEST, root=path)
+        self.git('add', 'tests/new_test.py', cwd=path)
+        os.remove(os.path.join(path, 'tests', 'new_test.py'))
+        self.assertIn('AD tests/new_test.py', self.git('status', '--porcelain', cwd=path))
+        rc, out = self.run_scratch(path)
+        self.assertRemoved(path, rc, out)
+
+    def test_a_staged_change_then_deleted_from_disk_is_restored(self):
+        path = self.scratch_tree()
+        self.fx.write('README.md', 'hello, topic\n', root=path)
+        self.git('add', 'README.md', cwd=path)
+        os.remove(os.path.join(path, 'README.md'))
+        self.assertIn('MD README.md', self.git('status', '--porcelain', cwd=path))
+        rc, out = self.run_scratch(path)
+        self.assertRemoved(path, rc, out)
+
+    def test_a_staged_new_file_is_restored(self):
+        path = self.scratch_tree()
+        self.fx.write('tests/new_test.py', NEW_TEST, root=path)
+        self.git('add', 'tests/new_test.py', cwd=path)
+        self.assertIn('A  tests/new_test.py', self.git('status', '--porcelain', cwd=path))
+        rc, out = self.run_scratch(path)
+        self.assertRemoved(path, rc, out)
+
+    def test_a_nested_repository_is_refused(self):
+        path = self.scratch_tree()
+        self.git('init', '-q', os.path.join(path, 'nested'))
+        self.fx.write('nested/x.txt', 'x\n', root=path)
+        rc, out = self.run_scratch(path)
+        self.assertKept(path, rc, out, 'nested/ is a folder git does not list into')
+        self.assertTrue(os.path.isfile(os.path.join(path, 'nested', 'x.txt')))
+
+
+class Failures(ScratchCase):
+    """Every read that fails, and every git step that fails, keeps the tree."""
+
+    def wrap_git(self, when, then):
+        real = remove.git
+
+        def wrapped(cwd, *args, **kw):
+            hit = when(args)
+            if hit == 'fail':
+                return 128, '', 'boom'
+            got = real(cwd, *args, **kw)
+            if hit:
+                then()
+            return got
+        return mock.patch.object(remove, 'git', wrapped)
+
+    def test_a_failed_checkout_keeps_the_tree(self):
+        path = self.scratch_tree()
+        self.fx.write('README.md', 'hello, topic\n', root=path)
+        self.fx.write('tests/new_test.py', NEW_TEST, root=path)
+        with self.wrap_git(lambda a: 'fail' if a[:1] == ('checkout',) else None, None):
+            rc, out = self.run_scratch(path)
+        self.assertKept(path, rc, out, 'git worktree remove was NOT run')
+        self.assertTrue(os.path.isfile(os.path.join(path, 'tests', 'new_test.py')))
+
+    def test_a_failed_reset_keeps_the_tree(self):
+        path = self.scratch_tree()
+        self.fx.write('README.md', 'hello, topic\n', root=path)
+        self.git('add', 'README.md', cwd=path)
+        with self.wrap_git(lambda a: 'fail' if a[:1] == ('reset',) else None, None):
+            rc, out = self.run_scratch(path)
+        self.assertKept(path, rc, out, 'git worktree remove was NOT run')
+
+    def test_a_merge_base_error_refuses(self):
+        self.fx.write('one.txt', '1\n')
+        first = self.fx.commit('one', 'one.txt')
+        self.fx.write('two.txt', '2\n')
+        self.fx.commit('two', 'two.txt')
+        path = self.scratch_tree(commit=first)
+        with self.wrap_git(lambda a: 'fail' if a[:1] == ('merge-base',) else None, None):
+            rc, out = self.run_scratch(path)
+        self.assertKept(path, rc, out, 'is unknown')
+
+    def test_an_unreadable_index_refuses(self):
+        path = self.scratch_tree()
+        self.fx.write('README.md', 'hello, topic\n', root=path)
+        self.git('add', 'README.md', cwd=path)
+        with mock.patch.object(scratch, 'staged', return_value=(None, 'boom')):
+            rc, out = self.run_scratch(path)
+        self.assertKept(path, rc, out, 'the staged blobs could not be read (boom)')
+
+    def test_an_unsearchable_ref_list_refuses(self):
+        path = self.scratch_tree()
+        self.fx.write('tests/new_test.py', NEW_TEST, root=path)
+        with mock.patch.object(scratch, 'found', return_value=(None, 'boom')):
+            rc, out = self.run_scratch(path)
+        self.assertKept(path, rc, out, 'the refs could not be searched (boom)')
+
+    def test_a_commit_made_after_the_restore_is_refused(self):
+        path = self.scratch_tree()
+        real = remove.clear_disposable
+
+        def commit_first(ctx, p):
+            self.fx.write('late.txt', 'late\n', root=path)
+            self.fx.commit('late', 'late.txt', cwd=path)
+            return real(ctx, p)
+
+        with mock.patch.object(remove, 'clear_disposable', commit_first):
+            rc, out = self.run_scratch(path)
+        self.assertKept(path, rc, out, 'HEAD moved')
+        self.assertTrue(os.path.isfile(os.path.join(path, 'late.txt')))
+
+    def test_a_file_rewritten_after_the_checkout_is_kept(self):
+        path = self.scratch_tree()
+        self.fx.write('README.md', 'hello, topic\n', root=path)
+        target = self.fx.write('tests/new_test.py', NEW_TEST, root=path)
+
+        def rewrite():
+            with open(target, 'w', encoding='utf-8', newline='\n') as fh:
+                fh.write('rewritten\n')
+
+        with self.wrap_git(lambda a: a[:1] == ('checkout',), rewrite):
+            rc, out = self.run_scratch(path)
+        self.assertKept(path, rc, out, 'changed after it was checked')
+        with open(target, encoding='utf-8') as fh:
+            self.assertEqual(fh.read(), 'rewritten\n')
+
+    @unittest.skipUnless(WINDOWS, 'junctions are Windows')
+    def test_a_folder_made_a_junction_after_the_check_is_kept(self):
+        path = self.scratch_tree()
+        self.fx.write('README.md', 'hello, topic\n', root=path)
+        self.fx.write('tests/new_test.py', NEW_TEST, root=path)
+        outside = os.path.join(self.root, 'outside')
+
+        def swap():
+            os.rename(os.path.join(path, 'tests'), outside)
+            subprocess.run(['cmd', '/c', 'mklink', '/J', os.path.join(path, 'tests'), outside],
+                           check=True, capture_output=True)
+
+        with self.wrap_git(lambda a: a[:1] == ('checkout',), swap):
+            rc, out = self.run_scratch(path)
+        self.assertEqual(rc, 1, out)
+        self.assertIn('is a link', out)
+        self.assertTrue(os.path.isfile(os.path.join(outside, 'new_test.py')), out)
+        os.rmdir(os.path.join(path, 'tests'))
+
+    def test_the_checkout_reads_its_paths_literally(self):
+        path = self.scratch_tree()
+        self.fx.write('README.md', 'hello, topic\n', root=path)
+        seen = []
+        real = remove.git
+
+        def record(cwd, *args, **kw):
+            if args[:1] == ('checkout',):
+                seen.append((kw.get('env') or {}).get('GIT_LITERAL_PATHSPECS'))
+            return real(cwd, *args, **kw)
+
+        with mock.patch.object(remove, 'git', record):
+            rc, out = self.run_scratch(path)
+        self.assertRemoved(path, rc, out)
+        self.assertEqual(seen, ['1'])
+
+
+class Refs(ScratchCase):
+
+    def test_a_tag_on_a_blob_does_not_stop_the_search(self):
+        wt = os.path.realpath(self.fx.worktree('later'))
+        self.fx.write('a.txt', 'a\n', root=wt)
+        first = self.fx.commit('a', 'a.txt', cwd=wt)
+        self.fx.write('b.txt', 'b\n', root=wt)
+        self.git('tag', 'z-reach', self.fx.commit('b', 'b.txt', cwd=wt))
+        self.git('worktree', 'remove', wt)
+        self.git('branch', '-D', 'kit/later')
+        blob = self.git('hash-object', '-w', '--', os.path.join(self.repo, 'README.md'))
+        self.git('tag', 'a-blob', blob)
+        path = self.scratch_tree(commit=first)
+        rc, out = self.run_scratch(path)
+        self.assertRemoved(path, rc, out)
+        self.assertIn('in refs/tags/z-reach', out)
+
+    @unittest.skipUnless(WINDOWS, 'junctions are Windows')
+    def test_a_tree_in_the_worktree_folder_through_its_junction_is_refused(self):
+        ctx, refused = remove.open_ctx(self.repo)
+        self.assertIsNone(refused)
+        home = remove.home_of(ctx)
+        if os.path.isdir(home):
+            os.rmdir(home)
+        os.makedirs(os.path.dirname(home), exist_ok=True)
+        wts = os.path.join(self.root, 'wts')
+        os.makedirs(wts)
+        subprocess.run(['cmd', '/c', 'mklink', '/J', home, wts], check=True, capture_output=True)
+        self.addCleanup(lambda: os.path.isdir(home) and os.rmdir(home))
+        path = self.scratch_tree(root=wts)
+        rc, out = self.run_scratch(path)
+        self.assertKept(path, rc, out, 'worktree folder')
+
+
+@real_git('git reflog: the fake writes none')
+class Reflog(ScratchCase):
+
+    def test_a_commit_left_behind_in_the_reflog_is_refused(self):
+        path = self.scratch_tree()
+        self.fx.write('mine.txt', 'mine\n', root=path)
+        self.fx.commit('mine', 'mine.txt', cwd=path)
+        self.git('checkout', '-q', '--detach', self.base, cwd=path)
+        rc, out = self.run_scratch(path)
+        self.assertKept(path, rc, out, 'reflog')
+
+    def test_a_clean_tree_with_a_reachable_reflog_is_removed(self):
+        path = self.scratch_tree(commit=self.topic_tip)
+        self.git('checkout', '-q', '--detach', self.base, cwd=path)
+        rc, out = self.run_scratch(path)
+        self.assertRemoved(path, rc, out)
 
 
 class Cli(ScratchCase):
