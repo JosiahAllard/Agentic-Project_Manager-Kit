@@ -8,7 +8,8 @@ unreadable line is never a way around a rule, and a plain line is never denied b
   - a git or root-search pattern that matches: the text from the match to the next ; | & or
     newline is read again as a command of its own and the rules run on it. A rule that denies it
     gives the deny, its real alternative included; none: the `unreadable` deny, which shows the
-    line written plainly, or a script file's run when plain() cannot rewrite it (plainly()).
+    line written plainly, or a script file's run when plain() cannot rewrite it or its rewrite
+    does not read cleanly either (plainly()).
     The location-dependent git patterns are checked when the call's directory is a main checkout or one git cannot place; the push --no-verify pattern when that
     directory's repository has a PM data record (or git cannot place it), in every session but
     the owner's own. The update-ref pattern (git-shared-ref) is checked wherever the call runs, in a
@@ -156,12 +157,19 @@ def plain(parsed, text):
     return t
 
 
-def plainly(ctx, parsed, text):
+def plainly(ctx, parsed, text, cwd):
     """(the reason's last sentence, the alternative): the line written plainly when plain() can
-    rewrite it, else a run of a script file in the temp folder: never the refused line itself."""
+    rewrite it and the rewrite reads cleanly (read again in `cwd`), else a run of a script file
+    in the temp folder: never the refused line itself, nor a rewrite the guard would refuse as
+    unreadable too."""
     p = plain(parsed, text)
     if p.strip() != text.strip():
-        return PLAIN, p
+        try:
+            readable = cm.read(p, parsed.shell, cwd).clean
+        except Exception:                       # a rewrite the reader cannot take: offer the script
+            readable = False
+        if readable:
+            return PLAIN, p
     name, run = SCRIPT_RUNS['powershell' if parsed.shell == sh.PS else 'bash']
     return SCRIPT, run % rules.fwd(os.path.join(ctx.tempdir, name))
 
@@ -212,7 +220,7 @@ def check(event, ctx, text, cwd, role, parsed):
     def answer(d, rule):
         if d is not None:
             return rules.reworded(d, '%s %s' % (why, d.reason))
-        last, alt = plainly(ctx, parsed, text)
+        last, alt = plainly(ctx, parsed, text, cwd)
         return rules.refuse('unreadable', role, '%s Its text matches the %s rule.%s' % (why, rule, last), alt)
 
     main_rules = set(r for r, _p in MAIN_ONLY + SUBAGENT_MAIN)
@@ -261,7 +269,7 @@ def check(event, ctx, text, cwd, role, parsed):
         d = reread(m.start(), cwd_at(parsed, m.start(), cwd) or cwd)
         if d is not None:
             return answer(d, 'heavy')
-    last, alt = plainly(ctx, parsed, text)
+    last, alt = plainly(ctx, parsed, text, cwd)
     if role == 'subagent':
         return rules.refuse('unreadable', role, why + last, alt)
     if GIT_WORD_RE.search(text) and rules.agent_session(event, ctx):

@@ -77,6 +77,7 @@ A command line the parser cannot read cleanly also goes through kitlib.guard.fal
 "Agent session" and "the owner's own" are the session mark's (docs/guard.md "Session mark").
 """
 import ast
+import builtins
 import fnmatch
 import json
 import ntpath
@@ -2649,7 +2650,7 @@ PY_READ_MODULES = {
     'json': frozenset(('load', 'loads', 'dump', 'dumps', 'JSONDecodeError')),
     'sys': frozenset(('argv', 'stdin', 'stdout', 'stderr', 'exit', 'version', 'version_info',
                       'platform', 'maxsize', 'executable')),
-    're': frozenset(('compile', 'match', 'fullmatch', 'search', 'findall', 'finditer', 'sub', 'subn',
+    're': frozenset(('match', 'fullmatch', 'search', 'findall', 'finditer', 'sub', 'subn',
                      'split', 'escape', 'error', 'A', 'ASCII', 'I', 'IGNORECASE', 'M', 'MULTILINE',
                      'S', 'DOTALL', 'X', 'VERBOSE')),
     'collections': frozenset(('Counter', 'defaultdict', 'OrderedDict', 'deque')),
@@ -2662,12 +2663,43 @@ PY_READ_MODULES = {
                           'getsize', 'getmtime', 'abspath', 'normpath', 'normcase', 'realpath',
                           'relpath', 'split', 'splitext', 'commonpath')),
 }
-# builtins that run text as code, reach any attribute or module by name, or start a debugger or pager
-PY_DENIED_NAMES = {'exec', 'eval', 'compile', 'getattr', 'setattr', 'delattr', 'globals', 'locals',
-                   'vars', 'breakpoint', 'help'}
-# attributes that reach a frame, its globals or code: the way back to every module
+# The only builtins the code may name (an allowlist: type, object and the rest stay out). open
+# only as a call that opens for reading (_py_open_reads)
+PY_BUILTINS = frozenset(('print', 'len', 'range', 'sorted', 'reversed', 'enumerate', 'zip', 'min', 'max',
+                         'sum', 'abs', 'round', 'any', 'all', 'str', 'int', 'float', 'bool', 'list',
+                         'dict', 'set', 'tuple', 'repr', 'isinstance', 'map', 'filter', 'open'))
+# The only attributes the code may take of a value that is not an imported module: string, list,
+# dict, match and read-file methods. A file object's buffer, raw or name, and every class or
+# type attribute, stay out
+PY_VALUE_ATTRS = frozenset((
+    'read', 'readline', 'readlines', 'write', 'flush',
+    'strip', 'lstrip', 'rstrip', 'split', 'rsplit', 'splitlines', 'join', 'replace', 'startswith',
+    'endswith', 'lower', 'upper', 'find', 'count', 'format', 'encode', 'decode', 'partition',
+    'rpartition', 'isdigit',
+    'items', 'keys', 'values', 'get', 'append', 'extend', 'sort', 'index', 'most_common',
+    'group', 'groups', 'groupdict', 'start', 'end', 'span'))
+# names that run text as code, open a file, reach any attribute or module by name, give a value's
+# type, or start a debugger or pager: refused as any identifier (a name, attribute, import alias,
+# keyword); open is the one builtin call let through, as a Name only
+PY_DENIED_NAMES = {'exec', 'eval', 'compile', 'open', 'getattr', 'setattr', 'delattr', 'globals',
+                   'locals', 'vars', 'breakpoint', 'help', 'type', 'object', 'super', 'input'}
+# identifiers that reach a frame, its globals or code: the way back to every module
 PY_FRAME_ATTR_RE = re.compile(r'^(gi|cr|ag|f|tb|co|func|im)_')
 PY_OPEN_KEYWORDS = {'encoding', 'errors', 'newline', 'buffering'}
+# The only syntax the code may use: statements and expressions that bind, call, compute and loop.
+# No def, lambda or class (new names the walk would have to follow), no match (its patterns bind
+# and read attributes with no Name or Attribute node), no try, while, del, global, walrus, await,
+# yield or template string; any node type a later python adds is refused too
+PY_NODES = tuple(t for t in (getattr(ast, n, None) for n in (
+    'Module', 'Expr', 'Assign', 'AugAssign', 'For', 'If', 'With', 'withitem', 'Pass', 'Break',
+    'Continue', 'Import', 'ImportFrom', 'alias',
+    'Call', 'keyword', 'Name', 'Attribute', 'Subscript', 'Slice', 'Starred', 'Constant',
+    'JoinedStr', 'FormattedValue', 'BinOp', 'UnaryOp', 'BoolOp', 'Compare', 'IfExp', 'Tuple', 'List',
+    'Dict', 'Set', 'ListComp', 'SetComp', 'DictComp', 'GeneratorExp', 'comprehension',
+    'Load', 'Store', 'operator', 'unaryop', 'boolop', 'cmpop')) if t is not None)
+# names a stored name or import alias may not take: it would hide the builtin only when the
+# binding runs, so a name read as the binding might reach the builtin
+PY_SHADOWED = frozenset(dir(builtins)) | frozenset(PY_DENIED_NAMES)
 
 
 def _py_open_reads(call):
@@ -2686,20 +2718,33 @@ def _py_open_reads(call):
     return isinstance(mode, ast.Constant) and isinstance(mode.value, str) and set(mode.value) <= set('rbtU')
 
 
-def py_reads_only(code, flags):
+def _py_ident_ok(name):
+    """False for an identifier the code may not hold anywhere: one starting with _, a frame
+    identifier, or one of PY_DENIED_NAMES."""
+    return not (name.startswith('_') or PY_FRAME_ATTR_RE.match(name) or name in PY_DENIED_NAMES)
+
+
+def py_reads_only(code, flags, ps=False):
     """True when the guard can prove the python -c Word `code`, run with the option letters
-    `flags`, writes no file: literal text, isolated mode, imports and module attributes only from
-    PY_READ_MODULES, no PY_DENIED_NAMES, no name or attribute starting with _, no frame attribute,
-    a module name only as `module.attr`, and open() only as a call that opens for reading. Any
-    text it cannot parse, or any other shape, is not proved (False)."""
+    `flags`, writes no file: literal text, isolated mode, only PY_NODES syntax, imports and module
+    attributes only from PY_READ_MODULES, a module name only as `module.attr`, other attributes
+    only from PY_VALUE_ATTRS, names only from PY_BUILTINS, the imports and the names the code
+    stores, no identifier _py_ident_ok refuses, and open() only as a call that opens for reading.
+    `ps`: the line reaches python through PowerShell, whose native-argument quoting can hand python
+    other text than the Word when it holds a double quote, so such code is not proved. Any text it
+    cannot parse, or any other shape, is not proved (False)."""
     if code is None or code.dyn or 'I' not in flags or not flags <= PY_READ_FLAGS:
+        return False
+    if ps and '"' in code.text:
         return False
     try:
         tree = ast.parse(code.text, mode='exec')
     except Exception:                           # SyntaxError, ValueError, RecursionError: unread
         return False
-    mods, parents = {}, {}
+    mods, imported, stored, parents = {}, set(), set(), {}
     for node in ast.walk(tree):
+        if not isinstance(node, PY_NODES):
+            return False
         for child in ast.iter_child_nodes(node):
             parents[child] = node
         if isinstance(node, ast.Import):
@@ -2712,32 +2757,50 @@ def py_reads_only(code, flags):
                 return False
             if any(a.name not in PY_READ_MODULES[node.module] for a in node.names):
                 return False                    # `*` too
+            imported.update(a.asname or a.name for a in node.names)
+        elif isinstance(node, ast.alias):
+            if not all(_py_ident_ok(n) for n in (node.name, node.asname) if n) \
+                    or (node.asname or node.name) in PY_SHADOWED:
+                return False
+        elif isinstance(node, ast.keyword):
+            if node.arg is not None and not _py_ident_ok(node.arg):
+                return False
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            stored.add(node.id)
+    if stored & (set(mods) | imported | PY_SHADOWED):
+        return False                            # a module, an import or a builtin rebound
     for node in ast.walk(tree):
         if isinstance(node, ast.Attribute):
-            if node.attr.startswith('_') or PY_FRAME_ATTR_RE.match(node.attr):
+            if not _py_ident_ok(node.attr) or not isinstance(node.ctx, ast.Load):
                 return False
-            if isinstance(node.value, ast.Name) and node.value.id in mods \
-                    and node.attr not in mods[node.value.id]:
+            v = node.value
+            allowed = mods[v.id] if isinstance(v, ast.Name) and v.id in mods else PY_VALUE_ATTRS
+            if node.attr not in allowed:
                 return False
         elif isinstance(node, ast.Name):
             n, parent = node.id, parents.get(node)
-            if n.startswith('_') or n in PY_DENIED_NAMES:
+            if n == 'open':
+                if not (isinstance(parent, ast.Call) and parent.func is node and _py_open_reads(parent)):
+                    return False
+                continue
+            if not _py_ident_ok(n):
                 return False
-            if n in mods and not (isinstance(parent, ast.Attribute) and parent.value is node
-                                  and isinstance(node.ctx, ast.Load)):
-                return False                    # a module passed on, rebound or aliased
-            if n == 'open' and not (isinstance(parent, ast.Call) and parent.func is node
-                                    and _py_open_reads(parent)):
-                return False
-        elif isinstance(node, ast.alias) and (node.asname or node.name).startswith('_'):
-            return False
+            if n in mods:
+                if not (isinstance(parent, ast.Attribute) and parent.value is node
+                        and isinstance(node.ctx, ast.Load)):
+                    return False                # a module passed on, rebound or aliased
+            elif n not in PY_BUILTINS and n not in imported and n not in stored:
+                return False                    # any other builtin, or a name never bound
     return True
 
 
 def _python(cmd, name, args, cmd_word):
     kind, code, flags = py_program(name, args)
     if kind == 'code':
-        return [] if py_reads_only(code, flags) else [here(cmd_word)]
+        ps, c = False, cmd
+        while c is not None:                    # PowerShell anywhere on the way to python
+            ps, c = ps or c.shell == sh.PS, c.nested_in
+        return [] if py_reads_only(code, flags, ps) else [here(cmd_word)]
     if kind == 'stdin':
         return [here(cmd_word)]
     if kind in ('module', 'script'):

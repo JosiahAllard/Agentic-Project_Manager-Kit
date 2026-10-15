@@ -53,7 +53,10 @@ class PyReadsOnly(unittest.TestCase):
                 'import re, collections; print(collections.Counter(re.findall(r"\\w+", open("x").read())))',
                 'import json, sys; json.dump(json.load(sys.stdin), sys.stdout, indent=1)',
                 'import sys; sys.stdout.write(open(sys.argv[1]).read()); sys.exit(0)',
-                'print([x * 2 for x in range(3)])'):
+                'print([x * 2 for x in range(3)])',
+                'import sys\nfor line in sys.stdin:\n    if line.strip(): print(line.split()[0])',
+                'd = {}; d["a"] = 1; print(sorted(d.items(), key=len), f"{len(d):>3}")',
+                "import re; m = re.search('a', 'ab'); print(m and m.group(0))"):
             with self.subTest(code):
                 self.assertTrue(proved(code))
 
@@ -92,6 +95,53 @@ class PyReadsOnly(unittest.TestCase):
                 'print(1'):
             with self.subTest(code):
                 self.assertFalse(proved(code))
+
+    def test_not_proved_beyond_names_and_attributes(self):
+        """Syntax that binds or reaches an attribute with no Name or Attribute node, a type
+        reached from a value, a value attribute off the allowlist, a denied name as an attribute
+        or keyword, and a new name a def or lambda brings (docs/guard.md "Shell writes")."""
+        for code in (
+                'match 1:\n case int(_a=y): pass',              # a class pattern's keyword attribute
+                'match 1:\n case y: print(y)',                  # a capture pattern binds a name
+                'match [1]:\n case [*y]: pass',
+                "type(open('x'))('y', 'w')",                    # the type of a read file object
+                "print(type(1))",
+                "object",
+                "open('x').buffer.raw",                         # a file object's raw I/O object
+                "f = open('x'); print(f.name)",
+                "import sys; sys.stdin.buffer",
+                "x = 1; x.exec('y')",                           # a denied name as an attribute
+                "x = 1; x.eval",
+                "x = 1; x.open('y')",
+                "x = 1; x.compile",
+                "print(1, exec=2)",
+                'def f(_a): pass',                              # a def's or lambda's underscore arg
+                'print((lambda _a: 0)(1))',
+                'def f(a): pass',
+                'class C: pass',
+                'try:\n print(1)\nexcept Exception: pass',
+                'while 0: pass',
+                'global x',
+                'del x',
+                '(x := 1)',
+                'x = 1\nprint(x.real)',                         # a value attribute off the allowlist
+                'print(undefined)',                             # a name never bound
+                'iter = 1',                                     # a builtin rebound
+                'if 0: id = 1\nprint(id(1))',
+                'from json import load as print',
+                'import json as str',
+                'x = 1; x.f_globals',
+                'f_x = 1'):
+            with self.subTest(code):
+                self.assertFalse(proved(code))
+
+    def test_powershell_double_quote(self):
+        """Through PowerShell a double quote in the code is not proved: Windows PowerShell 5.1's
+        native-argument quoting can hand python other text than the guard read."""
+        code = sh.Word('print("x")', False, 0, 0)
+        self.assertTrue(rules.py_reads_only(code, {'I'}))
+        self.assertFalse(rules.py_reads_only(code, {'I'}, ps=True))
+        self.assertTrue(rules.py_reads_only(sh.Word("print('x')", False, 0, 0), {'I'}, ps=True))
 
     def test_flags(self):
         code = 'import json; print(1)'

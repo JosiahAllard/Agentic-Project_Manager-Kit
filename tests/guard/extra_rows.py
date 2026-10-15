@@ -65,6 +65,11 @@ ROWS = [
     ('unreadable: a double-quoted bash -c wait from PowerShell', lambda w: ps(
         'bash -c "until [ -f $F ]; do sleep 5; done"', w.wt, sub=True),
      'deny', 'unreadable', 'powershell -NoProfile -ExecutionPolicy Bypass -File "{temp}/script.ps1"'),
+    # plain() closes the odd single quote, which leaves the double quote open: that rewrite is
+    # unreadable too, so the alternative is the script file
+    ('unreadable: a rewrite that still does not read gives the script, subagent', lambda w: bash(
+        'echo "a\'b', w.wt, sub=True),
+     'deny', 'unreadable', 'bash "{temp}/script.sh"'),
     ('unreadable alternative, bash script, is allowed', lambda w: bash('bash "%s/script.sh"' % W.fwd(w.temp), w.wt, sub=True),
      None, None, None),
     ('unreadable alternative, PowerShell script, is allowed', lambda w: ps(
@@ -281,4 +286,13 @@ ROWS = [
         'python -I -c"open(\'x\',\'w\').write(\'y\')"', w.main, sub=True), 'deny', 'main-checkout', None),
     ('main-checkout: python -I - reads its code from a pipe', lambda w: bash(
         'echo "print(1)" | python -I -', w.main, sub=True), 'deny', 'main-checkout', None),
+    # Windows PowerShell 5.1 may hand python other text when the code holds a double quote
+    ('main-checkout: python -I -c with a double quote, PowerShell', lambda w: ps(
+        'python -I -c \'print("x")\'', w.main, sub=True), 'deny', 'main-checkout', None),
+    ('main-checkout: python -I -c with a double quote, bash -c from PowerShell', lambda w: ps(
+        'bash -c \'python -I -c "print(\\"x\\")"\'', w.main, sub=True), 'deny', 'main-checkout', None),
+    ('main-checkout: python -I -c with a double quote, bash', lambda w: bash(
+        'python -I -c \'print("x")\'', w.main, sub=True), None, None, None),
+    ('main-checkout: python -I -c naming type', lambda w: bash(
+        'python -I -c "print(type(1))"', w.main, sub=True), 'deny', 'main-checkout', None),
 ]
