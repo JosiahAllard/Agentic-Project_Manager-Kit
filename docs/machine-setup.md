@@ -31,16 +31,18 @@ The wrapper runs the tool under `-Python <python.exe>` when given, else under th
 
 `kitlib/machinesetup/links.py`. Machine setup makes no link, in either mode. The kit runs from its own folder (the plugin root), so an account needs no `tools`, `knowledge` or `skills` entry pointing into it. This step only reports the links an earlier setup left, and adds no change, so a second run still prints `nothing to do`.
 
-Each leftover is one note, with the command that removes the link only, never its target (never `/s`; `links.REMOVE`, `links.leftover`):
+Each leftover is one note, with the command that removes the link only, never its target (never `/s`; `links.remove_cmd`, `links.leftover`):
 
 ```
 leftover link <path> -> <target>: remove it with: cmd /c rmdir "<path>"
 ```
 
+That is the command for a junction or a directory symlink. A file symlink (one without the directory attribute) gets `cmd /c del "<path>"` instead, since `rmdir` fails on it; `del` removes the link and leaves its target. A relative symlink target is read against the link's own folder, not the current directory (`common.link_target`).
+
 In each config folder it checks `tools`, `knowledge` and `skills`. A link counts when its target is in this kit or, with `--old-kit`, in the older kit clone:
 
 - A container that is itself such a link: one leftover note for the container. For `skills`, each skill under its target that the kit has no folder for in `content/skills` is named too: a repo-local skill moves to its repo before the link goes.
-- A link whose target is outside this kit (and, with `--old-kit`, the older clone) is left alone but never silently: a container that is a link elsewhere, for example an account folder following `~/.claude`, or an entry of a real `tools` or `knowledge` folder that is, gets one note (`links.skipped`). In the default mode a link an earlier setup made into a kit clone that has moved since is one of these, so the note carries the same remove command:
+- A link whose target is outside this kit (and, with `--old-kit`, the older clone) is left alone but never silently: a container that is a link elsewhere, for example an account folder following `~/.claude`, or an entry of a real `tools`, `knowledge` or `skills` folder that is, gets one note (`links.skipped`). In the default mode a link an earlier setup made into a kit clone that has moved since is one of these, so the note carries the same remove command:
 
   ```
   skipped link <path> -> <target>: its target is outside this kit, left as is; if an earlier setup made it, remove it with: cmd /c rmdir "<path>"

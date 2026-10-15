@@ -130,6 +130,45 @@ class Leftovers(unittest.TestCase):
                 self.assertIn('cmd /c rmdir "%s"' % p, said[0])
                 self.assertTrue(common.is_link(p))                          # reported, not removed
 
+    def symlink(self, target, link, is_dir):
+        """A symlink (not a junction), or skip: making one needs the symlink privilege."""
+        try:
+            os.symlink(target, link, target_is_directory=is_dir)
+        except OSError as e:
+            self.skipTest('no symlink privilege on this machine: %s' % e)
+        self.addCleanup(os.rmdir if is_dir else os.remove, link)
+
+    def notes(self):
+        plan = M.Plan(M.Plan.FRESH_SECTIONS)
+        links.survey(plan, self.acct, self.ctx(True))
+        self.assertEqual((plan.changes, plan.refusals), ([], []))
+        return plan.notes['links']
+
+    def test_a_file_symlink_is_removed_with_del_not_rmdir(self):
+        """rmdir fails on a file symlink; del removes the link and leaves its target."""
+        into = os.path.join(self.kit, 'boot', 'hook.py')
+        outside = os.path.join(self.old, 'thing.py')
+        T.touch(outside)
+        mine = os.path.join(self.acct, 'tools', 'hook.py')
+        other = os.path.join(self.acct, 'tools', 'thing.py')
+        self.symlink(into, mine, False)
+        self.symlink(outside, other, False)
+        notes = self.notes()
+        self.assertIn('leftover link %s -> %s: remove it with: cmd /c del "%s"' % (mine, into, mine), notes)
+        self.assertIn(links.skipped(other, outside), notes)
+        self.assertTrue(links.skipped(other, outside).endswith('cmd /c del "%s"' % other))
+        self.assertIn(links.leftover(self.usage, os.path.join(self.kit, 'optional', 'usage')), notes)
+        self.assertTrue(links.leftover(self.usage, '').endswith('cmd /c rmdir "%s"' % self.usage))  # a junction
+        self.assertTrue(os.path.isfile(into) and os.path.isfile(outside))
+
+    def test_a_relative_symlink_target_is_read_against_the_links_folder(self):
+        """Read against the current directory, `..\\..\\..\\kit\\...` would land outside the kit."""
+        link = os.path.join(self.acct, 'tools', 'comfy')
+        into = os.path.join(self.kit, 'optional', 'usage')
+        self.symlink(os.path.join('..', '..', '..', 'kit', 'optional', 'usage'), link, True)
+        self.assertEqual(common.link_target(link), into)
+        self.assertIn(links.leftover(link, into), self.notes())
+
 
 class StatusLineThroughToolsLink(unittest.TestCase):
     """The live shape: every account's statusLine runs the usage script through

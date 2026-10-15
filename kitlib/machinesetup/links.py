@@ -1,7 +1,8 @@
 """Machine links, report only (docs/machine-setup.md "Links"): machine setup makes no link. The kit
 runs from its own folder (the plugin root), so an account needs no `tools`, `knowledge` or `skills`
 entry that points into it. This step finds the ones an earlier setup left and says how to remove
-each: `cmd /c rmdir "<path>"`, which removes the link only, never its target (never `/s`). It adds
+each: `cmd /c rmdir "<path>"` for a junction or directory link, `cmd /c del "<path>"` for a file
+symlink (remove_cmd), each of which removes the link only, never its target (never `/s`). It adds
 no change, so a second run still has nothing to do; it runs in both modes.
 
 What it reports, in each config folder:
@@ -10,12 +11,15 @@ What it reports, in each config folder:
   ~/.claude, or a kit clone that has moved since an earlier setup) is left alone, with one
   "skipped link" line (`skipped`), never silently.
 - In a real `tools` or `knowledge` folder, each entry that is a link into this kit or the older
-  clone; an entry that links anywhere else is one "skipped link" line. A real folder at one of the names an earlier setup linked (TOOL_LINKS, KNOWLEDGE_LINKS) is
+  clone. A real folder at one of the names an earlier setup linked (TOOL_LINKS, KNOWLEDGE_LINKS) is
   noted and left as it is; nothing is renamed or deleted.
 - In a real `skills` folder, each link at a kit skill's name (a folder under SKILLS_DIR) into this
   kit (MOVED_SKILLS_DIRS included) or the older clone; the plugin loads those skills. A link at
   another name into either is noted and left: the kit has no such skill, so a repo-local skill
   moves to its repo first.
+- In a real `tools`, `knowledge` or `skills` folder, an entry that links anywhere else is one
+  "skipped link" line. A relative symlink target is read against the link's own folder
+  (common.link_target).
 - Any other entry of the config folder (`agents`, `hooks`) that is a link into the older clone is
   noted and left (docs/machine-setup.md "Not done here").
 
@@ -35,7 +39,9 @@ SKILLS_DIR = 'content/skills'                  # the skills, written once (no re
 # rendered copy until decision 29. Both are under the kit, so a link into either is a leftover.
 MOVED_SKILLS_DIRS = (MOVED_FROM + '/skills', SHELL + '/skills')
 CONTAINERS = ('tools', 'knowledge', 'skills')
-REMOVE = 'cmd /c rmdir "%s"'                   # the link only; never /s
+REMOVE = 'cmd /c rmdir "%s"'                   # a junction or directory link: the link only; never /s
+REMOVE_FILE = 'cmd /c del "%s"'                # a file symlink: del removes the link, not its target
+DIRECTORY = 0x10                               # FILE_ATTRIBUTE_DIRECTORY
 
 
 def tool_link_names():
@@ -56,16 +62,27 @@ def kit_skills(kit):
         return set()
 
 
+def remove_cmd(path):
+    """The command that removes the link at `path` only. Windows keeps the directory attribute on a
+    junction and a directory symlink, dangling or not, and rmdir removes those; a file symlink has
+    none, rmdir fails on it, and del removes the link and leaves its target."""
+    try:
+        attrs = getattr(os.lstat(path), 'st_file_attributes', DIRECTORY)
+    except OSError:
+        attrs = DIRECTORY
+    return (REMOVE if attrs & DIRECTORY else REMOVE_FILE) % path
+
+
 def leftover(path, target):
     """The note for a leftover link: where it points and the command that removes the link only."""
-    return 'leftover link %s -> %s: remove it with: %s' % (path, target, REMOVE % path)
+    return 'leftover link %s -> %s: remove it with: %s' % (path, target, remove_cmd(path))
 
 
 def skipped(path, target):
     """The note for a link whose target is outside this kit (and the older clone): left as is, but
     never silent, since a link an earlier setup made into a kit clone that has moved since is one."""
     return ('skipped link %s -> %s: its target is outside this kit, left as is; if an earlier setup '
-            'made it, remove it with: %s' % (path, target, REMOVE % path))
+            'made it, remove it with: %s' % (path, target, remove_cmd(path)))
 
 
 def _ours(target, ctx):
