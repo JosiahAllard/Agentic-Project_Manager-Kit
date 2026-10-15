@@ -214,6 +214,38 @@ class FoundOn(StoreCase):
         self.assertIn('names a branch that exists neither here nor on a remote', str(cm.exception))
         self.assertIsNone(self.get('NEW'))
 
+    def test_a_merge_off_the_code_mains_first_parent_chain_is_no_proof(self):
+        # kit/x is merged into kit/side, which then lands: `Merge kit/x` is reachable from main
+        # but was never made on main, so kit/x did not land there.
+        self.repo.git('checkout', '-q', '-b', 'kit/side')
+        self.branch_with('kit/x', 'kitlib/x/inner.py')
+        self.repo.git('checkout', '-q', 'kit/side')
+        self.repo.git('merge', '-q', '--no-ff', '-m', 'Merge kit/x', 'kit/x')
+        self.repo.git('checkout', '-q', 'main')
+        self.repo.git('merge', '-q', '--no-ff', '-m', 'Merge kit/side', 'kit/side')
+        self.repo.git('push', '-q', 'origin', 'main')
+        self.repo.git('branch', '-q', '-D', 'kit/x')
+        self.repo.git('branch', '-q', '-D', 'kit/side')
+        self.assertIn('Merge kit/x', self.repo.git('log', '--merges', '--format=%s', 'main'))
+        with self.assertRaises(Refusal) as cm:
+            self.add(['docs/y.md'], found_on='kit/x')
+        self.assertIn('names a branch that exists neither here nor on a remote', str(cm.exception))
+        self.assertIsNone(self.get('NEW'))
+        change = self.add(['docs/y.md'], found_on='kit/side')
+        self.assertTrue(any(line.startswith('NOTE: branch kit/side landed on main as ')
+                            for line in change.lines), change.lines)
+
+    def test_a_missing_branch_with_a_code_main_that_does_not_resolve_fails(self):
+        # Neither origin/trunk nor trunk resolves: whether kit/gone landed cannot be told, so
+        # this is ERROR, never the `exists neither here nor on a remote` refusal.
+        self.ctx = pmod.Context(self.store, self.repo.root, branch=self.ctx.branch, today=TODAY,
+                                code_main='trunk')
+        with self.assertRaises(Failure) as cm:
+            self.add(['docs/y.md'], found_on='kit/gone')
+        self.assertIn('`trunk` does not resolve', str(cm.exception))
+        self.assertIn('backlog.code_main', str(cm.exception))
+        self.assertIsNone(self.get('NEW'))
+
     def test_a_ref_list_git_cannot_give_fails(self):
         real = cmd.run_text
         self.failing('cmd', run_text=lambda args, root, **kw: (None, 'git broke')
