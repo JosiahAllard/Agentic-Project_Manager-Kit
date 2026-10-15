@@ -600,6 +600,15 @@ HUB_PY_OPT_WORD_RE = re.compile(r'^[\w./:+,=-]+$', re.ASCII)
 # the text glued to a python word up to bash's word break (space, tab) or a command's end; a ;
 # is taken in, as cmd ends only a command's name there (hub_module_names)
 HUB_PY_GLUED_RE = re.compile(r'[^ \t\n|&]*')
+# hub_module_names on a line the parser could not read whole: `mid` crosses ; | & and newline too,
+# so a separator the shell may keep inside one of python's words cannot hide its -m (fail-closed)
+HUB_PY_MODULE_ANY_RE = re.compile(HUB_PY_MODULE_RE.pattern.replace('[^;|&\\n]*?', '[\\s\\S]*?', 1))
+# hub_word_module_names: one of python's words, as the shell passes it, that is a -m (a cluster
+# ending in m) naming hub glued to it (-mhub, -Bmhub), or that takes the module as the next word
+# (-m, -Bm, --module, runpy); --module=hub; and the module word itself
+HUB_PY_WORD_MODULE_GLUED_RE = re.compile(r'''(?i)^(?:-[A-Za-z]*m[ \t]*|--module=)['"]?hub(?![\w.-])''')
+HUB_PY_WORD_MODULE_NEXT_RE = re.compile(r'(?i)^(?:-[A-Za-z]*m|--module)$|(?:\b|^-[A-Za-z]*m|^--module=)runpy$')
+HUB_PY_WORD_HUB_RE = re.compile(r'''(?i)^[ \t]*['"]?hub(?![\w.-])''')
 # hub quoted as a name ('hub', ".hub") counts in a command whose text also loads a module by name:
 # __import__('tools', fromlist=['hub']), importlib.import_module('.hub', 'tools'), run_module('hub')
 HUB_QUOTED_RE = re.compile(r'''(?i)['"]\.*hub['"]''')
@@ -890,15 +899,19 @@ def hub_unexempt(text):
     return text
 
 
-def hub_text_names(text, loader=False):
+def hub_text_names(text, loader=False, quoted=(), whole=True):
     """The text of `text` that names the hub tool as a module or a script (HUB_NAME_RES; with
-    `loader`, also hub quoted as a name in text that loads a module by name), else None."""
-    text = hub_unexempt(text)
+    `loader`, also hub quoted as a name in text that loads a module by name), else None.
+    `quoted` and `whole` are hub_module_names' own; `quoted` holds spans of `text`, so it is
+    dropped when hub_unexempt changes the text (fail-closed)."""
+    raw, text = text, hub_unexempt(text)
+    if text != raw:
+        quoted = ()
     for rx in HUB_NAME_RES:
         m = rx.search(text)
         if m:
             return m.group(0).strip()
-    found = hub_module_names(text)
+    found = hub_module_names(text, quoted, whole)
     if found:
         return found
     if loader and HUB_LOADER_RE.search(text):
@@ -908,9 +921,11 @@ def hub_text_names(text, loader=False):
     return None
 
 
-def hub_module_names(text):
+def hub_module_names(text, quoted=(), whole=True):
     """The text of `text` from a python word to a -m (a cluster ending in m, --module, runpy)
-    naming hub on the same command (HUB_PY_WORD_RE, HUB_PY_MODULE_RE), else None. Every python
+    naming hub on the same command (HUB_PY_WORD_RE, HUB_PY_MODULE_RE), else None. With `whole`
+    False (a line the parser could not read whole) the -m may be past a ; | & or newline
+    (HUB_PY_MODULE_ANY_RE). Every python
     word is tried, so one inside another's arguments (`$(python -m hub)`) is read too. The -m is
     python's own unless python's words before it reach a script word first (hub_py_script_first):
     `python <kit>/tools/commit.py -m "Hub store: x"` gives commit.py its message. A python word
@@ -922,31 +937,139 @@ def hub_module_names(text):
     too (fail-closed). A quote glued to a python word is python's -m whatever follows, as the
     quoted run may hold spaces and a script word that are all argv[0]
     (`cmd /c python/" commit.py x" -m hub`), unless it only closes a quote that opens its word
-    (`"<dir>/python.exe" <kit>/tools/commit.py -m "Hub store: x"`: hub_py_glued_quote)."""
+    (`"<dir>/python.exe" <kit>/tools/commit.py -m "Hub store: x"`: hub_py_glued_quote, which
+    takes the parser's `quoted` word spans for a quoted path with a space in it). This reads text,
+    not words: a ; | & or newline the shell keeps inside a word (`-X 'a;b'`) ends `mid` here, so
+    every command is also read by its parsed words (hub_word_module_names)."""
+    module_re = HUB_PY_MODULE_RE if whole else HUB_PY_MODULE_ANY_RE
     words = list(HUB_PY_WORD_RE.finditer(text))
     for k, w in enumerate(words):
         glued = HUB_PY_GLUED_RE.match(text, w.end()).end()
         if k + 1 < len(words) and words[k + 1].start() < glued:
             continue
-        m = HUB_PY_MODULE_RE.match(text, w.end())
+        m = module_re.match(text, w.end())
         if not m and ';' in text[w.end():glued]:
-            m = HUB_PY_MODULE_RE.match(text, text.rindex(';', w.end(), glued) + 1)
-        if m and (hub_py_glued_quote(text, w.start(), text[w.end():glued]) or
+            m = module_re.match(text, text.rindex(';', w.end(), glued) + 1)
+        if m and (hub_py_glued_quote(text, w.start(), w.end(), text[w.end():glued], quoted) or
                   not hub_py_script_first(text[glued:m.end('mid')])):
             return text[w.start():m.end()].strip()
     return None
 
 
-def hub_py_glued_quote(text, start, glued):
-    """True when the text `glued` to the python word at `start` holds a quote other than one
-    closing a quote that opens the word (`"<dir>/python.exe"`, `'python'`), so the shell may
-    join words after it into python's own name."""
+def hub_py_glued_quote(text, start, end, glued, quoted=()):
+    """True when the text `glued` to the python word at `start`..`end` holds a quote other than
+    one closing a quote that opens the word (`"<dir>/python.exe"`, `'python'`), so the shell may
+    join words after it into python's own name. The opening quote is the one after the last
+    space or separator before the python word, or, for a quoted path with a space in it
+    (`"<Program Files>/Python312/python.exe"`), the parser's own: `quoted` holds the (start, end)
+    of each parsed word of this text that is one quoted run with no other quote inside
+    (hub_quoted_spans), and a word ending at the quote just after `end` opens with it."""
     if '"' not in glued and "'" not in glued:
         return False
     q = glued[0]
+    if glued != q or q not in '"\'':
+        return True
+    if any(e == end + 1 and o < start and text[o] == q for o, e in quoted):
+        return False
     head = text[max(text.rfind(c, 0, start) for c in ' \t\n;&|(') + 1:start]
-    return not (glued == q and q in '"\'' and head.startswith(q) and
-                '"' not in head[1:] and "'" not in head[1:])
+    return not (head.startswith(q) and '"' not in head[1:] and "'" not in head[1:])
+
+
+def hub_quoted_spans(parsed):
+    """The (start, end) of every word of `parsed` whose source, in the line's own text, is one
+    quoted run: an opening quote, then no ' " or backtick, then the same quote closing the word
+    (`"<Program Files>/Python312/python.exe"`). Spans of commands read from other text (a
+    nested shell's string) are left out."""
+    out = []
+    src = parsed.text
+    for c in parsed.commands:
+        if c.source != src:
+            continue
+        for w in c.words:
+            o, e = w.start, w.end
+            if not (isinstance(o, int) and isinstance(e, int) and 0 <= o and o + 2 <= e <= len(src)):
+                continue
+            q = src[o]
+            if q in '"\'' and src[e - 1] == q and not any(ch in src[o + 1:e - 1] for ch in '"\'`'):
+                out.append((o, e))
+    return out
+
+
+def hub_word_module_names(cmd):
+    """The words of `cmd`, as the shell passes them (Word.text, and Word.alt where bash's own
+    differs), from a word holding a python word (HUB_PY_WORD_RE) to a later word that is python's
+    -m naming hub (HUB_PY_WORD_MODULE_GLUED_RE; or HUB_PY_WORD_MODULE_NEXT_RE and the next word
+    HUB_PY_WORD_HUB_RE), joined, else None. A ; | & or newline inside a word is part of that
+    word here, never a command's end (`python -X 'a;b' -m hub`). The -m is python's own unless
+    python's words before it reach a record tool's script word first (hub_py_script_words). A
+    PowerShell word holding a double quote may reach a native program as other words: Windows
+    PowerShell 5.1 passes the quote on unescaped, wrapping the word in quotes or not, and the
+    program's C runtime splits it (hub_crt_words). Both splits are read as well as the word
+    itself (`python -X 'a;" -m hub "b'` and `python '-B"m"' hub` run python's -m)."""
+    variants = [[[t] for t in (w.text for w in cmd.words)]]
+    alts = [[w.alt if w.alt is not None else w.text] for w in cmd.words]
+    if alts != variants[0]:
+        variants.append(alts)
+    if cmd.shell == sh.PS and any('"' in w.text for w in cmd.words):
+        for wrap in (False, True):
+            variants.append([hub_crt_words('"%s"' % w.text if wrap else w.text) if '"' in w.text
+                             else [w.text] for w in cmd.words])
+    for texts in variants:
+        toks = [(k, p) for k, parts in enumerate(texts) for p in parts]
+        dyn = {i for i, (k, _) in enumerate(toks) if cmd.words[k].dyn}
+        for i, (k, t) in enumerate(toks):
+            if not HUB_PY_WORD_RE.search(t):
+                continue
+            args = [p for _, p in toks[i + 1:]]
+            bad = {j - i - 1 for j in dyn if j > i}
+            for j, a in enumerate(args):
+                hit = HUB_PY_WORD_MODULE_GLUED_RE.match(a) or (
+                    HUB_PY_WORD_MODULE_NEXT_RE.search(a) and j + 1 < len(args) and
+                    HUB_PY_WORD_HUB_RE.match(args[j + 1]))
+                if hit and not hub_py_script_words(args[:j], bad):
+                    return ' '.join([t] + args[:j + 2])
+    return None
+
+
+def hub_crt_words(s):
+    """The words a Windows program's C runtime (the UCRT, which python uses) reads from the
+    command-line text `s`: space and tab split words outside quotes; a double quote opens or
+    closes quoting, and two inside quoting give one literal quote; 2n backslashes before a quote
+    give n and the quote acts, 2n+1 give n and a literal quote; other backslashes are kept."""
+    out, cur, have, quoted, i = [], [], False, False, 0
+    while i < len(s):
+        c = s[i]
+        if c == '\\':
+            n = len(s) - i - len(s[i:].lstrip('\\'))
+            i += n
+            if i < len(s) and s[i] == '"':
+                cur.append('\\' * (n // 2))
+                if n % 2:
+                    cur.append('"')
+                    i += 1
+            else:
+                cur.append('\\' * n)
+            have = True
+        elif c == '"':
+            if quoted and s[i + 1:i + 2] == '"':
+                cur.append('"')
+                i += 2
+            else:
+                quoted = not quoted
+                i += 1
+            have = True
+        elif c in ' \t' and not quoted:
+            if have:
+                out.append(''.join(cur))
+            cur, have = [], False
+            i += 1
+        else:
+            cur.append(c)
+            have = True
+            i += 1
+    if have:
+        out.append(''.join(cur))
+    return out
 
 
 def hub_py_script_first(mid):
@@ -959,9 +1082,18 @@ def hub_py_script_first(mid):
     bash keeps inside a word), and an escaped space, a quote, a backtick, a variable or an
     expansion lets the shell hand python other words (`-X a\\ commit.py -m hub` gives -X the value
     `a commit.py`). Anything else is python's -m: fail-closed."""
-    toks = [t for t in re.split(r'[ \t]+', mid) if t]
+    return hub_py_script_words([t for t in re.split(r'[ \t]+', mid) if t])
+
+
+def hub_py_script_words(toks, bad=()):
+    """hub_py_script_first on python's words `toks` as already split; a word whose index is in
+    `bad` (one the shell may change or split) is never plain, so reaching it first is python's
+    -m (fail-closed)."""
+    toks = [None if i in bad else t for i, t in enumerate(toks)]
     i = 0
     while i < len(toks):
+        if toks[i] is None:
+            return False
         t = toks[i]
         if t == '--':
             return False
@@ -981,7 +1113,7 @@ def hub_py_script_first(mid):
             continue
         m = HUB_PY_PLAIN_WORD_RE.match(t)
         return (bool(m) and ntpath.basename(m.group(2)).lower() in HUB_PY_MESSAGE_SCRIPTS and
-                all(HUB_PY_OPT_WORD_RE.match(o) for o in toks[:i]))
+                all(o is not None and HUB_PY_OPT_WORD_RE.match(o) for o in toks[:i]))
     return False
 
 
@@ -1427,7 +1559,8 @@ def hub_named(parsed):
                 shaped.append(cmd)
             if cmd.start is not None:
                 text = text[:cmd.start] + ' ' * (cmd.end - cmd.start) + text[cmd.end:]
-    found = hub_text_names(text)
+    found = hub_text_names(text, quoted=hub_quoted_spans(parsed) if parsed.clean else (),
+                           whole=parsed.clean)
     if found:
         return found
     for cmd in parsed.commands:
@@ -1437,6 +1570,9 @@ def hub_named(parsed):
             found = hub_text_names(t, loader=True)
             if found:
                 return found
+        found = hub_word_module_names(cmd)
+        if found:
+            return found
         found = hub_glob_names(cmd)
         if found:
             return found
