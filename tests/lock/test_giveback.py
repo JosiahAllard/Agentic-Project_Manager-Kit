@@ -57,6 +57,15 @@ try:
     from kitlib.lock import giveback
     offer = giveback.Offer.from_env()
     held = offer.held() if offer else []
+    # None: the record cannot be read now (the wrapper is replacing it); read it again, never
+    # as no slots. Still None after 5 s: say so and fail (exit 4), never give nothing quietly.
+    until = time.time() + 5
+    while held is None and time.time() < until:
+        time.sleep(0.05)
+        held = offer.held()
+    if held is None:
+        print("the run's record stayed unreadable for 5 s", flush=True)
+        sys.exit(4)
     print("offer", offer is not None, "held", held,
           "gave", offer.give([max(held)]) if held else None, flush=True)
 except ImportError as e:
