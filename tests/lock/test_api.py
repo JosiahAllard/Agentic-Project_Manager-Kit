@@ -10,7 +10,8 @@ import threading
 import time
 import unittest
 
-from .helpers import OWNER, REPO, StoreCase, agent, claude_of, clean_env, under_agent_host
+from .helpers import (OWNER, REPO, StoreCase, agent, claude_of, clean_env, under_agent_host,
+                      unopenable)
 
 if os.name == "nt":
     from kitlib.lock import api
@@ -591,6 +592,16 @@ class EndRun(ApiCase):
         self.ok(api.end_run(agent("sess-A"), R_B, self.store))
         self.ok(api.end_run(OWNER, R_B, self.store))
         self.assertEqual(self.stop_file(R_B)["by"], "owner")
+
+    def test_a_live_record_that_stays_unreadable_is_a_store_error_never_no_run(self):
+        self.live_record(R_A)
+        with unopenable(self.store.path("active", R_A + ".json")):
+            e = self.err(api.end_run(OWNER, R_A, self.store), "store", "id")
+            r = api.run_record(R_A, self.store)
+        self.assertIn("could not be read", e["message"])
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["error"]["code"], "store")
+        self.assertTrue(api.run_record(R_A, self.store)["live"])
 
 
 R_H, R_C = ("r-20261006T120000Z-%s" % x for x in ("c1c1c1", "d1d1d1"))

@@ -216,7 +216,7 @@ def plan_add(snap, ctx, rid, summary, scopes, effort=None, ref=None, reopen=Fals
                       'that history read as though it were about this item: pass `--reopen` if it '
                       'is the same work coming back, or pick a new id' % (rid, prior))
     notes = [] if found_on == smod.NONE else _fold_overlap(snap, ctx, rid, found_on, scopes)
-    where = 'no branch' if found_on == smod.NONE else found_on
+    where = 'no branch (or on a branch since landed)' if found_on == smod.NONE else found_on
     summary = '%s (found on %s; not folded: %s)' % (summary.strip(), where, not_folded)
     pairs = [('id', rid), ('area', smod.area_from_scope(scopes)), ('priority', '-'),
              ('priority_by', '-'), ('effort', effort or '-'), ('state', 'open'),
@@ -239,7 +239,7 @@ def _fold_arguments(ctx, found_on, why_not_folded):
     branch-name check."""
     if found_on is None:
         raise Usage('`add` requires `--found-on BRANCH|none`: the branch the finding was made on, '
-                    'or `none` when no branch found it')
+                    'or `none` when it was found on no branch, or on a branch that landed and was removed')
     if why_not_folded is None:
         raise Usage('`add` requires `--why-not-folded TEXT`: why the finding is not fixed on the '
                     'branch that found it')
