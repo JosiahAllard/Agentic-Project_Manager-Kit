@@ -349,8 +349,8 @@ class LockVerbs(Base):
                 self.denied(self.shell('%s %s' % (LOCK, args), 'senior-worker'), 'role-lock')
 
     def test_a_path_naming_the_lock_cli_given_to_another_tool_is_no_lock_call(self):
-        """Only the program, or the script python runs, is a lock call; machine_lock.py as another
-        tool's argument is a path."""
+        """machine_lock.py as an argument of a program that never runs its words (backlog.py,
+        commit.py, a reader, git diff and the like) is a path, not a lock call."""
         kit_tools, pm = self.w.kit_dir.replace('\\', '/') + '/tools', self.w.data.replace('\\', '/')
         backlog = 'python %s/backlog.py -C %s --session kit ' % (kit_tools, pm)
         refused = (backlog + 'set EX-LOCK-SLOTS --scope kitlib/lock --scope tests/lock '
@@ -360,8 +360,9 @@ class LockVerbs(Base):
                    backlog + 'add EX-LOCK-STATUS --title "status --json" '
                              '--scope tools/machine_lock.py --scope kitlib/lock/api.py')
         others = ('cat tools/machine_lock.py', 'git diff -- tools/machine_lock.py', 'rg hold tools/machine_lock.py',
-                  'python tools/check.py tools/machine_lock.py hold whole',
-                  'py -3 -X utf8 tools/check.py --path tools/machine_lock.py run',
+                  'py -3 -X utf8 %s/commit.py -m "machine_lock.py: hold" tools/machine_lock.py' % kit_tools,
+                  'git log --oneline -- tools/machine_lock.py', 'git -C x show HEAD:tools/machine_lock.py',
+                  'grep -n hold tools/machine_lock.py | head -5',
                   'Get-Content tools/machine_lock.py | Select-String hold')
         for shell in ('bash', 'powershell'):
             for role in ('pm', 'reviewer', 'lander'):
@@ -407,6 +408,33 @@ class LockVerbs(Base):
         self.assertEqual((d.verdict, d.rule), ('deny', 'role-lock'))
         for shell, text in (('bash', 'py -3 %s run --kind build -- x' % lock),
                             ('powershell', 'Start-Process python -ArgumentList "%s background -- x"' % lock)):
+            with self.subTest(shell=shell, text=text):
+                self.denied(self.shell(text, 'reviewer', shell=shell), 'role-lock')
+
+    def test_a_launcher_or_script_given_the_lock_cli_runs_it(self):
+        """Fail-closed: a word naming machine_lock.py in any program but one that never runs its
+        words is a lock call - a launcher the guard does not unwrap, an interpreter it does not
+        name, another script that may run it, or a reader whose output reaches a program."""
+        lock = 'tools/machine_lock.py'
+        rows = (('bash', 'winpty python %s run --kind build -- x' % lock),
+                ('bash', 'uv run %s stop 42' % lock), ('bash', 'uv run python %s background -- x' % lock),
+                ('bash', 'setsid python %s stop 42' % lock), ('bash', 'watch -n 1 python %s stop 42' % lock),
+                ('bash', 'hatch run python %s stop 42' % lock), ('bash', 'pdm run python %s stop 42' % lock),
+                ('bash', 'poetry run python %s stop 42' % lock),
+                ('bash', 'conda run -n base python %s stop 42' % lock),
+                ('bash', 'start "a b" python %s stop 42' % lock), ('bash', 'start /b python %s stop 42' % lock),
+                ('bash', 'python3.13t %s stop 42' % lock), ('bash', 'python_d %s stop 42' % lock),
+                ('bash', 'python tools/check.py %s stop 42' % lock),
+                ('bash', 'py -3 -X utf8 tools/check.py --path %s run' % lock),
+                ('bash', 'rg --pre %s stop x' % lock),
+                ('bash', 'cat %s | python - stop 42' % lock), ('bash', 'cat %s > x.py' % lock),
+                ('bash', 'git show HEAD:%s | python - stop 42' % lock),
+                ('bash', 'git -c diff.external="python %s stop 42" diff' % lock),
+                ('bash', 'python - stop 42 <<< "$(cat %s)"' % lock),
+                ('powershell', 'Start-Process cmd -ArgumentList "/c python %s stop 42"' % lock),
+                ('powershell', 'Start-Process uv -ArgumentList "run %s stop 42"' % lock),
+                ('powershell', 'Get-Content %s | python - stop 42' % lock))
+        for shell, text in rows:
             with self.subTest(shell=shell, text=text):
                 self.denied(self.shell(text, 'reviewer', shell=shell), 'role-lock')
 

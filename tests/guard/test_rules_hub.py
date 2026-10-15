@@ -947,6 +947,8 @@ class FailClosed(Hub):
             (bash, backlog + 'add EX-RETIRE --body-file tools/hub.py --found-on none --why-not-folded x'),
             (bash, backlog + 'close EX-RETIRE --reason "fixed in tools/hub.py"'),
             (ps, backlog + 'set EX-RETIRE --scope tools\\hub.py'),
+            # backlog.py in a folder named hub is still backlog.py, not the hub tool
+            (bash, 'python tools/hub/backlog.py set EX-RETIRE --scope tools/hub.py'),
         ), False)
         # the hub tool run, imported or named as a module, beside backlog.py or in its words
         self.rows((
