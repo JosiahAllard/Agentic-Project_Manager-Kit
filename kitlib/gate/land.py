@@ -32,8 +32,11 @@ tools/land.py).
                  commit that changes an owner-only path the landing would change authored by the owner
                  (kitlib.guard.ownercommits; rules of the base merged with the tip's), and the
                  branch's history free of the backlog store's root commit (`ref` and `branch`
-                 stores; kitlib.backlog.at_landing). Then the strict check (Lander.strict_check;
-                 docs/gate.md "Strict paths"): a branch that changes a path in STRICT_DEFAULTS as
+                 stores; kitlib.backlog.at_landing). Then the tip gate check
+                 (Lander.tip_gate_check): every tip has a gate-OK record of exactly that commit
+                 written by a `gate.py --full` pass (kitlib.records.gate_ok.verify_full); a miss
+                 names the `gate.py -C <worktree> --full` command that gates it. Then the
+                 strict check (Lander.strict_check; docs/gate.md "Strict paths"): a branch that changes a path in STRICT_DEFAULTS as
                  the base holds it lands alone, with a verdict queued for its tip
                  (kitlib.gate.verdicts) by a strong-tier reviewer who is not its author; its
                  merged gate then runs --full --fresh. Any miss: REFUSED, the lock released, nothing
@@ -66,7 +69,7 @@ tools/land.py).
                  checkout meanwhile (a commit, an edit, a push) reaches neither the gated tree nor
                  the pushed commit
   8  record      green: the gate-OK record for the merge commit (pre-push reads it), its
-                 config_rev the base
+                 config_rev the base, its `full` whether the merged gate ran --full
   9  push        `git push <remote> <merge>:refs/heads/<main>` from the main checkout, never
                  forced. Someone pushed <remote>/<main> to a commit without the merge while the
                  gate ran: the push is refused, NOT LANDED (FAILED, `nothing landed`), the lock
@@ -661,7 +664,35 @@ class Lander(object):
             why = at_landing.ancestry_refusal(self.root, self.cfg, t, env=self.git_env)
             if why:
                 return why
-        return self.strict_check() or self.scope_check()
+        return self.tip_gate_check() or self.strict_check() or self.scope_check()
+
+    # ---------------------------------------------------------------- the tips' full gate
+
+    def tip_gate_check(self):
+        """A locked check (docs/gate.md "Landing"): every branch tip has a gate-OK record for
+        exactly that commit that git still agrees with and that a `gate.py --full` pass wrote
+        (gate_ok.verify_full). A default-mode run's record, a record from before records said
+        whether the gate was --full, and a record of any other commit do not count; an --only run
+        writes none. None, or the first miss: why, and the command that gates that tip whole
+        (REFUSED, nothing merged). It only adds to the merged gate, which runs as before."""
+        for b, t in self.pairs:
+            _, why = gate_ok.verify_full(self.root, t)
+            if why:
+                return '%s tip %s has no full-gate OK record: %s; gate that tip whole first: %s' % (
+                    b, t[:10], why, self.full_gate_command(b))
+        return None
+
+    def full_gate_command(self, branch):
+        """The command that gates `branch`'s worktree --full: `python "<gate.py>" -C "<worktree>"
+        --full`. The gate.py is the worktree's own when the running kit is a checkout of this
+        repository (the kit gating itself, so the branch is gated by its own gate code; docs/gate.md
+        "The caller's checkout"), else the running kit's. `<worktree>` stands in when no worktree
+        has the branch out."""
+        wts, _ = repo.worktrees(self.root)
+        wt = next((w.path for w in wts or [] if w.branch == branch), None) or '<worktree>'
+        same, _ = repo.same_repository(S.kit_live(), self.root)
+        gate_py = os.path.join(wt if same else S.kit_live(), 'tools', 'gate.py')
+        return 'python "%s" -C "%s" --full' % (gate_py, wt)
 
     # ---------------------------------------------------------------- strict paths
 
@@ -1344,7 +1375,7 @@ class Lander(object):
                                       runner.kit_identity(), runner.repo_name(self.cfg, self.root),
                                       started, runner.record_steps(results or []),
                                       base=self.expect_main, config_rev=self.expect_main,
-                                      source=self.source())
+                                      source=self.source(), full=bool(self.full))
         return path
 
     def push(self, started, results):

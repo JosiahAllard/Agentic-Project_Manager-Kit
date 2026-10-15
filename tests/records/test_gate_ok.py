@@ -219,7 +219,7 @@ class FullTest(GateOkCase):
         self.assertIsNone(why)
         self.assertEqual(got['commit'], self.head)
 
-    def test_a_record_without_full_is_refused_and_says_the_command(self):
+    def test_a_default_mode_record_is_refused(self):
         self.passed()
         rec, why = gate_ok.verify_full(self.repo.root, self.head)
         self.assertIsNone(rec)
