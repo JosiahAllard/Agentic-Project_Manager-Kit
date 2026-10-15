@@ -8,8 +8,8 @@ unreadable line is never a way around a rule, and a plain line is never denied b
   - a git or root-search pattern that matches: the text from the match to the next ; | & or
     newline is read again as a command of its own and the rules run on it. A rule that denies it
     gives the deny, its real alternative included; none: the `unreadable` deny, which shows the
-    line written plainly. The location-dependent git patterns are checked when the call's
-    directory is a main checkout or one git cannot place; the push --no-verify pattern when that
+    line written plainly, or a script file's run when plain() cannot rewrite it (plainly()).
+    The location-dependent git patterns are checked when the call's directory is a main checkout or one git cannot place; the push --no-verify pattern when that
     directory's repository has a PM data record (or git cannot place it), in every session but
     the owner's own. The update-ref pattern (git-shared-ref) is checked wherever the call runs, in a
     session rules.shared_ref_held holds. The push-to-main pattern in a repository that does not set
