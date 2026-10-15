@@ -162,6 +162,14 @@ class PyReadsOnly(unittest.TestCase):
                 self.assertFalse(rules.py_reads_only(sh.Word(text, False, 0, 0), {'I'}, ps=True))
         self.assertTrue(rules.py_reads_only(sh.Word("print('a b') #\\", False, 0, 0), {'I'}))
 
+    def test_empty_code(self):
+        """Empty or blank code is not proved, through any shell: Windows PowerShell 5.1 drops an
+        empty native argument, so python takes the next word as its code."""
+        for text in ('', ' ', '\n'):
+            for ps in (False, True):
+                with self.subTest(text=text, ps=ps):
+                    self.assertFalse(rules.py_reads_only(sh.Word(text, False, 0, 0), {'I'}, ps=ps))
+
     def test_flags(self):
         code = 'import json; print(1)'
         self.assertFalse(proved(code, ''))               # no -I: the working directory comes first on sys.path

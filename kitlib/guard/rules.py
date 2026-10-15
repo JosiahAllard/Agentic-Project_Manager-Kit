@@ -2759,11 +2759,14 @@ def py_reads_only(code, flags, ps=False):
     `ps`: the line reaches python through PowerShell, whose native-argument quoting can hand python
     other text than the Word when it holds a double quote or a backslash (PowerShell 5.1 also
     wraps an argument with a space in quotes without doubling a trailing backslash), so such code
-    is not proved. Each import name binds once. Any text it cannot parse, or any other shape, is
-    not proved (False)."""
+    is not proved; nor is empty or blank code, which PowerShell 5.1 drops so that python takes the
+    next word as its code. Each import name binds once. Any text it cannot parse, or any other
+    shape, is not proved (False)."""
     if code is None or code.dyn or 'I' not in flags or not flags <= PY_READ_FLAGS:
         return False
-    if ps and ('"' in code.text or '\\' in code.text):
+    if not code.text.strip():
+        return False
+    if ps and (ps_native_unsure(code) or '\\' in code.text):
         return False
     try:
         tree = ast.parse(code.text, mode='exec')
@@ -2824,13 +2827,22 @@ def py_reads_only(code, flags, ps=False):
     return True
 
 
-def _python(cmd, name, args, cmd_word):
+def _python(cmd, name, args, cmd_word, via=None):
+    # Start-Process hands python one command line the guard re-split with its quotes taken out
+    # (commands._split_list), so what python reads is not the words below
+    if via == 'start-process':
+        return [here(cmd_word)]
+    shells, c = set(), cmd
+    while c is not None:                        # every shell on the way to python
+        shells.add(c.shell)
+        # a word PowerShell may hand on as other than one argument (dropped when empty, split at a
+        # double quote): python's own words, or the text of a bash -c around it, are not the
+        # ones read here
+        if c.shell == sh.PS and any(ps_native_unsure(w) for w in c.words):
+            return [here(cmd_word)]
+        c = c.nested_in
     kind, code, flags = py_program(name, args)
     if kind == 'code':
-        shells, c = set(), cmd
-        while c is not None:                    # every shell on the way to python
-            shells.add(c.shell)
-            c = c.nested_in
         # through cmd.exe the Word is not what python gets: cmd ends a quoted part at a \" python
         # reads as a quote, and keeps print(...) one word where the read splits it at the (
         if sh.CMD in shells:
@@ -2912,7 +2924,7 @@ def write_targets(cmd, inv):
     if name == 'wget':
         return out + _wget(args, word)
     if cm.PYTHON_RE.match(name):
-        return out + _python(cmd, name, args, word)
+        return out + _python(cmd, name, args, word, inv.via)
     if name in EVALS:
         return out + _evals(name, args, word)
     if name == 'tar':                           # Windows' own tar.exe runs from PowerShell too

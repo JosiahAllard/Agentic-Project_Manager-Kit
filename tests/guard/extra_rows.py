@@ -321,4 +321,29 @@ ROWS = [
         "cmd /c 'python -I -c \"print(1)\"'", w.main, sub=True), 'deny', 'main-checkout', None),
     ('main-checkout: python -I -c through cmd, in a worktree', lambda w: bash(
         "cmd /c \"python -I -c print(open('x','w').write('y'))\"", w.wt, sub=True), None, None, None),
+    ('main-checkout: python -I -c through cmd and then bash', lambda w: bash(
+        "cmd /c 'bash -c \"python -I -c print(1)\"'", w.main, sub=True), 'deny', 'main-checkout', None),
+    # PowerShell 5.1 drops an empty argument, so python takes the next word as its code
+    ('main-checkout: python -I -c with empty code, PowerShell', lambda w: ps(
+        "python -I -c '' \"open('f','w').write('y')\"", w.main, sub=True), 'deny', 'main-checkout', None),
+    ('main-checkout: python -I -c with blank code, PowerShell', lambda w: ps(
+        "python -I -c ' ' \"open('f','w').write('y')\"", w.main, sub=True), 'deny', 'main-checkout', None),
+    ('main-checkout: python -I -c with empty code, bash', lambda w: bash(
+        "python -I -c '' x", w.main, sub=True), 'deny', 'main-checkout', None),
+    # Start-Process re-splits -ArgumentList with its quotes taken out: python reads other code
+    ('main-checkout: python -I -c through Start-Process', lambda w: ps(
+        "Start-Process python -ArgumentList '-I -c \"print(1)\";open(''f'',''w'').write(''y'')'",
+        w.main, sub=True), 'deny', 'main-checkout', None),
+    ('main-checkout: python -I -c through the start alias', lambda w: ps(
+        "start python -ArgumentList '-I -c \"print(1)\";open(''f'',''w'').write(''y'')'",
+        w.main, sub=True), 'deny', 'main-checkout', None),
+    ('main-checkout: python -I -c through Start-Process, read-only code', lambda w: ps(
+        "Start-Process python -ArgumentList '-I','-c','print(1)'", w.main, sub=True),
+     'deny', 'main-checkout', None),
+    # a bash -c text with a double quote reaches bash split differently through PowerShell 5.1
+    ('main-checkout: python -I -c in a bash -c text with a double quote, PowerShell', lambda w: ps(
+        "bash -c 'python -I -c \"print(1)\" \"x;touch f\"'", w.main, sub=True),
+     'deny', 'main-checkout', None),
+    ('main-checkout: python -I -c in a bash -c text, PowerShell', lambda w: ps(
+        "bash -c 'python -I -c print(1)'", w.main, sub=True), None, None, None),
 ]
