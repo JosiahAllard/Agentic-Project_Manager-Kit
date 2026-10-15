@@ -14,7 +14,8 @@ import subprocess
 
 from kitlib.config import ConfigError
 from kitlib.config import user as kuser
-from kitlib.worktree.task import CARRIER, FIND_PYTHONW, NOT_THE_STORE_ALIAS, quoted
+from kitlib.launcher.pythonw import base_pythonw
+from kitlib.worktree.task import CARRIER, NOT_THE_STORE_ALIAS, PYTHONW_IS, quoted
 
 from . import machineconfig
 from .common import Report, is_link, norm
@@ -25,6 +26,8 @@ MAX_AGE_DAYS = 3
 TASK = 'agent-temp-sweep'
 AT = '04:00'
 SWEEP = os.path.join('optional', 'agenttemp', 'agent_temp_sweep.py')
+NOT_A_FILE = ("if (-not (Test-Path -LiteralPath $py -PathType Leaf)) { throw ('no pythonw.exe at ' + $py"
+              " + '; nothing was registered') }")
 
 
 def default_agent_temp(kit):
@@ -36,21 +39,25 @@ def default_agent_temp(kit):
     return drive + '\\' + kuser.TEMP_DIR_NAME
 
 
-def task_line(kit):
+def task_line(kit, pythonw=None):
     """The one PowerShell line that registers TASK: daily at AT as the registering user
     (-RunLevel Limited, -StartWhenAvailable), running `python "<kit>\\SWEEP" --apply` in the kit
     with no console window: the task's program is pythonw.exe running the carrier
     `<kit>\\tools\\<CARRIER>` (kitlib.proc.spawn.carry), which starts the python.exe beside it.
-    It throws, registering nothing, when pythonw is missing or is the Microsoft Store alias."""
+    `pythonw` is written in as a literal path, default the base install's
+    (kitlib.launcher.pythonw.base_pythonw), never a PATH lookup, which finds the Microsoft Store
+    alias first. The line is PowerShell text, so it checks for itself: it throws, registering
+    nothing, when that pythonw is not a file or is under WindowsApps."""
     kit = os.path.normpath(kit)
+    pythonw = pythonw or base_pythonw()
     arg = '"%s" python "%s" --apply' % (os.path.join(kit, 'tools', CARRIER),
                                         os.path.join(kit, SWEEP))
-    return ("%s; %s; Register-ScheduledTask -TaskName %s"
+    return ("%s; %s; %s; Register-ScheduledTask -TaskName %s"
             " -Trigger (New-ScheduledTaskTrigger -Daily -At %s)"
             " -Action (New-ScheduledTaskAction -Execute $py -Argument %s -WorkingDirectory %s)"
             " -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable)"
             " -User $env:USERNAME -RunLevel Limited -Description %s"
-            % (FIND_PYTHONW, NOT_THE_STORE_ALIAS, quoted(TASK), AT, quoted(arg), quoted(kit),
+            % (PYTHONW_IS % quoted(pythonw), NOT_THE_STORE_ALIAS, NOT_A_FILE, quoted(TASK), AT, quoted(arg), quoted(kit),
                quoted('daily sweep of the agents\' temp folder')))
 
 

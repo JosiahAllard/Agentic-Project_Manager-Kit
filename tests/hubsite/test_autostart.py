@@ -3,6 +3,7 @@ starts the hub server at sign-in. No test registers a task: the PowerShell runne
 the CLI tests replace install."""
 import os
 import subprocess
+import sys
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -106,6 +107,20 @@ class Install(unittest.TestCase):
             autostart.install(HUB_PY, python=PY, run=run, isfile=absent)
         self.assertIn('C:\\Py\\pythonw.exe', str(cm.exception))
         self.assertEqual(run.calls, [])
+
+    def test_install_refuses_a_store_alias_pythonw_even_when_it_is_a_file(self):
+        alias = 'C:\\Store\\WindowsApps\\python.exe'
+        run = Recorder()
+        with self.assertRaises(autostart.AutostartError) as cm:
+            autostart.install(HUB_PY, python=alias, run=run, isfile=present)
+        self.assertIn('WindowsApps', str(cm.exception))
+        self.assertEqual(run.calls, [])
+
+    def test_with_no_python_named_the_task_runs_the_base_install_pythonw(self):
+        run = Recorder()
+        lines = autostart.install(HUB_PY, whatif=True, run=run, isfile=present)
+        self.assertIn("-Execute '%s'" % os.path.join(sys.base_prefix, 'pythonw.exe').replace("'", "''"),
+                      lines[1])
 
     def test_a_failed_registration_is_an_autostart_error_with_powershell_s_reason(self):
         run = Recorder(code=1, stderr='Access is denied.')

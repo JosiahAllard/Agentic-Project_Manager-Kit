@@ -24,6 +24,21 @@ def at():
     return agenttemp
 
 
+class ShortcutPythonw(unittest.TestCase):
+    def test_the_shortcut_target_is_the_base_install_pythonw_even_from_a_venv(self):
+        from kitlib.launcher import pythonw as P
+        with mock.patch.object(sys, 'executable', 'C:\\venv\\Scripts\\python.exe'), \
+                mock.patch.object(P.os.path, 'isfile', return_value=True):
+            self.assertEqual(extras.pythonw(), P.base_pythonw())
+
+    def test_a_store_alias_base_install_falls_back_to_this_interpreter(self):
+        from kitlib.launcher import pythonw as P
+        alias = 'C:\\Store\\WindowsApps\\pythonw.exe'
+        with mock.patch.object(P, 'base_pythonw', return_value=alias), \
+                mock.patch.object(P.os.path, 'isfile', return_value=True):
+            self.assertEqual(extras.pythonw(), sys.executable)
+
+
 class DefaultFolder(unittest.TestCase):
     def test_default_agent_temp_is_AgentTemp_on_the_kits_drive(self):
         for kit, drive in (('C:\\x\\kit', 'C:'), ('D:\\kit', 'D:'), ('Z:\\src\\kit', 'Z:')):
@@ -452,12 +467,26 @@ class Init(T.Base):
     def test_task_line_starts_no_console_window(self):
         """The task runs pythonw (no console of its own) on the kit's carrier, which starts the
         console python on the sweep with no window."""
-        line = at().task_line('C:\\kit')
-        self.assertTrue(line.startswith('$py = (Get-Command pythonw).Source; '), line)
-        self.assertNotIn('Get-Command python)', line)
+        line = at().task_line('C:\\kit', pythonw='C:\\Py\\pythonw.exe')
+        self.assertTrue(line.startswith("$py = 'C:\\Py\\pythonw.exe'; "), line)
+        self.assertNotIn('Get-Command', line)
         self.assertIn("-Execute $py -Argument '\"C:\\kit\\tools\\no_window.py\" python"
                       " \"C:\\kit\\optional\\agenttemp\\agent_temp_sweep.py\" --apply'", line)
         self.assertTrue(os.path.isfile(os.path.join(T.KIT, 'tools', 'no_window.py')))
+
+    def test_task_line_defaults_to_the_base_install_pythonw_not_a_path_lookup(self):
+        """The Store alias first on PATH is never asked: the literal is the base install's."""
+        from kitlib.launcher import pythonw as P
+        line = at().task_line('C:\\kit')
+        self.assertIn("$py = '%s'" % P.base_pythonw().replace("'", "''"), line)
+        self.assertNotIn('Get-Command', line)
+
+    def test_task_line_throws_in_powershell_for_a_store_alias_or_a_missing_file(self):
+        alias = 'C:\\Store\\WindowsApps\\pythonw.exe'
+        line = at().task_line('C:\\kit', pythonw=alias)
+        self.assertIn(alias, line)
+        self.assertIn("-match '\\\\WindowsApps\\\\'", line)
+        self.assertIn('Test-Path -LiteralPath $py', line)
 
     def test_acl_step_no_longer_refuses_when_the_folder_is_made_in_the_same_run(self):
         code, out = self.run_new()
