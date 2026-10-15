@@ -91,22 +91,25 @@ same check for its own repository (docs/install.md "Tools without a stub"). Code
 After `stubs`, the `memory` check reads `.claude/settings.json` of each repository in
 `launcher.repos`, and of the PM repository (the main checkout holding `sessions_file`), through
 `kitlib.stubs.memory.problem_line`. A file without `autoMemoryDirectory` gives
-`memory (<repo>): <file> has no autoMemoryDirectory; its memory folder is <folder>. Add it: python
-<kit>/tools/kit_stubs.py memory -C <folder> --apply (then the owner commits .claude/settings.json)`;
-one it cannot read gives `could not check memory (<repo>): ...`. A key naming another folder is the
-owner's choice and prints nothing. The folder is `<the main checkout's drive>/Agent-memory/<repo
-folder name>`. Then `pm_start.memory_dir` must name the PM repository's folder (case and slashes
+`memory (<repo>): <file> has no autoMemoryDirectory; its memory folder is <folder>. Ask the owner
+(via the hub) to run, in their own PowerShell window: python <kit>/tools/kit_stubs.py memory -C
+<folder> --apply (then the owner commits .claude/settings.json)`: an owner step, since the command
+writes another repository's main checkout. One it cannot read gives `could not check memory
+(<repo>): ...`, as does a check that raises. A key naming another folder is the owner's choice and
+prints nothing. The kit's folder is `<the main checkout's drive>/Agent-memory/<repo folder name>`.
+Then `pm_start.memory_dir` must name the folder the PM repository's settings name (the owner's
+choice when the key names another folder, else the kit's folder; case and slashes
 aside), or one line says what to set it to. Claude Code ignores the key without a word when
 `blockReadsOutsideWorkingDirectories` is set or the workspace is not trusted. Code:
 `kitlib/pmstart` `memory`; tests: `tests/pmstart/test_pmstart.py` `MemoryTest`.
 
 ## Repo prep (`repo_prep`)
 
-After `stubs`, the `repo_prep` check runs the first-use repo prep (`kitlib.git.prep.run`; docs/new-worktree.md "First-use prep") on each repository in `launcher.repos`. The prep adds each host's worktree folder to the repository's `info/exclude` and sets the local `core.hooksPath` to the kit's `githooks/` when none is set and `.git/hooks` holds no hook. It prints a `repo prep: <folder>: ...` line only for what it did or could not do, so a repository already prepared prints nothing. A folder that is not there gives a `could not prep <repo>: ...` line. Code: `kitlib/pmstart` `repo_prep`; tests: `tests/pmstart/test_repo_prep.py`.
+After `memory`, the `repo_prep` check runs the first-use repo prep (`kitlib.git.prep.run`; docs/new-worktree.md "First-use prep") on each repository in `launcher.repos`. The prep adds each host's worktree folder to the repository's `info/exclude` and sets the local `core.hooksPath` to the kit's `githooks/` when none is set and `.git/hooks` holds no hook. It prints a `repo prep: <folder>: ...` line only for what it did or could not do, so a repository already prepared prints nothing. A folder that is not there gives a `could not prep <repo>: ...` line. Code: `kitlib/pmstart` `repo_prep`; tests: `tests/pmstart/test_repo_prep.py`.
 
 ## Agent temp (`agent_temp`)
 
-After `stubs`, the `agent_temp` check prints one line for each part of the agents' temp folder set-up
+After `memory`, the `agent_temp` check prints one line for each part of the agents' temp folder set-up
 (docs/machine-setup.md "Extras") that is missing: "AGENT_TEMP is not set (machine_setup.py plans
 it)" when neither the process nor the user environment has `AGENT_TEMP`; "agent_temp_sweep is not
 set in the machine config (machine_setup.py plans it)"; and "agent temp sweep task agent-temp-sweep
