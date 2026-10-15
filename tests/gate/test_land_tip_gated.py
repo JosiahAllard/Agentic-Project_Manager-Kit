@@ -7,6 +7,7 @@ import re
 
 from kitlib import gate as G
 from kitlib.gate import runner
+from kitlib.gate import steps as S
 from kitlib.records import gate_ok
 from tests.gate import test_land
 
@@ -95,6 +96,34 @@ class Refused(TipCase):
         self.assertTrue(os.path.samefile(COMMAND.search(out.lines[0]).group(2), wt2))
         os.remove(gate_ok.record_path(self.repo.root, tip))
         self.assert_refused(out, 'kit/other', tip2, wt2)
+
+
+def same_path(a, b):
+    return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
+
+
+class GateCommand(TipCase):
+    """The refusal's command names the worktree's own tools/gate.py when the repository being
+    landed is the kit (its main checkout has the kit's layout, kitlib.content.oncommit.is_kit),
+    wherever the running kit came from; any other repository is gated by the running kit's."""
+
+    def refusal_gate_py(self):
+        wt, tip = self.branch('feature', {'a.py': 'x = 1\n'})
+        out = self.lander(BRANCH, self.main, tip).run()
+        self.assert_refused(out, BRANCH, tip, wt)
+        return COMMAND.search(out.lines[0]).group(1), wt
+
+    def test_another_repository_is_gated_by_the_running_kit(self):
+        gate_py, _ = self.refusal_gate_py()
+        self.assertTrue(same_path(gate_py, os.path.join(S.kit_live(), 'tools', 'gate.py')), gate_py)
+
+    def test_the_kit_is_gated_by_the_worktrees_own_gate(self):
+        self.repo.write('content/roles/worker.md', 'role\n')
+        self.repo.write('tools/render_content.py', '')
+        self.main = self.repo.commit('kit layout', 'content/roles/worker.md', 'tools/render_content.py')
+        self.repo.git('push', '-q', 'origin', 'main')
+        gate_py, wt = self.refusal_gate_py()
+        self.assertTrue(same_path(gate_py, os.path.join(wt, 'tools', 'gate.py')), gate_py)
 
 
 class Lands(TipCase):
