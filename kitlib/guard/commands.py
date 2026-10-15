@@ -450,7 +450,7 @@ def _nested_text(inv, parsed):
             return (val.text + ' ' + span_text(inv.cmd, rest)).strip(), inv.cmd.shell
         if not rest:
             return None
-        where = None if val.dyn else sh.resolve_path(val.text, inv.cmd.cwd)
+        where = None if val.dyn else sh.resolve_path(val.text, inv.cmd.cwd, home=parsed.home)
         return span_text(inv.cmd, rest), inv.cmd.shell, where
     if name in ('source', '.') and inv.cmd.shell == sh.BASH:
         if a and a[0].dyn:
@@ -1451,7 +1451,8 @@ def expand(parsed):
                 # -execdir/-okdir run in each found file's folder; {} is the found path, filled
                 # into any word that holds it (its own nested commands come later in the loop)
                 where = None if opt in ('-execdir', '-okdir') else cmd.cwd
-                for c in _nest(parsed, cmd, span_text(cmd, words), sh.BASH, where):
+                for c in _nest(parsed, cmd, span_text(cmd, words), sh.BASH, where,
+                               None if where is None else cmd.cwd_home):
                     fill_words(c.words, '{}')
             continue
         if inv.word is not None and inv.path != inv.word.text:
@@ -1464,30 +1465,32 @@ def expand(parsed):
         if not found:
             continue
         text, shell = found[:2]
-        where = found[2] if len(found) > 2 else cmd.cwd
+        where, where_home = (found[2], found[2]) if len(found) > 2 else (cmd.cwd, cmd.cwd_home)
         if text is STDIN:
             text = _stdin_text(cmd, parsed)
             if text is None:
                 continue
-        _nest(parsed, cmd, text, shell, where)
+        _nest(parsed, cmd, text, shell, where, where_home)
     return parsed
 
 
-def _nest(parsed, cmd, text, shell, cwd):
-    """Parse `text` as commands `cmd` runs, at `cwd`, into parsed; returns those commands."""
+def _nest(parsed, cmd, text, shell, cwd, cwd_home):
+    """Parse `text` as commands `cmd` runs, at `cwd` (cwd_home: shell.track), into parsed;
+    returns those commands."""
     if cmd.depth + 1 > sh.MAX_DEPTH:
         parsed.flag('shells nested deeper than %d' % sh.MAX_DEPTH)
         return []
-    _p, cmds = sh.parse(text, shell, cwd, depth=cmd.depth + 1, parsed=parsed)
+    _p, cmds = sh.parse(text, shell, cwd, depth=cmd.depth + 1, parsed=parsed, cwd_home=cwd_home)
     for c in cmds:
         if c.nested_in is None:
             c.nested_in = cmd
     return cmds
 
 
-def read(text, shell, cwd):
-    """parse() then expand(): every command `text` runs, nested shells included."""
-    parsed, _cmds = sh.parse(text, shell, cwd)
+def read(text, shell, cwd, home=None):
+    """parse() then expand(): every command `text` runs, nested shells included. `~` is `home`
+    (shell.home_folder)."""
+    parsed, _cmds = sh.parse(text, shell, cwd, home=home)
     expand(parsed)
     mark_git_env(parsed)
     return parsed

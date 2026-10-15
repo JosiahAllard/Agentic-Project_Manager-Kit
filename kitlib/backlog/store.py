@@ -623,19 +623,35 @@ class _IndexLock(object):
 
 
 def _replace_file(full, data):
-    """Give `full` the bytes `data` in one step: written to a file beside it, then moved
-    over it. An OSError leaves `full` as it was, whole, and removes the other file."""
+    """Give `full` the bytes `data` in one step: written to a file beside it (same folder, so the
+    move stays on one volume; named `<name>.<random>.put-back`, which no reader of the store takes
+    for a record), then moved over it. A move Windows refuses (another process has `full` open) is
+    retried for REPLACE_WAIT seconds. An OSError leaves `full` as it was, whole, and removes the
+    other file; one it cannot remove is named in the error raised. Any other exception (Ctrl+C
+    included) removes it too, and is raised as it was."""
     fd, tmp = tempfile.mkstemp(prefix=os.path.basename(full) + '.', suffix='.put-back',
                                dir=os.path.dirname(full))
     try:
         with os.fdopen(fd, 'wb') as f:
             f.write(data)
-        os.replace(tmp, full)
-    except OSError:
+        deadline = time.monotonic() + REPLACE_WAIT
+        while True:
+            try:
+                os.replace(tmp, full)
+                return
+            except PermissionError:
+                if time.monotonic() >= deadline:
+                    raise
+            time.sleep(0.05)
+    except BaseException as exc:
         try:
             os.remove(tmp)
-        except OSError:
+        except FileNotFoundError:
             pass
+        except OSError as gone:
+            if isinstance(exc, OSError):
+                raise OSError(exc.errno, '%s; and its temp file %s was left (%s)'
+                              % (exc.strerror or exc, tmp, gone)) from exc
         raise
 
 
@@ -925,24 +941,26 @@ class MainBackend(object):
         return left
 
     def _write_files(self, writes, before, paths, branch):
-        """Write `writes`; on an OSError put back the files already written (`before`: their
-        bytes) and raise Failure saying nothing was committed."""
+        """Write `writes`, each file whole or not at all (_replace_file); on an OSError put back
+        the files already written (`before`: their bytes) and raise Failure naming the path it
+        could not write (left as it was) and saying nothing was committed."""
         done = []
+        failed = self.dir
         try:
             os.makedirs(self.dir, exist_ok=True)
             for stem, text in sorted(writes.items()):
+                failed = self.path_of(stem)
                 full = os.path.join(self.dir, stem + '.md')
                 if text is None:
                     if os.path.exists(full):
                         os.remove(full)
                 else:
-                    with open(full, 'wb') as f:
-                        f.write(text.encode('utf-8'))
+                    _replace_file(full, text.encode('utf-8'))
                 done.append(stem)
         except OSError as exc:
             left = self._restore(done, before)
-            msg = 'cannot write %s: %s; %s' % (
-                self.dir, exc, 'the files already written were put back' if not left else
+            msg = 'cannot write %s (it is left as it was): %s; %s' % (
+                failed, exc, 'the files already written were put back' if not left else
                 'these were written and could not be put back: %s' % ', '.join(left))
             if branch:
                 msg += ('; the write is not committed (`%s` lists any uncommitted record path)'
@@ -950,8 +968,9 @@ class MainBackend(object):
             raise Failure(msg)
 
     def _restore(self, stems, before):
-        """Put back the bytes `before` held for each of `stems` (delete one it did not hold).
-        Returns the paths that could not be put back."""
+        """Put back the bytes `before` held for each of `stems` (delete one it did not hold),
+        whole or not at all (_replace_file), so one not put back holds the write's content
+        whole. Returns the paths that could not be put back."""
         left = []
         for stem in stems:
             full = os.path.join(self.dir, stem + '.md')
@@ -960,8 +979,7 @@ class MainBackend(object):
                     if os.path.exists(full):
                         os.remove(full)
                 else:
-                    with open(full, 'wb') as f:
-                        f.write(before[stem])
+                    _replace_file(full, before[stem])
             except OSError:
                 left.append(self.path_of(stem))
         return left

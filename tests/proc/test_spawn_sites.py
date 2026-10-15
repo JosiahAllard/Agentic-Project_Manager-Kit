@@ -182,6 +182,8 @@ HAZARD_EXEMPT = {
     ('tests/guard/test_provider_paths.py', 'NativePrograms.test_native_writers_in_the_main_checkout',
      'Start-Process'): (1, GUARD_TEST),
     ('tests/guard/test_rules.py', '<module>', 'Start-Process'): (2, GUARD_TEST),
+    ('tests/guard/test_rules_hub.py', 'OwnerVerbs.test_launchers', 'Start-Process'): (2, GUARD_TEST),
+    ('tests/guard/test_rules_hub.py', 'OwnerVerbs.test_review_rows_for_owner_verbs', 'Start-Process'): (1, GUARD_TEST),
     ('tests/guard/test_rules.py', 'OwnerLockTools', 'Start-Process'): (3, GUARD_TEST),
     ('tests/guard/test_rules.py', 'OwnerLockTools', 'cmd /c start'): (2, GUARD_TEST),
     ('tests/guard/test_rules.py', 'OwnerLockTools', 'start ""'): (2, GUARD_TEST),
