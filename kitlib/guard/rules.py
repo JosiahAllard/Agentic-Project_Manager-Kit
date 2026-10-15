@@ -1087,6 +1087,10 @@ HUB_SLS_VALUES = ('-pattern', '-path', '-literalpath', '-inputobject', '-include
                   '-encoding', '-context', '-culture')
 # a bare name: no separator, drive, home, variable or wildcard; not `.` or `..`, not an option
 HUB_BARE_WORD_RE = re.compile(r'^(?!\.\.?$)[\w.][\w.-]*$')
+# the long options of a python script whose bare value names, never opens: `--session` gives a
+# session name (tools/launch.py, whose sessions include one named hub). A script's other options
+# may name a folder it opens, so only an option with a stated reason is listed here.
+HUB_PY_NAME_OPTS = frozenset(('--session',))
 
 
 def _hub_grep_pattern(args, short, long_):
@@ -1164,11 +1168,16 @@ def _hub_sls_patterns(args):
 
 
 def _hub_python_values(inv):
-    """The bare values of a python script's long options: `--name value` and `--name=value`."""
+    """The bare values of a python script's HUB_PY_NAME_OPTS: `--session value` and
+    `--session=value`. None when a flag before the script may run a module or code (`-Bm`, `-Ic`:
+    commands.python_script reads such a cluster as a plain flag)."""
     found = cm.python_script(inv) if UI_PYTHON_RE.match(inv.name or '') else None
     if not found or inv.args[found[0]].dyn or inv.args[found[0]].text == '-':
         return []
     args, out = inv.args, []
+    for w in args[:found[0]]:
+        if w.dyn or (w.text.startswith('-') and re.search('[mc]', w.text.lstrip('-'))):
+            return []
     for j in range(found[0] + 1, len(args)):
         w = args[j]
         t = w.text
@@ -1177,22 +1186,24 @@ def _hub_python_values(inv):
         if w.dyn:
             continue
         if t.startswith('--'):
-            if '=' in t and HUB_BARE_WORD_RE.match(t.split('=', 1)[1]):
+            name, eq, value = t.partition('=')
+            if eq and name in HUB_PY_NAME_OPTS and HUB_BARE_WORD_RE.match(value):
                 out.append(w)
             continue
         prev = args[j - 1]
-        if (j - 1 > found[0] and not prev.dyn and prev.text.startswith('--') and len(prev.text) > 2
-                and '=' not in prev.text and HUB_BARE_WORD_RE.match(t)):
+        if (j - 1 > found[0] and not prev.dyn and prev.text in HUB_PY_NAME_OPTS
+                and HUB_BARE_WORD_RE.match(t)):
             out.append(w)
     return out
 
 
 def hub_not_paths(inv):
-    """The ids of the Words of `inv` that hub-secrets does not read as paths: a search's
-    pattern (grep, egrep, fgrep, rg, findstr, Select-String) when the guard knows every option on
-    the line, and the bare value of a python script's long option (`--session hub`). A pattern
-    with a wildcard the shell may expand stays a path. Nothing for a program the guard cannot
-    name, or one run through Start-Process or xargs."""
+    """The ids of the Words of `inv` that hub-secrets does not read as paths into the store (the
+    token folder still counts): a search's pattern (grep, egrep, fgrep, rg, findstr,
+    Select-String) when the guard knows every option on the line, and the bare value of a python
+    script's `--session` (HUB_PY_NAME_OPTS). A pattern with a wildcard the shell may expand stays
+    a path. Nothing for a program the guard cannot name, or one run through Start-Process or
+    xargs."""
     if inv is None or inv.dyn or inv.via:
         return set()
     name, args = inv.name, inv.args
@@ -1273,8 +1284,6 @@ def hub_secret_shell(ctx, cmd, inv, places):
     runs_hub = hub_script_run(inv)
     not_paths = hub_not_paths(inv)
     for w in list(cmd.words) + targets:
-        if id(w) in not_paths:
-            continue
         for text in hub_path_texts(w.text):
             text = sh.home_text(text, ctx.home, w.dyn)
             if text is None:
@@ -1287,6 +1296,8 @@ def hub_secret_shell(ctx, cmd, inv, places):
                 continue
             p_ = places()
             where = p_.glob_where(p) if hubg.has_glob(text) else p_.where(p)
+            if where == 'store' and id(w) in not_paths:
+                continue                        # exempt from the store, never the token folder
             if where == 'secret' or (where == 'store' and not runs_hub):
                 return 'reaches %s (%s)' % (p_.label(where), w.text)
     for text in inline_code(cmd, inv):

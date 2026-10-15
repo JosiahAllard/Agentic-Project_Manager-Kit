@@ -463,6 +463,9 @@ class BareWordsInTheDataFolder(Hub):
             (bash, 'python tools/x.py --dir hub'),
             (bash, 'python tools/x.py --dir=hub'),
             (ps, 'python tools/x.py --what-if hub'),
+            # a session value shaped as a path is read as one
+            (bash, 'python tools/x.py --session ./hub'),
+            (bash, 'python tools/x.py --session hub/todos'),
         ), deny=True)
 
     def test_a_module_run_through_a_flag_cluster_is_not_a_script(self):
