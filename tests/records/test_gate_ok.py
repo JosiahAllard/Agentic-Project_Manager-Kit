@@ -205,6 +205,50 @@ class VerifyTest(GateOkCase):
             self.assertIn('is not a gate-OK record', why)
 
 
+class FullTest(GateOkCase):
+    """The `full` key: true only from a `gate.py --full` pass; verify_full takes nothing else."""
+
+    def test_full_is_written_false_by_default_and_true_when_asked(self):
+        _, rec = self.passed()
+        self.assertIs(rec['full'], False)
+        self.assertFalse(gate_ok.full_of(rec))
+        _, rec = self.passed(full=True)
+        self.assertIs(rec['full'], True)
+        self.assertTrue(gate_ok.full_of(rec))
+        got, why = gate_ok.verify_full(self.repo.root, self.head)
+        self.assertIsNone(why)
+        self.assertEqual(got['commit'], self.head)
+
+    def test_a_record_without_full_is_refused_and_says_the_command(self):
+        self.passed()
+        rec, why = gate_ok.verify_full(self.repo.root, self.head)
+        self.assertIsNone(rec)
+        self.assertIn('without --full', why)
+
+    def test_a_record_from_before_the_key_does_not_count(self):
+        path, _ = self.passed(full=True)
+        self.rewrite(path, full=gate_ok)                # written before records carried the key
+        rec, why = gate_ok.verify(self.repo.root, self.head)
+        self.assertIsNone(why)                          # still a record for everything else
+        self.assertFalse(gate_ok.full_of(rec))
+        rec, why = gate_ok.verify_full(self.repo.root, self.head)
+        self.assertIsNone(rec)
+        self.assertIn('does not say whether the gate ran --full', why)
+        for odd in ('true', 1, None):                   # only the JSON true counts
+            self.rewrite(path, full=odd)
+            self.assertIsNone(gate_ok.verify_full(self.repo.root, self.head)[0], odd)
+
+    def test_verify_reasons_come_first(self):
+        rec, why = gate_ok.verify_full(self.repo.root, self.head)
+        self.assertIsNone(rec)
+        self.assertEqual(why, 'no gate-OK record for %s' % self.head)
+        path, _ = self.passed(full=True)
+        self.rewrite(path, tree='0' * 40)
+        rec, why = gate_ok.verify_full(self.repo.root, self.head)
+        self.assertIsNone(rec)
+        self.assertIn('names tree %s' % ('0' * 40), why)
+
+
 class HashTest(unittest.TestCase):
 
     def test_the_config_hash_is_sha256_of_sorted_compact_utf8_json(self):
