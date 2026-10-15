@@ -152,6 +152,21 @@ def _r_agent_script(p, ctx):
     return "agent background script whose session is gone" if _dead_parent_older(p, 60 * MIN) else None
 
 
+def _kit_temp_claude():
+    """'<kit temp folder>\\claude\\', lower case: the folder the kit's own temp files go in
+    (kitlib.config.user.work_temp, the machine config's `temp_dir` or its default), where agents'
+    TEMP lives. A string that matches no command line when kitlib or the config cannot be read,
+    e.g. a copy of this tool outside the kit."""
+    root = os.path.join(HERE, "..", "..")
+    if root not in sys.path:
+        sys.path.append(root)
+    try:
+        from kitlib.config.user import work_temp
+        return os.path.join(work_temp(HERE), "claude", "").lower()
+    except Exception:
+        return "\x00"           # an impossible path: no match
+
+
 def _r_conhost(p, ctx):
     return "console host with a dead parent" if _dead_parent_older(p, 30 * MIN) else None
 
@@ -192,7 +207,7 @@ RULES = [
     ("agent-script", "agent background script (python/node from a .claude path)",
      lambda p: _name(p) in {"python.exe", "pythonw.exe", "node.exe"} and
      ("\\.claude" in _cmd(p) or "/.claude" in _cmd(p) or "\\temp\\claude\\" in _cmd(p)
-      or "\\agenttemp\\claude\\" in _cmd(p)),             # agents' TEMP moved off the system drive
+      or _kit_temp_claude() in _cmd(p)),                  # agents' TEMP moved off the system drive
      _r_agent_script, False),
     ("conhost", "console host", lambda p: _name(p) == "conhost.exe", _r_conhost, False),
 ]

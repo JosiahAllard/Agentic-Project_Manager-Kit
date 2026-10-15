@@ -24,6 +24,29 @@ LIVE_BASH = (50, 1)      # the tool shell's MSYS ids: pid 50, started from Windo
 GONE = 99                # an MSYS parent pid that no longer exists
 
 
+_SAVED_HOME = {}
+_HOME_DIR = None
+
+
+def setUpModule():
+    # procwatch reads the machine config through kitlib (the kit temp folder); under the kit's home
+    # fence that needs a temp home, here and in the procwatch processes the tests start.
+    global _HOME_DIR
+    _HOME_DIR = tempfile.TemporaryDirectory()
+    for k in ('USERPROFILE', 'HOME'):
+        _SAVED_HOME[k] = os.environ.get(k)
+        os.environ[k] = _HOME_DIR.name
+
+
+def tearDownModule():
+    for k, v in _SAVED_HOME.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+    _HOME_DIR.cleanup()
+
+
 def proc(pid, ppid, name, cmd="", image=None, age=HOUR, cpu=0.0, ws=10 * 2**20, msys=None):
     """msys = (msys pid, msys parent pid) for a Git-Bash program, as Git's ps -l reports it."""
     return {"pid": pid, "ppid": ppid, "name": name, "cmd": cmd,
