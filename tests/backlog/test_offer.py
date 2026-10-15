@@ -233,7 +233,7 @@ if __name__ == '__main__':
 
 class BlockerSummary(unittest.TestCase):
     """`blocker_summary` ranks the live pulls and other sessions' records by how many passed-over
-    records they block (KIT-NEXT-BLOCKER-SUMMARY)."""
+    records they block."""
 
     def passed_for(self, s, holding=(), **kw):
         (_offers, passed), _refusals, _ranks = omod.next_offer(s, list(holding), **kw)
