@@ -309,6 +309,8 @@ class Sources(object):
       pm_data      kitlib.pmdata's {path, branch, remote}, or None
       notices      the machine lock's notice folder
       repos        callable(the store's repos documents) -> [{name, aliases}]
+      known_repos  callable() -> the PM's configured repo names, which the store's repo-alias
+                   check accepts without a repos/ document; None: none
       usage        callable() -> the lines kitlib.launcher.usage prints
       agents       the folder of agent definitions
       backlog      callable(refresh_s) -> a kitlib.hubsite.backlog.Views (or its like: get, start,
@@ -330,7 +332,8 @@ class Sources(object):
 
     def __init__(self, tokens=None, static_dir=STATIC_DIR, pm_data=None, notices=None, repos=None,
                  usage=None, agents=None, backlog=None, sync=None, access_keys=None,
-                 access_now=None):
+                 access_now=None, known_repos=None):
+        self.known_repos = known_repos
         self.tokens = tokens
         self.static_dir = static_dir
         self.pm_data = pm_data
@@ -370,6 +373,31 @@ def agents_dir(environ=None):
     return os.path.join(pmstart.KIT_ROOT, os.path.normpath(shell), 'agents')
 
 
+def _configured_repos(cfg):
+    """A callable giving pmstart.known_repos of the pm_start config `cfg`, the store's repo-alias
+    check's names. As in _repo_pairs, git is asked once: each folder's git top level (the PM's
+    repository and the kit's, two git runs) is kept, while sessions_file is read on each call, so
+    a new coordinator's repository counts at once, as on the repo menu (derived.repos). () when
+    the names cannot be read, since a store write must never fail on them: KeyError no
+    sessions_file, ValueError bad "repos" or bad JSON, OSError an unreadable sessions file,
+    AttributeError a sessions file whose JSON is not an object, TypeError a sessions_file that is
+    not a path. No git is not an error: pmstart._toplevel gives None and the name is left out.
+    Anything else is a bug in this code and is left to raise."""
+    tops = {}
+
+    def toplevel(folder):
+        if folder not in tops:
+            tops[folder] = pmstart._toplevel(folder)
+        return tops[folder]
+
+    def names():
+        try:
+            return pmstart.known_repos(cfg, toplevel=toplevel)
+        except (KeyError, ValueError, OSError, AttributeError, TypeError):
+            return ()
+    return names
+
+
 def machine_sources(home=None, sync=True):
     """This machine's Sources, read from the machine config under `home` (default the user's).
     It writes nothing and starts no git. sync=False: no git sync (a scratch store). ConfigError
@@ -392,6 +420,7 @@ def machine_sources(home=None, sync=True):
         src.usage = report
     if cfg and cfg.get('sessions_file'):
         src.repos = lambda stored: derived.repos(cfg, stored)
+        src.known_repos = _configured_repos(cfg)
         src.backlog = lambda refresh_s: backlog.Views(_repo_pairs(cfg), refresh_s)
     return src
 
@@ -707,6 +736,8 @@ def build(settings, sources, log=None):
         raise ServeError('no credential folder')
     notes = []
     store = _open_store(settings.store)
+    if sources.known_repos is not None:
+        store.known_repos = sources.known_repos
     listeners = []
     try:
         if store.took_over:

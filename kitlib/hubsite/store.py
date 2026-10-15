@@ -205,8 +205,10 @@ class Store(object):
     """The hub store at root, held for writing by this object until close(). See the module
     docstring. Use Store.open."""
 
-    def __init__(self, root, clock=None):
+    def __init__(self, root, clock=None, known_repos=None):
         self.root = os.path.abspath(root)
+        # callable() -> the PM's repo names; asked only on a write whose document has a repo tag
+        self.known_repos = known_repos or (lambda: ())
         self.clock = clock or _now
         self.took_over = {}
         self._lock = TreeLock(os.path.join(self.root, LOCK_NAME), what='hub store')
@@ -220,10 +222,10 @@ class Store(object):
         self._open = False
 
     @classmethod
-    def open(cls, root, clock=None):
+    def open(cls, root, clock=None, known_repos=None):
         """The Store at root, its lock taken and its documents loaded; StoreBusy when another
         Store holds it, HubError store when it cannot be opened or a document cannot be read."""
-        s = cls(root, clock)
+        s = cls(root, clock, known_repos)
         try:
             os.makedirs(s.root, exist_ok=True)
             s._lock.acquire()
@@ -439,11 +441,20 @@ class Store(object):
         if errors:
             raise HubError('invalid', '; '.join(f.message for f in errors), errors[0].field)
         rel = '%s/%s' % (coll, doc_id)
-        before = {_finding_key(f) for f in hubvalidate.validate(self._docs, only={rel})}
+        names = []
+
+        def known():
+            # asked by hubvalidate only when this document's repo tag is checked, and once a
+            # write: a write with no repo tag never runs known_repos (its git) under the mutex
+            if not names:
+                names.append(self.known_repos())
+            return names[0]
+        before = {_finding_key(f)
+                  for f in hubvalidate.validate(self._docs, only={rel}, known_repos=known)}
         after = dict(self._docs)
         after[coll] = dict(self._docs[coll])
         after[coll][doc_id] = new
-        found = [f for f in hubvalidate.validate(after, only={rel})
+        found = [f for f in hubvalidate.validate(after, only={rel}, known_repos=known)
                  if _finding_key(f) not in before]
         refused = [f for f in found if f.level == hubvalidate.ERROR or f.code in REFUSED]
         if refused:

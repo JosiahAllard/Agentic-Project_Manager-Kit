@@ -26,6 +26,7 @@ from kitlib.proc import process
 from tests.hubsite import access_keys as ak
 from tests.hubsite import httpfix
 from tests.hubsite import test_gitsync as gitcase       # its Case: a data work tree on the fake git
+from tests.hubsite.test_store import question
 from tests.hubsite.httpfix import TIMEOUT, bearer, get, post, send
 
 HEALTH = BASE + '/health'
@@ -341,6 +342,14 @@ class BuildCase(ServeCase):
         self.assertIs(hub.close(), True)
         self.assertIs(hub.start(), False)
         self.assertEqual(httpfix.http_threads(), [])
+
+    def test_the_sources_configured_repo_names_reach_the_built_store(self):
+        names = lambda: ['Gamerepo']        # noqa: E731
+        hub = self.build(known_repos=names)
+        self.assertIs(hub.store.known_repos, names)
+        self.assertEqual(hub.store.add('questions', question(repo='gamerepo')).warnings, [])
+        r = hub.store.add('questions', question(repo='ghost'))
+        self.assertEqual([f.code for f in r.warnings], ['repo-alias'])
 
     def test_a_write_and_a_read_go_through_the_built_server(self):
         hub = self.build()
@@ -1774,6 +1783,92 @@ class MachineCase(unittest.TestCase):
         self.assertEqual(asked, [(os.path.join(self.home, 'pm'),
                                   ('rev-parse', '--show-toplevel'))])
         self.assertEqual(listed, [(['a', 'b'], 'the/pm/root', {'a': 'p'})] * 2)
+
+    def test_an_unreadable_sessions_file_gives_no_repo_names_and_a_write_still_lands(self):
+        self.config({'pm_start': {'sessions_file': os.path.join(self.home, 'missing', 's.json')}})
+        src = serve.machine_sources(self.home)
+        self.assertEqual(src.known_repos(), ())
+        root = os.path.join(self.home, 'store')
+        store = Store.open(root, known_repos=src.known_repos)
+        self.addCleanup(store.close)
+        self.assertEqual(store.put('repos', 'alpha', {'name': 'alpha'}).warnings, [])
+
+    def sessions(self, text, **pm_start):
+        """A sessions file holding `text` under the temp home, and the config naming it."""
+        path = os.path.join(self.home, 'pm', 's.json')
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(text)
+        pm_start['sessions_file'] = path
+        self.config({'pm_start': pm_start})
+        return path
+
+    def store(self, src):
+        store = Store.open(os.path.join(self.home, 'store'), known_repos=src.known_repos)
+        self.addCleanup(store.close)
+        return store
+
+    def test_the_configured_repo_names_reach_the_sources_and_git_is_asked_once(self):
+        path = self.sessions(json.dumps({'g': {'repo': 'Gamerepo'}, 'x': 5}), repos=['extra'])
+        asked = []
+
+        def toplevel(folder):
+            asked.append(folder)
+            return 'pmrepo' if folder == os.path.dirname(path) else 'kitrepo'
+
+        with mock.patch.object(serve.pmstart, '_toplevel', toplevel):
+            src = serve.machine_sources(self.home)
+            self.assertEqual(asked, [], 'reading the sources ran git')
+            want = ['extra', 'Gamerepo', 'kitrepo', 'pmrepo']
+            self.assertEqual(src.known_repos(), want)
+            store = self.store(src)
+            for _ in range(3):
+                self.assertEqual(store.add('questions', question(repo='gamerepo')).warnings, [])
+            self.assertEqual(store.add('questions', question(repo='PMREPO')).warnings, [])
+            r = store.add('questions', question(repo='ghost'))
+            self.assertEqual([f.code for f in r.warnings], ['repo-alias'])
+            self.assertEqual(src.known_repos(), want)
+        self.assertEqual(len(asked), 2, asked)      # the two folders, once each, for every call
+        self.assertEqual(asked[0], os.path.dirname(path))
+
+    def test_a_sessions_file_whose_json_is_not_an_object_gives_no_repo_names(self):
+        for text in ('[]', 'null', '5', '"s"'):
+            self.sessions(text)
+            src = serve.machine_sources(self.home)
+            self.assertEqual(src.known_repos(), (), text)
+        store = self.store(src)
+        r = store.add('questions', question(repo='gamerepo'))      # the write still lands
+        self.assertEqual(store.get('questions', r.id)['repo'], 'gamerepo')
+
+    def test_bad_json_or_a_bad_repos_value_gives_no_repo_names(self):
+        for text, repos in (('not json', None), ('{}', 'gamerepo'), ('{}', [''])):
+            kw = {} if repos is None else {'repos': repos}
+            self.sessions(text, **kw)
+            src = serve.machine_sources(self.home)
+            self.assertEqual(src.known_repos(), (), (text, repos))
+        store = self.store(src)
+        r = store.add('questions', question(repo='gamerepo'))      # the write still lands
+        self.assertEqual([f.code for f in r.warnings], ['repo-alias'])
+        self.assertEqual(store.get('questions', r.id)['repo'], 'gamerepo')
+
+    def test_a_sessions_file_that_is_not_a_path_gives_no_repo_names(self):
+        self.config({'pm_start': {'sessions_file': ['not', 'a', 'path']}})
+        self.assertEqual(serve.machine_sources(self.home).known_repos(), ())
+
+    def test_with_no_git_the_names_are_what_the_sessions_file_says(self):
+        self.sessions(json.dumps({'g': {'repo': 'Gamerepo'}}), repos=['extra'])
+        ran = []
+
+        def no_git(*a, **kw):
+            ran.append(a[0])
+            raise FileNotFoundError('git')
+
+        with mock.patch('kitlib.git.cmd.subprocess_run', no_git):
+            src = serve.machine_sources(self.home)
+            self.assertEqual(src.known_repos(), ['extra', 'Gamerepo'])
+            self.assertEqual(self.store(src).add('questions', question(repo='gamerepo')).warnings,
+                             [])
+        self.assertEqual(len(ran), 2, ran)          # git was tried, for both folders
 
     def test_a_pm_data_object_that_cannot_be_used_is_a_config_error(self):
         self.config({'pm_data': 5})
