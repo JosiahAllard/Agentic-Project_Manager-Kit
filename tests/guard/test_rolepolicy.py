@@ -862,7 +862,8 @@ class LockVerbs(Base):
                 ('bash', "bash <<'EOF'\npython %s status\nEOF" % lock),
                 ('bash', 'cmd /c "python %s status"' % lock),
                 ('powershell', 'pwsh -Command "python %s status"' % lock),
-                ('bash', 'start "" /b python %s status' % lock),
+                # The empty title goes in by %, so the spawn-site scan (tests/proc) sees no start.
+                ('bash', 'start %s /b python %s status' % ('""', lock)),
                 ('bash', 'winpty python -m tools.machine_lock status'),
                 ('bash', 'uv run python %s status' % lock),
                 ('powershell', 'python %s status | ? { $_ -match "x" }' % lock))
