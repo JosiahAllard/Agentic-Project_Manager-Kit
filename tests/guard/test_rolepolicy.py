@@ -45,10 +45,10 @@ def write_roles(kit_dir, modes):
 
 def kit_tree(root):
     """Make `root` look like a kit checkout to kitlib.content.oncommit.is_kit (content/roles/ and
-    tools/render_content.py), with the kit's record and commit tools beside it."""
+    tools/render_content.py), with the kit's record, ledger and commit tools beside it."""
     os.makedirs(os.path.join(root, 'content', 'roles'), exist_ok=True)
     os.makedirs(os.path.join(root, 'tools'), exist_ok=True)
-    for name in ('render_content.py', 'backlog.py', 'commit.py'):
+    for name in ('render_content.py', 'backlog.py', 'commit.py', 'ledger.py'):
         with open(os.path.join(root, 'tools', name), 'w', encoding='utf-8') as f:
             f.write('')
 
@@ -931,6 +931,111 @@ class LockVerbs(Base):
                     self.assertIsNone(rolepolicy.check(self.shell(text, role, shell=shell), self.w.ctx()))
                     if role == 'pm':                # a read role may not commit (write-jail)
                         self.allowed(self.shell(text, role, shell=shell))
+
+
+SHA = 'b85318db49bd'
+
+
+class KitExport(Base):
+    """rolepolicy.kit_export: the kit's record, ruling and commit tools run from the plugin export
+    folder (<plugin.export_dir>/<sha12>, kitlib.pluginsource) are the kit's own, so a lock path or
+    the lock module's name in their words is a path or text, not a lock call (refusals.md row 116).
+    Only a folder kitlib.pluginsource would have written passes: its name a 12-hex sha, its marker
+    and kit.json in it, directly under the configured export root, and no root the session may
+    write holding it or lying inside it."""
+
+    def setUp(self):
+        super().setUp()
+        self.export = os.path.join(self.w.base, 'plugin')
+        self.root = self.export_tree(self.export, SHA)
+        self.w.user_config({'plugin': {'export_dir': self.export}})
+
+    def export_tree(self, parent, name, marker=True, manifest=True):
+        root = os.path.join(parent, name)
+        os.makedirs(os.path.join(root, 'tools'), exist_ok=True)
+        for tool in ('backlog.py', 'commit.py', 'ledger.py'):
+            with open(os.path.join(root, 'tools', tool), 'w', encoding='utf-8') as f:
+                f.write('')
+        if marker:
+            with open(os.path.join(root, '.pm-kit-export'), 'w', encoding='utf-8') as f:
+                f.write(name + '\n')
+        if manifest:
+            with open(os.path.join(root, 'kit.json'), 'w', encoding='utf-8') as f:
+                f.write('{"version": "1.0.0"}\n')
+        return root.replace('\\', '/')
+
+    def passes(self, rows, roles=('pm', 'coordinator', 'senior-worker')):
+        for shell in ('bash', 'powershell'):
+            for text in rows:
+                for role in roles:
+                    with self.subTest(shell=shell, role=role, text=text):
+                        self.assertIsNone(rolepolicy.check(self.shell(text, role, shell=shell), self.w.ctx()))
+
+    def handed_on(self, rows):
+        for shell in ('bash', 'powershell'):
+            for text in rows:
+                with self.subTest(shell=shell, text=text):
+                    d = self.denied(self.shell(text, 'reviewer', shell=shell), 'role-lock')
+                    self.assertIn('machine_lock.py %s is not' % rolepolicy.HANDED_ON, d.reason)
+
+    def test_a_record_naming_the_lock_cli_in_its_text_passes(self):
+        """refusals.md row 116, verbatim but for the folders: the coordinator's backlog add whose
+        --summary named the lock CLI (`machine_lock run`; `machine_lock.py run` too)."""
+        data = self.w.data.replace('\\', '/')
+        row = ('python "%s/tools/backlog.py" -C "%s" --session kit add KIT-LOCK-RUN-BAT-RESOLVE --summary '
+               '"%s on Windows: \'-- ./gradlew\' fails WinError 193 ... or the heavy guard remedy should name '
+               'the absolute .bat ..." --scope kitlib/lock/run.py --found-on none --why-not-folded "..."')
+        self.passes([row % (self.root, data, 'machine_lock run'), row % (self.root, data, 'machine_lock.py run'),
+                     'python %s/tools/backlog.py -C %s --session kit add KIT-X --summary '
+                     '"tools/hub.py answer and machine_lock.py stop"' % (self.root, data),
+                     'python %s/tools/ledger.py add --repo kit --prov owner --q "may machine_lock.py run stop 42?" '
+                     '--a "yes: tools/hub.py answer" --decides "machine_lock run" --source chat' % self.root])
+
+    def test_a_commit_of_the_lock_cli_passes(self):
+        """commit.py from the export folder, from a worktree of the kit, and git commit, given the
+        lock CLI's path and a message naming it."""
+        kit_tree(self.w.wt)
+        files = 'tools/machine_lock.py tests/lock/test_cli.py docs/lock-api.md'
+        wt = self.w.wt.replace('\\', '/')
+        self.passes(['python %s/tools/commit.py -C %s -m "lock: giveback" %s' % (self.root, wt, files),
+                     'python tools/commit.py -m "lock: giveback" %s' % files,
+                     'python tools/ledger.py add --repo kit --q "machine_lock.py stop 42"',
+                     'git commit -m "lock: fix machine_lock.py"',
+                     'git commit -m "lock: fix machine_lock.py" tools/machine_lock.py'])
+
+    def test_the_default_export_root_is_under_localappdata(self):
+        self.w.user_config({})
+        self.w.environ['LOCALAPPDATA'] = os.path.join(self.w.base, 'local')
+        root = self.export_tree(os.path.join(self.w.base, 'local', 'pm-kit', 'plugin'), SHA)
+        self.passes(['python %s/tools/backlog.py set EX-LOCK --scope tools/machine_lock.py' % root])
+
+    def test_a_folder_that_only_looks_like_an_export_hands_the_path_on(self):
+        lock = 'tools/machine_lock.py'
+        rows = []
+        for parent, name, kw in ((self.export, 'notasha00000', {}), (self.export, 'b85318db49bdX', {}),
+                                 (self.export, '0123456789ab', {'marker': False}),
+                                 (self.export, 'ba9876543210', {'manifest': False}),
+                                 (os.path.join(self.w.base, 'other'), SHA, {}),
+                                 (os.path.join(self.export, 'pins'), SHA, {}),
+                                 (os.path.join(self.root, 'tools'), SHA, {})):
+            root = self.export_tree(parent, name, **kw)
+            rows.append('python %s/tools/backlog.py %s stop 42' % (root, lock))
+        self.handed_on(rows)
+
+    def test_an_export_root_the_session_may_write_is_not_the_kits(self):
+        """An export_dir under temp (a root the session writes) holds folders it could have made."""
+        temp_export = os.path.join(self.w.temp, 'plugin')
+        root = self.export_tree(temp_export, SHA)
+        self.w.user_config({'plugin': {'export_dir': temp_export}})
+        self.handed_on(['python %s/tools/backlog.py tools/machine_lock.py stop 42' % root])
+
+    def test_no_export_root_the_guard_can_name_fails_closed(self):
+        """No plugin config and no LOCALAPPDATA (kitlib.pluginsource.settings raises), or a config
+        the guard cannot read: the export folder is no kit tool's."""
+        self.w.user_config({})
+        self.handed_on(['python %s/tools/backlog.py tools/machine_lock.py stop 42' % self.root])
+        self.w.user_config({'plugin': {'export_dir': 'relative/plugin'}})
+        self.handed_on(['python %s/tools/backlog.py tools/machine_lock.py stop 42' % self.root])
 
 
 class LockMcp(Base):

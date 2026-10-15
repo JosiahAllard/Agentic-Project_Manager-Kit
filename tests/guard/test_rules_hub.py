@@ -763,8 +763,12 @@ class OwnerVerbs(Hub):
             with self.subTest(cmd):
                 self.allowed(lambda sub, cmd=cmd: bash(cmd, self.w.wt, sub))
                 self.owner_allowed(lambda sub, cmd=cmd: bash(cmd, self.w.wt, sub))
-        # the same read with anything beside it is outside the family, and is denied
-        for cmd in ('cat tools/hub.py; echo x', 'cd tools && cat hub.py', 'cat tools/hub.py | head'):
+        # beside other commands on a plain line it is still the family (rules.hub_family)
+        for cmd in ('cat tools/hub.py; echo x', 'cd tools && cat hub.py'):
+            with self.subTest(cmd):
+                self.allowed(lambda sub, cmd=cmd: bash(cmd, self.w.wt, sub))
+        # piped on, its output reaches another program: denied
+        for cmd in ('cat tools/hub.py | head',):
             with self.subTest(cmd):
                 self.denied(lambda sub, cmd=cmd: bash(cmd, self.w.wt, sub), 'hub-owner-verb')
 
@@ -999,15 +1003,17 @@ class FailClosed(Hub):
             (ps, 'Select-String -Path tools/hub.py -Pattern answer'),
             (bash, 'python Z:/k/tools/commit.py -C Z:/r -m "guard: read tools/hub.py" --model M tools/hub.py'),
             (bash, 'python -B Z:/k/tools/commit.py -m x --owner-authored -- tools/hub.py'),
+            # a plain chain of family commands and others (rules.hub_family); git commit is family too
+            (bash, 'git diff tools/hub.py && echo ok'), (bash, 'git commit -m x tools/hub.py'),
         ), False)
-        # anything beside it, a program or form outside the list, or a wildcard leaves the family
+        # a program or form outside the list, an outlet beside it, or a wildcard leaves the family
         self.rows((
-            (bash, 'git diff tools/hub.py; python -m tools.hub answer Q-1'), (bash, 'git diff tools/hub.py && echo ok'),
+            (bash, 'git diff tools/hub.py; python -m tools.hub answer Q-1'),
             (bash, 'cat tools/hub.py | python'), (bash, 'cat $(echo tools/hub.py)'), (bash, 'cat tools/hub.py &'),
             (bash, 'cat tools/hub.py # import hub'), (bash, 'GIT_EXTERNAL_DIFF=x git diff tools/hub.py'),
             (bash, 'command cat tools/hub.py'), (bash, 'sudo cat tools/hub.py'), (bash, 'less tools/hub.py'),
             (bash, 'cat tools/hub.py > tools/h*.py'), (bash, 'grep -n answer tools/hub.py tools/hu?.py'),
-            (bash, 'git commit -m x tools/hub.py'), (bash, 'git restore tools/hub.py'),
+            (bash, 'git restore tools/hub.py'),
             (bash, 'git log --grep tools.hub'), (bash, 'grep -rn tools.hub kitlib'), (bash, 'grep "import hub" tools/hub.py'),
             (bash, 'python -i Z:/k/tools/commit.py -m x tools/hub.py'),
             (bash, 'python Z:/k/tools/commit.py -m "$m" tools/hub.py'),
@@ -1055,12 +1061,14 @@ class FailClosed(Hub):
                    '--why-not-folded x'),
             (bash, 'python Z:/k/tools/backlog.py close K-1 --reason "fixed in tools/hub.py"'),
             (ps, 'python Z:/k/tools/commit.py -m "guard: fix tools.hub" tools/x.py'),
+            # git commit's message is message text too (rules.hub_git_family)
+            (bash, 'git commit -m "fix tools.hub"'),
         ), False)
         self.rows((
             # argparse reads --summ as --summary, the guard reads only the option written in full
             (bash, 'python Z:/k/tools/backlog.py add K-1 --summ "tools.hub" --found-on none --why-not-folded x'),
             (bash, 'python Z:/k/tools/backlog.py add K-1 --summary x --found-on tools.hub --why-not-folded x'),
-            (bash, 'git commit -m "fix tools.hub"'), (bash, 'echo "tools.hub" | python Z:/k/tools/commit.py -m x a'),
+            (bash, 'echo "tools.hub" | python Z:/k/tools/commit.py -m x a'),
             (bash, 'python Z:/k/tools/commit.py -m "fix tools.hub" tools/x.py; python -m tools.hub answer Q-1'),
             (bash, 'python -c "import x" Z:/k/tools/commit.py -m "tools.hub" tools/x.py'),
         ), True)
@@ -1105,6 +1113,44 @@ class FailClosed(Hub):
         self.rows((
             (bash, 'git add -A'), (bash, 'git add tools'), (bash, 'python Z:/k/tools/commit.py -m x tools'),
         ), False)
+
+    def test_family_commands_on_a_plain_line(self):
+        # KIT-GUARD-STRING-LITERAL-FALSE-POSITIVES: a line of plain commands joined by ;, &&, || or
+        # a newline, where every command naming the hub tool is a family command, passes
+        # (rules.hub_family); git commit and ledger.py are family commands, their messages text
+        wt = W.fwd(self.w.wt)
+        self.rows((
+            (bash, 'cd %s && python tools/commit.py -m "Hub: x" tools/hub.py' % wt),
+            (ps, 'cd %s; python tools/commit.py -m "Hub: x" tools/hub.py' % wt),
+            (bash, 'python Z:/k/tools/ledger.py add --repo kit --q "does tools/hub.py answer twice?" --a no'),
+            (bash, 'git commit -m "Hub: fix tools/hub.py"'),
+            (bash, 'git add tools/hub.py && python Z:/k/tools/commit.py -m "Hub: x" tools/hub.py'),
+            (bash, 'python Z:/k/tools/backlog.py close K-1 --reason "fixed in tools/hub.py" 2>&1; git status'),
+            (bash, 'git diff tools/hub.py\ngit status'),
+        ), False)
+        # a way for one command's output, name or state to reach another, or a command that is not
+        # plain, leaves the family; the hub tool run anywhere on the line stays denied
+        self.rows((
+            (bash, 'cat tools/hub.py; python "$_" answer Q-1'), (bash, 'cat tools/hub.py; python ${_} answer Q-1'),
+            (ps, 'gc tools/hub.py -ov c; python -c "$c" answer Q-1'), (ps, 'gc tools/hub.py; python -c @c'),
+            (ps, 'Get-Content tools/hub.py; python $$ answer Q-1'), (ps, 'gc tools/hub.py; python $^'),
+            (ps, 'gc tools/hub.py -OutVariable c; python -c "$c"'),
+            (bash, 'cat tools/hub.py > x.py; python x.py answer Q-1'),
+            (bash, 'cat() { python "$1" answer Q-1; }; cat tools/hub.py'),
+            (ps, 'function cat { python $args }; cat tools/hub.py'),
+            (ps, 'Set-Alias cat python; cat tools/hub.py answer Q-1'),
+            (bash, 'alias cat=python; cat tools/hub.py answer Q-1'),
+            (bash, 'cd x && python tools/hub.py answer Q-1'),
+            (bash, 'echo x & python tools/hub.py answer Q-1'), (bash, 'cat tools/hub.py & echo x'),
+            (bash, 'git commit -m x tools/hub.py; python -c "import tools.hub"'),
+            (bash, 'git commit -e -m x tools/hub.py'), (bash, 'git commit --edit -m x tools/hub.py'),
+            (bash, 'git commit -p -m x tools/hub.py'),
+            (bash, 'git -c user.name=x commit -m x tools/hub.py'),
+            (bash, 'GIT_EDITOR=python git commit -e tools/hub.py'),
+            (bash, 'git show HEAD:tools/hub.py --output=x.py; python x.py answer Q-1'),
+            (bash, 'git commit -m x tools.hub'),
+            (bash, 'python Z:/k/tools/ledger.py add --repo tools.hub --q x'),
+        ), True)
 
 
 # ---------------------------------------------------------------- hub-mcp
