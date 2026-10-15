@@ -188,6 +188,40 @@ class PullCollision(StoreCase):
         self.assertIn('MINE (in flight on %s)' % BRANCH, str(cm.exception))
         self.assertEqual(self.get('FOO').get('state'), 'open')
 
+    def test_the_offer_leaves_out_only_the_branch_spelt_exactly(self):
+        # Direct, so a refusal from another check cannot pass it: as BRANCH, X is offered (its
+        # a/x.py overlaps only the branch's own MINE); as any other spelling, MINE holds a/** and
+        # X is passed over, so a case-insensitive or prefix match would offer X here.
+        self.seed_x_y()
+        snap = self.store.load()
+        for name in (BRANCH.upper(), 'tools/some', BRANCH + '-two', 'refs/heads/' + BRANCH):
+            self.ctx.branch = name
+            offers, passed, _holding, own = pmod.offer_for(snap, self.ctx)
+            self.assertEqual(own, name)
+            self.assertEqual([o.rec.id for o in offers], ['Y'], name)
+            self.assertEqual([p.rec.id for p in passed], ['X'], name)
+
+    def test_a_detached_head_names_no_branch_of_its_own(self):
+        self.repo.git('checkout', '-b', 'tools/other')
+        self.ctx.branch = None
+        self.assertEqual(pmod.own_branch(self.ctx), 'tools/other')   # the control: HEAD is read
+        self.repo.git('checkout', '--detach')
+        self.assertIsNone(pmod.own_branch(self.ctx))
+        self.assertEqual(pmod.own_branch(self.ctx, 'tools/named'), 'tools/named')
+
+    def test_a_pull_takes_what_next_offers_as_the_branch_when_its_own_pull_has_a_bad_scope(self):
+        # `next` as the branch leaves its own pulls out, so their scopes are never read there; the
+        # plain offer `pull` also consults reads them all. A scope that cannot be compared must
+        # not make `pull` refuse a record `next` offered.
+        self.seed(mine('a/*.py'), priced('Y', scope='docs/y.md'))
+        snap = self.store.load()
+        offers, _passed, _holding, own = pmod.offer_for(snap, self.ctx)
+        self.assertEqual((own, [o.rec.id for o in offers]), (BRANCH, ['Y']))
+        change = self.verb('pull', 'Y')
+        self.assertEqual((self.get('Y').get('state'), self.get('Y').get('preempt')),
+                         ('pulled', None))
+        self.assertIsNone(change.ruling)
+
 
 class SetScopeWidening(StoreCase):
     remote = False
