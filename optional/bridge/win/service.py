@@ -1,7 +1,7 @@
 """One controller serves verified MCP frontends through its private Windows pipe."""
 from optional.bridge.core.messages import DeliveryError
 from kitlib.proc.errors import ProcError
-from kitlib.proc.process import proc_ctime
+from .frontend import running
 from .rpc import PipeServer,encode
 
 
@@ -40,10 +40,12 @@ class BrokerService:
         # This field is the frontend's private publication, not model arguments.
         native=self.inspector.inspect(peer,channel=frame.get('channel'))
         for stale,(previous,server) in tuple(self.frontends.items()):
-            if proc_ctime(previous.pid)!=previous.creation:
+            if not running(previous.pid,previous.creation):
                 self.controller.detach_frontend(server)
                 del self.frontends[stale]
                 self.sources.pop(stale,None)
+        # A helper's request can be read after its frontend exited; it must not register it again.
+        if not running(native.pid,native.creation): raise DeliveryError('frontend-exited')
         key=(native.pid,native.creation)
         current=self.frontends.get(key)
         if current is None:
