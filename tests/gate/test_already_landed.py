@@ -1,5 +1,5 @@
 """kitlib.gate.land when the owner commits in the main checkout, and pushes, while the merged gate
-runs (KIT-GATE-UNSTICK, KIT-LAND-MERGED-GATE-ISOLATED-TREE; docs/gate.md "Landing", steps 7 to 9).
+runs (KIT-GATE-UNSTICK, then the landing tree; docs/gate.md "Landing", steps 5 to 9).
 
 The merge and its gate are in the kit's landing tree, never in the main checkout, so nothing the
 owner commits there is ever on top of the gated merge. A commit the owner pushes moves the remote's
