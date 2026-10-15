@@ -29,8 +29,8 @@ Endpoints are below `/api/v1` (`kitlib.hubsite.api.BASE`).
 
 | tool | arguments | endpoint |
 |---|---|---|
-| `hub_pending` | none | `GET /pending` |
-| `hub_wait` | `since`, `timeout_s` (default 30, at most 55: `api.WAIT_MAX_S`), `pending` | `GET /wait` through `Client.wait` |
+| `hub_pending` | `for` | `GET /pending` |
+| `hub_wait` | `since`, `timeout_s` (default 30, at most 55: `api.WAIT_MAX_S`), `pending`, `for` | `GET /wait` through `Client.wait` |
 | `hub_list` | `collection` (questions, todos, stories or to_pm), `status`, `repo` | `GET /<collection>` |
 | `hub_inbox` | none | `GET /snapshot`, its inbox as `{ok, items}` (the api has no inbox list route) |
 | `hub_backlog` | `repo`, `state`, `fresh` | `GET /backlog` |
@@ -38,10 +38,16 @@ Endpoints are below `/api/v1` (`kitlib.hubsite.api.BASE`).
 | `hub_view` | `view` (notices, repos, usage or agents) | `GET /<view>` |
 | `hub_health` | none | `GET /health` |
 
-`hub_pending` and `hub_wait` take no `for` key, so they see every pending item, including a
-coordinator's to-do routed to that coordinator and not yet acked: a pending `hub_wait` returns at
-once on such an item. The PM's own wait is `hub.py wait --pending --for pm` (docs/action-hub.md
-"Who handles a pending item").
+`hub_pending` and `hub_wait` take an optional `for`, a session key, sent as the `for` query of the
+hub's api as given (blank sends none). With it they list or wait for that key's pending items only:
+a session waits for its own answers with `hub_wait` `pending: true, for: <its launcher key>`, and
+`for: pm` is the PM's items and every answered question (docs/action-hub.md "Who handles a
+pending item"). A `for` that returns one of the key's items hands it over, as the CLI's does. The
+hub refuses `for` on a wait without `pending` (`invalid`, field `for`). Without `for` they see
+every pending item, including a coordinator's to-do routed to that coordinator and not yet acked:
+a pending `hub_wait` returns at once on such an item. `tests/hubmcp/test_server.py`
+`Routes.test_pending_and_wait_pass_for_through_as_the_query` and
+`LiveKeys.test_for_reaches_the_hub_on_pending_and_wait` check it.
 
 ## Agent write tools
 
@@ -56,6 +62,12 @@ Each calls a route the agent's token may call (`kitlib.hubsite.api.ROUTES`, role
 | `hub_story_set` | `id`, `status` (`api.AGENT_STORY_STATUSES`), `if_version`; `reviewer`, `review_note`, `backlog_id`, `closed_note` | `POST /stories/<id>` |
 | `hub_to_pm_reply` | `id`; `reply`, `ruling`, `if_version` | `POST /to_pm/<id>/reply` |
 | `hub_inbox_post` | `text`; `title`, `ref`, `asked`, `repo`, `from`, `refs` | `POST /inbox` |
+
+The `from` of `hub_ask` is the session the answer goes back to: a launcher session key or `pm`,
+the default when it is absent or blank. The hub refuses any other value, a free-text name
+included (`invalid`, field `from`, status 400: `kitlib/hubsite/api.py` `questions_add`;
+`LiveKeys.test_a_question_comes_from_a_session_key_or_pm_only`). The `from` of `hub_todo_add`
+and `hub_inbox_post` is a name in printable ASCII (`api._agent_from`).
 
 ## To-do steps
 
