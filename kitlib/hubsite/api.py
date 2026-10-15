@@ -79,6 +79,9 @@ items are listed, and such a wait is woken only by one of them, a reset or its t
 coordinator is not woken by another session's answer. A filtered read changes nothing: the
 items it leaves out, and the ones it lists, stay pending for every reader until they are
 handled (a question until it is logged). Without `for` every item is listed, as before.
+GET wait (with pending=1) also takes `except=<id>,<id>`: the ids the caller has already acted
+on are left out, and such a wait is woken only by another item, so an answer that waits for the
+PM's log is not returned again at once. It too only hides: nothing is marked.
 
 Revision. A read's `revision` is taken before the data is copied, so it is never later than the
 data: a client that waits `since` it is told of any write the copy missed. GET health gives the
@@ -840,9 +843,16 @@ def wait(api, req):
     for_key = _q(req, 'for')
     if for_key and not want:
         raise _invalid('for picks among the pending items: give pending=1 with it', 'for')
+    skip = {s.strip() for s in _q(req, 'except').split(',') if s.strip()}
+    if skip and not want:
+        raise _invalid('except leaves out pending items: give pending=1 with it', 'except')
+    filtered = bool(for_key or skip)
+
+    def mine():
+        return [p for p in api.pending(for_key) if p['id'] not in skip]
     # pending is read whether asked for or not: it is the read that refuses a closed store,
     # which Store.wait answers at once and with nothing (a client would loop on it)
-    found = api.pending(for_key)
+    found = mine()
     items = found if want else []
     if want:
         api.seen(req, 'pulled')
@@ -853,16 +863,16 @@ def wait(api, req):
         key = object()
         api.seen(req, 'waited', opened=key)
         try:
-            if for_key:
-                ch = _wait_for(api, since, min(timeout, WAIT_MAX_S), for_key)
+            if filtered:
+                ch = _wait_for(api, since, min(timeout, WAIT_MAX_S), mine)
             else:
                 ch = api.store.wait(since, min(timeout, WAIT_MAX_S))
         finally:
             api.seen(req, 'waited', closed=key)
-        found = api.pending(for_key)
+        found = mine()
         items = found if want else []
-    # a wait for one key ends on its own items, a reset or the timeout, never on other writes
-    quiet = not ch.reset and not items and (bool(for_key) or not ch.events)
+    # a filtered wait ends on its own items, a reset or the timeout, never on other writes
+    quiet = not ch.reset and not items and (filtered or not ch.events)
     return {'revision': ch.revision, 'reset': ch.reset,
             'timed_out': quiet,
             'changes': [{'collection': e.collection, 'id': e.id, 'op': e.op, 'status': e.status}
@@ -870,16 +880,17 @@ def wait(api, req):
             'pending': items}
 
 
-def _wait_for(api, since, timeout, for_key):
-    """Store.wait until a pending item is for for_key, the store resets, or timeout seconds
-    pass; a write that leaves no item for it waits on. The changes since `since`, all of them."""
+def _wait_for(api, since, timeout, mine):
+    """Store.wait until mine() (the pending items this wait is for: its `for` key, less its
+    `except` ids) is not empty, the store resets, or timeout seconds pass; a write that leaves
+    it empty waits on. The changes since `since`, all of them."""
     end = time.monotonic() + timeout
     at = since
     while True:
         ch = api.store.wait(at, max(0.0, end - time.monotonic()))
         if ch.reset:
             return ch
-        if api.pending(for_key) or time.monotonic() >= end:
+        if mine() or time.monotonic() >= end:
             break
         at = ch.revision
     return api.store.changes_since(since)

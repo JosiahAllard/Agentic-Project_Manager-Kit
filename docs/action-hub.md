@@ -132,15 +132,16 @@ connection dropped mid-request.
 
 The PM reads and writes the hub only through `tools/hub.py` or the hub MCP server (docs/hub-mcp.md),
 both with the agent's token. A coordinator writes only its own questions: it posts each with
-`hub.py questions add --from <its launcher session key>`, keeps one `hub.py wait --pending --for
+`hub.py questions add --from <its launcher session key>` (the `hub key:` line of its session-start
+context, `kitlib.coordinatorstart.hub_key`), keeps one `hub.py wait --pending --for
 <its key>` running in the background, and acts on the answer itself when it comes; it hands every
 other step (to-dos, notes, stories) to the PM. The server takes `--from` only when it is `pm` or a
 key of the launcher's sessions.json, read again on each add; any other value is refused, and a
 question without `--from` is the PM's. The answer stays pending for everyone, the PM included,
 until the PM logs the ruling in the rulings ledger and then on the question (`questions log`), as
-for any other answer, so until then the coordinator's wait prints the same answer again at once:
-the coordinator keeps the ids it has acted on, tells the PM to log each, and treats one that
-comes back before the log as expected, not as new. Every verb takes `--port N` and
+for any other answer, so a plain wait would print the same answer again at once: the
+coordinator restarts its wait with `--except` and every id it has acted on (`wait --pending --for
+<its key> --except Q-7 T-3`), which leaves those ids out and ends only on another item. Every verb takes `--port N` and
 `--json` (the server's answer as one JSON line). The server alone decides what a role may do: the
 owner's verbs (answer, todos done, stories add and withdraw, to-pm add and send, inbox read) are
 refused to the agent.
@@ -169,7 +170,7 @@ Verbs (`tools/hub.py` docstring is the source), with the line each prints:
 | `inbox add --text T [--title T] [--repo R] [--ref ID] [--asked TEXT] [--refs ID ...] [--from NAME]` | `POSTED M-2` |
 | `inbox read M-1 [--undo] [--if-version V]` (owner) | `READ M-1` or `UNREAD M-1` |
 | `pending [--for KEY]` | `<kind> <id> [repo] title` |
-| `wait [--since REV] [--timeout S] [--pending [--for KEY]]` | `HUB <rev> <kind> <id> <title>` (pending) or `HUB <rev> <collection> <id> <op> <status>`; `HUB <rev> reset: the store is behind --since; read it again` after a reset |
+| `wait [--since REV] [--timeout S] [--pending [--for KEY] [--except ID ...]]` | `HUB <rev> <kind> <id> <title>` (pending) or `HUB <rev> <collection> <id> <op> <status>`; `HUB <rev> reset: the store is behind --since; read it again` after a reset |
 | `validate [--store PATH]` | `VALIDATE <LEVEL> <document> <field>: <message> [<code>]` |
 | `serve [--port N] [--store PATH]`, `status [--port N]`, `setup`, `open [--port N] [--print]`, `migrate` | see "Serving it" and "Data from the old hub" |
 
@@ -187,9 +188,11 @@ Notes on the table:
   nothing, so the item stays pending for every reader until it is logged or acknowledged.
 - `hub.py wait --pending` waits until an item is pending (one already pending ends it at once) and
   prints `HUB <rev> <kind> <id> <title>` for each; with `--for KEY` it waits until an item for KEY
-  is pending and other sessions' items do not end it. `wait [--since REV]` waits for any change
-  and prints `HUB <rev> <collection> <id> <op> <status>`; `--for` without `--pending` is a usage
-  error. `--timeout S` exits 4 with no line when nothing came. The PM keeps one `wait --pending`
+  is pending and other sessions' items do not end it. `--except ID ...` leaves out the items with
+  those ids (ones already acted on, which stay pending until the PM logs or acknowledges them), so
+  only another item ends the wait; it marks nothing (`kitlib.hubsite.api.wait`). `wait [--since REV]`
+  waits for any change and prints `HUB <rev> <collection> <id> <op> <status>`; `--for` or
+  `--except` without `--pending` is a usage error. `--timeout S` exits 4 with no line when nothing came. The PM keeps one `wait --pending`
   running in the background, without `--for` so that it also sees the coordinators' answers it
   logs, handles what it prints, then starts it again; a PM waiting there is what the page shows
   as listening.

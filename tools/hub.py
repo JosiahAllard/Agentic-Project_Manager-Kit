@@ -136,10 +136,11 @@ the server alone decides what a role may do.
                                                      owner input the PM has not handled; --for:
                                                      only the items that came back to session
                                                      KEY (--json shows each item's `from`)
-  hub.py wait [--since REV] [--timeout S] [--pending [--for KEY]]
+  hub.py wait [--since REV] [--timeout S] [--pending [--for KEY] [--except ID...]]
       waits until the store changes after revision REV (default: the revision at the call), or,
       with --pending, until an item is pending (one that is pending already ends it at once);
-      with --for KEY as well, until an item for session KEY is pending.
+      with --for KEY as well, until an item for session KEY is pending; with --except, items
+      with those ids (ones already acted on, still pending until the PM logs them) are left out.
       Prints `HUB <rev> <kind> <id> <title>` for each pending item and `HUB <rev> <collection>
       <id> <op> <status>` for each change, exit 0. With --timeout S: exit 4 and no line when S
       seconds pass with neither. Without it the wait has no end of its own.
@@ -396,6 +397,9 @@ def _client_verbs(sub):
     w.add_argument('--for', dest='for_key', metavar='KEY',
                    help="with --pending: only this session key's items end the wait, and no "
                         "other change does")
+    w.add_argument('--except', dest='except_ids', nargs='+', metavar='ID',
+                   help='with --pending: leave out these ids (ones already acted on); only '
+                        'another pending item ends the wait')
     v = sub.add_parser('validate', help='check the store folder; reads it, no server needed')
     v.add_argument('--store', type=_folder, help='the store folder (default: the configured one)')
 
@@ -930,7 +934,7 @@ def _pending(a, stop):
 
 
 def _wait(a, stop):
-    got = _hub(a).wait(a.since, a.timeout, a.pending, a.for_key)
+    got = _hub(a).wait(a.since, a.timeout, a.pending, a.for_key, a.except_ids)
     if got.get('timed_out'):
         if getattr(a, 'json', False):
             _show(a, got, [])
@@ -967,6 +971,8 @@ def main(argv=None, stop=None):
         p.error('--whatif needs --autostart')
     if a.verb == 'wait' and a.for_key and not a.pending:
         p.error('--for picks among the pending items: give --pending with it')
+    if a.verb == 'wait' and a.except_ids and not a.pending:
+        p.error('--except leaves out pending items: give --pending with it')
     try:
         return VERBS[a.verb](a, stop)
     except ConfigError as e:

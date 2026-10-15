@@ -132,17 +132,19 @@ class Client(object):
         raise Refused(404, {'ok': False, 'error': {
             'code': 'not_found', 'message': 'no %s in %s' % (doc_id, collection), 'field': 'id'}})
 
-    def wait(self, since=None, timeout=None, pending=False, for_key=None):
+    def wait(self, since=None, timeout=None, pending=False, for_key=None, except_ids=None):
         """The last answer of GET /wait: {revision, reset, timed_out, changes, pending}.
         `timed_out` is true only when `timeout` seconds passed with nothing to say. for_key
-        (with pending) waits for that session key's pending items only."""
+        (with pending) waits for that session key's pending items only; except_ids (with
+        pending) leaves out the items with those ids, ones the caller has already acted on."""
         end = None if timeout is None else self._clock() + max(0.0, float(timeout))
         while True:
             left = _api.WAIT_MAX_S if end is None else end - self._clock()
             turn = max(0.0, min(float(left), float(_api.WAIT_MAX_S)))
             got = self.get('/wait', ANY, {'since': since, 'timeout': '%g' % turn,
                                           'pending': 1 if pending else None,
-                                          'for': for_key or None},
+                                          'for': for_key or None,
+                                          'except': ','.join(except_ids or ()) or None},
                            timeout=turn + WAIT_MARGIN_S)
             if not got.get('timed_out'):
                 return got

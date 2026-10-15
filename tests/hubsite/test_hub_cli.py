@@ -1496,6 +1496,22 @@ class DirectQuestionCase(VerbCase):
         self.assertEqual((code, out), (2, ''))
         self.assertIn('USAGE: --for picks among the pending items', err)
 
+    def test_except_leaves_out_an_acted_on_answer_until_another_comes(self):
+        old, new = self.asks('kit', 'old'), self.asks('kit', 'new')
+        self.ok('answer', old, '--choice', '0')
+        code, out, err = self.run_cli('wait', '--pending', '--for', 'kit', '--except', old,
+                                      '--timeout', '0', '--port', self.port)
+        self.assertEqual((code, out, err), (4, '', ''))
+        self.ok('answer', new, '--choice', '0')
+        got = self.ok('wait', '--pending', '--for', 'kit', '--except', old, 'Q-0', '--timeout', '5')
+        self.assertEqual([line.split()[3] for line in got], [new])
+
+    def test_except_without_pending_is_a_usage_error(self):
+        code, out, err = self.run_cli('wait', '--except', 'Q-1', '--timeout', '0',
+                                      '--port', self.port)
+        self.assertEqual((code, out), (2, ''))
+        self.assertIn('USAGE: --except leaves out pending items', err)
+
 
 class ArgumentCase(CliCase):
     VERBS = (('questions',), ('questions', 'add', '--title', 't'),

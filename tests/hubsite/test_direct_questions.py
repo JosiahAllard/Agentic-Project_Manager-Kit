@@ -238,6 +238,57 @@ class WaitForTest(DirectCase):
         self.assertEqual(len(got['changes']), 1)
 
 
+class WaitExceptTest(DirectCase):
+    """`except`: the ids a waiter has already acted on. An answered question stays pending until
+    the PM logs it, so a wait for its own key would otherwise return it again at once, forever."""
+    wait = WaitForTest.wait
+
+    def test_except_needs_pending(self):
+        self.refused('except', 'GET', '/wait', AGENT, query={'except': 'Q-1', 'timeout': '0'})
+
+    def test_an_acted_on_answer_does_not_end_the_wait_again(self):
+        qid = self.ask(**{'from': 'kit'})
+        self.answer(qid)
+        # without except the same answer comes back at once: the loop this fixes
+        self.assertEqual(self.ids(self.wait(5, **{'for': 'kit'})['pending']), [qid])
+        start = time.monotonic()
+        got = self.wait(0.3, **{'for': 'kit', 'except': qid})
+        self.assertGreaterEqual(time.monotonic() - start, 0.25)
+        self.assertEqual((got['pending'], got['timed_out']), ([], True))
+        # still pending for every reader: except hides, it never marks
+        self.assertEqual(self.ids(self.pending()), [qid])
+        self.assertEqual(self.ids(self.pending(**{'for': 'kit'})), [qid])
+
+    def test_a_wait_except_one_id_wakes_on_a_new_answer_and_lists_only_it(self):
+        old, new = self.ask(**{'from': 'kit'}), self.ask(**{'from': 'kit'})
+        self.answer(old)
+        since = self.store.revision
+        out = {}
+
+        def waiter():
+            out['got'] = self.wait(20, **{'for': 'kit', 'except': old, 'since': str(since)})
+        t = threading.Thread(target=waiter)
+        t.start()
+        self.addCleanup(t.join, 30)
+        time.sleep(0.2)
+        self.ok('POST', '/todos', AGENT, {'title': 'x', 'commands': ['dir']})
+        time.sleep(0.3)
+        self.assertTrue(t.is_alive(), 'a write with no new item for kit woke the wait')
+        self.answer(new)
+        t.join(10)
+        self.assertFalse(t.is_alive())
+        got = out['got']
+        self.assertEqual((self.ids(got['pending']), got['timed_out']), ([new], False))
+
+    def test_except_takes_several_ids_and_works_without_for(self):
+        a, b = self.ask(**{'from': 'kit'}), self.ask(**{'from': 'zeta'})
+        self.answer(a)
+        self.answer(b)
+        got = self.wait(0.2, **{'except': '%s,%s' % (a, b)})
+        self.assertEqual((got['pending'], got['timed_out']), ([], True))
+        self.assertEqual(self.ids(self.wait(5, **{'except': a})['pending']), [b])
+
+
 class PmSeenForTest(DirectCase):
     """pm_seen ("A PM is listening.") counts only the PM's own waits and reads: none with
     `for`, or `for=pm`. Another session's wait for its own key is not the PM listening."""
