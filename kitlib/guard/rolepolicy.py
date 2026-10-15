@@ -45,7 +45,7 @@ The owner's own session (nothing marks it) is never held, and its calls read no 
                   kit folder or of a checkout of the kit repository, a bare reader or printer, a
                   git read (LOCK_PATH_GIT) with plain options and no environment assignment on the line:
                   _lock_path_only, _git_plain), or runs the lock CLI itself (its script, python
-                  -m: _runs_lock; the python a launcher starts as its program: _launched) with a
+                  -m: _run_words; the python a launcher starts as its program: _launched) with a
                   verb inside the mode's LOCK_VERBS and no --force in any abbreviation, and no
                   later command reads the last word back (bash's $_, PowerShell's $$: _last_words).
                   Any other program given it may copy, store or run it (cp, Copy-Item, ln, read,
@@ -808,8 +808,10 @@ def _lock_words(inv, commands=(), kit=None, kit_checkout=None):
     """The words after the first one naming the lock CLI that `inv` is given (_lock_seq), or None
     when none names it or `inv` never runs its words (_lock_path_only: the kit's `backlog.py set
     --scope tools/machine_lock.py`, cat, rg, Get-Content, echo, git diff, whose output stays).
-    lock_verb reads them as the lock's verb only when `inv` runs the lock (_runs_lock, _launched);
-    any other program given them is refused (HANDED_ON). Not read (a known limit): the value of
+    lock_verb reads them as the lock's verb only when a launcher runs the lock (_launched, where
+    that one word is the script); a call that runs it itself is read from its script or module
+    (_run_words), not from an earlier word naming it; any other program given them is refused
+    (HANDED_ON). Not read (a known limit): the value of
     an environment assignment (only a git line holding one is refused: _git_plain), code that
     builds the name (python -c "...'machine_' + 'lock'..."), a glob the shell expands to it
     (tools/machine_lock.p?: only the base name is matched), a Windows 8.3 short name
@@ -825,17 +827,39 @@ def _lock_words(inv, commands=(), kit=None, kit_checkout=None):
     return seq[k + 1:]
 
 
-def _runs_lock(inv):
-    """True when `inv` runs the lock CLI itself: machine_lock.py (in any spelling Windows opens
-    as it: rules.is_lock_script) is its program, or python's script (_python_script), or python
-    runs it as a module (_lock_module). A launcher left unwrapped (winpty, uv run) is not; it is
-    _launched's."""
+def _word_starts(inv):
+    """[q]: the index in _lock_seq's words of the first token (_tokens) of `inv`'s word q, its
+    program being word 0; the last entry is the count of those tokens."""
+    starts = [0]
+    for w in [inv.path] + inv.argv:
+        starts.append(starts[-1] + len(_tokens(w)))
+    return starts
+
+
+def _run_words(inv):
+    """The words (_lock_seq) given to the lock CLI that `inv` runs itself, or None when it runs
+    none: machine_lock.py (in any spelling Windows opens as it: rules.is_lock_script) is its
+    program, or python's script (_python_script), or python runs it as a module (_lock_module).
+    They are the words after that script or module, never after an earlier word naming the lock:
+    python's own options and their values come first, so `python -X machine_lock -X status
+    tools/machine_lock.py stop 42` runs stop. None too (fail-closed: lock_verb refuses it as
+    HANDED_ON) when no token of that word names the lock. A launcher left unwrapped (winpty, uv
+    run) is not; it is _launched's."""
     if rules.is_lock_script(inv.path):
-        return True
-    if not rules.HUB_CODE_PYTHON_RE.match(inv.name):
-        return False
-    k = _python_script(inv.argv)
-    return (k is not None and rules.is_lock_script(inv.argv[k])) or _lock_module(inv.argv) is not None
+        q = 0
+    elif rules.HUB_CODE_PYTHON_RE.match(inv.name):
+        k = _python_script(inv.argv)
+        if k is None or not rules.is_lock_script(inv.argv[k]):
+            k = _lock_module(inv.argv)
+        if k is None:
+            return None
+        q = k + 1
+    else:
+        return None
+    seq, named = _lock_seq(inv)
+    starts = _word_starts(inv)
+    j = next((j for j in range(starts[q], starts[q + 1]) if named[j]), None)
+    return None if j is None else seq[j + 1:]
 
 
 LINE, STDIN_BODY, PROGRAM = 'line', 'stdin', 'program'
@@ -946,9 +970,7 @@ def _launched(inv, commands):
         return False
     k = ks[0]
     words = [inv.path] + inv.argv
-    starts = [0]
-    for w in words:
-        starts.append(starts[-1] + len(_tokens(w)))   # starts[q]: words[q]'s first token in seq
+    starts = _word_starts(inv)                  # starts[q]: words[q]'s first token in seq
     i, read = 0, any(c.nested_in is inv.cmd for c in commands)   # $( ) in its words too: see LINE
     while True:
         how = _launch(words, i, i == 0 and bool(inv.args) and cm.quoted(inv.cmd, inv.args[0]))
@@ -992,7 +1014,7 @@ def _hidden_launch(inv, commands):
 # The verb named for a command that runs no program the guard can name (an assignment alone, a
 # PowerShell expression) whose words name machine_lock.py: lock_verb refuses it in every mode.
 NO_PROGRAM = '(in a command that names no program)'
-# The verb named for a lock path given to a program that neither runs it (_runs_lock, _launched)
+# The verb named for a lock path given to a program that neither runs it (_run_words, _launched)
 # nor only reads or prints it (_lock_path_only), so may copy, store or pass it on: lock_verb
 # refuses it in every mode.
 HANDED_ON = '(its path handed on to another program)'
@@ -1008,7 +1030,7 @@ def lock_verb(parsed, m, kit=None, kit_checkout=None):
     mode: fail-closed, since its value may reach a program later on the line. Fail-closed too, a
     command whose words, heredoc body, here-string or redirect name it (_lock_seq) passes only
     when its program only reads or prints it with its output staying (_lock_path_only), or runs
-    it (_runs_lock, _launched: then judged by its verb); any other program - cp, Copy-Item, ln,
+    it (_run_words, _launched: then judged by its verb); any other program - cp, Copy-Item, ln,
     read, Set-Variable, `$c = echo ...`, xargs, python - - is refused as HANDED_ON. `kit` is the
     kit folder, and `kit_checkout(root)` tells whether a folder is a checkout of the kit
     repository; the tools/backlog.py and tools/commit.py under either are exempt (_kit_tool)."""
@@ -1025,8 +1047,10 @@ def lock_verb(parsed, m, kit=None, kit_checkout=None):
             if _hidden_launch(inv, parsed.commands):
                 return HANDED_ON, allowed
             continue
-        if not _runs_lock(inv) and not _launched(inv, parsed.commands) or _last_words(parsed.commands):
+        run = _run_words(inv)
+        if run is None and not _launched(inv, parsed.commands) or _last_words(parsed.commands):
             return HANDED_ON, allowed           # $_ after `... tools/machine_lock.py`: its path again
+        words = words if run is None else run   # a python option's value naming the lock is no verb
         head = words[:words.index('--')] if '--' in words else words
         said, k = [], 0
         while k < len(head):

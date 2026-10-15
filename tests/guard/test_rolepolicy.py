@@ -848,6 +848,57 @@ class LockVerbs(Base):
         self.assertIsNone(rolepolicy.check(self.shell('python "tools/machine_lock.py " status', 'reviewer',
                                                       shell='bash'), self.w.ctx()))
 
+    def test_the_verb_follows_the_script_python_runs_not_an_option_value(self):
+        """rolepolicy._run_words: python's own options and their values come before its script, so
+        an option value naming the lock (`-X machine_lock`, `-W machine_lock`, a spelling Windows
+        opens as it) and a `-X status` after it are no verb: the lock's words start after the
+        script python runs. Each role whose mode lacks the verb is refused."""
+        from kitlib.guard import commands as cm, shell as sh
+        lock = 'tools/machine_lock.py'
+        opts = ('-X machine_lock -X status', '-X tools.machine_lock -X status', '-W machine_lock -W status',
+                '-X %s. -X status' % lock, '-X "%s " -X status' % lock, '-X %s -X status' % lock)
+        # (the words after the script, the verb, the roles whose mode lacks it)
+        tails = (('stop 42', 'stop', ('reviewer', 'lander')),
+                 ('hold create x', 'hold create', ('reviewer', 'senior-worker', 'pm', 'test-runner', 'lander')),
+                 ('run -- python %s hold create x' % lock, 'run', ('reviewer',)))
+        rows = [(shell, '%s %s %s %s' % (prog, opt, lock, tail), verb, refused)
+                for shell in ('bash', 'powershell') for prog in ('python', 'pythonw')
+                for opt in opts for tail, verb, refused in tails]
+        # The cmdlet's name goes in by %, so the spawn-site scan (tests/proc) sees no start.
+        rows.append(('powershell', '%s python -ArgumentList "-X machine_lock -X status %s stop 42"'
+                     % ('Start-' + 'Process', lock), 'stop', ('reviewer', 'lander')))
+        rows.append(('bash', 'python -X machine_lock -m tools.machine_lock stop 42', 'stop', ('reviewer', 'lander')))
+        for shell, text, verb, refused in rows:
+            parsed = cm.read(text, sh.PS if shell == 'powershell' else sh.BASH, self.w.wt)
+            for role in refused:
+                m = MODES[role]
+                named = verb if verb.split()[0] in rolepolicy.LOCK_VERBS[m] else verb.split()[0]
+                with self.subTest(shell=shell, role=role, text=text):
+                    self.assertEqual(rolepolicy.lock_verb(parsed, m, self.w.kit_dir)[0], named)
+                    self.denied(self.shell(text, role, shell=shell), 'role-lock')
+
+    def test_an_option_value_naming_the_lock_before_another_script_is_handed_on(self):
+        """An option value naming the lock while python runs another script, or code, runs no lock
+        CLI the guard can place: fail-closed, refused as HANDED_ON in every mode."""
+        lock = 'tools/machine_lock.py'
+        self.handed_on([(shell, text) for shell in ('bash', 'powershell') for text in (
+            'python -X machine_lock other.py stop 42',
+            'pythonw -W machine_lock other.py status',
+            'python -X %s other.py status' % lock,
+            'python -X tools.machine_lock tools/check.py %s status' % lock,
+            'python -X machine_lock -c "print(1)" status')])
+
+    def test_an_option_value_naming_the_lock_before_the_lock_cli_reads_its_own_verb(self):
+        """The same option values before the lock CLI run read-only pass, as they run status."""
+        lock = 'tools/machine_lock.py'
+        for shell, text in (('bash', 'python -X machine_lock %s status' % lock),
+                            ('powershell', 'python -X machine_lock -X status %s status' % lock),
+                            ('bash', 'pythonw -W machine_lock -m tools.machine_lock status'),
+                            ('powershell', '%s python -ArgumentList "-X machine_lock %s status"'
+                             % ('Start-' + 'Process', lock))):
+            with self.subTest(shell=shell, text=text):
+                self.assertIsNone(rolepolicy.check(self.shell(text, 'reviewer', shell=shell), self.w.ctx()))
+
     def test_plain_git_and_the_launchers_still_pass(self):
         """What the round's refusals leave alone: git reading the lock path with plain options, a
         colon after the name (not a stream Windows opens), a launcher's python running the lock
