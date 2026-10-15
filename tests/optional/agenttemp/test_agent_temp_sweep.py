@@ -316,6 +316,22 @@ class SessionDirs(Case):
         self.assertTrue(os.path.isdir(pinned))
         self.assertTrue(os.path.isfile(os.path.join(self.dir, 'kit-conductor', 'plan.md')))
 
+    def test_coordinator_and_consultant_folders_are_kept_with_no_keep_list(self):
+        # kitlib.launcher.start keeps a consultant's notes in <repo>-consultant and a coordinator's
+        # state note in <repo>-coordinator; both outlive any age, whatever the config says.
+        kept = ('kit-coordinator', 'Alpha-Consultant', 'my-repo-consultant')
+        for name in kept + ('kit-coordinator-old', 'consultant', 'coordinator'):
+            put(os.path.join(self.dir, name, 'notes.md'))
+        self.session('proj', 'x-consultant')
+        self.assertEqual({n: a for n, a in self.sweep().items() if n in kept}, {n: 'kept' for n in kept})
+        got = self.sweep(apply=True)
+        for name in kept:
+            self.assertEqual(got[name], 'kept', name)
+            self.assertTrue(os.path.isfile(os.path.join(self.dir, name, 'notes.md')), name)
+        for name in ('kit-coordinator-old', 'consultant', 'coordinator', 'claude/proj/x-consultant'):
+            self.assertEqual(got[name], 'removed', name)    # a top-level <name>-coordinator/-consultant only
+        self.assertEqual(S.BUILT_IN_KEEP, ('*-coordinator', '*-consultant'))
+
     def test_keep_is_case_insensitive_and_matches_by_relpath_not_basename(self):
         put(os.path.join(self.dir, 'Work-Notes', 'a.txt'))
         put(os.path.join(self.dir, 'x', 'work-notes', 'a.txt'))
