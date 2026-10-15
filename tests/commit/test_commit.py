@@ -7,6 +7,7 @@ the tests reaches git, and the kit's doc-budget tool is a stub in a temp folder 
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -335,6 +336,13 @@ class LinkedCase(TempHomeCase):
         p = mock.patch.dict(os.environ, {'GIT_AUTHOR_EMAIL': email, 'GIT_AUTHOR_NAME': 'Someone'})
         p.start()
         self.addCleanup(p.stop)
+
+    def other_writer_commits(self, name='b.py'):
+        """Another writer commits `name` in this worktree; its commit's id."""
+        self.put(name, 'theirs\n')
+        self.git('add', '--', name)
+        self.git('commit', '-q', '-m', 'theirs', '--', name)
+        return self.git('rev-parse', 'HEAD')
 
 
 class AnOrdinaryCommit(LinkedCase):
@@ -752,13 +760,6 @@ class AnotherWriterStagesDuringTheCall(LinkedCase):
         self.put('a.py', 'a = 1\n')
         self.assert_refused_unchanged(head, *self.commit('add a', 'a.py'), 'HEAD')
 
-    def other_writer_commits(self):
-        """Another writer commits b.py in this worktree; its commit's id."""
-        self.put('b.py', 'theirs\n')
-        self.git('add', '--', 'b.py')
-        self.git('commit', '-q', '-m', 'theirs', '--', 'b.py')
-        return self.git('rev-parse', 'HEAD')
-
     def test_head_moved_before_the_commit_refuses(self):
         real, theirs = C.staged_machine_path_error, []
 
@@ -790,8 +791,12 @@ class AnotherWriterStagesDuringTheCall(LinkedCase):
 
     def test_a_commit_stacked_on_ours_is_never_undone(self):
         """Another writer commits on top of this call's commit before it reads HEAD back: their
-        commit is not this call's, so nothing is undone and the refusal says what happened."""
-        real, theirs = cmd.call, []
+        commit is not this call's, so nothing is undone. The tiers differ, on purpose. Real git:
+        the reflog entry `git commit` wrote under this call's tag shows its commit was made on the
+        HEAD checked, so the commit stands (exit 0, the committed line names it, a NOTE names
+        theirs). The fake writes no reflog, so this call cannot tell its commit from theirs and
+        refuses without undoing anything (exit 1, NOT undone)."""
+        start, real, theirs = self.head(), cmd.call, []
 
         def wrapper(args, cwd, *a, **kw):
             r = real(args, cwd, *a, **kw)
@@ -801,13 +806,20 @@ class AnotherWriterStagesDuringTheCall(LinkedCase):
         self.put('a.py', 'a = 1\n')
         with mock.patch.object(C.cmd, 'call', wrapper):
             code, out = self.commit('add a', 'a.py')
-        self.assertEqual(code, 1, out)
         self.assertNotIn('Undone', out)
-        self.assertIn('NOT undone', out)
         self.assertEqual(self.head(), theirs[0])
         self.assertEqual(self.git('show', 'HEAD:b.py'), 'theirs')
         self.assertEqual(self.git('show', 'HEAD:a.py'), 'a = 1')
         self.assertEqual(self.git('log', '-1', '--format=%s', 'HEAD^'), 'add a')
+        self.assertEqual(self.git('rev-parse', 'HEAD^^'), start)
+        if cmd.fake_active():
+            self.assertEqual(code, 1, out)
+            self.assertIn('NOT undone', out)
+        else:
+            self.assertEqual(code, 0, out)
+            ours = self.git('rev-parse', '--short', 'HEAD^')
+            self.assertIn('committed %s  add a' % ours, out)
+            self.assertIn(theirs[0][:12], out)
 
     def test_an_undo_that_fails_names_the_manual_fix(self):
         real, theirs = cmd.call, []
@@ -934,6 +946,88 @@ class AnotherWriterStagesDuringTheCall(LinkedCase):
           'commit as well as the fake\'s')
 class AnotherWriterStagesDuringTheCallRealGit(AnotherWriterStagesDuringTheCall):
     pass
+
+
+@real_git('hooks, and the reflog entry `git commit` writes under this call\'s tag: the fake runs '
+          'no hooks and writes no reflog')
+class HooksAndTheReflog(LinkedCase):
+    """A hook may change the commit (a commit-msg hook appends a trailer, a pre-commit hook stages
+    a file into the private index): it is still this call's commit. On a moved HEAD, the reflog
+    entry tagged by this call (GIT_REFLOG_ACTION) names this call's commit and its base."""
+
+    def hook(self, name, body):
+        hooks = tempfile.mkdtemp(prefix='kit-test-hooks-')
+        self.addCleanup(shutil.rmtree, hooks, True)
+        with open(os.path.join(hooks, name), 'w', encoding='utf-8', newline='\n') as fh:
+            fh.write('#!/bin/sh\n%s\n' % body)
+        self.git('config', 'core.hooksPath', hooks.replace('\\', '/'))
+
+    def around_commit(self, before=None, after=None):
+        """Run `before` just before this call's `git commit` and `after` just after it; the list
+        their answers are appended to, in that order."""
+        real, seen, done = cmd.call, [], []
+
+        def wrapper(args, cwd, *a, **kw):
+            first = args[:1] == ['commit'] and not done
+            if first:
+                done.append(1)
+                if before:
+                    seen.append(before())
+            r = real(args, cwd, *a, **kw)
+            if first and after:
+                seen.append(after())
+            return r
+        p = mock.patch.object(C.cmd, 'call', wrapper)
+        p.start()
+        self.addCleanup(p.stop)
+        return seen
+
+    def test_a_commit_msg_hook_that_appends_a_line_commits(self):
+        self.hook('commit-msg', 'printf "Change-Id: I0123\\n" >> "$1"')
+        start = self.head()
+        self.put('a.py', 'a = 1\n')
+        code, out = self.commit('add a', 'a.py')
+        self.assertEqual(code, 0, out)
+        self.assertIn('Change-Id: I0123', self.message())
+        self.assertEqual(self.git('rev-parse', 'HEAD^'), start)
+        self.assertEqual(self.git('show', 'HEAD:a.py'), 'a = 1')
+
+    def test_a_pre_commit_hook_that_stages_a_file_commits(self):
+        self.hook('pre-commit', 'printf "hook\\n" > extra.txt && git add extra.txt')
+        start = self.head()
+        self.put('a.py', 'a = 1\n')
+        code, out = self.commit('add a', 'a.py')
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.git('show', 'HEAD:extra.txt'), 'hook')
+        self.assertEqual(self.git('rev-parse', 'HEAD^'), start)
+
+    def test_head_moved_under_a_hooked_commit_is_still_undone(self):
+        self.hook('commit-msg', 'printf "Change-Id: I0123\\n" >> "$1"')
+        seen = self.around_commit(before=self.other_writer_commits)
+        self.put('a.py', 'a = 1\n')
+        code, out = self.commit('add a', 'a.py')
+        self.assertEqual(code, 1, out)
+        self.assertIn('Undone', out)
+        self.assertNotIn('NOT undone', out)
+        self.assertEqual(self.head(), seen[0])
+        self.assertEqual(self.git('show', 'HEAD:b.py'), 'theirs')
+        self.assertIn('A  a.py', self.git('status', '--porcelain'))
+
+    def test_ours_on_a_moved_head_under_a_stacked_commit_names_what_it_may_undo(self):
+        """X lands before git reads HEAD, Y on top of ours before the read-back: ours, which
+        lacks X's change, is not at HEAD and cannot be undone; the refusal names ours and X."""
+        seen = self.around_commit(before=lambda: self.other_writer_commits('b.py'),
+                                  after=lambda: self.other_writer_commits('c.py'))
+        self.put('a.py', 'a = 1\n')
+        code, out = self.commit('add a', 'a.py')
+        self.assertEqual(code, 1, out)
+        self.assertIn('NOT undone', out)
+        self.assertEqual(self.head(), seen[1])
+        ours = self.git('rev-parse', 'HEAD^')
+        self.assertEqual(self.git('rev-parse', 'HEAD^^'), seen[0])
+        self.assertIn(ours[:12], out)
+        self.assertIn(seen[0][:12], out)
+        self.assertIn('restore', out)
 
 
 class TheOwnersIdentity(LinkedCase):
@@ -1253,6 +1347,28 @@ class MergeInProgress(MergeCase):
         self.assertEqual(self.git('show', 'HEAD:work.txt'), 'resolved')
         self.assertNotIn('intruder.txt', self.git('ls-tree', '-r', '--name-only', 'HEAD'))
         self.assertEqual(self.git('diff', '--cached', '--name-only'), 'intruder.txt')
+
+    def test_a_merge_commit_on_a_moved_head_is_undone_with_its_merge_state(self):
+        """Another writer moves HEAD (commit-tree and update-ref) just before `git commit`: the
+        merge commit made on theirs is undone, and MERGE_HEAD comes back holding main's tip."""
+        tip, base = self.start_merge()
+        real, theirs = cmd.call, []
+
+        def wrapper(args, cwd, *a, **kw):
+            if args[:1] == ['commit'] and not theirs:
+                tree = self.git('rev-parse', 'HEAD^{tree}')
+                theirs.append(self.git('commit-tree', tree, '-p', tip, '-m', 'theirs'))
+                self.git('update-ref', 'HEAD', theirs[0], tip)
+            return real(args, cwd, *a, **kw)
+        with mock.patch.object(C.cmd, 'call', wrapper):
+            code, out = self.commit('merge main', 'work.txt')
+        self.assertEqual(code, 1, out)
+        self.assertIn('Undone', out)
+        self.assertNotIn('NOT undone', out)
+        self.assertEqual(self.head(), theirs[0])
+        path = self.git('rev-parse', '--path-format=absolute', '--git-path', 'MERGE_HEAD')
+        with open(path, encoding='utf-8') as fh:
+            self.assertEqual(fh.read().strip(), base)
 
     def test_a_foreign_file_staged_during_a_merge_is_refused(self):
         tip, _ = self.start_merge()
