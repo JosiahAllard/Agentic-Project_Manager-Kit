@@ -695,7 +695,8 @@ class SourceCase(Case):
 
 class RecommendedCase(Case):
     """A question's `recommended` that is a whole number written as text is imported as the
-    number: the store refuses every update of a question that holds the text."""
+    number, so no copy of it holds the text; a store that already holds the text reads it as the
+    number."""
 
     LINE = ("RECOMMENDED questions/Q-020: its `recommended` is the text '1'; %s as the number 1; "
             "nothing else in the document is changed")
@@ -794,12 +795,18 @@ class RecommendedCase(Case):
         with Store.open(self.mirror) as s:     # the store reads the text as its number
             self.assertEqual(s.get('questions', 'Q-020'), self.number)
         lines = migrate.report_lines(r)
-        self.assertIn('VALIDATE ERROR questions/Q-020 recommended: recommended must be int, not '
-                      'str [schema-field]', lines)
-        self.assertIn('VALIDATE questions/Q-020: the api will refuse every update of this '
-                      'document until it is fixed; fix its file by hand with the server stopped '
-                      '(no api route repairs it)', lines)
+        self.assertEqual([x for x in lines if 'questions/Q-020' in x and 'VALIDATE' in x], [
+            "VALIDATE WARN questions/Q-020 recommended: recommended is the text '1' in its file; "
+            "the store reads it as the number 1 and its next write stores the number "
+            "[schema-field]"])
+        self.assertFalse(any('the api will refuse' in x for x in lines))
+        self.assertEqual(migrate.validate(self.mirror), r.findings)
         self.assertTrue(lines[-1].startswith('nothing changed: '))
+        with Store.open(self.mirror) as s:     # and the api's update goes through
+            s.update('questions', 'Q-020', {'status': 'answered', 'answer': {'choice': 1}})
+        self.assertEqual(on_disk(self.mirror, 'questions', 'Q-020')['recommended'], 1)
+        self.assertEqual([f for f in migrate.validate(self.mirror) if f.rel == 'questions/Q-020'],
+                         [])
 
 
 def labelled(recommended, labels=('Paint it', 'Leave it: as found', 'Ask again'), **kw):
@@ -964,9 +971,8 @@ class LabelCase(Case):
         with Store.open(self.mirror) as s:     # the store reads the label as its position
             self.assertEqual(s.get('questions', 'Q-030'), self.number)
         lines = migrate.report_lines(r)
-        self.assertIn('VALIDATE questions/Q-030: the api will refuse every update of this '
-                      'document until it is fixed; fix its file by hand with the server stopped '
-                      '(no api route repairs it)', lines)
+        self.assertEqual([f.level for f in r.findings if f.rel == 'questions/Q-030'], ['warn'])
+        self.assertFalse(any('the api will refuse' in x for x in lines))
         self.assertTrue(lines[-1].startswith('nothing changed: '))
         # a second source that holds the number is the same document: no conflict
         fill(self.export, {'questions': {'Q-030': self.number}}, wrapped=True)

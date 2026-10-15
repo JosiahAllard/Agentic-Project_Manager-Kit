@@ -32,11 +32,14 @@ What a source document becomes:
     option's label or the label of two; a whole number that is also an option's label, unless
     it is the label of one option only and that option is at the position the number says;
     more than nine digits; and the empty text. The
-    store refuses every update of a question whose `recommended` is text (schema.check), so such
-    a question could not be answered. No other field and no other text is changed. Two copies
-    are compared with this text read as the number on both sides: a store document that holds
-    the number, or the text, is the same document as a source that holds the text. The store's
-    file is never rewritten, so one that already holds the text keeps it and check() reports it.
+    store refuses every update of a question whose `recommended` is text that stands for
+    nothing (schema.check), so such a question cannot be answered or logged until its file is
+    fixed. No other field and no other text is changed. Two copies are compared with this text
+    read as the number on both sides: a store document that holds the number, or the text, is
+    the same document as a source that holds the text. The store's file is never rewritten here:
+    one that already holds text that stands for a number keeps it, the store reads it as the
+    number (schema.whole_recommended) and its next write stores the number, and check() warns
+    of it.
   - A document the store already holds with the same fields is counted in `same`.
   - A document the store already holds with other fields is never written over. When the store's
     has a `version` (a server wrote it since), the store's is the newer truth: the difference is
@@ -265,11 +268,23 @@ def check(docs):
     document, then kitlib.hubvalidate.validate's, sorted by document, code and field. With no
     repos/ document there is nothing to judge a `repo` tag against: `repos` is then left out, so
     validate gives its one note that the tags were not checked, not a warning per tagged
-    document."""
+    document. A question whose `recommended` is text that stands for a number is judged as the
+    store reads it (schema.whole_recommended), with that number, and has one warning that its file
+    still holds the text: the api accepts its updates, and the first one stores the number."""
     out = []
+    read = {coll: {} for coll in schema.COLLECTIONS if coll in docs}
     for coll in schema.COLLECTIONS:
         for doc_id, d in sorted(docs.get(coll, {}).items()):
+            d, old, _ = (schema.whole_recommended(coll, d) if isinstance(d, dict)
+                         else (d, None, False))
+            if old is not None:
+                out.append(hubvalidate.Finding(
+                    hubvalidate.WARN, '%s/%s' % (coll, doc_id), 'recommended', schema.CODE,
+                    'recommended is the text %r in its file; the store reads it as the number %d '
+                    'and its next write stores the number' % (old, d['recommended'])))
+            read[coll][doc_id] = d
             out.extend(schema.check(coll, d, doc_id))
+    docs = dict(docs, **read)
     if not docs.get('repos'):
         docs = {k: v for k, v in docs.items() if k != 'repos'}
     out.extend(hubvalidate.validate(docs))
@@ -438,7 +453,8 @@ def validate_lines(findings):
     if not findings:
         return ['VALIDATE clean: no finding']
     lines = ['VALIDATE %s' % hubvalidate.format_line(f) for f in findings]
-    for rel in sorted({f.rel for f in findings if f.code == schema.CODE}):
+    for rel in sorted({f.rel for f in findings
+                       if f.code == schema.CODE and f.level == hubvalidate.ERROR}):
         lines.append('VALIDATE %s: the api will refuse every update of this document until it is '
                      'fixed; fix its file by hand with the server stopped (no api route repairs '
                      'it)' % rel)
