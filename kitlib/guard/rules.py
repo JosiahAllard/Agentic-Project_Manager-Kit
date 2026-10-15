@@ -1884,7 +1884,8 @@ def _tar_word(args, k, state, dirs):
     nxt = args[k + 1] if k + 1 < len(args) else None
     if t.startswith('--'):
         name, eq, value = t.partition('=')
-        if len(name) >= 5 and '--directory'.startswith(name):     # --di is also --diff
+        # --di is also --diff; bsdtar (Windows' tar.exe) reads --cd as -C
+        if name == '--cd' or len(name) >= 5 and '--directory'.startswith(name):
             if eq:
                 dirs.move(tail_word(w, value), not doubt)
                 return None
@@ -2912,6 +2913,21 @@ ARCHIVE_VALUES = {'format', 'prefix', 'add-file', 'add-virtual-file', 'output', 
 ARCHIVE_FLAGS = set('vl0123456789')
 # --remote runs git-upload-archive (a program --exec names) instead of reading this repository
 ARCHIVE_RUNS = {'remote', 'exec'}
+# the settings that make archive run a program in the checkout it reads: a tar.<format>.command
+# filter, and an include that may set one (keys lower-case, as git_prefix_configs gives them)
+ARCHIVE_FILTER_RE = re.compile(r'^(?:tar\..+\.command|include\.path|includeif\..+\.path)$')
+
+
+def archive_filter_set(gc):
+    """True when the line may give git archive `gc` a filter program (ARCHIVE_FILTER_RE) the
+    checkout's own config does not: a -c or --config-env naming one, a computed -c, or a variable
+    of commands.GIT_ENV_NAMES set on the line (GIT_CONFIG_PARAMETERS, GIT_CONFIG_KEY_<n>; the line
+    marks only the first it sets, so any of them counts) or an environment change the guard cannot
+    read (commands.mark_git_env)."""
+    if gc.inv.cmd.git_env:
+        return True
+    return any(first.dyn or last.dyn or ARCHIVE_FILTER_RE.match(key)
+               for key, _val, first, last in git_prefix_configs(gc))
 
 
 def tail_word(w, value):
@@ -3036,7 +3052,7 @@ def git_reads(gc, strict=False):
         # its -o file is a write: git_targets hands it to git_jail, which judges it first; where
         # the checkout cannot be placed, neither can a relative -o, so it is no plain read
         outs, read = archive_outputs(gc)
-        return read and not (strict and outs)
+        return read and not (strict and outs) and not archive_filter_set(gc)
     if sub in GIT_READS:
         return True
     pos = [t for t in words if not t.startswith('-')]

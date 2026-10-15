@@ -92,6 +92,56 @@ class ArchiveReadOnly(ArchiveWorld):
         text = 'git -C %s archive --remote=. --exec=/tmp/x.sh HEAD' % self.main
         self.assertIsNotNone(self.pm(bash(text, self.w.plain)))
 
+    def test_an_o_after_a_double_dash_is_a_pathspec(self):
+        # git reads every word after `--` as a pathspec (git 2.55: "'<f>' is outside repository")
+        for tail in ('-- -o', '-- -o README.md', '-- --output=README.md'):
+            text = 'git -C %s archive HEAD %s' % (self.main, tail)
+            with self.subTest(text):
+                self.assertIsNone(self.pm(bash(text, self.w.plain)))
+
+
+class ArchiveFilters(ArchiveWorld):
+    """git archive runs tar.<format>.command as a filter in the checkout it reads (git 2.55, cwd
+    observed), so a filter set on the line makes the archive a program run, as --exec does: -c,
+    --config-env, an include.path that may set one, a computed -c, and the GIT_CONFIG_* variables."""
+
+    def refused(self, shell, text):
+        d = self.pm(shell(text, self.w.plain))
+        self.assertIsNotNone(d)
+        self.assertEqual('write-jail', d.rule, d.reason)
+        self.assertIsNotNone(self.sub(shell(text, self.w.wt, sub=True)))
+
+    def test_a_tar_filter_set_with_c_is_no_read(self):
+        for shell in (bash, ps):
+            for cfg in ('-c tar.x.command="sh -c \'echo x > README.md\'"', '-c tar.x.command=x.sh',
+                        '-ctar.x.command=x.sh', '-c TAR.X.Command=x.sh', '-c tar.tar.gz.command=x.sh',
+                        '-c tar.x.command', '--config-env=tar.x.command=CMD', '--config-env tar.x.command=CMD',
+                        '-c include.path=%s/x.cfg' % self.scratch, '-c includeIf.onbranch:main.path=x.cfg'):
+                text = 'git -C %s %s archive --format=x HEAD' % (self.main, cfg)
+                with self.subTest(shell=shell.__name__, text=text):
+                    self.refused(shell, text)
+
+    def test_a_computed_c_is_no_read(self):
+        self.refused(bash, 'git -C %s -c $C archive HEAD' % self.main)
+
+    def test_git_config_variables_are_no_read(self):
+        for text in ('GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=tar.x.command GIT_CONFIG_VALUE_0=x.sh '
+                     'git -C %s archive --format=x HEAD',
+                     'GIT_CONFIG_PARAMETERS="\'tar.x.command\'=\'x.sh\'" git -C %s archive --format=x HEAD',
+                     'export GIT_CONFIG_PARAMETERS="\'tar.x.command\'=\'x.sh\'"; git -C %s archive --format=x HEAD'):
+            text = text % self.main
+            with self.subTest(text):
+                self.refused(bash, text)
+        self.refused(ps, '$env:GIT_CONFIG_PARAMETERS = "\'tar.x.command\'=\'x.sh\'"; git -C %s archive --format=x HEAD'
+                     % self.main)
+
+    def test_other_settings_on_the_line_keep_it_a_read(self):
+        for shell in (bash, ps):
+            for cfg in ('-c core.quotepath=false', '-c tar.umask=0022', '-c tar.x.remote=true'):
+                text = 'git -C %s %s archive HEAD' % (self.main, cfg)
+                with self.subTest(shell=shell.__name__, text=text):
+                    self.assertIsNone(self.pm(shell(text, self.w.plain)))
+
 
 class ArchiveHoles(ArchiveWorld):
     """The two writes into a main checkout the guard let through before this fix (rules.write_targets
@@ -214,6 +264,15 @@ class TarFolders(ArchiveWorld):
 
     def test_an_old_style_folder_in_scratch_from_powershell_passes(self):
         self.assertIsNone(self.pm(ps('tar xCf %s a.tar' % self.scratch, self.w.plain)))
+
+    def test_bsdtar_cd_is_a_folder(self):
+        # bsdtar (Windows' tar.exe): libarchive's tar long options map --cd to -C
+        for shell in (bash, ps):
+            for opt in ('--cd %s', '--cd=%s'):
+                with self.subTest(shell=shell.__name__, opt=opt):
+                    text = 'tar -xf a.tar ' + opt
+                    self.refused_by(self.pm(shell(text % self.main, self.w.temp)), 'write-jail', 'tar')
+                    self.assertIsNone(self.pm(shell(text % self.scratch, self.w.main)))
 
 
 if __name__ == '__main__':
