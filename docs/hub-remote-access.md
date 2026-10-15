@@ -173,30 +173,34 @@ python tools/hub.py setup --check
 
 The server reads the `hub` key at its start only.
 
-- Started by hand: press Ctrl+C in its window, then start it again:
+- Started by `setup --autostart` (it runs windowless, with no window to press Ctrl+C in):
+
+  ```powershell
+  python tools/hub.py restart
+  ```
+
+  It asks the server to close cleanly, as Ctrl+C does, waits until it has closed and its process
+  has ended, starts the scheduled task again and waits until the new server answers: `RESTARTED:
+  ...`, exit 0. A `TIMED OUT: ...` line (exit 4, after 300 s; `--timeout S` changes that) names
+  what it waited for and says that nothing was killed: the server goes on closing
+  (`kitlib.hubsite.control`).
+- Started by hand: press Ctrl+C in its window, or run `python tools/hub.py stop`; then start it
+  again:
 
   ```powershell
   python tools/hub.py serve
   ```
 
-- Started by `setup --autostart`: it runs windowless and has no window to press Ctrl+C in. There
-  is no stop verb; end its scheduled task, then check that it stopped:
+  `restart` stops a server started by hand too, but then starts nothing: it starts only the
+  scheduled task, so it prints the start command and exits 3.
+- After changing `hub.port`, the running server still listens on the old port: run
+  `python tools/hub.py restart --port <old port>`. It stops the server on the old port and waits
+  for the new one on the new port. A paired browser pairs again after a port change; on the same
+  port it stays paired across the restart.
 
-  ```powershell
-  Stop-ScheduledTask -TaskName 'PM kit hub server'
-  python tools/hub.py status
-  ```
-
-  If `status` still answers, the server is still running. End that one process by its pid: in
-  Task Manager, Details, add the Command line column and find the `pythonw.exe` or `python.exe`
-  whose command line ends `hub.py serve`; End task on that row only. Then start the task again:
-
-  ```powershell
-  Start-ScheduledTask -TaskName 'PM kit hub server'
-  ```
-
-  A stop that is not a clean close leaves the store lock, and the next start takes it over with a
-  note.
+Only the owner's token can stop the server, never a browser session, and only on the local
+port: through the tunnel the stop route answers 404 (`kitlib.hubsite.serve.build` adds it to the
+local listener alone).
 
 The start-up notes say that the tunnel listener is on, or why it is off.
 
