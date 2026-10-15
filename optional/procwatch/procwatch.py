@@ -28,6 +28,7 @@ Exit: 0 no suspects, 1 suspects reported, 2 error. Standard library only; Window
 """
 import argparse
 import datetime
+import functools
 import json
 import os
 import re
@@ -152,12 +153,13 @@ def _r_agent_script(p, ctx):
     return "agent background script whose session is gone" if _dead_parent_older(p, 60 * MIN) else None
 
 
+@functools.lru_cache(maxsize=None)
 def _kit_temp_claude():
     """'<kit temp folder>\\claude\\', lower case: the folder the kit's own temp files go in
     (kitlib.config.user.work_temp, the machine config's `temp_dir` or its default), where agents'
     TEMP lives. A string that matches no command line when kitlib or the config cannot be read,
     e.g. a copy of this tool outside the kit."""
-    root = os.path.join(HERE, "..", "..")
+    root = os.path.normpath(os.path.join(HERE, "..", ".."))
     if root not in sys.path:
         sys.path.append(root)
     try:
@@ -207,7 +209,8 @@ RULES = [
     ("agent-script", "agent background script (python/node from a .claude path)",
      lambda p: _name(p) in {"python.exe", "pythonw.exe", "node.exe"} and
      ("\\.claude" in _cmd(p) or "/.claude" in _cmd(p) or "\\temp\\claude\\" in _cmd(p)
-      or _kit_temp_claude() in _cmd(p)),                  # agents' TEMP moved off the system drive
+      or "\\agenttemp\\claude\\" in _cmd(p)                # agents' TEMP moved off the system drive
+      or _kit_temp_claude() in _cmd(p)),                  # ... or the kit temp folder, as resolved
      _r_agent_script, False),
     ("conhost", "console host", lambda p: _name(p) == "conhost.exe", _r_conhost, False),
 ]

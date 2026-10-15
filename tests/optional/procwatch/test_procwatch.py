@@ -93,11 +93,22 @@ class Classify(unittest.TestCase):
         import kitlib.config.user as KU
         old = KU.work_temp
         KU.work_temp = lambda near, home=None, environ=None, platform=None: r"Q:\odd-kit-temp"
+        PW._kit_temp_claude.cache_clear()
         try:
-            ps = by_pid(world(proc(900, 77, "python.exe", r"python.exe Q:\odd-kit-temp\claude\x\job.py", age=2 * HOUR)))
+            ps = by_pid(world(
+                proc(900, 77, "python.exe", r"python.exe Q:\odd-kit-temp\claude\x\job.py", age=2 * HOUR),
+                # the old agent-temp spelling still matches when the resolved folder is elsewhere
+                proc(901, 77, "python.exe", r"python.exe Z:\AgentTemp\claude\x\job.py", age=2 * HOUR)))
+            calls = []
+            KU.work_temp = lambda *a, **k: calls.append(1) or r"Q:\odd-kit-temp"
+            PW._kit_temp_claude.cache_clear()
+            world(*[proc(910 + i, 77, "python.exe", "python.exe job.py") for i in range(5)])
         finally:
             KU.work_temp = old
+            PW._kit_temp_claude.cache_clear()
         self.assertEqual(ps[900]["rule"], "agent-script")
+        self.assertEqual(ps[901]["rule"], "agent-script")
+        self.assertEqual(len(calls), 1)         # resolved once, not once per process
 
     def test_orphaned_tail_follow_and_grep_are_kill_ok_suspects(self):
         ps = by_pid(world(gitp(900, 77, "tail.exe", r"tail.exe -n +1 -f C:\t\x.output", 2 * HOUR, (60, GONE)),
