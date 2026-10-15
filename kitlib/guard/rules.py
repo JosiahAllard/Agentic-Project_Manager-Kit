@@ -1822,48 +1822,129 @@ def _rsync(args):
     return pos[-1:] if len(pos) >= 2 else []
 
 
-def _tar_folder(args, k):
-    """(folder Word or None, index of its last word) for tar's word args[k]: -C <dir>, -C<dir>,
-    -C in a cluster (-xC <dir>, -xvC<dir>), --directory[=]<dir> or a prefix of it from --dir
-    (--di is also --diff)."""
+# tar's short options that take no value in GNU tar and in bsdtar (Windows' tar.exe) alike, and
+# those that take one besides -C; a letter in neither may take one. Long options known to take none.
+TAR_FLAGS = set('xtcruvzjJZapkmOohPUwSBln')
+TAR_VALUES = set('bfFgHIKLNTVX')
+TAR_LONG_FLAGS = {'extract', 'get', 'list', 'create', 'append', 'update', 'verbose', 'gzip', 'gunzip', 'ungzip',
+                  'bzip2', 'xz', 'lzma', 'zstd', 'lzip', 'compress', 'uncompress', 'auto-compress',
+                  'keep-old-files', 'keep-newer-files', 'overwrite', 'preserve-permissions', 'same-permissions',
+                  'no-same-owner', 'same-owner', 'no-same-permissions', 'unlink-first', 'absolute-names',
+                  'dereference', 'totals', 'to-stdout', 'interactive', 'sparse', 'numeric-owner',
+                  'no-recursion', 'touch', 'ignore-zeros', 'check-links', 'verify'}
+
+
+class _TarDirs:
+    """The folders a tar line may extract into: `bases` the folders in force (None is the working
+    directory), `seen` every folder a -C named, `unsure` once a -C was read that may not be one."""
+
+    def __init__(self):
+        self.bases, self.seen, self.unsure = [None], [], False
+
+    def move(self, folder, sure):
+        """A -C to `folder`, relative to the one in force as tar reads it (-C /a -C b is /a/b);
+        not `sure`: it may not be a -C, so the folders in force stay possible too."""
+        new = []
+        for b in self.bases:
+            rooted = folder.text.startswith(('/', '\\', '~')) or ntpath.splitdrive(folder.text)[0]
+            new.append(folder if b is None or rooted else
+                       sh.Word(ntpath.join(b.text, folder.text), folder.dyn or b.dyn, folder.start, folder.end))
+        self.bases = new if sure else self.bases + new
+        self.seen += new
+        self.unsure = self.unsure or not sure
+
+
+def _tar_old(args, dirs):
+    """(index of the first word after the values, the state after them) for the old-style first
+    word (tar xCf <dir> a.tar): each letter that takes a value takes the next word in turn. A letter
+    the guard does not know may take one too, so a C after one names any of the words it could."""
+    k, unknown = 1, 0
+    for c in args[0].text:
+        if c == 'C':
+            for j in range(k, min(k + unknown + 1, len(args))):
+                dirs.move(args[j], not unknown)
+            k += 1
+        elif c in TAR_VALUES:
+            k += 1
+        elif c not in TAR_FLAGS:
+            unknown += 1
+    return k, ('maybe' if unknown else None)
+
+
+def _tar_word(args, k, state, dirs):
+    """The state after tar's word args[k] (None, 'value': the next word is a value, 'maybe': it may
+    be one, 'folder': it is -C's), moving `dirs` for a -C. A -C is sure only in a word that is no
+    value of the word before it and, in a cluster, after letters that take none (-xvC <dir>);
+    otherwise (-xfC <dir>: a file C; -NC<dir>: a date; --exclude -C<dir>) both readings stay."""
     w, t = args[k], args[k].text
+    if state == 'folder':
+        dirs.move(w, True)
+        return None
+    doubt = state is not None
+    nxt = args[k + 1] if k + 1 < len(args) else None
     if t.startswith('--'):
         name, eq, value = t.partition('=')
-        if len(name) < 5 or not '--directory'.startswith(name):
-            return None, k
-        if eq:
-            return tail_word(w, value), k
-    elif t.startswith('-') and 'C' in t[1:]:
-        rest = t[t.index('C', 1) + 1:]
-        if rest:
-            return tail_word(w, rest), k
-    else:
-        return None, k
-    return (args[k + 1], k + 1) if k + 1 < len(args) else (None, k)
+        if len(name) >= 5 and '--directory'.startswith(name):     # --di is also --diff
+            if eq:
+                dirs.move(tail_word(w, value), not doubt)
+                return None
+            if not doubt:
+                return 'folder'
+            if nxt is not None:
+                dirs.move(nxt, False)
+            return 'maybe'
+        return None if eq or name[2:] in TAR_LONG_FLAGS or state == 'value' else 'maybe'
+    if not t.startswith('-') or len(t) < 2:
+        return None
+    clean = not doubt
+    for j, c in enumerate(t[1:], 1):
+        if c == 'C':
+            rest = t[j + 1:]
+            if clean:
+                if rest:
+                    dirs.move(tail_word(w, rest), True)
+                    return None
+                return 'folder'
+            folder = tail_word(w, rest) if rest else nxt
+            if folder is not None:
+                dirs.move(folder, False)
+            return 'maybe'
+        if c not in TAR_FLAGS:
+            clean = False
+    if state == 'value':
+        return None
+    i = next((j for j, c in enumerate(t[1:], 1) if c not in TAR_FLAGS), None)
+    if i is None:
+        return None
+    if t[i] not in TAR_VALUES:
+        return 'maybe'
+    if i + 1 < len(t):                          # -fa.tar: the value is attached
+        return None
+    return 'maybe' if doubt else 'value'
 
 
 def _tar(args, cmd_word):
-    """[Word]: the folders tar -x writes: each -C/--directory (_tar_folder), a relative one read
-    from the one before it as tar does (-C /a -C b is /a/b); with none, the working directory."""
+    """[Word]: the folders tar -x writes: each folder a -C/--directory names, relative to the one
+    before it (_TarDirs), with none the working directory, and the working directory too once a -C
+    was read that may not be one (_tar_word, _tar_old: fail closed)."""
     first = args[0].text if args else ''
     extract = bool(re.match(r'^[A-Za-z]*x', first)) and not first.startswith('-')       # tar xf a.tar
-    folders, k = [], 0
+    dirs, k, state = _TarDirs(), 0, None
+    if extract:
+        k, state = _tar_old(args, dirs)
     while k < len(args):
         t = args[k].text
+        if t == '--' and state is None:
+            break
         if t in ('--extract', '--get') or re.match(r'^-[A-Za-z]*x', t) and not t.startswith('--'):
             extract = True
-        folder, k = _tar_folder(args, k)
-        if folder is not None:
-            prev = folders[-1] if folders else None
-            rooted = folder.text.startswith(('/', '\\', '~')) or ntpath.splitdrive(folder.text)[0]
-            if prev is not None and not rooted:
-                folder = sh.Word(ntpath.join(prev.text, folder.text), folder.dyn or prev.dyn, folder.start,
-                                 folder.end)
-            folders.append(folder)
+        state = _tar_word(args, k, state, dirs)
         k += 1
     if not extract:
         return []
-    return folders or [here(cmd_word)]
+    if not dirs.seen:
+        return [here(cmd_word)]
+    return dirs.seen + ([here(cmd_word)] if dirs.unsure else [])
 
 
 def _unzip(args, cmd_word):
@@ -2850,12 +2931,42 @@ def archive_long(name):
     return hits[0] if len(hits) == 1 else None
 
 
+def archive_opened(words):
+    """[Word]: the files git archive's first pass (builtin/archive.c cmd_archive) opens. That pass
+    knows only -o/--output, --remote and --exec, keeps every other option without taking a value
+    for it and reads on past words that are not options, up to `--`; so in `--prefix -o f HEAD` the
+    -o is its own and f is opened, though the later pass takes -o as the prefix. Every -o/-o<f>,
+    --output[=]<f> and prefix of --output counts wherever it sits (a prefix fails closed), and no
+    other option takes the word after it (fail closed for --remote and --exec)."""
+    outs, k = [], 0
+    while k < len(words):
+        w, t = words[k], words[k].text
+        if t == '--':
+            break
+        name, eq, value = t[2:].partition('=')
+        if t.startswith('--') and name and 'output'.startswith(name):
+            if eq:
+                outs.append(tail_word(w, value))
+            elif k + 1 < len(words):
+                k += 1
+                outs.append(words[k])
+        elif t.startswith('-o'):
+            if t[2:]:
+                outs.append(tail_word(w, t[2:]))
+            elif k + 1 < len(words):
+                k += 1
+                outs.append(words[k])
+        k += 1
+    return outs
+
+
 def archive_outputs(gc):
-    """(outputs, read) for git archive `gc`: the Words its -o/--output name (-o <f>, -o<f>,
-    -vo <f>, --output[=]<f> and any unique prefix, --o=<f>), and True when the archive only reads
-    the repository it runs in: no --remote or --exec (they run a program), no option the guard
-    does not know (a --no-* among them) and no word that is not literal (an unquoted $X may hold
-    -o). An unknown option does not end the scan, so an -o after it is still an output."""
+    """(outputs, read) for git archive `gc`: the Words its -o/--output name, those git's first pass
+    opens (archive_opened) and, failing closed, those the later pass would read (-vo <f>, an -o
+    after `--prefix`'s value), and True when the archive only reads the repository it runs in: no
+    --remote or --exec (they run a program), no option the guard does not know (a --no-* among
+    them) and no word that is not literal (an unquoted $X may hold -o). An unknown option does not
+    end the scan, so an -o after it is still an output."""
     words = gc.rest
     outs, read, k = [], True, 0
     while k < len(words):
@@ -2893,6 +3004,8 @@ def archive_outputs(gc):
                     read = False
                     break
         k += 1
+    spans = {(o.text, o.start, o.end) for o in outs}
+    outs += [o for o in archive_opened(words) if (o.text, o.start, o.end) not in spans]
     return outs, read
 
 

@@ -151,6 +151,24 @@ class ArchiveHoles(ArchiveWorld):
             with self.subTest(text):
                 self.assertIsNone(self.pm(bash(text, self.w.plain)))
 
+    def test_an_o_after_an_option_git_s_first_pass_takes_no_value_for_is_an_output(self):
+        # builtin/archive.c cmd_archive opens -o before --prefix takes its value: README.md is truncated
+        for opt in ('--prefix -o README.md', '--format -o README.md', '--mtime --output README.md',
+                    '--prefix --output=README.md', '--add-file -oREADME.md'):
+            text = 'git -C %s archive %s HEAD HEAD' % (self.main, opt)
+            with self.subTest(text):
+                d = self.pm(bash(text, self.w.plain))
+                self.assertIsNotNone(d)
+                self.assertEqual('write-jail', d.rule, d.reason)
+        text = 'git -C %s archive --prefix -o %s/README.md HEAD HEAD' % (self.wt, self.main)
+        self.refused_by(self.sub(bash(text, self.w.wt, sub=True)), 'write-jail', 'git')
+
+    def test_an_unplaced_archive_with_o_after_prefix_is_no_read(self):
+        text = 'git --git-dir="%s/.git" archive --prefix -o %s/f HEAD HEAD' % (self.main, self.main)
+        d = self.sub(bash(text, self.w.wt, sub=True))
+        self.assertIsNotNone(d)
+        self.assertEqual('write-jail', d.rule, d.reason)
+
     def test_an_unplaced_archive_reads_only_without_o(self):
         gd = '--git-dir="%s/.git"' % self.main
         self.assertIsNone(self.sub(bash('git %s archive HEAD' % gd, self.w.wt, sub=True)))
@@ -160,6 +178,42 @@ class ArchiveHoles(ArchiveWorld):
                 d = self.sub(bash(text, self.w.wt, sub=True))
                 self.assertIsNotNone(d)
                 self.assertEqual('write-jail', d.rule, d.reason)
+
+
+class TarFolders(ArchiveWorld):
+    """rules._tar reads -C only where tar does: a C after a letter that takes a value, or in a word
+    that is another option's value, may be no -C, so the working directory is judged as well (fail
+    closed); an old-style first word (tar xCf <dir> a.tar) takes its values in turn."""
+
+    def in_main(self, tail):
+        return 'cd %s && tar %s' % (self.main, tail)
+
+    def test_a_c_that_may_be_a_value_judges_the_working_directory(self):
+        for tail in ('-xf %s/a.tar -NC%s', '-xf a.tar --exclude -C%s', '-xfC %s', '-xf -C%s',
+                     '-xkfC %s', '-x -f a.tar -T -C%s', '-x --newer -C %s'):
+            text = self.in_main(tail % ((self.scratch, self.scratch) if tail.count('%s') == 2 else self.scratch))
+            with self.subTest(text):
+                self.refused_by(self.pm(bash(text, self.w.plain)), 'write-jail', 'tar')
+                self.refused_by(self.sub(bash(text, self.w.wt, sub=True)), 'main-checkout', 'tar')
+
+    def test_a_c_after_letters_that_take_no_value_is_read(self):
+        for tail in ('-xvC %s -f a.tar', '-xzvC%s -f a.tar', '-x -f a.tar -C %s', '-xf a.tar -C%s',
+                     '-xvf a.tar --directory %s', '--extract --verbose -C %s', '-x --exclude=-Cx -C %s'):
+            text = self.in_main(tail % self.scratch)
+            with self.subTest(text):
+                self.assertIsNone(self.pm(bash(text, self.w.plain)))
+
+    def test_an_old_style_first_word_takes_its_values_in_turn(self):
+        self.refused_by(self.pm(bash('tar xCf %s a.tar' % self.main, self.w.plain)), 'write-jail', 'tar')
+        self.refused_by(self.pm(bash('tar xfC a.tar %s' % self.main, self.w.plain)), 'write-jail', 'tar')
+        self.assertIsNone(self.pm(bash(self.in_main('xCf %s a.tar' % self.scratch), self.w.plain)))
+        self.assertIsNone(self.pm(bash(self.in_main('xfC a.tar %s' % self.scratch), self.w.plain)))
+        # a letter the guard does not know may take a value: the folder may be either word, or none
+        self.refused_by(self.pm(bash(self.in_main('xqCf %s a.tar' % self.scratch), self.w.plain)),
+                        'write-jail', 'tar')
+
+    def test_an_old_style_folder_in_scratch_from_powershell_passes(self):
+        self.assertIsNone(self.pm(ps('tar xCf %s a.tar' % self.scratch, self.w.plain)))
 
 
 if __name__ == '__main__':
