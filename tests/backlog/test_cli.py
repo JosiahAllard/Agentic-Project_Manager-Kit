@@ -70,6 +70,26 @@ class Cli(unittest.TestCase):
         self.assertEqual(self.repo.git('ls-remote', 'origin', smod.STORE_REF), tip)
         self.assertIn('pulled_by:  tools/wk', self.ok('--as', 'tools/wk', 'pull', 'FOO'))
 
+    def test_next_and_pull_agree_on_a_record_the_branch_already_holds(self):
+        # The branch holds a/**. X (p1) overlaps it and docs/y.md; Y (p2) is docs/y.md.
+        for rid, prio, scopes in (('HELD', '3', ('a/**',)), ('X', '1', ('a/x.py', 'docs/y.md')),
+                                  ('Y', '2', ('docs/y.md',))):
+            scope_args = [a for s in scopes for a in ('--scope', s)]
+            self.ok('add', rid, '--summary', 'a thing to do', *(scope_args + list(ADD_FLAGS)))
+            self.ok('set', rid, '--priority', prio, '--priority-by', 'agent', '--effort', 's')
+        self.repo.git('branch', 'tools/wk')
+        self.ok('--as', 'tools/wk', 'pull', 'HELD', '--reason', 'the branch starts with this one')
+        plain = self.ok('next')                      # the main checkout: no branch bundles
+        self.assertIn('passed over X', plain)
+        self.assertNotIn('passed over Y', plain)
+        mine = self.ok('--as', 'tools/wk', 'next')   # as the branch: X bundles onto it
+        self.assertIn('passed over Y', mine)
+        self.assertNotIn('passed over X', mine)
+        self.assertIn('tools/wk', mine)
+        # Each `next` offers what `pull` takes plainly: Y as the main checkout read it.
+        out = self.ok('--as', 'tools/wk', 'pull', 'Y')
+        self.assertNotIn('preempt', out)
+
     def test_refusals_exit_2_and_write_nothing(self):
         self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py', *ADD_FLAGS)
         tip = self.repo.git('ls-remote', 'origin', smod.STORE_REF)
