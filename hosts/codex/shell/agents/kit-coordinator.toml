@@ -146,7 +146,7 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
 - Tracked `.codex/` files and AGENTS.md are owner-only: no session or agent edits them. Never
   write an `Owner-Approved:` trailer unless the owner said so in your own session.
 - Message the PM only when you need a decision (owner or PM), main or CI is broken, a lock or
-  resource is stuck, you hit a usage limit, or you are ready to restart. When you start a work set,
+  resource is stuck, you hit a usage limit, or you are ready to restart, besides the start check-in (step 3) and refusal reports (Never). When you start a work set,
   send the owner questions it needs in one message.
 - **Look ahead.** At each work-set start, scan `next`'s next ~15 for anything needing the owner
   (owner-held, owner-only paths, live systems, a pre-emption); send those questions through the
