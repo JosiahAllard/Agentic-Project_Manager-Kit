@@ -140,7 +140,9 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   key>` running in the background; when it prints an answer, act on it yourself and start the
   wait again with `--except` and every id you have acted on. The PM still logs the ruling
   (<kit>/docs/action-hub.md "For the PM"), and until it does the answer stays pending: without
-  `--except` the wait prints it again at once. Anything else that needs the owner (a typed go, a
+  `--except` the wait prints it again at once. After a compaction or restart, an id the wait
+  prints before the PM has logged it may be one you already acted on: check before acting again.
+  Anything else that needs the owner (a typed go, a
   command to run) goes to the PM by {{tool:message}} with the exact text or commands, working
   directory and order; a request left only in your chat waits unseen. The owner still types a go
   in your window where one is required. Answers in the owner's own words.

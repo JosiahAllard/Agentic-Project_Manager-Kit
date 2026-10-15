@@ -361,6 +361,15 @@ class ContextTest(unittest.TestCase):
         self.assertEqual([l for l in lines if "hub key" in l],
                          ["- hub key: kitc (hub.py questions add --from kitc; wait --pending --for kitc)"])
 
+    def test_several_matching_entries_give_hub_key_unknown_never_the_first_key(self):
+        # no own name (procs=[]), two agent entries for alpha: find_entry takes the first with a note
+        other = dict(ENTRY, name="alpha-coordinator-b1", stem="alpha-other")
+        files = {"S.json": json.dumps({"kitc": ENTRY, "kitd": other})}
+        text = self.build({}, read=reader(files))
+        self.assertIn("2 sessions entries match repo alpha; took the first", text)
+        self.assertEqual([l for l in text.splitlines() if "hub key" in l],
+                         ["- hub key: unknown (several sessions entries match this repo); ask the PM for it"])
+
     def test_no_entry_gives_hub_key_unknown_and_every_other_check_still_runs(self):
         for kw in ({"cwd": ROOT + "/zzz"}, {"cwd": "C:/elsewhere"}, {"pm_cfg": {}}):
             text = self.build({}, **kw)

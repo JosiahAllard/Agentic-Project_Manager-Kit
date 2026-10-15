@@ -339,6 +339,8 @@ def context(cfg, env=None, cwd=None, now=None, procs=None, run=_run, read=_read,
                 entry = entry_once()
             except (LookupError, ValueError) as e:     # no entry: say so, never guess a key
                 return ["hub key: unknown (%s); ask the PM for it" % str(e).strip("'\"")]
+            if box["e"][1]:     # several entries match and the first was taken: it may not be ours
+                return ["hub key: unknown (several sessions entries match this repo); ask the PM for it"]
             return hub_key(box["s"], entry)
 
         def ledger():
