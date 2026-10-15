@@ -914,16 +914,17 @@ class MergeCase(LinkedCase):
         LinkedCase.setUp(self)
         self.configure(owner={'email': OWNER}, commit={'merge_fold': True})
 
-    def start_merge(self, extra=()):
-        """main changes work.txt and adds other.txt (and each `extra`); the branch changes
-        work.txt too, so the merge stops on work.txt with the rest staged. (tip, main tip)."""
+    def start_merge(self, extra=(), author=None):
+        """main changes work.txt and adds other.txt (and each `extra`) in a commit `author` (an
+        email; None: the fixture's identity) wrote; the branch changes work.txt too, so the merge
+        stops on work.txt with the rest staged. (tip, main tip)."""
         self.t.write('work.txt', 'base\n')
         self.t.commit('base work', 'work.txt')
         self.git('merge', '-q', '--ff-only', 'main')
         self.t.write('work.txt', 'main\n')
         for name in ('other.txt',) + tuple(extra):
             self.t.write(name, 'from main\n')
-        self.t.commit('main moves', 'work.txt', 'other.txt', *extra)
+        self.main_commit('main moves', ['work.txt', 'other.txt'] + list(extra), author)
         self.put('work.txt', 'branch\n')
         self.git('commit', '-q', '-m', 'branch work', '--', 'work.txt')
         tip, base = self.head(), self.git('rev-parse', 'main')
@@ -933,6 +934,12 @@ class MergeCase(LinkedCase):
         self.assertIn('other.txt', self.git('diff', '--cached', '--name-only'))
         self.put('work.txt', 'resolved\n')
         return tip, base
+
+    def main_commit(self, message, paths, author=None):
+        """Commit `paths` on main (in the main checkout), authored by `author` when given."""
+        self.t.git('add', '--', *paths)
+        extra = ['--author', 'Someone <%s>' % author] if author else []
+        self.t.git('commit', '-q', '-m', message, *extra)
 
     def assert_refused_naming(self, name, head):
         code, out = self.commit('merge main', 'work.txt')
@@ -967,13 +974,18 @@ class MergeInProgress(MergeCase):
         self.assertIn('differ from the clean merge result', self.assert_refused_naming('other.txt', tip))
 
     def test_an_owner_only_file_taken_unchanged_from_main_is_exempt(self):
-        tip, base = self.start_merge(extra=('CLAUDE.md',))
+        tip, base = self.start_merge(extra=('CLAUDE.md',), author=OWNER)
         code, out = self.commit('merge main', 'work.txt')
         self.assertEqual(code, 0, out)
         self.assertEqual(self.git('show', 'HEAD:CLAUDE.md'), 'from main')
 
+    def test_an_owner_only_file_main_got_from_an_agent_is_refused(self):
+        tip, _ = self.start_merge(extra=('CLAUDE.md',), author=AGENT)
+        refusal = self.assert_refused_naming('CLAUDE.md', tip)
+        self.assertNotIn('could not', refusal)
+
     def test_an_owner_only_file_edited_after_the_merge_is_refused(self):
-        tip, _ = self.start_merge(extra=('CLAUDE.md',))
+        tip, _ = self.start_merge(extra=('CLAUDE.md',), author=OWNER)
         self.put('CLAUDE.md', 'edited\n')
         self.git('add', '--', 'CLAUDE.md')
         self.assert_refused_naming('CLAUDE.md', tip)
@@ -999,15 +1011,16 @@ KEEP = object()        # main leaves the owner-only file as the base has it
 class MergeCarriesAnOwnerChange(MergeCase):
     """A conflicted merge of main, where main (the owner) changed an owner-only file. The merge's
     own copy of it is committed unnamed only when the staged state is exactly main's copy (a
-    deletion included) and main changed it; anything else under that path stays refused."""
+    deletion included), main changed it, and the owner authored every commit main brings that
+    changes it; anything else under that path stays refused."""
 
     F = 'CLAUDE.md'
 
-    def merge(self, main_side, branch_side=None, path=None):
+    def merge(self, main_side, branch_side=None, path=None, main_author=OWNER):
         """The base holds work.txt and the owner-only file. main sets the file to `main_side`
-        (None: deletes it; KEEP: leaves it); the branch sets it to `branch_side` when given (an
-        owner commit made outside the tool). Both change work.txt, so the merge stops; work.txt
-        is resolved in the work tree. (branch tip, main tip)."""
+        (None: deletes it; KEEP: leaves it) in a commit `main_author` wrote; the branch sets it to
+        `branch_side` when given (an owner commit made outside the tool). Both change work.txt,
+        so the merge stops; work.txt is resolved in the work tree. (branch tip, main tip)."""
         f = path or self.F
         self.assertTrue(C.kconfig.load(self.wt).owner_rules().is_locked(f), f)
         self.t.write('work.txt', 'base\n')
@@ -1020,13 +1033,13 @@ class MergeCarriesAnOwnerChange(MergeCase):
         elif main_side is not KEEP:
             self.t.write(f, main_side)
             self.t.git('add', '--', f)
-        self.t.commit('owner moves main', 'work.txt')
-        changed = ['work.txt']
+        self.main_commit('owner moves main', ['work.txt'], main_author)
         self.put('work.txt', 'branch\n')
+        self.git('commit', '-q', '-m', 'branch work', '--', 'work.txt')
         if branch_side is not None:
             self.put(f, branch_side)
-            changed.append(f)
-        self.git('commit', '-q', '-m', 'branch work', '--', *changed)
+            self.git('commit', '-q', '-m', 'owner edit', '--author', 'Owner <%s>' % OWNER,
+                     '--', f)
         tip, main = self.head(), self.git('rev-parse', 'main')
         p = cmd.subprocess_run(('git', 'merge', '--no-edit', 'main'), cwd=self.wt,
                                capture_output=True, text=True, env=gitfixture.fixture_env())
@@ -1124,6 +1137,32 @@ class MergeCarriesAnOwnerChange(MergeCase):
         self.assertIn('refused: CLAUDE.md is owner-only', out)
         self.assertIn('leave it out of your list', out)
         self.assertEqual(self.head(), tip)
+
+    def test_naming_an_owner_file_the_merge_does_not_carry_has_no_hint(self):
+        tip, _ = self.merge('owner edit\n')
+        self.put(self.F, 'owner edit, then the agent\'s\n')
+        self.git('add', '--', self.F)
+        code, out = self.commit('merge main', 'work.txt', self.F)
+        self.assertEqual(code, 1, out)
+        self.assertIn('refused: CLAUDE.md is owner-only', out)
+        self.assertNotIn('leave it out of your list', out)
+        self.assertEqual(self.head(), tip)
+
+    def test_an_agents_edit_carried_by_a_merge_is_refused(self):
+        # An agent's own commit, merged with --no-commit, does not pass as the owner's change.
+        tip, _ = self.merge('agent edit\n', main_author=AGENT)
+        self.assertNotIn('could not', self.assert_refused_naming(self.F, tip))
+
+    def test_an_agents_deletion_carried_by_a_merge_is_refused(self):
+        tip, _ = self.merge(None, main_author=AGENT)
+        self.assert_refused_naming(self.F, tip)
+
+    def test_naming_an_agents_merged_owner_file_has_no_hint(self):
+        tip, _ = self.merge('agent edit\n', main_author=AGENT)
+        code, out = self.commit('merge main', 'work.txt', self.F)
+        self.assertEqual(code, 1, out)
+        self.assertIn('refused: CLAUDE.md is owner-only', out)
+        self.assertNotIn('leave it out of your list', out)
 
     def test_outside_a_merge_a_staged_owner_file_is_still_refused(self):
         self.t.write(self.F, 'owner base\n')
