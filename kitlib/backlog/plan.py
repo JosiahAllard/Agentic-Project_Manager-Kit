@@ -1131,7 +1131,8 @@ def _plan_takeover(snap, ctx, rec, reason, ruling, blocker):
     nothing collides. A dead pull marked for review refuses, as `pull` of a marked record does,
     until `clear-review`. A failed git probe
     holds the pull (fail closed). A `pulled_by` that landed on the main branch (a `Merge <branch>`
-    merge in its history, committed on or after the `pulled_at` day) is not dead but unclosed:
+    merge on its first-parent line, committed on or after the `pulled_at` day; one brought in
+    inside another branch does not count) is not dead but unclosed:
     that refuses, and a git that cannot say fails."""
     rid, old = rec.id, rec.get('pulled_by')
     busy = Refusal('`%s` is already in flight - pulled %s by %s'
