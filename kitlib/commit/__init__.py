@@ -21,7 +21,9 @@ commit(Request) -> Outcome(code, lines). Nothing here prints or exits; tools/com
   --owner-authored commit), and user-profile paths are still refused.
 - Anything ELSE already staged is refused (it may be another session's), with one exception: with
   .kit.json "commit".merge_fold, during a merge in progress (one MERGE_HEAD), the files the merge
-  staged itself (merge_owned), so only the resolved conflicts are named.
+  staged itself (merge_owned), so only the resolved conflicts are named. An owner-only path is the
+  merge's only when its staged state is exactly the merged branch's copy and that branch changed
+  it (a deletion included; a conflict resolved to that copy too); named, it is refused as below.
 - Owner-only paths (.kit.json "owner", kitlib.config.owner) are committed only by the owner:
   --owner-authored, which refuses unless the author identity git will record (`git var
   GIT_AUTHOR_IDENT`) is "owner".email (unset, an agent_emails address or any other: refused).
@@ -309,19 +311,83 @@ def parse_merge_tree(raw):
     return head.strip(), {t for t in tokens if t not in ('', '\n')}
 
 
-def same_blob(root, a, b):
-    """True when both revisions name an object and it is the same one."""
-    rc_a, oid_a, _ = _git(root, 'rev-parse', '-q', '--verify', a)
-    rc_b, oid_b, _ = _git(root, 'rev-parse', '-q', '--verify', b)
-    return rc_a == 0 and rc_b == 0 and bool(oid_a.strip()) and oid_a.strip() == oid_b.strip()
+def _entries(out, path):
+    """The `(meta fields, name)` rows of a `-z` ls-files/ls-tree listing whose name is exactly
+    `path` (a pathspec may match more: a directory's contents, or a glob)."""
+    rows = []
+    for row in out.split('\0'):
+        meta, tab, name = row.partition('\t')
+        if tab and name == path:
+            rows.append(meta.split())
+    return rows
+
+
+def index_entry(root, path):
+    """`(known, entry)`: `path`'s staged index entry as `(mode, oid)`, or None when the index holds
+    none (a staged deletion). `known` is False when git cannot say, or when the path is unmerged
+    (a conflict stage is in the index): nothing is proven then."""
+    rc, out, _ = _git(root, 'ls-files', '--stage', '-z', '--', path)
+    if rc != 0:
+        return False, None
+    rows = _entries(out, path)
+    if not rows:
+        return True, None
+    if len(rows) != 1 or len(rows[0]) != 3 or rows[0][2] != '0':
+        return False, None
+    return True, (rows[0][0], rows[0][1])
+
+
+def tree_entry(root, rev, path):
+    """`(known, entry)`: `path`'s entry in commit `rev` as `(mode, oid)`, or None when the commit
+    has none (it deleted the path). `known` is False when git cannot say."""
+    rc, out, _ = _git(root, 'ls-tree', '-z', rev, '--', path)
+    if rc != 0:
+        return False, None
+    rows = _entries(out, path)
+    if not rows:
+        return True, None
+    if len(rows) != 1 or len(rows[0]) != 3:
+        return False, None
+    return True, (rows[0][0], rows[0][2])
+
+
+def merge_bases(root, head):
+    """Every merge base of HEAD and `head`, or None when git cannot say (or finds none)."""
+    rc, out, _ = _git(root, 'merge-base', '--all', 'HEAD', head)
+    bases = out.split() if rc == 0 else []
+    return bases or None
+
+
+def carries_merged_copy(root, path, head, bases):
+    """True when `path`'s staged state is exactly the merged-in commit `head`'s (the same mode and
+    blob, or absent from both: the merged branch deleted it and the deletion is staged) AND `head`
+    changed the path from every merge base in `bases`, so the change came in with the merged
+    branch rather than being the merge undoing this branch's own. An unmerged path, one git cannot
+    list, or no known merge base is False."""
+    if not bases:
+        return False
+    known_i, staged = index_entry(root, path)
+    known_t, theirs = tree_entry(root, head, path)
+    if not (known_i and known_t and staged == theirs):
+        return False
+    for base in bases:
+        known_b, at_base = tree_entry(root, base, path)
+        if not known_b or at_base == theirs:
+            return False
+    return True
 
 
 def merge_owned(root, rules, staged, heads):
-    """`(paths, why)`: the staged paths a merge in progress put there itself. A path counts only
-    when its staged content equals the clean merge result (`git merge-tree --write-tree`), merge-tree
-    does not list it as conflicted, and, for an owner-only path, its staged blob is the merged
-    branch's own (`<MERGE_HEAD>:<path>`). No merge, or an octopus one, gives `(set(), None)`; a git
-    failure gives `(set(), why)`."""
+    """`(paths, why)`: the staged paths a merge in progress put there itself. An ordinary path
+    counts only when its staged content equals the clean merge result (`git merge-tree
+    --write-tree`) and merge-tree does not list it as conflicted. An owner-only path counts only
+    when its staged state is exactly the merged branch's own copy, which that branch changed from
+    the merge base (carries_merged_copy: same mode and blob as `<MERGE_HEAD>:<path>`, or a deletion
+    of a path the merged branch deleted), whether the merge took it cleanly or a conflict was
+    resolved to it, and every commit the merge brings that changes it is the owner's
+    (non_owner_paths); any other staged state of an owner-only path is never the merge's. No
+    merge, or an octopus one, gives `(set(), None)`; a git failure gives `(set(), why)` (or the
+    ordinary paths and `why`, when only the authors could not be checked)."""
     candidates = set(staged)
     if len(heads) != 1 or not candidates:
         return set(), None
@@ -334,11 +400,28 @@ def merge_owned(root, rules, staged, heads):
     if rc != 0:
         return set(), 'git diff --cached against the merge result failed: %s' % (err or 'no output')
     differs = {p for p in out.split('\0') if p}
-    owned = candidates - differs - conflicted
-    for p in [p for p in owned if rules.is_locked(p)]:
-        if not same_blob(root, ':' + p, '%s:%s' % (heads[0], p)):
-            owned.discard(p)
+    locked = {p for p in candidates if rules.is_locked(p)}
+    owned = (candidates - locked) - differs - conflicted
+    if locked:
+        foreign, why = non_owner_paths(root, rules, heads[0])
+        if foreign is None:
+            return owned, why
+        bases = merge_bases(root, heads[0])
+        owned |= {p for p in locked - foreign if carries_merged_copy(root, p, heads[0], bases)}
     return owned, None
+
+
+def non_owner_paths(root, rules, head):
+    """`(paths, None)`: the owner-only paths that a commit the merged-in `head` brings (one not
+    reachable from HEAD) changes without the owner as its author, judged as `gate land` judges a
+    branch (kitlib.guard.ownercommits.violations against HEAD); or `(None, why)` when git cannot
+    tell. A merged copy one of those paths carries is not the owner's, so it is never the
+    merge's."""
+    from kitlib.guard import ownercommits     # here: kitlib.guard reaches back into this module
+    bad, why = ownercommits.violations(root, rules, head, ['HEAD'])
+    if bad is None:
+        return None, 'the authors of the merged commits could not be checked: %s' % why
+    return {p for v in bad for p in v.paths}, None
 
 
 def foreign_refusal(foreign, merge_why=None, in_merge=False):
@@ -606,9 +689,14 @@ def _commit(req, lines):
     approved = canonical_approved(rules, req.owner_approved, paths)
     locked = locked_paths(rules, paths + [p for p in rendered if p not in paths])
     if locked and not req.owner_authored:
+        # The hint only for a path the merge would carry unnamed, as it is staged now.
+        carried = sorted(merge_owned(root, rules, set(locked) & set(status_before), heads)[0])
         raise _Stop(REFUSED, 'refused: %s is owner-only, and only a commit the owner authors (his '
                     'own git identity, --owner-authored) can carry its approval. Propose the '
-                    'change to the owner.' % ', '.join(locked))
+                    'change to the owner.%s' % (', '.join(locked), (
+                        ' (A merge in progress carries the merged branch\'s own copy of %s '
+                        'without it being named: leave it out of your list.)'
+                        % ', '.join(carried)) if carried else ''))
     for p in unapproved_locked(rules, locked, approved):
         raise _Stop(REFUSED, 'refused: %s is owner-only and no --owner-approved value names it.' % p)
     if req.owner_authored:
