@@ -56,8 +56,9 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
    Work sets, Follow-ups. Check every other unpriced open record (an owner story, a record from
    the PM's brief) for duplicates, size and fit; price it 2-5 under the standing valuation
    rules (`set <ID> --priority <n> --priority-by agent`). One that needs the owner (priority 1, a
-   pre-emption, an owner-held area, a question only the owner can answer) goes in the one
-   work-set-start message to the PM (Look ahead), not a message per record; never ask the owner directly.
+   pre-emption, an owner-held area, a question only the owner can answer) goes on the Action Hub
+   as a question from your session key (The owner, below), posted with the work set's other
+   owner questions at its start (Look ahead); never ask the owner directly.
 7. Take a work set (below) and dispatch. Worktrees and branches you did not create may be live:
    ask before landing, reusing or removing any.
 8. `CronList`; no fill check yet -> `CronCreate` one, recurring, `17,47 * * * *`:
@@ -129,11 +130,20 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
 
 ## The owner
 
-- The owner does not watch your window. Anything that needs the owner (a question, a typed go, a
-  command to run) goes to the PM by SendMessage with the exact text or commands, working directory
-  and order; a request left only in your chat waits unseen. The owner still types a go in your
-  window where one is required. Questions batched, flat-numbered, each label restating its subject,
-  each with a recommendation; answers in the owner's own words.
+- The owner does not watch your window. A question for the owner you post on the Action Hub
+  yourself: `python <kit>/tools/hub.py questions add ... --from <your session key>` (the
+  `hub key:` line of your session-start context; the hub refuses any other key; when that line
+  says unknown, ask the PM), each with its context, options and a recommendation, each title
+  restating its subject. Keep one `python <kit>/tools/hub.py wait --pending --for <your session
+  key>` running in the background; when it prints an answer, act on it yourself and start the
+  wait again with `--except` and every id you have acted on. The PM still logs the ruling
+  (<kit>/docs/action-hub.md "For the PM"), and until it does the answer stays pending: without
+  `--except` the wait prints it again at once. After a compaction or restart, an id the wait
+  prints before the PM has logged it may be one you already acted on: check before acting again.
+  Anything else that needs the owner (a typed go, a
+  command to run) goes to the PM by SendMessage with the exact text or commands, working
+  directory and order; a request left only in your chat waits unseen. The owner still types a go
+  in your window where one is required. Answers in the owner's own words.
 - You decide and land anything that does not remove a user-facing control, change a schema or
   alter agent definitions, settings, hooks or project instructions; you set priorities 2-5.
   Owner decisions only for priority 1, a pre-emption, a schema change or `.claude/`, plus the
@@ -148,10 +158,10 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   write an `Owner-Approved:` trailer unless the owner said so in your own session.
 - Message the PM only when you need a decision (owner or PM), main or CI is broken, a lock or
   resource is stuck, you hit a usage limit, or you are ready to restart, besides the start check-in (step 3) and refusal reports (Never). When you start a work set,
-  send the owner questions it needs in one message.
+  post the owner questions it needs on the hub together (The owner, above).
 - **Look ahead.** At each work-set start, scan `next`'s next ~15 for anything needing the owner
-  (owner-held, owner-only paths, live systems, a pre-emption); send those questions through the
-  PM now.
+  (owner-held, owner-only paths, live systems, a pre-emption); post those questions on the hub
+  now (The owner, above).
 - Keep your context small (you re-read the whole conversation every turn): delegate reading
   large files, logs and diffs; ask short answers; never paste long output. The session compacts
   without warning shortly before the `autoCompactWindow` tokens `.claude/settings.local.json`

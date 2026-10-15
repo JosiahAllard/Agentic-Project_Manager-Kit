@@ -4,8 +4,9 @@ Pure functions that return data; the hook (boot/hook.py claude SessionStart coor
 comes from the "coordinator_start" key of the machine config and is emitted only when the
 environment variable PM_KIT_ROLE is "coordinator". After the standing lines come the optional ENG
 filing and pricing-pass lines (each switched on in the config), then the live checks (cap,
-machine state, other coordinators, the ledger line, and stubs: a line only when a repo that uses
-stubs has them not current), run as in kitlib.pmstart: each is a pure function over fakeable inputs
+machine state, other coordinators, the ledger line, the hub key: the session's sessions.json
+key, which it posts hub questions --from and waits --for, or "unknown" when no entry is found,
+and stubs: a line only when a repo that uses stubs has them not current), run as in kitlib.pmstart: each is a pure function over fakeable inputs
 (process list, file reads, a subprocess runner, now, the machine config), and a failed one is one
 "could not check X: reason" line. No check reads the rulings ledger: with the split ledger
 (`ledger_dir`, docs/ledger.md "Files") the ledger line names the repo's file from the machine
@@ -153,6 +154,16 @@ def find_entry(sessions, cwd, name=None, root=None):
         if name and (e.get("name") == name or name.startswith(str(e.get("stem") or "\0"))):
             return e, None
     return hits[0], "%d sessions entries match repo %s; took the first (%s)" % (len(hits), top, hits[0].get("name"))
+
+
+def hub_key(sessions, entry):
+    """[the `hub key: <key>` line]: the sessions.json key of `entry` (find_entry's pick, the same
+    object), the key this coordinator posts hub questions --from and waits --for
+    (docs/action-hub.md "For the PM"). LookupError when no key holds it."""
+    for k, v in sessions.items():
+        if v is entry and not str(k).startswith("_"):
+            return ["hub key: %s (hub.py questions add --from %s; wait --pending --for %s)" % (k, k, k)]
+    raise LookupError("no sessions.json key holds this session's entry")
 
 
 def cap(cfg, repo, today):
@@ -317,10 +328,20 @@ def context(cfg, env=None, cwd=None, now=None, procs=None, run=_run, read=_read,
                     name = own_name(procs_once(), env, pid)
                 except Exception:
                     name = None
-                box["e"] = find_entry(json.loads(read(sf)), cwd, name, cfg.get("repos_root"))
+                box["s"] = json.loads(read(sf))
+                box["e"] = find_entry(box["s"], cwd, name, cfg.get("repos_root"))
                 if box["e"][1]:
                     lines.append(box["e"][1])
             return box["e"][0]
+
+        def own_key():
+            try:
+                entry = entry_once()
+            except (LookupError, ValueError) as e:     # no entry: say so, never guess a key
+                return ["hub key: unknown (%s); ask the PM for it" % str(e).strip("'\"")]
+            if box["e"][1]:     # several entries match and the first was taken: it may not be ours
+                return ["hub key: unknown (several sessions entries match this repo); ask the PM for it"]
+            return hub_key(box["s"], entry)
 
         def ledger():
             # A config that cannot be read (user_config raises ConfigError for every such case):
@@ -337,6 +358,7 @@ def context(cfg, env=None, cwd=None, now=None, procs=None, run=_run, read=_read,
                                               lock_file_for(cfg, entry_once().get("repo")))),
             ("other coordinators", lambda: others(entry_once(), procs_once(), env, pid)),
             ("ledger", ledger),
+            ("hub key", own_key),
             ("stubs", lambda: stubs_line(entry_once(), cfg.get("repos_root"), stubs_check)),
         ]
         for name, fn in checks:

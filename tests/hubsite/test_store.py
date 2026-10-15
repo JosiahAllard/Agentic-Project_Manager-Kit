@@ -1,5 +1,6 @@
 """kitlib.hubsite.store: the file store, its single-writer lock, ids, revision, events, pending and
 validation on write, and a crash in the middle of a write."""
+import json
 import os
 import shutil
 import subprocess
@@ -42,7 +43,7 @@ os.replace = fake
 if sys.argv[3] == 'add':
     s.add('questions', {'status': 'open', 'title': 'second'})
 else:
-    s.update('questions', 'Q-001', {'title': 'changed'})
+    s.update('questions', 'Q-1000', {'title': 'changed'})
 '''
 
 
@@ -115,7 +116,7 @@ class FormatTest(StoreCase):
         s.close()
         s = self.open()
         self.assertEqual(s.revision, 1)
-        self.assertEqual(s.get('questions', 'Q-001')['title'], 't')
+        self.assertEqual(s.get('questions', 'Q-1000')['title'], 't')
 
     def test_an_unreadable_document_refuses_open(self):
         root = tmpdir(self)
@@ -130,8 +131,8 @@ class FormatTest(StoreCase):
 class IdTest(StoreCase):
     def test_each_prefix_counts_on_its_own(self):
         s = self.open()
-        self.assertEqual(s.add('questions', question()).id, 'Q-001')
-        self.assertEqual(s.add('questions', question()).id, 'Q-002')
+        self.assertEqual(s.add('questions', question()).id, 'Q-1000')
+        self.assertEqual(s.add('questions', question()).id, 'Q-1001')
         self.assertEqual(s.add('stories', {'status': 'submitted', 'repo': 'pm', 'title': 't',
                                            'story': 's'}).id, 'S-001')
         self.assertEqual(s.add('to_pm', {'status': 'queued', 'kind': 'fyi', 'text': 'x'}).id,
@@ -139,8 +140,32 @@ class IdTest(StoreCase):
 
     def test_the_counter_starts_above_ids_on_disk(self):
         root = tmpdir(self)
-        write_file(os.path.join(root, 'questions', 'Q-041.json'), '{"status": "open", "title": "x"}')
-        self.assertEqual(self.open(root).add('questions', question()).id, 'Q-042')
+        write_file(os.path.join(root, 'questions', 'Q-1041.json'),
+                   '{"status": "open", "title": "x"}')
+        self.assertEqual(self.open(root).add('questions', question()).id, 'Q-1042')
+
+    def test_a_new_question_id_starts_at_the_floor_and_old_ids_keep_theirs(self):
+        root = tmpdir(self)
+        write_file(os.path.join(root, 'questions', 'Q-957.json'), '{"status": "open", "title": "x"}')
+        write_file(os.path.join(root, store.META_NAME), '{"revision": 3, "counters": {"Q": 957}}')
+        s = self.open(root)
+        self.assertEqual(s.add('questions', question()).id, 'Q-1000')
+        self.assertEqual(sorted(s.docs('questions')), ['Q-1000', 'Q-957'])
+        self.assertEqual(s.add('todos', {'status': 'open', 'title': 't', 'from': 'you'}).id,
+                         'T-001', 'only questions have the floor')
+
+    def test_an_empty_stores_first_question_is_at_the_floor(self):
+        self.assertEqual(self.open().add('questions', question()).id, 'Q-1000')
+
+    def test_deleting_the_newest_question_never_lowers_the_next_id(self):
+        s = self.open()
+        s.add('questions', question())
+        newest = s.add('questions', question()).id
+        s.delete('questions', newest)
+        self.assertEqual(s.add('questions', question()).id, 'Q-1002')
+        s.delete('questions', 'Q-1002')
+        s.close()
+        self.assertEqual(self.open().add('questions', question()).id, 'Q-1003')
 
     def test_a_lost_meta_never_gives_an_id_twice(self):
         s = self.open()
@@ -149,15 +174,15 @@ class IdTest(StoreCase):
         s.close()
         os.remove(os.path.join(self.root, store.META_NAME))
         s = self.open()
-        self.assertEqual(s.add('questions', question()).id, 'Q-003')
+        self.assertEqual(s.add('questions', question()).id, 'Q-1002')
 
     def test_a_put_of_a_server_id_raises_the_counter(self):
         s = self.open()
         s.add('questions', question())
-        s.put('questions', 'Q-005', question())
-        self.assertEqual(s.add('questions', question()).id, 'Q-006')
+        s.put('questions', 'Q-1005', question())
+        self.assertEqual(s.add('questions', question()).id, 'Q-1006')
         s.close()
-        self.assertIn('"Q": 6', read_file(os.path.join(self.root, store.META_NAME)))
+        self.assertIn('"Q": 1006', read_file(os.path.join(self.root, store.META_NAME)))
 
     def test_an_id_differing_only_in_case_is_refused(self):
         s = self.open()
@@ -182,8 +207,8 @@ class IdTest(StoreCase):
             s = Store.open(self.root, clock=CLOCK)
             try:
                 self.assertEqual(s.revision, 0)
-                self.assertEqual(s.add('questions', question()).id, 'Q-003')
-                s.delete('questions', 'Q-003')
+                self.assertEqual(s.add('questions', question()).id, 'Q-1002')
+                s.delete('questions', 'Q-1002')
             finally:
                 s.close()
 
@@ -322,6 +347,21 @@ class ValidateTest(StoreCase):
         s = self.open(root)
         self.assertEqual(s.update('todos', 'T-001', {'title': 'u'}).version, 1)
 
+    def test_a_legacy_text_recommended_is_read_as_its_number_so_the_question_can_be_logged(self):
+        root = tmpdir(self)
+        two = [{'label': 'a', 'description': 'b'}, {'label': 'c', 'description': 'd'}]
+        legacy = question(status='answered', answer={'choice': 0, 'at': '2'}, options=two,
+                          recommended='1')
+        write_file(os.path.join(root, 'questions', 'Q-001.json'), json.dumps(legacy))
+        label = question(options=two, recommended='c')
+        write_file(os.path.join(root, 'questions', 'Q-002.json'), json.dumps(label))
+        s = self.open(root)
+        self.assertEqual(s.get('questions', 'Q-001')['recommended'], 1)
+        self.assertEqual(s.get('questions', 'Q-002')['recommended'], 1)
+        self.assertEqual(s.update('questions', 'Q-001', {'status': 'logged'}).version, 1)
+        with open(os.path.join(root, 'questions', 'Q-001.json'), encoding='utf-8') as f:
+            self.assertEqual(json.load(f)['recommended'], 1)
+
 
 class RingTest(StoreCase):
     def test_changes_since(self):
@@ -408,7 +448,14 @@ class PendingTest(StoreCase):
             store.Pending('question', 'Q-1', 't', 'pm', '2'),
             store.Pending('to_pm', 'P-1', 'first', '', '3'),
             store.Pending('todo', 'T-1', 'd', '', '4'),
-            store.Pending('todo', 'T-2', 'mine', '', '5')])
+            store.Pending('todo', 'T-2', 'mine', '', '5', 'you')])
+
+    def test_a_pending_question_and_to_do_carry_their_stored_from(self):
+        docs = {'questions': {'Q-1': question(status='answered', answer={'at': '1'},
+                                              **{'from': 'kit'})},
+                'todos': {'T-1': {'status': 'done', 'title': 'd', 'from': 'zeta',
+                                  'done_at': '2'}}}
+        self.assertEqual([p.sender for p in store.pending_items(docs)], ['kit', 'zeta'])
 
     def test_the_store_lists_and_clears_pending(self):
         s = self.open()
@@ -476,7 +523,7 @@ class ContentionTest(StoreCase):
         for t in threads:
             t.join()
         self.assertEqual(errors, [])
-        self.assertEqual(sorted(ids), ['Q-%03d' % n for n in range(1, 201)])
+        self.assertEqual(sorted(ids), ['Q-%d' % n for n in range(1000, 1200)])
         self.assertEqual(s.revision, 200)
         self.assertEqual(len(os.listdir(os.path.join(self.root, 'questions'))), 200)
 
@@ -488,7 +535,7 @@ class ContentionTest(StoreCase):
         def work(title):
             barrier.wait()
             try:
-                results.append(s.update('questions', 'Q-001', {'title': title}, if_version=1))
+                results.append(s.update('questions', 'Q-1000', {'title': title}, if_version=1))
             except HubError as e:
                 results.append(e.code)
         threads = [threading.Thread(target=work, args=(t,)) for t in ('a', 'b')]
@@ -498,7 +545,7 @@ class ContentionTest(StoreCase):
             t.join()
         self.assertEqual(sorted(type(r).__name__ for r in results), ['Result', 'str'])
         self.assertIn('conflict', results)
-        self.assertEqual(s.get('questions', 'Q-001')['version'], 2)
+        self.assertEqual(s.get('questions', 'Q-1000')['version'], 2)
 
 
 class CrashTest(StoreCase):
@@ -514,7 +561,7 @@ class CrashTest(StoreCase):
         s = Store.open(self.root, clock=CLOCK)
         s.add('questions', question())
         s.close()
-        self.q1 = read_file(os.path.join(self.root, 'questions', 'Q-001.json'))
+        self.q1 = read_file(os.path.join(self.root, 'questions', 'Q-1000.json'))
 
     def test_a_crash_before_meta_changes_nothing(self):
         self.crash(1, 'add')
@@ -522,25 +569,25 @@ class CrashTest(StoreCase):
         s = self.open()
         self.assertEqual(tmp_files(self.root), [])
         self.assertEqual(s.revision, 1)
-        self.assertEqual(sorted(s.docs('questions')), ['Q-001'])
+        self.assertEqual(sorted(s.docs('questions')), ['Q-1000'])
         self.assertTrue(s.took_over.get('pid'))
-        self.assertEqual(s.add('questions', question()).id, 'Q-002')
+        self.assertEqual(s.add('questions', question()).id, 'Q-1001')
 
     def test_a_crash_between_meta_and_document_skips_a_revision_and_an_id(self):
         self.crash(2, 'add')
         s = self.open()
         self.assertEqual(tmp_files(self.root), [])
         self.assertEqual(s.revision, 2)
-        self.assertEqual(sorted(s.docs('questions')), ['Q-001'])
+        self.assertEqual(sorted(s.docs('questions')), ['Q-1000'])
         r = s.add('questions', question())
-        self.assertEqual((r.id, r.revision), ('Q-003', 3))
+        self.assertEqual((r.id, r.revision), ('Q-1002', 3))
 
     def test_a_crash_mid_update_keeps_the_old_document(self):
         self.crash(2, 'update')
         s = self.open()
-        self.assertEqual(read_file(os.path.join(self.root, 'questions', 'Q-001.json')), self.q1)
-        self.assertEqual(s.get('questions', 'Q-001')['version'], 1)
-        self.assertEqual(s.update('questions', 'Q-001', {'title': 'x'}, if_version=1).version, 2)
+        self.assertEqual(read_file(os.path.join(self.root, 'questions', 'Q-1000.json')), self.q1)
+        self.assertEqual(s.get('questions', 'Q-1000')['version'], 1)
+        self.assertEqual(s.update('questions', 'Q-1000', {'title': 'x'}, if_version=1).version, 2)
 
 
 if __name__ == '__main__':

@@ -83,6 +83,19 @@ class HubSiteTest(unittest.TestCase):
         out = site(FakeClient(), procs=procs)
         self.assertEqual(out[1], "hub: wait --pending is running")
 
+    def test_only_the_pms_wait_counts_not_another_sessions_for_its_key(self):
+        def line(cmd):
+            return site(FakeClient(), procs=[{"Name": "python.exe", "CommandLine": cmd}])[1]
+        hub = 'python "x/tools/hub.py" wait --pending'
+        for cmd in (hub + ' --for kit', hub + ' --for=kit', hub + ' --for "kit"',
+                    'python "x/tools/hub.py" wait --for kit --pending'):
+            with self.subTest(cmd=cmd):
+                self.assertIn("in the background", line(cmd))
+        for cmd in (hub + ' --for pm', hub + ' --for=pm', hub + ' --for "pm"',
+                    hub + ' --timeout 30'):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(line(cmd), "hub: wait --pending is running")
+
     def test_a_wait_without_pending_does_not_count(self):
         procs = [{"Name": "python.exe", "CommandLine": 'python "x/tools/hub.py" wait --timeout 5'}]
         self.assertIn("in the background", site(FakeClient(), procs=procs)[1])
