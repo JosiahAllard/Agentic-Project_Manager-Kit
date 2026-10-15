@@ -1,5 +1,5 @@
 """--home-worktree on start, deep, consultant and handoff (kitlib/launcher/start.py home_folder,
-docs/launcher.md "The home worktree"): who may use it (deep-worker sessions only), where the window
+docs/launcher.md "The home worktree"): who may use it (deep-worker and consultant sessions), where the window
 starts, what the session is told, what is refused before any window or folder, and that without the
 flag nothing changes. The home worktree itself is FakeHost.home_worktree here;
 tests/launcher/test_home.py covers home.ensure."""
@@ -159,9 +159,9 @@ class StartInHome(HomeBase):
         self.assertIn('Warning: %s is untracked and is not in the home worktree' % local, out)
 
 
-class OnlyDeepWorkers(HomeBase):
-    """A coordinator's state note and a consultant's notes file live in the main checkout, which a
-    session in a linked worktree may not write (docs/guard.md "Write jail"): refused, nothing made."""
+class OnlyDeepWorkersAndConsultants(HomeBase):
+    """A coordinator's state note lives in the main checkout, which a session in a linked worktree
+    may not write (docs/guard.md "Write jail"): refused, nothing made."""
 
     def assert_refused(self, role, call):
         self.host.where = None              # place() would fail the test
@@ -178,10 +178,9 @@ class OnlyDeepWorkers(HomeBase):
             for whatif in (True, False):
                 self.assert_refused(role, lambda: self.go(agent=agent, whatif=whatif))
 
-    def test_a_consultant_is_refused_before_anything(self):
-        for plan in (True, False):
-            self.assert_refused('consultant', lambda: start.consultant(
-                self.h.settings, self.host, repo_path=self.repo, account='1', plan=plan, home_worktree=True))
+    def test_the_refusal_names_the_roles_that_may(self):
+        self.assertIn('for deep-worker and consultant sessions only', start.HOME_REFUSED)
+        self.assertEqual(start.HOME_ROLES, (window.DEEP_WORKER, window.CONSULTANT))
 
     def test_a_handoff_is_refused_before_any_successor_starts(self):
         self.h.write_state('sessions.json', {
@@ -201,6 +200,50 @@ class OnlyDeepWorkers(HomeBase):
             launch.run(launch.parser().parse_args(['start', '--repo', 'alpha', '--account', '1', '--what-if',
                                                    '--home-worktree']), h.settings, host)
         self.assertEqual(str(c.exception), start.HOME_REFUSED % 'coordinator')
+
+
+class ConsultantInHome(HomeBase):
+    """A consultant's notes file is in agent temp, which the write jail leaves open, so it may start
+    in its home worktree; a --notes-path in the main checkout is refused there instead."""
+
+    def setUp(self):
+        HomeBase.setUp(self)
+        self.temp = os.path.join(self.h.root, 'agent-temp')
+        self.host = FakeHost(self.h.root, env={'AGENT_TEMP': self.temp}, ignored=True)
+        self.host.where = gitrepo.MAIN
+
+    def cons(self, **kw):
+        args = dict(repo_path=self.repo, account='1', plan=True, home_worktree=True)
+        args.update(kw)
+        return '\n'.join(start.consultant(self.h.settings, self.host, **args))
+
+    def test_a_consultant_starts_in_its_home_and_keeps_its_notes_in_agent_temp(self):
+        for plan in (True, False):
+            out = self.cons(plan=plan)
+            if not plan:
+                out = self.host.opened[-1]       # the window script it opened
+            self.assert_starts_in_home(out, 'consultant-alpha')
+            self.assertIn('your notes file %s ' % os.path.join(self.temp, 'alpha-consultant', 'notes.md'), out)
+        self.assertEqual(len(self.host.opened), 1)
+
+    def test_a_notes_path_in_the_main_checkout_is_refused_before_anything(self):
+        self.host.where = None              # place() would fail the test
+        for notes in ('docs/ops/consultant-notes.local.md', os.path.join(self.repo, 'n.md')):
+            for plan in (True, False):
+                with self.assertRaisesRegex(S.LaunchError, r"--home-worktree: the notes file .* is in the main "
+                                                           r"checkout .*, which a session started in a home worktree "
+                                                           r"cannot write \(the guard's write jail\); leave out "
+                                                           r"--notes-path \(agent temp\)\. Nothing was started\."):
+                    self.cons(notes_path=notes, plan=plan)
+        self.assertEqual(self.host.opened, [])
+        self.assertEqual(self.host.homes, [])
+        self.no_folder()
+
+    def test_a_notes_path_outside_the_main_checkout_is_allowed(self):
+        elsewhere = os.path.join(self.h.root, 'notes.md')
+        out = self.cons(notes_path=elsewhere)
+        self.assert_starts_in_home(out, 'consultant-alpha')
+        self.assertIn('your notes file %s ' % elsewhere, out)
 
 
 class DeepInHome(HomeBase):
