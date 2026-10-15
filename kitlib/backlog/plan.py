@@ -155,19 +155,50 @@ def reason_error(reason, flag):
     return None
 
 
-def current_offer(snap, ctx, branch=None):
-    """`(offers, passed, holding)` as `next` would print them for `ctx.session`. With `branch`,
-    the live pulls that branch holds take no scope in the offer (a record overlapping them is
-    bundled onto the branch that already holds that scope, not passed over); `holding` is still
-    every live pull."""
+def own_branch(ctx, branch=None):
+    """The branch whose own live pulls an offer leaves out, so a record overlapping only them is
+    bundled onto it rather than passed over: `branch`, else `--as` (ctx.branch), else the branch
+    checked out in ctx.root. None when that cannot be read, HEAD is detached, or it is the main
+    branch or the code main: a main bundles nothing, so its pulls hold their scope. Compared
+    exactly, as `pulled_by` is written: another letter case or a ref spelling is another branch."""
+    if branch is None:
+        branch = ctx.branch
+    if not branch:
+        branch, _why = refs.current_branch(ctx.root)
+    if not branch or branch in (ctx.main_branch, ctx.code_main):
+        return None
+    return branch
+
+
+def offer_for(snap, ctx, branch=None, cap=omod.DEFAULT_CAP, seeds=()):
+    """`(offers, passed, holding, own)`: the offer `next` prints for `ctx.session`, with the live
+    pulls of `own` (own_branch) taking no scope in it; `holding` is still every live pull."""
+    own = own_branch(ctx, branch)
     holding, _dead, _why = omod.in_flight_split(snap, ctx.root, ctx.remote)
-    taken = [r for r in holding if not (branch and r.get('pulled_by') == branch)]
-    result, refusals, _ranks = omod.next_offer(snap, taken, session=ctx.session,
-                                               unmet=ctx.unmet(snap))
+    taken = [r for r in holding if not (own and r.get('pulled_by') == own)]
+    result, refusals, _ranks = omod.next_offer(snap, taken, cap=cap, seeds=seeds,
+                                               session=ctx.session, unmet=ctx.unmet(snap))
     if refusals:
         raise Failure('`next` cannot compute an offer, so there is nothing to check this against: '
                       '%s' % '; '.join(refusals))
-    return result[0], result[1], holding
+    return result[0], result[1], holding, own
+
+
+def current_offer(snap, ctx, branch=None):
+    """`(offers, passed, holding, also)` for a pull onto `branch`: the offer `next` prints as that
+    branch (offer_for), and `also`, the records `next` offers without it (as the main checkout
+    prints it), [] when the two are the same. A pull takes a record either one offers, so a
+    coordinator's `next` and a worker's `pull` never disagree on what is in order."""
+    offers, passed, holding, own = offer_for(snap, ctx, branch)
+    also = []
+    if own is not None and any(r.get('pulled_by') == own for r in holding):
+        result, refusals, _ranks = omod.next_offer(snap, holding, session=ctx.session,
+                                                   unmet=ctx.unmet(snap))
+        if refusals:
+            raise Failure('`next` cannot compute an offer, so there is nothing to check this '
+                          'against: %s' % '; '.join(refusals))
+        also = [o.rec for o in result[0]]
+    return offers, passed, holding, also
 
 
 def read_body_file(path):
@@ -836,8 +867,9 @@ def plan_clear_review(snap, ctx, rid, reason):
 def plan_pull(snap, ctx, rid, reason=None, ruling=None, blocker=None):
     """Take an open, priced record and record the branch. One in `next`'s offer pulls plainly;
     one outside it needs `--reason` and records `preempt` and the `displaced` offer, computed
-    here; the offer it is checked against leaves out the caller's branch's own pulls, so a record
-    overlapping only them is offered.
+    here. In the offer means in `next`'s offer as the caller's branch prints it (its own pulls
+    left out, so a record overlapping only them is offered) or as `next` prints it without a
+    branch (current_offer).
     A `priority: -1` record needs `--ruling` (a hold release). One whose scope collides with
     a live pull on another branch (one on the caller's branch is no collision) needs `--reason` and `--ruling` (the PM's ruling, cited in `preempt`); one ruling
     covers a `-1` record that also collides. An unmet `requires:` refuses.
@@ -879,8 +911,8 @@ def plan_pull(snap, ctx, rid, reason=None, ruling=None, blocker=None):
     if missing:
         raise Refusal('`%s` requires %s, which is unmet: %s' % ((rid,) + missing[0]))
     branch = ctx.current_branch()
-    offers, passed, holding = current_offer(snap, ctx, branch)
-    offered = rec in [o.rec for o in offers]
+    offers, passed, holding, also = current_offer(snap, ctx, branch)
+    offered = rec in [o.rec for o in offers] or rec in also
     hits = live_hits(rec.all('scope'), holding, skip=rid, branch=branch)
     folds, notes = _pull_fold_hits(ctx, rec.all('scope'), holding, branch)
     if not offered and reason is None:

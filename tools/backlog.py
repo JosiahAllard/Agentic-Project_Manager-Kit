@@ -193,7 +193,14 @@ def do_next(args, ctx, snap):
                  if rec.get('session') else '')
         say('DEAD PULL %s (pulled_by %s has no branch): %s`release %s --reason ...`'
             % (rec.id, rec.get('pulled_by'), taker, rec.id))
-    result, refusals, ranks = omod.next_offer(snap, holding, cap=cap, seeds=args.seeds,
+    # As `pull` checks it (plan.current_offer): the branch's own pulls take no scope.
+    own = pmod.own_branch(ctx)
+    taken = [r for r in holding if not (own and r.get('pulled_by') == own)]
+    if len(taken) != len(holding):
+        say('as branch %s: its own pulls (%s) take no scope here, so a record overlapping only '
+            'them is offered to bundle onto it'
+            % (own, ', '.join(r.id for r in holding if r not in taken)))
+    result, refusals, ranks = omod.next_offer(snap, taken, cap=cap, seeds=args.seeds,
                                               session=ctx.session, unmet=ctx.unmet(snap))
     if refusals:
         raise Failure('cannot compute an offer: %s' % '; '.join(refusals))
