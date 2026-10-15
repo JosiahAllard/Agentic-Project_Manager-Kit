@@ -1947,11 +1947,12 @@ def _net_written(method, count):
 def _net_lost(span):
     """True when _net_args may have lost its place in the argument text `span`, so the literal it
     read as an argument may be part of another: a smart quote (PowerShell closes one with a plain
-    quote), a here-string (@" or @'), a comment (#), or a subexpression or braced variable ($( or
-    ${) where a double quote also appears (a " inside it does not end the outer string)."""
-    if any(c in NET_QUOTES for c in span) or '@"' in span or "@'" in span or '#' in span:
+    quote), a here-string (@" or @'), a comment (#), a braced variable (${: PowerShell reads its
+    name up to the }, quotes included), or a subexpression ($() where a double quote also appears
+    (a " inside it does not end the outer string)."""
+    if any(c in NET_QUOTES for c in span) or '@"' in span or "@'" in span or '#' in span or '${' in span:
         return True
-    return '"' in span and ('$(' in span or '${' in span)
+    return '"' in span and '$(' in span
 
 
 def net_writes(cmd):

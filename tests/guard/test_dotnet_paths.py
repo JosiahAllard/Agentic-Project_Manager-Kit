@@ -170,7 +170,10 @@ class LostPlace(Base):
 
     def test_a_comment_and_a_braced_variable(self):
         for text in ('[IO.File]::Copy(\'{wt}\\s.txt\' <#, \'{wt}\\ok\'\n, #> \'{main}\\x\')',
-                     '[IO.File]::Copy("{wt}\\s.txt${{a", \'{wt}\\ok\', "}}", \'{main}\\x\')'):
+                     '[IO.File]::Copy("{wt}\\s.txt${{a", \'{wt}\\ok\', "}}", \'{main}\\x\')',
+                     # no " at all: PowerShell reads ${a'} and ${b'} as variables, so it copies
+                     # to '{main}\x'; a ' inside them opens a string to the parse
+                     "[IO.File]::Copy(${{a'}}, '{main}\\x' + ${{b'}}, '{wt}\\ok')"):
             with self.subTest(text=text):
                 self.denied(self.run_ps(text, cwd=self.w.main), 'main-checkout')
 
