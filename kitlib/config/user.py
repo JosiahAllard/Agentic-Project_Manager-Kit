@@ -123,8 +123,9 @@ RETIRED = ('ledger_refs',)
 # One line per key. A key another module owns is registered as Owned(<that module>), which checks it.
 SCHEMA = {
     'owner_email': Field(Email(), None, 'the author email of the owner\'s own commits, for every repository whose .kit.json sets no "owner".email; unset there too: no commit is provable as the owner\'s, so every owner-only change is refused (docs/kit-json.md "With no file"); older kit copies reject the key'),
-    'ledger_path': Field(AbsPath(), None, 'the rulings ledger file; set here only'),
-    'ledger_repos': Field(ListOf(Str(pattern=r'[a-z0-9][a-z0-9-]*', what='a lower-case repo name')), None, 'the repo columns `ledger.py add --repo` writes, besides `all`; unset: any lower-case name (docs/ledger.md)'),
+    'ledger_dir': Field(AbsPath(), None, 'the rulings ledger folder: one file `<ledger_dir>/<repo>.md` per `ledger_repos` name, which it needs; set here only (docs/ledger.md "Files"); older kit copies reject the key; set it only after every folder runs a kit that knows it'),
+    'ledger_repos': Field(ListOf(Str(pattern=r'[a-z0-9][a-z0-9-]*', what='a lower-case repo name')), None, 'the repos `ledger.py add --repo` writes; `pm` is the machine-wide one; with `ledger_dir`, each name once, and never `all`, `standing` or the frozen file\'s name; without it, the one-file ledger\'s repo columns besides `all`, and unset: any lower-case name (docs/ledger.md)'),
+    'ledger_path': Field(AbsPath(), None, 'the one-file rulings ledger (R-nnnn ids); set here only; once `ledger_dir` is set it is frozen: read, never written; removed one release after the split'),
     'pending_path': Field(AbsPath(), None, "the owner's pending-steps file tools/pending.py edits (docs/pending.md)"),
     'standing_delegation': Field(Str(pattern=r'R-[0-9]{4,}', what='a ruling id R-nnnn'), None, 'the ledger entry that delegates in general; the backlog refuses it as the ruling behind any one change. Unset: no id is refused for that'),
     'scrub_patterns': Field(ListOf(Regex()), None, "case-insensitive patterns for the install's own names (repositories, owner, accounts) that the shipped-text tests and tests/scrub/test_generic.py also refuse"),
@@ -480,6 +481,8 @@ def user_config(home=None, location=None):
             data = {k: v for k, v in data.items() if k not in RETIRED}
         errs = []
         Obj(SCHEMA, what='machine config').check(data, path, errs)
+        if not errs:
+            errs = ['%s: %s' % (path, why) for why in ledger_errors(data)]
         if errs:
             raise ConfigError('; '.join(errs))
     out = {k: f.default for k, f in SCHEMA.items()}
@@ -487,10 +490,38 @@ def user_config(home=None, location=None):
     return out
 
 
+LEDGER_NOT_A_REPO = ('all', 'standing')    # `all` is gone with the folder; standing.md is the digest
+
+
+def ledger_errors(data):
+    """What the ledger keys refuse together, for a machine config whose keys each passed their
+    type: `ledger_dir` needs `ledger_repos`, and each name's file `<ledger_dir>/<name>.md` must
+    be its own (a name once, not `all`, not the digest's, not the frozen file's)."""
+    folder = data.get('ledger_dir')
+    if folder is None:
+        return []
+    repos = data.get('ledger_repos')
+    if not repos:
+        return ['ledger_dir needs ledger_repos: the repos with a file in that folder']
+    out, seen = [], set()
+    frozen = data.get('ledger_path')
+    frozen = os.path.normcase(os.path.normpath(frozen)) if isinstance(frozen, str) else None
+    for name in repos:
+        if name in seen:
+            out.append('ledger_repos names %r twice' % name)
+        elif name in LEDGER_NOT_A_REPO:
+            out.append('ledger_repos may not name %r with ledger_dir set' % name)
+        elif os.path.normcase(os.path.normpath(os.path.join(folder, name + '.md'))) == frozen:
+            out.append('ledger_repos may not name %r: its file is ledger_path, the frozen ledger' % name)
+        seen.add(name)
+    return out
+
+
 def failing_keys(data):
     """The sorted top-level keys of the machine config object `data` that user_config refuses:
-    unknown, or holding a value its type refuses. Names only: no value is returned, so a caller
-    may print them where the value must not appear (kitlib.preflight.configline)."""
+    unknown, or holding a value its type refuses, or ledger_repos when ledger_errors refuses the
+    pair. Names only: no value is returned, so a caller may print them where the value must not
+    appear (kitlib.preflight.configline)."""
     out = []
     for k, v in data.items():
         if is_note(k) or k in RETIRED:
@@ -503,6 +534,8 @@ def failing_keys(data):
             f.type.check(v, k, errs)
         if errs:
             out.append(k)
+    if not {'ledger_dir', 'ledger_repos', 'ledger_path'} & set(out) and ledger_errors(data):
+        out.append('ledger_repos')
     return sorted(out)
 
 
@@ -519,8 +552,27 @@ def ledger_path(home=None):
 
 
 def ledger_repos(home=None):
-    """The repo columns the ledger writer accepts besides `all`, or None (any lower-case name)."""
+    """The repos the ledger writer accepts, or None (one-file ledger only: any lower-case name)."""
     return user_config(home)['ledger_repos']
+
+
+def ledger_dir(home=None):
+    """The per-repo ledger folder, or None when the machine config does not set one."""
+    return user_config(home)['ledger_dir']
+
+
+def files_of(cfg):
+    """{repo: <ledger_dir>/<repo>.md} in ledger_repos order, from a config user_config returned;
+    {} when it sets no ledger_dir."""
+    folder = cfg.get('ledger_dir')
+    if not folder:
+        return {}
+    return {name: os.path.join(folder, name + '.md') for name in cfg.get('ledger_repos') or ()}
+
+
+def ledger_files(home=None):
+    """files_of the machine config."""
+    return files_of(user_config(home))
 
 
 def standing_delegation(home=None):
