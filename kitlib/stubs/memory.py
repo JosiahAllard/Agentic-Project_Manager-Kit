@@ -35,8 +35,6 @@ from kitlib.machinesetup import settings as jsonfile
 KEY = 'autoMemoryDirectory'
 FOLDER = 'Agent-memory'
 OK, OTHER, MISSING, BAD = 'ok', 'other', 'missing', 'bad'
-SETTINGS = (registry.default_profile().state_directory, 'settings.json')
-SETTINGS_REL = '/'.join(SETTINGS)       # the file as the owner's commit names it
 ABSOLUTE = re.compile(r'^(?:[A-Za-z]:[\\/]|\\\\|//|~[\\/])')
 TMP = '.kit-memory.tmp'
 
@@ -87,8 +85,19 @@ def wanted(checkout, override=None, main_top=None):
     return memory_root(top, override) + '/' + name
 
 
+def _settings():
+    """(the host's settings folder, 'settings.json'), read from hosts.json at call time, so a broken
+    hosts.json fails the call that needs it (registry.RegistryError), not the import."""
+    return (registry.default_profile().state_directory, 'settings.json')
+
+
+def settings_rel():
+    """The settings file as the owner's commit names it (forward slashes, relative)."""
+    return '/'.join(_settings())
+
+
 def settings_path(checkout):
-    return os.path.join(checkout, *SETTINGS)
+    return os.path.join(checkout, *_settings())
 
 
 def _same(a, b):
@@ -108,7 +117,7 @@ def survey(checkout, override=None, main_top=None):
         return bad('git cannot place the main checkout of %s, so the memory folder is not known' % checkout)
     if not os.path.lexists(path):
         return Memory(MISSING, path, None, want, None, None, None, None)
-    shared = jsonfile._shared(path)
+    shared = jsonfile.shared_link(path)
     if shared:
         return bad('%s is %s; replacing it would split it from the file it shares (add the key by hand)'
                    % (path, shared))
@@ -182,7 +191,7 @@ def apply(m):
             except FileExistsError:
                 raise Refused('%s was made since the survey; not replaced (run again)' % m.path)
         else:
-            shared = jsonfile._shared(m.path)
+            shared = jsonfile.shared_link(m.path)
             if shared:
                 raise Refused('%s is %s; not replaced' % (m.path, shared))
             with open(m.path, 'rb') as fh:
@@ -216,16 +225,19 @@ def owner_command(checkout, kit=None):
 
 
 def problem_line(checkout, label=None, override=None, main_top=None, kit=None):
-    """One line when `checkout`'s settings lack the key (with the command that adds it) or cannot be
-    read; None when the key is there (the wanted folder or one the owner chose)."""
+    """One line when `checkout`'s settings lack the key or cannot be read; None when the key is there
+    (the wanted folder or one the owner chose). The missing line is an owner step, worded as the
+    checklist's other owner-only commands (kitlib.pmstart.fglock): the command writes another
+    repository's main checkout, so an agent never runs it."""
     label = label or os.path.basename(os.path.normpath(checkout))
     m = survey(checkout, override, main_top)
     if m.state in (OK, OTHER):
         return None
     if m.state == BAD:
         return 'could not check memory (%s): %s' % (label, m.why)
-    return ('memory (%s): %s has no %s; its memory folder is %s. Add it: %s (then the owner commits '
-            '%s)' % (label, m.path, KEY, m.want, owner_command(checkout, kit), SETTINGS_REL))
+    return ('memory (%s): %s has no %s; its memory folder is %s. Ask the owner (via the hub) to run, in '
+            'their own PowerShell window: %s (then the owner commits %s)'
+            % (label, m.path, KEY, m.want, owner_command(checkout, kit), settings_rel()))
 
 
 def run(checkout, apply=False, kit=None, override=None, main_top=None):
@@ -247,4 +259,4 @@ def run(checkout, apply=False, kit=None, override=None, main_top=None):
         lines = _apply(m)
     except Refused as e:
         return Outcome(1, ['memory: refused: %s' % e])
-    return Outcome(0, lines + ['memory: the owner commits %s' % SETTINGS_REL])
+    return Outcome(0, lines + ['memory: the owner commits %s' % settings_rel()])

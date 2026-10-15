@@ -543,16 +543,28 @@ def _same_folder(a, b):
     return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
 
 
-def memory(cfg, repos=None, check=None, pm_repo=None, want=None):
+def _pm_memory_folder(top):
+    """The memory folder the PM repository's settings name: its autoMemoryDirectory when it is there
+    (the kit's value or one the owner chose), else the kit's value for it (kitlib.stubs.memory.wanted).
+    Looked up at call time, so a test can replace either reader."""
+    from kitlib.stubs import memory as kmemory
+    m = kmemory.survey(top)
+    if m.state in (kmemory.OK, kmemory.OTHER):
+        return m.value
+    return m.want or kmemory.wanted(top)
+
+
+def memory(cfg, repos=None, check=None, pm_repo=None, folder=None):
     """The agent memory folder (kitlib.stubs.memory; docs/pm-start.md): one line per repository in
     launcher.repos, and for the PM's own repository, whose .claude/settings.json has no
-    autoMemoryDirectory (with the command that adds it) or cannot be read; then one line when
-    pm_start.memory_dir is not the PM repository's memory folder. None when all match. A folder
+    autoMemoryDirectory (an owner step: the command that adds it) or cannot be read; then one line
+    when pm_start.memory_dir is not the folder the PM repository's settings name (`folder`, default
+    _pm_memory_folder: a value the owner chose is the one compared). None when all match. A folder
     that is not there, or a check that raises, is that repo's own "could not check memory" line."""
     from kitlib.stubs import memory as kmemory
     if check is None:
         check = kmemory.problem_line
-    want = want or kmemory.wanted
+    folder = folder or _pm_memory_folder
     repos = launcher_repos() if repos is None else repos
     lines = []
     for name in sorted(repos):
@@ -570,14 +582,21 @@ def memory(cfg, repos=None, check=None, pm_repo=None, want=None):
     if not top:
         return lines
     if not any(_same_folder(top, p) for p in repos.values()):     # a launcher repo has its line already
-        line = check(top, label="PM repo")
+        try:
+            line = check(top, label="PM repo")
+        except Exception as e:
+            line = "could not check memory (PM repo): %s: %s" % (type(e).__name__, e)
         if line:
             lines.append(line)
-    folder = want(top)
+    try:
+        want = folder(top)
+    except Exception as e:
+        lines.append("could not check pm_start.memory_dir: %s: %s" % (type(e).__name__, e))
+        return lines
     have = cfg.get("memory_dir")
-    if folder and not (have and _same_folder(have, folder)):
+    if want and not (have and _same_folder(have, want)):
         lines.append("pm_start.memory_dir %s; the PM repo's memory folder is %s: set pm_start.memory_dir to %s"
-                     % ("is %s" % have if have else "is not set", folder, folder))
+                     % ("is %s" % have if have else "is not set", want, want))
     return lines
 
 

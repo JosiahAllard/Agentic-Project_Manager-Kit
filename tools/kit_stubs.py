@@ -8,8 +8,9 @@ folder to its .claude/settings.json (docs/install.md).
 -C names the checkout (default: here). A thin entry point (ARCHITECTURE.md, Layers): it parses,
 calls kitlib.stubs.run (memory: kitlib.stubs.memory.run, a dry run unless --apply), prints and
 exits. Exit codes: 0 done or all current; 1 a problem named (memory: a settings file it cannot
-edit, or a failed write); 2 usage, or the kit configuration was refused, or run from an export of the kit whose marker names
-no main checkout (no stub may name a folder a prune may remove); 130 Ctrl+C.
+edit, or a failed write); 2 usage, or the kit configuration was refused (a hosts.json it cannot read
+is one `kit_stubs: ERROR:` line), or run from an export of the kit whose marker names no main
+checkout (no stub may name a folder a prune may remove); 130 Ctrl+C.
 """
 import argparse
 import os
@@ -62,6 +63,7 @@ def main(argv=None):
     top, why = gitrepo.toplevel(a.root)
     if top is None:
         p.error('-C: %s' % why)
+    from kitlib.host import registry
     try:
         if a.verb == 'memory':
             from kitlib.stubs import memory
@@ -70,6 +72,9 @@ def main(argv=None):
             outcome = stubs.run(top, a.verb, tools=tools, replace=a.replace, dry_run=a.dry_run)
     except KeyboardInterrupt:
         return 130
+    except registry.RegistryError as e:          # hosts.json refused: the kit configuration
+        print('kit_stubs: ERROR: %s' % e, file=sys.stderr, flush=True)
+        return USAGE
     for line in outcome.lines:
         print(line, flush=True)
     return outcome.code

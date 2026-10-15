@@ -612,7 +612,7 @@ class Setup(object):
         if self.memory_added:
             from kitlib.stubs import memory
             out.append('     The owner commits %s too (its %s; docs/pm-first-run.md)'
-                       % (memory.SETTINGS_REL, memory.KEY))
+                       % (memory.settings_rel(), memory.KEY))
         tools = os.path.join(c.kit, 'tools')
         if c.stubs:
             out.append('  2. python "%s" check -C "%s"   (exit 0: every stub current)'

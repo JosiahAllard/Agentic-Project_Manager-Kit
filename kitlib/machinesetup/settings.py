@@ -157,7 +157,7 @@ def _plan_write(plan, ctx, path, raw, layout, data, did):
         plan.add('settings', '%s: create it; %s' % (path, '; '.join(did)),
                  lambda: _create(path, new), undo='delete "%s"' % path, detail=diff)
         return
-    shared = _shared(path)
+    shared = shared_link(path)
     if shared:
         plan.refuse('%s is %s; replacing it would split it from the file it shares (edit it by hand: %s)'
                     % (path, shared, '; '.join(did)))
@@ -747,7 +747,7 @@ def write(layout, data):
     return (b'\xef\xbb\xbf' + raw) if layout['bom'] else raw
 
 
-def _shared(path):
+def shared_link(path):
     """'a symbolic link' / 'a hard link (N names)' when os.replace would split `path` from a file it
     shares, else ''."""
     if os.path.islink(path):
@@ -760,7 +760,7 @@ def _shared(path):
 
 
 def _write(path, raw, new, bak):
-    shared = _shared(path)
+    shared = shared_link(path)
     if shared:
         raise RuntimeError('%s is %s; not replaced' % (path, shared))
     with open(path, 'rb') as f:
