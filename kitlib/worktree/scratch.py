@@ -1,5 +1,5 @@
 """Remove a SCRATCH worktree: a detached tree an agent made under its temp folder (red evidence run
-against an older commit), whose work is disposable (docs/worktree-remove.md "Scratch worktrees").
+against an older commit), whose work is disposable (docs/worktree-remove.md "Tools", `--scratch`).
 tools/worktree_remove.py `<path> --scratch` is the entry point. Nothing here prints.
 
 `remove_scratch(top, argument)` removes the tree only when every one of these holds, checked in
