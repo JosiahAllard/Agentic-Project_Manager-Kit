@@ -32,7 +32,11 @@ tools/land.py).
                  commit that changes an owner-only path the landing would change authored by the owner
                  (kitlib.guard.ownercommits; rules of the base merged with the tip's), and the
                  branch's history free of the backlog store's root commit (`ref` and `branch`
-                 stores; kitlib.backlog.at_landing). Any miss: REFUSED, the lock released, nothing
+                 stores; kitlib.backlog.at_landing). Then the strict check (Lander.strict_check;
+                 docs/gate.md "Strict paths"): a branch that changes a path in STRICT_DEFAULTS as
+                 the base holds it lands alone, with a verdict queued for its tip
+                 (kitlib.gate.verdicts) by a strong-tier reviewer who is not its author; its
+                 merged gate then runs --full --fresh. Any miss: REFUSED, the lock released, nothing
                  merged. Last, the scope check (Lander.scope_check): every path the branch changes
                  in a scope of a record it holds, in SCOPE_ALWAYS or in a folder store's folder;
                  a miss is a WARNING after the LANDED line while SCOPE_REFUSES is False, else
@@ -120,8 +124,10 @@ them all (main never held them). Each branch gets its own result record.
 A submitted landing (kitlib.gate.submit; `land.py --submit`) is this landing run by a detached
 process: its records are written `running` before it starts, and every outcome finishes them.
 """
+import ast
 import itertools
 import os
+import re
 import shutil
 import stat
 import time
@@ -134,10 +140,11 @@ from kitlib.backlog import store as smod
 from kitlib.backlog.errors import Refusal
 import kitlib.config as kconfig
 from kitlib.config.types import ConfigError
-from kitlib.gate import cleanup, result, reuse, runner, stash
+from kitlib.gate import cleanup, result, reuse, runner, stash, strict_defaults, verdicts
 from kitlib.gate import steps as S
 from kitlib.git import cmd, refs, repo
 from kitlib.guard import ownercommits
+from kitlib.host import registry
 from kitlib.lock import queue as lockqueue
 from kitlib.lock import run as lockrun
 from kitlib.lock.store import EXIT_USAGE, LockError, Store
@@ -161,6 +168,14 @@ SCOPE_REFUSES = False
 # cannot import tools/ to learn them, so a rendering change needs them in a record's scope.
 SCOPE_ALWAYS = ('tests/**', 'docs/INDEX.md')
 SCOPE_SHOWN = 10        # outside paths a scope-check line names; more are counted
+# The strict paths (Lander.strict_check; docs/gate.md "Strict paths"): the globs of this file's
+# STRICT_DEFAULTS, owner-authored, read from the base with `git show` and parsed, never imported
+# from the branch; a base without the file (a repository that is not the kit) has the running
+# kit's list. A branch changing a matching path lands only alone, with a queued verdict at its tip
+# from a strong-tier reviewer who is not its author, and its merged gate runs --full --fresh.
+STRICT_FILE = 'kitlib/gate/strict_defaults.py'
+STRICT_NAME = 'STRICT_DEFAULTS'
+STRICT_SHOWN = 5        # strict paths a refusal names; more are counted
 
 
 class _Stuck(Exception):
@@ -234,6 +249,90 @@ def _path_error(path):
     return None
 
 
+def parse_strict(text):
+    """The globs `text`, a strict_defaults.py, assigns to STRICT_DEFAULTS: read with ast, never
+    run, so nothing of the file executes. Raises ValueError unless it assigns STRICT_DEFAULTS
+    exactly once, at the top level, a literal tuple or list of non-empty strings. Pure."""
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError) as e:
+        raise ValueError('it does not parse: %s' % ' '.join(str(e).split()))
+    values = []
+    for node in tree.body:
+        targets = (node.targets if isinstance(node, ast.Assign) else
+                   [node.target] if isinstance(node, (ast.AnnAssign, ast.AugAssign)) else [])
+        if any(isinstance(t, ast.Name) and t.id == STRICT_NAME for t in targets):
+            values.append(node.value if isinstance(node, ast.Assign) and len(targets) == 1
+                          else None)
+    if len(values) != 1:
+        raise ValueError('it assigns %s %d times, not once' % (STRICT_NAME, len(values)))
+    try:
+        globs = ast.literal_eval(values[0]) if values[0] is not None else None
+    except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+        globs = None
+    if not isinstance(globs, (tuple, list)):
+        raise ValueError('%s is not a literal tuple of globs' % STRICT_NAME)
+    if not globs or not all(isinstance(g, str) and g.strip() for g in globs):
+        raise ValueError('%s is not a tuple of non-empty glob strings' % STRICT_NAME)
+    return tuple(globs)
+
+
+def tier_models(path=None):
+    """`(strong, weak, None)`: the casefolded models hosts.json gives the strong or deep tier of
+    any host (strong) and the light or standard tier of any host (weak); or `(None, None, why)`
+    when hosts.json cannot be read. `path`: kitlib.host.registry.load's."""
+    try:
+        hosts = registry.load(path)
+    except registry.RegistryError as e:
+        return None, None, str(e)
+    strong, weak = set(), set()
+    for h in hosts.values():
+        for tier, model in h.tiers:
+            (strong if tier in ('strong', 'deep') else weak).add(model.strip().casefold())
+    return strong - {''}, weak - {''}, None
+
+
+def strong_models(path=None):
+    """`(models, None)`: tier_models' strong models less every weak one (a model in both cannot
+    show which tier ran: Codex's account-default); or `(None, why)` when hosts.json cannot be
+    read."""
+    strong, weak, why = tier_models(path)
+    return (None, why) if strong is None else (strong - weak, None)
+
+
+def strong_alias(model, strong, weak):
+    """The strong-only model (strong less weak, as strong_models) that `model`, a verdict's
+    reviewer_model, names; else None. `model` names it when it is that model (case and outer
+    spaces aside), or a full model id holding it as a word of its own (`claude-opus-5-5` names
+    opus) and no other model of `strong` or `weak`. An id naming none, a weak one or two is
+    None: fail closed. Pure."""
+    only, text = strong - weak, model.strip().casefold()
+    if text in only:
+        return text
+    named = [m for m in (strong | weak) - {''}
+             if re.search(r'(?<![0-9a-z])%s(?![0-9a-z])' % re.escape(m), text)]
+    return named[0] if len(named) == 1 and named[0] in only else None
+
+
+def _who(text):
+    """`text` (an agent type or an author line) as the parts it names, casefolded: each part
+    split on '/', ',' or ';', stripped, a `plugin:` prefix dropped."""
+    return set(p.strip().rpartition(':')[2].strip().casefold()
+               for p in re.split(r'[/,;]', text)) - {''}
+
+
+def is_author(entry):
+    """True when the verdict entry's reviewer may be the branch's author: its reviewer_id appears
+    in `author` as a word of its own, or its reviewer agent type is one of the parts `author`
+    names, split on '/', ',' or ';' (`Kit Test / strong-worker` and
+    `Kit Test (agent), strong-worker` name strong-worker). Pure."""
+    rid = entry['reviewer_id'].strip().casefold()
+    author = entry['author'].casefold()
+    if rid and re.search(r'(?<![\w-])%s(?![\w-])' % re.escape(rid), author):
+        return True
+    return bool(_who(entry['reviewer']) & _who(entry['author']))
+
+
 class _Held(object):
     """What the scope check found for one branch: `held`, id -> [scope members, command(*args)
     for its store's write]; `read`, a store holding a record was read; `unread`, why a store
@@ -260,7 +359,8 @@ class Lander(object):
     `book` replaces kitlib.lock.run.book (tests); `lock_kw` goes to LandingLock (tests pass
     process probes). `wait_s` None: the config's "landing".wait_s; one budget covers the booking
     and the lock file. `keep_branch` True: no branch cleanup after the landing (step 12).
-    `fresh` True: the merged gate runs every step, reusing none (kitlib.gate.reuse).
+    `fresh` True: the merged gate runs every step, reusing none (kitlib.gate.reuse); a branch
+    that changes a strict path sets it and `full` True itself (strict_escalate).
     `tree`: where the landing tree is (step 5b); None: <main checkout>/<worktrees_dir>/_landing.
     `submitted` (kitlib.gate.submit.restore): the detached landing of a --submit, a dict with
     `runs` (the result.Run per branch whose running records the submission wrote; every outcome
@@ -313,6 +413,8 @@ class Lander(object):
         self.scope_notes = []       # scope-check NOTE lines, said before the LANDED line
         self.scope_warnings = []    # scope-check misses while SCOPE_REFUSES is False, said after it
         self.scope_reads = {}       # the stores the scope check read once per landing: key -> read
+        self.strict_hits = {}       # branch -> the strict paths it changes (strict_check)
+        self.strict_review = None   # the verdict entry a strict branch lands with (strict_check)
 
     @property
     def pairs(self):
@@ -559,7 +661,110 @@ class Lander(object):
             why = at_landing.ancestry_refusal(self.root, self.cfg, t, env=self.git_env)
             if why:
                 return why
-        return self.scope_check()
+        return self.strict_check() or self.scope_check()
+
+    # ---------------------------------------------------------------- strict paths
+
+    def strict_globs(self):
+        """`(globs, None)`: STRICT_DEFAULTS as STRICT_FILE holds it at the base (parse_strict;
+        never imported, never read from a branch), or the running kit's list when the base has no
+        such file (a repository that is not the kit); `(None, why)` when it cannot be read."""
+        base = self.expect_main
+        r = self.git('ls-tree', '--name-only', base, '--', STRICT_FILE)
+        if r.rc != 0:
+            return None, 'git ls-tree %s: %s' % (base[:10], r.err or 'exit %s' % r.rc)
+        if not cmd.text(r.out or b'').strip():
+            return tuple(strict_defaults.STRICT_DEFAULTS), None
+        r = self.git('show', '%s:%s' % (base, STRICT_FILE))
+        if r.rc != 0:
+            return None, 'git show %s:%s: %s' % (base[:10], STRICT_FILE, r.err or 'exit %s' % r.rc)
+        try:
+            return parse_strict(cmd.text(r.out or b'')), None
+        except ValueError as e:
+            return None, '%s: %s' % (STRICT_FILE, e)
+
+    def strict_check(self):
+        """A locked check (docs/gate.md "Strict paths"): the paths each branch changes (merge base
+        with the base to its tip) against strict_globs(). A branch with a hit lands only alone,
+        with a verdict queued for its tip (kitlib.gate.verdicts) whose reviewer ran on a
+        strong-tier model (strong_alias) and is not its author (is_author); then
+        self.strict_hits and self.strict_review are set, and _locked escalates the merged gate to
+        --full --fresh. None, or why not (REFUSED, nothing merged). Every read that fails
+        refuses."""
+        self.strict_hits, self.strict_review = {}, None
+        globs, why = self.strict_globs()
+        if globs is None:
+            return 'cannot read the strict paths from %s at %s: %s' % (
+                self.cfg.main_branch, self.expect_main[:10], why)
+        for b, t in self.pairs:
+            mb, why = refs.merge_base(self.expect_main, t, self.root)
+            changed, why2 = runner.changed_between(self.root, mb, t) if mb else (None, why)
+            if changed is None:
+                return 'git cannot list the paths of %s to check strict paths: %s' % (
+                    b, why2 or why or 'no common commit with %s' % self.expect_main[:10])
+            hits = [p for p in changed if S._match(p, globs)]
+            if hits:
+                self.strict_hits[b] = hits
+        if not self.strict_hits:
+            return None
+        if len(self.pairs) > 1:
+            b = next(b for b in self.branches if b in self.strict_hits)
+            return ('%s: a branch that changes a strict path lands alone, never in a batch'
+                    % self.strict_says(b))
+        (b, t), = self.pairs
+        why = self.strict_verdict(b, t)
+        if why:
+            return '%s: %s' % (self.strict_says(b), why)
+        return None
+
+    def strict_says(self, b):
+        hits = self.strict_hits[b]
+        more = len(hits) - STRICT_SHOWN
+        return '%s changes strict path %s%s' % (
+            b, ', '.join(hits[:STRICT_SHOWN]), ' and %d more' % more if more > 0 else '')
+
+    def strict_verdict(self, b, t):
+        """None when the verdict queued for branch `b` lets its tip `t` land on a strict path
+        (self.strict_review set to it); else why not."""
+        common, why = repo.common_dir(self.root)
+        if not common:
+            return 'its verdict queue cannot be found: %s' % (why or 'no git common dir')
+        try:
+            entry = verdicts._load(verdicts.entry_path(common, b), b)
+        except verdicts.VerdictError as e:
+            return 'its verdict entry cannot be used: %s' % e
+        if entry is None:
+            return ('it lands only with a queued verdict (tools/verdict.py add), and none is '
+                    'queued for it')
+        if entry['state'] != verdicts.QUEUED:
+            return ('its verdict entry is marked %s (%s): queue it again with tools/verdict.py '
+                    'add' % (entry['state'], entry['last_result'] or 'no reason given'))
+        if entry['tip'].lower() != t.lower():
+            return ('the verdict was given at %s, and the branch is at %s: review and queue the '
+                    'tip' % (entry['tip'][:10], t[:10]))
+        strong, weak, why = tier_models()
+        if strong is None:
+            return 'the strong-tier models cannot be read: %s' % why
+        model = entry['reviewer_model']
+        if strong_alias(model, strong, weak) is None:
+            return ('the reviewer ran on %s, not a strong-tier model (%s, or a full model id '
+                    'naming it; hosts.json "tiers")'
+                    % (model, ', '.join(sorted(strong - weak)) or 'none'))
+        if is_author(entry):
+            return ('the reviewer %s (%s) is its author (%s): it lands with a review by an agent '
+                    'that did not write it' % (entry['reviewer_id'], entry['reviewer'],
+                                              entry['author']))
+        self.strict_review = entry
+        return None
+
+    def strict_escalate(self):
+        """A strict branch passed strict_check: its merged gate runs --full --fresh, whatever the
+        caller passed (it only ever tightens), and one line says so."""
+        (b, _), = self.pairs
+        e = self.strict_review
+        self.full = self.fresh = True
+        self.say('STRICT: %s: reviewed by %s on %s (%s); the merged gate runs --full --fresh' % (
+            self.strict_says(b), e['reviewer'], e['reviewer_model'], e['reviewer_id']))
 
     # ---------------------------------------------------------------- the scope check
 
@@ -1456,6 +1661,8 @@ class Lander(object):
         if why:
             self.release()
             return G.Outcome(G.REFUSED, ['REFUSED: %s; nothing was merged' % why])
+        if self.strict_hits:        # strict_check passed it: --full --fresh, said once
+            self.strict_escalate()
         if not self.fresh:          # before this landing's own records replace them
             self.prior = self.prior_records()
         if self.submitted:          # running since the submission: now with the base
