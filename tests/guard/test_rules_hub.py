@@ -423,8 +423,12 @@ class BareWordsInTheDataFolder(Hub):
             (ps, 'Select-String -Pattern x -Path hub\\todos\\T-1.json'),
             (ps, 'Select-String -Pattern x hub'),
             (ps, 'sls -Context 2 x hub'),
+            (ps, 'sls -SimpleMatch x hub'),
+            (bash, 'grep --file hub launcher/coordinators.json'),
             # a python script's positional argument, a path-shaped value, a module's option
             (bash, 'python tools/x.py hub'),
+            (bash, 'python tools/x.py read hub'),
+            (bash, 'python tools/x.py -o hub'),
             (bash, 'python tools/x.py --store hub/todos'),
             (bash, 'python tools/x.py --store ./hub'),
             (bash, 'python tools/x.py --store=hub/todos'),
