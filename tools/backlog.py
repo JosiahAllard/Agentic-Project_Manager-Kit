@@ -196,6 +196,11 @@ def do_next(args, ctx, snap):
         say(row(o.rec, ranks) + ('  (--with)' if o.seeded else ''))
     for p in passed:
         say('  passed over %s (rank %s): %s' % (p.rec.id, p.rank, p.why))
+    summary = omod.blocker_summary(passed)
+    if summary:
+        say('  blockers, most first:')
+        for line in summary:
+            say('    ' + line)
     return 0
 
 
