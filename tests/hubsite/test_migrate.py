@@ -95,6 +95,16 @@ def tree(folder):
     return out
 
 
+def on_disk(root, coll, doc_id):
+    """The fields of root's coll/doc_id.json as its file holds them, or None: what migrate wrote,
+    not what the store reads (the store reads a text `recommended` as its number)."""
+    try:
+        with open(os.path.join(root, coll, doc_id + '.json'), encoding='utf-8') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return None
+
+
 def docs_of(folder):
     """The document files under folder: tree() without the store's own lock file."""
     return {k: v for k, v in tree(folder).items() if k != LOCK_NAME}
@@ -112,8 +122,7 @@ class Case(unittest.TestCase):
         return migrate.migrate(self.root, [self.mirror, self.export], **kw)
 
     def stored(self, coll, doc_id):
-        with Store.open(self.root) as s:
-            return s.get(coll, doc_id)
+        return on_disk(self.root, coll, doc_id)
 
 
 class ImportCase(Case):
@@ -539,8 +548,7 @@ class StoreConflictCase(Case):
         self.assertEqual(self.stored_in(self.mirror, 'inbox', 'L-run1-end'), notice('run1', 'end'))
 
     def stored_in(self, root, coll, doc_id):
-        with Store.open(root) as s:
-            return s.get(coll, doc_id)
+        return on_disk(root, coll, doc_id)
 
 
 class WriteCase(Case):
@@ -780,8 +788,10 @@ class RecommendedCase(Case):
         self.assertEqual((r.added, r.conflicts, r.kept, r.turned), ([], [], [], []))
         self.assertIn('questions/Q-020', r.same)
         self.assertTrue(r.complete)
-        with Store.open(self.mirror) as s:
-            self.assertEqual(s.get('questions', 'Q-020'), self.text)
+        self.assertEqual(on_disk(self.mirror, 'questions', 'Q-020'), self.text,
+                         'the file is not rewritten')
+        with Store.open(self.mirror) as s:     # the store reads the text as its number
+            self.assertEqual(s.get('questions', 'Q-020'), self.number)
         lines = migrate.report_lines(r)
         self.assertIn('VALIDATE ERROR questions/Q-020 recommended: recommended must be int, not '
                       'str [schema-field]', lines)
@@ -948,8 +958,10 @@ class LabelCase(Case):
         self.assertEqual((r.added, r.conflicts, r.kept, r.turned), ([], [], [], []))
         self.assertIn('questions/Q-030', r.same)
         self.assertTrue(r.complete)
-        with Store.open(self.mirror) as s:
-            self.assertEqual(s.get('questions', 'Q-030'), self.text)
+        self.assertEqual(on_disk(self.mirror, 'questions', 'Q-030'), self.text,
+                         'the file is not rewritten')
+        with Store.open(self.mirror) as s:     # the store reads the label as its position
+            self.assertEqual(s.get('questions', 'Q-030'), self.number)
         lines = migrate.report_lines(r)
         self.assertIn('VALIDATE questions/Q-030: the api will refuse every update of this '
                       'document until it is fixed; fix its file by hand with the server stopped '

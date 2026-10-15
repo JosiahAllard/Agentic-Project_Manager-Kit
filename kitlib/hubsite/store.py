@@ -12,7 +12,9 @@ Layout under the store folder `root` (the caller resolves it; nothing here reads
     <root>/_store.lock              the single-writer lock (below); never a document
 
 Only schema.COLLECTIONS are read and written; any other folder (parked/ from the old hub) is left
-alone.
+alone. A question whose `recommended` is text that stands for a number (kitlib.hubsite.migrate's
+rule, migrate._whole) is read as that number, so its next write stores the number; its file is
+not rewritten until then.
 
 One writer. Store.open takes kitlib.dailyfull.treelock.TreeLock on `_store.lock` for the life of
 the Store: an msvcrt byte-range lock the system drops when the holder exits, however it exits. A
@@ -232,6 +234,7 @@ class Store(object):
         return s
 
     def _load(self):
+        from . import migrate       # migrate imports this module: imported here, not at the top
         _sweep(self.root)
         for coll in schema.COLLECTIONS:
             folder = os.path.join(self.root, coll)
@@ -246,7 +249,9 @@ class Store(object):
             for n in names:
                 path = os.path.join(folder, n)
                 if n.lower().endswith('.json') and len(n) > 5 and os.path.isfile(path):
-                    docs[n[:-5]] = _read_json(path)
+                    # a legacy question's text `recommended` is read as the number it stands for
+                    # (migrate's rule), so schema.check does not refuse every later update of it
+                    docs[n[:-5]] = migrate._whole(coll, _read_json(path))[0]
             self._docs[coll] = docs
         meta_path = os.path.join(self.root, META_NAME)
         try:

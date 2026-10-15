@@ -1,5 +1,6 @@
 """kitlib.hubsite.store: the file store, its single-writer lock, ids, revision, events, pending and
 validation on write, and a crash in the middle of a write."""
+import json
 import os
 import shutil
 import subprocess
@@ -321,6 +322,21 @@ class ValidateTest(StoreCase):
                    '{"status": "open", "title": "t", "from": "pm"}')
         s = self.open(root)
         self.assertEqual(s.update('todos', 'T-001', {'title': 'u'}).version, 1)
+
+    def test_a_legacy_text_recommended_is_read_as_its_number_so_the_question_can_be_logged(self):
+        root = tmpdir(self)
+        two = [{'label': 'a', 'description': 'b'}, {'label': 'c', 'description': 'd'}]
+        legacy = question(status='answered', answer={'choice': 0, 'at': '2'}, options=two,
+                          recommended='1')
+        write_file(os.path.join(root, 'questions', 'Q-001.json'), json.dumps(legacy))
+        label = question(options=two, recommended='c')
+        write_file(os.path.join(root, 'questions', 'Q-002.json'), json.dumps(label))
+        s = self.open(root)
+        self.assertEqual(s.get('questions', 'Q-001')['recommended'], 1)
+        self.assertEqual(s.get('questions', 'Q-002')['recommended'], 1)
+        self.assertEqual(s.update('questions', 'Q-001', {'status': 'logged'}).version, 1)
+        with open(os.path.join(root, 'questions', 'Q-001.json'), encoding='utf-8') as f:
+            self.assertEqual(json.load(f)['recommended'], 1)
 
 
 class RingTest(StoreCase):
