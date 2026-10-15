@@ -52,6 +52,13 @@ class StubsCheckTest(unittest.TestCase):
         """Stubs are opt-in (decision 21): a repository that uses none gets no line."""
         self.assertEqual(pmstart.stubs({"a": self.a}), [])
 
+    def test_a_pm_data_folder_with_no_tools_folder_is_silent(self):
+        """A PM data folder calls the kit's tools by full path: a .kit.json with no "stubs"
+        section and no tools folder is a repository that uses no stubs, not one missing them."""
+        with open(os.path.join(self.a, ".kit.json"), "w", encoding="utf-8") as f:
+            f.write('{"backlog": {"store": "kit/backlog"}, "repo": {"name": "pm", "main_branch": "pmdata"}}\n')
+        self.assertEqual(pmstart.stubs({"pm": self.a}), [])
+
     def test_the_real_check_names_the_missing_stubs_of_a_repo(self):
         with open(os.path.join(self.a, ".kit.json"), "w", encoding="utf-8") as f:
             f.write('{"stubs": {"tools": ["backlog"]}}\n')    # the repository opts into stubs

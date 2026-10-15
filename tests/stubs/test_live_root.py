@@ -2,11 +2,14 @@
 (kitlib.pluginsource.live_root), never the export of pushed main that kitlib.gate.pin runs gate.py
 and land.py from. A downstream gate's kit-stubs step runs `{here}/kit_stubs.py check`, and `{here}`
 is the export's tools folder (kitlib.gate.steps.KIT_TOOLS); the stubs a repository has committed
-name the main checkout and must stay current.
+name the main checkout and must stay current. Run from the plugin's export with no KIT_LIVE_ROOT
+(the session start hook), the kit is the main checkout the export's marker names; an export whose
+marker names none is refused, never written into a stub.
 
 The export and the live checkout are fake kits in the fixture's temp folder; stubs.KIT_ROOT is
 patched to the export. No real repository and no ~/.claude* file is touched.
 """
+import json
 import os
 import unittest
 from unittest import mock
@@ -62,12 +65,172 @@ class Pinned(StubCase):
         self.assertIn('run python %s write' % os.path.join(self.live, 'tools', 'kit_stubs.py'), line)
         self.assertNotIn(self.export, line)
 
-    def test_an_export_without_the_variable_names_itself(self):
+    def test_an_export_without_the_variable_or_a_marker_checkout_writes_nothing(self):
+        """The export's marker ('{}') names no main checkout: a write would name the export, which
+        a later prune may remove, so it is refused and no stub is written."""
         with mock.patch.dict(os.environ):
             os.environ.pop(pluginsource.LIVE_ROOT_ENV)
-            self.assertEqual(self.run_stubs('write')[0], stubs.OK)
+            code, out = self.run_stubs('write')
+        self.assertEqual(code, stubs.CONFIG, out)
+        self.assertIn('kit_stubs: refused:', out)
+        self.assertFalse(os.path.exists(self.stub('cmd_a')))
+
+
+class FromTheExport(StubCase):
+    """A run from the plugin's export with no KIT_LIVE_ROOT, as the session start hook runs: the
+    export's marker names the main checkout it was made from (pluginsource.export_checkout)."""
+
+    def setUp(self):
+        super().setUp()
+        self.export = os.path.join(self.tmp, 'kit-export')
+        self.live = os.path.join(self.tmp, 'kit-live')
+        for kit in (self.export, self.live):
+            self.put(os.path.join(kit, 'tools', 'cmd_a.py'), "if __name__ == '__main__':\n    pass\n")
+            self.put(os.path.join(kit, 'kit.json'), '{}\n')
+        os.makedirs(os.path.join(self.live, '.git'))
+        self.put(os.path.join(self.export, pluginsource.MARKER),
+                 json.dumps({'sha': SHA, 'checkout': self.live.replace('\\', '/')}) + '\n')
+        root = mock.patch.object(stubs, 'KIT_ROOT', self.export)
+        root.start()
+        self.addCleanup(root.stop)
+        self.config(stubs={'tools': ['cmd_a']})
+
+    def test_kit_root_is_the_main_checkout_the_marker_names(self):
+        self.assertEqual(os.path.normpath(stubs.kit_root()), os.path.normpath(self.live))
+
+    def test_a_stub_running_the_main_checkout_is_current(self):
+        self.put(self.stub('cmd_a'), stubs.stub_text('cmd_a', kit=self.live))
+        code, out = self.run_stubs('check')
+        self.assertEqual(code, stubs.OK, out)
+        self.assertIsNone(stubs.problem_line(self.root))
+
+    def test_write_names_the_main_checkout_never_the_export(self):
+        code, out = self.run_stubs('write')
+        self.assertEqual(code, stubs.OK, out)
+        text = self.read(self.stub('cmd_a'))
+        self.assertEqual(stubs.stub_kit(text), repr(os.path.normpath(self.live)))
+        self.assertNotIn(self.export, text)
+
+    def test_the_problem_lines_write_command_names_the_main_checkout(self):
+        line = stubs.problem_line(self.root)
+        self.assertIn('run python %s write' % os.path.join(os.path.normpath(self.live), 'tools',
+                                                          'kit_stubs.py'), line)
+        self.assertNotIn(self.export, line)
+
+    def test_the_variable_wins_over_the_marker(self):
+        other = os.path.join(self.tmp, 'kit-other')
+        os.makedirs(other)
+        with mock.patch.dict(os.environ, {pluginsource.LIVE_ROOT_ENV: other}):
+            self.assertEqual(stubs.kit_root(), other)
+
+    def test_an_explicit_export_kit_is_mapped_to_its_checkout(self):
+        """machine_setup.py --repo --stubs passes its own folder as the kit: run from the plugin,
+        that is the export."""
+        code, out = self.run_stubs('write', kit=self.export)
+        self.assertEqual(code, stubs.OK, out)
         self.assertEqual(stubs.stub_kit(self.read(self.stub('cmd_a'))),
-                         repr(os.path.normpath(self.export)))
+                         repr(os.path.normpath(self.live)))
+
+
+class ExportNamingNoCheckout(StubCase):
+    """An export whose marker names no main checkout: an older marker with no `checkout`, or one
+    naming a folder that is not a main checkout (no .git folder), is gone, or is a git checkout
+    that is not the kit (a .git folder but no kit.json, or no tools folder: live_kit's own test).
+    Nothing may name the export, so write and check are refused and the session start's line
+    carries no command."""
+
+    MARKERS = ('{}', '{"checkout": "%(plain)s"}', '{"checkout": "%(gone)s"}',
+               '{"checkout": "%(nokitjson)s"}', '{"checkout": "%(notools)s"}')
+
+    def setUp(self):
+        super().setUp()
+        self.export = os.path.join(self.tmp, 'kit-export')
+        self.put(os.path.join(self.export, 'tools', 'cmd_a.py'), "if __name__ == '__main__':\n    pass\n")
+        self.plain = os.path.join(self.tmp, 'kit-plain')
+        os.makedirs(os.path.join(self.plain, 'tools'))
+        self.nokitjson = os.path.join(self.tmp, 'repo-nokitjson')
+        os.makedirs(os.path.join(self.nokitjson, '.git'))
+        # The tool the configuration names is there, so only live_kit's kit.json test refuses it.
+        self.put(os.path.join(self.nokitjson, 'tools', 'cmd_a.py'),
+                 "if __name__ == '__main__':\n    pass\n")
+        self.notools = os.path.join(self.tmp, 'repo-notools')
+        os.makedirs(os.path.join(self.notools, '.git'))
+        self.put(os.path.join(self.notools, 'kit.json'), '{}\n')
+        root = mock.patch.object(stubs, 'KIT_ROOT', self.export)
+        root.start()
+        self.addCleanup(root.stop)
+        self.config(stubs={'tools': ['cmd_a']})
+
+    def why(self):
+        """live_kit's refusal of the export: the text every refusal below must carry, so none
+        passes on another error (a tool the configuration names missing from the folder named)."""
+        return ('%s is an export of the kit' % os.path.normpath(self.export))
+
+    def markers(self):
+        for m in self.MARKERS:
+            text = m % {'plain': self.plain.replace('\\', '/'),
+                        'gone': os.path.join(self.tmp, 'gone').replace('\\', '/'),
+                        'nokitjson': self.nokitjson.replace('\\', '/'),
+                        'notools': self.notools.replace('\\', '/')}
+            self.put(os.path.join(self.export, pluginsource.MARKER), text + '\n')
+            yield text
+
+    def test_write_is_refused_and_writes_nothing(self):
+        for marker in self.markers():
+            with self.subTest(marker=marker):
+                code, out = self.run_stubs('write')
+                self.assertEqual(code, stubs.CONFIG, out)
+                self.assertIn('kit_stubs: refused: %s' % self.why(), out)
+                self.assertFalse(os.path.exists(self.stub('cmd_a')))
+
+    def test_check_is_refused(self):
+        for marker in self.markers():
+            with self.subTest(marker=marker):
+                code, out = self.run_stubs('check')
+                self.assertEqual(code, stubs.CONFIG, out)
+                self.assertIn('kit_stubs: refused: %s' % self.why(), out)
+
+    def test_problem_line_names_no_write_command(self):
+        label = os.path.basename(self.root)
+        for marker in self.markers():
+            with self.subTest(marker=marker):
+                line = stubs.problem_line(self.root)
+                want = 'could not check stubs (%s): %s' % (label, self.why())
+                self.assertTrue(line.startswith(want), line)
+                self.assertNotIn('kit_stubs.py write', line)
+                self.assertNotIn('run python', line)
+
+    def test_live_kit_refuses_a_git_checkout_that_is_not_the_kit(self):
+        """export_checkout accepts any folder with a .git folder; live_kit's own test needs both
+        kit.json and a tools folder."""
+        for name, folder in (('nokitjson', self.nokitjson), ('notools', self.notools)):
+            self.put(os.path.join(self.export, pluginsource.MARKER),
+                     json.dumps({'checkout': folder.replace('\\', '/')}) + '\n')
+            with self.subTest(checkout=name):
+                self.assertEqual(os.path.normpath(pluginsource.export_checkout(self.export)),
+                                 os.path.normpath(folder))
+                kit, why = stubs.live_kit(self.export)
+                self.assertIsNone(kit)
+                self.assertTrue(why.startswith(self.why()), why)
+
+    def test_a_repository_that_uses_no_stubs_gets_no_line_and_check_is_ok(self):
+        """Stubs are opt-in: a repository with no "stubs".tools and no stub (a PM data folder) is
+        not checked at all, so the export's marker does not matter to it."""
+        self.config()
+        for marker in self.markers():
+            with self.subTest(marker=marker):
+                self.assertIsNone(stubs.problem_line(self.root))
+                code, out = self.run_stubs('check')
+                self.assertEqual(code, stubs.OK, out)
+                self.assertIn('kit_stubs: uses no stubs', out)
+
+    def test_write_on_a_repository_that_uses_no_stubs_is_still_refused(self):
+        self.config()
+        for marker in self.markers():
+            with self.subTest(marker=marker):
+                code, out = self.run_stubs('write', tools=['cmd_a'])
+                self.assertEqual(code, stubs.CONFIG, out)
+                self.assertFalse(os.path.exists(self.stub('cmd_a')))
 
 
 class Unpinned(StubCase):
