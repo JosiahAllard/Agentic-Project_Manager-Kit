@@ -13,6 +13,8 @@ coordinator profile: with none, the coordinator works from the repository's own 
 AGENTS.md: a branch `kit/<slug>` in a worktree made by `tools/new_worktree.py` (docs/new-worktree.md,
 docs/worktree-paths.md), never the main checkout. Commit by explicit path with `tools/commit.py`
 (docs/commit.md). Remove only your own worktree, with `tools/worktree_remove.py` (docs/worktree-remove.md).
+A session started with `launch.py --home-worktree` runs in a detached, locked `home-<session name>`
+worktree (docs/launcher.md "The home worktree"): never edit or check out in it; it is not a task worktree.
 
 ## Build and test
 The gate is `python tools/gate.py` (docs/gate.md); `--full` runs the whole suite and takes the
@@ -31,9 +33,9 @@ Landing is standing owner-approved work: the lander lands a reviewed branch on t
 project manager's go, with the reviewer's verdict in its brief. From the main checkout, on main,
 after `git merge --ff-only <remote>/<main>`:
 `python tools/gate.py land <branch> --expect-main <sha> --expect-tip <sha>`.
-It queues, locks, merges, gates the merge, pushes and verifies (docs/gate.md "Landing"). Success: a
-`LANDED ` line and exit 0, or exit 9 (landed-ungated: commits on top were not gated; run the full
-gate on main and report); any other verdict line (`NOT LANDED:`, `STUCK:`, `REFUSED:`, `BUSY:`) is
+It queues, locks, merges and gates the merge in its own landing tree, pushes and verifies, then
+brings the main checkout to the merge (docs/gate.md "Landing"). Success: a `LANDED ` line and exit
+0; any other verdict line (`NOT LANDED:`, `STUCK:`, `REFUSED:`, `BUSY:`) is
 reported as is, with the doc's recovery steps, and not retried. Batches: docs/gate.md.
 
 ## Shared resources that must be serialised
