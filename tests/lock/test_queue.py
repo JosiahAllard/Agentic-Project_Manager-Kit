@@ -375,6 +375,25 @@ class ResourceExclusion(unittest.TestCase):
         self.assertEqual(got["r-x2"]["start"], NOW + 1800)
         self.assertEqual(got["r-run"]["start"], NOW + 1800)
 
+    def test_two_landings_of_a_repo_and_a_backfill_candidate(self):
+        # A holder leaves two of the four slots busy for 900 s. Landing 1 needs all four, so it
+        # waits for the slots (a barrier); landing 2 names the same resource and follows it.
+        # Only a run that ends by landing 1's start may go ahead; none passes landing 2 by it.
+        def plan(candidate):
+            es = [holder("r-h", [0, 1], NOW - 100, 1000), land("r-l1", 4, 100, 2),
+                  land("r-l2", 4, 100, 3), candidate]
+            return self.plan(es)
+        got = plan(waiter("r-fits", 2, 900, 4))
+        self.assertEqual((got["r-fits"]["start"], got["r-fits"]["backfill"]), (NOW, True))
+        self.assertEqual(got["r-l1"]["start"], NOW + 900)
+        self.assertEqual(got["r-l2"]["start"], NOW + 1000)      # never beside landing 1
+        got = plan(waiter("r-over", 2, 901, 4))
+        self.assertFalse(got["r-over"]["backfill"])
+        self.assertGreaterEqual(got["r-over"]["start"], got["r-l1"]["start"])
+        self.assertEqual(got["r-l1"]["start"], NOW + 900)       # the candidate cost it nothing
+        self.assertEqual(got["r-l2"]["start"], NOW + 1000)
+        self.assertLess(got["r-l1"]["position"], got["r-l2"]["position"])
+
     def test_a_background_run_naming_it_holds_it_but_its_slots_still_yield(self):
         bg = {"id": "r-bg", "ticket": 1, "state": "bg", "need": {"cpu": 1, "gpu": 0},
               "cores": [0], "gpus": [], "held_at": NOW, "expect_s": 600, "resource": LAND}
