@@ -96,7 +96,7 @@ def _path(where, v):
         raise StepError('%s: the file is a non-empty string' % where)
     if len(v) > PATH_MAX or not _PATH_RE.match(v) or _PATH_BAD_RE.search(v) or \
             v.endswith(('\\', '/')):
-        raise StepError('%s: the file must be an absolute path to a file (C:\\... or '
+        raise StepError('%s: the file must be an absolute path to a file (<drive>:\\... or '
                         '\\\\server\\share\\...) with no control character or "<>|?*: %r'
                         % (where, v))
     return v
@@ -189,7 +189,7 @@ _EDIT = (
     "try { $CR=[string][char]13; $LF=[string][char]10; $o=$o.Replace($CR,''); "
     "$n=$n.Replace($CR,''); $b=[IO.File]::ReadAllBytes($p); "
     "if ($b.Length -ge 4 -and $b[0] -eq 0xFF -and $b[1] -eq 0xFE -and $b[2] -eq 0 -and "
-    "$b[3] -eq 0) { throw 'a UTF-32 file is not edited here' }; "
+    "$b[3] -eq 0) { throw 'a UTF32 file is not edited here' }; "
     "if ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF) "
     "{ $k=3; $e=New-Object Text.UTF8Encoding($true,$true) } "
     "elseif ($b.Length -ge 2 -and $b[0] -eq 0xFF -and $b[1] -eq 0xFE) "

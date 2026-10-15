@@ -54,7 +54,7 @@ Each calls a route the agent's token may call (`kitlib.hubsite.api.ROUTES`, role
 
 ## To-do steps
 
-`hub_todo_add` takes `steps`, a list of what the owner is to do, and `kitlib.hubsite.todosteps` turns each into a PowerShell command the owner pastes (`render`), appended after any `commands` given. One line per step (`summary`), such as `replace 2 lines in C:\w\a.txt` or `run python t.py`, ends the to-do's detail, after a blank line. A step has exactly one verb key:
+`hub_todo_add` takes `steps`, a list of what the owner is to do, and `kitlib.hubsite.todosteps` turns each into a PowerShell command the owner pastes (`render`), appended after any `commands` given. One line per step (`summary`), such as `replace 2 lines in <file>` or `run python t.py`, ends the to-do's detail, after a blank line. A step has exactly one verb key:
 
 | step | command |
 |---|---|
