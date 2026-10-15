@@ -17,7 +17,7 @@ import for that): kitlib never imports a host, the host is chosen at the edge.
                             closed; and the one place a hook command line is written
   header                    the kit header every session and subagent start adds to the context
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, Protocol
 
 # `other`: a tool call no guard rule judges (a read, a search); the adapter still parses it, so a
@@ -46,6 +46,9 @@ class Action:
                    None: `cwd`
       retarget     the same edit aimed elsewhere, as the host's call text with `{path}` for the
                    path (an Instead line); '' when the host has no such form
+      params       an MCP call's input object as the host passed it (None: not an MCP call, or a
+                   host that does not pass it); the hub-browser rule reads its strings. It takes
+                   no part in equality or hashing
     """
     kind: str
     tool: str = ''
@@ -59,6 +62,7 @@ class Action:
     background: bool = False
     retarget: str = ''
     workdir: Optional[str] = None
+    params: Optional[dict] = field(default=None, compare=False, hash=False)
 
     def __post_init__(self):
         if self.kind not in KINDS:
