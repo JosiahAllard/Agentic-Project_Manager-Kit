@@ -85,4 +85,4 @@ Start with `python <kit>/tools/preflight.py -C <worktree>`.
 Find what you need with `python <kit>/tools/doc_index.py -C <worktree> --find <topic>` (`--tools` for tools); never read
 `docs/INDEX.md` whole. `<kit>/tools/codemap.py` shows where code lives, `doc_index.py --section "<heading>"` one doc section.
 Use the Grep and Read tools, not shell grep, cat or sed. No tool fits: write your own script in your
-scratch folder, never in the repo.
+scratch folder, never in the repo. Write targets are literal paths, never a shell variable in a command that writes.
