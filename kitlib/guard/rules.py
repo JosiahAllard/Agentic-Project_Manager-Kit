@@ -2010,21 +2010,130 @@ def _rsync(args):
     return pos[-1:] if len(pos) >= 2 else []
 
 
+# tar's short options that take no value in GNU tar and in bsdtar (Windows' tar.exe) alike, and
+# those that take one besides -C; a letter in neither may take one. Long options known to take none.
+TAR_FLAGS = set('xtcruvzjJZapkmOohPUwSBln')
+TAR_VALUES = set('bfFgHIKLNTVX')
+TAR_LONG_FLAGS = {'extract', 'get', 'list', 'create', 'append', 'update', 'verbose', 'gzip', 'gunzip', 'ungzip',
+                  'bzip2', 'xz', 'lzma', 'zstd', 'lzip', 'compress', 'uncompress', 'auto-compress',
+                  'keep-old-files', 'keep-newer-files', 'overwrite', 'preserve-permissions', 'same-permissions',
+                  'no-same-owner', 'same-owner', 'no-same-permissions', 'unlink-first', 'absolute-names',
+                  'dereference', 'totals', 'to-stdout', 'interactive', 'sparse', 'numeric-owner',
+                  'no-recursion', 'touch', 'ignore-zeros', 'check-links', 'verify'}
+
+
+class _TarDirs:
+    """The folders a tar line may extract into: `bases` the folders in force (None is the working
+    directory), `seen` every folder a -C named, `unsure` once a -C was read that may not be one."""
+
+    def __init__(self):
+        self.bases, self.seen, self.unsure = [None], [], False
+
+    def move(self, folder, sure):
+        """A -C to `folder`, relative to the one in force as tar reads it (-C /a -C b is /a/b);
+        not `sure`: it may not be a -C, so the folders in force stay possible too."""
+        new = []
+        for b in self.bases:
+            rooted = folder.text.startswith(('/', '\\', '~')) or ntpath.splitdrive(folder.text)[0]
+            new.append(folder if b is None or rooted else
+                       sh.Word(ntpath.join(b.text, folder.text), folder.dyn or b.dyn, folder.start, folder.end))
+        self.bases = new if sure else self.bases + new
+        self.seen += new
+        self.unsure = self.unsure or not sure
+
+
+def _tar_old(args, dirs):
+    """(index of the first word after the values, the state after them) for the old-style first
+    word (tar xCf <dir> a.tar): each letter that takes a value takes the next word in turn. A letter
+    the guard does not know may take one too, so a C after one names any of the words it could."""
+    k, unknown = 1, 0
+    for c in args[0].text:
+        if c == 'C':
+            for j in range(k, min(k + unknown + 1, len(args))):
+                dirs.move(args[j], not unknown)
+            k += 1
+        elif c in TAR_VALUES:
+            k += 1
+        elif c not in TAR_FLAGS:
+            unknown += 1
+    return k, ('maybe' if unknown else None)
+
+
+def _tar_word(args, k, state, dirs):
+    """The state after tar's word args[k] (None, 'value': the next word is a value, 'maybe': it may
+    be one, 'folder': it is -C's), moving `dirs` for a -C. A -C is sure only in a word that is no
+    value of the word before it and, in a cluster, after letters that take none (-xvC <dir>);
+    otherwise (-xfC <dir>: a file C; -NC<dir>: a date; --exclude -C<dir>) both readings stay."""
+    w, t = args[k], args[k].text
+    if state == 'folder':
+        dirs.move(w, True)
+        return None
+    doubt = state is not None
+    nxt = args[k + 1] if k + 1 < len(args) else None
+    if t.startswith('--'):
+        name, eq, value = t.partition('=')
+        # --di is also --diff; bsdtar (Windows' tar.exe) reads --cd as -C
+        if name == '--cd' or len(name) >= 5 and '--directory'.startswith(name):
+            if eq:
+                dirs.move(tail_word(w, value), not doubt)
+                return None
+            if not doubt:
+                return 'folder'
+            if nxt is not None:
+                dirs.move(nxt, False)
+            return 'maybe'
+        return None if eq or name[2:] in TAR_LONG_FLAGS or state == 'value' else 'maybe'
+    if not t.startswith('-') or len(t) < 2:
+        return None
+    clean = not doubt
+    for j, c in enumerate(t[1:], 1):
+        if c == 'C':
+            rest = t[j + 1:]
+            if clean:
+                if rest:
+                    dirs.move(tail_word(w, rest), True)
+                    return None
+                return 'folder'
+            folder = tail_word(w, rest) if rest else nxt
+            if folder is not None:
+                dirs.move(folder, False)
+            return 'maybe'
+        if c not in TAR_FLAGS:
+            clean = False
+    if state == 'value':
+        return None
+    i = next((j for j, c in enumerate(t[1:], 1) if c not in TAR_FLAGS), None)
+    if i is None:
+        return None
+    if t[i] not in TAR_VALUES:
+        return 'maybe'
+    if i + 1 < len(t):                          # -fa.tar: the value is attached
+        return None
+    return 'maybe' if doubt else 'value'
+
+
 def _tar(args, cmd_word):
+    """[Word]: the folders tar -x writes: each folder a -C/--directory names, relative to the one
+    before it (_TarDirs), with none the working directory, and the working directory too once a -C
+    was read that may not be one (_tar_word, _tar_old: fail closed)."""
     first = args[0].text if args else ''
     extract = bool(re.match(r'^[A-Za-z]*x', first)) and not first.startswith('-')       # tar xf a.tar
-    folder = None
-    for k, w in enumerate(args):
-        t = w.text
+    dirs, k, state = _TarDirs(), 0, None
+    if extract:
+        k, state = _tar_old(args, dirs)
+    while k < len(args):
+        t = args[k].text
+        if t == '--' and state is None:
+            break
         if t in ('--extract', '--get') or re.match(r'^-[A-Za-z]*x', t) and not t.startswith('--'):
             extract = True
-        if t in ('-C', '--directory') and k + 1 < len(args):
-            folder = args[k + 1]
-        elif t.startswith('--directory='):
-            folder = sh.Word(t.partition('=')[2], w.dyn, w.start, w.end)
+        state = _tar_word(args, k, state, dirs)
+        k += 1
     if not extract:
         return []
-    return [folder if folder is not None else here(cmd_word)]
+    if not dirs.seen:
+        return [here(cmd_word)]
+    return dirs.seen + ([here(cmd_word)] if dirs.unsure else [])
 
 
 def _unzip(args, cmd_word):
@@ -2140,14 +2249,14 @@ def write_targets(cmd, inv):
         return out + _python(cmd, args, word)
     if name in EVALS:
         return out + _evals(name, args, word)
+    if name == 'tar':                           # Windows' own tar.exe runs from PowerShell too
+        return out + _tar(args, word)
     if cmd.shell == sh.PS:
         return out
     if name == 'sed':
         return out + _sed(args)
     if name == 'perl':
         return out + _perl(args, word)
-    if name == 'tar':
-        return out + _tar(args, word)
     if name == 'unzip':
         return out + _unzip(args, word)
     if name == 'dd':
@@ -2984,6 +3093,199 @@ def writes_output_file(t):
     return len(name) >= 4 and '--output'.startswith(name)
 
 
+# git archive's long options in full (git expands a unique prefix: --outp is --output), those that
+# take a value, and its short ones (-o takes a value; -0..-9 are compression levels)
+ARCHIVE_LONGS = ('format', 'prefix', 'add-file', 'add-virtual-file', 'output', 'worktree-attributes', 'verbose',
+                 'list', 'mtime', 'remote', 'exec')
+ARCHIVE_VALUES = {'format', 'prefix', 'add-file', 'add-virtual-file', 'output', 'mtime', 'remote', 'exec'}
+ARCHIVE_FLAGS = set('vl0123456789')
+# --remote runs git-upload-archive (a program --exec names) instead of reading this repository
+ARCHIVE_RUNS = {'remote', 'exec'}
+# the -c keys (lower-case) an archive may carry and stay a read: none names a program, a filter or
+# another file to read config or attributes from. Any other key may make archive run a program in
+# the checkout it reads (tar.<format>.command; filter.<driver>.smudge or .process with
+# core.attributesFile or the checkout's own attributes; include.path), so it fails closed
+ARCHIVE_SAFE_KEY_RE = re.compile(r'^(?:core\.quotepath|core\.autocrlf|core\.eol|tar\.umask|tar\..+\.remote)$')
+
+
+def ps_native_unsure(w):
+    """True when Windows PowerShell 5.1 may hand the word `w` to a program as other than one
+    argument (observed): a double quote in it ('\\"a -c b' arrives as "a, -c, b), an empty word
+    (dropped), or a blank in it and a backslash at its end (it takes in the words after it)."""
+    t = w.text
+    return '"' in t or not t or (t.endswith('\\') and any(c.isspace() for c in t))
+
+
+def cmd_native_unsure(cmd, w):
+    """True when the C runtime may split the word `w` that cmd.exe passes on other than cmd reads
+    it: cmd toggles quoting at every `"` and keeps backslashes, the C runtime reads `\\"` as a quote
+    and `""` inside quotes as one; so only a word with no `"`, or one wholly in one pair of quotes
+    with no backslash before the closing one, is read the same (cmd reads a\\" -o f \\"b as one
+    word, git.exe gets a", -o, f, "b). A word with no valid place in the source is unsure: its
+    text has cmd's quotes taken out already (fail closed)."""
+    src = cmd.source or ''
+    if w.start is None or w.end is None or not 0 <= w.start <= w.end <= len(src):
+        return True
+    raw = src[w.start:w.end]
+    if '"' not in raw:
+        return False
+    return not (len(raw) >= 2 and raw[0] == raw[-1] == '"' and '"' not in raw[1:-1] and not raw[:-1].endswith('\\'))
+
+
+def native_unsure(cmd, w):
+    """True when the shell may hand the word `w` to a native program as other than one argument,
+    the word the guard reads (ps_native_unsure, cmd_native_unsure)."""
+    if cmd.shell == sh.PS:
+        return ps_native_unsure(w)
+    if cmd.shell == sh.CMD:
+        return cmd_native_unsure(cmd, w)
+    return False
+
+
+def archive_words(gc):
+    """The Words after git archive `gc`'s subcommand as the shell hands them to git (bash drops
+    every backslash it would, a leading one too: `\\-o` is -o; commands.passed)."""
+    cmd = gc.inv.cmd
+    return [sh.Word(cm.passed(cmd, w), w.dyn, w.start, w.end, w.synth) for w in gc.inv.args[len(gc.inv.args) -
+                                                                                          len(gc.rest):]]
+
+
+def archive_filter_set(gc):
+    """True when the line may give git archive `gc` a program to run that the checkout's own config
+    does not, or the guard cannot tell: a git the text cannot place (gc.blind: --git-dir,
+    --work-tree, --config-env, a GIT_DIR-like variable), any GIT_* variable outside
+    commands.GIT_SAFE_NAMES or an environment change the guard cannot read (commands.mark_git_env),
+    a user config moved (HOME and the like, Command.home_env), PATH changed (Command.path_env), and
+    before the subcommand --exec-path (it and PATH say where git finds a filter's bare program
+    name, as Git for Windows' filter.lfs.process = git-lfs), a word the guard cannot read
+    (computed, or one PowerShell or cmd may split: native_unsure) or a -c whose key, read as the
+    shell hands it to git (commands.passed), is not on ARCHIVE_SAFE_KEY_RE."""
+    cmd = gc.inv.cmd
+    if gc.blind or cmd.git_env or cmd.home_env or cmd.path_env:
+        return True
+    args = gc.inv.args
+    pre = args[:len(args) - len(gc.rest) - 1]
+    k = 0
+    while k < len(pre):
+        if any(w.dyn or native_unsure(cmd, w) for w in pre[k:k + 2]):
+            return True
+        t = cm.passed(cmd, pre[k])
+        name = t.partition('=')[0]
+        if name.startswith('--exec-path') or len(name) > 2 and '--exec-path'.startswith(name):
+            return True
+        if t == '-c':
+            if k + 1 >= len(pre):
+                return True
+            body, k = cm.passed(cmd, pre[k + 1]), k + 2
+        elif t.startswith('--config-env'):
+            return True
+        elif t.startswith('-c'):
+            body, k = t[2:], k + 1
+        else:
+            k += 1
+            continue
+        if not ARCHIVE_SAFE_KEY_RE.match(body.partition('=')[0].lower()):
+            return True
+    return False
+
+
+def tail_word(w, value):
+    """The Word for `value`, the end of the word `w` after an option attached to it (--output=x,
+    -ox, -Cdir): its span covers only the value when `w` is spelt as its text (unquoted), so a
+    rewrite (retarget) keeps the option; else the whole word's."""
+    start = w.end - len(value) if w.end - w.start == len(w.text) else w.start
+    return sh.Word(value, w.dyn, start, w.end)
+
+
+def archive_long(name):
+    """The archive long option `name` (no dashes) stands for, or None when it is unknown or an
+    ambiguous prefix (--add)."""
+    if name in ARCHIVE_LONGS:
+        return name
+    hits = [o for o in ARCHIVE_LONGS if name and o.startswith(name)]
+    return hits[0] if len(hits) == 1 else None
+
+
+def archive_opened(words):
+    """[Word]: the files git archive's first pass (builtin/archive.c cmd_archive) opens. That pass
+    knows only -o/--output, --remote and --exec, keeps every other option without taking a value
+    for it and reads on past words that are not options, up to `--`; so in `--prefix -o f HEAD` the
+    -o is its own and f is opened, though the later pass takes -o as the prefix. Every -o/-o<f>,
+    --output[=]<f> and prefix of --output counts wherever it sits (a prefix fails closed), and no
+    other option takes the word after it (fail closed for --remote and --exec)."""
+    outs, k = [], 0
+    while k < len(words):
+        w, t = words[k], words[k].text
+        if t == '--':
+            break
+        name, eq, value = t[2:].partition('=')
+        if t.startswith('--') and name and 'output'.startswith(name):
+            if eq:
+                outs.append(tail_word(w, value))
+            elif k + 1 < len(words):
+                k += 1
+                outs.append(words[k])
+        elif t.startswith('-o'):
+            if t[2:]:
+                outs.append(tail_word(w, t[2:]))
+            elif k + 1 < len(words):
+                k += 1
+                outs.append(words[k])
+        k += 1
+    return outs
+
+
+def archive_outputs(gc):
+    """(outputs, read) for git archive `gc`: the Words its -o/--output name, those git's first pass
+    opens (archive_opened) and, failing closed, those the later pass would read (-vo <f>, an -o
+    after `--prefix`'s value), and True when the archive only reads the repository it runs in: no
+    --remote or --exec (they run a program), no option the guard does not know (a --no-* among
+    them) and no word that is not literal (an unquoted $X may hold -o) or that PowerShell or cmd
+    may split (native_unsure). An unknown option does not end the scan, so an -o after it is still
+    an output. Every word is read as the shell hands it to git (archive_words)."""
+    words = archive_words(gc)
+    read = not any(native_unsure(gc.inv.cmd, w) for w in words)
+    outs, k = [], 0
+    while k < len(words):
+        w, t = words[k], words[k].text
+        if w.dyn:
+            read = False
+        if t == '--':
+            read = read and not any(x.dyn for x in words[k + 1:])
+            break
+        if t.startswith('--'):
+            name, eq, value = t[2:].partition('=')
+            opt = archive_long(name)
+            if opt is None or opt in ARCHIVE_RUNS:
+                read = False
+            if opt in ARCHIVE_VALUES and not eq:
+                k += 1
+                if k < len(words):
+                    w, value = words[k], words[k].text
+                    read = read and not w.dyn
+                else:
+                    w = None
+            if opt == 'output' and w is not None:
+                outs.append(tail_word(w, value) if eq else w)
+        elif t.startswith('-') and len(t) > 1:
+            for j, c in enumerate(t[1:], 1):
+                if c == 'o':
+                    if t[j + 1:]:
+                        outs.append(tail_word(w, t[j + 1:]))
+                    elif k + 1 < len(words):
+                        k += 1
+                        outs.append(words[k])
+                        read = read and not words[k].dyn
+                    break
+                if c not in ARCHIVE_FLAGS:
+                    read = False
+                    break
+        k += 1
+    spans = {(o.text, o.start, o.end) for o in outs}
+    outs += [o for o in archive_opened(words) if (o.text, o.start, o.end) not in spans]
+    return outs, read
+
+
 def strict_read_opts(sub, words):
     """True when every option of branch, tag or config is one GIT_STRICT_READ_OPTS or
     CONFIG_STRICT_READ_OPTS names in full: git expands an abbreviation (branch --unset-up), so an
@@ -3007,6 +3309,11 @@ def git_reads(gc, strict=False):
         return False
     if strict and sub == 'grep' and any(opens_pager(t) for t in words):
         return False
+    if sub == 'archive':
+        # its -o file is a write: git_targets hands it to git_jail, which judges it first; where
+        # the checkout cannot be placed, neither can a relative -o, so it is no plain read
+        outs, read = archive_outputs(gc)
+        return read and not (strict and outs) and not archive_filter_set(gc)
     if sub in GIT_READS:
         return True
     pos = [t for t in words if not t.startswith('-')]
@@ -3026,8 +3333,11 @@ def git_reads(gc, strict=False):
 
 
 def git_targets(gc):
-    """[Word]: the folders git `gc` creates besides the checkout it runs in (worktree add, clone)."""
+    """[Word]: the folders and files git `gc` writes besides the checkout it runs in (worktree add,
+    clone, archive's -o/--output file: archive_outputs)."""
     args = gc.rest
+    if gc.sub == 'archive':
+        return archive_outputs(gc)[0]
     if gc.sub == 'worktree' and args and args[0].text == 'add':
         rest, skip = args[1:], {'-b', '-B', '--reason', '--orphan'}
     elif gc.sub == 'clone':
@@ -4372,14 +4682,15 @@ def git_config_call(gc):
 
 def git_prefix_configs(gc):
     """[(key, value text, first Word, last Word)] of the -c and --config-env settings before the
-    git subcommand (key lower-case)."""
+    git subcommand (key lower-case), each word read as the shell hands it to git (commands.passed:
+    bash's `-\\c core.hooksPat\\h=x` is -c core.hooksPath=x)."""
     a = list(gc.inv.args)
     a = a[:len(a) - len(gc.rest) - 1]
     out, k = [], 0
     while k < len(a):
-        t = a[k].text
+        t = cm.passed(gc.inv.cmd, a[k])
         if t in ('-c', '--config-env') and k + 1 < len(a):
-            key, _eq, val = a[k + 1].text.partition('=')
+            key, _eq, val = cm.passed(gc.inv.cmd, a[k + 1]).partition('=')
             out.append((key.lower(), val, a[k], a[k + 1]))
             k += 2
             continue
