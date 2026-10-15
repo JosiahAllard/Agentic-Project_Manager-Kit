@@ -221,7 +221,7 @@ class MachineTest(StatusCase):
         self.assertEqual(out[1], "machine: free gpu slots %d of %d; free cpu slots %d of %d" % (gf, gn, cf, cn))
         self.assertIn("HELD - lane full, branches b1, a token holder, phase gate", out[2])
         self.assertEqual(calls[0][-2:], ["status", "--json"])
-        self.assertTrue(calls[0][1].replace("\\", "/").endswith("H/.claude/tools/machine_lock/machine_lock.py"))
+        self.assertEqual(calls[0][1].replace("\\", "/"), "H/tools/machine_lock.py")
 
     def test_a_run_holding_a_slot_is_not_free(self):
         snap = self.status()
@@ -300,7 +300,7 @@ class ContextTest(unittest.TestCase):
         def run(args, timeout=10):
             return json.dumps(status) if "machine_lock.py" in args[1] else "G"
         base = dict(env={"CLAUDE_CONFIG_DIR": "C:/u/.claude-account2"}, cwd=ROOT + "/alpha", now=NOW,
-                    procs=[], run=run, read=reader(files), home="H", pid=1, pm_cfg=self.PM)
+                    procs=[], run=run, read=reader(files), kit="H", pid=1, pm_cfg=self.PM)
         base.update(kw)
         return coordinatorstart.context(dict(dict(repos_root=ROOT), **cfg), **base)
 
@@ -313,6 +313,16 @@ class ContextTest(unittest.TestCase):
         self.assertIn("- machine: free gpu slots %d of %d" % (gf, gn), text)
         self.assertNotIn("also running", text)
         self.assertNotIn("usage", text.lower())
+
+    def test_the_machine_check_runs_the_named_kits_lock_tool(self):
+        calls, status = [], idle_status()
+
+        def run(args, timeout=10):
+            calls.append(args)
+            return json.dumps(status) if "machine_lock.py" in args[1] else "G"
+        self.assertIn("- machine: free gpu slots", self.build({}, run=run))
+        self.assertEqual([a[1].replace("\\", "/") for a in calls if "machine_lock.py" in a[1]],
+                         ["H/tools/machine_lock.py"])
 
     def test_eng_filing_lines_follow_the_standing_lines(self):
         lines = self.build({"standing": ["wind down"], "eng_filing": True, "pricing_pass": True}).splitlines()
@@ -350,7 +360,7 @@ class ContextTest(unittest.TestCase):
             text = coordinatorstart.context(
                 {"repos_root": ROOT, "cap": {"alpha": [{"cap": 4}]}},
                 env={}, cwd=ROOT + "/alpha", now=NOW, procs=[], run=lambda a, timeout=10: "G",
-                home="H", pid=1, pm_cfg={"sessions_file": p})
+                kit="H", pid=1, pm_cfg={"sessions_file": p})
         self.assertIn("- agent cap 4", text)
 
     def test_repos_root_comes_from_the_config(self):

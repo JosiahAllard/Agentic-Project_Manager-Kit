@@ -124,11 +124,22 @@ def quote(path):
     return '"%s"' % fwd(path)
 
 
+def literal_word(path):
+    """`path` as one word that bash and PowerShell both read literally: single-quoted when it holds
+    a `$` or a backtick (which expand inside double quotes) and no single quote; otherwise
+    double-quoted, as quote() does. A path with both a single quote and one of those has no such
+    word and stays double-quoted (docs/guard.md "Rules", the `heavy` row)."""
+    p = fwd(path)
+    if ('$' in p or '`' in p) and "'" not in p:
+        return "'%s'" % p
+    return quote(p)
+
+
 def lock_tool(ctx):
     """The lock CLI an alternative names: tools/machine_lock.py of the kit the guard runs from
-    (ctx.kit, kitlib.kitroot.lock_tool), quoted since a kit path may hold a space. Its `run` takes
-    no --lock flag: it always locks."""
-    return quote(kitroot.lock_tool(ctx.kit))
+    (ctx.kit, kitlib.kitroot.lock_tool), as one literal word (literal_word) since a kit path may
+    hold a space or a `$`. Its `run` takes no --lock flag: it always locks."""
+    return literal_word(kitroot.lock_tool(ctx.kit))
 
 
 def kit_tool(ctx, name):
