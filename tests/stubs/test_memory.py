@@ -71,7 +71,8 @@ class Files(unittest.TestCase):
         d = tempfile.TemporaryDirectory()
         self.addCleanup(d.cleanup)
         self.root = os.path.realpath(d.name)
-        self.path = os.path.join(self.root, '.claude', 'settings.json')
+        self.path = os.path.join(self.root, '.claude', 'settings.local.json')
+        self.shared = os.path.join(self.root, '.claude', 'settings.json')
 
     def survey(self):
         return memory.survey(self.root, main_top=fake_top(self.TOP))
@@ -184,14 +185,55 @@ class Files(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.dirname(self.path)))
 
     def test_run_apply_writes_and_names_the_owners_commit(self):
-        got = memory.run(self.root, apply=True, main_top=fake_top(self.TOP), kit='K')
+        got = memory.run(self.root, apply=True, main_top=fake_top(self.TOP), kit='K', unignored=lambda c: None)
         self.assertEqual(got.code, 0, got.lines)
-        self.assertIn('the owner commits .claude/settings.json', '\n'.join(got.lines))
+        out = '\n'.join(got.lines)
+        self.assertIn('nothing to commit', out)
+        self.assertNotIn('owner commits', out)
         self.assertEqual(self.survey().state, memory.OK)
+        self.assertFalse(os.path.exists(self.shared))
+
+    def test_run_apply_passes_on_the_warning_when_git_does_not_ignore_the_file(self):
+        got = memory.run(self.root, apply=True, main_top=fake_top(self.TOP), kit='K',
+                         unignored=lambda c: 'memory: WARNING: not ignored')
+        self.assertEqual(got.code, 0, got.lines)
+        self.assertEqual(got.lines[-1], 'memory: WARNING: not ignored')
+
+    def put_shared(self, raw):
+        os.makedirs(os.path.dirname(self.shared), exist_ok=True)
+        with open(self.shared, 'wb') as fh:
+            fh.write(raw)
+
+    def test_the_key_is_never_written_to_the_tracked_settings_file(self):
+        before = b'{"model": "x"}\n'
+        self.put_shared(before)
+        memory.apply(self.survey())
+        with open(self.shared, 'rb') as fh:
+            self.assertEqual(fh.read(), before)
+        self.assertEqual(json.loads(self.raw().decode('utf-8')), {'autoMemoryDirectory': self.WANT})
+
+    def test_a_key_in_the_tracked_file_counts_and_is_kept(self):
+        self.put_shared(json.dumps({'autoMemoryDirectory': '~/mine/proj'}).encode('utf-8'))
+        m = self.survey()
+        self.assertEqual((m.state, m.value, m.path), (memory.OTHER, '~/mine/proj', self.shared))
+        self.assertEqual(memory.apply(m), [])
+        self.assertFalse(os.path.exists(self.path))
+        self.assertIsNone(memory.problem_line(self.root, main_top=fake_top(self.TOP)))
+
+    def test_the_local_key_wins_over_the_tracked_one(self):
+        self.put_shared(json.dumps({'autoMemoryDirectory': '~/old/proj'}).encode('utf-8'))
+        self.put(json.dumps({'autoMemoryDirectory': self.WANT}).encode('utf-8'))
+        m = self.survey()
+        self.assertEqual((m.state, m.path), (memory.OK, self.path))
+
+    def test_the_missing_line_names_the_local_file_not_a_commit(self):
+        line = memory.problem_line(self.root, main_top=fake_top(self.TOP), kit='K')
+        self.assertIn('settings.local.json', line)
+        self.assertNotIn('commits', line)
 
     def test_run_on_a_bad_file_exits_1(self):
         self.put(b'[1]')
-        got = memory.run(self.root, apply=True, main_top=fake_top(self.TOP), kit='K')
+        got = memory.run(self.root, apply=True, main_top=fake_top(self.TOP), kit='K', unignored=lambda c: None)
         self.assertEqual(got.code, 1, got.lines)
         self.assertEqual(self.raw(), b'[1]')
 

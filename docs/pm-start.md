@@ -88,12 +88,12 @@ same check for its own repository (docs/install.md "Tools without a stub"). Code
 
 ## Memory folder (`memory`)
 
-After `stubs`, the `memory` check reads `.claude/settings.json` of each repository in
+After `stubs`, the `memory` check reads `.claude/settings.local.json`, then `.claude/settings.json`, of each repository in
 `launcher.repos`, and of the PM repository (the main checkout holding `sessions_file`), through
-`kitlib.stubs.memory.problem_line`. A file without `autoMemoryDirectory` gives
+`kitlib.stubs.memory.problem_line`. Files without `autoMemoryDirectory` give
 `memory (<repo>): <file> has no autoMemoryDirectory; its memory folder is <folder>. Ask the owner
 (via the hub) to run, in their own PowerShell window: python <kit>/tools/kit_stubs.py memory -C
-<folder> --apply (then the owner commits .claude/settings.json)`: an owner step, since the command
+<folder> --apply (it writes .claude/settings.local.json, which git ignores; nothing to commit)`: an owner step, since the command
 writes another repository's main checkout. One it cannot read gives `could not check memory
 (<repo>): ...`, as does a check that raises. A key naming another folder is the owner's choice and
 prints nothing. The kit's folder is `<the main checkout's drive>/Agent-memory/<repo folder name>`.

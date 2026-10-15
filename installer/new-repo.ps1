@@ -11,8 +11,8 @@
 # .gitignore and .gitattributes lines (only the missing ones appended to an existing file), a starter
 # docs\INDEX.md (only if absent; it opts the repository into the doc index check), with -Stack the
 # stack's tools\gate.json, tools files and skills, with -Stubs the kit tool stubs, and the
-# autoMemoryDirectory in .claude\settings.json when the file lacks it (<drive>/Agent-memory/<repo>;
-# kitlib\stubs\memory.py; the owner commits it). -PmData runs
+# autoMemoryDirectory in .claude\settings.local.json when neither it nor settings.json has it
+# (<drive>/Agent-memory/<repo>; kitlib\stubs\memory.py; git-ignored, nothing to commit). -PmData runs
 # the kit's `tools\pm_data.py init` after (the KIT's PM-data branch, docs/pm-data-branch.md). Dry run
 # by default; -Apply writes. It never overwrites.
 #

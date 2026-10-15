@@ -8,6 +8,7 @@
   api      the site's JSON API: routes, roles, and the writes behind them
   derived  views read from files other tools write (notices, repos, usage, agents), never stored
   backlog  the backlog views the site shows
+  todosteps an owner to-do's steps (edit, open, run) as PowerShell, and the to-do refusals
   gitsync  the store's commits, and its pull and push against the PM data remote
   httpd    one loopback HTTP listener in front of the api: the gate, the write rules, the waits
   tunnel   the listener a tunnel program points at: its Cloudflare Access gate, its write source

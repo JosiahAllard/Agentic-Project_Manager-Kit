@@ -18,10 +18,12 @@ The target is an existing git checkout, named by its top level. It writes these 
   <target>/tools/gate.json    with a stack: templates/stacks/<stack>/tools/gate.json, only if absent
   <target>/tools/<file>       with a stack: its other tools files, each only if absent
   <target>/<skills>/...       with a stack: its skills (kitlib.stackskill), the kit's path written in
-  <target>/.claude/settings.json   its autoMemoryDirectory (kitlib.stubs.memory) when the file lacks
-                              the key: created holding it alone, or the key added and nothing else
-                              changed. A key already there is kept; a file it cannot edit refuses
-                              before any write. The memory folder itself is not made.
+  <target>/.claude/settings.local.json   its autoMemoryDirectory (kitlib.stubs.memory) when neither
+                              it nor settings.json has the key: created holding it alone, or the key
+                              added and nothing else changed. The key is a machine path, so it goes
+                              in the ignored local file, never a tracked one. A key already in
+                              either file is kept; a file it cannot edit refuses before any write.
+                              The memory folder itself is not made.
 It never overwrites: a .kit.json or tools/gate.json already there, or with `stubs` a file where a
 stub goes that is not a stub, refuses before anything is written. Every template and every
 existing line file is read at plan time, so one that cannot be read refuses before any write.
@@ -611,8 +613,8 @@ class Setup(object):
                '     %s as usual' % usual]
         if self.memory_added:
             from kitlib.stubs import memory
-            out.append('     The owner commits %s too (its %s; docs/pm-first-run.md)'
-                       % (memory.settings_rel(), memory.KEY))
+            out.append('     %s (its %s, a machine path) is git-ignored: nothing to commit for it'
+                       % (memory.local_rel(), memory.KEY))
         tools = os.path.join(c.kit, 'tools')
         if c.stubs:
             out.append('  2. python "%s" check -C "%s"   (exit 0: every stub current)'
