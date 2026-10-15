@@ -53,6 +53,24 @@ class SweepDryRun(unittest.TestCase):
         self.assertNotIn('--apply', argv)
         self.assertEqual(argv, at().sweep_dry_run_argv(self.KIT, 'py.exe'))
 
+    def test_home_is_passed_on_to_the_sweep(self):
+        run, calls = self.fake()
+        at().sweep_dry_run(self.KIT, 'py.exe', home='C:\\h', run=run)
+        self.assertEqual(calls[0][0][-2:], ['--home', 'C:\\h'])
+        self.assertEqual(calls[0][0], at().sweep_dry_run_argv(self.KIT, 'py.exe', 'C:\\h'))
+        run, calls = self.fake()
+        at().sweep_dry_run(self.KIT, 'py.exe', run=run)
+        self.assertNotIn('--home', calls[0][0])
+
+    def test_the_sweep_is_run_and_read_as_utf8_whatever_the_locale(self):
+        run, calls = self.fake()
+        at().sweep_dry_run(self.KIT, 'py.exe', run=run)
+        kw = calls[0][1]
+        self.assertEqual(kw.get('encoding'), 'utf-8')
+        self.assertEqual(kw.get('errors'), 'replace')
+        self.assertEqual(kw['env']['PYTHONIOENCODING'], 'utf-8')
+        self.assertNotIn('text', kw)
+
     def test_creationflags_and_timeout_are_passed(self):
         run, calls = self.fake()
         at().sweep_dry_run(self.KIT, 'py.exe', timeout=7, run=run)
@@ -274,7 +292,7 @@ class Init(T.Base):
             self.assertIn(want, line)
         kinds = [c[0] for c in self.host.calls]
         self.assertLess(kinds.index('sweep-dry-run'), kinds.index('task'))   # the dry run first
-        self.assertIn(('sweep-dry-run', self.kit), self.host.calls)
+        self.assertIn(('sweep-dry-run', self.kit, self.home), self.host.calls)   # the run's --home reaches it
         dry = '  sweep dry run (nothing removed): claude/p/old-session  4.0 days  would'
         self.assertIn(dry, out)
         self.assertLess(out.index(dry), out.index('done: register the scheduled task'))
@@ -283,7 +301,7 @@ class Init(T.Base):
         code, out = self.run_new(apply=True, sweep_task=False)
         self.assertEqual(code, M.EXIT_OK, out)
         self.assertEqual(self.tasks(), [])
-        self.assertNotIn(('sweep-dry-run', self.kit), self.host.calls)
+        self.assertNotIn('sweep-dry-run', [c[0] for c in self.host.calls])
         self.assertIn('scheduled task agent-temp-sweep is not registered (--no-sweep-task)', out)
         self.assertIn('-RunLevel Limited', out)
 
@@ -316,6 +334,24 @@ class Init(T.Base):
         self.assertEqual(self.tasks(), [])
         self.assertIn('machine-setup: STOPPED at: run the sweep once without --apply', out)
         self.assertIn('the sweep dry run exit 2', out)
+
+    def test_the_acl_is_applied_before_the_sweep_dry_run(self):
+        code, out = self.run_new(apply=True)
+        self.assertEqual(code, M.EXIT_OK, out)
+        kinds = [c[0] for c in self.host.calls]
+        self.assertLess(kinds.index('icacls'), kinds.index('sweep-dry-run'), out)
+
+    def test_a_refusing_sweep_dry_run_still_leaves_the_acl_applied(self):
+        self.host.sweep_error = RuntimeError('the sweep dry run exit 2, so the task is not registered')
+        code, out = self.run_new(apply=True)
+        self.assertEqual(code, M.EXIT_REFUSED, out)
+        self.assertIn('icacls', [c[0] for c in self.host.calls], out)
+
+    def test_the_standalone_tool_applies_the_acl_before_the_dry_run_too(self):
+        self.host.sweep_error = RuntimeError('the sweep dry run exit 2, so the task is not registered')
+        code, out, _ = self.init_tool('--agent-temp', self.new, '--apply')
+        self.assertEqual(code, 1, out)
+        self.assertIn('icacls', [c[0] for c in self.host.calls], out)
 
     def test_the_dry_run_report_is_printed_even_when_registering_fails(self):
         with mock.patch.object(self.host, 'task_register', side_effect=RuntimeError('no pythonw')):
