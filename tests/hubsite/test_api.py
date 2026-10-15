@@ -1611,7 +1611,7 @@ class RecordViews(object):
         self.calls.append(('record', repo, id))
         if repo != 'kit':
             raise HubError('not_found', 'repo not known', 'repo')
-        if id != 'KIT-1':
+        if id != 'EX-1':
             raise HubError('not_found', 'no such record', 'id')
         return {'repo': 'kit', 'id': id, 'where': 'open'}
 
@@ -1629,11 +1629,11 @@ class RecordRouteTest(ApiCase):
     def test_a_record_and_the_template(self):
         for role in (OWNER, AGENT):
             with self.subTest(role=role):
-                self.assertEqual(self.ok('GET', '/records/kit/KIT-1', role),
-                                 {'repo': 'kit', 'id': 'KIT-1', 'where': 'open',
+                self.assertEqual(self.ok('GET', '/records/kit/EX-1', role),
+                                 {'repo': 'kit', 'id': 'EX-1', 'where': 'open',
                                   'revision': self.store.revision})
                 self.assertEqual(self.ok('GET', '/records/kit/new', role)['fields'], [])
-        self.assertEqual(self.views.calls[:2], [('record', 'kit', 'KIT-1'),
+        self.assertEqual(self.views.calls[:2], [('record', 'kit', 'EX-1'),
                                                 ('record_template', 'kit')])
 
     def test_the_literal_new_wins_over_an_id(self):
@@ -1643,16 +1643,16 @@ class RecordRouteTest(ApiCase):
     def test_a_record_or_repository_that_is_not_there_is_a_404_naming_nothing_asked(self):
         for role in (OWNER, AGENT):
             with self.subTest(role=role):
-                obj = self.refused('not_found', 'id', 'GET', '/records/kit/KIT-404', role)
+                obj = self.refused('not_found', 'id', 'GET', '/records/kit/EX-404', role)
                 self.assertEqual(obj['error']['message'], 'no such record')
-                obj = self.refused('not_found', 'repo', 'GET', '/records/other/KIT-1', role)
+                obj = self.refused('not_found', 'repo', 'GET', '/records/other/EX-1', role)
                 self.assertEqual(obj['error']['message'], 'repo not known')
 
     def test_a_segment_that_can_be_no_name_is_refused_before_the_view(self):
         for path, field in (('/records/kit/..', 'id'), ('/records/kit/%2e%2e', 'id'),
                             ('/records/kit/a\\b', 'id'), ('/records/kit/.git', 'id'),
                             ('/records/kit/A..B', 'id'), ('/records/kit/' + 'A' * 129, 'id'),
-                            ('/records/../KIT-1', 'repo'), ('/records/C:/KIT-1', 'repo'),
+                            ('/records/../EX-1', 'repo'), ('/records/C:/EX-1', 'repo'),
                             ('/records/%2e%2e/new', 'repo'), ('/records/-x/new', 'repo')):
             for role in (OWNER, AGENT):
                 with self.subTest(path=path, role=role):
@@ -1671,7 +1671,7 @@ class RecordRouteTest(ApiCase):
             def record_template(self, repo):
                 raise ValueError('C:\\secret\\.kit.json')
         self.api = api.Api(self.store, views=Broken(), clock=CLOCK)
-        for path, name, cls in (('/records/kit/KIT-1', 'record', 'OSError'),
+        for path, name, cls in (('/records/kit/EX-1', 'record', 'OSError'),
                                 ('/records/kit/new', 'record_template', 'ValueError')):
             for role in (OWNER, AGENT):
                 with self.subTest(path=path, role=role):
@@ -1681,7 +1681,7 @@ class RecordRouteTest(ApiCase):
 
     def test_no_record_view_is_not_available(self):
         self.api = api.Api(self.store, views=Views(), clock=CLOCK)
-        for path in ('/records/kit/KIT-1', '/records/kit/new'):
+        for path in ('/records/kit/EX-1', '/records/kit/new'):
             with self.subTest(path=path):
                 self.refused('unavailable', 'views', 'GET', path, AGENT)
 

@@ -922,10 +922,10 @@ class RecordViewsCase(ServeCase):
         self.assertFalse(hasattr(bare, 'record'))
         self.assertFalse(hasattr(bare, 'record_template'))
         views, source = self.site()
-        self.assertEqual(views.record('kit', 'KIT-1'), {'repo': 'kit', 'id': 'KIT-1',
+        self.assertEqual(views.record('kit', 'EX-1'), {'repo': 'kit', 'id': 'EX-1',
                                                         'where': 'open'})
         self.assertEqual(views.record_template('kit'), {'repo': 'kit', 'fields': []})
-        self.assertEqual(source.calls, [('record', 'kit', 'KIT-1'), ('record_template', 'kit')])
+        self.assertEqual(source.calls, [('record', 'kit', 'EX-1'), ('record_template', 'kit')])
         self.assertEqual(source.reads, [], 'a record read is not a backlog read')
 
     def test_what_the_record_read_raises_is_a_hub_error_with_its_fixed_phrase(self):
@@ -941,7 +941,7 @@ class RecordViewsCase(ServeCase):
                 (backlog.ReadError('C:\\secret\\folder'), ('unavailable', backlog.READ_FAILED,
                                                           'views'))):
             views, _ = self.site(raised)
-            for call in (lambda: views.record('kit', 'KIT-1'),
+            for call in (lambda: views.record('kit', 'EX-1'),
                          lambda: views.record_template('kit')):
                 with self.subTest(raised=raised):
                     with self.assertRaises(serve.HubError) as got:

@@ -225,7 +225,7 @@ class WhatIsRefused(RecordCase):
 
     def test_an_id_the_store_never_held_is_no_such_record(self):
         repo = self.main_repo(A=record("A", "first"))
-        self.assert_refused(lambda: self.read(repo, "NOPE-1"), "not_found", backlog.NO_RECORD, "id")
+        self.assert_refused(lambda: self.read(repo, "EX-404"), "not_found", backlog.NO_RECORD, "id")
 
     def test_a_repository_not_configured_is_repo_not_known(self):
         repo = self.main_repo(A=record("A", "first"))
