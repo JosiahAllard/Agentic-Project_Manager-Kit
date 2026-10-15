@@ -1,8 +1,20 @@
 """One controller serves verified MCP frontends through its private Windows pipe."""
 from optional.bridge.core.messages import DeliveryError
 from kitlib.proc.errors import ProcError
-from kitlib.proc.process import proc_ctime
+from kitlib.proc.process import (PROCESS_QUERY_LIMITED_INFORMATION,SYNCHRONIZE,WAIT_TIMEOUT,
+    close,handle_ctime,open_process)
+from kitlib.proc.win32 import K32
 from .rpc import PipeServer,encode
+
+
+def running(pid,creation):
+    """True only while process (pid, creation) has not exited. An exited process stays openable,
+    with its creation time, while any handle to it is open anywhere on the machine, so a matching
+    creation time alone does not mean it still runs: its exit is read from the wait state."""
+    handle=open_process(pid,PROCESS_QUERY_LIMITED_INFORMATION|SYNCHRONIZE)
+    if not handle: return False
+    try: return handle_ctime(handle)==creation and K32.WaitForSingleObject(handle,0)==WAIT_TIMEOUT
+    finally: close(handle)
 
 
 class BrokerService:
@@ -40,10 +52,12 @@ class BrokerService:
         # This field is the frontend's private publication, not model arguments.
         native=self.inspector.inspect(peer,channel=frame.get('channel'))
         for stale,(previous,server) in tuple(self.frontends.items()):
-            if proc_ctime(previous.pid)!=previous.creation:
+            if not running(previous.pid,previous.creation):
                 self.controller.detach_frontend(server)
                 del self.frontends[stale]
                 self.sources.pop(stale,None)
+        # A helper's request can be read after its frontend exited; it must not register it again.
+        if not running(native.pid,native.creation): raise DeliveryError('frontend-exited')
         key=(native.pid,native.creation)
         current=self.frontends.get(key)
         if current is None:
