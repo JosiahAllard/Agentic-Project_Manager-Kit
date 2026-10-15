@@ -24,8 +24,8 @@ import subprocess
 import sys
 import time
 
+from kitlib import kitroot
 from kitlib.config import ConfigError, user
-from kitlib.host import registry
 from kitlib.proc import spawn
 from kitlib.records import landing
 
@@ -78,17 +78,17 @@ def landing_hold(ctx):
     return 'the landing lock %s is held (%s)' % (lock.path, landing.describe(held))
 
 
-def machine_lock_path(home=None):
-    """The user's installed machine lock tool (`~/.claude/tools/machine_lock/machine_lock.py`: in
-    the kit's per-user state folder, kitlib.host.registry.state_path)."""
-    return registry.state_path(home or user.home_dir(), 'tools', 'machine_lock', 'machine_lock.py')
+def machine_lock_path(kit=None):
+    """The kit's own lock tool, `<kit>/tools/machine_lock.py` (kitlib.kitroot.lock_tool; with no
+    `kit`, the checkout this kitlib is in)."""
+    return kitroot.lock_tool(kit)
 
 
-def machine_lock_entries(run=spawn.run, home=None):
+def machine_lock_entries(run=spawn.run, kit=None):
     """`(entries, None)`: every record `machine_lock.py status --json` lists - its `lock.held`,
     `waiting` and `background` lists, or (the kit lock's snapshot) its `runs` and `queue.entries`;
     or `(None, why)` when it cannot be read: the sweep then defers (fail closed)."""
-    path = machine_lock_path(home)
+    path = machine_lock_path(kit)
     if not os.path.isfile(path):
         return None, 'the machine lock tool is not at %s' % path
     try:

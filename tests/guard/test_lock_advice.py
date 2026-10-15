@@ -10,7 +10,9 @@ import os
 import shlex
 import unittest
 
+from kitlib.git import repo
 from kitlib.guard import context, rules
+from kitlib.guard import shell as sh
 from kitlib.lock import kinds
 
 from . import world as W
@@ -138,15 +140,67 @@ class AdvisedLockLine(unittest.TestCase):
                 self.assertEqual(script, want.strip('"'))
                 self.assertEqual(self.parse(head).cmd, verb)
 
+    def special_kits(self):
+        """Kit paths with a character that expands inside double quotes in bash and PowerShell
+        (`$`, a backtick); one holds a space as well."""
+        return [os.path.join(self.w.base, name, 'kit') for name in ('a$b kit', 'a`b')]
+
+    def advised_lines(self, ctx):
+        return [self.heavy_line(ctx=ctx)] + self.status_lines(ctx)
+
+    def test_a_kit_path_with_dollar_or_backtick_is_one_literal_word(self):
+        for kit in self.special_kits():
+            want = '%s/tools/%s' % (W.fwd(kit), SCRIPT)
+            ctx = self.w.ctx(kit=kit)
+            for line in self.advised_lines(ctx):
+                with self.subTest(line):
+                    self.assertTrue(line.startswith("python '%s' " % want), line)
+                    script, head, _ = self.lock_call(line)
+                    self.assertEqual(script, want)
+                    self.assertIn(self.parse(head).cmd, ('run', 'status'))
+                    for dialect in (sh.BASH, sh.PS):
+                        p, _ = sh.parse(line, dialect, self.w.wt)
+                        self.assertEqual(p.unclean, [], dialect)
+                        word = p.commands[0].words[1]
+                        self.assertEqual((word.text, word.dyn), (want, False), dialect)
+
+    def test_a_kit_path_with_a_single_quote_stays_double_quoted(self):
+        # a quote alone: the double-quoted word is literal in both shells, so it is unchanged
+        kit = os.path.join(self.w.base, "o'neil", 'kit')
+        line = self.heavy_line(ctx=self.w.ctx(kit=kit))
+        self.assertTrue(line.startswith('python "%s/tools/%s" run' % (W.fwd(kit), SCRIPT)), line)
+
+    def test_a_kit_path_with_a_quote_and_a_dollar_is_the_known_limit(self):
+        # docs/guard.md "Rules", the `heavy` row: no one quoted word is literal in both shells; it stays
+        # double-quoted, as before. Asserted so that a change to it is a deliberate one.
+        kit = os.path.join(self.w.base, "o'$x", 'kit')
+        line = self.heavy_line(ctx=self.w.ctx(kit=kit))
+        self.assertTrue(line.startswith('python "%s/tools/%s" run' % (W.fwd(kit), SCRIPT)), line)
+
+    def assert_allowed_when_run(self, kit, sub):
+        ctx = self.w.ctx(kit=kit)
+        for line in self.advised_lines(ctx):
+            for make in (bash, ps):
+                with self.subTest(line, shell=make.__name__, sub=sub):
+                    d = decide(make(line, self.w.wt, sub=sub), self.w.ctx(kit=kit))
+                    self.assertIsNone(d, d and d.reason)
+
     def test_the_advised_lines_are_allowed_when_run(self):
         # an agent that runs the alternative as written is not denied again, in either shell
-        for kit in (self.w.kit_dir, os.path.join(self.w.base, 'my kit')):
-            ctx = self.w.ctx(kit=kit)
-            for line in (self.heavy_line(ctx=ctx), self.status_lines(ctx)[0]):
-                for make in (bash, ps):
-                    with self.subTest(line, shell=make.__name__):
-                        d = decide(make(line, self.w.wt, sub=True), self.w.ctx(kit=kit))
-                        self.assertIsNone(d, d and d.reason)
+        for kit in [self.w.kit_dir, os.path.join(self.w.base, 'my kit')] + self.special_kits():
+            self.assert_allowed_when_run(kit, sub=True)
+
+    def test_the_owner_may_run_the_advised_lines(self):
+        # a main session nothing marks is the owner's (kitlib.guard.context.OWNER)
+        self.assertEqual(self.w.environ, {})
+        for kit in [self.w.kit_dir] + self.special_kits():
+            self.assert_allowed_when_run(kit, sub=False)
+
+    def test_a_kit_that_is_a_repository_checkout(self):
+        # the guard runs from a kit checkout that is itself a repository's main checkout
+        self.assertEqual(self.w.classify(self.w.main).kind, repo.MAIN)
+        for sub in (True, False):
+            self.assert_allowed_when_run(self.w.main, sub=sub)
 
 
 if __name__ == '__main__':
