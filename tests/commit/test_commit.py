@@ -19,6 +19,7 @@ from kitlib.git import cmd
 from tests import gitfixture
 from tests.gitfixture import TempRepo
 from tests.home import TempHomeCase, machine_config, no_machine_owner
+from tests.realgit import real_git
 
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 TOOL = os.path.join(KIT, 'tools', 'commit.py')
@@ -988,6 +989,152 @@ class MergeInProgress(MergeCase):
         self.configure(owner={'email': OWNER})
         tip, _ = self.start_merge()
         self.assertNotIn('a merge is in progress', self.assert_refused_naming('other.txt', tip))
+
+
+KEEP = object()        # main leaves the owner-only file as the base has it
+
+
+@real_git('modify/delete conflicts, checkout --theirs and update-index --chmod: the fake has '
+          'none; and the index and tree entries the rule compares are git\'s own')
+class MergeCarriesAnOwnerChange(MergeCase):
+    """A conflicted merge of main, where main (the owner) changed an owner-only file. The merge's
+    own copy of it is committed unnamed only when the staged state is exactly main's copy (a
+    deletion included) and main changed it; anything else under that path stays refused."""
+
+    F = 'CLAUDE.md'
+
+    def merge(self, main_side, branch_side=None, path=None):
+        """The base holds work.txt and the owner-only file. main sets the file to `main_side`
+        (None: deletes it; KEEP: leaves it); the branch sets it to `branch_side` when given (an
+        owner commit made outside the tool). Both change work.txt, so the merge stops; work.txt
+        is resolved in the work tree. (branch tip, main tip)."""
+        f = path or self.F
+        self.assertTrue(C.kconfig.load(self.wt).owner_rules().is_locked(f), f)
+        self.t.write('work.txt', 'base\n')
+        self.t.write(f, 'owner base\n')
+        self.t.commit('base', 'work.txt', f)
+        self.git('merge', '-q', '--ff-only', 'main')
+        self.t.write('work.txt', 'main\n')
+        if main_side is None:
+            self.t.git('rm', '-q', '--', f)
+        elif main_side is not KEEP:
+            self.t.write(f, main_side)
+            self.t.git('add', '--', f)
+        self.t.commit('owner moves main', 'work.txt')
+        changed = ['work.txt']
+        self.put('work.txt', 'branch\n')
+        if branch_side is not None:
+            self.put(f, branch_side)
+            changed.append(f)
+        self.git('commit', '-q', '-m', 'branch work', '--', *changed)
+        tip, main = self.head(), self.git('rev-parse', 'main')
+        p = cmd.subprocess_run(('git', 'merge', '--no-edit', 'main'), cwd=self.wt,
+                               capture_output=True, text=True, env=gitfixture.fixture_env())
+        self.assertNotEqual(p.returncode, 0, p.stdout)
+        self.put('work.txt', 'resolved\n')
+        return tip, main
+
+    def assert_merged(self, tip, main, out, code):
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.git('log', '-1', '--format=%P').split(), [tip, main])
+
+    def tracked(self, path=None):
+        return self.git('ls-tree', '--name-only', 'HEAD', '--', path or self.F)
+
+    def test_an_owner_deletion_carried_by_a_conflicted_merge_is_committed(self):
+        tip, main = self.merge(None)
+        code, out = self.commit('merge main', 'work.txt')
+        self.assert_merged(tip, main, out, code)
+        self.assertEqual(self.tracked(), '')
+        self.assertIn('files     work.txt, CLAUDE.md', out)
+
+    def test_an_owner_deletion_under_a_locked_directory_is_committed(self):
+        f = '.claude/agent-profile.md'
+        tip, main = self.merge(None, path=f)
+        code, out = self.commit('merge main', 'work.txt')
+        self.assert_merged(tip, main, out, code)
+        self.assertEqual(self.tracked(f), '')
+
+    def test_an_owner_edit_carried_by_a_conflicted_merge_is_committed(self):
+        tip, main = self.merge('owner edit\n')
+        code, out = self.commit('merge main', 'work.txt')
+        self.assert_merged(tip, main, out, code)
+        self.assertEqual(self.git('show', 'HEAD:CLAUDE.md'), 'owner edit')
+
+    def test_a_conflict_on_the_owner_file_resolved_to_mains_copy_is_committed(self):
+        tip, main = self.merge('owner edit\n', branch_side='branch owner edit\n')
+        self.git('checkout', '--theirs', '--', self.F)
+        self.git('add', '--', self.F)
+        code, out = self.commit('merge main', 'work.txt')
+        self.assert_merged(tip, main, out, code)
+        self.assertEqual(self.git('show', 'HEAD:CLAUDE.md'), 'owner edit')
+
+    def test_a_modify_delete_conflict_resolved_to_mains_deletion_is_committed(self):
+        tip, main = self.merge(None, branch_side='branch owner edit\n')
+        self.git('rm', '-q', '--', self.F)
+        code, out = self.commit('merge main', 'work.txt')
+        self.assert_merged(tip, main, out, code)
+        self.assertEqual(self.tracked(), '')
+
+    def test_an_unresolved_conflict_on_the_owner_file_is_refused(self):
+        tip, _ = self.merge(None, branch_side='branch owner edit\n')
+        self.assert_refused_naming(self.F, tip)
+
+    def test_a_conflict_resolved_to_neither_copy_is_refused(self):
+        tip, _ = self.merge('owner edit\n', branch_side='branch owner edit\n')
+        self.put(self.F, 'owner edit\nbranch owner edit\n')
+        self.git('add', '--', self.F)
+        self.assert_refused_naming(self.F, tip)
+
+    def test_a_staged_copy_that_differs_from_mains_is_refused(self):
+        tip, _ = self.merge('owner edit\n')
+        self.put(self.F, 'owner edit, then the agent\'s\n')
+        self.git('add', '--', self.F)
+        self.assert_refused_naming(self.F, tip)
+
+    def test_a_file_main_deleted_but_staged_with_new_content_is_refused(self):
+        tip, _ = self.merge(None)
+        self.put(self.F, 'agent text\n')
+        self.git('add', '--', self.F)
+        self.assert_refused_naming(self.F, tip)
+
+    def test_mains_blob_with_another_mode_is_refused(self):
+        tip, _ = self.merge('owner edit\n')
+        self.git('update-index', '--chmod=+x', '--', self.F)
+        self.assert_refused_naming(self.F, tip)
+
+    def test_undoing_the_branchs_own_owner_change_to_mains_copy_is_refused(self):
+        # main never touched the file: staging main's copy reverts the branch's owner commit.
+        tip, _ = self.merge(KEEP, branch_side='branch owner edit\n')
+        self.git('checkout', 'main', '--', self.F)
+        self.assertEqual(self.git('diff', '--cached', '--name-only', '--', self.F), self.F)
+        self.assert_refused_naming(self.F, tip)
+
+    def test_an_octopus_merge_carries_no_owner_change(self):
+        tip, _ = self.merge(None)
+        path = self.git('rev-parse', '--path-format=absolute', '--git-path', 'MERGE_HEAD')
+        with open(path, 'a', encoding='utf-8', newline='\n') as fh:
+            fh.write(tip + '\n')
+        self.assert_refused_naming(self.F, tip)
+
+    def test_naming_the_merges_owner_file_is_refused_with_the_hint(self):
+        tip, _ = self.merge('owner edit\n')
+        code, out = self.commit('merge main', 'work.txt', self.F)
+        self.assertEqual(code, 1, out)
+        self.assertIn('refused: CLAUDE.md is owner-only', out)
+        self.assertIn('leave it out of your list', out)
+        self.assertEqual(self.head(), tip)
+
+    def test_outside_a_merge_a_staged_owner_file_is_still_refused(self):
+        self.t.write(self.F, 'owner base\n')
+        self.t.commit('base', self.F)
+        self.git('merge', '-q', '--ff-only', 'main')
+        self.git('rm', '-q', '--', self.F)
+        self.put('a.txt', 'x\n')
+        code, out = self.commit('work', 'a.txt')
+        self.assertEqual(code, 1, out)
+        self.assertIn('refused: already staged and not in your list', out)
+        self.assertNotIn('leave it out of your list', out)
 
 
 # ---------------------------------------------------------------------------------- the command
