@@ -102,7 +102,7 @@ class PlanBehind(unittest.TestCase):
     """A waiting --within run keeps later runs off its own slots only: one that fits outside them
     starts now, one that would need a slot inside them waits for it (the backfill rule)."""
     def setUp(self):
-        # 24 threads, 2 to a core: 12 cpu slots; no gpu.
+        # The fake machine: 2 threads to a core, 12 cpu slots, no gpu.
         self.L = lay.derive(lay.fake_hardware(threads=24, smt=2, gpus=0))
 
     def plan(self, entries):
