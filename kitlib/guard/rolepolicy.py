@@ -573,7 +573,8 @@ def _lock_words(inv, commands=(), kit=None, kit_checkout=None):
     of an environment assignment (GIT_PAGER='python tools/machine_lock.py stop 42' git log,
     GIT_EXTERNAL_DIFF=...), a name inside python -c code (run(['python',
     'tools/machine_lock.py', 'stop', '42'])) and a file named only as a `<` redirect's source
-    (python - stop 42 < tools/machine_lock.py, bash's "$(<tools/machine_lock.py)"). `commands` is
+    (python - stop 42 < tools/machine_lock.py, bash's "$(<tools/machine_lock.py)") and a glob the
+    shell expands to it (tools/machine_lock.p?: only the base name is matched). `commands` is
     the line's commands, for the pipes; `kit` and `kit_checkout` as _lock_path_only."""
     seq = []
     for w in [inv.path] + inv.argv:
