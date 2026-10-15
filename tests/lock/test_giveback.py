@@ -16,10 +16,9 @@ import threading
 import time
 import types
 import unittest
-from ctypes import wintypes
 from unittest import mock
 
-from .helpers import FAST, OWNER, REPO, StoreCase, clean_env, own_affinity
+from .helpers import FAST, OWNER, REPO, StoreCase, clean_env, own_affinity, unopenable
 
 if os.name == "nt":
     import datetime
@@ -96,23 +95,33 @@ def affinity(p):
     return pm.value
 
 
-@contextlib.contextmanager
-def unopenable(path):
-    """While inside, every other open of path fails with PermissionError: a handle on it that
-    shares nothing. It is how an asker's read fails when it lands while the wrapper's os.replace
-    swaps the record (a reader's open then is refused, never answered with no such file)."""
-    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    create = k32.CreateFileW
-    create.restype = wintypes.HANDLE
-    create.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
-                       wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE)
-    h = create(path, 0x80000000, 0, None, 3, 0, None)       # GENERIC_READ, no sharing, OPEN_EXISTING
-    if h is None or h == win32.INVALID_HANDLE_VALUE:
-        raise ctypes.WinError(ctypes.get_last_error())
-    try:
-        yield
-    finally:
-        win32.K32.CloseHandle(h)
+class Clock:
+    """giveback's time, made up: monotonic is `now`, and sleep(s) moves it on by s, then calls
+    on_sleep(n), n the sleeps so far. Nothing waits."""
+
+    def __init__(self, case, on_sleep=None):
+        self.now, self.sleeps, self.on_sleep = 0.0, 0, on_sleep or (lambda n: None)
+        p = mock.patch.object(gb(), "time", types.SimpleNamespace(monotonic=lambda: self.now,
+                                                                  sleep=self._sleep))
+        p.start()
+        case.addCleanup(p.stop)
+
+    def _sleep(self, s):
+        self.sleeps += 1
+        self.now += s
+        self.on_sleep(self.sleeps)
+
+
+def scratch_offer(case, record=None):
+    """An Offer on a scratch folder's run r-20261010T000000Z-abcdef, and its record's path
+    (record: what the record file holds, as text; None: no file)."""
+    d = tempfile.mkdtemp()
+    case.addCleanup(shutil.rmtree, d, True)
+    rec = os.path.join(d, "r-20261010T000000Z-abcdef.json")
+    if record is not None:
+        with open(rec, "w", encoding="utf-8") as f:
+            f.write(record)
+    return gb().Offer(os.path.join(d, "r-20261010T000000Z-abcdef" + gb().SUFFIX)), rec
 
 
 class Asker:
@@ -719,6 +728,94 @@ class Helpers(unittest.TestCase):
             with open(rec, "w", encoding="utf-8") as f:
                 f.write(text)
             self.assertEqual(g.read_record(rec), (None, True))
+
+    def test_a_give_whose_record_stays_unreadable_times_out_never_gone(self):
+        offer, rec = scratch_offer(self, json.dumps({"state": "held", "cores": [0, 1]}))
+        clock = Clock(self)
+        with unopenable(rec):
+            res, why = offer.give([1], wait_s=1.0)
+        self.assertEqual(res, "timeout", why)
+        self.assertGreaterEqual(clock.now, 1.0)                 # it waited out wait_s
+        self.assertNotIn("could not be withdrawn", why)
+        self.assertFalse(os.path.exists(offer.path))            # its request withdrawn
+
+    def test_a_record_that_is_not_a_json_object_is_read_again(self):
+        offer, rec = scratch_offer(self, "[1]")
+
+        def answer(n):
+            # Two polls find a record that is there but not a JSON object; then it is written.
+            if n == 2:
+                with open(offer.path, encoding="utf-8") as f:
+                    rid = json.load(f)["id"]
+                with open(rec, "w", encoding="utf-8") as f:
+                    json.dump({"state": "held", "cores": [0],
+                               "given_back": {"id": rid, "cpu": [1], "cores": [0]}}, f)
+        clock = Clock(self, answer)
+        res, info = offer.give([1], wait_s=60)
+        self.assertEqual(res, "given", info)
+        self.assertEqual(info["cores"], [0])
+        self.assertEqual(clock.sleeps, 2)
+
+    def test_a_timed_out_request_it_cannot_read_is_withdrawn_once_it_can(self):
+        offer, _rec = scratch_offer(self, json.dumps({"state": "held", "cores": [0, 1]}))
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+
+        def wrapper_has_it_open(n):
+            # From its first poll the request cannot be opened; it can again well past wait_s.
+            if n == 1:
+                stack.enter_context(unopenable(offer.path))
+            elif clock.now >= 1.0:
+                stack.close()
+        clock = Clock(self, wrapper_has_it_open)
+        res, why = offer.give([1], wait_s=0.5)
+        self.assertEqual(res, "timeout", why)
+        self.assertNotIn("could not be withdrawn", why)
+        self.assertFalse(os.path.exists(offer.path))
+        self.assertGreaterEqual(clock.now, 1.0)                 # it tried again past wait_s
+
+    def test_a_timed_out_request_that_stays_unreadable_is_said(self):
+        offer, _rec = scratch_offer(self, json.dumps({"state": "held", "cores": [0, 1]}))
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        clock = Clock(self, lambda n: n == 1 and stack.enter_context(unopenable(offer.path)))
+        res, why = offer.give([1], wait_s=0.5)
+        stack.close()
+        self.assertEqual(res, "timeout", why)
+        self.assertIn("could not be withdrawn", why)
+        self.assertTrue(os.path.exists(offer.path))             # left: the run may act on it
+        self.assertGreaterEqual(clock.now, 0.5 + gb().WITHDRAW_S)
+
+    def test_held_is_none_while_the_record_cannot_be_read(self):
+        offer, rec = scratch_offer(self)
+        self.assertEqual(offer.held(), [])                      # no record: gone
+        with open(rec, "w", encoding="utf-8") as f:
+            json.dump({"state": "held", "cores": [0, 1]}, f)
+        self.assertEqual(offer.held(), [0, 1])
+        with unopenable(rec):
+            self.assertIsNone(offer.held())                     # not now, never no slots
+        with open(rec, "w", encoding="utf-8") as f:
+            json.dump({"state": "ended", "cores": [0, 1]}, f)
+        self.assertEqual(offer.held(), [])
+
+    def test_the_drainer_never_counts_an_unreadable_record_as_no_slots(self):
+        g = gb()
+        offer, rec = scratch_offer(self, json.dumps({"state": "held", "cores": [0, 1, 2, 3]}))
+        env = {g.GIVE_ENV: offer.path, "MACHINE_LOCK_RUN": "r-20261010T000000Z-abcdef:1:2",
+               "MACHINE_LOCK_CPUMASK": "0xff"}
+        asked, said = [], []
+
+        def give(_offer, cpu, wait_s=10.0):
+            asked.append(cpu)
+            return "given", {"cores": [0, 1]}
+        with mock.patch.object(g.Offer, "give", give):
+            with unopenable(rec):
+                drain = g.drainer(said.append, env)
+                self.assertIsNone(drain(3))         # not read now: nothing asked, nor given up
+            # 4 slots of 2 threads, 3 threads still needed: 2 slots kept, never 3.
+            self.assertEqual(drain(3), {"cores": [0, 1]})
+        self.assertEqual(asked, [[2, 3]])
+        self.assertEqual(len(said), 1)
 
     def test_the_request_file_is_not_a_run_record(self):
         # Both tools list active/*.json as run records; the request must not be one.

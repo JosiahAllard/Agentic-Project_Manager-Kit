@@ -2,6 +2,7 @@
 hardware (kitlib.lock.layout.fake_hardware), its own kinds table, and game probes that never look
 at this machine's processes. Settings are shortened by parameter (store.Settings), never by
 environment."""
+import contextlib
 import ctypes
 import datetime
 import json
@@ -10,6 +11,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from ctypes import wintypes
 
 if os.name == "nt":
     from kitlib.lock import holds as hl
@@ -27,6 +29,25 @@ KINDS = {"kinds": {
 FAST = {"wait_change_poll_s": 0.05, "queue_read_s": 0.3, "queue_poll_s": 0.05,
         "store_lock_s": 5.0, "queue_lock_s": 5.0, "usage_sample_s": 0.5, "child_poll_s": 0.1}
 OWNER = {"role": "owner", "session": None, "host": None, "ancestors": [], "name": "test-owner"}
+
+
+@contextlib.contextmanager
+def unopenable(path):
+    """While inside, every other open of path fails with PermissionError: a handle on it that
+    shares nothing. It is how a read fails when it lands while a writer's os.replace swaps the
+    file (an open then is refused, never answered with no such file)."""
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create = k32.CreateFileW
+    create.restype = wintypes.HANDLE
+    create.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+                       wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE)
+    h = create(path, 0x80000000, 0, None, 3, 0, None)       # GENERIC_READ, no sharing, OPEN_EXISTING
+    if h is None or h == win32.INVALID_HANDLE_VALUE:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        yield
+    finally:
+        win32.K32.CloseHandle(h)
 
 
 def claude_of(session):
