@@ -30,14 +30,15 @@ Rules, in the order they are checked:
                    but the owner's own (kitlib.guard.hub)
   hub-owner-verb   fail-closed: a shell line whose text names the hub tool as a module or
                    a script (tools/hub.py, tools.hub, an import of hub, python -m hub, a standalone
-                   hub in python code that imports) anywhere outside the one shape the guard reads
+                   hub on a line that runs python and holds import) anywhere outside the one shape
+                   the guard reads
                    in full (HUB_SHAPE: python, plain options, tools/hub.py or -m tools.hub, an agent
                    verb, every word literal with no unquoted wildcard) and outside the path family
                    (hub_path_family: one simple command of cat, Get-Content, type, grep, rg,
                    Select-String, git add|diff|log|show|blame|status|restore --staged, commit.py or
                    backlog.py naming hub.py only as a path, or anyhow in a commit or backlog
-                   message; git -c, --exec-path, --ext-diff, --textconv and rg --pre, --pre-glob
-                   denied), and that shape running an owner verb (answer, open, pair, unpair, stop,
+                   message; git -c, --exec-path, --ext-diff, --textconv and rg --pre, --pre-glob,
+                   --hostname-bin denied), and that shape running an owner verb (answer, open, pair, unpair, stop,
                    restart, todos done, stories add|withdraw, to-pm add|send, inbox read, approvals
                    approve|deny, todos add --owner), in any session but the owner's own. Known
                    limit: a name built at run time (string concatenation, an encoding, a variable,
@@ -561,10 +562,11 @@ HUB_EXEMPT_RES = (
 # -x), as a cluster, and the py launcher's version (-3, -3.12, -3.12-64, -V:3.12)
 HUB_SHAPE_OPT_RE = re.compile(r'^-(?:[bBdEIOPqRsSuv]+|[23](?:\.\d+)?(?:-(?:32|64))?|V:[\w.\-/]+)$')
 HUB_SHAPE = 'python, its plain options, then tools/hub.py or -m tools.hub, then an agent verb, every word literal'
-# python code that imports (its -c code, a heredoc, a here-string or a command piped into python)
-# names the hub tool by any standalone `hub` in it: Python takes a line join (a backslash before
-# the newline) or a comment inside a bracketed import list between `import` and `hub`, so the
-# import is not modelled (hub_code_names). x.hub is HUB_NAME_RES's (tests.hub.test_x is not hub).
+# a line that runs python and holds `import` anywhere names the hub tool by any standalone `hub`
+# on it: Python takes a line join (a backslash before the newline) or a comment inside a bracketed
+# import list between `import` and `hub`, and takes code from many places (-c, -m code, a pipe of
+# any length), so neither the import nor where the code comes from is modelled (hub_code_names).
+# x.hub is HUB_NAME_RES's (tests.hub.test_x is not hub).
 HUB_BARE_RE = re.compile(r'(?i)(?<![\w-])(?<!\w\.)hub(?![\w-])')
 HUB_IMPORT_RE = re.compile(r'(?i)\bimport\b')
 # The path family, the one other form the guard reads in full (hub_path_family; docs/guard.md
@@ -573,7 +575,7 @@ HUB_IMPORT_RE = re.compile(r'(?i)\bimport\b')
 # anyhow in a commit or backlog message. Each program's options that can run another program are
 # refused by name, a long option's unique prefix included (git abbreviates long options).
 HUB_READERS = frozenset(('cat', 'get-content', 'type', 'grep', 'rg', 'select-string'))
-HUB_READER_DENIED = {'rg': ('--pre', '--pre-glob')}
+HUB_READER_DENIED = {'rg': ('--pre', '--pre-glob', '--hostname-bin')}
 HUB_GIT_SUBS = frozenset(('add', 'diff', 'log', 'show', 'blame', 'status', 'restore'))
 HUB_GIT_DENIED = ('--ext-diff', '--textconv')
 # git add's and restore's own options that open an editor or ask (and restore's that write the work tree)
@@ -934,6 +936,8 @@ def hub_path_family(parsed):
     while k < len(args) and HUB_SHAPE_OPT_RE.match(args[k]):
         k += 1
     script = cm.base_name(args[k]) if k < len(args) and not args[k].startswith('-') else None
+    if script is not None and (hub_text_names(args[k]) or HUB_BARE_RE.search(args[k])):
+        return False
     if script == 'commit.py':
         return hub_commit_family(args[k + 1:])
     if script == 'backlog.py':
@@ -941,30 +945,31 @@ def hub_path_family(parsed):
     return False
 
 
-class PyRun(object):
-    """A python word of a command and the words after it, read as the program inline_code takes."""
-    __slots__ = ('name', 'args')
-
-    def __init__(self, name, args):
-        self.name, self.args = name, args
-
-
-def hub_code_names(cmd):
-    """`hub` standing alone in python code that imports (HUB_BARE_RE, HUB_IMPORT_RE): the code
-    every python word of `cmd` runs from its command line or standard input (inline_code; a
-    wrapper's python, uv run python -c, too), the guard's own kitlib.guard.hub read as another
-    name first; else None."""
-    for j, w in enumerate(cmd.words):
-        if w.dyn:
-            continue
-        base = cm.base_name(w.text)
-        if not UI_PYTHON_RE.match(base):
-            continue
-        for text in inline_code(cmd, PyRun(base, cmd.words[j + 1:])):
-            text = hub_unexempt(text)
-            m = HUB_BARE_RE.search(text) if HUB_IMPORT_RE.search(text) else None
-            if m:
-                return m.group(0)
+def hub_code_names(parsed, text, shaped):
+    """`hub` standing alone (HUB_BARE_RE) anywhere on a line that runs python and holds `import`
+    (HUB_IMPORT_RE), else None. Line-wide, so no reading of where python takes its code from
+    (-c, -m code, -m timeit -s, a pipe of any length, a heredoc, a here-string) is needed: the
+    texts are the line's own `text` (allowed-shape commands blanked) and, for every other command
+    at any depth, its source, its words as the shell passes them (bash's $'...' and PowerShell's
+    backtick escapes decoded, Word.alt too) and its redirects' targets and bodies. `shaped` are
+    the allowed-shape commands, which run no python code given on the line. The guard's own
+    kitlib.guard.hub is read as another name first."""
+    rest = [c for c in parsed.commands if not any(c is s for s in shaped)]
+    if not any(not w.dyn and UI_PYTHON_RE.match(cm.base_name(w.text)) for c in rest for w in c.words):
+        return None
+    texts = [text]
+    for c in rest:
+        texts.append(c.text or '')
+        texts.extend(w.text for w in c.words)
+        texts.extend(w.alt for w in c.words if w.alt is not None)
+        texts.extend(r.target.text for r in c.redirects if r.target is not None)
+    texts = [hub_unexempt(t) for t in texts]
+    if not any(HUB_IMPORT_RE.search(t) for t in texts):
+        return None
+    for t in texts:
+        m = HUB_BARE_RE.search(t)
+        if m:
+            return m.group(0)
     return None
 
 
@@ -985,8 +990,9 @@ def hub_named(parsed):
     (docs/guard.md "Hub secrets"). The line's own text is read with every command of the
     allowed shape (hub_shape) blanked out, and every other command, at any depth (a substitution,
     a nested shell, a heredoc's body), by its words as the shell passes them (hub_command_texts:
-    quotes and escapes inside a name are gone), and any standalone hub in python code that
-    imports (hub_code_names). A line of the path family (hub_path_family) names nothing. A name
+    quotes and escapes inside a name are gone), and any standalone hub on a line that runs python
+    and holds `import` (hub_code_names). A line of the path family (hub_path_family) names
+    nothing. A name
     the code builds at run time (string concatenation, an encoding, a variable's value, a script
     the agent wrote) is not read: the rule guards against accidents, not an adversary."""
     if hub_path_family(parsed):
@@ -1008,10 +1014,10 @@ def hub_named(parsed):
             found = hub_text_names(t, loader=True)
             if found:
                 return found
-        found = hub_glob_names(cmd) or hub_code_names(cmd)
+        found = hub_glob_names(cmd)
         if found:
             return found
-    return None
+    return hub_code_names(parsed, text, shaped)
 
 
 def hub_name(text):

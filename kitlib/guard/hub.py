@@ -22,7 +22,8 @@ from the owner's ruling on reading and committing the hub tool): one simple comm
 restore --staged, commit.py or backlog.py, naming hub.py only as a path word, or anyhow in
 commit.py's -m/-b or backlog.py's message options. Inside it the options that run a program are
 denied: git's -c and --exec-path (only -C, --no-pager and -P precede the subcommand), --ext-diff,
---textconv, add's editor and prompts, restore's work-tree writes, and rg's --pre and --pre-glob.
+--textconv, add's editor and prompts, restore's work-tree writes, and rg's --pre, --pre-glob and
+--hostname-bin.
 Any other text naming the hub tool is refused. Known limit: a name built at run time (string
 concatenation, an encoding, an escape a program expands, Unicode compatibility characters Python
 folds to hub, a variable, a script the agent wrote) is not read. The hub rules guard against

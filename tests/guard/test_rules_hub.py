@@ -766,7 +766,8 @@ class FailClosed(Hub):
 
     def test_hub_in_python_code_that_imports(self):
         # Python joins a line ending in a backslash, and takes a comment inside a bracketed import
-        # list, so any standalone hub in python code that imports counts (rules.hub_code_names)
+        # list, so any standalone hub on a line that runs python and holds import counts, wherever
+        # python takes its code from (rules.hub_code_names)
         self.rows((
             (bash, "python - <<'EOF'\nimport tools.\\\nhub\nEOF"),
             (bash, "python - <<'EOF'\nimport tools\\\n.hub as h\nEOF"),
@@ -783,6 +784,41 @@ class FailClosed(Hub):
             (bash, "python - <<'EOF'\nimport json\nprint('the page')\nEOF"),
             (bash, "python -c 'print(\"hub\")'"),
             (bash, "python - <<'EOF'\nfrom kitlib.guard import hub\nprint(hub.OWNER_VERBS)\nEOF"),
+        ), False)
+
+    def test_hub_in_python_code_from_anywhere_on_the_line(self):
+        # a pipe of any length, a module that runs code it reads (code, asyncio, timeit -s,
+        # pdb -c), and a newline the shell decodes ($'...', PowerShell's backtick n) all reach
+        # python; the line is read whole, not where its code comes from (rules.hub_code_names)
+        self.rows((
+            (bash, "echo 'from tools import \\\nhub as h; h.main()' | cat | python - answer Q-1"),
+            (bash, "cat <<'EOF'| cat | python - answer Q-1\nfrom tools import \\\nhub as h; h.main()\nEOF"),
+            (bash, "cat <<'EOF' | python - answer Q-1\nfrom tools import \\\nhub as h; h.main()\nEOF"),
+            (bash, "python -m code <<'EOF'\nfrom tools import \\\nhub as h\nEOF"),
+            (bash, "echo 'from tools import \\\nhub as h' | python -m code"),
+            (bash, "echo 'import tools.\\\nhub as h' | python -m asyncio"),
+            (bash, "python -m timeit -s 'from tools import \\\nhub as h' 'h.main()'"),
+            (bash, "python -m pdb -c 'from tools import \\\nhub' -m json.tool"),
+            (bash, "echo $'from tools import \\\\\\nhub as h; h.main()' | python"),
+            (bash, "printf '%s\\\\n' $'import tools.\\\\\\nhub as h' | python"),
+            (bash, "cat <<< $'import tools.\\\\\\nhub as h' | python"),
+            (bash, "echo 'from tools import (os,' 'hub)' | python"),
+            (ps, "'from tools import \\\nhub as h; h.main()' | Write-Output | python - answer Q-1"),
+            (ps, '@"\nfrom tools import \\\nhub as h\n"@ | python -m code'),
+            (ps, "@'\nimport tools.\\\nhub as h\n'@ | python -m asyncio"),
+            (ps, "python -m timeit -s 'from tools import \\\nhub as h' 'h.main()'"),
+            (ps, 'echo "import tools.\\`nhub as h; h.main()" | python - answer Q-1'),
+            (ps, '"import tools.\\`nhub as h; h.main()" | python - answer Q-1'),
+            (ps, 'Write-Output "from tools import \\`nhub as h`nh.main()" | python'),
+            (ps, "'from tools import \\','hub as h; h.main()' | python - answer Q-1"),
+            # over-reach: python and import anywhere on the line, hub anywhere else on it
+            (bash, 'python -c "import json"; echo hub'),
+        ), True)
+        self.rows((
+            (bash, 'python -m code < x.py'), (ps, 'Get-Content x | python -m code'),
+            (bash, "python -c 'from tools import (os,' -c 'x'"),
+            (bash, "echo 'import json' | python -m code"),
+            (bash, 'python "%s" questions add --title "import x"' % self.hub),
         ), False)
 
     def test_the_path_family(self):
@@ -819,13 +855,18 @@ class FailClosed(Hub):
             (bash, 'python Z:/k/tools/commit.py -m x --model tools.hub tools/x.py'),
             (bash, 'python Z:/k/tools/commit.py -m x --unknown tools/hub.py'),
             (bash, 'python Z:/k/tools/backlog.py show tools/hub.py'),
+            # the script word is the commit.py or backlog.py path itself, naming no hub
+            (bash, 'python tools/hub.py/../commit.py -m x a.py'), (bash, 'python tools.hub/backlog.py list'),
+            (ps, 'python tools\\hub.py\\..\\commit.py -m x a.py'),
         ), True)
 
     def test_the_path_family_refuses_options_that_run_a_program(self):
         # git's -c and --exec-path (only -C, --no-pager and -P come before git's subcommand),
         # --ext-diff and --textconv (a unique prefix too), add's editor and prompts, restore's
-        # writes to the work tree, and rg's --pre and --pre-glob
+        # writes to the work tree, and rg's --pre, --pre-glob and --hostname-bin
         self.rows((
+            (bash, 'rg --hostname-bin x answer tools/hub.py'), (bash, 'rg --hostname-bin=x answer tools/hub.py'),
+            (bash, 'rg --hostn x answer tools/hub.py'), (ps, 'rg --hostname-bin x answer tools/hub.py'),
             (bash, 'git -c diff.external=x diff tools/hub.py'), (bash, 'git -c core.pager=x log tools/hub.py'),
             (bash, 'git --exec-path=x diff tools/hub.py'), (bash, 'git --exec-path x diff tools/hub.py'),
             (bash, 'git diff --ext-diff tools/hub.py'), (bash, 'git diff --ext tools/hub.py'),
