@@ -38,7 +38,7 @@ from kitlib.lock import notice
 from kitlib.lock import site
 from kitlib.lock.store import (EXIT_BUSY, EXIT_HOLD, EXIT_REQUIRE, EXIT_RESERVED, EXIT_TIMEOUT,
                                EXIT_USAGE, LockError, Store, caller, iso, local_text,
-                               new_id, parse_iso, read_json, remove, session_of, tree_role,
+                               new_id, parse_iso, read_record, remove, session_of, tree_role,
                                utc_now, write_json)
 from kitlib.proc import bash, cpu, daemons, process, win32, winwatch
 from kitlib.proc.job import Job, JobError, cores_text
@@ -103,7 +103,10 @@ def nest_check(store, value):
     """(parent, None) when MACHINE_LOCK_RUN's value names the run this process is inside (the
     named wrapper is one of its ancestors, alive, and its record says held), else (None, why).
     parent = {id, pid, ctime, kind, shares, resource (None: it names none), has: {pool: slots it
-    holds or inherited}, cores, gpus}."""
+    holds or inherited}, cores, gpus}.
+    A record that is there but cannot be read (its wrapper's os.replace is swapping it) is read
+    again for settings.queue_read_s, then LockError (EXIT_REQUIRE): never "holds no lock", which
+    would have this run take its own lock inside one that holds, and wait on that run's slots."""
     try:
         m = NEST_RE.match(value or "")
         if not m:
@@ -111,7 +114,12 @@ def nest_check(store, value):
         rid, pid, ct = m.group(1), int(m.group(2)), int(m.group(3))
         if (pid, ct) not in _ancestors():
             return None, "the named wrapper is not an ancestor of this run"
-        d = read_json(store.path("active", rid + ".json"))
+        path = store.path("active", rid + ".json")
+        d, there = read_record(path, store.settings.queue_read_s)
+        if there and d is None:
+            raise LockError(EXIT_REQUIRE, "require-lock: %s names run %s, whose record %s could "
+                                          "not be read for %g s; the command was not run"
+                            % (NEST_ENV, rid, path, store.settings.queue_read_s))
         if not d or d.get("state") != "held":
             return None, "the named run holds no lock"
         if (d.get("pid"), d.get("ctime")) != (pid, ct):
@@ -123,6 +131,8 @@ def nest_check(store, value):
                 "shares": dict(d.get("shares") or {}), "resource": d.get("resource"),
                 "has": {p: n for p, n in has.items() if p in POOLS and type(n) is int and n > 0},
                 "cores": list(d.get("cores") or []), "gpus": list(d.get("gpus") or [])}, None
+    except LockError:
+        raise
     except Exception as e:
         return None, "%s: %s" % (type(e).__name__, e)
 

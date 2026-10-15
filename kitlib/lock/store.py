@@ -321,6 +321,28 @@ def read_json(path):
         return None
 
 
+def read_record(path, wait_s=0.0):
+    """(record, there): the JSON object at path, and whether its file is there. (None, False):
+    no such file. (None, True): there, but not read: an open refused, or not a JSON object. A
+    record is written by os.replace (write_json), and on Windows an open that lands while it
+    swaps the file is refused (PermissionError), never answered with no such file: that is "not
+    now", never "no record". Such a file is read again every 0.1 s for wait_s (0: once)."""
+    end = time.monotonic() + wait_s
+    while True:
+        try:
+            with open(path, encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, dict):
+                return d, True
+        except FileNotFoundError:
+            return None, False
+        except (OSError, ValueError):
+            pass
+        if time.monotonic() >= end:
+            return None, True
+        time.sleep(0.1)
+
+
 def remove(path):
     with contextlib.suppress(OSError):
         os.remove(path)
