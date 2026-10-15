@@ -7,8 +7,10 @@
       from the main checkout: take the landing's turn in the machine lock's queue (one booking,
       whose slot the merged gate runs in) and the landing lock, fetch, merge each branch onto
       <remote>/<main> as it is then (main moved on since --expect-main: said, never refused) with
-      --no-ff (one --expect-tip per branch, in the same order), gate the merged tree, push, verify
-      with ls-remote, release; undo on a red gate, a conflict (CONFLICT) or a refused push.
+      --no-ff (one --expect-tip per branch, in the same order) in the kit's landing tree (never
+      the main checkout), gate the merged tree there, push, verify with ls-remote, fast-forward
+      the main checkout's main to it when that is safe, release; on a red gate, a conflict
+      (CONFLICT) or a refused push nothing is pushed and the merge is dropped.
       Landed: each branch's remote branch, worktree and local branch go, never forced (what main
       does not contain, or work, or a holder, keeps it); --keep-branch keeps all three. --fresh
       runs every step of the merged gate (no gate reuse, docs/gate.md "Gate reuse").
@@ -27,7 +29,7 @@ ends in a final record.
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.gate.land, prints and exits.
 Exit codes (kitlib.gate): 0 OK (or SUBMITTED), 1 FAILED (CONFLICT included), 2 USAGE, 3 STUCK,
-4 REFUSED, 5 BUSY, 9 LANDED_UNGATED (landed, but main was not gated whole); a machine lock refusal
+4 REFUSED, 5 BUSY; 9 LANDED_UNGATED is retired (no landing gives it); a machine lock refusal
 passes its own code through (6, 8, 10, 11, 12); 130 Ctrl+C.
 """
 import argparse

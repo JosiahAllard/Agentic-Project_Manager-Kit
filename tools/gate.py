@@ -26,8 +26,8 @@
       finished `error` (kitlib.gate.result.finish_dead)
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.gate, prints and exits.
-Exit codes (kitlib.gate): 0 OK, 1 FAILED, 2 USAGE, 3 STUCK, 4 REFUSED, 5 BUSY, 9 LANDED_UNGATED
-(landed, but main was not gated whole); a machine lock refusal passes its own code through
+Exit codes (kitlib.gate): 0 OK, 1 FAILED, 2 USAGE, 3 STUCK, 4 REFUSED, 5 BUSY; 9 LANDED_UNGATED
+is retired (no landing gives it); a machine lock refusal passes its own code through
 (6, 8, 10, 11, 12); 130 Ctrl+C.
 """
 import argparse

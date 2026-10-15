@@ -68,7 +68,7 @@ RUN_ID = re.compile(r'[0-9a-f]{16}')
 # How long submit() waits for the detached landing to record itself (its pid in the records).
 CLAIM_WAIT_S = 15.0
 CLAIM_POLL_S = 0.25
-LANDED = ('pass', 'landed-ungated')
+LANDED = ('pass', 'landed-ungated')    # landed-ungated: an old record's (exit 9 is retired)
 
 
 class SubmitError(Exception):
@@ -165,7 +165,8 @@ def _refused(runs, why):
 def blocked(root, branches, tips):
     """Why the land records of `branches` stop a submission, or None: a branch's landing is
     running and its process lives (result.running_state 'live'; a dead or unknown one does not
-    count), or a branch already landed at its tip (verdict pass or landed-ungated). Read only."""
+    count), or a branch already landed at its tip (verdict pass, or an old record's landed-ungated).
+    Read only."""
     for b, t in zip(branches, tips):
         rec, _ = result.read(root, b, 'land')
         if not isinstance(rec, dict):
