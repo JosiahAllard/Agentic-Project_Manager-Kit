@@ -5,6 +5,7 @@ import msvcrt
 import os
 from pathlib import Path
 import stat
+import time
 
 from kitlib.proc.pipe import INVALID,close,create_file
 
@@ -40,9 +41,13 @@ def _open_shared(path):
     13) while os.replace is still landing the file under this name, because MoveFileEx holds a
     DELETE-access handle on it for a moment after the name appears. Sharing delete also lets a
     writer unlink the file while this reader holds it. It does not let a writer os.replace over it:
-    replacing a file that any handle holds open still fails (WinError 5, access denied) under
-    either share mode, so a writer's os.replace racing a marker reader can still fail. Substitution
-    is still caught: stable_bytes compares the file's version before, during and after the read."""
+    replacing a file that any handle holds open fails (WinError 5, access denied) whatever that
+    handle shares, so a writer replacing a file these reads may hold uses replace() below, which
+    waits the reader out. Substitution is still caught: stable_bytes compares the file's version
+    before, during and after the read.
+
+    CreateFileW failing raises OSError carrying its Windows error, so a missing file is
+    FileNotFoundError (winerror 2) and a holder that shares nothing is PermissionError (32)."""
     handle=create_file(str(path),GENERIC_READ,SHARE_ALL,None,OPEN_EXISTING,0,None)
     if handle in (None,INVALID):
         error=ctypes.get_last_error()
@@ -52,6 +57,28 @@ def _open_shared(path):
         close(handle)
         raise
     return os.fdopen(descriptor,'rb')
+
+
+REPLACE_BUDGET=1.0  # seconds a replace waits for readers before failing as it always did
+
+
+def replace(source, target, *, budget=REPLACE_BUDGET):
+    """os.replace that waits out readers holding target open.
+
+    A stable_bytes read holds the file for the length of one bounded read, and while it does the
+    replace fails with WinError 5 (or 32 against a reader that does not share delete). Only those
+    two are retried, with short doubling sleeps, until budget seconds have passed; then the last
+    error is raised, as os.replace would have. Any other error is raised at once."""
+    deadline=time.monotonic()+budget
+    delay=0.005
+    while True:
+        try: return os.replace(source,target)
+        except PermissionError as error:
+            if getattr(error,'winerror',None) not in (5,32): raise
+            remaining=deadline-time.monotonic()
+            if remaining<=0: raise
+            time.sleep(min(delay,remaining))
+            delay=min(delay*2,0.1)
 
 
 def stable_bytes(path, limit):
