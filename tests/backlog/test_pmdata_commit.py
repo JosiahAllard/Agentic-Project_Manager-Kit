@@ -1,6 +1,7 @@
 """A write to the PM data branch's folder store commits its own record paths
 (docs/backlog-store.md "The main backend"); other folder stores still commit nothing."""
 import contextlib
+import errno
 import io
 import os
 import re
@@ -564,16 +565,19 @@ class PmDataStore(unittest.TestCase):
         refused write wrote (never a part of HEAD's content), it is named as left, and no
         other file stays in the store folder."""
         mine = priced('BAR', summary='mine')['BAR']
-        real = os.replace
+        real, moves = os.replace, []
 
-        def replace(src, dst):
+        def replace(src, dst):                       # the write's own move goes through
             if os.path.basename(dst) == 'BAR.md':
-                raise OSError('disk full')
+                moves.append(src)
+                if len(moves) > 1:
+                    raise OSError('disk full')
             return real(src, dst)
         with mock.patch.object(smod.os, 'replace', replace):
             exc = self.overtaken_publish(
                 lambda s, ctx: pmod.plan_set(s, ctx, 'BAR', [('summary', ['theirs'])]),
                 {'BAR': mine})
+        self.assertEqual(len(moves), 2)                 # the write, then the refused put back
         self.assertEqual(exc.left, [DIR + '/BAR.md'])
         with open(self.path('BAR'), 'rb') as f:
             self.assertEqual(f.read(), mine.encode('utf-8'))
@@ -1081,6 +1085,281 @@ class PmDataStore(unittest.TestCase):
         self.assertTrue(lines[-1].startswith('WARNING: '), out2)
         self.assertTrue(lines[-1].endswith(
             'git -C "%s" reset -q -- "%s/NEW.md"' % (self.wt, DIR)), out2)
+
+
+class _FullDisk(object):
+    """A file opened for writing whose every write fails as a full disk does."""
+
+    def __init__(self, f):
+        self.f = f
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.f.close()
+
+    def write(self, data):
+        raise OSError(errno.ENOSPC, 'No space left on device')
+
+    def close(self):
+        self.f.close()
+
+
+def nth_write_fails(n):
+    """Patches under which the `n`th file the store module opens for writing (by `open` or
+    `os.fdopen`) is opened, so a truncating open has truncated it, and then refuses every write."""
+    count = [0]
+    real_open, real_fdopen = open, os.fdopen
+
+    def wrap(f, mode):
+        if 'w' in mode:
+            count[0] += 1
+            if count[0] == n:
+                return _FullDisk(f)
+        return f
+    return (mock.patch.object(smod, 'open', create=True,
+                              new=lambda p, mode='r', *a, **k: wrap(real_open(p, mode, *a, **k),
+                                                                   mode)),
+            mock.patch.object(smod.os, 'fdopen',
+                              new=lambda fd, mode='r', *a, **k: wrap(real_fdopen(fd, mode, *a, **k),
+                                                                    mode)))
+
+
+class WriteWhole(unittest.TestCase):
+    """A store write that fails part way leaves every record whole and names the one it could not
+    write (MainBackend._write_files, _restore, _replace_file)."""
+
+    setUp = PmDataStore.setUp
+    git = PmDataStore.git
+    head = PmDataStore.head
+
+    def leftovers(self):
+        return [n for n in os.listdir(os.path.join(self.wt, *DIR.split('/')))
+                if n.endswith('.put-back')]
+
+    def test_a_write_that_fails_leaves_the_record_whole_and_named(self):
+        """BAR is written, then the write into BAZ fails: BAZ still holds its bytes (never a
+        truncated file), BAR is put back, the Failure names BAZ, and no temp file is left."""
+        snap = self.backend.load(rmod.Rules())
+        before = dict(snap.raw)
+        writes = dict((stem, before[stem].decode('utf-8') + '\nchanged\n') for stem in ('BAR', 'BAZ'))
+        head = self.head()
+        first, second = nth_write_fails(2)
+        with first, second, self.assertRaises(Failure) as cm:
+            self.backend.publish(snap, writes, 'both\n')
+        now = self.backend._read()
+        self.assertEqual(now['BAZ'], before['BAZ'])
+        self.assertEqual(now['BAR'], before['BAR'])
+        self.assertIn('%s/BAZ.md' % DIR, str(cm.exception))
+        self.assertIn('No space left on device', str(cm.exception))
+        self.assertIn('the files already written were put back', str(cm.exception))
+        self.assertEqual(self.leftovers(), [])
+        self.assertEqual(self.head(), head)
+
+    def test_a_restore_that_fails_leaves_the_record_whole_and_named(self):
+        """BAR is written, BAZ's write fails, and putting BAR back fails too: BAR holds the new
+        content whole (not a truncated file), BAZ its old bytes, and the Failure names BAZ as the
+        record it could not write and BAR as not put back."""
+        snap = self.backend.load(rmod.Rules())
+        before = dict(snap.raw)
+        writes = dict((stem, before[stem].decode('utf-8') + '\nchanged\n') for stem in ('BAR', 'BAZ'))
+        with mock.patch.object(smod, '_replace_file', side_effect=self.fail_from_second()):
+            with self.assertRaises(Failure) as cm:
+                self.backend.publish(snap, writes, 'both\n')
+        now = self.backend._read()
+        self.assertEqual(now['BAZ'], before['BAZ'])
+        self.assertEqual(now['BAR'], writes['BAR'].encode('utf-8'))
+        self.assertIn('cannot write %s/BAZ.md' % DIR, str(cm.exception))
+        self.assertIn('could not be put back: %s/BAR.md' % DIR, str(cm.exception))
+
+    def publish_fails(self, writes):
+        """The Failure of publishing `writes` ({stem: text or None}) on a fresh snapshot."""
+        snap = self.backend.load(rmod.Rules())
+        with self.assertRaises(Failure) as cm:
+            self.backend.publish(snap, writes, 'w\n')
+        return str(cm.exception)
+
+    def test_a_delete_that_fails_leaves_the_record_and_names_it(self):
+        before = self.backend._read()
+        real = os.remove
+
+        def remove(path):
+            if os.path.basename(path) == 'BAR.md':
+                raise PermissionError(errno.EACCES, 'in use')
+            return real(path)
+        with mock.patch.object(smod.os, 'remove', remove):
+            msg = self.publish_fails({'BAR': None})
+        self.assertIn('cannot write %s/BAR.md (it is left as it was)' % DIR, msg)
+        self.assertEqual(self.backend._read(), before)
+
+    def test_a_folder_that_cannot_be_made_is_named(self):
+        real = os.makedirs
+
+        def makedirs(path, *a, **k):              # git's own folders (the fake git) still made
+            if os.path.normcase(path) == os.path.normcase(self.backend.dir):
+                raise PermissionError(errno.EACCES, 'denied')
+            return real(path, *a, **k)
+        with mock.patch.object(smod.os, 'makedirs', makedirs):
+            msg = self.publish_fails({'BAR': 'x\n'})
+        self.assertIn('cannot write %s' % self.backend.dir, msg)
+
+    def test_a_temp_file_that_cannot_be_made_leaves_the_record_whole(self):
+        before = self.backend._read()
+        with mock.patch.object(smod.tempfile, 'mkstemp', side_effect=OSError(errno.ENOSPC, 'full')):
+            msg = self.publish_fails({'BAR': 'x\n'})
+        self.assertIn('cannot write %s/BAR.md (it is left as it was)' % DIR, msg)
+        self.assertEqual(self.backend._read(), before)
+        self.assertEqual(self.leftovers(), [])
+
+    def test_a_new_file_that_cannot_be_deleted_again_is_named(self):
+        """NEW is written, ZED's write fails, and removing NEW (it was not there before) fails:
+        NEW is named as not put back."""
+        real = os.remove
+
+        def remove(path):
+            if os.path.basename(path) == 'NEW.md':
+                raise PermissionError(errno.EACCES, 'in use')
+            return real(path)
+        with mock.patch.object(smod, '_replace_file', side_effect=self.fail_from_second()), \
+                mock.patch.object(smod.os, 'remove', remove):
+            msg = self.publish_fails({'NEW': 'new\n', 'ZED': 'zed\n'})
+        self.assertIn('cannot write %s/ZED.md' % DIR, msg)
+        self.assertIn('could not be put back: %s/NEW.md' % DIR, msg)
+        self.assertEqual(self.backend._read().get('NEW'), b'new\n')
+
+    def test_outside_the_pm_data_worktree_the_failure_names_no_catch_up(self):
+        before = self.backend._read()
+        with mock.patch.object(smod, '_replace_file',
+                               side_effect=OSError(errno.ENOSPC, 'full')):
+            with self.assertRaises(Failure) as cm:
+                self.backend._write_files({'BAR': 'x\n'}, before, [DIR + '/BAR.md'], None)
+        self.assertIn('cannot write %s/BAR.md' % DIR, str(cm.exception))
+        self.assertNotIn('not committed', str(cm.exception))
+        self.assertNotIn('catch-up', str(cm.exception))
+
+    def fail_from_second(self):
+        """_replace_file that works once (BAR's write) and then fails, leaving its target alone."""
+        real, calls = smod._replace_file, [0]
+
+        def replace(full, data):
+            calls[0] += 1
+            if calls[0] == 1:
+                return real(full, data)
+            raise OSError(errno.EIO, 'the disk went away')
+        return replace
+
+
+class ReplaceFile(unittest.TestCase):
+    """_replace_file: whole or not at all, a refused move retried, a temp file it cannot remove
+    named."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix='kit-replace-')
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        self.full = os.path.join(self.dir, 'FOO.md')
+        with open(self.full, 'wb') as f:
+            f.write(b'old\n')
+
+    def content(self):
+        with open(self.full, 'rb') as f:
+            return f.read()
+
+    def others(self):
+        return sorted(n for n in os.listdir(self.dir) if n != 'FOO.md')
+
+    def test_the_temp_file_is_beside_the_target_and_is_no_record(self):
+        made = []
+        real = tempfile.mkstemp
+
+        def mkstemp(*a, **k):
+            fd, path = real(*a, **k)
+            made.append(path)
+            return fd, path
+        with mock.patch.object(smod.tempfile, 'mkstemp', mkstemp):
+            smod._replace_file(self.full, b'new\n')
+        self.assertEqual(self.content(), b'new\n')
+        self.assertEqual(os.path.dirname(made[0]), self.dir)
+        self.assertFalse(made[0].endswith('.md'), made[0])
+        self.assertEqual(self.others(), [])
+
+    def test_a_failed_write_into_the_temp_file_leaves_the_target_whole(self):
+        _, fdopen = nth_write_fails(1)
+        with fdopen, self.assertRaises(OSError) as cm:
+            smod._replace_file(self.full, b'new\n')
+        self.assertEqual(cm.exception.errno, errno.ENOSPC)
+        self.assertEqual(self.content(), b'old\n')
+        self.assertEqual(self.others(), [])
+
+    def test_a_temp_file_that_cannot_be_removed_is_named(self):
+        _, fdopen = nth_write_fails(1)
+        real = os.remove
+
+        def remove(path):
+            if path.endswith('.put-back'):
+                raise PermissionError(errno.EACCES, 'in use')
+            return real(path)
+        with fdopen, mock.patch.object(smod.os, 'remove', remove):
+            with self.assertRaises(OSError) as cm:
+                smod._replace_file(self.full, b'new\n')
+        left = self.others()
+        self.assertEqual(len(left), 1, left)
+        self.assertEqual(cm.exception.errno, errno.ENOSPC)
+        self.assertIn('No space left on device', str(cm.exception))
+        self.assertIn(os.path.join(self.dir, left[0]), str(cm.exception))
+        self.assertIn('in use', str(cm.exception))
+        self.assertEqual(self.content(), b'old\n')
+
+    def test_a_move_refused_for_a_while_is_retried(self):
+        real, calls = os.replace, [0]
+
+        def replace(src, dst):
+            calls[0] += 1
+            if calls[0] <= 2:
+                raise PermissionError(errno.EACCES, 'held open by a reader')
+            return real(src, dst)
+        with mock.patch.object(smod.os, 'replace', replace), \
+                mock.patch.object(smod.time, 'sleep') as sleep:
+            smod._replace_file(self.full, b'new\n')
+        self.assertEqual(calls[0], 3)
+        self.assertEqual(self.content(), b'new\n')
+        self.assertEqual(self.others(), [])
+        self.assertEqual(sleep.call_count, 2)
+        self.assertTrue(all(c.args[0] <= 0.05 for c in sleep.call_args_list))
+
+    def test_a_move_refused_past_the_wait_leaves_the_target_whole(self):
+        calls = [0]
+
+        def replace(src, dst):
+            calls[0] += 1
+            raise PermissionError(errno.EACCES, 'held open by a reader')
+        with mock.patch.object(smod.os, 'replace', replace), \
+                mock.patch.object(smod, 'REPLACE_WAIT', 0.2):
+            with self.assertRaises(PermissionError):
+                smod._replace_file(self.full, b'new\n')
+        self.assertGreater(calls[0], 1)
+        self.assertEqual(self.content(), b'old\n')
+        self.assertEqual(self.others(), [])
+
+    def test_an_interrupt_before_the_move_leaves_no_temp_file(self):
+        with mock.patch.object(smod.os, 'replace', side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                smod._replace_file(self.full, b'new\n')
+        self.assertEqual(self.content(), b'old\n')
+        self.assertEqual(self.others(), [])
+
+    def test_any_other_refusal_is_not_retried(self):
+        calls = [0]
+
+        def replace(src, dst):
+            calls[0] += 1
+            raise OSError(errno.EIO, 'the disk went away')
+        with mock.patch.object(smod.os, 'replace', replace):
+            with self.assertRaises(OSError):
+                smod._replace_file(self.full, b'new\n')
+        self.assertEqual(calls[0], 1)
+        self.assertEqual(self.content(), b'old\n')
+        self.assertEqual(self.others(), [])
 
 
 if __name__ == '__main__':

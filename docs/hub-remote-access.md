@@ -173,30 +173,42 @@ python tools/hub.py setup --check
 
 The server reads the `hub` key at its start only.
 
-- Started by hand: press Ctrl+C in its window, then start it again:
+- Started by `setup --autostart` (it runs windowless, with no window to press Ctrl+C in):
+
+  ```powershell
+  python tools/hub.py restart
+  ```
+
+  It asks the server to close cleanly, as Ctrl+C does, waits until it has closed and its process
+  has ended, starts the scheduled task again and waits until the new server answers: `RESTARTED:
+  ...`, exit 0. A `TIMED OUT: ...` line (exit 4, after 300 s; `--timeout S` changes that) names
+  what it waited for and says that nothing was killed: the server goes on closing
+  (`kitlib.hubsite.control`).
+- Started by hand: press Ctrl+C in its window, or run `python tools/hub.py stop`; then start it
+  again:
 
   ```powershell
   python tools/hub.py serve
   ```
 
-- Started by `setup --autostart`: it runs windowless and has no window to press Ctrl+C in. There
-  is no stop verb; end its scheduled task, then check that it stopped:
+  `restart` stops a server started by hand too, but then starts nothing: it starts only the
+  scheduled task, so it prints the start command and exits 3.
+- After changing `hub.port`, the running server still listens on the old port: run
+  `python tools/hub.py restart --port <old port>`. It stops the server on the old port and waits
+  for the new one on the new port. A paired browser pairs again after a port change; on the same
+  port it stays paired across the restart.
 
-  ```powershell
-  Stop-ScheduledTask -TaskName 'PM kit hub server'
-  python tools/hub.py status
-  ```
+Only the owner's token can stop the server, never a browser session, and only on the local
+port: through the tunnel the stop route answers 404 (`kitlib.hubsite.serve.build` adds it to the
+local listener alone), and a request there with no valid Access token gets the 403 `access`
+refusal first, as every request on the tunnel port does.
 
-  If `status` still answers, the server is still running. End that one process by its pid: in
-  Task Manager, Details, add the Command line column and find the `pythonw.exe` or `python.exe`
-  whose command line ends `hub.py serve`; End task on that row only. Then start the task again:
-
-  ```powershell
-  Start-ScheduledTask -TaskName 'PM kit hub server'
-  ```
-
-  A stop that is not a clean close leaves the store lock, and the next start takes it over with a
-  note.
+`stop` and `restart` say `nothing to stop: nothing answers on port N` when nothing answers on the
+port. A server stopped a moment ago may still be running then: it frees its port first and then
+makes its last git pass and closes the store, which can take some minutes (each git fetch and push
+may take up to 120 s, `kitlib.hubsite.gitsync.NET_TIMEOUT`). A `serve` started in that time is
+refused while that server still holds the store. `--timeout S` is approximate: a request in flight
+may run past it (`kitlib.hubsite.control`).
 
 The start-up notes say that the tunnel listener is on, or why it is off.
 
@@ -219,8 +231,11 @@ The start-up notes say that the tunnel listener is on, or why it is off.
    - `tunnel: off: <why>`: no listener. The reasons are fixed phrases: no Access settings, no team
      name, no audience tag, no allowed email, a team that is not one DNS label, emails that are not
      a list, the tunnel port could not be bound (another program holds it), or the listener could
-     not be made. The server console has the detail. Mend the field step 7 names and do step 8
-     again.
+     not be made. The start-up notes of the server have the detail: a server you started with
+     `hub.py serve` shows them in its console, but one the scheduled task started (`setup
+     --autostart`) has no console, so they are not shown. For that one, stop it (`python
+     tools/hub.py stop`) and run `python tools/hub.py serve` in a console to see them. Mend the
+     field step 7 names and do step 8 again.
 
 2. On the phone, open `https://<hostname>` and sign in as `<owner email>`. The page loads, and
    `status` shows `tunnel: on` once it did.

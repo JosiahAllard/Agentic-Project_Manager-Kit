@@ -55,7 +55,8 @@ repository.
 
 - `hub.py setup` makes the owner's and the agent's token files where they are absent and prints
   where they are; it never writes the machine config.
-- `hub.py serve` serves until Ctrl+C, which commits the last changes and releases the store lock.
+- `hub.py serve` serves until Ctrl+C or `hub.py stop`, either of which commits the last changes
+  and releases the store lock.
   The port is `hub.port` of the machine config (default 8790); the store is `hub.store`, else
   `hub/` in the PM data worktree (docs/pm-data-branch.md). `--store PATH` serves a scratch copy
   with git sync off. The server needs no `hub` key: without one every default holds. A trial
@@ -86,10 +87,25 @@ repository.
 - Autostart (opt-in): `python tools/hub.py setup --autostart` registers a scheduled task that
   runs `hub serve` at logon; `--whatif` shows what it would do and changes nothing. Without the
   flag nothing is registered. It is refused, with nothing registered, when no store folder is
-  set. The server then runs windowless, so Ctrl+C does not apply: end it with
-  `Stop-ScheduledTask -TaskName 'PM kit hub server'` and start it again with
-  `Start-ScheduledTask`. A server that was cut off without a clean close leaves its store lock,
-  which the next start takes over with a note (docs/hub-remote-access.md).
+  set. The server then runs windowless, so Ctrl+C does not apply: `hub.py restart` stops it
+  cleanly and starts the task again, and `hub.py stop` stops it (docs/hub-remote-access.md
+  "8. Restart the hub"). A server that was cut off without a clean close leaves its store lock,
+  which the next start takes over with a note.
+- `hub.py stop [--port N] [--timeout S]` and `hub.py restart [--port N] [--timeout S]`
+  (`kitlib.hubsite.control`) post `POST /api/v1/stop` (`kitlib.hubsite.httpd.STOP_ROUTE`) with
+  the owner's Bearer token. The route takes that token only, never a browser session (403
+  `forbidden` otherwise), and only on the local listener: through the tunnel it answers 404 (403
+  `access` first without a valid Access token). It answers `ok`, `stopping`, and the server's
+  `pid` and `ctime`, then the server closes as on Ctrl+C. `stop` waits until the port is free and
+  that process has ended: `STOPPED: ...`, or `nothing to stop: ...` (exit 0) when nothing answers
+  on the port. A server stopped a moment ago may still be closing then: it frees its port before
+  its last git pass and the store's close (`kitlib.hubsite.control`). `restart` reads the
+  scheduled task's state first and starts the task again only when the task ran the server it
+  stopped (the task is `Running` or `Queued`), or when nothing ran and the task is ready; then it
+  waits until the new server answers on `hub.port` (`RESTARTED: ...`). A task that cannot be read
+  or started after the stop prints the `STOPPED` line, why, and the start command (exit 1).
+  Neither ever kills a process: past `--timeout` (default 300 s, approximate: one request in
+  flight may run past it) they print `TIMED OUT: ...` and exit 4.
 - `python tools/hub.py setup --check` writes nothing: it says whether `hub.access` is unset, set
   or cannot serve, fetches the Access keys once when it can serve (`access keys: ...`), and lists
   each kit copy on the machine that would refuse the `hub` key (`kitlib.config.copies`). It ends
@@ -104,8 +120,10 @@ The machine config's `hub` key: docs/kit-json.md "Machine config keys". Its sett
 
 Exit codes of every verb: 0 ok, 1 refused (also a Ctrl+C other than the one that closes a
 running server, or a server that did not close cleanly), 2 usage error or an unreadable machine
-config, 3 the server is not running (the start command is printed), 4 a `wait --timeout` that ran
-out. A `wait` whose server closes mid-wait ends with 3 and the start command when the next poll
+config, 3 the server is not running (the start command is printed), or a `restart` that started
+nothing (no task, a disabled one, or a server started by hand: it says which and prints the
+start command), 4 a `wait --timeout` that ran out, or a `stop` or `restart` that ran out of time
+(nothing was killed). A `wait` whose server closes mid-wait ends with 3 and the start command when the next poll
 is refused, or with 1 (`REFUSED: port N did not answer as the hub does: ...`) when the
 connection dropped mid-request.
 
