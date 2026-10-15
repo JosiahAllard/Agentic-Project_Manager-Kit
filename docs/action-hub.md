@@ -39,6 +39,10 @@ or after an unpair or a session that ran out) is told so on the page and to run
   while a story is still submitted), Current backlog (each repository's open work, with priority,
   status and text filters), Parked (backlog items a coordinator has parked waiting on you, with
   their question, branch and age) and Completed (1, 7, 30 or 90 days).
+- **Docs.** The agents' documents (a plan, research, a visual choice), newest first, from the
+  store's `pages/` and `page_html/` ("pages/<id> and page_html/<id>" below). Read here opens one in
+  a full-screen reader; Close or Esc shuts it. Read only: nothing on the page writes or deletes a
+  document.
 - **Info.** Usage (each account's plan usage) and Agents (each agent's model and effort).
 
 Under the header a line says whether a PM is listening: "A PM is listening." while a PM holds a
@@ -48,9 +52,9 @@ count (`Api.seen` in `kitlib/hubsite/api.py`). The page reads everything at once
 the server), so what the PM writes shows without a reload. A view the server cannot give says so
 at the top.
 
-Links ending `#inbox`, `#todo`, `#topm`, `#backlog` (or `#stories`), `#parked` or `#info` open that
-section; `#usage` and `#agents` open that Info tab. The Questions, Answers and To do lists filter by
-repository.
+Links ending `#inbox`, `#todo`, `#topm`, `#backlog` (or `#stories`), `#parked`, `#docs` or `#info` open that
+section; `#usage` and `#agents` open that Info tab. The Questions, Answers, To do and Docs lists filter by
+repository; Questions, To do and Docs also by id or title.
 
 ## Serving it
 
@@ -336,6 +340,32 @@ repo list (`GET /api/v1/repos`, `kitlib.hubsite.derived.repos`) is every reposit
 (`kitlib.pmstart.known_repos`: each session's repo in `sessions_file`, the PM's repository, this
 kit's repository and the optional `pm_start.repos`) with the aliases the store holds. An item whose
 repo is `all` is for every repo and shows under each one.
+
+## pages/<id> and page_html/<id>
+An agent's document: `pages/<id>` is its card, `page_html/<id>` = {html} its body. In `pages`,
+`kitlib/hubsite/schema.py` requires only `title` (a string); the page also reads `repo`, `from`,
+`summary`, `refs` (a list of ids), `at` and the store's own `updated_at`, each as text, and orders
+the list by `updated_at`, else `at`, newest first (`pageRows` in `kitlib/hubsite/web/index.html`).
+The ids have no prefix: the store assigns none (`Store.add` refuses `pages`), so a writer gives one
+with `put`. Nothing creates a page yet: no `tools/hub.py` verb, hub MCP tool or API route writes
+either collection, so a page exists only when `tools/hub.py migrate` copies one in from the old
+hub ("Data from the old hub" below) or it is placed in the store by hand.
+
+`GET /api/v1/snapshot` carries both collections whole, every body included
+(`test_snapshot_carries_pages_and_their_bodies` in `tests/hubsite/test_api.py`). A page with no
+body is listed with its Read here button disabled; a body with no page is not shown.
+
+The body is agent-written html. The page draws it nowhere but in the reader's one frame, made in
+script with a `sandbox` attribute that grants nothing (no scripts, forms, same-origin, popups or
+navigation of the hub page) and given the body through `srcdoc` behind a meta policy,
+`default-src 'none'; style-src 'unsafe-inline'; img-src data:`: the body can load nothing from
+the network, and a diagram shows only as an inline `<svg>` or a `data:` image
+(`DocsTest` and `PageTextTest.test_the_reader_is_one_locked_frame` in `tests/hubsite/test_page.py`).
+
+`python tools/hub.py validate` (`_check_pages` in `kitlib/hubvalidate/__init__.py`) warns when a
+page's title is missing or empty, when a `page_html` has no string `html`, and when a `page_html`
+has no `pages` document (only when the `pages` collection exists). It does not warn about a page
+with no body.
 
 ## Views read live
 Never stored; read from their sources (`kitlib.hubsite.derived`, `kitlib.hubsite.backlog`):
