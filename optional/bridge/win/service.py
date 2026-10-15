@@ -1,20 +1,8 @@
 """One controller serves verified MCP frontends through its private Windows pipe."""
 from optional.bridge.core.messages import DeliveryError
 from kitlib.proc.errors import ProcError
-from kitlib.proc.process import (PROCESS_QUERY_LIMITED_INFORMATION,SYNCHRONIZE,WAIT_TIMEOUT,
-    close,handle_ctime,open_process)
-from kitlib.proc.win32 import K32
+from .frontend import running
 from .rpc import PipeServer,encode
-
-
-def running(pid,creation):
-    """True only while process (pid, creation) has not exited. An exited process stays openable,
-    with its creation time, while any handle to it is open anywhere on the machine, so a matching
-    creation time alone does not mean it still runs: its exit is read from the wait state."""
-    handle=open_process(pid,PROCESS_QUERY_LIMITED_INFORMATION|SYNCHRONIZE)
-    if not handle: return False
-    try: return handle_ctime(handle)==creation and K32.WaitForSingleObject(handle,0)==WAIT_TIMEOUT
-    finally: close(handle)
 
 
 class BrokerService:
