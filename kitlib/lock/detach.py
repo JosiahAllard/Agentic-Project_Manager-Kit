@@ -48,8 +48,8 @@ def pythons(python):
     pythonw(): both fall back to a console python where this must refuse (`missing`), and importing
     either puts the guard, the gate and the backlog in the lock tool's import reach, which a release
     may then not change under a live run (kitlib.lock.release.LOCK_PATHS, tests/lock/test_release.py)."""
-    folder = os.path.dirname(os.path.abspath(python))
-    return os.path.join(folder, 'pythonw.exe'), os.path.join(folder, 'python.exe')
+    python = os.path.abspath(python)
+    return spawn.pythonw_beside(python), os.path.join(os.path.dirname(python), 'python.exe')
 
 
 def command(python, tool, head, rid, tail):
