@@ -23,8 +23,8 @@ from kitlib.launcher import home, lookup, state, window
 from kitlib.launcher.settings import LaunchError
 
 PM_NAME = 'Project Manager'      # the PM session's name, as every first message names it
-DEFAULT_PROMPT = ('Start up now: run your start-up routine, read your state note (the path your role names), check '
-                  'in with the PM (the session named %s), then continue the queue in the state note.' % PM_NAME)
+DEFAULT_PROMPT = ('Start up now: run your start-up routine, read docs/ops/state.local.md, check in with the PM '
+                  '(the session named %s), then continue the queue in the state note.' % PM_NAME)
 HOME_NOTE = (' Your start folder %s is a home worktree of the main checkout %s, and a relative path resolves in '
              'it: do not write there; your branch work goes in your own worktree, and the main checkout, by '
              'absolute path, is read-only to you.')
@@ -485,8 +485,12 @@ def _copy_old_notes(old, notes, plan, out):
 
 def homes(settings, host, repo=None, repo_path=None, remove=None, whatif=False, git=None):
     """The home worktrees of a main checkout (home.list_homes), or remove one (home.remove): `remove`
-    is a session name or its home-<name> folder. Refused when the folder is not a main checkout, or
-    while a session runs whose home it is."""
+    is a session name or its home-<name> folder name: the home of the session named `remove` when
+    one exists, else, for a name starting home-, the home of the session named by the rest (so a
+    session named home-automation keeps its own home). Refused when the folder is not a main
+    checkout, the name is empty, or while a session runs whose home it is."""
+    if remove is not None and not remove.strip():
+        raise LaunchError('--remove needs a session name or a home-<name> folder name. Nothing was removed.')
     if bool(repo) == bool(repo_path):
         raise LaunchError('Give --repo <name in launcher.repos> or --repo-path <folder>, one of them.')
     folder = repo_path or settings.repo_path(repo)
@@ -498,6 +502,7 @@ def homes(settings, host, repo=None, repo_path=None, remove=None, whatif=False, 
                           'changed.' % (folder, place.detail))
     main = os.path.normpath(place.top)
     git = git or cmd.call
+    home.readable('launch.py homes', 'nothing was listed or removed')
     running = {}
     for p in _sessions(host):
         n = lookup.rc_name(p.get('CommandLine'))
@@ -518,8 +523,13 @@ def homes(settings, host, repo=None, repo_path=None, remove=None, whatif=False, 
                 line += '  in use by the running session %s (PID %s)' % (n, p.get('ProcessId'))
             out.append(line)
         return out
-    name = remove[len(home.PREFIX):] if remove.lower().startswith(home.PREFIX) else remove
-    path = home.home_path(main, name)
+    path = home.home_path(main, remove.strip())
+    if remove.strip().lower().startswith(home.PREFIX) and home.canon(path) not in home.registered(main, git):
+        rest = remove.strip()[len(home.PREFIX):]
+        if not rest.strip('-. '):
+            raise LaunchError("--remove '%s' names no session: give the session name or home-<name>. Nothing was "
+                              'removed.' % remove)
+        path = home.home_path(main, rest)
     live = running.get(home.canon(path))
     if live:
         raise LaunchError("a session named '%s' is running (PID %s) in its home worktree %s; stop it first. Nothing "

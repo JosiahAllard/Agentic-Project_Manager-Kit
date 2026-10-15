@@ -1,14 +1,20 @@
 """Listing and removing home worktrees (kitlib/launcher/home.py list_homes and remove,
 kitlib/launcher/start.py homes, `launch.py homes`; docs/launcher.md "The home worktree"): what is
 listed, every refusal (nothing changed), and on real git a clean home removed and a dirty one kept."""
+import io
+import json
 import os
 import shutil
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from unittest import mock
 
+from kitlib.config import user as kuser
 from kitlib.git import cmd
 from kitlib.git import repo as gitrepo
+from kitlib.host import registry
 from kitlib.launcher import home, start
 from kitlib.launcher.settings import LaunchError
 from tests.launcher.fakes import FakeHost, Home, session
@@ -27,13 +33,16 @@ class Git(object):
     """git as a script: the worktree list (the main checkout, then `entries`: [(path, lines)]) and
     each worktree's status (`status`: {path: text}); every call is recorded."""
 
-    def __init__(self, main, entries=(), status=None, fail=()):
+    def __init__(self, main, entries=(), status=None, fail=(), drop_on_remove=False):
         self.main, self.entries, self.status, self.fail = main, list(entries), dict(status or {}), fail
+        self.drop_on_remove = drop_on_remove        # a failed remove still unregisters it (part-way)
         self.calls = []
 
     def __call__(self, args, cwd):
         self.calls.append((tuple(args), cwd))
         key = ' '.join(args[:2])
+        if key == 'worktree remove' and self.drop_on_remove:
+            self.entries = [e for e in self.entries if e[0] != args[2]]
         if key in self.fail:
             return cmd.Result(1, b'', 'fatal: %s refused' % key)
         if key == 'worktree list':
@@ -136,12 +145,35 @@ class Remove(Case):
             home.remove(self.main, self.a, git=g)
         self.assertEqual(g.writes(), [])
 
-    def test_a_failed_remove_locks_it_again(self):
-        g = Git(self.main, [(self.a, 'HEAD %s\ndetached\nlocked' % HEAD)], fail=('worktree remove',))
-        with self.assertRaisesRegex(LaunchError, 'git worktree remove .* failed: .*; it was locked again'):
+    def test_a_failed_remove_locks_it_again_with_the_reason_it_had(self):
+        for lock, again in (('locked the owner wrote this', ['--reason', 'the owner wrote this']), ('locked', [])):
+            g = Git(self.main, [(self.a, 'HEAD %s\ndetached\n%s' % (HEAD, lock))], fail=('worktree remove',))
+            with self.assertRaisesRegex(LaunchError, 'git worktree remove .* failed: .*; it was locked again'):
+                home.remove(self.main, self.a, git=g)
+            self.assertEqual(g.writes(), [('worktree', 'unlock', self.a), ('worktree', 'remove', self.a),
+                                          tuple(['worktree', 'lock'] + again + [self.a])])
+
+    def test_a_remove_that_fails_part_way_names_the_loose_folder(self):
+        g = Git(self.main, [(self.a, 'HEAD %s\ndetached\nlocked why' % HEAD)], fail=('worktree remove',),
+                drop_on_remove=True)
+        with self.assertRaises(LaunchError) as c:
             home.remove(self.main, self.a, git=g)
-        self.assertEqual(g.writes(), [('worktree', 'unlock', self.a), ('worktree', 'remove', self.a),
-                                      ('worktree', 'lock', '--reason', home.LOCK_REASON % 'home-alpha-coord', self.a)])
+        msg = str(c.exception)
+        self.assertIn('failed part-way', msg)
+        self.assertIn('Git no longer lists it as a worktree, but the folder is left as a loose folder', msg)
+        self.assertIn('delete the folder yourself', msg)
+        self.assertNotIn('sweep still leaves it', msg)
+        self.assertEqual(g.writes(), [('worktree', 'unlock', self.a), ('worktree', 'remove', self.a)])   # no re-lock
+
+    def test_a_head_no_ref_keeps_is_refused(self):
+        g = Git(self.main, [(self.a, 'HEAD %s\ndetached\nlocked' % OLD)], fail=('merge-base --is-ancestor',))
+        with self.assertRaisesRegex(LaunchError, 'is at %s, a commit no branch, tag or other ref contains.*'
+                                                 'orphan it.*branch <name> %s.*Nothing was removed' % (OLD[:10], OLD)):
+            home.remove(self.main, self.a, git=g)
+        self.assertEqual(g.writes(), [])
+        asked = [a for a, _ in g.calls if a[0] in ('for-each-ref', 'merge-base')]
+        self.assertEqual(asked, [('for-each-ref', '--count=1', '--format=%(refname)', '--contains', OLD),
+                                 ('merge-base', '--is-ancestor', OLD, 'HEAD')])
 
     def test_a_failed_unlock_removes_nothing(self):
         g = Git(self.main, [(self.a, 'HEAD %s\ndetached\nlocked' % HEAD)], fail=('worktree unlock',))
@@ -185,6 +217,33 @@ class Verb(unittest.TestCase):
                              ['Would unlock and remove the home worktree %s.' % self.a])
         self.assertEqual(self.homes(remove='alpha-coord'), ['Removed the home worktree %s.' % self.a])
 
+    def test_a_session_named_home_dash_keeps_its_own_home(self):
+        auto = home.home_path(self.repo, 'automation-x')            # home-automation-x
+        own = home.home_path(self.repo, 'home-automation-x')        # home-home-automation-x
+        for p in (auto, own):
+            os.makedirs(p)
+        self.git.entries = [(auto, 'HEAD %s\ndetached\nlocked' % HEAD), (own, 'HEAD %s\ndetached\nlocked' % HEAD)]
+        self.assertEqual(self.homes(remove='home-automation-x', whatif=True),
+                         ['Would unlock and remove the home worktree %s.' % own])
+        self.git.entries = self.git.entries[:1]                     # no session home-automation-x has a home
+        self.assertEqual(self.homes(remove='home-automation-x', whatif=True),
+                         ['Would unlock and remove the home worktree %s.' % auto])
+
+    def test_an_empty_name_or_a_bare_prefix_is_refused(self):
+        for name in ('', '  ', 'home-', 'HOME-'):
+            self.git.calls = []
+            with self.assertRaisesRegex(LaunchError, 'Nothing was removed'):
+                self.homes(remove=name)
+            self.assertEqual(self.git.writes(), [], name)
+
+    def test_an_unreadable_hosts_json_is_worded_for_this_verb(self):
+        def broken(path=None):
+            raise registry.RegistryError('hosts.json: not JSON')
+        with mock.patch.object(registry, 'default_profile', broken):
+            with self.assertRaises(LaunchError) as c:
+                self.homes()
+        self.assertEqual(str(c.exception), 'launch.py homes: hosts.json: not JSON; nothing was listed or removed.')
+
     def test_a_running_sessions_home_is_refused(self):
         self.host.procs = [session(4242, 'Alpha-Coord')]
         with self.assertRaisesRegex(LaunchError, "a session named 'Alpha-Coord' is running \\(PID 4242\\) in its "
@@ -207,6 +266,37 @@ class Verb(unittest.TestCase):
         for bad in (['homes'], ['homes', '--repo', 'a', '--repo-path', 'b']):
             with self.assertRaises(SystemExit):
                 launch.parser().parse_args(bad)
+
+    def main(self, argv):
+        """launch.main(argv) with this test's settings file, host and scripted git: (exit code, out, err)."""
+        cfg = kuser.config_file(self.h.root)
+        os.makedirs(os.path.dirname(cfg), exist_ok=True)
+        with open(cfg, 'w', encoding='utf-8') as f:
+            json.dump({'launcher': self.h.obj}, f)
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(cmd, 'call', self.git), redirect_stdout(out), redirect_stderr(err):
+            code = launch.main(argv, self.host)
+        return code, out.getvalue(), err.getvalue()
+
+    def test_launch_main_runs_the_verb_and_exits_0_or_1(self):
+        code, out, err = self.main(['homes', '--repo', 'alpha'])
+        self.assertEqual((code, err), (0, ''))
+        self.assertIn('Home worktrees of %s:' % self.repo, out)
+        self.assertIn('home-alpha-coord  at %s  locked  clean' % HEAD[:10], out)
+        code, out, err = self.main(['homes', '--repo', 'alpha', '--remove', 'alpha-coord', '--what-if'])
+        self.assertEqual((code, out.strip()), (0, 'Would unlock and remove the home worktree %s.' % self.a))
+        self.assertEqual(self.git.writes(), [])
+        self.host.procs = [session(4242, 'alpha-coord')]
+        code, out, err = self.main(['homes', '--repo', 'alpha', '--remove', 'alpha-coord'])
+        self.assertEqual((code, out), (1, ''))
+        self.assertRegex(err, "^launch.py homes: a session named 'alpha-coord' is running \\(PID 4242\\)")
+        self.assertEqual(self.git.writes(), [])
+        self.host.procs = []
+        code, out, err = self.main(['homes', '--repo', 'alpha', '--remove', 'alpha-coord'])
+        self.assertEqual((code, out.strip(), err), (0, 'Removed the home worktree %s.' % self.a, ''))
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as c:
+            self.main(['homes'])
+        self.assertEqual(c.exception.code, 2)
 
 
 @real_git('worktree locking: the fake does not model git worktree lock')
@@ -240,6 +330,18 @@ class RealRemove(SweepCase):
             self.assertTrue(os.path.isfile(f))
             self.assertIsNotNone(home._entry(self.repo, self.path, cmd.call)['locked'])
             os.remove(f)
+        home.remove(self.repo, self.path)
+        self.assertFalse(os.path.exists(self.path))
+
+    def test_a_commit_made_in_the_home_keeps_it_until_a_branch_holds_it(self):
+        self.fx.write('made-here.txt', 'work\n', root=self.path)
+        sha = self.fx.commit('made in the home', 'made-here.txt', cwd=self.path)
+        with self.assertRaisesRegex(LaunchError, 'is at %s, a commit no branch, tag or other ref contains.*'
+                                                 'Nothing was removed' % sha[:10]):
+            home.remove(self.repo, self.path)
+        self.assertTrue(os.path.isfile(os.path.join(self.path, 'made-here.txt')))
+        self.assertIsNotNone(home._entry(self.repo, self.path, cmd.call)['locked'])
+        self.fx.git('branch', 'kept', sha)
         home.remove(self.repo, self.path)
         self.assertFalse(os.path.exists(self.path))
 

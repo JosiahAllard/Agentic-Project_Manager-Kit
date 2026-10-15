@@ -15,7 +15,8 @@ so a session keeps them.
                        lines it says, or a LaunchError (nothing created)
   list_homes(main)     the main checkout's home worktrees: path, HEAD, lock, dirty files
   remove(main, path)   unlock and remove a clean home (`launch.py homes --remove`); refused, with
-                       nothing changed, when it has any uncommitted, untracked or ignored file
+                       nothing changed, when it has any uncommitted, untracked or ignored file or
+                       its HEAD is a commit nothing else keeps
 
 A home belongs to one session name, and the launcher refuses to start a name that is already
 running (kitlib.launcher.start home_folder), so ensure() never moves a home under a running
@@ -37,12 +38,19 @@ _BAD = re.compile(r'[^a-z0-9._-]+')
 SHOWN = 10          # dirty files named, at most
 
 
-def _profile():
-    """The default host's profile; a hosts.json it cannot read is a LaunchError, not a traceback."""
+def _profile(what='--home-worktree', after='nothing was started'):
+    """The default host's profile; a hosts.json it cannot read is a LaunchError, not a traceback,
+    worded for the caller (`what`: the flag or verb, `after`: what did not happen)."""
     try:
         return registry.default_profile()
     except registry.RegistryError as e:
-        raise LaunchError('--home-worktree: %s; nothing was started.' % e) from None
+        raise LaunchError('%s: %s; %s.' % (what, e, after)) from None
+
+
+def readable(what, after):
+    """Raise the LaunchError _profile() would, worded for `what`, before any home is looked up: a
+    verb other than --home-worktree (launch.py homes) checks hosts.json first with this."""
+    _profile(what, after)
 
 
 def folder():
@@ -134,6 +142,27 @@ def _is_home(main, path):
             and os.path.basename(path).lower().startswith(PREFIX))
 
 
+def registered(main, git=cmd.call):
+    """The canon() paths of every worktree of `main` git knows; or a LaunchError."""
+    return {_canon(e['path']) for e in _entries(main, git)}
+
+
+def _reachable(main, head, git):
+    """Whether commit `head` is kept by something other than the home: a ref contains it (a branch,
+    tag, remote branch, stash), or the main checkout's HEAD has it. `git worktree remove` checks
+    only the files, so a commit made in a detached home and on no ref would be orphaned."""
+    out, why = _git(['for-each-ref', '--count=1', '--format=%(refname)', '--contains', head], main, git)
+    if out is None:
+        raise LaunchError('git for-each-ref --contains %s in %s failed: %s. Nothing was removed.' % (head, main, why))
+    if out:
+        return True
+    r = git(['merge-base', '--is-ancestor', head, 'HEAD'], main)
+    if r.rc in (0, 1):
+        return r.rc == 0
+    raise LaunchError('git merge-base --is-ancestor %s HEAD in %s failed: %s. Nothing was removed.'
+                      % (head, main, (r.err or '').strip() or 'exit %s' % r.rc))
+
+
 def list_homes(main, git=cmd.call):
     """The home worktrees of the main checkout `main`, in git's order: dicts with path, head,
     branch, locked (as _entries) and dirty (the files _dirty names, or None when the folder is
@@ -152,9 +181,11 @@ def list_homes(main, git=cmd.call):
 def remove(main, path, whatif=False, git=cmd.call):
     """Unlock and remove the home worktree `path` of `main` with `git worktree remove` (never
     --force). Refused, nothing changed, when it is not a worktree of `main`, not a home, on a
-    branch, its folder is missing, or it has any uncommitted, untracked or ignored file. A failed
-    remove locks it again. The lines it says, or a LaunchError. The caller checks that no session
-    runs in it (kitlib.launcher.start homes)."""
+    branch, its folder is missing, it has any uncommitted, untracked or ignored file, or its HEAD
+    is a commit no ref and not the main checkout's HEAD keeps (_reachable). A failed remove locks
+    it again with the reason it had, or, when git has already dropped it, names the loose folder
+    left. The lines it says, or a LaunchError. The caller checks that no session runs in it
+    (kitlib.launcher.start homes)."""
     entry = _entry(main, path, git)
     if entry is None:
         raise LaunchError('%s is not a worktree of %s. Nothing was removed.' % (path, main))
@@ -172,22 +203,40 @@ def remove(main, path, whatif=False, git=cmd.call):
     if dirty:
         raise LaunchError('the home worktree %s has %d uncommitted, untracked or ignored file(s): %s. Move or '
                           'delete them yourself first. Nothing was removed.' % (path, len(dirty), shown(dirty)))
-    locked = entry['locked'] is not None
+    head = entry['head']
+    if not head or not _reachable(main, head, git):
+        raise LaunchError('the home worktree %s is at %s, a commit no branch, tag or other ref contains and the main '
+                          "checkout's HEAD does not have: removing the home would orphan it. Put a branch on it "
+                          '(`git -C "%s" branch <name> %s`) first. Nothing was removed.'
+                          % (path, (head or '?')[:10], main, head or '<commit>'))
+    reason = entry['locked']
     if whatif:
-        return ['Would %sremove the home worktree %s.' % ('unlock and ' if locked else '', path)]
-    if locked:
+        return ['Would %sremove the home worktree %s.' % ('unlock and ' if reason is not None else '', path)]
+    if reason is not None:
         _, why = _git(['worktree', 'unlock', path], main, git)
         if why is not None:
             raise LaunchError('git worktree unlock %s failed: %s. Nothing was removed.' % (path, why))
     _, why = _git(['worktree', 'remove', path], main, git)
-    if why is not None:
-        if not locked:
-            raise LaunchError('git worktree remove %s failed: %s' % (path, why))
-        _, again = _git(['worktree', 'lock', '--reason', LOCK_REASON % os.path.basename(path), path], main, git)
-        raise LaunchError('git worktree remove %s failed: %s; %s' % (
-            path, why, 'it was locked again' if again is None else
-            'locking it again failed too (%s): it is detached, so the sweep still leaves it' % again))
-    return ['Removed the home worktree %s.' % path]
+    if why is None:
+        return ['Removed the home worktree %s.' % path]
+    try:
+        still = _canon(path) in registered(main, git)
+    except LaunchError:
+        still = True                    # unknown: say what a registered one gets, the safe reading
+    if not still:
+        if not os.path.exists(path):
+            return ['Removed the home worktree %s (git reported: %s).' % (path, why)]
+        raise LaunchError('git worktree remove %s failed part-way: %s. Git no longer lists it as a worktree, but the '
+                          'folder is left as a loose folder that no lock or sweep rule covers. It had no uncommitted, '
+                          'untracked or ignored file when checked: look inside, then delete the folder yourself.'
+                          % (path, why))
+    if reason is None:
+        raise LaunchError('git worktree remove %s failed: %s' % (path, why))
+    _, again = _git(['worktree', 'lock'] + (['--reason', reason] if reason else []) + [path], main, git)
+    raise LaunchError('git worktree remove %s failed: %s; %s' % (
+        path, why, 'it was locked again' if again is None else
+        'locking it again failed too (%s): it is detached, so the sweep still leaves it, but lock it again with '
+        '`git -C "%s" worktree lock "%s"`' % (again, main, path)))
 
 
 def ensure(main, path, whatif=False, git=cmd.call):
