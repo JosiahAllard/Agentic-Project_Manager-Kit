@@ -655,8 +655,8 @@ HUB_DUPS_RE = re.compile(r'^(?:\s*[\d*]?>&[\d-])*\s*$')
 # and run: that is a script the agent wrote, a documented limit (hub_named), not modelled
 HUB_LINE_OPS = frozenset((None, ';', '&&', '||', '\n'))
 # words that define or change what a later name runs (an alias, a function, a variable, a module,
-# an item on a provider drive, a drive of its own: New-PSDrive f -PSProvider Function makes
-# f:\Get-Content a function), read the shell's memory (history, the call stack), run text as a
+# an item on a provider drive, a drive of its own: a New-PSDrive on the Function provider makes a
+# Get-Content item on it a function), read the shell's memory (history, the call stack), run text as a
 # command, or open a compound command whose body the line's own order does not show. A write to
 # the env drive in any spelling is an environment variable set (commands.line_env_names); the
 # alias, function and variable drives are HUB_LINE_DRIVES
@@ -903,7 +903,7 @@ def hub_module_names(text):
     naming hub on the same command (HUB_PY_WORD_RE, HUB_PY_MODULE_RE), else None. Every python
     word is tried, so one inside another's arguments (`$(python -m hub)`) is read too. The -m is
     python's own unless python's words before it reach a script word first (hub_py_script_first):
-    `python Z:/k/tools/commit.py -m "Hub store: x"` gives commit.py its message."""
+    `python <kit>/tools/commit.py -m "Hub store: x"` gives commit.py its message."""
     for w in HUB_PY_WORD_RE.finditer(text):
         m = HUB_PY_MODULE_RE.match(text, w.end())
         if m and not hub_py_script_first(m.group('mid')):
