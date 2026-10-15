@@ -124,14 +124,26 @@ class PullFold(_Branches):
         self.verb('pull', 'FOO')
         self.assertEqual(self.get('FOO').get('state'), 'pulled')
 
-    def test_a_live_branch_only_a_remote_has_is_noted_not_compared(self):
+    def far_on_origin_only(self):
         self.branch_with('kit/far', 'kitlib/r/a.py')
         self.repo.git('push', '-q', 'origin', 'kit/far')
         self.repo.git('branch', '-q', '-D', 'kit/far')
-        self.seed(held('FAR', 'kit/far', 'docs/far.md'), priced('FOO', scope='kitlib/r/**'))
+        self.seed(held('FAR', 'kit/far', 'docs/far.md'))
+
+    def test_a_live_branch_only_a_remote_has_is_compared_as_last_fetched(self):
+        self.far_on_origin_only()
+        self.seed(priced('FOO', scope='kitlib/r/**'))
+        with self.assertRaises(Refusal) as cm:
+            self.verb('pull', 'FOO')
+        self.assertIn('kitlib/r/** vs kitlib/r/a.py (changed on origin/kit/far)', str(cm.exception))
+        self.assertEqual(self.get('FOO').get('state'), 'open')
+
+    def test_a_remote_only_branch_that_does_not_overlap_is_noted_and_pulls(self):
+        self.far_on_origin_only()
+        self.seed(priced('FOO', scope='kitlib/other/**'))
         change = self.verb('pull', 'FOO')
-        self.assertIn('NOTE: branch kit/far is not a local branch (only on origin); its diff was '
-                      'not compared', change.lines)
+        self.assertIn('NOTE: branch kit/far is not a local branch; its diff was compared as last '
+                      'fetched from origin', change.lines)
         self.assertEqual(self.get('FOO').get('state'), 'pulled')
 
     def test_a_diff_path_that_cannot_be_compared_is_refused(self):
