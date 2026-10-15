@@ -14,7 +14,7 @@ from unittest import mock
 from kitlib import hubmcp
 from kitlib.config.types import ConfigError
 from kitlib.hubmcp import server as srv
-from kitlib.hubsite import api, auth, serve
+from kitlib.hubsite import api, auth, serve, todosteps
 from tests.hubsite import httpfix
 from tests.lock.helpers import REPO, clean_env
 from tests.lockmcp.test_server import Client as Process
@@ -222,6 +222,61 @@ class Arguments(Case):
                 self.assertEqual(payload["error"]["code"], "invalid")
                 self.assertEqual(payload["error"]["field"], field)
         self.assertEqual(self.ask.calls, [])
+
+
+class TodoSteps(Case):
+    """hub_todo_add takes steps (kitlib.hubsite.todosteps): it posts their commands and summary,
+    and refuses what an agent's to-do may not hold before any call."""
+
+    def test_the_schema_takes_steps_as_a_list_of_objects(self):
+        steps = srv.TOOLS["hub_todo_add"][1]["properties"]["steps"]
+        self.assertEqual(steps, {"type": "array", "items": {"type": "object"},
+                                 "description": steps["description"]})
+        self.assertIn("edit", steps["description"])
+
+    def test_steps_post_as_commands_after_the_given_ones_with_a_summary(self):
+        steps = [{"edit": "C:\\w\\a.txt", "old": "x\ny", "new": "z"}, {"run": "python t.py"}]
+        payload, is_error = self.rpc(self.server(), "hub_todo_add",
+                                     {"title": "t", "detail": "Why.", "commands": ["first"],
+                                      "steps": steps})
+        self.assertFalse(is_error, payload)
+        body = self.ask.calls[-1]["body"]
+        self.assertNotIn("steps", body)
+        self.assertEqual(body["commands"][0], "first")
+        self.assertEqual(body["commands"][1:], todosteps.render(steps))
+        self.assertEqual(body["detail"], "Why.\n\nreplace 2 lines in C:\\w\\a.txt\nrun python t.py")
+
+    def test_steps_without_a_detail_make_the_summary_the_detail(self):
+        steps = [{"open": "C:\\w\\a.txt", "line": 3}]
+        for extra in ({}, {"detail": ""}):
+            with self.subTest(extra=extra):
+                payload, is_error = self.rpc(self.server(), "hub_todo_add",
+                                             dict(extra, title="t", steps=steps))
+                self.assertFalse(is_error, payload)
+                body = self.ask.calls[-1]["body"]
+                self.assertEqual(body["detail"], "open C:\\w\\a.txt at line 3 in Notepad++")
+                self.assertEqual(body["commands"], todosteps.render(steps))
+
+    def test_bad_steps_and_refused_text_never_reach_the_hub(self):
+        for args, field in (({"steps": [{"open": "rel.txt"}]}, "steps"),
+                            ({"steps": [{"edit": "C:\\w\\a.txt", "old": "a\ud800", "new": "b"}]},
+                             "steps"),
+                            ({"steps": [{"open": "C:\\w\\\udc00.txt"}]}, "steps"),
+                            ({"steps": [{"run": "notepad x"}]}, "steps"),
+                            ({"steps": [{"run": "echo a\ud800b"}]}, "steps"),
+                            ({"commands": ["git worktree add x"]}, "commands"),
+                            ({"detail": "Open it and apply the change."}, "detail")):
+            with self.subTest(args=args):
+                payload, is_error = self.rpc(self.server(), "hub_todo_add",
+                                             dict(args, title="t"))
+                self.assertTrue(is_error)
+                self.assertEqual(payload["error"]["code"], "invalid")
+                self.assertEqual(payload["error"]["field"], field)
+        self.assertEqual(self.ask.calls, [])
+
+    def test_a_to_do_without_steps_posts_as_before(self):
+        self.rpc(self.server(), "hub_todo_add", {"title": "t", "commands": ["x"]})
+        self.assertEqual(self.ask.calls[-1]["body"], {"title": "t", "commands": ["x"]})
 
 
 class Errors(Case):

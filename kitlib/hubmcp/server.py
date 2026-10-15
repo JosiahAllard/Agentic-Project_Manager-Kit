@@ -32,6 +32,7 @@ from kitlib.hubsite import auth as hubauth
 from kitlib.hubsite import client as hubclient
 from kitlib.hubsite import serve as hubserve
 from kitlib.hubsite import settings as hubsettings
+from kitlib.hubsite import todosteps
 
 SERVER_VERSION = "0.1.0"
 PROTOCOLS = ("2025-06-18", "2025-03-26", "2024-11-05")    # newest first
@@ -122,10 +123,17 @@ TOOLS = {
               "if_version": _PIN}, ["id", "ruling", "if_version"]),
         "POST", "/questions/{id}/log", AGENT),
     "hub_todo_add": (
-        "Adds a to-do for the owner (POST /todos). An agent's open to-do needs commands: the "
-        "steps the owner runs.",
+        "Adds a to-do for the owner (POST /todos). An agent's open to-do needs commands or "
+        "steps: what the owner runs. Refused: plain Notepad, 'open and apply' prose, and "
+        "coordinator work (worktree add/remove, landings, gates, ref deletes).",
         _obj({"title": {"type": "string"}, "detail": {"type": "string"},
               "commands": {"type": "array", "items": {"type": "string"}},
+              "steps": {"type": "array", "items": {"type": "object"},
+                        "description": "Steps the hub turns into commands (after any given), "
+                                       "each one of {edit: <absolute file>, old, new} (an exact "
+                                       "replace of the one place old is; prints ok or MISS), "
+                                       "{open: <absolute file>, line} (Notepad++) or {run: "
+                                       "<PowerShell command>}."},
               "repo": _REPO, "refs": _REFS, "urgent": _URGENT, "from": _FROM}, ["title"]),
         "POST", "/todos", AGENT),
     "hub_todo_ack": (
@@ -298,6 +306,22 @@ class Server:
 
     def _t_hub_inbox(self, a):
         return {"ok": True, "items": self.client().inbox()}
+
+    def _t_hub_todo_add(self, a):
+        """Steps become commands, after the given ones, and their summary ends the detail; the
+        owner's to-do rules (todosteps.check) refuse the agent's text before any call."""
+        a = dict(a)
+        steps = a.pop("steps", None)
+        try:
+            todosteps.check(dict(a, steps=steps))
+            if steps is not None:
+                a["commands"] = list(a.get("commands") or []) + todosteps.render(steps)
+                lines = "\n".join(todosteps.summary(steps))
+                a["detail"] = (a["detail"].rstrip() + "\n\n" + lines) if a.get("detail") \
+                    else lines
+        except (todosteps.StepError, todosteps.Refused) as e:
+            raise ToolError("invalid", str(e), e.field)
+        return self._route("hub_todo_add", a)
 
     # ---------------------------------------------------------------- JSON-RPC
     def handle(self, msg):
