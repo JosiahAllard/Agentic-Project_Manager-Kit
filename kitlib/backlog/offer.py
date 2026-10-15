@@ -236,8 +236,10 @@ class Offer(object):
 
 
 class PassedOver(object):
-    def __init__(self, rec, rank, why):
-        self.rec, self.rank, self.why = rec, rank, why
+    def __init__(self, rec, rank, why, blocker=None):
+        # `blocker`: `(who, record id)` of the live pull or other session's record whose scope
+        # this one collides with; None for any other reason (`blocker_summary` counts these).
+        self.rec, self.rank, self.why, self.blocker = rec, rank, why, blocker
 
 
 def next_offer(snap, holding, cap=DEFAULT_CAP, seeds=(), session=None, unmet=None):
@@ -274,7 +276,8 @@ def next_offer(snap, holding, cap=DEFAULT_CAP, seeds=(), session=None, unmet=Non
     offers, passed, reached, holders = [], [], set(), {}
     for rec in holding:
         for m in rec.all('scope'):
-            holders.setdefault(m, '%s (in flight on %s)' % (rec.id, rec.get('pulled_by') or '?'))
+            holders.setdefault(m, ('%s (in flight on %s)' % (rec.id, rec.get('pulled_by') or '?'),
+                                   (rec.get('pulled_by') or '?', rec.id)))
     for rec in ordered:
         reached.add(id(rec))
         rid = rec.id
@@ -299,10 +302,10 @@ def next_offer(snap, holding, cap=DEFAULT_CAP, seeds=(), session=None, unmet=Non
             continue
         if hit:
             if own(rec):
-                holder = holders.get(hit[0][1])
+                holder, who = holders.get(hit[0][1]) or (None, None)
                 passed.append(PassedOver(rec, ranks.get(rid, '-'), 'scope %s collides with %s '
                                          'already taken%s' % (hit[0][0], hit[0][1], ' by %s'
-                                         % holder if holder else '')))
+                                         % holder if holder else ''), who))
             continue
         if own(rec) and unmet is not None:
             missing = unmet(rec)
@@ -313,10 +316,11 @@ def next_offer(snap, holding, cap=DEFAULT_CAP, seeds=(), session=None, unmet=Non
         occupied.extend(scopes)
         if not own(rec):
             for m in scopes:
-                holders.setdefault(m, '%s (session %s)' % (rid, rec.get('session') or 'none'))
+                holders.setdefault(m, ('%s (session %s)' % (rid, rec.get('session') or 'none'),
+                                       ('session %s' % (rec.get('session') or 'none'), rid)))
             continue
         for m in scopes:
-            holders.setdefault(m, '%s (offered above)' % rid)
+            holders.setdefault(m, ('%s (offered above)' % rid, None))
         offers.append(Offer(rec, ranks.get(rid, '-'), id(rec) in seeded))
         if cap is not None and len(offers) >= cap:
             break
@@ -325,6 +329,18 @@ def next_offer(snap, holding, cap=DEFAULT_CAP, seeds=(), session=None, unmet=Non
             passed.append(PassedOver(rec, ranks.get(rec.id, '-'),
                                      'not reached - the cap was already full'))
     return (offers, passed), [], ranks
+
+
+def blocker_summary(passed, top=5):
+    """`['blocks N: <branch or session> (<record id>)', ...]`: the live pulls and other sessions'
+    records that hold the scope of the most passed-over records, most first (ties by name), at
+    most `top` lines. Empty when nothing was passed over on such a collision."""
+    counts = {}
+    for p in passed:
+        if p.blocker is not None:
+            counts[p.blocker] = counts.get(p.blocker, 0) + 1
+    ordered = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:top]
+    return ['blocks %d: %s (%s)' % (n, who, rid) for (who, rid), n in ordered]
 
 
 def not_offered_why(rec, passed, session=None):

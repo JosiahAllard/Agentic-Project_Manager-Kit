@@ -78,6 +78,8 @@ Rules, in the order they are checked:
 A command line the parser cannot read cleanly also goes through kitlib.guard.fallback.
 "Agent session" and "the owner's own" are the session mark's (docs/guard.md "Session mark").
 """
+import ast
+import builtins
 import fnmatch
 import json
 import ntpath
@@ -2676,23 +2678,266 @@ def _evals(name, args, cmd_word):
     return []
 
 
-def _python(cmd, args, cmd_word):
+# python's short options that take a value: the rest of the word, or the next word (-c CODE,
+# -cCODE, -Ic CODE); its long option that takes one
+PY_SHORT_VALUE = 'cmWX'
+PY_LONG_VALUE = {'--check-hash-based-pycs'}
+# the py launcher's version choice (-3, -3.12, -3.12-64), taken before python's own options
+PY_LAUNCHER_VER_RE = re.compile(r'^-\d+(\.\d+)*(-(32|64))?$')
+
+
+def py_program(name, args):
+    """(kind, value, flags): how python reads its program from `args`. kind is 'code' (value the
+    -c Word), 'module' (-m), 'stdin' (`-`), 'script' or 'none' (no program named: python reads
+    standard input). flags is the set of option letters before it that take no value; a -W or -X
+    value or a long option adds '?'."""
+    flags = set()
     k = 0
+    if name == 'py' and args and PY_LAUNCHER_VER_RE.match(args[0].text):
+        k = 1
     while k < len(args):
-        t = args[k].text
-        if t == '-c' or (t.startswith('-') and not t.startswith('--') and t.endswith('c') and len(t) > 2):
-            return [here(cmd_word)]
+        w = args[k]
+        t = w.text
         if t == '-':
-            return [here(cmd_word)]
-        if t in ('-X', '-W'):
-            k += 2
+            return 'stdin', None, flags
+        if t == '--':
+            return ('script' if k + 1 < len(args) else 'none'), None, flags
+        if t.startswith('--'):
+            flags.add('?')
+            k += 2 if t in PY_LONG_VALUE else 1
             continue
-        if t.startswith('-'):
-            if t == '-m' or t.endswith('m') and not t.startswith('--'):
-                return []                       # a module: what it writes is its own business
+        if not t.startswith('-') or len(t) < 2:
+            return 'script', None, flags
+        for j in range(1, len(t)):
+            ch = t[j]
+            if ch not in PY_SHORT_VALUE:
+                flags.add(ch)
+                continue
+            if t[j + 1:]:
+                value, k = sh.Word(t[j + 1:], w.dyn, w.start, w.end), k + 1
+            else:
+                value, k = (args[k + 1] if k + 1 < len(args) else None), k + 2
+            if ch == 'c':
+                return 'code', value, flags
+            if ch == 'm':
+                return 'module', value, flags
+            flags.add('?')
+            break
+        else:
             k += 1
-            continue
-        return []                               # a script file
+    return 'none', None, flags
+
+
+# A python -c the guard can prove reads only (py_reads_only): isolated (-I: no working directory
+# or PYTHON* variable decides what an import loads) with these other plain flags, importing only
+# these modules and naming only these of their attributes (os.path only as `from os.path import`)
+PY_READ_FLAGS = set('IESsBbdqOuvP')
+PY_READ_MODULES = {
+    'json': frozenset(('load', 'loads', 'dump', 'dumps', 'JSONDecodeError')),
+    'sys': frozenset(('argv', 'stdin', 'stdout', 'stderr', 'exit', 'version', 'version_info',
+                      'platform', 'maxsize', 'executable')),
+    're': frozenset(('match', 'fullmatch', 'search', 'findall', 'finditer', 'sub', 'subn',
+                     'split', 'escape', 'error', 'A', 'ASCII', 'I', 'IGNORECASE', 'M', 'MULTILINE',
+                     'S', 'DOTALL', 'X', 'VERBOSE')),
+    'collections': frozenset(('Counter', 'defaultdict', 'OrderedDict', 'deque')),
+    'itertools': frozenset(('chain', 'islice', 'groupby', 'count', 'product', 'permutations',
+                            'combinations', 'accumulate', 'zip_longest', 'takewhile', 'dropwhile',
+                            'starmap', 'repeat', 'compress', 'filterfalse')),
+    'math': frozenset(('ceil', 'floor', 'sqrt', 'log', 'log2', 'log10', 'exp', 'fabs', 'fsum',
+                       'prod', 'gcd', 'isclose', 'isnan', 'isinf', 'trunc', 'pi', 'e', 'inf', 'nan')),
+    'os.path': frozenset(('basename', 'dirname', 'exists', 'isfile', 'isdir', 'isabs', 'join',
+                          'getsize', 'getmtime', 'abspath', 'normpath', 'normcase', 'realpath',
+                          'relpath', 'split', 'splitext', 'commonpath')),
+}
+# The only builtins the code may name (an allowlist: type, object and the rest stay out). open
+# only as a call that opens for reading (_py_open_reads)
+PY_BUILTINS = frozenset(('print', 'len', 'range', 'sorted', 'reversed', 'enumerate', 'zip', 'min', 'max',
+                         'sum', 'abs', 'round', 'any', 'all', 'str', 'int', 'float', 'bool', 'list',
+                         'dict', 'set', 'tuple', 'repr', 'isinstance', 'map', 'filter', 'open'))
+# The only attributes the code may take of a value that is not an imported module: string, list,
+# dict, match and read-file methods. A file object's buffer, raw or name, and every class or
+# type attribute, stay out
+PY_VALUE_ATTRS = frozenset((
+    'read', 'readline', 'readlines', 'write', 'flush',
+    'strip', 'lstrip', 'rstrip', 'split', 'rsplit', 'splitlines', 'join', 'replace', 'startswith',
+    'endswith', 'lower', 'upper', 'find', 'count', 'format', 'encode', 'decode', 'partition',
+    'rpartition', 'isdigit',
+    'items', 'keys', 'values', 'get', 'append', 'extend', 'sort', 'index', 'most_common',
+    'group', 'groups', 'groupdict', 'start', 'end', 'span'))
+# names that run text as code, open a file, reach any attribute or module by name, give a value's
+# type, or start a debugger or pager: refused as any identifier (a name, attribute, import alias,
+# keyword); open is the one builtin call let through, as a Name only
+PY_DENIED_NAMES = {'exec', 'eval', 'compile', 'open', 'getattr', 'setattr', 'delattr', 'globals',
+                   'locals', 'vars', 'breakpoint', 'help', 'type', 'object', 'super', 'input'}
+# identifiers that reach a frame, its globals or code: the way back to every module
+PY_FRAME_ATTR_RE = re.compile(r'^(gi|cr|ag|f|tb|co|func|im)_')
+PY_OPEN_KEYWORDS = {'encoding', 'errors', 'newline', 'buffering'}
+# The only syntax the code may use: statements and expressions that bind, call, compute and loop.
+# No def, lambda or class (new names the walk would have to follow), no match (its patterns bind
+# and read attributes with no Name or Attribute node), no try, while, del, global, walrus, await,
+# yield or template string; any node type a later python adds is refused too
+PY_NODES = tuple(t for t in (getattr(ast, n, None) for n in (
+    'Module', 'Expr', 'Assign', 'AugAssign', 'For', 'If', 'With', 'withitem', 'Pass', 'Break',
+    'Continue', 'Import', 'ImportFrom', 'alias',
+    'Call', 'keyword', 'Name', 'Attribute', 'Subscript', 'Slice', 'Starred', 'Constant',
+    'JoinedStr', 'FormattedValue', 'BinOp', 'UnaryOp', 'BoolOp', 'Compare', 'IfExp', 'Tuple', 'List',
+    'Dict', 'Set', 'ListComp', 'SetComp', 'DictComp', 'GeneratorExp', 'comprehension',
+    'Load', 'Store', 'operator', 'unaryop', 'boolop', 'cmpop')) if t is not None)
+# Every public builtin name up to python 3.14, written out so the guard does not depend on the
+# python it runs on: the python a line starts may be newer than the guard's
+PY_BUILTIN_NAMES = frozenset((
+    'abs', 'aiter', 'all', 'anext', 'any', 'ascii', 'bin', 'bool', 'breakpoint', 'bytearray', 'bytes',
+    'callable', 'chr', 'classmethod', 'compile', 'complex', 'copyright', 'credits', 'delattr', 'dict',
+    'dir', 'divmod', 'enumerate', 'eval', 'exec', 'exit', 'filter', 'float', 'format', 'frozenset',
+    'getattr', 'globals', 'hasattr', 'hash', 'help', 'hex', 'id', 'input', 'int', 'isinstance',
+    'issubclass', 'iter', 'len', 'license', 'list', 'locals', 'map', 'max', 'memoryview', 'min', 'next',
+    'object', 'oct', 'open', 'ord', 'pow', 'print', 'property', 'quit', 'range', 'repr', 'reversed',
+    'round', 'set', 'setattr', 'slice', 'sorted', 'staticmethod', 'str', 'sum', 'super', 'tuple', 'type',
+    'vars', 'zip', 'Ellipsis', 'NotImplemented', 'True', 'False', 'None',
+    'ArithmeticError', 'AssertionError', 'AttributeError', 'BaseException', 'BaseExceptionGroup',
+    'BlockingIOError', 'BrokenPipeError', 'BufferError', 'BytesWarning', 'ChildProcessError',
+    'ConnectionAbortedError', 'ConnectionError', 'ConnectionRefusedError', 'ConnectionResetError',
+    'DeprecationWarning', 'EOFError', 'EncodingWarning', 'EnvironmentError', 'Exception',
+    'ExceptionGroup', 'FileExistsError', 'FileNotFoundError', 'FloatingPointError', 'FutureWarning',
+    'GeneratorExit', 'IOError', 'ImportError', 'ImportWarning', 'IndentationError', 'IndexError',
+    'InterruptedError', 'IsADirectoryError', 'KeyError', 'KeyboardInterrupt', 'LookupError',
+    'MemoryError', 'ModuleNotFoundError', 'NameError', 'NotADirectoryError', 'NotImplementedError',
+    'OSError', 'OverflowError', 'PendingDeprecationWarning', 'PermissionError', 'ProcessLookupError',
+    'PythonFinalizationError', 'RecursionError', 'ReferenceError', 'ResourceWarning', 'RuntimeError',
+    'RuntimeWarning', 'StopAsyncIteration', 'StopIteration', 'SyntaxError', 'SyntaxWarning',
+    'SystemError', 'SystemExit', 'TabError', 'TimeoutError', 'TypeError', 'UnboundLocalError',
+    'UnicodeDecodeError', 'UnicodeEncodeError', 'UnicodeError', 'UnicodeTranslateError',
+    'UnicodeWarning', 'UserWarning', 'ValueError', 'Warning', 'WindowsError', 'ZeroDivisionError'))
+# names a stored name or import alias may not take: it would hide the builtin only when the
+# binding runs, so a name read as the binding might reach the builtin. The fixed list joined with
+# the running python's own, so a python newer or older than the guard's is covered either way
+PY_SHADOWED = PY_BUILTIN_NAMES | frozenset(dir(builtins)) | frozenset(PY_DENIED_NAMES)
+
+
+def _py_open_reads(call):
+    """True when the open() call opens for reading only: a path, then at most a literal mode
+    without w, a, x or +, and only plain keywords."""
+    if not 1 <= len(call.args) <= 2 or any(isinstance(a, ast.Starred) for a in call.args):
+        return False
+    mode = call.args[1] if len(call.args) == 2 else None
+    for kw in call.keywords:
+        if kw.arg == 'mode' and mode is None:
+            mode = kw.value
+        elif kw.arg not in PY_OPEN_KEYWORDS:
+            return False                        # **kwargs, opener=, a second mode
+    if mode is None:
+        return True
+    return isinstance(mode, ast.Constant) and isinstance(mode.value, str) and set(mode.value) <= set('rbtU')
+
+
+def _py_ident_ok(name):
+    """False for an identifier the code may not hold anywhere: one starting with _, a frame
+    identifier, or one of PY_DENIED_NAMES."""
+    return not (name.startswith('_') or PY_FRAME_ATTR_RE.match(name) or name in PY_DENIED_NAMES)
+
+
+def py_reads_only(code, flags, ps=False):
+    """True when the guard can prove the python -c Word `code`, run with the option letters
+    `flags`, writes no file: literal text, isolated mode, only PY_NODES syntax, imports and module
+    attributes only from PY_READ_MODULES, a module name only as `module.attr`, other attributes
+    only from PY_VALUE_ATTRS, names only from PY_BUILTINS, the imports and the names the code
+    stores, no identifier _py_ident_ok refuses, and open() only as a call that opens for reading.
+    `ps`: the line reaches python through PowerShell, whose native-argument quoting can hand python
+    other text than the Word when it holds a double quote or a backslash (PowerShell 5.1 also
+    wraps an argument with a space in quotes without doubling a trailing backslash), so such code
+    is not proved; nor is empty or blank code, which PowerShell 5.1 drops so that python takes the
+    next word as its code. Each import name binds once. Any text it cannot parse, or any other
+    shape, is not proved (False)."""
+    if code is None or code.dyn or 'I' not in flags or not flags <= PY_READ_FLAGS:
+        return False
+    if not code.text.strip():
+        return False
+    if ps and (ps_native_unsure(code) or '\\' in code.text):
+        return False
+    try:
+        tree = ast.parse(code.text, mode='exec')
+    except Exception:                           # SyntaxError, ValueError, RecursionError: unread
+        return False
+    mods, imported, stored, aliases, parents = {}, set(), set(), set(), {}
+    for node in ast.walk(tree):
+        if not isinstance(node, PY_NODES):
+            return False
+        for child in ast.iter_child_nodes(node):
+            parents[child] = node
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                if a.name not in PY_READ_MODULES or '.' in a.name:
+                    return False
+                mods[a.asname or a.name] = PY_READ_MODULES[a.name]
+        elif isinstance(node, ast.ImportFrom):
+            if node.level or node.module not in PY_READ_MODULES:
+                return False
+            if any(a.name not in PY_READ_MODULES[node.module] for a in node.names):
+                return False                    # `*` too
+            imported.update(a.asname or a.name for a in node.names)
+        elif isinstance(node, ast.alias):
+            bound = node.asname or node.name
+            if not all(_py_ident_ok(n) for n in (node.name, node.asname) if n) \
+                    or bound in PY_SHADOWED or bound in aliases:
+                return False                    # a name two imports bind: which one is unknown
+            aliases.add(bound)
+        elif isinstance(node, ast.keyword):
+            if node.arg is not None and not _py_ident_ok(node.arg):
+                return False
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            stored.add(node.id)
+    if stored & (set(mods) | imported | PY_SHADOWED):
+        return False                            # a module, an import or a builtin rebound
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute):
+            if not _py_ident_ok(node.attr) or not isinstance(node.ctx, ast.Load):
+                return False
+            v = node.value
+            allowed = mods[v.id] if isinstance(v, ast.Name) and v.id in mods else PY_VALUE_ATTRS
+            if node.attr not in allowed:
+                return False
+        elif isinstance(node, ast.Name):
+            n, parent = node.id, parents.get(node)
+            if n == 'open':
+                if not (isinstance(parent, ast.Call) and parent.func is node and _py_open_reads(parent)):
+                    return False
+                continue
+            if not _py_ident_ok(n):
+                return False
+            if n in mods:
+                if not (isinstance(parent, ast.Attribute) and parent.value is node
+                        and isinstance(node.ctx, ast.Load)):
+                    return False                # a module passed on, rebound or aliased
+            elif n not in PY_BUILTINS and n not in imported and n not in stored:
+                return False                    # any other builtin, or a name never bound
+    return True
+
+
+def _python(cmd, name, args, cmd_word, via=None):
+    # Start-Process hands python one command line the guard re-split with its quotes taken out
+    # (commands._split_list), so what python reads is not the words below
+    if via == 'start-process':
+        return [here(cmd_word)]
+    shells, c = set(), cmd
+    while c is not None:                        # every shell on the way to python
+        shells.add(c.shell)
+        # a word PowerShell may hand on as other than one argument (dropped when empty, split at a
+        # double quote): python's own words, or the text of a bash -c around it, are not the
+        # ones read here
+        if c.shell == sh.PS and any(ps_native_unsure(w) for w in c.words):
+            return [here(cmd_word)]
+        c = c.nested_in
+    kind, code, flags = py_program(name, args)
+    if kind == 'code':
+        # through cmd.exe the Word is not what python gets: cmd ends a quoted part at a \" python
+        # reads as a quote, and keeps print(...) one word where the read splits it at the (
+        if sh.CMD in shells:
+            return [here(cmd_word)]
+        return [] if py_reads_only(code, flags, sh.PS in shells) else [here(cmd_word)]
+    if kind == 'stdin':
+        return [here(cmd_word)]
+    if kind in ('module', 'script'):
+        return []                               # its own file decides what it writes
     if cmd.piped_in or any(r.op in ('<<', '<<<', '<') for r in cmd.redirects):
         return [here(cmd_word)]                 # a script read from standard input
     return []
@@ -2765,7 +3010,7 @@ def write_targets(cmd, inv):
     if name == 'wget':
         return out + _wget(args, word)
     if cm.PYTHON_RE.match(name):
-        return out + _python(cmd, args, word)
+        return out + _python(cmd, name, args, word, inv.via)
     if name in EVALS:
         return out + _evals(name, args, word)
     if name == 'tar':                           # Windows' own tar.exe runs from PowerShell too
@@ -5287,8 +5532,9 @@ def _busy_loop(parsed, cmds, first, last):
         if BOUND_RE.search(loop):
             return None
         cut = body_open + 1 - head.start
-        return loop, '$deadline = (Get-Date).AddMinutes(%d); %s if ((Get-Date) -gt $deadline) { break }; %s' % (
+        bounded = '$deadline = (Get-Date).AddMinutes(%d); %s if ((Get-Date) -gt $deadline) { break }; %s' % (
             BUSY_MINUTES, loop[:cut], loop[cut:].lstrip())
+        return loop, _in_outer(head, src[:head.start] + bounded + src[end:], bounded)
     words = [w for w in head.words if w.text not in BASH_LEAD_SKIP]
     start = words[0].start if words else head.start
     done = cmds[last]
@@ -5300,7 +5546,49 @@ def _busy_loop(parsed, cmds, first, last):
     if tested and cm.base_name(tested[0].text) == 'read':
         return None                              # while read: it reads lines, it waits on nothing
     rest = src[done_end:done.end] + DUP_RE.match(src, done.end).group(0)   # the loop's redirects
-    return loop, "timeout %d bash -c '%s'%s" % (BUSY_MINUTES * 60, loop.replace("'", "'\\''"), rest.rstrip())
+    do = _bash_loop_do(cmds, first, last)
+    if do is None:
+        return loop, "timeout %d bash -c '%s'%s" % (BUSY_MINUTES * 60, loop.replace("'", "'\\''"), rest.rstrip())
+    cut = do.end - start
+    bounded = 'SECONDS=0; %s [ $SECONDS -ge %d ] && break;%s%s' % (
+        loop[:cut], BUSY_MINUTES * 60, loop[cut:] if loop[cut:cut + 1].isspace() else ' ' + loop[cut:],
+        rest.rstrip())
+    return loop, _in_outer(head, src[:start] + bounded + src[done_end + len(rest):], bounded)
+
+
+def _bash_loop_do(cmds, first, last):
+    """The `do` Word of the bash loop cmds[first..last] (not one of a loop nested in it), or None."""
+    depth = 1
+    for c in cmds[first + 1:last + 1]:
+        w = c.words[0] if c.words else None
+        if depth == 1 and w is not None and w.text == 'do' and not cm.quoted(c, w):
+            return w
+        if _lead(c) in ('while', 'until', 'for', 'select'):
+            depth += 1
+        elif _first(c) == 'done':
+            depth -= 1
+    return None
+
+
+def _in_outer(cmd, text, alone):
+    """`alone` (the bounded loop) when `cmd` is on the call's own line. When it is nested (bash -c
+    '...', powershell -Command '...'), the outer command that runs `text` (the nested source with
+    the loop bounded) instead: each outer command with the literal word that held the old text
+    replaced by the new, single-quoted for its shell; `alone` when that word cannot be found."""
+    if cmd.nested_in is None:
+        return alone
+    c = cmd
+    while c.nested_in is not None:
+        outer = c.nested_in
+        hits = [w for w in outer.words if not w.dyn and w.text == c.source]
+        if len(hits) != 1 or outer.start is None:
+            return alone
+        w = hits[0]
+        quoted = "'%s'" % (text.replace("'", "''") if outer.shell == sh.PS else text.replace("'", "'\\''"))
+        src = outer.source
+        text = src[outer.start:w.start] + quoted + src[w.end:outer.end]
+        c = outer
+    return text
 
 
 DUP_RE = re.compile(r'(?:\s*\d*[<>]&\d+)*')       # fd duplications (2>&1) a command's span leaves out

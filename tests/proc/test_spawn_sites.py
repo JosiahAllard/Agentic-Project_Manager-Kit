@@ -127,6 +127,7 @@ HAZARD_EXEMPT = {
     ('kitlib/guard/commands.py', '_ps_env_unsafe', 'Start-Process'): (1, GUARD_READS),
     ('kitlib/guard/commands.py', '_start_process', 'Start-Process'): (1, GUARD_READS),
     ('kitlib/guard/commands.py', 'invocation', 'Start-Process'): (2, GUARD_READS),
+    ('kitlib/guard/rules.py', '_python', 'Start-Process'): (1, GUARD_READS),
     ('kitlib/guard/rules.py', 'plain_run', 'Start-Process'): (1, GUARD_READS),
     ('kitlib/guard/rules.py', 'runs_reserve_ui', 'Start-Process'): (1, GUARD_READS),
     ('kitlib/pluginsource/__init__.py', '<module>', 'DETACHED_PROCESS'): (
@@ -175,6 +176,7 @@ HAZARD_EXEMPT = {
     ('tests/bridge/test_startup.py',
      'StartupTests.test_task_uses_current_interactive_user_and_hidden_explicit_python_launcher',
      '-WindowStyle Hidden'): (2, BRIDGE_TEXT),
+    ('tests/guard/extra_rows.py', '<module>', 'Start-Process'): (4, GUARD_TEST),
     ('tests/guard/shell_rows.py', '<module>', 'Start-Process'): (6, GUARD_TEST),
     ('tests/guard/shell_rows.py', '<module>', 'cmd /c start'): (2, GUARD_TEST),
     ('tests/guard/test_jail.py', 'UnplacedGit.test_each_env_changer_held_for_every_jailed_role',

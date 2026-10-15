@@ -595,7 +595,7 @@ class ReadTest(ApiCase):
         self.ok('POST', '/questions/%s/answer' % qid, OWNER, {'choice': 0})
         self.assertEqual(self.ok('GET', '/pending', AGENT)['items'],
                          [{'kind': 'question', 'id': qid, 'title': 't', 'repo': 'kit',
-                           'at': NOW, 'from': 'pm'}])
+                           'at': NOW, 'from': 'pm', 'route': 'pm'}])
 
     def test_snapshot(self):
         qid = self.question()

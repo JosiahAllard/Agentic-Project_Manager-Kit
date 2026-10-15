@@ -75,6 +75,22 @@ class NextAllCli(unittest.TestCase):
         self.assertIn('DEAD PULL BAR (pulled_by tools/gone-branch has no branch): '
                       '`release BAR --reason ...`', out)
 
+    def test_next_and_all_print_the_blockers_after_the_passed_over_lines(self):
+        backend = smod.RefBackend(self.repo.root, 'origin', smod.STORE_REF, smod.STORE_REF)
+        snap = smod.Store(backend, rmod.Rules()).load()
+        backend.publish(snap, {
+            'HOLD': record_text(id='HOLD', priority='1', priority_by='agent', session='other',
+                                scope='a/**'),
+            'R1': record_text(id='R1', priority='2', priority_by='agent', scope='a/x.py'),
+            'R2': record_text(id='R2', priority='2', priority_by='agent', scope='a/y.py')},
+            'seed\n')
+        for args in (('next',), ('next', '--all')):
+            out = self.ok(*args)
+            self.assertIn('  passed over R2 (rank', out)
+            self.assertLess(out.index('  passed over R2'), out.index('  blockers, most first:'))
+            self.assertTrue(out.rstrip('\n').endswith(
+                '  blockers, most first:\n    blocks 2: session other (HOLD)'), out)
+
     def test_all_with_cap_is_usage(self):
         rc, out = self.run_tool('next', '--all', '--cap', '3')
         self.assertEqual(rc, 2, out)
