@@ -197,6 +197,8 @@ class RealHome(SweepCase):
 
     def test_the_sweep_check_and_remove_never_take_it(self):
         home.ensure(self.repo, self.path)
+        self.fx.write('later.txt', 'later\n')
+        self.fx.commit('later', 'later.txt')            # main moves on; the home stays behind it
         self.git('push', '-q', 'origin', 'main')
         rc, out = self.sweep(apply=True)
         self.assertEqual(rc, 0, out)
