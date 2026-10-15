@@ -167,16 +167,30 @@ def decide(event, ctx=None, environ=None, profile=None):
     HostProfile or a callable returning one) is built here, so its reads fail inside decide.
     The shared rules judge first, so a call they refuse is refused as it always was; a call they
     allow then meets the role policy (kitlib.guard.rolepolicy), which is off for a role whose
-    .kit.json entry names no mode, and, when it adds write-jail roots, the shared rules again."""
+    .kit.json entry names no mode, and, when it adds write-jail roots, the shared rules again.
+    A refusal made while the machine config's last good copy stands in says so (stand_in_said)."""
     from . import rolepolicy
     ctx = ctx or context.Ctx(environ=environ, profile=profile)
     d = judge(event, ctx)
-    if d:
+    if not d:
+        d, held = rolepolicy.screen(event, ctx)
+        if d is None and held is not ctx:
+            d = judge(event, held)
+    return stand_in_said(d, ctx) if d else Decision(ALLOW)
+
+
+def stand_in_said(d, ctx):
+    """The Decision `d` with ctx.stand_in() (context.Ctx: the machine config does not parse and
+    its last good copy stands in) said before its alternative, the tag still last. An allow, or a
+    reason that says it already, is unchanged."""
+    say = getattr(ctx, 'stand_in', None)
+    note = say() if callable(say) and d.verdict != ALLOW else None
+    if not note or note in d.reason:
         return d
-    d, held = rolepolicy.screen(event, ctx)
-    if d is None and held is not ctx:
-        d = judge(event, held)
-    return d or Decision(ALLOW)
+    at = d.reason.rfind(' Instead: %s' % d.instead) if d.instead else -1
+    if at < 0:
+        return reworded(d, '%s %s' % (note, d.reason))
+    return reworded(d, '%s %s%s' % (d.reason[:at], note, d.reason[at:]))
 
 
 def judge(event, ctx):
