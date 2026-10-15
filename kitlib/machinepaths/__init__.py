@@ -7,8 +7,10 @@ variable, and prose writes `%VAR%\...`. This rule keeps a new literal from creep
 tracked file, and every untracked file git does not ignore, is read from the WORKING TREE (so work
 in progress counts) and searched for
 
-  - a drive-rooted `GitHub`, `research` or `AgentTemp` folder: `<drive>:` then `\`, `\\` or `/`,
-    then that name;
+  - a drive-rooted machine folder: `<drive>:` then `\`, `\\` or `/`, then one of the folder
+    names folders() gives - the machine config's `machine_path_folders` (kitlib.config.user).
+    The kit codes no folder name (DEFAULT_FOLDERS is empty): unset, no drive-rooted folder is
+    searched and check() prints a NOTE saying so;
   - a drive-rooted user profile: `<drive>:` + separator + `Users` + separator + a name, which
     covers every `AppData`, `Documents` and `.claude` path under one. A placeholder name in angle
     brackets or a `%VAR%` is not a name and never matches.
@@ -35,14 +37,18 @@ Not searched: a file listed but gone from the working tree, files outside `scan`
 `known_binary`. Any OTHER file this cannot search - binary (a NUL in its first 8 KiB), over 4 MiB,
 or unreadable - is a WARNING naming it, so a skip is never silent.
 
-find(text) is the same search over one string and reads no configuration. scan_staged(root, rels)
+A machine config the kit cannot read does not stop the check: user-profile paths are still
+searched and a WARNING (naming no value from the file) says so, never NOT CHECKED.
+
+find(text, folders=None) is the same search over one string and reads no configuration: `folders`
+names the folders (default none: a user profile only). scan_staged(root, rels)
 is the same rule over the STAGED copies (the index) of `rels`, in one `git cat-file --batch`;
 kitlib.commit runs it on every file it is about to commit. It fails closed: an index git cannot
 read, or a named path with no staged blob, is `(None, why)`.
 
 check(root) is the whole tree sweep as `(code, lines)`: 0 clean (WARNING lines included), 1 a hit
-outside the allow-list, 2 git could not list the tree, nothing was read, or the configuration was
-refused. Nothing here prints or exits.
+outside the allow-list, 2 git could not list the tree, nothing was read, or the `.kit.json`
+configuration was refused. Nothing here prints or exits.
 """
 import collections
 import fnmatch
@@ -50,13 +56,30 @@ import os
 import re
 
 from kitlib import config as kconfig
+from kitlib.config import user as kuser
 from kitlib.git import batch, cmd
 
 SEP = r'(?:\\\\|\\|/)+'
-MACHINE_PATH = re.compile(
-    r'(?<![A-Za-z0-9])[A-Za-z]:' + SEP +
-    r'(?:(?:GitHub|research|AgentTemp)\b|Users' + SEP + r'[^\\/\s\'"`<>%$*]+)',
-    re.IGNORECASE)
+DEFAULT_FOLDERS = ()
+_PATTERNS = {}
+
+
+def pattern(folders):
+    """The compiled machine-path pattern for the drive-rooted folder names `folders` (a user
+    profile is always one); cached per folder list."""
+    key = tuple(folders)
+    got = _PATTERNS.get(key)
+    if got is None:
+        # (?![A-Za-z0-9_]), not \b: a name ending in a symbol (`C#`) has no word boundary after it.
+        named = r'(?:%s)(?![A-Za-z0-9_])|' % '|'.join(re.escape(f) for f in key) if key else ''
+        got = _PATTERNS[key] = re.compile(
+            r'(?<![A-Za-z0-9])[A-Za-z]:' + SEP +
+            r'(?:' + named + r'Users' + SEP + r'[^\\/\s\'"`<>%$*]+)',
+            re.IGNORECASE)
+    return got
+
+
+MACHINE_PATH = pattern(DEFAULT_FOLDERS)
 MAX_BYTES = 4 * 1024 * 1024
 SECTION = 'machine_paths'
 GIT_TIMEOUT = 60
@@ -64,7 +87,10 @@ GIT_TIMEOUT = 60
 OK, FAILED, NOT_CHECKED = 0, 1, 2
 
 Allow = collections.namedtuple('Allow', 'glob line_re hit_re reason temporary')
-Config = collections.namedtuple('Config', 'allow known_binary scan fallback')
+# folders: the drive-rooted folder names searched (None: DEFAULT_FOLDERS); note: the WARNING line
+# when the machine config could not be read, else None (check() adds the NOTE for an unset list).
+Config = collections.namedtuple('Config', 'allow known_binary scan fallback folders note',
+                                defaults=(None, None))
 
 FIXTURE = 'test fixture: an invented path the test feeds in, not a path on this machine'
 VAR_NAME = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
@@ -120,10 +146,25 @@ def from_section(data, where='.kit.json "%s"' % SECTION):
     return Config(tuple(allow), dict(kb), tuple(scan_globs), fallback)
 
 
-def load_config(root):
+def folders(home=None):
+    """(folder names, note): the machine config's `machine_path_folders` (unset: none) and None;
+    or, when the machine config cannot be read, no folder names and a WARNING line that names no
+    value from the file. HomeFenced is a BaseException and is never caught here."""
+    try:
+        return kuser.machine_path_folders(home), None
+    except ConfigError:
+        return DEFAULT_FOLDERS, ('WARNING: machine config %s could not be read, so only '
+                                 'user-profile paths were searched - run tools/preflight.py to see '
+                                 'what it refuses' % kuser.DISPLAY)
+
+
+def load_config(root, home=None):
     """The repository's allow-list and scan settings (`Config`) from the working tree's
-    `.kit.json` "machine_paths". Raises ConfigError on anything it cannot use."""
-    return from_section(kconfig.load(root).section(SECTION))
+    `.kit.json` "machine_paths", with the folder names of the machine config under `home`
+    (default the user's; folders()). Raises ConfigError on a `.kit.json` it cannot use."""
+    cfg = from_section(kconfig.load(root).section(SECTION))
+    names, note = folders(home)
+    return cfg._replace(folders=names, note=note)
 
 
 class ListError(Exception):
@@ -155,9 +196,11 @@ def allowed(allow, rel, line, hit):
     return None
 
 
-def find(text):
-    """Every machine path in `text`, as matched strings. Reads no configuration."""
-    return [m.group(0) for m in MACHINE_PATH.finditer(text or '')]
+def find(text, folders=None):
+    """Every machine path in `text`, as matched strings, for the drive-rooted folder names
+    `folders` (default none: user-profile paths only). Reads no configuration."""
+    rx = MACHINE_PATH if folders is None else pattern(folders)
+    return [m.group(0) for m in rx.finditer(text or '')]
 
 
 def searched(cfg, rel):
@@ -173,8 +216,9 @@ def check_data(cfg, rel, data, hits, used, read, skipped):
         skipped.append((rel, 'binary (a NUL in its first 8 KiB)'))
         return
     read.append(rel)
+    rx = MACHINE_PATH if cfg.folders is None else pattern(cfg.folders)
     for n, line in enumerate(data.decode('utf-8', 'replace').splitlines(), 1):
-        for m in MACHINE_PATH.finditer(line):
+        for m in rx.finditer(line):
             if cfg.fallback is not None and cfg.fallback.search(line):
                 continue
             i = allowed(cfg.allow, rel, line, m.group(0))
@@ -260,6 +304,19 @@ def stale_lines(cfg, used, read):
     return out
 
 
+UNSET_NOTE = ('NOTE: the machine config sets no "machine_path_folders", so only drive-rooted '
+              'user-profile paths were searched - name the folders of this machine there '
+              '(docs/commit.md "machine_paths.py")')
+
+
+def note_lines(cfg):
+    """The config's WARNING when the machine config could not be read; else UNSET_NOTE when it
+    names no folder; else nothing."""
+    if cfg.note:
+        return [cfg.note]
+    return [] if cfg.folders else [UNSET_NOTE]
+
+
 def check(root):
     """The tree sweep: `(code, lines)` with code OK, FAILED or NOT_CHECKED (module docstring)."""
     try:
@@ -274,7 +331,8 @@ def check(root):
                              % (root, e)]
     if not read:
         return NOT_CHECKED, ['MACHINE PATHS NOT CHECKED: no file was read under %s' % root]
-    lines = skipped_lines(skipped) + stale_lines(cfg, used, read) + hit_lines(hits, len(read))
+    lines = note_lines(cfg) + skipped_lines(skipped) + \
+        stale_lines(cfg, used, read) + hit_lines(hits, len(read))
     if hits:
         return FAILED, lines
     return OK, lines + ['MACHINE PATHS OK (%d file(s) read, %d allow-listed line kind(s) in use, '

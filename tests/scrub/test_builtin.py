@@ -1,5 +1,7 @@
 """The built-in scrub (kitlib/scrub) over every file `git ls-files` lists, tests/ included. It
-needs no machine config, so a clean clone checks it too.
+needs no machine config, so a clean clone checks it too; when the machine config sets
+`machine_path_folders`, a drive path into one of them is a `drive` hit as well
+(configured_folders, read as tests/shipped.py reads the install's names).
 
 A hit that no ALLOWED entry covers counts against its (class, file) baseline in the PENDING_*
 blocks below. Each block is today's hits that one later piece of work removes; that work lowers
@@ -235,9 +237,18 @@ def j(*parts):
     return ''.join(parts)
 
 
+def configured_folders():
+    """The real machine config's `machine_path_folders` through the home fence's one exception
+    (tests.real_install_config); () when there is no config file or it sets none, and then the
+    one NOTE naming the unset key (tests.shipped.real_machine_folders)."""
+    from tests import shipped
+    return shipped.real_machine_folders()
+
+
 class BuiltIn(unittest.TestCase):
     def test_no_new_owner_text_in_a_tracked_file(self):
-        found, unused = scrub.scan(tracked_files(), read_text, ALLOWED)
+        found, unused = scrub.scan(tracked_files(), read_text, ALLOWED,
+                                   classes=scrub.classes(configured_folders()))
         over, under = scrub.ratchet(found, PENDING)
         for cls, path, n, base in under:
             print('scrub: %s has %d %s hit(s), baseline %d: lower the baseline in tests/scrub/'
@@ -379,19 +390,65 @@ class TheChecks(unittest.TestCase):
             'docs/a.md:2: ' + j('Inte', 'l Core i7') + ' (hardware)',
             'docs/a.md:3: ' + j('RT', 'X 3080') + ' (hardware)'])
 
-    def test_a_drive_path_into_a_machine_folder_is_found_in_tests_too(self):
+    def test_a_drive_path_into_a_user_profile_is_found_in_tests_too(self):
+        # The scrub reads no configuration, and the kit codes no machine folder list (the machine
+        # config's machine_path_folders): only a user profile is a machine folder here.
         bs = chr(92)
         files = {'tests/x/test_y.py': '\n'.join([
-            j('a = "', 'Z', ':', bs * 2, 'Git', 'Hub', bs * 2, 'repo"'),
-            j('b = "', 'z', ':/', 're', 'search/x"'),
-            j('c = "', 'C', ':/', 'us', 'ers/x and ', 'D', ':/', 'Agent', 'Temp"'),
+            j('a = "', 'Z', ':', bs * 2, 'Src', bs * 2, 'repo"'),
+            j('b = "', 'z', ':/', 'us', 'ers', bs, 'x"'),
+            j('c = "', 'C', ':/', 'us', 'ers/x and ', 'D', ':/', 'kit', '-temp"'),
             j('d = "', 'D', ':/src/alpha", "', 'C', ':/', 'Users', 'x/y"'),
             ''])}
         self.assertEqual(self.found(files), [
-            'tests/x/test_y.py:1: ' + j('Z', ':', bs * 2, 'Git', 'Hub') + ' (drive)',
-            'tests/x/test_y.py:2: ' + j('z', ':/', 're', 'search') + ' (drive)',
-            'tests/x/test_y.py:3: ' + j('C', ':/', 'us', 'ers') + ' (drive)',
-            'tests/x/test_y.py:3: ' + j('D', ':/', 'Agent', 'Temp') + ' (drive)'])
+            'tests/x/test_y.py:2: ' + j('z', ':/', 'us', 'ers') + ' (drive)',
+            'tests/x/test_y.py:3: ' + j('C', ':/', 'us', 'ers') + ' (drive)'])
+
+    def test_the_scrub_codes_no_folder_but_a_user_profile(self):
+        self.assertEqual(scrub.MACHINE_FOLDERS, ('Users',))
+        self.assertIs(scrub.classes(), scrub.CLASSES)
+        self.assertIs(scrub.classes(()), scrub.CLASSES)
+
+    def test_a_configured_machine_folder_is_found_in_tests_too(self):
+        # The machine config's machine_path_folders, passed in (scrub.classes): the scrub itself
+        # reads no configuration.
+        bs = chr(92)
+        files = {'tests/x/test_y.py': '\n'.join([
+            j('a = "', 'Z', ':', bs * 2, 'Src', bs * 2, 'repo"'),
+            j('b = "', 'D', ':/', 'srcs', '/x and ', 'C', ':/', 'us', 'ers/x"'),
+            ''])}
+        hits, _ = scrub.scan(sorted(files), files.get, classes=scrub.classes(('Src',)))
+        self.assertEqual(['%s:%d: %s (%s)' % (h.path, h.line, h.text, h.cls) for h in hits], [
+            'tests/x/test_y.py:1: ' + j('Z', ':', bs * 2, 'Src') + ' (drive)',
+            'tests/x/test_y.py:2: ' + j('C', ':/', 'us', 'ers') + ' (drive)'])
+
+    def test_the_gate_check_reads_the_real_configs_machine_path_folders(self):
+        import json
+        import os
+        import tempfile
+        from unittest import mock
+        import tests
+        from kitlib.config import user as kuser
+        from tests.scrub import test_builtin as me
+        home = tempfile.mkdtemp(prefix='kit-scrub-home-')
+        self.addCleanup(__import__('shutil').rmtree, home, True)
+        with mock.patch.object(tests, '_REAL_HOME', home):
+            self.assertEqual(me.configured_folders(), ())       # no machine config file
+            os.makedirs(os.path.join(home, kuser.DIR_NAME))
+            with open(kuser.config_file(home), 'w', encoding='utf-8') as f:
+                json.dump({'machine_path_folders': ['Src']}, f)
+            self.assertEqual(me.configured_folders(), ('Src',))
+            extra = 'tests/zz_new.py'
+            files, real_read = me.tracked_files() + [extra], me.read_text
+
+            def read(rel):
+                return j('p = "', 'D', ':/', 'Src', '/x"\n') if rel == extra else real_read(rel)
+            result = unittest.TestResult()
+            with mock.patch.object(me, 'tracked_files', lambda: files), \
+                    mock.patch.object(me, 'read_text', read):
+                me.BuiltIn('test_no_new_owner_text_in_a_tracked_file').run(result)
+        self.assertEqual(len(result.failures), 1, result.errors)
+        self.assertIn('tests/zz_new.py (drive: 1 hit(s), baseline 0)', result.failures[0][1])
 
     def test_machine_folders_agree_with_the_shipped_text_scrub(self):
         import re

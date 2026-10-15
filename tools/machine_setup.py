@@ -23,7 +23,7 @@ It writes nothing into any repository: a repository works with the kit with noth
            --pm-settings FILE (default mode only: the settings file the PM session loads, for its
                              SessionStart hook)
            --agent-temp DIR (default: the machine config's agent_temp_sweep.dir, then the user
-                             environment's AGENT_TEMP, then AgentTemp at the root of the kit's drive)
+                             environment's AGENT_TEMP, then kit-temp at the root of the kit's drive)
            --no-sweep-task   do not register the agent-temp-sweep scheduled task (by default
                              --apply registers it, after one dry run of the sweep printing what it
                              would remove; a task already registered is left as is)

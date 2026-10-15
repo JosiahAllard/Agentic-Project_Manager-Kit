@@ -36,8 +36,9 @@ OLD = 'old'      # the old folder's file: DIR_NAME has none (the fallback)
 BOTH = 'both'    # both have one: DIR_NAME's is read, the old one ignored
 NONE = 'none'    # neither: an empty config, named at DIR_NAME
 BAD = 'bad'      # DIR_NAME's folder or file cannot be read as present or absent: a ConfigError
-# The kit's temp folder at the root of a checkout's drive (work_temp).
-TEMP_DIR_NAME = 'AgentTemp'
+# The kit's temp folder at the root of a checkout's drive (work_temp): the kit's default, which
+# the machine config's `temp_dir` overrides.
+TEMP_DIR_NAME = 'kit-temp'
 
 
 class AbsPath(Str):
@@ -142,7 +143,8 @@ SCHEMA = {
     'launcher': Field(Owned('kitlib.launcher'), None, 'the session launcher settings: state folder, repos, account folders (docs/launcher.md "Settings")'),
     'backlog_lint': Field(Owned('kitlib.backloglint'), None, 'the backlog lint repositories'),
     'machine_lock': Field(Owned('kitlib.lock.site'), None, 'the machine lock settings: build daemons at release, lock-window notices'),
-    'temp_dir': Field(AbsPath(), None, "the folder the kit's own temp files go in (test run folders, gate logs); unset: `AgentTemp` at the root of the checkout's drive, or the shared temp folder on its drive (docs/test-tools.md \"Temp folders\"); older kit copies reject the key"),
+    'temp_dir': Field(AbsPath(), None, "the folder the kit's own temp files go in (test run folders, gate logs); unset: `kit-temp` at the root of the checkout's drive, or the shared temp folder on its drive (docs/test-tools.md \"Temp folders\"); older kit copies reject the key"),
+    'machine_path_folders': Field(ListOf(Str(pattern=r'[^\\/:*?"<>|\s]+', what='a folder name')), None, 'the drive-rooted folder names the machine-paths check refuses besides a user profile (docs/commit.md "machine_paths.py"); unset: none, so only drive-rooted user-profile paths are refused and tools/machine_paths.py prints a NOTE saying so; older kit copies reject the key; set it only after every folder runs a kit that knows it'),
     'agent_temp_sweep': Field(Owned('optional/agenttemp/agent_temp_sweep.py'), None, "the agents' temp folder to sweep (`dir`), the age past which an unused entry goes (`max_age_days`, default 3) and the entries it never removes (`keep`, relative paths such as `claude/<project>/<session>`); `tools/machine_setup.py` adds it when absent (docs/machine-setup.md \"Extras\")"),
     'plugin': Field(Owned('kitlib.pluginsource'), None, 'where the plugin export of pushed kit main lives, and whether pm_watch refreshes it on its own (docs/plugin-source.md); older kit copies reject the key; set it only after every folder is migrated'),
 }
@@ -578,6 +580,13 @@ def ledger_files(home=None):
 def standing_delegation(home=None):
     """The standing delegation's ruling id, or None when the machine config does not set one."""
     return user_config(home)['standing_delegation']
+
+
+def machine_path_folders(home=None):
+    """The drive-rooted folder names the machine-path check refuses besides a user profile, as a
+    tuple: the machine config's `machine_path_folders`, else () (the kit codes no folder names).
+    A machine config that cannot be read raises ConfigError."""
+    return tuple(user_config(home)['machine_path_folders'] or ())
 
 
 def doc_lines():
