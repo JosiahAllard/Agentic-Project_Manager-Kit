@@ -172,7 +172,7 @@ class PullCollision(StoreCase):
         self.assert_still_collides(BRANCH)
 
     def test_the_callers_branch_in_another_letter_case_still_collides(self):
-        # pulled_by is compared exactly: --as TOOLS/SOME-BRANCH is not the branch that pulled.
+        # pulled_by is compared exactly: the branch upper-cased is not the branch that pulled.
         self.ctx.branch = BRANCH.upper()
         self.seed(mine('kitlib/backlog/**'), priced('FOO', scope='kitlib/backlog/scope.py'))
         with self.assertRaises(Refusal) as cm:
