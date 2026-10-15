@@ -8,9 +8,12 @@ one, or one the owner authored and claims (`Owner-Approved:` / `Owner-Authored: 
 WARNING. The owner's identity is the base's `owner` section alone, so a branch cannot name itself
 the owner.
 
-`merged` (a landing's merged-tree gate, HEAD on the main branch): the first-parent merges in
-`<base>..HEAD` are the lander's own and are not branch commits. On any other branch they are the
-branch's sync merges, so `merged` there is refused, never read as an exemption.
+`merged` (a landing's merged-tree gate): the first-parent merges in `<base>..HEAD` are the
+lander's own and are not branch commits. It holds with HEAD on the main branch, or detached at a
+landing's merge: the landing tree of kitlib.gate.land, where HEAD's first-parent chain from the
+base is merges only, the oldest made onto the base itself (landing_head). On any other branch, or
+at any other detached HEAD, those merges are the branch's sync merges, so `merged` there is
+refused, never read as an exemption.
 """
 import collections
 
@@ -35,10 +38,53 @@ def lander_merges(base, root):
     return set(gitcmd.text(r.out).split()), None
 
 
-def _on_main(root, main):
-    r = gitcmd.call(['symbolic-ref', '-q', 'HEAD'], root)
-    ref = gitcmd.text(r.out).strip() if r.rc == 0 else ''
-    return ref == 'refs/heads/%s' % main, ref or 'detached'
+def landing_head(base, root):
+    """`(True, None)` when the detached HEAD of `root` is a landing's merge onto `base`: its
+    first-parent chain in `<base>..HEAD` is one or more merges (a batch merges one branch after
+    another), and the oldest of them has `base` as its first parent. Else `(False, why not)`, or
+    `(None, why)` when git cannot tell."""
+    base_sha, why = gitrefs.resolve(base, root)
+    if not base_sha:
+        return None, why
+    chain, why = gitcmd.run_text(['rev-list', '--first-parent', '%s..HEAD' % base_sha, '--'],
+                                 root)
+    if chain is None:
+        return None, why
+    chain = chain.split()
+    if not chain:
+        return False, 'HEAD is the base %s itself, with no merge on it' % base_sha[:10]
+    merges, why = lander_merges(base_sha, root)
+    if merges is None:
+        return None, why
+    plain = [c for c in chain if c not in merges]
+    if plain:
+        return False, ('its first-parent chain from the base %s holds %d commit(s) that are not '
+                       'merges (%s)' % (base_sha[:10], len(plain), plain[0][:10]))
+    first, why = gitrefs.resolve(chain[-1] + '^1', root)
+    if first is None:
+        return None, why
+    if first != base_sha:
+        return False, 'its first-parent chain does not start at the base %s' % base_sha[:10]
+    return True, None
+
+
+def _merged_refusal(root, base, main):
+    """None when `merged` may exempt the lander's merges in `root`: HEAD on `main` (a landing
+    merged in the main checkout), or a detached HEAD that is a landing's merge onto `base` (the
+    landing tree, docs/gate.md "Landing" step 5; landing_head). Else what HEAD is and why not."""
+    branch, why = gitrefs.current_branch(root)
+    if branch is None:
+        return 'git cannot tell what HEAD is (%s)' % why
+    if branch == main:
+        return None
+    if branch:
+        return 'HEAD is on the branch %s' % branch
+    landing, why = landing_head(base, root)
+    if landing:
+        return None
+    if landing is None:
+        return 'HEAD is detached, and git cannot tell whether it is a landing merge (%s)' % why
+    return 'HEAD is detached and not a landing merge: %s' % why
 
 
 def check(root, base=None, cfg=None, merged=False, since=None):
@@ -53,11 +99,12 @@ def check(root, base=None, cfg=None, merged=False, since=None):
     if why:
         return Outcome(REFUSED, lines + ['trailers: NOT CHECKED: %s' % why])
     if merged:
-        on_main, head = _on_main(root, cfg.main_branch)
-        if not on_main:
+        why = _merged_refusal(root, base, cfg.main_branch)
+        if why:
             return Outcome(REFUSED, lines + [
                 "trailers: REFUSED - --merged exempts the lander's merges and holds only on %s "
-                "itself; HEAD is %s. On a branch, run without --merged." % (cfg.main_branch, head)])
+                "itself or at a landing's detached merge onto the base; %s. On a branch, run "
+                "without --merged." % (cfg.main_branch, why)])
     try:
         rules = ownermod.merge(load_at(root, 'HEAD').owner_rules(),
                                load_at(root, base).owner_rules())
