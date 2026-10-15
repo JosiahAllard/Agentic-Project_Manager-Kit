@@ -13,6 +13,7 @@
           unblock ID [--on M] [--reason T] [--ruling R]      (several blockers: --on and --reason)
           pull ID [--reason T] [--ruling R] [--blocker ID]   release ID --reason T
           close ID --reason T [--ruling R]                   retire ID --why T [--ruling R]
+          delete ID --why T [--ruling R]                     clear-review ID --reason T
           set-status ID parked --q Q-nnn                     unpark ID --ruling R
   start   migrate [--dry-run] [--to ref|branch] [--dir D]   (main's records -> a new store)
   repair  catch-up [--apply PATH...]     (the PM data worktree's uncommitted record paths; a dry
@@ -134,6 +135,14 @@ def build_parser():
     v.add_argument('--why', required=True)
     v.add_argument('--ruling', default=None)
     v.add_argument('--owner-said', default=None)           # refused: kept so the message names --ruling
+    v = sub.add_parser('delete')
+    v.add_argument('id')
+    v.add_argument('--why', required=True)
+    v.add_argument('--ruling', default=None)
+    v.add_argument('--owner-said', default=None)           # refused, as on retire
+    v = sub.add_parser('clear-review')
+    v.add_argument('id')
+    v.add_argument('--reason', required=True)
     v = sub.add_parser('set-status')
     v.add_argument('id')
     v.add_argument('status')
@@ -223,8 +232,12 @@ def do_list(args, ctx, snap):
     if args.area:
         recs = [r for r in recs if r.get('area') == args.area]
     if args.needs_priority:
+        # A record marked for review at `-` or `-1` still wants its price (the pricing pass).
         recs = sorted((r for r in recs if omod.classify(r)[0] in
-                       (omod.UNPRIORITISED_OPEN, omod.OWNER_PRIORITISED)), key=lambda r: r.id)
+                       (omod.UNPRIORITISED_OPEN, omod.OWNER_PRIORITISED) or
+                       omod.classify(r)[0] == omod.REVIEW and
+                       r.get('priority') in ('-', rmod.OWNER_PRIORITY)),
+                      key=lambda r: r.id)
     elif args.blocked:
         recs = [r for r in recs if omod.classify(r)[0] == omod.HELD]
         if args.on:
@@ -245,6 +258,8 @@ def do_list(args, ctx, snap):
             days = rmod.parked_days(r, ctx.date())
             age = '?' if days is None else '%dd' % days
             line += '  [q %s, parked %s]' % (r.get('q') or '?', age)
+        if r.has('review'):
+            line += '  [review %s]' % r.get('review')
         say(line)
     say('%d record(s)' % len(recs))
     return 0
@@ -410,9 +425,10 @@ def do_migrate(args, top, cfg, rules):
 def main(argv=None):
     args = build_parser().parse_args(argv)
     try:
-        if args.verb == 'retire' and args.owner_said is not None:
+        if args.verb in ('retire', 'delete') and args.owner_said is not None:
             raise Usage('`--owner-said` is gone: owner words are never copied into a record. '
-                        'Retiring an owner-held record takes `--ruling R-nnnn`')
+                        '%s an owner-held record takes `--ruling R-nnnn`'
+                        % ('Retiring' if args.verb == 'retire' else 'Deleting'))
         root = os.path.abspath(args.root or os.getcwd())
         if args.verb == 'migrate':
             top, cfg, rules = open_repo(root)

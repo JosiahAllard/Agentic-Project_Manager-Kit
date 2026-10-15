@@ -34,6 +34,8 @@ WRITTEN_BY = {
     'hold_ruling': '`--ruling R-nnnn` on a release, or `set --hold-ruling R-nnnn`',
     'q': '`set-status parked --q Q-nnn`', 'parked_at': '`set-status parked --q Q-nnn`',
     'resume': '`unpark --ruling R-nnnn`',
+    'review': '`add` from the Action Hub (the library\'s `review=`); a coordinator clears it with '
+              '`clear-review ID --reason T`',
 }
 
 
@@ -181,8 +183,12 @@ def read_body_file(path):
 # --- add ------------------------------------------------------------------------------------------
 
 def plan_add(snap, ctx, rid, summary, scopes, effort=None, ref=None, reopen=False, session=None,
-             found_on=None, why_not_folded=None):
+             found_on=None, why_not_folded=None, review=None):
     """One unprioritised record. `priority: -` always: pricing is a separate act.
+
+    `review` (`<source> <YYYY-MM-DD>`, the library's alone: the Action Hub passes it, the CLI has
+    no flag) writes the review mark: `pull` refuses the record and `next` never offers it until a
+    coordinator runs `clear-review` (plan_clear_review).
 
     The fold-in guard (docs/backlog.md, "The fold-in guard"): `found_on` is the branch the finding
     was made on, or `none`; `why_not_folded` says why it is not fixed there. A record whose scope
@@ -210,17 +216,22 @@ def plan_add(snap, ctx, rid, summary, scopes, effort=None, ref=None, reopen=Fals
             raise Usage('bad `--scope %s`: %s' % (s, bad))
     if effort is not None and rmod._effort(effort) is not None:
         raise Usage('bad `--effort %s`: %s' % (effort, rmod._effort(effort)))
+    if review is not None and rmod._review(review) is not None:
+        raise Usage('bad review mark `%s`: %s' % (review, rmod._review(review)))
     prior = ctx.store.history(rid, snap)
     if prior and not reopen:
-        raise Refusal('`%s` was already closed or retired: %s. Re-adding it under the same id makes '
-                      'that history read as though it were about this item: pass `--reopen` if it '
-                      'is the same work coming back, or pick a new id' % (rid, prior))
+        raise Refusal('`%s` was already closed, retired or deleted: %s. Re-adding it under the '
+                      'same id makes that history read as though it were about this item: pass '
+                      '`--reopen` if it is the same work coming back, or pick a new id'
+                      % (rid, prior))
     notes = [] if found_on == smod.NONE else _fold_overlap(snap, ctx, rid, found_on, scopes)
     where = 'no branch (or on a branch since landed)' if found_on == smod.NONE else found_on
     summary = '%s (found on %s; not folded: %s)' % (summary.strip(), where, not_folded)
     pairs = [('id', rid), ('area', smod.area_from_scope(scopes)), ('priority', '-'),
              ('priority_by', '-'), ('effort', effort or '-'), ('state', 'open'),
              ('blocked_on', '-')]
+    if review is not None:
+        pairs.append(('review', review))
     pairs += [('scope', s) for s in scopes]
     if session is not None:
         pairs.append(('session', session))
@@ -230,6 +241,9 @@ def plan_add(snap, ctx, rid, summary, scopes, effort=None, ref=None, reopen=Fals
     lines = notes + ['ADDED %s, found on %s' % (rid, where)]
     lines += ['  %-11s %s' % (k + ':', v) for k, v in pairs]
     lines.append('Unprioritised: not in `next` until somebody prices it (`list --needs-priority`).')
+    if review is not None:
+        lines.append('Marked for review: not pullable until a coordinator runs `clear-review %s '
+                     '--reason T`.' % rid)
     return Change({rid: _text(pairs, ADD_BODY)}, 'backlog: add %s, found on %s' % (rid, where),
                   lines)
 
@@ -775,6 +789,28 @@ def plan_unpark(snap, ctx, rid, ruling=None):
     return Change({rid: _text(pairs, rec.body)}, 'backlog: unpark %s' % rid, lines, ruling=ruling)
 
 
+# --- review mark ----------------------------------------------------------------------------------
+
+def plan_clear_review(snap, ctx, rid, reason):
+    """Drop the review mark (`review:`, written by `add` from the Action Hub): a coordinator has
+    reviewed the record, which `pull` and `next` then treat as any other. Any state; no ruling,
+    and the price is not touched."""
+    rec = require(snap, rid)
+    refuse_machine_paths('--reason', reason)
+    bad = reason_error(reason, '--reason')
+    if bad:
+        raise Usage(bad)
+    if not rec.has('review'):
+        raise Refusal('`%s` carries no `review:` mark, so there is nothing to clear' % rid)
+    mark = rec.get('review')
+    pairs = [(k, v) for k, v in rec.pairs() if k != 'review']
+    text = ' '.join(reason.split())
+    return Change({rid: _text(pairs, rec.body)}, 'backlog: clear review %s: %s' % (rid, text),
+                  ['CLEARED the review mark on %s (was: %s)' % (rid, mark),
+                   '  state: %s, priority: %s; `pull` and `next` now treat it as any other record'
+                   % (rec.get('state'), rec.get('priority'))])
+
+
 # --- pull / release -------------------------------------------------------------------------------
 
 def plan_pull(snap, ctx, rid, reason=None, ruling=None, blocker=None):
@@ -801,6 +837,10 @@ def plan_pull(snap, ctx, rid, reason=None, ruling=None, blocker=None):
     if state != 'open':
         raise Refusal('`%s` is `state: %s`, and `pull` takes an open record. %s first, in its own '
                       'step' % (rid, state, 'Unblock it' if state == 'blocked' else 'Open it'))
+    if rec.has('review'):
+        raise Refusal('`%s` is marked for review (review: %s); a coordinator clears it with '
+                      '`clear-review %s --reason T` before anyone pulls it'
+                      % (rid, rec.get('review'), rid))
     minus_one = rec.get('priority') == rmod.OWNER_PRIORITY
     if not minus_one and not rmod.is_band(rec.get('priority')):
         raise Refusal('`%s` is `priority: %s`, and `pull` takes a priced record (`1`-`5`). Price it '
@@ -957,7 +997,8 @@ def _plan_takeover(snap, ctx, rec, reason, ruling, blocker):
     wrote them, with the scope-collision warnings a pre-empting pull prints. A takeover whose scope
     collides with a live pull on another branch, or folds into one's diff (`_pull_fold_hits`),
     needs `--ruling R-nnnn`, as a pull does; it takes no other flag, and no `--ruling` when
-    nothing collides. A failed git probe
+    nothing collides. A dead pull marked for review refuses, as `pull` of a marked record does,
+    until `clear-review`. A failed git probe
     holds the pull (fail closed). A `pulled_by` that landed on the main branch (a `Merge <branch>`
     merge in its history, committed on or after the `pulled_at` day) is not dead but unclosed:
     that refuses, and a git that cannot say fails."""
@@ -969,6 +1010,10 @@ def _plan_takeover(snap, ctx, rec, reason, ruling, blocker):
     holding, dead, _why = omod.in_flight_split(snap, ctx.root, ctx.remote)
     if rec not in dead:
         raise busy
+    if rec.has('review'):
+        raise Refusal('`%s` is a dead pull of this session, and it is marked for review (review: '
+                      '%s); a coordinator clears it with `clear-review %s --reason T` before '
+                      'anyone takes it over' % (rid, rec.get('review'), rid))
     hits = live_hits(rec.all('scope'), holding, skip=rid, branch=ctx.current_branch())
     folds, notes = _pull_fold_hits(ctx, rec.all('scope'), holding, ctx.current_branch())
     given =[f for f, v in (('--reason', reason), ('--ruling', None if hits or folds else ruling),
@@ -1121,3 +1166,43 @@ def plan_retire(snap, ctx, rid, why, ruling=None):
     writes[rid] = None
     lines.insert(0, 'RETIRED %s' % rid)
     return Change(writes, subject, lines, ruling=ruling)
+
+
+def plan_delete(snap, ctx, rid, why, ruling=None):
+    """The record should not exist (the owner's delete from the Action Hub, or a coordinator's):
+    delete it, with the subject `deletes ID: <why>`, which history reads as `closes`/`retires`
+    are read (`add` again needs `--reopen`; a `requires: item:` on it never lands). The owner
+    gates are `retire`'s. A pull whose branch is live refuses: its holder releases it first. A
+    dead pull goes with the record; a parked record's kept branch is left for its owner to
+    remove."""
+    rec = require(snap, rid)
+    subject = _claim_subject('deletes', rid, why, '--why')
+    state = rec.get('state')
+    notes = []
+    if state == 'pulled':
+        holder = rec.get('pulled_by') or '?'
+        holding, _dead, probe = omod.in_flight_split(snap, ctx.root, ctx.remote)
+        if probe:
+            raise Failure('cannot tell whether the pull of `%s` by `%s` is live: %s'
+                          % (rid, holder, probe))
+        if any(r.id == rid for r in holding):
+            raise Refusal('`%s` is being built on `%s`; release it first (`release %s --reason T`, '
+                          'from that branch)' % (rid, holder, rid))
+        notes.append('  dead pull on `%s` dropped with the record' % holder)
+    elif state == 'parked':
+        notes.append('  parked on %s; a branch kept for it is not touched: remove it by hand'
+                     % (rec.get('q') or 'no recorded question'))
+    guarded = rmod.is_owner_prioritised(rec) or rmod.is_owner_held(rec)
+    if guarded and ruling is None:
+        raise Refusal('`%s` is %s, so deleting it needs `--ruling R-nnnn`'
+                      % (rid, 'owner-held (%s)' % rmod.owner_hold_label(rec)
+                         if rmod.is_owner_held(rec)
+                         else 'owner-prioritised (`priority_by: %s`)' % rec.get('priority_by')))
+    if ruling is not None:
+        if not guarded:
+            raise Usage('`--ruling %s` was given, and `%s` is neither owner-prioritised nor '
+                        'owner-held: deleting it needs no ruling' % (ruling, rid))
+        _check_ruling(rid, rec, ruling, 'deletion')
+    writes, lines = dependent_rewrites(snap, rid)
+    writes[rid] = None
+    return Change(writes, subject, ['DELETED %s' % rid] + notes + lines, ruling=ruling)
