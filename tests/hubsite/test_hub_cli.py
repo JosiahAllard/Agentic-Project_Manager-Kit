@@ -16,7 +16,7 @@ import threading
 import unittest
 from unittest import mock
 
-from kitlib.hubsite import auth, httpd, serve, tunnel
+from kitlib.hubsite import auth, httpd, schema, serve, tunnel
 from kitlib.hubsite import settings as hub_settings
 from kitlib.hubsite.store import Store, StoreBusy
 from tests.hubsite import httpfix
@@ -1733,6 +1733,26 @@ class ValidateCase(CliCase):
         self.assertTrue(all(line.startswith('VALIDATE ') for line in lines), out)
         self.assertTrue(any(line.startswith('VALIDATE ERROR todos/T-001 status: ')
                             for line in lines), out)
+
+    def test_a_text_recommended_that_names_an_option_is_exit_0_with_its_warning(self):
+        hub = self.server()
+        self.assertEqual(self.run_cli('questions', 'add', '--title', 'which way', '--option',
+                                      'left::go left', '--option', 'right::go right',
+                                      '--recommended', '0', '--port', str(hub.port))[0], 0)
+        hub.close()
+        path = os.path.join(self.store_dir, 'questions', 'Q-1000.json')
+        with open(path, encoding='utf-8') as f:
+            doc = json.load(f)
+        doc['recommended'] = 'right'            # a legacy file: the option's label, not its place
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(doc, f)
+        code, out, err = self.run_cli('validate', '--store', self.store_dir)
+        self.assertEqual((code, err), (0, ''), out)
+        lines = out.splitlines()
+        self.assertIn("VALIDATE WARN questions/Q-1000 recommended: recommended is the text "
+                      "'right' in its file; the store reads it as the number 1 and its next "
+                      "write stores the number [%s]" % schema.CODE, lines)
+        self.assertFalse(any(line.startswith('VALIDATE ERROR') for line in lines), out)
 
     def test_validate_of_no_store_is_refused(self):
         code, out, err = self.run_cli('validate')
