@@ -481,5 +481,43 @@ class TheCommandLine(StubCase):
         self.assertIn('kit_stubs: refused:', out)
 
 
+class TheMemoryVerb(StubCase):
+    """kit_stubs.py memory: the repository's autoMemoryDirectory (kitlib.stubs.memory). No case here
+    writes the key with --apply into a file that lacks it: that value would name the temp folder's
+    real drive (tests/stubs/test_memory.py writes against a faked main checkout instead)."""
+
+    def settings(self):
+        return os.path.join(self.root, '.claude', 'settings.json')
+
+    def test_the_dry_run_names_the_value_and_the_command_and_writes_nothing(self):
+        from kitlib.stubs import memory
+        code, out = self.call([TOOL, 'memory', '-C', self.root], self.tmp)
+        self.assertEqual(code, 0, out)
+        self.assertIn('would add autoMemoryDirectory = %s' % memory.wanted(self.root), out)
+        self.assertIn('memory -C "%s" --apply' % self.root, out)
+        self.assertFalse(os.path.exists(os.path.join(self.root, '.claude')))
+
+    def test_a_current_value_is_ok_with_apply_and_unchanged(self):
+        from kitlib.stubs import memory
+        raw = json.dumps({'autoMemoryDirectory': memory.wanted(self.root)})
+        self.put(self.settings(), raw)
+        code, out = self.call([TOOL, 'memory', '--apply'], self.root)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.read(self.settings()), raw)
+
+    def test_a_file_it_cannot_edit_exits_1(self):
+        self.put(self.settings(), '[1]')
+        code, out = self.call([TOOL, 'memory', '--apply'], self.root)
+        self.assertEqual(code, 1, out)
+        self.assertEqual(self.read(self.settings()), '[1]')
+
+    def test_usage(self):
+        for args in (['memory', '--tools', 'landed'], ['memory', '--dry-run'], ['memory', '--replace'],
+                     ['write', '--apply'], ['check', '--apply']):
+            code, out = self.call([TOOL] + args, self.root)
+            self.assertEqual(code, 2, (args, out))
+            self.assertIn('USAGE:', out)
+
+
 if __name__ == '__main__':
     unittest.main()
