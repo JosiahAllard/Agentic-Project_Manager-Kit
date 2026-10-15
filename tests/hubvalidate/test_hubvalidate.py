@@ -74,6 +74,21 @@ class DoneWhenTest(unittest.TestCase):
         self.assertEqual(V.validate({'questions': {'Q-1': question(repo='all')}}), [])
 
 
+    def test_configured_repo_names_are_known_without_a_stored_repos_doc(self):
+        docs = {'questions': {'Q-1': question(repo='gamerepo')},
+                'repos': {'pm': {'name': 'pm', 'added_at': 'x'}}}
+        self.assertEqual(codes(V.validate(docs)), [('questions/Q-1', 'repo-alias')])
+        self.assertEqual(V.validate(docs, known_repos=['Gamerepo']), [])
+        self.assertEqual(codes(V.validate(docs, known_repos=['other'])),
+                         [('questions/Q-1', 'repo-alias')])
+
+    def test_configured_repo_names_also_cover_a_store_with_no_repos_collection(self):
+        docs = {'questions': {'Q-1': question(repo='gamerepo')}}
+        self.assertEqual(V.validate(docs, known_repos=['gamerepo']), [])
+        self.assertEqual(codes(V.validate(docs, known_repos=['other'])),
+                         [('questions/Q-1', 'repo-alias')])
+
+
 class CheckTest(unittest.TestCase):
     def test_commands_must_be_a_list_of_strings(self):
         for bad in ({'a': 1}, [1], [''], None):
