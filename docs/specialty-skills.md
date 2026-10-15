@@ -1,6 +1,6 @@
 # Specialty skills: task specialties as skills, not agent types
 
-Status: DRAFT for owner review. Nothing here is built. Written for the state after two pending
+Status: DRAFT, pending Q-962 (the owner's answers to the questions below). Nothing here is built. Written for the state after two pending
 changes land: senior-worker on opus/high with strong-worker on opus/medium (the tier change), and a
 weak-worker on haiku 5.5 (the weak-worker change). Those rows come from the owner's rulings, not from main.
 
