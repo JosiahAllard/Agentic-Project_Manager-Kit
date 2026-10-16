@@ -179,9 +179,14 @@ class NativeToolsPipe:
         events = queue.Queue(maxsize=8)
         def event():
             remaining = deadline-time.monotonic()
-            if remaining <= 0:
-                raise ValueError('deadline')
-            return events.get(timeout=remaining)
+            if remaining > 0:
+                try:
+                    return events.get(timeout=remaining)
+                except queue.Empty:
+                    pass
+            # Before the commit a miss is a refusal with its own code; after it, the
+            # BeforeWriteError below becomes the uncertain DeliveryError as any other.
+            raise BeforeWriteError('codex-native-start-timeout-before-write')
         try:
             job = Job(kill_on_close=True)
             # This helper never needs provider credentials, native metadata or

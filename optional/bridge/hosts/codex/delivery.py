@@ -148,9 +148,11 @@ class CodexDesktopAdapter:
             # certified before-write result merely by raising BeforeWriteError.
             if may_have_written:
                 raise DeliveryError('codex-native-result-unconfirmed') from None
-            # A before-write refusal keeps its own code (which check refused); anything
-            # else before the write is reported as an unavailable context.
-            code = (error.code if type(error) is BeforeWriteError
+            # A refusal before the write keeps its own fixed code (which check refused),
+            # whether raised as a BeforeWriteError or as the host's DeliveryError (the
+            # channel check); anything else is reported as an unavailable context. Either
+            # way it is still a BeforeWriteError: only the code is diagnostic.
+            code = (error.code if isinstance(error, DeliveryError)
                 else 'codex-native-context-unavailable-before-write')
             raise BeforeWriteError(code) from None
 
