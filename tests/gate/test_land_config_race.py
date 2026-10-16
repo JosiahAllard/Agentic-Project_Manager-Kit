@@ -84,9 +84,6 @@ class Landing(fixtures.GateRepoCase):
         env = mock.patch.dict(os.environ, fixtures.test_env(), clear=True)
         env.start()
         self.addCleanup(env.stop)
-        no_wait = mock.patch.object(gitstatus(), 'PAUSE', 0)
-        no_wait.start()
-        self.addCleanup(no_wait.stop)
 
     def test_a_landing_whose_every_git_status_races_once_lands(self):
         _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
