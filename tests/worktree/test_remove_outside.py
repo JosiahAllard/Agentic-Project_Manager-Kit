@@ -146,7 +146,8 @@ class Refused(OutsideCase):
         self.assertKept(path, rc, out, 'only a detached tree')
         rc, out = self.run_abandon(path)
         self.assertKept(path, rc, out, 'only a detached tree')
-        self.assertEqual(self.git('branch', '--list', 'kit/onbranch').strip(), 'kit/onbranch')
+        self.assertEqual(self.git('rev-parse', '--verify', 'refs/heads/kit/onbranch').strip(),
+                         self.base)
 
     def test_a_locked_tree_is_refused(self):
         path = self.tree()
