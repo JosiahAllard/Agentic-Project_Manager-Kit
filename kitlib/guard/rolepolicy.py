@@ -196,7 +196,7 @@ def check(action, ctx):
     cwd = action.cwd or os.getcwd()
     top = checkout(ctx, cwd)
     if action.kind == 'edit':
-        target = edit_path(action, cwd)
+        target = edit_path(action, cwd, getattr(ctx, 'home', None))
         if m in NO_EDIT and target and inside(target, top) and not role_may_write(ctx, role, target, top):
             return _deny('role-edit', tag, '%s of %s: the %s role (mode %s) does not edit files in the '
                          'checkout it works in (%s); its scratch and temp folders stay open.'
@@ -210,7 +210,7 @@ def check(action, ctx):
     text = action.command
     if not isinstance(text, str) or not text.strip():
         return None
-    parsed = cm.read(text, rules.SHELLS.get(action.shell, sh.BASH), where or cwd)
+    parsed = cm.read(text, rules.SHELLS.get(action.shell, sh.BASH), where or cwd, home=getattr(ctx, 'home', None))
     gap = shell_gap(parsed)
     if gap:
         name, why, instead = gap
@@ -225,12 +225,13 @@ def check(action, ctx):
     return None
 
 
-def edit_path(action, cwd):
-    """The file an edit Action writes, made absolute against `cwd` as the shared rules do."""
+def edit_path(action, cwd, home=None):
+    """The file an edit Action writes, made absolute against `cwd` as the shared rules do, `~` as
+    `home` (ctx.home; None: sh.home_folder's)."""
     path = action.path
     if not isinstance(path, str) or not path:
         return None
-    return sh.resolve_path(path, cwd) or path
+    return sh.resolve_path(path, cwd, home=home) or path
 
 
 def role_may_write(ctx, role, target, top):
@@ -515,7 +516,7 @@ def _kit_tool(path, name, cmd, kit, kit_checkout=None, program=False):
     else is not it."""
     if program and '/' not in path and '\\' not in path:
         return False
-    full = sh.resolve_path(path, cmd.cwd, cmd.shell)
+    full = sh.resolve_path(path, cmd.cwd, cmd.shell, cmd.home)
     if not full:
         return False
     tools, base = os.path.split(full)
@@ -1156,7 +1157,7 @@ def writes_file(action, ctx, role, cwd, top):
     """True for a file-tool edit of a file the role's `writes` names (role_may_write)."""
     if action.kind != 'edit':
         return False
-    target = edit_path(action, cwd)
+    target = edit_path(action, cwd, getattr(ctx, 'home', None))
     return bool(target) and inside(target, top) and role_may_write(ctx, role, target, top)
 
 

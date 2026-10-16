@@ -199,7 +199,7 @@ def judge(event, ctx):
         target = event.path
         if not isinstance(target, str) or not target:
             return None
-        target = sh.resolve_path(target, cwd) or target
+        target = sh.resolve_path(target, cwd, home=getattr(ctx, 'home', None)) or target
         form = event.retarget
         return edit_target(event, ctx, target, cwd, role, '%s of %s' % (tool, target),
                            rewrite=(lambda path: form.replace('{path}', fwd(path))) if form else None)
@@ -3181,11 +3181,11 @@ def copy_into(cmd, inv):
     return (ca.pos[-1], ca.pos[:-1], False) if len(ca.pos) > 1 else None
 
 
-def into_folder(target, w, into, cwd):
+def into_folder(target, w, into, cwd, home=None):
     """[path]: what a write of `target` (the Word `w`) writes. When `into` (copy_into) names `w`
     as the destination and `target` is an existing folder, <target>/<each source's name>; a
     source the guard cannot name (not literal, a wildcard, a drive-qualified name, no name, or a
-    folder where only a file is read so) keeps the folder itself."""
+    folder where only a file is read so) keeps the folder itself. `~` is `home` (ctx.home)."""
     if into is None or not os.path.isdir(target):
         return [target]
     dest, srcs, files_only = into
@@ -3197,7 +3197,7 @@ def into_folder(target, w, into, cwd):
         if not base or base in ('.', '..') or GLOB_CHARS & set(base):
             return [target]
         if files_only:
-            src = sh.resolve_path(s.text, cwd)
+            src = sh.resolve_path(s.text, cwd, home=home)
             if not src or not os.path.isfile(src):
                 return [target]
         out.append(os.path.join(target, base))
@@ -3245,11 +3245,12 @@ def ps_line_plain(cmd):
     no assignment or other expression statement, no computed name, no Start-Process); every word is
     literal or only reads an environment variable (PS_ENV_READ_WORD_RE; no other variable, member
     call or subexpression); and neither the raw line nor any decoded word matches
-    PS_DRIVE_REMAP_RE, commands.PS_SCRIPT_TEXT_RE or PS_DOTNET_RE. Anything else may remap a drive."""
+    PS_DRIVE_REMAP_RE, commands.PS_SCRIPT_TEXT_RE or PS_DOTNET_RE. Anything else may remap a drive.
+    The line is read again with `~` as the home its own parse read (Command.home)."""
     src = cmd.source
     if any(r.search(src) for r in (PS_DRIVE_REMAP_RE, cm.PS_SCRIPT_TEXT_RE, PS_DOTNET_RE)):
         return False
-    parsed = cm.read(src, sh.PS, cmd.cwd)
+    parsed = cm.read(src, sh.PS, cmd.cwd, home=cmd.home)
     if not parsed.clean:
         return False
     for c in parsed.commands:
@@ -3310,7 +3311,7 @@ def shell_writes(event, ctx, cmd, inv, cwd, role):
             ps_drive = True
             target, why = None, 'a PowerShell drive or provider path the guard cannot place: %s' % w.text
         else:
-            target = sh.resolve_path(w.text, cmd.cwd, cmd.shell)
+            target = sh.resolve_path(w.text, cmd.cwd, cmd.shell, getattr(ctx, 'home', None))
             why = None if target else 'the directory it runs in is unknown' if cmd.cwd is None \
                 else 'a path the text cannot place: %s' % w.text
             if target is None and cmd.cwd is None and cmd.cwd_ps_drive:
@@ -3325,7 +3326,7 @@ def shell_writes(event, ctx, cmd, inv, cwd, role):
         rewrite = None if stand_in or part else (lambda path, w=w: retarget(cmd, w, path))   # part: -tDIR
         if (w.start, w.end) in net and not w.dyn:
             rewrite = lambda path, x=net[(w.start, w.end)]: net_retarget(cmd, x, path)
-        for t in into_folder(target, w, into, cmd.cwd) if target else [target]:
+        for t in into_folder(target, w, into, cmd.cwd, getattr(ctx, 'home', None)) if target else [target]:
             d = edit_target(event, ctx, t, cwd, role, what, why, rewrite=rewrite, run=bare(cmd))
             if d:
                 return d
@@ -3503,13 +3504,14 @@ WILD = re.compile(r'[*?\[]')
 
 def is_root(text, cwd, ctx=None, shell=None):
     """True when `text` names a drive or filesystem root, the user's home, or a variable that is
-    one of those; `shell` the shell whose word it is (sh.resolve_path: FileSystem::<drive root> in PS)."""
+    one of those; `shell` the shell whose word it is (sh.resolve_path: FileSystem::<drive root> in PS).
+    `~` is ctx.home; with no ctx, or one without a home, sh.home_folder's."""
     t = text.strip()
     if not t:
         return False
     if ROOT_VAR_RE.match(t):
         return True
-    p = sh.resolve_path(t, cwd, shell)
+    p = sh.resolve_path(t, cwd, shell, getattr(ctx, 'home', None))
     if not p:
         return False
     if ctx is not None and getattr(ctx, 'home', None) and same_dir(p, ctx.home):
@@ -3671,7 +3673,7 @@ def kit_wrapper(ctx, cmd, inv, cwd):
     word = inv.args[found[0]] if found else inv.word
     if word is None or word.dyn:
         return None
-    path = sh.resolve_path(word.text, cmd.cwd or cwd, cmd.shell) or (
+    path = sh.resolve_path(word.text, cmd.cwd or cwd, cmd.shell, getattr(ctx, 'home', None)) or (
         word.text if os.path.isabs(word.text) else None)
     if not path:
         return None
@@ -4249,16 +4251,16 @@ def lander_forms(cfg):
     return {'fetch': ([remote], [remote, main]), 'merge': (['--ff-only', '%s/%s' % (remote, main)],)}
 
 
-def lander_alone(event, cmd, gc):
+def lander_alone(event, cmd, gc, home=None):
     """True when `cmd` (git) is the whole command line of `event`, or follows one literal cd,
     Set-Location or pushd into the checkout git runs in, joined by && or ;. The line is read again
-    from the event; an unclean parse, a pipe, a group, a nested shell or any third command is not
-    alone."""
+    from the event, `~` as `home` (ctx.home); an unclean parse, a pipe, a group, a nested shell or
+    any third command is not alone."""
     shell = SHELLS.get(event.shell) if event is not None and event.kind == 'shell' else None
     text, cwd = (event.command, event.workdir or event.cwd) if event is not None else (None, None)
     if shell is None or not isinstance(text, str) or cmd.depth or cmd.nested_in is not None:
         return False
-    parsed = cm.read(text, shell, cwd)
+    parsed = cm.read(text, shell, cwd, home=home)
     cmds = parsed.commands
     if not parsed.clean or not cmds or len(cmds) > 2 or cmds[-1].start != cmd.start or cmds[-1].end != cmd.end:
         return False
@@ -4266,7 +4268,7 @@ def lander_alone(event, cmd, gc):
         return False
     if len(cmds) == 1:
         return True
-    is_cd, where = sh.cd_target(cmds[0], cwd)
+    is_cd, where = sh.cd_target(cmds[0], cwd, home)
     if not is_cd or where is None or cmds[1].prev_op not in ('&&', ';') or cmds[0].redirects:
         return False
     return jail.real(where) == jail.real(gc.dir)
@@ -4293,7 +4295,7 @@ def lander_check(event, ctx, cmd, inv, gc):
     table = kconfig.roles(cfg)
     if kconfig.role_name(event, table) != LANDER or not table[LANDER].get('edit_main_checkout'):
         return False, LANDER_NO_ROLE
-    if not lander_alone(event, cmd, gc):
+    if not lander_alone(event, cmd, gc, getattr(ctx, 'home', None)):
         return False, LANDER_NOT_ALONE
     pre = inv.args[:len(inv.args) - len(gc.rest) - 1]
     if inv.via is not None or inv.dyn or [w.text for w in cmd.words[:inv.index]] not in ([], ['&']) or \
@@ -4361,7 +4363,7 @@ def git_jail(event, ctx, cmd, inv, cwd, role):
     for w in git_targets(gc):
         if w.dyn:
             continue
-        target = sh.resolve_path(w.text, gc.dir)
+        target = sh.resolve_path(w.text, gc.dir, home=getattr(ctx, 'home', None))
         if not target:
             continue
         rs = rs or jail_roots(event, ctx, cwd)
@@ -4715,8 +4717,8 @@ def git_worktree_remove(ctx, gc, role, text):
     if not pos or pos[0].dyn or gc.dir is None:
         target = None
     else:
-        target = sh.resolve_path(pos[0].text, gc.dir)
-    main_top = (ctx.main_top(gc.dir) if gc.dir else None) or gc.dir
+        target = sh.resolve_path(pos[0].text, gc.dir, home=getattr(ctx, 'home', None))
+    main_top =(ctx.main_top(gc.dir) if gc.dir else None) or gc.dir
     if target is None:
         return refuse('git-worktree-remove', role, '`%s`: the guard cannot tell which worktree it removes. Name it '
                       'by a literal path:' % text,
@@ -5157,7 +5159,7 @@ def _config_file_recorded(ctx, path, where):
     folder, or the git common dir two folders up from a worktree's config, holds the record), or
     is a user or system config (scope_all, judged by machine_pm_data); a path that cannot be
     resolved counts (fail closed)."""
-    p = sh.resolve_path(path, where) if path else None
+    p = sh.resolve_path(path, where, home=getattr(ctx, 'home', None)) if path else None
     if not p:
         return True
     parts = [x.lower() for x in fwd(posixpath.normpath(fwd(p))).split('/') if x]
@@ -5883,8 +5885,8 @@ def git_prefix_configs(gc):
     return out
 
 
-def _is_kit_hooks(text, cwd):
-    p = sh.resolve_path(text, cwd) if text else None
+def _is_kit_hooks(text, cwd, home=None):
+    p = sh.resolve_path(text, cwd, home=home) if text else None
     return bool(p) and same_dir(p, kit_githooks())
 
 
@@ -5963,7 +5965,7 @@ def git_hooks_path(event, ctx, cmd, inv, cwd, role):
         return None
     configs = git_prefix_configs(gc) + (clone_configs(gc) if gc.sub == 'clone' else [])
     for key, val, first, last in configs:
-        if key == HOOKS_KEY and not _is_kit_hooks(val, gc.dir):
+        if key == HOOKS_KEY and not _is_kit_hooks(val, gc.dir, getattr(ctx, 'home', None)):
             return refuse('git-hooks-path', role, '`%s` runs git with core.hooksPath=%s, which replaces the '
                           'repository\'s hooks. %s Run it without the setting:' %
                           (bare(cmd), val, why), _without(cmd, first, last))
@@ -5978,7 +5980,8 @@ def hooks_config_write(ctx, gc, role, shown):
     the temp folder (not --global or --system), and -f on a config under it, are left alone."""
     if _under_temp(ctx, gc.dir) and not _config_scope_all(gc):
         return None
-    if any(_under_temp(ctx, os.path.dirname(sh.resolve_path(f, gc.dir) or '')) for f in _config_files(gc)):
+    home = getattr(ctx, 'home', None)
+    if any(_under_temp(ctx, os.path.dirname(sh.resolve_path(f, gc.dir, home=home) or '')) for f in _config_files(gc)):
         return None                              # -f on a scratch repository's config under temp
     call = git_config_call(gc)
     if call is None:
@@ -5986,7 +5989,7 @@ def hooks_config_write(ctx, gc, role, shown):
     key, value, writes = call
     if key != HOOKS_KEY or not writes:
         return None
-    if value is not None and not value.dyn and _is_kit_hooks(value.text, gc.dir):
+    if value is not None and not value.dyn and _is_kit_hooks(value.text, gc.dir, home):
         return None
     where = quote(gc.dir) if gc.dir else '"<checkout>"'
     return refuse('git-hooks-path', role, '`%s` changes core.hooksPath. %s Ask the owner (through the PM) when it '

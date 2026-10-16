@@ -165,7 +165,7 @@ def plainly(ctx, parsed, text, cwd):
     p = plain(parsed, text)
     if p.strip() != text.strip():
         try:
-            readable = cm.read(p, parsed.shell, cwd).clean
+            readable = cm.read(p, parsed.shell, cwd, home=getattr(ctx, 'home', None)).clean
         except Exception:                       # a rewrite the reader cannot take: offer the script
             readable = False
         if readable:
@@ -208,7 +208,7 @@ def check(event, ctx, text, cwd, role, parsed):
     shell = parsed.shell
 
     def reread(start, where):
-        p = cm.read(segment(text, start), shell, where)
+        p = cm.read(segment(text, start), shell, where, home=getattr(ctx, 'home', None))
         for cmd in p.commands:
             inv = cm.invocation(cmd)
             for name in PARSED_RULES:
