@@ -9,6 +9,7 @@ import unittest
 from kitlib.gate import carry
 from kitlib.git import cmd
 from tests.gate.fixtures import GateRepoCase
+from tests.realgit import real_git
 
 LINES = ''.join('line %d\n' % i for i in range(1, 21))
 
@@ -26,6 +27,14 @@ class CarryCase(GateRepoCase):
         for rel, text in files.items():
             self.repo.write(rel, text)
         self.main = self.repo.commit(message, *files)
+        self.repo.git('push', '-q', 'origin', 'main')
+        return self.main
+
+    def chmod_on_main(self, rel):
+        """Make `rel` executable on main (its mode only) and push it: the new main."""
+        self.repo.git('update-index', '--chmod=+x', '--', rel)
+        self.repo.git('commit', '-q', '-m', 'main makes %s executable' % rel)
+        self.main = self.repo.head()
         self.repo.git('push', '-q', 'origin', 'main')
         return self.main
 
@@ -97,6 +106,20 @@ class Carries(CarryCase):
         tip = self.sync(wt)
         two = self.assert_carries(reviewed, tip, [first, tip])
         self.assertEqual(one['diff'], two['diff'])
+
+    def test_a_hunk_main_moved_with_its_context_intact_carries(self):
+        # A known limit, pinned: hunk positions and the enclosing name on each `@@` line are left
+        # out of the comparison (kitlib.gate.carry._patch), so a hunk main moved compares equal
+        # while its three context lines are intact, even when main put a new definition above it.
+        self.on_main({'f.txt': LINES})
+        wt, reviewed = self.branch('feature', {'f.txt': edit(LINES, 15, 'branch')})
+        self.on_main({'f.txt': edit(LINES, 8, 'line 8\ndef other():\n    pass')})
+        tip = self.sync(wt)
+        moved = re.search(r'^@@ -(\d+)', self.repo.git('diff', '-U3', self.main, tip), re.M)
+        first = re.search(r'^@@ -(\d+)', self.repo.git('diff', '-U3', '%s~1' % reviewed, reviewed),
+                          re.M)
+        self.assertEqual(int(moved.group(1)), int(first.group(1)) + 2)
+        self.assert_carries(reviewed, tip, [tip])
 
 
 class Refuses(CarryCase):
@@ -194,6 +217,53 @@ class Refuses(CarryCase):
             facts, why = carry.check(self.repo.root, bad, 'b' * 40, 'c' * 40, git=git)
             self.assertIsNone(facts)
             self.assertTrue(re.search('full commit hash', why), why)
+
+
+@real_git("update-index --chmod: the fake has none, and what is pinned is git's own merge of a "
+          'mode change')
+class MainChangedTheModeOfABranchFile(CarryCase):
+    """A path the branch changes whose mode main changed, its patch still the reviewed one
+    (kitlib.gate.carry._same_diff past the patch comparison)."""
+
+    def test_main_changing_the_mode_of_a_binary_the_branch_edits_refuses(self):
+        # Main can change a binary the branch edits without a conflict only by its mode: two
+        # content edits to a binary always conflict. Its patch says only "Binary files differ".
+        self.on_main({'b.bin': 'bin\0one\n'})
+        wt, reviewed = self.branch('feature', {'b.bin': 'bin\0two\n'})
+        self.chmod_on_main('b.bin')
+        tip = self.sync(wt)
+        self.assert_refused(reviewed, tip, 'binary file', 'b.bin')
+
+    def test_a_symlink_or_submodule_entry_main_changed_refuses(self):
+        # git merges a file main turned into a symlink or submodule with the branch's edit only
+        # with a conflict ("distinct types"), so the entry is made here: the mode main gave the
+        # file is reported as each kind in turn.
+        self.on_main({'f.txt': LINES})
+        wt, reviewed = self.branch('feature', {'f.txt': edit(LINES, 2, 'branch')})
+        self.chmod_on_main('f.txt')
+        tip = self.sync(wt)
+        self.assert_carries(reviewed, tip, [tip])
+        for mode in (b'120000', b'160000'):
+            def git(args, mode=mode):
+                r = cmd.call(args, self.repo.root)
+                if args[0] == 'ls-tree' and r.out:
+                    r = cmd.Result(r.rc, r.out.replace(b'100755 blob', mode + b' blob'), r.err)
+                return r
+            facts, why = self.check(reviewed, tip, git=git)
+            self.assertIsNone(facts, mode)
+            self.assertIn('f.txt is not a plain file on both sides', why, mode)
+
+    def test_main_changing_the_mode_of_a_file_the_branch_edits_carries(self):
+        # Pinned as it is: the merge is clean (main's mode, the branch's lines), and the tip's
+        # patch against the new merge base is the reviewed one, since both of its sides hold the
+        # new mode and the one line that names a mode (`index`) is left out of the comparison.
+        # The mode change is main's, so there is nothing of the branch's own to review again.
+        self.on_main({'f.txt': LINES})
+        wt, reviewed = self.branch('feature', {'f.txt': edit(LINES, 2, 'branch')})
+        self.chmod_on_main('f.txt')
+        tip = self.sync(wt)
+        self.assertTrue(self.repo.git('ls-tree', tip, '--', 'f.txt').startswith('100755 '))
+        self.assert_carries(reviewed, tip, [tip])
 
 
 if __name__ == '__main__':
