@@ -1,10 +1,12 @@
 """Who may take each backlog action (owner-authored; in OWNER_PATHS, so agents cannot widen the rows).
 
-The guard reads this map from the installed kit, never from a branch. For each command it takes
-role = role_of(session mark or bare agent_type, subagent), sorts the command (a backlog.py verb, a
-python import of kitlib.backlog, or a raw write found by its target) into ACTIONS rows, keeps the
-narrowest (a row's `over` names the broader rows it replaces), and refuses unless allows() holds
-for every row left. It audits AUDITED risks and requires --why for NEEDS_WHY ones.
+No guard reads this map yet: its one reader in the kit is kitlib.agentview, which shows each role's
+rights, so a verb with no row is refused nowhere and AUDITED and NEEDS_WHY are not enforced. The
+design it records, for the guard that reads it (from the installed kit, never from a branch): for
+each command take role = role_of(session mark or bare agent_type, subagent), sort the command (a
+backlog.py verb, a python import of kitlib.backlog, or a raw write found by its target) into ACTIONS
+rows, keep the narrowest (a row's `over` names the broader rows it replaces), and refuse unless
+allows() holds for every row left; audit AUDITED risks and require --why for NEEDS_WHY ones.
 
 A Row: verbs, risk, allowed (roles always allowed), when ((role, fact) pairs: allowed once the
 guard has established the fact), over. SESSION_ONLY roles come only from a launcher session mark
@@ -87,8 +89,11 @@ ACTIONS = collections.OrderedDict([
     ('block-owner', Row(('block', 'unblock'), MEDIUM, LEADS, (), ('block',))),
     ('set-status', Row(('set-status', 'unpark'), MEDIUM, LEADS, (), ())),
     ('close', Row(('close',), MEDIUM, LEADS, tuple((r, VIA_LAND) for r in LANDERS), ())),
-    ('close-held', Row(('close', 'retire'), HIGH, TOP, (), ('close', 'retire'))),
+    # A held record: closing, retiring or deleting it is TOP's (R-2033 added delete).
+    ('close-held', Row(('close', 'retire', 'delete'), HIGH, TOP, (), ('close', 'retire', 'delete'))),
     ('retire', Row(('retire',), MEDIUM, LEADS, (), ())),
+    ('delete', Row(('delete',), MEDIUM, LEADS, (), ())),                # R-2033
+    ('clear-review', Row(('clear-review',), MEDIUM, LEADS, (), ())),    # R-2033
     ('retarget', Row(('retarget', 'migrate'), HIGH, TOP, (), ())),
     # A raw write: a direct edit of a record file or a ref write (refs/backlog, git update-ref),
     # judged at the write; a commit of what the backlog tool wrote (land.py's deletions) is not.
