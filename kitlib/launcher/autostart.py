@@ -20,10 +20,6 @@ TASK_NAME = 'Claude coordinators after reboot'
 OLD_TASK_NAME = 'Claude conductors after reboot'   # unregistered by install (removed after the switch, W2b)
 
 
-def pythonw_beside(python):
-    """The pythonw.exe in the folder of `python`: the task's program."""
-    return os.path.join(os.path.dirname(python), 'pythonw.exe')
-
 
 def task_script(python, launch_py):
     """The PowerShell that registers the task to run `python launch_py after-reboot` with no
@@ -33,7 +29,7 @@ def task_script(python, launch_py):
     opens are its own, as before. `python` may be either of the two; neither is checked to exist
     here (install refuses a pythonw.exe that is not a file)."""
     folder = os.path.dirname(python)
-    pythonw = pythonw_beside(python)
+    pythonw = spawn.pythonw_beside(python)
     console = (os.path.join(folder, 'python.exe')
                if os.path.basename(python).lower() == 'pythonw.exe' else python)
     carrier = os.path.join(os.path.dirname(launch_py), spawn.CARRIER)
@@ -79,7 +75,7 @@ def install(launch_py, python=None, whatif=False, run=spawn.run, isfile=os.path.
     python = python or pythonw_mod.base_pythonw(base_prefix)
     text = task_script(python, launch_py)
     test = 'python "%s" after-reboot --test' % launch_py
-    pythonw = pythonw_beside(python)
+    pythonw = spawn.pythonw_beside(python)
     if pythonw_mod.under_windows_apps(pythonw):
         missing = '%s; nothing registered' % pythonw_mod.refusal(pythonw, isfile)
     elif not isfile(pythonw):

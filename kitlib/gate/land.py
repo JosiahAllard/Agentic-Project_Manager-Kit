@@ -32,8 +32,15 @@ tools/land.py).
                  commit that changes an owner-only path the landing would change authored by the owner
                  (kitlib.guard.ownercommits; rules of the base merged with the tip's), and the
                  branch's history free of the backlog store's root commit (`ref` and `branch`
-                 stores; kitlib.backlog.at_landing). Then the strict check (Lander.strict_check;
-                 docs/gate.md "Strict paths"): a branch that changes a path in STRICT_DEFAULTS as
+                 stores; kitlib.backlog.at_landing). Then the tip gate check
+                 (Lander.tip_gate_check): a base whose "gate" section has no step that is not
+                 manual is refused first (nothing could gate a tip or the merge); then every tip
+                 has a gate-OK record of exactly that commit written by a `gate.py --full` pass
+                 (kitlib.records.gate_ok.verify_full); a miss names the `gate.py -C <worktree>
+                 --full` command that gates it, and, when the kit lands itself and the tip does
+                 not contain the base, says to merge <remote>/<main> into the branch first (its
+                 own gate.py may predate the record's `full` key). Then the
+                 strict check (Lander.strict_check; docs/gate.md "Strict paths"): a branch that changes a path in STRICT_DEFAULTS as
                  the base holds it lands alone, with a verdict queued for its tip
                  (kitlib.gate.verdicts) by a strong-tier reviewer who is not its author; its
                  merged gate then runs --full --fresh. Any miss: REFUSED, the lock released, nothing
@@ -66,7 +73,7 @@ tools/land.py).
                  checkout meanwhile (a commit, an edit, a push) reaches neither the gated tree nor
                  the pushed commit
   8  record      green: the gate-OK record for the merge commit (pre-push reads it), its
-                 config_rev the base
+                 config_rev the base, its `full` whether the merged gate ran --full
   9  push        `git push <remote> <merge>:refs/heads/<main>` from the main checkout, never
                  forced. Someone pushed <remote>/<main> to a commit without the merge while the
                  gate ran: the push is refused, NOT LANDED (FAILED, `nothing landed`), the lock
@@ -140,7 +147,8 @@ from kitlib.backlog import store as smod
 from kitlib.backlog.errors import Refusal
 import kitlib.config as kconfig
 from kitlib.config.types import ConfigError
-from kitlib.gate import cleanup, result, reuse, runner, stash, strict_defaults, verdicts
+from kitlib.content import oncommit
+from kitlib.gate import cleanup, detect, result, reuse, runner, stash, strict_defaults, verdicts
 from kitlib.gate import steps as S
 from kitlib.git import cmd, refs, repo
 from kitlib.guard import ownercommits
@@ -661,7 +669,78 @@ class Lander(object):
             why = at_landing.ancestry_refusal(self.root, self.cfg, t, env=self.git_env)
             if why:
                 return why
-        return self.strict_check() or self.scope_check()
+        return self.tip_gate_check() or self.strict_check() or self.scope_check()
+
+    # ---------------------------------------------------------------- the tips' full gate
+
+    def tip_gate_check(self):
+        """A locked check (docs/gate.md "Landing"): every branch tip has a gate-OK record for
+        exactly that commit that git still agrees with and that a `gate.py --full` pass wrote
+        (gate_ok.verify_full). A default-mode run's record, a record from before records said
+        whether the gate was --full, and a record of any other commit do not count; an --only run
+        writes none. None, or the first miss: why, and what gates that tip whole
+        (full_gate_advice; REFUSED, nothing merged). It only adds to the merged gate, which runs
+        as before. A base gate with no step that is not manual refuses first (manual_only).
+
+        The record's `gate_config` is not compared with any config: the branch gate writes a
+        record only for a clean tree, with `config_rev` the tip, so the hash is of the tip's own
+        committed config. Re-reading that config here would use the landing kit's defaults and
+        schema, which refuse honest records whenever the two kits differ (a kit branch that
+        changes the gate's defaults or adds a config key); and the config that decides what
+        lands is the base's, which the merged gate reads."""
+        why = self.manual_only()
+        if why:
+            return why
+        for b, t in self.pairs:
+            _, why = gate_ok.verify_full(self.root, t)
+            if why:
+                return '%s tip %s has no full-gate OK record: %s; %s' % (
+                    b, t[:10], why, self.full_gate_advice(b, t))
+        return None
+
+    def manual_only(self):
+        """Why no tip can be gated whole, or None: the base's `.kit.json` has a "gate" section
+        (detect.configured) and none of its steps is runnable outside --only (every one is
+        `manual`, or there is none). `gate.py --full` and the merged gate select no step then
+        (steps.select) and both refuse, so the tip check's command could never be met."""
+        if not detect.configured(self.cfg):
+            return None
+        specs = self.cfg.section('gate').get('steps') or []
+        if any(not (isinstance(s, dict) and s.get('manual')) for s in specs):
+            return None
+        return ('the "gate" section of .kit.json at %s has no step that is not manual, so '
+                'neither `gate.py --full` nor the merged gate would run anything (both refuse: '
+                'no gate step selected); no branch can land until %s gives the gate a step '
+                'without "manual"' % (self.expect_main[:10], self.cfg.main_branch))
+
+    def full_gate_advice(self, branch, tip):
+        """What gates `branch`'s tip whole: `gate that tip whole first: <full_gate_command>`. When
+        the kit lands itself (oncommit.is_kit) the command runs the branch's own gate.py, and one
+        from before records said `full` never writes it; so a tip that does not contain the base
+        (or whose ancestry git cannot tell) is told to merge <remote>/<main> in first, then gate
+        and land the merge. Any other repository's command runs the running kit's gate.py, which
+        writes it whatever the branch holds."""
+        command = self.full_gate_command(branch)
+        if oncommit.is_kit(self.root):
+            inside, _ = refs.is_ancestor(self.expect_main, tip, self.root)
+            if inside is not True:
+                return ('merge %s/%s (%s) into %s first (a branch\'s own gate.py from before '
+                        'records said `full` never writes it), then gate the merge whole and land '
+                        'that tip: %s' % (self.cfg.remote, self.cfg.main_branch,
+                                          self.expect_main[:10], branch, command))
+        return 'gate that tip whole first: %s' % command
+
+    def full_gate_command(self, branch):
+        """The command that gates `branch`'s worktree --full: `python "<gate.py>" -C "<worktree>"
+        --full`. The gate.py is the worktree's own when the repository being landed is the kit
+        (its main checkout has the kit's layout, oncommit.is_kit: the branch is gated by its own
+        gate code; docs/gate.md "The caller's checkout"), whether the running kit is a checkout or
+        a plugin export; any other repository's is the running kit's. `<worktree>` stands in when
+        no worktree has the branch out."""
+        wts, _ = repo.worktrees(self.root)
+        wt = next((w.path for w in wts or [] if w.branch == branch), None) or '<worktree>'
+        gate_py = os.path.join(wt if oncommit.is_kit(self.root) else S.kit_live(), 'tools', 'gate.py')
+        return 'python "%s" -C "%s" --full' % (gate_py, wt)
 
     # ---------------------------------------------------------------- strict paths
 
@@ -1344,7 +1423,7 @@ class Lander(object):
                                       runner.kit_identity(), runner.repo_name(self.cfg, self.root),
                                       started, runner.record_steps(results or []),
                                       base=self.expect_main, config_rev=self.expect_main,
-                                      source=self.source())
+                                      source=self.source(), full=bool(self.full))
         return path
 
     def push(self, started, results):

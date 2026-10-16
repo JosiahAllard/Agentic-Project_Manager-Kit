@@ -73,6 +73,7 @@ class ReuseCase(fixtures.GateRepoCase):
         kw.setdefault('git_env', self.env)
         kw.setdefault('book_kw', self.book_kw)
         kw.setdefault('log_dir', self.logs)
+        fixtures.gate_full(self.repo.root, *(tip if isinstance(tip, list) else [tip]))
         lander = land.Lander(self.repo.root, branch, expect_main or self.main, tip,
                              say=self.said.append, **kw)
         return lander, lander.run()
