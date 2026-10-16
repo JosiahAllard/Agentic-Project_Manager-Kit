@@ -201,12 +201,13 @@ def parse_blob(stem, data, path):
     return rmod.parse(path, text, stem)
 
 
-def records_in_tree(root, rev, rel):
-    """`(records, raw, None)`, or `(None, None, why)`: every `*.md` directly under `rel` in the
-    tree of `rev`, parsed, with `raw` mapping each stem to its bytes."""
+def record_entries(root, rev, rel):
+    """`([(stem, path, blob sha)], None)`, or `(None, why)`: every `*.md` directly under `rel` in
+    the tree of `rev`, one `git ls-tree` and no blob read (preflight counts the default store
+    with it: kitlib/preflight/defaultstore.py)."""
     out, why = cmd.run(['ls-tree', '-z', '--full-tree', rev, '--', rel + '/'], root)
     if out is None:
-        return None, None, '`git ls-tree` failed: %s' % why
+        return None, '`git ls-tree` failed: %s' % why
     entries = []
     for item in out.split(b'\0'):
         meta, _, path = item.partition(b'\t')
@@ -215,6 +216,15 @@ def records_in_tree(root, rev, rel):
         name = path[len(rel) + 1:]
         if len(parts) == 3 and parts[1] == 'blob' and '/' not in name and name.endswith('.md'):
             entries.append((name[:-3], path, parts[2]))
+    return entries, None
+
+
+def records_in_tree(root, rev, rel):
+    """`(records, raw, None)`, or `(None, None, why)`: every `*.md` directly under `rel` in the
+    tree of `rev` (record_entries), parsed, with `raw` mapping each stem to its bytes."""
+    entries, why = record_entries(root, rev, rel)
+    if entries is None:
+        return None, None, why
     blobs, why = batch.cat_file([sha for _, _, sha in entries], root)
     if blobs is None:
         return None, None, why

@@ -187,7 +187,8 @@ class TheBase(Fixture):
         self.assertFalse([a for a in spawns.argvs if 'fetch' in a], spawns.argvs)
 
     def test_the_base_refs_are_one_git_process(self):
-        with Spawns() as spawns:
+        # The `backlog` line's own ref reads (for-each-ref) are counted in test_default_store.
+        with Spawns() as spawns, mock.patch.object(report.defaultstore, 'lines', return_value=[]):
             out = self.run_preflight()[1]
         reads = [a for a in spawns.argvs if '--short' in a or 'show-ref' in a or 'for-each-ref' in a]
         self.assertEqual(len(reads), 2, reads)        # for-each-ref, and HEAD's own rev-parse

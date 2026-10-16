@@ -88,11 +88,15 @@ class TheDefaultStoreLine(tp.Fixture):
         self.assertEqual(self.backlog_lines(out), [])
         self.assertFalse([a for a in spawns.argvs if smod.STORE_REF in a], spawns.argvs)
 
-    def test_no_default_ref_is_no_line_and_one_git_process(self):
+    def test_no_default_ref_is_no_line_and_only_the_ref_reads(self):
+        """refs.ref_commit's for-each-ref of the ref, and its case-variant check of refs/ that
+        confirms "no ref"; no ls-tree."""
         with tp.Spawns() as spawns:
             out = self.run_preflight()[1]
         self.assertEqual(self.backlog_lines(out), [])
         self.assertEqual(len([a for a in spawns.argvs if smod.STORE_REF in a]), 1, spawns.argvs)
+        self.assertEqual(len([a for a in spawns.argvs if a[-2:] == ['--format=%(refname)', 'refs/']]),
+                         1, spawns.argvs)
         self.assertFalse([a for a in spawns.argvs if 'ls-tree' in a], spawns.argvs)
 
     def test_a_ref_with_no_records_is_no_line(self):
