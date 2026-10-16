@@ -1,5 +1,5 @@
 """kitlib.gate.verdicts.carry and `tools/verdict.py carry` (docs/gate.md "Carrying a verdict
-forward", owner ruling R-2050): a queued verdict moves to the branch's head only when the head
+forward"): a queued verdict moves to the branch's head only when the head
 carries it (kitlib.gate.carry, tested in test_carry.py), recording `carried`; anything else writes
 nothing. The entry's `carried` record is checked like every other key. On the scratch repository
 of tests/gate/fixtures.py GateRepoCase."""

@@ -317,7 +317,7 @@ A strict branch that passes lands automatically, as any other: its merged gate r
 
 ### Carrying a verdict forward
 
-Owner ruling R-2050: a reviewed branch needs no fresh review because main moved. After a main sync of a branch whose verdict is queued, the coordinator moves the verdict to the branch's head with:
+A reviewed branch needs no fresh review because main moved: a merge of main that git made with no conflict adds nothing of the branch's own to review. After a main sync of a branch whose verdict is queued, the coordinator moves the verdict to the branch's head with:
 
 `python <kit>/tools/verdict.py carry -C <repo> --branch <branch>`
 

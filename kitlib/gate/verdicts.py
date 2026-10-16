@@ -395,8 +395,8 @@ def add(common_dir, entry, now=None):
 
 
 def carry(common_dir, root, branch, base, now=None, checker=None):
-    """Move `branch`'s queued verdict to the branch's head when the head carries it (owner ruling
-    R-2050; docs/gate.md "Carrying a verdict forward"): `(path, stored entry)`, with tip the head
+    """Move `branch`'s queued verdict to the branch's head when the head carries it
+    (docs/gate.md "Carrying a verdict forward"): `(path, stored entry)`, with tip the head
     and `carried` the facts kitlib.gate.carry.check gave for the commit first reviewed (the
     entry's carried.from, else its tip), the head and `base` (main as fetched, a full hash).
     `root`: a path in the repository, where git runs. None when nothing is queued for `branch`.

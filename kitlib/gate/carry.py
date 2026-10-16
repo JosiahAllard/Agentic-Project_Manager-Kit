@@ -1,5 +1,4 @@
-"""Carrying a verdict forward (docs/gate.md "Carrying a verdict forward", owner ruling R-2050): a
-branch reviewed at one tip and then synced with main needs no fresh review, when the sync is all
+"""Carrying a verdict forward (docs/gate.md "Carrying a verdict forward"): a branch reviewed at one tip and then synced with main needs no fresh review, when the sync is all
 that changed. check() decides that mechanically, read-only; kitlib.gate.verdicts.carry records it
 and the landing checks it again under its lock.
 
@@ -26,7 +25,7 @@ import hashlib
 
 from kitlib.git import cmd, refs
 
-CONTEXT = 3                 # diff context lines (-U3): the fail-closed choice of KIT-VERDICT-CARRY-FORWARD
+CONTEXT = 3                 # diff context lines (-U3): fewer would let a main edit next to a branch hunk carry unseen
 FILE_MODES = ('100644', '100755')
 BINARY_MARKS = (b'Binary files ', b'GIT binary patch')
 
