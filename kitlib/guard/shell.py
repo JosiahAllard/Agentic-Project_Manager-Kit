@@ -857,8 +857,11 @@ def ps_unplaceable(p):
 
 
 def home_folder(home=None):
-    """`home`, else the user's home folder (os.path.expanduser)."""
-    return home or os.path.expanduser('~')
+    """`home`, else the user's home folder as kitlib.config.user.home_dir() gives it, so the
+    tests' home fence applies (docs/test-tools.md "Home fence"). Its HomeFenced is a
+    BaseException: it passes every `except Exception` in the guard and kitlib.host.hookmain, and
+    boot/hook.py run() blocks the call."""
+    return home or kuser.home_dir()
 
 
 # a word's text that starts with a variable naming the home folder, in any shell's spelling,
