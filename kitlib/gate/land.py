@@ -148,7 +148,8 @@ from kitlib.backlog.errors import Refusal
 import kitlib.config as kconfig
 from kitlib.config.types import ConfigError
 from kitlib.content import oncommit
-from kitlib.gate import cleanup, detect, result, reuse, runner, stash, strict_defaults, verdicts
+from kitlib.gate import cleanup, detect, gitstatus, result, reuse, runner, stash, strict_defaults
+from kitlib.gate import verdicts
 from kitlib.gate import steps as S
 from kitlib.git import cmd, refs, repo
 from kitlib.guard import ownercommits
@@ -627,7 +628,7 @@ class Lander(object):
             tip = self.ref('refs/heads/%s' % b)
             if tip != t:
                 return '%s is at %s, and the caller expects %s' % (b, (tip or '?')[:10], t[:10])
-        entries, why = refs.status(self.root)
+        entries, why = gitstatus.status(self.root)
         if entries is None:
             return 'git status failed: %s' % why
         if entries:
@@ -1139,7 +1140,7 @@ class Lander(object):
         if current != main_b:
             return '%s, and the main checkout is on %s, not %s' % (
                 behind, current or why or '(detached HEAD)', main_b)
-        entries, why = refs.status(self.root)
+        entries, why = gitstatus.status(self.root)
         if entries is None:
             return 'git status failed: %s' % why
         if entries:
@@ -1257,7 +1258,7 @@ class Lander(object):
             return self.add_tree(why)
         r = self.git('checkout', '--quiet', '--detach', self.expect_main, cwd=tree,
                      timeout=PUSH_TIMEOUT)
-        entries, _ = refs.status(tree)
+        entries, _ = gitstatus.status(tree)
         if r.rc == 0 and self.tree_head() == self.expect_main and entries == []:
             return None
         return self.add_tree('could not be put at the base %s (%s)' % (
@@ -1274,7 +1275,7 @@ class Lander(object):
         merging, why = refs.merge_in_progress(tree)
         if merging is not False:
             return 'has a merge in progress' if merging else 'cannot be read (%s)' % why
-        entries, why = refs.status(tree)
+        entries, why = gitstatus.status(tree)
         if entries is None:
             return 'cannot be read: git status failed (%s)' % why
         if entries:
@@ -1305,7 +1306,7 @@ class Lander(object):
                      self.expect_main, timeout=PUSH_TIMEOUT)
         if r.rc != 0:
             return 'git worktree add %s failed: %s' % (tree, r.err or 'exit %s' % r.rc)
-        entries, err = refs.status(tree)
+        entries, err = gitstatus.status(tree)
         if self.tree_head() != self.expect_main or entries != []:
             return 'the landing tree %s, just added, is not clean at the base %s: %s' % (
                 tree, self.expect_main[:10], _paths(entries) if entries else err or 'HEAD differs')
@@ -1363,7 +1364,7 @@ class Lander(object):
     def tracked_and_untracked(self, where=None):
         """`(tracked entries, untracked paths)` of the status of `where` (default the main
         checkout); None, None when git cannot say."""
-        entries, _ = refs.status(where or self.root)
+        entries, _ = gitstatus.status(where or self.root)
         if entries is None:
             return None, None
         return ([(xy, p) for xy, p in entries if xy != '??'],
@@ -1510,7 +1511,7 @@ class Lander(object):
             return ['%s: %s; finish it, then: %s' % (
                 lead, 'a merge is in progress there' if merging else 'git cannot tell whether a '
                 'merge is in progress there (%s)' % why, ff)]
-        entries, why = refs.status(self.root)
+        entries, why = gitstatus.status(self.root)
         changed, why2 = runner.changed_between(self.root, main, self.merge)
         if entries is None or changed is None:
             return ['%s: git cannot tell whether local changes are in the way (%s); check, then: %s'
