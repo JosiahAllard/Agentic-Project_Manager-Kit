@@ -2,6 +2,7 @@
 remote in the same temp folder) holding a `.kit.json` gate, and the scratch machine-lock store of
 tests/lock/helpers.StoreCase. Nothing here touches the machine's lock store, a real repository or
 a real remote."""
+import faulthandler
 import inspect
 import json
 import os
@@ -55,6 +56,28 @@ def test_env():
     return env
 
 
+# A gate test still running DUMP_S seconds after its setUp writes every thread's stack to DUMP_FD,
+# and again every DUMP_S after that; the test's cleanup cancels it. The landing tests once hung
+# with no trace for the hour the suite's pool waits on a unit. Fd 2: under
+# tools/kit_tests.py's pool it is the unit's unit-<n>.out (kitlib.tooldeps.pool_worker), and it is
+# so even when unittest's buffer has replaced sys.stderr. The slowest gate test takes well under
+# DUMP_S, and TakeTurns (tests/gate/test_land.py) waits HANG_S = 600 before it fails a hang.
+DUMP_S = 300
+DUMP_FD = 2
+
+
+def arm_dump(case):
+    """Arms the stack dump (DUMP_S, DUMP_FD, read now) for the test `case`, cancelled in its
+    cleanup. faulthandler keeps one such timer per process, so arming replaces the last one. A
+    dump that cannot be armed (no usable fd 2) is skipped: it is a diagnostic, never a failure."""
+    try:
+        faulthandler.dump_traceback_later(DUMP_S, repeat=True, file=DUMP_FD)
+    except (ValueError, OSError, RuntimeError):
+        return False
+    case.addCleanup(faulthandler.cancel_dump_traceback_later)
+    return True
+
+
 REAL_BOOK = lockrun.book
 # The machine lock's book takes resource= and priority= (its landing queue): only then does the
 # lock itself keep a second landing of one repository from its turn (docs/lock-api.md).
@@ -87,12 +110,14 @@ def patch_book(case):
 class GateRepoCase(StoreCase):
     """self.repo: main with `.kit.json` (self.GATE; None: no "gate" section, so the gate is
     auto-detected) committed and pushed to a bare remote; self.book_kw books one fake cpu slot
-    on the scratch store; self.book_calls: every kitlib.lock.run.book call (compat_book)."""
+    on the scratch store; self.book_calls: every kitlib.lock.run.book call (compat_book). A test
+    still running DUMP_S after setUp dumps every thread's stack (arm_dump)."""
     GATE = GATE
     KIT = None
 
     def setUp(self):
         StoreCase.setUp(self)
+        arm_dump(self)
         self.book_calls = patch_book(self)
         self.confine(1)
         kit = dict(self.KIT or {})
