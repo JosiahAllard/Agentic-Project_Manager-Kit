@@ -190,7 +190,8 @@ def submit(root, tool_file, child_args, branches, tips, expect_main=None, enviro
            clock=time.monotonic, sleep=time.sleep, landing_of=None):
     """Start the landing of `branches` at `tips` detached: `tool_file` (tools/land.py or
     tools/gate.py) again with `child_args` (the landing's own arguments, -C absolute) and
-    `--submitted <payload>`. An Outcome: OK with the SUBMITTED line, USAGE for arguments the
+    `--submitted <payload>`. An Outcome: OK with the REVIEW lines (review_lines) and the
+    SUBMITTED line last, USAGE for arguments the
     landing would refuse as usage (nothing written), REFUSED with nothing written when a
     branch's landing is running or it landed at its tip already (blocked), REFUSED when the
     records or the payload cannot be written or the start fails (records written are finished

@@ -1,5 +1,5 @@
-"""kitlib.gate.submit (land.py --submit, gate.py land --submit): the one SUBMITTED line with its
-wait-result command, the running land records written before the detached start, and the detached
+"""kitlib.gate.submit (land.py --submit, gate.py land --submit): the SUBMITTED line with its
+wait-result command, after a REVIEW line for each verdict queued at a tip submitted, the running land records written before the detached start, and the detached
 landing (Lander(submitted=...)) finishing those same records whatever it ends with, refusals and
 the machine lock's included. pin.lease_child: the lease a pinned tool's detached child holds. On a
 scratch repository with a bare remote and the scratch lock store (tests/gate/fixtures.py); the
