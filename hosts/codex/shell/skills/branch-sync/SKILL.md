@@ -15,7 +15,7 @@ The coordinator names a commit hash. You merge that hash, and nothing else. Run 
 6. Conflicts in files you did not touch, or text you did not write: `git merge --abort` and tell the coordinator.
 7. Docs and backlog-record conflicts: never keep both sides blindly; a union resurrects rows the base retired. Run `git diff <hash> -- <file>` and justify every printed line, deletions and additions; if you cannot, stop.
 8. Finish a conflicted merge with `python <kit>/tools/commit.py -C <worktree> -m "<subject>" <resolved path> ...` (the repo's `"commit".merge_fold` lets the merge's own staged files through; the tool adds the trailer).
-9. Re-gate the merged tree: `python <kit>/tools/gate.py -C <worktree>`; name the string that proves the merge is in the build.
+9. Re-gate the merged tree: `python <kit>/tools/gate.py -C <worktree> --full` (landing refuses a tip without it); name the string that proves the merge is in the build.
 10. Report the branch ready again, with the hash you merged and the gate's verdict line.
 
 ## Never

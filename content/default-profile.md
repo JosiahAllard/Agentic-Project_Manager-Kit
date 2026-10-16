@@ -26,7 +26,7 @@ folder (the kit keeps that folder out of git locally). Commit by explicit path w
 untracked generated file may be deleted first; a merge git refuses is reported.
 
 ## Build and test
-The gate is ONE command: `python <kit>/tools/gate.py -C <worktree>` (`--full` for every step). It
+The gate is ONE command: `python <kit>/tools/gate.py -C <worktree>`; the gate before review and landing is `--full` (every step) on the exact tip, which landing requires; `--only <step>` is for interim runs. It
 reads the repository's `"gate"` section in `.kit.json` when there is one, and otherwise detects the
 stack from the files (Python, Node, Rust, Go, .NET) and runs its usual test and lint steps; its
 verdict line then says "auto-detected" (`<kit>/docs/gate.md` "Auto-detected gate"). Read that line:
