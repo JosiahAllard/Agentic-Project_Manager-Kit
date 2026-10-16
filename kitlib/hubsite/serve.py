@@ -4,10 +4,12 @@ and 9).
   build(settings, sources, log=None) -> Hub     open the store, make the views, the Api and the
                                                 listeners; nothing is started. ServeError.
   Hub   .settings .store .api .views .creds .listeners .sync .backlog .notes .tunnel .port .url
+        .stopping                               the event the owner's stop route sets
         .start()                               start the git sync, the backlog timer, the listeners
         .watch()                                log a git sync failure that is new (below)
         .close(timeout=CLOSE_TIMEOUT_S)         the clean close (below); safe to call twice
-  run(hub, started=None, stop=None)             start, serve until `stop` is set or Ctrl+C, close
+  run(hub, started=None, stop=None)             start, serve until `stop` is set, the owner's
+                                                stop route is called or Ctrl+C, close
   Sources(...)                                  where each part comes from
   machine_sources(home=None, sync=True)         this machine's Sources, from its machine config
   SiteViews                                     the Api's `views` object over those sources
@@ -33,7 +35,12 @@ text is for the owner's console (it may name a folder):
      and GET health says so in a fixed phrase (the reason itself names folders).
   4. the Api over the store and a SiteViews, then the local listener on settings.port with
      httpd.local_hosts, httpd.local_gate, httpd.pair_routes over an auth.Credentials made for
-     the port that was really bound, and health_route.
+     the port that was really bound, httpd.stop_route (it sets Hub.stopping and answers this
+     process's pid and creation time; the tunnel listener never has it) and health_route. The
+     Credentials keep the browser
+     sessions in the token folder's sessions file for that port (auth, persist=True), so a
+     paired browser stays paired when the server starts again; a file it cannot read whole is a
+     line in `Hub.notes`. With settings.port 0 (a new port each run) no sessions file is kept.
   5. the tunnel listener on settings.tunnel_port (kitlib.hubsite.tunnel.start), only when
      settings.access can serve it. It never stops the server: with no Access settings at all
      there is no second listener and no line about it; with settings that cannot serve
@@ -54,7 +61,9 @@ they were with no tunnel, and it never reads the Access header.
 
 The log. `log(level, text)` gets the listeners' lines (httpd: 'access', 'error'), the tunnel
 gate's ('note' or 'error' for a request it refused, at most one a reason a minute:
-kitlib.hubsite.tunnel) and the hub's own: 'error' for a close step that failed, ran out of
+kitlib.hubsite.tunnel), the tunnel listener's 'error' tunnel.HOST_LINE for a write refused
+because its Origin host is not its Host (httpd's origin_refused, tunnel.host_note: at most one
+a minute) and the hub's own: 'error' for a close step that failed, ran out of
 time or was cut short and for a git sync pass that failed, 'note' for what is no error (the
 wait for git begins at the close; the sync works again). Every line of the hub's own goes
 through scrub(), so none holds the user or password of a remote URL; the listeners' and the
@@ -68,7 +77,8 @@ changed, and a 'note' when the sync works again; run() calls it on every turn of
 A sync with push on and no remote to push to is failing from the start (gitsync.NO_REMOTE), so
 the first look logs that.
 
-The clean close, in this order (Hub.close; run() ends with it, also on Ctrl+C):
+The clean close, in this order (Hub.close; run() ends with it, also on Ctrl+C and on the
+owner's stop route):
   1. every listener's gate that has a stop() (the tunnel's: tunnel.Gate.stop), then every
      listener's door. The gate first: a tunnel request held on a fetch of the Access keys
      (up to access.FETCH_DEADLINE_S, longer than a step's `timeout`) is refused at once with
@@ -129,12 +139,20 @@ phrases, and the reasons of the derived views are replaced by fixed phrases here
       [{repo, fetched_at, items, error, stale, fetch_error}]; completed adds `days`. No entry
       names the commit it was read at (backlog.Views does not give it). `days` narrows the
       window backlog.Views was built with and cannot widen it.
+      Called with no argument (GET snapshot's call: api.snapshot; the backlog and completed
+      routes pass every argument) while the backlog timer runs (backlog.Views.timer_running),
+      both answer from what the timer's reads left (backlog.Views.held), however old, and start
+      no git: the page's one load never waits on a repository's read. A repository the first
+      round has not come to yet is an entry with "error" backlog.NOT_READ; with none read yet
+      both raise NotReadYet, which the snapshot shows in `unavailable`. With no timer running
+      (backlog_refresh_s unset, or the timer not started or ended) they read as the routes do.
   notices() repos() usage() agents()      kitlib.hubsite.derived's answers
   health()    {git, backlog, backlog_at, backlog_error, backlog_timer}. `git` is GitSync.status()
       without `detail`, or {"running": false, "off": phrase}. `backlog` is null with no backlog
       source, else [{repo, fetched_at, error}] as the last backlog read gave it (`backlog_at`:
       when; null and an empty list before the first read): health starts no git. A read is a
-      client's GET of the backlog or completed view, or the end of a round of the backlog
+      client's GET of the backlog or completed view (a snapshot's held answer is not one), or the
+      end of a round of the backlog
       timer: build() wraps the `wait` of a backlog.Views (its pause between two rounds) so
       SiteViews.after_round() runs on the timer's own thread after each round. That reads the
       view as a client would, mostly from what the round just read; with no timer
@@ -192,6 +210,7 @@ import threading
 from kitlib import hubbacklog, pmdata, pmstart, pmwatch
 from kitlib.config import user
 from kitlib.config.types import ConfigError
+from kitlib.proc import process
 
 from . import api as _api
 from . import access, auth, backlog, derived, gitsync, httpd, tunnel
@@ -203,6 +222,7 @@ POLL_S = 0.5                    # run()'s wait between two looks at `stop` (and 
 ASK_TIMEOUT_S = 10
 MAX_ANSWER = 16 << 20           # bytes of one answer ask() reads
 VIA_CLI = 'cli'
+VIA_MCP = 'mcp'                 # the hub MCP server's writes (kitlib.hubmcp, docs/hub-mcp.md)
 USER_AGENT = 'hub-client'       # what ask() calls itself: it names no person and no machine
 SYNC_OFF = 'git sync is off on this server'
 SYNC_REFUSED = 'git sync was refused at start-up: the server console says why'
@@ -225,6 +245,7 @@ USAGE_FAILED = 'the usage source could not be read'
 AGENTS_FAILED = 'the agent definitions could not be read'
 ROUND_FAILED = ('the backlog view could not be read after a round of the backlog timer, so '
                 'health does not follow the timer: %s: %s')
+STOP_ASKED = 'closing: the owner asked the server to stop (hub.py stop)'
 GIT_WAIT_THREAD = 'hub-close-git'       # the thread a wait for git is made on at the close
 _GIT_LIMITS = ('git may take %d s for a fetch and again for a push' % gitsync.NET_TIMEOUT)
 _AGAIN = 'Ctrl+C again ends the wait'
@@ -287,6 +308,15 @@ class NoRepoList(Exception):
     class name only."""
 
 
+class NotReadYet(Exception):
+    """GET snapshot's backlog or completed view while the backlog timer runs and no read has
+    answered yet (backlog.NOT_READ): its first round is still in git. The Api shows the class
+    name only."""
+
+    def __init__(self):
+        Exception.__init__(self, backlog.NOT_READ)
+
+
 class Sources(object):
     """Where the server's parts come from. A part that is None is a view the server does not
     have (or, for `sync`, a server that commits nothing).
@@ -296,6 +326,8 @@ class Sources(object):
       pm_data      kitlib.pmdata's {path, branch, remote}, or None
       notices      the machine lock's notice folder
       repos        callable(the store's repos documents) -> [{name, aliases}]
+      known_repos  callable() -> the PM's configured repo names, which the store's repo-alias
+                   check accepts without a repos/ document; None: none
       usage        callable() -> the lines kitlib.launcher.usage prints
       agents       the folder of agent definitions
       backlog      callable(refresh_s) -> a kitlib.hubsite.backlog.Views (or its like: get, start,
@@ -317,7 +349,8 @@ class Sources(object):
 
     def __init__(self, tokens=None, static_dir=STATIC_DIR, pm_data=None, notices=None, repos=None,
                  usage=None, agents=None, backlog=None, sync=None, access_keys=None,
-                 access_now=None):
+                 access_now=None, known_repos=None):
+        self.known_repos = known_repos
         self.tokens = tokens
         self.static_dir = static_dir
         self.pm_data = pm_data
@@ -357,6 +390,31 @@ def agents_dir(environ=None):
     return os.path.join(pmstart.KIT_ROOT, os.path.normpath(shell), 'agents')
 
 
+def _configured_repos(cfg):
+    """A callable giving pmstart.known_repos of the pm_start config `cfg`, the store's repo-alias
+    check's names. As in _repo_pairs, git is asked once: each folder's git top level (the PM's
+    repository and the kit's, two git runs) is kept, while sessions_file is read on each call, so
+    a new coordinator's repository counts at once, as on the repo menu (derived.repos). () when
+    the names cannot be read, since a store write must never fail on them: KeyError no
+    sessions_file, ValueError bad "repos" or bad JSON, OSError an unreadable sessions file,
+    AttributeError a sessions file whose JSON is not an object, TypeError a sessions_file that is
+    not a path. No git is not an error: pmstart._toplevel gives None and the name is left out.
+    Anything else is a bug in this code and is left to raise."""
+    tops = {}
+
+    def toplevel(folder):
+        if folder not in tops:
+            tops[folder] = pmstart._toplevel(folder)
+        return tops[folder]
+
+    def names():
+        try:
+            return pmstart.known_repos(cfg, toplevel=toplevel)
+        except (KeyError, ValueError, OSError, AttributeError, TypeError):
+            return ()
+    return names
+
+
 def machine_sources(home=None, sync=True):
     """This machine's Sources, read from the machine config under `home` (default the user's).
     It writes nothing and starts no git. sync=False: no git sync (a scratch store). ConfigError
@@ -379,6 +437,7 @@ def machine_sources(home=None, sync=True):
         src.usage = report
     if cfg and cfg.get('sessions_file'):
         src.repos = lambda stored: derived.repos(cfg, stored)
+        src.known_repos = _configured_repos(cfg)
         src.backlog = lambda refresh_s: backlog.Views(_repo_pairs(cfg), refresh_s)
     return src
 
@@ -397,9 +456,21 @@ def _entry(e, items):
             'fetch_error': e.get('fetch_error')}
 
 
+def _record_call(fn, *args):
+    """fn(*args), a record view of kitlib.hubsite.backlog, with what it raises put as the Api
+    answers it: a RecordError as its own code (not_found, invalid) and fixed phrase, a ReadError
+    as `unavailable` with its fixed phrase (backlog.say). Neither names a path or what was asked."""
+    try:
+        return fn(*args)
+    except backlog.RecordError as e:
+        raise HubError(e.code, e.said, e.field)
+    except backlog.ReadError as e:
+        raise HubError('unavailable', backlog.say(e), 'views')
+
+
 class SiteViews(object):
     """The Api's `views` (module docstring, "Views"). A view is bound only where its source
-    exists: `backlog_views` for backlog and completed, sources.repos and .agents for theirs.
+    exists: `backlog_views` for backlog, completed, record and record_template, sources.repos and .agents for theirs.
     notices, usage and health are always there (kitlib.hubsite.derived answers a missing notice
     folder with no notices and a missing usage source with its own phrase). `sync` is the git
     sync or None, `sync_off` the fixed phrase health gives when there is none. `log(level,
@@ -420,15 +491,36 @@ class SiteViews(object):
         if backlog_views is not None:
             self.backlog = self._open
             self.completed = self._completed
+            self.record = self._record
+            self.record_template = self._record_template
         if sources.repos is not None:
             self.repos = self._repos
         if sources.agents:
             self.agents = self._agents
 
-    def _read(self, fresh=False, stop=None):
+    def _held(self):
+        """The backlog source's held answer (backlog.Views.held) while its timer runs, or None
+        to read as before: no timer running (none configured, not started, or ended) or a
+        source with no held answer (a stand-in). Raises NotReadYet when the timer runs and no
+        read has answered yet."""
+        running = getattr(self._backlog, 'timer_running', None)
+        held = getattr(self._backlog, 'held', None)
+        if not callable(running) or not callable(held) or not running():
+            return None
+        got = held()
+        if got is None:
+            raise NotReadYet()
+        return got
+
+    def _read(self, fresh=False, stop=None, held=False):
         """The backlog source's entries, kept for health. With `stop` (an Event; the timer's
         own read gives its) the source may answer None, a read it cut short: None then, and
-        health keeps what it had."""
+        health keeps what it had. `held` (GET snapshot's): while the timer runs, what its reads
+        left, with no git started and health left as it was (_held); with no timer running, a
+        read as without it."""
+        got = self._held() if held else None
+        if got is not None:
+            return got.get('repos') or []
         if stop is None:
             got = self._backlog.get(fresh=bool(fresh))
         else:
@@ -445,17 +537,20 @@ class SiteViews(object):
             raise NoRepoList()
         return entries
 
-    def _open(self, repo='', state='', fresh=False):
+    def _open(self, repo=None, state=None, fresh=None):
+        # no argument at all is GET snapshot's call (api.snapshot); every route passes all three
+        held = repo is None and state is None and fresh is None
         out = []
-        for e in _named(self._read(fresh), repo):
+        for e in _named(self._read(fresh, held=held), repo or ''):
             items = e.get('open') or []
             if state:
                 items = [i for i in items if i.get('s') == state]
             out.append(_entry(e, items))
         return out
 
-    def _completed(self, repo='', days=None):
-        entries = self._read()
+    def _completed(self, repo=None, days=None):
+        # no `repo` is GET snapshot's call (api.snapshot); GET completed always passes one
+        entries = self._read(held=repo is None)
         limit = self._backlog.days
         since = None
         if days is not None and days < limit:
@@ -469,6 +564,13 @@ class SiteViews(object):
             one['days'] = limit if since is None else days
             out.append(one)
         return out
+
+    def _record(self, repo, id):
+        """One record, read now (kitlib.hubsite.backlog Views.record), its failures as HubErrors."""
+        return _record_call(self._backlog.record, repo, id)
+
+    def _record_template(self, repo):
+        return _record_call(self._backlog.record_template, repo)
 
     def _notices(self):
         return derived.notices(self._sources.notices)
@@ -694,6 +796,8 @@ def build(settings, sources, log=None):
         raise ServeError('no credential folder')
     notes = []
     store = _open_store(settings.store)
+    if sources.known_repos is not None:
+        store.known_repos = sources.known_repos
     listeners = []
     try:
         if store.took_over:
@@ -719,9 +823,16 @@ def build(settings, sources, log=None):
         except httpd.BindRefused as e:
             raise ServeError('%s: is a hub server running already?' % e)
         listeners.append(local)
-        creds = auth.Credentials(sources.tokens, port=local.port)
+        # port 0 binds a new port each run: a sessions file per run would never be read again
+        creds = auth.Credentials(sources.tokens, port=local.port, persist=settings.port != 0,
+                                 log=log)
+        notes.extend(creds.notes)
         local.gate = httpd.local_gate(creds)
         local.routes.update(httpd.pair_routes(creds))
+        # the local listener's alone: the tunnel listener is never given a stop route
+        stopping = threading.Event()
+        local.routes.update(httpd.stop_route(creds, stopping.set,
+                                             {'pid': os.getpid(), 'ctime': process.own_ctime()}))
         tunnelled, said = _make_tunnel(settings, sources, api, notes, log)
         health = ('GET', _api.BASE + '/health')
         if tunnelled is not None:
@@ -733,7 +844,7 @@ def build(settings, sources, log=None):
                 api, views, functools.partial(_tunnel_state, tunnelled), fixed=True)
         local.routes[health] = health_route(api, views, said)
         return Hub(settings, store, api, views, creds, listeners, sync, views_b, notes, log,
-                   tunnel=said)
+                   tunnel=said, stopping=stopping)
     except BaseException:
         for lis in listeners:
             lis.close_door()
@@ -747,10 +858,12 @@ class Hub(object):
     GET health says of the tunnel listener at this moment (TUNNEL_ON, TUNNEL_BOUND or
     TUNNEL_BOUND_WHY, or TUNNEL_OFF with the reason; '' for a Hub made without build), and
     TUNNEL_CLOSED from the moment close() was called when there was a tunnel listener (with
-    none it stays what it was). The `tunnel` given here is that text or a callable giving it."""
+    none it stays what it was). The `tunnel` given here is that text or a callable giving it.
+    `stopping` is the event the local listener's stop route sets (httpd.stop_route); run()
+    closes the hub once it is set. A Hub made without one gets an event nothing sets."""
 
     def __init__(self, settings, store, api, views, creds, listeners, sync, backlog_views, notes,
-                 log=None, tunnel=''):
+                 log=None, tunnel='', stopping=None):
         self.settings = settings
         self.store = store
         self.api = api
@@ -761,6 +874,7 @@ class Hub(object):
         self.backlog = backlog_views
         self.notes = notes
         self._tunnel = tunnel
+        self.stopping = stopping if stopping is not None else threading.Event()
         self._log = log
         self._life = threading.Lock()       # start() and close()
         self._started = False
@@ -986,13 +1100,15 @@ def _apart(fn, *args):
 
 
 def run(hub, started=None, stop=None):
-    """Start `hub`, call started(hub), serve until the event `stop` is set or Ctrl+C, then close
-    it: what Hub.close() answered. The hub is closed however this ends. ServeError when the hub
-    was started or closed already.
+    """Start `hub`, call started(hub), serve until the event `stop` is set, the owner's stop
+    route sets hub.stopping (hub.py stop) or Ctrl+C, then close it: what Hub.close() answered.
+    The hub is closed however this ends. ServeError when the hub was started or closed already.
 
     The wait is a timed one in a loop: on Windows a wait with no time limit is not interrupted
-    by Ctrl+C. Each turn of it calls hub.watch(), which logs a git sync failure that is new. No
-    signal handler is set, so only Ctrl+C (KeyboardInterrupt) and `stop` are a clean close. A
+    by Ctrl+C. Each turn of it looks at hub.stopping (set: a 'note' line, STOP_ASKED, and the
+    close), then calls hub.watch(), which logs a git sync failure that is new. No signal
+    handler is set, so only Ctrl+C (KeyboardInterrupt), `stop` and the stop route are a clean
+    close, and the stop route's is the same close as Ctrl+C's. A
     second Ctrl+C, during the close, is Hub.close's to answer (module docstring, "The clean
     close"): with a git sync started it ends the wait for git and this answers False; with
     none, or when it arrives in the last two steps of the close, it leaves here as a
@@ -1004,6 +1120,9 @@ def run(hub, started=None, stop=None):
         if started is not None:
             started(hub)
         while not stop.wait(POLL_S):
+            if hub.stopping.is_set():
+                hub._say(STOP_ASKED, 'note')
+                break
             hub.watch()
     except KeyboardInterrupt:
         pass
@@ -1014,18 +1133,19 @@ def run(hub, started=None, stop=None):
 
 # ------------------------------------------------------------------ the local client
 
-def ask(port, method, path, token=None, body=None, timeout=ASK_TIMEOUT_S):
+def ask(port, method, path, token=None, body=None, timeout=ASK_TIMEOUT_S, via=VIA_CLI):
     """One request to the hub server on this machine's `port`: (status, the JSON object it
     answered). `token` is sent as a Bearer token; a POST carries `body` as JSON with the Origin
-    and Content-Type the listener requires and names itself VIA_CLI. NotRunning when nothing
-    listens there, ServeError when what answers is not the hub."""
+    and Content-Type the listener requires and names itself `via` (VIA_CLI by default; the hub
+    MCP server passes VIA_MCP). NotRunning when nothing listens there, ServeError when what
+    answers is not the hub."""
     headers = {'Accept': httpd.JSON, 'User-Agent': USER_AGENT}
     if token:
         headers['Authorization'] = 'Bearer %s' % token
     data = None
     if method == 'POST':
         data = json.dumps({} if body is None else body).encode('utf-8')
-        headers.update({'Content-Type': httpd.JSON, httpd.VIA_HEADER: VIA_CLI,
+        headers.update({'Content-Type': httpd.JSON, httpd.VIA_HEADER: via,
                         'Origin': 'http://%s:%d' % (httpd.LOOPBACK, port)})
     conn = http.client.HTTPConnection(httpd.LOOPBACK, port, timeout=timeout)
     try:

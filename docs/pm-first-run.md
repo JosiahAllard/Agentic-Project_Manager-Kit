@@ -68,15 +68,24 @@ home folder, all absolute. A hand step changes the owner's own settings: give it
    settings only the PM session loads (machine setup's `-PmSettings` above writes it).
    Success: the next PM session starts with "PM session start checklist", not "no pm_start
    config ... checklist skipped".
+   Then give the PM repository, and each repository in `launcher.repos`, its agent memory folder:
+   `python <kit>/tools/kit_stubs.py memory -C <repo>` prints the `autoMemoryDirectory` it would add
+   to `.claude/settings.local.json` (`<the main checkout's drive>/Agent-memory/<repo folder name>`;
+   `kitlib/stubs/memory.py`), and the owner runs the same command with `--apply`, which adds it only
+   when neither that file nor `.claude/settings.json` has the key. The key is a machine path, so it
+   goes in the git-ignored local file: there is nothing to commit. Set
+   `pm_start.memory_dir` to the PM repository's folder (docs/pm-start.md "Config"). A machine
+   config key to put the folder elsewhere is coming; until then the drive's root is used.
+   Success: the session start has no `memory (...)` or `pm_start.memory_dir` line.
 
 8. **Start the Action Hub.** `python <kit>/tools/hub.py setup` makes the token files, then the
    owner starts `python <kit>/tools/hub.py serve` in a window of its own and runs
    `python <kit>/tools/hub.py open` (docs/action-hub.md "Serving it"). The store is `hub/` in the
    PM data worktree; with no `pm_data` yet, set `hub.store` to an absolute folder in the machine
-   config. The PM starts `python <kit>/tools/hub.py wait --pending` in the background
+   config. The PM starts `python <kit>/tools/hub.py wait --pending --for pm` in the background
    (docs/action-hub.md "For the PM").
    Success: the page opens signed in, and the next session start says
-   `hub: server up on port 8790, 0 pending`.
+   `hub: server up on port 8790, 0 pending for the PM`.
 
 9. **Install each repository** (docs/install.md).
    Success: `git -C <repo> config core.hooksPath` prints `<kit>/githooks` (and, for a

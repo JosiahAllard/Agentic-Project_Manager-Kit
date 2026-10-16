@@ -5,10 +5,14 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from kitlib import coordinatorstart
+from kitlib.config import ConfigError
 from kitlib.config import user as kuser
 from kitlib.lockmcp import PLUGIN_NAME
+from kitlib.lock import api
+from tests.lock.helpers import OWNER, StoreCase
 
 # the coordinator rules hook as the plugin's hooks.json runs it (boot/hook.py, its coordinator part)
 HOOK = [os.path.join(os.path.dirname(__file__), "..", "..", "boot", "hook.py"), "claude", "SessionStart", "coordinator"]
@@ -168,19 +172,35 @@ class CapReviewTest(unittest.TestCase):
             coordinatorstart.cap({"cap": {}}, "alpha", TODAY)
 
 
-STATUS = {"reservations": {"active": [], "upcoming": [
-              {"start": "2026-10-06T20:00:00Z", "end": "2026-10-06T22:00:00Z", "start_local": "16:00",
-               "end_local": "18:00", "note": "gaming"},
-              {"start": "2026-10-07T20:00:00Z", "end": "2026-10-07T22:00:00Z", "start_local": "x", "end_local": "y"}]},
-          "lock": {"bookings": [{"start": "2026-10-06T18:00:00Z", "end": "2026-10-06T19:00:00Z",
-                                 "start_local": "14:00", "end_local": "15:00"}]},
-          "gpus": [{"idx": 0, "holder_id": "a"}, {"idx": 1, "holder_id": None}],
-          "cores": [{"holder_id": "a"}, {"holder_id": None}, {"holder_id": None}]}
 LOCK = {"lane": "full", "branches": ["b1"], "pid": None, "phase": "gate", "started_utc": "T"}
 
 
-class MachineTest(unittest.TestCase):
-    def run_fake(self, status=STATUS):
+class StatusCase(StoreCase):
+    """A status payload from the current producer, api.snapshot() (what `machine_lock.py status
+    --json` prints, docs/lock-api.md "Snapshot"), on a scratch store."""
+
+    def status(self, *specs):
+        for s in specs:
+            self.assertTrue(api.hold_create(OWNER, s, self.store)["ok"])
+        return api.snapshot(self.store)
+
+    def free(self, snap, pool):
+        d = snap["slots"][pool]
+        return sum(1 for x in d if not x["holder"] and not x["hold"]), len(d)
+
+
+def idle_status():
+    """The producer's snapshot of an idle scratch store, for tests that are not about holds."""
+    case = StatusCase()
+    case.setUp()
+    try:
+        return case.status()
+    finally:
+        case.doCleanups()
+
+
+class MachineTest(StatusCase):
+    def run_fake(self, status):
         calls = []
 
         def run(args, timeout=10):
@@ -189,19 +209,39 @@ class MachineTest(unittest.TestCase):
         return run, calls
 
     def test_summary_and_landing_lock(self):
-        run, calls = self.run_fake()
+        snap = self.status({"owner": "owner", "scope": "half", "for_s": 7200, "note": "gaming"},
+                           {"owner": "owner", "scope": "half", "start": api.iso(
+                               api.utc_now() + datetime.timedelta(hours=9)), "for_s": 3600})
+        [soon, later] = snap["holds"]
+        run, calls = self.run_fake(snap)
         read = reader({os.path.join(ROOT + "/alpha/.git", "alpha-landing.lock"): json.dumps(LOCK)})
-        out = coordinatorstart.machine(ENTRY, run, read, NOW, "H", ROOT, "alpha-landing.lock")
-        self.assertEqual(out[0], "machine: owner reservation 16:00-18:00: gaming; booking 14:00-15:00")
-        self.assertEqual(out[1], "machine: free gpu slots 1 of 2; free cpu slots 2 of 3")
+        out = coordinatorstart.machine(ENTRY, run, read, api.utc_now(), "H", ROOT, "alpha-landing.lock")
+        self.assertEqual(out[0], "machine: owner hold %s-%s: gaming" % (soon["start_local"], soon["end_local"]))
+        self.assertNotIn(later["start_local"] + "-", out[0])
+        (gf, gn), (cf, cn) = self.free(snap, "gpu"), self.free(snap, "cpu")
+        self.assertLess(cf, cn)             # the half hold covers cpu slots, so they are not free
+        self.assertEqual(out[1], "machine: free gpu slots %d of %d; free cpu slots %d of %d" % (gf, gn, cf, cn))
         self.assertIn("HELD - lane full, branches b1, a token holder, phase gate", out[2])
         self.assertEqual(calls[0][-2:], ["status", "--json"])
-        self.assertTrue(calls[0][1].replace("\\", "/").endswith("H/.claude/tools/machine_lock/machine_lock.py"))
+        self.assertEqual(calls[0][1].replace("\\", "/"), "H/tools/machine_lock.py")
+
+    def test_a_run_holding_a_slot_is_not_free(self):
+        snap = self.status()
+        snap["slots"]["cpu"][0]["holder"] = "r-1"
+        run, _ = self.run_fake(snap)
+        out = coordinatorstart.machine(ENTRY, run, reader({}), api.utc_now(), "H")
+        n = len(snap["slots"]["cpu"])
+        self.assertIn("free cpu slots %d of %d" % (n - 1, n), out[1])
+
+    def test_an_unknown_schema_is_refused_not_read_as_an_idle_machine(self):
+        run, _ = self.run_fake({"reservations": {}, "gpus": [], "cores": []})
+        with self.assertRaises(ValueError):
+            coordinatorstart.machine(ENTRY, run, reader({}), NOW, "H")
 
     def test_lock_free_and_no_landing_lock_configured(self):
-        run, _ = self.run_fake(dict(STATUS, reservations={}, lock={}))
+        run, _ = self.run_fake(self.status())
         out = coordinatorstart.machine(ENTRY, run, reader({}), NOW, "H", ROOT, "alpha-landing.lock")
-        self.assertIn("no owner reservation or booking within 4 h", out[0])
+        self.assertIn("no owner or agent hold within 4 h", out[0])
         self.assertEqual(out[2], "landing lock (alpha): free")
         for root, lock_file in ((ROOT, None), (None, "alpha-landing.lock")):
             out = coordinatorstart.machine(ENTRY, run, reader({}), NOW, "H", root, lock_file)
@@ -257,11 +297,12 @@ class ContextTest(unittest.TestCase):
 
     def build(self, cfg, **kw):
         files = {"S.json": json.dumps({"alpha": ENTRY})}
+        status = idle_status()
 
         def run(args, timeout=10):
-            return json.dumps(STATUS) if "machine_lock.py" in args[1] else "G"
+            return json.dumps(status) if "machine_lock.py" in args[1] else "G"
         base = dict(env={"CLAUDE_CONFIG_DIR": "C:/u/.claude-account2"}, cwd=ROOT + "/alpha", now=NOW,
-                    procs=[], run=run, read=reader(files), home="H", pid=1, pm_cfg=self.PM)
+                    procs=[], run=run, read=reader(files), kit="H", pid=1, pm_cfg=self.PM, machine_cfg={})
         base.update(kw)
         return coordinatorstart.context(dict(dict(repos_root=ROOT), **cfg), **base)
 
@@ -270,9 +311,20 @@ class ContextTest(unittest.TestCase):
         text = self.build(cfg)
         # The cap check is the first live check: its line follows the standing line.
         self.assertEqual(text.split("\n")[:3], ["Coordinator session start:", "- wind down", "- agent cap 4"])
-        self.assertIn("- machine: free gpu slots 1 of 2", text)
+        gf, gn = StatusCase().free(idle_status(), "gpu")
+        self.assertIn("- machine: free gpu slots %d of %d" % (gf, gn), text)
         self.assertNotIn("also running", text)
         self.assertNotIn("usage", text.lower())
+
+    def test_the_machine_check_runs_the_named_kits_lock_tool(self):
+        calls, status = [], idle_status()
+
+        def run(args, timeout=10):
+            calls.append(args)
+            return json.dumps(status) if "machine_lock.py" in args[1] else "G"
+        self.assertIn("- machine: free gpu slots", self.build({}, run=run))
+        self.assertEqual([a[1].replace("\\", "/") for a in calls if "machine_lock.py" in a[1]],
+                         ["H/tools/machine_lock.py"])
 
     def test_eng_filing_lines_follow_the_standing_lines(self):
         lines = self.build({"standing": ["wind down"], "eng_filing": True, "pricing_pass": True}).splitlines()
@@ -301,6 +353,33 @@ class ContextTest(unittest.TestCase):
         self.assertIn("could not check cap: LookupError", self.build({}, cwd=ROOT + "/zzz"))
         self.assertIn("could not check cap: ValueError", self.build({}, cwd="C:/elsewhere"))
 
+    def test_the_hub_key_line_names_the_sessions_key_of_this_coordinator(self):
+        # the key differs from the repo and the name: only the sessions.json key can give it
+        files = {"S.json": json.dumps({"_note": "x", "kitc": ENTRY,
+                                       "plain": {"repo": "alpha", "stem": "alpha-plain"}})}
+        lines = self.build({}, read=reader(files)).splitlines()
+        self.assertEqual([l for l in lines if "hub key" in l],
+                         ["- hub key: kitc (hub.py questions add --from kitc; wait --pending --for kitc)"])
+
+    def test_several_matching_entries_give_hub_key_unknown_never_the_first_key(self):
+        # no own name (procs=[]), two agent entries for alpha: find_entry takes the first with a note
+        other = dict(ENTRY, name="alpha-coordinator-b1", stem="alpha-other")
+        files = {"S.json": json.dumps({"kitc": ENTRY, "kitd": other})}
+        text = self.build({}, read=reader(files))
+        self.assertIn("2 sessions entries match repo alpha; took the first", text)
+        self.assertEqual([l for l in text.splitlines() if "hub key" in l],
+                         ["- hub key: unknown (several sessions entries match this repo); ask the PM for it"])
+
+    def test_no_entry_gives_hub_key_unknown_and_every_other_check_still_runs(self):
+        for kw in ({"cwd": ROOT + "/zzz"}, {"cwd": "C:/elsewhere"}, {"pm_cfg": {}}):
+            text = self.build({}, **kw)
+            self.assertIn("- hub key: unknown (", text, kw)
+            self.assertNotIn("hub key: alpha", text)
+            self.assertIn("could not check cap:", text)
+        self.assertEqual(coordinatorstart.hub_key({"a": ENTRY}, ENTRY)[0].split()[:3], ["hub", "key:", "a"])
+        with self.assertRaises(LookupError):
+            coordinatorstart.hub_key({"a": dict(ENTRY)}, ENTRY)     # equal, but not the entry found
+
     def test_default_read_takes_a_bom_sessions_file(self):
         # regression-only: the default _read is utf-8-sig, so a PowerShell-saved sessions file loads
         with tempfile.TemporaryDirectory() as d:
@@ -310,7 +389,7 @@ class ContextTest(unittest.TestCase):
             text = coordinatorstart.context(
                 {"repos_root": ROOT, "cap": {"alpha": [{"cap": 4}]}},
                 env={}, cwd=ROOT + "/alpha", now=NOW, procs=[], run=lambda a, timeout=10: "G",
-                home="H", pid=1, pm_cfg={"sessions_file": p})
+                kit="H", pid=1, pm_cfg={"sessions_file": p}, machine_cfg={})
         self.assertIn("- agent cap 4", text)
 
     def test_repos_root_comes_from_the_config(self):
@@ -351,6 +430,80 @@ class NoRulingsCheckTest(unittest.TestCase):
     def test_the_reader_and_its_limits_are_gone(self):
         for name in ("rulings", "ledger_file", "LEDGER_CAP", "DECIDES_CHARS", "safepath"):
             self.assertFalse(hasattr(coordinatorstart, name), name)
+
+
+class LedgerLineTest(unittest.TestCase):
+    """With the split ledger (ledger_dir), one line names this repo's ledger file, the reference for
+    HOW the repo works; it comes from the machine config and the file is never opened."""
+    CAP = {"cap": {"alpha": [{"cap": 4}]}}
+    DIR = "D:/pm/rulings"
+    SPLIT = {"ledger_dir": DIR, "ledger_repos": ["kit", "alpha", "pm"], "ledger_path": "D:/pm/LEDGER.md"}
+
+    def test_the_repos_file_is_named_once(self):
+        text = ContextTest().build(self.CAP, machine_cfg=self.SPLIT)
+        want = "- ledger (reference, HOW this repo works): %s" % os.path.join(self.DIR, "alpha.md")
+        self.assertEqual([l for l in text.splitlines() if l.startswith("- ledger")], [want])
+
+    def test_the_repo_name_is_matched_without_case(self):
+        self.assertEqual(coordinatorstart.ledger_lines(self.SPLIT, "Alpha"),
+                         ["ledger (reference, HOW this repo works): %s" % os.path.join(self.DIR, "alpha.md")])
+
+    def test_the_sessions_repo_name_is_lower_cased_with_underscores_as_hyphens(self):
+        machine = dict(self.SPLIT, ledger_repos=["my-tools-repo", "side-repo", "pm"])
+        for repo, name in (("My-Tools_Repo", "my-tools-repo"), ("my_tools_repo", "my-tools-repo"),
+                           ("side-repo", "side-repo"), ("Side_Repo", "side-repo")):
+            with self.subTest(repo=repo):
+                self.assertEqual(coordinatorstart.ledger_lines(machine, repo),
+                                 ["ledger (reference, HOW this repo works): %s"
+                                  % os.path.join(self.DIR, name + ".md")])
+
+    def test_a_repo_not_in_ledger_repos_gets_the_folder_and_the_names(self):
+        line, = coordinatorstart.ledger_lines(self.SPLIT, "Some_Folder")
+        self.assertEqual(line, "ledger (reference, HOW each repo works): one file per ledger_repos name in %s "
+                               "(kit, alpha, pm); none is named some-folder (from Some_Folder)" % self.DIR)
+        line, = coordinatorstart.ledger_lines(self.SPLIT, "beta")
+        self.assertTrue(line.endswith("(kit, alpha, pm); none is named beta"), line)
+
+    def test_no_line_without_ledger_dir(self):
+        for machine in ({}, {"ledger_path": "D:/pm/LEDGER.md", "ledger_repos": ["alpha"]},
+                        {"ledger_dir": None, "ledger_repos": ["alpha"]}):
+            with self.subTest(machine_cfg=machine):
+                self.assertEqual(coordinatorstart.ledger_lines(machine, "alpha"), [])
+                self.assertNotIn("- ledger", ContextTest().build(self.CAP, machine_cfg=machine))
+
+    def test_the_ledger_file_is_never_opened(self):
+        seen = []
+        files = {"S.json": json.dumps({"alpha": ENTRY})}
+
+        def read(p):
+            seen.append(p)
+            return files[p]
+        text = ContextTest().build(self.CAP, read=read, machine_cfg=self.SPLIT)
+        self.assertIn("- ledger (reference", text)
+        self.assertEqual(seen, ["S.json"])
+
+    def test_no_line_when_not_live(self):
+        self.assertNotIn("ledger", coordinatorstart.context(dict(self.CAP, standing=["s"]), live=False,
+                                                            machine_cfg=self.SPLIT))
+
+    def test_a_config_that_cannot_be_read_adds_no_line(self):
+        with mock.patch.object(coordinatorstart.kuser, "user_config",
+                               side_effect=ConfigError("bad key")):
+            broken = ContextTest().build(self.CAP, machine_cfg=None)
+        self.assertEqual(broken, ContextTest().build(self.CAP, machine_cfg={}))
+        self.assertNotIn("ledger", broken)
+        self.assertIn("- agent cap 4", broken)
+
+    def test_a_bug_reading_the_config_is_reported_not_dropped(self):
+        with mock.patch.object(coordinatorstart.kuser, "user_config", side_effect=TypeError("bug")):
+            text = ContextTest().build(self.CAP, machine_cfg=None)
+        self.assertIn("- could not check ledger: TypeError: bug", text)
+        self.assertIn("- agent cap 4", text)
+
+    def test_without_ledger_dir_the_sessions_entry_is_not_needed(self):
+        # No sessions file: cap and the others cannot run, and the ledger check adds no line.
+        text = ContextTest().build({}, pm_cfg={}, machine_cfg={})
+        self.assertNotIn("ledger", text)
 
 
 class StubsLineTest(unittest.TestCase):

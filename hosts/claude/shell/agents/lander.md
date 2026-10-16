@@ -67,8 +67,8 @@ Missing any: say what you need, do nothing.
    break a landing lock: STUCK -> stop and report its lines. Do not truncate native output
    through a pipe - in PowerShell, `Select-Object -First` fakes a non-zero exit code.
 6. The wait prints `RESULT <verdict> land <branch> at <tip>: <line> (<log>)`: `pass`
-   (`LANDED ...`); `landed-ungated` (`LANDED ...`, but main was not gated whole; report the
-   log's `WARNING:` line verbatim); `fail` with `CONFLICT <branch> with main <sha>: the author
+   (`LANDED ...`); `fail` (a red gate leaves main untouched: the merge is made in the kit landing
+   tree) with `CONFLICT <branch> with main <sha>: the author
    merges main` or with `NOT LANDED: ...`; `refused`, `busy`, `not-run`, `usage`; `stuck`;
    `error`. Verify, whatever the verdict.
    At minimum: main and its remote match, and the branch tip is an ancestor of the remote main.

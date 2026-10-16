@@ -19,7 +19,8 @@ manifests(kit, content) writes the plugin's files, each JSON with indent 2 and a
 - `hosts/codex/shell/plugin.json`: kit.json's name and version, the hooks file under
   extensions.com.openai (the portable plugin format the Codex branch used).
 - `hosts/codex/shell/mcp.json`: the machine-lock MCP server, read-only on Codex
-  (hosts/codex/shell/mcp/lock_server.py, hosts.codex.adapter.lock).
+  (hosts/codex/shell/mcp/lock_server.py, hosts.codex.adapter.lock), and the hub MCP server
+  (hosts/codex/shell/mcp/hub_server.py, docs/hub-mcp.md).
 - `hosts/codex/shell/hooks/hooks.json`: every hosts.json hook event, each running the kit's one
   hook entry, boot/hook.py, as the plugin's copy ${PLUGIN_ROOT}/boot/hook.py with `codex` and the
   event's name. Codex reads a hook's command as one string, so it is
@@ -39,6 +40,7 @@ import os
 
 from kitlib import agentname
 from kitlib.host import hookmain, registry
+from kitlib.hubmcp import SERVER_NAME as HUB_NAME
 from kitlib.lockmcp import SERVER_NAME
 from kitlib.host.content import ContentError, banner, role_source, substitute
 
@@ -58,7 +60,7 @@ PLUGIN_ROOT = '${PLUGIN_ROOT}'
 PLUGIN_SCHEMA = 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json'
 MCP_SCHEMA = 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json'
 DESCRIPTION = ('The PM kit as a Codex plugin (ARCHITECTURE.md, Packaging; hosts/codex/README.md): its hooks, '
-               'skills and the read-only machine lock MCP server. Rendered from kit.json and content/ by '
+               'skills, the read-only machine lock MCP server and the hub MCP server. Rendered from kit.json and content/ by '
                'tools/render_content.py; never edit it by hand.')
 # (event, matcher, status message or None). Every event in hosts.json's capabilities, no other.
 HOOKS = (
@@ -70,7 +72,10 @@ HOOKS = (
 HOOK_TIMEOUT = 10
 MCP_SERVERS = {SERVER_NAME: {'type': 'stdio', 'command': 'python',
                                 'args': [PLUGIN_ROOT + '/mcp/lock_server.py'],
-                                'env_vars': ['PM_KIT_ROOT', 'PM_KIT_RELEASE_ID']}}
+                                'env_vars': ['PM_KIT_ROOT', 'PM_KIT_RELEASE_ID']},
+               HUB_NAME: {'type': 'stdio', 'command': 'python',
+                          'args': [PLUGIN_ROOT + '/mcp/hub_server.py'],
+                          'env_vars': ['PM_KIT_ROOT', 'PM_KIT_RELEASE_ID']}}
 # hosts.json's Codex tiers are all ACCOUNT_DEFAULT: every role runs on the account's configured
 # Codex model and differs by reasoning effort, as the Codex branch's roles.json had it. The owner
 # names models per tier in hosts.json (docs/ROSTER.md) when Codex models are chosen.

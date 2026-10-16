@@ -4,7 +4,9 @@ setup writes nothing into a repository by default, and this mode keeps the old c
 a repository that wants it. Nothing here prints or exits: run() gives the exit code and the lines.
 
 The target is an existing git checkout, named by its top level. It writes these and nothing else:
-  <target>/.kit.json          "repo".main_branch and .name, "owner".email and .agent_emails, and
+  <target>/.kit.json          "repo".main_branch and .name, "backlog".store "ref" (named, so the
+                              backlog tool writes it: kitlib.backlog.store.open_backend), "owner".email
+                              and .agent_emails, and
                               with a stack "gate": "tools/gate.json". The name is `repo_name`,
                               else the folder's name lower-cased; either must be a lower-case repo
                               name, or it refuses.
@@ -18,6 +20,12 @@ The target is an existing git checkout, named by its top level. It writes these 
   <target>/tools/gate.json    with a stack: templates/stacks/<stack>/tools/gate.json, only if absent
   <target>/tools/<file>       with a stack: its other tools files, each only if absent
   <target>/<skills>/...       with a stack: its skills (kitlib.stackskill), the kit's path written in
+  <target>/.claude/settings.local.json   its autoMemoryDirectory (kitlib.stubs.memory) when neither
+                              it nor settings.json has the key: created holding it alone, or the key
+                              added and nothing else changed. The key is a machine path, so it goes
+                              in the ignored local file, never a tracked one. A key already in
+                              either file is kept; a file it cannot edit refuses before any write.
+                              The memory folder itself is not made.
 It never overwrites: a .kit.json or tools/gate.json already there, or with `stubs` a file where a
 stub goes that is not a stub, refuses before anything is written. Every template and every
 existing line file is read at plan time, so one that cannot be read refuses before any write.
@@ -88,7 +96,7 @@ class RepoContext(object):
     used; `python` the interpreter pm_data.py runs under."""
 
     def __init__(self, target, owner_email, agent_email, kit, main_branch='main', repo_name='',
-                 stack='', pm_data='', private_remote='', stubs=False, python=None):
+                 stack='', pm_data='', private_remote='', stubs=False, python=None, memory_root=None):
         self.target = target
         self.owner_email = (owner_email or '').strip()
         self.agent_email = (agent_email or '').strip()
@@ -100,6 +108,7 @@ class RepoContext(object):
         self.private_remote = (private_remote or '').strip()
         self.stubs = bool(stubs)
         self.python = python or sys.executable
+        self.memory_root = memory_root      # the memory root; None: kitlib.stubs.memory's default
 
 
 def trim_slash(p):
@@ -210,10 +219,12 @@ class Setup(object):
         if os.path.exists(self.kit_json):
             raise Refused('%s exists already; nothing was written' % self.kit_json)
         self._plan_stack()
+        self._plan_memory()
         gate_line = '  "gate": "tools/gate.json",\n' if c.stack else ''
         self.text = ('{\n'
                      '  "repo": {"main_branch": "%s", "name": "%s"},\n'
                      '%s'
+                     '  "backlog": {"store": "ref"},\n'
                      '  "owner": {"email": "%s", "agent_emails": ["%s"]}\n'
                      '}\n' % (c.main_branch, self.repo_name, gate_line, c.owner_email, c.agent_email))
         self.line_files = [self._plan_line_file('.gitignore', self.stack_lines['gitignore']),
@@ -317,6 +328,15 @@ class Setup(object):
         if rc == 0:
             self.unindexed = [n for n in out.split('\0') if n and n not in named]
 
+    def _plan_memory(self):
+        """The autoMemoryDirectory survey (kitlib.stubs.memory); Refused when the settings file is
+        one it cannot edit."""
+        from kitlib.stubs import memory
+        self.memory = memory.survey(self.target, override=self.ctx.memory_root)
+        self.memory_added = False
+        if self.memory.state == memory.BAD:
+            raise Refused('cannot add autoMemoryDirectory: %s; nothing was written' % self.memory.why)
+
     def _plan_stubs(self):
         """With `stubs`: the stubs kitlib.stubs would write, read as the target is now (no
         .kit.json yet: the default tools_dir and tool list apply, as they will after the write)."""
@@ -388,6 +408,7 @@ class Setup(object):
             else:
                 out.append('  would create  %s   (from %s)' % (dst, os.path.join('templates', 'stacks', c.stack, 'tools', n)))
         out += ['  %s   (stack skill, kit path written in)' % l for l in self.skill_lines]
+        out += ['', 'memory:'] + ['  ' + l for l in self.memory_lines()]
         out.append('')
         if self.remote_url:
             out.append('remote:   origin -> %s' % self.remote_url)
@@ -400,6 +421,16 @@ class Setup(object):
             out += ['', "PM data (the kit's own repository, docs/pm-data-branch.md):",
                     '  %s after the files above:  %s' % ('runs' if apply else 'would run', self.pm_line)]
         return out
+
+    def memory_lines(self):
+        from kitlib.stubs import memory
+        m = self.memory
+        if m.state == memory.MISSING:
+            return ['would add autoMemoryDirectory = %s to %s' % (m.want, m.path)]
+        if m.state == memory.OTHER:
+            return ["kept          %s names %s (never replaced; the kit's value would be %s)"
+                    % (m.path, m.value, m.want)]
+        return ['current       %s names %s' % (m.path, m.value)]
 
     def late_refusal(self):
         """The refusals that follow the printed plan (it shows what they are about), or None."""
@@ -485,6 +516,23 @@ class Setup(object):
         if self.index_new:
             self.put(self.index_dst, self.index_text)
             emit('  wrote    %s' % self.index_dst)
+        self.write_memory()
+
+    def write_memory(self):
+        """Add the planned autoMemoryDirectory; a refusal (the file changed since the plan, a failed
+        write) stops like any failed write, the file left as it was."""
+        from kitlib.stubs import memory
+        m = self.memory
+        if m.state != memory.MISSING:
+            return
+        try:
+            lines = memory.apply(m)
+        except memory.Refused as e:
+            self.fail(m.path, e, 'add autoMemoryDirectory to')
+        self.emit(*['  ' + l for l in lines])
+        if m.raw is None:
+            self.written.append(m.path)
+        self.memory_added = True
 
     def put(self, path, text, append=False):
         try:
@@ -566,6 +614,10 @@ class Setup(object):
                "     owner's identity (owner-only paths: the kit's tools/commit.py refuses an agent's); "
                'commit %s.gitignore,' % ('the stubs, ' if c.stubs else ''),
                '     %s as usual' % usual]
+        if self.memory_added:
+            from kitlib.stubs import memory
+            out.append('     %s (its %s, a machine path) is git-ignored: nothing to commit for it'
+                       % (memory.local_rel(), memory.KEY))
         tools = os.path.join(c.kit, 'tools')
         if c.stubs:
             out.append('  2. python "%s" check -C "%s"   (exit 0: every stub current)'

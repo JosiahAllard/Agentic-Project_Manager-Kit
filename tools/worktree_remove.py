@@ -11,14 +11,17 @@ holds it (docs/worktree-remove.md).
   worktree_remove.py [-C DIR] <branch> --branch --abandon "<why>"
                                                                  UNLANDED local branch with NO worktree:
                                                                  tag archive/<name>, then delete it
-  worktree_remove.py [-C DIR] --check                            leftovers; exit 1 if any
+  worktree_remove.py [-C DIR] <path> --scratch                   a DETACHED tree under a temp folder
+                                                                 whose dirt git already holds: restore,
+                                                                 then remove
+  worktree_remove.py [-C DIR] --check                           leftovers; exit 1 if any
   worktree_remove.py [-C DIR] --sweep-merged                     DRY RUN of the nightly sweep
   worktree_remove.py [-C DIR] --sweep-merged --apply             the nightly sweep
 
 -C names the repository by any of its work trees (default: here); the worktrees acted on are always
 the MAIN checkout's, and the sweep takes only the main checkout. A relative path argument means
 the caller's directory. A thin entry point (ARCHITECTURE.md, Layers): it parses, calls
-kitlib.worktree.remove or .sweep, prints and exits. Exit codes: 0 done (or nothing to do); 1
+kitlib.worktree.remove, .scratch or .sweep, prints and exits. Exit codes: 0 done (or nothing to do); 1
 refused, a leftover, git failed, or the sweep deferred; 2 usage, or the kit configuration was
 refused; 130 Ctrl+C.
 """
@@ -28,7 +31,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from kitlib.git import repo as gitrepo                              # noqa: E402
-from kitlib.worktree import remove, sweep                           # noqa: E402
+from kitlib.worktree import remove, scratch, sweep                  # noqa: E402
 
 USAGE = 2
 
@@ -60,11 +63,16 @@ def split_root(argv):
 
 def parse(args):
     """`(verb, target, why, keep, apply)` or a usage message (str). Verbs: sweep, check, abandon,
-    abandon-branch, remove-branch, remove. A why that starts with `--` is a flag typed where the why belongs, never a reason."""
+    abandon-branch, remove-branch, remove, scratch. A why that starts with `--` is a flag typed where the why belongs, never a reason."""
     if '--sweep-merged' in args or '--apply' in args:
         if sorted(args) not in (['--sweep-merged'], ['--apply', '--sweep-merged']):
             return '--sweep-merged takes only --apply (and -C)'
         return 'sweep', None, None, False, '--apply' in args
+    if '--scratch' in args:
+        rest = [a for a in args if a != '--scratch']
+        if args.count('--scratch') != 1 or len(rest) != 1 or rest[0].startswith('-'):
+            return '--scratch takes exactly one <path> and no other option'
+        return 'scratch', rest[0], None, False, False
     keep = args.count('--keep-branch')
     by_branch = args.count('--branch')
     rest, whys, i = [], [], 0
@@ -118,6 +126,8 @@ def main(argv=None):
             outcome = sweep.sweep(top, apply=apply)
         elif verb == 'check':
             outcome = remove.check(top)
+        elif verb == 'scratch':
+            outcome = scratch.remove_scratch(top, target)
         elif verb == 'abandon-branch':
             outcome = remove.abandon_branch(top, target, why)
         elif verb == 'remove-branch':

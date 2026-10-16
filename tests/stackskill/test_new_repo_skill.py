@@ -87,7 +87,8 @@ class NewRepoSkill(unittest.TestCase):
     def test_a_stack_without_skills_writes_none(self):
         code, out = self.ps('-Apply', '-Stack', 'python')
         self.assertEqual(code, 0, out)
-        self.assertFalse(os.path.exists(os.path.join(self.root, '.claude')))
+        # The folder holds only the local settings file with the memory folder key (kitlib.stubs.memory).
+        self.assertEqual(os.listdir(os.path.join(self.root, '.claude')), ['settings.local.json'])
 
 
 if __name__ == '__main__':

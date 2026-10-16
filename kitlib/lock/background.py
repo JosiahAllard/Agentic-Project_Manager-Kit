@@ -9,6 +9,13 @@ holds nothing, and it starts again after settings.bg_resume_s with no demand on 
 (never what a hold covers). A child still running settings.bg_yield_s after it was asked has its
 tree ended (yield-late). Failures write alerts/<run id>.json for the PM's watcher.
 
+A tree is ended (yield-late, a stop past bg_stop_grace_s, Ctrl+C) as a foreground run's is
+(end_child, kitlib.lock.run end_sparing): a build daemon another job's client uses or may use is
+left running with its tree, and its judgement is listed in the record's `daemons`. When it spares
+one, ending the rest one by one takes up to about 2 s (END_PASSES x END_PASS_S, then END_WAIT_S),
+so a stop or a yield-late frees the run's slots that much later; with none to spare the whole
+job is ended at once, as before.
+
 The child gets MACHINE_LOCK_BG=<run id>:<wrapper pid>:<wrapper ctime>, MACHINE_LOCK_BG_CONTROL
 (its control.json) and MACHINE_LOCK_BG_DIR (background/<run id>.d, which a container may mount).
 """
@@ -23,8 +30,8 @@ from kitlib.lock import layout as lay
 from kitlib.lock import queue as qm
 from kitlib.lock import game
 from kitlib.lock.run import (BG_ENV, NEST_ENV, ORIGIN_ENV, PICK, POOLS, XLA_DEFAULT_FRACTION,
-                             XLA_FRACTION_ENV, Run, child_code, docker_cpu_env, export_threads,
-                             pin_fields, settle)
+                             XLA_FRACTION_ENV, Run, child_code, claim_id, docker_cpu_env,
+                             end_sparing, export_threads, pin_fields, settle)
 from kitlib.lock.store import EXIT_REQUIRE, EXIT_USAGE, LockError, Store, iso, write_json
 from kitlib.proc.job import Job, cores_text
 
@@ -71,10 +78,19 @@ def bg_free(store, run):
     return ok
 
 
-def end_child(job, p, wait_s=10):
-    """Ends the job's whole tree, then waits on its child p (bounded), so the Popen knows its
-    process ended: dropped unwaited, it warns "subprocess N is still running" (ResourceWarning)."""
-    job.end(kill=True)
+def end_child(job, p, store, run, wait_s=10):
+    """Ends the job's tree as a foreground run's kill path does (kitlib.lock.run end_sparing): a
+    build daemon another job's client uses or may use is left running with its tree, the job
+    then closed unpinned, its judgement said and listed in the run's record (`daemons`); else
+    the whole job is ended. An interrupt inside end_sparing (a second Ctrl+C) ends the whole job
+    and goes up. Then it waits on its child p (bounded), so the Popen knows its process ended:
+    dropped unwaited, it warns "subprocess N is still running" (ResourceWarning)."""
+    try:
+        spared = end_sparing(store, run.id, job, run.rec)
+    except BaseException:
+        job.end(kill=True)
+        raise
+    job.end(kill=not spared)
     if p is not None:
         with contextlib.suppress(subprocess.TimeoutExpired, OSError):
             p.wait(timeout=wait_s)
@@ -84,8 +100,8 @@ def run_background(cmd, repo, slug, expect_s=None, note=None, store=None, env=No
                    detached=False, log=None):
     """Runs cmd as a background run until it exits other than PAUSE_EXIT, stop ends it, or it
     yields late. Returns its exit code (1 for yield-late or a failed start, 130 on Ctrl+C).
-    Raises LockError (exit 2 with no gpu here, 10 when the store or queue cannot be had before
-    it joined)."""
+    Raises LockError (exit 2 with no gpu here or a rid not shaped as a run id, 10 when its id is
+    taken (run.claim_id) or the store or queue cannot be had before it joined)."""
     store = store or Store()
     s, say = store.settings, store.say
     L = lay.in_force(store)["layout"]
@@ -93,27 +109,28 @@ def run_background(cmd, repo, slug, expect_s=None, note=None, store=None, env=No
         raise LockError(EXIT_USAGE, "usage: a background run is gpu training, and this machine "
                                     "has no gpu the lock knows of")
     env = dict(os.environ if env is None else env)
-    run = Run(store, L, repo, slug, None, note, cmd, "bg", rid, detached, env, log)
-    ctl_dir = store.path("background", run.id + ".d")
-    ctl = os.path.join(ctl_dir, "control.json")
-    for k in (NEST_ENV, ORIGIN_ENV, BG_ROOT_ENV):   # bg_client would prefer BG_ROOT (containers)
-        env.pop(k, None)
-    env[BG_ENV] = "%s:%d:%d" % (run.id, run.rec["pid"], run.rec["ctime"])
-    env[BG_CONTROL_ENV], env[BG_DIR_ENV] = ctl, ctl_dir
-    if not env.get(XLA_FRACTION_ENV):
-        env[XLA_FRACTION_ENV] = XLA_DEFAULT_FRACTION
+    # The id first, its run mutex held: a refusal here (an id taken, exit 10; one not shaped as a
+    # run id, exit 2) writes nothing, so another run's record and control.json are never touched.
+    rid, mutex = claim_id(store, rid)
+    try:
+        run = Run(store, L, repo, slug, None, note, cmd, "bg", rid, detached, env, log)
+        ctl_dir = store.path("background", run.id + ".d")
+        ctl = os.path.join(ctl_dir, "control.json")
+        for k in (NEST_ENV, ORIGIN_ENV, BG_ROOT_ENV):   # bg_client would prefer BG_ROOT
+            env.pop(k, None)
+        env[BG_ENV] = "%s:%d:%d" % (run.id, run.rec["pid"], run.rec["ctime"])
+        env[BG_CONTROL_ENV], env[BG_DIR_ENV] = ctl, ctl_dir
+        if not env.get(XLA_FRACTION_ENV):
+            env[XLA_FRACTION_ENV] = XLA_DEFAULT_FRACTION
+    except BaseException:
+        mutex.release()
+        raise
     need = {"cpu": L["medium_cores"], "gpu": 1}
     seq, beat, job, p, first, free_since = 0, 0.0, None, None, True, time.monotonic()
-    code, how, pause, stopping, told, mutex = 1, "stopped", None, None, None, None
+    code, how, pause, stopping, told = 1, "stopped", None, None, None
     demand_since, fg_gpu, fg_cpu, qbad, unfreed, joined = None, [], [], None, False, False
     hs_known, hbad = None, None
     try:
-        try:
-            mutex = store.run_mutex(run.id)
-        except OSError as e:
-            code, how = EXIT_REQUIRE, "not acquired"
-            raise LockError(EXIT_REQUIRE, "require-lock: the run's mutex could not be made (%s); "
-                                          "the command was not run" % e)
         run.rec.update(need=need, background=True, expect_s=expect_s, kind="background")
         try:
             os.makedirs(ctl_dir, exist_ok=True)
@@ -279,7 +296,7 @@ def run_background(cmd, repo, slug, expect_s=None, note=None, store=None, env=No
                 if stopping and now >= stopping:
                     say("run %s: the child did not pause in time; its process tree is ended"
                         % run.id)
-                    end_child(job, p)
+                    end_child(job, p, store, run)
                     job = p = None
                     break
                 if (stopping is None and demand_since is not None
@@ -288,7 +305,7 @@ def run_background(cmd, repo, slug, expect_s=None, note=None, store=None, env=No
                            "pause; its process tree is ended and its slot freed"
                            % (s.bg_yield_s, demand_text(fg_gpu, fg_cpu, mine)))
                     say("WARNING: background run %s: %s" % (run.id, why))
-                    end_child(job, p)
+                    end_child(job, p, store, run)
                     job = p = None
                     code, how = 1, "yield-late"
                     alert(store, run, how, code, why)
@@ -303,7 +320,7 @@ def run_background(cmd, repo, slug, expect_s=None, note=None, store=None, env=No
             store.pause("BG_END")
             if job is not None:
                 run.usage.sample(job)
-                end_child(job, p)
+                end_child(job, p, store, run)
             run.rec.update(run.usage.fields())
             write_json(ctl, {"seq": seq + 1, "pause": True, "stale_s": s.bg_stale_s, "at": iso(),
                              "reason": "the background run ended (%s)" % how})

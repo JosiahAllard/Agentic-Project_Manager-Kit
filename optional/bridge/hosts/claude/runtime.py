@@ -30,7 +30,7 @@ from optional.bridge.core.mcp import TOOLS
 from optional.bridge.win.controller import Controller
 from optional.bridge.win.launch import PYTHON_FLAGS
 from optional.bridge.win.evidence import document
-from optional.bridge.win.frontend import NativeFrontend,arguments
+from optional.bridge.win.frontend import NativeFrontend,arguments,running
 from optional.bridge.win.rpc import PipeClient
 from optional.bridge.port import NativeSource
 from optional.bridge.paths import RPC_WORKER_REL,kit_file
@@ -223,7 +223,7 @@ class ClaudeSources:
             if self._closed:raise DeliveryError('claude-provider-closed')
             # Drop exited frontend caches without touching controller state here.
             for old,previous in tuple(self._frontends.items()):
-                if proc_ctime(previous.native.pid)!=previous.native.creation:del self._frontends[old]
+                if not running(previous.native.pid,previous.native.creation):del self._frontends[old]
             previous=self._frontends.get(key)
             if previous is not None:return previous.source
             if len(self._frontends)>=128:raise DeliveryError('claude-native-frontend-capacity')
@@ -246,7 +246,7 @@ class ClaudeSources:
         with self._lock:entries=tuple(self._frontends.values())
         candidates=[entry for entry in entries if type(entry.calls) is TerminalCalls
             and (entry.native.host_pid,entry.native.host_creation) in lineage
-            and proc_ctime(entry.native.pid)==entry.native.creation]
+            and running(entry.native.pid,entry.native.creation)]
         if len(candidates)!=1:raise DeliveryError('claude-hook-frontend-missing-or-ambiguous')
         entry=candidates[0]
         self._native(entry.native)

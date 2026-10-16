@@ -36,11 +36,11 @@ MCP server and the hub tools exit.
 ## Who calls it
 
 - `boot/hook.py`, every host's one hook entry, from the folder beside it. It decides an unguarded
-  tool (Read, Grep...: one its host's `hosts.json` `hook.guarded_tools` leaves out) before it boots,
+  tool (TodoWrite, WebFetch...: one its host's `hosts.json` `hook.guarded_tools` leaves out) before it boots,
   so those calls never pay for a release check. A plugin whose root is not the kit (Codex) ships a
   byte copy of `boot/` and finds the kit through `PM_KIT_ROOT`, or the checkout it sits in
   (`boot/hook.py` `kit_here`).
-- `mcp/lock_server.py`.
+- `mcp/lock_server.py` and `mcp/hub_server.py`.
 
 Each puts `boot/` on `sys.path` relative to its own file, then calls `kitboot.boot()`. Tests:
 `tests/boot`.

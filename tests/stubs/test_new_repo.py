@@ -75,6 +75,7 @@ class NewRepo(unittest.TestCase):
         with open(os.path.join(self.root, '.kit.json'), encoding='utf-8') as fh:
             data = json.load(fh)
         self.assertEqual(data, {'repo': {'main_branch': 'master', 'name': 'repo'},
+                                'backlog': {'store': 'ref'},
                                 'owner': {'email': OWNER, 'agent_emails': [AGENT]}})
         got = stubs.run(self.root, 'check')
         self.assertEqual(got.code, stubs.OK, got.lines)

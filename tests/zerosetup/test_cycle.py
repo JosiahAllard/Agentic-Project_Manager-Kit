@@ -10,8 +10,9 @@ The cycle, in the order a PM and a worker run it:
   2. the PM makes the worker's worktree (kitlib.worktree.new.create, tools/new_worktree.py),
      which runs the first-use repo prep (kitlib.git.prep: info/exclude, core.hooksPath);
   3. the worker commits in the worktree (kitlib.commit.commit, tools/commit.py);
-  4. the worker gates the branch with no gate configured (kitlib.gate.runner.branch_gate: the
-     stack is detected, `source: auto`, and the clone's own unittest tests run);
+  4. the worker gates the branch --full with no gate configured (kitlib.gate.runner.branch_gate:
+     the stack is detected, `source: auto`, and the clone's own unittest tests run), which writes
+     the full-gate OK record a landing takes for the tip;
   5. the PM lands it from the main checkout (kitlib.gate.land.Lander, `gate.py land`): merge, the
      merged tree's gate, the push to the remote, the branch cleanup.
 
@@ -42,6 +43,7 @@ from kitlib import kitroot
 from kitlib import gate as G
 from kitlib.config import user as kuser
 from kitlib.gate import land, runner
+from kitlib.git import cmd as gitcmd
 from kitlib.git import prep
 from kitlib.git.fake import repo as fakerepo
 from kitlib.guard import prepush
@@ -193,8 +195,9 @@ class Cycle(object):
         # ... and pushes its branch: the worktree shares the clone's remote (decision 23)
         self.git('push', '-q', 'origin', 'kit/fix-add', cwd=wt)
         self.assertEqual(self.remote_git('rev-parse', 'kit/fix-add'), tip)
-        # 4. the worker's gate: no gate configured, the clone's own tests detected and run
-        gated = runner.branch_gate(wt, book_kw=self.book_kw, log_dir=self.logs)
+        # 4. the worker's gate: no gate configured, the clone's own tests detected and run, --full
+        #    (the record a landing takes for the tip)
+        gated = runner.branch_gate(wt, full=True, book_kw=self.book_kw, log_dir=self.logs)
         self.assertEqual(gated.code, G.OK, gated.lines)
         self.assertEqual(gated.source, 'auto')
         self.assertEqual([(r['name'], r['status']) for r in gated.results], [('python-tests', 'PASS')])
@@ -317,7 +320,10 @@ class AnyPlatform(Cycle, unittest.TestCase):
     def pre_commit_passed(self, wt):
         """The commit asked for its pre-commit hook; the kit's, run in the worktree as git runs it
         (by sh, at the work tree's root), passes: the repository has no .kit.json naming the ledger
-        check and is not a kit checkout."""
+        check and is not a kit checkout. On real git (KIT_FAKE_GIT=0) git ran the hook itself, as
+        in OnWindows, and the fake's hook_exists is never asked."""
+        if not gitcmd.fake_active():
+            return
         self.assertIn('pre-commit', self.hooks_asked)
         sh = shutil.which('sh')
         if sh is None:
@@ -328,7 +334,10 @@ class AnyPlatform(Cycle, unittest.TestCase):
 
     def pre_push_passed(self, merge, start):
         """The landing's push asked for its pre-push hook; the kit's (kitlib.guard.prepush), given
-        the line git hands it for that push, allows it: a fast-forward of main."""
+        the line git hands it for that push, allows it: a fast-forward of main. On real git git
+        ran the hook itself."""
+        if not gitcmd.fake_active():
+            return
         self.assertIn('pre-push', self.hooks_asked)
         line = 'refs/heads/main %s refs/heads/main %s' % (merge, start)
         self.assertEqual(prepush.check(self.clone, [line], remote='origin', url=self.remote), (True, None))

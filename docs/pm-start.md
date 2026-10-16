@@ -16,23 +16,30 @@ Hub (`kitlib.pmstart` `hub_site`, tests `tests/pmstart/test_hub_site.py`; docs/a
 lines read the machine config's `hub` key (`kitlib.hubsite.settings`), or every default (port 8790)
 when there is no `hub` key. The check only asks the loopback server on `hub.port`, through
 `kitlib.hubsite.client`; it starts no process and never starts the server, and it imports
-`kitlib.hubsite.serve` only once the settings are read. Each ask (`GET /health`,
-then `GET /pending`) waits at most `HUB_SITE_TIMEOUT_S` (1.5 seconds). The lines:
-`hub: server up on port <n>, <k> pending` (`<k>` is 0 when the answer's `items` is not a list); when
-`<k>` is above 0, a line to process the items (`hub.py pending`); then either
-`hub: wait --pending is running` or a line telling the PM to start
-`hub.py wait --pending` in the background and start it again after it ends. "Running" is matched by
+`kitlib.hubsite.serve` only once the settings are read. Each ask (`GET /api/v1/health`,
+then `GET /api/v1/pending?for=pm`) waits at most `HUB_SITE_TIMEOUT_S` (1.5 seconds). The pending
+ask is the PM's items only, the list `hub.py pending --for pm` prints: an item routed to a creator
+that can still be reached is that session's to ack, and a PM ack would hide it from the creator's
+wait. The lines:
+`hub: server up on port <n>, <k> pending for the PM` (`<k>` is 0 when the answer's `items` is not a
+list); when `<k>` is above 0, a line to process the items (`hub.py pending --for pm`); then either
+`hub: wait --pending is running` or a warning, `hub: WARN no PM wait --pending --for pm is
+running, so items routed to the PM go unseen; ...`, telling the PM to start
+`hub.py wait --pending --for pm` in the background and start it again after it ends (docs/action-hub.md
+"Who handles a pending item"). "Running" is matched by
 command text only: any `python` process on the machine whose command line holds `hub.py`, `wait`
-and `--pending` counts, so another session's `wait --pending` makes this line say running. Failures,
+and `--pending`, and no `--for` other than `--for pm`, counts (`_wait_running` in
+`kitlib/pmstart/__init__.py`): a session's `wait --pending --for <key>` waits on its own answers
+and is not the PM's, but another PM session's plain `wait --pending` makes this line say running. Failures,
 each one line:
 - Nothing listens: `hub: hub server down (nothing listens on port <n>): start it with python
   "<kit>/tools/hub.py" serve`.
 - No token file (neither the agent's nor the owner's can be read): `hub: no hub token file is there
   to read: run python "<kit>/tools/hub.py" setup`.
-- `GET /health` answered, but not ok: `hub: server did not answer as the hub does (health not ok)`.
-- Any other failure of `GET /health` (a timeout, a refusal, an answer that is not the hub's): `hub:
+- `GET /api/v1/health` answered, but not ok: `hub: server did not answer as the hub does (health not ok)`.
+- Any other failure of `GET /api/v1/health` (a timeout, a refusal, an answer that is not the hub's): `hub:
   server did not answer as the hub does (<exception class>)`; the class is all it names.
-- `GET /pending` fails after `GET /health` answered: `hub: server up on port <n>, pending not asked
+- `GET /api/v1/pending?for=pm` fails after `GET /api/v1/health` answered: `hub: server up on port <n>, pending not asked
   (<exception class>)`.
 - The `hub` key is there and cannot be used (the machine config check refuses it, or the hub
   settings do): `hub: the hub key of the machine config cannot be used: <the configuration error's
@@ -77,17 +84,39 @@ sets `"stubs".tools`, or it holds at least one) whose stubs are missing or stale
 `stubs (<repo>): N missing/stale: <names>; run python <kit>/tools/kit_stubs.py write -C <folder>`,
 with `(stale ones run the kit at <path>)` added when a stub runs another kit. A repository whose
 stubs are current prints nothing; a folder that is not there, or a check that fails, is that
-repository's own `could not check stubs (<repo>): ...` line. The coordinator's session start has the
+repository's own `could not check stubs (<repo>): ...` line. The check runs in the plugin's
+export, so it compares each stub with the main checkout the export's marker names, the folder
+`kit_stubs.py write` would name (`kitlib.stubs.live_kit`); an export whose marker names none gives
+each repository that uses stubs `could not check stubs (<repo>): <export> is an export of the kit
+...` with no write command, and a repository with none still nothing (docs/plugin-source.md
+"Layout"). The coordinator's session start has the
 same check for its own repository (docs/install.md "Tools without a stub"). Code: `kitlib/pmstart`
 `stubs`; tests: `tests/pmstart/test_stubs_check.py`.
 
+## Memory folder (`memory`)
+
+After `stubs`, the `memory` check reads `.claude/settings.local.json`, then `.claude/settings.json`, of each repository in
+`launcher.repos`, and of the PM repository (the main checkout holding `sessions_file`), through
+`kitlib.stubs.memory.problem_line`. Files without `autoMemoryDirectory` give
+`memory (<repo>): <file> has no autoMemoryDirectory; its memory folder is <folder>. Ask the owner
+(via the hub) to run, in their own PowerShell window: python <kit>/tools/kit_stubs.py memory -C
+<folder> --apply (it writes .claude/settings.local.json, which git ignores; nothing to commit)`: an owner step, since the command
+writes another repository's main checkout. One it cannot read gives `could not check memory
+(<repo>): ...`, as does a check that raises. A key naming another folder is the owner's choice and
+prints nothing. The kit's folder is `<the main checkout's drive>/Agent-memory/<repo folder name>`.
+Then `pm_start.memory_dir` must name the folder the PM repository's settings name (the owner's
+choice when the key names another folder, else the kit's folder; case and slashes
+aside), or one line says what to set it to. Claude Code ignores the key without a word when
+`blockReadsOutsideWorkingDirectories` is set or the workspace is not trusted. Code:
+`kitlib/pmstart` `memory`; tests: `tests/pmstart/test_pmstart.py` `MemoryTest`.
+
 ## Repo prep (`repo_prep`)
 
-After `stubs`, the `repo_prep` check runs the first-use repo prep (`kitlib.git.prep.run`; docs/new-worktree.md "First-use prep") on each repository in `launcher.repos`. The prep adds each host's worktree folder to the repository's `info/exclude` and sets the local `core.hooksPath` to the kit's `githooks/` when none is set and `.git/hooks` holds no hook. It prints a `repo prep: <folder>: ...` line only for what it did or could not do, so a repository already prepared prints nothing. A folder that is not there gives a `could not prep <repo>: ...` line. Code: `kitlib/pmstart` `repo_prep`; tests: `tests/pmstart/test_repo_prep.py`.
+After `memory`, the `repo_prep` check runs the first-use repo prep (`kitlib.git.prep.run`; docs/new-worktree.md "First-use prep") on each repository in `launcher.repos`. The prep adds each host's worktree folder to the repository's `info/exclude` and sets the local `core.hooksPath` to the kit's `githooks/` when none is set and `.git/hooks` holds no hook. It prints a `repo prep: <folder>: ...` line only for what it did or could not do, so a repository already prepared prints nothing. A folder that is not there gives a `could not prep <repo>: ...` line. Code: `kitlib/pmstart` `repo_prep`; tests: `tests/pmstart/test_repo_prep.py`.
 
 ## Agent temp (`agent_temp`)
 
-After `stubs`, the `agent_temp` check prints one line for each part of the agents' temp folder set-up
+After `memory`, the `agent_temp` check prints one line for each part of the agents' temp folder set-up
 (docs/machine-setup.md "Extras") that is missing: "AGENT_TEMP is not set (machine_setup.py plans
 it)" when neither the process nor the user environment has `AGENT_TEMP`; "agent_temp_sweep is not
 set in the machine config (machine_setup.py plans it)"; and "agent temp sweep task agent-temp-sweep
@@ -133,7 +162,7 @@ The machine config (docs/kit-json.md "Machine config keys"), key `pm_start`; wit
 ```json
 {"pm_start": {
   "pm_watch_cmd": "python -u <kit>/tools/pm_watch.py --stream",
-  "memory_dir": "<home>/.claude/projects/<project>/memory",
+  "memory_dir": "<repo drive>/Agent-memory/<pm-repo>",
   "handoff_glob": "pm-handoff-*.md",
   "reminders_file": "<config-dir>/reminders.json",
   "sessions_file": "<launcher state_dir>/sessions.json",
@@ -141,8 +170,6 @@ The machine config (docs/kit-json.md "Machine config keys"), key `pm_start`; wit
 }}
 ```
 
-- `hub_mirror`: the absolute folder of the old hub's mirror for an install without `pm_data`
-  (docs/action-hub.md "Data from the old hub"). The checklist does not read it.
 - `reminders_file`: `[{"due": "YYYY-MM-DD", "text": "..."}]`.
 - `sessions_file`: `{"<key>": {"name": "<remote-control name>", "repo": "<repo>"}}`; an entry
   with `autostart: false` is not checked.

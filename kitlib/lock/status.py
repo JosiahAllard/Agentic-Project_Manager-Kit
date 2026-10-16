@@ -75,6 +75,12 @@ def render(snap):
     if L["hardware_change"]["changed"]:
         out.append("hardware or division changed: the new layout applies once nothing is live or "
                    "queued%s" % (" (waiting for that)" if L["hardware_change"]["pending"] else ""))
+    if L.get("other_labels"):
+        # Another writer's text: repr keeps a line break or a "; " inside a label from passing
+        # for the line's own structure.
+        out.append("WARNING: a live run carries another slot numbering (%s): an older lock tool "
+                   "that counts this machine's cpu or gpu slots its own way writes to this store, "
+                   "and its slot numbers are not this layout's" % "; ".join(map(repr, L["other_labels"])))
     ccds = hw.get("ccds") or []
     if len(ccds) > 1:
         out.append("L3 domains: %s" % "; ".join(
@@ -135,10 +141,12 @@ def render(snap):
         else:
             plan = "not yet planned"
         mv = w.get("moved") or {}
-        out.append("waiting: %s/%s (%s, %s, run %s%s%s) since %s; %s%s%s" % (
+        out.append("waiting: %s/%s (%s, %s, run %s%s%s%s) since %s; %s%s%s" % (
             w["repo"], w["slug"], w["kind"], lay.need_text(w["needs"]), w["id"],
             ", priority %s" % w["priority"] if w.get("priority") else "",
             ", resource %s" % w["resource"] if w.get("resource") else "",
+            ", within %s (--within)" % lay.slots_text("cpu", w["within_slots"])
+            if w.get("within_slots") else "",
             _local(w["since"]), plan, "; moved to the top by %s at %s" % (
                 moved_by(mv), _local(mv.get("at"))) if mv else "",
             "; " + w["why"] if w.get("why") else ""))

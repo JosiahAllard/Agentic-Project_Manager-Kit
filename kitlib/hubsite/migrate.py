@@ -1,8 +1,8 @@
 """kitlib.hubsite.migrate: copy the earlier Action Hub's documents into the hub store.
 
-A source is a folder of <collection>/<id>.json files: the mirror folder (kitlib.hubmirror) or an
-ArtifactData out_dir export of one account's copy. Both spellings of a document are read, the
-bare fields and the wrapped one, through kitlib.hubmirror.fields_of.
+A source is a folder of <collection>/<id>.json files: the old hub's data folder (hub/ in the PM data
+worktree) or an ArtifactData out_dir export of one account's copy. Both spellings of a document
+are read, the bare fields and the wrapped one, through fields_of.
 
   migrate(root, sources, dry_run=False)  -> Result   copy the sources' documents into the store
   validate(root)                         -> [Finding] the store's findings, read only, no lock
@@ -17,7 +17,7 @@ second run finds every document there and writes nothing.
 What a source document becomes:
   - A document of one of schema.COLLECTIONS that the store does not hold is written to
     <root>/<collection>/<id>.json with its own id and its own fields, as store.normal_text. It has
-    no `version`, so the store reads it at version 0, exactly as it reads a mirror file (the
+    no `version`, so the store reads it at version 0, exactly as it reads an old hub file (the
     store's module docstring). It is not passed through the store's write checks: a document the
     earlier hub held is kept whole even where a new write of it would be refused, and check()
     reports what is wrong with it. An inbox document that is a lock-window notice is a document
@@ -32,16 +32,19 @@ What a source document becomes:
     option's label or the label of two; a whole number that is also an option's label, unless
     it is the label of one option only and that option is at the position the number says;
     more than nine digits; and the empty text. The
-    store refuses every update of a question whose `recommended` is text (schema.check), so such
-    a question could not be answered. No other field and no other text is changed. Two copies
-    are compared with this text read as the number on both sides: a store document that holds
-    the number, or the text, is the same document as a source that holds the text. The store's
-    file is never rewritten, so one that already holds the text keeps it and check() reports it.
+    store refuses every update of a question whose `recommended` is text that stands for
+    nothing (schema.check), so such a question cannot be answered or logged until its file is
+    fixed. No other field and no other text is changed. Two copies are compared with this text
+    read as the number on both sides: a store document that holds the number, or the text, is
+    the same document as a source that holds the text. The store's file is never rewritten here:
+    one that already holds text that stands for a number keeps it, the store reads it as the
+    number (schema.whole_recommended) and its next write stores the number, and check() warns
+    of it.
   - A document the store already holds with the same fields is counted in `same`.
   - A document the store already holds with other fields is never written over. When the store's
     has a `version` (a server wrote it since), the store's is the newer truth: the difference is
     in `kept` and the run is complete. When it has none (no server ever wrote it: it is a copy
-    from a source, or a mirror file where the mirror folder is the store folder), it is one
+    from a source, or an old hub file where the old hub's data folder is the store folder), it is one
     source against another: it is in `conflicts` (Conflict.store True) and the run is not
     complete.
   - A document two sources hold with different fields, and the store does not hold, is written
@@ -58,7 +61,7 @@ until the last document is written: while a server holds the store the run is re
 before anything is written. A dry run writes nothing at all: it takes the lock only when the
 lock file is already there (a holder made it), and never makes the store folder.
 
-A source may be the store folder itself (the mirror folder served in place): every document is
+A source may be the store folder itself (the old hub's data folder served in place): every document is
 then already the store's and nothing is written.
 
 Nothing here prints, parses arguments or exits.
@@ -67,13 +70,15 @@ import collections
 import datetime
 import json
 import os
-import re
 
-from kitlib import hubmirror, hubvalidate
+from kitlib import hubvalidate
+from kitlib.config.types import ConfigError
 
 from . import schema
 from . import store as hubstore
 
+# A wrapped out_dir document: a `data` object plus only these keys (fields_of).
+WRAPPER_KEYS = frozenset(('data', 'id', 'version', 'doc_id', 'collection'))
 LOCK_WINDOW = 'lock-window'         # the `kind` of an inbox document that is a lock-window notice
 # the fields whose time says how new a document is, for a conflict's `later`
 STAMPS = ('updated_at', 'done_at', 'asked_at')
@@ -89,8 +94,6 @@ Skipped = collections.namedtuple('Skipped', 'source rel why')
 # a question written with its `recommended`, the text `old`, as the number `new`; label: `old`
 # is the label of the option at position `new`, not a number written as text
 Turned = collections.namedtuple('Turned', 'rel old new label', defaults=(False,))
-_WHOLE = re.compile(r'[0-9]{1,9}')  # a whole number small enough to be a position; more digits
-_DIGITS = re.compile(r'[0-9]+')     # than that are kept as text
 
 
 class Result(collections.namedtuple(
@@ -132,26 +135,6 @@ def _own(fields):
     return {k: v for k, v in fields.items() if k != 'id' and k not in schema.STORE_KEYS}
 
 
-def _whole(coll, fields):
-    """(fields, old, label): a question whose `recommended` is text that stands for a number
-    (the module docstring) is given back as a copy with the number; old is that text and label
-    is True when it was an option's label. Any other document is given back as it is, with old
-    None."""
-    old = fields.get('recommended') if coll == 'questions' else None
-    if not isinstance(old, str) or not old:
-        return fields, None, False              # '' names no option, whatever an option's label is
-    options = fields.get('options')
-    at = [i for i, o in enumerate(options if isinstance(options, list) else [])
-          if isinstance(o, dict) and o.get('label') == old]
-    if _WHOLE.fullmatch(old):
-        if at and at != [int(old)]:
-            return fields, None, False          # the number, or one of those options: it does not say
-        return dict(fields, recommended=int(old)), old, bool(at)
-    if len(at) != 1 or _DIGITS.fullmatch(old):  # too long to be a number here: left as it is
-        return fields, None, False
-    return dict(fields, recommended=at[0]), old, True
-
-
 def _doc_files(folder):
     """{id: path} of the *.json files directly in folder."""
     out = {}
@@ -159,6 +142,36 @@ def _doc_files(folder):
         path = os.path.join(folder, n)
         if n.lower().endswith('.json') and len(n) > 5 and os.path.isfile(path):
             out[n[:-5]] = path
+    return out
+
+
+class NotADocument(ValueError):
+    """A source file that cannot be read as one document; the message says why."""
+
+
+def fields_of(collection, obj):
+    """The document's own fields from one ArtifactData out_dir file or one old-hub data file. An
+    object whose `data` is an object and whose other keys are all in WRAPPER_KEYS (none at all
+    included) is a wrapped document and gives its `data`. An object with a `data` object beside
+    any other key is refused (NotADocument): it is either a wrapper with keys this module does not
+    know or a document with a `data` field, and reading the wrong one would store nested garbage
+    (no hub collection has a `data` field, docs/action-hub.md). Otherwise the object is the
+    fields. `id` and `version` are never kept: a document's id is its file name."""
+    if not isinstance(obj, dict):
+        raise NotADocument('a %s document is not a JSON object' % collection)
+    if isinstance(obj.get('data'), dict):
+        extra = sorted(set(obj) - WRAPPER_KEYS)
+        if extra:
+            raise NotADocument(
+                'a %s document has a `data` object beside %s: cannot tell a wrapped ArtifactData '
+                'document from one with a `data` field, so it was not read. If these are '
+                "ArtifactData's own keys, add them to kitlib.hubsite.migrate.WRAPPER_KEYS"
+                % (collection, ', '.join(extra)))
+        out = dict(obj['data'])
+    else:
+        out = dict(obj)
+    out.pop('version', None)
+    out.pop('id', None)
     return out
 
 
@@ -170,7 +183,7 @@ def _read_json(path):
 def _misplaced(coll, doc_id, obj):
     """Why the file's own keys name another document than its path coll/doc_id, or ''. A wrapped
     document's `id`, `doc_id` and `collection`, the `id` inside its `data`, and a bare document's
-    `id` are not stored (hubmirror.fields_of): one that disagrees with the path would be dropped
+    `id` are not stored (fields_of): one that disagrees with the path would be dropped
     unseen. A whole number is read as its text: the `id` 7 names the file 7.json."""
     if not isinstance(obj, dict):
         return ''
@@ -217,8 +230,8 @@ def read_source(src):
                     continue
                 try:
                     obj = _read_json(path)
-                    fields = hubmirror.fields_of(name, obj)
-                except (OSError, ValueError, hubmirror.Refused) as e:
+                    fields = fields_of(name, obj)
+                except (OSError, ValueError) as e:
                     skipped.append(Skipped(src, rel, 'cannot be read as a document: %s' % e))
                     continue
                 why = _misplaced(name, doc_id, obj)
@@ -251,30 +264,59 @@ def store_docs(root):
     return out
 
 
-def check(docs):
+def check(docs, known_repos=()):
     """The findings for docs ({collection: {id: document}}): schema.check's errors for each
-    document, then kitlib.hubvalidate.validate's, sorted by document, code and field. With no
-    repos/ document there is nothing to judge a `repo` tag against: `repos` is then left out, so
+    document, then kitlib.hubvalidate.validate's (given `known_repos`, the configured repo names
+    or a callable giving them), sorted by document, code and field. With no repos/ document and
+    no known repos there is nothing to judge a `repo` tag against: `repos` is then left out, so
     validate gives its one note that the tags were not checked, not a warning per tagged
-    document."""
+    document. A question whose `recommended` is text that stands for a number is judged as the
+    store reads it (schema.whole_recommended), with that number, and has one warning that its file
+    still holds the text: the api accepts its updates, and the first one stores the number."""
     out = []
+    read = {coll: {} for coll in schema.COLLECTIONS if coll in docs}
     for coll in schema.COLLECTIONS:
         for doc_id, d in sorted(docs.get(coll, {}).items()):
+            d, old, _ = (schema.whole_recommended(coll, d) if isinstance(d, dict)
+                         else (d, None, False))
+            if old is not None:
+                out.append(hubvalidate.Finding(
+                    hubvalidate.WARN, '%s/%s' % (coll, doc_id), 'recommended', schema.CODE,
+                    'recommended is the text %r in its file; the store reads it as the number %d '
+                    'and its next write stores the number' % (old, d['recommended'])))
+            read[coll][doc_id] = d
             out.extend(schema.check(coll, d, doc_id))
+    docs = dict(docs, **read)
     if not docs.get('repos'):
         docs = {k: v for k, v in docs.items() if k != 'repos'}
-    out.extend(hubvalidate.validate(docs))
+    out.extend(hubvalidate.validate(docs, known_repos=known_repos))
     return sorted(out, key=lambda f: (f.rel, f.code, f.field, f.message))
 
 
-def validate(root):
+def machine_known_repos(home=None):
+    """The callable the live server hands its store (serve.machine_sources(...).known_repos): the
+    PM's configured repo names, asked only when a document has a repo tag. () when the machine
+    config cannot be used or names no sessions file, as the server then has none either."""
+    from . import serve                     # here: serve is not needed by the other verbs
+    try:
+        found = serve.machine_sources(home, sync=False).known_repos
+    except ConfigError:
+        return ()
+    return found if found is not None else ()
+
+
+def validate(root, known_repos=None, home=None):
     """check() over the store folder `root` as it is on disk. Read only: no lock is taken and
-    nothing is made, so it may run beside a server. MigrateError for a folder that does not
-    exist or a document that cannot be read."""
+    nothing is made, so it may run beside a server. `known_repos` (names, or a callable giving
+    them, as hubvalidate.validate takes) default to the machine's own, as the live server uses
+    (machine_known_repos of `home`, the user's by default). MigrateError for a folder that does
+    not exist or a document that cannot be read."""
     root = os.path.abspath(root)
     if not os.path.isdir(root):
         raise MigrateError('the hub store %s is not a folder' % root)
-    return check(store_docs(root))
+    if known_repos is None:
+        known_repos = machine_known_repos(home)
+    return check(store_docs(root), known_repos)
 
 
 def _when(fields):
@@ -369,10 +411,11 @@ def migrate(root, sources, dry_run=False):
         for (coll, doc_id), found in sorted(versions.items()):
             rel = '%s/%s' % (coll, doc_id)
             cur = have[coll].get(doc_id)
-            was = {s: _whole(coll, f)[1:] for s, f in found}
-            found = [(s, _whole(coll, f)[0]) for s, f in found]
+            was = {s: schema.whole_recommended(coll, f)[1:] for s, f in found}
+            found = [(s, schema.whole_recommended(coll, f)[0]) for s, f in found]
             if cur is not None:
-                mine = _own(_whole(coll, cur)[0])       # compared as a source is: text as number
+                # compared as a source is: text as number
+                mine = _own(schema.whole_recommended(coll, cur)[0])
                 differs = [(s, f) for s, f in found if _own(f) != mine]
                 if not differs:
                     same.append(rel)
@@ -428,7 +471,8 @@ def validate_lines(findings):
     if not findings:
         return ['VALIDATE clean: no finding']
     lines = ['VALIDATE %s' % hubvalidate.format_line(f) for f in findings]
-    for rel in sorted({f.rel for f in findings if f.code == schema.CODE}):
+    for rel in sorted({f.rel for f in findings
+                       if f.code == schema.CODE and f.level == hubvalidate.ERROR}):
         lines.append('VALIDATE %s: the api will refuse every update of this document until it is '
                      'fixed; fix its file by hand with the server stopped (no api route repairs '
                      'it)' % rel)
@@ -474,8 +518,9 @@ def report_lines(result):
                 "different fields; the store's copy is kept and nothing was imported (%s). To "
                 "keep the store's copy there is nothing to do; a run with that source reports "
                 "this again. To take a source's copy: with the server stopped, move the file "
-                "%s.json out of the store folder (where the store folder is the mirror folder, "
-                "that file is the mirror's own file), then run again with the chosen source alone"
+                "%s.json out of the store folder (where the store folder is the old hub's data "
+                "folder, that file is the old hub's own file), then run again with the chosen "
+                "source alone"
                 % (c.rel, ' and '.join(c.sources), later, c.rel))
         else:
             lines.append(

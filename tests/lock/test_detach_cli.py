@@ -63,6 +63,26 @@ class DetachCli(StoreCase):
             return self.call("run", "--kind", "engine-test", "--repo", "kit", "--slug", "t",
                              "--cores", "1", "--no-wait", "--detach", cmd=[sys.executable, "-V"])
 
+    def child(self, rid):
+        """The detached child's own call, `run --detached-id rid`: (code, stderr)."""
+        code, _, err = self.call("run", "--kind", "engine-test", "--repo", "kit", "--slug", "t",
+                                 "--cores", "1", "--no-wait", "--detached-id", rid,
+                                 cmd=[sys.executable, "-c", "import sys; sys.exit(0)"])
+        return code, err
+
+    def test_a_detached_id_not_shaped_like_a_run_id_is_exit_2(self):
+        for rid in ("..\\x", "r-1"):
+            with self.subTest(rid=rid):
+                code, err = self.child(rid)
+                self.assertEqual(code, 2, err)
+
+    def test_a_detached_id_an_ended_run_has_is_exit_10_and_its_record_kept(self):
+        rid = "r-20261006T120000Z-0d0d0d"
+        self.store.write("ended/%s.json" % rid, {"id": rid, "note": "first"})
+        code, err = self.child(rid)
+        self.assertEqual(code, 10, err)
+        self.assertEqual(self.store.read("ended/%s.json" % rid), {"id": rid, "note": "first"})
+
     def test_no_pythonw_beside_python_is_exit_1_and_nothing_started(self):
         folder = os.path.join(self.tmp, "py")
         os.makedirs(folder)

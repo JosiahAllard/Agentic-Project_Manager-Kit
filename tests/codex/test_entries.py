@@ -112,6 +112,17 @@ class Entries(unittest.TestCase):
         self.assertTrue(third['result']['isError'])
         self.assertEqual(third['result']['structuredContent']['error']['code'], 'forbidden')
 
+    def test_the_hub_server_lists_its_tools(self):
+        requests = [{'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {}},
+                    {'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list'}]
+        r = self.run_entry(self.cached, 'mcp/hub_server.py', '\n'.join(json.dumps(q) for q in requests) + '\n')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        first, second = [json.loads(line) for line in r.stdout.splitlines()]
+        names = {t['name'] for t in second['result']['tools']}
+        self.assertIn('hub_pending', names)
+        from kitlib import hubmcp
+        self.assertFalse(names & set(hubmcp.OWNER_ONLY))
+
 
 if __name__ == '__main__':
     unittest.main()

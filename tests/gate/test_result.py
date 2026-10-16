@@ -396,6 +396,8 @@ class LandingWrites(fixtures.GateRepoCase):
         kw.setdefault('git_env', self.env)
         kw.setdefault('book_kw', self.book_kw)
         kw.setdefault('log_dir', self.logs)
+        fixtures.gate_full(self.repo.root, *(expect_tip if isinstance(expect_tip, list)
+                                             else [expect_tip]))
         return land.Lander(self.repo.root, branch, expect_main, expect_tip, **kw)
 
     def test_a_landing_writes_running_then_a_land_record(self):

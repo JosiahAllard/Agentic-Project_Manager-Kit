@@ -353,11 +353,13 @@ class ServiceAttests(unittest.TestCase):
     """win/service.py calls attest() on any SenderAttestor a provider returns (port.py)."""
 
     def handle(self, source):
+        from kitlib.proc.process import own_ctime
         from optional.bridge.win.service import BrokerService
         observed = []
 
         class Native:
-            pid, creation = 10, 20
+            # A running process, as the real inspector returns: the broker refuses an exited one.
+            pid, creation = os.getpid(), own_ctime()
 
         class Server:
             def handle(self, message):

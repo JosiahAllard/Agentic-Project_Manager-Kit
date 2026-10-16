@@ -1,12 +1,15 @@
 """kitlib.hubvalidate: checks on the Action Hub's data (docs/action-hub.md field tables).
 
 Pure logic over the hub's JSON shape, `docs = {collection: {doc_id: fields}}` (what
-kitlib.hubmirror.read_source returns); it knows nothing of the page, ArtifactData or any transport.
+kitlib.hubsite.migrate.check takes); it knows nothing of the page, ArtifactData or any transport.
 Nothing here prints, parses arguments or exits.
 
-  validate(docs, only=None)   [Finding] for every document; `only` (a set of "collection/doc_id")
+  validate(docs, only=None, known_repos=())
+                              [Finding] for every document; `only` (a set of "collection/doc_id")
                               limits the findings to those documents while refs and repos are
-                              still judged against all of docs
+                              still judged against all of docs; `known_repos` are extra repo
+                              names (the configured ones) a repo tag may use, or a callable
+                              giving them, called only when a checked document has a repo tag
   batch_docs(entries, base)   (docs, findings) from an ArtifactData batch (a list of entries with
                               op, collection, doc_id and a data object or a file_path)
   summary(findings)           "N error(s), M warning(s)"
@@ -154,8 +157,12 @@ def _check_pages(docs, out):
                           'no pages/%s for this page_html' % doc_id))
 
 
-def validate(docs, only=None):
-    """The Findings for docs, sorted by document then code. See the module docstring."""
+def validate(docs, only=None, known_repos=()):
+    """The Findings for docs, sorted by document then code. See the module docstring.
+    `known_repos`: further repo names (the PM's configured repositories, which the hub's repo
+    menu lists beside the stored repos/ docs) that a repo tag may use without an alias, or a
+    callable() giving them, called only when a document checked carries a repo tag. With `only`,
+    repo tags are checked on those documents alone, so the repo-alias note is about them too."""
     out = []
     for coll in sorted(docs):
         for doc_id, d in sorted(docs[coll].items()):
@@ -169,25 +176,30 @@ def validate(docs, only=None):
             _check_options(coll, doc_id, d, out)
             _check_refs(coll, doc_id, d, docs, out)
     _check_pages(docs, out)
-    out.extend(_check_repos(docs))
+    out.extend(_check_repos(docs, known_repos, only))
     if only is not None:
         out = [f for f in out if f.rel in only or f.level == NOTE]
     return sorted(out, key=lambda f: (f.rel, f.code, f.field))
 
 
-def _check_repos(docs):
+def _check_repos(docs, known_repos=(), only=None):
     tags = []
     for coll in REPO_COLLECTIONS:
         for doc_id, d in sorted(docs.get(coll, {}).items()):
+            if only is not None and '%s/%s' % (coll, doc_id) not in only:
+                continue                    # its finding would be dropped: never look it up
             if isinstance(d, dict) and isinstance(d.get('repo'), str) \
                     and d['repo'].strip().lower() not in ANY_REPO:
                 tags.append((coll, doc_id, d['repo']))
     if not tags:
         return []
-    if 'repos' not in docs:
+    if callable(known_repos):               # asked only now that a repo tag is checked
+        known_repos = known_repos()
+    if 'repos' not in docs and not known_repos:
         return [Finding(NOTE, '', 'repo', 'repo-alias',
                         'repo aliases not checked: there is no repos/ collection to check against')]
-    known = _known_repos({k: v for k, v in docs['repos'].items() if isinstance(v, dict)})
+    known = _known_repos({k: v for k, v in docs.get('repos', {}).items() if isinstance(v, dict)})
+    known.update(str(x).lower() for x in known_repos)
     return [_f(WARN, coll, doc_id, 'repo', 'repo-alias',
                'repo %r is neither a repos/ name nor one of its aliases: it shows only under All'
                % tag) for coll, doc_id, tag in tags if tag.strip().lower() not in known]

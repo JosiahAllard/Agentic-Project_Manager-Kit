@@ -7,7 +7,9 @@
       refused (4) when this gate.py is in another checkout of the gated tree's repository; a
       relative --log-dir
       outside the gated checkout is USAGE (2) (kitlib.gate.caller). From another directory:
-      python <worktree>/tools/gate.py -C <worktree> (docs/gate.md "The caller's checkout")
+      python <worktree>/tools/gate.py -C <worktree> (docs/gate.md "The caller's checkout").
+      Refused (4), with --plan and as `land` too, while the repository's stash stack holds an
+      entry, whichever checkout made it (kitlib.gate.stash; docs/gate.md "The stash guard")
   gate.py land BRANCH --expect-tip SHA [--expect-main SHA] [-C DIR] [--lane L] [--summary TEXT]
                       [--full] [--fresh] [--wait SECONDS] [--log-dir D] [--keep-branch] [--submit]
       land BRANCH from the main checkout, as tools/land.py does: merge onto <remote>/<main> as it
@@ -24,8 +26,8 @@
       finished `error` (kitlib.gate.result.finish_dead)
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.gate, prints and exits.
-Exit codes (kitlib.gate): 0 OK, 1 FAILED, 2 USAGE, 3 STUCK, 4 REFUSED, 5 BUSY, 9 LANDED_UNGATED
-(landed, but main was not gated whole); a machine lock refusal passes its own code through
+Exit codes (kitlib.gate): 0 OK, 1 FAILED, 2 USAGE, 3 STUCK, 4 REFUSED, 5 BUSY; 9 LANDED_UNGATED
+is retired (no landing gives it); a machine lock refusal passes its own code through
 (6, 8, 10, 11, 12); 130 Ctrl+C.
 """
 import argparse

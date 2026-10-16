@@ -18,7 +18,8 @@ What it refuses (`kitlib/commit/__init__.py`, `_commit`):
 - **Explicit paths only.** A directory, `.`, `-A` or a glob is a usage error. A path outside the work tree is a usage error too.
 - **Foreign staged files.** Anything already staged and not named is refused, because it may belong to another session.
   - With `"commit".merge_fold` on, during a merge with one MERGE_HEAD, the files the merge staged itself are exempt (`merge_owned`).
-  - An owner-only file is exempt only when it is the merged branch's blob byte for byte.
+  - An owner-only file is exempt only when its staged state is exactly the merged branch's copy: the same mode and blob as `MERGE_HEAD`'s, or a deletion of a path `MERGE_HEAD` deleted (`carries_merged_copy`). That branch must have changed it from the merge base, so the merge is carrying the owner's change in, not undoing this branch's. Every commit the merge brings in (reachable from `MERGE_HEAD`, not from `HEAD`) that changes it must be authored by the owner, judged as `gate land` judges a branch (`non_owner_paths`, through `kitlib.guard.ownercommits.violations` against `HEAD`); when git cannot tell, it stays refused. A conflict resolved to that copy counts too; any other staged state, an unresolved conflict, or an octopus merge stays refused.
+  - Naming such a file is still refused as owner-only. The refusal says to leave it out of the list only for a path the merge would carry unnamed.
 - **Machine paths.** A machine path in the subject or body is refused (`kitlib.machinepaths.find`), unless the commit is `--owner-authored`.
   - A machine path in the staged copy of any file being committed is refused too, under the repository's own `"machine_paths"` config. There is no owner exemption here. This check fails closed.
   - Either refusal unstages what this call staged.
@@ -33,6 +34,10 @@ The message is the subject, then the body, then the trailers:
 - An `--owner-authored` commit carries `Owner-Authored: yes` instead of `Co-Authored-By`.
 - The model comes from `--model`, else `CLAUDE_AGENT_MODEL`. A blank value counts as unset.
 - `"Claude "` is added unless the name is a `"commit".coauthor_families` family, or starts with one followed by a space, `.` or `-`.
+- The session line comes last (`kitlib.commit.session_lines`). Lines of the form `<key>: <value>` that end the body, `<key>` being a host's `attribution.session_trailer` key in `hosts.json` (`Claude-Session`), are taken out of the body and written in the trailer block, where git reads them as trailers. This holds with or without the environment variable below, so a `-b "...~~Claude-Session: <url>"` is a trailer, not a body line. The same line anywhere else in the body stays in the body.
+  - With no such line, an agent's commit on Claude gets `Claude-Session: https://claude.ai/code/<id>`, `<id>` being `CLAUDE_CODE_BRIDGE_SESSION_ID`. Nothing is written when that variable is unset, blank, or not a plain id (letters, digits, `_`, `-`).
+  - The URL prefix and the variable name are harness facts observed on 2026-10-14, not a documented contract. A host change to either is a `hosts.json` edit.
+  - An `--owner-authored` commit gets no session line from the environment. Codex has no session trailer (`"session_trailer": null`).
 - The body comes from `-b TEXT`, where a typed `\n` becomes a newline (`~~` also becomes a newline; for a literal `~~` use --body-file), or from `--body-file FILE`, read as UTF-8 with CRLF changed to LF.
   - `-m` takes the subject once; a second `-m` is a usage error (exit 2) pointing at `-b` / `--body-file`, and nothing is committed.
   - A `-b` whose whole value names an existing file, or looks like an absolute path, is a usage error.
@@ -53,7 +58,7 @@ After a commit that includes a `.md` file or an owner-only file, it prints the d
 
 ## machine_paths.py
 
-`machine_paths.py [-C DIR]` searches every tracked file, and every untracked file git does not ignore, in the work tree. It looks for a drive-rooted `GitHub`, `research` or `AgentTemp` folder, or a drive-rooted user profile. The `kitlib/machinepaths` docstring gives the pattern and the allow-list rules.
+`machine_paths.py [-C DIR]` searches every tracked file, and every untracked file git does not ignore, in the work tree. It looks for a drive-rooted machine folder, or a drive-rooted user profile. The machine folders are the machine config's `machine_path_folders` (docs/kit-json.md "Machine config keys"); the kit codes no folder name. Unset, only drive-rooted user-profile paths are searched, and the tree sweep prints a `NOTE:` line naming the key (`kitlib.machinepaths.UNSET_NOTE`). The tree sweep, the staged-file check of commit.py (`kitlib.machinepaths.scan_staged`), the message check of commit.py (`machine_path_error`) and the free-text check of backlog.py (`kitlib.backlog.plan.refuse_machine_paths`) all read it. A machine config that cannot be read does not stop any of them: user-profile paths are still searched, and each prints a `WARNING: machine config ...` line that names no value from the file: commit.py prints it once (the message check, or the staged-file check of an --owner-authored commit), and backlog.py adds it to a refusal or to the lines of the write (`kitlib.backlog.store.add_plan_note`). The `kitlib/machinepaths` docstring gives the pattern and the allow-list rules.
 
 | Code | Meaning |
 |---|---|

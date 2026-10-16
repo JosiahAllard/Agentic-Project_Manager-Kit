@@ -8,6 +8,10 @@ field tables), checked by the store before every write.
                          field of the wrong type, and per to_pm kind that is not known (an
                          unknown status is kitlib.hubvalidate's status-unknown error)
   check_id(doc_id)       an error message for a document id that cannot be a file name, else None
+  whole_recommended(coll, fields)
+                         (fields, old, label): a question whose `recommended` is text that
+                         stands for a number, given back with the number; read so by the
+                         store and written so by kitlib.hubsite.migrate
 
 A field that is absent or null passes its type check unless it is required: the page writes many
 fields as null until they are set (sent_at, q, reply). Unknown fields pass. The status values and
@@ -54,6 +58,8 @@ _ID = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.-]*$')
 # Windows device names: a file named so (any extension) opens the device, not a file
 _DEVICES = frozenset(['con', 'prn', 'aux', 'nul'] + ['com%d' % i for i in range(1, 10)]
                      + ['lpt%d' % i for i in range(1, 10)])
+_WHOLE = re.compile(r'[0-9]{1,9}')  # a whole number small enough to be a position; more digits
+_DIGITS = re.compile(r'[0-9]+')     # than that are kept as text
 
 
 def _err(coll, doc_id, field, message):
@@ -98,3 +104,23 @@ def check_id(doc_id):
     if doc_id.split('.')[0].lower() in _DEVICES or doc_id.endswith('.'):
         return 'a document id cannot be %r: Windows would not open it as a file' % doc_id
     return None
+
+
+def whole_recommended(coll, fields):
+    """(fields, old, label): a question whose `recommended` is text that stands for a number
+    (the rule is in kitlib.hubsite.migrate's module docstring) is given back as a copy with the
+    number; old is that text and label is True when it was an option's label. Any other document
+    is given back as it is, with old None."""
+    old = fields.get('recommended') if coll == 'questions' else None
+    if not isinstance(old, str) or not old:
+        return fields, None, False              # '' names no option, whatever an option's label is
+    options = fields.get('options')
+    at = [i for i, o in enumerate(options if isinstance(options, list) else [])
+          if isinstance(o, dict) and o.get('label') == old]
+    if _WHOLE.fullmatch(old):
+        if at and at != [int(old)]:
+            return fields, None, False          # the number, or one of those options: it does not say
+        return dict(fields, recommended=int(old)), old, bool(at)
+    if len(at) != 1 or _DIGITS.fullmatch(old):  # too long to be a number here: left as it is
+        return fields, None, False
+    return dict(fields, recommended=at[0]), old, True

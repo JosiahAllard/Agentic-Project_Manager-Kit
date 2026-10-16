@@ -28,12 +28,24 @@ KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 
 class LandCase(fixtures.GateRepoCase):
     KIT = {'landing': {'lanes': {'docs': {'branch_prefix': ['docs/'], 'paths': ['docs/*']}}}}
+    # lander() gives each tip the full-gate OK record a landing requires (fixtures.gate_full);
+    # a test of that check itself sets it False and gates its tips (test_land_tip_gated)
+    GATE_TIPS = True
 
     def lander(self, branch, expect_main, expect_tip, **kw):
         kw.setdefault('git_env', self.env)
         kw.setdefault('book_kw', self.book_kw)
         kw.setdefault('log_dir', self.logs)
+        if self.GATE_TIPS:
+            self.gate_tips(expect_tip)
         return land.Lander(self.repo.root, branch, expect_main, expect_tip, **kw)
+
+    def gate_tips(self, *tips):
+        """fixtures.gate_full on each tip (a tip may be a list, as a batch's --expect-tip is);
+        the record files it made are left out of records()."""
+        flat = [t for tip in tips for t in (tip if isinstance(tip, (list, tuple)) else [tip])]
+        made = fixtures.gate_full(self.repo.root, *flat)
+        self.__dict__.setdefault('fixture_records', set()).update(made)
 
     def lock(self):
         return landing.LandingLock(self.repo.root, lanes=('docs',))
@@ -42,8 +54,10 @@ class LandCase(fixtures.GateRepoCase):
         return self.repo.git('rev-parse', 'refs/heads/main')
 
     def records(self):
+        """The gate-OK record files, less those gate_tips made for the tips."""
         d = gate_ok.record_dir(self.repo.root)
-        return sorted(os.listdir(d)) if os.path.isdir(d) else []
+        made = self.__dict__.get('fixture_records', set())
+        return sorted(n for n in os.listdir(d) if n not in made) if os.path.isdir(d) else []
 
     def assert_untouched(self, out, code):
         self.assertEqual(out.code, code, out.lines)
@@ -159,7 +173,9 @@ class PushCase(LandCase):
                         out.lines)
         rec = self.lock().read()
         self.assertEqual(rec['phase'], 'stuck')                 # no landing starts on top of it
-        self.assertEqual(self.main_now(), out.merge)            # left for a person, not guessed at
+        self.assertTrue(out.merge)                              # the merge was made and gated,
+        self.assertEqual(self.main_now(), self.main)            # in the landing tree: the main
+        # checkout was never merged into, so nothing is left there to guess at
         self.assertEqual(self.remote_main(), self.main)
         # the next landing is refused while it is stuck
         nxt = self.lander(BRANCH, self.main, tip).run()
@@ -332,6 +348,7 @@ class TakeTurns(LandCase):
         self.assertIsNone(self.lock().read())
 
     def child(self, branch, tip, **extra):
+        self.gate_tips(tip)
         spec = dict(repo=self.repo.root, branch=branch, expect_main=self.main, expect_tip=tip,
                     logs=self.logs, store={'root': self.root, 'kinds_path': self.kinds_path,
                                            'hw': self.HW}, **extra)

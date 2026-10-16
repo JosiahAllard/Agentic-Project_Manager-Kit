@@ -1,10 +1,10 @@
 # Lock MCP server
 
-`mcp/lock_server.py` serves the machine lock as a stdio MCP server, the adapter named in ARCHITECTURE.md "Scheduler UI". Its tools are thin wrappers over `kitlib.lock.api` (docs/lock-api.md) and call nothing else. The logic is `kitlib/lockmcp/server.py`.
+`mcp/lock_server.py` serves the machine lock as a stdio MCP server, the adapter named in ARCHITECTURE.md "Scheduler UI". Its tools are thin wrappers over `kitlib.lock.api` (docs/lock-api.md) and call nothing else. The logic is `kitlib/lockmcp/server.py`; the stdio JSON-RPC loop and response shapes (`ok`, `err`, `serve`) are `kitlib/mcpwire`, shared with the hub server.
 
 - **Transport:** JSON-RPC 2.0, one message per line on stdin and stdout. It is written on the standard library, because the `mcp` SDK is not installed and the kit uses no packages (CLAUDE.md). It answers `initialize` (protocol 2025-06-18, 2025-03-26 or 2024-11-05), `ping`, `tools/list` and `tools/call`.
 - **Plugin:** `.claude-plugin/plugin.json` names it `machine-lock`. That manifest holds this server, the skills (`content/skills/`), the agents (`hosts/claude/shell/agents/`) and the hooks of ARCHITECTURE.md "Packaging".
-- **Not live:** it is registered in no settings and no `.mcp.json`.
+- **Live through the plugin:** a Claude session with the `pm-kit` plugin enabled starts it from that manifest; no settings entry or `.mcp.json` names it. Observed 2026-10-14: a session's tools include `mcp__plugin_pm-kit_machine-lock__lock_snapshot` and the other tools below.
 
 ## Results
 
@@ -21,7 +21,7 @@
 | `lock_snapshot` | `history_days`, `since`, `until` (all optional) | `api.snapshot()`: the Snapshot of docs/lock-api.md, with `revision`, `slots`, `runs`, `queue`, `holds` and `holds_error`, and `game`. |
 | `lock_wait_change` | `revision`, `timeout_s` (default 30, capped at 60) | `api.wait_change()`: the snapshot once the revision moves, or after the timeout. |
 | `lock_stats` | `days`, `since`, `until` (all optional) | `api.stats()`. |
-| `lock_run` | `id` | `{found, run}`: `api.run_record()`, live (`live: true`) or ended. An error result from the api (`invalid`) is the tool error. |
+| `lock_run` | `id` | `{found, run}`: `api.run_record()`, live (`live: true`) or ended. An error result from the api (`invalid`, or `store` for a live record that cannot be read) is the tool error. |
 | `lock_hold` | `id` | `{found, hold}`: `api.hold_record()`, live (`live_record: true`) or ended. Holds that cannot be read are the `store` tool error (`api.hold_record` returns that error result). |
 
 ## Write tools (owner-only)

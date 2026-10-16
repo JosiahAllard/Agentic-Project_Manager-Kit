@@ -92,7 +92,11 @@ ROWS = [
     ('subagent branch -f in main', lambda w: bash('git branch -f main HEAD~1', w.main, sub=True), 'deny', 'git-main-history', None),
     ('subagent branch --force in main', lambda w: ps('git branch --force kit/x HEAD', w.main, sub=True), 'deny', 'git-main-history', None),
     ('subagent branch -f in its worktree', lambda w: bash('git branch -f kit/x HEAD', w.wt, sub=True), None, None, None),
-    ('subagent update-ref in main', lambda w: bash('git update-ref refs/heads/main HEAD~1', w.main, sub=True), 'deny', 'git-main-history', None),
+    ('subagent update-ref in main', lambda w: bash('git update-ref refs/heads/main HEAD~1', w.main, sub=True), 'deny', 'git-shared-ref', None),
+    ('subagent update-ref of main in its worktree', lambda w: bash('git update-ref -d refs/heads/main', w.wt, sub=True), 'deny',
+     'git-shared-ref', 'git -C "{wt}" show-ref refs/heads/main'),
+    ('subagent update-ref of a scratch ref in its worktree', lambda w: bash('git update-ref refs/tmp/x HEAD', w.wt, sub=True),
+     None, None, None),
     ('main-role git rm in main', lambda w: bash('git rm a.py', w.main), None, None, None),
 
     # ---------------------------------------------------------------- 10: more writers, a subagent

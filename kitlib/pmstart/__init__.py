@@ -162,9 +162,14 @@ def _hub_client(port):
     return client.Client(port, tokens=folder, timeout=HUB_SITE_TIMEOUT_S)
 
 
+# a wait's `--for KEY` or `--for=KEY`, the key quoted or not
+_WAIT_FOR = re.compile(r'--for(?:=|\s+)"?([^\s"]*)')
+
+
 def _wait_running(procs):
-    """Whether a `hub.py wait --pending` process is in `procs` (a list, or a function giving
-    one: asked only when the server is up; a list that cannot be had counts as none)."""
+    """Whether the PM's `hub.py wait --pending` process is in `procs` (a list, or a function
+    giving one: asked only when the server is up; a list that cannot be had counts as none). A
+    wait `--for` a key other than `pm` is another session's, waiting on its own answers."""
     try:
         procs = procs() if callable(procs) else procs
     except Exception:
@@ -172,7 +177,8 @@ def _wait_running(procs):
     for p in procs or []:
         cmd = p.get("CommandLine") or ""
         if (p.get("Name") or "").lower().startswith("python") and "hub.py" in cmd \
-                and " wait" in cmd and "--pending" in cmd:
+                and " wait" in cmd and "--pending" in cmd \
+                and all(k == "pm" for k in _WAIT_FOR.findall(cmd)):
             return True
     return False
 
@@ -209,19 +215,23 @@ def hub_site(procs=(), load=None, make_client=_hub_client):
     if health.get("ok") is False:
         return ["hub: server did not answer as the hub does (health not ok)"]
     try:
-        items = hub.get("/pending", timeout=HUB_SITE_TIMEOUT_S).get("items")
+        # the PM's items only: one routed to a reachable creator is that session's to ack, and a PM
+        # ack would hide it from the creator's wait (docs/action-hub.md "Who handles a pending item")
+        items = hub.get("/pending", query={"for": "pm"}, timeout=HUB_SITE_TIMEOUT_S).get("items")
         items = items if isinstance(items, list) else []
     except Exception as e:
         return ["hub: server up on port %d, pending not asked (%s)" % (port, type(e).__name__)]
-    lines = ["hub: server up on port %d, %d pending" % (port, len(items))]
+    lines = ["hub: server up on port %d, %d pending for the PM" % (port, len(items))]
     if items:
-        lines.append("hub: process the %d pending item(s): python \"%s\" pending, then handle, ack or log "
-                     "each" % (len(items), HUB_TOOL))
+        lines.append("hub: process the %d pending item(s): python \"%s\" pending --for pm, then "
+                     "handle, ack or log each" % (len(items), HUB_TOOL))
     if _wait_running(procs):
         lines.append("hub: wait --pending is running")
     else:
-        lines.append("hub: start in the background: python \"%s\" wait --pending (it exits with one HUB "
-                     "line per item; handle the items, then start it again)" % HUB_TOOL)
+        lines.append("hub: WARN no PM wait --pending --for pm is running, so items routed to the PM "
+                     "go unseen; start in the background: python \"%s\" wait --pending --for pm (it "
+                     "exits with one HUB line per item; handle the items, then start it again)"
+                     % HUB_TOOL)
     return lines
 
 
@@ -527,6 +537,79 @@ def stubs(repos=None, check=None):
     return lines
 
 
+def pm_memory_repo(cfg, main_top=None):
+    """The main checkout of the PM's own repository (the one holding sessions_file), or None when
+    sessions_file is not set or not there. `main_top` is kitlib.git.repo.main_checkout_toplevel
+    unless given."""
+    path = cfg.get("sessions_file")
+    if not path or not os.path.isfile(path):
+        return None
+    if main_top is None:
+        from kitlib.git.repo import main_checkout_toplevel as main_top
+    return main_top(os.path.dirname(os.path.abspath(path)))
+
+
+def _same_folder(a, b):
+    return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
+
+
+def _pm_memory_folder(top):
+    """The memory folder the PM repository's settings name: its autoMemoryDirectory when it is there
+    (the kit's value or one the owner chose), else the kit's value for it (kitlib.stubs.memory.wanted).
+    Looked up at call time, so a test can replace either reader."""
+    from kitlib.stubs import memory as kmemory
+    m = kmemory.survey(top)
+    if m.state in (kmemory.OK, kmemory.OTHER):
+        return m.value
+    return m.want or kmemory.wanted(top)
+
+
+def memory(cfg, repos=None, check=None, pm_repo=None, folder=None):
+    """The agent memory folder (kitlib.stubs.memory; docs/pm-start.md): one line per repository in
+    launcher.repos, and for the PM's own repository, whose .claude/settings.json has no
+    autoMemoryDirectory (an owner step: the command that adds it) or cannot be read; then one line
+    when pm_start.memory_dir is not the folder the PM repository's settings name (`folder`, default
+    _pm_memory_folder: a value the owner chose is the one compared). None when all match. A folder
+    that is not there, or a check that raises, is that repo's own "could not check memory" line."""
+    from kitlib.stubs import memory as kmemory
+    if check is None:
+        check = kmemory.problem_line
+    folder = folder or _pm_memory_folder
+    repos = launcher_repos() if repos is None else repos
+    lines = []
+    for name in sorted(repos):
+        path = repos[name]
+        if not os.path.isdir(path):
+            lines.append("could not check memory (%s): no repository folder %s" % (name, path))
+            continue
+        try:
+            line = check(path, label=name)
+        except Exception as e:
+            line = "could not check memory (%s): %s: %s" % (name, type(e).__name__, e)
+        if line:
+            lines.append(line)
+    top = (pm_repo or pm_memory_repo)(cfg)
+    if not top:
+        return lines
+    if not any(_same_folder(top, p) for p in repos.values()):     # a launcher repo has its line already
+        try:
+            line = check(top, label="PM repo")
+        except Exception as e:
+            line = "could not check memory (PM repo): %s: %s" % (type(e).__name__, e)
+        if line:
+            lines.append(line)
+    try:
+        want = folder(top)
+    except Exception as e:
+        lines.append("could not check pm_start.memory_dir: %s: %s" % (type(e).__name__, e))
+        return lines
+    have = cfg.get("memory_dir")
+    if want and not (have and _same_folder(have, want)):
+        lines.append("pm_start.memory_dir %s; the PM repo's memory folder is %s: set pm_start.memory_dir to %s"
+                     % ("is %s" % have if have else "is not set", want, want))
+    return lines
+
+
 def repo_prep(repos=None, prep=None):
     """The first-use repo prep (kitlib.git.prep.run; docs/new-worktree.md "First-use prep") of each
     repository in launcher.repos, the repositories the kit's workers make worktrees in: its lines,
@@ -651,6 +734,9 @@ def checklist(cfg, now=None, procs=None, **fakes):
         ("kit_sync", lambda: kit_sync(fakes.get("pm_data", pm_data_settings)())),
         ("plugin_current", lambda: plugin_current(**fakes.get("plugin_current", {}))),
         ("stubs", lambda: stubs(**fakes.get("stubs", {}))),
+        # A stubs fake's repos stand for launcher.repos here too.
+        ("memory", lambda: memory(cfg, **fakes.get("memory", {k: v for k, v in fakes.get("stubs", {}).items()
+                                                              if k == "repos"}))),
         ("repo_prep", lambda: repo_prep(**fakes.get("repo_prep", {}))),
         ("agent_temp", lambda: agent_temp_lines(**fakes.get("agent_temp", {}))),
         ("console_tasks", lambda: consoletasks.check(cfg, **fakes.get("console_tasks", {}))),

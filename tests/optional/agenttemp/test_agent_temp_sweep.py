@@ -316,6 +316,22 @@ class SessionDirs(Case):
         self.assertTrue(os.path.isdir(pinned))
         self.assertTrue(os.path.isfile(os.path.join(self.dir, 'kit-conductor', 'plan.md')))
 
+    def test_coordinator_and_consultant_folders_are_kept_with_no_keep_list(self):
+        # kitlib.launcher.start keeps a consultant's notes in <repo>-consultant and a coordinator's
+        # state note in <repo>-coordinator; both outlive any age, whatever the config says.
+        kept = ('kit-coordinator', 'Alpha-Consultant', 'my-repo-consultant')
+        for name in kept + ('kit-coordinator-old', 'consultant', 'coordinator'):
+            put(os.path.join(self.dir, name, 'notes.md'))
+        self.session('proj', 'x-consultant')
+        self.assertEqual({n: a for n, a in self.sweep().items() if n in kept}, {n: 'kept' for n in kept})
+        got = self.sweep(apply=True)
+        for name in kept:
+            self.assertEqual(got[name], 'kept', name)
+            self.assertTrue(os.path.isfile(os.path.join(self.dir, name, 'notes.md')), name)
+        for name in ('kit-coordinator-old', 'consultant', 'coordinator', 'claude/proj/x-consultant'):
+            self.assertEqual(got[name], 'removed', name)    # a top-level <name>-coordinator/-consultant only
+        self.assertEqual(S.BUILT_IN_KEEP, ('*-coordinator', '*-consultant'))
+
     def test_keep_is_case_insensitive_and_matches_by_relpath_not_basename(self):
         put(os.path.join(self.dir, 'Work-Notes', 'a.txt'))
         put(os.path.join(self.dir, 'x', 'work-notes', 'a.txt'))
@@ -459,6 +475,28 @@ class Cli(Case):
         code, _out, err = self.main()
         self.assertEqual(code, 2)
         self.assertIn('nothing to sweep', err)
+
+    def test_home_option_names_the_home_whose_machine_config_is_read(self):
+        self.config({S.KEY: {'dir': self.dir}})
+        put(os.path.join(self.dir, 'old.log'))
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(sys, 'stderr', err):
+            code = S.main(['--home', self.home], out=out, now=LATER)     # no home= argument
+        self.assertEqual(code, 0, out.getvalue() + err.getvalue())
+        self.assertIn('would    old.log', out.getvalue())
+
+    def test_an_entry_name_outside_the_pipe_code_page_does_not_fail_the_run(self):
+        self.config({S.KEY: {'dir': self.dir}})
+        name = '中文-☃.log'                 # in no Western code page
+        put(os.path.join(self.dir, name))
+        pipe = io.BytesIO()
+        stdout = io.TextIOWrapper(pipe, encoding='cp1252', errors='strict', write_through=True)
+        err = io.StringIO()
+        with mock.patch.object(sys, 'stdout', stdout), mock.patch.object(sys, 'stderr', err):
+            code = S.main([], home=self.home, now=LATER)                 # out=None: the process's stdout
+        stdout.flush()
+        self.assertEqual(code, 0, err.getvalue())
+        self.assertIn(b'would', pipe.getvalue())
 
     def test_an_unsafe_dir_is_refused(self):
         self.config({S.KEY: {'dir': self.home}})

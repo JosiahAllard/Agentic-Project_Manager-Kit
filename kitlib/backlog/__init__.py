@@ -9,7 +9,8 @@ docs/backlog-store.md). Logic only: no argparse, no printing, no exit.
             write (plan.py `_check_ruling`) and `check` read no ledger file
   offer     partition, rank, in flight, requires, the `next` offer
   check     every `check` line with its own denominator
-  plan      the write verbs as plans: add, set, block, unblock, pull, release, close, retire
+  plan      the write verbs as plans: add, set, block, unblock, pull, release, close, retire,
+            delete, set-status, unpark, clear-review
   retarget  `backlog.py retarget`: a moved path rewritten across every record in one commit
   landable  may a branch land without leaving a dead pull
   at_landing  the store at `gate.py land`: the ancestry refusal and closing the landed pulls

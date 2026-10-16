@@ -7,6 +7,7 @@ import io
 import json
 import os
 import sys
+import time
 import unittest
 from unittest import mock
 
@@ -65,6 +66,37 @@ class Cli(StoreCase):
         self.assertEqual(self.call("status")[0], 0)
         self.assertEqual(self.call("status", "r-20261006T120000Z-abcdef")[0], 1)
 
+    def test_status_json_carries_resource_and_priority_for_runs_and_queue(self):
+        from kitlib.lock import store as store_mod
+        from kitlib.proc import process
+        land = "landing:z:\\repo\\.git"
+        held, wait = "r-20261006T120000Z-aaaaaa", "r-20261006T120000Z-bbbbbb"
+        self.live_record(held, resource=land, priority="land", cores=[0])
+        for rid in (held, wait):                # live wrappers: this process, run mutexes held
+            m = self.store.run_mutex(rid)
+            self.addCleanup(m.release)
+        base = {"pid": os.getpid(), "ctime": process.own_ctime(), "repo": "kit",
+                "kind": "engine-test", "need": {"cpu": 1, "gpu": 0}, "expect_s": 60,
+                "gpus": [], "resource": land, "priority": "land"}
+        self.store.write("queue.json", {"ticket": 2, "entries": [
+            dict(base, id=held, ticket=1, state="held", slug="t", cores=[0],
+                 held_at=time.time()),
+            dict(base, id=wait, ticket=2, state="waiting", slug="next", cores=[],
+                 since=store_mod.iso())]})
+        code, out, _ = self.call("status", "--json")
+        self.assertEqual(code, 0)
+        snap = json.loads(out)
+        [row] = [r for r in snap["runs"] if r["id"] == held]
+        self.assertEqual((row["resource"], row["priority"]), (land, "land"))
+        [w] = snap["queue"]["entries"]
+        for key in ("id", "position", "ticket", "repo", "slug", "kind", "needs", "since",
+                    "expect_s", "est_start", "backfill", "parked", "blocked_by", "hold", "moved",
+                    "resource", "priority", "within_slots", "why"):
+            self.assertIn(key, w)
+        self.assertEqual((w["id"], w["resource"], w["priority"]), (wait, land, "land"))
+        self.assertIn("resource %s is held by" % land, w["why"])
+        self.assertIn("error", snap["queue"])
+
     def test_status_of_a_hold_when_holds_are_unreadable_is_a_store_error(self):
         os.makedirs(self.store.path("holds"), exist_ok=True)
         with open(self.store.path("holds", "h-20261006T120000Z-abcd.json"), "w") as f:
@@ -83,6 +115,31 @@ class Cli(StoreCase):
                                    "t")[0], 2)
         self.assertEqual(self.call("run", "--kind", "no-such-kind", "--repo", "kit", "--slug",
                                    "t", cmd=[sys.executable, "-V"])[0], 2)
+
+    def test_run_within_reaches_the_run_and_bad_syntax_is_usage(self):
+        import datetime
+        from kitlib.lock import holds as hl
+        from kitlib.lock.store import utc_now
+        from .helpers import OWNER
+        now = utc_now()
+        hl.create(self.store, self.layout(), {"owner": "owner", "scope": "whole", "start": now,
+                                              "end": now + datetime.timedelta(hours=1)},
+                  OWNER, None)
+        code, _, err = self.call("run", "--kind", "engine-test", "--repo", "kit", "--slug", "t",
+                                 "--within", "8-15", "--cores", "1", "--no-wait",
+                                 cmd=[sys.executable, "-V"])
+        self.assertEqual(code, 11, err)             # sized and booked, then the owner hold refuses
+        ended = [self.store.read("ended/" + n) for n in os.listdir(self.store.path("ended"))
+                 if n.startswith("r-")]
+        self.assertEqual([(r["within"], r["within_slots"]) for r in ended],
+                         [("8-15", {"cpu": [4, 5, 6, 7]})])
+        for bad in ("8-", "x", ""):
+            with self.subTest(bad=bad):
+                code, _, err = self.call("run", "--kind", "engine-test", "--repo", "kit",
+                                         "--slug", "t", "--within", bad,
+                                         cmd=[sys.executable, "-V"])
+                self.assertEqual(code, 2)
+                self.assertIn("--within", err)
 
     def test_run_returns_the_command_code(self):
         self.confine(1)

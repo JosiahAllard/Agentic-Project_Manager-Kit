@@ -17,6 +17,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `.codex/agent-profile.md` | stub: the profile is docs/agent-profile.md | an agent names the host's profile path | kw: profile
 - `docs/ROSTER.md` | agent roster | choosing an agent | kw: roster, agents
 - `docs/action-hub.md` | Action Hub | the PM action list | kw: action-hub, hub
+- `docs/hub-mcp.md` | hub MCP server: the Action Hub's api as MCP tools, the owner's tools pinned | the hub from an agent | kw: hub-mcp, hub, mcp
 - `docs/hub-remote-access.md` | Hub remote access | reaching the hub from a phone | kw: hub, remote-access, tunnel, cloudflared
 - `docs/backlog.md` | backlog.py | reading or changing backlog records | kw: backlog
 - `docs/backlog-lint.md` | backlog lint | checking backlog records | kw: backlog-lint, lint
@@ -27,9 +28,9 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `docs/daily-full.md` | daily_full | the nightly full run | kw: daily-full, nightly
 - `docs/doc-tools.md` | doc_budget, doc_index, codemap | finding or checking docs | kw: doc-tools, doc_index, doc_budget, codemap, find, section, stale
 - `docs/engineering-rulings.md` | engineering rulings | before a design choice | kw: rulings, engineering
-- `docs/gate.md` | gate.py | running the gate | kw: gate, test
+- `docs/gate.md` | gate.py | running the gate | kw: gate, test, stash
 - `docs/go-live.md` | go-live list | switching a repo to the kit | kw: go-live
-- `docs/guard.md` | shell guard and git hooks | a command is refused | kw: guard, hooks, refusal
+- `docs/guard.md` | shell guard and git hooks | a command is refused | kw: guard, hooks, refusal, hub secrets
 - `docs/kitboot.md` | boot/kitboot.py: which kit a host entry runs, the pinned release check before kitlib | a hook or the lock server will not load the kit | kw: kitboot, boot, PM_KIT_ROOT, PM_KIT_RELEASE_ID, release
 - `docs/install.md` | installing the kit in a repository | setting up a repo | kw: install, installer, junctions, plugin
 - `docs/kit-json.md` | `.kit.json` keys, types and defaults | configuring | kw: kit-json, config
@@ -39,7 +40,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `docs/lock-api.md` | machine lock API | heavy runs | kw: lock, machine-lock
 - `docs/lock-mcp.md` | lock MCP server | lock from an agent | kw: lock-mcp, mcp
 - `docs/lock-release.md` | lock release pre-check | releasing a lock | kw: lock-release
-- `docs/machine-setup.md` | machine setup | a new machine | kw: machine-setup, setup
+- `docs/machine-setup.md` | machine setup | a new machine | kw: machine-setup, setup, leftover links
 - `docs/model-ab.md` | model A/B results | choosing a model | kw: model, ab
 - `docs/multi-host-plan.md` | multi-host architecture plan (proposal) | changing host adapters, plugins or the bridge | kw: multi-host, codex, host, plugin, bridge
 - `docs/agent-review.md` | agent review: usage, refusals, definition findings (undecided) | choosing a model, editing agent definitions | kw: agent-review, agents, model
@@ -58,6 +59,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `docs/repo-checks.md` | forbidden, trailers, pieces | repo checks | kw: forbidden, trailers, pieces
 - `docs/review-pack.md` | review_pack | preparing a review | kw: review-pack, review
 - `docs/shipping.md` | what ships | changing the shipped set | kw: shipping, ships
+- `docs/specialty-skills.md` | decided spec (not built): specialties as skills, merged read and docs agent types (analyst, docs-writer) | changing the roster or a specialty skill | kw: specialty, skills, roster, roles, merge
 - `docs/sync-base.md` | sync_base | main moved | kw: sync-base, merge
 - `docs/test-tools.md` | testlist, tool_deps, pytests | test selection | kw: testlist, tool_deps, pytests, tests
 - `docs/windows-token-leak.md` | Windows token leak: slow process launches | slow launches | kw: windows, token-leak

@@ -49,7 +49,7 @@ command is one slice: keep it under ~10 minutes. Pass --force only if you
 already hold this tool's GPU self-lock. Keep images near 1 MP, and never
 generate during a measurement window.
 
-Knowledge base (read before; record sessions in the repo's docs/ops/assets.md): ~/.claude/knowledge/asset-generation/
+Knowledge base (read before; record sessions in the repo's docs/ops/assets.md): <kit>/knowledge/asset-generation/
 """
 import argparse
 import datetime
@@ -69,7 +69,7 @@ TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, TOOL_DIR)
 import comfy_api as C  # noqa: E402
 # winproc.py (Toolhelp + job-object helpers, standard library only) lives beside procwatch.py,
-# a sibling tool folder installed next to this one (~/.claude/tools/procwatch/); reused here
+# a sibling tool folder next to this one (optional/procwatch/ in the kit); reused here
 # instead of re-implementing pid/ctime verification and process termination.
 sys.path.insert(0, os.path.join(TOOL_DIR, "..", "procwatch"))
 import winproc as W  # noqa: E402

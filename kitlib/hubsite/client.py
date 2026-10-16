@@ -16,17 +16,19 @@ exit_code(e) gives the number for one of these; OK (0), REFUSED (1), USAGE (2), 
 and TIMED_OUT (4) are the exit codes of tools/hub.py, here as data. TIMED_OUT is never raised:
 Client.wait() answers with `timed_out` true.
 
-Client(port, tokens)
+Client(port, tokens, via=serve.VIA_CLI)
   get(path, role, query), post(path, role, body)   one call; `path` is below api.BASE
   listing(collection, status, repo)     the items of GET /<collection>
-  pending()                             the items of GET /pending
+  pending(for_key)                      the items of GET /pending (for_key: only that session
+                                        key's)
   inbox()                               the inbox documents, from GET /snapshot (the api has no
                                         route that lists them)
   version(collection, id)               the version of one document now, for a write that pins it
-  wait(since, timeout, pending)         the long-poll: GET /wait again and again, each for at
+  wait(since, timeout, pending, for_key) the long-poll: GET /wait again and again, each for at
                                         most api.WAIT_MAX_S, until the server answers with a
                                         change, a pending item or a reset, or `timeout` seconds
-                                        passed (None: no limit)
+                                        passed (None: no limit); with for_key, until a pending
+                                        item of that session key
 """
 import time
 import urllib.parse
@@ -71,15 +73,18 @@ def part(doc_id):
 
 class Client(object):
     """`tokens`: the folder of the token files (default auth.folder()). `timeout`: seconds one
-    call waits for its answer. `ask`: serve.ask or a stand-in."""
+    call waits for its answer. `ask`: serve.ask or a stand-in. `via`: the name a write gives
+    as its source (serve.VIA_CLI; the hub MCP server gives serve.VIA_MCP); a stand-in `ask` is
+    passed it as a keyword only when it is not VIA_CLI."""
 
     def __init__(self, port, tokens=None, timeout=serve.ASK_TIMEOUT_S, ask=None,
-                 clock=time.monotonic):
+                 clock=time.monotonic, via=serve.VIA_CLI):
         self.port = port
         self.tokens = tokens if tokens is not None else auth.folder()
         self.timeout = timeout
         self._ask = ask or serve.ask
         self._clock = clock
+        self.via = via
 
     def token(self, role):
         """The token a call of a `role` route carries. ServeError when its file is absent."""
@@ -94,8 +99,9 @@ class Client(object):
         return token
 
     def call(self, method, path, role, body=None, query=None, timeout=None):
+        extra = {} if self.via == serve.VIA_CLI else {'via': self.via}
         status, obj = self._ask(self.port, method, _path(path, query), self.token(role), body,
-                                self.timeout if timeout is None else timeout)
+                                self.timeout if timeout is None else timeout, **extra)
         if status != 200 or obj.get('ok') is False:
             raise Refused(status, obj)
         return obj
@@ -110,8 +116,9 @@ class Client(object):
         got = self.get('/' + collection, role, {'status': status, 'repo': repo})
         return got.get('items') or []
 
-    def pending(self):
-        return self.get('/pending').get('items') or []
+    def pending(self, for_key=None):
+        """The pending items, each with `from`; with for_key only that session key's."""
+        return self.get('/pending', ANY, {'for': for_key or None}).get('items') or []
 
     def inbox(self):
         docs = (self.get('/snapshot').get('collections') or {}).get('inbox') or {}
@@ -125,15 +132,19 @@ class Client(object):
         raise Refused(404, {'ok': False, 'error': {
             'code': 'not_found', 'message': 'no %s in %s' % (doc_id, collection), 'field': 'id'}})
 
-    def wait(self, since=None, timeout=None, pending=False):
+    def wait(self, since=None, timeout=None, pending=False, for_key=None, except_ids=None):
         """The last answer of GET /wait: {revision, reset, timed_out, changes, pending}.
-        `timed_out` is true only when `timeout` seconds passed with nothing to say."""
+        `timed_out` is true only when `timeout` seconds passed with nothing to say. for_key
+        (with pending) waits for that session key's pending items only; except_ids (with
+        pending) leaves out the items with those ids, ones the caller has already acted on."""
         end = None if timeout is None else self._clock() + max(0.0, float(timeout))
         while True:
             left = _api.WAIT_MAX_S if end is None else end - self._clock()
             turn = max(0.0, min(float(left), float(_api.WAIT_MAX_S)))
             got = self.get('/wait', ANY, {'since': since, 'timeout': '%g' % turn,
-                                          'pending': 1 if pending else None},
+                                          'pending': 1 if pending else None,
+                                          'for': for_key or None,
+                                          'except': ','.join(except_ids or ()) or None},
                            timeout=turn + WAIT_MARGIN_S)
             if not got.get('timed_out'):
                 return got

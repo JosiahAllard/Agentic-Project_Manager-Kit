@@ -17,11 +17,12 @@ HELD = 'held'
 PARKED = 'parked'
 IN_FLIGHT = 'in flight'
 UNPRIORITISED_OPEN = 'unprioritised+open'
+REVIEW = 'to review'
 OWNER_PRIORITISED = 'owner to prioritise'
 UNCLASSIFIED = 'unclassifiable'
 NOT_READ = 'unreadable'
-BUCKETS = (PULLABLE, HELD, PARKED, IN_FLIGHT, UNPRIORITISED_OPEN, OWNER_PRIORITISED, UNCLASSIFIED,
-           NOT_READ)
+BUCKETS = (PULLABLE, HELD, PARKED, IN_FLIGHT, UNPRIORITISED_OPEN, REVIEW, OWNER_PRIORITISED,
+           UNCLASSIFIED, NOT_READ)
 EFFORT_ORDER = {'s': 0, 'm': 1, 'l': 2, '-': 3}
 PROBE_TIMEOUT = 60
 DEFAULT_CAP = 5
@@ -46,6 +47,9 @@ def classify(rec):
         return IN_FLIGHT, None
     if state != 'open':
         return UNCLASSIFIED, '`state: %s` parses but has no bucket' % state
+    if rec.has('review'):
+        # Marked by the Action Hub's add: never offered, priced or not, until `clear-review`.
+        return REVIEW, None
     priority = rec.get('priority')
     if priority is None or rmod._priority(priority) is not None:
         return UNCLASSIFIED, 'no readable `priority`'
@@ -104,13 +108,17 @@ class Banner(object):
                  '%d pullable' % self.count(PULLABLE),
                  '%d held' % self.count(HELD),
                  '%d unprioritised+open' % self.count(UNPRIORITISED_OPEN)]
+        if self.count(REVIEW):
+            parts.append('%d %s' % (self.count(REVIEW), REVIEW))
         for bucket in (PARKED, IN_FLIGHT, OWNER_PRIORITISED, NOT_READ, UNCLASSIFIED):
             if self.count(bucket):
                 parts.append('%d %s' % (self.count(bucket), bucket))
         minus_one = sum(1 for r in self.snap.readable if r.get('priority') == rmod.OWNER_PRIORITY)
-        if minus_one != self.count(OWNER_PRIORITISED):
-            parts.append('%d at priority -1 (%d of them open)'
-                         % (minus_one, self.count(OWNER_PRIORITISED)))
+        # An open `-1` record marked for review sits in REVIEW, not OWNER_PRIORITISED: still open.
+        open_minus_one = self.count(OWNER_PRIORITISED) + sum(
+            1 for r in self.buckets[REVIEW] if r.get('priority') == rmod.OWNER_PRIORITY)
+        if minus_one != open_minus_one:
+            parts.append('%d at priority -1 (%d of them open)' % (minus_one, open_minus_one))
         out = [' | '.join(parts)]
         groups, multi = self.held_groups()
         if self.count(HELD):
@@ -218,7 +226,7 @@ def unmet_requires(rec, snap, history, root, main_branch):
                 continue
             last = history(target)
             if last is None or not re.match(r'^\S+ closes ', last):
-                out.append((member, 'retired, so it will never land' if last else
+                out.append((member, 'retired or deleted, so it will never land' if last else
                             'no record has that id and none was closed'))
         elif kind == 'commit' and target:
             ok, why = refs.is_ancestor(target, 'refs/heads/%s' % main_branch, root)
@@ -236,8 +244,10 @@ class Offer(object):
 
 
 class PassedOver(object):
-    def __init__(self, rec, rank, why):
-        self.rec, self.rank, self.why = rec, rank, why
+    def __init__(self, rec, rank, why, blocker=None):
+        # `blocker`: `(who, record id)` of the live pull or other session's record whose scope
+        # this one collides with; None for any other reason (`blocker_summary` counts these).
+        self.rec, self.rank, self.why, self.blocker = rec, rank, why, blocker
 
 
 def next_offer(snap, holding, cap=DEFAULT_CAP, seeds=(), session=None, unmet=None):
@@ -246,7 +256,9 @@ def next_offer(snap, holding, cap=DEFAULT_CAP, seeds=(), session=None, unmet=Non
     equals `session` are offered; another session's record takes its scope silently. A record
     passed over on a collision names the holder: a live pull by id and branch, another session's
     record by id and session, a record already in this offer as `(offered above)`. Scopes are each record's current `scope:` lines, so a pulled record
-    narrowed with `set --scope` frees what it gave up."""
+    narrowed with `set --scope` frees what it gave up. A seed (`next --with`) goes first and is
+    not passed over for the rest of the offer, but one that collides with a live pull is passed
+    over like any record: only `pull --reason --ruling` takes scope a live pull holds."""
     ranks = ranked(snap)
     occupied = []
     for rec in holding:
@@ -255,6 +267,7 @@ def next_offer(snap, holding, cap=DEFAULT_CAP, seeds=(), session=None, unmet=Non
            for m in occupied if smod.scope_member_error(m, True) is not None]
     if bad:
         return None, bad, ranks
+    live = list(occupied)
 
     def own(r):
         return r.get('session') == session
@@ -271,7 +284,8 @@ def next_offer(snap, holding, cap=DEFAULT_CAP, seeds=(), session=None, unmet=Non
     offers, passed, reached, holders = [], [], set(), {}
     for rec in holding:
         for m in rec.all('scope'):
-            holders.setdefault(m, '%s (in flight on %s)' % (rec.id, rec.get('pulled_by') or '?'))
+            holders.setdefault(m, ('%s (in flight on %s)' % (rec.id, rec.get('pulled_by') or '?'),
+                                   (rec.get('pulled_by') or '?', rec.id)))
     for rec in ordered:
         reached.add(id(rec))
         rid = rec.id
@@ -285,19 +299,21 @@ def next_offer(snap, holding, cap=DEFAULT_CAP, seeds=(), session=None, unmet=Non
                 passed.append(PassedOver(rec, ranks.get(rid, '-'), 'scope undecidable, so this '
                                          'is a collision: `%s` - %s' % errs[0]))
             continue
+        # A seed goes first over the rest of this offer, never over a live pull's scope.
+        against = live if id(rec) in seeded else occupied
         try:
-            hit = smod.colliding_pairs(scopes, occupied) if occupied else []
+            hit = smod.colliding_pairs(scopes, against) if against else []
         except smod.UndecidableScope as exc:
             if own(rec):
                 passed.append(PassedOver(rec, ranks.get(rid, '-'),
                                          'scope undecidable, so this is a collision: %s' % exc))
             continue
-        if hit and id(rec) not in seeded:
+        if hit:
             if own(rec):
-                holder = holders.get(hit[0][1])
+                holder, who = holders.get(hit[0][1]) or (None, None)
                 passed.append(PassedOver(rec, ranks.get(rid, '-'), 'scope %s collides with %s '
                                          'already taken%s' % (hit[0][0], hit[0][1], ' by %s'
-                                         % holder if holder else '')))
+                                         % holder if holder else ''), who))
             continue
         if own(rec) and unmet is not None:
             missing = unmet(rec)
@@ -308,10 +324,11 @@ def next_offer(snap, holding, cap=DEFAULT_CAP, seeds=(), session=None, unmet=Non
         occupied.extend(scopes)
         if not own(rec):
             for m in scopes:
-                holders.setdefault(m, '%s (session %s)' % (rid, rec.get('session') or 'none'))
+                holders.setdefault(m, ('%s (session %s)' % (rid, rec.get('session') or 'none'),
+                                       ('session %s' % (rec.get('session') or 'none'), rid)))
             continue
         for m in scopes:
-            holders.setdefault(m, '%s (offered above)' % rid)
+            holders.setdefault(m, ('%s (offered above)' % rid, None))
         offers.append(Offer(rec, ranks.get(rid, '-'), id(rec) in seeded))
         if cap is not None and len(offers) >= cap:
             break
@@ -322,6 +339,18 @@ def next_offer(snap, holding, cap=DEFAULT_CAP, seeds=(), session=None, unmet=Non
     return (offers, passed), [], ranks
 
 
+def blocker_summary(passed, top=5):
+    """`['blocks N: <branch or session> (<record id>)', ...]`: the live pulls and other sessions'
+    records that hold the scope of the most passed-over records, most first (ties by name), at
+    most `top` lines. Empty when nothing was passed over on such a collision."""
+    counts = {}
+    for p in passed:
+        if p.blocker is not None:
+            counts[p.blocker] = counts.get(p.blocker, 0) + 1
+    ordered = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:top]
+    return ['blocks %d: %s (%s)' % (n, who, rid) for (who, rid), n in ordered]
+
+
 def not_offered_why(rec, passed, session=None):
     """Why `rec` is not in the offer, named."""
     bucket, why = classify(rec)
@@ -329,6 +358,9 @@ def not_offered_why(rec, passed, session=None):
         return 'it is held on %s' % ', '.join(rec.all('blocked_on'))
     if bucket == PARKED:
         return 'it is parked'
+    if bucket == REVIEW:
+        return ('it is marked for review (review: %s): `clear-review %s --reason T` first'
+                % (rec.get('review'), rec.id))
     if bucket == UNPRIORITISED_OPEN:
         return 'it is unprioritised, so it has no rank and is never offered'
     if bucket == OWNER_PRIORITISED:

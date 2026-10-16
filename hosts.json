@@ -24,7 +24,12 @@
         "name": "Claude",
         "email": "noreply@anthropic.com",
         "model_env": "CLAUDE_AGENT_MODEL",
-        "model_pattern": null
+        "model_pattern": null,
+        "session_trailer": {
+          "key": "Claude-Session",
+          "env": "CLAUDE_CODE_BRIDGE_SESSION_ID",
+          "url": "https://claude.ai/code/{id}"
+        }
       },
       "agent_name_format": "{plugin}:{name}",
       "session_process": "claude.exe",
@@ -33,7 +38,7 @@
     "hook": {
       "tool_event": "PreToolUse",
       "tool_field": "tool_name",
-      "guarded_tools": ["Edit", "Write", "MultiEdit", "NotebookEdit", "Bash", "PowerShell", "mcp__*"],
+      "guarded_tools": ["Edit", "Write", "MultiEdit", "NotebookEdit", "Bash", "PowerShell", "Read", "Grep", "Glob", "mcp__*"],
       "fast_path": "all"
     },
     "tiers": {"light": "haiku", "standard": "sonnet", "strong": "opus", "deep": "opus"}
@@ -62,7 +67,8 @@
         "name": "Codex",
         "email": "noreply@openai.com",
         "model_env": null,
-        "model_pattern": "[A-Za-z0-9][A-Za-z0-9._:/-]*"
+        "model_pattern": "[A-Za-z0-9][A-Za-z0-9._:/-]*",
+        "session_trailer": null
       },
       "agent_name_format": "kit-{name}",
       "session_process": "codex.exe",

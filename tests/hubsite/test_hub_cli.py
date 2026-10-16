@@ -16,7 +16,7 @@ import threading
 import unittest
 from unittest import mock
 
-from kitlib.hubsite import auth, httpd, serve, tunnel
+from kitlib.hubsite import auth, httpd, schema, serve, todosteps, tunnel
 from kitlib.hubsite import settings as hub_settings
 from kitlib.hubsite.store import Store, StoreBusy
 from tests.hubsite import httpfix
@@ -71,9 +71,10 @@ class CliCase(unittest.TestCase):
         s.bind((httpd.LOOPBACK, 0))
         return s.getsockname()[1]
 
-    def server(self, tokens=None):
-        """A started hub on a free port, with the temp home's token files unless given others."""
-        cfg = hub_settings.settings(None)._replace(port=0, store=self.store_dir)
+    def server(self, tokens=None, port=0):
+        """A started hub on a free port (or `port`), with the temp home's token files unless
+        given others. Only a hub given its port keeps a sessions file (serve.build)."""
+        cfg = hub_settings.settings(None)._replace(port=port, store=self.store_dir)
         hub = serve.build(cfg, serve.Sources(tokens=tokens or self.tokens,
                                              static_dir=os.path.join(self.home, 'web')))
         self.addCleanup(hub.close)
@@ -92,8 +93,9 @@ class UsageCase(CliCase):
     def test_no_verb_and_an_unknown_verb_are_usage_errors(self):
         code, out, err = self.run_cli()
         self.assertEqual((code, out), (2, ''))
-        self.assertIn('USAGE: give a verb: serve, status, setup, open, migrate, questions, '
-                      'answer, todos, stories, to-pm, inbox, pending, wait or validate\n', err)
+        self.assertIn('USAGE: give a verb: serve, status, setup, open, unpair, stop, restart, '
+                      'migrate, questions, answer, todos, stories, to-pm, inbox, pending, wait '
+                      'or validate\n', err)
         self.assertEqual(sorted(HUB.VERBS), sorted(HUB.VERB_NAMES))     # every verb it has
         self.assertEqual(self.run_cli('launch')[0], 2)
         self.assertEqual(self.run_cli('serve', '--bind', '0.0.0.0')[0], 2)
@@ -102,14 +104,19 @@ class UsageCase(CliCase):
     def test_a_port_that_is_no_port_is_a_usage_error(self):
         for argv in (('serve', '--port', 'x'), ('serve', '--port', '70000'),
                      ('serve', '--port', '-1'), ('status', '--port', '0'),
-                     ('open', '--port', '65536'), ('status', '--port', '')):
+                     ('open', '--port', '65536'), ('status', '--port', ''),
+                     ('unpair', '--port', '0'), ('unpair', '--all'),
+                     ('stop', '--port', '0'), ('restart', '--port', 'x'),
+                     ('stop', '--timeout', '-1'), ('restart', '--timeout', 'soon'),
+                     ('stop', '--all')):
             code, out, err = self.run_cli(*argv)
             self.assertEqual((code, out), (2, ''), argv)
             self.assertIn('USAGE: ', err)
 
     def test_a_machine_config_that_cannot_be_used_is_exit_2(self):
         self.config({'hub': {'port': 'eighty'}})
-        for argv in (('serve', '--port', '0'), ('status',), ('setup',), ('open',)):
+        for argv in (('serve', '--port', '0'), ('status',), ('setup',), ('open',), ('unpair',),
+                     ('stop',), ('restart',)):
             code, out, err = self.run_cli(*argv)
             self.assertEqual((code, out), (2, ''), argv)
             self.assertIn('machine config: ', err)
@@ -130,6 +137,8 @@ class ServeCase(CliCase):
                                      'is released')
         start = 'hub serving %s on http://127.0.0.1:' % os.path.abspath(self.store_dir)
         self.assertTrue(lines[0].startswith(start), lines[0])
+        self.assertTrue(lines[0].endswith('to pair a browser run: ' + HUB.OPEN), lines[0])
+        self.assertIn(' open', HUB.OPEN)
         port = int(lines[0][len(start):].split()[0])
         self.assertNotEqual(port, 0)
         self.assertFalse(self.locked(), 'the store lock outlived the server')
@@ -597,6 +606,122 @@ class SetupCase(CliCase):
         self.assertIn(bad, err)
 
 
+class SetupCheckCase(CliCase):
+    """`setup --check`: read-only. It names the Access state, probes the Access keys when the
+    settings can serve, and lists each plugin copy that would refuse the `hub` key."""
+    NEW = "SCHEMA = {'hub': 1, 'plugin': 1}\n"
+    OLD = "SCHEMA = {'plugin': 1}\n"
+
+    def setUp(self):
+        CliCase.setUp(self)
+        self.root = os.path.join(self.home, 'exports')
+
+    def export(self, name, text, current=False):
+        folder = os.path.join(self.root, name, 'kitlib', 'config')
+        os.makedirs(folder)
+        with open(os.path.join(folder, 'user.py'), 'w', encoding='utf-8') as f:
+            f.write(text)
+        if current:
+            os.makedirs(os.path.join(self.root, '.claude-plugin'), exist_ok=True)
+            with open(os.path.join(self.root, '.claude-plugin', 'marketplace.json'), 'w',
+                      encoding='utf-8') as f:
+                json.dump({'name': 'pm-kit', 'plugins': [{'name': 'pm-kit',
+                                                          'source': './' + name}]}, f)
+
+    def check(self, hub=None):
+        obj = {'plugin': {'export_dir': self.root}}
+        if hub is not None:
+            obj['hub'] = hub
+        self.config(obj)
+        path = os.path.join(self.home, '.pm-kit', 'config.json')
+        with open(path, 'rb') as f:
+            before = f.read()
+        code, out, err = self.run_cli('setup', '--check')
+        with open(path, 'rb') as f:
+            self.assertEqual(f.read(), before, 'setup --check wrote the machine config')
+        self.assertFalse(os.path.exists(self.tokens), 'setup --check made the token files')
+        return code, out, err
+
+    def test_every_copy_in_use_knows_hub_so_it_is_ready_and_nothing_is_written(self):
+        self.export('aaaaaaaaaaaa', self.NEW, current=True)
+        self.export('bbbbbbbbbbbb', self.OLD)
+        code, out, err = self.check()
+        self.assertEqual((code, err), (0, ''))
+        self.assertIn('access: not set (hub.access)', out)
+        self.assertNotIn('access keys:', out)
+        self.assertIn('aaaaaaaaaaaa (current export): knows every key', out)
+        self.assertIn('bbbbbbbbbbbb (not in use): would refuse hub', out)
+        self.assertIn('READY: ', out)
+        self.assertNotIn('NOT READY', out)
+
+    def test_a_copy_in_use_that_would_refuse_hub_is_not_ready(self):
+        self.export('aaaaaaaaaaaa', self.OLD, current=True)
+        code, out, err = self.check()
+        self.assertEqual((code, err), (1, ''))
+        self.assertIn('aaaaaaaaaaaa (current export): would refuse hub', out)
+        self.assertIn('NOT READY: ', out)
+
+    def test_access_settings_that_can_serve_are_probed_once(self):
+        self.export('aaaaaaaaaaaa', self.NEW, current=True)
+        hub = {'access': {'team': 'example-team', 'aud': 'aud-tag',
+                          'emails': ['owner@example.invalid']}}
+        calls = []
+
+        def probe(team):
+            calls.append(team)
+            return True, 'access keys: 2 fetched from example-team.cloudflareaccess.com'
+        with mock.patch.object(HUB.access, 'probe', probe):
+            code, out, err = self.check(hub)
+        self.assertEqual((code, err, calls), (0, '', ['example-team']))
+        self.assertIn('access: set', out)
+        self.assertIn('access keys: 2 fetched from example-team.cloudflareaccess.com', out)
+        with mock.patch.object(HUB.access, 'probe',
+                               lambda team: (False, 'access keys: not fetched from x: keys-fetch')):
+            code, out, err = self.check(hub)
+        self.assertEqual(code, 1)
+        self.assertIn('access keys: not fetched from x: keys-fetch', out)
+        self.assertIn('NOT READY: ', out)
+
+    def test_access_settings_that_cannot_serve_are_named_and_never_probed(self):
+        self.export('aaaaaaaaaaaa', self.NEW, current=True)
+        hub = {'access': {'team': 'example-team', 'aud': 'aud-tag', 'emails': []}}
+        with mock.patch.object(HUB.access, 'probe', side_effect=AssertionError('probed')):
+            code, out, err = self.check(hub)
+        self.assertEqual(code, 1)
+        self.assertIn('access: cannot serve: %s' % tunnel.NO_EMAILS, out)
+        self.assertNotIn('access keys:', out)
+
+    def test_kit_copies_that_cannot_be_looked_at_are_not_ready(self):
+        from kitlib import pluginsource
+        with mock.patch.object(pluginsource, 'load',
+                               side_effect=pluginsource.RefreshError('no export root set')):
+            code, out, err = self.check()
+        self.assertEqual((code, err), (1, ''))
+        self.assertIn('kit copies: cannot look: no export root set', out)
+        self.assertNotIn('kit copies, checked against', out)
+        self.assertIn('NOT READY: the kit copies could not be looked at', out)
+
+    def test_an_account_install_whose_folder_is_gone_says_to_refresh_that_account(self):
+        from kitlib import pluginsource
+        self.export('aaaaaaaaaaaa', self.NEW, current=True)
+        gone = os.path.join(self.home, 'acct', 'plugins', 'cache', 'pm-kit', 'pm-kit', '0.1')
+        acct = os.path.join(self.home, 'acct')
+        with mock.patch.object(pluginsource, 'installs', lambda: [(gone, acct)]):
+            code, out, err = self.check()
+        self.assertEqual((code, err), (1, ''))
+        self.assertIn('%s (installed in %s): cannot tell: the folder is missing: refresh that '
+                      'account (' % (gone, acct), out)
+        self.assertIn('plugin_refresh', out)
+        self.assertIn('NOT READY: ', out)
+
+    def test_check_takes_no_other_option(self):
+        for extra in (('--autostart',), ('--autostart', '--whatif'), ('--whatif',)):
+            code, out, err = self.run_cli('setup', '--check', *extra)
+            self.assertEqual(code, 2, extra)
+            self.assertIn('--check', err)
+        self.assertFalse(os.path.exists(self.tokens))
+
+
 class ClientCase(CliCase):
     def test_status_and_open_with_no_server_are_exit_3_with_the_start_command(self):
         self.assertEqual(self.run_cli('setup')[0], 0)
@@ -663,6 +788,306 @@ class ClientCase(CliCase):
         code, out, err = self.run_cli('open', '--print', '--port', str(hub.port))
         self.assertEqual((code, out), (1, ''))
         self.assertIn('answered 403', err)
+
+    def test_unpair_ends_every_browser_the_running_server_paired(self):
+        self.assertEqual(self.run_cli('setup')[0], 0)
+        probe = self.server()               # port 0 keeps no sessions file: find a port, ask it
+        port = probe.port
+        self.assertIs(probe.close(), True)
+        hub = self.server(port=port)
+        base = 'http://127.0.0.1:%d' % hub.port
+        cookies = []
+        for _ in range(2):
+            link = self.run_cli('open', '--print', '--port', str(hub.port))[1].strip()
+            set_cookie = httpfix.get(hub.port, link[len(base):]).header('Set-Cookie')[0]
+            cookies.append(('Cookie', set_cookie.split(';')[0]))
+        for cookie in cookies:
+            self.assertEqual(httpfix.get(hub.port, HUB.HEALTH, headers=[cookie]).status, 200)
+        code, out, err = self.run_cli('unpair', '--port', str(hub.port))
+        self.assertEqual((code, err), (0, ''))
+        self.assertEqual(out, 'unpaired every browser of the hub server on port %d\n' % hub.port)
+        for cookie in cookies:
+            self.assertEqual(httpfix.get(hub.port, HUB.HEALTH, headers=[cookie]).status, 403)
+        with open(os.path.join(self.tokens, auth.sessions_file(hub.port)), encoding='ascii') as f:
+            self.assertEqual(json.load(f)['sessions'], [])
+
+    def test_unpair_with_no_server_empties_the_sessions_file_itself(self):
+        self.assertEqual(self.run_cli('setup')[0], 0)
+        port = self.dead_port()
+        creds = auth.Credentials(self.tokens, port=port, persist=True)
+        value = creds.pair(creds.new_pairing_code())
+        cookie = {auth.cookie_name(port): value}
+        reread = auth.Credentials(self.tokens, port=port, persist=True)
+        self.assertEqual(reread.role_for({}, cookie), auth.OWNER)
+        code, out, err = self.run_cli('unpair', '--port', str(port))
+        self.assertEqual((code, err), (0, ''))
+        self.assertIn('no hub server is listening on port %d' % port, out)
+        self.assertIn(auth.sessions_file(port), out)
+        reread = auth.Credentials(self.tokens, port=port, persist=True)
+        self.assertEqual((reread.role_for({}, cookie), reread.notes), (None, []))
+
+    def unpair_racing_a_start(self, second):
+        """unpair with no server at its first ask, and `second` the answer to the next one:
+        a server that bound the port and read the sessions file before the file was emptied."""
+        self.assertEqual(self.run_cli('setup')[0], 0)
+        port = self.dead_port()
+        asked = []
+
+        def ask(p, method, path, token=None, **kw):
+            asked.append((p, method, path))
+            if len(asked) == 1:
+                raise serve.NotRunning(p)
+            if isinstance(second, Exception):
+                raise second
+            return second
+
+        with mock.patch.object(HUB.serve, 'ask', ask):
+            got = self.run_cli('unpair', '--port', str(port))
+        self.assertEqual(asked, [(port, 'POST', httpd.UNPAIR_ROUTE)] * 2)
+        return port, got
+
+    def test_unpair_with_no_server_asks_again_after_the_file_and_unpairs_one_that_started(self):
+        port, (code, out, err) = self.unpair_racing_a_start((200, {'ok': True}))
+        self.assertEqual((code, err), (0, ''))
+        self.assertIn(auth.sessions_file(port), out)
+        self.assertIn('unpaired every browser of the hub server on port %d' % port, out)
+
+    def test_unpair_with_a_server_that_started_and_refuses_is_refused(self):
+        port, (code, out, err) = self.unpair_racing_a_start((403, {'error': 'forbidden'}))
+        self.assertEqual(code, 1)
+        self.assertIn('REFUSED: the server on port %d answered 403' % port, err)
+
+    def test_unpair_with_still_no_server_at_the_second_ask_is_the_file_alone(self):
+        port, (code, out, err) = self.unpair_racing_a_start(serve.NotRunning(self.dead_port()))
+        self.assertEqual((code, err), (0, ''))
+        self.assertIn(auth.sessions_file(port), out)
+        self.assertNotIn('of the hub server', out)
+
+    def test_unpair_with_no_server_and_a_file_it_cannot_write_is_refused(self):
+        self.assertEqual(self.run_cli('setup')[0], 0)
+        port = self.dead_port()
+        os.makedirs(os.path.join(self.tokens, auth.sessions_file(port)))   # a folder in its place
+        code, out, err = self.run_cli('unpair', '--port', str(port))
+        self.assertEqual((code, out), (1, ''))
+        self.assertIn('REFUSED: ', err)
+        self.assertIn('could not be written', err)
+
+    def test_unpair_needs_the_owners_token(self):
+        port = self.dead_port()
+        code, out, err = self.run_cli('unpair', '--port', str(port))
+        self.assertEqual((code, out), (1, ''))
+        self.assertIn('REFUSED: no owner token', err)
+        self.assertFalse(os.path.exists(os.path.join(self.tokens, auth.sessions_file(port))))
+        hub = self.server(tokens=os.path.join(self.home, 'other-tokens'))
+        self.assertEqual(self.run_cli('setup')[0], 0)
+        code, out, err = self.run_cli('unpair', '--port', str(hub.port))
+        self.assertEqual((code, out), (1, ''))
+        self.assertIn('REFUSED: the server on port %d answered 403 forbidden' % hub.port, err)
+
+
+class StopRestartCase(CliCase):
+    """hub.py stop and hub.py restart (kitlib.hubsite.control). No test here reads or starts
+    the real scheduled task: its state and its start are replaced in every restart."""
+
+    def running(self):
+        """A hub that serve.run serves on a thread, as `hub.py serve` does: the hub and the
+        thread. Its port is a free one."""
+        cfg = hub_settings.settings(None)._replace(port=0, store=self.store_dir)
+        hub = serve.build(cfg, serve.Sources(tokens=self.tokens,
+                                             static_dir=os.path.join(self.home, 'web')))
+        up, stop = threading.Event(), threading.Event()
+        runner = threading.Thread(target=serve.run, args=(hub, lambda h: up.set(), stop),
+                                  name='test-run', daemon=True)
+        runner.start()
+        self.addCleanup(runner.join, 30)
+        self.addCleanup(stop.set)
+        self.assertTrue(up.wait(30), 'the server never started')
+        return hub, runner
+
+    def fake_task(self, state):
+        """The task's state is `state`; a start of it is noted in the list returned. hub.port
+        is a port nothing listens on, so a restart that went on to wait for a new server would
+        never ask the machine's own."""
+        self.config({'hub': {'port': self.dead_port()}})
+        started = []
+        states = mock.patch.object(HUB.control.autostart, 'task_state', lambda: state)
+        starts = mock.patch.object(HUB.control.autostart, 'start_task',
+                                   lambda: started.append(True))
+        states.start()
+        starts.start()
+        self.addCleanup(states.stop)
+        self.addCleanup(starts.stop)
+        return started
+
+    def test_stop_ends_the_running_server_and_waits_for_its_process(self):
+        self.assertEqual(self.run_cli('setup')[0], 0)
+        hub, runner = self.running()
+        asked = []
+
+        def alive(pid, ctime):
+            asked.append((pid, ctime))
+            return runner.is_alive()
+
+        with mock.patch.object(HUB.control.process, 'alive', alive):
+            code, out, err = self.run_cli('stop', '--port', str(hub.port))
+        self.assertEqual((code, err), (0, ''))
+        self.assertEqual(out, 'STOPPED: the hub server on port %d (pid %d) has closed and its '
+                              'process has ended\n' % (hub.port, os.getpid()))
+        runner.join(30)
+        self.assertFalse(runner.is_alive())
+        self.assertFalse(self.locked())
+        self.assertTrue(asked, 'the process was never asked about')
+        self.assertEqual(asked[0][0], os.getpid())
+
+    def test_stop_with_nothing_listening_is_nothing_to_stop(self):
+        self.assertEqual(self.run_cli('setup')[0], 0)
+        port = self.dead_port()
+        code, out, err = self.run_cli('stop', '--port', str(port))
+        self.assertEqual((code, err), (0, ''))
+        self.assertTrue(out.startswith('nothing to stop: nothing answers on port %d' % port), out)
+        # a server stopped a moment ago has freed its port, but may still hold the store
+        self.assertIn('may still be closing', out)
+        self.assertNotIn('no hub server is listening', out)
+
+    def test_stop_and_restart_need_the_owners_token(self):
+        port = self.dead_port()
+        started = self.fake_task('Ready')
+        for verb in ('stop', 'restart'):
+            code, out, err = self.run_cli(verb, '--port', str(port))
+            self.assertEqual((code, out), (1, ''), verb)
+            self.assertIn('REFUSED: no owner token', err)
+        self.assertEqual(started, [])
+
+    def test_a_stop_the_server_refuses_is_refused_and_it_serves_on(self):
+        hub = self.server(tokens=os.path.join(self.home, 'other-tokens'))
+        self.assertEqual(self.run_cli('setup')[0], 0)
+        code, out, err = self.run_cli('stop', '--port', str(hub.port))
+        self.assertEqual((code, out), (1, ''))
+        self.assertIn('REFUSED: the server on port %d answered 403 forbidden' % hub.port, err)
+        self.assertFalse(hub.stopping.is_set())
+
+    def test_stop_passes_the_port_the_token_and_the_timeout(self):
+        self.assertEqual(self.run_cli('setup')[0], 0)
+        self.config({'hub': {'port': 8799}})
+        calls = []
+
+        def stop(port, token, timeout, **kw):
+            calls.append((port, token, timeout))
+            return HUB.control.Stopped(False, None, False)
+
+        with mock.patch.object(HUB.control, 'stop', stop):
+            self.assertEqual(self.run_cli('stop')[0], 0)
+            self.assertEqual(self.run_cli('stop', '--port', '8801', '--timeout', '7.5')[0], 0)
+        owner = auth.read_token(self.tokens, auth.OWNER)
+        self.assertEqual(calls, [(8799, owner, HUB.control.DEFAULT_TIMEOUT_S),
+                                 (8801, owner, 7.5)])
+        self.assertEqual(HUB.control.DEFAULT_TIMEOUT_S, 300)
+
+    def test_restart_with_no_task_starts_nothing_and_prints_the_start_command(self):
+        self.assertEqual(self.run_cli('setup')[0], 0)
+        port = self.dead_port()
+        started = self.fake_task(None)
+        code, out, err = self.run_cli('restart', '--port', str(port))
+        self.assertEqual((code, err), (3, ''))
+        self.assertIn('nothing to stop: nothing answers on port %d' % port, out)
+        self.assertIn(HUB.hub_autostart.TASK_NAME, out)
+        self.assertTrue(out.endswith('start it with: %s\n' % HUB.START), out)
+        self.assertEqual(started, [])
+
+    def test_restart_of_a_server_started_by_hand_stops_it_and_starts_nothing(self):
+        self.assertEqual(self.run_cli('setup')[0], 0)
+        hub, runner = self.running()
+        started = self.fake_task('Ready')
+        with mock.patch.object(HUB.control.process, 'alive',
+                               lambda pid, ctime: runner.is_alive()):
+            code, out, err = self.run_cli('restart', '--port', str(hub.port))
+        self.assertEqual((code, err), (3, ''))
+        self.assertIn('STOPPED: the hub server on port %d' % hub.port, out)
+        self.assertIn('started by hand', out)
+        self.assertTrue(out.endswith('start it with: %s\n' % HUB.START), out)
+        self.assertEqual(started, [])
+        runner.join(30)
+        self.assertFalse(runner.is_alive())
+
+    def test_restart_with_a_disabled_task_starts_nothing(self):
+        self.assertEqual(self.run_cli('setup')[0], 0)
+        started = self.fake_task('Disabled')
+        code, out, err = self.run_cli('restart', '--port', str(self.dead_port()))
+        self.assertEqual((code, err), (3, ''))
+        self.assertIn('disabled', out)
+        self.assertEqual(started, [])
+
+    def test_restart_says_where_the_task_s_server_answers(self):
+        self.assertEqual(self.run_cli('setup')[0], 0)
+        self.config({'hub': {'port': 8799}})
+        calls = []
+
+        def restart(port, token, timeout, new_port=None, **kw):
+            calls.append((port, timeout, new_port))
+            return HUB.control.Restarted(HUB.control.Stopped(True, 77, False),
+                                         HUB.control.RESTARTED, new_port)
+
+        with mock.patch.object(HUB.control, 'restart', restart):
+            code, out, err = self.run_cli('restart', '--port', '8801', '--timeout', '9')
+        self.assertEqual((code, err), (0, ''))
+        self.assertEqual(calls, [(8801, 9.0, 8799)])
+        self.assertIn('STOPPED: the hub server on port 8801 (pid 77)', out)
+        self.assertIn('RESTARTED: the hub server answers on port 8799', out)
+
+    def test_a_timeout_is_exit_4_and_says_nothing_was_killed(self):
+        self.assertEqual(self.run_cli('setup')[0], 0)
+        port = self.dead_port()
+        for verb, phase in (('stop', HUB.control.CLOSING_PHASE),
+                            ('restart', HUB.control.ANSWER_PHASE)):
+            with self.subTest(verb=verb):
+                def fail(*args, **kw):
+                    raise HUB.control.TimedOut(phase, 'port %d did not close within 1 s; '
+                                                      'nothing was killed' % port)
+
+                with mock.patch.object(HUB.control, verb, fail):
+                    code, out, err = self.run_cli(verb, '--port', str(port))
+                self.assertEqual((code, out), (4, ''))
+                self.assertIn('TIMED OUT: port %d did not close within 1 s; nothing was killed'
+                              % port, err)
+                # a server the task started has no console: its start-up lines go nowhere
+                self.assertEqual('hub.py serve' in err and 'console' in err, verb == 'restart',
+                                 err)
+
+    def test_the_console_advice_follows_a_timeout_waiting_for_the_new_server_alone(self):
+        # a server that never answered after the start may have said why at start-up, in a
+        # console it does not have; a stop or a task that has not ended says nothing there
+        self.assertEqual(self.run_cli('setup')[0], 0)
+        port = self.dead_port()
+        for phase in (HUB.control.CLOSING_PHASE, HUB.control.PROCESS_PHASE,
+                      HUB.control.TASK_PHASE, HUB.control.ANSWER_PHASE):
+            with self.subTest(phase=phase):
+                def fail(*args, **kw):
+                    raise HUB.control.TimedOut(phase, 'ran out; nothing was killed')
+
+                with mock.patch.object(HUB.control, 'restart', fail):
+                    code, out, err = self.run_cli('restart', '--port', str(port))
+                self.assertEqual((code, out), (4, ''))
+                self.assertIn('TIMED OUT: ran out; nothing was killed', err)
+                self.assertEqual(HUB.NO_CONSOLE in err, phase == HUB.control.ANSWER_PHASE, err)
+
+    def test_a_task_that_cannot_be_started_after_the_stop_says_the_server_stopped(self):
+        self.assertEqual(self.run_cli('setup')[0], 0)
+        port = self.dead_port()
+        for reason in ("starting the task 'x': powershell exit 1: denied",
+                       "reading the state of the task 'x': powershell timed out after 60 s"):
+            with self.subTest(reason=reason):
+                def fail(*args, **kw):
+                    raise HUB.control.StartFailed(HUB.control.Stopped(True, 77, False),
+                                                  HUB.hub_autostart.AutostartError(reason))
+
+                with mock.patch.object(HUB.control, 'restart', fail):
+                    code, out, err = self.run_cli('restart', '--port', str(port))
+                self.assertEqual(code, 1)
+                self.assertEqual(out, 'STOPPED: the hub server on port %d (pid 77) has closed and '
+                                      'its process has ended\n' % port)
+                self.assertNotIn('REFUSED', err)
+                self.assertIn('the scheduled task could not be started: %s' % reason, err)
+                self.assertTrue(err.endswith('start it with: %s\n' % HUB.START), err)
 
 
 class ClosedConsoleCase(CliCase):
@@ -783,8 +1208,8 @@ class VerbCase(CliCase):
 class PendingCase(VerbCase):
     def test_pending_prints_the_items_get_pending_answers(self):
         self.assertEqual(self.ok('pending'), [])
-        self.assertEqual(self.ask(), ['ASKED Q-001'])
-        self.assertEqual(self.ok('answer', 'Q-001', '--choice', '1'), ['ANSWERED Q-001 right'])
+        self.assertEqual(self.ask(), ['ASKED Q-1000'])
+        self.assertEqual(self.ok('answer', 'Q-1000', '--choice', '1'), ['ANSWERED Q-1000 right'])
         self.assertEqual(self.ok('to-pm', 'add', '--text', 'look at this', '--repo', 'kit'),
                          ['QUEUED P-001'])
         self.assertEqual(self.ok('to-pm', 'send'), ['SENT P-001'])
@@ -792,9 +1217,10 @@ class PendingCase(VerbCase):
         self.assertEqual(len(want['items']), 2, want)
         self.assertEqual(json.loads('\n'.join(self.ok('pending', '--json'))), want)
         self.assertEqual(self.ok('pending'), [
-            '%s %s [%s] %s' % (i['kind'], i['id'], i['repo'] or '-', i['title'])
+            '%s %s [%s] to=%s from=%s %s' % (i['kind'], i['id'], i['repo'] or '-', i['route'],
+                                             i['from'], i['title'])
             for i in want['items']])
-        self.assertIn('Q-001 [kit] which way', self.ok('pending')[0])
+        self.assertIn('Q-1000 [kit] to=pm from=pm which way', self.ok('pending')[0])
 
 
 class WriteCase(VerbCase):
@@ -803,23 +1229,22 @@ class WriteCase(VerbCase):
         self.assertEqual(self.ok(
             'questions', 'add', '--title', 'which way', '--repo', 'kit', '--context-file', context,
             '--option', 'left::go left', '--option', 'right::go right', '--recommended', '0',
-            '--refs', 'B-1', 'B-2', '--urgent', '--from', 'coordinator'), ['ASKED Q-001'])
+            '--refs', 'B-1', 'B-2', '--urgent', '--from', 'pm'), ['ASKED Q-1000'])
         doc = self.direct('/questions')['items'][0]
         self.assertEqual((doc['context'], doc['recommended'], doc['refs'], doc['urgent'],
-                          doc['from']), ('the context\nof it\n', 0, ['B-1', 'B-2'], True,
-                                         'coordinator'))
+                          doc['from']), ('the context\nof it\n', 0, ['B-1', 'B-2'], True, 'pm'))
         self.assertEqual(doc['options'], [{'label': 'left', 'description': 'go left'},
                                           {'label': 'right', 'description': 'go right'}])
-        self.assertEqual(self.ok('questions'), ['Q-001 v1 open [kit] which way'])
+        self.assertEqual(self.ok('questions'), ['Q-1000 v1 open [kit] which way'])
         self.assertEqual(self.ok('questions', '--status', 'answered'), [])
         self.assertEqual(self.ok('questions', '--repo', 'elsewhere'), [])
         # the first option is place 0: it is a choice, not "no choice"
-        self.assertEqual(self.ok('answer', 'Q-001', '--choice', '0', '--note', 'as planned'),
-                         ['ANSWERED Q-001 left'])
+        self.assertEqual(self.ok('answer', 'Q-1000', '--choice', '0', '--note', 'as planned'),
+                         ['ANSWERED Q-1000 left'])
         self.assertEqual(self.ok('questions', '--status', 'answered'),
-                         ['Q-001 v2 answered [kit] which way'])
-        self.assertEqual(self.ok('questions', 'log', 'Q-001', 'D-7', '--if-version', '2'),
-                         ['LOGGED Q-001 D-7'])
+                         ['Q-1000 v2 answered [kit] which way'])
+        self.assertEqual(self.ok('questions', 'log', 'Q-1000', 'D-7', '--if-version', '2'),
+                         ['LOGGED Q-1000 D-7'])
         doc = self.direct('/questions?status=all')['items'][0]
         self.assertEqual((doc['status'], doc['ruling'], doc['answer']['note']),
                          ('logged', 'D-7', 'as planned'))
@@ -828,13 +1253,13 @@ class WriteCase(VerbCase):
 
     def test_other_needs_a_note_and_a_stale_version_is_refused(self):
         self.ask()
-        self.assertIn('REFUSED invalid: ', self.refused('answer', 'Q-001', '--choice', 'other'))
-        self.assertIn('REFUSED invalid: ', self.refused('answer', 'Q-001', '--choice', '7'))
-        self.assertIn('REFUSED conflict: ', self.refused('answer', 'Q-001', '--choice', '0',
+        self.assertIn('REFUSED invalid: ', self.refused('answer', 'Q-1000', '--choice', 'other'))
+        self.assertIn('REFUSED invalid: ', self.refused('answer', 'Q-1000', '--choice', '7'))
+        self.assertIn('REFUSED conflict: ', self.refused('answer', 'Q-1000', '--choice', '0',
                                                          '--if-version', '99'))
-        self.assertEqual(self.ok('answer', 'Q-001', '--choice', 'other', '--note', 'neither'),
-                         ['ANSWERED Q-001 Other'])
-        self.assertIn('REFUSED conflict: ', self.refused('questions', 'log', 'Q-001', 'D-7',
+        self.assertEqual(self.ok('answer', 'Q-1000', '--choice', 'other', '--note', 'neither'),
+                         ['ANSWERED Q-1000 Other'])
+        self.assertIn('REFUSED conflict: ', self.refused('questions', 'log', 'Q-1000', 'D-7',
                                                          '--if-version', '0'))
         self.assertIn('REFUSED not_found: ', self.refused('questions', 'log', 'Q-009', 'D-7',
                                                           '--if-version', '1'))
@@ -844,19 +1269,19 @@ class WriteCase(VerbCase):
         """The version is the one the caller read: an answer changed after that read is never
         logged under a ruling written for the earlier one."""
         self.ask()
-        self.assertEqual(self.ok('answer', 'Q-001', '--choice', '0'), ['ANSWERED Q-001 left'])
+        self.assertEqual(self.ok('answer', 'Q-1000', '--choice', '0'), ['ANSWERED Q-1000 left'])
         read = self.direct('/questions?status=answered')['items'][0]['version']
         self.assertEqual(self.ok('questions', '--status', 'answered'),
-                         ['Q-001 v%d answered [kit] which way' % read])
-        self.assertEqual(self.ok('answer', 'Q-001', '--choice', '1'), ['ANSWERED Q-001 right'])
-        err = self.refused('questions', 'log', 'Q-001', 'D-7', '--if-version', str(read))
+                         ['Q-1000 v%d answered [kit] which way' % read])
+        self.assertEqual(self.ok('answer', 'Q-1000', '--choice', '1'), ['ANSWERED Q-1000 right'])
+        err = self.refused('questions', 'log', 'Q-1000', 'D-7', '--if-version', str(read))
         self.assertTrue(err.startswith('REFUSED conflict: '), err)
         doc = self.direct('/questions?status=all')['items'][0]
         self.assertEqual((doc['status'], doc.get('ruling'), doc['answer']['label']),
                          ('answered', None, 'right'))
         # the version of the answer as it is now logs it
-        self.assertEqual(self.ok('questions', 'log', 'Q-001', 'D-7', '--if-version',
-                                 str(doc['version'])), ['LOGGED Q-001 D-7'])
+        self.assertEqual(self.ok('questions', 'log', 'Q-1000', 'D-7', '--if-version',
+                                 str(doc['version'])), ['LOGGED Q-1000 D-7'])
 
     def test_a_story_set_on_a_version_it_no_longer_has_is_refused_and_not_set(self):
         story = self.file('story.md', 'As the owner I want it.\n')
@@ -872,7 +1297,7 @@ class WriteCase(VerbCase):
     def test_the_questions_and_stories_lines_and_json_show_each_documents_version(self):
         self.ask()
         self.ask('and then')
-        self.ok('answer', 'Q-002', '--choice', '0')
+        self.ok('answer', 'Q-1001', '--choice', '0')
         story = self.file('story.md', 'As the owner I want it.\n')
         self.ok('stories', 'add', '--repo', 'kit', '--title', 'a verb', '--story-file', story)
         for verb, path in (('questions', '/questions?status=all'), ('stories', '/stories?status=all')):
@@ -911,6 +1336,23 @@ class WriteCase(VerbCase):
         self.assertEqual(len(self.ok('todos', '--status', 'open')), 2)
         code, out, err = self.run_cli('todos', 'add', '--title', 't', '--owner', '--from', 'x')
         self.assertEqual((code, out), (2, ''))
+
+    def test_todos_add_steps_reads_a_json_file_and_the_server_renders_it(self):
+        steps = [{'open': 'C:\\w\\a.txt', 'line': 3}, {'run': 'python t.py'}]
+        good = self.file('steps.json', json.dumps(steps))
+        self.assertEqual(self.ok('todos', 'add', '--title', 't', '--detail', 'Why.',
+                                 '--command', 'first', '--steps', good), ['ADDED T-001'])
+        d = self.direct('/todos')['items'][0]
+        self.assertEqual(d['commands'], ['first'] + todosteps.render(steps))
+        self.assertEqual(d['detail'],
+                         'Why.\n\nopen C:\\w\\a.txt at line 3 in Notepad++\nrun python t.py')
+        self.assertNotIn('steps', d)
+        bad = self.file('bad.json', json.dumps([{'open': 'rel.txt'}]))
+        err = self.refused('todos', 'add', '--title', 't', '--steps', bad)
+        self.assertTrue(err.startswith('REFUSED invalid: steps[0]'), err)
+        err = self.refused('todos', 'add', '--title', 't', '--steps', self.file('x.json', '[1'))
+        self.assertIn('cannot read the steps file', err)
+        self.assertEqual(len(self.direct('/todos')['items']), 1)
 
     def test_stories_are_submitted_set_and_withdrawn(self):
         story = self.file('story.md', 'As the owner I want it.\n')
@@ -975,9 +1417,9 @@ class WriteCase(VerbCase):
         self.assertNotIn('s3cret', self.ok('todos', '--json')[0])
 
     def test_a_write_says_each_warning_of_the_document_it_wrote(self):
-        self.assertEqual(self.ask(), ['ASKED Q-001'])
+        self.assertEqual(self.ask(), ['ASKED Q-1000'])
         self.assertEqual(len(self.warned), 1, self.warned)
-        self.assertTrue(self.warned[0].startswith('WARN questions/Q-001 repo: '), self.warned)
+        self.assertTrue(self.warned[0].startswith('WARN questions/Q-1000 repo: '), self.warned)
         self.assertTrue(self.warned[0].endswith('[repo-alias]'), self.warned)
 
 
@@ -1004,14 +1446,14 @@ class WaitVerbCase(VerbCase):
         self.ask()
         now = self.hub.store.revision
         self.assertEqual(self.ok('wait', '--since', str(was), '--timeout', '5'),
-                         ['HUB %d questions Q-001 %s open' % (
+                         ['HUB %d questions Q-1000 %s open' % (
                              now, self.direct('/wait?since=%d&timeout=0' % was)['changes'][0]['op'])])
-        self.ok('answer', 'Q-001', '--choice', '0')
+        self.ok('answer', 'Q-1000', '--choice', '0')
         items = self.direct('/pending')['items']
-        self.assertEqual([i['id'] for i in items], ['Q-001'])
+        self.assertEqual([i['id'] for i in items], ['Q-1000'])
         self.assertEqual(self.ok('wait', '--pending', '--timeout', '5'),
-                         ['HUB %d %s Q-001 which way' % (self.hub.store.revision,
-                                                         items[0]['kind'])])
+                         ['HUB %d %s Q-1000 to=pm from=pm which way' % (self.hub.store.revision,
+                                                                       items[0]['kind'])])
 
     def test_a_wait_argument_that_is_no_number_is_a_usage_error(self):
         for argv in (('wait', '--timeout', 'soon'), ('wait', '--timeout', '-1'),
@@ -1020,6 +1462,92 @@ class WaitVerbCase(VerbCase):
             code, out, err = self.run_cli(*argv)
             self.assertEqual((code, out), (2, ''), argv)
             self.assertIn('USAGE: ', err)
+
+
+class DirectQuestionCase(VerbCase):
+    """questions add --from <session key>, pending --for and wait --pending --for, with the
+    session keys read from the temp home's launcher sessions.json."""
+
+    def setUp(self):
+        VerbCase.setUp(self)
+        state = os.path.join(self.home, 'launcher-state')
+        os.makedirs(state)
+        self.config({'launcher': {'state_dir': state}})
+        with open(os.path.join(state, 'sessions.json'), 'w', encoding='utf-8') as f:
+            json.dump({'_note': 'x', 'kit': {'repo': 'kit'}, 'other': {'repo': 'other'}}, f)
+
+    def asks(self, sender, title):
+        return self.ok('questions', 'add', '--title', title, '--repo', 'kit', '--from', sender,
+                       '--option', 'a::b', '--option', 'c::d')[0].split()[1]
+
+    def test_a_question_from_a_launcher_key_comes_back_to_it_alone(self):
+        mine, theirs, pms = self.asks('kit', 'mine'), self.asks('other', 'theirs'), \
+            self.ask('pms')[0].split()[1]
+        for qid in (mine, theirs, pms):
+            self.ok('answer', qid, '--choice', '0')
+        got = json.loads('\n'.join(self.ok('pending', '--json', '--for', 'kit')))
+        self.assertEqual([(i['id'], i['from']) for i in got['items']], [(mine, 'kit')])
+        # the PM's list holds every answered question, each to be logged, whoever asked it
+        self.assertEqual(sorted(line.split()[1] for line in self.ok('pending', '--for', 'pm')),
+                         sorted([mine, theirs, pms]))
+        self.assertEqual(sorted(line.split()[1] for line in self.ok('pending')),
+                         sorted([mine, theirs, pms]))
+        self.assertEqual(self.ok('wait', '--pending', '--for', 'other', '--timeout', '5'),
+                         ['HUB %d %s %s to=other from=other theirs' % (
+                             self.hub.store.revision, got['items'][0]['kind'], theirs)])
+
+    def test_pending_and_wait_lines_say_who_handles_each_item_and_whose_it_is(self):
+        mine, pms = self.asks('kit', 'mine'), self.ask('pms')[0].split()[1]
+        for qid in (mine, pms):
+            self.ok('answer', qid, '--choice', '0')
+        kind = self.direct('/pending')['items'][0]['kind']
+        # kit has never waited: the PM handles its answer too
+        self.assertEqual(sorted(self.ok('pending')),
+                         sorted(['%s %s [kit] to=pm from=kit mine' % (kind, mine),
+                                 '%s %s [kit] to=pm from=pm pms' % (kind, pms)]))
+        rev = self.hub.store.revision
+        self.assertEqual(self.ok('wait', '--pending', '--for', 'kit', '--timeout', '5'),
+                         ['HUB %d %s %s to=kit from=kit mine' % (rev, kind, mine)])
+        # handed over to kit: kit handles it now, and the PM still logs it
+        self.assertEqual(sorted(self.ok('wait', '--pending', '--for', 'pm', '--timeout', '5')),
+                         sorted(['HUB %d %s %s to=kit from=kit mine' % (rev, kind, mine),
+                                 'HUB %d %s %s to=pm from=pm pms' % (rev, kind, pms)]))
+
+    def test_a_wait_for_a_key_with_nothing_for_it_times_out(self):
+        self.ok('answer', self.asks('other', 'theirs'), '--choice', '0')
+        code, out, err = self.run_cli('wait', '--pending', '--for', 'kit', '--timeout', '0',
+                                      '--port', self.port)
+        self.assertEqual((code, out, err), (4, '', ''))
+
+    def test_a_question_from_an_unknown_key_is_refused(self):
+        err = self.refused('questions', 'add', '--title', 't', '--from', 'coordinator',
+                           '--option', 'a::b', '--option', 'c::d')
+        self.assertTrue(err.startswith('REFUSED invalid: '), err)
+        self.assertIn('known: kit, other, pm', err)
+        self.assertNotIn('sessions.json', err)
+        self.assertEqual(self.direct('/questions')['items'], [])
+
+    def test_for_without_pending_is_a_usage_error(self):
+        code, out, err = self.run_cli('wait', '--for', 'kit', '--timeout', '0',
+                                      '--port', self.port)
+        self.assertEqual((code, out), (2, ''))
+        self.assertIn('USAGE: --for picks among the pending items', err)
+
+    def test_except_leaves_out_an_acted_on_answer_until_another_comes(self):
+        old, new = self.asks('kit', 'old'), self.asks('kit', 'new')
+        self.ok('answer', old, '--choice', '0')
+        code, out, err = self.run_cli('wait', '--pending', '--for', 'kit', '--except', old,
+                                      '--timeout', '0', '--port', self.port)
+        self.assertEqual((code, out, err), (4, '', ''))
+        self.ok('answer', new, '--choice', '0')
+        got = self.ok('wait', '--pending', '--for', 'kit', '--except', old, 'Q-0', '--timeout', '5')
+        self.assertEqual([line.split()[3] for line in got], [new])
+
+    def test_except_without_pending_is_a_usage_error(self):
+        code, out, err = self.run_cli('wait', '--except', 'Q-1', '--timeout', '0',
+                                      '--port', self.port)
+        self.assertEqual((code, out), (2, ''))
+        self.assertIn('USAGE: --except leaves out pending items', err)
 
 
 class ArgumentCase(CliCase):
@@ -1056,7 +1584,9 @@ class ArgumentCase(CliCase):
         # each verb of the tool is in that list, but for those that ask no running server
         self.assertEqual(sorted({v[0] for v in self.VERBS}),
                          sorted(set(HUB.VERB_NAMES)
-                                - {'serve', 'status', 'setup', 'open', 'migrate', 'validate'}))
+                                - {'serve', 'status', 'setup', 'open', 'migrate', 'validate',
+                                   'unpair',    # unpair with no server: ClientCase
+                                   'stop', 'restart'}))     # with no server: StopRestartCase
 
     def test_the_port_is_the_configured_one_unless_given(self):
         self.assertEqual(self.run_cli('setup')[0], 0)
@@ -1256,6 +1786,26 @@ class ValidateCase(CliCase):
         self.assertTrue(all(line.startswith('VALIDATE ') for line in lines), out)
         self.assertTrue(any(line.startswith('VALIDATE ERROR todos/T-001 status: ')
                             for line in lines), out)
+
+    def test_a_text_recommended_that_names_an_option_is_exit_0_with_its_warning(self):
+        hub = self.server()
+        self.assertEqual(self.run_cli('questions', 'add', '--title', 'which way', '--option',
+                                      'left::go left', '--option', 'right::go right',
+                                      '--recommended', '0', '--port', str(hub.port))[0], 0)
+        hub.close()
+        path = os.path.join(self.store_dir, 'questions', 'Q-1000.json')
+        with open(path, encoding='utf-8') as f:
+            doc = json.load(f)
+        doc['recommended'] = 'right'            # a legacy file: the option's label, not its place
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(doc, f)
+        code, out, err = self.run_cli('validate', '--store', self.store_dir)
+        self.assertEqual((code, err), (0, ''), out)
+        lines = out.splitlines()
+        self.assertIn("VALIDATE WARN questions/Q-1000 recommended: recommended is the text "
+                      "'right' in its file; the store reads it as the number 1 and its next "
+                      "write stores the number [%s]" % schema.CODE, lines)
+        self.assertFalse(any(line.startswith('VALIDATE ERROR') for line in lines), out)
 
     def test_validate_of_no_store_is_refused(self):
         code, out, err = self.run_cli('validate')

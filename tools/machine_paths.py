@@ -2,8 +2,9 @@
 
   machine_paths.py [-C DIR]
       search every tracked file, and every untracked one git does not ignore, of the work tree DIR
-      is in (default: here) for a drive-rooted GitHub, research or AgentTemp folder or user
-      profile, against the .kit.json "machine_paths" allow-list
+      is in (default: here) for a drive-rooted machine folder (the machine config's
+      machine_path_folders; unset: none, and a NOTE says so) or user profile, against the
+      .kit.json "machine_paths" allow-list
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.machinepaths, prints and
 exits. Exit codes: 0 OK (WARNING lines included), 1 FAILED (a hit off the allow-list),

@@ -258,7 +258,7 @@ class RemoveSettings(RemoveCase):
         self.assertIn('!! out/run.log', out)
 
     def test_check_skips_exempt_and_lists_stumps_and_landed(self):
-        self.workstream('daily')
+        exempt = self.workstream('daily')
         landed = self.workstream('landed')
         self.land('kit/landed')
         self.workstream('fresh', commits=0)
@@ -268,7 +268,8 @@ class RemoveSettings(RemoveCase):
         self.assertIn('leftover  %s' % os.path.join(self.home, 'stump'), out)
         self.assertIn('merged    %s [kit/landed] landed' % landed, out)
         self.assertNotIn('fresh', out)
-        self.assertNotIn('daily', out)
+        self.assertNotIn(exempt, out)       # its path, not the word: the caller's own path may hold it
+        self.assertNotIn('kit/daily', out)
 
 
 class BranchTemplate(RemoveCase):

@@ -186,6 +186,151 @@ class Refusals(StoreCase):
         self.assertEqual(self.code(hold=h["id"], detached=True, no_wait=True), 12)
 
 
+def store_files(root):
+    """{path relative to root: bytes} of every file under root."""
+    out = {}
+    for d, _, names in os.walk(root):
+        for n in names:
+            p = os.path.join(d, n)
+            with open(p, "rb") as f:
+                out[os.path.relpath(p, root)] = f.read()
+    return out
+
+
+class RunIds(StoreCase):
+    """A run id is a second stamp and a 3-byte token. It was fixed before any mutex, so a run could
+    take an id a live run, an ended run or a dead run's leftover file has. book() now claims it
+    (rm.claim_id) under its run mutex before any record exists. A drawn id that is taken is drawn
+    again. A given one (rid=, the CLI's --detached-id) that is taken is refused with exit 10, and
+    nothing is written. One not shaped like a run id is usage, exit 2."""
+
+    def book(self, slug, **kw):
+        kw.setdefault("store", self.store)
+        kw.setdefault("env", clean_env())
+        return rm.book("engine-test", "kit", slug, cores=1, no_wait=True, **kw)
+
+    def refused(self, slug, **kw):
+        with self.assertRaises(LockError) as cm:
+            self.book(slug, **kw)
+        return cm.exception
+
+    def drawn(self, *taken):
+        """(a patch of the id builder book uses: each of `taken` in turn, then an id nothing has,
+        that id). A draw after it is an error (StopIteration)."""
+        fresh = next(i for i in (taken[0][:-6] + "%06x" % n for n in range(len(taken) + 1))
+                     if i not in taken)
+        return mock.patch.object(rm, "new_id", side_effect=list(taken) + [fresh]), fresh
+
+    def entry(self, rid):
+        """(state, cores) of rid's queue entry, or None."""
+        for e in (self.store.read("queue.json") or {}).get("entries", []):
+            if e["id"] == rid:
+                return e["state"], e.get("cores")
+        return None
+
+    def ended_run(self, note):
+        s = self.book("old", note=note)
+        s.release()
+        return s.id
+
+    def test_an_id_an_ended_run_has_is_drawn_again(self):
+        """Red before the claim: the second run took the id, and its end replaced
+        ended/<id>.json, the only record of the first run."""
+        self.confine(1)
+        old = self.ended_run("first")
+        before = self.store.read("ended/%s.json" % old)
+        patch, fresh = self.drawn(old)
+        with patch as ids:
+            s = self.book("new", note="second")
+            s.release()
+        self.assertEqual(self.store.read("ended/%s.json" % old), before)
+        self.assertEqual(s.id, fresh)
+        self.assertEqual(self.store.read("ended/%s.json" % fresh)["note"], "second")
+        self.assertEqual(ids.call_count, 2)
+
+    def test_an_id_a_live_run_has_is_drawn_again_and_the_live_run_is_untouched(self):
+        """Red before the claim: the second run was refused (its run mutex is the live run's),
+        and its settle then dropped the live run's queue entry and record."""
+        self.confine(2)
+        first = self.book("first")
+        try:
+            rec = self.store.read("active/%s.json" % first.id)
+            entry = self.entry(first.id)
+            self.assertIsNotNone(entry)
+            patch, fresh = self.drawn(first.id)
+            with patch as ids:
+                second = self.book("second")
+                second.release()
+            self.assertEqual(second.id, fresh)
+            self.assertEqual(ids.call_count, 2)
+            self.assertEqual(self.store.read("active/%s.json" % first.id), rec)
+            self.assertEqual(self.entry(first.id), entry)
+            self.assertIsNone(self.store.read("ended/%s.json" % first.id))
+        finally:
+            first.release()
+
+    def test_a_given_id_a_live_run_has_is_refused_and_the_live_run_is_untouched(self):
+        """Red before the claim: the refusal settled the refused run under the live run's id, so
+        the live run's record and queue entry went and an ended record was written for it while
+        it still held its slots."""
+        self.confine(2)
+        first = self.book("first")
+        try:
+            rec = self.store.read("active/%s.json" % first.id)
+            entry = self.entry(first.id)
+            err = self.refused("second", rid=first.id)
+            self.assertEqual(self.store.read("active/%s.json" % first.id), rec)
+            self.assertEqual(self.entry(first.id), entry)
+            self.assertIsNone(self.store.read("ended/%s.json" % first.id))
+            self.assertEqual(err.code, store_mod.EXIT_REQUIRE)
+            self.assertIn("run id %s is taken" % first.id, err.message)
+        finally:
+            first.release()
+
+    def test_a_given_id_with_anything_of_an_earlier_run_left_is_refused_and_nothing_is_written(self):
+        """Each thing claim_id counts as taken, alone: the run mutex, the active record, the stop
+        file, the ended record, the background folder."""
+        self.confine(1)
+        left = ("mutex", "active/%s.json", "active/%s.stop", "ended/%s.json",
+                "background/%s.d/control.json")
+        for i, what in enumerate(left):
+            rid = "r-20261006T12000%dZ-abc123" % i
+            with self.subTest(left=what):
+                if what == "mutex":
+                    m = self.store.run_mutex(rid)
+                    self.addCleanup(m.release)
+                else:
+                    self.store.write(what % rid, {"id": rid, "left": what})
+                before = store_files(self.root)
+                err = self.refused("t", rid=rid)
+                self.assertEqual(store_files(self.root), before)
+                self.assertEqual(err.code, store_mod.EXIT_REQUIRE)
+                self.assertIn("run id %s is taken" % rid, err.message)
+
+    def test_a_given_id_not_shaped_like_a_run_id_is_usage_and_nothing_is_written(self):
+        """--detached-id reached store paths unchecked: '..\\\\x' named a file outside active/."""
+        self.confine(1)
+        before = store_files(self.root)
+        for rid in ("r-1", "..\\x", "r-20261006T120000Z-abcd", "h-20261006T120000Z-abcd",
+                    "r-20261006T120000Z-ABC123", "r-20261006T120000Z-abc123\n", 5):
+            with self.subTest(rid=rid):
+                err = self.refused("t", rid=rid)
+                self.assertEqual(err.code, store_mod.EXIT_USAGE)
+                self.assertIn("not a run id", err.message)
+        self.assertEqual(store_files(self.root), before)
+
+    def test_a_draw_that_finds_every_id_taken_gives_up_with_10_and_writes_nothing(self):
+        self.confine(1)
+        old = self.ended_run("first")
+        before = store_files(self.root)
+        with mock.patch.object(rm, "new_id", return_value=old) as ids:
+            err = self.refused("t")
+        self.assertEqual(store_files(self.root), before)
+        self.assertEqual(err.code, store_mod.EXIT_REQUIRE)
+        self.assertIn("no free run id", err.message)
+        self.assertEqual(ids.call_count, rm.CLAIM_TRIES)
+
+
 SIZED_KINDS = {"kinds": {
     "engine-test": {"cpu": "medium", "gpu": 0, "warn_min": 30},
     "three": {"cpu": 3, "gpu": 0, "warn_min": 30},
@@ -636,6 +781,64 @@ class Resources(StoreCase):
         finally:
             s.release()
         self.assertIn("run %s died holding resource %s; it is free" % (rid, LAND), said)
+
+    def test_a_dead_run_holding_slots_and_the_resource_frees_both_for_the_next_claimant(self):
+        self.confine(2)
+        rid = "r-20261006T120000Z-d1d1d1"
+        m = self.store.run_mutex(rid)
+        self.addCleanup(m.release)
+        self.store.write("queue.json", {"ticket": 1, "entries": [{
+            "id": rid, "ticket": 1, "state": "held", "pid": os.getpid(),
+            "ctime": process.own_ctime(), "repo": "kit", "slug": "gone", "kind": "engine-test",
+            "need": {"cpu": 1, "gpu": 0}, "expect_s": 600, "cores": [0], "gpus": [],
+            "held_at": time.time(), "resource": LAND, "priority": "land"}]})
+        m.release()                             # its wrapper is gone
+        said = []
+        self.store.say = said.append
+        s = self.book("next", resource=LAND, priority="land", no_wait=True)
+        try:
+            self.assertEqual([e["id"] for e in self.entries()], [s.id])
+        finally:
+            s.release()
+        [line] = [t for t in said if rid in t]
+        self.assertIn("died holding it; it is free; so is resource %s" % LAND, line)
+
+    def test_a_dead_waiter_naming_the_resource_is_dropped_and_does_not_keep_it(self):
+        self.confine(2)
+        rid = "r-20261006T120000Z-d2d2d2"
+        m = self.store.run_mutex(rid)
+        self.addCleanup(m.release)
+        self.store.write("queue.json", {"ticket": 1, "entries": [{
+            "id": rid, "ticket": 1, "state": "waiting", "pid": os.getpid(),
+            "ctime": process.own_ctime(), "repo": "kit", "slug": "gone", "kind": "engine-test",
+            "since": store_mod.iso(), "need": {"cpu": 1, "gpu": 0}, "expect_s": 600,
+            "cores": [], "gpus": [], "resource": LAND, "priority": "land"}]})
+        m.release()
+        said = []
+        self.store.say = said.append
+        s = self.book("next", resource=LAND, no_wait=True)
+        s.release()
+        self.assertIn("run %s's caller died while it waited; its queue entry is dropped" % rid,
+                      said)
+        self.assertEqual(self.entries(), [])
+
+    def test_an_unknown_priority_is_refused_before_anything_is_written(self):
+        # Refused, not defaulted to ordinary (the planner's default is only for old disk entries).
+        self.confine(2)
+        for prio in ("", "Land", "urgent", ("land",), True):
+            with self.subTest(priority=prio):
+                e = self.busy("t", resource=LAND, priority=prio)
+                self.assertEqual(e.code, 2)
+                self.assertIn("unknown priority", e.message)
+        self.assertIsNone(self.store.read("queue.json"))
+        self.assertEqual(os.listdir(self.store.path("active")) if os.path.isdir(
+            self.store.path("active")) else [], [])
+        s = self.book("t", priority="land", no_wait=True)       # known, with no resource
+        try:
+            [e] = self.entries()
+            self.assertEqual((e["priority"], e["resource"]), ("land", None))
+        finally:
+            s.release()
 
     def test_a_nested_run_naming_one_its_parent_lacks_joins_the_queue_for_it(self):
         anc = process.own_ancestors()

@@ -1,6 +1,6 @@
 """Find repetitive agent work worth turning into a tool. Read-only; reads Claude Code transcripts.
 
-usage: python ~/.claude/tools/usage/repetition_report.py <repo path> [--days 7] [--top 15] [--config-dir <dir> ...]
+usage: python <kit>/optional/usage/repetition_report.py <repo path> [--days 7] [--top 15] [--config-dir <dir> ...]
 
 Reports, for that repo's sessions and subagents in the window:
   1. shell command shapes repeated most (paths, hashes and numbers normalised away) - with failure rate

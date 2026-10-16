@@ -15,14 +15,23 @@
             `refused`, found by the run_id in the payload's name
   redirect_output  the detached tool's stdout and stderr, appended to the output file
 
-The detached tool is started the way `machine_lock.py run --detach` starts its wrapper:
-Win32_Process.Create through PowerShell's CIM cmdlets with ShowWindow 0, so it is outside this
-process tree (it outlives the shell and the agent that submitted it) and has no window. Its
+The detached tool is started the way `machine_lock.py run --detach` starts its wrapper
+(kitlib.lock.detach, "Why WMI" and "Why the carrier"): `create` asks Win32_Process.Create, through
+PowerShell's CIM cmdlets, to start `command`'s argv: the pythonw.exe beside this interpreter
+running the carrier tools/no_window.py beside the tool, which starts the python.exe beside it
+running the tool with CREATE_NO_WINDOW and waits for it. WMI's process is outside this process
+tree and its job (it outlives the shell and the agent that submitted it); pythonw has no console,
+so the tool gets a console with no window, and nothing rests on ShowWindow. The pid `detach` gives
+is the carrier's: it ends with the tool's exit code, and it runs from the same folder (a pinned
+export). The tool is the python.exe the carrier started (kitlib.lock.detach.wrapper_pid finds it),
+which outlives a carrier that is killed: the export is leased to both pids, and the claim watches
+and records the tool's pid (the carrier's when the tool was not found). A missing pythonw.exe,
+carrier or python.exe starts nothing. Its
 environment is this one, less the machine lock's MACHINE_LOCK_RUN (the landing books its own slot,
 never one nested in the submitter's run) and with MACHINE_LOCK_ORIGIN, this process's ancestry, so
 the machine lock gives the detached slot the submitter's role. A tool run from an export of pushed
 main (kitlib.gate.pin) keeps KIT_PINNED, so the detached tool runs from the same export, and
-pin.lease_child leases the export for it.
+pin.lease_child leases the export for the carrier and for the tool, one lease each.
 
 Every outcome of the detached landing ends in a final land record per branch, refusals included:
 the records were written `running` before the start, and Lander.run finishes them whatever the
@@ -38,7 +47,6 @@ import json
 import os
 import re
 import secrets
-import subprocess
 import sys
 import time
 
@@ -47,6 +55,7 @@ from kitlib import pluginsource
 from kitlib.gate import pin
 from kitlib.gate import result
 from kitlib.git import repo
+from kitlib.lock import detach as lockdetach
 from kitlib.lock import run as lockrun
 from kitlib.proc import process, spawn
 
@@ -59,15 +68,7 @@ RUN_ID = re.compile(r'[0-9a-f]{16}')
 # How long submit() waits for the detached landing to record itself (its pid in the records).
 CLAIM_WAIT_S = 15.0
 CLAIM_POLL_S = 0.25
-LANDED = ('pass', 'landed-ungated')
-# The detach of tools/machine_lock.py, the same script: the command line, folder and environment
-# arrive as JSON on stdin; it prints "<ReturnValue> <ProcessId>".
-DETACH_PS = ("$d = [Console]::In.ReadToEnd() | ConvertFrom-Json; "
-             "$si = New-CimInstance -ClassName Win32_ProcessStartup -Property "
-             "@{ShowWindow=[UInt16]0; EnvironmentVariables=[string[]]$d.env} -ClientOnly; "
-             "$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments "
-             "@{CommandLine=$d.cmd; CurrentDirectory=$d.cwd; ProcessStartupInformation=$si}; "
-             "\"$($r.ReturnValue) $($r.ProcessId)\"")
+LANDED = ('pass', 'landed-ungated')    # landed-ungated: an old record's (exit 9 is retired)
 
 
 class SubmitError(Exception):
@@ -93,21 +94,27 @@ def run_id_of(payload):
     return rid if RUN_ID.fullmatch(rid) else None
 
 
+def command(tool_file, args, python=None):
+    """The detached tool's argv: the pythonw.exe beside `python` (default: this interpreter), the
+    carrier beside `tool_file`, the python.exe beside `python`, then `-B tool_file` and `args`.
+    kitlib.lock.detach.command's shape, without the lock's --detached-id."""
+    pythonw, console = lockdetach.pythons(python or sys.executable)
+    tool = os.path.abspath(tool_file)
+    carrier = os.path.join(os.path.dirname(tool), spawn.CARRIER)
+    return [pythonw, carrier, console, '-B', tool] + list(args)
+
+
 def detach(argv, cwd, env, run=None, timeout=START_TIMEOUT_S):
-    """Start `argv` detached and windowless: (pid, None), or (None, why)."""
-    run = run or spawn.run
-    data = {'cmd': subprocess.list2cmdline(argv), 'cwd': cwd,
-            'env': ['%s=%s' % kv for kv in env.items()]}
-    try:
-        r = run(['powershell', '-NoProfile', '-NonInteractive', '-Command', DETACH_PS],
-                input=json.dumps(data), capture_output=True, text=True, timeout=timeout)
-    except (OSError, subprocess.SubprocessError) as e:
-        return None, 'the detached start failed: %s' % e
-    parts = (r.stdout or '').split()
-    if r.returncode or len(parts) != 2 or parts[0] != '0' or not parts[1].isdigit():
-        return None, 'the detached start got %r (exit %s): %s' % (
-            (r.stdout or '').strip(), r.returncode, ' '.join((r.stderr or '').split())[-300:])
-    return int(parts[1]), None
+    """Start `command`'s argv detached and windowless (kitlib.lock.detach.create): (the carrier's
+    pid, None), or (None, why), with nothing started when its pythonw.exe, carrier or python.exe
+    is not a file. run: the tests' stand-in for spawn.run."""
+    why = lockdetach.missing(argv)
+    if why:
+        return None, 'the detached start: %s' % why
+    pid, why = lockdetach.create(argv, cwd, env, run=run, timeout=timeout)
+    if pid is None:
+        return None, 'the detached start %s' % ' '.join(why.split())
+    return pid, None
 
 
 def child_env(environ=None):
@@ -158,7 +165,8 @@ def _refused(runs, why):
 def blocked(root, branches, tips):
     """Why the land records of `branches` stop a submission, or None: a branch's landing is
     running and its process lives (result.running_state 'live'; a dead or unknown one does not
-    count), or a branch already landed at its tip (verdict pass or landed-ungated). Read only."""
+    count), or a branch already landed at its tip (verdict pass, or an old record's landed-ungated).
+    Read only."""
     for b, t in zip(branches, tips):
         rec, _ = result.read(root, b, 'land')
         if not isinstance(rec, dict):
@@ -178,7 +186,7 @@ def blocked(root, branches, tips):
 
 def submit(root, tool_file, child_args, branches, tips, expect_main=None, environ=None,
            detach_fn=None, kit=None, now=None, claim_wait_s=CLAIM_WAIT_S,
-           clock=time.monotonic, sleep=time.sleep):
+           clock=time.monotonic, sleep=time.sleep, landing_of=None):
     """Start the landing of `branches` at `tips` detached: `tool_file` (tools/land.py or
     tools/gate.py) again with `child_args` (the landing's own arguments, -C absolute) and
     `--submitted <payload>`. An Outcome: OK with the SUBMITTED line, USAGE for arguments the
@@ -186,7 +194,10 @@ def submit(root, tool_file, child_args, branches, tips, expect_main=None, enviro
     branch's landing is running or it landed at its tip already (blocked), REFUSED when the
     records or the payload cannot be written or the start fails (records written are finished
     `refused`), or when the detached landing died before it recorded itself (claim: its
-    records are finished `error`)."""
+    records are finished `error`). The export a pinned tool runs from is leased to the carrier
+    `detach` started and to the landing (`landing_of(carrier)`, default
+    kitlib.lock.detach.wrapper_pid; the tests' stand-in), and the claim watches the landing, or
+    the carrier when no landing was found."""
     from kitlib.gate import land        # land imports nothing from here; late, as runner does
     branches, tips = list(branches), list(tips)
     why = land.Lander(root, branches, expect_main, tips).usage()
@@ -225,16 +236,20 @@ def submit(root, tool_file, child_args, branches, tips, expect_main=None, enviro
                 '+'.join(branches), ','.join(t[:10] for t in tips), runs[0].started_at))
     except OSError as e:
         return _refused(runs, 'the submission could not write %s: %s' % (payload, e))
-    argv = [sys.executable, '-B', os.path.abspath(tool_file)] + list(child_args) + [FLAG, payload]
+    argv = command(tool_file, list(child_args) + [FLAG, payload])
     env = child_env(environ)
     pid, why = (detach_fn or detach)(argv, root, env)
     if pid is None:
         return _refused(runs, 'the landing could not be started: %s' % why)
-    try:
-        pin.lease_child(tool_file, pid, env)
-    except OSError as e:        # the landing runs; a later pin may prune its export under it
-        _note(output, 'WARNING: the pinned export could not be leased for pid %d: %s' % (pid, e))
-    died = claim(root, runs, pid, output, claim_wait_s, clock=clock, sleep=sleep)
+    landing = _landing(pid, landing_of)
+    for p in (pid, landing):
+        if p is None:
+            continue
+        try:
+            pin.lease_child(tool_file, p, env)
+        except OSError as e:    # the landing runs; a later pin may prune its export under it
+            _note(output, 'WARNING: the pinned export could not be leased for pid %d: %s' % (p, e))
+    died = claim(root, runs, landing or pid, output, claim_wait_s, clock=clock, sleep=sleep)
     if died:
         return G.Outcome(G.REFUSED, ['REFUSED: %s; nothing was changed; its output: %s' % (
             died, output)], pid=pid, payload=payload, output=output)
@@ -242,9 +257,20 @@ def submit(root, tool_file, child_args, branches, tips, expect_main=None, enviro
                      output=output)
 
 
+def _landing(carrier, landing_of=None):
+    """The pid of the landing (the python.exe) the carrier `carrier` started, or None: not seen
+    (it and the carrier ended already) or the lookup failed. The carrier ends with the landing,
+    but a carrier that is killed leaves it running."""
+    try:
+        return (landing_of or lockdetach.wrapper_pid)(carrier)
+    except Exception:       # noqa: BLE001 - the carrier's pid still names the submission
+        return None
+
+
 def claim(root, runs, pid, output, wait_s=CLAIM_WAIT_S, poll_s=CLAIM_POLL_S, clock=time.monotonic,
           sleep=time.sleep, alive=None):
-    """Wait up to `wait_s` for the detached landing `pid` to record itself in `runs`' records
+    """Wait up to `wait_s` for the detached landing `pid` (submit: the landing's own pid, or the
+    carrier's when the landing was not found) to record itself in `runs`' records
     (restore writes its pid into them). Once every record is claimed, or finished: None. When
     the process died first: its unclaimed records are finished `error` and the reason is
     returned. When the wait ends with the process alive: its pid (and creation time) is written

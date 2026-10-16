@@ -27,6 +27,23 @@ class Process(unittest.TestCase):
         self.assertTrue(process.alive(os.getpid(), process.own_ctime()))
         self.assertFalse(process.alive(os.getpid(), process.own_ctime() + 1))
 
+    def test_parent_pid_reads_one_handle_and_agrees_with_the_snapshot(self):
+        self.assertEqual(process.parent_pid(process.K32.GetCurrentProcess()), os.getppid())
+        p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        try:
+            h = process.open_process(p.pid)
+            try:
+                self.assertEqual(process.parent_pid(h), os.getpid())
+                self.assertEqual(process.parent_pid(h), process.process_parents()[p.pid])
+            finally:
+                process.close(h)
+        finally:
+            p.kill()
+            p.wait()
+
+    def test_parent_pid_of_an_unusable_handle_is_none(self):
+        self.assertIsNone(process.parent_pid(None))
+
     def test_own_ancestors_hold_the_parent(self):
         self.assertIn(os.getppid(), {p for p, _c in process.own_ancestors()})
 

@@ -87,61 +87,88 @@ class GatedIsPushed(_CommittedTools):
         _, tip = self.branch('feature', {'MODE': mode + '\n'})
         return self.lander(BRANCH, self.main, tip).run()
 
+    def landing_tree(self):
+        return self.repo.path('.claude', 'worktrees', '_landing')
+
     def assert_nothing_pushed(self, out):
         self.assertEqual(self.remote_main(), self.main, out.lines)
         self.assertEqual(self.records(), [], out.lines)
 
+    def assert_merge_named(self, out):
+        """A green gate the landing tree did not keep to (Lander.unchanged) names the gated merge
+        in its FAILED outcome, as a refused push does: a merge of the base, not on main."""
+        self.assertRegex(out.facts.get('merge') or '', '^[0-9a-f]{40}$', out.lines)
+        self.assertIn('parent %s' % self.main, self.repo.git('cat-file', '-p', out.merge))
+        self.assertNotEqual(out.merge, self.main_now(), out.lines)
+
+    def assert_main_checkout_untouched(self, out):
+        """The step ran in the landing tree: the main checkout was never merged into, so it is
+        at the base and clean, and the landing lock is released (nothing is left for a person)."""
+        self.assertEqual(self.main_now(), self.main, out.lines)
+        self.assertEqual(self.repo.git('status', '--porcelain'), '', out.lines)
+        self.assertIsNone(self.lock().read(), out.lines)
+
     def test_a_step_that_edits_a_tracked_file_pushes_nothing(self):
         out = self.land_mode('edit')
-        self.assertEqual(out.code, G.STUCK, out.lines)      # its edit is never thrown away
+        self.assertEqual(out.code, G.FAILED, out.lines)     # the edit is in the kit's own tree
+        self.assertTrue(out.undone)
         self.assertIn('README.md', joined(out))
         self.assert_nothing_pushed(out)
-        self.assertEqual(self.lock().read()['phase'], 'stuck')
-        text = joined(out)                                  # what is left, and how to clear it
-        self.assertIn('tracked changes: M README.md', text)
-        self.assertIn('reset --keep %s' % self.main, text)
-        self.assertIn('.break_lock()', text)
+        self.assertIn('a step changed tracked files: M README.md', joined(out))
+        self.assert_merge_named(out)
+        self.assert_main_checkout_untouched(out)
+        with open(self.repo.path('README.md'), encoding='utf-8') as f:
+            self.assertNotIn('changed by the gate', f.read())
 
     def test_a_step_that_commits_pushes_nothing(self):
         out = self.land_mode('commit')
-        self.assertEqual(out.code, G.STUCK, out.lines)
+        self.assertEqual(out.code, G.FAILED, out.lines)
+        self.assertTrue(out.undone)
         self.assertIn('HEAD moved', joined(out))
+        self.assert_merge_named(out)
         self.assert_nothing_pushed(out)
-        self.assertNotEqual(self.main_now(), self.main)       # left for a person, not guessed at
+        self.assert_main_checkout_untouched(out)
+        self.assertNotIn('made by the gate', self.repo.git('log', '--format=%s', 'main'))
 
     def test_an_untracked_file_left_by_a_green_gate_undoes_and_pushes_nothing(self):
         out = self.land_mode('untracked')
         self.assertEqual(out.code, G.FAILED, out.lines)
         self.assertTrue(out.undone)
         self.assertIn('left.txt', joined(out))
-        self.assertIn('needs cleaning', joined(out))
+        self.assertIn('a step left untracked files: left.txt', joined(out))
+        self.assert_merge_named(out)
         self.assert_nothing_pushed(out)
-        self.assertEqual(self.main_now(), self.main)
-        self.assertIsNone(self.lock().read())
-        self.assertTrue(os.path.exists(self.repo.path('left.txt')))   # kept, and reported
+        self.assert_main_checkout_untouched(out)
+        self.assertFalse(os.path.exists(self.repo.path('left.txt')))
+        # kept in the landing tree to look at, until the next landing recreates the tree
+        self.assertTrue(os.path.exists(os.path.join(self.landing_tree(), 'left.txt')))
 
     def test_an_untracked_file_left_by_a_red_gate_is_undone_not_stuck(self):
         out = self.land_mode('untracked-red')
         self.assertEqual(out.code, G.FAILED, out.lines)
         self.assertTrue(out.undone)
-        self.assertIn('left.txt', joined(out))
         self.assert_nothing_pushed(out)
-        self.assertEqual(self.main_now(), self.main)
-        self.assertIsNone(self.lock().read())
+        self.assert_main_checkout_untouched(out)
+        self.assertFalse(os.path.exists(self.repo.path('left.txt')))
 
-    def test_the_undo_has_the_merge_timeout(self):
+    def test_putting_the_tree_back_at_the_base_has_a_long_timeout(self):
+        """What the undo was: the next landing puts the landing tree back at the base, which
+        touches every file the merge changed, so it never runs on git's short default timeout."""
+        _, tip = self.branch('feature', {'MODE': 'red\n'})
+        out = self.lander(BRANCH, self.main, tip).run()
+        self.assertTrue(out.undone, out.lines)
         seen = []
         real = cmd.call
 
         def spy(args, cwd, stdin=None, timeout=cmd._DEFAULT, env=None):
             seen.append((list(args), timeout))
             return real(args, cwd, stdin=stdin, timeout=timeout, env=env)
-        _, tip = self.branch('feature', {'MODE': 'red\n'})
         with mock.patch.object(cmd, 'call', spy):
             out = self.lander(BRANCH, self.main, tip).run()
         self.assertTrue(out.undone, out.lines)
-        resets = [t for a, t in seen if a[:1] == ['reset']]
-        self.assertEqual(resets, [land.MERGE_TIMEOUT])
+        back = [t for a, t in seen if a[:1] == ['checkout']]
+        self.assertEqual(back, [land.PUSH_TIMEOUT])
+        self.assertGreaterEqual(land.PUSH_TIMEOUT, land.MERGE_TIMEOUT)
 
 
 # ---------------------------------------------------------------- 2 SystemExit and Ctrl+C

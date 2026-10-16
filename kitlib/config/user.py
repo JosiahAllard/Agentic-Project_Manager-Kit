@@ -36,8 +36,9 @@ OLD = 'old'      # the old folder's file: DIR_NAME has none (the fallback)
 BOTH = 'both'    # both have one: DIR_NAME's is read, the old one ignored
 NONE = 'none'    # neither: an empty config, named at DIR_NAME
 BAD = 'bad'      # DIR_NAME's folder or file cannot be read as present or absent: a ConfigError
-# The kit's temp folder at the root of a checkout's drive (work_temp).
-TEMP_DIR_NAME = 'AgentTemp'
+# The kit's temp folder at the root of a checkout's drive (work_temp): the kit's default, which
+# the machine config's `temp_dir` overrides.
+TEMP_DIR_NAME = 'kit-temp'
 
 
 class AbsPath(Str):
@@ -123,8 +124,9 @@ RETIRED = ('ledger_refs',)
 # One line per key. A key another module owns is registered as Owned(<that module>), which checks it.
 SCHEMA = {
     'owner_email': Field(Email(), None, 'the author email of the owner\'s own commits, for every repository whose .kit.json sets no "owner".email; unset there too: no commit is provable as the owner\'s, so every owner-only change is refused (docs/kit-json.md "With no file"); older kit copies reject the key'),
-    'ledger_path': Field(AbsPath(), None, 'the rulings ledger file; set here only'),
-    'ledger_repos': Field(ListOf(Str(pattern=r'[a-z0-9][a-z0-9-]*', what='a lower-case repo name')), None, 'the repo columns `ledger.py add --repo` writes, besides `all`; unset: any lower-case name (docs/ledger.md)'),
+    'ledger_dir': Field(AbsPath(), None, 'the rulings ledger folder: one file `<ledger_dir>/<repo>.md` per `ledger_repos` name, which it needs; set here only (docs/ledger.md "Files"); older kit copies reject the key; set it only after every folder runs a kit that knows it'),
+    'ledger_repos': Field(ListOf(Str(pattern=r'[a-z0-9][a-z0-9-]*', what='a lower-case repo name')), None, 'the repos `ledger.py add --repo` writes; `pm` is the machine-wide one; a repository\'s name is its folder name lower-cased with `_` as `-` (`My_Tools-Repo` is `my-tools-repo`); with `ledger_dir`, each name once, and never `all`, `standing` or the frozen file\'s name; without it, the one-file ledger\'s repo columns besides `all`, and unset: any lower-case name (docs/ledger.md)'),
+    'ledger_path': Field(AbsPath(), None, 'the one-file rulings ledger (R-nnnn ids); set here only; once `ledger_dir` is set it is frozen: read, never written; removed one release after the split'),
     'pending_path': Field(AbsPath(), None, "the owner's pending-steps file tools/pending.py edits (docs/pending.md)"),
     'standing_delegation': Field(Str(pattern=r'R-[0-9]{4,}', what='a ruling id R-nnnn'), None, 'the ledger entry that delegates in general; the backlog refuses it as the ruling behind any one change. Unset: no id is refused for that'),
     'scrub_patterns': Field(ListOf(Regex()), None, "case-insensitive patterns for the install's own names (repositories, owner, accounts) that the shipped-text tests and tests/scrub/test_generic.py also refuse"),
@@ -134,14 +136,15 @@ SCHEMA = {
     'guard_mark_roots': Field(MarkMap(ListOf(MARK_ROOT), what='mark'), None, 'more write-jail roots for the main sessions of one launcher mark, as {mark: [{path, mode, why}]}; a root that is, holds or lies inside either machine config folder, the current or the retired one, is ignored unless it is read-only (docs/guard.md "Write jail")'),
     'pm_data': Field(Owned('kitlib.pmdata'), None, 'the worktree of the PM data branch: {path, branch, remote} (docs/pm-data-branch.md "Layout")'),
     'hub': Field(Owned('kitlib.hubsite.settings'), None, 'the Action Hub site settings: port, tunnel_port, store, commit_every_s, push (unset: on only when store is unset and pm_data is set), backlog_refresh_s, access: {team, aud, emails}, relay: {source}; unset: every default, and the site still runs; older kit copies reject the key; set it only after every folder runs a kit that knows it'),
-    'pm_start': Field(Owned('kitlib.pmstart'), None, 'the PM session-start checklist settings (docs/pm-start.md "Config"); among them hub_mirror: the absolute folder of the old hub\'s mirror for an install without pm_data (docs/action-hub.md "Data from the old hub")'),
+    'pm_start': Field(Owned('kitlib.pmstart'), None, 'the PM session-start checklist settings (docs/pm-start.md "Config")'),
     'coordinator_start': Field(Owned('kitlib.coordinatorstart'), None, 'the coordinator session-start settings'),
     'conductor_start': Field(Owned('kitlib.coordinatorstart'), None, 'the old name of coordinator_start, read when coordinator_start is absent; removed after the switch'),
     'pm_watch': Field(Owned('kitlib.pmwatch'), None, 'the PM watcher settings'),
     'launcher': Field(Owned('kitlib.launcher'), None, 'the session launcher settings: state folder, repos, account folders (docs/launcher.md "Settings")'),
     'backlog_lint': Field(Owned('kitlib.backloglint'), None, 'the backlog lint repositories'),
     'machine_lock': Field(Owned('kitlib.lock.site'), None, 'the machine lock settings: build daemons at release, lock-window notices'),
-    'temp_dir': Field(AbsPath(), None, "the folder the kit's own temp files go in (test run folders, gate logs); unset: `AgentTemp` at the root of the checkout's drive, or the shared temp folder on its drive (docs/test-tools.md \"Temp folders\"); older kit copies reject the key"),
+    'temp_dir': Field(AbsPath(), None, "the folder the kit's own temp files go in (test run folders, gate logs); unset: `kit-temp` at the root of the checkout's drive, or the shared temp folder on its drive (docs/test-tools.md \"Temp folders\"); older kit copies reject the key"),
+    'machine_path_folders': Field(ListOf(Str(pattern=r'[^\\/:*?"<>|\s]+', what='a folder name')), None, 'the drive-rooted folder names the machine-paths check refuses besides a user profile (docs/commit.md "machine_paths.py"); unset: none, so only drive-rooted user-profile paths are refused and tools/machine_paths.py prints a NOTE saying so; older kit copies reject the key; set it only after every folder runs a kit that knows it'),
     'agent_temp_sweep': Field(Owned('optional/agenttemp/agent_temp_sweep.py'), None, "the agents' temp folder to sweep (`dir`), the age past which an unused entry goes (`max_age_days`, default 3) and the entries it never removes (`keep`, relative paths such as `claude/<project>/<session>`); `tools/machine_setup.py` adds it when absent (docs/machine-setup.md \"Extras\")"),
     'plugin': Field(Owned('kitlib.pluginsource'), None, 'where the plugin export of pushed kit main lives, and whether pm_watch refreshes it on its own (docs/plugin-source.md); older kit copies reject the key; set it only after every folder is migrated'),
 }
@@ -480,6 +483,8 @@ def user_config(home=None, location=None):
             data = {k: v for k, v in data.items() if k not in RETIRED}
         errs = []
         Obj(SCHEMA, what='machine config').check(data, path, errs)
+        if not errs:
+            errs = ['%s: %s' % (path, why) for why in ledger_errors(data)]
         if errs:
             raise ConfigError('; '.join(errs))
     out = {k: f.default for k, f in SCHEMA.items()}
@@ -487,10 +492,38 @@ def user_config(home=None, location=None):
     return out
 
 
+LEDGER_NOT_A_REPO = ('all', 'standing')    # `all` is gone with the folder; standing.md is the digest
+
+
+def ledger_errors(data):
+    """What the ledger keys refuse together, for a machine config whose keys each passed their
+    type: `ledger_dir` needs `ledger_repos`, and each name's file `<ledger_dir>/<name>.md` must
+    be its own (a name once, not `all`, not the digest's, not the frozen file's)."""
+    folder = data.get('ledger_dir')
+    if folder is None:
+        return []
+    repos = data.get('ledger_repos')
+    if not repos:
+        return ['ledger_dir needs ledger_repos: the repos with a file in that folder']
+    out, seen = [], set()
+    frozen = data.get('ledger_path')
+    frozen = os.path.normcase(os.path.normpath(frozen)) if isinstance(frozen, str) else None
+    for name in repos:
+        if name in seen:
+            out.append('ledger_repos names %r twice' % name)
+        elif name in LEDGER_NOT_A_REPO:
+            out.append('ledger_repos may not name %r with ledger_dir set' % name)
+        elif os.path.normcase(os.path.normpath(os.path.join(folder, name + '.md'))) == frozen:
+            out.append('ledger_repos may not name %r: its file is ledger_path, the frozen ledger' % name)
+        seen.add(name)
+    return out
+
+
 def failing_keys(data):
     """The sorted top-level keys of the machine config object `data` that user_config refuses:
-    unknown, or holding a value its type refuses. Names only: no value is returned, so a caller
-    may print them where the value must not appear (kitlib.preflight.configline)."""
+    unknown, or holding a value its type refuses, or ledger_repos when ledger_errors refuses the
+    pair. Names only: no value is returned, so a caller may print them where the value must not
+    appear (kitlib.preflight.configline)."""
     out = []
     for k, v in data.items():
         if is_note(k) or k in RETIRED:
@@ -503,6 +536,8 @@ def failing_keys(data):
             f.type.check(v, k, errs)
         if errs:
             out.append(k)
+    if not {'ledger_dir', 'ledger_repos', 'ledger_path'} & set(out) and ledger_errors(data):
+        out.append('ledger_repos')
     return sorted(out)
 
 
@@ -519,13 +554,39 @@ def ledger_path(home=None):
 
 
 def ledger_repos(home=None):
-    """The repo columns the ledger writer accepts besides `all`, or None (any lower-case name)."""
+    """The repos the ledger writer accepts, or None (one-file ledger only: any lower-case name)."""
     return user_config(home)['ledger_repos']
+
+
+def ledger_dir(home=None):
+    """The per-repo ledger folder, or None when the machine config does not set one."""
+    return user_config(home)['ledger_dir']
+
+
+def files_of(cfg):
+    """{repo: <ledger_dir>/<repo>.md} in ledger_repos order, from a config user_config returned;
+    {} when it sets no ledger_dir."""
+    folder = cfg.get('ledger_dir')
+    if not folder:
+        return {}
+    return {name: os.path.join(folder, name + '.md') for name in cfg.get('ledger_repos') or ()}
+
+
+def ledger_files(home=None):
+    """files_of the machine config."""
+    return files_of(user_config(home))
 
 
 def standing_delegation(home=None):
     """The standing delegation's ruling id, or None when the machine config does not set one."""
     return user_config(home)['standing_delegation']
+
+
+def machine_path_folders(home=None):
+    """The drive-rooted folder names the machine-path check refuses besides a user profile, as a
+    tuple: the machine config's `machine_path_folders`, else () (the kit codes no folder names).
+    A machine config that cannot be read raises ConfigError."""
+    return tuple(user_config(home)['machine_path_folders'] or ())
 
 
 def doc_lines():

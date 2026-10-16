@@ -1,16 +1,11 @@
-"""kitlib.hubvalidate and the validation lines of hub_mirror save."""
-import importlib.util
-import io
+"""kitlib.hubvalidate: the findings over a corpus of hub documents."""
 import json
 import os
 import shutil
 import tempfile
 import unittest
-from unittest import mock
 
-from kitlib import hubmirror, hubvalidate as V
-
-KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from kitlib import hubvalidate as V
 
 
 def tmpdir(test):
@@ -79,6 +74,38 @@ class DoneWhenTest(unittest.TestCase):
         self.assertEqual(V.validate({'questions': {'Q-1': question(repo='all')}}), [])
 
 
+    def test_configured_repo_names_are_known_without_a_stored_repos_doc(self):
+        docs = {'questions': {'Q-1': question(repo='gamerepo')},
+                'repos': {'pm': {'name': 'pm', 'added_at': 'x'}}}
+        self.assertEqual(codes(V.validate(docs)), [('questions/Q-1', 'repo-alias')])
+        self.assertEqual(V.validate(docs, known_repos=['Gamerepo']), [])
+        self.assertEqual(codes(V.validate(docs, known_repos=['other'])),
+                         [('questions/Q-1', 'repo-alias')])
+
+    def test_configured_repo_names_also_cover_a_store_with_no_repos_collection(self):
+        docs = {'questions': {'Q-1': question(repo='gamerepo')}}
+        self.assertEqual(V.validate(docs, known_repos=['gamerepo']), [])
+        self.assertEqual(codes(V.validate(docs, known_repos=['other'])),
+                         [('questions/Q-1', 'repo-alias')])
+
+    def test_configured_repo_names_given_as_a_callable_are_asked_only_for_a_checked_tag(self):
+        asked = []
+
+        def names():
+            asked.append(1)
+            return ['gamerepo']
+
+        docs = {'questions': {'Q-1': question(repo='gamerepo'), 'Q-2': question(repo='ghost')},
+                'todos': {'T-1': {'status': 'open', 'title': 't', 'from': 'you'}},
+                'repos': {}}
+        self.assertEqual(V.validate(docs, only={'todos/T-1'}, known_repos=names), [])
+        self.assertEqual(asked, [], 'no checked document has a repo tag')
+        self.assertEqual(V.validate(docs, only={'questions/Q-1'}, known_repos=names), [])
+        self.assertEqual(codes(V.validate(docs, known_repos=names)),
+                         [('questions/Q-2', 'repo-alias')])
+        self.assertEqual(len(asked), 2)
+
+
 class CheckTest(unittest.TestCase):
     def test_commands_must_be_a_list_of_strings(self):
         for bad in ({'a': 1}, [1], [''], None):
@@ -126,6 +153,10 @@ class CheckTest(unittest.TestCase):
         self.assertEqual(V.validate({'questions': {'Q-1': question()}, 'todos': {'T-1': todo()}}), [])
         self.assertEqual(codes(V.validate({'todos': {'T-1': 'x'}})), [('todos/T-1', 'not-object')])
 
+    def test_a_non_object_pages_document_is_not_object_not_a_crash(self):
+        f = V.validate({'pages': {'p': 'x'}, 'page_html': {'p': 3}})
+        self.assertEqual(codes(f), [('page_html/p', 'not-object'), ('pages/p', 'not-object')])
+
     def test_only_limits_findings_not_the_judging(self):
         docs = {'questions': {'Q-1': question(status='bad')}, 'todos': {'T-1': todo(refs=['Q-9'])}}
         self.assertEqual(codes(V.validate(docs, only={'todos/T-1'})), [('todos/T-1', 'ref-dangling')])
@@ -150,65 +181,6 @@ class BatchTest(unittest.TestCase):
         self.assertEqual(sorted(docs['todos']), ['T-1', 'T-2', 'T-3'])
         self.assertEqual(docs['todos']['T-3'], {'status': 'done'})
         self.assertEqual(codes(bad), [('todos/T-4', 'unreadable')])
-
-
-class SaveTest(unittest.TestCase):
-    """hub_mirror save prints the findings (read_source notes) and saves anyway."""
-
-    def setUp(self):
-        self.d = tmpdir(self)
-        self.src = os.path.join(self.d, 'src')
-        write_json(os.path.join(self.src, 'todos', 'T-1.json'), todo(commands='Get-ChildItem'))
-
-    def test_read_source_notes_the_findings(self):
-        _, notes = hubmirror.read_source(self.src)
-        self.assertTrue(any(n.startswith('VALIDATE ERROR todos/T-1 commands') for n in notes), notes)
-        self.assertIn('VALIDATE 1 error(s), 0 warning(s) (saved anyway)', notes)
-
-    def test_a_crashing_check_never_aborts_the_save(self):
-        spec = importlib.util.spec_from_file_location('hub_mirror_tool',
-                                                      os.path.join(KIT, 'tools', 'hub_mirror.py'))
-        tool = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(tool)
-        mirror = os.path.join(self.d, 'mirror')
-        out = io.StringIO()
-        with mock.patch('sys.stdout', out), \
-                mock.patch.object(hubmirror.hubvalidate, 'validate', side_effect=KeyError('boom')), \
-                mock.patch.object(tool, '_settings', return_value=(None, {'hub_mirror': mirror})):
-            code = tool.main(['save', '--from', self.src])
-        self.assertEqual(code, 0)
-        self.assertIn('VALIDATE skipped:', out.getvalue())
-        self.assertTrue(os.path.isfile(os.path.join(mirror, 'todos', 'T-1.json')))
-
-    def test_a_non_object_pages_document_is_not_object_not_a_crash(self):
-        f = V.validate({'pages': {'p': 'x'}, 'page_html': {'p': 3}})
-        self.assertEqual(codes(f), [('page_html/p', 'not-object'), ('pages/p', 'not-object')])
-
-    def test_clean_source_adds_no_notes(self):
-        write_json(os.path.join(self.src, 'todos', 'T-1.json'), todo())
-        self.assertEqual(hubmirror.read_source(self.src)[1], [])
-
-    def test_repos_folder_is_read_for_aliases_but_not_mirrored(self):
-        write_json(os.path.join(self.src, 'todos', 'T-1.json'), todo(repo='old'))
-        write_json(os.path.join(self.src, 'repos', 'pm.json'), {'name': 'pm', 'aliases': ['old']})
-        found, notes = hubmirror.read_source(self.src)
-        self.assertEqual(sorted(found), ['todos'])
-        self.assertEqual([n for n in notes if n.startswith('VALIDATE')], [])
-
-    def test_the_tool_save_prints_findings_and_still_writes_exit_0(self):
-        spec = importlib.util.spec_from_file_location('hub_mirror_tool',
-                                                      os.path.join(KIT, 'tools', 'hub_mirror.py'))
-        tool = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(tool)
-        mirror = os.path.join(self.d, 'mirror')
-        out = io.StringIO()
-        with mock.patch('sys.stdout', out), \
-                mock.patch.object(tool, '_settings', return_value=(None, {'hub_mirror': mirror})):
-            code = tool.main(['save', '--from', self.src])
-        self.assertEqual(code, 0)
-        self.assertIn('VALIDATE ERROR todos/T-1 commands', out.getvalue())
-        self.assertIn('added todos/T-1.json', out.getvalue())
-        self.assertTrue(os.path.isfile(os.path.join(mirror, 'todos', 'T-1.json')))
 
 
 if __name__ == '__main__':

@@ -4,10 +4,13 @@ Pure functions that return data; the hook (boot/hook.py claude SessionStart coor
 comes from the "coordinator_start" key of the machine config and is emitted only when the
 environment variable PM_KIT_ROLE is "coordinator". After the standing lines come the optional ENG
 filing and pricing-pass lines (each switched on in the config), then the live checks (cap,
-machine state, other coordinators, and stubs: a line only when a repo that uses stubs has them not current),
-run as in kitlib.pmstart: each is a pure function over fakeable inputs (process list, file reads,
-a subprocess runner, now), and a failed one is one "could not check X: reason" line. No check
-reads the rulings ledger.
+machine state, other coordinators, the ledger line, the hub key: the session's sessions.json
+key, which it posts hub questions --from and waits --for, or "unknown" when no entry is found,
+and stubs: a line only when a repo that uses stubs has them not current), run as in kitlib.pmstart: each is a pure function over fakeable inputs
+(process list, file reads, a subprocess runner, now, the machine config), and a failed one is one
+"could not check X: reason" line. No check reads the rulings ledger: with the split ledger
+(`ledger_dir`, docs/ledger.md "Files") the ledger line names the repo's file from the machine
+config, and the file is never opened.
 
 Install values come from the config, never from the code: "repos_root" (the folder whose top-level
 folders are the repositories, matched against the session's cwd) and "landing_lock" ({repo: the
@@ -20,10 +23,9 @@ import os
 import re
 import sys
 
-from kitlib import pmstart, sessionmark, stubs
+from kitlib import kitroot, pmstart, sessionmark, stubs
 from kitlib.config import user as kuser
 from kitlib.git import cmd as gitcmd
-from kitlib.host import registry
 
 KEY = "coordinator_start"
 ROLE_VAR = "PM_KIT_ROLE"
@@ -33,6 +35,7 @@ LEGACY_ROLE = "conductor"
 NAME_VAR = "PM_KIT_SESSION_NAME"  # optional: this session's Remote Control name (else the process tree)
 TIMEOUT = 10
 SOON_HOURS = 4
+LOCK_SCHEMA_VERSION = 1       # kitlib.lock.api.SCHEMA_VERSION, the snapshot schema machine() reads
 # Engineering decisions (docs/engineering-rulings.md): the filing format, the consultant as
 # recipient, and the owner-only list.
 ENG_LINE = ("ENG rulings: an engineering question (API shape, class versus record, signatures, module layout, "
@@ -153,6 +156,16 @@ def find_entry(sessions, cwd, name=None, root=None):
     return hits[0], "%d sessions entries match repo %s; took the first (%s)" % (len(hits), top, hits[0].get("name"))
 
 
+def hub_key(sessions, entry):
+    """[the `hub key: <key>` line]: the sessions.json key of `entry` (find_entry's pick, the same
+    object), the key this coordinator posts hub questions --from and waits --for
+    (docs/action-hub.md "For the PM"). LookupError when no key holds it."""
+    for k, v in sessions.items():
+        if v is entry and not str(k).startswith("_"):
+            return ["hub key: %s (hub.py questions add --from %s; wait --pending --for %s)" % (k, k, k)]
+    raise LookupError("no sessions.json key holds this session's entry")
+
+
 def cap(cfg, repo, today):
     caps = _need(cfg, "cap").get(repo) or _need(cfg, "cap").get(repo.lower())
     if not caps:
@@ -194,30 +207,62 @@ def landing_lock(entry, run=_run, read=_read, root=None, lock_file=None):
         r.get("phase"), r.get("started_utc"))
 
 
-def machine(entry, run=_run, read=_read, now=None, home=None, root=None, lock_file=None):
-    """Owner reservations and bookings in force or starting within 4 h, free gpu and cpu slots, landing lock."""
-    home = home or kuser.home_dir()
+def machine(entry, run=_run, read=_read, now=None, kit=None, root=None, lock_file=None):
+    """Owner and agent holds in force or starting within 4 h, free gpu and cpu slots, landing lock.
+
+    Runs the kit's own `tools/machine_lock.py status --json` (kitlib.kitroot.lock_tool; `kit`
+    names another kit checkout) and reads its snapshot (kitlib.lock.api.snapshot, docs/lock-api.md
+    "Snapshot"): `holds` and `slots`. A slot is free when no run holds it and no hold covers it. A
+    payload of another schema_version raises ValueError rather than reading as an idle machine."""
     now = now or datetime.datetime.now().astimezone()
-    s = json.loads(run([sys.executable, registry.state_path(home, "tools", "machine_lock", "machine_lock.py"),
-                        "status", "--json"]))
+    s = json.loads(run([sys.executable, kitroot.lock_tool(kit), "status", "--json"]))
+    if s.get("schema_version") != LOCK_SCHEMA_VERSION:
+        raise ValueError("machine_lock status --json has schema_version %r, this check reads %d"
+                         % (s.get("schema_version"), LOCK_SCHEMA_VERSION))
     soon = now + datetime.timedelta(hours=SOON_HOURS)
-    res = s.get("reservations") or {}
     owner = []
-    for kind, items in (("owner reservation", (res.get("active") or []) + (res.get("upcoming") or [])),
-                        ("booking", (s.get("lock") or {}).get("bookings") or [])):
-        for v in items:
-            if _parse_time(v["start"]) <= soon and _parse_time(v["end"]) > now:
-                owner.append("%s %s-%s%s" % (kind, v.get("start_local", v["start"]), v.get("end_local", v["end"]),
+    for v in s.get("holds") or []:
+        if _parse_time(v["start"]) <= soon and _parse_time(v["end"]) > now:
+            owner.append("%s hold %s-%s%s" % ("agent" if v.get("owner") == "agent" else "owner",
+                                              v.get("start_local", v["start"]), v.get("end_local", v["end"]),
                                               ": " + v["note"] if v.get("note") else ""))
-    gpus, cores = s.get("gpus") or [], s.get("cores") or []
-    lines = ["machine: " + ("; ".join(owner) if owner else "no owner reservation or booking within %d h" % SOON_HOURS),
+    if s.get("holds_error"):
+        owner.append("holds unreadable: %s" % s["holds_error"])
+    slots = s.get("slots") or {}
+    gpus, cores = slots.get("gpu") or [], slots.get("cpu") or []
+
+    def free(pool):
+        return sum(1 for x in pool if not x.get("holder") and not x.get("hold"))
+    lines = ["machine: " + ("; ".join(owner) if owner else "no owner or agent hold within %d h" % SOON_HOURS),
              "machine: free gpu slots %d of %d; free cpu slots %d of %d" % (
-                 sum(1 for g in gpus if not g.get("holder_id")), len(gpus),
-                 sum(1 for c in cores if not c.get("holder_id")), len(cores))]
+                 free(gpus), len(gpus), free(cores), len(cores))]
     lock = landing_lock(entry, run, read, root, lock_file)
     if lock:
         lines.append(lock)
     return lines
+
+
+def ledger_lines(machine, repo):
+    """[the line naming `repo`'s ledger file] from the machine config `machine`
+    (kitlib.config.user.user_config's): [] without `ledger_dir`. `repo` (the sessions file's
+    folder name) is matched against `ledger_repos` lower-cased with every '_' as '-' (so
+    My_Tools-Repo is my-tools-repo); a repo not named there gets the
+    folder and the names instead. Nothing is read."""
+    if not machine.get("ledger_dir"):
+        return []
+    files = kuser.files_of(machine)
+    repo = str(repo or "")
+    key = ledger_name(repo)
+    if key in files:
+        return ["ledger (reference, HOW this repo works): %s" % files[key]]
+    named = key if key == repo else "%s (from %s)" % (key, repo)
+    return ["ledger (reference, HOW each repo works): one file per ledger_repos name in %s (%s); none is named %s"
+            % (machine["ledger_dir"], ", ".join(files), named)]
+
+
+def ledger_name(repo):
+    """The ledger_repos name a repository folder name `repo` maps to: lower-cased, '_' as '-'."""
+    return str(repo or "").lower().replace("_", "-")
 
 
 def stubs_line(entry, root=None, check=stubs.problem_line):
@@ -254,9 +299,9 @@ def others(entry, procs, env, pid):
             "otherwise stop and tell the PM" % ", ".join(names)]
 
 
-def context(cfg, env=None, cwd=None, now=None, procs=None, run=_run, read=_read, home=None,
-            pid=None, pm_cfg=None, live=True, stubs_check=stubs.problem_line):
-    """The heading, one "- <text>" line per string in cfg["standing"], the ENG filing line (only when cfg["eng_filing"] is true), the pricing-pass line (only when cfg["pricing_pass"] is true), then the live checks (the stubs check prints only when the repo's stubs are missing or stale)."""
+def context(cfg, env=None, cwd=None, now=None, procs=None, run=_run, read=_read, kit=None,
+            pid=None, pm_cfg=None, live=True, stubs_check=stubs.problem_line, machine_cfg=None):
+    """The heading, one "- <text>" line per string in cfg["standing"], the ENG filing line (only when cfg["eng_filing"] is true), the pricing-pass line (only when cfg["pricing_pass"] is true), then the live checks (the ledger check prints only with `ledger_dir` set, and nothing when the machine config cannot be read; the stubs check only when the repo's stubs are missing or stale). `machine_cfg`: the machine config (default kitlib.config.user.user_config(), read by the ledger check)."""
     env = os.environ if env is None else env
     lines = [str(t) for t in cfg.get("standing") or []]
     if cfg.get("eng_filing") is True:
@@ -283,16 +328,37 @@ def context(cfg, env=None, cwd=None, now=None, procs=None, run=_run, read=_read,
                     name = own_name(procs_once(), env, pid)
                 except Exception:
                     name = None
-                box["e"] = find_entry(json.loads(read(sf)), cwd, name, cfg.get("repos_root"))
+                box["s"] = json.loads(read(sf))
+                box["e"] = find_entry(box["s"], cwd, name, cfg.get("repos_root"))
                 if box["e"][1]:
                     lines.append(box["e"][1])
             return box["e"][0]
 
+        def own_key():
+            try:
+                entry = entry_once()
+            except (LookupError, ValueError) as e:     # no entry: say so, never guess a key
+                return ["hub key: unknown (%s); ask the PM for it" % str(e).strip("'\"")]
+            if box["e"][1]:     # several entries match and the first was taken: it may not be ours
+                return ["hub key: unknown (several sessions entries match this repo); ask the PM for it"]
+            return hub_key(box["s"], entry)
+
+        def ledger():
+            # A config that cannot be read (user_config raises ConfigError for every such case):
+            # no line, as with no ledger_dir. Any other error is a bug and is reported below.
+            try:
+                m = machine_cfg if machine_cfg is not None else kuser.user_config()
+            except kuser.ConfigError:
+                return []
+            return ledger_lines(m, entry_once()["repo"]) if m.get("ledger_dir") else []
+
         checks = [
             ("cap", lambda: cap(cfg, entry_once()["repo"], now.date())),
-            ("machine state", lambda: machine(entry_once(), run, read, now, home, cfg.get("repos_root"),
+            ("machine state", lambda: machine(entry_once(), run, read, now, kit, cfg.get("repos_root"),
                                               lock_file_for(cfg, entry_once().get("repo")))),
             ("other coordinators", lambda: others(entry_once(), procs_once(), env, pid)),
+            ("ledger", ledger),
+            ("hub key", own_key),
             ("stubs", lambda: stubs_line(entry_once(), cfg.get("repos_root"), stubs_check)),
         ]
         for name, fn in checks:

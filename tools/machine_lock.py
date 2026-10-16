@@ -29,6 +29,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from kitlib.lock import api                                        # noqa: E402
 from kitlib.lock import detach as dt                               # noqa: E402
 from kitlib.lock import holds as hl                                # noqa: E402
+from kitlib.lock import layout as lay                              # noqa: E402
 from kitlib.lock import status as st                               # noqa: E402
 from kitlib.lock.background import run_background                  # noqa: E402
 from kitlib.lock.run import ORIGIN_ENV, run_command                # noqa: E402
@@ -101,6 +102,14 @@ def parse_slots(s):
     return sorted(got)
 
 
+def parse_threads(s):
+    """'8-15,20' -> the thread ids (kitlib.lock.layout.parse_threads)."""
+    try:
+        return lay.parse_threads(s)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(str(e))
+
+
 def parse_json(s):
     try:
         return json.loads(s)
@@ -135,6 +144,11 @@ def parser():
                    "owner's own runs only), or an agent hold made for it (exit 12 when "
                    "it cannot)")
     r.add_argument("--gpu-share", choices=("training",), help="one gpu slot of a shareable kind")
+    r.add_argument("--within", type=parse_threads, metavar="THREADS",
+                   help="stay inside these threads (a Linux cpuset list such as 8-15, e.g. a "
+                        "container's): it takes only cpu slots whose threads all lie inside "
+                        "and waits for those; exit 2 when they are too few for its size "
+                        "(--cores) or it has --hold")
     r.add_argument("--on-release", metavar="CMDLINE", help="a shell command run after the command "
                    "ends (MACHINE_LOCK_END says how) and before the slots are freed")
     w = r.add_mutually_exclusive_group()
@@ -297,7 +311,7 @@ def cmd_run(a, cmd, store, argv):
         return run_background(cmd, a.repo, a.slug, **common)
     return run_command(cmd, a.kind, a.repo, a.slug, cores=a.cores, hold=a.hold,
                        gpu_share=a.gpu_share, wait_s=a.wait_s, no_wait=a.no_wait,
-                       on_release_cmd=a.on_release, **common)
+                       on_release_cmd=a.on_release, within=a.within, **common)
 
 
 def cmd_status(a, store):

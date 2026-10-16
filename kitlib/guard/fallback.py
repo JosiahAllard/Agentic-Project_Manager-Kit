@@ -8,10 +8,12 @@ unreadable line is never a way around a rule, and a plain line is never denied b
   - a git or root-search pattern that matches: the text from the match to the next ; | & or
     newline is read again as a command of its own and the rules run on it. A rule that denies it
     gives the deny, its real alternative included; none: the `unreadable` deny, which shows the
-    line written plainly. The location-dependent git patterns are checked when the call's
-    directory is a main checkout or one git cannot place; the push --no-verify pattern when that
+    line written plainly, or a script file's run when plain() cannot rewrite it or its rewrite
+    does not read cleanly either (plainly()).
+    The location-dependent git patterns are checked when the call's directory is a main checkout or one git cannot place; the push --no-verify pattern when that
     directory's repository has a PM data record (or git cannot place it), in every session but
-    the owner's own. The push-to-main pattern in a repository that does not set
+    the owner's own. The update-ref pattern (git-shared-ref) is checked wherever the call runs, in a
+    session rules.shared_ref_held holds. The push-to-main pattern in a repository that does not set
     repo.push_block (one with no .kit.json among them) gives only the re-read's own deny (a delete
     or a forced push of main); no deny lets the line run.
   - a heavy program's name: the same, and a program named by a variable is denied as heavy with
@@ -35,6 +37,7 @@ The git patterns are an earlier per-repository git guard's ($g and its four rule
 kit's own git rules.
 """
 import fnmatch
+import os
 import re
 
 from kitlib import config as kconfig
@@ -42,6 +45,7 @@ from kitlib.git import repo
 
 from . import commands as cm
 from . import rules
+from . import shell as sh
 
 G = r'\bgit(?:\.exe)?\s+(?:-[Cc]\s+(?:"[^"]*"|\'[^\']*\'|\S+)\s+|--?\S+\s+)*'
 GIT_WORD_RE = re.compile(r'(?i)(?<![\w.-])git(?:\.exe)?(?![\w-])')  # git as a word, not .git or GIT_DIR
@@ -63,11 +67,13 @@ MAIN_ONLY = (
                         r'|(?=[^|;&]*\s(?:--worktree|-[a-zA-Z]*W[a-zA-Z]*)\b))'),
 )
 SUBAGENT_MAIN = (
-    ('git-main-history', G + r'(?:commit|merge|rebase|cherry-pick|revert|am|pull|apply)\b'),
+    ('git-main-history', G + r'(?:commit|merge|rebase|cherry-pick|revert|am|pull|apply|update-ref)\b'),
 )
 ANYWHERE = (
     ('git-branch-force-delete', G + r'branch\s+[^|;&]*(-D|--delete\s+--force|-[a-zA-Z]*D[a-zA-Z]*)\b'),
     ('git-worktree-remove', G + r'worktree\s+remove\b'),
+    # every worktree shares the refs: a held session's update-ref is judged wherever it runs
+    ('git-shared-ref', G + r'update-ref\b'),
     ('git-push-main', G + r'push\b[^|;&]*(\s|:|/)(?:main|master)\b'),
     ('git-push-pmdata', G + r'push\b[^|;&]*\s--no(?:-v|-?(?![\w-]))'),
     ('git-push-pmdata', G + r'send-pack\b'),
@@ -92,6 +98,11 @@ ANYWHERE = (
 PARSED_RULES = ('owner_lock', 'owner_setup', 'wrapped_gate', 'root_search', 'heavy', 'git_rules', 'shell_writes')
 WHY = 'The guard could not read this command; write the program name literally. Why: %s.'
 PLAIN = ' Write it plainly:'
+# when plain() cannot rewrite the line, the alternative is a script file, never the line again
+SCRIPT = (' Make every program name and nested shell text literal (a nested bash -c in single quotes; a '
+          'variable it needs exported), or write the commands to a script file with the Write tool, then run it:')
+SCRIPT_RUNS = {'bash': ('script.sh', 'bash "%s"'),
+               'powershell': ('script.ps1', 'powershell -NoProfile -ExecutionPolicy Bypass -File "%s"')}
 
 
 def heavy_patterns(cfg):
@@ -146,6 +157,23 @@ def plain(parsed, text):
     return t
 
 
+def plainly(ctx, parsed, text, cwd):
+    """(the reason's last sentence, the alternative): the line written plainly when plain() can
+    rewrite it and the rewrite reads cleanly (read again in `cwd`), else a run of a script file
+    in the temp folder: never the refused line itself, nor a rewrite the guard would refuse as
+    unreadable too."""
+    p = plain(parsed, text)
+    if p.strip() != text.strip():
+        try:
+            readable = cm.read(p, parsed.shell, cwd).clean
+        except Exception:                       # a rewrite the reader cannot take: offer the script
+            readable = False
+        if readable:
+            return PLAIN, p
+    name, run = SCRIPT_RUNS['powershell' if parsed.shell == sh.PS else 'bash']
+    return SCRIPT, run % rules.fwd(os.path.join(ctx.tempdir, name))
+
+
 def cwd_at(parsed, pos, cwd):
     """The directory the top-level command holding text position `pos` runs in (a literal cd
     before it followed; None when a cd the text cannot place came first)."""
@@ -192,8 +220,8 @@ def check(event, ctx, text, cwd, role, parsed):
     def answer(d, rule):
         if d is not None:
             return rules.reworded(d, '%s %s' % (why, d.reason))
-        return rules.refuse('unreadable', role, '%s Its text matches the %s rule.%s' % (why, rule, PLAIN),
-                            plain(parsed, text))
+        last, alt = plainly(ctx, parsed, text, cwd)
+        return rules.refuse('unreadable', role, '%s Its text matches the %s rule.%s' % (why, rule, last), alt)
 
     main_rules = set(r for r, _p in MAIN_ONLY + SUBAGENT_MAIN)
     for rule, pat in list(ANYWHERE) + list(MAIN_ONLY) + list(SUBAGENT_MAIN):
@@ -211,6 +239,8 @@ def check(event, ctx, text, cwd, role, parsed):
         if rule in main_rules and not main_like(ctx, where):
             continue
         if rule == 'owner-setup' and rules.is_owner_session(event, ctx):
+            continue
+        if rule == 'git-shared-ref' and not rules.shared_ref_held(event, ctx):
             continue
         if rule == 'git-push-pmdata' and (rules.is_owner_session(event, ctx) or (
                 pat != XARGS_BARE_GIT and not rules.pmdata_recorded(ctx, where or cwd))):
@@ -239,11 +269,12 @@ def check(event, ctx, text, cwd, role, parsed):
         d = reread(m.start(), cwd_at(parsed, m.start(), cwd) or cwd)
         if d is not None:
             return answer(d, 'heavy')
+    last, alt = plainly(ctx, parsed, text, cwd)
     if role == 'subagent':
-        return rules.refuse('unreadable', role, why + PLAIN, plain(parsed, text))
+        return rules.refuse('unreadable', role, why + last, alt)
     if GIT_WORD_RE.search(text) and rules.agent_session(event, ctx):
         return rules.refuse('write-jail', role, '%s git on a line the guard cannot read may write a checkout it '
-                            'cannot place; run the git in its own call.%s' % (why, PLAIN), plain(parsed, text))
+                            'cannot place; run the git in its own call.%s' % (why, last), alt)
     owner = rules.is_owner_session(event, ctx)
     for c in parsed.commands:
         inv = cm.invocation(c)
@@ -258,10 +289,9 @@ def check(event, ctx, text, cwd, role, parsed):
             continue
         if main_like(ctx, c.cwd):
             return rules.refuse('unreadable', role, '%s It runs %s in a main checkout or a place git cannot '
-                                'tell.%s' % (why, hidden, PLAIN), plain(parsed, text))
+                                'tell.%s' % (why, hidden, last), alt)
         if not owner and rules.pmdata_recorded(ctx, c.cwd):
             return rules.refuse('git-push-pmdata', role, '%s It runs %s in a repository with a PM data record (%s): '
                                 'it may be git push --no-verify, which skips the pre-push hook that keeps PM data '
-                                'off public remotes.%s' % (why, hidden, rules.pmdata.FILE_NAME, PLAIN),
-                                plain(parsed, text))
+                                'off public remotes.%s' % (why, hidden, rules.pmdata.FILE_NAME, last), alt)
     return None

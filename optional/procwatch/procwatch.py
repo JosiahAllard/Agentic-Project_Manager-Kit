@@ -21,6 +21,8 @@ rule's age floor; idle where the rule says so), it is not protected, and its cre
 re-checked immediately before TerminateProcess. Protected (never touched, listed as expected):
 PROTECT_PATTERNS - ComfyUI plus any regexes in the PROCWATCH_PROTECT environment variable
 (';'-separated, matched against the command line), e.g. a repo's live production process.
+The origin label names the nearest known ancestor app; the PROCWATCH_ORIGINS environment
+variable (';'-separated exe names) adds more.
 
 Exit: 0 no suspects, 1 suspects reported, 2 error. Standard library only; Windows only.
 """
@@ -202,6 +204,15 @@ def protected(p):
     return any(re.search(x, s) for x in PROTECT_PATTERNS)
 
 
+ORIGIN_APPS = {"code.exe", "explorer.exe", "services.exe", "svchost.exe", "comfy desktop.exe",
+               "windowsterminal.exe"}
+
+
+def _extra_origins():
+    """Exe names from env PROCWATCH_ORIGINS (';'-separated), read per call."""
+    return {x.strip().lower() for x in os.environ.get("PROCWATCH_ORIGINS", "").split(";") if x.strip()}
+
+
 def origin(p, by_pid):
     """Who started it: the nearest recognisable ancestor, and whether the chain is broken."""
     q, hops = p, 0
@@ -216,8 +227,7 @@ def origin(p, by_pid):
                 m = re.search(r"-n\s+(\S+)", q.get("cmd") or "")
                 return "coordinator claude.exe " + (m.group(1) if m else str(q["pid"]))
             return f"claude.exe {q['pid']} session"
-        if n in {"code.exe", "explorer.exe", "services.exe", "svchost.exe", "steam.exe",
-                 "discord.exe", "comfy desktop.exe", "windowsterminal.exe"}:
+        if n in ORIGIN_APPS or n in _extra_origins():
             return n
         hops += 1
     return "orphan" if not p["parent_alive"] else f"{q['name']} {q['pid']} (its parent is gone)"

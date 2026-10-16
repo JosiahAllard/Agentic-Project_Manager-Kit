@@ -10,7 +10,8 @@ import threading
 import time
 import unittest
 
-from .helpers import OWNER, REPO, StoreCase, agent, claude_of, clean_env, under_agent_host
+from .helpers import (OWNER, REPO, StoreCase, agent, claude_of, clean_env, under_agent_host,
+                      unopenable)
 
 if os.name == "nt":
     from kitlib.lock import api
@@ -66,6 +67,7 @@ class Snapshot(ApiCase):
         self.assertIsNone(s["kinds_error"])
         self.assertEqual(s["layout"]["source"], "default")
         self.assertFalse(s["layout"]["hardware_change"]["changed"])
+        self.assertEqual(s["layout"]["other_labels"], [])
         self.assertEqual(s["holds"], [])
         self.assertFalse(s["game"]["enabled"])
         self.assertEqual(s["stats"]["rows"], [])
@@ -78,6 +80,31 @@ class Snapshot(ApiCase):
         self.assertIsNone(s["runs"][0]["gpu_mem_mb"])
         self.assertTrue(api.run_record(R_LIVE, self.store)["live"])
         self.assertIsNone(api.run_record(R_NONE, self.store))
+
+    def test_a_live_record_with_another_slot_label_is_named_and_warned(self):
+        # A record this kit writes carries slot_key of the layout in force: named nowhere. One
+        # with another label (here a two-card count on this one-card machine) comes from an
+        # older writer: the snapshot names its label once, and status warns in one line.
+        other = "t24 g2 cpu 12 x 2 gpu 4 m0123abcd"
+        self.live_record(R_A, layout=lay.slot_key(self.layout()))
+        self.live_record(R_LIVE)
+        s = self.snap()
+        self.assertEqual(s["layout"]["other_labels"], [])
+        self.assertFalse(any("WARNING" in x for x in st.render(s)))
+        self.live_record(R_B, layout=other)
+        s = self.snap()
+        self.assertEqual(s["layout"]["other_labels"], [other])
+        warn = [x for x in st.render(s) if other in x]
+        self.assertEqual(len(warn), 1)
+        self.assertTrue(warn[0].startswith("WARNING: "))
+        self.assertIn("older lock tool", warn[0])
+        # A foreign label is another writer's text: one with a line break stays escaped in the
+        # one WARNING line instead of starting a line of its own.
+        self.live_record(R_B, layout=other + "\nlayout (forged)")
+        self.assertEqual([x for x in "\n".join(st.render(self.snap())).split("\n") if "WARNING: a live" in x or "forged" in x],
+                         ["WARNING: a live run carries another slot numbering (%r): an older lock tool "
+                          "that counts this machine's cpu or gpu slots its own way writes to this store, "
+                          "and its slot numbers are not this layout's" % (other + "\nlayout (forged)")])
 
     def test_an_unreadable_queue_is_reported_not_emptied(self):
         os.makedirs(os.path.dirname(self.store.path("queue.json")), exist_ok=True)
@@ -565,6 +592,16 @@ class EndRun(ApiCase):
         self.ok(api.end_run(agent("sess-A"), R_B, self.store))
         self.ok(api.end_run(OWNER, R_B, self.store))
         self.assertEqual(self.stop_file(R_B)["by"], "owner")
+
+    def test_a_live_record_that_stays_unreadable_is_a_store_error_never_no_run(self):
+        self.live_record(R_A)
+        with unopenable(self.store.path("active", R_A + ".json")):
+            e = self.err(api.end_run(OWNER, R_A, self.store), "store", "id")
+            r = api.run_record(R_A, self.store)
+        self.assertIn("could not be read", e["message"])
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["error"]["code"], "store")
+        self.assertTrue(api.run_record(R_A, self.store)["live"])
 
 
 R_H, R_C = ("r-20261006T120000Z-%s" % x for x in ("c1c1c1", "d1d1d1"))

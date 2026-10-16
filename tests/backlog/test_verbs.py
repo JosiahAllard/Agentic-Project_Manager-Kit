@@ -8,6 +8,7 @@ import unittest
 from kitlib.backlog.errors import NotFound, Refusal, Usage
 
 from tests.backlog.helpers import ADD_NONE, BRANCH, TODAY, StoreCase, priced, rec
+from tests.home import machine_config
 
 OWNER_PRICED = dict(priority='2', priority_by='owner', priority_ruling='R-9001')
 OWNER_BLOCKED = dict(state='blocked', blocked_on='owner', owner_ask='which one?')
@@ -93,6 +94,22 @@ class Set(VerbCase):
         with self.assertRaises(Refusal):
             self.verb('set', 'FOO', [], hold_ruling='R-9002')
 
+    def test_set_scope_replaces_the_list_and_names_what_it_removed(self):
+        self.seed(rec('FOO', scope=['a/one.py', 'a/two.py', 'a/three.py']))
+        change = self.verb('set', 'FOO', [('scope', ['a/two.py', 'b/new.py'])])
+        self.assertEqual(self.get('FOO').all('scope'), ['a/two.py', 'b/new.py'])
+        self.assertIn('  removed 2 scope entries: a/one.py, a/three.py', change.lines)
+
+    def test_set_scope_that_removes_nothing_says_nothing_about_removal(self):
+        self.seed(rec('FOO', scope=['a/one.py']))
+        change = self.verb('set', 'FOO', [('scope', ['a/one.py', 'b/new.py'])])
+        self.assertFalse([ln for ln in change.lines if 'removed' in ln], change.lines)
+
+    def test_set_scope_that_removes_one_entry_says_entry(self):
+        self.seed(rec('FOO', scope=['a/one.py', 'a/two.py']))
+        change = self.verb('set', 'FOO', [('scope', ['a/two.py'])])
+        self.assertIn('  removed 1 scope entry: a/one.py', change.lines)
+
     def test_unknown_and_required_fields(self):
         self.seed(rec('FOO'))
         with self.assertRaises(Usage):
@@ -142,15 +159,29 @@ class RulingShapeOnly(VerbCase):
 
 class BlockUnblock(VerbCase):
 
-    def test_block_replaces_blocked_on_and_unblock_opens(self):
-        self.seed(rec('FOO'), rec('BAR'))
-        self.verb('block', 'FOO', ['item:BAR', 'live-client'])
+    def test_block_adds_to_blocked_on_and_unblock_removes(self):
+        # A second block once wiped the first's blockers.
+        self.seed(rec('FOO'), rec('BAR'), rec('BAZ'))
+        self.verb('block', 'FOO', ['item:BAR'])
+        change = self.verb('block', 'FOO', ['live-client'])
         self.assertEqual(self.get('FOO').all('blocked_on'), ['item:BAR', 'live-client'])
-        self.verb('block', 'FOO', ['live-client'])
+        self.assertIn('  blocked_on: item:BAR -> item:BAR, live-client', change.lines)
+        self.verb('block', 'FOO', ['live-client', 'item:BAZ'])
+        self.assertEqual(self.get('FOO').all('blocked_on'),
+                         ['item:BAR', 'live-client', 'item:BAZ'])
+        for m in ('item:BAR', 'item:BAZ'):
+            self.verb('unblock', 'FOO', on=m, reason='that blocker is done now')
         self.assertEqual(self.get('FOO').all('blocked_on'), ['live-client'])
         self.verb('unblock', 'FOO')
         self.assertEqual((self.get('FOO').get('state'), self.get('FOO').get('blocked_on')),
                          ('open', '-'))
+
+    def test_a_block_on_members_it_already_has_changes_nothing(self):
+        self.seed(rec('FOO'), rec('BAR'))
+        self.verb('block', 'FOO', ['item:BAR', 'live-client'])
+        change = self.verb('block', 'FOO', ['live-client'])
+        self.assertEqual(self.get('FOO').all('blocked_on'), ['item:BAR', 'live-client'])
+        self.assertIn('  (no change)', change.lines)
 
     def test_block_refusals(self):
         self.seed(rec('FOO'), priced('BAR', state='pulled', pulled_at=TODAY, pulled_by=BRANCH))
@@ -161,13 +192,18 @@ class BlockUnblock(VerbCase):
         with self.assertRaises(Refusal):
             self.verb('block', 'BAR', ['live-client'])
 
-    def test_the_owners_hold_is_released_only_with_a_ruling(self):
+    def test_the_owners_hold_is_released_only_by_unblock_with_a_ruling(self):
+        # `block` only adds, so it never releases the owner's hold and takes no `--ruling`.
         self.seed(rec('FOO', **OWNER_BLOCKED))
         with self.assertRaises(Refusal):
             self.verb('unblock', 'FOO')
-        with self.assertRaises(Refusal):
-            self.verb('block', 'FOO', ['live-client'])
-        self.verb('block', 'FOO', ['live-client'], ruling='R-9001')
+        with self.assertRaises(Usage):
+            self.verb('block', 'FOO', ['live-client'], ruling='R-9001')
+        self.verb('block', 'FOO', ['live-client'])
+        r = self.get('FOO')
+        self.assertEqual((r.all('blocked_on'), r.get('hold_ruling'), r.get('owner_ask')),
+                         (['owner', 'live-client'], None, 'which one?'))
+        self.verb('unblock', 'FOO', on='owner', reason='the owner answered it', ruling='R-9001')
         r = self.get('FOO')
         self.assertEqual((r.all('blocked_on'), r.get('hold_ruling')), (['live-client'], 'R-9001'))
 
@@ -300,6 +336,43 @@ class MachinePaths(VerbCase):
             with self.subTest(drive=d):
                 self.refused('set', 'FOO', [('summary', ['a clean replacement summary'])],
                              body='notes at %s here\n' % d)
+
+    def test_the_machine_configs_folder_list_is_refused_too(self):
+        self.seed(priced('FOO'))
+        src = 'D:' + chr(92) + 'Src' + chr(92) + 'x'
+        self.verb('set', 'FOO', [('summary', ['see %s first' % src])])
+        machine_config(self.home, {'machine_path_folders': ['Src']})
+        self.refused('set', 'FOO', [('summary', ['see %s again' % src])])
+        self.refused('close', 'FOO', 'done, see %s' % self.DRIVES[0])
+
+    def test_an_unreadable_machine_config_is_a_warning_on_the_write_and_on_the_refusal(self):
+        # The check narrows to user profiles; the WARNING says so, as the commit checks do.
+        self.seed(priced('FOO'))
+        machine_config(self.home, '{not json')
+        change = self.verb('set', 'FOO', [('summary', ['a clean replacement summary'])])
+        warned = [l for l in change.lines if l.startswith('WARNING: machine config')]
+        self.assertEqual(len(warned), 1, change.lines)
+        self.assertIn('only user-profile paths were searched', warned[0])
+        with self.assertRaises(Usage) as ctx:
+            self.verb('close', 'FOO', 'done, see %s' % self.DRIVES[0])
+        self.assertIn('machine path', str(ctx.exception))
+        self.assertIn('WARNING: machine config', str(ctx.exception))
+
+    def test_an_unreadable_machine_config_warning_ends_a_refusal_for_another_reason(self):
+        # The text is clean, so the plan collects the WARNING and then stops on the missing id:
+        # the stop still names the narrower check, once.
+        self.seed(priced('FOO'))
+        machine_config(self.home, '{not json')
+        with self.assertRaises(NotFound) as ctx:
+            self.verb('set', 'NOPE', [('summary', ['a clean replacement summary'])])
+        msg = str(ctx.exception)
+        self.assertEqual(msg.count('WARNING: machine config'), 1, msg)
+        self.assertTrue(msg.splitlines()[-1].startswith('WARNING: machine config'), msg)
+
+    def test_a_readable_machine_config_adds_no_warning(self):
+        self.seed(priced('FOO'))
+        change = self.verb('set', 'FOO', [('summary', ['a clean replacement summary'])])
+        self.assertFalse([l for l in change.lines if 'machine config' in l], change.lines)
 
     def test_a_refused_close_leaves_the_record_and_clean_text_still_closes(self):
         self.seed(priced('FOO'))

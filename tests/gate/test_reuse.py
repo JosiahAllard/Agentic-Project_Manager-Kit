@@ -16,7 +16,7 @@ import unittest
 from unittest import mock
 
 from kitlib import gate as G
-from kitlib.gate import land, result, reuse, runner, strict_defaults
+from kitlib.gate import land, result, reuse, runner, strict_defaults, verdicts
 from kitlib.gate import steps as S
 from kitlib.records import gate_ok
 from tests.gate import fixtures
@@ -73,6 +73,7 @@ class ReuseCase(fixtures.GateRepoCase):
         kw.setdefault('git_env', self.env)
         kw.setdefault('book_kw', self.book_kw)
         kw.setdefault('log_dir', self.logs)
+        fixtures.gate_full(self.repo.root, *(tip if isinstance(tip, list) else [tip]))
         lander = land.Lander(self.repo.root, branch, expect_main or self.main, tip,
                              say=self.said.append, **kw)
         return lander, lander.run()
@@ -349,8 +350,16 @@ class Strict(ReuseCase):
         self.assert_none(out, out.log_dir, why)
         self.assertEqual(self.entries(), [])
         tip = self.repo.git('rev-parse', 'HEAD', cwd=wt)
+        # a strict branch lands only with a strong non-author verdict, and its merged gate is
+        # escalated to --full --fresh (docs/gate.md "Strict paths"): --fresh is the why there
+        common, _ = land.repo.common_dir(self.repo.root)
+        verdicts.add(common, {'branch': BRANCH, 'tip': tip, 'verdict': 'LAND', 'risk': 'High',
+                              'reviewer': 'pm-kit:reviewer', 'reviewer_model': 'opus',
+                              'reviewer_id': 'agent-r1', 'author': 'Kit Test / strong-worker',
+                              'range': '%s..%s' % (self.main[:10], tip), 'session': 's',
+                              'records': []})
         lander, out = self.land(BRANCH, tip)
-        self.assert_none(out, lander.gate_logs, why)
+        self.assert_none(out, lander.gate_logs, '--fresh')
         self.assertEqual(self.entries(), [])
 
 

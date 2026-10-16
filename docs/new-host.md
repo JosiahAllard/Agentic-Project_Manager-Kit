@@ -45,7 +45,7 @@ checks the whole file, and one bad field refuses all of it. The fake host's entr
 |---|---|
 | `tool_event` | The one `hook_events` entry whose calls the guard judges. Every other hook event is a start event: the adapter adds context for it. |
 | `tool_field` | The dotted key of the tool's name in that event's payload: `tool_name`, or `call.name` for the fake host |
-| `guarded_tools` | Every tool a guard rule or the host's own `screen` can refuse, by name; an entry ending in `*` is a prefix (`mcp__*`). A call to any other tool is allowed before the kit boots, so it never pays for a boot or a release check. The conformance suite fails when a recorded payload that parses into an edit, shell or MCP call names a tool left out. |
+| `guarded_tools` | Every tool a guard rule or the host's own `screen` can refuse, by name; an entry ending in `*` is a prefix (`mcp__*`). A call to any other tool is allowed before the kit boots, so it never pays for a boot or a release check. The conformance suite fails when a recorded payload that parses into an edit, shell, read or MCP call (any kind but `other`; tests/host/conformance.py) names a tool left out. |
 | `fast_path` | `all`: an unguarded call skips the kit in every session. `unmarked`: only in a session no launcher marked (`PM_KIT_ROLE` unset), for a host whose `screen` must see every call of a marked session (Codex holds a marked session to an allowlist). |
 
 `profile` holds the host data the core reads. Each field has a consumer (`kitlib.host.HostProfile`):
@@ -59,7 +59,7 @@ checks the whole file, and one bad field refuses all of it. The fake host's entr
 | `mcp_tool_format` | How it names an MCP tool, using `{plugin}`, `{server}` and `{tool}` |
 | `session_env` | The variable that holds its session id. The lock shows it but never trusts it. |
 | `skills_directory` | The repo path it reads a repository's own skills from |
-| `attribution` | The commit trailer: `name`, `email`, `model_env` (or `null`), and `model_pattern` (`null` allows any model name) |
+| `attribution` | The commit trailer: `name`, `email`, `model_env` (or `null`), and `model_pattern` (`null` allows any model name); optional `session_trailer` (`{"key", "env", "url"}` with one `{id}` in `url`, or `null`), the session line its commits carry (docs/commit.md) |
 | `agent_name_format` | How it names a bundled agent: `{plugin}` once at most, then `{name}` last |
 | `session_process` | The process image of a session it launches |
 | `env_prefixes` | The environment variable prefixes its sessions own (`CLAUDE_`). A child launched on another host never inherits them (`kitlib.sessionmark.child_environment`). |

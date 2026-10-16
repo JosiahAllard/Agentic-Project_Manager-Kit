@@ -26,6 +26,14 @@ class Tokeniser(unittest.TestCase):
         self.assertTrue(c[1].piped_out)
         self.assertEqual(c[1].text, 'python tools/gate.py --full')
 
+    def test_a_cd_behind_builtin_or_command_moves_the_cwd(self):
+        for line in ('builtin cd /d/x && ls', 'command cd /d/x && ls'):
+            with self.subTest(line):
+                _, c = cmds(line, s.BASH)
+                self.assertEqual(c[1].cwd, 'D:\\x')
+        _, c = cmds('command -v cd && ls', s.BASH)
+        self.assertEqual(c[1].cwd, CWD)
+
     def test_quoted_redirect_is_text(self):
         _, c = cmds('git commit -m "a > b" && echo hi > out.txt 2>&1', s.BASH)
         self.assertEqual(c[0].argv, ['git', 'commit', '-m', 'a > b'])

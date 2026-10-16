@@ -1,21 +1,24 @@
 """kitlib.lock.giveback: a held run gives back cpu slots while its command runs on, and a queued
 run takes them at once; the run's job is narrowed off them first; what cannot be given back is
-refused and changes nothing; the record is written before the queue."""
+refused and changes nothing; the record is written before the queue, and the ack after it."""
+import contextlib
 import copy
 import ctypes
 import importlib
 import json
 import os
+import queue
 import shutil
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+import types
 import unittest
 from unittest import mock
 
-from .helpers import FAST, OWNER, REPO, StoreCase, clean_env, own_affinity
+from .helpers import FAST, OWNER, REPO, StoreCase, clean_env, own_affinity, unopenable
 
 if os.name == "nt":
     import datetime
@@ -54,6 +57,15 @@ try:
     from kitlib.lock import giveback
     offer = giveback.Offer.from_env()
     held = offer.held() if offer else []
+    # None: the record cannot be read now (the wrapper is replacing it); read it again, never
+    # as no slots. Still None after 5 s: say so and fail (exit 4), never give nothing quietly.
+    until = time.time() + 5
+    while held is None and time.time() < until:
+        time.sleep(0.05)
+        held = offer.held()
+    if held is None:
+        print("the run's record stayed unreadable for 5 s", flush=True)
+        sys.exit(4)
     print("offer", offer is not None, "held", held,
           "gave", offer.give([max(held)]) if held else None, flush=True)
 except ImportError as e:
@@ -90,6 +102,82 @@ def affinity(p):
     if not win32.K32.GetProcessAffinityMask(int(p._handle), ctypes.byref(pm), ctypes.byref(sm)):
         raise ctypes.WinError(ctypes.get_last_error())
     return pm.value
+
+
+class Clock:
+    """giveback's time, made up: monotonic is `now`, and sleep(s) moves it on by s, then calls
+    on_sleep(n), n the sleeps so far. Nothing waits."""
+
+    def __init__(self, case, on_sleep=None):
+        self.now, self.sleeps, self.on_sleep = 0.0, 0, on_sleep or (lambda n: None)
+        p = mock.patch.object(gb(), "time", types.SimpleNamespace(monotonic=lambda: self.now,
+                                                                  sleep=self._sleep))
+        p.start()
+        case.addCleanup(p.stop)
+
+    def _sleep(self, s):
+        self.sleeps += 1
+        self.now += s
+        self.on_sleep(self.sleeps)
+
+
+def scratch_offer(case, record=None):
+    """An Offer on a scratch folder's run r-20261010T000000Z-abcdef, and its record's path
+    (record: what the record file holds, as text; None: no file)."""
+    d = tempfile.mkdtemp()
+    case.addCleanup(shutil.rmtree, d, True)
+    rec = os.path.join(d, "r-20261010T000000Z-abcdef.json")
+    if record is not None:
+        with open(rec, "w", encoding="utf-8") as f:
+            f.write(record)
+    return gb().Offer(os.path.join(d, "r-20261010T000000Z-abcdef" + gb().SUFFIX)), rec
+
+
+class Asker:
+    """Offer.give on a thread whose polls the test steps one at a time: give() sleeps between
+    polls through time.sleep, which here reports the poll and waits for the test's go instead.
+    next() is what the asker did since the last go: "polled" (it looked and has no answer yet)
+    or ("answer", what give returned)."""
+
+    class Closed(Exception):
+        pass
+
+    def __init__(self, case, offer, cpu):
+        self.offer, self.cpu = offer, cpu
+        self.events, self.go = queue.Queue(), queue.Queue()
+        fake = types.SimpleNamespace(monotonic=time.monotonic, sleep=self._sleep)
+        p = mock.patch.object(gb(), "time", fake)
+        p.start()
+        case.addCleanup(p.stop)
+        self.t = threading.Thread(target=self._run, daemon=True)
+        case.addCleanup(self._close)            # runs before p.stop
+
+    def _run(self):
+        try:
+            self.events.put(("answer", self.offer.give(self.cpu, wait_s=60)))
+        except Asker.Closed:
+            pass
+
+    def _sleep(self, _s):
+        self.events.put("polled")
+        if self.go.get(timeout=60) == "close":
+            raise Asker.Closed()
+
+    def _close(self):
+        # A test that failed with the asker still waiting ends it here.
+        if self.t.is_alive():
+            self.go.put("close")
+            self.t.join(30)
+
+    def start(self):
+        """Starts it: its request is on disk once next() says it polled."""
+        self.t.start()
+        return self.events.get(timeout=60)
+
+    def step(self):
+        """One more poll."""
+        self.go.put(None)
+        return self.events.get(timeout=60)
 
 
 def usable_slots(case, n):
@@ -249,29 +337,22 @@ class Narrowing(StoreCase):
         Store = type(self.store)
         with mock.patch.object(Store, "write", write):
             with self.assertRaises(OSError):
-                gb().shrink(self.store, s.run, [usable[0]],
-                            {"given_back": {"id": "y", "cpu": [usable[1]]}})
+                gb().shrink(self.store, s.run, [usable[0]], {}, {"id": "y", "cpu": [usable[1]]})
         self.assertEqual(failed, [rel])
         self.assertEqual(s.run.rec, mem)                    # in memory, exactly as it was
         self.assertEqual(self.store.read(rel), disk)        # on disk too
 
         # The same failure under a real request: Offer.give hears "refused", never "given".
-        offer = gb().Offer(gb().request_path(self.store, s.id))
+        asker = Asker(self, gb().Offer(gb().request_path(self.store, s.id)), [usable[1]])
         failed.clear()
-        res = []
         with mock.patch.object(Store, "write", write), \
                 mock.patch.object(s.job, "pids", return_value=[os.getpid()]):
-            t = threading.Thread(target=lambda: res.append(offer.give([usable[1]], wait_s=20)))
-            t.start()
-            end = time.monotonic() + 30
-            while t.is_alive() and time.monotonic() < end:
-                s.serve_give_back()
-                time.sleep(0.02)
-            t.join(5)
+            self.assertEqual(asker.start(), "polled")       # asked, and no answer yet
+            s.serve_give_back()
         self.assertEqual(failed, [rel])
-        self.assertEqual(len(res), 1, "Offer.give did not answer")
-        self.assertEqual(res[0][0], "refused", res[0])
-        self.assertIn("could not be written", res[0][1])
+        res = asker.step()
+        self.assertEqual(res[1][0], "refused", res)
+        self.assertIn("could not be written", res[1][1])
         on_disk = self.store.read(rel)
         self.assertNotIn("given_back", on_disk)
         self.assertEqual({k: v for k, v in on_disk.items() if k != "give_back_refused"}, disk)
@@ -341,6 +422,219 @@ class Narrowing(StoreCase):
             self.ask(s, p, [usable[1]])
         self.assertEqual(seen, [[usable[0]]])
 
+    def queue_cores(self, s):
+        return sorted([x for x in self.store.read("queue.json")["entries"] if x["id"] == s.id][0]["cores"])
+
+    def test_the_ack_is_written_after_the_queue(self):
+        s, usable = self.held(2)
+        p = self.sleeper(s, give_back=True)
+        seen = []
+        real = gb().qm.save
+
+        def save(store, q):
+            seen.append(self.store.read("active/%s.json" % s.id))
+            return real(store, q)
+        with mock.patch.object(gb().qm, "save", side_effect=save):
+            rid, rec = self.ask(s, p, [usable[1]])
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen[0]["cores"], [usable[0]])     # the booking first...
+        self.assertNotIn("given_back", seen[0])             # ...but no ack before the queue says so
+        self.assertEqual(rec["given_back"]["id"], rid)
+
+    def test_a_polling_asker_never_hears_given_while_the_queue_write_fails(self):
+        s, usable = self.held(2)
+        p = self.sleeper(s, give_back=True)
+        both = lay.cores_mask(self.layout(), usable)
+        asker = Asker(self, gb().Offer(gb().request_path(self.store, s.id)), [usable[1]])
+        during = []
+
+        def save(store, q):
+            # A queue write that waits on a held queue.json, then fails: the asker polls twice
+            # while it waits, with the narrower booking already in the record.
+            during.append(self.store.read("active/%s.json" % s.id)["cores"])
+            during.extend([asker.step(), asker.step()])
+            raise OSError("queue.json is held")
+        with mock.patch.object(gb().qm, "save", side_effect=save), \
+                mock.patch.object(s.job, "pids", return_value=[os.getpid()]):
+            self.assertEqual(asker.start(), "polled")
+            s.serve_give_back()
+        self.assertEqual(during, [[usable[0]], "polled", "polled"])    # no answer mid-write
+        res = asker.step()
+        self.assertEqual(res[1][0], "refused", res)
+        self.assertIn("could not be written", res[1][1])
+        rec = self.store.read("active/%s.json" % s.id)
+        self.assertNotIn("given_back", rec)
+        self.assertEqual(sorted(rec["cores"]), usable)
+        self.assertEqual(self.queue_cores(s), usable)
+        self.assertEqual(s.job.mask, both)
+        self.assertEqual(affinity(p), both)
+
+    def test_a_record_read_that_collides_with_its_replace_is_not_gone(self):
+        # An asker's open of the record that lands while the wrapper
+        # replaces it is refused (PermissionError). That is "not now": it looks again, and hears
+        # the answer; only a record that is not there, or not held, is "gone".
+        s, usable = self.held(2)
+        p = self.sleeper(s, give_back=True)
+        asker = Asker(self, gb().Offer(gb().request_path(self.store, s.id)), [usable[1]])
+        with mock.patch.object(s.job, "pids", return_value=[os.getpid()]):
+            with unopenable(self.store.path("active", s.id + ".json")):
+                self.assertEqual(asker.start(), "polled")
+                self.assertEqual(asker.step(), "polled")
+            self.assertIsNone(s.serve_give_back())
+        res = asker.step()
+        self.assertEqual(res[1][0], "given", res)
+        self.assertEqual(res[1][1]["cores"], [usable[0]])
+        self.assertEqual(self.queue_cores(s), [usable[0]])
+        self.assertEqual(affinity(p), lay.cores_mask(self.layout(), [usable[0]]))
+
+    def test_a_lost_ack_undoes_nothing_is_written_next_poll_and_a_re_ask_is_refused(self):
+        s, usable = self.held(2)
+        p = self.sleeper(s, give_back=True)
+        keep = lay.cores_mask(self.layout(), [usable[0]])
+        rel = "active/%s.json" % s.id
+        real, failed = type(self.store).write, []
+
+        def write(store, r, data, *a, **kw):
+            # The first two record writes that carry the ack fail (shrink's, then the first
+            # poll's); every other write goes through.
+            if r == rel and "given_back" in data and len(failed) < 2:
+                failed.append(r)
+                raise OSError("disk full")
+            return real(store, r, data, *a, **kw)
+        with mock.patch.object(type(self.store), "write", write):
+            rid, rec = self.ask(s, p, [usable[1]])
+            self.assertEqual(failed, [rel])
+            # Given back all the same: the queue freed the slot, so nothing is widened again.
+            self.assertNotIn("give_back_refused", rec)
+            self.assertNotIn("given_back", rec)
+            self.assertEqual(rec["cores"], [usable[0]])
+            self.assertEqual(self.queue_cores(s), [usable[0]])
+            self.assertEqual((s.job.mask, affinity(p), s.cores), (keep, keep, [usable[0]]))
+            # The next poll's ack write fails too: still due, nothing else changes.
+            self.assertIsNone(s.serve_give_back())
+            self.assertEqual(failed, [rel, rel])
+            self.assertTrue(s.ack_due)
+            self.assertNotIn("given_back", self.store.read(rel))
+            # The poll after it writes the ack.
+            self.assertIsNone(s.serve_give_back())
+        self.assertFalse(s.ack_due)
+        self.assertEqual(self.store.read(rel)["given_back"]["id"], rid)
+        # An asker that timed out and asks again for the same slot is refused; nothing changes.
+        rid2, rec2 = self.ask(s, p, [usable[1]])
+        self.assertEqual(rec2["give_back_refused"]["id"], rid2)
+        self.assertIn("not this run's", rec2["give_back_refused"]["why"])
+        self.assertEqual((rec2["cores"], rec2["given_back"]["id"]), ([usable[0]], rid))
+        self.assertEqual(self.queue_cores(s), [usable[0]])
+        self.assertEqual((s.job.mask, affinity(p)), (keep, keep))
+
+    def landed_then(self, exc):
+        """shrink with a queue write that lands, then raises exc (as a Ctrl+C in its bump
+        would): the record (in memory and on disk) and the queue keep the narrower booking."""
+        s, usable = self.held(2)
+        real, raised = gb().qm.save, []
+
+        def save(store, q):
+            real(store, q)
+            raised.append(exc)
+            raise exc("after the replace")
+        ack = {"id": "i-%s" % exc.__name__, "cpu": [usable[1]]}
+        with mock.patch.object(gb().qm, "save", side_effect=save):
+            if exc is KeyboardInterrupt:
+                with self.assertRaises(KeyboardInterrupt):
+                    gb().shrink(self.store, s.run, [usable[0]], {}, ack)
+            else:
+                self.assertTrue(gb().shrink(self.store, s.run, [usable[0]], {}, ack))
+        self.assertEqual(raised, [exc])
+        on_disk = self.store.read("active/%s.json" % s.id)
+        self.assertEqual((s.run.rec["cores"], on_disk["cores"]), ([usable[0]], [usable[0]]))
+        self.assertEqual(self.queue_cores(s), [usable[0]])
+        return on_disk, ack
+
+    def test_an_interrupt_after_the_queue_write_lands_puts_nothing_back(self):
+        on_disk, _ack = self.landed_then(KeyboardInterrupt)
+        self.assertNotIn("given_back", on_disk)
+
+    def test_an_error_after_the_queue_write_lands_is_committed_and_acked(self):
+        on_disk, ack = self.landed_then(OSError)
+        self.assertEqual(on_disk["given_back"]["id"], ack["id"])
+
+    def unreadable_after_save(self, lands):
+        """Patches for an ask: the queue write lands (or not), then raises OSError, and every
+        queue read after it finds queue.json unreadable (QueueUnreadable)."""
+        real_save, real_load, saved = gb().qm.save, gb().qm.load, []
+
+        def save(store, q):
+            saved.append(lands)
+            if lands:
+                real_save(store, q)
+            raise OSError("queue.json is held")
+
+        def load(store):
+            if saved:
+                raise gb().qm.QueueUnreadable("queue unreadable: held")
+            return real_load(store)
+        return saved, (mock.patch.object(gb().qm, "save", side_effect=save),
+                       mock.patch.object(gb().qm, "load", side_effect=load))
+
+    def test_an_unreadable_read_back_after_a_landed_write_never_widens_the_job(self):
+        # Widening here would run the job on a slot the landed queue write freed: booked twice.
+        s, usable = self.held(2)
+        p = self.sleeper(s, give_back=True)
+        keep = lay.cores_mask(self.layout(), [usable[0]])
+        saved, (ps, pl) = self.unreadable_after_save(lands=True)
+        with ps, pl:
+            rid, rec = self.ask(s, p, [usable[1]])
+        self.assertEqual(saved, [True])
+        self.assertNotIn("give_back_refused", rec)
+        self.assertEqual(rec["given_back"]["id"], rid)
+        self.assertEqual((rec["cores"], s.run.rec["cores"]), ([usable[0]], [usable[0]]))
+        self.assertEqual(self.queue_cores(s), [usable[0]])
+        self.assertEqual((s.job.mask, affinity(p), s.cores), (keep, keep, [usable[0]]))
+
+    def test_an_unreadable_read_back_after_a_failed_write_errs_on_an_unused_slot(self):
+        # Not knowing, shrink takes the write as landed: the job and record narrow, the queue
+        # still books both slots for this run. The slot given back sits unused until the run
+        # ends, but no planner hands it out while the job could still run on it.
+        s, usable = self.held(2)
+        p = self.sleeper(s, give_back=True)
+        keep = lay.cores_mask(self.layout(), [usable[0]])
+        saved, (ps, pl) = self.unreadable_after_save(lands=False)
+        with ps, pl:
+            rid, rec = self.ask(s, p, [usable[1]])
+        self.assertEqual(saved, [False])
+        self.assertNotIn("give_back_refused", rec)
+        self.assertEqual(rec["cores"], [usable[0]])
+        self.assertEqual(self.queue_cores(s), usable)       # still held: never handed out twice
+        self.assertEqual((s.job.mask, affinity(p)), (keep, keep))
+
+    def test_a_refused_repin_leaves_the_job_narrowed_and_a_later_ask_refused(self):
+        s, usable = self.held(2)
+        p = self.sleeper(s, give_back=True)
+        L = self.layout()
+        both, keep = lay.cores_mask(L, usable), lay.cores_mask(L, [usable[0]])
+        real = s.job.repin
+
+        def repin(mask):
+            # Narrowing goes through (Job.narrow repins); widening back to both is refused.
+            return False if mask == both else real(mask)
+        with mock.patch.object(s.job, "repin", side_effect=repin), \
+                mock.patch("kitlib.lock.queue.save", side_effect=OSError("disk full")):
+            rid, rec = self.ask(s, p, [usable[1]])
+        self.assertEqual(rec["give_back_refused"]["id"], rid)
+        self.assertIn("stays narrowed to", rec["give_back_refused"]["why"])
+        self.assertNotIn("given_back", rec)
+        self.assertEqual(sorted(rec["cores"]), usable)      # the booking keeps both
+        self.assertEqual(self.queue_cores(s), usable)
+        self.assertEqual(sorted(s.cores), usable)
+        self.assertEqual((s.job.mask, affinity(p)), (keep, keep))
+        # The pin cannot widen, so a request that keeps the other slot cannot narrow onto it.
+        rid2, rec2 = self.ask(s, p, [usable[0]])
+        self.assertEqual(rec2["give_back_refused"]["id"], rid2)
+        self.assertIn("could not be narrowed", rec2["give_back_refused"]["why"])
+        self.assertEqual(sorted(rec2["cores"]), usable)
+        self.assertEqual(self.queue_cores(s), usable)
+        self.assertEqual((s.job.mask, affinity(p)), (keep, keep))
+
 
 class Helpers(unittest.TestCase):
     def test_surplus_gives_back_the_highest_and_keeps_one(self):
@@ -386,6 +680,27 @@ class Helpers(unittest.TestCase):
         self.assertIn("gave back cpu slot(s) 2,3, the run holds 0,1", said[0])
         self.assertIn("not given back (refused: no)", said[1])
 
+    def test_the_drainer_never_says_a_timeout_kept_the_slots(self):
+        # A lost ack: the wrapper gave the slots back but the asker timed out first.
+        g = gb()
+        path = os.path.abspath(os.path.join("store", "active", "r-20261010T000000Z-abcdef.giveback"))
+        env = {g.GIVE_ENV: path, "MACHINE_LOCK_RUN": "r-20261010T000000Z-abcdef:1:2",
+               "MACHINE_LOCK_CPUMASK": "0xff"}
+        held, said = [[0, 1, 2, 3]], []
+
+        def give(_offer, cpu, wait_s=10.0):
+            held[0] = [i for i in held[0] if i not in cpu]
+            return "timeout", "no answer within 10 s"
+        with mock.patch.object(g.Offer, "held", lambda _o: list(held[0])), \
+                mock.patch.object(g.Offer, "give", give):
+            d = g.drainer(said.append, env)
+            self.assertIsNone(d(3))
+            self.assertIsNone(d(1))                 # it asks no more
+        self.assertEqual(len(said), 1)
+        self.assertNotIn("keeps them", said[0])
+        self.assertIn("cpu slot(s) 2,3: no answer (timeout: no answer within 10 s); "
+                      "the run's record books 0,1 now", said[0])
+
     def test_a_gpu_that_is_not_a_list_is_refused_not_read_as_none(self):
         g = gb()
         d = tempfile.mkdtemp()
@@ -404,6 +719,112 @@ class Helpers(unittest.TestCase):
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(base if gpu is None else dict(base, gpu=gpu), f)
             self.assertEqual(g.read_request(path)["gpu"], want)
+
+    def test_only_a_missing_record_reads_as_gone(self):
+        g = gb()
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        rec = os.path.join(d, "r-20261010T000000Z-abcdef.json")
+        self.assertEqual(g.read_record(rec), (None, False))
+        offer = g.Offer(os.path.join(d, "r-20261010T000000Z-abcdef" + g.SUFFIX))
+        self.assertEqual(offer.give([1], wait_s=20)[0], "gone")      # at once, not at wait_s
+        with open(rec, "w", encoding="utf-8") as f:
+            json.dump({"state": "held", "cores": [0, 1]}, f)
+        self.assertEqual(g.read_record(rec), ({"state": "held", "cores": [0, 1]}, True))
+        with unopenable(rec):
+            self.assertEqual(g.read_record(rec), (None, True))
+        for text in ("[1]", "{half"):
+            with open(rec, "w", encoding="utf-8") as f:
+                f.write(text)
+            self.assertEqual(g.read_record(rec), (None, True))
+
+    def test_a_give_whose_record_stays_unreadable_times_out_never_gone(self):
+        offer, rec = scratch_offer(self, json.dumps({"state": "held", "cores": [0, 1]}))
+        clock = Clock(self)
+        with unopenable(rec):
+            res, why = offer.give([1], wait_s=1.0)
+        self.assertEqual(res, "timeout", why)
+        self.assertGreaterEqual(clock.now, 1.0)                 # it waited out wait_s
+        self.assertNotIn("could not be withdrawn", why)
+        self.assertFalse(os.path.exists(offer.path))            # its request withdrawn
+
+    def test_a_record_that_is_not_a_json_object_is_read_again(self):
+        offer, rec = scratch_offer(self, "[1]")
+
+        def answer(n):
+            # Two polls find a record that is there but not a JSON object; then it is written.
+            if n == 2:
+                with open(offer.path, encoding="utf-8") as f:
+                    rid = json.load(f)["id"]
+                with open(rec, "w", encoding="utf-8") as f:
+                    json.dump({"state": "held", "cores": [0],
+                               "given_back": {"id": rid, "cpu": [1], "cores": [0]}}, f)
+        clock = Clock(self, answer)
+        res, info = offer.give([1], wait_s=60)
+        self.assertEqual(res, "given", info)
+        self.assertEqual(info["cores"], [0])
+        self.assertEqual(clock.sleeps, 2)
+
+    def test_a_timed_out_request_it_cannot_read_is_withdrawn_once_it_can(self):
+        offer, _rec = scratch_offer(self, json.dumps({"state": "held", "cores": [0, 1]}))
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+
+        def wrapper_has_it_open(n):
+            # From its first poll the request cannot be opened; it can again well past wait_s.
+            if n == 1:
+                stack.enter_context(unopenable(offer.path))
+            elif clock.now >= 1.0:
+                stack.close()
+        clock = Clock(self, wrapper_has_it_open)
+        res, why = offer.give([1], wait_s=0.5)
+        self.assertEqual(res, "timeout", why)
+        self.assertNotIn("could not be withdrawn", why)
+        self.assertFalse(os.path.exists(offer.path))
+        self.assertGreaterEqual(clock.now, 1.0)                 # it tried again past wait_s
+
+    def test_a_timed_out_request_that_stays_unreadable_is_said(self):
+        offer, _rec = scratch_offer(self, json.dumps({"state": "held", "cores": [0, 1]}))
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        clock = Clock(self, lambda n: n == 1 and stack.enter_context(unopenable(offer.path)))
+        res, why = offer.give([1], wait_s=0.5)
+        stack.close()
+        self.assertEqual(res, "timeout", why)
+        self.assertIn("could not be withdrawn", why)
+        self.assertTrue(os.path.exists(offer.path))             # left: the run may act on it
+        self.assertGreaterEqual(clock.now, 0.5 + gb().WITHDRAW_S)
+
+    def test_held_is_none_while_the_record_cannot_be_read(self):
+        offer, rec = scratch_offer(self)
+        self.assertEqual(offer.held(), [])                      # no record: gone
+        with open(rec, "w", encoding="utf-8") as f:
+            json.dump({"state": "held", "cores": [0, 1]}, f)
+        self.assertEqual(offer.held(), [0, 1])
+        with unopenable(rec):
+            self.assertIsNone(offer.held())                     # not now, never no slots
+        with open(rec, "w", encoding="utf-8") as f:
+            json.dump({"state": "ended", "cores": [0, 1]}, f)
+        self.assertEqual(offer.held(), [])
+
+    def test_the_drainer_never_counts_an_unreadable_record_as_no_slots(self):
+        g = gb()
+        offer, rec = scratch_offer(self, json.dumps({"state": "held", "cores": [0, 1, 2, 3]}))
+        env = {g.GIVE_ENV: offer.path, "MACHINE_LOCK_RUN": "r-20261010T000000Z-abcdef:1:2",
+               "MACHINE_LOCK_CPUMASK": "0xff"}
+        asked, said = [], []
+
+        def give(_offer, cpu, wait_s=10.0):
+            asked.append(cpu)
+            return "given", {"cores": [0, 1]}
+        with mock.patch.object(g.Offer, "give", give):
+            with unopenable(rec):
+                drain = g.drainer(said.append, env)
+                self.assertIsNone(drain(3))         # not read now: nothing asked, nor given up
+            # 4 slots of 2 threads, 3 threads still needed: 2 slots kept, never 3.
+            self.assertEqual(drain(3), {"cores": [0, 1]})
+        self.assertEqual(asked, [[2, 3]])
+        self.assertEqual(len(said), 1)
 
     def test_the_request_file_is_not_a_run_record(self):
         # Both tools list active/*.json as run records; the request must not be one.

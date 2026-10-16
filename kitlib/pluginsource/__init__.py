@@ -2,7 +2,9 @@
 installs from (docs/plugin-source.md).
 
   remote_main(kit, remote)         the sha the remote's main points at; refuses one not fetched
-  export(kit, sha, root)           <root>/<sha12>/: the tracked files at sha, plugin.json stamped
+  export(kit, sha, root)           <root>/<sha12>/: the tracked files at sha, plugin.json stamped,
+                                   the marker naming the kit's main checkout
+  export_checkout(folder)          that main checkout, while it still is one, or None
   write_marketplace(root, folder)  <root>/.claude-plugin/marketplace.json names that folder
   prune(root)                      old export folders removed (never the named one, the 3 newest, or
                                    one replaced less than 7 days ago); stale <sha12>.tmp folders removed
@@ -10,6 +12,7 @@ installs from (docs/plugin-source.md).
   RefreshLock                      <root>/refresh.pid, one refresh at a time
   pick_folders(folders, wanted)    the account folders --folder names, and the names that are not one
   refresh(...)                     the whole run tools/plugin_refresh.py makes
+  installs(folders)                [(install path, account folder)] of each account's kit install
   current_lines(kit, s, folders)   the pm_start warning lines (no export, not migrated, behind, failed)
   poll(kit, s, last, ...)          the pm_watch check: an event line per new main, and the spawn
                                    of a refresh when plugin.auto_refresh is on
@@ -30,7 +33,7 @@ import sys
 import time
 
 from kitlib import kitroot
-from kitlib.git import batch, cmd, refs
+from kitlib.git import batch, cmd, refs, repo
 
 NAME = 'pm-kit'                      # the marketplace's and the plugin's name
 PLUGIN_ID = 'pm-kit@pm-kit'
@@ -300,7 +303,8 @@ def folder_name(sha):
 
 def export(kit, sha, root, now=None, made_by='tools/plugin_refresh.py'):
     """<root>/<sha12>: the tracked files at `sha`, plugin.json's version stamped, and the marker
-    (`made_by`: the tool that wrote it). Written into <sha12>.tmp and renamed, so a folder by the
+    (`made_by`: the tool that wrote it; `checkout`: the main checkout of `kit`'s repository, left
+    out when git cannot place it). Written into <sha12>.tmp and renamed, so a folder by the
     final name is always whole. An existing folder whose marker names `sha` is kept as it is.
     Returns (folder, version)."""
     name = folder_name(sha)
@@ -340,6 +344,9 @@ def export(kit, sha, root, now=None, made_by='tools/plugin_refresh.py'):
     skipped = [e[3] for e in entries if e not in blobs]
     marker = {'sha': sha, 'version': version, 'exported_at': _stamp(now),
               'skipped': skipped, 'made_by': made_by}
+    checkout = repo.main_checkout_toplevel(kit)
+    if checkout:
+        marker['checkout'] = checkout
     with open(os.path.join(tmp, MARKER), 'w', encoding='utf-8', newline='\n') as fh:
         json.dump(marker, fh, indent=2)
         fh.write('\n')
@@ -355,6 +362,20 @@ def read_marker(folder):
     except (OSError, ValueError):
         return None
     return data if isinstance(data, dict) else None
+
+
+def export_checkout(folder):
+    """The kit main checkout an export folder was made from: its marker's `checkout`, when that
+    names a folder holding a .git folder (a main checkout; a linked worktree's .git is a file).
+    None for a folder with no marker, an older marker without the key, or a checkout that has
+    moved or gone. kitlib.gate.pin pins a tool started from the export through it."""
+    marker = read_marker(folder)
+    checkout = marker.get('checkout') if marker else None
+    if not isinstance(checkout, str) or not checkout:
+        return None
+    if not os.path.isdir(os.path.join(checkout, '.git')):
+        return None
+    return checkout
 
 
 # ---------------------------------------------------------------- the marketplace and state
@@ -382,7 +403,7 @@ def write_marketplace(root, folder):
         'description': 'The PM kit\'s plugin, exported from pushed kit main (docs/plugin-source.md).',
         'owner': {'name': 'PM kit'},
         'plugins': [{'name': NAME, 'source': './%s' % folder,
-                     'description': 'The PM kit: agents, skills and the machine lock MCP server.'}],
+                     'description': 'The PM kit: agents, skills and the machine lock and hub MCP servers.'}],
     })
 
 
@@ -813,11 +834,22 @@ def _old_cache_lines(kit, sha, folders, out):
 
 # ---------------------------------------------------------------- pm_start and pm_watch
 
+def _host():
+    from kitlib.pluginsource import claude
+    return claude
+
+
 def _folders(folders):
     if folders is None:
-        from kitlib.pluginsource import claude
-        folders = claude.account_folders()
+        folders = _host().account_folders()
     return list(folders)
+
+
+def installs(folders=None):
+    """[(install path, account folder)]: where each account folder of `folders` (default every
+    one) loads the kit plugin from, for the folders that have it installed. Reads each folder's
+    install record only."""
+    return _host().installs(_folders(folders))
 
 
 def unmigrated(state, folders):

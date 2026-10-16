@@ -116,10 +116,17 @@ or its PowerShell front end `installer/new-repo.ps1`, which passes its parameter
    powershell -NoProfile -File installer\new-repo.ps1 -Target <checkout> -OwnerEmail <owner> -AgentEmail <agents> [-MainBranch main] [-RepoName <name>] [-Stack python] [-Stubs]
    ```
 
-   It prints what it would write: `.kit.json` (`"repo".main_branch`, `"repo".name`, `"owner".email`,
-   `"owner".agent_emails`), `.gitignore` and `.gitattributes`, a starter `docs/INDEX.md`, with
+   It prints what it would write: `.kit.json` (`"repo".main_branch`, `"repo".name`,
+   `"backlog".store` `"ref"`, `"owner".email`, `"owner".agent_emails`), `.gitignore` and
+   `.gitattributes`, a starter `docs/INDEX.md`, with
    `--stack` the stack's `tools/gate.json`, and with `--stubs` only the stubs (by
-   `kitlib.stubs`, as `kit_stubs.py write -C <target>`; without it the dry run says `stubs: none`).
+   `kitlib.stubs`, as `kit_stubs.py write -C <target>`; without it the dry run says `stubs: none`),
+   and under `memory:` the `autoMemoryDirectory` key
+   (`<the main checkout's drive>/Agent-memory/<repo folder name>`, `kitlib/stubs/memory.py`): added
+   to `.claude/settings.local.json` only when neither that file nor `.claude/settings.json` has it,
+   kept when either names any absolute folder, refused when the local file is not JSON it can edit or
+   the key is not an absolute folder. The key is a machine path, so it goes in the git-ignored local
+   file (the `.gitignore` lines above name it) and there is nothing to commit. It never makes the folder.
    `"repo".name` is the repository's rulings-ledger column (docs/backlog.md "Owner gates"): `--repo-name`,
    else the target folder's name lower-cased; either must match `[a-z0-9][a-z0-9-]*` or it
    refuses (exit 2). Both emails are required and must differ, or an agent's commit could pass
@@ -180,7 +187,9 @@ or its PowerShell front end `installer/new-repo.ps1`, which passes its parameter
      a `"` in either (usage, 2). A repository already set up (its `.kit.json` makes the setup
      refuse) runs that command directly.
 4. **An existing repository with its own copies of the tools** skips the setup. It needs a
-   `.kit.json` only when it wants more than the defaults (docs/kit-json.md); its
+   `.kit.json` only when it wants more than the defaults (docs/kit-json.md), and one that
+   writes backlog records names its store there (`"backlog": {"store": "ref"}` or a folder:
+   the default store alone is read-only, docs/backlog.md "Stores"); its
    own copies are then removed, since agents run the kit's tools from `<kit>`. A repository that
    wants stubs in their place instead runs
    `python <kit>/tools/kit_stubs.py write -C <repo> --replace`, then a commit.
@@ -199,8 +208,9 @@ or its PowerShell front end `installer/new-repo.ps1`, which passes its parameter
   them with the `<PLACEHOLDER>` slots filled (docs/shipping.md "Stack templates"). Both profiles
   are optional: with no agent profile, every role reads the kit's `content/default-profile.md`
   plus the repository's README and instructions file (docs/agent-profile.md).
-- `.claude/settings.json`: the kit ships none (docs/go-live.md "Joint-review questions").
-- `backlog/.gitkeep` is not needed (the backlog store is the ref `refs/backlog/main`), and
+- `.claude/settings.json`: the kit ships none (docs/go-live.md "Joint-review questions"); the
+  setup adds only its `autoMemoryDirectory` key, to the ignored `.claude/settings.local.json` (step 2).
+- `backlog/.gitkeep` is not needed (the setup's `.kit.json` names the ref store `refs/backlog/main`), and
   `.github/workflows/instructions.yml` is not shipped: the stack workflows do not mention it.
 - Anything outside the repository: the ledger, the lock and the user config are per machine.
 
@@ -285,18 +295,18 @@ An account set up by `machine_setup.py` has per-item junctions under `~/.claude`
 skills, hooks and agents the plugin now loads. Remove them in stages, in this order.
 
 **Stage 1.** At install, remove the kit's `~/.claude/skills/*` junctions, or each skill appears twice.
-Only the 12 kit skill names are touched (the directories under `content/skills`); any other link stays.
+Only the 19 kit skill names are touched (the directories under `content/skills`); any other link stays.
 `cmd /c rmdir` removes the link only, never the target:
 
 ```powershell
-$kit = 'backlog-ops','branch-review','branch-sync','coordinator-dispatch','doc-claims-discipline','flaky-test-triage','land-branch','machine-lock-run','mutation-testing','session-handoff','shell-and-worktree-traps','subagent-dispatch'
+$kit = 'backlog-ops','branch-review','branch-sync','coordinator-dispatch','doc-claims-discipline','flaky-test-triage','land-branch','machine-lock-run','mutation-testing','session-handoff','shell-and-worktree-traps','subagent-dispatch','specialty-3d-assets','specialty-tech-art','specialty-sound','specialty-review','specialty-research','specialty-records','specialty-spec'
 Get-ChildItem "$env:USERPROFILE\.claude\skills" -Force |
   Where-Object { $_.LinkType -eq 'Junction' -and $_.Name -in $kit } |
   ForEach-Object { cmd /c rmdir "$($_.FullName)" }
 Get-ChildItem "$env:USERPROFILE\.claude\skills" -Force | Where-Object { $_.LinkType -and $_.Name -in $kit }
 ```
 
-The last command must print nothing. Then `ListSkills` shows each of the 12 names once.
+The last command must print nothing. Then `ListSkills` shows each of the 19 names once.
 
 **Stage 1b.** Gated on the KIT-AGENTS-IN-PLUGIN rename landing; do not do this before.
 
@@ -310,13 +320,21 @@ cmd /c rmdir "$env:USERPROFILE\.claude\agents"
 `settings.json` no longer calls a guard through `~/.claude/hooks`. Check by searching
 `$env:USERPROFILE\.claude\settings.json` for `\.claude\\hooks`: it must have no hit.
 
-**Stage 3.** The `tools/*` and `knowledge/*` junctions stay for now: `~/.claude/tools/machine_lock` is the live
-lock path, and `machine_setup.py --apply` recreates those links. Record KIT-JUNCTIONS-TOOLS-KNOWLEDGE
-retires them.
+**Stage 3.** The `tools/*` and `knowledge/*` junctions go last. Machine setup makes no link: it
+reports each one an earlier setup left, and re-points a `settings.json` path through
+`~/.claude/tools/<name>` (the status line's, for one) to the kit's own file (docs/machine-setup.md
+"Links"). Run it with `--apply` first, then remove each link with the line its dry run prints, which
+removes the link only, never the target (never `/s`):
+
+```
+leftover link <path> -> <target>: remove it with: cmd /c rmdir "<path>"
+```
+
+A second dry run then reports no leftover link.
 
 `<kit>/tools/backlog.py -C <worktree> add` needs at least one `--scope <path>` (`none` for a record that touches no
 tracked file); without one it refuses (docs/backlog.md). It also needs `--found-on <branch>` (or
-`--found-on none` when no branch found it) and `--why-not-folded "<reason>"` (docs/backlog.md
+`--found-on none` when found on no branch, or on one that landed and was removed) and `--why-not-folded "<reason>"` (docs/backlog.md
 "The fold-in guard").
 
 The rulings ledger is once per machine: set `ledger_path` (and optionally `ledger_repos`) in
@@ -328,7 +346,14 @@ the machine config (docs/kit-json.md "Machine config keys"). The first `<kit>/to
 ```
 python <kit>/tools/kit_stubs.py write [-C DIR] [--tools a,b,...] [--replace] [--dry-run]
 python <kit>/tools/kit_stubs.py check [-C DIR] [--tools a,b,...]
+python <kit>/tools/kit_stubs.py memory [-C DIR] [--apply]
 ```
+
+`memory` is not about stubs: it prints the `autoMemoryDirectory` that `.claude/settings.local.json`
+(git-ignored; the value is a machine path) would get (dry run), and with `--apply` adds it when
+neither that file nor `.claude/settings.json` has the key; exit 1 when the local file
+cannot be edited (`kitlib/stubs/memory.py`; tests: `tests/stubs/test_memory.py`; docs/pm-start.md
+"Memory folder (`memory`)").
 
 Opt-in, for a repository that wants committed stubs (the old setup; decision 21 made the default
 none). Nothing in the kit needs them: the skills, roles and the default profile run
@@ -345,7 +370,17 @@ with the stub's arguments.
 - That location is the live kit checkout (`kitlib.stubs.kit_root`). When `kit_stubs.py` runs
   from a pinned export of pushed main (a gate's `kit-stubs` step under a pinned gate.py or
   land.py, docs/gate.md "Pinned tools"), it is `KIT_LIVE_ROOT` (`kitlib.pluginsource.live_root`), never the
-  export: `write` names the main checkout and `check` holds stubs that name it current.
+  export: `write` names the main checkout and `check` holds stubs that name it current. That holds
+  for a gate started from the plugin's export too (`<kit>/tools/gate.py -C <checkout>`): it pins
+  through the main checkout the export's marker names (`kitlib.pluginsource.export_checkout`,
+  docs/plugin-source.md "Layout"; `tests/gate/test_export_stubs.py`).
+- Run from an export with no `KIT_LIVE_ROOT` (`<kit>/tools/kit_stubs.py` itself, or the session
+  start's stubs check, which runs in the plugin's export), the location is the main checkout the
+  export's marker names, when that folder holds `kit.json` and `tools/` (`kitlib.stubs.live_kit`).
+  An export whose marker names none is refused: `write`, and `check` on a repository that uses
+  stubs, exit 2 with `kit_stubs: refused: <export> is an export of the kit ...` and write nothing,
+  so no stub ever names an export a prune may remove (`tests/stubs/test_live_root.py`). A
+  repository that uses no stubs is never refused (`check` below).
 - The child runs in the caller's directory when that is inside the stub's checkout, else in the
   stub's checkout. So a kit tool's default `-C .` names the stub's checkout, and a linked
   worktree's stub acts on that worktree.
@@ -365,8 +400,12 @@ note: no exit code changes and nothing deletes the file.
 - `write` creates or replaces each stub. It keeps a file that is not a stub, and reports it,
   unless `--replace`. `--dry-run` writes nothing.
 - `check` exits 0 when every stub has exactly the text `write` would give it. A stub that runs
-  another kit location is `stale`.
-- Exit codes: 0 done or current; 1 a problem named; 2 usage or configuration.
+  another kit location is `stale`. A repository that uses no stubs (no `--tools`, no
+  `"stubs".tools` in its `.kit.json` and no stub in its tools folder, such as a PM data folder)
+  exits 0 with `kit_stubs: uses no stubs (...); nothing to check`, the rule the session start's
+  check follows (`kitlib.stubs` `_opted`).
+- Exit codes: 0 done, current, or no stubs used; 1 a problem named; 2 usage, configuration, or an
+  export whose marker names no main checkout.
 
 A committed stub carries the kit's absolute path, so a repository whose gate checks for machine
 paths must allow it (`machine_paths.allow`, docs/kit-json.md).

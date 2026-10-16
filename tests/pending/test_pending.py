@@ -2,6 +2,7 @@
 (docs/pending.md)."""
 import os
 import tempfile
+import threading
 import unittest
 
 from kitlib import pending
@@ -27,6 +28,21 @@ class ReadTest(unittest.TestCase):
             self.assertEqual(os.listdir(tmp), ['PENDING.md'])
             with self.assertRaises(Refused):
                 pending.read_raw(os.path.join(tmp, 'missing.md'))
+
+    def test_a_reader_holding_the_file_open_delays_the_write_and_does_not_fail_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, 'PENDING.md')
+            pending.write_atomic(path, TEXT)
+            reader = open(path, 'rb')               # no delete sharing: os.replace is refused
+            closer = threading.Timer(0.3, reader.close)
+            closer.start()
+            try:
+                pending.write_atomic(path, TEXT + '4. Fourth\n')
+            finally:
+                closer.cancel()
+                reader.close()
+            self.assertEqual(pending.read_raw(path), TEXT + '4. Fourth\n')
+            self.assertEqual(os.listdir(tmp), ['PENDING.md'])
 
 
 class AddTest(unittest.TestCase):

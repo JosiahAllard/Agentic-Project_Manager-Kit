@@ -18,13 +18,15 @@ import unittest
 from unittest import mock
 
 from kitlib.config.types import ConfigError
-from kitlib.hubsite import access, auth, backlog, gitsync, httpd, serve, tunnel
+from kitlib.hubsite import access, auth, backlog, client, gitsync, httpd, serve, tunnel
 from kitlib.hubsite import settings as hub_settings
 from kitlib.hubsite.api import BASE
 from kitlib.hubsite.store import Store, StoreBusy
+from kitlib.proc import process
 from tests.hubsite import access_keys as ak
 from tests.hubsite import httpfix
 from tests.hubsite import test_gitsync as gitcase       # its Case: a data work tree on the fake git
+from tests.hubsite.test_store import question
 from tests.hubsite.httpfix import TIMEOUT, bearer, get, post, send
 
 HEALTH = BASE + '/health'
@@ -341,6 +343,14 @@ class BuildCase(ServeCase):
         self.assertIs(hub.start(), False)
         self.assertEqual(httpfix.http_threads(), [])
 
+    def test_the_sources_configured_repo_names_reach_the_built_store(self):
+        names = lambda: ['Gamerepo']        # noqa: E731
+        hub = self.build(known_repos=names)
+        self.assertIs(hub.store.known_repos, names)
+        self.assertEqual(hub.store.add('questions', question(repo='gamerepo')).warnings, [])
+        r = hub.store.add('questions', question(repo='ghost'))
+        self.assertEqual([f.code for f in r.warnings], ['repo-alias'])
+
     def test_a_write_and_a_read_go_through_the_built_server(self):
         hub = self.build()
         hub.start()
@@ -366,6 +376,48 @@ class BuildCase(ServeCase):
         r = get(hub.port, HEALTH, headers=[('Cookie', cookie.split(';')[0])])
         self.assertEqual(r.status, 200)
         self.assertIn('store', r.json())
+
+    def test_a_server_on_port_0_keeps_no_sessions_file(self):
+        hub = self.build()
+        self.assertIsNotNone(hub.creds.pair(hub.creds.new_pairing_code()))
+        self.assertIsNone(hub.creds.path)
+        self.assertEqual([n for n in os.listdir(self.tokens) if n.startswith('browser-')], [])
+
+    def test_a_paired_browser_stays_paired_when_the_server_is_built_again(self):
+        probe = self.build()                # port 0 keeps no sessions: find a port, then ask it
+        port = probe.port
+        self.assertIs(probe.close(), True)
+        first = self.build(self.settings._replace(port=port))
+        # paired through the credentials: no connection is made to the first port, so the
+        # second build can bind it again at once
+        value = first.creds.pair(first.creds.new_pairing_code())
+        self.assertTrue(os.path.isfile(os.path.join(self.tokens, auth.sessions_file(port))))
+        self.assertIs(first.close(), True)
+        hub = self.build(self.settings._replace(port=port))
+        self.assertEqual(hub.port, port)
+        self.assertEqual(hub.notes, [])
+        hub.start()
+        cookie = ('Cookie', '%s=%s' % (auth.cookie_name(port), value))
+        r = get(port, HEALTH, headers=[cookie])
+        self.assertEqual(r.status, 200, r.body)
+        self.assertIn('store', r.json())
+        # the owner's token unpairs it, here and in the file the next build reads
+        self.assertEqual(post(port, httpd.UNPAIR_ROUTE, {}, self.owner).status, 200)
+        self.assertEqual(get(port, HEALTH, headers=[cookie]).status, 403)
+        self.assertEqual(auth.Credentials(self.tokens, port=port, persist=True)
+                         .role_for({}, {auth.cookie_name(port): value}), None)
+        self.assertEqual(self.errors(), [])
+
+    def test_a_sessions_file_that_cannot_be_read_is_a_start_up_note(self):
+        first = self.build()
+        port = first.port
+        self.assertIs(first.close(), True)
+        os.makedirs(self.tokens, exist_ok=True)
+        with open(os.path.join(self.tokens, auth.sessions_file(port)), 'w') as f:
+            f.write('not json')
+        hub = self.build(self.settings._replace(port=port))
+        self.assertEqual(len(hub.notes), 1, hub.notes)
+        self.assertIn(auth.sessions_file(port), hub.notes[0])
 
     def test_a_second_server_on_the_same_store_is_refused_at_once(self):
         first = self.build()
@@ -591,6 +643,86 @@ class CloseCase(ServeCase):
             serve.run(hub)
 
 
+class StopCase(ServeCase):
+    """The stop route of a built server (httpd.STOP_ROUTE): the owner's token ends run() as
+    Ctrl+C does, and nothing else does."""
+
+    def running(self, settings=None, **src):
+        """A built hub that run() serves on a thread: the hub, the thread, and the list run()'s
+        answer goes to."""
+        hub = self.build(settings, **src)
+        up, stop, out = threading.Event(), threading.Event(), []
+        runner = threading.Thread(target=lambda: out.append(serve.run(hub, lambda h: up.set(),
+                                                                      stop)),
+                                  name='test-run', daemon=True)
+        runner.start()
+        self.addCleanup(runner.join, TIMEOUT)
+        self.addCleanup(stop.set)
+        self.assertTrue(up.wait(TIMEOUT), 'the server never started')
+        return hub, runner, out
+
+    def test_the_owners_stop_ends_run_with_a_clean_close(self):
+        hub, runner, out = self.running(sync=self.sync_factory(),
+                                        backlog=lambda s: FakeBacklog(self.calls))
+        self.assertFalse(hub.stopping.is_set())
+        r = post(hub.port, httpd.STOP_ROUTE, {}, self.owner)
+        self.assertEqual(r.status, 200, r.body)
+        self.assertEqual(r.json(), {'ok': True, 'stopping': True, 'pid': os.getpid(),
+                                    'ctime': process.own_ctime()})
+        runner.join(TIMEOUT)
+        self.assertFalse(runner.is_alive(), 'run() did not end after the stop')
+        self.assertEqual(out, [True])
+        # the same close as Ctrl+C: the last sync pass after the listeners, then the store
+        self.assertEqual(self.calls, ['sync.start', 'backlog.start', 'backlog.stop', 'sync.stop',
+                                      'sync.sync_once'])
+        self.assertEqual(httpfix.http_threads(), [])
+        self.assertFalse(self.locked())
+        with self.assertRaises(serve.NotRunning):
+            serve.ask(hub.port, 'GET', HEALTH, self.owner)
+        self.assertIn(('note', serve.STOP_ASKED), self.lines)
+        self.assertEqual(self.errors(), [])
+
+    def test_no_one_but_the_owners_token_stops_the_server(self):
+        hub, runner, out = self.running()
+        path = post(hub.port, httpd.PAIR_ROUTE, {}, self.owner).json()['path']
+        session = ('Cookie', get(hub.port, path).header('Set-Cookie')[0].split(';')[0])
+        self.assertIn('store', get(hub.port, HEALTH, headers=[session]).json())
+        for what, token, headers in (('no credential', None, []), ('the agent', self.agent, []),
+                                     ('a browser session', None, [session]),
+                                     ('the agent beside a session', self.agent, [session])):
+            with self.subTest(what=what):
+                r = post(hub.port, httpd.STOP_ROUTE, {}, token, headers=headers)
+                self.assertEqual((r.status, r.code()), (403, 'forbidden'), r.body)
+        # writes the listener refuses before any route: no Origin, not JSON, another host
+        r = send(hub.port, 'POST', httpd.STOP_ROUTE,
+                 [bearer(self.owner), ('Content-Type', httpd.JSON)], b'{}')
+        self.assertEqual(r.status, 403)
+        r = send(hub.port, 'POST', httpd.STOP_ROUTE,
+                 [bearer(self.owner), ('Origin', 'http://127.0.0.1:%d' % hub.port)], b'{}')
+        self.assertEqual(r.status, 415)
+        evil = 'evil.example:%d' % hub.port
+        r = send(hub.port, 'POST', httpd.STOP_ROUTE,
+                 [bearer(self.owner), ('Content-Type', httpd.JSON), ('Origin', 'http://' + evil)],
+                 b'{}', host=evil)
+        self.assertEqual(r.status, 403)
+        self.assertFalse(hub.stopping.is_set())
+        self.assertTrue(runner.is_alive())
+        self.assertEqual(out, [])
+        self.assertEqual(get(hub.port, HEALTH, self.owner).status, 200)
+
+    def test_a_paired_browser_stays_paired_across_a_stop(self):
+        probe = self.build()                # port 0 keeps no sessions: find a port, then ask it
+        port = probe.port
+        self.assertIs(probe.close(), True)
+        hub, runner, out = self.running(self.settings._replace(port=port))
+        value = hub.creds.pair(hub.creds.new_pairing_code())
+        self.assertEqual(post(port, httpd.STOP_ROUTE, {}, self.owner).status, 200)
+        runner.join(TIMEOUT)
+        self.assertEqual(out, [True])
+        reread = auth.Credentials(self.tokens, port=port, persist=True)
+        self.assertEqual(reread.role_for({}, {auth.cookie_name(port): value}), auth.OWNER)
+
+
 class ViewsCase(ServeCase):
     def views(self, **src):
         self.fake = FakeBacklog(self.calls, src.pop('answer', None))
@@ -760,6 +892,81 @@ class ViewsCase(ServeCase):
         self.assertEqual(r.json()['items'], [{'name': 'alpha', 'aliases': []}])
         self.assertEqual(seen, [[]])
         self.assertEqual(get(hub.port, BASE + '/notices', self.owner).json()['items'], [])
+
+
+class RecordBacklog(FakeBacklog):
+    """FakeBacklog with backlog.Views's two record reads; `raises` is what they raise instead."""
+    raises = None
+
+    def record(self, repo, rid):
+        self.calls.append(('record', repo, rid))
+        if self.raises is not None:
+            raise self.raises
+        return {'repo': repo, 'id': rid, 'where': 'open'}
+
+    def record_template(self, repo):
+        self.calls.append(('record_template', repo))
+        if self.raises is not None:
+            raise self.raises
+        return {'repo': repo, 'fields': []}
+
+
+class RecordViewsCase(ServeCase):
+    def site(self, raises=None):
+        source = RecordBacklog([])
+        source.raises = raises
+        return serve.SiteViews(None, serve.Sources(), source), source
+
+    def test_the_record_views_are_bound_only_with_a_backlog(self):
+        bare = serve.SiteViews(None, serve.Sources())
+        self.assertFalse(hasattr(bare, 'record'))
+        self.assertFalse(hasattr(bare, 'record_template'))
+        views, source = self.site()
+        self.assertEqual(views.record('kit', 'EX-1'), {'repo': 'kit', 'id': 'EX-1',
+                                                        'where': 'open'})
+        self.assertEqual(views.record_template('kit'), {'repo': 'kit', 'fields': []})
+        self.assertEqual(source.calls, [('record', 'kit', 'EX-1'), ('record_template', 'kit')])
+        self.assertEqual(source.reads, [], 'a record read is not a backlog read')
+
+    def test_what_the_record_read_raises_is_a_hub_error_with_its_fixed_phrase(self):
+        for raised, want in (
+                (backlog.RecordError('not_found', backlog.NO_RECORD, 'id'),
+                 ('not_found', backlog.NO_RECORD, 'id')),
+                (backlog.RecordError('not_found', backlog.NO_REPO, 'repo'),
+                 ('not_found', backlog.NO_REPO, 'repo')),
+                (backlog.RecordError('invalid', backlog.BAD_ID, 'id'),
+                 ('invalid', backlog.BAD_ID, 'id')),
+                (backlog.ReadError(backlog.NO_CHECKOUT), ('unavailable', backlog.NO_CHECKOUT,
+                                                          'views')),
+                (backlog.ReadError('C:\\secret\\folder'), ('unavailable', backlog.READ_FAILED,
+                                                          'views'))):
+            views, _ = self.site(raised)
+            for call in (lambda: views.record('kit', 'EX-1'),
+                         lambda: views.record_template('kit')):
+                with self.subTest(raised=raised):
+                    with self.assertRaises(serve.HubError) as got:
+                        call()
+                    e = got.exception
+                    self.assertEqual((e.code, e.message, e.field), want)
+
+    def test_the_routes_answer_over_http(self):
+        source = RecordBacklog(self.calls)
+        hub = self.build(backlog=lambda refresh_s: source)
+        hub.start()
+        r = get(hub.port, BASE + '/records/Alpha/A-1', self.agent)
+        self.assertEqual(r.status, 200, r.body)
+        self.assertEqual((r.json()['repo'], r.json()['id']), ('Alpha', 'A-1'))
+        r = get(hub.port, BASE + '/records/Alpha/new', self.owner)
+        self.assertEqual((r.status, r.json()['fields']), (200, []))
+        source.raises = backlog.RecordError('not_found', backlog.NO_RECORD, 'id')
+        r = get(hub.port, BASE + '/records/Alpha/A-404', self.agent)
+        self.assertEqual((r.status, r.json()['error']['message']), (404, backlog.NO_RECORD))
+        r = get(hub.port, BASE + '/records/Alpha/%2e%2e', self.agent)
+        self.assertEqual((r.status, r.json()['error']['code']), (400, 'invalid'))
+        self.assertNotIn('%2e', r.body.decode('utf-8'))
+        self.assertEqual([c for c in self.calls if isinstance(c, tuple)],
+                         [('record', 'Alpha', 'A-1'), ('record_template', 'Alpha'),
+                          ('record', 'Alpha', 'A-404')])
 
 
 class ReasonCase(ServeCase):
@@ -1652,6 +1859,92 @@ class MachineCase(unittest.TestCase):
                                   ('rev-parse', '--show-toplevel'))])
         self.assertEqual(listed, [(['a', 'b'], 'the/pm/root', {'a': 'p'})] * 2)
 
+    def test_an_unreadable_sessions_file_gives_no_repo_names_and_a_write_still_lands(self):
+        self.config({'pm_start': {'sessions_file': os.path.join(self.home, 'missing', 's.json')}})
+        src = serve.machine_sources(self.home)
+        self.assertEqual(src.known_repos(), ())
+        root = os.path.join(self.home, 'store')
+        store = Store.open(root, known_repos=src.known_repos)
+        self.addCleanup(store.close)
+        self.assertEqual(store.put('repos', 'alpha', {'name': 'alpha'}).warnings, [])
+
+    def sessions(self, text, **pm_start):
+        """A sessions file holding `text` under the temp home, and the config naming it."""
+        path = os.path.join(self.home, 'pm', 's.json')
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(text)
+        pm_start['sessions_file'] = path
+        self.config({'pm_start': pm_start})
+        return path
+
+    def store(self, src):
+        store = Store.open(os.path.join(self.home, 'store'), known_repos=src.known_repos)
+        self.addCleanup(store.close)
+        return store
+
+    def test_the_configured_repo_names_reach_the_sources_and_git_is_asked_once(self):
+        path = self.sessions(json.dumps({'g': {'repo': 'Gamerepo'}, 'x': 5}), repos=['extra'])
+        asked = []
+
+        def toplevel(folder):
+            asked.append(folder)
+            return 'pmrepo' if folder == os.path.dirname(path) else 'kitrepo'
+
+        with mock.patch.object(serve.pmstart, '_toplevel', toplevel):
+            src = serve.machine_sources(self.home)
+            self.assertEqual(asked, [], 'reading the sources ran git')
+            want = ['extra', 'Gamerepo', 'kitrepo', 'pmrepo']
+            self.assertEqual(src.known_repos(), want)
+            store = self.store(src)
+            for _ in range(3):
+                self.assertEqual(store.add('questions', question(repo='gamerepo')).warnings, [])
+            self.assertEqual(store.add('questions', question(repo='PMREPO')).warnings, [])
+            r = store.add('questions', question(repo='ghost'))
+            self.assertEqual([f.code for f in r.warnings], ['repo-alias'])
+            self.assertEqual(src.known_repos(), want)
+        self.assertEqual(len(asked), 2, asked)      # the two folders, once each, for every call
+        self.assertEqual(asked[0], os.path.dirname(path))
+
+    def test_a_sessions_file_whose_json_is_not_an_object_gives_no_repo_names(self):
+        for text in ('[]', 'null', '5', '"s"'):
+            self.sessions(text)
+            src = serve.machine_sources(self.home)
+            self.assertEqual(src.known_repos(), (), text)
+        store = self.store(src)
+        r = store.add('questions', question(repo='gamerepo'))      # the write still lands
+        self.assertEqual(store.get('questions', r.id)['repo'], 'gamerepo')
+
+    def test_bad_json_or_a_bad_repos_value_gives_no_repo_names(self):
+        for text, repos in (('not json', None), ('{}', 'gamerepo'), ('{}', [''])):
+            kw = {} if repos is None else {'repos': repos}
+            self.sessions(text, **kw)
+            src = serve.machine_sources(self.home)
+            self.assertEqual(src.known_repos(), (), (text, repos))
+        store = self.store(src)
+        r = store.add('questions', question(repo='gamerepo'))      # the write still lands
+        self.assertEqual([f.code for f in r.warnings], ['repo-alias'])
+        self.assertEqual(store.get('questions', r.id)['repo'], 'gamerepo')
+
+    def test_a_sessions_file_that_is_not_a_path_gives_no_repo_names(self):
+        self.config({'pm_start': {'sessions_file': ['not', 'a', 'path']}})
+        self.assertEqual(serve.machine_sources(self.home).known_repos(), ())
+
+    def test_with_no_git_the_names_are_what_the_sessions_file_says(self):
+        self.sessions(json.dumps({'g': {'repo': 'Gamerepo'}}), repos=['extra'])
+        ran = []
+
+        def no_git(*a, **kw):
+            ran.append(a[0])
+            raise FileNotFoundError('git')
+
+        with mock.patch('kitlib.git.cmd.subprocess_run', no_git):
+            src = serve.machine_sources(self.home)
+            self.assertEqual(src.known_repos(), ['extra', 'Gamerepo'])
+            self.assertEqual(self.store(src).add('questions', question(repo='gamerepo')).warnings,
+                             [])
+        self.assertEqual(len(ran), 2, ran)          # git was tried, for both folders
+
     def test_a_pm_data_object_that_cannot_be_used_is_a_config_error(self):
         self.config({'pm_data': 5})
         with self.assertRaises(ConfigError):
@@ -1673,6 +1966,20 @@ class ClientCase(ServeCase):
         self.assertEqual(status, 200, obj)
         self.assertEqual([d.get('via') for d in hub.store.docs('todos').values()],
                          [serve.VIA_CLI])
+        self.assertEqual(self.errors(), [])
+
+    def test_ask_names_the_via_it_is_given_and_a_client_passes_its_own(self):
+        hub = self.build()
+        hub.start()
+        status, obj = serve.ask(hub.port, 'POST', BASE + '/todos', self.owner, {'title': 'a'},
+                                via=serve.VIA_MCP)
+        self.assertEqual(status, 200, obj)
+        c = client.Client(hub.port, tokens=self.tokens, via=serve.VIA_MCP)
+        c.post('/inbox', client.AGENT, {'text': 'b'})
+        self.assertEqual([d.get('via') for d in hub.store.docs('todos').values()],
+                         [serve.VIA_MCP])
+        self.assertEqual([d.get('via') for d in hub.store.docs('inbox').values()],
+                         [serve.VIA_MCP])
         self.assertEqual(self.errors(), [])
 
     def test_ask_tells_a_server_that_is_not_running_from_one_that_is_not_the_hub(self):

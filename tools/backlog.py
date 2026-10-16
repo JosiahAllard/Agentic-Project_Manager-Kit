@@ -8,11 +8,12 @@
   writes  add ID --summary S --scope P... --found-on BRANCH|none --why-not-folded T
               [--effort s|m|l] [--ref R] [--reopen]
           set ID [--<field> V]... [--unset K]... [--ruling R] [--body-file F] [--hold-ruling R]
-          block ID --on M... [--reason T] [--owner-ask Q] [--ruling R]
+          block ID --on M... [--reason T] [--owner-ask Q]   (adds; unblock removes)
           retarget OLD NEW [--apply]                (a moved path; a dry run without --apply)
           unblock ID [--on M] [--reason T] [--ruling R]      (several blockers: --on and --reason)
           pull ID [--reason T] [--ruling R] [--blocker ID]   release ID --reason T
           close ID --reason T [--ruling R]                   retire ID --why T [--ruling R]
+          delete ID --why T [--ruling R]                     clear-review ID --reason T
           set-status ID parked --q Q-nnn                     unpark ID --ruling R
   start   migrate [--dry-run] [--to ref|branch] [--dir D]   (main's records -> a new store)
   repair  catch-up [--apply PATH...]     (the PM data worktree's uncommitted record paths; a dry
@@ -107,7 +108,7 @@ def build_parser():
     v.add_argument('--on', action='append', default=[])
     v.add_argument('--reason', default=None)
     v.add_argument('--owner-ask', default=None)
-    v.add_argument('--ruling', default=None)
+    v.add_argument('--ruling', default=None)    # refused (plan_block): the message names unblock
     v = sub.add_parser('retarget')
     v.add_argument('old')
     v.add_argument('new')
@@ -134,6 +135,14 @@ def build_parser():
     v.add_argument('--why', required=True)
     v.add_argument('--ruling', default=None)
     v.add_argument('--owner-said', default=None)           # refused: kept so the message names --ruling
+    v = sub.add_parser('delete')
+    v.add_argument('id')
+    v.add_argument('--why', required=True)
+    v.add_argument('--ruling', default=None)
+    v.add_argument('--owner-said', default=None)           # refused, as on retire
+    v = sub.add_parser('clear-review')
+    v.add_argument('id')
+    v.add_argument('--reason', required=True)
     v = sub.add_parser('set-status')
     v.add_argument('id')
     v.add_argument('status')
@@ -184,11 +193,14 @@ def do_next(args, ctx, snap):
                  if rec.get('session') else '')
         say('DEAD PULL %s (pulled_by %s has no branch): %s`release %s --reason ...`'
             % (rec.id, rec.get('pulled_by'), taker, rec.id))
-    result, refusals, ranks = omod.next_offer(snap, holding, cap=cap, seeds=args.seeds,
-                                              session=ctx.session, unmet=ctx.unmet(snap))
-    if refusals:
-        raise Failure('cannot compute an offer: %s' % '; '.join(refusals))
-    offers, passed = result
+    # The offer `pull` checks against (plan.offer_for): the branch's own pulls take no scope.
+    offers, passed, _holding, own = pmod.offer_for(snap, ctx, cap=cap, seeds=args.seeds,
+                                                   holding=holding)
+    mine = [r.id for r in holding if own and r.get('pulled_by') == own]
+    if mine:
+        say('as branch %s: its own pulls (%s) take no scope here, so a record overlapping only '
+            'them is offered to bundle onto it' % (own, ', '.join(mine)))
+    ranks = omod.ranked(snap)
     say('')
     say('NEXT (%d offered%s%s)' % (len(offers), ', session %s' % ctx.session if ctx.session else '',
                                    ', --all: no cap' if cap is None else ''))
@@ -196,6 +208,11 @@ def do_next(args, ctx, snap):
         say(row(o.rec, ranks) + ('  (--with)' if o.seeded else ''))
     for p in passed:
         say('  passed over %s (rank %s): %s' % (p.rec.id, p.rank, p.why))
+    summary = omod.blocker_summary(passed)
+    if summary:
+        say('  blockers, most first:')
+        for line in summary:
+            say('    ' + line)
     return 0
 
 
@@ -218,8 +235,12 @@ def do_list(args, ctx, snap):
     if args.area:
         recs = [r for r in recs if r.get('area') == args.area]
     if args.needs_priority:
+        # A record marked for review at `-` or `-1` still wants its price (the pricing pass).
         recs = sorted((r for r in recs if omod.classify(r)[0] in
-                       (omod.UNPRIORITISED_OPEN, omod.OWNER_PRIORITISED)), key=lambda r: r.id)
+                       (omod.UNPRIORITISED_OPEN, omod.OWNER_PRIORITISED) or
+                       omod.classify(r)[0] == omod.REVIEW and
+                       r.get('priority') in ('-', rmod.OWNER_PRIORITY)),
+                      key=lambda r: r.id)
     elif args.blocked:
         recs = [r for r in recs if omod.classify(r)[0] == omod.HELD]
         if args.on:
@@ -240,6 +261,8 @@ def do_list(args, ctx, snap):
             days = rmod.parked_days(r, ctx.date())
             age = '?' if days is None else '%dd' % days
             line += '  [q %s, parked %s]' % (r.get('q') or '?', age)
+        if r.has('review'):
+            line += '  [review %s]' % r.get('review')
         say(line)
     say('%d record(s)' % len(recs))
     return 0
@@ -381,7 +404,9 @@ def do_migrate(args, top, cfg, rules):
         raise Usage('the configured store is `%s`, not a `ref` or `branch` store; name the store '
                     'to start with `--to ref` or `--to branch`' % configured)
     rel = args.dir or ('docs/backlog' if configured in ('ref', 'branch', 'main') else configured)
-    backend = smod.open_backend(top, cfg, fetch=False, store=to)
+    backend = smod.open_backend(top, cfg, fetch=False, store=args.to)   # the default: implicit
+    if getattr(backend, 'implicit', False):      # a dry run says so too, not only the real run
+        raise Refusal(smod.default_store_refusal(top))
     label, src = mmod.main_tip(top, backend.remote, cfg.main_branch)
     res = mmod.migrate(backend, rules, top, src, rel, dry_run=args.dry_run, label=label,
                        session=args.session)
@@ -403,9 +428,10 @@ def do_migrate(args, top, cfg, rules):
 def main(argv=None):
     args = build_parser().parse_args(argv)
     try:
-        if args.verb == 'retire' and args.owner_said is not None:
+        if args.verb in ('retire', 'delete') and args.owner_said is not None:
             raise Usage('`--owner-said` is gone: owner words are never copied into a record. '
-                        'Retiring an owner-held record takes `--ruling R-nnnn`')
+                        '%s an owner-held record takes `--ruling R-nnnn`'
+                        % ('Retiring' if args.verb == 'retire' else 'Deleting'))
         root = os.path.abspath(args.root or os.getcwd())
         if args.verb == 'migrate':
             top, cfg, rules = open_repo(root)

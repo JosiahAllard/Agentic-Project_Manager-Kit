@@ -6,7 +6,7 @@
   agent_temp_init.py --apply         make it
   options: --kit DIR (default: the checkout this file is in)   --home DIR (default: the user's home)
            --agent-temp DIR (default: the machine config's agent_temp_sweep.dir, then the user
-                             environment's AGENT_TEMP, then AgentTemp at the root of the kit's drive)
+                             environment's AGENT_TEMP, then kit-temp at the root of the kit's drive)
            --no-sweep-task   do not register the agent-temp-sweep scheduled task (by default
                              --apply registers it, after one dry run of the sweep printing what it
                              would remove; with the flag the plan prints the line that registers it)

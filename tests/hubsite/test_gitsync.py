@@ -22,6 +22,7 @@ from kitlib.hubsite.store import LOCK_NAME, Store
 from tests.gitfixture import EMAIL, NAME, TempRepo, fixture_env
 from tests.realgit import real_git
 
+KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 FETCH = ['fetch', '-q', '--no-tags', 'origin', 'refs/heads/pmdata:refs/remotes/origin/pmdata']
 PUSH = ['push', '-q', '--no-signed', 'origin', 'refs/heads/pmdata:refs/heads/pmdata']
 FAKE_LACKS = ('--no-autostash', '--no-signed')          # flags the fake git has no model of
@@ -824,9 +825,17 @@ class PrepareTest(Case):
         self.assertTrue(os.path.samefile(plan.root, self.wt))
 
     def test_a_checkout_of_the_kit_is_refused(self):
-        self.write('kitlib/hubmirror/__init__.py', '')      # the kit's code
+        self.write('kitlib/hubsite/gitsync.py', '')         # the kit's code
         with self.assertRaises(gitsync.Refused) as cm:
             self.sync()
+        self.assertIn('a checkout of the kit itself', str(cm.exception))
+
+    def test_this_very_kit_work_tree_is_refused_as_the_kit(self):
+        # The tree the suite runs in may be detached (the daily gate's is); the branch check runs
+        # first, so name a branch to reach the kit-code check whatever HEAD is.
+        with mock.patch.object(gitsync.refs, 'current_branch', return_value=('main', '')):
+            with self.assertRaises(gitsync.Refused) as cm:
+                gitsync.prepare(os.path.join(KIT, 'hub'))
         self.assertIn('a checkout of the kit itself', str(cm.exception))
 
     def test_the_kits_repository_syncs_only_its_recorded_data_branch_and_remote(self):

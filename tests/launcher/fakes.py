@@ -7,6 +7,7 @@ import re
 import shutil
 import tempfile
 
+from kitlib.git import repo as gitrepo
 from kitlib.launcher import settings as S
 from kitlib.launcher.host import Host
 
@@ -31,6 +32,7 @@ class FakeHost(Host):
         self.procs = list(procs)
         self.opened, self.killed, self.slept = [], [], []
         self.ignored, self.mypid, self.uptime = ignored, own_pid, uptime
+        self.where, self.homes = None, []      # place()'s kind (None: place() fails the test); home_worktree calls
 
     def env(self, name):
         return self.environ.get(name)
@@ -48,6 +50,16 @@ class FakeHost(Host):
 
     def git_ignored(self, repo, path):
         return self.ignored
+
+    def place(self, folder):
+        if self.where is None:
+            raise AssertionError('place(%s) asked with no place set' % folder)
+        top = folder if self.where in (gitrepo.MAIN, gitrepo.LINKED) else None
+        return gitrepo.Place(self.where, top, 'fake %s' % self.where, None, None)
+
+    def home_worktree(self, main, path, whatif=False):
+        self.homes.append((main, path, whatif))
+        return ['HOME %s whatif=%s' % (path, whatif)]
 
     def own_pid(self):
         return self.mypid

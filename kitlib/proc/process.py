@@ -39,6 +39,19 @@ def process_parents():
     return {pid: ppid for pid, ppid, _name in snapshot()}
 
 
+def parent_pid(h):
+    """The parent pid recorded when the process of handle h was created (the value a Toolhelp
+    snapshot lists as its parent), or None when it cannot be read. One NtQueryInformationProcess
+    call on a handle with query access, so asking about one process costs no system-wide
+    snapshot. Like the snapshot's, the value is a pid that may since have been reused."""
+    info = win32.PROCESS_BASIC_INFORMATION()
+    size = wintypes.ULONG(0)
+    st = win32.NTDLL.NtQueryInformationProcess(
+        h, win32.PROCESS_BASIC_INFORMATION_CLASS, ctypes.byref(info), ctypes.sizeof(info),
+        ctypes.byref(size))
+    return int(info.InheritedFromUniqueProcessId) if st == 0 else None
+
+
 def open_process(pid, access=PROCESS_QUERY_LIMITED_INFORMATION):
     return K32.OpenProcess(access, False, int(pid)) or None
 
