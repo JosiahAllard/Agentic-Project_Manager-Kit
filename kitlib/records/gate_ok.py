@@ -33,8 +33,8 @@ unless the caller asks for what they carry):
                 (source_of)
   full          true when the gate ran `--full` (every non-manual step, each by its full_cmd when
                 it has one; kitlib.gate.steps.select), false for any other run. Only the JSON
-                true counts (full_of): a record without the key was written before records said
-                which, and a reader that needs a full gate (verify_full; a landing's branch tips)
+                true counts (full_of): a record without the key was written by a gate from before
+                records said which (an older kit, or a kit branch's own gate.py), and a reader that needs a full gate (verify_full; a landing's branch tips)
                 takes it as not full. Nothing in the older keys tells the two apart: the steps
                 carry names only, and a step with a full_cmd has the same name in both modes
 
@@ -147,8 +147,8 @@ def verify_full(root, commit):
     if full_of(rec):
         return rec, None
     if 'full' not in rec:
-        return None, ('the record for %s does not say whether the gate ran --full (written before '
-                      'records said so), so it does not count' % rec['commit'])
+        return None, ('the record for %s does not say whether the gate ran --full (written by a '
+                      'gate from before records said so), so it does not count' % rec['commit'])
     return None, 'the record for %s is from a gate run without --full' % rec['commit']
 
 
