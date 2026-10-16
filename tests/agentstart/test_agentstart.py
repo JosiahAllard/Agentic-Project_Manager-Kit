@@ -30,7 +30,7 @@ class Fixture(unittest.TestCase):
         self.git = self.repo.git
         self.git('update-ref', 'refs/remotes/origin/main', 'HEAD')
         self.head = self.git('rev-parse', '--short', 'HEAD')
-        p = mock.patch.object(agentstart.stray, 'check', return_value=(0, ['STRAY-LINE']))
+        p = mock.patch.object(agentstart.stray, 'check', return_value=(0, ['the stray line']))
         self.stray = p.start()
         self.addCleanup(p.stop)
 
@@ -80,7 +80,7 @@ class MainCheckout(Fixture):
 
     def test_the_stray_check_is_the_last_line(self):
         lines = agentstart.lines(self.repo.root, KIT)
-        self.assertEqual(lines[-1], 'STRAY-LINE')
+        self.assertEqual(lines[-1], 'the stray line')
         self.assertEqual(os.path.normcase(os.path.abspath(self.stray.call_args[0][0])),
                          os.path.normcase(os.path.abspath(self.repo.root)))
 
