@@ -5,9 +5,12 @@ A check that looked at nothing over a store that was read is vacuous (an answer)
 population at all is red (it never ran). No check reads the ledger: a ruling id on a record is
 taken on its word.
 """
+from kitlib.git import refs
+
 from . import offer as omod
 from . import record as rmod
 from . import scope as smod
+from .errors import Failure
 from .store import dangling_items
 
 PREEMPTIONS = 'pre-emptions'
@@ -122,8 +125,47 @@ def check_pull_records(snap):
                        proxy='reads the shape; colliding in-flight scopes are a WARN')
 
 
-def check_store(snap):
-    """Every check, each with its own denominator."""
+DEFAULT_STORE = 'default store'
+
+
+def check_default_store(snap):
+    """One WARN per record of the implicit default store (refs/backlog/main while .kit.json names
+    no "backlog".store: store.default_store_refusal), which nothing writes, so a landing closes
+    none of its records (at_landing._read_default): they are stranded there. Never red."""
+    found = [rmod.Finding(DEFAULT_STORE, rec.path, 1, '%s is held by the default backlog store, '
+                          'read only while .kit.json names no "backlog".store, so no landing '
+                          'closes it: add it to the live backlog store, or, if this is the live '
+                          'store, name it in .kit.json ("backlog": {"store": "ref"})' % rec.id)
+             for rec in snap.readable]
+    return CheckResult(DEFAULT_STORE, len(snap.readable), (), warnings=found,
+                       proxy='a non-empty default store is a WARN, never red')
+
+
+def load_for_check(store):
+    """`(snap, note)`: `store.load()`, note None. One case reads the local ref instead: the
+    implicit default store, whose remote has no refs/backlog/main while the local ref holds a
+    store. The fetching read refuses that (a write would start a new store without those
+    records), but nothing writes the implicit store, and those records are exactly what
+    check_default_store reports; that fallback sets `backend.fetch = False` on the store it was
+    given, so a later load of it reads the local ref too. Any other Failure, or a remote that
+    cannot be asked, stands."""
+    backend = store.backend
+    try:
+        return store.load(), None
+    except Failure:
+        if not (getattr(backend, 'implicit', False) and backend.remote and backend.fetch):
+            raise
+        sha, _ = refs.ls_remote(backend.remote, backend.remote_ref, backend.root)
+        if sha != '':
+            raise
+    backend.fetch = False
+    return store.load(), ('%s has no %s; read the local %s, which holds the default store'
+                          % (backend.remote, backend.remote_ref, backend.local_ref))
+
+
+def check_store(snap, implicit=False):
+    """Every check, each with its own denominator. `implicit`: `snap` is the implicit default
+    store's, which adds check_default_store when it holds any file."""
     by_name = {}
     for f in snap.all_findings():
         by_name.setdefault(f.check, []).append(f)
@@ -145,6 +187,8 @@ def check_store(snap):
         check_preemptions(snap),
         check_pull_records(snap),
     ]
+    if implicit and snap.file_count:
+        results.append(check_default_store(snap))
     for r in results:
         r.population = snap.file_count
     return results
