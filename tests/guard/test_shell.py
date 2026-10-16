@@ -74,22 +74,55 @@ class Tokeniser(unittest.TestCase):
 
 
 ROUTED = 'C:\\routed-home'
+GIVEN = 'C:\\given-home'
 
 
-class HomeTilde(unittest.TestCase):
-    """resolve_path reads a leading `~` as the folder kitlib.config.user.home_dir() gives, so a
-    guard test that reaches a `~` path with the real home meets the home fence instead of reading
-    the real home (docs/test-tools.md "Home fence")."""
+class HomeFolder(unittest.TestCase):
+    """With no `home` given, home_folder is the folder kitlib.config.user.home_dir() gives, so a
+    guard test that reaches `~`, a home variable or a bare cd with the real home meets the home
+    fence instead of reading the real home (docs/test-tools.md "Home fence"). A `home` given
+    wins, and home_dir() is not asked."""
+
+    def routed(self):
+        patch = mock.patch.object(kuser, 'home_dir', return_value=ROUTED)
+        home_dir = patch.start()
+        self.addCleanup(patch.stop)
+        return home_dir
 
     def test_tilde_is_the_folder_home_dir_gives(self):
-        with mock.patch.object(kuser, 'home_dir', return_value=ROUTED) as home_dir:
-            for shell in (None, s.BASH, s.PS, s.CMD):
-                with self.subTest(shell=shell):
-                    self.assertEqual(s.resolve_path('~', CWD, shell), ROUTED)
-                    self.assertEqual(s.resolve_path('~/a/b', CWD, shell), ROUTED + '\\a\\b')
-                    self.assertEqual(s.resolve_path('~\\a', CWD, shell), ROUTED + '\\a')
-                    self.assertIsNone(s.resolve_path('~user/a', CWD, shell))
+        home_dir = self.routed()
+        for shell in (None, s.BASH, s.PS, s.CMD):
+            with self.subTest(shell=shell):
+                self.assertEqual(s.resolve_path('~', CWD, shell), ROUTED)
+                self.assertEqual(s.resolve_path('~/a/b', CWD, shell), ROUTED + '\\a\\b')
+                self.assertEqual(s.resolve_path('~\\a', CWD, shell), ROUTED + '\\a')
+                self.assertIsNone(s.resolve_path('~user/a', CWD, shell))
         self.assertTrue(home_dir.called)
+
+    def test_a_home_given_wins_and_home_dir_is_not_asked(self):
+        home_dir = self.routed()
+        self.assertEqual(s.home_folder(GIVEN), GIVEN)
+        self.assertEqual(s.resolve_path('~/a', CWD, home=GIVEN), GIVEN + '\\a')
+        self.assertEqual(s.home_text('~/a', GIVEN), GIVEN + '/a')
+        self.assertEqual(s.home_text('$HOME/a', GIVEN, dyn=True), GIVEN + '/a')
+        self.assertFalse(home_dir.called)
+
+    def test_home_text_reads_tilde_and_a_home_variable_as_home_dir_gives(self):
+        self.routed()
+        self.assertEqual(s.home_folder(), ROUTED)
+        self.assertEqual(s.home_text('~/a'), ROUTED + '/a')
+        for text in ('$HOME/a', '${HOME}/a', '$env:USERPROFILE/a', '%USERPROFILE%/a'):
+            with self.subTest(text=text):
+                self.assertEqual(s.home_text(text, dyn=True), ROUTED + '/a')
+
+    def test_a_bare_cd_goes_to_the_folder_home_dir_gives(self):
+        self.routed()
+        for line, sh in (('cd && ls', s.BASH), ('cd -- && ls', s.BASH), ('Set-Location; ls', s.PS)):
+            with self.subTest(line=line):
+                _, c = cmds(line, sh)
+                self.assertEqual(c[1].cwd_home, ROUTED)
+        _, c = cmds('cd $HOME/a && ls', s.BASH)
+        self.assertEqual(c[1].cwd_home, ROUTED + '\\a')
 
     def test_tilde_meets_the_fence(self):
         fence_decoy(self)
@@ -98,11 +131,22 @@ class HomeTilde(unittest.TestCase):
                 with self.assertRaises(kuser.HomeFenced):
                     s.resolve_path(text, CWD)
         self.assertEqual(s.resolve_path('C:\\m\\x', CWD), 'C:\\m\\x')
+        self.assertEqual(s.resolve_path('~/a', CWD, home=GIVEN), GIVEN + '\\a')
 
-    def test_a_cd_to_tilde_meets_the_fence(self):
+    def test_home_text_meets_the_fence(self):
         fence_decoy(self)
-        with self.assertRaises(kuser.HomeFenced):
-            cmds('cd ~/a && echo x > f', s.BASH)
+        for text, dyn in (('~/a', False), ('$HOME/a', True), ('%USERPROFILE%', True)):
+            with self.subTest(text=text):
+                with self.assertRaises(kuser.HomeFenced):
+                    s.home_text(text, dyn=dyn)
+        self.assertEqual(s.home_text('C:\\m'), 'C:\\m')
+
+    def test_a_cd_home_meets_the_fence(self):
+        fence_decoy(self)
+        for line in ('cd ~/a && echo x > f', 'cd && echo x > f', 'cd $HOME && echo x > f'):
+            with self.subTest(line=line):
+                with self.assertRaises(kuser.HomeFenced):
+                    cmds(line, s.BASH)
 
 
 if __name__ == '__main__':
