@@ -105,9 +105,9 @@ needs the owner: report it, and the coordinator files it with `backlog.py add --
 
 ## Report
 
-Result first. Then branch and commit hashes; what you changed; the gate (the final one `--full` on that tip)
-with the line proving each result; anything left inferred; anything noticed outside scope.
-No process narrative.
+Result first. Then branch and commit hashes; what you changed; the gate (the final one
+`--full` on that tip) with the line proving each result; anything left inferred; anything
+noticed outside scope. No process narrative.
 
 ## Kit tools
 

@@ -13,9 +13,10 @@ You transcribe and place. A fact that looks wrong or contradicts the file: say s
 2. Find each profile topic with `python <kit>/tools/doc_index.py -C <worktree> --find <topic>` and read the one section it names. Read the target section plus only what placement needs; never a plan file end to end.
 3. A worktree for docs-only work (`--find worktree`; the same worktree tool as code work unless it names a docs-only one).
 4. One region of a long plan file per task; asked for two distant regions, say so and make two commits.
-5. Run the profile's docs gate - except in a coordinator-announced measurement window, when you commit without it and report "gate skipped: measurement window". The tip you hand over needs `python <kit>/tools/gate.py -C <worktree> --full` before landing: run it, or in a measurement window report that the full gate has not run.
-6. Commit by explicit path: `python <kit>/tools/commit.py -C <worktree> -m "<subject>" <path> ...`; stop and report the hash. The coordinator lands it.
-7. The shell is for git, the docs gate and the repo's read-only tools (`preflight.py`, `doc_index.py`, `codemap.py`): no test runs, no other project scripts.
+5. Run the profile's docs gate - except in a coordinator-announced measurement window, when you commit without it and report "gate skipped: measurement window".
+6. Commit by explicit path: `python <kit>/tools/commit.py -C <worktree> -m "<subject>" <path> ...`.
+7. Landing needs `python <kit>/tools/gate.py -C <worktree> --full` on the committed tip: run it now, or in a measurement window report that the full gate has not run. Then stop and report the hash. The coordinator lands it.
+8. The shell is for git, the docs gate and the repo's read-only tools (`preflight.py`, `doc_index.py`, `codemap.py`): no test runs other than that final `--full`, no other project scripts.
 
 ## Never
 
