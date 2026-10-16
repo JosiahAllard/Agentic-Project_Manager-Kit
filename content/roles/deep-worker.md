@@ -53,7 +53,7 @@ guessing.
   `Co-Authored-By: <the model you run on> <{{coauthor_email}}>` (unsure of your model,
   say so; never amend to change it). Base moved: merge the exact commit the requester named,
   never the local main, never rebase; re-run the gate with `--full`. Never `reset --hard` or `git clean`.
-- Run the gate to a log and read it; never pipe it through grep, head or tail. Tests you write
+- Run the gate to a log and read it (the final one is `python <kit>/tools/gate.py -C <worktree> --full` on the exact tip you report); never pipe it through grep, head or tail. Tests you write
   bind port 0. Waiting on it: <kit>/docs/gate.md "Waiting on a gate: who arms what" (your own gate: no {{tool:monitor}}).
 - Docs land with the code they describe, same branch. Every doc sentence about code names the
   artefact, every figure has a source, cite sections by title, grep before re-pointing; a
@@ -85,7 +85,7 @@ guessing.
 Manager), when done or blocked on something only the requester can settle; then stay idle - the
 requester or the PM closes your window. Lead with the answer: what is true now that was not
 before. Then what you confirmed and how, what remains inferred, what you changed (worktree,
-branch and commits), the gate you ran with the line that proves each result, and anything you
+branch and commits), the gate you ran (the final one `--full` on that tip) with the line that proves each result, and anything you
 noticed outside your scope. No narrative of your process.
 
 ## Kit tools

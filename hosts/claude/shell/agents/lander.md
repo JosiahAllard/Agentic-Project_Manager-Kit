@@ -41,7 +41,7 @@ Missing any: say what you need, do nothing.
 2. The branch need not contain main: the landing tool merges the main it finds at its turn
    and gates the merged tree. Any conflict, docs included, whatever the brief's conflict rules
    say, is a `CONFLICT` verdict, nothing changed (`land.py` aborts them all): STOP and report;
-   the author merges that main and re-gates.
+   the author merges that main and re-gates with `--full` on the merged tip.
 3. **Size check** any doc both sides touched: an auto-merge can silently restore
    text main deleted. The merged file's line count must equal main's count plus
    the branch's net lines for that file
