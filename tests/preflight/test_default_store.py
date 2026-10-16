@@ -1,0 +1,141 @@
+"""preflight's `backlog` line (kitlib/preflight/defaultstore.py, docs/preflight.md): the implicit
+default store refs/backlog/main holding records while it is not the live store is one WARN line
+naming the ref, its record count and the command that reads the live store. Read from the local
+ref, never fetched; never red; the exit code stays 0."""
+import unittest
+from unittest import mock
+
+from kitlib import pmdata
+from kitlib.backlog import store as smod
+from kitlib.preflight import defaultstore
+from tests.preflight import test_preflight as tp
+
+LABEL = 'backlog   '
+HEAD = ('backlog   WARN the default store refs/backlog/main holds %d record(s) here (local ref, '
+        'not fetched)')
+IMPLICIT = ' and .kit.json names no "backlog".store'
+
+
+class TheDefaultStoreLine(tp.Fixture):
+
+    def seed(self, *stems):
+        """refs/backlog/main holding `backlog/<stem>.md` for each stem, built by the store's own
+        writer and moved locally (no remote is touched)."""
+        backend = smod.RefBackend(self.root, 'origin', smod.STORE_REF, smod.STORE_REF, fetch=False)
+        new = backend.build(smod.Snapshot([], None, '', None),
+                            {s: 'id: %s\n' % s for s in stems}, 'seed\n')
+        self.git('update-ref', smod.STORE_REF, new)
+        return new
+
+    def backlog_lines(self, out):
+        return [l for l in out.splitlines() if l.startswith(LABEL)]
+
+    def backlog_cmd(self):
+        return tp.kit('backlog', self.kit)
+
+    # --- case (a): .kit.json names no store -----------------------------------------------------
+
+    def test_an_implicit_store_holding_records_is_one_warn_and_exit_0(self):
+        self.seed('A', 'B')
+        code, out = self.run_preflight()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.backlog_lines(out), [
+            HEAD % 2 + IMPLICIT + ', so it is read-only; if it is the live store, name it in '
+            '.kit.json: "backlog": {"store": "ref"}'])
+
+    def test_the_pm_data_worktree_is_named_as_the_live_store(self):
+        self.seed('A')
+        pmdata.write(self.repo.common_dir(), 'pmdata', 'private', self.repo.head())
+        wt = self.repo.worktree('pm', branch='pmdata')
+        code, out = self.run_preflight()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.backlog_lines(out), [
+            HEAD % 1 + IMPLICIT + ', so backlog.py -C on this checkout reads that copy; the live '
+            'store: %s -C "%s" list' % (self.backlog_cmd(), wt.replace('\\', '/'))])
+
+    def test_a_missing_pm_data_worktree_is_named(self):
+        self.seed('A')
+        pmdata.write(self.repo.common_dir(), 'pmdata', 'private', self.repo.head())
+        out = self.run_preflight()[1]
+        self.assertEqual(self.backlog_lines(out), [
+            HEAD % 1 + IMPLICIT + ', so backlog.py -C on this checkout reads that copy; the live '
+            "store's PM data worktree was not found (no worktree has the PM data branch pmdata "
+            'checked out)'])
+
+    # --- case (b): .kit.json names another store ------------------------------------------------
+
+    def test_a_named_folder_store_gets_the_command_for_this_checkout(self):
+        self.seed('A', 'B', 'C')
+        self.config(backlog={'store': 'kit/backlog'})
+        code, out = self.run_preflight()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.backlog_lines(out), [
+            HEAD % 3 + ', but .kit.json names "backlog".store "kit/backlog"; read the configured '
+            'store: %s -C "%s" list' % (self.backlog_cmd(), self.root.replace('\\', '/'))])
+
+    def test_a_named_main_store_is_warned_too(self):
+        self.seed('A')
+        self.config(backlog={'store': 'main'})
+        self.assertEqual(len(self.backlog_lines(self.run_preflight()[1])), 1)
+
+    # --- silent, and cheap ----------------------------------------------------------------------
+
+    def test_a_named_ref_store_is_the_live_store_and_costs_no_git_process(self):
+        self.seed('A')
+        self.config(backlog={'store': 'ref'})
+        with tp.Spawns() as spawns:
+            out = self.run_preflight()[1]
+        self.assertEqual(self.backlog_lines(out), [])
+        self.assertFalse([a for a in spawns.argvs if smod.STORE_REF in a], spawns.argvs)
+
+    def test_no_default_ref_is_no_line_and_one_git_process(self):
+        with tp.Spawns() as spawns:
+            out = self.run_preflight()[1]
+        self.assertEqual(self.backlog_lines(out), [])
+        self.assertEqual(len([a for a in spawns.argvs if smod.STORE_REF in a]), 1, spawns.argvs)
+        self.assertFalse([a for a in spawns.argvs if 'ls-tree' in a], spawns.argvs)
+
+    def test_a_ref_with_no_records_is_no_line(self):
+        self.git('update-ref', smod.STORE_REF, 'HEAD')
+        self.assertEqual(self.backlog_lines(self.run_preflight()[1]), [])
+
+    def test_the_warn_never_fetches(self):
+        self.seed('A')
+        with tp.Spawns() as spawns:
+            self.run_preflight()
+        self.assertFalse([a for a in spawns.argvs if 'fetch' in a or 'ls-remote' in a],
+                         spawns.argvs)
+
+    # --- a failed reading -----------------------------------------------------------------------
+
+    def test_a_ref_git_cannot_read_is_not_checked_and_exit_0(self):
+        with mock.patch.object(defaultstore.refs, 'ref_commit', return_value=(None, 'boom')):
+            code, out = self.run_preflight()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.backlog_lines(out), [LABEL + 'WARN default store not checked: boom'])
+
+    def test_a_failure_inside_is_not_checked_and_exit_0(self):
+        self.seed('A')
+        with mock.patch.object(defaultstore.smod, 'record_entries', side_effect=OSError('gone')):
+            code, out = self.run_preflight()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.backlog_lines(out),
+                         [LABEL + 'WARN default store not checked: OSError: gone'])
+
+
+class RecordEntries(tp.Fixture):
+    """store.record_entries: the `*.md` files directly under the store folder, as records_in_tree
+    reads them, without reading a blob."""
+
+    def test_it_lists_what_records_in_tree_parses(self):
+        tip = TheDefaultStoreLine.seed(self, 'A', 'B')
+        entries, why = smod.record_entries(self.root, tip, smod.STORE_DIR)
+        self.assertIsNone(why)
+        records, _raw, why = smod.records_in_tree(self.root, tip, smod.STORE_DIR)
+        self.assertIsNone(why)
+        self.assertEqual([e[0] for e in entries], ['A', 'B'])
+        self.assertEqual(sorted(e[0] for e in entries), sorted(r.stem for r in records))
+
+
+if __name__ == '__main__':
+    unittest.main()
