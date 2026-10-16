@@ -56,8 +56,9 @@ def test_env():
     return env
 
 
-# A gate test still running DUMP_S seconds after its setUp writes every thread's stack to DUMP_FD,
-# and again every DUMP_S after that; the test's cleanup cancels it. The landing tests once hung
+# A gate test still running DUMP_S seconds after its setUp ends writes every thread's stack to
+# DUMP_FD, and again every DUMP_S after that; the test's cleanup cancels it (registered last, so it
+# runs first). The setUp's own repository build does not count. The landing tests once hung
 # with no trace for the hour the suite's pool waits on a unit. Fd 2: under
 # tools/kit_tests.py's pool it is the unit's unit-<n>.out (kitlib.tooldeps.pool_worker), and it is
 # so even when unittest's buffer has replaced sys.stderr. The slowest gate test takes well under
@@ -111,13 +112,13 @@ class GateRepoCase(StoreCase):
     """self.repo: main with `.kit.json` (self.GATE; None: no "gate" section, so the gate is
     auto-detected) committed and pushed to a bare remote; self.book_kw books one fake cpu slot
     on the scratch store; self.book_calls: every kitlib.lock.run.book call (compat_book). A test
-    still running DUMP_S after setUp dumps every thread's stack (arm_dump)."""
+    still running DUMP_S after its setUp ends dumps every thread's stack (arm_dump, the last step
+    of setUp)."""
     GATE = GATE
     KIT = None
 
     def setUp(self):
         StoreCase.setUp(self)
-        arm_dump(self)
         self.book_calls = patch_book(self)
         self.confine(1)
         kit = dict(self.KIT or {})
@@ -138,6 +139,7 @@ class GateRepoCase(StoreCase):
         self.env = test_env()
         self.book_kw = {'cores': 1, 'store': self.store, 'env': self.env}
         self.logs = os.path.join(self.tmp, 'logs')
+        arm_dump(self)
 
     def branch(self, name, files):
         """A worktree on branch kit/<name> with `files` ({path: text}) committed: (path, tip)."""
