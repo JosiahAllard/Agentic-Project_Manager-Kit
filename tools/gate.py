@@ -17,7 +17,8 @@
       (remote and local) and remove its worktree, never forced, unless --keep-branch (docs/gate.md
       "Branch cleanup"); --fresh or --full runs every step of the merged gate: nothing is read
       from or stored in the gate cache (docs/gate.md "Gate reuse"). --submit: started detached;
-      prints the one SUBMITTED line with its wait-result command and exits 0
+      prints a REVIEW line for each branch whose queued verdict is at the tip submitted, then the
+      one SUBMITTED line with its wait-result command, and exits 0
   gate.py --measure --out PATH [--days N]
       write a proposed kinds table from the lock's run history (never the live table)
   gate.py wait-result BRANCH --tip SHA [--kind gate|land] [--timeout S] [-C DIR]
