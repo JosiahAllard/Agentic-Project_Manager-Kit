@@ -29,6 +29,6 @@ Read `creative.md` (brief block, options first, generation, the limits you keep 
 
 ## Report
 
-Page path or URL first. Then the sound and its sound brief; the options, each with intent, source and why a cheaper source could not; measurements before and after as a table; what you saw in the spectrograms; the critique's three weaknesses; **what the owner should listen for, as a question the owner can answer** ("does the impact still read at distance?"); licence and where you recorded it; branch and commit; the gate with the line that proves each result. For a shortlist, end with "Which of these three, or none?"
+Page path or URL first. Then the sound and its sound brief; the options, each with intent, source and why a cheaper source could not; measurements before and after as a table; what you saw in the spectrograms; the critique's three weaknesses; **what the owner should listen for, as a question the owner can answer** ("does the impact still read at distance?"); licence and where you recorded it; branch and commit; the gate (the final one `--full` on that tip) with the line that proves each result. For a shortlist, end with "Which of these three, or none?"
 
 Details: `creative.md` and `measuring.md` beside this file; `<kit>/knowledge/asset-generation/MODELS.md`; the repo profile's **Audio** section.

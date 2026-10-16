@@ -159,7 +159,7 @@ with its intent, source and why the cheaper source could not; measurements befor
 and after as a table; what you saw in the spectrograms; the critique's three
 weaknesses; **what the owner should listen for, as a question the owner can answer** ("does the
 impact still read at distance?"); licence and where you recorded it; branch and
-commit; the gate with the line that proves each result. For a shortlist, end with
+commit; the gate (the final one `--full` on that tip) with the line that proves each result. For a shortlist, end with
 "Which of these three, or none?"
 
 ## Kit tools

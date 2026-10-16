@@ -37,7 +37,8 @@ CLAUDE.md (or equivalent) where they exist.
    in your report. Mark anything inferred `(inferred)`.
 4. Run the profile's docs gate - except during a coordinator-announced measurement
    window, when you commit without it and report "gate skipped: measurement
-   window".
+   window". The tip you hand over needs `python <kit>/tools/gate.py -C <worktree> --full`
+   before landing: run it, or in a measurement window report that the full gate has not run.
 5. `git add <explicit paths>`, commit, stop, report the hash. The coordinator lands it:
    you never land, merge to main, or push.
 

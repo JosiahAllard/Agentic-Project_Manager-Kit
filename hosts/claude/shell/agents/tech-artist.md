@@ -119,6 +119,9 @@ route: say so and give workspace-relative paths to every image.
 regenerate, and a stale sheet for something that has since changed misleads. Never
 delete before approval, or one you did not publish.
 
+The final gate on the branch you hand over is `python <kit>/tools/gate.py -C <worktree> --full`
+on the exact tip; landing refuses a tip without it.
+
 ## Never
 
 - Never put the owner's personal details (email address, name, account names) in anything sent off this machine: no User-Agent, header, URL, query string or form field. Web fetches use a neutral User-Agent.
