@@ -231,7 +231,7 @@ class ReflogOnly(OutsideCase):
 
         with mock.patch.object(remove, 'clear_disposable', commit_and_return):
             rc, out = self.run_remove(path)
-        self.assertKept(path, rc, out, 'its HEAD reflog changed after it was checked')
+        self.assertKept(path, rc, out, 'its HEAD reflog or a per-worktree ref changed after it was checked')
 
     def left_behind(self, start):
         path = self.tree(commit=start)
@@ -305,7 +305,7 @@ class ReflogOnly(OutsideCase):
 
         with mock.patch.object(remove, 'clear_disposable', commit_and_return):
             rc, out = self.run_abandon(path)
-        self.assertKept(path, rc, out, 'its HEAD reflog changed after it was checked')
+        self.assertKept(path, rc, out, 'its HEAD reflog or a per-worktree ref changed after it was checked')
         self.assertIn('kept     tag archive/red', out)
 
     def test_an_unknown_reach_refuses_abandon(self):

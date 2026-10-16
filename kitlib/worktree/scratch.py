@@ -147,7 +147,8 @@ def reflog(path):
     """`([commit ids in the tree's HEAD reflog, oldest first, then the tips of its per-worktree
     refs (PER_WORKTREE)], None)` or `(None, why)`: every commit only the tree's git dir may keep,
     which `git worktree remove` deletes with the tree. The reflog file (`<its git dir>/logs/HEAD`)
-    is read here: no reflog file is no entries, as `git log -g` would print none. That holds only
+    is read here: no reflog file is no entries, as `git log -g` would print none, and the
+    per-worktree refs are read all the same. That holds only
     for the files ref format: a reftable repository never has the file, so any other format
     refuses. A per-worktree ref that is not a commit refuses."""
     args = ('rev-parse', '--show-ref-format')
@@ -166,7 +167,7 @@ def reflog(path):
         with open(log, encoding='utf-8', errors='replace') as fh:
             text = fh.read()
     except FileNotFoundError:
-        return [], None
+        text = ''               # no reflog: its per-worktree refs are still read below
     except OSError as e:
         return None, 'its HEAD reflog %s could not be read (%s)' % (log, e)
     oids = []
@@ -425,8 +426,8 @@ def _delete(ctx, path, rel, blobs):
 
 
 def unmoved(ctx, path, head, logged):
-    """True when the tree's HEAD and HEAD reflog are what was checked; else says why (a commit made
-    while the verb ran would otherwise be removed with the tree)."""
+    """True when the tree's HEAD, HEAD reflog and per-worktree ref tips are what was checked; else
+    says why (a commit made while the verb ran would otherwise be removed with the tree)."""
     rc, now, err = remove.git(path, 'rev-parse', '--verify', 'HEAD')
     if rc != 0 or now != head:
         ctx.say('failed    %s: HEAD moved after it was checked (%s, was %s); git worktree remove'
@@ -435,8 +436,8 @@ def unmoved(ctx, path, head, logged):
         return False
     again, why = reflog(path)
     if again != logged:
-        ctx.say('failed    %s: its HEAD reflog changed after it was checked%s; git worktree remove'
-                ' was NOT run' % (path, ' (%s)' % why if why else ''))
+        ctx.say('failed    %s: its HEAD reflog or a per-worktree ref changed after it was checked%s;'
+                ' git worktree remove was NOT run' % (path, ' (%s)' % why if why else ''))
         return False
     return True
 

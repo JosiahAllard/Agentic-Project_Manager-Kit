@@ -509,6 +509,31 @@ class RefFormat(ScratchCase):
         self.assertKept(path, rc, out, 'git rev-parse --show-ref-format exited 128')
 
 
+class PerWorktreeRefs(ScratchCase):
+    """The per-worktree refs (scratch.PER_WORKTREE) go with the tree: an unread list refuses."""
+
+    def answer(self, rc, out):
+        real = remove.git
+
+        def wrapped(cwd, *args, **kw):
+            if args[:1] == ('for-each-ref',) and 'refs/worktree' in args:
+                return rc, out, 'boom' if rc else ''
+            return real(cwd, *args, **kw)
+        return mock.patch.object(remove, 'git', wrapped)
+
+    def test_an_unreadable_per_worktree_ref_list_is_refused(self):
+        path = self.scratch_tree()
+        with self.answer(128, ''):
+            rc, out = self.run_scratch(path)
+        self.assertKept(path, rc, out, 'git for-each-ref exited 128')
+
+    def test_a_per_worktree_ref_that_is_not_a_commit_is_refused(self):
+        path = self.scratch_tree()
+        with self.answer(0, '%s tag refs/worktree/odd' % ('a' * 40)):
+            rc, out = self.run_scratch(path)
+        self.assertKept(path, rc, out, 'its per-worktree ref refs/worktree/odd is not a commit')
+
+
 @real_git('git reflog and annotated tags on a blob: the fake writes no reflog')
 class Reflog(ScratchCase):
 
@@ -550,7 +575,7 @@ class Reflog(ScratchCase):
 
         with mock.patch.object(remove, 'clear_disposable', commit_and_return):
             rc, out = self.run_scratch(path)
-        self.assertKept(path, rc, out, 'its HEAD reflog changed after it was checked')
+        self.assertKept(path, rc, out, 'its HEAD reflog or a per-worktree ref changed after it was checked')
 
     def test_a_commit_left_behind_in_the_reflog_is_refused(self):
         path = self.scratch_tree()
