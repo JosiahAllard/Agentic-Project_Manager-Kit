@@ -78,6 +78,7 @@ class AutoBranchGate(AutoCase):
 class AutoLanding(AutoCase):
     def test_a_landing_gates_the_merged_tree_by_detection(self):
         _, tip = self.branch('feature', {'tests/test_a.py': PASSING})
+        fixtures.gate_full(self.repo.root, tip)
         out = land.Lander(self.repo.root, 'kit/feature', self.main, tip, git_env=self.env,
                           book_kw=self.book_kw, log_dir=self.logs).run()
         self.assertEqual(out.code, G.OK, out.lines)
