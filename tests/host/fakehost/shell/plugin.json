@@ -15,6 +15,7 @@
     "strong-worker",
     "tech-artist",
     "test-runner",
+    "weak-worker",
     "worker"
   ],
   "hooks": {

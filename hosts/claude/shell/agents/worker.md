@@ -1,7 +1,7 @@
 ---
 # Generated from content/roles/worker.md: edit that, then run python tools/render_content.py --write. Never edit this file by hand.
 name: worker
-description: The default coding agent for routine, low- and medium-risk work - additive content, UI, pure logic with tests, small fixes with a known cause, and moves or renames that must not change behaviour. Builds on its own branch and worktree, runs the gate its brief names, and reports. Not for networking or concurrency, simulation or ordering changes, CI config, crash hunts or design; those go to `pm-kit:senior-worker`, `pm-kit:strong-worker` or a `pm-kit:deep-worker` session. Repository specifics come from `.claude/agent-profile.md`.
+description: The default coding agent for routine, low- and medium-risk work - additive content, UI, pure logic with tests, small fixes with a known cause, and moves or renames that must not change behaviour. Builds on its own branch and worktree, runs the gate its brief names, and reports. Not for networking or concurrency, simulation or ordering changes, CI config, crash hunts or design; those go to `pm-kit:strong-worker`, `pm-kit:senior-worker` or a `pm-kit:deep-worker` session. Small, well-defined low-risk changes can go to `pm-kit:weak-worker`. Repository specifics come from `.claude/agent-profile.md`.
 model: sonnet
 effort: medium
 ---

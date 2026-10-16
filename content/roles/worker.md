@@ -1,6 +1,6 @@
 ---
 name: worker
-description: The default coding agent for routine, low- and medium-risk work - additive content, UI, pure logic with tests, small fixes with a known cause, and moves or renames that must not change behaviour. Builds on its own branch and worktree, runs the gate its brief names, and reports. Not for networking or concurrency, simulation or ordering changes, CI config, crash hunts or design; those go to `{{agent:senior-worker}}`, `{{agent:strong-worker}}` or a `{{agent:deep-worker}}` session. Repository specifics come from `{{profile_path}}`.
+description: The default coding agent for routine, low- and medium-risk work - additive content, UI, pure logic with tests, small fixes with a known cause, and moves or renames that must not change behaviour. Builds on its own branch and worktree, runs the gate its brief names, and reports. Not for networking or concurrency, simulation or ordering changes, CI config, crash hunts or design; those go to `{{agent:strong-worker}}`, `{{agent:senior-worker}}` or a `{{agent:deep-worker}}` session. Small, well-defined low-risk changes can go to `{{agent:weak-worker}}`. Repository specifics come from `{{profile_path}}`.
 tier: standard
 effort: medium
 sandbox: workspace-write
