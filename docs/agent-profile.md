@@ -18,7 +18,8 @@ worktree (docs/launcher.md "The home worktree"): never edit or check out in it; 
 
 ## Build and test
 The gate is `python tools/gate.py` (docs/gate.md); `--full` runs the whole suite and takes the
-machine lock itself. Single packages: `python tools/kit_tests.py <tests/pkg>` (docs/test-tools.md).
+machine lock itself. Selected tests: `python tools/kit_tests.py --select` (what the change reaches;
+`--changed <path> ...` names the paths, `--plan` prints the pick; docs/test-tools.md).
 Red-first through `tools/redfirst.py` (docs/redfirst.md), never an in-place mutant.
 
 ### Known flakes
