@@ -281,7 +281,7 @@ def do_stale(args, ctx, snap):
 def do_check(args, ctx, snap):
     say('CHECK %s (%s)' % (snap.head_label(), snap.where))
     red = False
-    for res in checkmod.check_store(snap):
+    for res in checkmod.check_store(snap, implicit=getattr(ctx.store.backend, 'implicit', False)):
         say(res.line())
         for f in res.findings:
             say('    FAIL %s:%s %s' % (f.path, f.line, f.message))

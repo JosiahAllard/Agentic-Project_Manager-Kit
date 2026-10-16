@@ -122,8 +122,25 @@ def check_pull_records(snap):
                        proxy='reads the shape; colliding in-flight scopes are a WARN')
 
 
-def check_store(snap):
-    """Every check, each with its own denominator."""
+DEFAULT_STORE = 'default store'
+
+
+def check_default_store(snap):
+    """One WARN per record of the implicit default store (refs/backlog/main while .kit.json names
+    no "backlog".store: store.default_store_refusal), which nothing writes, so a landing closes
+    none of its records (at_landing._read_default): they are stranded there. Never red."""
+    found = [rmod.Finding(DEFAULT_STORE, rec.path, 1, '%s is held by the default backlog store, '
+                          'read only while .kit.json names no "backlog".store, so no landing '
+                          'closes it: add it to the live backlog store, or, if this is the live '
+                          'store, name it in .kit.json ("backlog": {"store": "ref"})' % rec.id)
+             for rec in snap.readable]
+    return CheckResult(DEFAULT_STORE, len(snap.readable), (), warnings=found,
+                       proxy='a non-empty default store is a WARN, never red')
+
+
+def check_store(snap, implicit=False):
+    """Every check, each with its own denominator. `implicit`: `snap` is the implicit default
+    store's, which adds check_default_store when it holds any file."""
     by_name = {}
     for f in snap.all_findings():
         by_name.setdefault(f.check, []).append(f)
@@ -145,6 +162,8 @@ def check_store(snap):
         check_preemptions(snap),
         check_pull_records(snap),
     ]
+    if implicit and snap.file_count:
+        results.append(check_default_store(snap))
     for r in results:
         r.population = snap.file_count
     return results
