@@ -114,13 +114,28 @@ class Worktree(Fixture):
         real = cmd.run_text
 
         def broken(args, cwd, **kw):
-            if args[:1] in (['rev-list'], ['status']):
+            if cmd.subcommand(args) in ('rev-list', 'status'):
                 return None, 'git broke'
             return real(args, cwd, **kw)
         with mock.patch.object(agentstart.cmd, 'run_text', broken):
             lines = agentstart.lines(self.wt, KIT)
         self.assertIn('behind ?, ahead ?', self.row(lines, 'vs base '))
         self.assertIn('UNKNOWN', self.row(lines, 'dirty '))
+
+    def test_the_dirty_count_takes_no_index_lock(self):
+        # a status killed at the budget's timeout while it refreshes the index would leave a stale
+        # index.lock in the agent's own worktree; --no-optional-locks makes it not write the index
+        seen = []
+        real = cmd.run_text
+
+        def spy(args, cwd, **kw):
+            seen.append(list(args))
+            return real(args, cwd, **kw)
+        with mock.patch.object(agentstart.cmd, 'run_text', spy):
+            agentstart.lines(self.wt, KIT)
+        status = [a for a in seen if cmd.subcommand(a) == 'status']
+        self.assertEqual(len(status), 1, seen)
+        self.assertLess(status[0].index('--no-optional-locks'), status[0].index('status'))
 
 
 class Never(unittest.TestCase):
@@ -174,7 +189,7 @@ class NoNetwork(Fixture):
             agentstart.lines(wt, KIT)
         self.assertTrue(seen)
         for argv in seen:
-            self.assertNotIn(argv[0], NETWORK, argv)
+            self.assertNotIn(cmd.subcommand(argv), NETWORK, argv)
 
 
 class Text(unittest.TestCase):

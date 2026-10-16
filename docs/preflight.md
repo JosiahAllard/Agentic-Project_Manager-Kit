@@ -52,10 +52,10 @@ A queue or holds file the lock could not read is shown as `queue unreadable: <er
 - **next**: in the main checkout only, `<kit>/tools/new_worktree.py -C "<top>" <area>/<slug>`, the command that makes the agent's worktree.
 - **base**: the base against `<remote>/<base>`, `(equal)` or `(DIFFERENT)` only when both refs were read, else `(not compared: <ref> not read)`; then how old the remote side is, from the mtime of `FETCH_HEAD` in the common git folder (`<remote> as of the last fetch N min ago`, or `never fetched here`). The base is picked as preflight picks it (`settings.base_names`, `settings.pick_base`).
 - **vs base**: in a worktree off the base only, behind and ahead, measured as preflight measures them (`settings.measure_rev`).
-- **dirty**: in a worktree only, the count from `git status`.
+- **dirty**: in a worktree only, the count from `git --no-optional-locks status`, so a status cut off at the budget's timeout leaves no `index.lock` behind.
 - **stray lines**: from `kitlib.git.stray.check`, at most four.
 
-A folder in no git work tree, or no absolute folder in the hook payload, is one `checkout  NOT CHECKED` line. It never fetches and runs no git command that reaches a remote. It never raises: a failure is a `could not check` line. The hook waits at most 1 s (`agentstart.BUDGET`): the reading runs on a daemon thread, each git call it makes itself is given what is left of the budget as its timeout (`repo.classify` and `stray.check` keep their own), and what is not done in time is one `NOT CHECKED - the rest: over the 1.0 s budget` line.
+A folder in no git work tree, or no absolute folder in the hook payload, is one `checkout  NOT CHECKED` line. It never fetches and runs no git command that reaches a remote. It never raises: a failure is a `could not check` line, and each host's call site turns an exception that escapes anyway into one such line after the header (`_agent_start` in hosts/claude/adapter/host.py, `text` in hosts/codex/adapter/start.py). The hook waits at most 1 s (`agentstart.BUDGET`): the reading runs on a daemon thread, each git call it makes itself is given what is left of the budget as its timeout (`repo.classify` and `stray.check` keep their own), and what is not done in time is one `NOT CHECKED - the rest: over the 1.0 s budget` line.
 
 ## board.py
 

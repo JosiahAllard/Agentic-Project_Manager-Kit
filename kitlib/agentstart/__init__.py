@@ -116,7 +116,9 @@ def _read(cwd, kit, out, deadline, now):
     if cfg is not None:
         _base(top, cfg, git, place, out, branch, now)
     if place.kind == repo.LINKED:
-        status = git('status', '--porcelain', '--untracked-files=normal', strip=False)[0]
+        # --no-optional-locks: a status killed at the budget's timeout while it refreshed the index
+        # would leave a stale index.lock in the agent's own worktree
+        status = git('--no-optional-locks', 'status', '--porcelain', '--untracked-files=normal', strip=False)[0]
         out.append('dirty     %s' % ('%d file(s)' % len([s for s in status.splitlines() if s.strip()])
                                      if status is not None else 'UNKNOWN - git status failed here'))
     _code, stray_lines = stray.check(top)

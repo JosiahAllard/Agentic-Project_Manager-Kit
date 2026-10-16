@@ -23,6 +23,12 @@ class Start(unittest.TestCase):
         self.assertEqual(got, header.text(KIT) + '\n' + start.CHILD_NOTE + '\nBLOCK')
         block.assert_called_once_with('C:/r', KIT)
 
+    def test_a_block_that_raises_is_one_line_after_the_header_and_the_note(self):
+        with unittest.mock.patch.object(start.agentstart, 'text', side_effect=RuntimeError('boom')):
+            got = start.text('SubagentStart', KIT, {'cwd': 'C:/r'}, {})
+        self.assertEqual(got, header.text(KIT) + '\n' + start.CHILD_NOTE
+                         + '\nAgent start: could not check: RuntimeError: boom')
+
     def test_a_session_start_gets_no_agent_start_block(self):
         with unittest.mock.patch.object(start.agentstart, 'text', return_value='BLOCK') as block:
             for event in ('SessionStart', 'PostCompact'):
