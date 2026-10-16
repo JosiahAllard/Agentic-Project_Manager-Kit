@@ -9,6 +9,13 @@ holds nothing, and it starts again after settings.bg_resume_s with no demand on 
 (never what a hold covers). A child still running settings.bg_yield_s after it was asked has its
 tree ended (yield-late). Failures write alerts/<run id>.json for the PM's watcher.
 
+A tree is ended (yield-late, a stop past bg_stop_grace_s, Ctrl+C) as a foreground run's is
+(end_child, kitlib.lock.run end_sparing): a build daemon another job's client uses or may use is
+left running with its tree, and its judgement is listed in the record's `daemons`. When it spares
+one, ending the rest one by one takes up to about 2 s (END_PASSES x END_PASS_S, then END_WAIT_S),
+so a stop or a yield-late frees the run's slots that much later; with none to spare the whole
+job is ended at once, as before.
+
 The child gets MACHINE_LOCK_BG=<run id>:<wrapper pid>:<wrapper ctime>, MACHINE_LOCK_BG_CONTROL
 (its control.json) and MACHINE_LOCK_BG_DIR (background/<run id>.d, which a container may mount).
 """
@@ -24,7 +31,7 @@ from kitlib.lock import queue as qm
 from kitlib.lock import game
 from kitlib.lock.run import (BG_ENV, NEST_ENV, ORIGIN_ENV, PICK, POOLS, XLA_DEFAULT_FRACTION,
                              XLA_FRACTION_ENV, Run, child_code, claim_id, docker_cpu_env,
-                             export_threads, pin_fields, settle)
+                             end_sparing, export_threads, pin_fields, settle)
 from kitlib.lock.store import EXIT_REQUIRE, EXIT_USAGE, LockError, Store, iso, write_json
 from kitlib.proc.job import Job, cores_text
 
@@ -71,10 +78,19 @@ def bg_free(store, run):
     return ok
 
 
-def end_child(job, p, wait_s=10):
-    """Ends the job's whole tree, then waits on its child p (bounded), so the Popen knows its
-    process ended: dropped unwaited, it warns "subprocess N is still running" (ResourceWarning)."""
-    job.end(kill=True)
+def end_child(job, p, store, run, wait_s=10):
+    """Ends the job's tree as a foreground run's kill path does (kitlib.lock.run end_sparing): a
+    build daemon another job's client uses or may use is left running with its tree, the job
+    then closed unpinned, its judgement said and listed in the run's record (`daemons`); else
+    the whole job is ended. An interrupt inside end_sparing (a second Ctrl+C) ends the whole job
+    and goes up. Then it waits on its child p (bounded), so the Popen knows its process ended:
+    dropped unwaited, it warns "subprocess N is still running" (ResourceWarning)."""
+    try:
+        spared = end_sparing(store, run.id, job, run.rec)
+    except BaseException:
+        job.end(kill=True)
+        raise
+    job.end(kill=not spared)
     if p is not None:
         with contextlib.suppress(subprocess.TimeoutExpired, OSError):
             p.wait(timeout=wait_s)
@@ -280,7 +296,7 @@ def run_background(cmd, repo, slug, expect_s=None, note=None, store=None, env=No
                 if stopping and now >= stopping:
                     say("run %s: the child did not pause in time; its process tree is ended"
                         % run.id)
-                    end_child(job, p)
+                    end_child(job, p, store, run)
                     job = p = None
                     break
                 if (stopping is None and demand_since is not None
@@ -289,7 +305,7 @@ def run_background(cmd, repo, slug, expect_s=None, note=None, store=None, env=No
                            "pause; its process tree is ended and its slot freed"
                            % (s.bg_yield_s, demand_text(fg_gpu, fg_cpu, mine)))
                     say("WARNING: background run %s: %s" % (run.id, why))
-                    end_child(job, p)
+                    end_child(job, p, store, run)
                     job = p = None
                     code, how = 1, "yield-late"
                     alert(store, run, how, code, why)
@@ -304,7 +320,7 @@ def run_background(cmd, repo, slug, expect_s=None, note=None, store=None, env=No
             store.pause("BG_END")
             if job is not None:
                 run.usage.sample(job)
-                end_child(job, p)
+                end_child(job, p, store, run)
             run.rec.update(run.usage.fields())
             write_json(ctl, {"seq": seq + 1, "pause": True, "stale_s": s.bg_stale_s, "at": iso(),
                              "reason": "the background run ended (%s)" % how})
