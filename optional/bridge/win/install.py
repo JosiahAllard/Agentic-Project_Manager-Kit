@@ -290,7 +290,6 @@ def _render(config,output,hosts=None):
     service=kit_file(SERVICE_REL,config.kit_root)
     dependencies=[PathBinding('python',config.python),PathBinding('mcp-frontend',frontend),
         PathBinding('service-entry',service)]
-    command={'command':str(config.python),'args':[*PYTHON_FLAGS,str(frontend),str(marker)]}
     servers,extra={},[]
     for kind,profile in config.profiles.items():
         host=hosts.get(kind)
@@ -299,6 +298,9 @@ def _render(config,output,hosts=None):
         if (type(fragment) is not InstallFragment or type(fragment.server) is not dict
                 or type(fragment.server.get('name')) is not str or 'configuration' in fragment.server):
             raise DeliveryError('invalid-install-fragment')
+        command={'command':str(config.python),'args':[*PYTHON_FLAGS,str(frontend),str(marker)]}
+        channels=registry.channel_names(registry.read_profile(kind,config.kit_root))
+        if channels: command['env_vars']=list(channels)
         servers[kind]={**fragment.server,'configuration':command}
         dependencies.extend(PathBinding(role,Path(path)) for role,path in fragment.dependencies)
         for name,role,document_value in fragment.files:
