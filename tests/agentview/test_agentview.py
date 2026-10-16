@@ -158,6 +158,12 @@ class Start(Base):
         self.view('worker')
         self.assertEqual([c[0] for c in self.calls], ['SubagentStart'])
 
+    def test_a_dispatched_role_on_claude_shows_the_agent_start_block(self):
+        from hosts.claude.adapter.host import ADAPTER
+        got = self.text(self.view('worker', start_text=ADAPTER.start_text), 'At start')
+        self.assertIn('Agent start (worker):', got)
+        self.assertIn('checkout  NOT CHECKED', got)      # the temp repo is in no git work tree
+
     def test_nothing_past_the_header_is_said(self):
         got = self.view('worker', start_text=lambda event, kit, payload, environ, part: header.text(kit))
         self.assertEqual(self.section(got, 'At start').lines, ['nothing'])

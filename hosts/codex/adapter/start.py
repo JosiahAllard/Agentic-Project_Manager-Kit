@@ -7,13 +7,14 @@ header (kitlib.host.header) and, for a PM or a coordinator session, the shared s
 
 The role is the session mark (PM_KIT_ROLE, kitlib.sessionmark). A SubagentStart is told that its
 role is its parent's mark: Codex starts a child with the parent's environment, and its hooks carry
-no child identity, so the child is held to the parent's role policy. A coordinator's external state
+no child identity, so the child is held to the parent's role policy. After that note every child
+gets the agent-start block (kitlib.agentstart) for the payload's cwd. A coordinator's external state
 note comes from PM_KIT_CODEX_STATE (outside the checkout). The checks read; they register nothing
 and start nothing. A check that fails is reported in the text, never raised.
 """
 import json
 
-from kitlib import sessionmark
+from kitlib import agentstart, sessionmark
 from kitlib.host import header
 
 from hosts.codex.adapter.events import absolute
@@ -36,7 +37,9 @@ def text(event, kit, payload=None, environ=None, checks=None, lock_reader=None):
     env = os.environ if environ is None else environ
     out = header.text(kit)
     if event == 'SubagentStart':
-        out += '\n' + CHILD_NOTE
+        # The one call site of the agent-start block (an opt-in setting would go here). Codex
+        # hooks carry no child identity, so every child gets it, named a subagent.
+        out += '\n' + CHILD_NOTE + '\n' + agentstart.text((payload or {}).get('cwd'), kit)
     role = sessionmark.mark(env)
     if role not in START_ROLES or event == 'SubagentStart':
         return out

@@ -16,9 +16,18 @@ class Start(unittest.TestCase):
                 with self.subTest(env=env, event=event):
                     self.assertEqual(start.text(event, KIT, {'cwd': 'C:/r'}, env), header.text(KIT))
 
-    def test_a_child_is_told_it_runs_under_its_parents_mark(self):
-        got = start.text('SubagentStart', KIT, {'cwd': 'C:/r'}, {'PM_KIT_ROLE': 'coordinator'})
-        self.assertEqual(got, header.text(KIT) + '\n' + start.CHILD_NOTE)
+    def test_a_child_is_told_it_runs_under_its_parents_mark_then_gets_the_agent_start_block(self):
+        # Codex hooks carry no child identity, so every child gets the block, named a subagent
+        with unittest.mock.patch.object(start.agentstart, 'text', return_value='BLOCK') as block:
+            got = start.text('SubagentStart', KIT, {'cwd': 'C:/r'}, {'PM_KIT_ROLE': 'coordinator'})
+        self.assertEqual(got, header.text(KIT) + '\n' + start.CHILD_NOTE + '\nBLOCK')
+        block.assert_called_once_with('C:/r', KIT)
+
+    def test_a_session_start_gets_no_agent_start_block(self):
+        with unittest.mock.patch.object(start.agentstart, 'text', return_value='BLOCK') as block:
+            for event in ('SessionStart', 'PostCompact'):
+                start.text(event, KIT, {'cwd': 'C:/r'}, {'PM_KIT_ROLE': 'worker'})
+        block.assert_not_called()
 
     def test_a_lead_gets_the_shared_start_checks(self):
         seen = []
