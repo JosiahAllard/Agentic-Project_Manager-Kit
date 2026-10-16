@@ -506,7 +506,7 @@ class FoundOnNoRemote(StoreCase):
         self.assertIsNone(self.get('NEW'))
 
 
-# The PM data worktree's own .kit.json, as the project-manager store writes it: its main branch is
+# The PM data worktree's own .kit.json, as a pmdata store writes it: its main branch is
 # the data branch and its remote the data remote; `code_main` names the code's main (or is unset).
 PM_KIT_JSON = {'backlog': {'id_grammar': 'upper', 'code_main': 'main'},
                'repo': {'main_branch': 'pmdata', 'remote': 'private'}}
