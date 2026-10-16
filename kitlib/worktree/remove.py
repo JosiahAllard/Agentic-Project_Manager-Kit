@@ -489,6 +489,71 @@ def _under(path, root):
     return canon(path).startswith(canon(root).rstrip('\\/') + os.sep)
 
 
+def link_on_the_way(path):
+    """The first folder of `path`, itself or an ancestor, that is a link, junction or other reparse
+    point (holders.linked), or None. Another spelling of the same folders - an 8.3 short name, a
+    subst drive - is no link, so it is not refused: canon resolves it to the tree git registered."""
+    p = os.path.abspath(path)
+    while True:
+        if holders.linked(p):
+            return p
+        parent = os.path.dirname(p)
+        if parent == p:
+            return None
+        p = parent
+
+
+def kept_reflog(ctx, path, head, tagged):
+    """The outside tree's HEAD reflog (kitlib.worktree.scratch.reflog) when every commit in it is
+    kept: reached by a branch, remote-tracking branch or tag, and with `tagged` (--abandon) also
+    by `head`, which the tag is about to hold. Else None after saying why: a commit made in the tree
+    and left by a checkout lives only in `logs/HEAD`, which `git worktree remove` deletes, and a
+    commit no ref reaches is the owner's call (the --scratch verb's rule). Reads only."""
+    from . import scratch           # scratch imports this module
+    logged, why = scratch.reflog(path)
+    if logged is None:
+        ctx.say('refused   %s: %s; nothing was %s' % (path, why, 'tagged or removed' if tagged
+                                                         else 'removed'))
+        return None
+    if not tagged:
+        return logged if scratch.reachable(ctx, path, head, logged) else None
+    args = ('for-each-ref', '--format=%(objectname) %(objecttype) %(refname)', 'refs/heads',
+            'refs/remotes', 'refs/tags')
+    rc, out, err = git(ctx.main, *args)
+    if rc != 0:
+        ctx.say('refused   %s: whether a ref reaches its HEAD reflog is unknown (%s); nothing was'
+                ' tagged or removed' % (path, failure(args[:1], rc, err)))
+        return None
+    # The tag on HEAD keeps HEAD's history: HEAD is the first "ref" asked (merge-base takes a hash).
+    refs = [(head, head)] + [(p[0], p[2]) for p in (line.split(' ', 2) for line in out.splitlines())
+                             if len(p) == 3 and p[1] in ('commit', 'tag')]
+    lost = []
+    for oid in logged:
+        if oid == head:
+            continue
+        got, why = scratch._reaches(ctx, refs, oid)
+        if got is None and why:
+            ctx.say('refused   %s: whether a ref reaches %s is unknown (%s); nothing was tagged or'
+                    ' removed' % (path, oid[:10], why))
+            return None
+        if got is None:
+            lost.append(oid[:10])
+    if lost:
+        ctx.say('refused   %s: its HEAD reflog holds %s, which no ref reaches and the tag on HEAD'
+                ' %s would not keep (a commit made there and left behind); whether to drop it is'
+                ' the owner\'s call; nothing was tagged or removed' % (path, ', '.join(lost),
+                                                                       head[:10]))
+        return None
+    return logged
+
+
+def unmoved(ctx, path, head, logged):
+    """kitlib.worktree.scratch.unmoved: HEAD and its reflog read once more just before git, so a
+    commit made while the verb ran is not removed with an outside tree."""
+    from . import scratch
+    return scratch.unmoved(ctx, path, head, logged)
+
+
 def outside_target(ctx, path):
     """`(path, registrations)` for a registered DETACHED worktree outside every worktree folder,
     named by its path (an agent's red-run tree in a scratchpad), or the exit status after saying
@@ -503,9 +568,10 @@ def outside_target(ctx, path):
                 ' checkout or a tree inside it outside the worktree folders; %s'
                 % (path, home_of(ctx), where, main, nothing))
         return REFUSED
-    if os.path.normcase(os.path.realpath(path)) != os.path.normcase(path):
-        ctx.say('refused   %s: a link or junction is on the way to it (it resolves to %s); %s'
-                % (path, os.path.realpath(path), nothing))
+    link = link_on_the_way(path)
+    if link:
+        ctx.say('refused   %s: a link or junction is on the way to it (%s is one; it resolves to'
+                ' %s); %s' % (path, link, os.path.realpath(path), nothing))
         return REFUSED
     if exemption(ctx.s, path):
         ctx.say('refused   %s is exempt (%s): this tool never removes it; nothing was touched'
@@ -560,16 +626,22 @@ def slug_redirect(ctx, argument, path):
     try:
         found = outside_matches(ctx, argument)
     except GitReadError as e:
-        ctx.say('refused   %s does not exist, and the worktree list could not be read (%s) to'
-                ' tell whether a worktree elsewhere has that name; nothing was removed' % (path, e))
-        return REFUSED
+        # A slug with no folder was `nothing` (exit 0) before outside trees existed; a list that
+        # cannot be read removes nothing either, so it stays `nothing`, with the doubt said.
+        ctx.say('note      the worktree list could not be read (%s), so whether a worktree outside'
+                ' the worktree folders is named %s is unknown' % (e, argument))
+        return None
     if not found:
         return None
     ctx.say('refused   %s is not under %s: a worktree named %s is registered outside the worktree'
             ' folders, and a slug never names one; nothing was removed. Name it by its path:'
-            % (argument, home_of(ctx), argument))
+            ' --scratch for a red-run tree under a temp folder (its HEAD and reflog need only be in'
+            ' some ref; uncommitted files git already holds are restored), the plain verb when its'
+            ' HEAD is in %s, --abandon to keep unlanded work under a tag:'
+            % (argument, home_of(ctx), argument, ctx.s['upstream']))
     for p in found:
-        ctx.say('             %s "%s"' % (ctx.s['tool'], p),
+        ctx.say('             %s "%s" --scratch' % (ctx.s['tool'], p),
+                '             %s "%s"' % (ctx.s['tool'], p),
                 '             %s "%s" --abandon "<why>"' % (ctx.s['tool'], p))
     return REFUSED
 
@@ -794,6 +866,20 @@ def _remove(ctx, argument, keep_branch):
             ctx.say('  note     release every holder first: his `git worktree remove` above fails'
                     ' the same destructive way this tool refuses to risk.')
         return REFUSED
+    outside = not is_workstream(ctx, path)
+    if outside:
+        try:
+            head = checked_out(ctx.main, key)[1]
+        except GitReadError as e:
+            ctx.say('refused   %s: the worktree list could not be read (%s); nothing was removed'
+                    % (path, e))
+            return REFUSED
+        if not head:
+            ctx.say('refused   %s: git reported no HEAD for it; nothing was removed' % path)
+            return REFUSED
+        logged = kept_reflog(ctx, path, head, False)
+        if logged is None:
+            return REFUSED
     why = holders.blockers(path)
     if why:
         ctx.say('refused   %s is held; git was NOT run' % path)
@@ -809,6 +895,8 @@ def _remove(ctx, argument, keep_branch):
         ctx.say('refused   %s: %s; nothing was removed' % (path, why))
         return REFUSED
     if not clear_disposable(ctx, path):
+        return REFUSED
+    if outside and not unmoved(ctx, path, head, logged):
         return REFUSED
     registered_path, branch = known[key]
     if not git_remove(ctx, path, registered_path):
@@ -1088,6 +1176,10 @@ def _abandon(ctx, argument, why, keep_branch, today):
         ctx.say('refused   %s: the merge check failed (%s); nothing was tagged or removed'
                 % (path, why_not))
         return REFUSED
+    outside = not is_workstream(ctx, path)
+    logged = kept_reflog(ctx, path, tip, True) if outside else None
+    if outside and logged is None:
+        return REFUSED
     rerun = '%s %s --abandon "<why>"%s' % (s['tool'], handle(ctx, registered_path),
                                            ' --keep-branch' if keep_branch else '')
     if dirty_refusal(ctx, path, 'nothing was tagged or removed', rerun):
@@ -1128,7 +1220,9 @@ def _abandon(ctx, argument, why, keep_branch, today):
                        'could not be read (%s)' % why_tag))
             return REFUSED
         ctx.say('tagged    %s -> %s (%s): abandoned: %s' % (tag, tip[:10], name, why))
-    if not clear_disposable(ctx, path) or not git_remove(ctx, path, registered_path):
+    if (not clear_disposable(ctx, path)
+            or (outside and not unmoved(ctx, path, tip, logged))
+            or not git_remove(ctx, path, registered_path)):
         ctx.say('  kept     tag %s stays on %s%s. Once the cause is cleared, the same command'
                 ' reruns and reuses the tag.' % (tag, tip[:10],
                                                  ', and branch %s' % branch if branch else ''))

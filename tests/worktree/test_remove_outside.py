@@ -5,7 +5,9 @@ tree in a scratchpad): named by its path, a DETACHED one goes through the plain 
 
 Every worktree here is one the test made, in fixture folders beside the repository.
 """
+import json
 import os
+import re
 import subprocess
 import sys
 import unittest
@@ -14,6 +16,7 @@ from unittest import mock
 from kitlib.config import load
 from kitlib.worktree import remove
 from tests import gitfixture
+from tests.realgit import real_git
 
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 TOOL = os.path.join(KIT, 'tools', 'worktree_remove.py')
@@ -211,6 +214,156 @@ class Refused(OutsideCase):
         self.assertTrue(os.path.isdir(path))
 
 
+@real_git('git reflog: the fake writes no reflog')
+class ReflogOnly(OutsideCase):
+    """A commit made in the tree and left by a checkout lives only in the tree's HEAD reflog
+    (<admin dir>/logs/HEAD), which `git worktree remove` deletes: no verb drops it silently."""
+
+    def test_a_commit_made_while_the_verb_ran_is_refused(self):
+        path = self.tree()
+        real = remove.clear_disposable
+
+        def commit_and_return(ctx, p):
+            self.fx.write('late.txt', 'late\n', root=path)
+            self.fx.commit('late', 'late.txt', cwd=path)
+            self.git('checkout', '-q', '--detach', self.base, cwd=path)
+            return real(ctx, p)
+
+        with mock.patch.object(remove, 'clear_disposable', commit_and_return):
+            rc, out = self.run_remove(path)
+        self.assertKept(path, rc, out, 'its HEAD reflog changed after it was checked')
+
+    def left_behind(self, start):
+        path = self.tree(commit=start)
+        self.fx.write('left.txt', 'left\n', root=path)
+        left = self.fx.commit('left behind', 'left.txt', cwd=path)
+        self.git('checkout', '-q', '--detach', start, cwd=path)
+        return path, left
+
+    def test_the_plain_verb_refuses_a_reflog_only_commit(self):
+        path, left = self.left_behind(self.base)
+        rc, out = self.run_remove(path)
+        self.assertKept(path, rc, out, 'which no ref reaches')
+        self.assertIn(left[:10], out)
+
+    def test_abandon_refuses_a_reflog_only_commit_and_tags_nothing(self):
+        path, left = self.left_behind(self.topic_tip)
+        rc, out = self.run_abandon(path)
+        self.assertKept(path, rc, out, 'which no ref reaches')
+        self.assertIn(left[:10], out)
+        self.assertEqual(self.tag('archive/red'), '')
+
+    def test_a_reflog_commit_a_branch_reaches_does_not_refuse(self):
+        path = self.tree()
+        self.git('checkout', '-q', '--detach', self.topic_tip, cwd=path)
+        self.git('checkout', '-q', '--detach', self.base, cwd=path)
+        rc, out = self.run_remove(path)
+        self.assertRemoved(path, rc, out)
+
+    def test_abandon_keeps_a_reflog_commit_its_tag_reaches(self):
+        path = self.tree(commit=self.topic_tip)
+        self.fx.write('mine.txt', 'mine\n', root=path)
+        mine = self.fx.commit('mine', 'mine.txt', cwd=path)
+        self.fx.write('more.txt', 'more\n', root=path)
+        more = self.fx.commit('more', 'more.txt', cwd=path)
+        rc, out = self.run_abandon(path)
+        self.assertRemoved(path, rc, out)
+        self.assertEqual(self.tag('archive/red'), more)
+        self.git('merge-base', '--is-ancestor', mine, 'archive/red')    # raises when not
+
+
+class Spelling(OutsideCase):
+
+    def test_a_relative_path_is_taken_against_the_callers_directory(self):
+        path = self.tree()
+        got = remove.remove(self.repo, 'outside/red', cwd=os.path.dirname(self.outside))
+        self.assertRemoved(path, got.code, '\n'.join(got.lines))
+
+    @unittest.skipUnless(WINDOWS, '8.3 short names are Windows')
+    def test_a_short_name_spelling_is_the_same_tree_not_a_junction(self):
+        import ctypes
+        import shutil
+        import tempfile
+
+        def short_of(p):
+            buf = ctypes.create_unicode_buffer(1024)
+            n = ctypes.windll.kernel32.GetShortPathNameW(p, buf, len(buf))
+            got = buf.value if 0 < n < len(buf) else ''
+            return got if got and os.path.normcase(got) != os.path.normcase(p) else ''
+
+        # The fixture's volume may make no 8.3 names; the system drive's temp folder usually does.
+        homes = [self.outside]
+        local = os.environ.get('LOCALAPPDATA')
+        if local and os.path.isdir(os.path.join(local, 'Temp')):
+            extra = os.path.realpath(tempfile.mkdtemp(prefix='kit-short-',
+                                                      dir=os.path.join(local, 'Temp')))
+            self.addCleanup(shutil.rmtree, extra, True)
+            homes.append(extra)
+        path = short = None
+        for i, home in enumerate(homes):
+            parent = os.path.join(home, 'a long folder name')
+            os.makedirs(parent)
+            short = short_of(parent)
+            if short:
+                path = self.tree(name='red%d' % i, root=parent)
+                short = os.path.join(short, 'red%d' % i)
+                break
+        if not short:
+            self.skipTest('no volume here makes 8.3 short names')
+        self.assertNotEqual(os.path.normcase(os.path.realpath(short)), os.path.normcase(short))
+        rc, out = self.run_remove(short)
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn('link or junction', out)
+        self.assertFalse(os.path.exists(path), out)
+
+
+class MoreRefusals(OutsideCase):
+
+    def test_a_folder_holding_the_main_checkout_is_refused(self):
+        rc, out = self.run_remove(os.path.dirname(self.repo))
+        self.assertEqual(rc, 1, out)
+        self.assertIn('holds the main checkout', out)
+        self.assertTrue(os.path.isfile(os.path.join(self.repo, 'README.md')))
+
+    def test_an_exempt_outside_tree_is_refused(self):
+        self.fx.write('.kit.json', json.dumps(
+            {'worktree_remove': {'exempt': {'red': 'kept by ruling Y'}}}) + '\n')
+        self.fx.commit('config', '.kit.json')
+        path = self.tree()
+        rc, out = self.run_remove(path)
+        self.assertKept(path, rc, out, 'is exempt (kept by ruling Y)')
+
+    def test_no_head_is_refused(self):
+        path = self.tree()
+        real = remove.worktree_entries
+
+        def headless(listing):
+            got = real(listing)
+            for e in got:
+                if os.path.normcase(os.path.realpath(e['path'])) == os.path.normcase(path):
+                    e['head'] = None
+            return got
+        with mock.patch.object(remove, 'worktree_entries', side_effect=headless):
+            rc, out = self.run_remove(path)
+        self.assertKept(path, rc, out, 'git reported no HEAD for it')
+
+    def test_the_ignored_file_refusal_reruns_by_the_quoted_path(self):
+        self.fx.write('.gitignore', '*.log\n')
+        tip = self.fx.commit('ignore logs', '.gitignore')
+        self.git('push', '-q', 'origin', 'main')
+        path = self.tree(commit=tip)
+        self.fx.write('run.log', 'evidence\n', root=path)
+        rc, out = self.run_remove(path)
+        self.assertKept(path, rc, out, 'ignored files that are not build output')
+        self.assertRegex(out, r'(?m)^  rerun    \S.*worktree_remove.* "%s"$' % re.escape(path))
+
+    def test_abandon_of_a_landed_tree_names_the_plain_verb_by_path(self):
+        path = self.tree()
+        rc, out = self.run_abandon(path)
+        self.assertKept(path, rc, out, 'nothing to abandon')
+        self.assertRegex(out, r'Remove it with `\S.*worktree_remove.* "%s"`' % re.escape(path))
+
+
 class SlugRedirect(OutsideCase):
 
     def test_a_slug_matching_only_an_outside_tree_names_the_path_form(self):
@@ -218,6 +371,20 @@ class SlugRedirect(OutsideCase):
         rc, out = self.run_abandon('red')
         self.assertKept(path, rc, out, 'is not under')
         self.assertIn('"%s" --abandon "<why>"' % path, out)
+
+    def test_the_redirect_names_the_scratch_verb(self):
+        path = self.tree()
+        rc, out = self.run_remove('red')
+        self.assertKept(path, rc, out, 'is not under')
+        self.assertIn('"%s" --scratch' % path, out)
+
+    def test_an_unreadable_list_for_a_missing_slug_is_still_nothing(self):
+        with mock.patch.object(remove, 'worktree_listing',
+                               side_effect=remove.GitReadError('git worktree list failed')):
+            rc, out = self.run_remove('nowhere')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('nothing   ', out)
+        self.assertIn('git worktree list failed', out)
 
     def test_two_outside_matches_are_both_named(self):
         one = self.tree()
