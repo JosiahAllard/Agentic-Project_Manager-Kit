@@ -1481,11 +1481,15 @@ class FailClosed(Hub):
             (ps, 'cd %s; & python Z:/k/tools/commit.py -m "Hub store: x" a.py' % wt),
             (bash, 'pyth""on Z:/k/tools/commit.py -m "Hub store: x" a.py'),
         ), False)
-        # over-reach, fail-closed: in a nested shell's quoted string the line's text has a quote
-        # before the bare python (rules.hub_py_bare), so its -m stays python's
+        # a bare python starting a nested shell's text is judged by that text (owner ruling Q-1009)
         self.rows((
             (bash, "bash -c 'python Z:/k/tools/commit.py -m \"Hub store: x\" a.py'"),
             (ps, "cmd /c 'python Z:/k/tools/commit.py -m \"Hub store: x\" a.py'"),
+        ), False)
+        # a full or quoted python path inside the nested text keeps its -m python's
+        self.rows((
+            (bash, 'bash -c \'"D:/bin/python.exe" Z:/k/tools/commit.py -m "Hub store: x" a.py\''),
+            (bash, "bash -c 'D:/bin/python.exe Z:/k/tools/commit.py -m \"Hub store: x\" a.py'"),
         ), True)
 
 

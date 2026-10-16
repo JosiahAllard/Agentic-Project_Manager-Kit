@@ -899,16 +899,19 @@ def hub_unexempt(text):
     return text
 
 
-def hub_text_names(text, loader=False, whole=True):
+def hub_text_names(text, loader=False, whole=True, bare=()):
     """The text of `text` that names the hub tool as a module or a script (HUB_NAME_RES; with
     `loader`, also hub quoted as a name in text that loads a module by name), else None.
-    `whole` is hub_module_names' own."""
-    text = hub_unexempt(text)
+    `whole` and `bare` are hub_module_names' own; `bare` is dropped when hub_unexempt changes
+    the text, since its spans would no longer fit (fail-closed)."""
+    unexempt = hub_unexempt(text)
+    bare = bare if unexempt == text else ()
+    text = unexempt
     for rx in HUB_NAME_RES:
         m = rx.search(text)
         if m:
             return m.group(0).strip()
-    found = hub_module_names(text, whole)
+    found = hub_module_names(text, whole, bare)
     if found:
         return found
     if loader and HUB_LOADER_RE.search(text):
@@ -918,7 +921,7 @@ def hub_text_names(text, loader=False, whole=True):
     return None
 
 
-def hub_module_names(text, whole=True):
+def hub_module_names(text, whole=True, bare=()):
     """The text of `text` from a python word to a -m (a cluster ending in m, --module, runpy)
     naming hub on the same command (HUB_PY_WORD_RE, HUB_PY_MODULE_RE), else None. With `whole`
     False (a line the parser could not read whole) the -m may be past a ; | & or newline
@@ -934,15 +937,17 @@ def hub_module_names(text, whole=True):
     argv[0] (`cmd /c python/commit.py -m hub` and `cmd /c python;x -m hub` run python's -m), and
     a ; there is read as cmd reads it, so in bash too (fail-closed). This reads text, not words:
     a ; | & or newline the shell keeps inside a word (`-X 'a;b'`) ends `mid` here, so every
-    command is also read by its parsed words (hub_word_module_names)."""
+    command is also read by its parsed words (hub_word_module_names). A python word whose
+    (start, end) is in `bare` counts as bare too: one that starts the text a nested shell runs
+    and is bare in that text (hub_nested_bare, owner ruling Q-1009)."""
     module_re = HUB_PY_MODULE_RE if whole else HUB_PY_MODULE_ANY_RE
     for w in HUB_PY_WORD_RE.finditer(text):
         glued = HUB_PY_GLUED_RE.match(text, w.end()).end()
         m = module_re.match(text, w.end())
         if not m and ';' in text[w.end():glued]:
             m = module_re.match(text, text.rindex(';', w.end(), glued) + 1)
-        if m and not (hub_py_bare(text, w.start(), w.end()) and
-                      hub_py_script_first(text[w.end():m.end('mid')])):
+        is_bare = w.span() in bare or hub_py_bare(text, w.start(), w.end())
+        if m and not (is_bare and hub_py_script_first(text[w.end():m.end('mid')])):
             return text[w.start():m.end()].strip()
     return None
 
@@ -1520,10 +1525,42 @@ def hub_command_texts(cmd):
     return out
 
 
+def hub_nested_bare(parsed):
+    """The (start, end) spans, in the line's text, of each python word that starts the text a
+    nested bash/sh -c '...' or cmd /c "..." runs and is bare in that text, judged by that text's
+    own spelling (hub_py_bare on Command.source; owner ruling Q-1009): in the line's text the
+    quote that holds the nested text sits before it, and that quote is the outer shell's, not
+    part of the word. Only a nested text that one quoted word of a command on the line itself
+    holds verbatim (no escape inside) is placed; any other has no span here, so its python is
+    judged by the line's text (fail-closed)."""
+    out = set()
+    for c in parsed.commands:
+        outer = c.nested_in
+        if outer is None or c.source == parsed.text or outer.source != parsed.text or not c.words:
+            continue
+        inv = cm.invocation(outer)
+        if inv is None or (inv.name not in cm.BASH_SHELLS and inv.name != 'cmd'):
+            continue
+        hits = [x for x in outer.words if not x.dyn and x.text == c.source]
+        if len(hits) != 1:
+            continue
+        h, src, w = hits[0], c.source, c.words[0]
+        raw = parsed.text[h.start:h.end]
+        if len(raw) != len(src) + 2 or raw[0] not in '\'"' or raw[-1] != raw[0] or raw[1:-1] != src:
+            continue
+        if not 0 <= w.start < w.end <= len(src) or src[:w.start].strip('( \t\n'):
+            continue
+        if (HUB_PY_WORD_RE.fullmatch(src[w.start:w.end]) is not None and
+                HUB_PY_WORD_RE.fullmatch(w.text) is not None and hub_py_bare(src, w.start, w.end)):
+            out.add((h.start + 1 + w.start, h.start + 1 + w.end))
+    return out
+
+
 def hub_named(parsed):
     """What the line `parsed` names of the hub tool outside the allowed shape, as text, or None
     (docs/guard.md "Hub secrets"). The line's own text is read with every command of the
-    allowed shape (hub_shape) blanked out, and every other command, at any depth (a substitution,
+    allowed shape (hub_shape) blanked out (a python word starting a nested shell's text judged by
+    that text: hub_nested_bare), and every other command, at any depth (a substitution,
     a nested shell, a heredoc's body), by its words as the shell passes them (hub_command_texts:
     quotes and escapes inside a name are gone), and any standalone hub on a line that runs python
     and holds `import` (hub_code_names). A line of the path family (hub_path_family) names
@@ -1543,7 +1580,7 @@ def hub_named(parsed):
                 shaped.append(cmd)
             if cmd.start is not None:
                 text = text[:cmd.start] + ' ' * (cmd.end - cmd.start) + text[cmd.end:]
-    found = hub_text_names(text, whole=parsed.clean)
+    found = hub_text_names(text, whole=parsed.clean, bare=hub_nested_bare(parsed))
     if found:
         return found
     for cmd in parsed.commands:
