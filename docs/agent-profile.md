@@ -13,6 +13,8 @@ coordinator profile: with none, the coordinator works from the repository's own 
 AGENTS.md: a branch `kit/<slug>` in a worktree made by `tools/new_worktree.py` (docs/new-worktree.md,
 docs/worktree-paths.md), never the main checkout. Commit by explicit path with `tools/commit.py`
 (docs/commit.md). Remove only your own worktree, with `tools/worktree_remove.py` (docs/worktree-remove.md).
+A session started with `launch.py --home-worktree` runs in a detached, locked `home-<session name>`
+worktree (docs/launcher.md "The home worktree"): never edit or check out in it; it is not a task worktree.
 
 ## Build and test
 The gate is `python tools/gate.py` (docs/gate.md); `--full` runs the whole suite and takes the
