@@ -88,27 +88,52 @@ class Classify(unittest.TestCase):
                 os.environ["PROCWATCH_ORIGINS"] = old
         self.assertEqual(ps[701]["origin"], "obs64.exe")
 
-    def test_agent_script_in_the_resolved_kit_temp_folder_is_an_agent_script(self):
-        # the kit temp folder comes from kitlib's work_temp (machine config `temp_dir`), not a guess
+    def _with_agent_temp(self, reader):
+        """Run `reader` as the launcher's AGENT_TEMP reader (kitlib.pmstart.agent_temp_env); the
+        kit's own temp folder (work_temp) is set to a different folder so a wrong source shows."""
         import kitlib.config.user as KU
-        old = KU.work_temp
-        KU.work_temp = lambda near, home=None, environ=None, platform=None: r"Q:\odd-kit-temp"
-        PW._kit_temp_claude.cache_clear()
-        try:
-            ps = by_pid(world(
-                proc(900, 77, "python.exe", r"python.exe Q:\odd-kit-temp\claude\x\job.py", age=2 * HOUR),
-                # the old agent-temp spelling still matches when the resolved folder is elsewhere
-                proc(901, 77, "python.exe", r"python.exe Z:\AgentTemp\claude\x\job.py", age=2 * HOUR)))
-            calls = []
-            KU.work_temp = lambda *a, **k: calls.append(1) or r"Q:\odd-kit-temp"
-            PW._kit_temp_claude.cache_clear()
-            world(*[proc(910 + i, 77, "python.exe", "python.exe job.py") for i in range(5)])
-        finally:
-            KU.work_temp = old
-            PW._kit_temp_claude.cache_clear()
+        import kitlib.pmstart as PS
+        old = PS.agent_temp_env, KU.work_temp
+        PS.agent_temp_env = reader
+        KU.work_temp = lambda *a, **k: r"Q:\kit-own-temp"
+
+        def clear():
+            for name in ("_agent_temp_claude", "_kit_temp_claude"):     # the resolver is cached
+                if hasattr(PW, name):
+                    getattr(PW, name).cache_clear()
+
+        def restore():
+            PS.agent_temp_env, KU.work_temp = old
+            clear()
+        self.addCleanup(restore)
+        clear()
+
+    def test_agent_script_in_the_agent_temp_folder_is_an_agent_script(self):
+        # the agents' TEMP is AGENT_TEMP (kitlib.pmstart.agent_temp_env), not the kit's own temp folder
+        calls = []
+        self._with_agent_temp(lambda: calls.append(1) or r"Q:\odd-agent-temp")
+        ps = by_pid(world(
+            proc(900, 77, "python.exe", r"python.exe Q:\odd-agent-temp\claude\x\job.py", age=2 * HOUR),
+            # the kit's own temp folder is not where agents run from
+            proc(901, 77, "python.exe", r"python.exe Q:\kit-own-temp\claude\x\job.py", age=2 * HOUR),
+            *[proc(910 + i, 77, "python.exe", "python.exe job.py") for i in range(5)]))
         self.assertEqual(ps[900]["rule"], "agent-script")
-        self.assertEqual(ps[901]["rule"], "agent-script")
+        self.assertNotEqual(ps[901]["rule"], "agent-script")
         self.assertEqual(len(calls), 1)         # resolved once, not once per process
+
+    def test_agent_temp_given_with_forward_slashes_matches_a_backslashed_command_line(self):
+        self._with_agent_temp(lambda: "D:/Foo")
+        ps = by_pid(world(proc(900, 77, "python.exe", r"python.exe D:\Foo\claude\x\job.py", age=2 * HOUR)))
+        self.assertEqual(ps[900]["rule"], "agent-script")
+
+    def test_unset_or_unreadable_agent_temp_keeps_the_rule_off(self):
+        def unreadable():
+            raise OSError("registry")
+        for reader in (lambda: None, lambda: "", unreadable):
+            with self.subTest(reader):
+                self._with_agent_temp(reader)
+                ps = by_pid(world(proc(900, 77, "python.exe", r"python.exe Q:\x\claude\job.py", age=2 * HOUR)))
+                self.assertNotEqual(ps[900]["rule"], "agent-script")
 
     def test_orphaned_tail_follow_and_grep_are_kill_ok_suspects(self):
         ps = by_pid(world(gitp(900, 77, "tail.exe", r"tail.exe -n +1 -f C:\t\x.output", 2 * HOUR, (60, GONE)),

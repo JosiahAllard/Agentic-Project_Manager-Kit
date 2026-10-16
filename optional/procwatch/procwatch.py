@@ -154,19 +154,23 @@ def _r_agent_script(p, ctx):
 
 
 @functools.lru_cache(maxsize=None)
-def _kit_temp_claude():
-    """'<kit temp folder>\\claude\\', lower case: the folder the kit's own temp files go in
-    (kitlib.config.user.work_temp, the machine config's `temp_dir` or its default), where agents'
-    TEMP lives. A string that matches no command line when kitlib or the config cannot be read,
-    e.g. a copy of this tool outside the kit."""
+def _agent_temp_claude():
+    """'<agent temp folder>\\claude\\', lower case, backslashes: the agents' TEMP, which the launcher
+    sets from AGENT_TEMP (kitlib.pmstart.agent_temp_env: process environment, then the user
+    registry). A string that matches no command line when AGENT_TEMP is unset or kitlib cannot be
+    read, e.g. a copy of this tool outside the kit."""
     root = os.path.normpath(os.path.join(HERE, "..", ".."))
     if root not in sys.path:
         sys.path.append(root)
     try:
-        from kitlib.config.user import work_temp
-        return os.path.join(work_temp(HERE), "claude", "").lower()
-    except Exception:
+        from kitlib.pmstart import agent_temp_env
+        temp = agent_temp_env()
+    except (ImportError, OSError):
+        # kitlib missing or the registry unreadable: keep this rule off rather than guess a folder
         return "\x00"           # an impossible path: no match
+    if not temp:
+        return "\x00"
+    return os.path.join(temp.replace("/", "\\"), "claude", "").lower()
 
 
 def _r_conhost(p, ctx):
@@ -210,7 +214,7 @@ RULES = [
      lambda p: _name(p) in {"python.exe", "pythonw.exe", "node.exe"} and
      ("\\.claude" in _cmd(p) or "/.claude" in _cmd(p) or "\\temp\\claude\\" in _cmd(p)
       or "\\agenttemp\\claude\\" in _cmd(p)                # agents' TEMP moved off the system drive
-      or _kit_temp_claude() in _cmd(p)),                  # ... or the kit temp folder, as resolved
+      or _agent_temp_claude() in _cmd(p)),                # ... or the agent temp folder, as resolved
      _r_agent_script, False),
     ("conhost", "console host", lambda p: _name(p) == "conhost.exe", _r_conhost, False),
 ]
