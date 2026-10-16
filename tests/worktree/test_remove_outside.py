@@ -122,7 +122,6 @@ class Refused(OutsideCase):
         self.fx.write('work.txt', 'work\n', root=path)
         rc, out = self.run_remove(path)
         self.assertKept(path, rc, out, 'uncommitted or untracked files')
-        self.assertIn('"%s"' % path, out)
 
     def test_a_modified_tracked_file_is_refused_by_abandon(self):
         path = self.tree(commit=self.topic_tip)

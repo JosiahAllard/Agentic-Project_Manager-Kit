@@ -9,7 +9,10 @@ lines). Nothing here prints. The checks, in order, are the PM tool's:
 - the target: under `"repo".worktrees_dir` or another registered host's worktree folder
   (kitlib.worktree.hostdirs; homes_of: a folder reached through a junction is not one), not
   `"worktree_remove".exempt`, present, registered (a stump is named and never deleted), and on
-  `branch_template`'s branch when one is set;
+  `branch_template`'s branch when one is set; or, named by its PATH, a registered DETACHED tree
+  outside those folders (`outside_target`: not the main checkout nor in it, no link on the way,
+  not locked, holding no other registered tree). A slug never names an outside tree: one that
+  only matches such a tree is refused with its path-form command (`slug_redirect`);
 - landed: the branch (or detached HEAD) is an ancestor of `<remote>/<main_branch>` AS IT STANDS,
   never fetched (`merge_check`); UNLANDED work is the owner's to remove and the refusal prints his
   commands and the `--abandon` verb, running none of them;
@@ -313,6 +316,7 @@ def merge_check(ctx, key, registered_path):
     rc, count, err = git(main, 'rev-list', '--count', '%s..%s' % (base, tip))
     count = count if rc == 0 and count else 'an unknown number of'
     slug = os.path.basename(registered_path)
+    named = handle(ctx, registered_path)
     lines = ['refused   %s holds UNLANDED work: %s has %s commit(s) not in %s %s;'
              ' nothing was removed' % (registered_path, name, count, up, base[:10]),
              '  owner    removing unlanded work is the owner\'s standing rule that deleting data'
@@ -323,7 +327,7 @@ def merge_check(ctx, key, registered_path):
         lines.append('             git branch -D %s' % branch)
     lines.append('  abandon  to drop it but keep its commits under the tag %s%s, run instead:'
                  % (ARCHIVE, slug))
-    lines.append('             %s %s --abandon "<why>"' % (s['tool'], slug))
+    lines.append('             %s %s --abandon "<why>"' % (s['tool'], named))
     lines.append('  note     %s was read as it stands, not fetched: if the branch has'
                  ' landed since, `git fetch %s` and run this again.' % (up, s['remote']))
     return lines
@@ -473,21 +477,125 @@ def target_path(ctx, argument):
     return os.path.abspath(os.path.join(home_of(ctx), argument))
 
 
+def handle(ctx, registered_path):
+    """How a printed command names a tree: its slug in a worktree folder, else its quoted path
+    (a slug always resolves under the worktree folder)."""
+    if is_workstream(ctx, registered_path):
+        return os.path.basename(os.path.normpath(registered_path))
+    return '"%s"' % os.path.normpath(registered_path)
+
+
+def _under(path, root):
+    return canon(path).startswith(canon(root).rstrip('\\/') + os.sep)
+
+
+def outside_target(ctx, path):
+    """`(path, registrations)` for a registered DETACHED worktree outside every worktree folder,
+    named by its path (an agent's red-run tree in a scratchpad), or the exit status after saying
+    why not (a missing folder: OK). The scope is git's own registration list; a branch's tree is a
+    workstream's, so only a detached one is taken, and the landing cleanup never reaches here."""
+    main, nothing = ctx.main, 'nothing was removed'
+    where = ('is the main checkout' if canon(path) == canon(main) else
+             'is inside the main checkout' if _under(path, main) else
+             'holds the main checkout' if _under(main, path) else None)
+    if where:
+        ctx.say('refused   %s is not under %s: it %s %s, and this tool never removes the main'
+                ' checkout or a tree inside it outside the worktree folders; %s'
+                % (path, home_of(ctx), where, main, nothing))
+        return REFUSED
+    if os.path.normcase(os.path.realpath(path)) != os.path.normcase(path):
+        ctx.say('refused   %s: a link or junction is on the way to it (it resolves to %s); %s'
+                % (path, os.path.realpath(path), nothing))
+        return REFUSED
+    if exemption(ctx.s, path):
+        ctx.say('refused   %s is exempt (%s): this tool never removes it; nothing was touched'
+                % (path, exemption(ctx.s, path)))
+        return REFUSED
+    if not os.path.isdir(path):
+        ctx.say('nothing   %s does not exist' % path)
+        return OK
+    try:
+        listing = worktree_listing(main)
+    except GitReadError as e:
+        ctx.say('refused   %s: the worktree list could not be read (%s), so whether it is a'
+                ' registered worktree is unknown; %s' % (path, e, nothing))
+        return REFUSED
+    entries = worktree_entries(listing)
+    entry = next((e for e in entries if canon(e['path']) == canon(path)), None)
+    if entry is None:
+        ctx.say('refused   %s is not a registered worktree of %s; this tool never deletes a'
+                ' folder git does not know; %s' % (path, main, nothing))
+        return REFUSED
+    inner = [os.path.normpath(e['path']) for e in entries if _under(e['path'], path)]
+    if inner:
+        ctx.say('refused   %s holds the registered worktree %s; %s'
+                % (path, '; '.join(inner), nothing))
+        return REFUSED
+    if entry['locked'] is not None:
+        ctx.say('refused   %s is locked (%s); %s' % (path, entry['locked'] or 'no reason', nothing))
+        return REFUSED
+    if entry['branch']:
+        ctx.say('refused   %s is on branch %s: outside the worktree folders only a detached tree'
+                ' is removed (a branch\'s worktree is a workstream\'s, under %s); %s'
+                % (path, entry['branch'], home_of(ctx), nothing))
+        return REFUSED
+    if not entry['head']:
+        ctx.say('refused   %s: git reported no HEAD for it; %s' % (path, nothing))
+        return REFUSED
+    return path, registrations(main, listing)
+
+
+def outside_matches(ctx, slug):
+    """The registered worktrees outside every worktree folder whose folder is named `slug`, as
+    git spells them; GitReadError when the list cannot be read."""
+    return [os.path.normpath(e['path']) for e in worktree_entries(worktree_listing(ctx.main))
+            if os.path.normcase(os.path.basename(os.path.normpath(e['path'])))
+            == os.path.normcase(slug) and not is_workstream(ctx, e['path'])
+            and canon(e['path']) != canon(ctx.main)]
+
+
+def slug_redirect(ctx, argument, path):
+    """For a slug with no folder under the worktree folder: REFUSED after naming the path-form
+    command of each outside tree of that name (never removed by its name), else None."""
+    try:
+        found = outside_matches(ctx, argument)
+    except GitReadError as e:
+        ctx.say('refused   %s does not exist, and the worktree list could not be read (%s) to'
+                ' tell whether a worktree elsewhere has that name; nothing was removed' % (path, e))
+        return REFUSED
+    if not found:
+        return None
+    ctx.say('refused   %s is not under %s: a worktree named %s is registered outside the worktree'
+            ' folders, and a slug never names one; nothing was removed. Name it by its path:'
+            % (argument, home_of(ctx), argument))
+    for p in found:
+        ctx.say('             %s "%s"' % (ctx.s['tool'], p),
+                '             %s "%s" --abandon "<why>"' % (ctx.s['tool'], p))
+    return REFUSED
+
+
 def registered_target(ctx, argument):
-    """`(path, registrations)` for the registered workstream worktree `argument` names, or the exit
+    """`(path, registrations)` for the registered workstream worktree `argument` names, or, named
+    by its path, a detached one outside the worktree folders (`outside_target`); else the exit
     status after saying why there is none (absent: 0)."""
     s = ctx.s
     path = target_path(ctx, argument)
-    home = home_of(ctx)
+    by_path = os.path.sep in argument or '/' in argument
     if not is_workstream(ctx, path):
+        if by_path:
+            return outside_target(ctx, path)
         ctx.say('refused   %s is not under %s; this tool removes workstream worktrees only'
-                % (path, home))
+                % (path, home_of(ctx)))
         return REFUSED
     if exemption(s, path):
         ctx.say('refused   %s is exempt (%s): this tool never removes it; nothing was touched'
                 % (path, exemption(s, path)))
         return REFUSED
     if not os.path.isdir(path):
+        if not by_path:
+            redirected = slug_redirect(ctx, argument, path)
+            if redirected is not None:
+                return redirected
         ctx.say('nothing   %s does not exist' % path)
         return OK
     try:
@@ -692,7 +800,7 @@ def _remove(ctx, argument, keep_branch):
         ctx.describe(path, why)
         ctx.say('  kept     the worktree is still registered and intact, and still removable later')
         return REFUSED
-    rerun = '%s %s%s' % (ctx.s['tool'], os.path.basename(os.path.normpath(known[key][0])),
+    rerun = '%s %s%s' % (ctx.s['tool'], handle(ctx, known[key][0]),
                          ' --keep-branch' if keep_branch else '')
     if dirty_refusal(ctx, path, 'nothing was removed', rerun):
         return REFUSED
@@ -974,13 +1082,14 @@ def _abandon(ctx, argument, why, keep_branch, today):
     if merged:
         ctx.say('refused   %s: %s is already in %s %s - nothing to abandon. Remove it'
                 ' with `%s %s`; nothing was tagged or removed'
-                % (path, name, up, base[:10], s['tool'], slug))
+                % (path, name, up, base[:10], s['tool'], handle(ctx, registered_path)))
         return REFUSED
     if merged is None:
         ctx.say('refused   %s: the merge check failed (%s); nothing was tagged or removed'
                 % (path, why_not))
         return REFUSED
-    rerun = '%s %s --abandon "<why>"%s' % (s['tool'], slug, ' --keep-branch' if keep_branch else '')
+    rerun = '%s %s --abandon "<why>"%s' % (s['tool'], handle(ctx, registered_path),
+                                           ' --keep-branch' if keep_branch else '')
     if dirty_refusal(ctx, path, 'nothing was tagged or removed', rerun):
         return REFUSED
     why_link = holders.link_reason(path)
