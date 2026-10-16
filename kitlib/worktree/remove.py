@@ -286,9 +286,10 @@ def checked_out(main, key):
     return branch, head
 
 
-def merge_check(ctx, key, registered_path):
+def merge_check(ctx, key, registered_path, seen=None):
     """None when the worktree's work is already in the base, else the refusal lines. The base is
-    read as it stands, never fetched; a failure of the check itself refuses with no commands."""
+    read as it stands, never fetched; a failure of the check itself refuses with no commands.
+    `seen` (a dict), when given, gets the HEAD this check judged under 'head'."""
     s, main = ctx.s, ctx.main
     up = s['upstream']
     registered_path = os.path.normpath(registered_path)
@@ -297,6 +298,8 @@ def merge_check(ctx, key, registered_path):
     except GitReadError as e:
         return ['refused   %s: the worktree list could not be read (%s), so whether its work has'
                 ' landed is unknown; nothing was removed' % (registered_path, e)]
+    if seen is not None:
+        seen['head'] = head
     tip = ('refs/heads/' + branch) if branch else head
     name = branch or ('detached HEAD %s' % (head or '?'))
     if not tip:
@@ -539,7 +542,8 @@ def kept_reflog(ctx, path, head, tagged):
         if got is None:
             lost.append(oid[:10])
     if lost:
-        ctx.say('refused   %s: its HEAD reflog holds %s, which no ref reaches and the tag on HEAD'
+        ctx.say('refused   %s: its HEAD reflog or a per-worktree ref holds %s, which no ref'
+                ' reaches and the tag on HEAD'
                 ' %s would not keep (a commit made there and left behind); whether to drop it is'
                 ' the owner\'s call; nothing was tagged or removed' % (path, ', '.join(lost),
                                                                        head[:10]))
@@ -857,7 +861,8 @@ def _remove(ctx, argument, keep_branch):
         return found
     path, known = found
     key = canon(path)
-    refusal = merge_check(ctx, key, known[key][0])
+    seen = {}
+    refusal = merge_check(ctx, key, known[key][0], seen)
     if refusal:
         ctx.say(*refusal)
         if any('UNLANDED' in line for line in refusal):
@@ -868,12 +873,9 @@ def _remove(ctx, argument, keep_branch):
         return REFUSED
     outside = not is_workstream(ctx, path)
     if outside:
-        try:
-            head = checked_out(ctx.main, key)[1]
-        except GitReadError as e:
-            ctx.say('refused   %s: the worktree list could not be read (%s); nothing was removed'
-                    % (path, e))
-            return REFUSED
+        # The HEAD merge_check found in the base: the reflog check and `unmoved` hold the tree to
+        # it, so a HEAD moved since (to an unlanded tip) is refused, never judged afresh.
+        head = seen.get('head')
         if not head:
             ctx.say('refused   %s: git reported no HEAD for it; nothing was removed' % path)
             return REFUSED

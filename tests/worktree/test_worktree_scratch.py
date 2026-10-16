@@ -560,6 +560,15 @@ class Reflog(ScratchCase):
         rc, out = self.run_scratch(path)
         self.assertKept(path, rc, out, 'reflog')
 
+    def test_a_commit_only_a_per_worktree_ref_keeps_is_refused(self):
+        path = self.scratch_tree()
+        kept = self.git('commit-tree', self.base + '^{tree}', '-p', self.base, '-m', 'kept',
+                        cwd=path).strip()
+        self.git('update-ref', 'refs/bisect/bad', kept, cwd=path)
+        rc, out = self.run_scratch(path)
+        self.assertKept(path, rc, out, 'which no ref reaches')
+        self.assertIn(kept[:10], out)
+
     def test_a_clean_tree_with_a_reachable_reflog_is_removed(self):
         path = self.scratch_tree(commit=self.topic_tip)
         self.git('checkout', '-q', '--detach', self.base, cwd=path)

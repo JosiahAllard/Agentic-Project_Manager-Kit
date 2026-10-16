@@ -260,6 +260,65 @@ class ReflogOnly(OutsideCase):
         rc, out = self.run_remove(path)
         self.assertRemoved(path, rc, out)
 
+    def test_a_head_moved_after_the_merge_check_is_refused(self):
+        # kit/topic reaches the new HEAD, so only the merge check's HEAD tells it is unlanded.
+        path = self.tree()
+        real = remove.merge_check
+
+        def then_move(*args):
+            got = real(*args)
+            self.git('checkout', '-q', '--detach', self.topic_tip, cwd=path)
+            return got
+
+        with mock.patch.object(remove, 'merge_check', then_move):
+            rc, out = self.run_remove(path)
+        self.assertKept(path, rc, out, 'HEAD moved after it was checked')
+
+    def test_a_commit_only_a_per_worktree_ref_keeps_is_refused(self):
+        path = self.tree()
+        kept = self.git('commit-tree', self.base + '^{tree}', '-p', self.base, '-m', 'kept',
+                        cwd=path).strip()
+        self.git('update-ref', 'refs/worktree/keep', kept, cwd=path)
+        rc, out = self.run_remove(path)
+        self.assertKept(path, rc, out, 'which no ref reaches')
+        self.assertIn(kept[:10], out)
+
+    def test_abandon_refuses_a_commit_only_a_per_worktree_ref_keeps(self):
+        path = self.tree(commit=self.topic_tip)
+        kept = self.git('commit-tree', self.base + '^{tree}', '-p', self.base, '-m', 'kept',
+                        cwd=path).strip()
+        self.git('update-ref', 'refs/bisect/bad', kept, cwd=path)
+        rc, out = self.run_abandon(path)
+        self.assertKept(path, rc, out, 'which no ref reaches')
+        self.assertIn(kept[:10], out)
+        self.assertEqual(self.tag('archive/red'), '')
+
+    def test_abandon_refuses_a_reflog_changed_before_git(self):
+        path = self.tree(commit=self.topic_tip)
+        real = remove.clear_disposable
+
+        def commit_and_return(ctx, p):
+            self.fx.write('late.txt', 'late\n', root=path)
+            self.fx.commit('late', 'late.txt', cwd=path)
+            self.git('checkout', '-q', '--detach', self.topic_tip, cwd=path)
+            return real(ctx, p)
+
+        with mock.patch.object(remove, 'clear_disposable', commit_and_return):
+            rc, out = self.run_abandon(path)
+        self.assertKept(path, rc, out, 'its HEAD reflog changed after it was checked')
+        self.assertIn('kept     tag archive/red', out)
+
+    def test_an_unknown_reach_refuses_abandon(self):
+        path = self.tree(commit=self.topic_tip)
+        self.git('checkout', '-q', '--detach', self.base, cwd=path)
+        self.git('checkout', '-q', '--detach', self.topic_tip, cwd=path)
+        from kitlib.worktree import scratch
+        with mock.patch.object(scratch, '_reaches',
+                               return_value=(None, 'git merge-base exited 128')):
+            rc, out = self.run_abandon(path)
+        self.assertKept(path, rc, out, 'is unknown (git merge-base exited 128)')
+        self.assertEqual(self.tag('archive/red'), '')
+
     def test_abandon_keeps_a_reflog_commit_its_tag_reaches(self):
         path = self.tree(commit=self.topic_tip)
         self.fx.write('mine.txt', 'mine\n', root=path)
@@ -346,6 +405,31 @@ class MoreRefusals(OutsideCase):
         with mock.patch.object(remove, 'worktree_entries', side_effect=headless):
             rc, out = self.run_remove(path)
         self.assertKept(path, rc, out, 'git reported no HEAD for it')
+
+    def test_an_unreadable_reflog_refuses_both_verbs(self):
+        from kitlib.worktree import scratch
+        landed, unlanded = self.tree(), self.tree(name='blue', commit=self.topic_tip)
+        with mock.patch.object(scratch, 'reflog', return_value=(None, 'its HEAD reflog broke')):
+            rc, out = self.run_remove(landed)
+            self.assertKept(landed, rc, out, 'its HEAD reflog broke; nothing was removed')
+            rc, out = self.run_abandon(unlanded)
+            self.assertKept(unlanded, rc, out, 'its HEAD reflog broke; nothing was tagged or removed')
+        self.assertEqual(self.tag('archive/blue'), '')
+
+    def test_a_failed_ref_list_refuses_abandon(self):
+        path = self.tree(commit=self.topic_tip)
+        real = remove.git
+
+        def failing(cwd, *args, **kw):
+            if args[:1] == ('for-each-ref',) and 'refs/tags' in args:
+                return 128, '', 'fatal: refs unreadable'
+            return real(cwd, *args, **kw)
+
+        with mock.patch.object(remove, 'git', failing):
+            rc, out = self.run_abandon(path)
+        self.assertKept(path, rc, out, 'whether a ref reaches its HEAD reflog is unknown')
+        self.assertIn('refs unreadable', out)
+        self.assertEqual(self.tag('archive/red'), '')
 
     def test_the_ignored_file_refusal_reruns_by_the_quoted_path(self):
         self.fx.write('.gitignore', '*.log\n')
