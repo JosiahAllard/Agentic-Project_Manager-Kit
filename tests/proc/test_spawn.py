@@ -97,6 +97,16 @@ class ConsolePythonTest(unittest.TestCase):
 
 
 @unittest.skipUnless(os.name == "nt", "Windows only")
+class PythonwBesideTest(unittest.TestCase):
+
+    def test_the_pythonw_in_the_folder_of_either_python_checked_for_nothing(self):
+        want = os.path.join("C:\\", "py", "pythonw.exe")
+        with mock.patch.object(spawn.os.path, "isfile", side_effect=AssertionError("checked")):
+            self.assertEqual(spawn.pythonw_beside(os.path.join("C:\\", "py", "python.exe")), want)
+            self.assertEqual(spawn.pythonw_beside(want), want)
+
+
+@unittest.skipUnless(os.name == "nt", "Windows only")
 class CarryTest(unittest.TestCase):
     """carry(argv): start the program with no console window, wait, its exit code."""
 

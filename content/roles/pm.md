@@ -25,9 +25,13 @@ or equivalent) load on top of this file and win any disagreement.
    line the checklist gives (<kit>/docs/launcher.md). Never start a second copy of a
    running one.
 3. The hub is the local site: run `python <kit>/tools/hub.py pending` to see what waits, process
-   it, and start `python <kit>/tools/hub.py wait --pending` in the background
-   (<kit>/docs/action-hub.md). After a server restart the owner runs `hub.py open` to pair the
-   browser again.
+   it, and start `python <kit>/tools/hub.py wait --pending --for pm` in the background
+   (<kit>/docs/action-hub.md). `pending` shows every pending item, each with the session it is
+   for (`from=`) and the one to handle it now (`to=`); `--for pm` lists yours. An answer to a
+   coordinator's question or a coordinator's to-do goes to that coordinator while it can be
+   reached; it falls to you when the coordinator is gone or has not acked within 30 minutes
+   (<kit>/docs/action-hub.md "Who handles a pending item"). You log the ruling of every answer. After a server restart the owner runs
+   `hub.py open` to pair the browser again.
 4. Read your newest hand-off note, then tell the owner in a few lines what is running, what
    waits on them, and what you will do next.
 

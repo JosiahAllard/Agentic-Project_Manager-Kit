@@ -4,6 +4,11 @@ for kitlib.guard.rules' hub-secrets, hub-owner-verb, hub-mcp and hub-browser.
   secret_folder(config_path)   the hub's token folder beside the machine config file
   stores(hub, pm_data_path)    the folders the hub store may be in
   glob_reaches(pattern, folder) True when a wildcard path can name the folder or a path in it
+  list_reaches(pattern, folder, names)  True when a names search's wildcard can list the folder
+                               or a file in it
+  expand_braces(text)          a glob's {a,b} forms written out, or None
+  filter_reaches(flt, rel, names)  True when a content search's file filter can take in a file
+                               of the token folder below the search's root
   ports(hub)                   the hub's listener ports: the defaults and the configured ones
   owner_verb(words)            the owner verb a tools/hub.py command line runs, or None
   split_mcp(tool, sep)         (server, tool) of a host's MCP tool name
@@ -119,6 +124,104 @@ def glob_reaches(pattern, folder):
         if not fnmatch.fnmatchcase(f, pat[k]):
             return False
     return True
+
+
+def list_reaches(pattern, folder, names):
+    """True when a names search's absolute wildcard path `pattern` can list the folder `folder` or
+    a file in it, `names` being every name in it (subfolders' too): glob_reaches, except that a
+    `**` followed by one last part, or a last part just below the folder, has to match one of
+    `names` (`**/*.py` lists nothing there when no name in it ends .py). A `**` that ends the
+    pattern or is followed by more than one part reaches."""
+    pat, fol = _parts(pattern), _parts(folder)
+    names = [n.lower() for n in names]
+    for k, part in enumerate(pat):
+        if part == '**':
+            rest = pat[k + 1:]
+            return len(rest) != 1 or any(fnmatch.fnmatchcase(n, rest[0]) for n in names)
+        if k < len(fol):
+            if not fnmatch.fnmatchcase(fol[k], part):
+                return False
+            continue
+        if k == len(pat) - 1:
+            return any(fnmatch.fnmatchcase(n, part) for n in names)
+        return True                             # a path below a folder in it
+    return len(pat) == len(fol)                 # the folder itself; shorter: a parent
+
+
+BRACE_LIMIT = 256
+
+
+def expand_braces(text):
+    """`text` with each {a,b} alternative written out (ripgrep's glob braces), as a list, or None
+    when its braces do not pair, nest, or give more than BRACE_LIMIT forms: the caller then
+    reads the text as reaching anything."""
+    out = ['']
+    k = 0
+    while k < len(text):
+        c = text[k]
+        if c == '}':
+            return None
+        if c != '{':
+            out = [o + c for o in out]
+            k += 1
+            continue
+        end = text.find('}', k)
+        if end < 0 or '{' in text[k + 1:end]:
+            return None
+        out = [o + alt for o in out for alt in text[k + 1:end].split(',')]
+        if len(out) > BRACE_LIMIT:
+            return None
+        k = end + 1
+    return out
+
+
+def filter_reaches(flt, rel, names):
+    """True when a content search's file filter `flt` (a ripgrep glob, as a search tool passes
+    it) can let the search read a file in the folder `rel` below its root (`rel`: the folder's
+    parts from the root, ['.pm-kit', 'hub'] for a search of home), whose files are `names`.
+    Read the safe way: no filter, a negation (`!`) or braces expand_braces cannot write out
+    reach; each part a space or comma splits off is judged alone; a backslash is dropped; case is
+    ignored. A part with no slash matches anywhere below the root, so it reaches when it matches
+    a name in `names` or a folder on the way (a folder it names may take its files in); a part
+    with a slash is matched part by part against the way down from the root and from every folder
+    on it (anchored or not), `**` and a part that stops on the way counting as reaching."""
+    if not isinstance(flt, str) or '!' in flt:
+        return True
+    forms = expand_braces(flt)
+    if forms is None:
+        return True
+    pieces = [p for form in forms for p in re.split(r'[\s,]+', form.replace('\\', '').lower())
+              if p.strip('/')]
+    if not pieces:
+        return True
+    rel = [r.lower() for r in rel]
+    names = [n.lower() for n in names]
+    for piece in pieces:
+        pp = [p for p in piece.strip('/').split('/') if p]
+        if len(pp) == 1:
+            if any(fnmatch.fnmatchcase(n, pp[0]) for n in names + rel):
+                return True
+            continue
+        for start in range(len(rel)):
+            if _way_reaches(pp, rel[start:], names):
+                return True
+    return False
+
+
+def _way_reaches(pp, way, names):
+    """filter_reaches for one slashed part `pp` (its parts) laid on the folders `way` down to the
+    secret folder, whose files are `names`."""
+    for k, part in enumerate(pp):
+        if part == '**':
+            return True
+        if k < len(way):
+            if not fnmatch.fnmatchcase(way[k], part):
+                return False
+            continue
+        if k == len(pp) - 1:                    # a name in the secret folder
+            return any(fnmatch.fnmatchcase(n, part) for n in names)
+        return True                             # a path below a folder in it
+    return True                                 # it stops on the way: a folder it may take in
 
 
 def ports(hub):

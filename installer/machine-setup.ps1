@@ -4,7 +4,7 @@
 #
 #   powershell -NoProfile -File installer\machine-setup.ps1 [-OwnerEmail <email>] [-PmSettings <file>]
 #                                [-ConfigDir <folder>,<folder>] [-AgentTemp <folder>]
-#                                [-NoSweepTask] [-Shortcut] [-Apply]
+#                                [-NoSweepTask] [-Shortcut] [-Procwatch [-ProcwatchKill]] [-Apply]
 #   powershell -NoProfile -File installer\machine-setup.ps1 -OldKit <old kit clone> [-OwnerEmail <email>]
 #                                [-ConfigDir <folder>,<folder>] [-AgentTemp <folder>]
 #                                [-NoSweepTask] [-Apply]
@@ -14,7 +14,10 @@
 # the machine config (-OwnerEmail, else the machine config's; with neither, -Apply asks in the
 # console, offering `git config user.email`, never stored unconfirmed), and the agents' temp folder. -PmSettings writes the PM SessionStart hook
 # to that file; -Shortcut makes the machine schedule shortcut. -OldKit switches the config folders
-# from an older kit clone instead: links, settings, the owner's email, the extras.
+# from an older kit clone instead: settings, the owner's email, the extras. Neither mode makes a
+# link: each link an earlier setup left is reported with the command that removes the link only.
+# -Procwatch registers (or updates) the "Claude procwatch" scheduled task, report only; -ProcwatchKill
+# also lets it end the SAFE rules' processes (docs/machine-setup.md "Procwatch task").
 # -Apply registers the agent-temp-sweep scheduled task by default, after one dry run of the sweep
 # that prints what it would remove; -NoSweepTask leaves it unregistered (the plan prints the line
 # that registers it). A task already registered is left as is. -RegisterSweepTask, the old opt-in,
@@ -33,7 +36,7 @@
 # on PATH.
 #
 # Exit: 0 dry run printed, changes made or nothing to do; 1 refused or stopped; 2 usage (both -OldKit
-# and -Fresh, both -NoSweepTask and -RegisterSweepTask, -PmSettings with -OldKit, -Python not a
+# and -Fresh, both -NoSweepTask and -RegisterSweepTask, -PmSettings with -OldKit, -ProcwatchKill without -Procwatch, -Python not a
 # file, no python on PATH, no tools\machine_setup.py).
 param(
     [string]$OldKit = '',
@@ -48,6 +51,8 @@ param(
     [switch]$NoSweepTask,
     [switch]$RegisterSweepTask,
     [switch]$Shortcut,
+    [switch]$Procwatch,
+    [switch]$ProcwatchKill,
     [switch]$Apply
 )
 
@@ -63,6 +68,7 @@ if ($OldKit -and $Fresh) {
 }
 if ($NoSweepTask -and $RegisterSweepTask) { Write-Host 'machine-setup: usage - give -NoSweepTask or -RegisterSweepTask, not both'; exit 2 }
 if ($PmSettings -and $OldKit) { Write-Host 'machine-setup: usage - -PmSettings goes with the default mode only, not -OldKit'; exit 2 }
+if ($ProcwatchKill -and -not $Procwatch) { Write-Host 'machine-setup: usage - -ProcwatchKill goes with -Procwatch'; exit 2 }
 $kit = Split-Path $PSScriptRoot -Parent
 $tool = Join-Path $kit 'tools\machine_setup.py'
 if (-not (Test-Path -LiteralPath $tool)) { Write-Host "machine-setup: REFUSED - the kit at $kit has no tools\machine_setup.py"; exit 2 }
@@ -87,6 +93,8 @@ if ($HomeDir) { $argv += @('--home', $HomeDir) }
 if ($Desktop) { $argv += @('--desktop', $Desktop) }
 if ($NoSweepTask) { $argv += '--no-sweep-task' }
 if ($Shortcut) { $argv += '--shortcut' }
+if ($Procwatch) { $argv += '--procwatch' }
+if ($ProcwatchKill) { $argv += '--procwatch-kill' }
 if ($Apply) { $argv += '--apply' }
 
 # Native calls run under Continue: Windows PowerShell 5.1 turns a native stderr line into an error

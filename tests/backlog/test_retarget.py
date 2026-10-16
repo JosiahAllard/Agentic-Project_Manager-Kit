@@ -9,12 +9,14 @@ from kitlib.backlog import store as smod
 from tests.backlog import test_cli
 from tests.backlog.helpers import ADD_FLAGS, StoreCase, rec
 from tests.backlog import test_verbs
+from tests.home import TempHomeCase
 
 OLD, NEW = 'docs/guide', 'docs/design/guide'
 
 
-class Rewrites(unittest.TestCase):
-    """The pure path rules."""
+class Rewrites(TempHomeCase):
+    """The pure path rules, under a temp home: check_paths' machine-path refusal reads the
+    machine config's machine_path_folders (kitlib.backlog.plan.refuse_machine_paths)."""
 
     def test_scope_exact_under_and_glob(self):
         self.assertEqual(retmod.scope_member(OLD, OLD, NEW), (NEW, None))

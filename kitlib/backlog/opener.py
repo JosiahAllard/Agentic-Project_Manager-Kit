@@ -25,8 +25,8 @@ from .errors import Failure, Usage
 
 # `set --<field>` for every field but hold_ruling, whose `--hold-ruling` is the recite.
 FIELD_FLAGS = [k for k in rmod.FIELDS if k != 'hold_ruling']
-WRITES = ('add', 'set', 'block', 'unblock', 'pull', 'release', 'close', 'retire', 'set-status',
-          'unpark')
+WRITES = ('add', 'set', 'block', 'unblock', 'pull', 'release', 'close', 'retire', 'delete',
+          'set-status', 'unpark', 'clear-review')
 
 
 def open_repo(root):
@@ -88,6 +88,10 @@ def planner(args, ctx):
         return lambda s: pmod.plan_unpark(s, ctx, args.id, args.ruling)
     if v == 'retire':
         return lambda s: pmod.plan_retire(s, ctx, args.id, args.why, args.ruling)
+    if v == 'delete':
+        return lambda s: pmod.plan_delete(s, ctx, args.id, args.why, args.ruling)
+    if v == 'clear-review':
+        return lambda s: pmod.plan_clear_review(s, ctx, args.id, args.reason)
     # The caller's mistake, so Usage (errors.py); raised here, before any plan could run.
     raise Usage('`%s` is not a write verb: `planner` plans %s' % (v, ', '.join(WRITES + ('retarget',))))
 
@@ -97,7 +101,10 @@ def retarget_dry(args, store):
     checked as a write would be; nothing is published."""
     snap = store.load()
     smod.require_readable(snap)
-    change = retmod.plan_retarget(snap, args.old, args.new)
+    with smod.plan_notes() as notes, smod.notes_on_refusal(notes):
+        change = retmod.plan_retarget(snap, args.old, args.new)
+    change = smod.with_plan_notes(change, notes)
     if change.writes:
-        smod.check_change(snap, change)
+        with smod.notes_on_refusal(notes):
+            smod.check_change(snap, change)
     return change

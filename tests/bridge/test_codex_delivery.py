@@ -21,9 +21,12 @@ from optional.bridge.core.contracts import Capability
 from optional.bridge.core.messages import BeforeWriteError, DeliveryError, NativeResult, OutboundMessage
 from optional.bridge.core.contracts import SessionIdentity, WorkspaceIdentity
 from optional.bridge.core.pairing import ChatBinding
+from kitlib.proc.errors import ProcError
 from kitlib.proc.pipe import PrivateListener, peek, read, write
 from kitlib.proc.job import Job
 from kitlib.proc.process import own_ctime, proc_ctime
+
+SERVE_GUARD = 30
 
 
 class CodexDeliveryTests(unittest.TestCase):
@@ -39,9 +42,11 @@ class CodexDeliveryTests(unittest.TestCase):
         self.message = OutboundMessage('fixture-operation', 'fixture-task', self.sender, self.recipient,
             'private-content\n\U0001f30e\u00e9' * 1200)
         self.requests, self.errors, self.threads = [], [], []
-        self.checks = 0
+        self.checks, self.check_times = 0, []
+        self.done = threading.Event()
 
     def tearDown(self):
+        self.done.set()
         for thread in self.threads:
             thread.join(timeout=4)
         self.listener.close()
@@ -50,7 +55,18 @@ class CodexDeliveryTests(unittest.TestCase):
 
     def check(self):
         self.checks += 1
+        self.check_times.append(time.monotonic())
         return True
+
+    def response_elapsed(self):
+        """Seconds since the response phase began.
+
+        The adapter checks the lease once on entry, then NativeToolsPipe.call checks it as
+        before_write and sets the response deadline straight after, so the second check is
+        the commit. The helper start before it has its own budget (start_timeout); timing
+        from before send() made these response bounds also count a slow start under load."""
+        self.assertGreaterEqual(len(self.check_times), 2, 'the call never reached the commit')
+        return time.monotonic()-self.check_times[1]
 
     @contextmanager
     def lease(self, message):
@@ -58,11 +74,39 @@ class CodexDeliveryTests(unittest.TestCase):
         yield DesktopLease(self.recipient, self.context, self.endpoint, self.check)
 
     def serve(self, response=None, *, wrong_id=False, stall=False, raw=None):
+        # The fake server waits for the helper for as long as the test runs: when the helper
+        # connects is bounded by the adapter's start_timeout, which is under test, never by
+        # this fixture. A fixed accept window raced a slow helper start (3 s from serve(),
+        # which test_slow_helper_start spent 2.5 s of). SERVE_GUARD only stops a broken test
+        # from hanging the suite; tearDown ends the wait.
         def run():
             try:
-                self.listener.accept(timeout=3)
-                data, end = bytearray(), time.monotonic()+3
-                while time.monotonic() < end:
+                guard = time.monotonic()+SERVE_GUARD
+                while True:
+                    try:
+                        self.listener.accept(timeout=.1)
+                        break
+                    except ProcError as error:
+                        if error.code != 'private-pipe-accept-timeout':
+                            raise
+                    if self.done.is_set():
+                        # The test ended. One last look, then a helper that never connected is
+                        # an error tearDown fails on: every test that serves expects the helper,
+                        # and a before-write refusal with no request would pass without one.
+                        try:
+                            self.listener.accept(timeout=.1)
+                            break
+                        except ProcError as error:
+                            if error.code != 'private-pipe-accept-timeout':
+                                raise
+                        self.errors.append('serve: no helper connected')
+                        return
+                    if time.monotonic() > guard:
+                        raise TimeoutError('serve-guard')
+                data = bytearray()
+                while not self.done.is_set():
+                    if time.monotonic() > guard:
+                        raise TimeoutError('serve-guard')
                     available = w.DWORD()
                     if not peek(self.listener.handle, None, 0, None, ctypes.byref(available), None):
                         return
@@ -93,7 +137,7 @@ class CodexDeliveryTests(unittest.TestCase):
                     else:
                         time.sleep(.005)
             except Exception as error:
-                self.errors.append(type(error).__name__)
+                self.errors.append('%s: %s' % (type(error).__name__, getattr(error, 'code', '')))
         thread = threading.Thread(target=run)
         self.threads.append(thread)
         thread.start()
@@ -203,12 +247,11 @@ class CodexDeliveryTests(unittest.TestCase):
             child = original(job, command, **options)
             children.append(child)
             return child
-        began = time.monotonic()
         with patch('optional.bridge.hosts.codex.delivery_transport.Job.start', start):
             with self.assertRaises(DeliveryError) as caught:
                 CodexDesktopAdapter(lease=self.lease, timeout=.7).send(self.message)
         self.assertNotIsInstance(caught.exception, BeforeWriteError)
-        self.assertLess(time.monotonic()-began, 4)
+        self.assertLess(self.response_elapsed(), 4)
         self.assertTrue(children)
         self.assertTrue(all(child.poll() is not None for child in children))
 
@@ -288,11 +331,10 @@ class CodexDeliveryTests(unittest.TestCase):
 
     def test_native_oversize_frame_is_uncertain_and_bounded(self):
         self.serve(raw=struct.pack('<I', MAX_FRAME+1))
-        began = time.monotonic()
         with self.assertRaises(DeliveryError) as caught:
             CodexDesktopAdapter(lease=self.lease, timeout=2).send(self.message)
         self.assertNotIsInstance(caught.exception, BeforeWriteError)
-        self.assertLess(time.monotonic()-began, 4)
+        self.assertLess(self.response_elapsed(), 4)
         self.assertEqual(len(self.requests), 1)
 
     def test_duplicate_native_fields_never_form_correlated_receipt(self):
@@ -346,11 +388,14 @@ class CodexDeliveryTests(unittest.TestCase):
         # delivers: the response budget counts from the commit, not from the spawn.
         self.serve()
         original = Job.start
+        # The injected 3.2 s start exceeds both the 2 s response budget and the 3 s accept
+        # window the serve fixture once had, so a fixed fixture window fails here every run;
+        # start_timeout 6.7 keeps the 3.5 s left for the real helper start that 2.5/6 gave.
         def start(job, command, **options):
-            time.sleep(2.5)
+            time.sleep(3.2)
             return original(job, command, **options)
         with patch('optional.bridge.hosts.codex.delivery_transport.Job.start', start):
-            result = CodexDesktopAdapter(lease=self.lease, timeout=2, start_timeout=6).send(self.message)
+            result = CodexDesktopAdapter(lease=self.lease, timeout=2, start_timeout=6.7).send(self.message)
         self.threads[0].join(3)
         self.assertEqual(result.state, 'recipient-accepted')
         self.assertEqual(len(self.requests), 1)
@@ -361,12 +406,11 @@ class CodexDeliveryTests(unittest.TestCase):
             child = original(job, command, **options)
             children.append(child)
             return child
-        began = time.monotonic()
         with patch('optional.bridge.hosts.codex.delivery_transport.Job.start', start):
             with self.assertRaises(DeliveryError) as caught:
                 CodexDesktopAdapter(lease=self.lease, timeout=.7).send(self.message)
         self.assertNotIsInstance(caught.exception, BeforeWriteError)
-        self.assertLess(time.monotonic()-began, 4)
+        self.assertLess(self.response_elapsed(), 4)
         self.assertTrue(all(child.poll() is not None for child in children))
 
     def test_receipt_reconciliation_recovers_exact_call_id_after_unknown_outcome(self):
@@ -432,14 +476,13 @@ class CodexDeliveryTests(unittest.TestCase):
             children.append(child)
             child.stdin, child.stdout = GuardStream(child.stdin, child), GuardStream(child.stdout, child)
             return child
-        began = time.monotonic()
         try:
             with patch('optional.bridge.hosts.codex.delivery_transport.Job.start', start), patch(
                     'optional.bridge.hosts.codex.delivery_transport.Job.terminate', return_value=False):
                 with self.assertRaises(DeliveryError):
                     CodexDesktopAdapter(lease=self.lease, timeout=.7).send(self.message)
             self.assertEqual(closed_while_live, [])
-            self.assertLess(time.monotonic()-began, 4)
+            self.assertLess(self.response_elapsed(), 4)
             self.assertTrue(all(child.poll() is not None for child in children))
             self.assertTrue(all(job.h is None for job in jobs))
         finally:

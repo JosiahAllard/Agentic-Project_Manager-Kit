@@ -14,6 +14,7 @@ from kitlib.git import cmd
 
 from tests.backlog.helpers import ADD_NONE, BRANCH, StoreCase, priced, race, rec
 from tests.gitfixture import TempRepo, fixture_env
+from tests.home import TempHomeCase
 from tests.realgit import real_git
 
 
@@ -36,7 +37,7 @@ def add(store, rid, scope=None):
 
 def added(rid):
     """The subject `add` writes for a record filed with ADD_NONE."""
-    return 'backlog: add %s, found on no branch' % rid
+    return 'backlog: add %s, found on no branch (or on a branch since landed)' % rid
 
 
 def wrap_git(case, on):
@@ -846,7 +847,8 @@ class BranchStoreNoRemote(BranchStoreBase):
         self.assertEqual(self.landed_ids(), ('refs/heads/backlog', 'backlog', ['FOO']))
 
 
-class OtherBackends(unittest.TestCase):
+class OtherBackends(TempHomeCase):
+    """Under a temp home: a verb's machine-path refusal reads the machine config."""
 
     def test_open_backend_follows_the_store_key(self):
         from kitlib import config

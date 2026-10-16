@@ -139,12 +139,20 @@ phrases, and the reasons of the derived views are replaced by fixed phrases here
       [{repo, fetched_at, items, error, stale, fetch_error}]; completed adds `days`. No entry
       names the commit it was read at (backlog.Views does not give it). `days` narrows the
       window backlog.Views was built with and cannot widen it.
+      Called with no argument (GET snapshot's call: api.snapshot; the backlog and completed
+      routes pass every argument) while the backlog timer runs (backlog.Views.timer_running),
+      both answer from what the timer's reads left (backlog.Views.held), however old, and start
+      no git: the page's one load never waits on a repository's read. A repository the first
+      round has not come to yet is an entry with "error" backlog.NOT_READ; with none read yet
+      both raise NotReadYet, which the snapshot shows in `unavailable`. With no timer running
+      (backlog_refresh_s unset, or the timer not started or ended) they read as the routes do.
   notices() repos() usage() agents()      kitlib.hubsite.derived's answers
   health()    {git, backlog, backlog_at, backlog_error, backlog_timer}. `git` is GitSync.status()
       without `detail`, or {"running": false, "off": phrase}. `backlog` is null with no backlog
       source, else [{repo, fetched_at, error}] as the last backlog read gave it (`backlog_at`:
       when; null and an empty list before the first read): health starts no git. A read is a
-      client's GET of the backlog or completed view, or the end of a round of the backlog
+      client's GET of the backlog or completed view (a snapshot's held answer is not one), or the
+      end of a round of the backlog
       timer: build() wraps the `wait` of a backlog.Views (its pause between two rounds) so
       SiteViews.after_round() runs on the timer's own thread after each round. That reads the
       view as a client would, mostly from what the round just read; with no timer
@@ -300,6 +308,15 @@ class NoRepoList(Exception):
     class name only."""
 
 
+class NotReadYet(Exception):
+    """GET snapshot's backlog or completed view while the backlog timer runs and no read has
+    answered yet (backlog.NOT_READ): its first round is still in git. The Api shows the class
+    name only."""
+
+    def __init__(self):
+        Exception.__init__(self, backlog.NOT_READ)
+
+
 class Sources(object):
     """Where the server's parts come from. A part that is None is a view the server does not
     have (or, for `sync`, a server that commits nothing).
@@ -309,6 +326,8 @@ class Sources(object):
       pm_data      kitlib.pmdata's {path, branch, remote}, or None
       notices      the machine lock's notice folder
       repos        callable(the store's repos documents) -> [{name, aliases}]
+      known_repos  callable() -> the PM's configured repo names, which the store's repo-alias
+                   check accepts without a repos/ document; None: none
       usage        callable() -> the lines kitlib.launcher.usage prints
       agents       the folder of agent definitions
       backlog      callable(refresh_s) -> a kitlib.hubsite.backlog.Views (or its like: get, start,
@@ -330,7 +349,8 @@ class Sources(object):
 
     def __init__(self, tokens=None, static_dir=STATIC_DIR, pm_data=None, notices=None, repos=None,
                  usage=None, agents=None, backlog=None, sync=None, access_keys=None,
-                 access_now=None):
+                 access_now=None, known_repos=None):
+        self.known_repos = known_repos
         self.tokens = tokens
         self.static_dir = static_dir
         self.pm_data = pm_data
@@ -370,6 +390,31 @@ def agents_dir(environ=None):
     return os.path.join(pmstart.KIT_ROOT, os.path.normpath(shell), 'agents')
 
 
+def _configured_repos(cfg):
+    """A callable giving pmstart.known_repos of the pm_start config `cfg`, the store's repo-alias
+    check's names. As in _repo_pairs, git is asked once: each folder's git top level (the PM's
+    repository and the kit's, two git runs) is kept, while sessions_file is read on each call, so
+    a new coordinator's repository counts at once, as on the repo menu (derived.repos). () when
+    the names cannot be read, since a store write must never fail on them: KeyError no
+    sessions_file, ValueError bad "repos" or bad JSON, OSError an unreadable sessions file,
+    AttributeError a sessions file whose JSON is not an object, TypeError a sessions_file that is
+    not a path. No git is not an error: pmstart._toplevel gives None and the name is left out.
+    Anything else is a bug in this code and is left to raise."""
+    tops = {}
+
+    def toplevel(folder):
+        if folder not in tops:
+            tops[folder] = pmstart._toplevel(folder)
+        return tops[folder]
+
+    def names():
+        try:
+            return pmstart.known_repos(cfg, toplevel=toplevel)
+        except (KeyError, ValueError, OSError, AttributeError, TypeError):
+            return ()
+    return names
+
+
 def machine_sources(home=None, sync=True):
     """This machine's Sources, read from the machine config under `home` (default the user's).
     It writes nothing and starts no git. sync=False: no git sync (a scratch store). ConfigError
@@ -392,6 +437,7 @@ def machine_sources(home=None, sync=True):
         src.usage = report
     if cfg and cfg.get('sessions_file'):
         src.repos = lambda stored: derived.repos(cfg, stored)
+        src.known_repos = _configured_repos(cfg)
         src.backlog = lambda refresh_s: backlog.Views(_repo_pairs(cfg), refresh_s)
     return src
 
@@ -410,9 +456,21 @@ def _entry(e, items):
             'fetch_error': e.get('fetch_error')}
 
 
+def _record_call(fn, *args):
+    """fn(*args), a record view of kitlib.hubsite.backlog, with what it raises put as the Api
+    answers it: a RecordError as its own code (not_found, invalid) and fixed phrase, a ReadError
+    as `unavailable` with its fixed phrase (backlog.say). Neither names a path or what was asked."""
+    try:
+        return fn(*args)
+    except backlog.RecordError as e:
+        raise HubError(e.code, e.said, e.field)
+    except backlog.ReadError as e:
+        raise HubError('unavailable', backlog.say(e), 'views')
+
+
 class SiteViews(object):
     """The Api's `views` (module docstring, "Views"). A view is bound only where its source
-    exists: `backlog_views` for backlog and completed, sources.repos and .agents for theirs.
+    exists: `backlog_views` for backlog, completed, record and record_template, sources.repos and .agents for theirs.
     notices, usage and health are always there (kitlib.hubsite.derived answers a missing notice
     folder with no notices and a missing usage source with its own phrase). `sync` is the git
     sync or None, `sync_off` the fixed phrase health gives when there is none. `log(level,
@@ -433,15 +491,36 @@ class SiteViews(object):
         if backlog_views is not None:
             self.backlog = self._open
             self.completed = self._completed
+            self.record = self._record
+            self.record_template = self._record_template
         if sources.repos is not None:
             self.repos = self._repos
         if sources.agents:
             self.agents = self._agents
 
-    def _read(self, fresh=False, stop=None):
+    def _held(self):
+        """The backlog source's held answer (backlog.Views.held) while its timer runs, or None
+        to read as before: no timer running (none configured, not started, or ended) or a
+        source with no held answer (a stand-in). Raises NotReadYet when the timer runs and no
+        read has answered yet."""
+        running = getattr(self._backlog, 'timer_running', None)
+        held = getattr(self._backlog, 'held', None)
+        if not callable(running) or not callable(held) or not running():
+            return None
+        got = held()
+        if got is None:
+            raise NotReadYet()
+        return got
+
+    def _read(self, fresh=False, stop=None, held=False):
         """The backlog source's entries, kept for health. With `stop` (an Event; the timer's
         own read gives its) the source may answer None, a read it cut short: None then, and
-        health keeps what it had."""
+        health keeps what it had. `held` (GET snapshot's): while the timer runs, what its reads
+        left, with no git started and health left as it was (_held); with no timer running, a
+        read as without it."""
+        got = self._held() if held else None
+        if got is not None:
+            return got.get('repos') or []
         if stop is None:
             got = self._backlog.get(fresh=bool(fresh))
         else:
@@ -458,17 +537,20 @@ class SiteViews(object):
             raise NoRepoList()
         return entries
 
-    def _open(self, repo='', state='', fresh=False):
+    def _open(self, repo=None, state=None, fresh=None):
+        # no argument at all is GET snapshot's call (api.snapshot); every route passes all three
+        held = repo is None and state is None and fresh is None
         out = []
-        for e in _named(self._read(fresh), repo):
+        for e in _named(self._read(fresh, held=held), repo or ''):
             items = e.get('open') or []
             if state:
                 items = [i for i in items if i.get('s') == state]
             out.append(_entry(e, items))
         return out
 
-    def _completed(self, repo='', days=None):
-        entries = self._read()
+    def _completed(self, repo=None, days=None):
+        # no `repo` is GET snapshot's call (api.snapshot); GET completed always passes one
+        entries = self._read(held=repo is None)
         limit = self._backlog.days
         since = None
         if days is not None and days < limit:
@@ -482,6 +564,13 @@ class SiteViews(object):
             one['days'] = limit if since is None else days
             out.append(one)
         return out
+
+    def _record(self, repo, id):
+        """One record, read now (kitlib.hubsite.backlog Views.record), its failures as HubErrors."""
+        return _record_call(self._backlog.record, repo, id)
+
+    def _record_template(self, repo):
+        return _record_call(self._backlog.record_template, repo)
 
     def _notices(self):
         return derived.notices(self._sources.notices)
@@ -707,6 +796,8 @@ def build(settings, sources, log=None):
         raise ServeError('no credential folder')
     notes = []
     store = _open_store(settings.store)
+    if sources.known_repos is not None:
+        store.known_repos = sources.known_repos
     listeners = []
     try:
         if store.took_over:

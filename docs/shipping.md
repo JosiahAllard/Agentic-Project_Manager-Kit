@@ -22,8 +22,12 @@ the install's own names stay with `tests/scrub/test_generic.py` and `scrub_patte
 - `hardware`: a GPU model, a CPU family or chiplet, or a total core or thread count of ten or
   more.
 - `drive`: a drive path into one of MACHINE_FOLDERS, the machine folders that tests/shipped.py
-  BASE_FORBIDDEN also refuses (a test checks the two agree). It reads tests/ too; other drive
-  paths there are invented fixtures, and `tests/scrub/test_generic.py` refuses every drive path
+  BASE_FORBIDDEN also refuses (a test checks the two agree): `Users` only, since the kit codes no
+  other folder name. The machine config's `machine_path_folders` are added by the caller:
+  `tests/scrub/test_builtin.py` passes them to `scrub.classes`, and tests/shipped.py
+  `machine_patterns` refuses them as "machine path" with the base patterns; the package itself
+  reads no config. It reads tests/
+  too; other drive paths there are invented fixtures, and `tests/scrub/test_generic.py` refuses every drive path
   outside tests/.
 - `name`: a salted digest in NAME_STORE, hashed the way `kitlib/forbidden` hashes (docs/repo-checks.md,
   "forbidden"), so the names are never written down. The shipped store is empty; filling it is the
@@ -46,7 +50,9 @@ than the baseline fails, a file with no baseline fails on its first hit, and few
   docs/content.md): backlog-ops, branch-review, branch-sync,
   coordinator-dispatch, doc-claims-discipline, flaky-test-triage, land-branch (uses
   `tools/land.py`), machine-lock-run, mutation-testing, session-handoff,
-  shell-and-worktree-traps, subagent-dispatch. branch-review and coordinator-dispatch hold the
+  shell-and-worktree-traps, subagent-dispatch, specialty-3d-assets, specialty-tech-art,
+  specialty-sound, specialty-review, specialty-research, specialty-records, specialty-spec.
+  branch-review and coordinator-dispatch hold the
   coordinator's procedure, loaded only when needed. Skills name kit tools by path
   (`tests/skills` checks each exists); `tools/doc_index.py`, `tools/doc_budget.py` and
   `tools/gate.json` are each repository's own.
@@ -81,13 +87,16 @@ than the baseline fails, a file with no baseline fails on its first hit, and few
   input, and an output that is not .html/.htm, is one of the images, or is an existing non-HTML
   file.
 - `procwatch`: a process watcher. It spares ComfyUI; add patterns with env `PROCWATCH_PROTECT`
-  (`;`-separated regexes).
+  (`;`-separated regexes). It labels a process by its nearest known ancestor; add ancestor apps
+  (exe names) with env `PROCWATCH_ORIGINS` (`;`-separated).
 - `usage`: usage reports and the statusline (`statusline-usage.ps1`, `write-usage-status.ps1`).
 - `bridge`: agent-to-agent messaging between open host chats, an optional install that no host
   shell mentions until the owner registers it (`optional/bridge/README.md`; what works:
   `optional/bridge/STATUS.md`). Tests in `tests/bridge`.
 - `agenttemp`: `agent_temp_sweep.py` clears old entries from the agents' shared temp folder and its
-  session folders, set by `agent_temp_sweep` in the machine config (docs/kit-json.md).
+  session folders, set by `agent_temp_sweep` in the machine config (docs/kit-json.md). It never
+  removes a `*-coordinator` or `*-consultant` folder, whatever `keep` says (`BUILT_IN_KEEP`; they
+  hold a coordinator's state note and a consultant's notes, docs/launcher.md "Start").
 
 ## Knowledge (`knowledge/asset-generation`)
 
@@ -101,5 +110,5 @@ sessions in its own `docs/ops/assets.md`, and lessons that hold up go into BEST_
   the general case.
 - `godot-render-check` is not a plugin skill: it ships, made generic, in the Godot stack template
   (repository values come from its docs), keeping the plugin's skills generic.
-- `jobrun.py`/`jobrun.sh`: not shipped; `kitlib/proc` and the machine lock cover them.
+- `jobrun.py`/`jobrun.sh`: not shipped. The shell-prefix wrapper they were part of was dropped by the owner's ruling, and nothing in the kit wraps an agent's Bash calls; `kitlib/proc` covers a process the kit starts itself, and the machine lock covers heavy runs.
 - The source's `docs/` and `.claude/` profiles under the common template were not ported.

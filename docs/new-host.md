@@ -45,7 +45,7 @@ checks the whole file, and one bad field refuses all of it. The fake host's entr
 |---|---|
 | `tool_event` | The one `hook_events` entry whose calls the guard judges. Every other hook event is a start event: the adapter adds context for it. |
 | `tool_field` | The dotted key of the tool's name in that event's payload: `tool_name`, or `call.name` for the fake host |
-| `guarded_tools` | Every tool a guard rule or the host's own `screen` can refuse, by name; an entry ending in `*` is a prefix (`mcp__*`). A call to any other tool is allowed before the kit boots, so it never pays for a boot or a release check. The conformance suite fails when a recorded payload that parses into an edit, shell or MCP call names a tool left out. |
+| `guarded_tools` | Every tool a guard rule or the host's own `screen` can refuse, by name; an entry ending in `*` is a prefix (`mcp__*`). A call to any other tool is allowed before the kit boots, so it never pays for a boot or a release check. The conformance suite fails when a recorded payload that parses into an edit, shell, read or MCP call (any kind but `other`; tests/host/conformance.py) names a tool left out. |
 | `fast_path` | `all`: an unguarded call skips the kit in every session. `unmarked`: only in a session no launcher marked (`PM_KIT_ROLE` unset), for a host whose `screen` must see every call of a marked session (Codex holds a marked session to an allowlist). |
 
 `profile` holds the host data the core reads. Each field has a consumer (`kitlib.host.HostProfile`):

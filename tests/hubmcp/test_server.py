@@ -14,7 +14,7 @@ from unittest import mock
 from kitlib import hubmcp
 from kitlib.config.types import ConfigError
 from kitlib.hubmcp import server as srv
-from kitlib.hubsite import api, auth, serve
+from kitlib.hubsite import api, auth, serve, todosteps
 from tests.hubsite import httpfix
 from tests.lock.helpers import REPO, clean_env
 from tests.lockmcp.test_server import Client as Process
@@ -205,6 +205,35 @@ class Routes(Case):
         self.assertIn("since=3", call["path"])
         self.assertEqual(srv.WAIT_MAX_S, api.WAIT_MAX_S)
 
+    def test_pending_and_wait_pass_for_through_as_the_query(self):
+        self.ask.answer = (200, {"ok": True, "timed_out": False, "revision": 4, "items": []})
+        s = self.server()
+        for name, args in (("hub_pending", {"for": "k-one"}),
+                           ("hub_wait", {"pending": True, "for": "k-one", "timeout_s": 0})):
+            with self.subTest(name=name):
+                payload, is_error = self.rpc(s, name, args)
+                self.assertFalse(is_error, payload)
+                self.assertIn("for=k-one", self.ask.calls[-1]["path"])
+        self.assertIn("pending=1", self.ask.calls[-1]["path"])
+
+    def test_pending_and_wait_without_for_send_none(self):
+        self.ask.answer = (200, {"ok": True, "timed_out": False, "revision": 4, "items": []})
+        s = self.server()
+        for name, args in (("hub_pending", {}), ("hub_wait", {"pending": True, "timeout_s": 0}),
+                           ("hub_pending", {"for": ""})):
+            with self.subTest(name=name, args=args):
+                payload, is_error = self.rpc(s, name, args)
+                self.assertFalse(is_error, payload)
+                self.assertNotIn("for=", self.ask.calls[-1]["path"])
+
+    def test_the_from_of_a_question_is_described_as_the_hub_takes_it(self):
+        said = srv.TOOLS["hub_ask"][1]["properties"]["from"]["description"]
+        self.assertIn("launcher session key", said)
+        self.assertIn(api.AGENT_FROM, said)
+        self.assertNotIn("agent name", said)
+        for name in ("hub_pending", "hub_wait"):
+            self.assertEqual(srv.TOOLS[name][1]["properties"]["for"]["type"], "string", name)
+
 
 class Arguments(Case):
     def test_bad_arguments_are_refused_before_any_call(self):
@@ -222,6 +251,46 @@ class Arguments(Case):
                 self.assertEqual(payload["error"]["code"], "invalid")
                 self.assertEqual(payload["error"]["field"], field)
         self.assertEqual(self.ask.calls, [])
+
+
+class TodoSteps(Case):
+    """hub_todo_add takes steps (kitlib.hubsite.todosteps): it posts them as given, for the hub
+    to render (api.todo_steps), and refuses what an agent's to-do may not hold before any call."""
+
+    def test_the_schema_takes_steps_as_a_list_of_objects(self):
+        steps = srv.TOOLS["hub_todo_add"][1]["properties"]["steps"]
+        self.assertEqual(steps, {"type": "array", "items": {"type": "object"},
+                                 "description": steps["description"]})
+        self.assertIn("edit", steps["description"])
+
+    def test_steps_post_as_given_for_the_hub_to_render(self):
+        steps = [{"edit": "C:\\w\\a.txt", "old": "x\ny", "new": "z"}, {"run": "python t.py"}]
+        args = {"title": "t", "detail": "Why.", "commands": ["first"], "steps": steps}
+        payload, is_error = self.rpc(self.server(), "hub_todo_add", args)
+        self.assertFalse(is_error, payload)
+        self.assertEqual(self.ask.calls[-1]["body"], args)
+
+    def test_bad_steps_and_refused_text_never_reach_the_hub(self):
+        for args, field in (({"steps": [{"open": "rel.txt"}]}, "steps"),
+                            ({"steps": [{"edit": "C:\\w\\a.txt", "old": "a\ud800", "new": "b"}]},
+                             "steps"),
+                            ({"steps": [{"open": "C:\\w\\\udc00.txt"}]}, "steps"),
+                            ({"steps": [{"run": "notepad x"}]}, "steps"),
+                            ({"steps": [{"run": "echo a\ud800b"}]}, "steps"),
+                            ({"commands": ["git worktree add x"]}, "commands"),
+                            ({"commands": ["dir", "echo a\ud800b"]}, "commands"),
+                            ({"detail": "Open it and apply the change."}, "detail")):
+            with self.subTest(args=args):
+                payload, is_error = self.rpc(self.server(), "hub_todo_add",
+                                             dict(args, title="t"))
+                self.assertTrue(is_error)
+                self.assertEqual(payload["error"]["code"], "invalid")
+                self.assertEqual(payload["error"]["field"], field)
+        self.assertEqual(self.ask.calls, [])
+
+    def test_a_to_do_without_steps_posts_as_before(self):
+        self.rpc(self.server(), "hub_todo_add", {"title": "t", "commands": ["x"]})
+        self.assertEqual(self.ask.calls[-1]["body"], {"title": "t", "commands": ["x"]})
 
 
 class Errors(Case):
@@ -244,6 +313,20 @@ class Errors(Case):
             self.ask.answer = answer
             payload, is_error = self.rpc(self.server(), "hub_health")
             self.assertEqual((is_error, payload["error"]["code"]), (True, code))
+
+    def test_a_wait_that_fails_is_a_result_like_any_other_tool(self):
+        for answer, code in ((serve.NotRunning(8790), "not_running"),
+                             (serve.ServeError("port 1 did not answer"), "client"),
+                             (ValueError("boom"), "internal")):
+            with self.subTest(code=code):
+                self.ask.answer = answer
+                payload, is_error = self.rpc(self.server(), "hub_wait",
+                                             {"pending": True, "for": "k-one", "timeout_s": 0})
+                self.assertEqual((is_error, payload["error"]["code"]), (True, code))
+        self.ask.answer = (400, api.error_body("invalid", "for needs pending", "for"))
+        payload, is_error = self.rpc(self.server(), "hub_wait", {"for": "k-one", "timeout_s": 0})
+        self.assertTrue(is_error)
+        self.assertEqual((payload["status"], payload["error"]["field"]), (400, "for"))
 
     def test_settings_that_cannot_be_read_are_a_result(self):
         def bad():
@@ -338,6 +421,17 @@ class Live(httpfix.ListenerCase):
         self.assertEqual(payload["status"], 400)
         self.assertEqual(self.errors(), [])
 
+    def test_a_to_do_with_steps_is_rendered_by_the_hub(self):
+        steps = [{"open": "C:\\w\\a.txt", "line": 3}]
+        payload, is_error = self.mcp.call("hub_todo_add", {"title": "t", "commands": ["first"],
+                                                           "steps": steps})
+        self.assertFalse(is_error, payload)
+        doc = self.store.docs("todos")[payload["id"]]
+        self.assertEqual(doc["commands"], ["first"] + todosteps.render(steps))
+        self.assertEqual(doc["detail"], "open C:\\w\\a.txt at line 3 in Notepad++")
+        self.assertNotIn("steps", doc)
+        self.assertEqual(self.errors(), [])
+
     def test_inbox_and_health_read_through_the_listener(self):
         payload, is_error = self.mcp.call("hub_inbox_post", {"text": "done", "title": "t"})
         self.assertFalse(is_error, payload)
@@ -348,6 +442,40 @@ class Live(httpfix.ListenerCase):
         payload, is_error = self.mcp.call("hub_health", {})
         self.assertFalse(is_error, payload)
         self.assertNotIn("store", payload)      # the agent's token: where the store is stays hidden
+
+
+class LiveKeys(httpfix.ListenerCase):
+    """`from` and `for` against a real listener whose hub knows one launcher session key."""
+
+    def setUp(self):
+        httpfix.ListenerCase.setUp(self)
+        self.api = api.Api(self.store, views=httpfix.Views(), clock=httpfix.CLOCK,
+                           session_keys=lambda: {"k-one"})
+        self.lis = self.listener()
+        self.mcp = srv.Server(port=self.lis.port, tokens=self.tokens)
+
+    def test_a_question_comes_from_a_session_key_or_pm_only(self):
+        for who in ("k-one", api.AGENT_FROM):
+            payload, is_error = self.mcp.call("hub_ask", {"title": "t", "from": who})
+            self.assertFalse(is_error, payload)
+        payload, is_error = self.mcp.call("hub_ask", {"title": "t", "from": "some agent"})
+        self.assertTrue(is_error)
+        self.assertEqual((payload["status"], payload["error"]["code"], payload["error"]["field"]),
+                         (400, "invalid", "from"))
+
+    def test_for_reaches_the_hub_on_pending_and_wait(self):
+        payload, is_error = self.mcp.call("hub_pending", {"for": "k-one"})
+        self.assertFalse(is_error, payload)
+        self.assertEqual(payload["items"], [])
+        payload, is_error = self.mcp.call("hub_wait",
+                                          {"pending": True, "for": "k-one", "timeout_s": 0})
+        self.assertFalse(is_error, payload)
+        self.assertTrue(payload["timed_out"])
+        # the hub's own check, not the tool's schema: `for` arrived without pending
+        payload, is_error = self.mcp.call("hub_wait", {"for": "k-one", "timeout_s": 0})
+        self.assertTrue(is_error)
+        self.assertEqual((payload["status"], payload["error"]["field"]), (400, "for"))
+        self.assertEqual(self.errors(), [])
 
 
 @unittest.skipUnless(os.name == "nt", "the kit is Windows only")

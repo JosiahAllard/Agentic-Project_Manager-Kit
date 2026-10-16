@@ -4,7 +4,9 @@ setup writes nothing into a repository by default, and this mode keeps the old c
 a repository that wants it. Nothing here prints or exits: run() gives the exit code and the lines.
 
 The target is an existing git checkout, named by its top level. It writes these and nothing else:
-  <target>/.kit.json          "repo".main_branch and .name, "owner".email and .agent_emails, and
+  <target>/.kit.json          "repo".main_branch and .name, "backlog".store "ref" (named, so the
+                              backlog tool writes it: kitlib.backlog.store.open_backend), "owner".email
+                              and .agent_emails, and
                               with a stack "gate": "tools/gate.json". The name is `repo_name`,
                               else the folder's name lower-cased; either must be a lower-case repo
                               name, or it refuses.
@@ -18,10 +20,12 @@ The target is an existing git checkout, named by its top level. It writes these 
   <target>/tools/gate.json    with a stack: templates/stacks/<stack>/tools/gate.json, only if absent
   <target>/tools/<file>       with a stack: its other tools files, each only if absent
   <target>/<skills>/...       with a stack: its skills (kitlib.stackskill), the kit's path written in
-  <target>/.claude/settings.json   its autoMemoryDirectory (kitlib.stubs.memory) when the file lacks
-                              the key: created holding it alone, or the key added and nothing else
-                              changed. A key already there is kept; a file it cannot edit refuses
-                              before any write. The memory folder itself is not made.
+  <target>/.claude/settings.local.json   its autoMemoryDirectory (kitlib.stubs.memory) when neither
+                              it nor settings.json has the key: created holding it alone, or the key
+                              added and nothing else changed. The key is a machine path, so it goes
+                              in the ignored local file, never a tracked one. A key already in
+                              either file is kept; a file it cannot edit refuses before any write.
+                              The memory folder itself is not made.
 It never overwrites: a .kit.json or tools/gate.json already there, or with `stubs` a file where a
 stub goes that is not a stub, refuses before anything is written. Every template and every
 existing line file is read at plan time, so one that cannot be read refuses before any write.
@@ -220,6 +224,7 @@ class Setup(object):
         self.text = ('{\n'
                      '  "repo": {"main_branch": "%s", "name": "%s"},\n'
                      '%s'
+                     '  "backlog": {"store": "ref"},\n'
                      '  "owner": {"email": "%s", "agent_emails": ["%s"]}\n'
                      '}\n' % (c.main_branch, self.repo_name, gate_line, c.owner_email, c.agent_email))
         self.line_files = [self._plan_line_file('.gitignore', self.stack_lines['gitignore']),
@@ -611,8 +616,8 @@ class Setup(object):
                '     %s as usual' % usual]
         if self.memory_added:
             from kitlib.stubs import memory
-            out.append('     The owner commits %s too (its %s; docs/pm-first-run.md)'
-                       % (memory.settings_rel(), memory.KEY))
+            out.append('     %s (its %s, a machine path) is git-ignored: nothing to commit for it'
+                       % (memory.local_rel(), memory.KEY))
         tools = os.path.join(c.kit, 'tools')
         if c.stubs:
             out.append('  2. python "%s" check -C "%s"   (exit 0: every stub current)'

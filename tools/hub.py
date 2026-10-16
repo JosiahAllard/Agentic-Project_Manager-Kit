@@ -105,14 +105,21 @@ the server alone decides what a role may do.
 
   hub.py questions [--status S] [--repo R]          `Q-1 v2 open [repo] title` for each
   hub.py questions add --title T [--repo R] [--context-file F] [--option "label::description"
-        ...] [--recommended N] [--refs ID ...] [--urgent] [--story S-n] [--from NAME]
-                                                     `ASKED Q-2`, then a line for each warning
+        ...] [--recommended N] [--refs ID ...] [--urgent] [--story S-n] [--from KEY]
+                                                     `ASKED Q-2`, then a line for each warning;
+                                                     --from: the asker's launcher session key
+                                                     (default pm), refused when the hub does
+                                                     not know it
   hub.py questions log Q-1 <ruling id> --if-version V        `LOGGED Q-1 <ruling id>`
   hub.py answer Q-1 --choice N|other [--note TEXT] [--if-version V]     (owner)
                                                      `ANSWERED Q-1 <label>`
   hub.py todos [--status S] [--repo R]              `T-1 open [repo] title` for each
-  hub.py todos add --title T [--detail D] [--command C ...] [--repo R] [--refs ID ...]
-        [--urgent] [--from NAME | --owner]           `ADDED T-2`; --owner: the owner's own to-do
+  hub.py todos add --title T [--detail D] [--command C ...] [--steps F] [--repo R]
+        [--refs ID ...] [--urgent] [--from NAME | --owner]
+                                                     `ADDED T-2`; --owner: the owner's own to-do;
+                                                     --steps F: a UTF-8 JSON file holding the
+                                                     list of steps the hub makes into commands
+                                                     (docs/hub-mcp.md "To-do steps")
   hub.py todos done T-1 [--undo] [--if-version V]   (owner) `DONE T-1`, `REOPENED T-1`
   hub.py todos ack T-1                              `ACKED T-1`
   hub.py stories [--status S] [--repo R]            `S-1 v2 submitted [repo] title` for each
@@ -129,12 +136,20 @@ the server alone decides what a role may do.
   hub.py inbox add --text T [--title T] [--repo R] [--ref ID] [--asked TEXT] [--refs ID ...]
         [--from NAME]                                `POSTED M-2`
   hub.py inbox read M-1 [--undo] [--if-version V]   (owner) `READ M-1`, `UNREAD M-1`
-  hub.py pending                                    `<kind> <id> [repo] title` for each item of
-                                                     owner input the PM has not handled
-  hub.py wait [--since REV] [--timeout S] [--pending]
+  hub.py pending [--for KEY]                        `<kind> <id> [repo] to=R from=K title` for
+                                                     each item of owner input not yet handled: R
+                                                     is the session key to handle it now (pm
+                                                     when its creator K cannot be reached);
+                                                     --for KEY: only the items for session KEY
+                                                     (--for pm: the ones routed to the PM and
+                                                     every answered question)
+  hub.py wait [--since REV] [--timeout S] [--pending [--for KEY] [--except ID...]]
       waits until the store changes after revision REV (default: the revision at the call), or,
-      with --pending, until an item is pending (one that is pending already ends it at once).
-      Prints `HUB <rev> <kind> <id> <title>` for each pending item and `HUB <rev> <collection>
+      with --pending, until an item is pending (one that is pending already ends it at once);
+      with --for KEY as well, until an item for session KEY is pending; with --except, items
+      with those ids (ones already acted on, still pending until the PM logs them) are left out.
+      The PM waits with --for pm. Prints `HUB <rev> <kind> <id> to=R from=K <title>` for each
+      pending item (R and K as for pending) and `HUB <rev> <collection>
       <id> <op> <status>` for each change, exit 0. With --timeout S: exit 4 and no line when S
       seconds pass with neither. Without it the wait has no end of its own.
   hub.py validate [--store PATH]
@@ -301,7 +316,8 @@ def _client_verbs(sub):
     x.add_argument('--refs', nargs='+', metavar='ID')
     x.add_argument('--urgent', action='store_true')
     x.add_argument('--story', metavar='S-n')
-    x.add_argument('--from', dest='who', metavar='NAME')
+    x.add_argument('--from', dest='who', metavar='KEY',
+                   help='your launcher session key: the answer comes back to it (default: pm)')
     x = _leaf(q, 'log', 'record the ruling an answered question was logged as')
     x.add_argument('id')
     x.add_argument('ruling', metavar='ruling-id')
@@ -321,6 +337,9 @@ def _client_verbs(sub):
     x.add_argument('--detail')
     x.add_argument('--command', dest='commands', action='append', metavar='C',
                    help='a command the to-do names (repeatable)')
+    x.add_argument('--steps', dest='steps_file', metavar='F',
+                   help='a UTF-8 JSON file holding a list of steps: {edit, old, new}, '
+                        '{open, line} or {run}; the hub makes them commands after --command')
     _repo(x)
     x.add_argument('--refs', nargs='+', metavar='ID')
     x.add_argument('--urgent', action='store_true')
@@ -377,13 +396,21 @@ def _client_verbs(sub):
     x.add_argument('--undo', action='store_true')
     _pins(x)
 
-    _asks(sub.add_parser('pending', help='the owner input the PM has not handled'))
+    x = _asks(sub.add_parser('pending', help='the owner input the PM has not handled'))
+    x.add_argument('--for', dest='for_key', metavar='KEY',
+                   help="only the items for this session key (default: every item)")
     w = _asks(sub.add_parser('wait', help='wait for a change of the store or a pending item'))
     w.add_argument('--since', type=_count, metavar='REV',
                    help='changes after this revision (default: the revision at the call)')
     w.add_argument('--timeout', type=_seconds, metavar='S',
                    help='exit 4 after this many seconds with nothing (default: no limit)')
     w.add_argument('--pending', action='store_true', help='pending items end the wait too')
+    w.add_argument('--for', dest='for_key', metavar='KEY',
+                   help="with --pending: only this session key's items end the wait, and no "
+                        "other change does")
+    w.add_argument('--except', dest='except_ids', nargs='+', metavar='ID',
+                   help='with --pending: leave out these ids (ones already acted on); only '
+                        'another pending item ends the wait')
     v = sub.add_parser('validate', help='check the store folder; reads it, no server needed')
     v.add_argument('--store', type=_folder, help='the store folder (default: the configured one)')
 
@@ -805,6 +832,15 @@ def _text_of(path, what):
         raise serve.ServeError('cannot read the %s file %s: %s' % (what, path, type(e).__name__))
 
 
+def _json_of(path, what):
+    """The JSON value of a UTF-8 file (a BOM is skipped); the server judges its shape."""
+    try:
+        with open(path, encoding='utf-8-sig') as f:
+            return json.load(f)
+    except (OSError, ValueError) as e:
+        raise serve.ServeError('cannot read the %s file %s: %s' % (what, path, type(e).__name__))
+
+
 def _body(**fields):
     """The fields that were given: None, an empty list and a flag that is off are left out."""
     return {k: v for k, v in fields.items()            # 0 is a value: a place, a version
@@ -843,6 +879,8 @@ def _todos(a, stop):
     if a.sub == 'add':
         body = _body(title=a.title, detail=a.detail, commands=a.commands,
                      repo=getattr(a, 'repo', None), refs=a.refs, urgent=a.urgent)
+        if a.steps_file:
+            body['steps'] = _json_of(a.steps_file, 'steps')
         if a.who:
             body['from'] = a.who
         got = hub.post('/todos', client.OWNER if a.owner else client.AGENT, body)
@@ -910,21 +948,28 @@ def _inbox(a, stop):
                  [_item(d, 'read' if d.get('read') else 'unread') for d in items])
 
 
+def _routed(p):
+    """`to=<route> from=<from>` of pending item p: the session key that is to handle it now and
+    the key it is for (docs/action-hub.md "Who handles a pending item"); `-` for one not given."""
+    return 'to=%s from=%s' % (p.get('route') or '-', p.get('from') or '-')
+
+
 def _pending(a, stop):
-    got = _hub(a).get('/pending')
-    return _show(a, got, ['%s %s [%s] %s' % (p.get('kind'), p.get('id'), p.get('repo') or '-',
-                                              p.get('title') or '')
+    got = _hub(a).get('/pending', client.ANY, {'for': a.for_key})
+    return _show(a, got, ['%s %s [%s] %s %s' % (p.get('kind'), p.get('id'), p.get('repo') or '-',
+                                                 _routed(p), p.get('title') or '')
                           for p in got.get('items') or []])
 
 
 def _wait(a, stop):
-    got = _hub(a).wait(a.since, a.timeout, a.pending)
+    got = _hub(a).wait(a.since, a.timeout, a.pending, a.for_key, a.except_ids)
     if got.get('timed_out'):
         if getattr(a, 'json', False):
             _show(a, got, [])
         return client.TIMED_OUT
     rev = got.get('revision')
-    lines = ['HUB %s %s %s %s' % (rev, p.get('kind'), p.get('id'), p.get('title') or '')
+    lines = ['HUB %s %s %s %s %s' % (rev, p.get('kind'), p.get('id'), _routed(p),
+                                     p.get('title') or '')
              for p in got.get('pending') or []]
     lines += ['HUB %s %s %s %s %s' % (rev, c.get('collection'), c.get('id'), c.get('op'),
                                       c.get('status') or '-')
@@ -953,6 +998,10 @@ def main(argv=None, stop=None):
         p.error('--check takes no other option: it writes nothing')
     if a.verb == 'setup' and a.whatif and not a.autostart:
         p.error('--whatif needs --autostart')
+    if a.verb == 'wait' and a.for_key and not a.pending:
+        p.error('--for picks among the pending items: give --pending with it')
+    if a.verb == 'wait' and a.except_ids and not a.pending:
+        p.error('--except leaves out pending items: give --pending with it')
     try:
         return VERBS[a.verb](a, stop)
     except ConfigError as e:

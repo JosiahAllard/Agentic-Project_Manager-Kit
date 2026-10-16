@@ -162,9 +162,14 @@ def _hub_client(port):
     return client.Client(port, tokens=folder, timeout=HUB_SITE_TIMEOUT_S)
 
 
+# a wait's `--for KEY` or `--for=KEY`, the key quoted or not
+_WAIT_FOR = re.compile(r'--for(?:=|\s+)"?([^\s"]*)')
+
+
 def _wait_running(procs):
-    """Whether a `hub.py wait --pending` process is in `procs` (a list, or a function giving
-    one: asked only when the server is up; a list that cannot be had counts as none)."""
+    """Whether the PM's `hub.py wait --pending` process is in `procs` (a list, or a function
+    giving one: asked only when the server is up; a list that cannot be had counts as none). A
+    wait `--for` a key other than `pm` is another session's, waiting on its own answers."""
     try:
         procs = procs() if callable(procs) else procs
     except Exception:
@@ -172,7 +177,8 @@ def _wait_running(procs):
     for p in procs or []:
         cmd = p.get("CommandLine") or ""
         if (p.get("Name") or "").lower().startswith("python") and "hub.py" in cmd \
-                and " wait" in cmd and "--pending" in cmd:
+                and " wait" in cmd and "--pending" in cmd \
+                and all(k == "pm" for k in _WAIT_FOR.findall(cmd)):
             return True
     return False
 
@@ -209,19 +215,23 @@ def hub_site(procs=(), load=None, make_client=_hub_client):
     if health.get("ok") is False:
         return ["hub: server did not answer as the hub does (health not ok)"]
     try:
-        items = hub.get("/pending", timeout=HUB_SITE_TIMEOUT_S).get("items")
+        # the PM's items only: one routed to a reachable creator is that session's to ack, and a PM
+        # ack would hide it from the creator's wait (docs/action-hub.md "Who handles a pending item")
+        items = hub.get("/pending", query={"for": "pm"}, timeout=HUB_SITE_TIMEOUT_S).get("items")
         items = items if isinstance(items, list) else []
     except Exception as e:
         return ["hub: server up on port %d, pending not asked (%s)" % (port, type(e).__name__)]
-    lines = ["hub: server up on port %d, %d pending" % (port, len(items))]
+    lines = ["hub: server up on port %d, %d pending for the PM" % (port, len(items))]
     if items:
-        lines.append("hub: process the %d pending item(s): python \"%s\" pending, then handle, ack or log "
-                     "each" % (len(items), HUB_TOOL))
+        lines.append("hub: process the %d pending item(s): python \"%s\" pending --for pm, then "
+                     "handle, ack or log each" % (len(items), HUB_TOOL))
     if _wait_running(procs):
         lines.append("hub: wait --pending is running")
     else:
-        lines.append("hub: start in the background: python \"%s\" wait --pending (it exits with one HUB "
-                     "line per item; handle the items, then start it again)" % HUB_TOOL)
+        lines.append("hub: WARN no PM wait --pending --for pm is running, so items routed to the PM "
+                     "go unseen; start in the background: python \"%s\" wait --pending --for pm (it "
+                     "exits with one HUB line per item; handle the items, then start it again)"
+                     % HUB_TOOL)
     return lines
 
 

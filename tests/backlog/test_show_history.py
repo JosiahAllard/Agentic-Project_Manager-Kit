@@ -13,7 +13,7 @@ from kitlib.backlog import record as rmod
 from kitlib.backlog import store as smod
 from kitlib.backlog.errors import Failure, NotFound, Usage
 from kitlib.git import cmd
-from tests.backlog.helpers import ADD_FLAGS, BRANCH, StoreCase, rec, record_text
+from tests.backlog.helpers import ADD_FLAGS, BRANCH, StoreCase, kit_json_ref, rec, record_text
 from tests.gitfixture import NAME, TempRepo, fixture_env, rmtree
 
 TOOL = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
@@ -210,6 +210,7 @@ class Cli(StoreCase):
     """tools/backlog.py `show` prints the removal and still exits 1."""
 
     def test_show_of_a_closed_record_prints_the_removal_and_exits_1(self):
+        kit_json_ref(self.repo)              # the tool writes the store it is told to
         home = tempfile.mkdtemp(prefix='kit-home-')
         self.addCleanup(rmtree, home)
         env = fixture_env({'USERPROFILE': home, 'HOME': home})

@@ -55,7 +55,7 @@ Off with no file, each switched on by its key: `repo.push_block` (a push to main
 - `roles.<role>.edit_main_checkout` (bool): may edit files in a main checkout; unset: the base role (main: true, any other: false)
 - `roles.<role>.mode` (controller|write|read|test|lander): the role policy this role is held to, over its role file's `mode` (docs/guard.md "Role policy"); unset: the role file's, else none
 - `roles.<role>.why` (string): the ruling that grants it
-- `backlog.store` (ref|branch|main or repo path, default "ref"): the record store: ref (refs/backlog/main), branch (the backlog branch), main (docs/backlog) or a folder (docs/backlog.md)
+- `backlog.store` (ref|branch|main or repo path, default "ref"): the record store: ref (refs/backlog/main), branch (the backlog branch), main (docs/backlog) or a folder (docs/backlog.md); the default ref is read-only, so a repository that writes records names its store
 - `backlog.phases` (list of string, default []): phase names in order
 - `backlog.id_grammar` (upper|mixed, default "upper"): item id spelling
 - `backlog.code_main` (string): the branch code lands on, which `add --found-on` measures a branch's diff from; default repo.main_branch
@@ -163,8 +163,9 @@ A retired key is still accepted and ignored, so an older machine config loads: `
 Each kit copy on the machine reads this one file with its own key list, so a key "older kit copies reject" refuses the whole file in every copy that does not know it. `python tools/hub.py setup --check` lists each copy (the plugin export folders, the pins and each account folder's install, `kitlib.config.copies`) with the keys of the file plus `hub` that it would refuse, and writes nothing. It reads each copy's `SCHEMA` and `RETIRED` from the text of its `kitlib/config/user.py` and checks top-level keys only.
 
 - `owner_email` (email): the author email of the owner's own commits, for every repository whose .kit.json sets no "owner".email; unset there too: no commit is provable as the owner's, so every owner-only change is refused (docs/kit-json.md "With no file"); older kit copies reject the key
-- `ledger_path` (absolute path): the rulings ledger file; set here only
-- `ledger_repos` (list of a lower-case repo name): the repo columns `ledger.py add --repo` writes, besides `all`; unset: any lower-case name (docs/ledger.md)
+- `ledger_dir` (absolute path): the rulings ledger folder: one file `<ledger_dir>/<repo>.md` per `ledger_repos` name, which it needs; set here only (docs/ledger.md "Files"); older kit copies reject the key; set it only after every folder runs a kit that knows it
+- `ledger_repos` (list of a lower-case repo name): the repos `ledger.py add --repo` writes; `pm` is the machine-wide one; a repository's name is its folder name lower-cased with `_` as `-` (`My_Tools-Repo` is `my-tools-repo`); with `ledger_dir`, each name once, and never `all`, `standing` or the frozen file's name; without it, the one-file ledger's repo columns besides `all`, and unset: any lower-case name (docs/ledger.md)
+- `ledger_path` (absolute path): the one-file rulings ledger (R-nnnn ids); set here only; once `ledger_dir` is set it is frozen: read, never written; removed one release after the split
 - `pending_path` (absolute path): the owner's pending-steps file tools/pending.py edits (docs/pending.md)
 - `standing_delegation` (a ruling id R-nnnn): the ledger entry that delegates in general; the backlog refuses it as the ruling behind any one change. Unset: no id is refused for that
 - `scrub_patterns` (list of regex): case-insensitive patterns for the install's own names (repositories, owner, accounts) that the shipped-text tests and tests/scrub/test_generic.py also refuse
@@ -185,7 +186,8 @@ Each kit copy on the machine reads this one file with its own key list, so a key
 - `backlog_lint` (object, checked by kitlib.backloglint): the backlog lint repositories
 - `machine_lock` (object, checked by kitlib.lock.site): the machine lock settings: build daemons at release, lock-window notices
   Read from the config under the Windows profile folder, not under the environment's home (the paragraph above); under the kit's tests the read is refused (docs/test-tools.md "Home fence").
-- `temp_dir` (absolute path): the folder the kit's own temp files go in (test run folders, gate logs); unset: `AgentTemp` at the root of the checkout's drive, or the shared temp folder on its drive (docs/test-tools.md "Temp folders"); older kit copies reject the key
+- `temp_dir` (absolute path): the folder the kit's own temp files go in (test run folders, gate logs); unset: `kit-temp` at the root of the checkout's drive, or the shared temp folder on its drive (docs/test-tools.md "Temp folders"); older kit copies reject the key
+- `machine_path_folders` (list of a folder name): the drive-rooted folder names the machine-paths check refuses besides a user profile (docs/commit.md "machine_paths.py"); unset: none, so only drive-rooted user-profile paths are refused and tools/machine_paths.py prints a NOTE saying so; older kit copies reject the key; set it only after every folder runs a kit that knows it
 - `agent_temp_sweep` (object, checked by optional/agenttemp/agent_temp_sweep.py): the agents' temp folder to sweep (`dir`), the age past which an unused entry goes (`max_age_days`, default 3) and the entries it never removes (`keep`, relative paths such as `claude/<project>/<session>`); `tools/machine_setup.py` adds it when absent (docs/machine-setup.md "Extras")
 - `plugin` (object, checked by kitlib.pluginsource): where the plugin export of pushed kit main lives, and whether pm_watch refreshes it on its own (docs/plugin-source.md); older kit copies reject the key; set it only after every folder is migrated
   - `export_dir` (absolute path): the export root; unset: `%LOCALAPPDATA%\pm-kit\plugin`. Nothing needs setting for the default. It must lie outside the kit checkout and `agent_temp_sweep.dir` (`kitlib.pluginsource` `placement_errors`).

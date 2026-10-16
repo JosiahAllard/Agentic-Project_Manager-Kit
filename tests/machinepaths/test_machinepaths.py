@@ -18,7 +18,9 @@ from unittest import mock
 
 from kitlib import machinepaths as M
 from kitlib.git import cmd
+from kitlib.config import user
 from tests import gitfixture
+from tests.home import TempHomeCase
 
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 TOOL = os.path.join(KIT, 'tools', 'machine_paths.py')
@@ -50,17 +52,32 @@ REPO_CONFIG = {
 }
 
 
-class PlantedTree(unittest.TestCase):
-    """A throwaway git repository the guard is pointed at."""
+# The drive-rooted folder names a planted tree's machine config sets (machine_path_folders),
+# invented for the fixtures: unset, the check would refuse only user-profile paths.
+FOLDERS = ('GitHub', 'research', 'Agent' + 'Temp')
+
+
+class PlantedTree(TempHomeCase):
+    """A throwaway git repository the guard is pointed at, under a temp home whose machine config
+    sets `folders` as machine_path_folders (kitlib.config.user); None writes no machine config."""
     config = None
+    folders = FOLDERS
 
     def setUp(self):
+        super().setUp()
         self.repo = gitfixture.TempRepo()
         self.addCleanup(self.repo.cleanup)
         self.root = self.repo.root
         self.write('README.md', 'nothing machine-specific here\n')
         if self.config is not None:
             self.set_config(self.config)
+        if self.folders is not None:
+            self.machine_config(json.dumps({'machine_path_folders': list(self.folders)}))
+
+    def machine_config(self, body):
+        os.makedirs(os.path.join(self.home, user.DIR_NAME), exist_ok=True)
+        with open(user.config_file(self.home), 'w', encoding='utf-8') as fh:
+            fh.write(body)
 
     def set_config(self, section, top=None):
         data = dict(top or {})
@@ -418,20 +435,121 @@ class TheConfigRefusesWhatItCannotUse(PlantedTree):
             M.load_config(self.root)
 
 
+class MachinePathFolders(PlantedTree):
+    """The machine config's machine_path_folders names the drive-rooted folders refused besides a
+    user profile, which is refused whatever it says. Unset, only user-profile paths are refused and
+    a NOTE says so; a config the kit cannot read warns and checks user-profile paths only, never
+    NOT CHECKED."""
+    folders = None
+    SRC = 'D' + ':' + BS + 'Src' + BS + 'x'
+
+    def tool(self):
+        env = dict(gitfixture.fixture_env(), USERPROFILE=self.home, HOME=self.home)
+        return subprocess.run([sys.executable, TOOL, '-C', self.root], capture_output=True,
+                              text=True, encoding='utf-8', errors='replace', env=env)
+
+    def test_a_configured_folder_is_caught_and_another_is_not(self):
+        self.machine_config(json.dumps({'machine_path_folders': ['Src']}))
+        self.write('notes.md', 'a %s\nb %s\nc %s\n' % (self.SRC, GITHUB, PROFILE))
+        rc, out = self.run_guard()
+        self.assertEqual(rc, 1, out)
+        self.assertIn('notes.md:1:', out)
+        self.assertNotIn('notes.md:2:', out)
+        self.assertIn('notes.md:3:', out)
+        self.assertNotIn('NOTE:', out)
+
+    def test_an_empty_list_leaves_the_profile_only(self):
+        self.machine_config(json.dumps({'machine_path_folders': []}))
+        self.write('notes.md', 'a %s\n' % GITHUB)
+        rc, out = self.run_guard()
+        self.assertEqual(rc, 0, out)
+        self.write('notes.md', 'a %s\nb %s\n' % (GITHUB, PROFILE))
+        rc, out = self.run_guard()
+        self.assertEqual(rc, 1, out)
+        self.assertIn('notes.md:2:', out)
+
+    def test_unset_only_the_profile_is_caught_and_a_note_says_so(self):
+        for body in (None, json.dumps({'owner_email': 'someone@example.com'})):
+            if body is not None:
+                self.machine_config(body)
+            self.write('notes.md', 'a %s\nb %s\n' % (self.SRC, GITHUB))
+            rc, out = self.run_guard()
+            self.assertEqual(rc, 0, out)
+            self.assertIn('NOTE:', out)
+            self.assertIn('machine_path_folders', out)
+            self.write('notes.md', 'a %s\nb %s\n' % (GITHUB, PROFILE))
+            rc, out = self.run_guard()
+            self.assertEqual(rc, 1, out)
+            self.assertNotIn('notes.md:1:', out)
+            self.assertIn('notes.md:2:', out)
+
+    def test_a_config_it_cannot_read_warns_and_still_checks_the_profile(self):
+        for body in ('{not json', json.dumps({'machine_path_folders': ['a/b']})):
+            self.machine_config(body)
+            self.write('notes.md', 'a %s\nb %s\n' % (GITHUB, PROFILE))
+            rc, out = self.run_guard()
+            self.assertEqual(rc, 1, out)
+            self.assertNotIn('notes.md:1:', out)
+            self.assertIn('notes.md:2:', out)
+            self.assertIn('WARNING: machine config', out)
+            self.assertNotIn('a/b', out)
+
+    def test_scan_staged_uses_the_configured_folders(self):
+        self.machine_config(json.dumps({'machine_path_folders': ['Src']}))
+        self.write('notes.md', 'a %s\nb %s\n' % (GITHUB, self.SRC))
+        hits, _used, _read, _skipped = M.scan_staged(self.root, ['notes.md'])
+        self.assertEqual([h[:2] for h in hits], [('notes.md', 2)])
+
+    def test_the_tool_reads_the_machine_config(self):
+        self.machine_config(json.dumps({'machine_path_folders': ['Src']}))
+        self.write('notes.md', 'a %s\n' % self.SRC)
+        done = self.tool()
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn('notes.md:1:', done.stdout)
+
+    def test_the_tool_prints_the_note_when_unset(self):
+        done = self.tool()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn('NOTE:', done.stdout)
+        self.assertIn('machine_path_folders', done.stdout)
+
+    def test_find_takes_a_folder_list_and_reads_no_config(self):
+        self.machine_config(json.dumps({'machine_path_folders': ['Src']}))
+        self.assertEqual(M.find(self.SRC), [])
+        self.assertEqual(M.find(GITHUB), [])
+        self.assertTrue(M.find(PROFILE))
+        self.assertTrue(M.find(self.SRC, ('Src',)))
+        self.assertEqual(M.find(GITHUB, ('Src',)), [])
+        self.assertTrue(M.find(PROFILE, ()))
+
+    def test_a_folder_name_ending_in_a_symbol_is_caught(self):
+        D = 'D' + ':' + BS
+        for name in ('C#', 'Dev+'):
+            self.assertTrue(M.find(D + name + BS + 'x', (name,)), name)
+            self.assertTrue(M.find(D + name, (name,)), name)
+            self.assertEqual(M.find(D + name + 'x' + BS + 'y', (name,)), [], name)
+        self.assertEqual(M.find(D + 'Srcs' + BS + 'x', ('Src',)), [])
+
+
 class FindNeedsNoConfig(unittest.TestCase):
     """`find` is what other tools call on one string; a repository's spellings, through it."""
 
     def test_every_spelling_is_caught(self):
         D = DRIVE
+        folders = ('GitHub', 'Agent' + 'Temp')
         for s in (D + '\\GitHub\\Gamma', D + '\\\\GitHub\\\\Gamma', 'c:' + '/github/x',
                   D + '\\Users\\someone\\AppData', D + '\\\\Users\\\\someone', 'D:' + '\\AgentTemp\\x',
                   'd:' + '/GitHub'):
-            self.assertTrue(M.find(s), s)
+            self.assertTrue(M.find(s, folders), s)
+
+    def test_with_no_folder_list_only_a_profile_is_caught(self):
+        self.assertTrue(M.find(DRIVE + '\\Users\\someone\\AppData'))
+        self.assertEqual(M.find(DRIVE + '\\GitHub\\Gamma'), [])
 
     def test_variables_are_not_caught(self):
         for s in ('%GAMMA_REPO%\\.claude', '$env:LOCALAPPDATA', '%PM_ROOT%\\reviews',
                   '/home/someone/Gamma', 'c--GitHub-Gamma', DRIVE + '\\Users\\<USER>\\x'):
-            self.assertEqual(M.find(s), [], s)
+            self.assertEqual(M.find(s, ('GitHub',)), [], s)
 
     def test_import_and_find_read_no_configuration(self):
         outside = tempfile.mkdtemp(prefix='machine-paths-noconf-')

@@ -9,6 +9,9 @@ the command line: {"dir": <absolute folder>, "max_age_days": <number, default 3>
 name, or claude/<project>/<session>; * and ? match within one name; case-insensitive. A unit (below)
 is kept when an item names it, a folder holding it, or anything inside it: the sweep never enters a
 unit, so "kit-coordinator/r2" keeps all of kit-coordinator, and "*/x" keeps every top-level folder.
+Built in, whatever the config says (BUILT_IN_KEEP): a top-level "<name>-coordinator" or
+"<name>-consultant" folder is always kept, since the launcher keeps a consultant's notes file
+there and a coordinator its state note (kitlib.launcher.start CONSULTANT_FOLDER, COORDINATOR_FOLDER).
 
 The units are the top-level files and folders of dir, except a folder named "claude": Claude Code
 keeps each session's scratch at claude/<project>/<session>, so each entry of claude/<project> is its
@@ -54,7 +57,7 @@ import sys
 import time
 
 # The machine config's place comes from the kit library (kitlib.config.user), found at the kit's
-# root through the real path: an installed junction (~/.claude/tools/agenttemp) resolves into the kit.
+# root through the real path: a link to this folder resolves into the kit.
 # Without it nothing is swept: load() refuses (exit 2), never a traceback (exit 1 means a partial sweep).
 KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 sys.path.insert(0, KIT_ROOT)
@@ -322,6 +325,11 @@ def is_kept(rel, keep):
     return False
 
 
+# kept whatever "keep" says: the launcher's <repo>-consultant notes folder and a coordinator's
+# <repo>-coordinator state-note folder (kitlib.launcher.start CONSULTANT_FOLDER, COORDINATOR_FOLDER)
+BUILT_IN_KEEP = ("*-coordinator", "*-consultant")
+
+
 LIST_TIMEOUT = 30       # seconds for the process list; the session start's 4 s is too short at 04:00
 UNREADABLE = "the process list could not be read"
 
@@ -343,7 +351,7 @@ def live_ids(procs):
 
 def sweep(d, max_age_days, apply=False, now=None, home=None, keep=(), lister=None):
     """[Entry] for every unit of d (units()) and every claude/<project> folder it removes, oldest
-    first. action: "young" (too new), "kept" (keep-list), "live" (under claude/: a running process
+    first. action: "young" (too new), "kept" (keep-list or BUILT_IN_KEEP), "live" (under claude/: a running process
     names it, or the process list could not be read), "would" (old; apply not set), "removed", or
     "in-use" / "failed" (kept), or "skipped" (a claude/ or claude/<project> folder that could not
     be listed; its units are not in the list). lister gives the processes (default_lister); it is called only
@@ -375,6 +383,7 @@ def sweep(d, max_age_days, apply=False, now=None, home=None, keep=(), lister=Non
     found = units(d, skipped)
     out = [Entry(rel, 0.0, "skipped", why) for rel, why in skipped]
     projects = [x for x in projects if x[0] not in {rel for rel, _ in skipped}]
+    keep = tuple(keep or ()) + BUILT_IN_KEEP
     for rel, parent, name in found:
         if is_kept(rel, keep):
             out.append(Entry(rel, 0.0, "kept"))

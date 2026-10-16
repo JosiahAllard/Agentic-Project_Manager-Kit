@@ -1,6 +1,7 @@
-"""The standing-rulings digest: STANDING.md beside the ledger file (docs/ledger.md "Standing digest").
+"""The standing-rulings digest: STANDING.md beside the ledger file, or in `ledger_dir` with the
+per-repo files (docs/ledger.md "Standing digest").
 
-The digest lists the rules still in force, one `- R-nnnn: <rule>` line each under `##` (and
+The digest lists the rules still in force, one `- <id>: <rule>` line each under `##` (and
 deeper) headings for repository and topic; the `#` title is not a heading here. Written by hand
 (the guard's ledger rule does not cover it); the ledger tool only reads it:
 
@@ -33,11 +34,13 @@ def read_digest(path):
 
 
 def problems(ledger_text, digest_text):
-    """One line per digest citation of an id the ledger lacks or has retired; [] for no digest."""
+    """One line per digest citation of an id the ledger lacks or has retired; [] for no digest.
+    `ledger_text` is one ledger text or a list of them (every per-repo file and the frozen one)."""
     if digest_text is None:
         return []
+    texts = [ledger_text] if isinstance(ledger_text, str) else list(ledger_text)
     live, retired = set(), set()
-    for e in read.parse(ledger_text):
+    for e in (e for text in texts for e in read.parse(text)):
         (retired if e.dead else live).add(e.id)
     errs = []
     for n, line in enumerate(digest_text.replace('\r\n', '\n').split('\n'), 1):
@@ -48,6 +51,19 @@ def problems(ledger_text, digest_text):
             elif rid not in live:
                 errs.append('%s:%d cites %s, which is not in the ledger' % (NAME, n, rid))
     return errs
+
+
+def section(digest_text, repo):
+    """The digest's `## <repo>` section (any case), its deeper headings included, up to the next
+    `##` heading; '' when it has none."""
+    out, inside = [], False
+    for line in digest_text.replace('\r\n', '\n').split('\n'):
+        m = HEADING_RE.match(line)
+        if m and len(m.group(1)) == 2:
+            inside = line[3:].strip().lower() == repo.lower()
+        if inside:
+            out.append(line)
+    return '\n'.join(out)
 
 
 def topic(digest_text, word):

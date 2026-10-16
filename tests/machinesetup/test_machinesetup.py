@@ -243,12 +243,6 @@ class Base(unittest.TestCase):
         out['host'] = (dict(self.host.env), list(self.host.calls), self.host.acl_fixed)
         return out
 
-    def target(self, *parts):
-        return common.norm(common.link_target(os.path.join(*parts)))
-
-    def kitp(self, rel):
-        return common.norm(os.path.join(self.kit, *rel.split('/')))
-
     def entry(self, *words):
         """The exec-form args of the kit's hook entry with `words` after the host."""
         return [fwd(os.path.join(self.kit, 'boot', 'hook.py')), 'claude'] + list(words)
@@ -262,42 +256,33 @@ class DryRunApplyAgain(Base):
         self.assertEqual(self.snapshot(), before)
         self.assertIn('DRY RUN', out)
         self.assertIn('re-run with --apply', out)
-        self.assertIn('replace the link', out)
-        self.assertIn('a real folder: rename it to comfy.old-%s' % TODAY, out)
+        self.assertNotIn('replace the link', out)                            # no link is made
+        self.assertNotIn('.old-', out)                                       # nothing renamed aside
+        self.assertIn('leftover link %s -> ' % os.path.join(self.c1, 'tools'), out)
+        self.assertIn('remove it with: cmd /c rmdir "%s"' % os.path.join(self.c1, 'tools'), out)
+        self.assertIn('%s: a real folder, left as it is' % os.path.join(self.c2, 'tools', 'comfy'), out)
         diff = [l.strip() for l in out.splitlines()]
         self.assertIn('-' + ' ' * 12 + '"command": "python %s/hooks/no_root_search.py"' % fwd(self.old), diff)
         self.assertTrue(any(l.startswith('+') and 'boot/hook.py' in l for l in diff), out)
-        self.assertIn('the kit has no skill worktree-start', out)
+        self.assertIn('also loads worktree-start, which the kit has no skill for', out)
         self.assertIn('agents', out)
         self.assertIn('left as is', out)
         self.assertIn('icacls', out)
-        self.assertIn('not carried over', out)
-        self.assertIn('heavy_run.py', out)
-        self.assertIn('%s -> ' % os.path.join(self.c2, 'tools', 'oldthing'), out)
+        self.assertIn('leftover link %s -> ' % os.path.join(self.c2, 'tools', 'oldthing'), out)
         self.assertIn('KIT_MACHINE_LOCK', out)
         self.assertNotIn(os.path.join(self.c2, 'skills', 'land-branch'), out)   # follows account 1
 
     def test_apply_makes_every_change_and_a_second_run_has_nothing_to_do(self):
         s1_before = readb(self.s1)
+        links_before = {p: v for p, v in self.snapshot().items() if isinstance(v, str) and v.startswith('link:')}
         code, out = self.run_it(apply=True)
         self.assertEqual(code, M.EXIT_OK, out)
         self.assertIn('made ', out)
-        # links
-        self.assertFalse(common.is_link(os.path.join(self.c1, 'tools')))
-        self.assertEqual(self.target(self.c1, 'tools', 'machine_lock'), self.kitp('tools'))
-        self.assertEqual(self.target(self.c1, 'tools', 'kitlib'), self.kitp('kitlib'))
-        self.assertEqual(self.target(self.c1, 'tools', 'usage'), self.kitp('optional/usage'))
-        self.assertEqual(self.target(self.c1, 'skills', 'land-branch'), self.kitp('content/skills/land-branch'))
-        self.assertEqual(self.target(self.c1, 'skills', 'worktree-start'),     # no kit skill: kept
-                         common.norm(os.path.join(self.old, 'skills', 'worktree-start')))
-        self.assertEqual(self.target(self.c1, 'knowledge', 'asset-generation'), self.kitp('knowledge/asset-generation'))
-        self.assertEqual(self.target(self.c1, 'agents'), common.norm(os.path.join(self.old, 'agents')))
-        self.assertEqual(self.target(self.c2, 'tools', 'machine_lock'), self.kitp('tools'))
-        self.assertEqual(self.target(self.c2, 'tools', 'comfy'), self.kitp('optional/comfy'))
-        aside = os.path.join(self.c2, 'tools', 'comfy.old-' + TODAY, 'local-notes.txt')
-        self.assertEqual(readb(aside).decode('utf-8').strip(), 'keep me')
-        self.assertTrue(common.is_link(os.path.join(self.c2, 'skills')))
-        self.assertTrue(os.path.isfile(os.path.join(self.c1, 'tools', 'machine_lock', 'machine_lock.py')))
+        # links: every one as it was, none made (test_no_link.py has the leftover notes)
+        self.assertEqual({p: v for p, v in self.snapshot().items() if isinstance(v, str) and v.startswith('link:')},
+                         links_before)
+        self.assertEqual(readb(os.path.join(self.c2, 'tools', 'comfy', 'local-notes.txt')).decode('utf-8').strip(),
+                         'keep me')
         # the old kit is untouched
         self.assertTrue(os.path.isfile(os.path.join(self.old, 'tools', 'comfy', 'comfy_gen.py')))
         # settings
@@ -317,7 +302,10 @@ class DryRunApplyAgain(Base):
         self.assertEqual(pre[1]['hooks'][0]['args'], self.entry('PreToolUse'))
         self.assertEqual(doc['hooks']['SessionStart'][0]['hooks'][0],          # re-pointed, then exec form
                          {'type': 'command', 'command': PYW, 'args': self.entry('SessionStart', 'pm')})
-        self.assertEqual(doc['statusLine'], self.settings_doc()['statusLine'])   # through tools/usage: kept
+        self.assertEqual(doc['statusLine'], {'type': 'command',                  # through tools/usage: re-pointed
+                                             'command': 'powershell -NoProfile -File "%s"'
+                                                        % fwd(os.path.join(self.kit, 'optional', 'usage',
+                                                                           'statusline-usage.ps1'))})
         doc2 = json.loads(readb(self.s2).decode('utf-8'))
         self.assertEqual(doc2['hooks']['SessionStart'][0]['hooks'][0],
                          {'type': 'command', 'command': PYW, 'args': self.entry('SessionStart', 'coordinator')})
@@ -376,13 +364,13 @@ class Refusals(Base):
         os.remove(os.path.join(self.kit, 'optional', 'usage', 'statusline-usage.ps1'))
         self.assertRefusedUnchanged('statusline-usage.ps1')
 
-    def test_a_missing_link_target_in_the_kit_refuses(self):
+    def test_no_link_is_made_so_a_missing_kit_folder_or_a_file_at_a_link_name_is_no_refusal(self):
         shutil.rmtree(os.path.join(self.kit, 'optional', 'procwatch'))
-        self.assertRefusedUnchanged('optional/procwatch')
-
-    def test_a_file_where_a_link_goes_refuses(self):
         touch(os.path.join(self.c2, 'tools', 'kitlib'))
-        self.assertRefusedUnchanged('is a file where a link')
+        code, out = self.run_it()
+        self.assertEqual(code, M.EXIT_OK, out)
+        self.assertNotIn('REFUSED', out)
+        self.assertNotIn(os.path.join(self.c2, 'tools', 'kitlib'), out)
 
     def test_the_kit_as_its_own_old_kit_refuses(self):
         code, lines = M.run(M.Context(self.home, self.kit, self.kit, host=self.host, today=TODAY,

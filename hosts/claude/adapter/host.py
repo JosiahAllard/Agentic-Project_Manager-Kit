@@ -34,14 +34,14 @@ kitlib.host.hookmain.dispatch.
   content()            hosts.claude.adapter.content (the content renderer)
 
 MATCHER is the PreToolUse matcher: exactly the tools a guard rule can refuse (events.FILE_TOOLS,
-events.SHELL_TOOLS, mcp__*), the same list as hosts.json's hook.guarded_tools, which boot/hook.py's
-fast path reads; tests/guard/test_entry.py checks all three agree.
+events.SHELL_TOOLS, events.READ_TOOLS, mcp__*), the same list as hosts.json's hook.guarded_tools,
+which boot/hook.py's fast path reads; tests/guard/test_entry.py checks all three agree.
 """
 import json
 
 from hosts.claude.adapter import events
 
-MATCHER = 'Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit|mcp__.*'
+MATCHER = 'Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit|Read|Grep|Glob|mcp__.*'
 CONTEXT_EVENTS = ('SessionStart', 'SubagentStart')
 PARTS = ('coordinator', 'pm')
 

@@ -11,7 +11,7 @@ from kitlib.backlog import stale as stmod
 from kitlib.backlog import store as smod
 from kitlib.backlog import record as rmod
 from tests.backlog import helpers
-from tests.backlog.helpers import StoreCase, rec, TODAY
+from tests.backlog.helpers import StoreCase, kit_json_ref, rec, TODAY
 from tests.gitfixture import TempRepo, fixture_env, rmtree
 
 TOOL = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
@@ -201,6 +201,10 @@ class Stale(StoreCase):
 
 class StaleCli(StoreCase):
     remote = True
+
+    def setUp(self):
+        StoreCase.setUp(self)
+        kit_json_ref(self.repo)              # the tool writes the store it is told to
 
     def run_tool(self, *args):
         home = tempfile.mkdtemp(prefix='kit-home-')

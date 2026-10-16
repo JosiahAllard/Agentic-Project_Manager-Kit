@@ -14,11 +14,16 @@ SessionStart hook to ctx.pm_settings alone.
 Every path in a hook's `command` and `args` and in statusLine.command is read; one that resolves
 into the old kit clone is either in REMOVE (its hook goes; a group or event left empty goes too),
 in REPOINT (rewritten to this kit's file, forward slashes, quotes kept; a retired hook script to
-ENTRY and its words) or refused, named. A path
-through `<config>/tools/<link>` is left: the links step points it at this kit, and it is refused
-only if this kit has no such file. The JSON is edited as data and written back in the layout it
-was read in (indent, ASCII escaping, line ends, BOM, final newline), so a dry run's diff shows
+ENTRY and its words) or refused, named. The JSON is edited as data and written back in the layout
+it was read in (indent, ASCII escaping, line ends, BOM, final newline), so a dry run's diff shows
 only the changed lines.
+
+Paths through a tools link (repoint_links): machine setup makes no link (kitlib.machinesetup.links
+reports the ones left), so a hook or statusLine path through `<config>/tools/<name>/...`, a name in
+links.TOOL_LINKS, is re-pointed to the kit file that link reached: `.../tools/usage/x.ps1` becomes
+`<kit>/optional/usage/x.ps1`. `<config>` is any config folder of the run or of the home. It runs in
+every mode and in the PM settings, so a status line keeps working once the link goes; a kit with no
+such file is refused, named.
 
 Moved hook paths (docs/machine-setup.md "Moved hook paths"): a hook path to one of this kit's
 RETIRED hook scripts, in HOOKS (`<kit>/hosts/claude/shell/hooks/`, plan steps 7 to 13) or in
@@ -88,6 +93,7 @@ def survey(plan, d, ctx):
         return
     try:
         ed.did.extend(repoint_moved(data, ctx))
+        ed.did.extend(repoint_links(data, ctx))
     except ValueError as e:
         plan.refuse('%s: %s' % (path, e))
         return
@@ -188,7 +194,7 @@ def _survey_fresh(plan, path, ctx):
         return
     raw, layout, data = got
     try:
-        did = repoint_moved(data, ctx)
+        did = repoint_moved(data, ctx) + repoint_links(data, ctx)
     except ValueError as e:
         plan.refuse('%s: %s' % (path, e))
         return
@@ -282,6 +288,82 @@ def repoint_moved(data, ctx):
     return did
 
 
+def _link_dirs(ctx):
+    """The config folders whose `tools` links a settings path may run through: the run's, then
+    every one under the home (a status line may name another account's folder)."""
+    from . import default_config_dirs                                # the package imports this module
+    out, seen = [], set()
+    for d in list(ctx.config_dirs) + default_config_dirs(ctx.home):
+        if norm(d) not in seen:
+            seen.add(norm(d))
+            out.append(d)
+    return out
+
+
+def _through_link(p, dirs, kit):
+    """(the TOOL_LINKS name, the kit file) when the absolute path `p` runs through
+    `<dir>/tools/<name>` for one of `dirs`; else None. The rest of the path keeps its spelling."""
+    for d in dirs:
+        for name, rel in links.TOOL_LINKS:
+            link = os.path.join(d, 'tools', name)
+            if under(p, link):
+                rest = os.path.relpath(os.path.normpath(p), os.path.normpath(link))
+                after = kit_file(kit, rel)
+                return name, (after if rest == '.' else os.path.join(after, rest))
+    return None
+
+
+def _sub_links(s, ctx, dirs, where, did, whole):
+    """`s` with each path through a tools link (_through_link) replaced by the kit file, forward
+    slashes, its quotes kept; an unquoted path that gains a space is quoted (a whole argument is
+    never quoted). ValueError when the kit has no such file."""
+    spans = [(0, len(s), s)] if whole else [(m.start(), m.end(), m.group()) for m in TOKEN.finditer(s)]
+    out, last = [], 0
+    for a, b, tok in spans:
+        q = tok[0] if tok[:1] in '"\'' and len(tok) > 1 and tok[-1] == tok[0] else ''
+        bare = tok[1:-1] if q else tok
+        p = expand(bare, ctx.home)
+        hit = _through_link(p, dirs, ctx.kit) if p else None
+        if hit is None:
+            continue
+        name, new = hit
+        if not os.path.exists(new):
+            raise ValueError('%s runs %s through the tools link %s, and the kit has no %s for it to reach'
+                             % (where, bare, name, new))
+        fwd = new.replace('\\', '/')
+        if not q and not whole and ' ' in fwd:
+            q = '"'
+        out.append(s[last:a] + q + fwd + q)
+        last = b
+        did.append('re-point the %s path %s (through the tools link %s) to %s' % (where, bare, name, fwd))
+    out.append(s[last:])
+    return ''.join(out)
+
+
+def repoint_links(data, ctx):
+    """Re-point, in place, every hook path in `data` (any event; `command` and `args`) and the
+    statusLine.command path that runs through `<config>/tools/<name>` (links.TOOL_LINKS) to the kit
+    file that link reached; [what it did, one line per path]. ValueError when the kit has no such
+    file. Runs in every mode: machine setup makes no link, so the path must name the kit's file
+    before the owner removes the leftover link."""
+    if not isinstance(data, dict):
+        return []
+    did, dirs = [], _link_dirs(ctx)
+    hooks = data.get('hooks')
+    for event in sorted(hooks) if isinstance(hooks, dict) else []:
+        where = '%s hook' % event
+        for h in _hooks(data, event):
+            if isinstance(h.get('command'), str):
+                h['command'] = _sub_links(h['command'], ctx, dirs, where, did, False)
+            if isinstance(h.get('args'), list):
+                h['args'] = [_sub_links(a, ctx, dirs, where, did, True) if isinstance(a, str) else a
+                             for a in h['args']]
+    sl = data.get('statusLine')
+    if isinstance(sl, dict) and isinstance(sl.get('command'), str):
+        sl['command'] = _sub_links(sl['command'], ctx, dirs, 'statusLine.command', did, False)
+    return did
+
+
 def survey_pm(plan, ctx):
     """The PM SessionStart hook (docs/pm-start.md "Hook (settings.json)"), written to
     ctx.pm_settings and nowhere else; a note when there is none."""
@@ -306,7 +388,7 @@ def survey_pm(plan, ctx):
         return
     raw, layout, data = got
     try:
-        did = repoint_moved(data, ctx)
+        did = repoint_moved(data, ctx) + repoint_links(data, ctx)
     except ValueError as e:
         plan.refuse('%s: %s' % (path, e))
         return
@@ -584,20 +666,9 @@ class _Editor(object):
         return ''.join(out), False, words
 
     def classify(self, p):
-        """None (not the old kit's, or kept as is), 'remove' or 'repoint'; refuses the rest."""
+        """None (not the old kit's, or kept as is), 'remove' or 'repoint'; refuses the rest. A path
+        through a tools link is the kit's file by now (repoint_links ran first)."""
         ctx = self.ctx
-        for d in ctx.config_dirs:
-            for name, rel in links.TOOL_LINKS:
-                link = os.path.join(d, 'tools', name)
-                if under(p, link):
-                    rest = os.path.relpath(norm(p), norm(link))
-                    after = os.path.join(ctx.kit, *rel.split('/'))
-                    if rest != '.':
-                        after = os.path.join(after, rest)
-                    if not os.path.exists(after):
-                        self.plan.refuse('%s: %s goes through the tools link %s, and the kit has '
-                                         'no %s for it to reach' % (self.path, p, name, after))
-                    return None
         real = os.path.realpath(p)
         old = under(p, ctx.old_kit) or under(real, ctx.old_kit) \
             or under(real, os.path.join(ctx.kit, 'hooks')) \

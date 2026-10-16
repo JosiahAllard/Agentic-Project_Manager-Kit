@@ -9,7 +9,7 @@ import tempfile
 import threading
 import unittest
 
-from kitlib.hubsite import api
+from kitlib.hubsite import api, todosteps
 from kitlib.hubsite.api import AGENT, BASE, OWNER
 from kitlib.hubsite.store import HubError, Store
 
@@ -165,10 +165,10 @@ class QuestionTest(ApiCase):
         obj = self.ok('POST', '/questions', AGENT, {
             'title': 'Which?', 'repo': 'kit', 'from': 'pm', 'context': 'c', 'options': OPTIONS,
             'recommended': 1, 'refs': ['S-001'], 'urgent': True, 'story': 'S-001'})
-        self.assertEqual((obj['id'], obj['version'], obj['ok']), ('Q-001', 1, True))
+        self.assertEqual((obj['id'], obj['version'], obj['ok']), ('Q-1000', 1, True))
         self.assertEqual(obj['revision'], self.store.revision)
         self.assertIsInstance(obj['warnings'], list)
-        d = self.store.get('questions', 'Q-001')
+        d = self.store.get('questions', 'Q-1000')
         self.assertEqual((d['status'], d['asked_at'], d['title'], d['recommended'], d['urgent']),
                          ('open', NOW, 'Which?', 1, True))
         self.assertNotIn('answer', d)
@@ -262,6 +262,30 @@ class QuestionTest(ApiCase):
         self.assertEqual((status, obj['error']['code']), (409, 'conflict'))
         self.assertEqual(self.store.get('questions', qid)['status'], 'logged')
         self.assertNotIn('answer', self.store.get('questions', qid))
+
+    def test_a_version_0_question_whose_recommended_is_text_is_logged_at_if_version_0(self):
+        # the shape of a question an earlier hub wrote: no `version` (read as 0), answered, and
+        # its `recommended` the text of a number or an option's label
+        for doc_id, text in (('Q-925', '1'), ('Q-926', 'second')):
+            with self.subTest(recommended=text):
+                root = tempfile.mkdtemp(prefix='kit-hubapi-legacy-')
+                self.addCleanup(shutil.rmtree, root, True)
+                legacy = {'title': 't', 'status': 'answered', 'repo': 'kit', 'options': OPTIONS,
+                          'recommended': text, 'asked_at': NOW,
+                          'answer': {'choice': 1, 'label': 'second', 'at': NOW}}
+                os.makedirs(os.path.join(root, 'questions'))
+                path = os.path.join(root, 'questions', doc_id + '.json')
+                with open(path, 'w', encoding='utf-8') as f:
+                    json.dump(legacy, f)
+                store = Store.open(root, clock=CLOCK)
+                self.addCleanup(store.close)
+                hub = api.Api(store, clock=CLOCK)
+                status, obj = hub.call('POST', BASE + '/questions/%s/log' % doc_id, AGENT,
+                                       {'ruling': 'decision-7', 'if_version': 0}, None)
+                self.assertEqual((status, obj.get('error')), (200, None), obj)
+                self.assertEqual((obj['status'], obj['version']), ('logged', 1))
+                with open(path, encoding='utf-8') as f:
+                    self.assertEqual(json.load(f)['recommended'], 1, 'stored as the number')
 
     def test_log(self):
         qid = self.question()
@@ -380,6 +404,74 @@ class TodoTest(ApiCase):
         self.assertEqual([d['id'] for d in self.ok('GET', '/todos', AGENT, None,
                                                    {'repo': 'KIT'})['items']], [a])
         self.refused('invalid', 'status', 'GET', '/todos', AGENT, None, {'status': 'answered'})
+
+
+class TodoStepsTest(ApiCase):
+    """POST /todos takes steps and judges an agent's to-do (api.todo_steps), for every client,
+    not only the MCP tool."""
+
+    def test_steps_become_commands_after_the_given_ones_and_a_summary(self):
+        steps = [{'edit': 'C:\\w\\a.txt', 'old': 'x\ny', 'new': 'z'}, {'run': 'python t.py'}]
+        for role in (AGENT, OWNER):
+            with self.subTest(role=role):
+                obj = self.ok('POST', '/todos', role, {'title': 't', 'detail': 'Why.',
+                                                       'commands': ['first'], 'steps': steps})
+                d = self.store.get('todos', obj['id'])
+                self.assertNotIn('steps', d)
+                self.assertEqual(d['commands'], ['first'] + todosteps.render(steps))
+                self.assertEqual(d['detail'],
+                                 'Why.\n\nreplace 2 lines in C:\\w\\a.txt\nrun python t.py')
+
+    def test_steps_without_a_detail_make_the_summary_the_detail(self):
+        steps = [{'open': 'C:\\w\\a.txt', 'line': 3}]
+        for extra in ({}, {'detail': ''}, {'detail': None}):
+            with self.subTest(extra=extra):
+                obj = self.ok('POST', '/todos', AGENT, dict(extra, title='t', steps=steps))
+                d = self.store.get('todos', obj['id'])
+                self.assertEqual(d['detail'], 'open C:\\w\\a.txt at line 3 in Notepad++')
+                self.assertEqual(d['commands'], todosteps.render(steps))
+
+    def test_bad_steps_and_refused_text_are_refused_naming_the_field(self):
+        for body, field in (({'steps': [{'open': 'rel.txt'}]}, 'steps'),
+                            ({'steps': []}, 'steps'),
+                            ({'steps': 'run x'}, 'steps'),
+                            ({'steps': [{'edit': 'C:\\w\\a.txt', 'old': 'a\ud800', 'new': 'b'}]},
+                             'steps'),
+                            ({'steps': [{'run': 'notepad x'}]}, 'steps'),
+                            ({'commands': ['dir'], 'steps': [{'run': 'echo a\ud800b'}]}, 'steps'),
+                            ({'commands': ['git worktree add x']}, 'commands'),
+                            ({'commands': ['notepad C:\\a.txt']}, 'commands'),
+                            ({'commands': ['dir'], 'detail': 'Open it and apply the change.'},
+                             'detail')):
+            with self.subTest(body=body):
+                obj = self.refused('invalid', field, 'POST', '/todos', AGENT,
+                                   dict(body, title='t'))
+                self.assertTrue(obj['error']['message'], obj)
+
+    def test_a_lone_surrogate_in_a_command_is_refused_for_either_role(self):
+        for role in (AGENT, OWNER):
+            for c in ('echo a\ud800b', '\udc00'):
+                with self.subTest(role=role, command=c):
+                    obj = self.refused('invalid', 'commands', 'POST', '/todos', role,
+                                       {'title': 't', 'commands': ['dir', c]})
+                    self.assertIn('commands[1] holds a lone surrogate', obj['error']['message'])
+        self.ok('POST', '/todos', AGENT, {'title': 't', 'commands': ['echo \U0001f600']})
+
+    def test_commands_must_be_a_list(self):
+        self.refused('invalid', 'commands', 'POST', '/todos', AGENT,
+                     {'title': 't', 'commands': 'dir'})
+
+    def test_the_owners_own_text_is_not_judged_by_the_agent_rules(self):
+        obj = self.ok('POST', '/todos', OWNER, {'title': 't',
+                                                'commands': ['notepad C:\\a.txt'],
+                                                'detail': 'Open it and apply the change.'})
+        self.assertEqual(self.store.get('todos', obj['id'])['commands'], ['notepad C:\\a.txt'])
+
+    def test_edit_text_is_never_judged(self):
+        steps = [{'edit': 'C:\\w\\a.txt', 'old': 'git worktree add x', 'new': 'notepad'}]
+        obj = self.ok('POST', '/todos', AGENT, {'title': 't', 'steps': steps})
+        self.assertEqual(self.store.get('todos', obj['id'])['commands'],
+                         todosteps.render(steps))
 
 
 class StoryTest(ApiCase):
@@ -571,7 +663,7 @@ class ReadTest(ApiCase):
         self.ok('POST', '/questions/%s/answer' % qid, OWNER, {'choice': 0})
         self.assertEqual(self.ok('GET', '/pending', AGENT)['items'],
                          [{'kind': 'question', 'id': qid, 'title': 't', 'repo': 'kit',
-                           'at': NOW}])
+                           'at': NOW, 'from': 'pm', 'route': 'pm'}])
 
     def test_snapshot(self):
         qid = self.question()
@@ -588,6 +680,16 @@ class ReadTest(ApiCase):
         self.assertEqual(obj['views']['backlog'], [{'repo': 'r', 'items': []}])
         self.assertEqual(obj['unavailable'], dict.fromkeys(('repos', 'usage', 'agents'),
                                                            'unavailable'))
+
+    def test_snapshot_carries_pages_and_their_bodies(self):
+        """The page's Docs section reads both from the snapshot: a change that trims either must change this."""
+        body = '<h1>Plan</h1><svg viewBox="0 0 1 1"></svg>'
+        self.store.put('pages', 'plan-1', {'title': 'The plan', 'repo': 'kit', 'at': '2026-10-15T00:00:00Z'})
+        self.store.put('page_html', 'plan-1', {'html': body})
+        for role in (OWNER, AGENT):
+            cols = self.ok('GET', '/snapshot', role)['collections']
+            self.assertEqual(cols['pages']['plan-1']['title'], 'The plan', role)
+            self.assertEqual(cols['page_html']['plan-1']['html'], body, role)
 
     def test_health(self):
         obj = self.ok('GET', '/health', OWNER)
@@ -1473,18 +1575,30 @@ class ThirdFixTest(ApiCase):
         self.assertEqual(len(calls), 2)
         self.assertEqual(self.api.pm_seen(), {'waited': CLOCK(), 'pulled': None, 'waiting': 0})
 
-    def test_an_agents_from_on_a_question_or_an_inbox_item_follows_the_to_do_rule(self):
-        for path, coll, body in (('/questions', 'questions', {'title': 't', 'options': OPTIONS}),
-                                 ('/inbox', 'inbox', {'text': 'x'})):
-            for bad in ('you', 'Y o u', ' YOU ', 'уou', 'yｏu', 'pm͏', 'a\x00b',
-                        'a  b'):
-                with self.subTest(path=path, bad=bad):
-                    self.refused('invalid', 'from', 'POST', path, AGENT, dict(body, **{'from': bad}))
-            with self.subTest(path=path, ok=True):
-                did = self.ok('POST', path, AGENT, dict(body, **{'from': ' pm kit-2 '}))['id']
-                self.assertEqual(self.store.get(coll, did)['from'], 'pm kit-2')
-                did = self.ok('POST', path, AGENT, body)['id']
-                self.assertNotIn('from', self.store.get(coll, did))
+    def test_an_agents_from_on_an_inbox_item_follows_the_to_do_rule(self):
+        path, coll, body = '/inbox', 'inbox', {'text': 'x'}
+        for bad in ('you', 'Y o u', ' YOU ', 'уou', 'yｏu', 'pm͏', 'a\x00b',
+                    'a  b'):
+            with self.subTest(path=path, bad=bad):
+                self.refused('invalid', 'from', 'POST', path, AGENT, dict(body, **{'from': bad}))
+        with self.subTest(path=path, ok=True):
+            did = self.ok('POST', path, AGENT, dict(body, **{'from': ' pm kit-2 '}))['id']
+            self.assertEqual(self.store.get(coll, did)['from'], 'pm kit-2')
+            did = self.ok('POST', path, AGENT, body)['id']
+            self.assertNotIn('from', self.store.get(coll, did))
+
+    def test_an_agents_from_on_a_question_is_a_session_key_or_the_pm(self):
+        self.api = api.Api(self.store, clock=CLOCK, session_keys=lambda: {'kit-2'})
+        body = {'title': 't', 'options': OPTIONS}
+        for bad in ('you', 'Y o u', ' YOU ', 'уou', 'yｏu', 'pm͏', 'a\x00b',
+                    'a  b', 'pm kit-2', 'Kit-2'):
+            with self.subTest(bad=bad):
+                self.refused('invalid', 'from', 'POST', '/questions', AGENT,
+                             dict(body, **{'from': bad}))
+        did = self.ok('POST', '/questions', AGENT, dict(body, **{'from': ' kit-2 '}))['id']
+        self.assertEqual(self.store.get('questions', did)['from'], 'kit-2')
+        did = self.ok('POST', '/questions', AGENT, body)['id']
+        self.assertEqual(self.store.get('questions', did)['from'], 'pm')
 
     def test_an_owner_edit_of_an_acked_to_do_makes_it_pending_again(self):
         tid = self.ok('POST', '/todos', OWNER, {'title': 't'})['id']
@@ -1562,6 +1676,98 @@ class IdGuardTest(ApiCase):
         mid = self.ok('POST', '/inbox', AGENT, {'text': 'x'})['id']
         self.ok('POST', '/inbox/%s/read' % mid, OWNER)
         self.assertEqual(seen, [mid])
+
+
+class RecordViews(object):
+    """The two record views as kitlib.hubsite.serve.SiteViews gives them: known names answer, the
+    rest raise the HubErrors SiteViews maps kitlib.hubsite.backlog's refusals to."""
+
+    def __init__(self):
+        self.calls = []
+
+    def record(self, repo, id):
+        self.calls.append(('record', repo, id))
+        if repo != 'kit':
+            raise HubError('not_found', 'repo not known', 'repo')
+        if id != 'EX-1':
+            raise HubError('not_found', 'no such record', 'id')
+        return {'repo': 'kit', 'id': id, 'where': 'open'}
+
+    def record_template(self, repo):
+        self.calls.append(('record_template', repo))
+        return {'repo': repo, 'fields': []}
+
+
+class RecordRouteTest(ApiCase):
+    def setUp(self):
+        ApiCase.setUp(self)
+        self.views = RecordViews()
+        self.api = api.Api(self.store, views=self.views, clock=CLOCK)
+
+    def test_a_record_and_the_template(self):
+        for role in (OWNER, AGENT):
+            with self.subTest(role=role):
+                self.assertEqual(self.ok('GET', '/records/kit/EX-1', role),
+                                 {'repo': 'kit', 'id': 'EX-1', 'where': 'open',
+                                  'revision': self.store.revision})
+                self.assertEqual(self.ok('GET', '/records/kit/new', role)['fields'], [])
+        self.assertEqual(self.views.calls[:2], [('record', 'kit', 'EX-1'),
+                                                ('record_template', 'kit')])
+
+    def test_the_literal_new_wins_over_an_id(self):
+        self.assertIs(api.match('GET', BASE + '/records/kit/new')[0].handler, api.record_new)
+        self.assertIs(api.match('GET', BASE + '/records/kit/NEW')[0].handler, api.record)
+
+    def test_a_record_or_repository_that_is_not_there_is_a_404_naming_nothing_asked(self):
+        for role in (OWNER, AGENT):
+            with self.subTest(role=role):
+                obj = self.refused('not_found', 'id', 'GET', '/records/kit/EX-404', role)
+                self.assertEqual(obj['error']['message'], 'no such record')
+                obj = self.refused('not_found', 'repo', 'GET', '/records/other/EX-1', role)
+                self.assertEqual(obj['error']['message'], 'repo not known')
+
+    def test_a_segment_that_can_be_no_name_is_refused_before_the_view(self):
+        for path, field in (('/records/kit/..', 'id'), ('/records/kit/%2e%2e', 'id'),
+                            ('/records/kit/a\\b', 'id'), ('/records/kit/.git', 'id'),
+                            ('/records/kit/A..B', 'id'), ('/records/kit/' + 'A' * 129, 'id'),
+                            ('/records/../EX-1', 'repo'), ('/records/C:/EX-1', 'repo'),
+                            ('/records/%2e%2e/new', 'repo'), ('/records/-x/new', 'repo')):
+            for role in (OWNER, AGENT):
+                with self.subTest(path=path, role=role):
+                    obj = self.refused('invalid', field, 'GET', path, role)
+                    self.assertEqual(obj['error']['message'], api.SEGMENT_SAYS[field])
+        self.assertEqual(self.views.calls, [])
+        # a path with more segments is no record route
+        self.refused('not_found', 'path', 'GET', '/records/kit/a/b', OWNER)
+        self.assertEqual(self.views.calls, [])
+
+    def test_a_view_that_raises_anything_else_is_unavailable_with_its_class_only(self):
+        class Broken(object):
+            def record(self, repo, id):
+                raise OSError('C:\\secret\\folder is gone')
+
+            def record_template(self, repo):
+                raise ValueError('C:\\secret\\.kit.json')
+        self.api = api.Api(self.store, views=Broken(), clock=CLOCK)
+        for path, name, cls in (('/records/kit/EX-1', 'record', 'OSError'),
+                                ('/records/kit/new', 'record_template', 'ValueError')):
+            for role in (OWNER, AGENT):
+                with self.subTest(path=path, role=role):
+                    obj = self.refused('unavailable', 'views', 'GET', path, role)
+                    self.assertEqual(obj['error']['message'],
+                                     'the %s view failed: %s' % (name, cls))
+
+    def test_no_record_view_is_not_available(self):
+        self.api = api.Api(self.store, views=Views(), clock=CLOCK)
+        for path in ('/records/kit/EX-1', '/records/kit/new'):
+            with self.subTest(path=path):
+                self.refused('unavailable', 'views', 'GET', path, AGENT)
+
+    def test_the_record_views_are_not_part_of_the_snapshot(self):
+        self.assertNotIn('record', api.VIEWS)
+        self.assertNotIn('record_template', api.VIEWS)
+        self.ok('GET', '/snapshot', OWNER)
+        self.assertEqual(self.views.calls, [])
 
 
 if __name__ == '__main__':

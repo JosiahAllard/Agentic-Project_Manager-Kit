@@ -95,6 +95,16 @@ def tree(folder):
     return out
 
 
+def on_disk(root, coll, doc_id):
+    """The fields of root's coll/doc_id.json as its file holds them, or None: what migrate wrote,
+    not what the store reads (the store reads a text `recommended` as its number)."""
+    try:
+        with open(os.path.join(root, coll, doc_id + '.json'), encoding='utf-8') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return None
+
+
 def docs_of(folder):
     """The document files under folder: tree() without the store's own lock file."""
     return {k: v for k, v in tree(folder).items() if k != LOCK_NAME}
@@ -107,13 +117,18 @@ class Case(unittest.TestCase):
         self.mirror = fill(os.path.join(self.tmp, 'mirror'), MIRROR)
         self.export = fill(os.path.join(self.tmp, 'export'), EXPORT, wrapped=True)
         self.root = os.path.join(self.tmp, 'store')
+        # validate reads the machine's repo names: a temp home, so this machine's are not used
+        self.home = os.path.join(self.tmp, 'home')
+        os.makedirs(self.home)
+        env = mock.patch.dict(os.environ, {'USERPROFILE': self.home, 'HOME': self.home})
+        env.start()
+        self.addCleanup(env.stop)
 
     def run_both(self, **kw):
         return migrate.migrate(self.root, [self.mirror, self.export], **kw)
 
     def stored(self, coll, doc_id):
-        with Store.open(self.root) as s:
-            return s.get(coll, doc_id)
+        return on_disk(self.root, coll, doc_id)
 
 
 class ImportCase(Case):
@@ -204,7 +219,8 @@ class ImportCase(Case):
     def test_the_next_id_the_store_gives_is_above_every_imported_one(self):
         self.run_both()
         with Store.open(self.root) as s:
-            self.assertEqual(s.add('questions', question()).id, 'Q-010')
+            # the imported questions end at Q-009, below the store's question floor
+            self.assertEqual(s.add('questions', question()).id, 'Q-1000')
             self.assertEqual(s.add('stories', MIRROR['stories']['S-001']).id, 'S-002')
 
     def test_an_imported_document_is_at_version_0_until_the_store_writes_it(self):
@@ -368,6 +384,43 @@ class LockCase(Case):
         with self.assertRaises(MigrateError):
             migrate.validate(missing)
         self.assertFalse(os.path.exists(missing))
+
+
+class KnownReposCase(Case):
+    """validate judges a repo tag against the repo names the live server knows."""
+
+    def store_with(self, *repos):
+        return fill(os.path.join(self.tmp, 'tagged'),
+                    {'questions': {'Q-%03d' % i: question(repo=r) for i, r in enumerate(repos, 1)}})
+
+    def codes(self, findings):
+        return [(f.rel, f.code) for f in findings]
+
+    def test_check_passes_known_repos_so_a_known_tag_is_clean_and_an_unknown_one_is_flagged(self):
+        docs = {'questions': {'Q-001': question(repo='Gamerepo'), 'Q-002': question(repo='ghost')}}
+        for known in (['gamerepo'], lambda: ['gamerepo']):
+            self.assertEqual(self.codes(migrate.check(docs, known)),
+                             [('questions/Q-002', 'repo-alias')])
+        # no repos/ and no known repos: the one note that tags were not checked, as before
+        self.assertEqual([(f.rel, f.code) for f in migrate.check(docs)], [('', 'repo-alias')])
+
+    def test_validate_asks_the_machine_sources_for_the_known_repos(self):
+        root = self.store_with('gamerepo', 'ghost')
+        sessions = os.path.join(self.home, 'pm', 's.json')
+        write(sessions, json.dumps({'g': {'repo': 'Gamerepo'}}))
+        write(os.path.join(self.home, '.pm-kit', 'config.json'),
+              json.dumps({'pm_start': {'sessions_file': sessions}}))
+        with mock.patch('kitlib.pmstart._toplevel', lambda folder: None):   # no git
+            found = migrate.validate(root)
+        self.assertEqual(self.codes(found), [('questions/Q-002', 'repo-alias')])
+
+    def test_validate_with_no_machine_repos_gives_the_one_note_as_the_server_has_no_names(self):
+        found = migrate.validate(self.store_with('gamerepo', 'ghost'))
+        self.assertEqual(self.codes(found), [('', 'repo-alias')])
+
+    def test_validate_takes_known_repos_given_to_it(self):
+        found = migrate.validate(self.store_with('gamerepo', 'ghost'), known_repos=['gamerepo'])
+        self.assertEqual(self.codes(found), [('questions/Q-002', 'repo-alias')])
 
 
 class NotImportedCase(Case):
@@ -539,8 +592,7 @@ class StoreConflictCase(Case):
         self.assertEqual(self.stored_in(self.mirror, 'inbox', 'L-run1-end'), notice('run1', 'end'))
 
     def stored_in(self, root, coll, doc_id):
-        with Store.open(root) as s:
-            return s.get(coll, doc_id)
+        return on_disk(root, coll, doc_id)
 
 
 class WriteCase(Case):
@@ -686,7 +738,8 @@ class SourceCase(Case):
 
 class RecommendedCase(Case):
     """A question's `recommended` that is a whole number written as text is imported as the
-    number: the store refuses every update of a question that holds the text."""
+    number, so no copy of it holds the text; a store that already holds the text reads it as the
+    number."""
 
     LINE = ("RECOMMENDED questions/Q-020: its `recommended` is the text '1'; %s as the number 1; "
             "nothing else in the document is changed")
@@ -780,15 +833,23 @@ class RecommendedCase(Case):
         self.assertEqual((r.added, r.conflicts, r.kept, r.turned), ([], [], [], []))
         self.assertIn('questions/Q-020', r.same)
         self.assertTrue(r.complete)
-        with Store.open(self.mirror) as s:
-            self.assertEqual(s.get('questions', 'Q-020'), self.text)
+        self.assertEqual(on_disk(self.mirror, 'questions', 'Q-020'), self.text,
+                         'the file is not rewritten')
+        with Store.open(self.mirror) as s:     # the store reads the text as its number
+            self.assertEqual(s.get('questions', 'Q-020'), self.number)
         lines = migrate.report_lines(r)
-        self.assertIn('VALIDATE ERROR questions/Q-020 recommended: recommended must be int, not '
-                      'str [schema-field]', lines)
-        self.assertIn('VALIDATE questions/Q-020: the api will refuse every update of this '
-                      'document until it is fixed; fix its file by hand with the server stopped '
-                      '(no api route repairs it)', lines)
+        self.assertEqual([x for x in lines if 'questions/Q-020' in x and 'VALIDATE' in x], [
+            "VALIDATE WARN questions/Q-020 recommended: recommended is the text '1' in its file; "
+            "the store reads it as the number 1 and its next write stores the number "
+            "[schema-field]"])
+        self.assertFalse(any('the api will refuse' in x for x in lines))
+        self.assertEqual(migrate.validate(self.mirror), r.findings)
         self.assertTrue(lines[-1].startswith('nothing changed: '))
+        with Store.open(self.mirror) as s:     # and the api's update goes through
+            s.update('questions', 'Q-020', {'status': 'answered', 'answer': {'choice': 1}})
+        self.assertEqual(on_disk(self.mirror, 'questions', 'Q-020')['recommended'], 1)
+        self.assertEqual([f for f in migrate.validate(self.mirror) if f.rel == 'questions/Q-020'],
+                         [])
 
 
 def labelled(recommended, labels=('Paint it', 'Leave it: as found', 'Ask again'), **kw):
@@ -948,12 +1009,13 @@ class LabelCase(Case):
         self.assertEqual((r.added, r.conflicts, r.kept, r.turned), ([], [], [], []))
         self.assertIn('questions/Q-030', r.same)
         self.assertTrue(r.complete)
-        with Store.open(self.mirror) as s:
-            self.assertEqual(s.get('questions', 'Q-030'), self.text)
+        self.assertEqual(on_disk(self.mirror, 'questions', 'Q-030'), self.text,
+                         'the file is not rewritten')
+        with Store.open(self.mirror) as s:     # the store reads the label as its position
+            self.assertEqual(s.get('questions', 'Q-030'), self.number)
         lines = migrate.report_lines(r)
-        self.assertIn('VALIDATE questions/Q-030: the api will refuse every update of this '
-                      'document until it is fixed; fix its file by hand with the server stopped '
-                      '(no api route repairs it)', lines)
+        self.assertEqual([f.level for f in r.findings if f.rel == 'questions/Q-030'], ['warn'])
+        self.assertFalse(any('the api will refuse' in x for x in lines))
         self.assertTrue(lines[-1].startswith('nothing changed: '))
         # a second source that holds the number is the same document: no conflict
         fill(self.export, {'questions': {'Q-030': self.number}}, wrapped=True)

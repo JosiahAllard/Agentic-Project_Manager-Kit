@@ -18,7 +18,7 @@ except ImportError:                                                  # not Windo
 
 from kitlib.launcher import pythonw as pythonw_mod
 
-from . import agenttemp
+from . import agenttemp, procwatch
 from .common import kit_file, norm, under
 
 SHORTCUT = 'Machine schedule.lnk'
@@ -169,6 +169,7 @@ def survey(plan, ctx):
     folder, made = agenttemp.survey(plan, ctx)        # before the ACL: it may make the folder
     if folder:
         acl_step(plan, ctx, folder, made)
+    procwatch.task_step(plan, ctx, folder)
     if ctx.fresh:
         plan.note('extras', '%s left as is in fresh mode: the plugin\'s lock tool is used' % LOCK_ENV)
     else:

@@ -6,10 +6,11 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from kitlib.backlog import record as rmod
 from kitlib.backlog import store as smod
-from tests.backlog.helpers import ADD_FLAGS
+from tests.backlog.helpers import ADD_FLAGS, TODAY, kit_json_ref, priced
 from tests.gitfixture import TempRepo, fixture_env, rmtree
 from kitlib.config import user as kuser
 
@@ -25,6 +26,7 @@ class Cli(unittest.TestCase):
         home = self.home = tempfile.mkdtemp(prefix='kit-home-')
         self.addCleanup(rmtree, home)
         self.env = fixture_env({'USERPROFILE': home, 'HOME': home})
+        kit_json_ref(self.repo)              # the store these writes go to is named
 
     def run_tool(self, *args):
         p = subprocess.run([sys.executable, TOOL, '-C', self.repo.root] + list(args),
@@ -68,6 +70,41 @@ class Cli(unittest.TestCase):
         self.assertIn('--as <branch>', out)
         self.assertEqual(self.repo.git('ls-remote', 'origin', smod.STORE_REF), tip)
         self.assertIn('pulled_by:  tools/wk', self.ok('--as', 'tools/wk', 'pull', 'FOO'))
+
+    def test_next_and_pull_agree_on_a_record_the_branch_already_holds(self):
+        # The branch holds a/**. X (p1) overlaps it and docs/y.md; Y (p2) is docs/y.md.
+        for rid, prio, scopes in (('HELD', '3', ('a/**',)), ('X', '1', ('a/x.py', 'docs/y.md')),
+                                  ('Y', '2', ('docs/y.md',))):
+            scope_args = [a for s in scopes for a in ('--scope', s)]
+            self.ok('add', rid, '--summary', 'a thing to do', *(scope_args + list(ADD_FLAGS)))
+            self.ok('set', rid, '--priority', prio, '--priority-by', 'agent', '--effort', 's')
+        self.repo.git('branch', 'tools/wk')
+        self.ok('--as', 'tools/wk', 'pull', 'HELD', '--reason', 'the branch starts with this one')
+        plain = self.ok('next')                      # the main checkout: no branch bundles
+        self.assertIn('passed over X', plain)
+        self.assertNotIn('passed over Y', plain)
+        mine = self.ok('--as', 'tools/wk', 'next')   # as the branch: X bundles onto it
+        self.assertIn('passed over Y', mine)
+        self.assertNotIn('passed over X', mine)
+        self.assertIn('tools/wk', mine)
+        # Each `next` offers what `pull` takes plainly: Y as the main checkout read it.
+        out = self.ok('--as', 'tools/wk', 'pull', 'Y')
+        self.assertNotIn('preempt', out)
+
+    def test_a_bad_scope_on_another_branchs_pull_fails_next_and_pull_alike(self):
+        # `add` refuses `a/*.py`, so the live pull is seeded through the library.
+        self.repo.git('branch', 'tools/other')
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            backend = smod.RefBackend(self.repo.root, 'origin', smod.STORE_REF, smod.STORE_REF)
+            store = smod.Store(backend, rmod.Rules())
+            backend.publish(store.load(), dict(
+                priced('HOLD', state='pulled', pulled_at=TODAY, pulled_by='tools/other',
+                       scope='a/*.py'), **priced('Y', scope='docs/y.md')), 'seed\n')
+        for args in (('--as', 'tools/wk', 'next'), ('next',), ('--as', 'tools/wk', 'pull', 'Y')):
+            rc, out = self.run_tool(*args)
+            self.assertEqual(rc, 1, (args, out))
+            self.assertIn('ERROR: `next` cannot compute an offer: an in-flight record has '
+                          '`scope: a/*.py`', out, args)
 
     def test_refusals_exit_2_and_write_nothing(self):
         self.ok('add', 'FOO', '--summary', 'a thing to do', '--scope', 'tools/x.py', *ADD_FLAGS)
@@ -219,10 +256,7 @@ class RulingCitesUnchecked(unittest.TestCase):
         self.ledger = os.path.join(self.home, 'rulings.md')
         with open(self.ledger, 'w', encoding='utf-8', newline='\n') as f:
             f.write(self.LEDGER)
-        with open(os.path.join(self.repo.root, '.kit.json'), 'w', encoding='utf-8') as f:
-            json.dump({'backlog': {'ledger_repo': 'kit'}}, f)    # the ledger's repo column here
-        self.repo.git('add', '.kit.json')
-        self.repo.git('commit', '-q', '-m', 'kit config')
+        kit_json_ref(self.repo, {'backlog': {'ledger_repo': 'kit'}})  # the ledger's repo column
 
     def configure(self, **extra):
         os.makedirs(kuser.config_dir(self.home), exist_ok=True)

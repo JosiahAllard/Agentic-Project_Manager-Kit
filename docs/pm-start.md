@@ -17,13 +17,20 @@ lines read the machine config's `hub` key (`kitlib.hubsite.settings`), or every 
 when there is no `hub` key. The check only asks the loopback server on `hub.port`, through
 `kitlib.hubsite.client`; it starts no process and never starts the server, and it imports
 `kitlib.hubsite.serve` only once the settings are read. Each ask (`GET /api/v1/health`,
-then `GET /api/v1/pending`) waits at most `HUB_SITE_TIMEOUT_S` (1.5 seconds). The lines:
-`hub: server up on port <n>, <k> pending` (`<k>` is 0 when the answer's `items` is not a list); when
-`<k>` is above 0, a line to process the items (`hub.py pending`); then either
-`hub: wait --pending is running` or a line telling the PM to start
-`hub.py wait --pending` in the background and start it again after it ends. "Running" is matched by
+then `GET /api/v1/pending?for=pm`) waits at most `HUB_SITE_TIMEOUT_S` (1.5 seconds). The pending
+ask is the PM's items only, the list `hub.py pending --for pm` prints: an item routed to a creator
+that can still be reached is that session's to ack, and a PM ack would hide it from the creator's
+wait. The lines:
+`hub: server up on port <n>, <k> pending for the PM` (`<k>` is 0 when the answer's `items` is not a
+list); when `<k>` is above 0, a line to process the items (`hub.py pending --for pm`); then either
+`hub: wait --pending is running` or a warning, `hub: WARN no PM wait --pending --for pm is
+running, so items routed to the PM go unseen; ...`, telling the PM to start
+`hub.py wait --pending --for pm` in the background and start it again after it ends (docs/action-hub.md
+"Who handles a pending item"). "Running" is matched by
 command text only: any `python` process on the machine whose command line holds `hub.py`, `wait`
-and `--pending` counts, so another session's `wait --pending` makes this line say running. Failures,
+and `--pending`, and no `--for` other than `--for pm`, counts (`_wait_running` in
+`kitlib/pmstart/__init__.py`): a session's `wait --pending --for <key>` waits on its own answers
+and is not the PM's, but another PM session's plain `wait --pending` makes this line say running. Failures,
 each one line:
 - Nothing listens: `hub: hub server down (nothing listens on port <n>): start it with python
   "<kit>/tools/hub.py" serve`.
@@ -32,7 +39,7 @@ each one line:
 - `GET /api/v1/health` answered, but not ok: `hub: server did not answer as the hub does (health not ok)`.
 - Any other failure of `GET /api/v1/health` (a timeout, a refusal, an answer that is not the hub's): `hub:
   server did not answer as the hub does (<exception class>)`; the class is all it names.
-- `GET /api/v1/pending` fails after `GET /api/v1/health` answered: `hub: server up on port <n>, pending not asked
+- `GET /api/v1/pending?for=pm` fails after `GET /api/v1/health` answered: `hub: server up on port <n>, pending not asked
   (<exception class>)`.
 - The `hub` key is there and cannot be used (the machine config check refuses it, or the hub
   settings do): `hub: the hub key of the machine config cannot be used: <the configuration error's
@@ -88,12 +95,12 @@ same check for its own repository (docs/install.md "Tools without a stub"). Code
 
 ## Memory folder (`memory`)
 
-After `stubs`, the `memory` check reads `.claude/settings.json` of each repository in
+After `stubs`, the `memory` check reads `.claude/settings.local.json`, then `.claude/settings.json`, of each repository in
 `launcher.repos`, and of the PM repository (the main checkout holding `sessions_file`), through
-`kitlib.stubs.memory.problem_line`. A file without `autoMemoryDirectory` gives
+`kitlib.stubs.memory.problem_line`. Files without `autoMemoryDirectory` give
 `memory (<repo>): <file> has no autoMemoryDirectory; its memory folder is <folder>. Ask the owner
 (via the hub) to run, in their own PowerShell window: python <kit>/tools/kit_stubs.py memory -C
-<folder> --apply (then the owner commits .claude/settings.json)`: an owner step, since the command
+<folder> --apply (it writes .claude/settings.local.json, which git ignores; nothing to commit)`: an owner step, since the command
 writes another repository's main checkout. One it cannot read gives `could not check memory
 (<repo>): ...`, as does a check that raises. A key naming another folder is the owner's choice and
 prints nothing. The kit's folder is `<the main checkout's drive>/Agent-memory/<repo folder name>`.

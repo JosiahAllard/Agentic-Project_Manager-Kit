@@ -21,7 +21,11 @@ TOOL = os.path.join(KIT, 'tools', 'kit_stubs.py')
 class StubCase(unittest.TestCase):
 
     def setUp(self):
-        env = mock.patch.dict(os.environ, gitfixture.fixture_env(), clear=True)
+        # Not the run's own pin: a landing gate runs pinned (kitlib/gate/pin.py sets both), and
+        # these tests choose the live root themselves.
+        fixture = {k: v for k, v in gitfixture.fixture_env().items()
+                   if k not in ('KIT_LIVE_ROOT', 'KIT_PINNED')}
+        env = mock.patch.dict(os.environ, fixture, clear=True)
         env.start()
         self.addCleanup(env.stop)
         self.fx = gitfixture.TempRepo()
@@ -506,10 +510,13 @@ class TheMemoryVerb(StubCase):
         self.assertEqual(self.read(self.settings()), raw)
 
     def test_a_file_it_cannot_edit_exits_1(self):
-        self.put(self.settings(), '[1]')
+        # The local file: --apply writes only there (kitlib.stubs.memory). A shared settings.json
+        # that is not an object is skipped, and on real git the key then lands in the local file.
+        local = os.path.join(self.root, '.claude', 'settings.local.json')
+        self.put(local, '[1]')
         code, out = self.call([TOOL, 'memory', '--apply'], self.root)
         self.assertEqual(code, 1, out)
-        self.assertEqual(self.read(self.settings()), '[1]')
+        self.assertEqual(self.read(local), '[1]')
 
     def test_usage(self):
         # Each is refused for its own reason, not as an unknown verb or option.

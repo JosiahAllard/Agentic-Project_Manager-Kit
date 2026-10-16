@@ -4,10 +4,13 @@ Pure functions that return data; the hook (boot/hook.py claude SessionStart coor
 comes from the "coordinator_start" key of the machine config and is emitted only when the
 environment variable PM_KIT_ROLE is "coordinator". After the standing lines come the optional ENG
 filing and pricing-pass lines (each switched on in the config), then the live checks (cap,
-machine state, other coordinators, and stubs: a line only when a repo that uses stubs has them not current),
-run as in kitlib.pmstart: each is a pure function over fakeable inputs (process list, file reads,
-a subprocess runner, now), and a failed one is one "could not check X: reason" line. No check
-reads the rulings ledger.
+machine state, other coordinators, the ledger line, the hub key: the session's sessions.json
+key, which it posts hub questions --from and waits --for, or "unknown" when no entry is found,
+and stubs: a line only when a repo that uses stubs has them not current), run as in kitlib.pmstart: each is a pure function over fakeable inputs
+(process list, file reads, a subprocess runner, now, the machine config), and a failed one is one
+"could not check X: reason" line. No check reads the rulings ledger: with the split ledger
+(`ledger_dir`, docs/ledger.md "Files") the ledger line names the repo's file from the machine
+config, and the file is never opened.
 
 Install values come from the config, never from the code: "repos_root" (the folder whose top-level
 folders are the repositories, matched against the session's cwd) and "landing_lock" ({repo: the
@@ -153,6 +156,16 @@ def find_entry(sessions, cwd, name=None, root=None):
     return hits[0], "%d sessions entries match repo %s; took the first (%s)" % (len(hits), top, hits[0].get("name"))
 
 
+def hub_key(sessions, entry):
+    """[the `hub key: <key>` line]: the sessions.json key of `entry` (find_entry's pick, the same
+    object), the key this coordinator posts hub questions --from and waits --for
+    (docs/action-hub.md "For the PM"). LookupError when no key holds it."""
+    for k, v in sessions.items():
+        if v is entry and not str(k).startswith("_"):
+            return ["hub key: %s (hub.py questions add --from %s; wait --pending --for %s)" % (k, k, k)]
+    raise LookupError("no sessions.json key holds this session's entry")
+
+
 def cap(cfg, repo, today):
     caps = _need(cfg, "cap").get(repo) or _need(cfg, "cap").get(repo.lower())
     if not caps:
@@ -229,6 +242,29 @@ def machine(entry, run=_run, read=_read, now=None, kit=None, root=None, lock_fil
     return lines
 
 
+def ledger_lines(machine, repo):
+    """[the line naming `repo`'s ledger file] from the machine config `machine`
+    (kitlib.config.user.user_config's): [] without `ledger_dir`. `repo` (the sessions file's
+    folder name) is matched against `ledger_repos` lower-cased with every '_' as '-' (so
+    My_Tools-Repo is my-tools-repo); a repo not named there gets the
+    folder and the names instead. Nothing is read."""
+    if not machine.get("ledger_dir"):
+        return []
+    files = kuser.files_of(machine)
+    repo = str(repo or "")
+    key = ledger_name(repo)
+    if key in files:
+        return ["ledger (reference, HOW this repo works): %s" % files[key]]
+    named = key if key == repo else "%s (from %s)" % (key, repo)
+    return ["ledger (reference, HOW each repo works): one file per ledger_repos name in %s (%s); none is named %s"
+            % (machine["ledger_dir"], ", ".join(files), named)]
+
+
+def ledger_name(repo):
+    """The ledger_repos name a repository folder name `repo` maps to: lower-cased, '_' as '-'."""
+    return str(repo or "").lower().replace("_", "-")
+
+
 def stubs_line(entry, root=None, check=stubs.problem_line):
     """[the stubs line] for the coordinator's repo (repos_root/<repo>), [] when its stubs are current
     or it uses none (stubs are opt-in: kitlib.stubs.problem_line).
@@ -264,8 +300,8 @@ def others(entry, procs, env, pid):
 
 
 def context(cfg, env=None, cwd=None, now=None, procs=None, run=_run, read=_read, kit=None,
-            pid=None, pm_cfg=None, live=True, stubs_check=stubs.problem_line):
-    """The heading, one "- <text>" line per string in cfg["standing"], the ENG filing line (only when cfg["eng_filing"] is true), the pricing-pass line (only when cfg["pricing_pass"] is true), then the live checks (the stubs check prints only when the repo's stubs are missing or stale)."""
+            pid=None, pm_cfg=None, live=True, stubs_check=stubs.problem_line, machine_cfg=None):
+    """The heading, one "- <text>" line per string in cfg["standing"], the ENG filing line (only when cfg["eng_filing"] is true), the pricing-pass line (only when cfg["pricing_pass"] is true), then the live checks (the ledger check prints only with `ledger_dir` set, and nothing when the machine config cannot be read; the stubs check only when the repo's stubs are missing or stale). `machine_cfg`: the machine config (default kitlib.config.user.user_config(), read by the ledger check)."""
     env = os.environ if env is None else env
     lines = [str(t) for t in cfg.get("standing") or []]
     if cfg.get("eng_filing") is True:
@@ -292,16 +328,37 @@ def context(cfg, env=None, cwd=None, now=None, procs=None, run=_run, read=_read,
                     name = own_name(procs_once(), env, pid)
                 except Exception:
                     name = None
-                box["e"] = find_entry(json.loads(read(sf)), cwd, name, cfg.get("repos_root"))
+                box["s"] = json.loads(read(sf))
+                box["e"] = find_entry(box["s"], cwd, name, cfg.get("repos_root"))
                 if box["e"][1]:
                     lines.append(box["e"][1])
             return box["e"][0]
+
+        def own_key():
+            try:
+                entry = entry_once()
+            except (LookupError, ValueError) as e:     # no entry: say so, never guess a key
+                return ["hub key: unknown (%s); ask the PM for it" % str(e).strip("'\"")]
+            if box["e"][1]:     # several entries match and the first was taken: it may not be ours
+                return ["hub key: unknown (several sessions entries match this repo); ask the PM for it"]
+            return hub_key(box["s"], entry)
+
+        def ledger():
+            # A config that cannot be read (user_config raises ConfigError for every such case):
+            # no line, as with no ledger_dir. Any other error is a bug and is reported below.
+            try:
+                m = machine_cfg if machine_cfg is not None else kuser.user_config()
+            except kuser.ConfigError:
+                return []
+            return ledger_lines(m, entry_once()["repo"]) if m.get("ledger_dir") else []
 
         checks = [
             ("cap", lambda: cap(cfg, entry_once()["repo"], now.date())),
             ("machine state", lambda: machine(entry_once(), run, read, now, kit, cfg.get("repos_root"),
                                               lock_file_for(cfg, entry_once().get("repo")))),
             ("other coordinators", lambda: others(entry_once(), procs_once(), env, pid)),
+            ("ledger", ledger),
+            ("hub key", own_key),
             ("stubs", lambda: stubs_line(entry_once(), cfg.get("repos_root"), stubs_check)),
         ]
         for name, fn in checks:

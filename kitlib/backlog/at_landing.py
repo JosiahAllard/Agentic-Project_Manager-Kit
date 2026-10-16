@@ -305,10 +305,10 @@ def pm_data_root(root):
     return None, 'no worktree has the PM data branch %s checked out' % record.branch
 
 
-def _pm_data_store(root, configured):
+def pm_data_store(root, configured):
     """`(store root, Config, backend, None)` of the PM data branch's store, `(None,) * 4` when
     there is none or it is the configured store (`configured`: its describe(), or None), or
-    `(None, None, None, why)` when it cannot be opened."""
+    `(None, None, None, why)` when it cannot be opened. Public: kitlib/gate/land.py calls it."""
     pm_root, why = pm_data_root(root)
     if pm_root is None:
         return None, None, None, why
@@ -322,6 +322,10 @@ def _pm_data_store(root, configured):
     if configured is not None and backend.describe() == configured:
         return None, None, None, None
     return pm_root, pm_cfg, backend, None
+
+
+# The old private name, kept until kitlib/gate/land.py calls pm_data_store.
+_pm_data_store = pm_data_store
 
 
 class _Seen(object):
@@ -357,7 +361,7 @@ class _Part(object):
 
 def close_landed(root, cfg, branch, merge, session=SESSION, tip=None, base=None, batch=()):
     """Close every record `branch`, which landed as `merge`, holds pulled: in the configured store
-    when it is a `ref` or `branch` store, and in the PM data branch's store (_pm_data_store). With
+    when it is a `ref` or `branch` store, and in the PM data branch's store (pm_data_store). With
     `tip` and `base` (the branch tip merged and the main it was merged onto), every record a
     `Closes:` trailer in `tip --not base` names (closes_trailers) is closed too while it is
     pulled, whoever pulled it: a pull made in the main checkout records the main branch, which no
@@ -397,7 +401,7 @@ def close_landed(root, cfg, branch, merge, session=SESSION, tip=None, base=None,
         lines.extend(_close_in(backend, root, cfg, branch, merge, session,
                                lambda *args: close_command(root, *args), named, seen, quiet,
                                part))
-    pm_root, pm_cfg, pm_backend, why = _pm_data_store(
+    pm_root, pm_cfg, pm_backend, why = pm_data_store(
         root, backend.describe() if backend is not None else None)
     if why:
         seen.unread = True
@@ -486,6 +490,24 @@ def _after_put_back(store, rid, branch, command, reason, named=False, act=None):
     return ('%s is now %s and no longer pulled%s, so it was not %s; see it with: %s'
             % (rid, now.get('state') or 'in an unreadable state',
                '' if named else ' by %s' % branch, past, command('show', rid)))
+
+
+def _refused_advice(exc, backend, root, act, args, command):
+    """How to make a write the store refused: `command(*args)`, except on the implicit default
+    `ref` store (store.default_store_refusal), which refuses that command too: there it is the
+    same write against the PM data worktree the refusal names, or, with none, the command once
+    .kit.json names its store."""
+    if not (isinstance(exc, Refusal) and getattr(backend, 'implicit', False)):
+        return '%s it with: %s' % (act.verb, command(*args))
+    try:
+        pm_root, _why = pm_data_root(root)
+    except Exception:                       # noqa: BLE001 - the advice is best effort
+        pm_root = None
+    if pm_root:
+        return '%s it in the PM data worktree with: %s' % (
+            act.verb, backlog_command(pm_root.replace('\\', '/'), *args))
+    return '%s it, once .kit.json names its "backlog".store, with: %s' % (act.verb,
+                                                                          command(*args))
 
 
 def _close_in(backend, root, cfg, branch, merge, session, command, named=(), seen=None,
@@ -617,9 +639,10 @@ def _close_in(backend, root, cfg, branch, merge, session, command, named=(), see
         except Exception as exc:            # one record's failure never stops the others
             what = ('%s: %s' % (exc.label, exc) if isinstance(exc, Refusal)
                     else '%s: %s' % (type(exc).__name__, exc))
-            lines.append('WARNING: %s landed, and %s%s, was not %s (%s); %s it with: %s'
-                         % (branch, rid, how, act.past, _one_line(what), act.verb,
-                            command(*act_args(act, rid))))
+            lines.append('WARNING: %s landed, and %s%s, was not %s (%s); %s'
+                         % (branch, rid, how, act.past, _one_line(what),
+                            _refused_advice(exc, backend, root, act, act_args(act, rid),
+                                            command)))
             seen.not_done(rid, act)
             continue
         if not change.writes:

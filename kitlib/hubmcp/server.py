@@ -51,6 +51,13 @@ _PIN = {"type": "integer", "description": "The version of the document you read:
                                           "refused (conflict) when it has changed since."}
 _REPO = {"type": "string", "description": "A repository's name."}
 _FROM = {"type": "string", "description": "Who is writing: a session or agent name."}
+_ASK_FROM = {"type": "string", "description": "The session the answer goes back to: a launcher "
+                                              "session key, or pm (the default when absent or "
+                                              "blank). The hub refuses any other value "
+                                              "(invalid)."}
+_FOR = {"type": "string", "description": "Only the pending items for this session key: your own "
+                                         "launcher session key, or pm (the PM's items and every "
+                                         "answered question). Absent: every pending item."}
 _REFS = {"type": "array", "items": {"type": "string"},
          "description": "Ids of other hub documents this one names."}
 _URGENT = {"type": "boolean"}
@@ -71,15 +78,17 @@ def _one_of(values, what):
 # query of a GET or the body of a POST.
 TOOLS = {
     "hub_pending": (
-        "The owner input the PM has not handled (GET /pending), as {ok, items}.",
-        _obj({}), "GET", "/pending", ANY),
+        "The owner input not yet handled (GET /pending), as {ok, items}; with `for`, only the "
+        "items for that session key.",
+        _obj({"for": _FOR}), "GET", "/pending", ANY),
     "hub_wait": (
         "Waits for the hub to change (GET /wait): returns {revision, reset, timed_out, changes, "
         "pending} once the store's revision moves past `since`, or after timeout_s (default 30, "
-        "at most 55) with timed_out true. pending: also return at once while items wait.",
+        "at most 55) with timed_out true. pending: also return at once while items wait. for "
+        "(with pending true): wait for that session key's pending items only.",
         _obj({"since": {"type": "integer", "description": "The revision you last saw."},
               "timeout_s": {"type": "number", "description": "Seconds to wait, at most 55."},
-              "pending": {"type": "boolean"}}), "GET", "/wait", ANY),
+              "pending": {"type": "boolean"}, "for": _FOR}), "GET", "/wait", ANY),
     "hub_list": (
         "The documents of one collection (GET /<collection>): questions, todos, stories or to_pm, "
         "as {ok, items}; each item carries its id and version.",
@@ -112,7 +121,7 @@ TOOLS = {
                           "description": "The choices: [{label, description}]."},
               "recommended": {"type": "integer", "description": "The index of the option you "
                                                                 "recommend."},
-              "repo": _REPO, "from": _FROM, "refs": _REFS, "urgent": _URGENT,
+              "repo": _REPO, "from": _ASK_FROM, "refs": _REFS, "urgent": _URGENT,
               "story": {"type": "string", "description": "The story this question is about."}},
              ["title"]), "POST", "/questions", AGENT),
     "hub_question_log": (
@@ -122,10 +131,17 @@ TOOLS = {
               "if_version": _PIN}, ["id", "ruling", "if_version"]),
         "POST", "/questions/{id}/log", AGENT),
     "hub_todo_add": (
-        "Adds a to-do for the owner (POST /todos). An agent's open to-do needs commands: the "
-        "steps the owner runs.",
+        "Adds a to-do for the owner (POST /todos). An agent's open to-do needs commands or "
+        "steps: what the owner runs. Refused: plain Notepad, 'open and apply' prose, and "
+        "coordinator work (worktree add/remove, landings, gates, ref deletes).",
         _obj({"title": {"type": "string"}, "detail": {"type": "string"},
               "commands": {"type": "array", "items": {"type": "string"}},
+              "steps": {"type": "array", "items": {"type": "object"},
+                        "description": "Steps the hub turns into commands (after any given), "
+                                       "each one of {edit: <absolute file>, old, new} (an exact "
+                                       "replace of the one place old is; prints ok or MISS), "
+                                       "{open: <absolute file>, line} (Notepad++) or {run: "
+                                       "<PowerShell command>}."},
               "repo": _REPO, "refs": _REFS, "urgent": _URGENT, "from": _FROM}, ["title"]),
         "POST", "/todos", AGENT),
     "hub_todo_ack": (
@@ -294,10 +310,22 @@ class Server:
 
     def _t_hub_wait(self, a):
         t = min(max(float(a.get("timeout_s", WAIT_DEFAULT_S)), 0.0), float(WAIT_MAX_S))
-        return self.client().wait(a.get("since"), timeout=t, pending=a.get("pending", False))
+        return self.client().wait(a.get("since"), timeout=t, pending=a.get("pending", False),
+                                  for_key=a.get("for"))
 
     def _t_hub_inbox(self, a):
         return {"ok": True, "items": self.client().inbox()}
+
+    def _t_hub_todo_add(self, a):
+        """The hub makes the steps into commands and detail (kitlib.hubsite.api.todo_steps), so
+        they go to it as given. The same check runs here first, so a to-do it refuses (a bad
+        step, a lone surrogate in a command, text the owner's to-do rules forbid) is refused
+        with the hub's own words and never reaches the hub."""
+        try:
+            hubapi.todo_steps(a)
+        except hubapi.HubError as e:
+            raise ToolError(e.code, e.message, e.field)
+        return self._route("hub_todo_add", a)
 
     # ---------------------------------------------------------------- JSON-RPC
     def handle(self, msg):

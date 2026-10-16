@@ -42,8 +42,8 @@ def since_value(since, days, now=None):
 def _kit_user():
     """kitlib.config.user of the kit this folder belongs to, or None: the folder was copied
     somewhere without the kit, the kitlib found does not import, or it has no home_dir (a broken
-    or foreign one must not stop these scripts). ~/.claude/tools/usage is a link into the kit, so
-    the real path of this file is what finds it."""
+    or foreign one must not stop these scripts). For a copy of this folder outside the kit, or one
+    reached through a link, the real path of this file is what finds it."""
     for own in (False, True):
         if own:
             if not os.path.isdir(os.path.join(KIT_ROOT, "kitlib")):

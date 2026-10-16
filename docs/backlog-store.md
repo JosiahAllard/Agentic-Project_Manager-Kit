@@ -11,7 +11,7 @@ A backlog add, edit, pull or close is one tool call that takes seconds. No work 
 - Each repo keeps its own backlog, in its own repo: no extra repo, nothing shared between projects.
 - Records are `backlog/<ID>.md` (same format as today) on the ref `refs/backlog/main`.
 - The ref has no shared history with main. It never merges, rebases or fast-forwards with main; the two move independently.
-- `.kit.json` `"backlog": {"store": "ref" | "branch" | "main"}`, default `ref`.
+- `.kit.json` `"backlog": {"store": "ref" | "branch" | "main"}`, default `ref`, which a write must name: the default alone is read-only (docs/backlog.md "Stores").
   - `ref`: hidden from branch lists and PR menus, not fetched by a default clone (the tool adds the fetch refspec, only once a fetch found the store on the remote: kitlib/backlog/store.py `RefBackend.load`; a refspec for a ref the remote lacks fails every plain `git fetch`).
   - `branch`: the same on a visible `backlog` branch, browsable on GitHub.
   - `main`: today's behaviour, records in main through landings.
@@ -64,7 +64,7 @@ the hub's backlog snapshot (`kitlib.hubbacklog`), kit pmstart/coordinatorstart, 
 1. Land or port every in-flight records branch first.
 2. `backlog.py migrate`: copy `docs/backlog/*.md` at main's tip into the store as its first commit, citing that sha. One-off steps for an older record layout run here: tombstone files are not copied (their ids stay checkable through git history), `migrated` is stripped, anchor and artefact fold into the body, and `reref` is dropped.
    - Built: kitlib/backlog/migrate.py; docs/backlog.md "Commands" has the verb. It only starts a store: an existing one, or one created while it runs, is REFUSED. Files that are not `*.md` are named and not copied. An unreadable record stops it before any write. FAIL findings are printed and copied as they are.
-   - Try it on a scratch clone first (no real store written; the repo's `.kit.json` cut to `repo` and `backlog`): `backlog.py -C <scratch clone> migrate --dry-run`, then `migrate` (`--to ref` for a repo whose store is a folder), then `check`; the clone's origin is a bare scratch copy.
+   - Try it on a scratch clone first (no real store written; the repo's `.kit.json` cut to `repo` and `backlog`): `backlog.py -C <scratch clone> migrate --dry-run`, then `migrate` (`--to ref` for a repo whose store is a folder or whose `.kit.json` names no store: the default `ref` is read-only, and both runs are refused without it), then `check`; the clone's origin is a bare scratch copy.
 3. One normal branch in the repo: delete `docs/backlog`, set `.kit.json` backlog.store, update hooks. Its coordinator builds and lands it.
 4. Old record history stays in main's git log.
 

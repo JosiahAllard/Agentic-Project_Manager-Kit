@@ -26,8 +26,10 @@ Rules, in the order they are checked:
   hub-secrets      a shell command naming the hub's token folder or a token file (owner.token,
                    agent.token, approval.key), reaching the token folder or the hub store (the
                    store through tools/hub.py's own --store excepted), or python or node code that
-                   names them or the hub site; an edit of a file in either folder; in any session
-                   but the owner's own (kitlib.guard.hub)
+                   names them or the hub site; an edit of a file in either folder; a read tool's
+                   read of the token folder or a file in it, or a search that can read or list
+                   one (the store stays readable); in any session but the owner's own
+                   (kitlib.guard.hub)
   hub-owner-verb   fail-closed: a shell line whose text names the hub tool as a module or
                    a script (tools/hub.py, tools.hub, an import of hub, python -m hub, a standalone
                    hub on a line that runs python and holds import) anywhere outside the one shape
@@ -76,6 +78,8 @@ Rules, in the order they are checked:
 A command line the parser cannot read cleanly also goes through kitlib.guard.fallback.
 "Agent session" and "the owner's own" are the session mark's (docs/guard.md "Session mark").
 """
+import ast
+import builtins
 import fnmatch
 import json
 import ntpath
@@ -206,6 +210,8 @@ def judge(event, ctx):
         return shell_command(event, ctx, text, SHELLS[event.shell], cwd, role)
     if event.kind == 'mcp':
         return hub_mcp(event, ctx, tool, role)
+    if event.kind == 'read':
+        return hub_secret_read(event, ctx, cwd, role)
     return None
 
 
@@ -717,6 +723,88 @@ def hub_secret_edit(event, ctx, target, role, what):
     if where is None:
         return None
     return hub_secrets_refusal(event, ctx, role, '%s is in %s' % (what, places.label(where)))
+
+
+def hub_secret_read(event, ctx, cwd, role):
+    """hub-secrets for a read tool (Action kind 'read'), in any session but the owner's own: a
+    read of the hub's token folder or a file in it, and a search that can read or list one. The
+    store stays readable. A search starting in the folder is refused; any other is refused unless
+    its terms cannot reach it: a names search whose wildcard can list neither the folder nor a
+    file in it (hub.list_reaches), a contents search from a parent with a file filter that can
+    take in none of its files (hub.filter_reaches). A contents search with no filter is refused at
+    every parent: any of its output modes, counts and file lists too, would answer for a token's
+    text (docs/guard.md "Hub secrets")."""
+    if is_owner_session(event, ctx):
+        return None
+    secret_path = hubg.secret_folder(ctx.config_location().new)
+    secret = hub_real(secret_path)
+    if not secret:
+        return None
+    params = event.params if isinstance(event.params, dict) else None
+    target = event.path if isinstance(event.path, str) else None
+    tool = event.tool or 'a read'
+    label = 'the hub token folder %s' % quote(secret_path)
+    if params is None:
+        if not target:
+            return None
+        full = hub_real(sh.resolve_path(target, cwd, home=ctx.home) or target)
+        if full and jail.inside(full, secret):
+            return hub_secrets_refusal(event, ctx, role, '%s of %s is in %s' % (tool, fwd(target), label))
+        return None
+    start = sh.resolve_path(target or cwd, cwd, home=ctx.home) or target or cwd
+    root = hub_real(start)
+    if root is None:
+        return None
+    what = '%s from %s' % (tool, fwd(start))
+    if jail.inside(root, secret):
+        return hub_secrets_refusal(event, ctx, role, '%s is in %s' % (what, label))
+    if params.get('search') == 'names':
+        reach = hub_list_reach(params.get('wildcard'), (root, start), (secret, secret_path),
+                               hub_secret_names(secret))
+        if reach:
+            return hub_secrets_refusal(event, ctx, role, '%s can list %s (%s)' % (what, label, reach))
+        return None
+    if not jail.inside(secret, root):
+        return None
+    flt = params.get('filter')
+    rel = [p for p in ntpath.relpath(secret, root).split('\\') if p]
+    names = hub_secret_names(secret) if flt is not None else None
+    if flt is None or names is None or hubg.filter_reaches(flt, rel, names):
+        how = 'with no file filter' if flt is None else 'with a file filter (%s) that can take in a file in it' % flt
+        return hub_secrets_refusal(event, ctx, role, '%s, a parent of %s, %s' % (what, label, how))
+    return None
+
+
+def hub_list_reach(wildcard, roots, folders, names):
+    """The wildcard path, one of `roots` joined to `wildcard` (or `wildcard` itself when absolute),
+    that can list one of `folders` or a file in it (hub.list_reaches over `names`), each {a,b}
+    form apart; or None. No wildcard lists everything; braces expand_braces cannot write out, and
+    names None (too many to read), count as reaching."""
+    text = wildcard if isinstance(wildcard, str) and wildcard.strip() else '**'
+    forms = hubg.expand_braces(text)
+    if forms is None or names is None:
+        return text
+    for form in forms:
+        for root in roots:
+            full = form if ntpath.isabs(form) or ntpath.splitdrive(form)[0] else ntpath.join(root, form)
+            if any(f and hubg.list_reaches(full, f, names) for f in folders):
+                return fwd(full)
+    return None
+
+
+HUB_NAMES_LIMIT = 2000
+
+
+def hub_secret_names(secret):
+    """Every name a search could meet in the token folder, its subfolders' too, with
+    hub.SECRET_FILES; None past HUB_NAMES_LIMIT (the caller then counts the folder as reached)."""
+    found = list(hubg.SECRET_FILES)
+    for _top, dirs, files in os.walk(secret):
+        found.extend(dirs)
+        found.extend(files)
+        if len(found) > HUB_NAMES_LIMIT:
+            return None
+    return found
 
 
 def hub_script_run(inv):
@@ -1781,7 +1869,11 @@ EVALS = {'node': ('-e', '--eval', '-p', '--print'), 'ruby': ('-e',)}
 # a .NET file call that writes (OpenRead and OpenText only read)
 IO_FILE_RE = re.compile(r'(?i)\[(?:System\.)?IO\.(?:File|Directory)\]::'
                         r'(?:Write|Append|Create|Copy|Move|Delete|Replace|Open(?!Read\b|Text\b))')
-NET_ABS_RE = re.compile(r'^(?:[A-Za-z]:[\\/]|[\\/]{2})')     # a path .NET reads the same from any directory
+# a .NET type whose constructor opens a file to write: [IO.StreamWriter]::new(...), New-Object IO.FileStream ...
+NET_TYPE_RE = re.compile(r'(?i)(?<![\w.])(?:System\.)?IO\.(?:StreamWriter|FileStream)(?![\w.])')
+NET_ABS_RE = re.compile(r'^[A-Za-z]:[\\/]')     # a path .NET reads the same from any directory
+# \\?\<drive>:\x and \\.\<drive>:\x are <drive>:\x (a device path); any other \\ or // path is a share the guard cannot place
+NET_DEVICE_RE = re.compile(r'^[\\/]{2}[?.][\\/](?=[A-Za-z]:[\\/])')
 WIN_OPT_RE = re.compile(r'^/[A-Za-z]+(?::\S*)?$')
 
 
@@ -1864,6 +1956,8 @@ class NetWrite(object):
 
 
 NET_QUOTES = '‘’‚‛“”„'     # PowerShell reads these as quotes too
+NET_DASHES = '-–—―'              # and these as the dash an operator starts with
+NET_UNARY = frozenset(('not', 'bnot', 'join', 'split', 'csplit', 'isplit'))   # -op operand
 
 
 def _net_string_end(src, k):
@@ -1959,16 +2053,273 @@ def _net_lost(span):
     return '"' in span and '$(' in span
 
 
+def net_mentioned(cmd):
+    """True when the PowerShell command names a .NET file call or type that writes (IO_FILE_RE,
+    NET_TYPE_RE): net_writes reads it."""
+    return cmd.shell == sh.PS and bool(IO_FILE_RE.search(cmd.text) or NET_TYPE_RE.search(cmd.text))
+
+
+def _net_word(raw):
+    """The text of a command-mode argument `raw`: a plain string (_net_literal) or a bare word,
+    else None."""
+    text = _net_literal(raw)
+    if text is None and re.match(r'^[^\s\'"`$(){}\[\]@#;,|&<>%s]+$' % NET_QUOTES, raw):
+        return raw
+    return text
+
+
+def _net_list(src, k):
+    """([(text or None, start, end)], end): the command-mode argument at offset `k` of `src`, a
+    word or a comma list of them ('a', 'b'), read as _net_args reads a call's; a bare word ends at
+    a '(' (PowerShell starts a new argument there)."""
+    args, n = [], len(src)
+    while True:
+        start, depth = k, 0
+        while k < n:
+            c = src[k]
+            if c in '\'"':
+                k = _net_string_end(src, k)
+                continue
+            if c == '`':
+                k += 2
+                continue
+            if c in '([{':
+                if c == '(' and depth == 0 and k > start and src[k - 1] != '$':
+                    break
+                depth += 1
+            elif c in ')]}':
+                if depth == 0:
+                    break
+                depth -= 1
+            elif depth == 0 and c in ', \t\r\n;|&':
+                break
+            k += 1
+        k = min(k, n)
+        if k > start:
+            args.append((_net_word(src[start:k]), start, k))
+        j = k
+        while j < n and src[j] in ' \t':
+            j += 1
+        if j >= n or src[j] != ',':
+            return args, k
+        k = j + 1
+        while k < n and src[k] in ' \t\r\n':
+            k += 1
+
+
+NEW_OBJECT_PARAMS = ('typename', 'argumentlist', 'property', 'comobject', 'strict')
+
+
+def _net_new_object(cmd, inv):
+    """(type (text or None, start, end), [argument], end, lost) of the New-Object call `inv`, or
+    None when the guard does not read it: its -TypeName and -ArgumentList, named or positional,
+    each a word, a comma list, (...) or @(...)."""
+    src, n = cmd.source, len(cmd.source)
+    k, vals, slots, lost = inv.word.end, {}, ['typename', 'argumentlist'], ''
+    while True:
+        while k < n and src[k] in ' \t':
+            k += 1
+        if k >= n or src[k] in ';|&\r\n)}':
+            break
+        m = re.compile(r'-([A-Za-z]+)(:?)').match(src, k)
+        if m and src[k + 1:k + 2].isalpha():
+            body = m.group(1).lower()
+            names = ['argumentlist'] if body == 'args' else [p for p in NEW_OBJECT_PARAMS if p.startswith(body)]
+            if len(names) != 1:                 # a common parameter (-ErrorAction Stop, -Verbose)
+                body = PS_COMMON_ALIASES.get(body, body)
+                if not any(p.startswith(body) for p in PS_COMMON_VALUES + PS_COMMON_SWITCHES):
+                    return None
+                names = ['skip' if any(p.startswith(body) for p in PS_COMMON_VALUES) else 'strict']
+            k = m.end()
+            if names[0] == 'strict':
+                continue
+            while not m.group(2) and k < n and src[k] in ' \t':
+                k += 1
+            param = names[0]
+            if param in slots:
+                slots.remove(param)
+        elif slots:
+            param = slots.pop(0)
+        else:
+            return None
+        stops = ' \t;|&\r\n)}'
+        if src.startswith('@(', k) or src.startswith('(', k):
+            open_ = k + (2 if src[k] == '@' else 1)
+            args, k = _net_args(src, open_)
+            lost += src[open_:k]
+        else:
+            args, k = _net_list(src, k)
+            lost += ''.join(src[s:e] for _t, s, e in args)
+            stops += '('                        # IO.StreamWriter('x'): the list starts a new argument
+        if k < n and src[k] not in stops:
+            return None                         # ('a') + 'b': an expression the guard does not read
+        vals[param] = args
+    kind = vals.get('typename') or []
+    if len(kind) != 1:
+        return None
+    return kind[0], vals.get('argumentlist', []), k, _net_lost(lost)
+
+
+FILE_MODE_RE = re.compile(r'(?i)^(?:\[(?:System\.)?IO\.FileMode\]::)?(\w+)$')
+FILE_ACCESS_RE = re.compile(r'(?i)^(?:\[(?:System\.)?IO\.FileAccess\]::)?(\w+)$')
+
+
+def _net_arg_name(src, arg, pattern):
+    """The enum value name the argument names ('Open', [IO.FileMode]::Open), lower case, or ''."""
+    text, s, e = arg
+    m = pattern.match(text if text is not None else src[s:e].strip())
+    return m.group(1).lower() if m else ''
+
+
+def _net_ctor(src, kind, args, end, out):
+    """Add the path a StreamWriter or FileStream constructor with `args` writes to `out`; True
+    when the guard does not read it: no arguments, or a StreamWriter's first argument that is not a
+    plain string (a Stream it writes through, judged where it is opened, or a path the line
+    computes). A FileStream opened to read only (FileMode Open, FileAccess Read) writes nothing,
+    unless it names FileOptions (a sixth argument: DeleteOnClose deletes the file)."""
+    if not args:
+        return True
+    text, s, e = args[0]
+    if kind == 'filestream' and 3 <= len(args) < 6 and _net_arg_name(src, args[1], FILE_MODE_RE) == 'open' and \
+            _net_arg_name(src, args[2], FILE_ACCESS_RE) == 'read':
+        return False
+    if text is None and (kind == 'streamwriter' or src[s:e].lower() == '$null'):
+        return kind == 'streamwriter'
+    out.append(NetWrite(sh.Word(src[s:e] if text is None else text, text is None, s, e), end))
+    return False
+
+
+def _net_operand_end(src, k):
+    """The offset just past the operand that starts at src[k]: its strings and brackets whole, up to
+    a space, a comma, a statement end or an unopened closing bracket."""
+    n, depth = len(src), 0
+    while k < n:
+        c = src[k]
+        if c in '\'"':
+            k = _net_string_end(src, k)
+            continue
+        if c == '`':
+            k += 2
+            continue
+        if c in '([{':
+            depth += 1
+        elif c in ')]}':
+            if depth == 0:
+                break
+            depth -= 1
+        elif depth == 0 and c in ' \t\r\n,;|&':
+            break
+        k += 1
+    return min(k, n)
+
+
+def _net_cast_operand(src, k):
+    """The offset of what follows the ']' at src[k - 1], past the spaces, <# #> comments and backtick
+    line continuations PowerShell reads as space there."""
+    n = len(src)
+    while k < n:
+        if src[k] in ' \t':
+            k += 1
+        elif src.startswith('<#', k):
+            close = src.find('#>', k + 2)
+            k = n if close < 0 else close + 2
+        elif src[k] == '`' and src[k + 1:k + 2] == '\n':
+            k += 2
+        elif src[k] == '`' and src[k + 1:k + 3] == '\r\n':
+            k += 3
+        else:
+            break
+    return k
+
+
+def _net_cast(src, k):
+    """The NetWrite of the StreamWriter cast whose type name ends at src[k] (its ']'), or None when
+    no operand follows (the type passed as a value: [IO.StreamWriter], [IO.StreamWriter].Name,
+    $x -is [IO.StreamWriter] -and $y, @([IO.StreamWriter], 1), List[IO.StreamWriter]). What follows
+    the ']' is an operand unless it ends the statement or the expression (a line end, a line comment,
+    . ) ] } ; | , ..) or is
+    a binary operator (-and, -eq, -f); a unary one (-join, -split, -not, -bnot, -1, +, !) opens an
+    operand, as a comment or a line continuation before it does not end one (_net_cast_operand).
+    PowerShell converts the operand by the constructor that takes a string, so a plain string
+    ('x.txt', or ('x.txt')) is the path; any other operand ($p, ('a' + $b), 'x'.Replace(...): a member
+    access or an index binds before the cast) is a path the line computes."""
+    n = len(src)
+    if src[k:k + 1] != ']':
+        return None
+    k = _net_cast_operand(src, k + 1)
+    if k >= n or src[k] in '\r\n#)]};|,':
+        return None                             # ']': a type argument, List[IO.StreamWriter]
+    if src[k] == '.' and not (src[k - 1] != ']' and src[k + 1:k + 2].isdigit()):
+        return None                             # .Name, ..5; but [IO.StreamWriter] .5 is a cast of 0.5
+    if src[k] in NET_DASHES:
+        op = re.compile(r'[A-Za-z]*').match(src, k + 1).group(0).lower()
+        if op and op not in NET_UNARY:
+            return None                         # a binary operator, or one PowerShell rejects
+    end = max(_net_operand_end(src, k), k + 1)
+    lit = None
+    if src[k] in '\'"':
+        close = _net_string_end(src, k)
+        lit = (_net_literal(src[k:close]), k, close) if close == end else None
+    elif src[k] == '(':
+        args, close = _net_args(src, k + 1)
+        if close == end and src[close - 1:close] == ')' and len(args) == 1 and not _net_lost(src[k + 1:close]):
+            lit = args[0]
+    if lit is not None and lit[0] is not None:
+        return NetWrite(sh.Word(lit[0], False, lit[1], lit[2]), end)
+    return NetWrite(sh.Word(src[k:end], True, k, end), end)
+
+
 def net_writes(cmd):
-    """([NetWrite], unread): each path the PowerShell command's .NET file calls (IO_FILE_RE) write,
-    and True when a match is a write the guard does not read the path of, so write_targets judges
-    the directory the command runs in, as it did for every such call: one inside a quoted word, a
-    method named with no '(' after it (called later, through .Invoke or a variable), a call with
-    fewer arguments than the ones it writes (_net_written), and one whose arguments the parse may
-    have lost its place in (_net_lost). A $null argument (Replace's backup) writes nothing."""
+    """([NetWrite], unread): each path the PowerShell command's .NET file calls (IO_FILE_RE) and
+    StreamWriter and FileStream constructors (NET_TYPE_RE: ::new(...), New-Object, or a StreamWriter
+    cast, [IO.StreamWriter]'x.txt', whose operand is a path the line computes unless it is a plain
+    string, _net_cast) write, and True
+    when a match is a write the guard does not read the path of, so write_targets judges the
+    directory the command runs in, as it did for every such call, and dotnet_process_dir the one
+    its process started in: one inside a quoted word, a method named with no '(' after it (called
+    later, through .Invoke or a variable), a call with fewer arguments than the ones it writes
+    (_net_written), one whose arguments the parse may have lost its place in (_net_lost), a type
+    named any other way (a FileStream cast, [type] as a value) and a New-Object call _net_new_object does
+    not read. A $null argument (Replace's backup) writes nothing."""
     if cmd.shell != sh.PS:
         return [], False
     out, unread, src = [], False, cmd.source
+    read = []                                   # the span of the type a New-Object call names
+    inv = cm.invocation(cmd) if NET_TYPE_RE.search(cmd.text) else None
+    if inv is not None and inv.name == 'new-object':
+        got = _net_new_object(cmd, inv)
+        kind = got and got[0][0] and re.match(r'(?i)^(?:System\.)?IO\.(StreamWriter|FileStream)$', got[0][0])
+        if kind:
+            read.append(got[0][1:])
+            unread = _net_ctor(src, kind.group(1).lower(), got[1], got[2], out) or got[3]
+    for m in NET_TYPE_RE.finditer(cmd.text):
+        pos, after = cmd.start + m.start(), cmd.start + m.end()
+        if any(s <= pos < e for s, e in read):
+            continue
+        w = next((x for x in cmd.words if x.start <= pos < x.end), None)
+        call = re.compile(r'\]::(\w+)').match(src, after)
+        if w is None or src[w.start:w.start + 1] in '\'"' + NET_QUOTES or src[pos - 1:pos] != '[':
+            unread = True                       # in a string, a type name passed as a value
+            continue
+        if not call:
+            # [IO.StreamWriter]'x.txt', [IO.StreamWriter]$p: a cast opens its operand (_net_cast)
+            cast = _net_cast(src, after) if m.group(0).lower().endswith('streamwriter') else None
+            if cast is None:
+                unread = True                   # [type] passed as a value, a FileStream cast
+            else:
+                out.append(cast)
+            continue
+        if call.group(1).lower() != 'new':
+            continue                            # a static member: [IO.StreamWriter]::Null
+        k = call.end()
+        while k < len(src) and src[k] in ' \t':
+            k += 1
+        if src[k:k + 1] != '(':
+            unread = True
+            continue
+        args, end = _net_args(src, k + 1)
+        kind = re.search(r'(?i)(StreamWriter|FileStream)$', m.group(0)).group(1).lower()
+        unread = _net_ctor(src, kind, args, end, out) or _net_lost(src[k + 1:end]) or unread
     for m in IO_FILE_RE.finditer(cmd.text):
         pos = cmd.start + m.start()
         w = next((x for x in cmd.words if x.start <= pos < x.end), None)
@@ -1991,11 +2342,17 @@ def net_writes(cmd):
             if text is None and src[s:e].lower() == '$null':
                 continue
             out.append(NetWrite(sh.Word(src[s:e] if text is None else text, text is None, s, e), end))
+    for x in out:
+        m = None if x.word.dyn else NET_DEVICE_RE.match(x.word.text)
+        if m:                                   # \\?\<drive>:\x is <drive>:\x; the span stays the argument's
+            x.word = sh.Word(x.word.text[m.end():], False, x.word.start, x.word.end)
     return out, unread
 
 
 def net_placed(w):
-    """True when the .NET argument Word `w` is a literal absolute path (NET_ABS_RE)."""
+    """True when the .NET argument Word `w` is a literal absolute path on a drive (NET_ABS_RE;
+    net_writes reads \\\\?\\<drive>:\\x as <drive>:\\x). A share (\\\\host\\<drive>$\\x) is not: the guard cannot tell
+    which folder it is, so dotnet_unplaced judges it as a path it cannot place."""
     return not w.dyn and bool(NET_ABS_RE.match(w.text))
 
 
@@ -2321,23 +2678,266 @@ def _evals(name, args, cmd_word):
     return []
 
 
-def _python(cmd, args, cmd_word):
+# python's short options that take a value: the rest of the word, or the next word (-c CODE,
+# -cCODE, -Ic CODE); its long option that takes one
+PY_SHORT_VALUE = 'cmWX'
+PY_LONG_VALUE = {'--check-hash-based-pycs'}
+# the py launcher's version choice (-3, -3.12, -3.12-64), taken before python's own options
+PY_LAUNCHER_VER_RE = re.compile(r'^-\d+(\.\d+)*(-(32|64))?$')
+
+
+def py_program(name, args):
+    """(kind, value, flags): how python reads its program from `args`. kind is 'code' (value the
+    -c Word), 'module' (-m), 'stdin' (`-`), 'script' or 'none' (no program named: python reads
+    standard input). flags is the set of option letters before it that take no value; a -W or -X
+    value or a long option adds '?'."""
+    flags = set()
     k = 0
+    if name == 'py' and args and PY_LAUNCHER_VER_RE.match(args[0].text):
+        k = 1
     while k < len(args):
-        t = args[k].text
-        if t == '-c' or (t.startswith('-') and not t.startswith('--') and t.endswith('c') and len(t) > 2):
-            return [here(cmd_word)]
+        w = args[k]
+        t = w.text
         if t == '-':
-            return [here(cmd_word)]
-        if t in ('-X', '-W'):
-            k += 2
+            return 'stdin', None, flags
+        if t == '--':
+            return ('script' if k + 1 < len(args) else 'none'), None, flags
+        if t.startswith('--'):
+            flags.add('?')
+            k += 2 if t in PY_LONG_VALUE else 1
             continue
-        if t.startswith('-'):
-            if t == '-m' or t.endswith('m') and not t.startswith('--'):
-                return []                       # a module: what it writes is its own business
+        if not t.startswith('-') or len(t) < 2:
+            return 'script', None, flags
+        for j in range(1, len(t)):
+            ch = t[j]
+            if ch not in PY_SHORT_VALUE:
+                flags.add(ch)
+                continue
+            if t[j + 1:]:
+                value, k = sh.Word(t[j + 1:], w.dyn, w.start, w.end), k + 1
+            else:
+                value, k = (args[k + 1] if k + 1 < len(args) else None), k + 2
+            if ch == 'c':
+                return 'code', value, flags
+            if ch == 'm':
+                return 'module', value, flags
+            flags.add('?')
+            break
+        else:
             k += 1
-            continue
-        return []                               # a script file
+    return 'none', None, flags
+
+
+# A python -c the guard can prove reads only (py_reads_only): isolated (-I: no working directory
+# or PYTHON* variable decides what an import loads) with these other plain flags, importing only
+# these modules and naming only these of their attributes (os.path only as `from os.path import`)
+PY_READ_FLAGS = set('IESsBbdqOuvP')
+PY_READ_MODULES = {
+    'json': frozenset(('load', 'loads', 'dump', 'dumps', 'JSONDecodeError')),
+    'sys': frozenset(('argv', 'stdin', 'stdout', 'stderr', 'exit', 'version', 'version_info',
+                      'platform', 'maxsize', 'executable')),
+    're': frozenset(('match', 'fullmatch', 'search', 'findall', 'finditer', 'sub', 'subn',
+                     'split', 'escape', 'error', 'A', 'ASCII', 'I', 'IGNORECASE', 'M', 'MULTILINE',
+                     'S', 'DOTALL', 'X', 'VERBOSE')),
+    'collections': frozenset(('Counter', 'defaultdict', 'OrderedDict', 'deque')),
+    'itertools': frozenset(('chain', 'islice', 'groupby', 'count', 'product', 'permutations',
+                            'combinations', 'accumulate', 'zip_longest', 'takewhile', 'dropwhile',
+                            'starmap', 'repeat', 'compress', 'filterfalse')),
+    'math': frozenset(('ceil', 'floor', 'sqrt', 'log', 'log2', 'log10', 'exp', 'fabs', 'fsum',
+                       'prod', 'gcd', 'isclose', 'isnan', 'isinf', 'trunc', 'pi', 'e', 'inf', 'nan')),
+    'os.path': frozenset(('basename', 'dirname', 'exists', 'isfile', 'isdir', 'isabs', 'join',
+                          'getsize', 'getmtime', 'abspath', 'normpath', 'normcase', 'realpath',
+                          'relpath', 'split', 'splitext', 'commonpath')),
+}
+# The only builtins the code may name (an allowlist: type, object and the rest stay out). open
+# only as a call that opens for reading (_py_open_reads)
+PY_BUILTINS = frozenset(('print', 'len', 'range', 'sorted', 'reversed', 'enumerate', 'zip', 'min', 'max',
+                         'sum', 'abs', 'round', 'any', 'all', 'str', 'int', 'float', 'bool', 'list',
+                         'dict', 'set', 'tuple', 'repr', 'isinstance', 'map', 'filter', 'open'))
+# The only attributes the code may take of a value that is not an imported module: string, list,
+# dict, match and read-file methods. A file object's buffer, raw or name, and every class or
+# type attribute, stay out
+PY_VALUE_ATTRS = frozenset((
+    'read', 'readline', 'readlines', 'write', 'flush',
+    'strip', 'lstrip', 'rstrip', 'split', 'rsplit', 'splitlines', 'join', 'replace', 'startswith',
+    'endswith', 'lower', 'upper', 'find', 'count', 'format', 'encode', 'decode', 'partition',
+    'rpartition', 'isdigit',
+    'items', 'keys', 'values', 'get', 'append', 'extend', 'sort', 'index', 'most_common',
+    'group', 'groups', 'groupdict', 'start', 'end', 'span'))
+# names that run text as code, open a file, reach any attribute or module by name, give a value's
+# type, or start a debugger or pager: refused as any identifier (a name, attribute, import alias,
+# keyword); open is the one builtin call let through, as a Name only
+PY_DENIED_NAMES = {'exec', 'eval', 'compile', 'open', 'getattr', 'setattr', 'delattr', 'globals',
+                   'locals', 'vars', 'breakpoint', 'help', 'type', 'object', 'super', 'input'}
+# identifiers that reach a frame, its globals or code: the way back to every module
+PY_FRAME_ATTR_RE = re.compile(r'^(gi|cr|ag|f|tb|co|func|im)_')
+PY_OPEN_KEYWORDS = {'encoding', 'errors', 'newline', 'buffering'}
+# The only syntax the code may use: statements and expressions that bind, call, compute and loop.
+# No def, lambda or class (new names the walk would have to follow), no match (its patterns bind
+# and read attributes with no Name or Attribute node), no try, while, del, global, walrus, await,
+# yield or template string; any node type a later python adds is refused too
+PY_NODES = tuple(t for t in (getattr(ast, n, None) for n in (
+    'Module', 'Expr', 'Assign', 'AugAssign', 'For', 'If', 'With', 'withitem', 'Pass', 'Break',
+    'Continue', 'Import', 'ImportFrom', 'alias',
+    'Call', 'keyword', 'Name', 'Attribute', 'Subscript', 'Slice', 'Starred', 'Constant',
+    'JoinedStr', 'FormattedValue', 'BinOp', 'UnaryOp', 'BoolOp', 'Compare', 'IfExp', 'Tuple', 'List',
+    'Dict', 'Set', 'ListComp', 'SetComp', 'DictComp', 'GeneratorExp', 'comprehension',
+    'Load', 'Store', 'operator', 'unaryop', 'boolop', 'cmpop')) if t is not None)
+# Every public builtin name up to python 3.14, written out so the guard does not depend on the
+# python it runs on: the python a line starts may be newer than the guard's
+PY_BUILTIN_NAMES = frozenset((
+    'abs', 'aiter', 'all', 'anext', 'any', 'ascii', 'bin', 'bool', 'breakpoint', 'bytearray', 'bytes',
+    'callable', 'chr', 'classmethod', 'compile', 'complex', 'copyright', 'credits', 'delattr', 'dict',
+    'dir', 'divmod', 'enumerate', 'eval', 'exec', 'exit', 'filter', 'float', 'format', 'frozenset',
+    'getattr', 'globals', 'hasattr', 'hash', 'help', 'hex', 'id', 'input', 'int', 'isinstance',
+    'issubclass', 'iter', 'len', 'license', 'list', 'locals', 'map', 'max', 'memoryview', 'min', 'next',
+    'object', 'oct', 'open', 'ord', 'pow', 'print', 'property', 'quit', 'range', 'repr', 'reversed',
+    'round', 'set', 'setattr', 'slice', 'sorted', 'staticmethod', 'str', 'sum', 'super', 'tuple', 'type',
+    'vars', 'zip', 'Ellipsis', 'NotImplemented', 'True', 'False', 'None',
+    'ArithmeticError', 'AssertionError', 'AttributeError', 'BaseException', 'BaseExceptionGroup',
+    'BlockingIOError', 'BrokenPipeError', 'BufferError', 'BytesWarning', 'ChildProcessError',
+    'ConnectionAbortedError', 'ConnectionError', 'ConnectionRefusedError', 'ConnectionResetError',
+    'DeprecationWarning', 'EOFError', 'EncodingWarning', 'EnvironmentError', 'Exception',
+    'ExceptionGroup', 'FileExistsError', 'FileNotFoundError', 'FloatingPointError', 'FutureWarning',
+    'GeneratorExit', 'IOError', 'ImportError', 'ImportWarning', 'IndentationError', 'IndexError',
+    'InterruptedError', 'IsADirectoryError', 'KeyError', 'KeyboardInterrupt', 'LookupError',
+    'MemoryError', 'ModuleNotFoundError', 'NameError', 'NotADirectoryError', 'NotImplementedError',
+    'OSError', 'OverflowError', 'PendingDeprecationWarning', 'PermissionError', 'ProcessLookupError',
+    'PythonFinalizationError', 'RecursionError', 'ReferenceError', 'ResourceWarning', 'RuntimeError',
+    'RuntimeWarning', 'StopAsyncIteration', 'StopIteration', 'SyntaxError', 'SyntaxWarning',
+    'SystemError', 'SystemExit', 'TabError', 'TimeoutError', 'TypeError', 'UnboundLocalError',
+    'UnicodeDecodeError', 'UnicodeEncodeError', 'UnicodeError', 'UnicodeTranslateError',
+    'UnicodeWarning', 'UserWarning', 'ValueError', 'Warning', 'WindowsError', 'ZeroDivisionError'))
+# names a stored name or import alias may not take: it would hide the builtin only when the
+# binding runs, so a name read as the binding might reach the builtin. The fixed list joined with
+# the running python's own, so a python newer or older than the guard's is covered either way
+PY_SHADOWED = PY_BUILTIN_NAMES | frozenset(dir(builtins)) | frozenset(PY_DENIED_NAMES)
+
+
+def _py_open_reads(call):
+    """True when the open() call opens for reading only: a path, then at most a literal mode
+    without w, a, x or +, and only plain keywords."""
+    if not 1 <= len(call.args) <= 2 or any(isinstance(a, ast.Starred) for a in call.args):
+        return False
+    mode = call.args[1] if len(call.args) == 2 else None
+    for kw in call.keywords:
+        if kw.arg == 'mode' and mode is None:
+            mode = kw.value
+        elif kw.arg not in PY_OPEN_KEYWORDS:
+            return False                        # **kwargs, opener=, a second mode
+    if mode is None:
+        return True
+    return isinstance(mode, ast.Constant) and isinstance(mode.value, str) and set(mode.value) <= set('rbtU')
+
+
+def _py_ident_ok(name):
+    """False for an identifier the code may not hold anywhere: one starting with _, a frame
+    identifier, or one of PY_DENIED_NAMES."""
+    return not (name.startswith('_') or PY_FRAME_ATTR_RE.match(name) or name in PY_DENIED_NAMES)
+
+
+def py_reads_only(code, flags, ps=False):
+    """True when the guard can prove the python -c Word `code`, run with the option letters
+    `flags`, writes no file: literal text, isolated mode, only PY_NODES syntax, imports and module
+    attributes only from PY_READ_MODULES, a module name only as `module.attr`, other attributes
+    only from PY_VALUE_ATTRS, names only from PY_BUILTINS, the imports and the names the code
+    stores, no identifier _py_ident_ok refuses, and open() only as a call that opens for reading.
+    `ps`: the line reaches python through PowerShell, whose native-argument quoting can hand python
+    other text than the Word when it holds a double quote or a backslash (PowerShell 5.1 also
+    wraps an argument with a space in quotes without doubling a trailing backslash), so such code
+    is not proved; nor is empty or blank code, which PowerShell 5.1 drops so that python takes the
+    next word as its code. Each import name binds once. Any text it cannot parse, or any other
+    shape, is not proved (False)."""
+    if code is None or code.dyn or 'I' not in flags or not flags <= PY_READ_FLAGS:
+        return False
+    if not code.text.strip():
+        return False
+    if ps and (ps_native_unsure(code) or '\\' in code.text):
+        return False
+    try:
+        tree = ast.parse(code.text, mode='exec')
+    except Exception:                           # SyntaxError, ValueError, RecursionError: unread
+        return False
+    mods, imported, stored, aliases, parents = {}, set(), set(), set(), {}
+    for node in ast.walk(tree):
+        if not isinstance(node, PY_NODES):
+            return False
+        for child in ast.iter_child_nodes(node):
+            parents[child] = node
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                if a.name not in PY_READ_MODULES or '.' in a.name:
+                    return False
+                mods[a.asname or a.name] = PY_READ_MODULES[a.name]
+        elif isinstance(node, ast.ImportFrom):
+            if node.level or node.module not in PY_READ_MODULES:
+                return False
+            if any(a.name not in PY_READ_MODULES[node.module] for a in node.names):
+                return False                    # `*` too
+            imported.update(a.asname or a.name for a in node.names)
+        elif isinstance(node, ast.alias):
+            bound = node.asname or node.name
+            if not all(_py_ident_ok(n) for n in (node.name, node.asname) if n) \
+                    or bound in PY_SHADOWED or bound in aliases:
+                return False                    # a name two imports bind: which one is unknown
+            aliases.add(bound)
+        elif isinstance(node, ast.keyword):
+            if node.arg is not None and not _py_ident_ok(node.arg):
+                return False
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            stored.add(node.id)
+    if stored & (set(mods) | imported | PY_SHADOWED):
+        return False                            # a module, an import or a builtin rebound
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute):
+            if not _py_ident_ok(node.attr) or not isinstance(node.ctx, ast.Load):
+                return False
+            v = node.value
+            allowed = mods[v.id] if isinstance(v, ast.Name) and v.id in mods else PY_VALUE_ATTRS
+            if node.attr not in allowed:
+                return False
+        elif isinstance(node, ast.Name):
+            n, parent = node.id, parents.get(node)
+            if n == 'open':
+                if not (isinstance(parent, ast.Call) and parent.func is node and _py_open_reads(parent)):
+                    return False
+                continue
+            if not _py_ident_ok(n):
+                return False
+            if n in mods:
+                if not (isinstance(parent, ast.Attribute) and parent.value is node
+                        and isinstance(node.ctx, ast.Load)):
+                    return False                # a module passed on, rebound or aliased
+            elif n not in PY_BUILTINS and n not in imported and n not in stored:
+                return False                    # any other builtin, or a name never bound
+    return True
+
+
+def _python(cmd, name, args, cmd_word, via=None):
+    # Start-Process hands python one command line the guard re-split with its quotes taken out
+    # (commands._split_list), so what python reads is not the words below
+    if via == 'start-process':
+        return [here(cmd_word)]
+    shells, c = set(), cmd
+    while c is not None:                        # every shell on the way to python
+        shells.add(c.shell)
+        # a word PowerShell may hand on as other than one argument (dropped when empty, split at a
+        # double quote): python's own words, or the text of a bash -c around it, are not the
+        # ones read here
+        if c.shell == sh.PS and any(ps_native_unsure(w) for w in c.words):
+            return [here(cmd_word)]
+        c = c.nested_in
+    kind, code, flags = py_program(name, args)
+    if kind == 'code':
+        # through cmd.exe the Word is not what python gets: cmd ends a quoted part at a \" python
+        # reads as a quote, and keeps print(...) one word where the read splits it at the (
+        if sh.CMD in shells:
+            return [here(cmd_word)]
+        return [] if py_reads_only(code, flags, sh.PS in shells) else [here(cmd_word)]
+    if kind == 'stdin':
+        return [here(cmd_word)]
+    if kind in ('module', 'script'):
+        return []                               # its own file decides what it writes
     if cmd.piped_in or any(r.op in ('<<', '<<<', '<') for r in cmd.redirects):
         return [here(cmd_word)]                 # a script read from standard input
     return []
@@ -2353,7 +2953,7 @@ def write_targets(cmd, inv):
         if r.target.text.lower() in NULL_TARGETS:
             continue
         out.append(r.target)
-    if cmd.shell == sh.PS and IO_FILE_RE.search(cmd.text):
+    if net_mentioned(cmd):
         net, unread = net_writes(cmd)
         out.extend(x.word for x in net if net_placed(x.word))
         # The rest are dotnet_unplaced's, and the directory the command runs in is judged too,
@@ -2410,7 +3010,7 @@ def write_targets(cmd, inv):
     if name == 'wget':
         return out + _wget(args, word)
     if cm.PYTHON_RE.match(name):
-        return out + _python(cmd, args, word)
+        return out + _python(cmd, name, args, word, inv.via)
     if name in EVALS:
         return out + _evals(name, args, word)
     if name == 'tar':                           # Windows' own tar.exe runs from PowerShell too
@@ -2686,11 +3286,11 @@ def shell_writes(event, ctx, cmd, inv, cwd, role):
     d = git_jail(event, ctx, cmd, inv, cwd, role)
     if d:
         return d
-    d = dotnet_unplaced(event, ctx, cmd, cwd, role)
+    d = dotnet_unplaced(event, ctx, cmd, cwd, role) or dotnet_process_dir(event, ctx, cmd, cwd, role)
     if d:
         return d
     net = {}
-    if cmd.shell == sh.PS and IO_FILE_RE.search(cmd.text):
+    if net_mentioned(cmd):
         net = dict(((x.word.start, x.word.end), x) for x in net_writes(cmd)[0])
     into = copy_into(cmd, inv)
     for w in write_targets(cmd, inv):
@@ -2749,7 +3349,7 @@ def dotnet_unplaced(event, ctx, cmd, cwd, role):
     (write-jail); the owner's own session is not judged. A relative path is first judged where the
     PowerShell location puts it (edit_target), and the alternative is the call on that absolute
     path."""
-    if cmd.shell != sh.PS or not IO_FILE_RE.search(cmd.text):
+    if not net_mentioned(cmd):
         return None
     for x in net_writes(cmd)[0]:
         w = x.word
@@ -2775,12 +3375,55 @@ def dotnet_unplaced(event, ctx, cmd, cwd, role):
         why = '%s through .NET. %s' % (what, NET_RELATIVE)
         if w.dyn:
             why += ' The guard does not read a path the line computes.'
+        elif re.match(r'^[\\/]{2}', w.text):
+            why += ' The guard cannot tell which folder a share path names.'
         if fixed:
             return refuse(rule, role, why + ' The same write on the absolute path:', rewrite(fixed))
         base = own_worktree(ctx, cwd) or cmd.cwd
         if base:
             return refuse(rule, role, why + ' Give it a literal absolute path:', rewrite(fwd(base) + '/<file>'))
         return refuse(rule, role, why + ' Give it a literal absolute path; to see where this session runs:', 'pwd')
+    return None
+
+
+def dotnet_process_dir(event, ctx, cmd, cwd, role):
+    """A .NET write the guard does not read the path of, or one it cannot place (net_writes,
+    net_placed), judged in each directory its process may have started in (edit_target): the
+    directory the call runs in (`cwd`) and the PowerShell location of each command it is nested
+    in. .NET reads a relative path there (NET_RELATIVE), so a Set-Location into a worktree does not
+    take the write with it; write_targets judges the PowerShell location itself. A session that
+    runs outside a worktree of its own (in the main checkout, or outside any repository) is told to
+    give the call literal absolute paths, not to make a worktree (that does not move where its
+    process starts)."""
+    if not net_mentioned(cmd):
+        return None
+    net, unread = net_writes(cmd)
+    if not unread and all(net_placed(x.word) for x in net):
+        return None
+    dirs, outer = [cwd], cmd.nested_in
+    while outer is not None:
+        dirs.append(outer.cwd)
+        outer = outer.nested_in
+    seen = set([paths.norm(cmd.cwd)] if cmd.cwd else [])
+    for d in dirs:
+        if not d or paths.norm(d) in seen:
+            continue
+        seen.add(paths.norm(d))
+        what = ('`%s` may write through .NET in %s, the directory its process started in (.NET reads a relative '
+                'path there, and Set-Location does not move it; give the call literal absolute paths)'
+                % (bare(cmd), fwd(d)))
+        target = paths.norm(d, fold=False)
+        res = edit_target(event, ctx, target, cwd, role, what, run=bare(cmd))
+        place = ctx.place(target) if res and res.rule == 'main-checkout' and own_worktree(ctx, cwd) is None \
+            else None
+        if place is not None and place.kind == repo.MAIN and not ctx.is_pm_data(place.top):
+            # the session runs outside a worktree: a worktree it makes does not move where its process starts
+            return refuse('main-checkout', role, '%s is in the main checkout %s; this role may not edit a main '
+                          'checkout. A new worktree does not move the directory this PowerShell process '
+                          'started in, so call each .NET method directly with literal absolute paths inside '
+                          'a worktree. To see where this session runs:' % (what, place.top), 'pwd')
+        if res:
+            return res
     return None
 
 
@@ -4889,8 +5532,9 @@ def _busy_loop(parsed, cmds, first, last):
         if BOUND_RE.search(loop):
             return None
         cut = body_open + 1 - head.start
-        return loop, '$deadline = (Get-Date).AddMinutes(%d); %s if ((Get-Date) -gt $deadline) { break }; %s' % (
+        bounded = '$deadline = (Get-Date).AddMinutes(%d); %s if ((Get-Date) -gt $deadline) { break }; %s' % (
             BUSY_MINUTES, loop[:cut], loop[cut:].lstrip())
+        return loop, _in_outer(head, src[:head.start] + bounded + src[end:], bounded)
     words = [w for w in head.words if w.text not in BASH_LEAD_SKIP]
     start = words[0].start if words else head.start
     done = cmds[last]
@@ -4902,7 +5546,49 @@ def _busy_loop(parsed, cmds, first, last):
     if tested and cm.base_name(tested[0].text) == 'read':
         return None                              # while read: it reads lines, it waits on nothing
     rest = src[done_end:done.end] + DUP_RE.match(src, done.end).group(0)   # the loop's redirects
-    return loop, "timeout %d bash -c '%s'%s" % (BUSY_MINUTES * 60, loop.replace("'", "'\\''"), rest.rstrip())
+    do = _bash_loop_do(cmds, first, last)
+    if do is None:
+        return loop, "timeout %d bash -c '%s'%s" % (BUSY_MINUTES * 60, loop.replace("'", "'\\''"), rest.rstrip())
+    cut = do.end - start
+    bounded = 'SECONDS=0; %s [ $SECONDS -ge %d ] && break;%s%s' % (
+        loop[:cut], BUSY_MINUTES * 60, loop[cut:] if loop[cut:cut + 1].isspace() else ' ' + loop[cut:],
+        rest.rstrip())
+    return loop, _in_outer(head, src[:start] + bounded + src[done_end + len(rest):], bounded)
+
+
+def _bash_loop_do(cmds, first, last):
+    """The `do` Word of the bash loop cmds[first..last] (not one of a loop nested in it), or None."""
+    depth = 1
+    for c in cmds[first + 1:last + 1]:
+        w = c.words[0] if c.words else None
+        if depth == 1 and w is not None and w.text == 'do' and not cm.quoted(c, w):
+            return w
+        if _lead(c) in ('while', 'until', 'for', 'select'):
+            depth += 1
+        elif _first(c) == 'done':
+            depth -= 1
+    return None
+
+
+def _in_outer(cmd, text, alone):
+    """`alone` (the bounded loop) when `cmd` is on the call's own line. When it is nested (bash -c
+    '...', powershell -Command '...'), the outer command that runs `text` (the nested source with
+    the loop bounded) instead: each outer command with the literal word that held the old text
+    replaced by the new, single-quoted for its shell; `alone` when that word cannot be found."""
+    if cmd.nested_in is None:
+        return alone
+    c = cmd
+    while c.nested_in is not None:
+        outer = c.nested_in
+        hits = [w for w in outer.words if not w.dyn and w.text == c.source]
+        if len(hits) != 1 or outer.start is None:
+            return alone
+        w = hits[0]
+        quoted = "'%s'" % (text.replace("'", "''") if outer.shell == sh.PS else text.replace("'", "'\\''"))
+        src = outer.source
+        text = src[outer.start:w.start] + quoted + src[w.end:outer.end]
+        c = outer
+    return text
 
 
 DUP_RE = re.compile(r'(?:\s*\d*[<>]&\d+)*')       # fd duplications (2>&1) a command's span leaves out

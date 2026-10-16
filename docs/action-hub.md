@@ -39,17 +39,22 @@ or after an unpair or a session that ran out) is told so on the page and to run
   while a story is still submitted), Current backlog (each repository's open work, with priority,
   status and text filters), Parked (backlog items a coordinator has parked waiting on you, with
   their question, branch and age) and Completed (1, 7, 30 or 90 days).
+- **Docs.** The agents' documents (a plan, research, a visual choice), newest first, from the
+  store's `pages/` and `page_html/` ("pages/<id> and page_html/<id>" below). Read here opens one in
+  a full-screen reader; Close shuts it, and so does Esc while the focus is outside the document. Read only: nothing on the page writes or deletes a
+  document.
 - **Info.** Usage (each account's plan usage) and Agents (each agent's model and effort).
 
 Under the header a line says whether a PM is listening: "A PM is listening." while a PM holds a
-`wait` open, else when one last asked. The page reads everything at once
+`wait` open, else when one last asked; another session's wait `--for` its own key does not
+count (`Api.seen` in `kitlib/hubsite/api.py`). The page reads everything at once
 (`GET /api/v1/snapshot`), then waits for the next change (`GET /api/v1/wait`, about 55 seconds on
 the server), so what the PM writes shows without a reload. A view the server cannot give says so
 at the top.
 
-Links ending `#inbox`, `#todo`, `#topm`, `#backlog` (or `#stories`), `#parked` or `#info` open that
-section; `#usage` and `#agents` open that Info tab. The Questions, Answers and To do lists filter by
-repository.
+Links ending `#inbox`, `#todo`, `#topm`, `#backlog` (or `#stories`), `#parked`, `#docs` or `#info` open that
+section; `#usage` and `#agents` open that Info tab. The Questions, Answers, To do and Docs lists filter by
+repository; Questions, To do and Docs also by id or title.
 
 ## Serving it
 
@@ -130,8 +135,19 @@ connection dropped mid-request.
 ## For the PM
 
 The PM reads and writes the hub only through `tools/hub.py` or the hub MCP server (docs/hub-mcp.md),
-both with the agent's token; coordinators
-never write to it, they send questions and hand steps to the PM. Every verb takes `--port N` and
+both with the agent's token. A coordinator writes only its own questions: it posts each with
+`hub.py questions add --from <its launcher session key>` (the `hub key:` line of its session-start
+context, `kitlib.coordinatorstart.hub_key`), keeps one `hub.py wait --pending --for
+<its key>` running in the background, and acts on the answer itself when it comes. A to-do for its
+own work it files with `hub.py todos add --from <its key>`, and acknowledges it (`todos ack`) once
+it has acted on it; it hands every other step (notes, stories) to the PM. Who handles each pending
+item: "Who handles a pending item" below. For a question, the server takes `--from` only when it is `pm` or a
+key of the launcher's sessions.json, read again on each add; any other value is refused, and a
+question without `--from` is the PM's. The answer stays pending for everyone, the PM included,
+until the PM logs the ruling in the rulings ledger and then on the question (`questions log`), as
+for any other answer, so a plain wait would print the same answer again at once: the
+coordinator restarts its wait with `--except` and every id it has acted on (`wait --pending --for
+<its key> --except Q-7 T-3`), which leaves those ids out and ends only on another item. Every verb takes `--port N` and
 `--json` (the server's answer as one JSON line). The server alone decides what a role may do: the
 owner's verbs (answer, todos done, stories add and withdraw, to-pm add and send, inbox read) are
 refused to the agent.
@@ -141,11 +157,11 @@ Verbs (`tools/hub.py` docstring is the source), with the line each prints:
 | Verb | Prints |
 |---|---|
 | `questions [--status S] [--repo R]` | `Q-1 v2 open [repo] title` |
-| `questions add --title T [--repo R] [--context-file F] [--option "label::description" ...] [--recommended N] [--refs ID ...] [--urgent] [--story S-n] [--from NAME]` | `ASKED Q-2`, then any warning lines |
+| `questions add --title T [--repo R] [--context-file F] [--option "label::description" ...] [--recommended N] [--refs ID ...] [--urgent] [--story S-n] [--from KEY]` | `ASKED Q-2`, then any warning lines |
 | `questions log Q-1 <ruling id> --if-version V` | `LOGGED Q-1 <ruling id>` |
 | `answer Q-1 --choice N\|other [--note TEXT] [--if-version V]` (owner) | `ANSWERED Q-1 <label>` |
 | `todos [--status S] [--repo R]` | `T-1 open [repo] title` |
-| `todos add --title T [--detail D] [--command C ...] [--repo R] [--refs ID ...] [--urgent] [--from NAME \| --owner]` | `ADDED T-2` |
+| `todos add --title T [--detail D] [--command C ...] [--steps F] [--repo R] [--refs ID ...] [--urgent] [--from NAME \| --owner]` | `ADDED T-2` |
 | `todos done T-1 [--undo] [--if-version V]` (owner) | `DONE T-1` or `REOPENED T-1` |
 | `todos ack T-1` | `ACKED T-1` |
 | `stories [--status S] [--repo R]` | `S-1 v2 submitted [repo] title` |
@@ -159,8 +175,8 @@ Verbs (`tools/hub.py` docstring is the source), with the line each prints:
 | `inbox` | `M-1 unread [repo] title` |
 | `inbox add --text T [--title T] [--repo R] [--ref ID] [--asked TEXT] [--refs ID ...] [--from NAME]` | `POSTED M-2` |
 | `inbox read M-1 [--undo] [--if-version V]` (owner) | `READ M-1` or `UNREAD M-1` |
-| `pending` | `<kind> <id> [repo] title` |
-| `wait [--since REV] [--timeout S] [--pending]` | `HUB <rev> <kind> <id> <title>` (pending) or `HUB <rev> <collection> <id> <op> <status>`; `HUB <rev> reset: the store is behind --since; read it again` after a reset |
+| `pending [--for KEY]` | `<kind> <id> [repo] to=<route> from=<key> title` |
+| `wait [--since REV] [--timeout S] [--pending [--for KEY] [--except ID ...]]` | `HUB <rev> <kind> <id> to=<route> from=<key> <title>` (pending) or `HUB <rev> <collection> <id> <op> <status>`; `HUB <rev> reset: the store is behind --since; read it again` after a reset |
 | `validate [--store PATH]` | `VALIDATE <LEVEL> <document> <field>: <message> [<code>]` |
 | `serve [--port N] [--store PATH]`, `status [--port N]`, `setup`, `open [--port N] [--print]`, `migrate` | see "Serving it" and "Data from the old hub" |
 
@@ -170,23 +186,54 @@ Notes on the table:
   require `--if-version`.
 - `hub.py pending` lists the owner input not yet handled: questions answered and not logged,
   stories submitted, To PM items sent, and to-dos done or added by the owner without `pm_ack`
-  (`kitlib.hubsite.store.pending_items`).
+  (`kitlib.hubsite.store.pending_items`). Each item carries `from`, the session key it is for, and
+  `route`, the key that is to handle it now (the line's `from=` and `to=`). A question or to-do is
+  for the launcher session key it was posted `--from` while that key is still in sessions.json;
+  everything else (a to-do's free-text `from`, the owner's own items, stories, To PM items, and a
+  question whose session has gone) is for `pm` (`kitlib.hubsite.api.Api.pending`). `pending --for
+  KEY` lists only KEY's items, and `pending --for pm` the items routed to `pm` and every answered
+  question; reading it marks nothing, so the item stays pending for every reader until it is
+  logged or acknowledged.
 - `hub.py wait --pending` waits until an item is pending (one already pending ends it at once) and
-  prints `HUB <rev> <kind> <id> <title>` for each; `wait [--since REV]` waits for any change and
-  prints `HUB <rev> <collection> <id> <op> <status>`. `--timeout S` exits 4 with no line when
-  nothing came. The PM keeps one `wait --pending` running in the background, handles what it
-  prints, then starts it again; a PM waiting there is what the page shows as listening.
+  prints `HUB <rev> <kind> <id> to=<route> from=<key> <title>` for each; with `--for KEY` it waits
+  until an item for KEY is pending and other sessions' items do not end it. `--except ID ...`
+  leaves out the items with those ids (ones already acted on, which stay pending until the PM logs
+  or acknowledges them), so only another item ends the wait; it marks nothing
+  (`kitlib.hubsite.api.wait`). `wait [--since REV]` waits for any change and prints
+  `HUB <rev> <collection> <id> <op> <status>`; `--for` or `--except` without `--pending` is a
+  usage error. `--timeout S` exits 4 with no line when nothing came. The PM keeps one
+  `wait --pending --for pm` running in the background, handles what it prints, then starts it
+  again; a PM waiting there is what the page shows as listening. A plain `wait --pending` would
+  end at once on an item a creator holds and not yet acknowledged, again and again.
 
 `--if-version V` is the version of the document the PM read and decided on (the `v2` of the
 `questions` and `stories` lines); a document that has moved on is refused (`REFUSED conflict`). At
 each start, resume and compact the PM session-start checklist (docs/pm-start.md) says whether the
-server is up, how many items are pending and whether `wait --pending` runs.
+server is up, how many items are pending and whether the PM's `wait --pending --for pm` runs.
+
+### Who handles a pending item
+
+Each pending item goes to the session that created it while that session can be reached, and to
+the PM otherwise, so the PM is the fallback for a creator that is gone (`route`, "Routes" in the
+`kitlib/hubsite/api.py` docstring):
+- An item for `pm` is the PM's.
+- An item for a session key, before it is handed over, is that key's while the key can be reached:
+  a `wait --pending --for <key>` is open now, or one started or ended within `REACH_GRACE_S` (the
+  55-second wait limit plus 30 seconds). Otherwise it is the PM's.
+- A `pending` or `wait` `--for <key>` that returns one of the key's items hands it over. The item
+  is then the key's for `ACK_WINDOW_S` (30 minutes) from the first hand-over, and the PM's after
+  that while it is still pending. The creator ends it by acting on it: `todos ack` for a to-do;
+  an answered question stays pending until the PM logs it.
+- `--for pm` lists the PM's items and every answered question, whoever asked it, because the PM
+  logs each ruling. A PM wait is also woken when an item turns to the PM with no write.
+- This state lives in the server's memory only: after a restart every item is the PM's until
+  its creator waits again. Older to-dos whose `from` is a free-text name are the PM's.
 
 ## questions/Q-NNN
 | Field | Written by | Meaning |
 |---|---|---|
 | status | PM, owner | `open`, then `answered` (owner), then `logged` (PM) |
-| repo, from, asked_at | PM | where it came from; asked_at is ISO time |
+| repo, from, asked_at | PM, coordinator | where it came from; `from` is `pm` or the asking coordinator's launcher session key, the session its answer goes back to; asked_at is ISO time |
 | title | PM | the question itself |
 | context | PM | everything needed to answer; nothing is assumed from chat |
 | options | PM | `[{label, description}]`, recommendation first |
@@ -196,7 +243,8 @@ server is up, how many items are pending and whether `wait --pending` runs.
 | answer | owner | `{choice: index or "other", label, note, at}` |
 | ruling | PM | the ruling id it was logged as |
 
-The PM files each answer, then logs it (`questions log`), pinning `--if-version`.
+The PM files each answer, then logs it (`questions log`), pinning `--if-version`; an answer to a
+coordinator's question too, which the coordinator has already acted on.
 
 ## inbox/M-NNN
 The owner's inbox: the PM's answer to every question the owner asks in a note (on a question, a
@@ -255,6 +303,15 @@ short acknowledgement. `to-pm reply` sets `done`.
 | urgent | true sorts it to the top; the owner can set it on their own items |
 | pm_ack | PM: set once it has followed up on a done item or picked up an owner-added one; takes it off the pending list |
 
+A new to-do (`POST /todos`, so `hub.py todos add` and the MCP tool `hub_todo_add` alike) may also
+carry `steps`, which is not stored: `kitlib.hubsite.api.todo_steps` turns each step into a command
+appended after `commands` and adds one summary line per step at the end of `detail` (the steps and
+their commands: docs/hub-mcp.md "To-do steps"). `hub.py todos add --steps F` reads the list from F,
+a UTF-8 JSON file. The server refuses, as `invalid` naming the field: a bad step (`steps`), a
+`commands` entry holding a lone surrogate (U+D800 to U+DFFF, `commands`), and, on an agent's to-do,
+text the owner's to-do rules forbid (`todosteps.check`: plain Notepad, a hand edit described in
+prose, coordinator work). The owner's own to-dos are not judged by those rules.
+
 ## stories/S-NNN
 The owner writes a story and picks the backlog it belongs in. It reaches the backlog only through
 that repo's coordinator.
@@ -293,13 +350,56 @@ repo list (`GET /api/v1/repos`, `kitlib.hubsite.derived.repos`) is every reposit
 kit's repository and the optional `pm_start.repos`) with the aliases the store holds. An item whose
 repo is `all` is for every repo and shows under each one.
 
+## pages/<id> and page_html/<id>
+An agent's document: `pages/<id>` is its card, `page_html/<id>` = {html} its body. In `pages`,
+`kitlib/hubsite/schema.py` requires only `title` (a string); the page also reads `repo`, `from`,
+`summary`, `refs` (a list of ids), `at` and the store's own `updated_at`, each as text, and orders
+the list by `updated_at`, else `at`, newest first (`pageRows` in `kitlib/hubsite/web/index.html`).
+The ids have no prefix: the store assigns none (`Store.add` refuses `pages`), so a writer gives one
+with `put`. Nothing creates a page yet: no `tools/hub.py` verb, hub MCP tool or API route writes
+either collection, so a page exists only when `tools/hub.py migrate` copies one in from the old
+hub ("Data from the old hub" below) or it is placed in the store by hand.
+
+`GET /api/v1/snapshot` carries both collections whole, every body included
+(`test_snapshot_carries_pages_and_their_bodies` in `tests/hubsite/test_api.py`). A page with no
+body is listed with its Read here button disabled; a body with no page is not shown.
+
+The body is agent-written html. The page draws it nowhere but in the reader's one frame, made in
+script with a `sandbox` attribute that grants nothing (no scripts, forms, same-origin, popups or
+navigation of the hub page) and given the body through `srcdoc` behind a meta policy,
+`default-src 'none'; style-src 'unsafe-inline'; img-src data:; form-action 'none'; base-uri 'none'`
+(`DOC_CSP` in `kitlib/hubsite/web/index.html`; `DocsTest` and
+`PageTextTest.test_the_reader_is_one_locked_frame` in `tests/hubsite/test_page.py`). The policy
+blocks what the body loads by itself: images other than `data:`, CSS files, fonts, scripts, frames
+and form posts. A diagram therefore shows only as an inline `<svg>` or a `data:` image. Links are
+not blocked. A link clicked inside the reader moves the frame itself to that address, and the
+policy no longer applies there; the sandbox still blocks scripts and forms on that page. Some
+browsers may also look up the host names of links in advance (DNS prefetch). Agent documents are
+trusted to that level. The publish step is planned to remove links, `meta refresh` and `<link>`
+from a body.
+
+Esc closes the reader only while the focus is outside the frame: keys typed inside the sandboxed
+document never reach the hub page. The Close button always works. An open reader keeps the body it
+was opened with until it is closed, even when a later read of the snapshot changes or removes the page.
+
+`python tools/hub.py validate` (`_check_pages` in `kitlib/hubvalidate/__init__.py`) warns when a
+page's title is missing or empty, when a `page_html` has no string `html`, and when a `page_html`
+has no `pages` document (only when the `pages` collection exists). It does not warn about a page
+with no body.
+
 ## Views read live
-Never stored; the server reads each from its source on request (`kitlib.hubsite.derived`,
-`kitlib.hubsite.backlog`):
+Never stored; read from their sources (`kitlib.hubsite.derived`, `kitlib.hubsite.backlog`):
 - backlog and completed: each repository's backlog store (`.kit.json` backlog.store), every open
   record and every record closed in the last 90 days, fetched every `hub.backlog_refresh_s`.
   Parked is the backlog items whose state is parked. A repository's folder is
-  `pm_start.repo_paths[name]`, else the PM repository's sibling.
+  `pm_start.repo_paths[name]`, else the PM repository's sibling. While that timer runs,
+  `GET /api/v1/snapshot` (the page's load) answers these two from what the timer's reads left,
+  however old (one round per `backlog_refresh_s`; inferred: older if a round is slow), and starts no git. A
+  repository the first round has not reached shows with error "not read yet"; before any read
+  the snapshot lists the view in `unavailable` as `NotReadYet`, which the page shows as "The
+  backlog view is unavailable: NotReadYet" (the page text is inferred from `unavailable` being
+  shown as `gone`). `GET /api/v1/backlog?fresh=1` runs a fetch round and reads live. With no
+  timer (`backlog_refresh_s` unset) the snapshot reads as the routes do.
 - usage: `launch.py usage` (docs/launcher.md "Usage").
 - agents: the agent definitions in `claude/agents`.
 

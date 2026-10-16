@@ -44,7 +44,7 @@ the gate's exit 0 and its `GATE OK` line; anything else is a failure. Report the
 the failing lines from the log the gate names, not the whole log.
 
 ## Landing
-Only the lander or the project manager lands; no other role merges or pushes to the main branch.
+Only the coordinator or the project manager submits a landing to the land queue; no other role merges or pushes to the main branch.
 There is no standing landing approval here: each landing needs the owner's go for that branch,
 relayed by the coordinator or project manager with the reviewer's verdict. Missing either: do not
 land; say what is missing. From the main checkout, on the main branch:
@@ -52,8 +52,8 @@ land; say what is missing. From the main checkout, on the main branch:
 landing and prints the `gate.py wait-result ... -C <repo>` command to wait with; its `RESULT` line
 carries the same verdict line).
 It queues, locks, merges onto the main it finds, gates the merged tree, pushes and verifies
-(`<kit>/docs/gate.md` "Landing"). Success: a `LANDED ` line and exit 0, or exit 9 (landed, but
-commits on top were not gated: run the full gate on main and report). A conflict is
+(`<kit>/docs/gate.md` "Landing"). Success: a `LANDED ` line and exit 0. A red gate leaves main untouched (the merge is made in the
+kit landing tree). A conflict is
 `CONFLICT <branch> with main <sha>: the author merges main`: nothing changed, the branch goes back
 to its author. Any other verdict line (`NOT LANDED:`, `STUCK:`, `REFUSED:`, `BUSY:`, `NOT RUN:`)
 is reported as it is, with the doc's recovery steps, and not retried. No batches.

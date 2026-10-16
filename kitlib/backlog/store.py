@@ -17,6 +17,8 @@ store it did not validate against. A write that fails validation publishes nothi
 never touches a working tree or an index other than its own temporary one. The main backend has
 no compare-and-swap (check the bytes, then write), so it writes only in a linked worktree.
 """
+import contextlib
+import contextvars
 import os
 import random
 import re
@@ -250,12 +252,15 @@ def find_remote(root, remote):
 class RefBackend(object):
     """Records under `backlog/` in the tree of a ref. With a remote the remote's `remote_ref` is
     the store and `local_ref` caches it; without one (the repository has no remote at all)
-    `local_ref` is the store."""
+    `local_ref` is the store. `implicit`: the store is `.kit.json`'s default, not one it names
+    (open_backend), so it reads as usual and publish refuses (default_store_refusal)."""
 
-    def __init__(self, root, remote, remote_ref, local_ref, no_remote_ref=None, fetch=True):
+    def __init__(self, root, remote, remote_ref, local_ref, no_remote_ref=None, fetch=True,
+                 implicit=False):
         self.root = root
         self.remote_ref = remote_ref
         self.fetch = fetch
+        self.implicit = implicit
         self.remote = find_remote(root, remote)
         self.local_ref = local_ref if self.remote else (no_remote_ref or local_ref)
 
@@ -361,7 +366,10 @@ class RefBackend(object):
         return cmd.text(self._git(args, stdin=message.encode('utf-8'))).strip()
 
     def publish(self, snap, writes, message):
-        """The new tip; Conflict when the store is no longer at snap.tip."""
+        """The new tip; Conflict when the store is no longer at snap.tip. Refused, nothing built,
+        when the store is the implicit default (default_store_refusal)."""
+        if self.implicit:
+            raise Refusal(default_store_refusal(self.root))
         new = self.build(snap, writes, message)
         if new is None:
             return snap.tip
@@ -439,7 +447,8 @@ class RefBackend(object):
         cmd.call(['update-ref', self.local_ref, new, cur or '0' * len(new)], self.root)
 
     def history(self, rid, snap):
-        """`<short sha> <subject>` of the last commit that closed or retired `rid`, or None."""
+        """`<short sha> <subject>` of the last commit that closed, retired or deleted `rid`, or
+        None."""
         if not snap.tip:
             return None
         return _last_closing(self.root, rid, snap.tip)
@@ -466,7 +475,7 @@ class RefBackend(object):
 
 
 def _last_closing(root, rid, rev):
-    pattern = '^(closes|retires) %s: ' % re.escape(rid)
+    pattern = '^(closes|retires|deletes) %s: ' % re.escape(rid)
     out, why = cmd.run_text(['log', '-1', '--format=%h %s', '-E', '--grep', pattern, rev, '--'],
                             root)
     if out is None:
@@ -678,7 +687,7 @@ class MainBackend(object):
     files stay written); an index left stale after the commit is IndexStale. Its git calls drop an
     inherited GIT_INDEX_FILE, GIT_DIR and GIT_WORK_TREE
     (_store_env). Elsewhere it commits nothing. With `clean` (a landing's close,
-    at_landing._pm_data_store) a write there first requires every path it writes to match HEAD in
+    at_landing.pm_data_store) a write there first requires every path it writes to match HEAD in
     the worktree and the index (_require_clean): else Dirty, and nothing is written, so it never
     deletes or commits a change another session made there and did not commit."""
 
@@ -1239,7 +1248,8 @@ class MainBackend(object):
 
     def uncommitted_removal(self, rid):
         """True when HEAD tracks `<dir>/<rid>.md` and the worktree no longer holds it: a write
-        here deleted it (`close`, `retire`, which commit nothing outside the PM data worktree)
+        here deleted it (`close`, `retire`, `delete`, which commit nothing outside the PM data
+        worktree)
         or a hand removed it. False on
         an unborn HEAD. Failure when git did not answer (killed, timed out): fail closed."""
         if not PLAIN_ID.match(rid):
@@ -1282,15 +1292,44 @@ def catch_up(backend, paths, session):
                                                    session or '-'))
 
 
+def default_store_refusal(root):
+    """Why a write to the implicit `ref` store is refused, and where to write instead: the PM data
+    worktree and its store when the repository has one (at_landing.pm_data_root), else the
+    `.kit.json` setting that opts in. Records written there by default were lost to the live
+    store once, so a ref store is written only when named."""
+    from . import at_landing                         # at_landing imports this module
+    head = ('%s is the default backlog store: this repository\'s .kit.json names no '
+            '"backlog".store, so nothing was written' % STORE_REF)
+    opt_in = 'or set "backlog": {"store": "ref"} in .kit.json to write this store'
+    try:
+        pm_root, why = at_landing.pm_data_root(root)
+    except Exception as exc:                         # noqa: BLE001 - the advice is best effort
+        pm_root, why = None, str(exc)
+    if pm_root is None:
+        where = '; the PM data worktree was not found (%s)' % why if why else ''
+        return '%s%s; %s' % (head, where, opt_in.replace('or set', 'set', 1))
+    from kitlib.config import ConfigError, load as load_config
+    try:
+        live = load_config(pm_root).section('backlog')['store']
+    except (ConfigError, OSError):
+        live = None
+    store = ' (store %s)' % live if live else ''
+    return ('%s; write to the live store in the PM data worktree%s with -C "%s", %s'
+            % (head, store, pm_root.replace('\\', '/'), opt_in))
+
+
 def open_backend(root, cfg, fetch=True, store=None, clean=False):
     """The backend `.kit.json` "backlog".store names (absent: the schema default, `ref`), or
     `store` when given (`migrate --to`): `ref` the hidden ref, `branch` the `backlog` branch,
     `main` docs/backlog in `root`, any other path that folder in `root`. `clean`: a folder
-    store's MainBackend writes over no uncommitted change (Dirty); a ref store ignores it."""
+    store's MainBackend writes over no uncommitted change (Dirty); a ref store ignores it.
+    The `ref` store reached by the default alone (neither `store` nor `.kit.json` names it) is
+    read-only: its publish refuses (default_store_refusal)."""
+    implicit = not store and cfg.written('backlog', 'store') is None
     store = store or cfg.section('backlog')['store']
     remote = cfg.remote
     if store == 'ref':
-        return RefBackend(root, remote, STORE_REF, STORE_REF, fetch=fetch)
+        return RefBackend(root, remote, STORE_REF, STORE_REF, fetch=fetch, implicit=implicit)
     if store == 'branch':
         return RefBackend(root, remote, 'refs/heads/' + BRANCH,
                           'refs/remotes/%s/%s' % (remote, BRANCH),
@@ -1309,6 +1348,51 @@ class Change(object):
         self.subject = subject
         self.lines = list(lines)
         self.ruling = ruling
+
+
+_PLAN_NOTES = contextvars.ContextVar('backlog_plan_notes', default=None)
+
+
+@contextlib.contextmanager
+def plan_notes():
+    """Collect the lines a plan adds with add_plan_note while it runs (a list, in order, each
+    once). Store.write and a dry run put them before the change's own lines."""
+    notes = []
+    token = _PLAN_NOTES.set(notes)
+    try:
+        yield notes
+    finally:
+        _PLAN_NOTES.reset(token)
+
+
+def add_plan_note(line):
+    """A line the running plan's caller prints with the change (plan.refuse_machine_paths's
+    machine-config WARNING); dropped when no plan_notes collector is open."""
+    notes = _PLAN_NOTES.get()
+    if notes is not None and line not in notes:
+        notes.append(line)
+
+
+@contextlib.contextmanager
+def notes_on_refusal(notes):
+    """Re-raise a Refusal (any of kitlib.backlog.errors) raised inside with each line of `notes`
+    its message does not already hold added on a line of its own, as commit.py adds its machine
+    config WARNING to the stop lines: a plan that stops for another reason still prints it. The
+    same exception object, so its type and attributes are kept."""
+    try:
+        yield
+    except Refusal as exc:
+        msg = str(exc)
+        extra = ''.join('\n' + n for n in notes if n not in msg)
+        if extra:
+            exc.args = (msg + extra,) + tuple(exc.args[1:])
+        raise
+
+
+def with_plan_notes(change, notes):
+    """`change` with `notes` it does not already print put before its lines."""
+    change.lines = [n for n in notes if n not in change.lines] + change.lines
+    return change
 
 
 class Store(object):
@@ -1350,10 +1434,13 @@ class Store(object):
         for attempt in range(ATTEMPTS):
             snap = self.load()
             require_readable(snap)
-            change = plan(snap)
+            with plan_notes() as notes, notes_on_refusal(notes):
+                change = plan(snap)
+            change = with_plan_notes(change, notes)
             if not change.writes:
                 return change, snap.tip
-            check_change(snap, change)
+            with notes_on_refusal(notes):
+                check_change(snap, change)
             if self.before_publish is not None:
                 self.before_publish(attempt)
             try:
