@@ -16,6 +16,7 @@ from kitlib.backlog import at_landing
 from kitlib.backlog import check as checkmod
 from kitlib.backlog import record as rmod
 from kitlib.backlog import store as smod
+from kitlib.backlog.errors import Failure
 
 from tests.backlog.helpers import priced
 from tests.gitfixture import TempRepo, fixture_env
@@ -211,6 +212,32 @@ class DefaultStoreWarn(unittest.TestCase):
         _backend, snap = self.default_snap()
         self.assertFalse([r for r in checkmod.check_store(snap)
                           if r.name == checkmod.DEFAULT_STORE])
+
+    def fetching_store(self):
+        backend = smod.open_backend(self.root, kconfig.load(self.root), fetch=True)
+        self.assertTrue(backend.implicit)
+        return backend, smod.Store(backend, rmod.Rules())
+
+    def test_load_for_check_reraises_when_the_remote_cannot_be_asked(self):
+        """A local-only default ref, but ls_remote cannot tell whether the remote has one: the
+        fetching read's Failure stands and the store is not switched to the local ref."""
+        self.seed_default(priced('FOO'), remote=False)
+        backend, store = self.fetching_store()
+        with mock.patch.object(checkmod.refs, 'ls_remote', return_value=(None, 'offline')):
+            with self.assertRaises(Failure) as raised:
+                checkmod.load_for_check(store)
+        self.assertIn('holds a store', str(raised.exception))
+        self.assertTrue(backend.fetch)
+
+    def test_load_for_check_reraises_when_the_remote_holds_the_ref(self):
+        """The remote holds refs/backlog/main and the load fails anyway: that Failure stands."""
+        self.seed_default(priced('FOO'))
+        backend, store = self.fetching_store()
+        with mock.patch.object(smod.RefBackend, 'load', side_effect=Failure('broken store')):
+            with self.assertRaises(Failure) as raised:
+                checkmod.load_for_check(store)
+        self.assertEqual(str(raised.exception), 'broken store')
+        self.assertTrue(backend.fetch)
 
     def run_tool(self, *args):
         env = fixture_env({'USERPROFILE': self.home, 'HOME': self.home})

@@ -146,7 +146,9 @@ def load_for_check(store):
     implicit default store, whose remote has no refs/backlog/main while the local ref holds a
     store. The fetching read refuses that (a write would start a new store without those
     records), but nothing writes the implicit store, and those records are exactly what
-    check_default_store reports. Any other Failure, or a remote that cannot be asked, stands."""
+    check_default_store reports; that fallback sets `backend.fetch = False` on the store it was
+    given, so a later load of it reads the local ref too. Any other Failure, or a remote that
+    cannot be asked, stands."""
     backend = store.backend
     try:
         return store.load(), None
