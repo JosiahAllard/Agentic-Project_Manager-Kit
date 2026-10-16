@@ -1,7 +1,9 @@
 """The verdict queue: reviewed branches waiting to land, one file per branch.
 
 A coordinator queues a branch after reading its review (tools/verdict.py add); a reviewer never
-does, so no reviewer can queue its own verdict. A landing takes what is ready (ready()) and drops
+does, so no reviewer can queue its own verdict. After a main sync of a queued branch the
+coordinator carries the verdict to the new head (tools/verdict.py carry) when the sync is all that
+changed (kitlib.gate.carry). A landing takes what is ready (ready()) and drops
 what it landed.
 
 Where: `<git common dir>/kit-verdicts/<branch>.json`, the branch name percent-encoded
@@ -13,7 +15,8 @@ os.replace; a re-add for the same branch replaces its entry.
 The queue lock: add, drop, mark_failed and scan each run whole (read, check, then write or
 remove) holding `<queue folder>/.queue.lock`, a file made with O_CREAT|O_EXCL and removed when
 the call ends, so none of them acts on an entry another replaced between its read and its write.
-A call waits up to LOCK_WAIT_S for the lock, then raises VerdictError and does nothing. A
+carry() runs its git check between two holds and writes only when the entry and the branch's head
+are, in the second, what they were in the first. A call waits up to LOCK_WAIT_S for the lock, then raises VerdictError and does nothing. A
 PermissionError making the lock file is waited out the same way (on Windows a lock file being
 removed refuses a new one for a moment), the VerdictError then naming it; any other OSError is a
 VerdictError at once, naming the cause. Stale-lock
@@ -42,8 +45,17 @@ An entry (every key always present):
   state           queued | failed (mark_failed)
   last_result     None, or why it was marked failed
 
+and, only in an entry carry() moved (a re-add drops it):
+
+  carried         {from, merges, main, diff, utc}: the verdict was given at `from` (the commit the
+                  range ends at), and tip carries it over `merges` (main merges, oldest first, the
+                  last the tip) as kitlib.gate.carry checked against `main` at `utc`; `diff` is the
+                  sha256 of the branch's normalized patch. A record of the check, never proof: a
+                  landing checks it again (docs/gate.md "Carrying a verdict forward").
+
 Errors (all VerdictError): BadEntry for a malformed entry or branch name given, nothing read or
 written; TipMismatch when the tip is not the branch's head, or there is no such branch;
+CarryRefused when carry() finds the head does not carry the verdict, nothing written;
 OtherBranch when the file for the branch named holds another branch's entry (names that differ
 only in case share one file on Windows); VerdictError itself for a queue file that cannot be read
 or written, or is not an entry, the queue lock not had in time, or git giving no answer. Nothing
@@ -63,6 +75,7 @@ import secrets
 import time
 import urllib.parse
 
+from kitlib.gate import carry as carrymod
 from kitlib.git import refs
 
 DIR_NAME = 'kit-verdicts'
@@ -76,6 +89,9 @@ GIVEN_KEYS = ('branch', 'tip', 'verdict', 'risk', 'reviewer', 'reviewer_model', 
               'author', 'range', 'session', 'records')
 SET_KEYS = ('queued_utc', 'state', 'last_result')
 KEYS = GIVEN_KEYS + SET_KEYS
+CARRIED = 'carried'         # set only by carry(): an entry may lack it
+CARRIED_KEYS = ('from', 'merges', 'main', 'diff', 'utc')
+DIGEST_RE = re.compile(r'^[0-9a-f]{64}$')
 TEXT_KEYS = ('reviewer', 'reviewer_model', 'reviewer_id', 'author', 'session')
 UTC_RE = re.compile(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$')
 RANGE_TIP_RE = re.compile(r'^[0-9a-f]{7,64}$')
@@ -115,6 +131,10 @@ class TipMismatch(VerdictError):
 
 class OtherBranch(VerdictError):
     """The file for the branch named holds another branch's entry."""
+
+
+class CarryRefused(VerdictError):
+    """The branch's head does not carry its queued verdict (carry()): nothing was written."""
 
 
 def utc(when=None):
@@ -166,14 +186,15 @@ def entry_path(common_dir, branch):
 
 def check(entry, stored=True):
     """Why `entry` is not a well-formed entry, or None. `stored`: it must carry add()'s keys too
-    (an entry read back); False: only the keys the coordinator states (an entry given to add)."""
+    (an entry read back; it may hold `carried`); False: only the keys the coordinator states (an
+    entry given to add)."""
     if not isinstance(entry, dict):
         return 'an entry is a JSON object, not %s' % type(entry).__name__
     keys = KEYS if stored else GIVEN_KEYS
     missing = [k for k in keys if k not in entry]
     if missing:
         return 'the entry lacks %s' % ', '.join(missing)
-    extra = sorted(k for k in entry if k not in keys)
+    extra = sorted(k for k in entry if k not in keys and not (stored and k == CARRIED))
     if extra:
         return 'the entry has keys it may not set: %s' % ', '.join(extra)
     why = _branch_why(entry['branch'])
@@ -182,6 +203,12 @@ def check(entry, stored=True):
     tip = entry['tip']
     if not refs.is_sha(tip):
         return 'tip is a full commit hash, not %r' % (tip,)
+    reviewed = tip
+    if CARRIED in entry:
+        why = _carried_why(entry[CARRIED], tip)
+        if why:
+            return why
+        reviewed = entry[CARRIED]['from']
     if entry['verdict'] not in VERDICTS:
         return 'verdict is one of %s, not %r' % (' | '.join(VERDICTS), entry['verdict'])
     if entry['risk'] not in RISKS:
@@ -193,8 +220,10 @@ def check(entry, stored=True):
     rng = entry['range']
     base, sep, right = rng.partition('..') if isinstance(rng, str) else ('', '', '')
     if (not sep or not base or base.startswith('-') or any(c.isspace() for c in rng)
-            or not RANGE_TIP_RE.match(right) or not tip.startswith(right)):
-        return 'range is <base>..<tip> with the queued tip (or 7+ digits of it) on the right, not %r' % (rng,)
+            or not RANGE_TIP_RE.match(right) or not reviewed.startswith(right)):
+        return ('range is <base>..<tip> with the %s (or 7+ digits of it) on the right, not %r'
+                % ('reviewed commit the verdict was carried from' if reviewed != tip
+                   else 'queued tip', rng))
     recs = entry['records']
     if not isinstance(recs, list) or any(not isinstance(r, str) or not r or any(c.isspace() for c in r)
                                          for r in recs):
@@ -206,6 +235,26 @@ def check(entry, stored=True):
             return 'state is one of %s, not %r' % (' | '.join(STATES), entry['state'])
         if entry['last_result'] is not None and not isinstance(entry['last_result'], str):
             return 'last_result is null or a text, not %r' % (entry['last_result'],)
+    return None
+
+
+def _carried_why(c, tip):
+    """Why `c` is not the `carried` record of an entry queued at `tip`, or None."""
+    if not isinstance(c, dict) or sorted(c) != sorted(CARRIED_KEYS):
+        return 'carried is an object of %s, not %r' % (', '.join(CARRIED_KEYS), c)
+    for k in ('from', 'main'):
+        if not refs.is_sha(c[k]):
+            return 'carried.%s is a full commit hash, not %r' % (k, c[k])
+    if c['from'] == tip:
+        return 'carried.from is the commit reviewed, not the tip %s it was carried to' % tip[:10]
+    merges = c['merges']
+    if (not isinstance(merges, list) or not merges or any(not refs.is_sha(m) for m in merges)
+            or merges[-1] != tip):
+        return 'carried.merges is the main merges carried over, the last the tip, not %r' % (merges,)
+    if not isinstance(c['diff'], str) or not DIGEST_RE.match(c['diff']):
+        return 'carried.diff is a sha256 in hex, not %r' % (c['diff'],)
+    if not isinstance(c['utc'], str) or not UTC_RE.match(c['utc']):
+        return 'carried.utc is YYYY-MM-DDTHH:MM:SSZ, not %r' % (c['utc'],)
     return None
 
 
@@ -342,6 +391,51 @@ def add(common_dir, entry, now=None):
                   last_result=None)
     with _locked(common_dir):
         _load(path, branch)              # an unreadable entry, or another branch's, is not replaced
+        return _write(path, stored), stored
+
+
+def carry(common_dir, root, branch, base, now=None, checker=None):
+    """Move `branch`'s queued verdict to the branch's head when the head carries it (owner ruling
+    R-2050; docs/gate.md "Carrying a verdict forward"): `(path, stored entry)`, with tip the head
+    and `carried` the facts kitlib.gate.carry.check gave for the commit first reviewed (the
+    entry's carried.from, else its tip), the head and `base` (main as fetched, a full hash).
+    `root`: a path in the repository, where git runs. None when nothing is queued for `branch`.
+
+    CarryRefused, nothing written, when the entry is marked failed, is already at the head, or the
+    head does not carry it; TipMismatch when there is no such branch; VerdictError when the entry
+    or the branch moved while the check ran (outside the queue lock: git may be slow). `checker`:
+    the check to run (default kitlib.gate.carry.check); `now`: a datetime for carried.utc."""
+    path = entry_path(common_dir, branch)
+    with _locked(common_dir):
+        entry = _load(path, branch)
+    if entry is None:
+        return None
+    if entry['state'] != QUEUED:
+        raise CarryRefused('the verdict of %s is marked %s (%s): review and queue it again'
+                           % (branch, entry['state'], entry['last_result'] or 'no reason given'))
+    head = head_of(common_dir, branch)
+    if not head:
+        raise TipMismatch('there is no branch %s' % branch)
+    if head == entry['tip']:
+        raise CarryRefused('the verdict of %s is queued at its head %s already: nothing to carry'
+                           % (branch, head[:10]))
+    reviewed = entry[CARRIED]['from'] if CARRIED in entry else entry['tip']
+    facts, why = (checker or carrymod.check)(root, reviewed, head, base)
+    if facts is None:
+        raise CarryRefused('%s at %s does not carry the verdict given at %s: %s'
+                           % (branch, head[:10], reviewed[:10], why))
+    stored = dict(entry, tip=head, carried=dict(facts, utc=utc(now)))
+    why = check(stored)
+    if not why and (stored[CARRIED]['from'] != reviewed or stored[CARRIED]['main'] != base):
+        why = 'carried.from or carried.main is not the commit asked about'
+    if why:
+        raise CarryRefused('the carry check gave facts that are not a carried record: %s' % why)
+    with _locked(common_dir):
+        if _load(path, branch) != entry:
+            raise VerdictError('the verdict of %s changed while its carry was checked: run carry '
+                               'again' % branch)
+        if head_of(common_dir, branch) != head:
+            raise VerdictError('%s moved while its carry was checked: run carry again' % branch)
         return _write(path, stored), stored
 
 

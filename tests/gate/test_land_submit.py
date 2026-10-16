@@ -16,7 +16,7 @@ import unittest
 from unittest import mock
 
 from kitlib import gate as G
-from kitlib.gate import pin, result, submit
+from kitlib.gate import pin, result, submit, verdicts
 from kitlib.git import repo
 from kitlib.lock import detach as lockdetach
 from kitlib.lock.store import LockError
@@ -193,6 +193,61 @@ class TheLine(SubmitCase):
                     f.write(text)
             with self.assertRaises(submit.SubmitError):
                 submit.restore(self.repo.root, bad)
+
+
+class ReviewLines(SubmitCase):
+    """A REVIEW line, before the SUBMITTED line, for each branch with a verdict queued at the tip
+    submitted (docs/gate.md "Submitting a landing"): the submission shows the review on record."""
+    REVIEW = {'verdict': 'LAND', 'risk': 'High', 'reviewer': 'pm-kit:reviewer',
+              'reviewer_model': 'opus', 'reviewer_id': 'agent-r1',
+              'author': 'Kit Test / strong-worker', 'session': 'coord-1', 'records': []}
+
+    def common(self):
+        common, why = repo.common_dir(self.repo.root)
+        self.assertIsNotNone(common, why)
+        return common
+
+    def queue(self, branch, tip):
+        verdicts.add(self.common(), dict(self.REVIEW, branch=branch, tip=tip,
+                                         range='%s..%s' % (self.main[:10], tip)))
+
+    def test_a_verdict_queued_at_the_tip_is_said_before_the_submitted_line(self):
+        _, tip = self.branch('feature', {'a.py': 'a\n'})
+        self.queue(BRANCH, tip)
+        out, _ = self.submit([BRANCH], [tip])
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertEqual(out.lines[0], 'REVIEW kit/feature %s: LAND by pm-kit:reviewer/opus '
+                                       '(agent-r1)' % tip)
+        self.assertEqual(len(out.lines), 2, out.lines)
+        self.assertTrue(out.lines[1].startswith('SUBMITTED kit/feature tip %s wait: ' % tip),
+                        out.lines)
+
+    def test_a_carried_verdict_names_the_commit_reviewed(self):
+        wt, reviewed = self.branch('feature', {'a.py': 'a\n'})
+        self.queue(BRANCH, reviewed)
+        self.repo.write('m.py', 'm\n')
+        self.main = self.repo.commit('main edit', 'm.py')
+        self.repo.git('push', '-q', 'origin', 'main')
+        self.repo.git('merge', '-q', '--no-edit', 'main', cwd=wt)
+        tip = self.repo.head(wt)
+        verdicts.carry(self.common(), self.repo.root, BRANCH, self.main)
+        out, _ = self.submit([BRANCH], [tip])
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertEqual(out.lines[0], 'REVIEW kit/feature %s: LAND by pm-kit:reviewer/opus '
+                                       '(agent-r1), carried from %s over 1 main merge'
+                         % (tip, reviewed))
+        self.assertTrue(out.lines[1].startswith('SUBMITTED kit/feature tip %s wait: ' % tip),
+                        out.lines)
+
+    def test_a_verdict_at_another_tip_has_no_line(self):
+        wt, old = self.branch('feature', {'a.py': 'a\n'})
+        self.queue(BRANCH, old)
+        self.repo.write('b.py', 'b\n', root=wt)
+        tip = self.repo.commit('more', 'b.py', cwd=wt)
+        out, _ = self.submit([BRANCH], [tip])
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertEqual(len(out.lines), 1, out.lines)
+        self.assertTrue(out.lines[0].startswith('SUBMITTED '), out.lines)
 
 
 class TheDetachedLanding(SubmitCase):

@@ -15,11 +15,13 @@
       does not contain, or work, or a holder, keeps it); --keep-branch keeps all three. --fresh
       runs every step of the merged gate (no gate reuse, docs/gate.md "Gate reuse").
       A branch that changes a strict path (kitlib/gate/strict_defaults.py, read from main) lands
-      alone, only with a verdict queued for its tip (tools/verdict.py add) by a strong-tier
-      reviewer who is not its author, and its merged gate runs --full --fresh whatever was
-      passed (docs/gate.md "Strict paths").
-      --submit: the same landing, started detached and windowless; prints one line, SUBMITTED
-      ... wait: <the gate.py wait-result command that waits for its result record>, and exits 0
+      alone, only with a verdict queued for its tip (tools/verdict.py add, or carried to it over
+      main merges by tools/verdict.py carry and checked again here) by a strong-tier reviewer who
+      is not its author, and its merged gate runs --full --fresh whatever was passed (docs/gate.md
+      "Strict paths").
+      --submit: the same landing, started detached and windowless; prints a REVIEW line for each
+      branch with a verdict queued at its tip, then the last line, SUBMITTED ... wait: <the
+      gate.py wait-result command that waits for its result record>, and exits 0
   land.py --queue [-C DIR]
       read-only: the landing lock's holder and the landings in the machine lock's queue
   land.py --sweep-landed [--apply] [-C DIR]
