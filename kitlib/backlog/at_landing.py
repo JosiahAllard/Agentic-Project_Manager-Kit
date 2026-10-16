@@ -517,7 +517,7 @@ class _Stranded(object):
         act, rid = self.act, self.act.rid
         args = list(act.args)
         if not act.release and rmod.is_owner_held(self.rec):
-            args += ['--ruling', 'R-nnnn']          # his ruling ends the hold (plan_close)
+            args += ['--ruling', 'R-nnnn']          # the owner's ruling ends it (plan_close)
         state = self.rec.get('state') or '?'
         if state == 'pulled':
             state = 'pulled by %s' % (self.rec.get('pulled_by') or '?')
