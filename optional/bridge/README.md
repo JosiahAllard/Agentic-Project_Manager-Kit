@@ -161,7 +161,9 @@ shells).
    - `runtime.json`
    - `mcp.json`: each host's MCP server entry. The command is the isolated frontend command line
      above, with the marker's absolute path. The name and metadata come from the half's
-     `install()`.
+     `install()`. Each entry includes `env_vars` only for that host's declared `channel_env`
+     names; current environment values are never copied. This forwards a host-nominated channel
+     to its frontend; it does not establish a writer lease or prove live delivery readiness.
    - each half's own files, such as `claude-hooks.json`
    - `start-bridge.ps1` and `startup-task.xml`: a per-user, least-privilege task, not registered
    - `manifest.json`: every file's hash, every dependency and every bound path, marked
