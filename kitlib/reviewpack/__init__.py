@@ -4,7 +4,9 @@ tools/review_pack.py; docs/review-pack.md).
 `pack(path, branch, base, diff)` is the whole command; tools/review_pack.py parses, calls it, prints
 `Outcome.lines` and exits with `Outcome.code`. It never prints and never exits.
 
-The pack: base and merge-base, whether the branch contains the base tip, commits, files changed
+The pack: base and merge-base, whether the branch contains the base tip, commits, whether the tip
+has a full-gate OK record (the `gate` line, gate_line: printed only, the exit status unchanged;
+a landing refuses a tip without one), files changed
 with +/- grouped by the risk level in docs/ops/risk-map.md (unlisted = High), owner-only paths
 touched and whether an Owner-Approved trailer covers them, the branch's commits with no
 Co-Authored-By trailer (when configured, below), and the doc-budget verdict. `diff` set: only the
@@ -59,6 +61,7 @@ from kitlib.config import owner as ownermod
 from kitlib.git import cmd as gitcmd
 from kitlib.git import refs as gitrefs
 from kitlib.git import repo as gitrepo
+from kitlib.records import gate_ok
 from kitlib import verdict
 from kitlib.docs import callers as doc_callers
 from kitlib.proc import spawn
@@ -496,6 +499,19 @@ def pack(path, branch, base=None, diff=None):
         return Outcome(USAGE, lines)
 
 
+def gate_line(top, branch):
+    """The `gate` line: whether `branch`'s tip has the record a landing requires, a gate-OK
+    record of exactly that commit from a `gate.py --full` pass (gate_ok.verify_full; docs/gate.md
+    "Landing"). Printed only: it never changes the exit status."""
+    tip, why = gitrefs.resolve(branch, top)
+    if not tip:
+        return 'gate     tip of %s cannot be read (%s); landing will refuse' % (branch, why)
+    rec, why = gate_ok.verify_full(top, tip)
+    if rec is None:
+        return 'gate     tip %s: NO full-gate OK record (%s); landing will refuse' % (tip[:10], why)
+    return 'gate     tip %s: full gate OK, ended %s' % (tip[:10], rec.get('ended_utc'))
+
+
 def _pack(lines, path, branch, base, diff):
     top, why = gitrepo.toplevel(path)
     if top is None:
@@ -535,6 +551,7 @@ def _pack(lines, path, branch, base, diff):
                   '--').splitlines()
     lines.append('commits  %d (no merges)' % len(commits))
     lines.extend('           ' + c for c in commits[:40])
+    lines.append(gate_line(top, branch))
 
     levels = risk_rules(top)
     groups = {}

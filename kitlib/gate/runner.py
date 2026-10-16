@@ -757,7 +757,7 @@ def _gate_checkout(top, cfg, seen, base=None, full=False, only=None, plan=False,
     try:
         path, _rec = gate_ok.record_pass(top, head, gate_config(cfg), kit_identity(), name, started,
                                          record_steps(results), base=mb, config_rev=head,
-                                         source=eff.source)
+                                         source=eff.source, full=bool(full))
     except gate_ok.RecordError as e:
         facts['no_record'] = str(e)
         lines.append('FAILED: the gate passed, and its gate-OK record could not be written: %s' % e)
