@@ -1330,7 +1330,7 @@ def hub_family_cmd(parsed, cmd, outlet=False):
             all(hub_path_word(t) or not hub_text_names(t) for t in args)
     if inv.name == 'git':
         return hub_git_family(args, outlet)
-    if not UI_PYTHON_RE.match(inv.name or ''):
+    if not UI_PYTHON_RE.match(inv.name or '') or not hub_family_py_bare(parsed, cmd, inv):
         return False
     k = 0
     while k < len(args) and HUB_SHAPE_OPT_RE.match(args[k]):
@@ -1345,6 +1345,22 @@ def hub_family_cmd(parsed, cmd, outlet=False):
     if script == 'ledger.py':
         return hub_backlog_family(args[k + 1:], HUB_LEDGER_MESSAGES)
     return False
+
+
+def hub_family_py_bare(parsed, cmd, inv):
+    """True when the program word of `cmd` (inv.index; after PowerShell's `&`) is a bare python
+    word as the line spells it and as the shell passes it (HUB_PY_WORD_RE, whole): no path, quote,
+    escape or other text, so `<dir>/python.exe`, `"<dir>/python.exe"` and `"python"` before
+    commit.py are no family command (owner rulings Q-1010, Q-1012). A word with no place in the
+    line's text is not bare (fail-closed)."""
+    if inv.index is None or not 0 <= inv.index < len(cmd.words):
+        return False
+    w = cmd.words[inv.index]
+    o, e = w.start, w.end
+    if not (isinstance(o, int) and isinstance(e, int) and 0 <= o < e <= len(parsed.text)):
+        return False
+    return (HUB_PY_WORD_RE.fullmatch(parsed.text[o:e]) is not None and
+            HUB_PY_WORD_RE.fullmatch(w.text) is not None)
 
 
 def hub_path_family(parsed):

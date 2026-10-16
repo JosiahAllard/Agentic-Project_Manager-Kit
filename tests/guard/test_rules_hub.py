@@ -1457,6 +1457,37 @@ class FailClosed(Hub):
             (ps, 'git show HEAD:tools/hub.py; Add-Content -Path notes.txt -Value x'),
         ), False)
 
+    def test_only_a_bare_python_is_a_family_command(self):
+        # owner rulings Q-1010 and Q-1012: a python with a path, or in quotes, before commit.py is
+        # no family command (rules.hub_family_cmd), on a plain line or alone, so its -m is python's
+        wt = W.fwd(self.w.wt)
+        self.rows((
+            (bash, 'cd %s && D:/bin/python.exe Z:/k/tools/commit.py -m "Hub store: x" a.py' % wt),
+            (ps, 'cd %s; D:\\bin\\python.exe Z:/k/tools/commit.py -m "Hub store: x" a.py' % wt),
+            (bash, 'cd %s && "D:/bin/python.exe" Z:/k/tools/commit.py -m "Hub store: x" a.py' % wt),
+            (ps, "cd %s; & 'D:\\bin\\python.exe' Z:/k/tools/commit.py -m \"Hub store: x\" a.py" % wt),
+            (bash, 'D:/bin/python.exe Z:/k/tools/commit.py -m "Hub store: x" a.py'),
+            (ps, '& D:\\bin\\python.exe Z:/k/tools/commit.py -m "Hub store: x" a.py'),
+            (bash, '"D:/bin/python.exe" Z:/k/tools/commit.py -m "Hub store: x" a.py'),
+            (ps, "& 'D:\\bin\\python.exe' Z:/k/tools/commit.py -m \"Hub store: x\" a.py"),
+            (bash, '"python" Z:/k/tools/commit.py -m "Hub store: x" a.py'),
+            # a backslash-newline joins the lines; the python after it still has a path
+            (bash, 'cd %s && \\\nD:/bin/python.exe Z:/k/tools/commit.py -m "Hub store: x" a.py' % wt),
+        ), True)
+        # a bare python is (owner ruling Q-1009); pyth""on reaches python bare
+        self.rows((
+            (bash, 'python Z:/k/tools/commit.py -m "Hub store: x" a.py'),
+            (ps, '& python Z:/k/tools/commit.py -m "Hub store: x" a.py'),
+            (ps, 'cd %s; & python Z:/k/tools/commit.py -m "Hub store: x" a.py' % wt),
+            (bash, 'pyth""on Z:/k/tools/commit.py -m "Hub store: x" a.py'),
+        ), False)
+        # over-reach, fail-closed: in a nested shell's quoted string the line's text has a quote
+        # before the bare python (rules.hub_py_bare), so its -m stays python's
+        self.rows((
+            (bash, "bash -c 'python Z:/k/tools/commit.py -m \"Hub store: x\" a.py'"),
+            (ps, "cmd /c 'python Z:/k/tools/commit.py -m \"Hub store: x\" a.py'"),
+        ), True)
+
 
 # ---------------------------------------------------------------- hub-mcp
 
