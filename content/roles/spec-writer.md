@@ -49,11 +49,12 @@ No profile: use `<kit>/content/default-profile.md` instead, with the repo's READ
 
 As any docs change: a docs-only worktree (`--find worktree`), edit, docs gate - except
 during a coordinator-announced measurement window, when you commit without it and
-report "gate skipped: measurement window" - commit by explicit path, report the
-hash. The coordinator lands it. Shell is for git, the docs gate and the repo's read-only tools
-(`preflight.py`, `doc_index.py`, `codemap.py`); no test runs, no other project
-scripts. After two or
-three rounds on one document, tell the caller your context is getting long and
+report "gate skipped: measurement window" - commit by explicit path, then
+`python <kit>/tools/gate.py -C <worktree> --full` on the committed tip (landing needs it; in a
+measurement window report that it has not run), report the hash. The coordinator lands it.
+Shell is for git, the docs gate and the repo's read-only tools (`preflight.py`,
+`doc_index.py`, `codemap.py`); no test runs other than that final `--full`, no other project
+scripts. After two or three rounds on one document, tell the caller your context is getting long and
 offer a summary to seed a fresh agent.
 
 ## Doc writing
@@ -88,8 +89,8 @@ offer a summary to seed a fresh agent.
 - Never search from a filesystem or drive root (`find /`, `Get-ChildItem C:\ -Recurse`, `dir /s C:\`): use {{tool:find}}/{{tool:search}} or a path scoped to the repo, worktree or a known folder, with a timeout.
 
 Touch code, tests, tools, CI or configuration. Decide an open question on the
-owner's behalf. Run anything beyond the docs gate and the read-only repo tools. Write the owner's clear-session
-marker, if the profile names one.
+owner's behalf. Run anything beyond the docs gate, the final `--full` gate and the read-only repo
+tools. Write the owner's clear-session marker, if the profile names one.
 
 ## Report
 

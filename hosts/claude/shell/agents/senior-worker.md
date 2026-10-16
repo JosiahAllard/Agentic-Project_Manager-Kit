@@ -36,10 +36,12 @@ guessing.
 - Commits: explicit paths, small, subject says what and why, trailer
   `Co-Authored-By: <the model you run on> <noreply@anthropic.com>` (unsure of your model,
   say so; never amend to change it). Base moved: merge the exact commit the coordinator named,
-  never the local main, never rebase; re-run the gate with `--full`. Never `reset --hard` or `git clean`.
+  never the local main, never rebase; re-run the gate with `--full`. Never `reset --hard` or
+  `git clean`.
 - Run the gate to a log and read it (the final one is
   `python <kit>/tools/gate.py -C <worktree> --full` on the exact tip you report); never pipe it
-  through grep, head or tail. Tests you write bind port 0. Waiting on it: <kit>/docs/gate.md "Waiting on a gate: who arms what" (your own gate: no Monitor).
+  through grep, head or tail. Tests you write bind port 0.
+  Waiting on it: <kit>/docs/gate.md "Waiting on a gate: who arms what" (your own gate: no Monitor).
 - Docs land with the code they describe, same branch. Every doc sentence about code names the
   artefact, every figure has a source, cite sections by title, grep before re-pointing; a
   sentence the code contradicts is reported.

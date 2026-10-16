@@ -42,8 +42,8 @@ No profile: use `<kit>/content/default-profile.md` instead, with the repo's READ
 - Commit at each milestone, and before any revert, stash or checkout experiment; keep a short
   state note in your scratch folder (done, in progress, next) so a fresh agent can resume.
 - Base moved: merge the exact commit the coordinator named, never the local main, never rebase;
-  re-run the gate with `--full` (skill branch-sync). Never `reset --hard`, never `git clean`. Resolve merge
-  conflicts with your file-edit tool only, never a scratch script that rewrites a tracked file;
+  re-run the gate with `--full` (skill branch-sync). Never `reset --hard`, never `git clean`.
+  Resolve merge conflicts with your file-edit tool only, never a scratch script that rewrites a tracked file;
   one command per call.
 - Heavy work beyond your gate (stress, mutation, renders, generation) takes the machine lock:
   skill machine-lock-run.
