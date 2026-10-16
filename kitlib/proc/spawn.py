@@ -63,6 +63,12 @@ def console_python(exe=None):
     return path if os.path.isfile(path) else None
 
 
+def pythonw_beside(python):
+    """The pythonw.exe in the folder of `python` (either of the two pythons). Not checked to exist
+    here, and no fallback: a caller that must refuse a missing one checks the path itself."""
+    return os.path.join(os.path.dirname(python), 'pythonw.exe')
+
+
 def exit_code(code):
     """A child's exit code as subprocess gives it on Windows (0 to 0xFFFFFFFF) as the int that,
     handed to sys.exit, ends this process with the same 32 bits: unchanged up to 0x7FFFFFFF, and

@@ -225,11 +225,7 @@ PENDING_OWNER_TEXT = {
     ('hardware', 'tests/lock/test_run.py'): 1,
     ('hardware', 'tests/lockmcp/scratch_server.py'): 1,
 }
-# Machine-specific defaults become config or move to optional/.
-PENDING_MACHINE_DEFAULTS = {
-    ('hardware', 'kitlib/lock/game.py'): 2,
-}
-PENDING = (PENDING_FIXTURES, PENDING_HISTORY, PENDING_OWNER_TEXT, PENDING_MACHINE_DEFAULTS)
+PENDING = (PENDING_FIXTURES, PENDING_HISTORY, PENDING_OWNER_TEXT)
 
 
 def j(*parts):

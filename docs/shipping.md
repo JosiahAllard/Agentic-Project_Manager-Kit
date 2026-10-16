@@ -87,7 +87,8 @@ than the baseline fails, a file with no baseline fails on its first hit, and few
   input, and an output that is not .html/.htm, is one of the images, or is an existing non-HTML
   file.
 - `procwatch`: a process watcher. It spares ComfyUI; add patterns with env `PROCWATCH_PROTECT`
-  (`;`-separated regexes).
+  (`;`-separated regexes). It labels a process by its nearest known ancestor; add ancestor apps
+  (exe names) with env `PROCWATCH_ORIGINS` (`;`-separated).
 - `usage`: usage reports and the statusline (`statusline-usage.ps1`, `write-usage-status.ps1`).
 - `bridge`: agent-to-agent messaging between open host chats, an optional install that no host
   shell mentions until the owner registers it (`optional/bridge/README.md`; what works:
