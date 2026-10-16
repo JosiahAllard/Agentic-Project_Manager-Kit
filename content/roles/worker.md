@@ -32,7 +32,8 @@ No profile: use `<kit>/content/default-profile.md` instead, with the repo's READ
   gate calls for one.
 - Before any run, name the string that would be absent if your change were not in
   the build, then look for it in the output.
-- Run your brief's gate under the profile's locks, in your assigned ports. Pure
+- Run your brief's gate under the profile's locks, in your assigned ports; the final one is
+  `python <kit>/tools/gate.py -C <worktree> --full` on the exact tip you report. Pure
   pass/fail whose log you do not need -> dispatch `{{agent:test-runner}}`.
 - Commit by explicit path, one commit per step, gate green: `python <kit>/tools/commit.py -C <worktree> -m "<subject>"
   <path> ...`, which adds the trailer for your host and model. Small commits, subject says what
@@ -41,7 +42,7 @@ No profile: use `<kit>/content/default-profile.md` instead, with the repo's READ
 - Commit at each milestone, and before any revert, stash or checkout experiment; keep a short
   state note in your scratch folder (done, in progress, next) so a fresh agent can resume.
 - Base moved: merge the exact commit the coordinator named, never the local main, never rebase;
-  re-run the gate (skill branch-sync). Never `reset --hard`, never `git clean`. Resolve merge
+  re-run the gate with `--full` (skill branch-sync). Never `reset --hard`, never `git clean`. Resolve merge
   conflicts with your file-edit tool only, never a scratch script that rewrites a tracked file;
   one command per call.
 - Heavy work beyond your gate (stress, mutation, renders, generation) takes the machine lock:
