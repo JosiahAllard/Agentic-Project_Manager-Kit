@@ -1202,16 +1202,34 @@ class FailClosed(Hub):
             (bash, 'cat tools/__pycache__/hub.cpython-312.pyc'),
             (ps, 'Get-Content tools\\__pycache__\\hub.cpython-312.pyc'),
         ), True)
-        # python.exe in a folder named Python312 runs commit.py, whose -m is its message: the folder's
-        # name is no python word (a variable keeps the line out of the path family)
+        # owner ruling Q-1010: only a bare python word takes commit.py's -m as its message; a python
+        # with a path before it, in a folder named like python or not, keeps the -m python's
+        # (fail-closed; agents use bare python). A variable keeps the line out of the path family
         self.rows((
+            (bash, 'D:/bin/python.exe Z:/k/tools/commit.py -C $PWD -m "Hub store: x" a.py'),
+            (ps, '& D:\\bin\\python.exe Z:/k/tools/commit.py -C $PWD -m "Hub store: x" a.py'),
+            (bash, 'D:/bin/python.exe Z:/k/tools/commit.py -C $PWD -m Hub a.py'),
             (bash, 'D:/Programs/Python/Python312/python.exe Z:/k/tools/commit.py '
                    '-C $PWD -m "Hub store: x" a.py'),
             (ps, '& D:\\Programs\\Python\\Python312\\python.exe Z:/k/tools/commit.py '
                  '-C $PWD -m "Hub store: x" a.py'),
+            (bash, 'C:/Python312/python.exe -X utf8 Z:/k/tools/commit.py -C $PWD -m "Hub store: x" a.py'),
+            (ps, 'C:\\Python312\\python Z:/k/tools/commit.py -C $PWD -m "Hub store: x" a.py'),
             (bash, '"D:/Programs/Python312/python.exe" Z:/k/tools/commit.py -C $PWD -m "Hub store: x" a.py'),
+            (bash, 'bash -c "D:/bin/python.exe Z:/k/tools/commit.py -C . -m \'Hub store: x\' a.py"'),
+            # a ( inside a path is no group: cmd runs D:/a(python.exe as the program
+            (ps, 'cmd /c "D:/a(python.exe Z:/k/tools/commit.py -C . -m Hub a.py"'),
+            (bash, 'cmd //c "D:/a((python.exe Z:/k/tools/commit.py -C . -m Hub a.py"'),
+        ), True)
+        # a bare python word still does (owner ruling Q-1009)
+        self.rows((
+            (bash, 'python Z:/k/tools/commit.py -C $PWD -m "Hub store: x" a.py'),
+            (ps, '& python Z:/k/tools/commit.py -C $PWD -m "Hub store: x" a.py'),
+            (bash, 'python3.12 -X utf8 Z:/k/tools/commit.py -C $PWD -m "Hub store: x" a.py'),
+            (ps, 'python.exe Z:/k/tools/commit.py -C $PWD -m "Hub store: x" a.py'),
+            (bash, 'echo $(python Z:/k/tools/commit.py -C $PWD -m "Hub store: x" a.py)'),
         ), False)
-        # but a python in that folder still runs hub as a module
+        # and a python in that folder runs hub as a module
         self.rows((
             (bash, 'D:/Programs/Python312/python.exe -m hub answer Q-1'),
             (ps, '& D:\\Programs\\Python312\\python.exe -m hub answer Q-1'),
@@ -1242,12 +1260,13 @@ class FailClosed(Hub):
             (ps, 'cmd /c "cd tools && python,x -m hub answer Q-1"'),
             (ps, 'cmd /c "cd tools && python=x -m hub answer Q-1"'),
         ), True)
-        # a python word in quotes is the program's name, closed by its own quote
+        # owner ruling Q-1012: a python word in quotes, a path or not, keeps commit.py's -m python's
         self.rows((
             (ps, '& "D:\\Programs\\Python312\\python.exe" Z:/k/tools/commit.py -C $PWD -m "Hub store: x" a.py'),
             (bash, "'D:/Programs/Python312/python.exe' Z:/k/tools/commit.py -C $PWD -m \"Hub store: x\" a.py"),
             (bash, '"python" Z:/k/tools/commit.py -C $PWD -m "Hub store: x" a.py'),
-        ), False)
+            (ps, "& 'python.exe' Z:/k/tools/commit.py -C $PWD -m \"Hub store: x\" a.py"),
+        ), True)
 
     def test_a_separator_inside_one_of_pythons_words(self):
         # round-6 review item 1: a ; | & or newline the shell keeps inside one of python's words
@@ -1321,8 +1340,8 @@ class FailClosed(Hub):
         ), False)
 
     def test_a_python_in_a_quoted_folder_with_a_space(self):
-        # round-6 review item 2: the quote that opens a quoted python path with a space in it is
-        # the parser's own word (rules.hub_quoted_spans), so commit.py's -m after it is a message
+        # owner rulings Q-1010 and Q-1012: a quoted python path with a space in it is a full path
+        # and quoted, so commit.py's -m after it stays python's (fail-closed; agents use bare python)
         self.rows((
             (ps, '& "C:\\Program Files\\Python312\\python.exe" Z:/k/tools/commit.py -C $PWD '
                  '-m "Hub store: x" a.py'),
@@ -1332,9 +1351,10 @@ class FailClosed(Hub):
             (bash, '"C:/Program Files/Python312/python.exe" -X utf8 Z:/k/tools/commit.py -C $PWD '
                    '-m "Hub store: x" a.py'),
             (bash, "'C:/Program Files/Python312/python.exe' Z:/k/tools/commit.py -C $PWD -m \"Hub store: x\" a.py"),
-        ), False)
-        # but the folder's python still runs hub as a module, and a quoted run glued after its
-        # closing quote is still read as part of python's own name
+            (bash, "'C:/Program Files/Python/python.exe' Z:/k/tools/commit.py -C $PWD -m Hub a.py"),
+        ), True)
+        # and the folder's python runs hub as a module, and a quoted run glued after its closing
+        # quote is read as part of python's own name
         self.rows((
             (ps, 'cd tools; & "C:\\Program Files\\Python312\\python.exe" -m hub answer Q-1'),
             (bash, 'cd tools && "C:/Program Files/Python312/python.exe" -m hub answer Q-1'),
