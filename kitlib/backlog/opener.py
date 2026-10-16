@@ -47,8 +47,15 @@ def open_store(root, fetch=True, session=None, branch=None):
     section = cfg.section('backlog')
     backend = smod.open_backend(top, cfg, fetch=fetch)
     store = smod.Store(backend, rules, session=session)
+    code_main, code_remote = section['code_main'], cfg.remote
+    code = pullmod.code_config(top)
+    if code is not None:
+        # The PM data worktree: its own main and remote are the data's; the code lands on the
+        # main checkout's (docs/backlog.md "The fold-in guard").
+        code_main, code_remote = code_main or code.main_branch, code.remote
     ctx = pmod.Context(store, top, remote=cfg.remote, main_branch=cfg.main_branch,
-                       branch=branch, code_main=section['code_main'] or cfg.main_branch)
+                       branch=branch, code_main=code_main or cfg.main_branch,
+                       code_remote=code_remote)
     return ctx
 
 
