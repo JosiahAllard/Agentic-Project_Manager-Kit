@@ -40,8 +40,8 @@ def text(event, kit, payload=None, environ=None, checks=None, lock_reader=None):
     if event == 'SubagentStart':
         # The one call site of the agent-start block (an opt-in setting would go here). Codex
         # hooks carry no child identity, so every child gets it, named a subagent. A block that
-        # raises is one line, as on Claude (hosts/claude/adapter/host.py _agent_start): the header
-        # and the note stand.
+        # raises is one line, as at the other hosts' call site (docs/preflight.md "Agent start
+        # block"): the header and the note stand.
         try:
             block = agentstart.text((payload or {}).get('cwd'), kit)
         except Exception as e:
