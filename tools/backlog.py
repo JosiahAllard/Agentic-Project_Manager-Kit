@@ -444,7 +444,12 @@ def main(argv=None):
             return do_retarget_dry(args, store)
         if args.verb == 'catch-up':
             return do_catch_up(args, store)
-        snap = store.load()
+        if args.verb == 'check':
+            snap, note = checkmod.load_for_check(store)
+            if note:
+                say('NOTE: %s' % note)
+        else:
+            snap = store.load()
         if args.verb == 'landable':
             return do_landable(args, ctx, snap, store.backend)
         return {'next': do_next, 'show': do_show, 'list': do_list,

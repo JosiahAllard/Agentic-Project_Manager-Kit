@@ -29,8 +29,8 @@ TODAY = '2026-10-07'
 STRANDED = 'the record is stranded there'
 
 
-def pulled(rid, by=BRANCH):
-    return priced(rid, state='pulled', pulled_at=TODAY, pulled_by=by)
+def pulled(rid, by=BRANCH, **over):
+    return priced(rid, state='pulled', pulled_at=TODAY, pulled_by=by, **over)
 
 
 class DefaultStoreWarn(unittest.TestCase):
@@ -141,6 +141,27 @@ class DefaultStoreWarn(unittest.TestCase):
         self.assertIn(STRANDED, warn[0])
         self.assertEqual(self.tips(), before)
 
+    def test_a_part_of_landing_words_its_default_ref_pull_as_a_release(self):
+        before = self.seed_default(pulled('BAR'))
+        lines = self.land('Part-of: BAR')
+        warn = self.warnings(lines)
+        self.assertEqual(len(warn), 1, lines)
+        self.assertIn('so BAR was not released', warn[0])
+        self.assertIn('release it with: ', warn[0])
+        self.assertIn('--as %s release BAR' % BRANCH, warn[0])
+        self.assertIn(STRANDED, warn[0])
+        self.assertFalse([l for l in lines if l.startswith('NOTE')], lines)
+        self.assertEqual(self.tips(), before)
+
+    def test_an_owner_held_default_ref_record_names_the_ruling_in_its_close_command(self):
+        before = self.seed_default(pulled('FOO', by='kit/other', priority='-1', priority_by='-',
+                                          owner_ask='may this ship?'))
+        lines = self.land('Closes: FOO')
+        warn = self.warnings(lines)
+        self.assertEqual(len(warn), 1, lines)
+        self.assertIn('close FOO --reason "landed %s" --ruling R-nnnn' % MERGE, warn[0])
+        self.assertEqual(self.tips(), before)
+
     def test_a_named_ref_store_closes_as_before(self):
         self.kit_json({'backlog': {'store': 'ref'}})
         before = self.seed_default(pulled('FOO', by='kit/other'))
@@ -209,6 +230,24 @@ class DefaultStoreWarn(unittest.TestCase):
         rc, out = self.run_tool('check')
         self.assertEqual(rc, 0, out)
         self.assertNotIn('default store', out)
+
+    def test_the_tool_check_reads_a_local_only_default_ref_and_warns(self):
+        """The remote has no store, the local ref does: the fetching read refuses, so `check`
+        reads the local ref (check.load_for_check), says so, and warns its records."""
+        self.seed_default(priced('FOO'), remote=False)
+        rc, out = self.run_tool('check')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('NOTE: origin has no refs/backlog/main; read the local refs/backlog/main',
+                      out)
+        self.assertIn('WARN backlog/FOO.md:1 FOO is held by the default backlog store', out)
+        self.assertTrue(out.rstrip().endswith('GREEN'), out)
+
+    def test_the_tool_check_of_a_named_ref_store_still_refuses_a_local_only_ref(self):
+        self.kit_json({'backlog': {'store': 'ref'}})
+        self.seed_default(priced('FOO'), remote=False)
+        rc, out = self.run_tool('check')
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn('origin has no refs/backlog/main, but refs/backlog/main holds a store', out)
 
 
 if __name__ == '__main__':
