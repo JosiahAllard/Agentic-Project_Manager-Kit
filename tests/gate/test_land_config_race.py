@@ -1,4 +1,4 @@
-"""kitlib.gate.gitstatus (KIT-LAND-GIT-CONFIG-RACE): on Windows a git reading .git/config while
+"""kitlib.gate.gitstatus: on Windows a git reading .git/config while
 another git in the same repository rewrites it by rename dies with `fatal: unable to access
 '<path>config': Permission denied`. The landing's and the gate's `git status` try again through
 that one failure, and through no other.

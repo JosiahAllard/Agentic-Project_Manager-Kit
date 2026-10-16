@@ -1,6 +1,6 @@
 """`git status` for the landing and the gate, tried again through one Windows race: another git in
 the same repository rewrites .git/config by rename, and a git reading it at that moment dies with
-`fatal: unable to access '<path>config': Permission denied` (KIT-LAND-GIT-CONFIG-RACE)."""
+`fatal: unable to access '<path>config': Permission denied`."""
 import re
 import time
 
