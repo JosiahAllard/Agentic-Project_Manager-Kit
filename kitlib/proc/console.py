@@ -70,6 +70,8 @@ HOLDER_WAIT_S = 5.0                     # how long the fallback waits for the ho
 
 MARK = '__kit_windowless__'             # set on the wrapper: install() is done in this process
 LOG_NAME = 'kit-console-incidents.log'
+CARRIER_LOG_ENV = 'KIT_CONSOLE_INCIDENT_LOG'   # a path that replaces the carrier's log: the tests' own file
+CARRIER_FAIL = 'carrier-fail'           # the "how" of the carrier's line (note_carrier_failure)
 LOG_MAX = 1 << 20
 KEEP_WORDS = 6                          # a logged command line: the program and this many words
 WORD_MAX = 120                          # each word cut to its start and end past this length
@@ -611,3 +613,51 @@ def _log_incident(how, child):
             fh.write(line)
     except Exception:                   # noqa: BLE001 - a log that fails never stops the start
         pass
+
+
+def carrier_log_path(environ=None):
+    """The file `note_carrier_failure` appends to: CARRIER_LOG_ENV when set, else `log_path()`.
+    None when that cannot be worked out (a fenced test process: HomeFenced, a BaseException; a bad
+    machine config; no LOCALAPPDATA): the line is skipped, rather than kept in a second folder
+    under the same name."""
+    env = os.environ if environ is None else environ
+    if env.get(CARRIER_LOG_ENV):
+        return env[CARRIER_LOG_ENV]
+    try:
+        from ..config import user
+        try:
+            return log_path()
+        except user.HomeFenced:
+            return None
+    except Exception:                   # noqa: BLE001
+        return None
+
+
+def note_carrier_failure(program, why, path=None, now=None, pid=None):
+    """Append one JSON line to `path` (default `carrier_log_path()`), in the same log as
+    `_log_incident`'s: {"time" (UTC), "how": "carrier-fail", "pid" (the carrier's), "exe" (the file
+    name of `program`, never its arguments), "why"}. The carrier tools/no_window.py calls it when
+    it cannot start its program: under pythonw it has no stderr, so this line is all that is left.
+    Returns the path written, or None when there is no log or it could not be written; never
+    raises, a HomeFenced included: it runs on the carrier's way out."""
+    try:
+        import json
+        import time
+        from ..config import user
+        try:
+            path = path or carrier_log_path()
+            if not path:
+                return None
+            name = str(program).strip().strip('"').replace('/', '\\').split('\\')[-1]
+            line = json.dumps({
+                'time': time.strftime('%Y-%m-%dT%H:%M:%SZ', now or time.gmtime()),
+                'how': CARRIER_FAIL, 'pid': os.getpid() if pid is None else pid,
+                'exe': name or '?', 'why': ' '.join(str(why).split())}) + '\n'
+            os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+            with open(path, 'a', encoding='utf-8') as f:
+                f.write(line)
+            return path
+        except user.HomeFenced:
+            return None
+    except Exception:                   # noqa: BLE001
+        return None

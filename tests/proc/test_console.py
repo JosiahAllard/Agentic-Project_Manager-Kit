@@ -8,6 +8,8 @@ check_output and a multiprocessing child; from THREADS threads at once; when the
 with no std handles; and with a child sending a console Ctrl+C or Ctrl+Break, which only ever
 reaches the parent's own new console (the sender checks who is on it first). Every process here
 is the test's own."""
+import datetime
+import importlib.util
 import json
 import os
 import shutil
@@ -849,6 +851,97 @@ class PythonwParentTest(unittest.TestCase):
         self.assert_shares_a_windowless_console(r, "run")
         self.assertTrue(r["after"], r)
         self.assertEqual(len(r["log"]), 1, r["log"])
+
+
+@unittest.skipUnless(os.name == "nt", "Windows only")
+class CarrierFailureLine(unittest.TestCase):
+    """The carrier's line when it cannot start its program: with no stderr under pythonw, the
+    incident log is all that is left of a detached run that never started. console.py is the one
+    writer of that log."""
+
+    def setUp(self):
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        self.log = os.path.join(d.name, "sub", "incidents.log")
+
+    def lines(self):
+        with open(self.log, encoding="utf-8") as f:
+            return [json.loads(x) for x in f.read().splitlines()]
+
+    def tool(self):
+        spec = importlib.util.spec_from_file_location(
+            "no_window_tool", os.path.join(ROOT, "tools", "no_window.py"))
+        tool = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(tool)
+        return tool
+
+    def test_one_json_line_with_the_program_file_name_only(self):
+        now = datetime.datetime(2026, 10, 13, 9, 30, 5).timetuple()
+        self.assertEqual(console.note_carrier_failure(r'"C:\Py\python.exe"', "exit 127\n(x)",
+                                                      path=self.log, now=now, pid=42), self.log)
+        self.assertEqual(self.lines(), [{"time": "2026-10-13T09:30:05Z", "how": "carrier-fail",
+                                         "pid": 42, "exe": "python.exe", "why": "exit 127 (x)"}])
+        console.note_carrier_failure("C:/a/b.exe", "again", path=self.log)
+        self.assertEqual([x["exe"] for x in self.lines()], ["python.exe", "b.exe"])  # appended
+
+    def test_a_line_that_cannot_be_written_is_not_an_error(self):
+        open(os.path.join(os.path.dirname(os.path.dirname(self.log)), "file"), "w").close()
+        blocked = os.path.join(os.path.dirname(os.path.dirname(self.log)), "file", "x.log")
+        self.assertIsNone(console.note_carrier_failure("python", "why", path=blocked))
+
+    def test_the_log_is_the_kits_console_incident_log_in_its_work_temp(self):
+        self.assertEqual(console.carrier_log_path(environ={console.CARRIER_LOG_ENV: self.log}), self.log)
+        with mock.patch.object(kuser, "work_temp", lambda near: os.path.join("W:\\", "t")), \
+                mock.patch.object(console, "LOG_PATH", None):
+            self.assertEqual(console.carrier_log_path(environ={}),
+                             os.path.join("W:\\", "t", console.LOG_NAME))
+        self.assertEqual(console.LOG_NAME, "kit-console-incidents.log")
+
+    def test_no_work_temp_folder_skips_the_line_and_never_raises(self):
+        """A fenced test process's HomeFenced is a BaseException and is caught as well."""
+        for err in (RuntimeError("no drive"), kuser.HomeFenced("fenced")):
+            with self.subTest(err=type(err).__name__), \
+                    mock.patch.dict(os.environ, {console.CARRIER_LOG_ENV: ""}), \
+                    mock.patch.object(console, "LOG_PATH", None), \
+                    mock.patch.object(kuser, "work_temp", mock.Mock(side_effect=err)):
+                self.assertIsNone(console.carrier_log_path(environ={}))
+                self.assertIsNone(console.note_carrier_failure("python", "why"))
+        with mock.patch.object(console.os, "makedirs", mock.Mock(side_effect=kuser.HomeFenced("x"))):
+            self.assertIsNone(console.note_carrier_failure("python", "why", path=self.log))
+
+    def test_the_carrier_logs_an_exception_through_console_and_lets_it_out(self):
+        """tools/no_window.py's exit path when spawn raises (not an OSError, which carry turns
+        into 127: tests/proc/test_no_window.py CarrierTest)."""
+        from kitlib.proc import spawn
+        tool = self.tool()
+        env = mock.patch.dict(os.environ, {console.CARRIER_LOG_ENV: self.log})
+        env.start()
+        self.addCleanup(env.stop)
+        with mock.patch.object(spawn, "carry", mock.Mock(side_effect=ValueError("bad handle"))):
+            with self.assertRaises(ValueError):
+                tool.main(["python", "-B", "secret.py"])
+        line, = self.lines()
+        self.assertEqual((line["how"], line["exe"], line["why"]), ("carrier-fail", "python", "ValueError"))
+        self.assertNotIn("secret", json.dumps(line))
+        self.assertNotIn("bad handle", json.dumps(line))   # the type only: a message can echo argv
+        with mock.patch.object(spawn, "carry", lambda argv: 127):
+            self.assertEqual(tool.main(["python"]), 127)
+        self.assertEqual(len(self.lines()), 2)
+        with mock.patch.object(spawn, "carry", lambda argv: 0):
+            self.assertEqual(tool.main(["python"]), 0)
+        self.assertEqual(len(self.lines()), 2)
+
+    def test_a_failing_log_changes_neither_the_exit_code_nor_the_exception(self):
+        from kitlib.proc import spawn
+        tool = self.tool()
+        broken = mock.Mock(side_effect=RuntimeError("log broke"))
+        with mock.patch.object(console, "note_carrier_failure", broken):
+            with mock.patch.object(spawn, "carry", lambda argv: 127):
+                self.assertEqual(tool.main(["python"]), 127)
+            with mock.patch.object(spawn, "carry", mock.Mock(side_effect=ValueError("x"))):
+                with self.assertRaises(ValueError):
+                    tool.main(["python"])
+        self.assertEqual(broken.call_count, 2)
 
 
 if __name__ == "__main__":

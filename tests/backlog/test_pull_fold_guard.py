@@ -124,14 +124,26 @@ class PullFold(_Branches):
         self.verb('pull', 'FOO')
         self.assertEqual(self.get('FOO').get('state'), 'pulled')
 
-    def test_a_live_branch_only_a_remote_has_is_noted_not_compared(self):
+    def far_on_origin_only(self):
         self.branch_with('kit/far', 'kitlib/r/a.py')
         self.repo.git('push', '-q', 'origin', 'kit/far')
         self.repo.git('branch', '-q', '-D', 'kit/far')
-        self.seed(held('FAR', 'kit/far', 'docs/far.md'), priced('FOO', scope='kitlib/r/**'))
+        self.seed(held('FAR', 'kit/far', 'docs/far.md'))
+
+    def test_a_live_branch_only_a_remote_has_is_compared_as_last_fetched(self):
+        self.far_on_origin_only()
+        self.seed(priced('FOO', scope='kitlib/r/**'))
+        with self.assertRaises(Refusal) as cm:
+            self.verb('pull', 'FOO')
+        self.assertIn('kitlib/r/** vs kitlib/r/a.py (changed on origin/kit/far)', str(cm.exception))
+        self.assertEqual(self.get('FOO').get('state'), 'open')
+
+    def test_a_remote_only_branch_that_does_not_overlap_is_noted_and_pulls(self):
+        self.far_on_origin_only()
+        self.seed(priced('FOO', scope='kitlib/other/**'))
         change = self.verb('pull', 'FOO')
-        self.assertIn('NOTE: branch kit/far is not a local branch (only on origin); its diff was '
-                      'not compared', change.lines)
+        self.assertIn('NOTE: branch kit/far is not a local branch; its diff was compared as last '
+                      'fetched from origin', change.lines)
         self.assertEqual(self.get('FOO').get('state'), 'pulled')
 
     def test_a_diff_path_that_cannot_be_compared_is_refused(self):
@@ -200,6 +212,48 @@ class PullFold(_Branches):
         self.failing('cmd', run=lambda args, root, **kw: (None, 'git broke')
                      if args[:2] == ['diff', '--no-renames'] else real(args, root, **kw))
         self.assert_git_failure()
+
+
+class SetScopeFold(_Branches):
+    """`set --scope` that widens a pulled record runs the fold-in
+    guard as `pull` does, on the members it adds, so `set` is not a door around it."""
+
+    def setUp(self):
+        super().setUp()
+        self.branch_with(HOLDER, 'kitlib/x/a.py')
+        self.branch_with(BRANCH, 'docs/mine.md', existing=True)
+        self.seed(held('HOLD', HOLDER, 'docs/held.md'), held('MINE', BRANCH, 'docs/mine.md'))
+
+    def test_widening_into_another_branchs_work_is_refused(self):
+        with self.assertRaises(Refusal) as cm:
+            self.verb('set', 'MINE', [('scope', ['docs/mine.md', 'kitlib/x/**'])])
+        msg = str(cm.exception)
+        self.assertIn('kitlib/x/** vs kitlib/x/a.py (changed on kit/holder)', msg)
+        self.assertIn('--ruling R-nnnn', msg)
+        self.assertEqual(self.get('MINE').all('scope'), ['docs/mine.md'])
+
+    def test_widening_into_another_branchs_work_with_a_ruling_is_written(self):
+        change = self.verb('set', 'MINE', [('scope', ['docs/mine.md', 'kitlib/x/**'])],
+                           ruling='R-9001')
+        self.assertEqual(self.get('MINE').all('scope'), ['docs/mine.md', 'kitlib/x/**'])
+        self.assertEqual(change.ruling, 'R-9001')
+        self.assertIn('  folds into the work of kit/holder on R-9001: kitlib/x/** vs kitlib/x/a.py '
+                      '(changed on kit/holder)', change.lines)
+
+    def test_widening_into_free_space_is_free(self):
+        change = self.verb('set', 'MINE', [('scope', ['docs/mine.md', 'kitlib/free/**'])])
+        self.assertEqual(self.get('MINE').all('scope'), ['docs/mine.md', 'kitlib/free/**'])
+        self.assertIsNone(change.ruling)
+
+    def test_the_records_own_branch_diff_never_counts(self):
+        self.branch_with(BRANCH, 'kitlib/own/b.py', existing=True)
+        self.verb('set', 'MINE', [('scope', ['docs/mine.md', 'kitlib/own/**'])])
+        self.assertEqual(self.get('MINE').all('scope'), ['docs/mine.md', 'kitlib/own/**'])
+
+    def test_an_open_record_is_not_checked(self):
+        self.seed(priced('FOO', scope='docs/foo.md'))
+        self.verb('set', 'FOO', [('scope', ['kitlib/x/**'])])
+        self.assertEqual(self.get('FOO').all('scope'), ['kitlib/x/**'])
 
 
 class TakeoverFold(_Branches):

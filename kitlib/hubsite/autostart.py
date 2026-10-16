@@ -18,7 +18,7 @@ import subprocess
 from kitlib.hubsite.serve import ServeError
 from kitlib.launcher import pythonw as pythonw_mod
 from kitlib.launcher import window
-from kitlib.launcher.autostart import in_worktree, pythonw_beside
+from kitlib.launcher.autostart import in_worktree
 from kitlib.proc import spawn
 
 TASK_NAME = 'PM kit hub server'
@@ -38,7 +38,7 @@ def task_script(python, hub_py):
     console python.exe. `python` may be either of the two; neither is checked to exist here
     (install refuses a pythonw.exe that is not a file)."""
     folder = os.path.dirname(python)
-    pythonw = pythonw_beside(python)
+    pythonw = spawn.pythonw_beside(python)
     console = (os.path.join(folder, 'python.exe')
                if os.path.basename(python).lower() == 'pythonw.exe' else python)
     carrier = os.path.join(os.path.dirname(hub_py), spawn.CARRIER)
@@ -65,7 +65,7 @@ def refusals(hub_py, python=None, isfile=os.path.isfile):
     if in_worktree(hub_py):
         out.append('install it from the main kit checkout, not a worktree: the task would run a '
                    'hub.py that goes when the worktree does (%s)' % hub_py)
-    pythonw = pythonw_beside(python)
+    pythonw = spawn.pythonw_beside(python)
     if pythonw_mod.under_windows_apps(pythonw):
         out.append(pythonw_mod.refusal(pythonw, isfile))
     elif not isfile(pythonw):

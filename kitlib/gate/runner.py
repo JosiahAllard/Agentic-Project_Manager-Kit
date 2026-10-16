@@ -46,6 +46,7 @@ from kitlib.config import policy
 from kitlib.config import user as kuser
 from kitlib.config.types import ConfigError
 from kitlib.gate import detect
+from kitlib.gate import gitstatus
 from kitlib.gate import hookrev
 from kitlib.gate import result
 from kitlib.gate import stash
@@ -698,7 +699,7 @@ def _gate_checkout(top, cfg, seen, base=None, full=False, only=None, plan=False,
     if not chosen and not empty:
         return G.Outcome(G.REFUSED, [NO_STEP % len(changed)], record=None,
                          no_record='no gate step selected', head=head, base=mb, changed=changed)
-    entries, why = refs.status(top)
+    entries, why = gitstatus.status(top)
     if entries is None:
         return G.Outcome(G.REFUSED, ['REFUSED: git status failed: %s' % why])
     untracked = [p for xy, p in entries if xy == '??']
@@ -735,7 +736,7 @@ def _gate_checkout(top, cfg, seen, base=None, full=False, only=None, plan=False,
     if refused:
         facts['no_record'] = 'no gate step ran'
         return G.Outcome(G.REFUSED, [refused, 'logs: %s' % logs], **facts)
-    after, _ = refs.status(top)
+    after, _ = gitstatus.status(top)
     head_now, _ = refs.head(top)
     no = None
     if only:
@@ -757,7 +758,7 @@ def _gate_checkout(top, cfg, seen, base=None, full=False, only=None, plan=False,
     try:
         path, _rec = gate_ok.record_pass(top, head, gate_config(cfg), kit_identity(), name, started,
                                          record_steps(results), base=mb, config_rev=head,
-                                         source=eff.source)
+                                         source=eff.source, full=bool(full))
     except gate_ok.RecordError as e:
         facts['no_record'] = str(e)
         lines.append('FAILED: the gate passed, and its gate-OK record could not be written: %s' % e)

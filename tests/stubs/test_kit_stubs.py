@@ -510,10 +510,13 @@ class TheMemoryVerb(StubCase):
         self.assertEqual(self.read(self.settings()), raw)
 
     def test_a_file_it_cannot_edit_exits_1(self):
-        self.put(self.settings(), '[1]')
+        # The local file: --apply writes only there (kitlib.stubs.memory). A shared settings.json
+        # that is not an object is skipped, and on real git the key then lands in the local file.
+        local = os.path.join(self.root, '.claude', 'settings.local.json')
+        self.put(local, '[1]')
         code, out = self.call([TOOL, 'memory', '--apply'], self.root)
         self.assertEqual(code, 1, out)
-        self.assertEqual(self.read(self.settings()), '[1]')
+        self.assertEqual(self.read(local), '[1]')
 
     def test_usage(self):
         # Each is refused for its own reason, not as an unknown verb or option.

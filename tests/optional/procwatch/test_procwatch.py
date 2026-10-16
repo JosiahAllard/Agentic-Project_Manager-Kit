@@ -47,6 +47,23 @@ def by_pid(procs):
 
 
 class Classify(unittest.TestCase):
+    def test_origin_skips_unlisted_apps(self):
+        for app in ("discord.exe", "steam.exe"):
+            ps = by_pid(world(proc(700, 4180, app), proc(701, 700, "child.exe")))
+            self.assertEqual(ps[701]["origin"], "explorer.exe", app)
+
+    def test_procwatch_origins_env_adds_an_app(self):
+        old = os.environ.get("PROCWATCH_ORIGINS")
+        os.environ["PROCWATCH_ORIGINS"] = "obs64.exe"
+        try:
+            ps = by_pid(world(proc(700, 4180, "obs64.exe"), proc(701, 700, "child.exe")))
+        finally:
+            if old is None:
+                del os.environ["PROCWATCH_ORIGINS"]
+            else:
+                os.environ["PROCWATCH_ORIGINS"] = old
+        self.assertEqual(ps[701]["origin"], "obs64.exe")
+
     def test_orphaned_tail_follow_and_grep_are_kill_ok_suspects(self):
         ps = by_pid(world(gitp(900, 77, "tail.exe", r"tail.exe -n +1 -f C:\t\x.output", 2 * HOUR, (60, GONE)),
                           gitp(901, 78, "grep.exe", 'grep.exe --line-buffered -E "FAIL"', 2 * HOUR, (61, GONE))))

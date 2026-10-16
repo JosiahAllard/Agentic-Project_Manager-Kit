@@ -8,7 +8,7 @@
   writes  add ID --summary S --scope P... --found-on BRANCH|none --why-not-folded T
               [--effort s|m|l] [--ref R] [--reopen]
           set ID [--<field> V]... [--unset K]... [--ruling R] [--body-file F] [--hold-ruling R]
-          block ID --on M... [--reason T] [--owner-ask Q] [--ruling R]
+          block ID --on M... [--reason T] [--owner-ask Q]   (adds; unblock removes)
           retarget OLD NEW [--apply]                (a moved path; a dry run without --apply)
           unblock ID [--on M] [--reason T] [--ruling R]      (several blockers: --on and --reason)
           pull ID [--reason T] [--ruling R] [--blocker ID]   release ID --reason T
@@ -108,7 +108,7 @@ def build_parser():
     v.add_argument('--on', action='append', default=[])
     v.add_argument('--reason', default=None)
     v.add_argument('--owner-ask', default=None)
-    v.add_argument('--ruling', default=None)
+    v.add_argument('--ruling', default=None)    # refused (plan_block): the message names unblock
     v = sub.add_parser('retarget')
     v.add_argument('old')
     v.add_argument('new')
@@ -193,11 +193,14 @@ def do_next(args, ctx, snap):
                  if rec.get('session') else '')
         say('DEAD PULL %s (pulled_by %s has no branch): %s`release %s --reason ...`'
             % (rec.id, rec.get('pulled_by'), taker, rec.id))
-    result, refusals, ranks = omod.next_offer(snap, holding, cap=cap, seeds=args.seeds,
-                                              session=ctx.session, unmet=ctx.unmet(snap))
-    if refusals:
-        raise Failure('cannot compute an offer: %s' % '; '.join(refusals))
-    offers, passed = result
+    # The offer `pull` checks against (plan.offer_for): the branch's own pulls take no scope.
+    offers, passed, _holding, own = pmod.offer_for(snap, ctx, cap=cap, seeds=args.seeds,
+                                                   holding=holding)
+    mine = [r.id for r in holding if own and r.get('pulled_by') == own]
+    if mine:
+        say('as branch %s: its own pulls (%s) take no scope here, so a record overlapping only '
+            'them is offered to bundle onto it' % (own, ', '.join(mine)))
+    ranks = omod.ranked(snap)
     say('')
     say('NEXT (%d offered%s%s)' % (len(offers), ', session %s' % ctx.session if ctx.session else '',
                                    ', --all: no cap' if cap is None else ''))
