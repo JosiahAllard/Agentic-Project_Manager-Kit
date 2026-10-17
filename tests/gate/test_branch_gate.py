@@ -147,6 +147,22 @@ class BranchGate(fixtures.GateRepoCase):
         self.assertEqual(self.store.history_records(1), [])          # nothing booked or run
         self.assertFalse(os.path.exists(self.logs))
 
+    def test_full_with_steps_that_drop_each_other_is_refused_with_the_full_advice(self):
+        # --full selects every step but the manual ones, so changed paths and globs are not the
+        # cause: the advice names skip_if_selected instead (runner.NO_STEP_FULL)
+        wt = self.repo.worktree('feature')
+        self.repo.write('.kit.json', '{"gate": {"steps": ['
+                        '{"name": "a", "always": true, "cmd": ["{python}", "-c", "print(1)"], '
+                        '"skip_if_selected": ["b"]}, '
+                        '{"name": "b", "always": true, "cmd": ["{python}", "-c", "print(1)"], '
+                        '"skip_if_selected": ["a"]}]}}\n', root=wt)
+        tip = self.repo.commit('a cycle', '.kit.json', cwd=wt)
+        out = self.gate(wt, full=True)
+        self.assertEqual(out.code, G.REFUSED, out.lines)
+        self.assertEqual(out.lines[0], runner.NO_STEP_FULL)   # then the gate's source label
+        self.assertEqual(out.no_record, 'no gate step selected')
+        self.assertFalse(os.path.exists(gate_ok.record_path(wt, tip)))
+
     def test_check_step_runs_the_hook_module(self):
         wt = self.repo.worktree('feature')
         self.repo.write('tools/kit_hooks.py', (
