@@ -266,6 +266,17 @@ class StateTest(unittest.TestCase):
         odd = js("hubState(items)", snapshot(collections={"pages": ["x"], "page_html": "y"}))
         self.assertEqual((odd["pages"], odd["pageHtml"]), ([], {}))
 
+    def test_only_pending_approvals_oldest_first_and_strong_only_when_true(self):
+        got = js("hubState(items)", snapshot(strong=True, collections={"approvals": {
+            "A-2": {"status": "pending", "title": "later", "created_at": "2026-10-02T00:00:00+00:00"},
+            "A-1": {"status": "pending", "title": "first", "created_at": "2026-10-01T00:00:00+00:00"},
+            "A-3": {"status": "approved", "title": "decided", "created_at": "2026-09-30T00:00:00+00:00"}}}))
+        self.assertEqual([(a["id"], a["title"]) for a in got["approvals"]], [("A-1", "first"), ("A-2", "later")])
+        self.assertIs(got["strong"], True)
+        for snap in ({}, None, snapshot(strong="yes"), snapshot(strong=1)):
+            got = js("hubState(items)", snap)
+            self.assertEqual((got["approvals"], got["strong"]), ([], False), snap)
+
     def test_pages_newest_first_with_their_bodies(self):
         got = js("hubState(items)", snapshot(collections={
             "pages": {"old": {"title": "Old", "at": "2026-10-01T00:00:00Z"},
@@ -1448,6 +1459,62 @@ class DomTest(unittest.TestCase):
         self.assertIn("Read on this machine", got["note"])                       # the rest of the view is drawn
         self.assertEqual((got["err"], got["sleeps"]), ("", []))
 
+    # A pending approval as kitlib.hubsite.api's add route stores it, diff lines and all (kitlib.hubsite.approvals.diff).
+    APPROVALS = {
+        "A-1": {"status": "pending", "repo": "github.com/team/alpha", "title": "Raise the cap", "head": "a" * 40,
+                "reason": "the cap is too low", "version": 2, "created_at": NOW,
+                "files": [{"path": "conf.txt", "base_blob": "b" * 40, "blob": "c" * 40, "content": "cap = 9\n"}],
+                "diff": ["--- a/conf.txt\n", "+++ b/conf.txt\n", "@@ -1 +1 @@\n", "-cap = 3\n", "+cap = 9 <img src=x>\n"]},
+        "A-2": {"status": "approved", "repo": "github.com/team/alpha", "title": "Already decided", "head": "a" * 40,
+                "version": 3, "created_at": NOW, "files": [], "diff": []}}
+
+    def test_a_pending_approval_shows_its_diff_and_approve_posts_decide_with_its_version(self):
+        got = dom("""
+            await start();
+            const c = $("#approval-A-1");
+            const before = { card: text(c), diff: text(c.querySelector("pre")), approve: button(c, "Approve").disabled,
+                             deny: button(c, "Deny").disabled, decided: !!$("#approval-A-2"), n: text($("#n-qq")), q: !!$("#q-Q-1") };
+            server.route = r => {
+              if (r.path !== "/approvals/A-1/decide") return undefined;
+              const d = server.snap.collections.approvals["A-1"]; d.status = "approved"; d.version = 3; server.snap.revision++;
+              return { status: 200, body: { ok: true } };
+            };
+            await click(button(c, "Approve"));
+            return { before, sent: calls.filter(r => r.method === "POST").map(r => [r.path, r.body]), after: !!$("#approval-A-1"), tags: [...new Set(created)] };
+        """, snapshot(strong=True, collections=dict(LISTS, approvals=self.APPROVALS)))
+        b = got["before"]
+        for part in ("A-1", "github.com/team/alpha", "Raise the cap", "a" * 40, "the cap is too low"):
+            self.assertIn(part, b["card"], part)
+        self.assertEqual(b["diff"], "--- a/conf.txt\n+++ b/conf.txt\n@@ -1 +1 @@\n-cap = 3\n+cap = 9 <img src=x>")
+        self.assertEqual((b["approve"], b["deny"], b["decided"], b["q"], b["n"]), (False, False, False, True, "2"))
+        self.assertEqual(got["sent"], [["/approvals/A-1/decide", {"decision": "approve", "if_version": 2}]])
+        self.assertFalse(got["after"])                                          # approved: no longer pending
+        self.assertNotIn("img", got["tags"])
+
+    def test_approve_and_deny_need_a_strong_session_and_a_403_shows_the_servers_words(self):
+        weak = dom("""
+            await start();
+            const c = $("#approval-A-1");
+            return { approve: button(c, "Approve").disabled, deny: button(c, "Deny").disabled, card: text(c) };
+        """, snapshot(collections={"approvals": self.APPROVALS}))
+        self.assertEqual((weak["approve"], weak["deny"]), (True, True))           # pagedom fires a disabled button; a browser does not
+        self.assertIn("need a strong session", weak["card"])
+        words = "POST /approvals/{id}/decide needs the owner logged in through Cloudflare Access"
+        got = dom("""
+            await start();
+            server.route = r => r.path === "/approvals/A-1/decide"
+              ? { status: 403, body: { ok: false, error: { code: "forbidden", message: %s, field: "role" } } } : undefined;
+            const c = $("#approval-A-1");
+            await click(button(c, "Deny"));
+            return { card: text(c), approve: button(c, "Approve").disabled, sent: calls.filter(r => r.method === "POST").map(r => r.body),
+                     err: text($("#loaderr")) };
+        """ % json.dumps(words), snapshot(strong=True, collections={"approvals": self.APPROVALS}))
+        self.assertIn("Not decided: " + words, got["card"])
+        self.assertNotIn("not paired", got["card"])
+        self.assertFalse(got["approve"])                                        # the owner may try again
+        self.assertEqual(got["sent"], [{"decision": "deny", "if_version": 2}])
+        self.assertEqual(got["err"], "")
+
 
 @unittest.skipUnless(NODE, "node is needed to run the page's logic")
 class RecordPageTest(unittest.TestCase):
@@ -1802,7 +1869,8 @@ class PageTextTest(unittest.TestCase):
     def test_only_the_decided_routes(self):
         self.assertEqual(re.findall(r'call\("GET", "(/[a-z_]+)', self.script), ["/snapshot", "/wait", "/records"])
         roots = set(re.findall(r'(?:write|hub\.post)\("(/[a-z_]+)', self.script))
-        self.assertEqual(roots, {"/questions", "/todos", "/stories", "/records", "/to_pm", "/inbox"})
+        self.assertEqual(roots, {"/questions", "/todos", "/stories", "/records", "/to_pm", "/inbox", "/approvals"})
+        self.assertEqual(re.findall(r'"/approvals/" \+ seg\([^)]*\) \+ "(/[a-z]+)"', self.script), ["/decide"])
         for route in ("/alert", "/logout", "/sessions", "/session", "/pair", "/alias", "/aliases", "/pages", "/page",
                       "/health", "/notices"):
             self.assertNotIn('"%s' % route, self.script, route)
