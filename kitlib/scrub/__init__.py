@@ -53,7 +53,7 @@ STOP_IDS = frozenset((
     'SHA-224', 'SHA-384', 'SHA-512', 'EMSA-PKCS1', 'RSASSA-PKCS1',
     # hyphenated English and marker words written in capitals
     'OWNER-ONLY', 'SELF-TEST', 'ROW-ID', 'FOLLOW-UP', 'AUTO-GENERATED', 'UP-TO-DATE',
-    'WORKING-RULES', 'CLAUDE-SPECIFIC', 'GATE-EXPECT-BEGIN', 'GATE-EXPECT-END'))
+    'WORKING-RULES', 'CLAUDE-SPECIFIC', 'GATE-EXPECT-BEGIN', 'GATE-EXPECT-END', 'FIX-HERE'))
 # Invented ids in fixtures and examples start with this, as ruling fixtures use R-9nnn.
 MADE_UP_ID_PREFIX = 'EX-'
 # "PM kit" alone is this kit's own name (AGENTS.md); what counts is the replaced one called

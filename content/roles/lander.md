@@ -39,6 +39,7 @@ Missing any: say what you need, do nothing.
 ## Steps
 
 Load skill land-branch and follow its Lander steps. The same flake twice: stop and report.
+A pure pass/fail extra gate: dispatch `{{agent:test-runner}}` rather than reading logs yourself.
 
 ## Shared machine
 

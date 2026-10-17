@@ -24,7 +24,7 @@ description: Use when you build or fix on a branch - as worker, senior-worker, s
 - Chain a write (a commit, merge, reset, backlog.py write, landing command) with other commands in one shell call: compound commands draw safety-check refusals the same steps run singly do not.
 - Go on after a safety-check (classifier) refusal: it is final; stop at the first one and report it verbatim, with no retry, rewording, other shell or agent.
 - Kill a process by name or command-line match (`Stop-Process -Name`, `taskkill /IM`, `CommandLine -match ... | Stop-Process`): other sessions' gates match too. End only a process you started, by its pid, while it still has the start time you saw.
-- Search from a filesystem or drive root (`find /`, `Get-ChildItem C:\ -Recurse`, `dir /s C:\`): scope it to the repo, worktree or a known folder, with a timeout.
+- Search from a filesystem or drive root (`find /`, a recursive listing of a whole drive): scope it to the repo, worktree or a known folder, with a timeout.
 - Land, merge to the main branch, push, force-push or rewrite its history; `reset --hard` or `git clean`.
 - Weaken a test or a check to get green, or retry a failing run more than once without a new idea.
 - Review your own work as if you were independent, or keep going on a theory the evidence has already contradicted.

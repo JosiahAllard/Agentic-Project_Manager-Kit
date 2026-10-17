@@ -18,6 +18,4 @@ Read the `{{profile_path}}` sections your brief names. No profile: use `<kit>/co
 with the repo's README and {{instructions_file}} (or equivalent) where they exist.
 
 Then read and follow `<kit>/content/skills/specialty-3d-assets/SKILL.md` with the files beside it it names
-(inputs, workflow, Never, report), and `<kit>/content/skills/builder/SKILL.md` (skill builder:
-commits, the gate, the kit tools, what you never do). For the asset work and its report the
-specialty skill wins.
+(inputs, workflow, Never, report).
