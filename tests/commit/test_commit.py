@@ -7,6 +7,7 @@ the tests reaches git, and the kit's doc-budget tool is a stub in a temp folder 
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -336,6 +337,13 @@ class LinkedCase(TempHomeCase):
         p.start()
         self.addCleanup(p.stop)
 
+    def other_writer_commits(self, name='b.py'):
+        """Another writer commits `name` in this worktree; its commit's id."""
+        self.put(name, 'theirs\n')
+        self.git('add', '--', name)
+        self.git('commit', '-q', '-m', 'theirs', '--', name)
+        return self.git('rev-parse', 'HEAD')
+
 
 class AnOrdinaryCommit(LinkedCase):
 
@@ -660,6 +668,510 @@ class StagedDeletions(LinkedCase):
         self.assertEqual(self.git('show', '--name-status', '--format=', 'HEAD'), 'M\tseed.txt')
 
 
+class AnotherWriterStagesDuringTheCall(LinkedCase):
+    """Another process (the PM data worktree has several writers)
+    stages a file after this call checked the index. The commit records only the paths this call
+    named (and what it rendered or a merge staged); the other file stays staged, uncommitted."""
+
+    def intrude_at(self, name, nth=1):
+        """Stage intruder.txt in the real index just before the `nth` call of C.`name`."""
+        self.put('intruder.txt', 'not yours\n')
+        real, calls = getattr(C, name), []
+
+        def wrapper(*a, **kw):
+            calls.append(1)
+            if len(calls) == nth:
+                self.git('add', '--', 'intruder.txt')
+            return real(*a, **kw)
+        p = mock.patch.object(C, name, wrapper)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def assert_left_staged(self, code, out, *committed):
+        self.assertEqual(code, 0, out)
+        self.assertEqual(sorted(self.git('show', '--name-only', '--format=', 'HEAD').split()),
+                         sorted(committed))
+        self.assertEqual(self.git('diff', '--cached', '--name-only'), 'intruder.txt')
+        self.assertIn('intruder.txt', out)
+        self.assertNotIn('intruder.txt', [ln for ln in out.splitlines()
+                                          if ln.startswith('files ')][0])
+
+    def test_staged_after_the_check_and_before_the_add(self):
+        self.intrude_at('staged_status', nth=2)
+        self.put('a.py', 'a = 1\n')
+        self.assert_left_staged(*self.commit('add a', 'a.py'), 'a.py')
+
+    def test_staged_after_the_add_and_before_the_commit(self):
+        self.intrude_at('staged_machine_path_error')
+        self.put('a.py', 'a = 1\n')
+        self.assert_left_staged(*self.commit('add a', 'a.py'), 'a.py')
+
+    def test_a_named_deletion_still_commits_beside_an_intruder(self):
+        self.intrude_at('staged_machine_path_error')
+        self.git('rm', '-q', '--', 'seed.txt')
+        code, out = self.commit('drop seed', 'seed.txt')
+        self.assert_left_staged(code, out, 'seed.txt')
+        self.assertEqual(self.git('show', '--name-status', '--format=', 'HEAD'), 'D\tseed.txt')
+
+    def test_the_committed_path_is_not_left_staged(self):
+        self.intrude_at('staged_machine_path_error')
+        self.put('a.py', 'a = 1\n')
+        self.commit('add a', 'a.py')
+        self.assertNotIn('a.py', self.git('status', '--porcelain'))
+
+    # -- HEAD: the tree the commit is built on
+
+    def test_an_unborn_branch_commits_only_the_named_file(self):
+        self.git('symbolic-ref', 'HEAD', 'refs/heads/unborn')
+        self.git('read-tree', '--empty')
+        self.put('a.py', 'a = 1\n')
+        code, out = self.commit('first', 'a.py')
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.git('ls-tree', '-r', '--name-only', 'HEAD'), 'a.py')
+        self.assertEqual(self.git('log', '-1', '--format=%P'), '')
+
+    def fail_head_read(self, rc):
+        real = C._git
+
+        def wrapper(root, *args, **kw):
+            if args[:1] == ('rev-parse',) and 'HEAD^{commit}' in args:
+                return rc, '', 'fatal: injected'
+            return real(root, *args, **kw)
+        p = mock.patch.object(C, '_git', wrapper)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def assert_refused_unchanged(self, head, code, out, *texts):
+        self.assertEqual(code, 1, out)
+        for text in texts:
+            self.assertIn(text, out)
+        self.assertEqual(self.head(), head)
+
+    def test_a_failing_head_read_refuses_and_commits_nothing(self):
+        head = self.head()
+        self.fail_head_read(128)
+        self.put('a.py', 'a = 1\n')
+        self.assert_refused_unchanged(head, *self.commit('add a', 'a.py'), 'HEAD', 'injected')
+        self.assertEqual(self.git('show', 'HEAD:seed.txt'), '0')
+
+    def test_a_head_read_that_did_not_run_refuses(self):
+        head = self.head()
+        self.fail_head_read(None)
+        self.put('a.py', 'a = 1\n')
+        self.assert_refused_unchanged(head, *self.commit('add a', 'a.py'), 'HEAD')
+
+    def test_head_moved_before_the_commit_refuses(self):
+        real, theirs = C.staged_machine_path_error, []
+
+        def wrapper(*a, **kw):
+            theirs.append(self.other_writer_commits())
+            return real(*a, **kw)
+        self.put('a.py', 'a = 1\n')
+        with mock.patch.object(C, 'staged_machine_path_error', wrapper):
+            code, out = self.commit('add a', 'a.py')
+        self.assert_refused_unchanged(theirs[0], code, out, 'HEAD moved')
+        self.assertEqual(self.git('show', 'HEAD:b.py'), 'theirs')
+        self.assertIn('A  a.py', self.git('status', '--porcelain'))
+
+    def test_head_moved_just_before_git_commit_is_undone(self):
+        """The other writer commits after every check and before `git commit` reads HEAD: the
+        commit made on top of theirs (whose tree lacks their change) is undone."""
+        real, theirs = cmd.call, []
+
+        def wrapper(args, cwd, *a, **kw):
+            if args[:1] == ['commit'] and not theirs:
+                theirs.append(self.other_writer_commits())
+            return real(args, cwd, *a, **kw)
+        self.put('a.py', 'a = 1\n')
+        with mock.patch.object(C.cmd, 'call', wrapper):
+            code, out = self.commit('add a', 'a.py')
+        self.assert_refused_unchanged(theirs[0], code, out, 'HEAD moved')
+        self.assertEqual(self.git('show', 'HEAD:b.py'), 'theirs')
+        self.assertIn('A  a.py', self.git('status', '--porcelain'))
+
+    def test_a_commit_stacked_on_ours_is_never_undone(self):
+        """Another writer commits on top of this call's commit before it reads HEAD back: their
+        commit is not this call's, so nothing is undone. The tiers differ, on purpose. Real git:
+        the reflog entry `git commit` wrote under this call's tag shows its commit was made on the
+        HEAD checked, so the commit stands (exit 0, the committed line names it, a NOTE names
+        theirs). The fake writes no reflog, so this call cannot tell its commit from theirs and
+        refuses without undoing anything (exit 1, NOT undone)."""
+        start, real, theirs = self.head(), cmd.call, []
+
+        def wrapper(args, cwd, *a, **kw):
+            r = real(args, cwd, *a, **kw)
+            if args[:1] == ['commit'] and not theirs:
+                theirs.append(self.other_writer_commits())
+            return r
+        self.put('a.py', 'a = 1\n')
+        with mock.patch.object(C.cmd, 'call', wrapper):
+            code, out = self.commit('add a', 'a.py')
+        self.assertNotIn('Undone', out)
+        self.assertEqual(self.head(), theirs[0])
+        self.assertEqual(self.git('show', 'HEAD:b.py'), 'theirs')
+        self.assertEqual(self.git('show', 'HEAD:a.py'), 'a = 1')
+        self.assertEqual(self.git('log', '-1', '--format=%s', 'HEAD^'), 'add a')
+        self.assertEqual(self.git('rev-parse', 'HEAD^^'), start)
+        if cmd.fake_active():
+            self.assertEqual(code, 1, out)
+            self.assertIn('NOT undone', out)
+        else:
+            self.assertEqual(code, 0, out)
+            ours = self.git('rev-parse', '--short', 'HEAD^')
+            self.assertIn('committed %s  add a' % ours, out)
+            self.assertIn(theirs[0][:12], out)
+
+    def test_an_undo_that_fails_names_the_manual_fix(self):
+        real, theirs = cmd.call, []
+
+        def wrapper(args, cwd, *a, **kw):
+            if args[:1] == ['commit'] and not theirs:
+                theirs.append(self.other_writer_commits())
+            if args[:1] == ['update-ref']:
+                return cmd.Result(128, b'', 'fatal: injected update-ref')
+            return real(args, cwd, *a, **kw)
+        self.put('a.py', 'a = 1\n')
+        with mock.patch.object(C.cmd, 'call', wrapper):
+            code, out = self.commit('add a', 'a.py')
+        self.assertEqual(code, 1, out)
+        self.assertIn('NOT undone', out)
+        self.assertIn('git update-ref HEAD %s ' % theirs[0], out)
+        self.assertEqual(self.git('log', '-1', '--format=%P'), theirs[0])
+
+    def fake_read_back(self, rewrite):
+        """C._git's answer to the read-back after `git commit`, passed through `rewrite`."""
+        real = C._git
+
+        def wrapper(root, *args, **kw):
+            got = real(root, *args, **kw)
+            if args[:1] == ('log',) and C.READ_BACK_FORMAT in args:
+                return rewrite(got)
+            return got
+        p = mock.patch.object(C, '_git', wrapper)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_a_failed_read_back_refuses_and_says_to_check(self):
+        self.fake_read_back(lambda got: (128, '', 'fatal: injected'))
+        self.put('a.py', 'a = 1\n')
+        code, out = self.commit('add a', 'a.py')
+        self.assertEqual(code, 1, out)
+        self.assertIn('could not be read back', out)
+        self.assertIn('injected', out)
+
+    def test_our_commit_without_a_parent_is_not_undone(self):
+        def drop_parents(got):
+            first, nl, rest = got[1].partition('\n')
+            return got[0], ' '.join(first.split()[:2]) + nl + rest, got[2]
+        self.fake_read_back(drop_parents)
+        self.put('a.py', 'a = 1\n')
+        code, out = self.commit('add a', 'a.py')
+        self.assertEqual(code, 1, out)
+        self.assertIn('no parent', out)
+        self.assertIn('NOT undone', out)
+        self.assertEqual(self.git('show', 'HEAD:a.py'), 'a = 1')
+
+    def undo_case(self):
+        """(parent, a commit on it, the MERGE_HEAD path, saved merge state)."""
+        parent = self.head()
+        new = self.other_writer_commits()
+        path = C.repo.git_path(self.wt, 'MERGE_HEAD')[0]
+        return parent, new, path, {path: b'1234\n'}
+
+    def test_an_undone_merge_commit_gets_its_merge_state_back(self):
+        parent, new, path, saved = self.undo_case()
+        lines = C.undo_commit(self.wt, new, parent, saved, merged=True)
+        self.assertEqual(self.head(), parent, lines)
+        with open(path, 'rb') as fh:
+            self.assertEqual(fh.read(), b'1234\n')
+
+    def test_an_undone_single_parent_commit_does_not_bring_merge_state_back(self):
+        parent, new, path, saved = self.undo_case()
+        lines = C.undo_commit(self.wt, new, parent, saved, merged=False)
+        self.assertEqual(self.head(), parent, lines)
+        self.assertFalse(os.path.exists(path))
+
+    # -- the private index
+
+    def fail_git(self, verb):
+        real = cmd.call
+
+        def wrapper(args, cwd, *a, **kw):
+            if args[:1] == [verb] and 'GIT_INDEX_FILE' in (kw.get('env') or {}):
+                return cmd.Result(128, b'', 'fatal: injected %s' % verb)
+            return real(args, cwd, *a, **kw)
+        p = mock.patch.object(C.cmd, 'call', wrapper)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_a_failing_read_tree_refuses(self):
+        head = self.head()
+        self.fail_git('read-tree')
+        self.put('a.py', 'a = 1\n')
+        self.assert_refused_unchanged(head, *self.commit('add a', 'a.py'))
+
+    def test_a_failing_update_index_refuses(self):
+        head = self.head()
+        self.fail_git('update-index')
+        self.put('a.py', 'a = 1\n')
+        self.assert_refused_unchanged(head, *self.commit('add a', 'a.py'))
+
+    def test_the_private_index_is_named_as_a_partial_commit_for_the_hook(self):
+        from kitlib.githooks import render
+        self.assertTrue(render.partial({'GIT_INDEX_FILE': C.private_index_file('x')}))
+
+    def test_a_restage_after_the_machine_path_check_refuses(self):
+        """The blobs checked are the blobs committed: a named file staged again with other
+        content after the check refuses the commit."""
+        head, real = self.head(), C.staged_machine_path_error
+
+        def wrapper(*a, **kw):
+            got = real(*a, **kw)
+            self.put('a.py', 'a = 2\n')
+            self.git('add', '--', 'a.py')
+            return got
+        self.put('a.py', 'a = 1\n')
+        with mock.patch.object(C, 'staged_machine_path_error', wrapper):
+            code, out = self.commit('add a', 'a.py')
+        self.assert_refused_unchanged(head, code, out, 'a.py')
+
+    def test_a_named_file_missing_from_the_work_tree_commits_its_deletion(self):
+        os.remove(os.path.join(self.wt, 'seed.txt'))
+        code, out = self.commit('drop seed', 'seed.txt')
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.git('show', '--name-status', '--format=', 'HEAD'), 'D\tseed.txt')
+
+
+@real_git('the commit is built in a private index (GIT_INDEX_FILE): checked against git\'s own '
+          'commit as well as the fake\'s')
+class AnotherWriterStagesDuringTheCallRealGit(AnotherWriterStagesDuringTheCall):
+    pass
+
+
+@real_git('hooks, and the reflog entry `git commit` writes under this call\'s tag: the fake runs '
+          'no hooks and writes no reflog')
+class HooksAndTheReflog(LinkedCase):
+    """A hook may change the commit (a commit-msg hook appends a trailer, a pre-commit hook stages
+    a file into the private index): it is still this call's commit. On a moved HEAD, the reflog
+    entry tagged by this call (GIT_REFLOG_ACTION) names this call's commit and its base."""
+
+    def hook(self, name, body):
+        hooks = tempfile.mkdtemp(prefix='kit-test-hooks-')
+        self.addCleanup(shutil.rmtree, hooks, True)
+        with open(os.path.join(hooks, name), 'w', encoding='utf-8', newline='\n') as fh:
+            fh.write('#!/bin/sh\n%s\n' % body)
+        self.git('config', 'core.hooksPath', hooks.replace('\\', '/'))
+
+    def around_commit(self, before=None, after=None):
+        """Run `before` just before this call's `git commit` and `after` just after it; the list
+        their answers are appended to, in that order."""
+        real, seen, done = cmd.call, [], []
+
+        def wrapper(args, cwd, *a, **kw):
+            first = args[:1] == ['commit'] and not done
+            if first:
+                done.append(1)
+                if before:
+                    seen.append(before())
+            r = real(args, cwd, *a, **kw)
+            if first and after:
+                seen.append(after())
+            return r
+        p = mock.patch.object(C.cmd, 'call', wrapper)
+        p.start()
+        self.addCleanup(p.stop)
+        return seen
+
+    def test_a_commit_msg_hook_that_appends_a_line_commits(self):
+        self.hook('commit-msg', 'printf "Change-Id: I0123\\n" >> "$1"')
+        start = self.head()
+        self.put('a.py', 'a = 1\n')
+        code, out = self.commit('add a', 'a.py')
+        self.assertEqual(code, 0, out)
+        self.assertIn('Change-Id: I0123', self.message())
+        self.assertEqual(self.git('rev-parse', 'HEAD^'), start)
+        self.assertEqual(self.git('show', 'HEAD:a.py'), 'a = 1')
+
+    def test_a_pre_commit_hook_that_stages_a_file_commits(self):
+        self.hook('pre-commit', 'printf "hook\\n" > extra.txt && git add extra.txt')
+        start = self.head()
+        self.put('a.py', 'a = 1\n')
+        code, out = self.commit('add a', 'a.py')
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.git('show', 'HEAD:extra.txt'), 'hook')
+        self.assertEqual(self.git('rev-parse', 'HEAD^'), start)
+
+    def test_head_moved_under_a_hooked_commit_is_still_undone(self):
+        self.hook('commit-msg', 'printf "Change-Id: I0123\\n" >> "$1"')
+        seen = self.around_commit(before=self.other_writer_commits)
+        self.put('a.py', 'a = 1\n')
+        code, out = self.commit('add a', 'a.py')
+        self.assertEqual(code, 1, out)
+        self.assertIn('Undone', out)
+        self.assertNotIn('NOT undone', out)
+        self.assertEqual(self.head(), seen[0])
+        self.assertEqual(self.git('show', 'HEAD:b.py'), 'theirs')
+        self.assertIn('A  a.py', self.git('status', '--porcelain'))
+
+    def test_ours_on_a_moved_head_under_a_stacked_commit_names_what_it_may_undo(self):
+        """X lands before git reads HEAD, Y on top of ours before the read-back: ours, which
+        lacks X's change, is not at HEAD and cannot be undone; the refusal names ours and X."""
+        seen = self.around_commit(before=lambda: self.other_writer_commits('b.py'),
+                                  after=lambda: self.other_writer_commits('c.py'))
+        self.put('a.py', 'a = 1\n')
+        code, out = self.commit('add a', 'a.py')
+        self.assertEqual(code, 1, out)
+        self.assertIn('NOT undone', out)
+        self.assertEqual(self.head(), seen[1])
+        ours = self.git('rev-parse', 'HEAD^')
+        self.assertEqual(self.git('rev-parse', 'HEAD^^'), seen[0])
+        self.assertIn(ours[:12], out)
+        self.assertIn(seen[0][:12], out)
+        self.assertIn('restore', out)
+        self.assertNotIn('would have reverted', out)
+
+    # -- the real index after a hook changed the commit
+
+    def index_blob(self, path):
+        return self.git('ls-files', '-s', '--', path).split()[1]
+
+    def test_a_file_a_pre_commit_hook_stages_is_in_the_real_index_too(self):
+        """The hook's `git add` lands in the private index only: without the real index brought
+        into line, it holds a staged deletion of extra.txt that the next commit would make."""
+        self.hook('pre-commit', 'printf "hook\\n" > extra.txt && git add extra.txt')
+        self.put('a.py', 'a = 1\n')
+        code, out = self.commit('add a', 'a.py')
+        self.assertEqual(code, 0, out)
+        self.assertNotIn('WARNING', out)
+        self.assertIn('index     set to the commit\'s copy of what a hook changed: extra.txt', out)
+        self.assertEqual(self.git('diff', '--cached', '--name-only'), '')
+        self.assertEqual(self.index_blob('extra.txt'), self.git('rev-parse', 'HEAD:extra.txt'))
+
+    def test_a_named_file_a_formatter_hook_restages_is_in_the_real_index_too(self):
+        self.hook('pre-commit', 'printf "a = 2\\n" > a.py && git add a.py')
+        self.put('a.py', 'a = 1\n')
+        code, out = self.commit('add a', 'a.py')
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.git('show', 'HEAD:a.py'), 'a = 2')
+        self.assertEqual(self.git('diff', '--cached', '--name-only'), '')
+        self.assertEqual(self.index_blob('a.py'), self.git('rev-parse', 'HEAD:a.py'))
+
+    def test_a_hook_change_another_writer_also_staged_keeps_the_commit_and_refuses(self):
+        """Another writer stages extra.txt in the real index during the call, and the hook commits
+        its own copy: the commit stands, the real index keeps theirs, and the refusal names the
+        path and the command that would bring the index into line with the commit."""
+        self.hook('pre-commit', 'printf "hook\\n" > extra.txt && git add extra.txt')
+        start = self.head()
+
+        def theirs():
+            self.put('extra.txt', 'theirs\n')
+            self.git('add', '--', 'extra.txt')
+            return self.index_blob('extra.txt')
+        seen = self.around_commit(before=theirs)
+        self.put('a.py', 'a = 1\n')
+        code, out = self.commit('add a', 'a.py')
+        self.assertEqual(code, 1, out)
+        self.assertEqual(self.git('rev-parse', 'HEAD^'), start)
+        self.assertEqual(self.git('show', 'HEAD:extra.txt'), 'hook')
+        self.assertEqual(self.index_blob('extra.txt'), seen[0])
+        self.assertIn('extra.txt', out)
+        self.assertIn('git restore --staged --source=', out)
+        self.assertIn('committed ', out)
+
+    def test_a_path_a_pre_commit_hook_removes_is_removed_from_the_real_index_too(self):
+        """The hook's `git rm` drops seed.txt from the private index only: the real index must
+        drop it too (a mode-0 index line), or the next commit would add it back."""
+        self.hook('pre-commit', 'git rm -q seed.txt')
+        self.put('a.py', 'a = 1\n')
+        code, out = self.commit('add a', 'a.py')
+        self.assertEqual(code, 0, out)
+        self.assertIn('index     set to the commit\'s copy of what a hook changed: seed.txt', out)
+        self.assertEqual(self.git('ls-tree', '--name-only', 'HEAD', '--', 'seed.txt'), '')
+        self.assertEqual(self.git('ls-files', '--stage', '--', 'seed.txt'), '')
+        self.assertEqual(self.git('diff', '--cached', '--name-only'), '')
+
+    def test_a_failing_index_write_after_a_hook_change_refuses_every_path(self):
+        """update-index on the real index fails: the commit stands, nothing is reported as set,
+        and the refusal names every path the hook changed."""
+        self.hook('pre-commit', 'printf "hook\\n" > extra.txt && printf "a = 2\\n" > a.py && '
+                  'git add extra.txt a.py')
+        start, real = self.head(), cmd.call
+
+        def wrapper(args, cwd, *a, **kw):
+            if args[:2] == ['update-index', '--index-info'] and not kw.get('env'):
+                return cmd.Result(128, b'', 'fatal: injected update-index')
+            return real(args, cwd, *a, **kw)
+        self.put('a.py', 'a = 1\n')
+        with mock.patch.object(C.cmd, 'call', wrapper):
+            code, out = self.commit('add a', 'a.py')
+        self.assertEqual(code, 1, out)
+        self.assertEqual(self.git('rev-parse', 'HEAD^'), start)
+        self.assertNotIn('index     set to', out)
+        self.assertIn('a.py, extra.txt', out)
+        self.assertIn('git restore --staged --source=', out)
+        self.assertIn('-- a.py extra.txt', out)
+
+    # -- the reflog checks
+
+    def test_a_parentless_head_after_the_commit_refuses_with_its_own_line(self):
+        def orphan():
+            tree = self.git('rev-parse', 'HEAD^{tree}')
+            new = self.git('commit-tree', tree, '-m', 'orphan')
+            self.git('update-ref', 'HEAD', new)
+            return new
+        seen = self.around_commit(after=orphan)
+        self.put('a.py', 'a = 1\n')
+        code, out = self.commit('add a', 'a.py')
+        self.assertEqual(code, 1, out)
+        self.assertIn('NOT undone', out)
+        self.assertIn('%s, a commit with no parent' % seen[0][:12], out)
+        self.assertNotIn('committed nothing', out)
+        self.assertNotIn('would have reverted', out)
+        self.assertEqual(self.head(), seen[0])
+
+    def test_a_logged_base_that_is_not_heads_parent_refuses_and_undoes_nothing(self):
+        real = C.tagged_entry
+
+        def wrong_base(root, tag):
+            got = real(root, tag)
+            return ('1' * 40, got[1])
+        self.around_commit(before=self.other_writer_commits)
+        self.put('a.py', 'a = 1\n')
+        with mock.patch.object(C, 'tagged_entry', wrong_base):
+            code, out = self.commit('add a', 'a.py')
+        self.assertEqual(code, 1, out)
+        self.assertIn('NOT undone', out)
+        self.assertIn('git logged', out)
+        self.assertEqual(self.git('show', 'HEAD:a.py'), 'a = 1')
+
+    def test_ours_on_the_checked_head_that_head_no_longer_contains_refuses(self):
+        """Another writer points HEAD back at the start and commits there: this call's commit,
+        made on the HEAD it checked, is no longer in HEAD's history."""
+        start = self.head()
+
+        def rewound():
+            self.git('update-ref', 'HEAD', start)
+            return self.other_writer_commits()
+        seen = self.around_commit(after=rewound)
+        self.put('a.py', 'a = 1\n')
+        code, out = self.commit('add a', 'a.py')
+        self.assertEqual(code, 1, out)
+        self.assertIn('does not contain it', out)
+        self.assertIn('NOT undone', out)
+        self.assertEqual(self.head(), seen[0])
+
+    def test_two_entries_with_one_tag_are_none(self):
+        path = C.repo.git_path(self.wt, 'logs/HEAD')[0]
+        tag, old, new = C.reflog_tag(), '2' * 40, '3' * 40
+        line = '%s %s A <a@example.invalid> 1 +0000\t%s: x\n' % (old, new, tag)
+        with open(path, 'a', encoding='utf-8', newline='\n') as fh:
+            fh.write(line)
+        self.assertEqual(C.tagged_entry(self.wt, tag), (old, new))
+        with open(path, 'a', encoding='utf-8', newline='\n') as fh:
+            fh.write(line)
+        self.assertIsNone(C.tagged_entry(self.wt, tag))
+
+
 class TheOwnersIdentity(LinkedCase):
 
     def test_the_owner_commits_an_owner_only_path_under_his_own_identity(self):
@@ -960,6 +1472,45 @@ class MergeInProgress(MergeCase):
         self.assertEqual(self.git('log', '-1', '--format=%P').split(), [tip, base])
         self.assertEqual(self.git('show', 'HEAD:other.txt'), 'from main')
         self.assertIn('files     work.txt, other.txt', out)
+
+    def test_a_file_another_writer_stages_mid_call_stays_out_of_the_merge(self):
+        tip, base = self.start_merge()
+        self.put('intruder.txt', 'not yours\n')
+        real = C.staged_machine_path_error
+
+        def wrapper(*a, **kw):
+            self.git('add', '--', 'intruder.txt')
+            return real(*a, **kw)
+        with mock.patch.object(C, 'staged_machine_path_error', wrapper):
+            code, out = self.commit('merge main', 'work.txt')
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.git('log', '-1', '--format=%P').split(), [tip, base])
+        self.assertEqual(self.git('show', 'HEAD:other.txt'), 'from main')
+        self.assertEqual(self.git('show', 'HEAD:work.txt'), 'resolved')
+        self.assertNotIn('intruder.txt', self.git('ls-tree', '-r', '--name-only', 'HEAD'))
+        self.assertEqual(self.git('diff', '--cached', '--name-only'), 'intruder.txt')
+
+    def test_a_merge_commit_on_a_moved_head_is_undone_with_its_merge_state(self):
+        """Another writer moves HEAD (commit-tree and update-ref) just before `git commit`: the
+        merge commit made on theirs is undone, and MERGE_HEAD comes back holding main's tip."""
+        tip, base = self.start_merge()
+        real, theirs = cmd.call, []
+
+        def wrapper(args, cwd, *a, **kw):
+            if args[:1] == ['commit'] and not theirs:
+                tree = self.git('rev-parse', 'HEAD^{tree}')
+                theirs.append(self.git('commit-tree', tree, '-p', tip, '-m', 'theirs'))
+                self.git('update-ref', 'HEAD', theirs[0], tip)
+            return real(args, cwd, *a, **kw)
+        with mock.patch.object(C.cmd, 'call', wrapper):
+            code, out = self.commit('merge main', 'work.txt')
+        self.assertEqual(code, 1, out)
+        self.assertIn('Undone', out)
+        self.assertNotIn('NOT undone', out)
+        self.assertEqual(self.head(), theirs[0])
+        path = self.git('rev-parse', '--path-format=absolute', '--git-path', 'MERGE_HEAD')
+        with open(path, encoding='utf-8') as fh:
+            self.assertEqual(fh.read().strip(), base)
 
     def test_a_foreign_file_staged_during_a_merge_is_refused(self):
         tip, _ = self.start_merge()
