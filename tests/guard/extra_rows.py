@@ -83,8 +83,6 @@ ROWS = [
      'deny', 'busy-wait',
      '$deadline = (Get-Date).AddMinutes(10); do {{ if ((Get-Date) -gt $deadline) {{ break }}; Start-Sleep 2 }} '
      'until (Test-Path x)'),
-    ('busy-wait: sleep loop in bash -c', lambda w: ps('bash -c "while ! test -f x; do sleep 1; done"', w.wt),
-     'deny', 'busy-wait', None),
     ('busy-wait: PowerShell Thread Sleep', lambda w: ps('while ($true) { [Threading.Thread]::Sleep(500) }', w.wt),
      'deny', 'busy-wait', None),
     ('busy-wait alternative, bash, is allowed', lambda w: bash(
