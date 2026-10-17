@@ -88,7 +88,8 @@ def _without_dir(args):
 
 def _land_read(tool, args):
     """`land.py --queue` and `gate.py wait-result ...`: reads of the landing queue and the result
-    records, whatever -C names (docs/gate.md "Commands")."""
+    records (wait-result's one write: an error record for a dead running one), whatever -C names
+    (docs/gate.md "Commands")."""
     rest, _ = _without_dir(args)
     return (tool == "land" and rest == ("--queue",)) or (tool == "gate" and rest[:1] == ("wait-result",))
 
