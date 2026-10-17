@@ -25,8 +25,8 @@ back to the lock (kitlib.lock.giveback.drainer) when the lock run offers it. --j
 one `python -m unittest` process the tool always ran.
 Tests run on the fake git (docs/test-tools.md "Fake git"): the units get KIT_FAKE_GIT=1 unless it
 is set; --real-git gives them 0, so the unit tier also runs on real git. --both-tiers runs the
-selection twice, KIT_FAKE_GIT 1 then 0, and prints `kit_tests: OK` only when both passed; each
-pass's own lines read `kit_tests [fake git]: ` / `kit_tests [real git]: `.
+selection on KIT_FAKE_GIT 1, then only tiers.REAL_GIT_MODULES of it on 0, and prints
+`kit_tests: OK` only when both passed; each pass's own lines read `kit_tests [fake git]: ` / `kit_tests [real git]: `.
 The units also get the home fence's marker (docs/test-tools.md "Home fence"): KIT_HOME_FENCE, the
 home folder this process resolves, unless the environment already carries one. The tools a test
 starts inherit it and refuse that home.
