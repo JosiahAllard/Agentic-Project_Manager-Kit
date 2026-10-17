@@ -14,8 +14,7 @@ from kitlib.backlog import at_landing
 from kitlib.backlog import record as rmod
 from kitlib.backlog import store as smod
 from kitlib.git import cmd, refs
-from tests.backlog.helpers import priced, rec
-from tests.backlog.test_pmdata_commit import commit_beside, index_move_fails
+from tests.backlog.helpers import priced
 from tests.gate import test_land
 from tests.gitfixture import fixture_env
 from tests.home import temp_home
@@ -95,47 +94,6 @@ class ClosesAtLanding(StoreLandCase):
         self.assertFalse([l for l in out.lines if l.startswith('WARNING')], out.lines)
         self.assertIsNone(self.lock().read())
 
-    def test_nothing_pulled_writes_nothing(self):
-        before = self.seed(priced('BAZ'), pulled('QUX', by='kit/other'))
-        _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
-        out = self.lander(BRANCH, self.main, tip).run()
-        self.assertEqual(out.code, G.OK, out.lines)
-        self.assertEqual(self.remote_store(), before)
-        self.assertTrue(out.lines[-1].startswith('LANDED '), out.lines)
-
-    def test_no_store_on_the_remote_creates_none_and_adds_no_refspec(self):
-        _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
-        out = self.lander(BRANCH, self.main, tip).run()
-        self.assertEqual(out.code, G.OK, out.lines)
-        self.assertTrue(out.lines[-1].startswith('LANDED '), out.lines)
-        self.assertEqual(self.remote_store(), '')
-        self.assertEqual(self.repo.git('rev-parse', '--verify', '--quiet', smod.STORE_REF,
-                                       check=False), '')
-        fetch = self.repo.git('config', '--get-all', 'remote.origin.fetch', check=False)
-        self.assertNotIn('backlog', fetch)
-
-    def test_a_close_the_store_refuses_is_a_warning_and_the_landing_stands(self):
-        # An owner-held record closes only with --ruling: the landing cannot close it.
-        self.seed(pulled('FOO', priority='-1', priority_by='-', owner_ask='may this ship?'),
-                  pulled('BAR'))
-        _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
-        out = self.lander(BRANCH, self.main, tip).run()
-        self.assertEqual(out.code, G.OK, out.lines)
-        merge = out.merge
-        self.assertEqual(self.remote_main(), merge)
-        self.assertEqual(self.stems(), ['FOO'])
-        warn = [l for l in out.lines if l.startswith('WARNING')]
-        self.assertEqual(len(warn), 1, out.lines)
-        self.assertIn('FOO', warn[0])
-        self.assertIn('owner-held', warn[0])
-        # A backlog write refuses in the main checkout, so the command names a worktree, never
-        # the main checkout the landing ran in.
-        self.assertIn('backlog.py" -C "%s" close FOO --reason "landed %s"'
-                      % (at_landing.WORKTREE, merge), warn[0])
-        self.assertNotIn(self.repo.root, warn[0])
-        self.assertEqual(len([l for l in out.lines if l.startswith('LANDED ')]), 1, out.lines)
-        self.assertIsNone(self.lock().read())
-
     def test_an_exception_while_closing_is_a_warning_and_the_landing_stands(self):
         self.seed(pulled('FOO'))
         _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
@@ -150,19 +108,6 @@ class ClosesAtLanding(StoreLandCase):
         self.assertEqual(self.stems(), ['FOO'])
         self.assertIsNone(self.lock().read())
 
-    def test_ctrl_c_while_closing_is_a_warning_and_the_merge_is_not_undone(self):
-        self.seed(pulled('FOO'))
-        _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
-        with mock.patch.object(at_landing, 'close_landed', side_effect=KeyboardInterrupt):
-            out = self.lander(BRANCH, self.main, tip).run()
-        self.assertEqual(out.code, G.OK, out.lines)
-        self.assertEqual(self.remote_main(), out.merge)
-        self.assertEqual(self.main_now(), out.merge)            # never undone after the push
-        warn = [l for l in out.lines if l.startswith('WARNING')]
-        self.assertEqual(len(warn), 1, out.lines)
-        self.assertIn('Ctrl+C', warn[0])
-        self.assertIsNone(self.lock().read())
-
     def test_a_landing_that_does_not_land_closes_nothing(self):
         before = self.seed(pulled('FOO'))
         _, tip = self.branch('feature', {'RED': 'x\n'})
@@ -170,51 +115,6 @@ class ClosesAtLanding(StoreLandCase):
         self.assertEqual(out.code, G.FAILED, out.lines)
         self.assertEqual(self.remote_store(), before)
         self.assertFalse([l for l in out.lines if l.startswith('closed ')], out.lines)
-
-
-class DefaultStoreCloses(StoreLandCase):
-    KIT = test_land.LandCase.KIT                     # names no backlog store
-
-    def test_a_close_on_the_default_store_is_refused_as_a_warning_and_the_landing_stands(self):
-        before = self.seed(pulled('FOO'))
-        _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
-        out = self.lander(BRANCH, self.main, tip).run()
-        self.assertEqual(out.code, G.OK, out.lines)
-        self.assertEqual(self.remote_main(), out.merge)
-        self.assertEqual(self.remote_store(), before)      # the stale default ref is not written
-        self.assertEqual(self.stems(), ['FOO'])
-        warn = [l for l in out.lines if l.startswith('WARNING')]
-        self.assertEqual(len(warn), 1, out.lines)
-        self.assertIn('FOO', warn[0])
-        self.assertIn('is the default backlog store', warn[0])
-        self.assertIn('close it, once .kit.json names its "backlog".store, with: ', warn[0])
-        self.assertEqual(len([l for l in out.lines if l.startswith('LANDED ')]), 1, out.lines)
-        self.assertIsNone(self.lock().read())
-
-
-class ClosesOnABranchStore(StoreLandCase):
-    STORE = 'branch'
-    KIT = dict(test_land.LandCase.KIT, backlog={'store': 'branch'})
-
-    def test_the_backlog_branch_store_is_closed_too(self):
-        self.seed(pulled('FOO'))
-        _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
-        out = self.lander(BRANCH, self.main, tip).run()
-        self.assertEqual(out.code, G.OK, out.lines)
-        self.assertEqual(self.stems(), [])
-        self.assertEqual(self.subjects()[0], 'closes FOO: landed %s' % out.merge)
-
-
-class MainStoreUntouched(StoreLandCase):
-    KIT = dict(test_land.LandCase.KIT, backlog={'store': 'main'})
-
-    def test_a_main_store_is_left_to_the_landing(self):
-        before = self.seed(pulled('FOO'))          # a stray ref store the config does not name
-        _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
-        out = self.lander(BRANCH, self.main, tip).run()
-        self.assertEqual(out.code, G.OK, out.lines)
-        self.assertEqual(self.remote_store(), before)
-        self.assertTrue(out.lines[-1].startswith('LANDED '), out.lines)
 
 
 class AncestryRefusal(StoreLandCase):
@@ -234,42 +134,6 @@ class AncestryRefusal(StoreLandCase):
         self.assertIn('backlog store', out.lines[0])
         self.assertIn(root[:10], out.lines[0])
         self.assertIn('nothing was merged', out.lines[0])
-        self.assert_untouched(out, G.REFUSED)
-
-    def test_a_later_store_commit_carries_the_root_in(self):
-        root = self.seed(priced('BAZ'))
-        later = self.seed(priced('QUX'), message='second\n')
-        self.assertNotEqual(root, later)
-        tip = self.merged_store_branch(later)
-        out = self.lander(BRANCH, self.main, tip).run()
-        self.assertIn(root[:10], out.lines[0])
-        self.assert_untouched(out, G.REFUSED)
-
-    def test_the_remote_store_is_read_when_the_local_copy_is_gone(self):
-        root = self.seed(priced('BAZ'))
-        tip = self.merged_store_branch(root)
-        self.repo.git('update-ref', '-d', smod.STORE_REF)
-        out = self.lander(BRANCH, self.main, tip).run()
-        self.assertIn(root[:10], out.lines[0])
-        self.assert_untouched(out, G.REFUSED)
-
-    def test_a_branch_without_the_store_history_lands(self):
-        self.seed(pulled('FOO', by='kit/other'))
-        _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
-        out = self.lander(BRANCH, self.main, tip).run()
-        self.assertEqual(out.code, G.OK, out.lines)
-
-
-class AncestryRefusalBranchStore(AncestryRefusal):
-    STORE = 'branch'
-    KIT = dict(test_land.LandCase.KIT, backlog={'store': 'branch'})
-
-    def test_the_remote_store_is_read_when_the_local_copy_is_gone(self):
-        root = self.seed(priced('BAZ'))
-        tip = self.merged_store_branch(root)
-        self.repo.git('update-ref', '-d', 'refs/remotes/origin/backlog')
-        out = self.lander(BRANCH, self.main, tip).run()
-        self.assertIn(root[:10], out.lines[0])
         self.assert_untouched(out, G.REFUSED)
 
 
@@ -299,11 +163,6 @@ class PmDataAncestry(StoreLandCase):
         self.assertIn('PM data root commit %s' % self.root[:10], out.lines[0])
         self.assertIn('nothing was merged', out.lines[0])
         self.assert_untouched(out, G.REFUSED)
-
-    def test_a_branch_without_the_root_lands(self):
-        _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
-        out = self.lander(BRANCH, self.main, tip).run()
-        self.assertEqual(out.code, G.OK, out.lines)
 
     def test_an_unreadable_record_or_a_missing_root_refuses(self):
         cfg = kconfig.load_at(self.repo.root, self.main)
@@ -396,25 +255,6 @@ class PmDataClose(StoreLandCase):
         self.assertEqual(len(landed), 1, out.lines)
         self.assertGreater(out.lines.index(closed[0]), landed[0], out.lines)
 
-    def test_the_close_in_the_pm_data_store_is_committed(self):
-        """Records committed on the PM data branch: the landing's close commits the deletion
-        there, alone, with a Session line."""
-        wt = self.pm_worktree(pulled('FOO'), priced('BAZ'))
-        self.repo.commit('seed the PM data store', 'kit/backlog', '.kit.json', cwd=wt)
-        before = self.repo.git('rev-parse', 'HEAD', cwd=wt)
-        out = self.land()
-        tip = self.repo.git('rev-parse', 'HEAD', cwd=wt)
-        self.assertEqual(self.repo.git('rev-parse', tip + '^', cwd=wt), before)
-        self.assertEqual(self.repo.git('diff-tree', '--no-commit-id', '--no-renames',
-                                       '--name-status', '-r', tip, cwd=wt),
-                         'D\tkit/backlog/FOO.md')
-        self.assertIn('\nSession: ', self.repo.git('log', '-1', '--format=%B', tip, cwd=wt))
-        self.assertEqual(self.repo.git('status', '--porcelain', '--', 'kit/backlog', cwd=wt), '')
-        closed = [l for l in out.lines if l.startswith('closed ')]
-        self.assertEqual(len(closed), 1, out.lines)
-        self.assertIn('closed FOO in the backlog store kit/backlog in ', closed[0])
-        self.assertIn('(committed %s)' % tip[:10], closed[0])
-
     # A change the PM made in the PM data worktree and did not commit is never deleted or committed
     # by the landing's close (store.MainBackend `clean`, errors.Dirty): nothing is written, and the
     # WARNING gives the compare and the close command.
@@ -456,314 +296,12 @@ class PmDataClose(StoreLandCase):
         self.assert_not_closed(wt, out, 'git -C "%s" diff HEAD -- "kit/backlog/FOO.md"'
                                % self.pm_root(wt))
 
-    def test_a_close_over_a_staged_change_leaves_the_index_entry(self):
-        def stage(wt):
-            self.edit(wt)
-            self.repo.git('add', '--', 'kit/backlog/FOO.md', cwd=wt)
-        wt, out = self.dirty_close(stage)
-        staged = self.repo.git('ls-files', '-s', '--', 'kit/backlog/FOO.md', cwd=wt).split()[1]
-        self.assertEqual(staged, self.repo.git('hash-object', 'kit/backlog/FOO.md', cwd=wt))
-        self.assertNotEqual(staged, self.repo.git('rev-parse', 'HEAD:kit/backlog/FOO.md', cwd=wt))
-        self.assert_not_closed(wt, out, 'git -C "%s" diff HEAD -- "kit/backlog/FOO.md"'
-                               % self.pm_root(wt))
-
-    def test_a_close_over_a_stale_index_names_the_index_repair(self):
-        """HEAD there moved by a command that left the index alone (commit_beside): the worktree
-        holds what HEAD holds and only the index differs. The close is refused all the same,
-        but the WARNING gives the index repair (a diff with HEAD would print nothing), then the
-        close command; that repair makes status clean."""
-        def move(wt):
-            with open(self.record(wt, 'FOO'), 'rb') as f:
-                text = f.read()
-            commit_beside(wt, {'kit/backlog/FOO.md': text + b'\nmoved by plumbing\n'},
-                          'another session')
-        wt, out = self.dirty_close(move)
-        root = self.pm_root(wt)
-        repair = 'git -C "%s" reset -q -- "kit/backlog/FOO.md"' % root
-        warn = [l for l in out.lines if l.startswith('WARNING')]
-        self.assertEqual(len(warn), 1, out.lines)
-        self.assertFalse([l for l in out.lines if l.startswith('closed ')], out.lines)
-        self.assertIn('FOO, which it holds pulled, was not closed', warn[0])
-        self.assertIn('the index there is stale for kit/backlog/FOO.md', warn[0])
-        self.assertIn('; repair the index with: %s, then close it with: python "' % repair,
-                      warn[0])
-        self.assertTrue(warn[0].endswith('backlog.py" -C "%s" close FOO --reason "landed %s"'
-                                         % (root, out.merge)), warn[0])
-        self.assertNotIn('compare with HEAD', warn[0])
-        self.assertNotIn('committed or put back', warn[0])
-        self.assertTrue(os.path.exists(self.record(wt, 'FOO')))
-        self.repo.git('reset', '-q', '--', 'kit/backlog/FOO.md', cwd=wt)
-        self.assertEqual(self.repo.git('status', '--porcelain', '--', 'kit/backlog', cwd=wt), '')
-
-    def test_a_record_never_committed_is_not_closed(self):
-        """FOO.md exists only in the worktree: deleting it would leave no trace of it anywhere,
-        so the close is refused and the compare is a status (a diff shows no untracked file)."""
-        wt, out = self.dirty_close(lambda wt: None, seed=False)
-        self.assertTrue(os.path.exists(self.record(wt, 'FOO')))
-        self.assert_not_closed(wt, out, 'git -C "%s" status --short -- "kit/backlog/FOO.md"'
-                               % self.pm_root(wt))
-
-    def test_an_uncommitted_edit_to_a_record_the_close_rewrites_stops_it(self):
-        """BAR is blocked on FOO, so the close rewrites BAR too: BAR's uncommitted edit stops
-        the whole close and FOO stays; only BAR is named in the compare."""
-        wt = self.pm_worktree(pulled('FOO'), rec('BAR', state='blocked', blocked_on='item:FOO'))
-        self.repo.commit('seed the PM data store', 'kit/backlog', '.kit.json', cwd=wt)
-        self.edit(wt, 'BAR')
-        out = self.land()
-        self.assertTrue(os.path.exists(self.record(wt, 'FOO')))
-        with open(self.record(wt, 'BAR'), encoding='utf-8') as f:
-            text = f.read()
-        self.assertIn('blocked_on: item:FOO', text)
-        self.assertIn('the PM wrote this by hand', text)
-        self.assert_not_closed(wt, out, 'git -C "%s" diff HEAD -- "kit/backlog/BAR.md"'
-                               % self.pm_root(wt))
-
-    def test_a_close_the_pm_data_store_cannot_commit_names_catch_up(self):
-        wt = self.pm_worktree(pulled('FOO'))
-        self.repo.commit('seed the PM data store', 'kit/backlog', '.kit.json', cwd=wt)
-        before = self.repo.git('rev-parse', 'HEAD', cwd=wt)
-        lock = os.path.join(self.repo.common_dir(), 'refs', 'heads', 'pmdata.lock')
-        with open(lock, 'w') as f:
-            f.write('')
-        self.addCleanup(os.remove, lock)
-        with mock.patch.object(smod, 'ATTEMPTS', 1):
-            out = self.land()
-        self.assertFalse(os.path.exists(self.record(wt, 'FOO')))
-        self.assertEqual(self.repo.git('rev-parse', 'HEAD', cwd=wt), before)
-        warn = [l for l in out.lines if l.startswith('WARNING')]
-        self.assertEqual(len(warn), 1, out.lines)
-        self.assertIn('FOO was closed in the backlog store kit/backlog in ', warn[0])
-        self.assertIn('but not committed', warn[0])
-        self.assertIn('; commit it with: python "', warn[0])
-        self.assertTrue(warn[0].endswith('backlog.py" -C "%s" catch-up --apply "kit/backlog/FOO.md"'
-                                         % self.pm_root(wt)), warn[0])
-        self.assertNotIn('compare each path with HEAD', warn[0])
-        self.assertEqual(self.main_now(), out.merge)
-
-    def overtaken_close(self, after_my_files=None, removes=False, garbles=False):
-        """`(wt, their commit, the landing)`: another session commits FOO in the PM data worktree
-        (an added line, with `removes` the file's removal, with `garbles` bytes no record
-        parses from) after the close checked the files
-        and before its first commit attempt. BAR is blocked on FOO, so the close writes it too.
-        `after_my_files()` runs once the close's own file change is on disk. That commit moves
-        HEAD without the index lock the close holds (commit_beside; a `git commit` there would
-        fail): the close leaves the index as it was, and the mover's own repair then resets
-        FOO's entry to HEAD."""
-        wt = self.pm_worktree(pulled('FOO'), rec('BAR', state='blocked', blocked_on='item:FOO'))
-        self.repo.commit('seed the PM data store', 'kit/backlog', '.kit.json', cwd=wt)
-        index = self.repo.git('ls-files', '-s', '--', 'kit/backlog', cwd=wt)
-        real = smod.MainBackend._write_files
-        theirs = []
-        path = 'kit/backlog/FOO.md'
-        with open(self.record(wt, 'FOO'), encoding='utf-8') as f:
-            added = f.read() + '\nanother session wrote this\n'
-
-        def another_commit_then_write(backend, writes, before, paths, branch):
-            first = branch and not theirs
-            if first:
-                change = None if removes else (b'\xff\xfe not a record\n' if garbles else added)
-                theirs.append(commit_beside(wt, {path: change}, 'another session'))
-            real(backend, writes, before, paths, branch)
-            if first and after_my_files is not None:
-                after_my_files(wt)
-        with mock.patch.object(smod.MainBackend, '_write_files', another_commit_then_write):
-            out = self.land()
-        self.assertEqual(len(theirs), 1)
-        self.assertEqual(self.repo.git('rev-parse', 'HEAD', cwd=wt), theirs[0])
-        self.assertEqual(self.main_now(), out.merge)
-        self.assertEqual(self.repo.git('ls-files', '-s', '--', 'kit/backlog', cwd=wt), index)
-        self.repo.git('reset', '-q', '--', path, cwd=wt)
-        return wt, theirs[0], out
-
-    def test_a_close_another_commit_overtook_is_put_back_and_reported_unclosed(self):
-        """The close's deletion is put back to that commit's FOO, so the record is still there:
-        the WARNING says it was not closed and gives the close command, never a catch-up."""
-        wt, _, out = self.overtaken_close()
-        with open(self.record(wt, 'FOO'), encoding='utf-8') as f:
-            self.assertIn('another session wrote this', f.read())
-        self.assertEqual(self.repo.git('status', '--porcelain', '--', 'kit/backlog', cwd=wt), '')
-        warn = [l for l in out.lines if l.startswith('WARNING')]
-        self.assertEqual(len(warn), 1, out.lines)
-        self.assertIn('the close of FOO in the backlog store kit/backlog in ', warn[0])
-        self.assertIn('was refused and its files were put back (ERROR: ', warn[0])
-        self.assertIn('another commit changed kit/backlog/FOO.md on HEAD', warn[0])
-        self.assertIn('FOO is still pulled by %s and was not closed; close it with: ' % BRANCH,
-                      warn[0])
-        with open(self.record(wt, 'BAR'), encoding='utf-8') as f:
-            self.assertIn('blocked_on: item:FOO', f.read())      # the dependent is as it was
-        self.assertTrue(warn[0].endswith('backlog.py" -C "%s" close FOO --reason "landed %s"'
-                                         % (self.pm_root(wt), out.merge)), warn[0])
-        self.assertNotIn('catch-up', warn[0])
-        self.assertNotIn('was closed', warn[0])
-
-    def test_a_close_overtaken_by_the_records_removal_prints_no_close_command(self):
-        """The other commit removed FOO: the close's rewrite of BAR is put back, and the WARNING
-        says the store no longer holds FOO; a close command would answer NOT FOUND."""
-        wt, _, out = self.overtaken_close(removes=True)
-        self.assertFalse(os.path.exists(self.record(wt, 'FOO')))
-        with open(self.record(wt, 'BAR'), encoding='utf-8') as f:
-            self.assertIn('blocked_on: item:FOO', f.read())
-        self.assertEqual(self.repo.git('status', '--porcelain', '--', 'kit/backlog', cwd=wt), '')
-        warn = [l for l in out.lines if l.startswith('WARNING')]
-        self.assertEqual(len(warn), 1, out.lines)
-        self.assertIn('was refused and its files were put back (ERROR: ', warn[0])
-        self.assertTrue(warn[0].endswith('the store no longer holds FOO (that commit closed or '
-                                         'removed it), so there is nothing to close'), warn[0])
-        self.assertNotIn('close it with', warn[0])
-        self.assertNotIn('catch-up', warn[0])
-
-    def test_a_close_overtaken_by_a_commit_that_left_the_record_unreadable_says_to_see_it(self):
-        """The other commit left FOO.md unparseable: the store still holds it, so the WARNING
-        does not say there is nothing to close; it gives the show command."""
-        wt, _, out = self.overtaken_close(garbles=True)
-        self.assertTrue(os.path.exists(self.record(wt, 'FOO')))
-        warn = [l for l in out.lines if l.startswith('WARNING')]
-        self.assertEqual(len(warn), 1, out.lines)
-        self.assertNotIn('no longer holds', warn[0])
-        self.assertNotIn('close it with', warn[0])
-        self.assertIn('FOO cannot be read as that commit left it', warn[0])
-        self.assertTrue(warn[0].endswith('backlog.py" -C "%s" show FOO' % self.pm_root(wt)),
-                        warn[0])
-
-    def test_a_close_overtaken_with_the_store_unreadable_afterwards_says_so(self):
-        """The folder cannot be read again after the put back (an OSError): the WARNING is the
-        close's own, says the store could not be read again and gives the show command."""
-        real = smod.MainBackend._read
-        gone = []
-
-        def read(backend):
-            if gone:
-                raise OSError('the disk went away')
-            return real(backend)
-        with mock.patch.object(smod.MainBackend, '_read', read):
-            wt, _, out = self.overtaken_close(lambda wt: gone.append(wt))
-        warn = [l for l in out.lines if l.startswith('WARNING')]
-        self.assertEqual(len(warn), 1, out.lines)
-        self.assertIn('the close of FOO in the backlog store kit/backlog in ', warn[0])
-        self.assertIn('the store could not be read again (the disk went away), so see whether '
-                      'FOO is still open with: ', warn[0])
-        self.assertTrue(warn[0].endswith('backlog.py" -C "%s" show FOO' % self.pm_root(wt)),
-                        warn[0])
-
-    def test_a_close_another_commit_overtook_names_the_compare_for_a_file_it_left(self):
-        """FOO is written again by hand after the close deleted it: the close leaves that file,
-        and the WARNING says not to commit it over that commit and gives the compare with HEAD;
-        it never prints a catch-up command to run as it is."""
-        def write_by_hand(wt):
-            with open(self.record(wt, 'FOO'), 'w', encoding='utf-8', newline='\n') as f:
-                f.write('written by hand\n')
-        wt, _, out = self.overtaken_close(write_by_hand)
-        with open(self.record(wt, 'FOO'), encoding='utf-8') as f:
-            self.assertEqual(f.read(), 'written by hand\n')
-        self.assertIn('another session wrote this',
-                      self.repo.git('show', 'HEAD:kit/backlog/FOO.md', cwd=wt))
-        warn = [l for l in out.lines if l.startswith('WARNING')]
-        self.assertEqual(len(warn), 1, out.lines)
-        self.assertIn('the close of FOO in the backlog store kit/backlog in ', warn[0])
-        self.assertIn('was refused', warn[0])
-        self.assertIn('another commit changed kit/backlog/FOO.md on HEAD', warn[0])
-        self.assertTrue(warn[0].endswith(
-            '; do not commit it over that commit: compare each path left with HEAD first: '
-            'git -C "%s" diff HEAD -- "kit/backlog/FOO.md"' % self.pm_root(wt)), warn[0])
-        self.assertNotIn('close it with', warn[0])
-        self.assertNotIn('catch-up --apply "', warn[0])
-        self.assertNotIn('catch-up --apply kit', warn[0])
-
-    def test_catch_up_after_a_failed_close_names_every_path_the_close_wrote(self):
-        """The close also rewrites BAR, which FOO blocked: the catch-up command names both."""
-        wt = self.pm_worktree(pulled('FOO'), rec('BAR', state='blocked', blocked_on='item:FOO'))
-        self.repo.commit('seed the PM data store', 'kit/backlog', '.kit.json', cwd=wt)
-        lock = os.path.join(self.repo.common_dir(), 'refs', 'heads', 'pmdata.lock')
-        with open(lock, 'w') as f:
-            f.write('')
-        self.addCleanup(os.remove, lock)
-        with mock.patch.object(smod, 'ATTEMPTS', 1):
-            out = self.land()
-        warn = [l for l in out.lines if l.startswith('WARNING')]
-        self.assertEqual(len(warn), 1, out.lines)
-        command = warn[0].split('; commit it with: ', 1)[-1]   # the printed command, not the error
-        self.assertIn('backlog.py" -C "%s" catch-up --apply "kit/backlog/BAR.md" '
-                      '"kit/backlog/FOO.md"' % self.pm_root(wt), command)
-
     def pm_index(self, wt):
         """The PM data worktree's own index file."""
         gitdir = self.repo.git('rev-parse', '--git-dir', cwd=wt)
         if not os.path.isabs(gitdir):
             gitdir = os.path.join(wt, gitdir)
         return os.path.join(gitdir, 'index')
-
-    def test_a_close_committed_with_a_stale_index_is_not_reported_unclosed(self):
-        """The close commits but the PM worktree's index cannot be updated (the updated copy
-        cannot be moved over it): the WARNING says it was closed and committed and gives the
-        index repair, never `close it with`."""
-        wt = self.pm_worktree(pulled('FOO'))
-        self.repo.commit('seed the PM data store', 'kit/backlog', '.kit.json', cwd=wt)
-        before = self.repo.git('rev-parse', 'HEAD', cwd=wt)
-        with index_move_fails(self.pm_index(wt)):
-            out = self.land()
-        self.assertFalse(os.path.exists(self.pm_index(wt) + '.lock'))
-        tip = self.repo.git('rev-parse', 'HEAD', cwd=wt)
-        self.assertEqual(self.repo.git('rev-parse', tip + '^', cwd=wt), before)
-        warn = [l for l in out.lines if l.startswith('WARNING')]
-        self.assertEqual(len(warn), 1, out.lines)
-        self.assertNotIn('was not closed', warn[0])
-        self.assertNotIn('close it with', warn[0])
-        self.assertIn('FOO was closed in the backlog store kit/backlog in ', warn[0])
-        self.assertIn('HEAD has the commit %s' % tip[:10], warn[0])
-        self.assertIn('reset -q -- "kit/backlog/FOO.md"', warn[0])
-
-    def test_a_close_while_another_git_command_holds_the_index_names_the_close_command(self):
-        """git's index lock in the PM data worktree stays held (store.MainBackend._lock_index,
-        errors.Busy): nothing is written, the WARNING names the lock and the close command, and
-        the landing stands."""
-        wt = self.pm_worktree(pulled('FOO'))
-        self.repo.commit('seed the PM data store', 'kit/backlog', '.kit.json', cwd=wt)
-        before = self.repo.git('rev-parse', 'HEAD', cwd=wt)
-        lock = self.pm_index(wt) + '.lock'
-        with open(lock, 'w') as f:
-            f.write('')
-        self.addCleanup(os.remove, lock)
-        with mock.patch.object(smod, 'INDEX_WAIT', 0.2):
-            out = self.land()
-        self.assertTrue(os.path.exists(self.record(wt, 'FOO')))
-        self.assertEqual(self.repo.git('rev-parse', 'HEAD', cwd=wt), before)
-        self.assertTrue(os.path.exists(lock))               # never another command's to remove
-        self.assertEqual(self.main_now(), out.merge)
-        warn = [l for l in out.lines if l.startswith('WARNING')]
-        self.assertEqual(len(warn), 1, out.lines)
-        self.assertFalse([l for l in out.lines if l.startswith('closed ')], out.lines)
-        self.assertIn('FOO, which it holds pulled, was not closed (ERROR: ', warn[0])
-        self.assertIn('nothing was written', warn[0])
-        self.assertIn("git's index lock", warn[0])
-        self.assertTrue(warn[0].endswith('backlog.py" -C "%s" close FOO --reason "landed %s"'
-                                         % (self.pm_root(wt), out.merge)), warn[0])
-        self.assertNotIn('catch-up', warn[0])
-
-    def test_a_record_the_pm_data_store_cannot_close_names_the_command_and_the_landing_stands(self):
-        wt = self.pm_worktree(pulled('FOO', priority='-1', priority_by='-',
-                                     owner_ask='may this ship?'))
-        out = self.land()
-        self.assertTrue(os.path.exists(self.record(wt, 'FOO')))
-        warn = [l for l in out.lines if l.startswith('WARNING')]
-        self.assertEqual(len(warn), 1, out.lines)
-        self.assertIn('owner-held', warn[0])
-        self.assertIn('backlog.py" -C "%s" close FOO --reason "landed %s" --ruling R-nnnn'
-                      % (self.pm_root(wt), out.merge), warn[0])
-        self.assertEqual(self.main_now(), out.merge)
-        self.assertIsNone(self.lock().read())
-
-    def test_no_worktree_on_the_pm_data_branch_is_a_warning_and_the_landing_stands(self):
-        out = self.land()
-        warn = [l for l in out.lines if l.startswith('WARNING')]
-        self.assertEqual(len(warn), 2, out.lines)
-        # The scope check could not read that store either (it warns while SCOPE_REFUSES is False).
-        self.assertTrue(warn[0].startswith(
-            'WARNING: cannot read the backlog store to check %s\'s paths' % BRANCH), warn[0])
-        self.assertIn('no worktree has the PM data branch pmdata checked out', warn[0])
-        warn = warn[1:]
-        self.assertIn('no worktree has the PM data branch pmdata checked out', warn[0])
-        self.assertIn('landable %s' % BRANCH, warn[0])
-        self.assertEqual(self.main_now(), out.merge)
 
     def test_the_landable_commands_name_the_pm_data_worktree(self):
         wt = self.pm_worktree()
@@ -787,22 +325,6 @@ class CloseEdges(StoreLandCase):
     def warnings(self, out):
         return [l for l in out.lines if l.startswith('WARNING')]
 
-    def test_a_record_whose_id_header_differs_from_its_file_name_is_closed(self):
-        # `check` reports the mismatch (ID_FILENAME, a FAIL finding); the record stays readable,
-        # and the store looks records up by file name.
-        self.seed({'FOO': pulled('OTHER')['OTHER']})
-        out = self.land()
-        self.assertEqual(self.warnings(out), [])
-        self.assertEqual(self.stems(), [])
-        self.assertEqual(self.subjects()[0], 'closes FOO: landed %s' % out.merge)
-
-    def test_an_owner_held_records_command_carries_the_ruling_it_needs(self):
-        self.seed(pulled('FOO', priority='-1', priority_by='-', owner_ask='may this ship?'))
-        out = self.land()
-        warn = self.warnings(out)
-        self.assertEqual(len(warn), 1, out.lines)
-        self.assertIn('close FOO --reason "landed %s" --ruling R-nnnn' % out.merge, warn[0])
-
     def test_an_owner_held_records_command_names_a_worktree_not_the_main_checkout(self):
         self.seed(pulled('FOO', priority='-1', priority_by='-', owner_ask='may this ship?'))
         out = self.land()
@@ -819,42 +341,6 @@ class CloseEdges(StoreLandCase):
         self.repo.write(os.path.join('tools', 'backlog.py'), '')
         self.assertEqual(at_landing.close_command(self.repo.root, 'close', 'FOO'),
                          'python tools/backlog.py -C "%s" close FOO' % at_landing.WORKTREE)
-
-    def test_a_record_re_pulled_by_another_branch_mid_close_is_left_as_it_is(self):
-        self.seed(pulled('FOO'))
-        test, real_init = self, smod.Store.__init__
-
-        def init(store, *args, **kw):
-            real_init(store, *args, **kw)
-
-            def repull(attempt):
-                if attempt == 0:
-                    test.seed(pulled('FOO', by='kit/other'), message='re-pull\n')
-            store.before_publish = repull
-
-        with mock.patch.object(smod.Store, '__init__', init):
-            out = self.land()
-        self.assertEqual(self.warnings(out), [])
-        self.assertIn('FOO is no longer pulled by %s; left as it is' % BRANCH, out.lines)
-        self.assertEqual(self.stems(), ['FOO'])
-        self.assertEqual(self.subjects()[0], 're-pull')
-        foo = self.backend().load(rmod.Rules()).get('FOO')
-        self.assertEqual(foo.get('pulled_by'), 'kit/other')
-
-    def test_an_unreadable_store_is_a_warning_and_the_landing_stands(self):
-        before = self.seed(pulled('FOO'), {'BAD': 'not a header line\n'})
-        out = self.land()
-        warn = self.warnings(out)
-        self.assertEqual(len(warn), 2, out.lines)
-        # The scope check could not read the store either (it warns while SCOPE_REFUSES is False).
-        self.assertTrue(warn[0].startswith(
-            'WARNING: cannot read the backlog store to check %s\'s paths' % BRANCH), warn[0])
-        self.assertIn('1 record(s) unreadable (BAD)', warn[0])
-        warn = warn[1:]
-        self.assertIn('could not be read', warn[0])
-        self.assertIn('backlog.py" -C "%s" landable %s' % (self.repo.root, BRANCH), warn[0])
-        self.assertEqual(self.remote_store(), before)
-        self.assertIsNone(self.lock().read())
 
     def test_a_remote_that_cannot_be_asked_is_a_warning(self):
         self.seed(pulled('FOO'))

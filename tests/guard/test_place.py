@@ -50,7 +50,7 @@ class RealPlaces(unittest.TestCase):
 
     @unittest.skipUnless(MINE, OWNER_NOTE)
     def test_ordinary_calls_start_no_process(self):
-        # KIT-HOOK-SPAWNS: the default Ctx reads places from the filesystem, so a plain command
+        # The default Ctx reads places from the filesystem, so a plain command
         # or an edit in a checkout starts no git child (each one is a process launch per call).
         started = []
         real_popen = subprocess.Popen

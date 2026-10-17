@@ -317,6 +317,28 @@ class CodexDeliveryTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, 'codex-native-context-unavailable-before-write')
         self.assertNotIn('private-detail', str(caught.exception))
 
+    def test_lease_delivery_error_before_write_keeps_its_code_and_stays_before_write(self):
+        # The host's channel check raises a plain DeliveryError before any byte is sent.
+        @contextmanager
+        def unverified(message):
+            raise DeliveryError('codex-native-channel-unverified')
+            yield
+        with patch('optional.bridge.hosts.codex.delivery.NativeToolsPipe.call') as call:
+            with self.assertRaises(BeforeWriteError) as caught:
+                CodexDesktopAdapter(lease=unverified).send(self.message)
+            call.assert_not_called()
+        self.assertEqual(caught.exception.code, 'codex-native-channel-unverified')
+
+    def test_start_phase_deadline_has_its_own_before_write_code(self):
+        original = Job.start
+        def start(job, command, **options):
+            return original(job, [command[0], '-I', '-c', 'import time; time.sleep(10)'], **options)
+        with patch('optional.bridge.hosts.codex.delivery_transport.Job.start', start):
+            with self.assertRaises(BeforeWriteError) as caught:
+                CodexDesktopAdapter(lease=self.lease, timeout=10, start_timeout=.7).send(self.message)
+        self.assertEqual(caught.exception.code, 'codex-native-start-timeout-before-write')
+        self.assertEqual(self.requests, [])
+
     def test_before_write_refusal_after_a_possible_write_stays_uncertain(self):
         @contextmanager
         def lease(message):

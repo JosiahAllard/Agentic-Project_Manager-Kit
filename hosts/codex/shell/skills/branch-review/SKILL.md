@@ -7,7 +7,7 @@ description: Use as a coordinator before giving any branch its landing verdict. 
 
 No branch reaches the land queue without your verdict. Green proves the project still works, not that the change is right, in scope, or exercised.
 
-1. Gather the brief, the exact diff range, the author's gate report and log paths; `python <kit>/tools/review_pack.py -C <worktree> <branch>`.
+1. Gather the brief, the exact diff range, the author's gate report (the final one is `gate.py --full` on that tip) and log paths; `python <kit>/tools/review_pack.py -C <worktree> <branch>`.
 2. Scope check, yourself: `git diff --stat <merge-base>..<branch>` against the brief. A file outside scope is a finding before you read a line.
 3. Small (about 150 lines) and low or medium risk: read every hunk yourself (docs and additive content: skim). Larger or high risk: dispatch a fresh, read-only reviewer role, never the author, its tier by the "Reviewer model" rule in skill coordinator-dispatch, roster.md; give it the brief, range, gate report and logs. The verdict stays yours. Standing checks: `python <kit>/tools/doc_index.py -C <worktree> --find review`.
 4. Look for: what the brief asked and only that; a test that fails without the change, and that it ran; new failure paths handled, not merely unreachable; a changed public interface, wire format, schema or stored data; a check weakened for green (a gate made green by deleting or loosening a test goes back); inferences marked as inferences; a commit trailer that misnames the host or model.

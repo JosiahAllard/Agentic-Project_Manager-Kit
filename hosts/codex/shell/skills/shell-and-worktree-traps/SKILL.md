@@ -13,7 +13,7 @@ description: Use before running shell commands on the Windows machine (Git Bash 
 6. A PowerShell function or pipeline returning exactly ONE object gives a bare scalar with no `.Count` (`$null`), so `$x.Count -gt 0` passes silently: wrap in `@()` before counting.
 7. Subprocesses: pass arguments as an array with the shell disabled.
 8. Test output: tee the whole output to a file (or `dotnet test --logger trx`), then read the file; never grep it live (a case-sensitive filter once matched the pass banner but not the failure text). Never pipe a gate or locked run through a truncating reader.
-9. One foreground gate per worktree, on its assigned ports; never background one with a stray `&` (two at once fought over the same build).
+9. One foreground gate per worktree, on its assigned ports; never background one with a stray `&` (two at once fought over the same build). The last gate before landing is `--full` on the exact tip.
 10. Cleanup goes through the kit's tools (`python <kit>/tools/worktree_remove.py -C <main checkout> <worktree>`), only for a worktree that is yours to remove; otherwise report it to the lander or coordinator.
 
 ## Never

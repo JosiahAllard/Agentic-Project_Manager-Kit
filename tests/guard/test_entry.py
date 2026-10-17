@@ -249,7 +249,7 @@ class GuardError(unittest.TestCase):
 
 class Unguarded(unittest.TestCase):
     """The early exit (hosts.json's claude hook.guarded_tools, read by boot/hook.py) and the
-    settings entry cover exactly the tools kitlib.guard.decide can refuse (KIT-HOOK-SPAWNS)."""
+    settings entry cover exactly the tools kitlib.guard.decide can refuse."""
 
     def load(self):
         return load()

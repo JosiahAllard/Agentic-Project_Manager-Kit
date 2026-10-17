@@ -28,7 +28,8 @@ Start-up, in this order; a failure releases everything taken before it and is a 
 text is for the owner's console (it may name a folder):
   1. the store (Store.open). A store another server holds is refused at once, never waited for.
      A lock left by a server that died is taken over, with a note.
-  2. the token files (auth.ensure_tokens): a token file that cannot serve is refused, named.
+  2. the token files (auth.ensure_tokens) and the approval key beside them
+     (auth.ensure_approval_key): a file that cannot serve is refused, named.
   3. the backlog views and the git sync, from the Sources' factories. A sync that is refused
      (gitsync.Refused: the folder is no work tree, the wrong branch, ...) does not stop the
      server: the reason goes to `Hub.notes` for the console, the server serves with sync off,
@@ -54,8 +55,9 @@ text is for the owner's console (it may name a folder):
 start() and close() carry every listener in it, and a start-up that fails after one was bound
 closes its door. Each gets a health_route of its own: the local listener's answers as it did
 with no tunnel, the tunnel's (fixed=True) answers fixed words only, so the tunnel's owner is
-told that a sync failed and not why. The tunnel listener has no pairing routes and no Host
-rule, and its error answers are the agent's wording for the owner too (tunnel.start makes it
+told that a sync failed and not why. The tunnel listener has no local pairing routes, only
+httpd.strong_pair_route (an Access login asks there for a code that pairs a local browser as
+the strong owner; the code is redeemed on the local listener), and no Host rule, and its error answers are the agent's wording for the owner too (tunnel.start makes it
 with httpd's agent_words), so none names the store folder; the local listener's rules are what
 they were with no tunnel, and it never reads the Access header.
 
@@ -750,9 +752,11 @@ def health_route(api, views, tunnel='', fixed=False):
     route, the answer is _fixed_health's instead: the Api is asked all the same, and nothing of
     its answer but a fixed word leaves."""
     def route(request):
-        # raise_unexpected: as the listener's own Api call, so an error is logged there
+        # raise_unexpected: as the listener's own Api call, so an error is logged there; and
+        # strong, as that call, only for the request its gate marked (httpd.strong_words)
         status, obj = api.call(request.method, request.path, request.role, request.body,
-                               request.query, request.via, raise_unexpected=True)
+                               request.query, request.via, raise_unexpected=True,
+                               **httpd.strong_words(request))
         said = tunnel() if callable(tunnel) else tunnel
         if fixed:
             return _fixed_health(status, obj, said)
@@ -804,6 +808,7 @@ def build(settings, sources, log=None):
             notes.append('the store lock was left by a server that did not close: taken over')
         try:
             auth.ensure_tokens(sources.tokens)
+            auth.ensure_approval_key(sources.tokens)
         except auth.TokenFileError as e:
             raise ServeError(str(e))
         except OSError as e:
@@ -837,6 +842,8 @@ def build(settings, sources, log=None):
         health = ('GET', _api.BASE + '/health')
         if tunnelled is not None:
             listeners.append(tunnelled)     # at once: a failure below closes its door too
+            # the tunnel listener's alone: only an Access login may ask for a strong code
+            tunnelled.routes.update(httpd.strong_pair_route(creds))
             # the local listener's health and Hub.tunnel say why there are no keys; the
             # tunnel's own health never does
             said = functools.partial(_tunnel_state, tunnelled, True)

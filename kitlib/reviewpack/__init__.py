@@ -398,7 +398,7 @@ def tips(root, base, branch, mb):
     --no-walk=unsorted` (the base tip is in the branch exactly when it is the merge-base `mb`). A
     failed or odd answer falls back to one read per rev, each through git_answer(): a read that
     fails or prints nothing stops the pack naming it, so no answer comes from a read that failed.
-    GOTCHA: TOOLS-REVIEWPACK-PERREV-FLAKE - a git ended from outside (a stale `taskkill /PID`
+    GOTCHA: a git ended from outside (a stale `taskkill /PID`
     that reached a reused pid, kitlib.proc.shield's GOTCHA) exits 1 having printed nothing, the
     same shape as `merge-base --is-ancestor`'s NO. The fallback asked that read, so a killed one
     printed a NO git never said; it now compares the base's full hash with `mb`, as the log does."""

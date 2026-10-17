@@ -19,6 +19,8 @@ Deliberate departures from the shells, all toward reading what a Windows user me
 import os
 import re
 
+from kitlib.config import user as kuser
+
 from . import paths
 
 BASH, PS, CMD = 'bash', 'ps', 'cmd'
@@ -74,12 +76,13 @@ class Redirect(object):
 class Command(object):
     __slots__ = ('words', 'redirects', 'start', 'end', 'source', 'shell', 'depth', 'cwd',
                  'piped_out', 'piped_in', 'subs', 'groups', 'nested_in', 'prev_op', 'next_op',
-                 'pipe_from', 'git_env', 'home_env', 'path_env', 'cwd_ps_drive', 'cwd_home')
+                 'pipe_from', 'git_env', 'home_env', 'path_env', 'cwd_ps_drive', 'cwd_home', 'home')
 
-    def __init__(self, source, shell, depth):
+    def __init__(self, source, shell, depth, home=None):
         self.words, self.redirects, self.subs = [], [], []
         self.start = self.end = None
         self.source, self.shell, self.depth = source, shell, depth
+        self.home = home            # the folder `~` names, its Parsed's home (home_folder: None is the user's)
         self.cwd = None
         self.cwd_ps_drive = False   # cwd None after a PowerShell cd into a place ps_unplaceable names (track)
         self.cwd_home = None        # cwd, with a cd to a home variable ($HOME/x) followed too (track)
@@ -743,7 +746,7 @@ class _Scan(object):
         ids = [0]
 
         def new(prev):
-            c = Command(self.s, self.shell, self.depth)
+            c = Command(self.s, self.shell, self.depth, getattr(self.parsed, 'home', None))
             c.groups = tuple(stack)
             c.prev_op = prev
             return c
@@ -855,8 +858,11 @@ def ps_unplaceable(p):
 
 
 def home_folder(home=None):
-    """`home`, else the user's home folder (os.path.expanduser)."""
-    return home or os.path.expanduser('~')
+    """`home`, else the user's home folder as kitlib.config.user.home_dir() gives it, so the
+    tests' home fence applies (docs/test-tools.md "Home fence"). Its HomeFenced is a
+    BaseException: it passes every `except Exception` in the guard and kitlib.host.hookmain, and
+    boot/hook.py run() blocks the call."""
+    return home or kuser.home_dir()
 
 
 # a word's text that starts with a variable naming the home folder, in any shell's spelling,

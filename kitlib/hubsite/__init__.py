@@ -5,6 +5,7 @@
   settings the site's machine settings, the machine config's `hub` key
   auth     who a request on the local listener is: the owner token, the pairing code, the session cookie
   access   the Cloudflare Access token check for the tunnel listener: verify, KeyCache
+  approvals the approvals a request waits on: asked, decided, verified
   api      the site's JSON API: routes, roles, and the writes behind them
   derived  views read from files other tools write (notices, repos, usage, agents), never stored
   backlog  the backlog views the site shows

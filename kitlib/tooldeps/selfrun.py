@@ -87,7 +87,7 @@ CPUMASK_ENV = 'MACHINE_LOCK_CPUMASK'
 # The variable kitlib.lock.giveback (GIVE_ENV) offers a give back with; units never inherit it.
 GIVE_ENV = 'MACHINE_LOCK_GIVE_BACK'
 FALLBACK_JOBS = 2
-UNIT_TIMEOUT = 3600
+UNIT_TIMEOUT = 300
 COUNT_TIMEOUT = 600
 INTERRUPTED = 130           # the exit status of a run stopped by Ctrl+C
 POLL = 0.5                  # seconds between checks for Ctrl+C while units run

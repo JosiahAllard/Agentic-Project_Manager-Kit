@@ -81,7 +81,7 @@ def base_pair(top, cfg, explicit=None):
     ob = refs.get('refs/remotes/%s/%s' % (cfg.remote, base), '')
     if explicit and not b:
         # No --quiet: its "no such rev" is exit 1 with no output, a killed git's shape
-        # (kitlib.git.refs.KILLED_SHAPE, KIT-GIT-EXIT1-ANSWERS-2). Without it any failure is
+        # (kitlib.git.refs.KILLED_SHAPE). Without it any failure is
         # just a failed read; missing and unread both show as '?' on the base line.
         b = cmd.run_text(['rev-parse', '--short', '--verify', explicit], top)[0] or ''
     return base, b, ob

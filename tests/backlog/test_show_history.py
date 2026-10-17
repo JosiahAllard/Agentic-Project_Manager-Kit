@@ -97,7 +97,7 @@ class UnreadableHistory(StoreCase):
 
 
 class MainStoreSideBranch(StoreCase):
-    """The TOOLS-BACKLOG-SHOW-REMOVED-BY case: added and deleted on a side branch, then merged."""
+    """The removed-by case: added and deleted on a side branch, then merged."""
 
     def test_a_record_deleted_on_a_merged_side_branch_names_the_deleting_commit(self):
         r = TempRepo()

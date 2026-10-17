@@ -349,7 +349,7 @@ def sync(path, target, model, model_source='--model', base=None, wait=True, say=
         lines.append('CONFLICTS (%d), merge left in progress:' % len(conflicted))
         lines.extend('  ' + f for f in conflicted)
         return done(FAILED, conflict_advice(base, full, model, arm_merge_msg(top, model, provider), provider))
-    # GOTCHA: KIT-GIT-EXIT1-ANSWERS-2 - this asked `rev-parse --verify --quiet MERGE_HEAD`, whose
+    # GOTCHA: this asked `rev-parse --verify --quiet MERGE_HEAD`, whose
     # "no MERGE_HEAD" is exit 1 with no output, a killed git's shape (gitrefs.KILLED_SHAPE): a kill
     # read as a fast-forward, so the merge was left uncommitted and reported merged.
     merging, why = gitrefs.merge_in_progress(top)

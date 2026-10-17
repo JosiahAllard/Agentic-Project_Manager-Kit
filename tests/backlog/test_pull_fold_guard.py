@@ -10,8 +10,10 @@ from kitlib.backlog import plan as pmod
 from kitlib.backlog.errors import Failure, Refusal, Usage
 from kitlib.git import cmd, refs
 
-from tests.backlog.helpers import BRANCH, TODAY, StoreCase, priced
-from tests.backlog.test_add_found_on import _Wrap
+from kitlib.backlog import opener
+
+from tests.backlog.helpers import BRANCH, TODAY, StoreCase, parse, priced
+from tests.backlog.test_add_found_on import PmDataWorktree, _Wrap
 
 HOLDER = 'kit/holder'
 FOLD = 'fold it into kit/holder, or pull it after kit/holder lands'
@@ -284,6 +286,23 @@ class TakeoverFold(_Branches):
     def test_a_folding_takeover_takes_no_reason(self):
         with self.assertRaises(Usage):
             self.verb('pull', 'DEAD', reason='the owner wants it', ruling='R-9001')
+
+
+class PullFoldInThePmDataWorktree(PmDataWorktree):
+    """`pull` in the PM data worktree diffs a live branch from the code remote's main, as `add`
+    does (test_add_found_on.PmDataWorktree), not from a local main that lags it."""
+
+    def test_a_live_branch_is_diffed_from_the_code_remotes_main(self):
+        stale = self.later_on_main()
+        self.branch_with(HOLDER, 'kitlib/y/own.py')
+        self.lag_main(stale)
+        ctx = opener.open_store(self.pm_worktree(), fetch=False)
+        holding = [parse('HOLD', id='HOLD', state='pulled', pulled_at=TODAY, pulled_by=HOLDER,
+                         scope='docs/held.md')]
+        hits, notes = pmod._pull_fold_hits(ctx, ['kitlib/x/later.py'], holding, BRANCH)
+        self.assertEqual((hits, notes), ([], []))
+        hits, _notes = pmod._pull_fold_hits(ctx, ['kitlib/y/**'], holding, BRANCH)
+        self.assertEqual(hits, ['kitlib/y/** vs kitlib/y/own.py (changed on kit/holder)'])
 
 
 if __name__ == '__main__':

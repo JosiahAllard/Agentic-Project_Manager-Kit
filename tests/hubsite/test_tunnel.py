@@ -13,6 +13,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 from kitlib.hubsite import access, api, auth, httpd, serve, tunnel
 from kitlib.hubsite import settings as hub_settings
@@ -39,6 +40,8 @@ NOT_MADE = 'off: the tunnel listener could not be made: the server console says 
 # git's words for a failed pass, as a sync gives them: a remote and a folder, both made up
 GIT_BRANCH = 'made-up-branch'
 GIT_WHY = "fatal: unable to access 'https://git.example.invalid/team/data.git/' from X:\\made-up"
+# a route of the tests' own for the strong owner: no route of api.ROUTES names api.APPROVER yet
+DECIDE = api.BASE + '/decide-test'
 
 
 class _Sync(object):
@@ -667,7 +670,12 @@ class StartTest(TunnelCase):
         self.assertIs(local.host_rule, httpd.local_hosts)
         self.assertIsNone(tunnelled.host_rule)
         self.assertEqual((local.origin_scheme, tunnelled.origin_scheme), ('http', 'https'))
-        self.assertEqual(sorted(tunnelled.routes), [('GET', HEALTH)])
+        # its one route besides health hands an Access login a strong pairing code; the local
+        # listener never has that route, and the tunnel's redeems no code
+        self.assertEqual(sorted(tunnelled.routes),
+                         [('GET', HEALTH), ('POST', httpd.STRONG_PAIR_ROUTE)])
+        self.assertNotIn(('POST', httpd.STRONG_PAIR_ROUTE), local.routes)
+        self.assertIn(('GET', httpd.PAIR_PATH), local.routes)
         self.assertEqual(hub.notes, ['the tunnel listener is on %s: every request there needs '
                                      'a Cloudflare Access token' % tunnelled.url])
         self.assertNoSecret()
@@ -1030,6 +1038,30 @@ class TunnelHealthTest(TunnelCase):
             self.assertEqual(json.loads(r.body.decode('utf-8')), {
                 'ok': True, 'version': 'v1', 'store': 'ok', 'git': word, 'tunnel': 'on'}, git)
 
+    def test_health_tells_the_api_strong_only_for_a_strong_request(self):
+        class Api(object):
+            def __init__(self):
+                self.kw = []
+
+            def call(self, *args, **kw):
+                self.kw.append(kw)
+                return 200, {'ok': True, 'git': None}
+
+        for fixed in (False, True):
+            with self.subTest(fixed=fixed):
+                stand_in = Api()
+                route = serve.health_route(stand_in, None, 'on', fixed=fixed)
+                request = httpd.Request('GET', HEALTH, None, '127.0.0.1', 0)
+                request.role = auth.OWNER
+                route(request)
+                for strong in (1, 'yes', None):
+                    request.strong = strong
+                    route(request)
+                request.strong = True
+                route(request)
+                self.assertEqual(stand_in.kw, [{'raise_unexpected': True}] * 4 + [
+                    {'raise_unexpected': True, 'strong': True}])
+
     def test_a_health_view_that_raises_is_still_a_200_of_fixed_words_through_the_tunnel(self):
         secret = 'a secret word at X:\\made-up'
 
@@ -1317,6 +1349,49 @@ class UnreadableRequestTest(TunnelCase):
         self.assertNoSecret(self.good)
 
 
+class TunnelStrongTest(TunnelCase):
+    """The owner who passed the tunnel gate is the strong owner, who alone may call a route of
+    role api.APPROVER; the local listener's owner token is not."""
+
+    def setUp(self):
+        TunnelCase.setUp(self)
+        self.calls = []
+
+        def handler(a, req):
+            self.calls.append((req.role, req.strong, req.via))
+            return {'ok': True}
+
+        route = api.Route('POST', DECIDE, api.APPROVER, handler)
+        patcher = mock.patch.object(api, 'ROUTES', api.ROUTES + (route,))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.build()
+        self.good = ak.token(ak.KEY_A)
+
+    def test_a_valid_access_token_reaches_an_approver_route(self):
+        r = self.ask('POST', DECIDE, token=self.good, obj={})
+        self.assertEqual(r.status, 200, r.body)
+        self.assertEqual(self.calls, [(auth.OWNER, True, tunnel.VIA)])
+
+    def test_the_local_listener_never_reaches_an_approver_route(self):
+        for token in (self.owner, self.agent):
+            r = post(self.lport, DECIDE, {}, token=token)
+            self.assertEqual((r.status, r.code(), r.json()['error']['field']),
+                             (403, 'forbidden', 'role'), r.body)
+        # an Access token is no credential on the local port, beside the owner token or alone
+        for token in (self.owner, None):
+            r = post(self.lport, DECIDE, {}, token=token, headers=[(tunnel.HEADER, self.good)])
+            self.assertEqual((r.status, r.code(), r.json()['error']['field']),
+                             (403, 'forbidden', 'role'), r.body)
+        self.assertEqual(self.calls, [])
+
+    def test_a_refused_tunnel_request_reaches_nothing(self):
+        self.refused('POST', DECIDE, obj={})
+        self.refused('POST', DECIDE, token=self.good + 'x', obj={})
+        self.refused('POST', DECIDE, obj={}, headers=[bearer(self.owner)])
+        self.assertEqual(self.calls, [])
+
+
 class _Request(object):
     """What the gate reads of a request: the one header."""
 
@@ -1372,6 +1447,31 @@ class GateTest(unittest.TestCase):
             self.assertRefusal(gate(_Request(token)))
         for _, text in self.lines:
             self.assertNotIn(self.good, text)
+
+    def test_a_valid_token_marks_the_request_strong_and_nothing_else_does(self):
+        gate = self.gate()
+        request = _Request(self.good)
+        self.assertEqual(gate(request), auth.OWNER)
+        self.assertIs(request.strong, True)
+        for token in (None, '', 'x', self.good + 'x',
+                      ak.token(ak.KEY_A, ak.claims(exp=ak.NOW - 1))):
+            request = _Request(token)
+            self.assertRefusal(gate(request))
+            self.assertFalse(hasattr(request, 'strong'), repr(token))
+        gate.stop()
+        request = _Request(self.good)
+        self.assertRefusal(gate(request))
+        self.assertFalse(hasattr(request, 'strong'), 'a stopped gate marked a request strong')
+
+    def test_a_request_that_cannot_be_marked_strong_is_refused(self):
+        class Fixed(_Request):
+            @property
+            def strong(self):
+                return False
+
+        self.assertRefusal(self.gate()(Fixed(self.good)))
+        self.assertEqual(self.lines, [
+            ('error', tunnel.REFUSAL_LINE % tunnel.GATE_ERROR + ' (AttributeError)')])
 
     def test_the_clock_of_the_gate_is_asked_for_every_token(self):
         times = [ak.NOW]

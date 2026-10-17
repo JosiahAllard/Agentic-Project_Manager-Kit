@@ -41,7 +41,7 @@ Missing any: say what you need, do nothing.
 2. The branch need not contain main: the landing tool merges the main it finds at its turn
    and gates the merged tree. Any conflict, docs included, whatever the brief's conflict rules
    say, is a `CONFLICT` verdict, nothing changed (`land.py` aborts them all): STOP and report;
-   the author merges that main and re-gates.
+   the author merges that main and re-gates with `--full` on the merged tip.
 3. **Size check** any doc both sides touched: an auto-merge can silently restore
    text main deleted. The merged file's line count must equal main's count plus
    the branch's net lines for that file
@@ -58,8 +58,9 @@ Missing any: say what you need, do nothing.
    (the repo's stub; `<kit>/tools/land.py` where the repo has none).
    A detached process lands it: it waits as one entry in the machine-lock queue (landings go
    ahead of ordinary runs), merges the main it finds with `--no-ff`, gates the merged tree,
-   pushes, verifies with `ls-remote`, and undoes the merge on red. The call prints one
-   `SUBMITTED ... wait: ...` line and exits 0. Start the
+   pushes, verifies with `ls-remote`, and undoes the merge on red. The call prints a `REVIEW` line for
+   each branch whose queued verdict is at the tip submitted, then the one
+   `SUBMITTED ... wait: ...` line, and exits 0. Start the
    `gate.py wait-result ... --kind land -C <main checkout>` command it prints, as it prints it, with `run_in_background`, and wait for the task
    notification, never a polling loop (the classifier denies it); no Monitor either
    (<kit>/docs/gate.md "Waiting on a gate: who arms what"). `python <kit>/tools/land.py -C <main checkout> --queue`

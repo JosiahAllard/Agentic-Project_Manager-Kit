@@ -177,7 +177,7 @@ class HomeByBuiltin(Base):
 
 
 class HomeByCmdSet(Base):
-    """cmd's `set HOME=...` before a push (KIT-GUARD-HOME-GITCONFIG), pinned."""
+    """cmd's `set HOME=...` before a push, pinned."""
 
     def test_cmd_set_home_is_denied(self):
         for text in ('cmd /c "set HOME=C:/h&& git push private pmdata"',

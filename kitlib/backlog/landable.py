@@ -28,7 +28,7 @@ def check(backend, snap, root, branches):
             out.append(Verdict(branch, CANNOT_TELL, (), bad))
             continue
         # known=True: a git ended from outside is no answer, never "no such branch"
-        # (KIT-GIT-EXIT1-ANSWERS-2; `rev-parse --verify --quiet` said both as exit 1).
+        # (`rev-parse --verify --quiet` said both as exit 1).
         tip, why = refs.resolve('refs/heads/%s' % branch, root, known=True)
         if tip is None:
             out.append(Verdict(branch, CANNOT_TELL, (), 'cannot read refs/heads/%s: %s'

@@ -519,7 +519,7 @@ def stray_warning():
 
 
 class AKilledGitIsNoBranchOrBaseAnswer(RepoFixture):
-    """KIT-GIT-EXIT1-ANSWERS: `symbolic-ref --quiet` (detached) and `merge-base` (no common
+    """`symbolic-ref --quiet` (detached) and `merge-base` (no common
     commit) answer with exit 1 and no output, the shape a git ended from outside leaves. Each read
     must give no answer for a kill, never "detached" or "no merge base"."""
 
@@ -545,7 +545,7 @@ class AKilledGitIsNoBranchOrBaseAnswer(RepoFixture):
 
 
 class PositiveForms(RepoFixture):
-    """The answers the positive forms give where git really answers (KIT-GIT-EXIT1-ANSWERS)."""
+    """The answers the positive forms give where git really answers."""
 
     def test_unrelated_histories_have_no_merge_base(self):
         orphan = self.r.git('commit-tree', self.r.git('rev-parse', 'HEAD^{tree}'), '-m', 'orphan')

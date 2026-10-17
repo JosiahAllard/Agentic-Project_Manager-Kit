@@ -182,7 +182,7 @@ class NewBranchMode(WorktreeCase):
         self.assertFalse(os.path.exists(self.slug_path('fresh')))
 
     def test_a_killed_read_of_the_base_is_refused_as_unread_not_unresolved(self):
-        """KIT-GIT-EXIT1-ANSWERS-2: `rev-parse --verify --quiet` said "no such ref" as exit 1 with
+        """`rev-parse --verify --quiet` said "no such ref" as exit 1 with
         no output, which a git ended from outside also leaves."""
         with kill_reads_of('%s^{commit}' % self.BASE):
             rc, out = self.tool('fix/fresh')

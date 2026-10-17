@@ -28,6 +28,7 @@ Exit: 0 no suspects, 1 suspects reported, 2 error. Standard library only; Window
 """
 import argparse
 import datetime
+import functools
 import json
 import os
 import re
@@ -152,6 +153,26 @@ def _r_agent_script(p, ctx):
     return "agent background script whose session is gone" if _dead_parent_older(p, 60 * MIN) else None
 
 
+@functools.lru_cache(maxsize=None)
+def _agent_temp_claude():
+    """'<agent temp folder>\\claude\\', lower case, backslashes: the agents' TEMP, which the launcher
+    sets from AGENT_TEMP (kitlib.pmstart.agent_temp_env: process environment, then the user
+    registry). A string that matches no command line when AGENT_TEMP is unset or kitlib cannot be
+    read, e.g. a copy of this tool outside the kit."""
+    root = os.path.normpath(os.path.join(HERE, "..", ".."))
+    if root not in sys.path:
+        sys.path.append(root)
+    try:
+        from kitlib.pmstart import agent_temp_env
+        temp = agent_temp_env()
+    except (ImportError, OSError):
+        # kitlib missing or the registry unreadable: keep this rule off rather than guess a folder
+        return "\x00"           # an impossible path: no match
+    if not temp:
+        return "\x00"
+    return os.path.join(temp.replace("/", "\\"), "claude", "").lower()
+
+
 def _r_conhost(p, ctx):
     return "console host with a dead parent" if _dead_parent_older(p, 30 * MIN) else None
 
@@ -192,7 +213,8 @@ RULES = [
     ("agent-script", "agent background script (python/node from a .claude path)",
      lambda p: _name(p) in {"python.exe", "pythonw.exe", "node.exe"} and
      ("\\.claude" in _cmd(p) or "/.claude" in _cmd(p) or "\\temp\\claude\\" in _cmd(p)
-      or "\\agenttemp\\claude\\" in _cmd(p)),             # agents' TEMP moved off the system drive
+      or "\\agenttemp\\claude\\" in _cmd(p)                # agents' TEMP moved off the system drive
+      or _agent_temp_claude() in _cmd(p)),                # ... or the agent temp folder, as resolved
      _r_agent_script, False),
     ("conhost", "console host", lambda p: _name(p) == "conhost.exe", _r_conhost, False),
 ]
@@ -342,6 +364,10 @@ def collect(sample_s=3.0):
         if pid == 0:
             continue
         d = W.details(pid)
+        if d.get("gone"):
+            # exited since the snapshot. Listed with an unknown creation time it would pass as the
+            # live parent of any process whose dead parent's pid it had taken (classify).
+            continue
         age = (now - d["ctime"]) / 1e7 if d["ctime"] else None
         cpu_pct = None
         f = first.get(pid)
