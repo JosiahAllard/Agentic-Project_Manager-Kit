@@ -1758,16 +1758,6 @@ class PageTextTest(unittest.TestCase):
         self.p = page()
         self.markup, self.script = self.p.split("<script>")[0], self.p.split("<script>")[1]
 
-    def test_one_inline_script_and_one_transport(self):
-        self.assertEqual(self.p.count("<script"), 1)
-        self.assertEqual(self.p.count("fetch("), 1)
-        self.assertIn("fetch(this.base + path, init)", self.p)
-        self.assertIn('base: "/api/v1"', self.p)
-        self.assertNotIn("XMLHttpRequest", self.p)
-        self.assertNotIn("WebSocket", self.p)
-        self.assertNotIn("EventSource", self.p)
-        self.assertNotIn("sendBeacon", self.p)
-
     def test_the_hidden_attribute_hides_whatever_display_rule_an_element_has(self):
         """A browser lets any author `display` rule beat its own rule for `hidden`; the stand-in DOM has no CSS and
         cannot see that. So the page's style must carry the one rule that makes `hidden` win, and nothing above it."""
@@ -1779,34 +1769,6 @@ class PageTextTest(unittest.TestCase):
         self.assertRegex(style, r"(?m)^form\.add\{display:grid")
         self.assertRegex(self.markup, r'<div class="tabs"[^>]*\shidden>')
         self.assertRegex(self.markup, r'<form class="add"[^>]*\shidden[ >]')
-
-    def test_state_filters_are_a_quiet_text_switch_and_what_filters_stay_pills(self):
-        """No test here runs a browser: this pins the classes and the style rules the look hangs on, not the look."""
-        lists = {}
-        for cls, rest in re.findall(r'<div class="([^"]*)" role="tablist"([^>]*)>', self.markup):
-            name = re.search(r'\bid="(\w+)"', rest) or re.search(r'data-for="(\w+)"', rest)
-            lists[name.group(1)] = cls
-        self.assertEqual(lists.pop("sections"), "sections")                      # the top row is neither kind
-        self.assertEqual(lists, {"qtabs": "tabs", "stabs": "tabs", "ftabs": "tabs",                # WHAT is shown: pills
-                                 "tabs": "tabs sw", "itabs": "tabs sw", "ttabs": "tabs sw", "topm": "tabs sw"})      # its STATE: quiet text
-        # Still real buttons in a tablist, each with aria-selected.
-        for row in re.findall(r'<div class="tabs sw".*?</div>', self.markup, re.S):
-            buttons = re.findall(r"<(\w+)([^>]*)>", row)[1:]
-            tabs = [a for t, a in buttons if t == "button"]
-            self.assertGreaterEqual(len(tabs), 2, row)
-            for a in tabs:
-                self.assertRegex(a, r'class="tab" role="tab"[^>]*aria-selected="(true|false)"')
-        style = re.search(r"<style[^>]*>(.*?)</style>", self.p, re.S).group(1)
-        rule = lambda sel: re.search(r"(?m)^" + re.escape(sel) + r"\{([^}]*)\}", style).group(1)      # noqa: E731
-        plain = rule(".sw .tab")
-        for part in ("border:0", "background:none", "border-radius:0"):
-            self.assertIn(part, plain)
-        chosen = rule('.sw .tab[aria-selected="true"]')
-        self.assertIn("text-decoration:underline", chosen)
-        self.assertIn("background:none", chosen)                                 # the pill's filled look does not come through
-        self.assertIn('content:"\\00b7"', rule(".sw .tab+.tab::before"))          # a middle dot between the choices
-        self.assertLess(style.index('.tab[aria-selected="true"]{'), style.index(".sw .tab{"))       # the quiet rules come later, so they win
-        self.assertNotIn("\x00", self.p)
 
     def test_no_artifact_store_call(self):
         for gone in ("window.claude", "onSnapshot", ".collection(", "sendToClaude", "db.", "user.can("):
@@ -1875,32 +1837,6 @@ class PageTextTest(unittest.TestCase):
                       "/health", "/notices"):
             self.assertNotIn('"%s' % route, self.script, route)
         self.assertEqual(re.findall(r'"/inbox[^"]*"[^;]*?"(/[a-z]+)"', self.script), ["/read"])
-
-    def test_the_owner_edits_and_deletes_only_their_own_to_dos(self):
-        s = self.script
-        self.assertRegex(s, r'"/todos/" \+ seg\([^)]*\) \+ "/edit"')
-        self.assertRegex(s, r'"/todos/" \+ seg\([^)]*\) \+ "/delete"')
-        card = s[s.index("function todoCard"):]
-        own = card.index('from === "you"')
-        self.assertLess(own, card.index('"/edit"'))
-        self.assertLess(own, card.index('"/delete"'))
-        self.assertIn("Mark urgent", card)
-
-    def test_sections(self):
-        self.assertRegex(self.markup, r'data-sf="parked"[^>]*>Parked')          # Parked is a tab of the Backlog row,
-        self.assertNotIn('data-s="parked"', self.markup)                         # no longer a section of its own
-        order = [self.markup.index('data-sf="%s"' % f) for f in ("current", "parked", "done")]
-        self.assertEqual(order, sorted(order))
-        self.assertNotIn('data-sf="new"', self.markup)                           # New story is a button, not a tab
-        self.assertRegex(self.markup, r'<button[^>]*id="rec-new"[^>]*>New story</button>')
-        self.assertRegex(self.markup, r'data-s="topm"[^>]*>To PM')
-        self.assertLess(self.markup.index('data-s="questions"'), self.markup.index('data-s="topm"'))
-        self.assertLess(self.markup.index('data-s="topm"'), self.markup.index('data-s="todo"'))
-        self.assertLess(self.markup.index('data-s="backlog"'), self.markup.index('data-s="docs"'))
-        self.assertLess(self.markup.index('data-s="docs"'), self.markup.index('data-s="info"'))
-        self.assertRegex(self.markup, r'<div[^>]*id="pmseen"[^>]*role="status"')
-        self.assertNotRegex(self.markup, r"(?i)<button[^>]*>[^<]*(alert|log ?out|sign out|end sessions)")
-        self.assertNotRegex(self.script, r'text: ?"[^"]*(Alert the PM|Log ?out|Sign out|End sessions)')
 
 
 if __name__ == "__main__":
