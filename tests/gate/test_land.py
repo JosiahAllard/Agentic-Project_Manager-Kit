@@ -276,6 +276,9 @@ class HookFromMain(LandCase):
 
 
 class NoStepSelected(LandCase):
+    # landing.select "diff": the merge's changed paths select the steps (the default, "full",
+    # selects every step that is not manual: tests/gate/test_land_select.py)
+    KIT = dict(LandCase.KIT, landing=dict(LandCase.KIT['landing'], select='diff'))
     GATE = {'steps': [{'name': 'unit', 'globs': ['src/*'], 'cmd': fixtures.RED_AWARE,
                        'pass': '^ok$'}]}
 

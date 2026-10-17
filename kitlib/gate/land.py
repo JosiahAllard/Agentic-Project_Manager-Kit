@@ -64,7 +64,9 @@ tools/land.py).
                  lock released: FAILED, the verdict line `CONFLICT <branch> with main <base>:
                  the author merges main`. Main is never moved
   7  gate        the landing tree gated in the slot of step 3 (kitlib.gate.runner.merged_gate,
-                 tree=, slot=) with the config of the base; a step that passed in the branch gate
+                 tree=, slot=) with the config of the base: every step that is not manual, as
+                 gate.py --full selects them (landing.select "full", the default; "diff": the
+                 steps the merge's changed paths select); a step that passed in the branch gate
                  of exactly this tree may count without running (kitlib.gate.reuse; never with
                  --fresh, --full or a batch). Red, or a gate where nothing ran: NOT LANDED, the
                  merge dropped (it is only in the landing tree; the landing never moves main),
@@ -1431,7 +1433,8 @@ class Lander(object):
         out = runner.merged_gate(self.root, self.cfg, self.expect_main, full=self.full,
                                  slug='+'.join(self.branches), log_dir=self.log_dir, say=self.say,
                                  book_kw=self.book_kw, lane_args=lane_args, reuse=plan,
-                                 slot=self.slot, tree=self.tree)
+                                 slot=self.slot, tree=self.tree,
+                                 select_all=self.cfg.section('landing')['select'] == 'full')
         self.gate_logs = out.facts.get('log_dir')
         return out
 

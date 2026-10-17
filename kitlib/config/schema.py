@@ -224,6 +224,7 @@ SECTIONS = {
         'batch_max': Field(Int(1, 20), 3, 'most branches one tools/land.py landing merges and gates together'),
         'reuse_max_age_h': Field(Int(0, 168), 24, 'hours a pass stored in the gate cache serves a branch gate rerun or a landing; 0: no gate reads or stores a step result'),
         'reuse_never': Field(Strs, [], 'globs of paths whose change makes a gate (branch or landing) read and store no step result in the gate cache'),
+        'select': Field(Enum('full', 'diff'), 'full', 'which steps a landing\'s merged gate runs: full, every step that is not manual, as gate.py --full selects them (each runs its cmd; a strict landing runs its full_cmd); diff, the steps the paths the merge changes select'),
         'in_flight': Field(IN_FLIGHT, None, 'how tools/new_worktree.py and tools/sync_base.py see a landing in flight before they fetch, and wait for it (unset: off; {}: the kit landing lock; wait_s unset: 100, inferred not measured; docs/new-worktree.md "Waiting for a landing in flight")'),
     },
     'ledger': {

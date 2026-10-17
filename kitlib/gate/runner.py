@@ -771,12 +771,13 @@ def _gate_checkout(top, cfg, seen, base=None, full=False, only=None, plan=False,
 # ---------------------------------------------------------------- the merged-tree gate
 
 def merged_gate(root, cfg, base, full=False, slug='land', log_dir=None, say=None, book_kw=None,
-                lane_args=None, reuse=None, slot=None, tree=None):
+                lane_args=None, reuse=None, slot=None, tree=None, select_all=False):
     """_merged_gate() with its source (kitlib.gate.detect) in facts['source'] and as the last
     line. With no "gate" section in `cfg` the gate is detected from the merged tree, plus the
     steps `base` owes (detect.effective). `slot`: the Slot the landing already holds; the steps
     run in it and no second slot is booked (gated). `tree`: the checkout holding the merge (a
-    landing's landing tree, kitlib.gate.land); default `root`."""
+    landing's landing tree, kitlib.gate.land); default `root`. `select_all`: select every
+    non-manual step, as `full` does, but run each step's cmd (landing.select "full")."""
     try:
         eff = detect.effective(cfg, tree or root, base=base)
     except detect.DetectError as e:
@@ -784,19 +785,21 @@ def merged_gate(root, cfg, base, full=False, slug='land', log_dir=None, say=None
     if eff.source == detect.AUTO:
         (say or _quiet)(detect.label(eff))
     out = _merged_gate(root, cfg, eff, base, full=full, slug=slug, log_dir=log_dir, say=say,
-                       book_kw=book_kw, lane_args=lane_args, reuse=reuse, slot=slot, tree=tree)
+                       book_kw=book_kw, lane_args=lane_args, reuse=reuse, slot=slot, tree=tree,
+                       select_all=select_all)
     out.facts['source'] = eff.source
     out.lines.append(detect.label(eff))
     return out
 
 
 def _merged_gate(root, cfg, eff, base, full=False, slug='land', log_dir=None, say=None,
-                 book_kw=None, lane_args=None, reuse=None, slot=None, tree=None):
+                 book_kw=None, lane_args=None, reuse=None, slot=None, tree=None, select_all=False):
     """Gate the merged tree at HEAD of `tree` (a landing's merge, in its landing tree; default
     `root`) against `base` (the main it was merged into). The steps run in `tree`, and their hook
     checks get it as ctx['root']; the repository's name and its log folder are `root`'s (the main
     checkout's), wherever the tree is. The paths base..HEAD changes select the steps (every
-    non-manual step with full, each running its full_cmd when it has one), and each step's
+    non-manual step with full or select_all, each running its full_cmd, when it has one, only
+    with full), and each step's
     merged_args are appended, then `lane_args` (the landing lane's merged_args). Outcome codes:
     OK, FAILED, REFUSED (also when no step is selected) or a machine lock code; facts verdict,
     results, log_dir, head, windows (as the branch gate's). Check steps run the hook module of
@@ -820,7 +823,8 @@ def _merged_gate(root, cfg, eff, base, full=False, slug='land', log_dir=None, sa
     try:
         all_steps = S.build(gate, tree, base, cfg.tools_dir, merged=True, extra=lane_args,
                             full=full)
-        chosen, _ = S.select(gate, all_steps, changed, full=full, read=S.working_tree_reader(tree))
+        chosen, _ = S.select(gate, all_steps, changed, full=full or select_all,
+                             read=S.working_tree_reader(tree))
     except S.GateConfigError as e:
         return G.Outcome(G.REFUSED, ['REFUSED: %s' % e])
     if not chosen and not empty:
