@@ -59,8 +59,15 @@ from kitlib.proc.job import JobError
 from kitlib.records import gate_ok
 
 NO_STEP = ('REFUSED: no gate step selected: the "gate".steps of .kit.json cover none of the %d '
-           'changed path(s), so nothing would run; no gate-OK record is written. Give a step '
-           '"always": true or globs that cover these paths')
+           'changed path(s), or each step they select is dropped by another\'s skip_if_selected, '
+           'so nothing would run; no gate-OK record is written. Give a step "always": true or '
+           'globs that cover these paths')
+# --full and the merged gate select every step but the manual ones, whatever changed: none left
+# means every step is manual, or each is dropped by another selected step's skip_if_selected.
+NO_STEP_FULL = ('REFUSED: no gate step selected: every step in the "gate".steps of .kit.json is '
+                'manual, or is dropped by another selected step\'s skip_if_selected, so nothing '
+                'would run; no gate-OK record is written. Give the gate a step that is not manual '
+                'and that no other step\'s skip_if_selected names')
 NO_CHECKS = ('GATE OK (auto-detected: no stack found, so NO checks ran; give the gate steps with a '
              '"gate" section in .kit.json or tools/gate.json)')
 PROBE_TIMEOUT = 60      # seconds a `requires` probe argv may take
@@ -697,7 +704,8 @@ def _gate_checkout(top, cfg, seen, base=None, full=False, only=None, plan=False,
         return G.Outcome(G.OK, plan_lines(chosen, picked, all_steps, base_text, changed),
                          chosen=[s.name for s in chosen])
     if not chosen and not empty:
-        return G.Outcome(G.REFUSED, [NO_STEP % len(changed)], record=None,
+        text = NO_STEP_FULL if full and not only else NO_STEP % len(changed)
+        return G.Outcome(G.REFUSED, [text], record=None,
                          no_record='no gate step selected', head=head, base=mb, changed=changed)
     entries, why = gitstatus.status(top)
     if entries is None:
@@ -828,7 +836,7 @@ def _merged_gate(root, cfg, eff, base, full=False, slug='land', log_dir=None, sa
     except S.GateConfigError as e:
         return G.Outcome(G.REFUSED, ['REFUSED: %s' % e])
     if not chosen and not empty:
-        return G.Outcome(G.REFUSED, [NO_STEP % len(changed)], head=head)
+        return G.Outcome(G.REFUSED, [NO_STEP_FULL], head=head)
     name = repo_name(cfg, root)
     logs = new_log_dir(cfg, root, name, 'land-' + slug, log_dir)
     say('merged-tree gate at %s against %s: %s' % (
