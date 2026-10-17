@@ -1,11 +1,13 @@
-"""The gate's second review round, cut to its two contracts: the pushed commit is the commit
-the merged gate passed, and a SystemExit or Ctrl+C never leaves a merge or a lock behind silently.
+"""The gate's second review round, cut to its contracts: the pushed commit is the commit the
+merged gate passed, a SystemExit or Ctrl+C never leaves a merge or a lock behind silently, and a
+landing where no gate step ran is refused.
 
 Scratch repositories with a bare remote in temp and the scratch lock store only."""
 import os
 import unittest
 
 from kitlib import gate as G
+from tests.gate import fixtures
 from tests.gate.test_land import BRANCH, LandCase
 
 # A step that does what the file MODE in the tree it runs in says, then prints ok; it exits 1
@@ -34,6 +36,8 @@ QUITS = (
     '    ctx["log"].write("about to exit\\n")\n'
     '    sys.exit(0)\n'
     'GATE_CHECKS = {"quits": quits}\n')
+
+MISSING = 'kit-no-such-command-for-tests'
 
 
 def joined(out):
@@ -132,6 +136,23 @@ class CtrlC(LandCase):
         self.assertEqual(self.remote_main(), self.main)
         self.assertEqual(self.repo.git('status', '--porcelain'), '')
         self.assertTrue(any('undone' in s for s in said), said)
+
+
+# ---------------------------------------------------------------- 3 a gate where nothing ran
+
+SKIPPED = {'steps': [{'name': 'unit', 'always': True, 'cmd': fixtures.RED_AWARE, 'pass': '^ok$',
+                      'requires': [MISSING]}]}
+
+
+class LandingNothingRan(LandCase):
+    GATE = SKIPPED
+
+    def test_a_landing_where_nothing_ran_is_refused_and_undone(self):
+        _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
+        out = self.lander(BRANCH, self.main, tip).run()
+        self.assertTrue(out.lines[0].startswith('REFUSED: no gate step ran'), out.lines)
+        self.assertTrue(out.undone)
+        self.assert_untouched(out, G.REFUSED)
 
 
 if __name__ == '__main__':

@@ -1,12 +1,14 @@
 """The gate's third review round: a STUCK landing exits 3 whatever stopped it (Ctrl+C included),
 and the commands a STUCK report prints fit what is left. Each clear-command test runs the printed
-commands in the scratch repository and asserts the state they leave.
+commands in the scratch repository and asserts the state they leave. Also: a merge interrupted
+part way is undone.
 
 The merge and its gate run in the landing tree (kitlib.gate.land, step 5b), so whatever stops a
 landing before its push leaves nothing in the main checkout to undo: the lock is released and
 the landing is NOT LANDED, never STUCK. STUCK is left for a push that may have landed.
 
 Scratch repositories with a bare remote in temp and the scratch lock store only."""
+import os
 import subprocess
 import unittest
 from unittest import mock
@@ -109,6 +111,49 @@ class PushUnknown(_Stuck):
         self.assert_broken(self.sh(cmds[-1]))
         self.assertEqual(self.main_now(), out.merge)
         self.assertEqual(self.remote_main(), out.merge)
+
+
+# ---------------------------------------------------------------- 7 a merge interrupted part way
+
+class HalfMerge(LandCase):
+    def interrupt_merge(self, tip, in_progress):
+        real = land.Lander.git
+
+        def git(lander, *args, **kw):
+            if args[:1] == ('merge',) and '--abort' not in args:
+                if in_progress:                       # stopped before the merge commit
+                    real(lander, 'merge', '--no-ff', '--no-commit', '-m', 'Merge', tip,
+                         cwd=kw.get('cwd'))
+                    trees.append(kw.get('cwd'))
+                    self.assertTrue(refs.merge_in_progress(kw.get('cwd'))[0])   # stopped mid-merge
+                else:                                 # stopped after it
+                    real(lander, *args, **kw)
+                raise KeyboardInterrupt
+            return real(lander, *args, **kw)
+        said, trees = [], []
+        self.trees = trees
+        with mock.patch.object(land.Lander, 'git', git):
+            with self.assertRaises(KeyboardInterrupt):
+                self.lander(BRANCH, self.main, tip, say=said.append).run()
+        return said
+
+    def assert_back(self):
+        self.assertEqual(self.main_now(), self.main)
+        self.assertEqual(self.remote_main(), self.main)
+        self.assertEqual(self.repo.git('status', '--porcelain'), '')
+        self.assertFalse(os.path.exists(os.path.join(self.repo.root, '.git', 'MERGE_HEAD')))
+        self.assertIsNone(self.lock().read())
+
+    def test_ctrl_c_with_the_merge_in_progress_aborts_it(self):
+        _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
+        said = self.interrupt_merge(tip, in_progress=True)
+        self.assert_back()
+        self.assertTrue(any('aborted' in s for s in said), said)
+        tree = self.trees[0]                        # the merge was in the landing tree, and its
+        self.assertTrue(tree and os.path.isdir(tree), self.trees)  # abort left nothing there
+        merging, _ = refs.merge_in_progress(tree)
+        self.assertFalse(merging)
+        self.assertEqual(self.repo.git('-C', tree, 'status', '--porcelain'), '')
 
 
 if __name__ == '__main__':
