@@ -175,7 +175,7 @@ button.danger{color:var(--warn)}
     <button class="sec" role="tab" data-s="questions" aria-selected="true" id="sec-questions">Inbox <span class="n" id="n-q">0</span></button>
     <button class="sec" role="tab" data-s="topm" aria-selected="false" id="sec-topm">To PM <span class="n" id="n-pm">0</span></button>
     <button class="sec" role="tab" data-s="todo" aria-selected="false" id="sec-todo">To do <span class="n" id="n-t">0</span></button>
-    <button class="sec" role="tab" data-s="backlog" aria-selected="false" id="sec-backlog">Backlog <span class="n hot" id="n-sp" hidden></span></button>
+    <button class="sec" role="tab" data-s="backlog" aria-selected="false" id="sec-backlog">Backlog <span class="n" id="n-s">0</span><span class="n hot" id="n-sp" hidden></span></button>
     <button class="sec" role="tab" data-s="docs" aria-selected="false" id="sec-docs">Docs <span class="n" id="n-d">0</span></button>
     <button class="sec" role="tab" data-s="info" aria-selected="false" id="sec-info">Info</button>
   </div>
@@ -384,6 +384,8 @@ button.danger{color:var(--warn)}
     $("#n-qq").textContent = oq.length; $("#n-qq").classList.toggle("hot", oq.some(d => d.urgent));
     $("#n-q").textContent = oq.length + ui.length; $("#n-q").classList.toggle("hot", oq.some(d => d.urgent) || ui.length > 0);
     $("#n-t").textContent = ot.length; $("#n-t").classList.toggle("hot", ot.some(t => t.urgent));
+    const os = state.stories.filter(st => ACTIVE.includes(st.status));
+    $("#n-s").textContent = os.length; $("#n-s").classList.toggle("hot", os.some(st => st.status === "questions"));
     const ua = state.usage.filter(u => u.account);
     const top = usagePeak(ua), peak = top.pct;
     $("#n-u").textContent = usageChip(top); $("#n-u").classList.toggle("hot", peak >= 90);
@@ -468,7 +470,7 @@ button.danger{color:var(--warn)}
       for (const item of g.items) out.push(drawn(p => {
         const q = p.q ? state.docs.find(d => d.id === p.q) : null, age = ageOf(p.parked_at);
         return el("article", {class:"pk", id: "pk-" + p.id},
-          el("div", {class:"meta"}, el("span", {class:"id", text: p.item || p.id}),
+          el("div", {class:"meta"}, el("button", {class:"link", type:"button", text: p.item || p.id, onclick: () => openRecord(p.repo, p.item || p.id)}),
             age ? el("span", {class:"age" + (p.old ? " old" : ""), title: "Parked " + when(p.parked_at) + (PARKED_FROM[p.parked_at_from] || ""), text: age}) : el("span", {class:"age", text: "parked, time unknown"}),
             p.session ? el("span", {text: "session " + p.session}) : null),
           p.title ? el("h2", {text: p.title}) : null,
@@ -506,7 +508,7 @@ button.danger{color:var(--warn)}
       const q = m.ref ? state.docs.find(d => d.id === m.ref) : null;
       const t = !q && m.ref ? state.todos.find(x => x.id === m.ref) : null;
       const st = !q && !t && m.ref ? state.stories.find(x => x.id === m.ref) : null;
-      const go = q ? () => goQuestion(q.id) : null;
+      const go = q ? () => goQuestion(q.id) : st ? () => goStory(st.id) : null;
       const refText = q ? q.id + ": " + (q.title || "") : t ? "To do: " + (t.title || t.id) : st ? "Story: " + (st.title || st.id) : m.ref;
       const head = el("div", {class:"meta"},
         el("span", {class:"id", text: m.id}),
@@ -891,14 +893,24 @@ button.danger{color:var(--warn)}
       el("div", {class:"body"}, el("div", {class:"meta"}, el("span", {class:"id", text: t.id})), ed.note, ti, de, ed.theirs, ed.acts));
   }
 
+  const ACTIVE = ["submitted", "review", "questions"];
+  const STEPS = [["submitted","Submitted"], ["review","Coordinator review"], ["questions","Needs you"], ["added","In backlog"]];
+  const storyQs = id => state.docs.filter(d => d.story === id);
+
   function goQuestion(qid){
     const d = state.docs.find(x => x.id === qid);
     state.section = "questions"; if (d) state.filter = pmQBucket(d); state.repo = ""; $("#repo").value = "";
     render();
     const n = document.getElementById("q-" + qid); if (n) n.scrollIntoView({block:"start"});
   }
+  // A story's card is on Current backlog (its in-progress cards above the table, filed ones below).
+  function goStory(sid){
+    state.section = "backlog"; state.sfilter = "current"; state.rec = null; state.repo = ""; $("#repo").value = "";
+    render();
+    const n = document.getElementById("story-" + sid); if (n) n.scrollIntoView({block:"start"});
+  }
 
-  // Backlog: Current backlog, Parked, Completed, and the record page a row or New story opens.
+  // Backlog: Current backlog (with the owner's story cards), Parked, Completed, and the record page a row or New story opens.
   // repo "all" is a scope (an item for every repo), never a menu choice: it shows under every repo.
   // Every repo menu lists the same items, only the real repos (repos/). An old tag maps to the repo
   // whose repos/ doc lists it in `aliases` (none by default); a tag that names no repo (machine)
@@ -957,12 +969,23 @@ button.danger{color:var(--warn)}
   }
   // A view the server last read more than 3 days ago says since when.
   const staleNote = rows => { const f = pmFresh(rows, Date.now()); return f.kind === "stale" ? " Last read " + when(f.since) + ", more than 3 days ago." : ""; };
+  // The owner's stories, on Current backlog: those in progress above the table, those filed or closed below it.
+  const bstories = el("div", {}), bfiled = el("div", {});
+  function fillStories(){
+    const mine = state.stories.filter(inB), active = mine.filter(st => ACTIVE.includes(st.status)), closed = mine.filter(st => !ACTIVE.includes(st.status));
+    const need = st => st.status === "questions" ? 1 : 0;
+    active.sort((a,b) => (b.urgent ? 1 : 0) - (a.urgent ? 1 : 0) || need(b) - need(a) || String(a.submitted_at||"").localeCompare(String(b.submitted_at||"")));
+    closed.sort((a,b) => String(b.added_at||b.closed_at||"").localeCompare(String(a.added_at||a.closed_at||"")));
+    bstories.replaceChildren(...(active.length ? [el("h3", {class:"blk", text: "In progress"}), ...active.map(st => drawn(storyCard, st))] : []));
+    bfiled.replaceChildren(...(closed.length ? [el("h3", {class:"blk", text: "Filed or closed"}), ...closed.map(st => drawn(storyCard, st))] : []));
+  }
   function renderCurrent(){
-    if (!state.backlog.length) { show(["backlog"], state.gone.backlog ? null : el("div", {class:"empty"}, el("strong", {text: ready ? "Nothing open" : NOT_READY}), ready ? "No repository's backlog has an open record, or no repository is configured on the hub server." : NOT_READY_WHY)); return; }
-    // The filter row stays in place between renders (the search box keeps its focus); only the notes above it are redrawn.
+    fillStories();
+    if (!state.backlog.length) { show(["backlog"], bstories, state.gone.backlog ? null : el("div", {class:"empty"}, el("strong", {text: ready ? "Nothing open" : NOT_READY}), ready ? "No repository's backlog has an open record, or no repository is configured on the hub server." : NOT_READY_WHY), bfiled); return; }
+    // The filter row stays in place between renders (the search box keeps its focus); only the notes and stories around it are redrawn.
     const list = $("#list");
     bnotes.replaceChildren(...goneNote("backlog"));
-    if (list.firstChild !== bnotes || list.childNodes.length !== 3) list.replaceChildren(bnotes, bfil, bout);
+    if (list.firstChild !== bnotes || list.childNodes.length !== 5) list.replaceChildren(bnotes, bstories, bfil, bout, bfiled);
     if (bsearch.value !== state.bq) bsearch.value = state.bq;
     fillCurrent();
   }
@@ -991,6 +1014,53 @@ button.danger{color:var(--warn)}
     const held = Math.min(...state.completed.map(c => c.days).filter(n => typeof n === "number"));
     const sn = staleNote(state.completed) + (held < state.period ? " The hub server holds the last " + held + " days of completed work." : "");
     show(["completed"], head, ...(sn ? [el("p", {class:"unote", text: sn.trim()})] : []), ...byRepo(rows, [["Done", c => when(c.done_at), "md"], ["Item", c => c.title || "", "role"], ["Id", c => c.item || c.id, "md"]]));
+  }
+
+  function storyCard(st){
+    const live = ACTIVE.includes(st.status);
+    const stat = {
+      submitted: el("span", {class:"chip", text:"Submitted"}),
+      review: el("span", {class:"chip", text:"In review"}),
+      questions: el("span", {class:"chip need", text:"Needs you"}),
+      added: el("span", {class:"chip ok", text: st.backlog_id ? "Added as " + st.backlog_id : "Added"}),
+      declined: el("span", {class:"chip", text:"Not added"}),
+      withdrawn: el("span", {class:"chip", text:"Withdrawn"})
+    }[st.status] || el("span", {class:"chip", text: st.status || "?"});
+    const parts = [el("div", {class:"meta"},
+      st.urgent && live ? el("span", {class:"chip urgent", text:"Urgent"}) : null,
+      el("span", {class:"id", text: st.id}),
+      st.repo ? el("span", {class:"chip", text: st.repo}) : null, stat,
+      st.submitted_at ? el("span", {text: "submitted " + when(st.submitted_at)}) : null,
+      st.added_at ? el("span", {text: "added " + when(st.added_at)}) : null),
+      el("h2", {text: st.title || "(untitled)"})];
+    if (st.story) parts.push(el("p", {class:"ctx", text: st.story}));
+    const idx = STEPS.findIndex(x => x[0] === st.status);
+    if (idx >= 0) parts.push(el("div", {class:"flow", "aria-label":"Progress"}, ...STEPS.map((x, i) => el("span", {class: i === idx ? "on" : i < idx ? "past" : "", text: x[1]}))));
+    const who = st.reviewer || (st.repo ? "the " + st.repo + " coordinator" : "the coordinator");
+    const line = {
+      submitted: "Waiting for the PM to hand it to " + who + ".",
+      review: "With " + who + " for review.",
+      questions: "Follow-up questions from " + who + " are waiting in Questions.",
+      added: "Filed in the " + (st.repo || "") + " backlog" + (st.backlog_id ? " as " + st.backlog_id : "") + ".",
+      declined: "Not added" + (st.closed_note ? ": " + st.closed_note : "."),
+      withdrawn: "You withdrew this story."
+    }[st.status];
+    if (line) parts.push(el("div", {class:"status", text: line}));
+    if (st.review_note) parts.push(el("div", {class:"ans"}, el("div", {}, el("b", {text: "Coordinator: "}), st.review_note)));
+    const qs = storyQs(st.id);
+    if (qs.length) parts.push(el("div", {class:"links"}, el("span", {class:"status", text:"Follow-ups:"}),
+      ...qs.map(d => el("button", {class:"link", type:"button", text: d.id + (d.status === "open" ? " (answer)" : d.status === "answered" ? " (submitted)" : " (logged)"), onclick: () => goQuestion(d.id)}))));
+    if (st.status === "submitted") {
+      const status = el("span", {class:"status", role:"status"});
+      const w = el("button", {class:"link", type:"button", text:"Withdraw"});
+      w.addEventListener("click", async () => {
+        w.disabled = true;
+        try { await write("/stories/" + seg(st.id) + "/withdraw", {}); }
+        catch (e) { status.className = "status err"; status.textContent = "Not saved: " + why(e) + "."; w.disabled = false; }
+      });
+      parts.push(el("div", {class:"act"}, w, status));
+    }
+    return el("article", {class: "q" + (live ? "" : " logged") + (st.urgent && live ? " urgent" : ""), id: "story-" + st.id}, ...parts);
   }
 
   // ---- The record page: one backlog record, each section edited through the store (docs/action-hub.md "The record page").
@@ -1163,7 +1233,7 @@ button.danger{color:var(--warn)}
       el("span", {class:"id", text: d.id}),
       d.repo ? el("span", {class:"chip", text: d.repo}) : null,
       d.from ? el("span", {text: "from " + d.from}) : null,
-      d.story ? el("span", {text: "story: " + (state.stories.find(x => x.id === d.story)?.title || d.story)}) : null,
+      d.story ? el("button", {class:"link", type:"button", text: "story: " + (state.stories.find(x => x.id === d.story)?.title || d.story), onclick: () => goStory(d.story)}) : null,
       d.asked_at ? el("span", {text: "asked " + when(d.asked_at)}) : null,
       pmQBucket(d) === "other" ? el("span", {class:"chip need", text: "status: " + String(d.status)}) : null
     );

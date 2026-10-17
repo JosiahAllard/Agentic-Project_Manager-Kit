@@ -381,7 +381,7 @@ class DomTest(unittest.TestCase):
     def test_server_text_with_markup_is_drawn_as_text(self):
         day = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         names = ("q-title", "q-context", "q-from", "q-label", "q-description", "q-ref", "i-title", "i-text", "i-asked",
-                 "p-text", "t-title", "t-detail", "t-command", "b-title", "b-error",
+                 "p-text", "t-title", "t-detail", "t-command", "s-title", "s-story", "s-note", "b-title", "b-error",
                  "c-title", "c-stale", "k-branch", "gone", "account", "repo", "d-title", "d-summary", "d-from", "d-repo",
                  "d-ref", "r-field", "r-ask", "r-body", "r-branch")
         m = {n: mark(n) for n in names}
@@ -398,6 +398,7 @@ class DomTest(unittest.TestCase):
                 "to_pm": {"P-1": {"status": "queued", "text": m["p-text"], "version": 1}},
                 "todos": {"T-1": {"status": "open", "title": m["t-title"], "detail": m["t-detail"], "from": "pm",
                                   "commands": [m["t-command"]]}},
+                "stories": {"S-1": {"status": "review", "title": m["s-title"], "story": m["s-story"], "review_note": m["s-note"]}},
                 # The list of documents is text like every other card; only the reader shows a body (DocsTest).
                 "pages": {"plan-1": {"title": m["d-title"], "summary": m["d-summary"], "from": m["d-from"], "repo": m["d-repo"],
                                      "refs": [m["d-ref"]], "at": day}},
@@ -942,7 +943,7 @@ class DomTest(unittest.TestCase):
                 self.assertFalse(got["open"])
 
     def test_every_card_shows_its_id_and_the_id_box_finds_it(self):
-        snap = snapshot(collections=LISTS)
+        snap = snapshot(collections=dict(LISTS, stories={"S-1": {"status": "review", "title": "a story", "story": "x"}}))
         got = dom("""
             await start();
             const ids = {};
@@ -956,14 +957,58 @@ class DomTest(unittest.TestCase):
             await click($("#sections [data-s=questions]"));
             const noneQ = text($("#list"));
             await type($("#idq"), "");
+            await click($("#sections [data-s=todo]")); await type($("#idq"), "");
+            await click($("#sections [data-s=backlog]")); ids.stories = idsIn("#list article");
             return { ids, found, none, noneQ };
         """, snap)
-        self.assertEqual(got["ids"], {"questions": ["Q-1"], "todos": ["T-1", "T-2"]})
+        self.assertEqual(got["ids"], {"questions": ["Q-1"], "todos": ["T-1", "T-2"], "stories": ["S-1"]})
         self.assertEqual(got["found"], ["todo-T-2"])
         self.assertIn('No match for "zzz"', got["none"])
         self.assertNotIn("Nothing to do", got["none"])
         self.assertIn('No match for "zzz"', got["noneQ"])
         self.assertNotIn("No open questions", got["noneQ"])
+
+    def test_a_submitted_story_is_withdrawn_from_its_card_on_current_backlog(self):
+        stories = {"S-1": {"status": "submitted", "title": "mine", "story": "x", "repo": "alpha", "version": 1},
+                   "S-2": {"status": "questions", "title": "asked", "story": "x", "repo": "alpha", "version": 1},
+                   "S-3": {"status": "added", "title": "filed", "story": "x", "repo": "alpha", "version": 1}}
+        got = dom("""
+            await start();
+            const out = { n: text($("#n-s")), hot: $("#n-s").classList.contains("hot") };
+            await click($("#sections [data-s=backlog]"));
+            out.cards = $$("#list article").map(a => a.attrs.id);
+            out.only = ["S-2", "S-3"].every(s => !button($("#story-" + s), "Withdraw"));
+            server.route = c => c.path === "/stories/S-1/withdraw" && c.method === "POST" ? { status: 409, body: { ok: false, error: { code: "invalid", message: "not submitted", field: "status" } } } : undefined;
+            await click(button($("#story-S-1"), "Withdraw"));
+            out.refused = text($("#story-S-1 .act .status"));
+            server.route = null;
+            await click(button($("#story-S-1"), "Withdraw"));
+            out.sent = calls.filter(c => c.path.endsWith("/withdraw")).map(c => c.method + " " + c.path);
+            return out;
+        """, snapshot(collections={"stories": stories}, views={"repos": [{"name": "alpha"}], "backlog": BACKLOG}))
+        self.assertEqual((got["n"], got["hot"]), ("2", True))           # the Backlog button counts stories in progress
+        self.assertEqual(got["cards"], ["story-S-2", "story-S-1", "story-S-3"])
+        self.assertTrue(got["only"])                                       # only a submitted story can be withdrawn
+        self.assertEqual(got["refused"], "Not saved: not submitted.")
+        self.assertEqual(got["sent"], ["POST /stories/S-1/withdraw"] * 2)
+
+    def test_a_follow_up_question_and_its_story_jump_to_each_other(self):
+        lists = {"stories": {"S-1": {"status": "questions", "title": "mine", "story": "x", "repo": "alpha", "version": 1}},
+                 "questions": {"Q-1": dict(LISTS["questions"]["Q-1"], story="S-1")}}
+        got = dom("""
+            await start();
+            const chip = button($("#q-Q-1"), "story: ");
+            const out = { chip: text(chip) };
+            await click(chip);
+            out.story = { section: $("#sec-backlog").getAttribute("aria-selected"), tab: $("#stab-current").getAttribute("aria-selected"),
+                          card: !!$("#story-S-1") };
+            await click(button($("#story-S-1"), "Q-1"));
+            out.back = { section: $("#sec-questions").getAttribute("aria-selected"), card: !!$("#q-Q-1") };
+            return out;
+        """, snapshot(collections=lists, views={"repos": [{"name": "alpha"}], "backlog": BACKLOG}))
+        self.assertEqual(got["chip"], "story: mine")
+        self.assertEqual(got["story"], {"section": "true", "tab": "true", "card": True})
+        self.assertEqual(got["back"], {"section": "true", "card": True})                 # the card's Follow-ups button
 
     def test_a_lost_to_do_card_has_a_tick_box_that_says_the_to_do_is_gone(self):
         got = dom("""
@@ -1357,12 +1402,14 @@ class DomTest(unittest.TestCase):
         self.assertTrue(broken[0].startswith(bad), broken[0])
         self.assertTrue(any(good in c and "cannot be shown" not in c for c in cards), cards)
 
-    def test_a_to_pm_to_do_or_inbox_card_that_cannot_be_drawn_stands_alone(self):
+    def test_a_to_pm_to_do_story_or_inbox_card_that_cannot_be_drawn_stands_alone(self):
         bad = self.BAD_TIME
         lists = {"to_pm": {"P-1": {"status": "queued", "text": "pm bad", "version": 1, "created_at": bad},
                            "P-2": {"status": "queued", "text": "pm good", "version": 1, "created_at": NOW}},
                  "todos": {"T-1": {"status": "open", "title": "todo bad", "from": "pm", "added_at": bad},
                            "T-2": {"status": "open", "title": "todo good", "from": "pm", "added_at": NOW}},
+                 "stories": {"S-1": {"status": "submitted", "title": "story bad", "story": "x", "submitted_at": bad},
+                             "S-2": {"status": "submitted", "title": "story good", "story": "x", "submitted_at": NOW}},
                  "inbox": {"I-1": {"title": "inbox bad", "text": "x", "read": False, "at": bad},
                            "I-2": {"title": "inbox good", "text": "x", "read": False, "at": NOW}}}
         got = dom(self.UNSHOWABLE + """
@@ -1370,12 +1417,14 @@ class DomTest(unittest.TestCase):
             const out = { topm: cards() };
             await click($("#sections [data-s=todo]")); out.todo = cards();
             await click($("#qtabs [data-qt=inbox]")); out.inbox = cards();
+            await click($("#sections [data-s=backlog]")); await click($("#stabs [data-sf=current]")); out.story = cards();
             out.err = text($("#loaderr")); out.sleeps = sleeps();
             return out;
         """, snapshot(collections=lists), hash="#topm")
         self.one_bad_one_good(got["topm"], "P-1", "pm good")
         self.one_bad_one_good(got["todo"], "T-1", "todo good")
         self.one_bad_one_good(got["inbox"], "I-1", "inbox good")
+        self.one_bad_one_good(got["story"], "S-1", "story good")
         self.assertEqual((got["err"], got["sleeps"]), ("", []))
 
     def test_a_parked_or_usage_card_that_cannot_be_drawn_stands_alone(self):
@@ -1457,6 +1506,20 @@ class RecordPageTest(unittest.TestCase):
         self.assertEqual(got["sent"], [change, dict(change, ruling=self.RULING)])
         self.assertIn("priority: 2", got["after"])
         self.assertTrue(got["back"])
+
+    def test_a_parked_rows_id_opens_its_record(self):
+        views = {"repos": [{"name": "alpha"}],
+                 "backlog": [dict(BACKLOG[0], items=[{"id": "B-4", "t": "waits", "p": 1, "s": "parked", "parked_at": NOW}])]}
+        got = dom("""
+            server.route = c => c.method === "GET" && c.path === "/records/alpha/B-4" ? { status: 200, body: REC } : undefined;
+            await start();
+            await click($("#sections [data-s=backlog]"));
+            await click($("#stabs [data-sf=parked]"));
+            await click(button($$("#list .pk")[0], "B-4"));
+            return { reads: calls.filter(c => c.path.startsWith("/records")).map(c => c.method + " " + c.path), page: !!$("#list .rec") };
+        """.replace("REC", json.dumps(record(id="B-4", fields=[["id", "B-4"], ["summary", "waits"]]))), snapshot(views=views))
+        self.assertEqual(got["reads"], ["GET /records/alpha/B-4"])
+        self.assertTrue(got["page"])
 
     def test_delete_waits_for_a_reason_and_the_typed_id_then_shows_the_record_deleted(self):
         gone = record(where="completed", removed={"how": "deleted", "commit": "abc", "at": "2026-10-17", "subject": "x"})
@@ -1739,7 +1802,7 @@ class PageTextTest(unittest.TestCase):
     def test_only_the_decided_routes(self):
         self.assertEqual(re.findall(r'call\("GET", "(/[a-z_]+)', self.script), ["/snapshot", "/wait", "/records"])
         roots = set(re.findall(r'(?:write|hub\.post)\("(/[a-z_]+)', self.script))
-        self.assertEqual(roots, {"/questions", "/todos", "/records", "/to_pm", "/inbox"})
+        self.assertEqual(roots, {"/questions", "/todos", "/stories", "/records", "/to_pm", "/inbox"})
         for route in ("/alert", "/logout", "/sessions", "/session", "/pair", "/alias", "/aliases", "/pages", "/page",
                       "/health", "/notices"):
             self.assertNotIn('"%s' % route, self.script, route)
