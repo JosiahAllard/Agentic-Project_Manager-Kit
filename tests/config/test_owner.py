@@ -1,8 +1,9 @@
 """kitlib.config.owner: owner-only paths, the owner's identity (fail-closed) and the landing merge."""
 import unittest
 
-from kitlib.config import owner
-from tests.config.helpers import AGENT, OWNER
+from kitlib import config
+from kitlib.config import ConfigError, owner
+from tests.config.helpers import AGENT, OWNER, TempTree
 
 
 def rules(**kw):
@@ -89,6 +90,33 @@ class MergeTest(unittest.TestCase):
                                 'trailer': 'Owner-Approved'})
         self.assertTrue(r.is_locked('CLAUDE.md'))
         self.assertIsNotNone(r.identity_problem())
+
+
+class TrailerTest(unittest.TestCase):
+    """"owner".trailer is never Owner-Approval, the hub approval's own trailer (docs/commit.md
+    "Owner approval"): read as the claim key, every hub:A-<n> value would be an owner claim."""
+
+    def load(self, trailer):
+        t = TempTree({'owner': {'trailer': trailer}})
+        self.addCleanup(t.cleanup)
+        return config.load(t.root)
+
+    def test_owner_approval_is_refused_in_any_case(self):
+        for key in ('Owner-Approval', 'owner-approval', 'OWNER-APPROVAL'):
+            with self.assertRaises(ConfigError) as cm:
+                self.load(key)
+            self.assertIn('"owner".trailer', str(cm.exception))
+            self.assertIn('Owner-Approval', str(cm.exception))
+            self.assertIsNotNone(owner.trailer_problem(key))
+
+    def test_any_other_key_loads(self):
+        self.assertEqual(self.load('Owner-OK').owner_rules().trailer, 'Owner-OK')
+        self.assertIsNone(owner.trailer_problem('Owner-Approved'))
+        self.assertIsNone(owner.trailer_problem('Owner-Approvals'))
+
+    def test_the_reserved_key_is_the_one_the_land_check_reads(self):
+        from kitlib.guard import ownercommits
+        self.assertEqual(owner.APPROVAL_TRAILER, ownercommits.TRAILER)
 
 
 if __name__ == '__main__':
