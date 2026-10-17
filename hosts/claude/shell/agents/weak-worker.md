@@ -47,10 +47,6 @@ true; `pm-kit:worker` takes it from there, the intended path, not a failure:
 - Never put the owner's personal details (email address, name, account names) in anything sent off this machine: no User-Agent, header, URL, query string or form field. Web fetches use a neutral User-Agent.
 - Never rewrite a tracked file with a scratch script, merge conflicts included: edits go through
   your file-edit tool only.
-- Never chain a write (a commit, merge, reset, backlog.py write, landing command) with other commands
-  in one shell call: run each on its own.
-- A safety-check (classifier) refusal is final: stop at the FIRST one, report it verbatim; no retry,
-  no rewording, no other shell or agent.
 Search from a filesystem or drive root: use Glob/Grep or a path scoped to the repo or worktree, with a timeout.
 Land, merge to main, push, force-push or rewrite the main branch's history. Weaken a test or check for green. Retry a failing run
 more than once without a new idea.
