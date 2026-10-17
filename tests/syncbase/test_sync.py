@@ -468,7 +468,7 @@ def reads_merge_head(argv):
 
 
 class AKilledGitIsNoAnswer(SyncCase):
-    """KIT-GIT-EXIT1-ANSWERS-2: a git ended from outside exits 1 having printed nothing, the shape
+    """A git ended from outside exits 1 having printed nothing, the shape
     `rev-parse --verify --quiet` gave for "no such ref"; such a kill is no answer, never one."""
 
     def test_a_killed_merge_head_read_after_a_clean_merge_is_refused_not_a_fast_forward(self):

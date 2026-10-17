@@ -442,7 +442,7 @@ def kill_reads_of(prefix):
 
 
 class KilledTagAndBranchReads(RemoveCase):
-    """KIT-GIT-EXIT1-ANSWERS: tag_tip and branch_tip asked `rev-parse -q --verify`, whose "no such
+    """Tag_tip and branch_tip asked `rev-parse -q --verify`, whose "no such
     ref" is exit 1 with no output, the shape a git ended from outside leaves. A killed read is no
     answer, never a free tag name or a branch that is gone."""
 
@@ -780,7 +780,7 @@ class RemoveBranchPulled(RemoveCase):
 
 
 class RemoveBranchKilledStoreRead(RemoveCase):
-    """KIT-GIT-EXIT1-ANSWERS: a git ended from outside exits 1 having printed nothing, the shape
+    """A git ended from outside exits 1 having printed nothing, the shape
     `rev-parse --verify --quiet` gives for "no such ref". The open-claim check of a ref store must
     refuse on it, never read the store as holding no records."""
 

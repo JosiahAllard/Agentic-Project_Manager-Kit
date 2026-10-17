@@ -1,5 +1,5 @@
 """An out-of-order pull refusal names the in-flight record holding the scope, and narrowing that
-record's `scope:` lines with `set` clears the collision (BACKLOG-PULL-NARROW-SCOPES), end to end
+record's `scope:` lines with `set` clears the collision, end to end
 through Store.write on a no-remote ref store."""
 import unittest
 

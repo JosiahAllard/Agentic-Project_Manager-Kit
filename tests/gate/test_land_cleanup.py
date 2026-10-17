@@ -184,7 +184,7 @@ class AfterLanding(CleanupCase):
     def kill_the_delete_and_the_read_after_it(self, branch):
         """A patch of cmd._run under which `git branch -d` exits 1 having printed nothing (a git
         ended from outside, refs.KILLED_SHAPE), and so does every later rev-parse of the branch;
-        every other git runs as before. KIT-GIT-EXIT1-ANSWERS-2: that read said "gone"."""
+        every other git runs as before. That read said "gone"."""
         real = cmd.spawner()
         tried = []
 

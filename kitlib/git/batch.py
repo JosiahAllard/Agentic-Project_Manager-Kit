@@ -1,4 +1,4 @@
-"""One git process for many reads (ported from the PM kit's tools/_git.py, TOOLS-GIT-BATCH).
+"""One git process for many reads (ported from the PM kit's tools/_git.py).
 
 A tool that asks git one question per item pays one process start per item, and on Windows under
 load that start is the run time. Each helper here answers a whole list in one git process:
@@ -153,7 +153,7 @@ def ancestry(rev, cwd, timeout=None, env=None):
 
 
 # Every commit in a throwaway repository otherwise starts a `git maintenance run --auto` child.
-# Measured 2026-10-01 in the PM kit's tests (TOOLS-GIT-SPAWN-DIET): 3,075 git processes, 555 of
+# Measured 2026-10-01 in the PM kit's tests: 3,075 git processes, 555 of
 # them started by git itself; 209 with this.
 FIXTURE_CONFIG = (('maintenance.auto', 'false'), ('gc.auto', '0'))
 

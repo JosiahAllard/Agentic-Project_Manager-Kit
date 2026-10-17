@@ -236,7 +236,7 @@ A gate-OK record is written for the merge before the push. When the push is refu
 3. The owner commits and pushes that switch commit. The kit's own pre-push hook refuses this push when it is installed in that repo: it reads the base `.kit.json` from the remote's main (kitlib/guard/prepush.py `_cfg`, `kitlib.config.load_at`), and the old spelling fails to load. Until main loads, pre-push refuses every branch push, not only the switch push. Push before the kit hook is installed in that repo, or push that one switch commit with `--no-verify` from the owner's own terminal (the guard refuses `--no-verify` pushes in agent sessions: rules git-push-main and git-push-pmdata), then install the hook. `gate.py land`, pre-push and the trailers check refuse until main loads.
 4. After that, normal landings work (docs/go-live.md "Landing tool").
 
-Reopen the item KIT-FIRST-SWITCH-LANDING if a repo ever has to switch from the old PM kit.
+Reopen the first-switch landing item if a repo ever has to switch from the old PM kit.
 
 ### Pinned tools
 

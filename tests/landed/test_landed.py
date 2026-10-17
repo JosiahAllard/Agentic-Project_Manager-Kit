@@ -166,7 +166,7 @@ class Containment(Fixture):
         self.assertIn('CANNOT ANSWER', out)
 
     def test_a_killed_read_of_the_local_main_is_unknown_not_no_such_branch(self):
-        """KIT-GIT-EXIT1-ANSWERS-2: a git ended from outside exits 1 having printed nothing, the
+        """A git ended from outside exits 1 having printed nothing, the
         shape `rev-parse --verify --quiet` gave for "no such ref"."""
         self.git('remote', 'remove', 'origin')
         real = cmd.spawner()
@@ -192,7 +192,7 @@ class Containment(Fixture):
         return mock.patch.object(cmd, '_run', side_effect=run)
 
     def test_a_killed_remote_lookup_cannot_answer_never_lets_the_local_main_decide(self):
-        """KIT-GIT-EXIT1-ANSWERS-2: any failure of `remote get-url` read as "no remote", so a
+        """Any failure of `remote get-url` read as "no remote", so a
         kill let the local main, which holds an unpushed merge, answer LANDED (exit 0)."""
         self.land_locally()
         with self.kill(lambda argv: argv[1:3] == ['remote', 'get-url']):

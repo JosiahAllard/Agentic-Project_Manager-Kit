@@ -274,7 +274,7 @@ def create(root, branch, existing=False, base=None, wait=True, say=None, sleep=t
     def refs():
         """(m, om): each a commit, or '' when the ref names none; _Unread when git gives no answer.
 
-        GOTCHA: KIT-GIT-EXIT1-ANSWERS-2 - this asked `rev-parse --verify --quiet`, whose "no such
+        GOTCHA: this asked `rev-parse --verify --quiet`, whose "no such
         ref" is exit 1 with no output, a killed git's shape (gitrefs.KILLED_SHAPE): a kill read as
         "did not resolve". resolve(known=True) tells the two apart; a str or a raise, never None,
         so `m[:7]` below always has a string."""
