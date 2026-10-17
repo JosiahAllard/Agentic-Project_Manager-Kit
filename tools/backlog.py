@@ -432,6 +432,10 @@ def main(argv=None):
             raise Usage('`--owner-said` is gone: owner words are never copied into a record. '
                         '%s an owner-held record takes `--ruling R-nnnn`'
                         % ('Retiring' if args.verb == 'retire' else 'Deleting'))
+        if args.verb == 'block':
+            err = rmod.block_citation_error(args.on, args.reason, args.owner_ask)
+            if err:
+                raise Usage(err)
         root = os.path.abspath(args.root or os.getcwd())
         if args.verb == 'migrate':
             top, cfg, rules = open_repo(root)

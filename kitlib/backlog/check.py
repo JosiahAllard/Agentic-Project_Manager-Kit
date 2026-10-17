@@ -125,6 +125,32 @@ def check_pull_records(snap):
                        proxy='reads the shape; colliding in-flight scopes are a WARN')
 
 
+HOLD_CITATIONS = 'hold citations'
+
+
+def check_hold_citations(snap):
+    """One WARN per `blocked_on: deliberate` or `owner` line on a blocked record whose hold cites
+    no ruling, question or item (record.hold_citations; an uncited hold is void). Never
+    red: the store holds such records already, and `block` refuses new ones."""
+    subjects, warned = 0, []
+    for rec in snap.readable:
+        if rec.get('state') != 'blocked':
+            continue
+        for n, key, value in rec.entries:
+            if key != 'blocked_on' or value not in rmod.UNCITED_KINDS:
+                continue
+            subjects += 1
+            if not rmod.hold_citations(rec):
+                warned.append(rmod.Finding(HOLD_CITATIONS, rec.path, n, '`blocked_on: %s` cites '
+                                           'no R-nnnn, Q-nnn, T-nnn or item:<ID> it waits on, so '
+                                           'the hold is void: unblock it, or cite the ruling and '
+                                           'its end condition with `block %s --on %s --reason '
+                                           '"R-nnnn: until ..."`' % (value, rec.id, value)))
+    return CheckResult(HOLD_CITATIONS, subjects, (), unit='deliberate or owner holds',
+                       warnings=warned, proxy='reads the ids in q, owner_ask, blocked_on and the '
+                       '`Blocked on` body lines; hold_ruling and resume are not citations')
+
+
 DEFAULT_STORE = 'default store'
 
 
@@ -186,6 +212,7 @@ def check_store(snap, implicit=False):
         CheckResult(rmod.ID_FILENAME, len(readable), by_name.get(rmod.ID_FILENAME, ())),
         check_preemptions(snap),
         check_pull_records(snap),
+        check_hold_citations(snap),
     ]
     if implicit and snap.file_count:
         results.append(check_default_store(snap))
