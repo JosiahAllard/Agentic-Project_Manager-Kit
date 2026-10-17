@@ -210,9 +210,18 @@ def main(argv=None, out=None):
     if a.both_tiers:
         # The fake pass, then the real-git pass (kitlib.tooldeps.tiers): only the last may give
         # cpu slots back, and only the fake pass records unit times (the landing tier's).
-        return tiers.run_tiers(
-            lambda fake, stream, last: run_pass(args, top, cfg, jobs, fake, stream, None,
-                                                give_back=last, record_times=fake == '1'), out)
+        # The real-git pass runs only tiers.REAL_GIT_MODULES of the selection.
+        every = selftree.all_test_modules(top) if args is FULL else args
+        real = tiers.real_git_modules(every)
+
+        def one_pass(fake, stream, last):
+            use = args if fake == '1' else real
+            if not use:
+                stream.write('kit_tests: no real-git module in the selection\n')
+                return 0
+            return run_pass(use, top, cfg, jobs, fake, stream, None, give_back=last,
+                            record_times=fake == '1')
+        return tiers.run_tiers(one_pass, out)
     # The units' environment carries the tier: a pool worker imports tests/__init__.py once, so
     # its default cannot reach each unit (kitlib/tooldeps/pool_worker.py). This process keeps
     # its own git real.
