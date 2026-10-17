@@ -250,6 +250,38 @@ class NextFold(_Branches):
         self.assertIn(FOLD, str(cm.exception))
         self.assertNotIn("not in `next`'s offer", str(cm.exception))
 
+    def test_a_pull_onto_the_branch_takes_what_the_main_checkouts_next_offers(self):
+        # R1 folds only into kit/holder's work, so the main checkout's `next` passes it over and
+        # offers R2; as kit/holder, R1 is offered and R2 collides with it. `pull R2` onto
+        # kit/holder must take it (current_offer's `also` is the main checkout's offer).
+        self.seed(priced('R1', priority='1', scope='kitlib/x/**'),
+                  priced('R2', priority='2', scope='kitlib/x/b.py'))
+        snap = self.store.load()
+        main, passed, _h, _o = pmod.offer_for(snap, self.ctx, branch='main')
+        self.assertEqual([o.rec.id for o in main], ['R2'])
+        self.assertIn(FOLD, {p.rec.id: p.why for p in passed}['R1'])
+        mine, passed, _h, _o = pmod.offer_for(snap, self.ctx, branch=HOLDER)
+        self.assertEqual([o.rec.id for o in mine], ['R1'])
+        self.assertIn('R2', {p.rec.id for p in passed})
+        self.ctx = pmod.Context(self.store, self.repo.root, branch=HOLDER, today=TODAY)
+        self.verb('pull', 'R2')
+        self.assertEqual((self.get('R2').get('state'), self.get('R2').get('pulled_by')),
+                         ('pulled', HOLDER))
+
+    def test_the_two_offers_a_pull_checks_read_the_diffs_once(self):
+        self.seed(priced('R1', scope='kitlib/x/**'), priced('R2', scope='kitlib/y/**'))
+        self.ctx = pmod.Context(self.store, self.repo.root, branch=HOLDER, today=TODAY)
+        real, reads = pmod._live_changes, []
+
+        def live_changes(*args):
+            reads.append(args[2])
+            return real(*args)
+        with mock.patch.object(pmod, '_live_changes', live_changes):
+            _offers, _passed, _holding, also, _notes = pmod.current_offer(self.store.load(),
+                                                                          self.ctx)
+        self.assertEqual([r.id for r in also], ['R2'])
+        self.assertEqual(reads, [None])
+
     def test_the_callers_own_branch_diff_never_passes_over(self):
         self.branch_with(BRANCH, 'kitlib/own/b.py', existing=True)
         self.seed(held('MINE', BRANCH, 'docs/mine.md'), priced('FOO', scope='kitlib/own/**'))

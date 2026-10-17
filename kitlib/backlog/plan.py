@@ -180,23 +180,23 @@ def offer_for(snap, ctx, branch=None, cap=omod.DEFAULT_CAP, seeds=(), holding=No
     into another live pull's branch (`_offer_folds`, the fold-in guard `pull` runs) is passed
     over, not offered. `next` and `pull` both build their offer here, so they cannot disagree on
     it."""
-    offers, passed, holding, own, _folded = _offer(snap, ctx, branch, cap, seeds, holding)
+    offers, passed, holding, own = _offer(snap, ctx, branch, cap, seeds, holding)
     return offers, passed, holding, own
 
 
-def _offer(snap, ctx, branch, cap, seeds, holding):
-    """offer_for, and the `folded` check it used, for current_offer to reuse."""
+def _offer(snap, ctx, branch, cap, seeds, holding, diffs=None):
+    """offer_for; `diffs` is the diff cache `_offer_folds` shares with current_offer's `also`."""
     own = own_branch(ctx, branch)
     if holding is None:
         holding, _dead, _why = omod.in_flight_split(snap, ctx.root, ctx.remote)
     taken = [r for r in holding if not (own and r.get('pulled_by') == own)]
-    folded = _offer_folds(ctx, holding, own)
+    folded = _offer_folds(ctx, holding, own, diffs)
     result, refusals, _ranks = omod.next_offer(snap, taken, cap=cap, seeds=seeds,
                                                session=ctx.session, unmet=ctx.unmet(snap),
                                                folded=folded)
     if refusals:
         raise Failure('`next` cannot compute an offer: %s' % '; '.join(refusals))
-    return result[0], result[1], holding, own, folded
+    return result[0], result[1], holding, own
 
 
 def current_offer(snap, ctx, branch=None):
@@ -208,13 +208,17 @@ def current_offer(snap, ctx, branch=None):
     pulls has a scope that cannot be compared, which the branch's offer never reads) it is [],
     so a record `next` offered as the branch still pulls plainly and nothing else is let in;
     `notes` then holds one NOTE naming why, for the pull to print."""
-    offers, passed, holding, own, folded = _offer(snap, ctx, branch, omod.DEFAULT_CAP, (), None)
+    diffs = []
+    offers, passed, holding, own = _offer(snap, ctx, branch, omod.DEFAULT_CAP, (), None, diffs)
     also, notes = [], []
     if own is not None and any(r.get('pulled_by') == own for r in holding):
-        # The same fold check as the branch's offer: the pull's own guard leaves the branch's
-        # own diff aside too, so `also` never widens past what that guard then lets through.
+        # The fold check `next` runs in the main checkout (no own branch, so the branch's own
+        # diff counts too): `also` must be exactly that offer, or a record the main checkout
+        # offers because a higher one folds into this branch would be refused here. The diffs
+        # are read once for both offers (`diffs`).
         result, refusals, _ranks = omod.next_offer(snap, holding, session=ctx.session,
-                                                   unmet=ctx.unmet(snap), folded=folded)
+                                                   unmet=ctx.unmet(snap),
+                                                   folded=_offer_folds(ctx, holding, None, diffs))
         if refusals:
             notes.append('NOTE: the offer without branch %s cannot be computed (%s); only the '
                          'offer as %s was checked' % (own, '; '.join(refusals), own))
@@ -576,18 +580,24 @@ def _pull_fold_hits(ctx, scopes, holding, branch):
     return _change_hits(scopes, changes), notes
 
 
-def _offer_folds(ctx, holding, own):
+def _offer_folds(ctx, holding, own, diffs=None):
     """The `folded(rec)` check an offer (`omod.next_offer`) passes over with: the reason `rec`'s
-    scope folds into another live pull's branch, None when it does not. The branches are diffed
-    on the first call only, and never when no candidate asks. A branch git cannot answer for
-    passes every candidate over with a "cannot tell" note instead of failing `next`; `pull`
-    still fails on it (`_pull_fold_hits`)."""
-    seen = []
+    scope folds into another live pull's branch than `own` (any letter case), None when it does
+    not. The branches are diffed on the first call only, and never when no candidate asks. A
+    branch git cannot answer for passes every candidate over with a "cannot tell" note instead
+    of failing `next`; `pull` still fails on it (`_pull_fold_hits`). `diffs`, a list two checks
+    share (current_offer), caches every live branch's diff, `own`'s too, and each check leaves
+    its own branch out of it; without it only the other branches are diffed."""
+    seen = [] if diffs is None else diffs
 
     def folded(rec):
         if not seen:
-            seen.append(_live_changes(ctx, holding, own))
+            seen.append(_live_changes(ctx, holding, own if diffs is None else None))
         changes, _notes, unknown = seen[0]
+        if diffs is not None and own:
+            mine = own.lower()
+            changes = dict((k, v) for k, v in changes.items() if k.lower() != mine)
+            unknown = dict((k, v) for k, v in unknown.items() if k.lower() != mine)
         hits = _change_hits(rec.all('scope'), changes)
         if hits:
             where = _fold_where(hits)
@@ -1387,28 +1397,43 @@ def plan_retire(snap, ctx, rid, why, ruling=None):
     return Change(writes, subject, lines, ruling=ruling)
 
 
-def _refuse_live_pulls(snap, ctx, recs, note='  dead pull on `%s` dropped with the record'):
-    """The guard `retire`, `delete` and `retarget` share: each pulled record in `recs` whose
-    branch is live refuses (its holder releases it first); `note % branch` for each dead pull
-    (none when `note` is None). The live pulls are read once, and only when one of `recs` is
-    pulled. Failure when they cannot be read: "cannot tell" is never "dead"."""
+def _refuse_live_pulls(snap, ctx, recs, note='  dead pull on `%s` dropped with the record',
+                       retarget=False):
+    """The guard `retire`, `delete` and `retarget` share: a pulled record in `recs` whose branch
+    is live refuses (its holder releases it first; with `retarget`, every live one is named in
+    the one refusal, which also offers retargeting after they land); `note % branch` for each
+    dead pull (none when `note` is None). The live pulls are read once, and only when one of
+    `recs` is pulled. Failure when they cannot be read: "cannot tell" is never "dead"."""
     pulled = [r for r in recs if r.get('state') == 'pulled']
     if not pulled:
         return []
     holding, _dead, probe = omod.in_flight_split(snap, ctx.root, ctx.remote)
     live = set(r.id for r in holding)
-    notes = []
+    notes, building = [], []
     for rec in pulled:
         holder = rec.get('pulled_by') or '?'
         if probe:
             raise Failure('cannot tell whether the pull of `%s` by `%s` is live: %s'
                           % (rec.id, holder, probe))
         if rec.id in live:
-            raise Refusal('`%s` is being built on `%s`; release it first (`release %s --reason T`, '
-                          'from that branch)' % (rec.id, holder, rec.id))
-        if note:
+            building.append((rec.id, holder))
+            if not retarget:
+                break
+        elif note:
             notes.append(note % holder)
+    if building:
+        raise Refusal(_live_pull_refusal(building, retarget))
     return notes
+
+
+def _live_pull_refusal(building, retarget):
+    """The refusal `_refuse_live_pulls` raises for `building`, [(id, branch)] of live pulls."""
+    where = '; '.join('`%s` is being built on `%s`' % pair for pair in building)
+    releases = ', '.join('`release %s --reason T`' % rid for rid, _b in building)
+    if len(building) == 1:
+        how = 'release it first (%s, from that branch)' % releases
+        return '%s; %s%s' % (where, 'retarget after it lands, or ' if retarget else '', how)
+    return '%s; retarget after they land, or release them first (%s, each from its branch)'         % (where, releases)
 
 
 def plan_delete(snap, ctx, rid, why, ruling=None):

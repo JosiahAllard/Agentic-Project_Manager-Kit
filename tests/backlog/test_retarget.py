@@ -173,10 +173,30 @@ class LivePulls(StoreCase):
         tip = self.remote_tip()
         with self.assertRaises(Refusal) as cm:
             self.write()
-        self.assertIn('`LIVE` is being built on `tools/live-one`; release it first',
+        self.assertIn('`LIVE` is being built on `tools/live-one`; retarget after it lands, or '
+                      'release it first (`release LIVE --reason T`, from that branch)',
                       str(cm.exception))
         self.assertEqual(self.remote_tip(), tip)
         self.assertEqual(self.get('FOO').all('scope'), [OLD + '/a.md'])
+
+    def test_every_live_pull_it_would_rewrite_is_named_in_one_refusal(self):
+        self.repo.git('branch', 'tools/live-one')
+        self.repo.git('branch', 'tools/live-two')
+        self.seed(priced('LIVE', state='pulled', pulled_at=TODAY, pulled_by='tools/live-one',
+                         scope=OLD + '/**'),
+                  priced('LIVE2', state='pulled', pulled_at=TODAY, pulled_by='tools/live-two',
+                         scope=OLD + '/a.md'),
+                  priced('DEAD', state='pulled', pulled_at=TODAY, pulled_by='tools/gone',
+                         scope=OLD + '/b.md'))
+        tip = self.remote_tip()
+        with self.assertRaises(Refusal) as cm:
+            self.write()
+        self.assertEqual(str(cm.exception),
+                         '`LIVE` is being built on `tools/live-one`; `LIVE2` is being built on '
+                         '`tools/live-two`; retarget after they land, or release them first '
+                         '(`release LIVE --reason T`, `release LIVE2 --reason T`, each from its '
+                         'branch)')
+        self.assertEqual(self.remote_tip(), tip)
 
     def test_a_dead_pulls_scope_is_rewritten(self):
         self.seed(priced('DEAD', state='pulled', pulled_at=TODAY, pulled_by='tools/gone',
@@ -203,6 +223,7 @@ class LivePulls(StoreCase):
             change = self.write()
         self.assertEqual(sorted(change.writes), ['FOO', 'LIVE'])
         self.assertEqual(self.get('LIVE').get('ref'), NEW + '/plan.md')
+
 
 class RetargetCli(unittest.TestCase):
     setUp = test_cli.Cli.setUp

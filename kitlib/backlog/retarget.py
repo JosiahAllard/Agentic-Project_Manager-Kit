@@ -170,13 +170,15 @@ def plan_retarget(snap, ctx, old, new):
     """The Change rewriting OLD to NEW in every readable record: one write per changed record,
     one commit. Lines that name OLD but are left (scope_member's notes, a bare word) are listed.
     A pulled record whose `scope:` it would rewrite refuses while its branch is live (the branch
-    is building against that scope: its holder releases it, or retargets after it lands), and
-    fails when git cannot tell (`_refuse_live_pulls`, which `retire` and `delete` share)."""
+    is building against that scope: its holder releases it, or retargets after it lands; one
+    refusal names every such record), and fails when git cannot tell (`_refuse_live_pulls`,
+    which `retire` and `delete` share)."""
     check_paths(old, new)
     edits = [edit_record(r, old, new) for r in snap.readable]
     changed = [e for e in edits if e.lines]
     _refuse_live_pulls(snap, ctx, [e.rec for e in changed
-                                   if any(key == 'scope' for key, _b, _a in e.lines)], note=None)
+                                   if any(key == 'scope' for key, _b, _a in e.lines)],
+                       note=None, retarget=True)
     writes = {e.rec.stem: rmod.render(e.pairs, e.rec.body) for e in changed}
     out = ['RETARGET %s -> %s: %d record(s), %d line(s)'
            % (old, new, len(changed), sum(len(e.lines) for e in changed))]
