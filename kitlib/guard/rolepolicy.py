@@ -41,9 +41,11 @@ The owner's own session (nothing marks it) is never held, and its calls read no 
                   name the lock CLI (machine_lock.py in any spelling Windows opens as it - any
                   case, a trailing dot or space, a `::$DATA` stream: rules.is_lock_script - or its
                   module tools.machine_lock: _lock_seq). It passes only when its program never
-                  runs them with its output staying (backlog.py and commit.py under tools/ of the
-                  kit folder or of a checkout of the kit repository, a bare reader or printer, a
-                  git read (LOCK_PATH_GIT) with plain options and no environment assignment on the line:
+                  runs them with its output staying (backlog.py, ledger.py and commit.py under
+                  tools/ of the kit folder, of a checkout of the kit repository or of the kit's
+                  plugin export: kit_checkout, kit_export; a bare reader or printer; a git read or
+                  commit (LOCK_PATH_GIT; a commit's message is text) with plain options and no
+                  environment assignment on the line:
                   _lock_path_only, _git_plain), or runs the lock CLI itself (its script, python
                   -m: _run_words; the python a launcher starts as its program: _launched) with a
                   verb inside the mode's LOCK_VERBS and no --force in any abbreviation, and no
@@ -82,6 +84,7 @@ from kitlib.host.content import MODES
 from kitlib.git import repo
 
 from . import commands as cm
+from . import jail
 from . import paths
 from . import rules
 from . import shell as sh
@@ -216,7 +219,8 @@ def check(action, ctx):
         name, why, instead = gap
         return _deny('role-shell', tag, '`%s` %s; a hook cannot answer an interpreter that waits for input. '
                      'Give it the script or command to run:' % (name, why), instead)
-    found = lock_verb(parsed, m, ctx.kit, lambda root: kit_checkout(ctx, root, top))
+    found = lock_verb(parsed, m, ctx.kit,
+                      lambda root: kit_checkout(ctx, root, top) or kit_export(ctx, root, action, cwd))
     if found:
         verb, allowed = found
         return _deny('role-lock', tag, 'machine_lock.py %s is not one of the lock verbs the %s role (mode %s) '
@@ -442,18 +446,20 @@ def _python_script(args):
 
 
 # Programs that never run the words they are given, so a path naming the lock CLI there is a path
-# (_lock_path_only). The kit's record and commit tools, as the program or as python's script, and
-# only where the path, made absolute against the command's working directory, is tools/ of the kit
-# folder or of a checkout of the kit repository (_kit_tool):
-LOCK_PATH_SCRIPTS = frozenset(('backlog.py', 'commit.py'))
+# (_lock_path_only). The kit's record, ledger and commit tools, as the program or as python's
+# script, and only where the path, made absolute against the command's working directory, is
+# tools/ of the kit folder, of a checkout of the kit repository or of an export of the kit
+# (_kit_tool, kit_checkout, kit_export):
+LOCK_PATH_SCRIPTS = frozenset(('backlog.py', 'commit.py', 'ledger.py'))
 # readers, named bare (_reader), that take no command or pager (rg only without --pre). PowerShell's
 # take a script block for a delay-bind parameter (-Path { ... }), which _ps_caught refuses:
 LOCK_PATH_READERS = frozenset((
     'cat', 'head', 'tail', 'wc', 'grep', 'egrep', 'fgrep', 'rg', 'findstr', 'ls', 'dir', 'stat',
     'type', 'get-content', 'gc', 'select-string', 'sls', 'get-childitem', 'gci', 'get-item', 'gi',
     'test-path', 'get-filehash'))
-# git subcommands that only read or stage a path given after the subcommand:
-LOCK_PATH_GIT = frozenset(('add', 'blame', 'diff', 'log', 'ls-files', 'show', 'status'))
+# git subcommands that only read, stage or commit a path given after the subcommand (a commit's
+# message is text; its options that open an editor or ask, LOCK_GIT_SUB_DENIED, are refused):
+LOCK_PATH_GIT = frozenset(('add', 'blame', 'commit', 'diff', 'log', 'ls-files', 'show', 'status'))
 # PowerShell's preference variable that can set -OutVariable on every later command (_output_stays),
 # matched as this prefix so a wildcard (Get-Variable PSDefault*) is caught too; and the ways to
 # reach a variable by a name the line does not spell out (a *-Variable cmdlet given a wildcard, the
@@ -535,6 +541,40 @@ def kit_checkout(ctx, root, top):
     if not (p.top and p.common and s.common) or paths.norm(p.top) != paths.norm(root):
         return False
     return paths.norm(p.common) == paths.norm(s.common) and oncommit.is_kit(root)
+
+
+# An export of the kit (kitlib.pluginsource): <export root>/<12 hex digits>, holding the marker
+# file the export writes and the kit's version file.
+EXPORT_NAME_RE = re.compile(r'[0-9a-f]{12}')
+EXPORT_FILES = ('.pm-kit-export', 'kit.json')
+
+
+def kit_export(ctx, root, action, cwd):
+    """True when the folder `root` is an export of the kit the machine runs from: a folder named
+    by 12 hex digits (EXPORT_NAME_RE) right under the machine's plugin export root (the machine
+    config's plugin.export_dir, else %LOCALAPPDATA%\\pm-kit\\plugin: kitlib.pluginsource.settings),
+    holding EXPORT_FILES, and neither inside nor holding a folder the session may write (its jail
+    roots that are not read-only: rules.jail_roots), so a session cannot make one of its own. A
+    machine config the guard cannot read, an export root it cannot name, a pin folder or any
+    other place is not one."""
+    from kitlib import pluginsource
+    user = ctx.user()
+    if not isinstance(user, dict) or user.get('error'):
+        return False
+    try:
+        export = pluginsource.settings(user.get(pluginsource.CONFIG_KEY), ctx.environ).export_dir
+    except (pluginsource.RefreshError, OSError, ValueError, TypeError):
+        return False
+    parent, name = os.path.split(paths.norm(root, fold=False))
+    if not EXPORT_NAME_RE.fullmatch(name) or paths.norm(parent) != paths.norm(export):
+        return False
+    if not all(os.path.isfile(os.path.join(root, f)) for f in EXPORT_FILES):
+        return False
+    here = jail.real(root)
+    for r in rules.jail_roots(action, ctx, cwd):
+        if r.mode != jail.READ_ONLY and (jail.inside(here, r.real) or jail.inside(r.real, here)):
+            return False
+    return True
 
 
 def _reader(inv, names=LOCK_PATH_READERS):
@@ -635,6 +675,7 @@ PS_LAST_NAMES = ('error', 'myinvocation', 'psitem', 'input', 'matches')
 # git's options that run a program or write a file (an external diff, a textconv filter, --output),
 # matched as rules.hub_opt_denied does (any prefix: --ext, --out), and the short -o:
 LOCK_GIT_DENIED = rules.HUB_GIT_DENIED + ('--output',)
+LOCK_GIT_SUB_DENIED = {'commit': rules.HUB_GIT_SUB_DENIED['commit']}
 
 
 def _last_words(commands, items=False):
@@ -667,7 +708,8 @@ def _ps_names_last(cmd):
 def _git_plain(args, g, commands):
     """True when git's words `args` (GitCall `g`) only read: global options only -C <path>,
     --no-pager and -P (no -c, --config-env, --exec-path, --git-dir: rules.hub_git_family's
-    rule), none of LOCK_GIT_DENIED or -o before a `--`, no alias or place git cannot be told
+    rule), none of LOCK_GIT_DENIED, -o or the subcommand's LOCK_GIT_SUB_DENIED (git commit's
+    editor and prompts) before a `--`, no alias or place git cannot be told
     (g.blind), and the line sets no environment variable (commands.line_env_names: GIT_PAGER,
     GIT_EXTERNAL_DIFF, PAGER, PATH; and what git_env or home_env marks): a pager, an external
     diff or a textconv filter git starts may run the path it is given."""
@@ -685,7 +727,9 @@ def _git_plain(args, g, commands):
         else:
             return False
     head = g.argv[:g.argv.index('--')] if '--' in g.argv else g.argv
-    return not any(t == '-o' or rules.hub_opt_denied(t, LOCK_GIT_DENIED) for t in head)
+    longs, shorts = LOCK_GIT_SUB_DENIED.get(g.sub, ((), ''))
+    return not any(t == '-o' or rules.hub_opt_denied(t, LOCK_GIT_DENIED)
+                   or t.startswith('-') and rules.hub_opt_denied(t, longs, shorts) for t in head)
 
 
 def _lock_path_only(inv, commands, kit=None, kit_checkout=None):

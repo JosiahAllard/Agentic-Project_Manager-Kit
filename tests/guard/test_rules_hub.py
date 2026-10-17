@@ -763,8 +763,12 @@ class OwnerVerbs(Hub):
             with self.subTest(cmd):
                 self.allowed(lambda sub, cmd=cmd: bash(cmd, self.w.wt, sub))
                 self.owner_allowed(lambda sub, cmd=cmd: bash(cmd, self.w.wt, sub))
-        # the same read with anything beside it is outside the family, and is denied
-        for cmd in ('cat tools/hub.py; echo x', 'cd tools && cat hub.py', 'cat tools/hub.py | head'):
+        # beside other commands on a plain line it is still the family (rules.hub_family)
+        for cmd in ('cat tools/hub.py; echo x', 'cd tools && cat hub.py'):
+            with self.subTest(cmd):
+                self.allowed(lambda sub, cmd=cmd: bash(cmd, self.w.wt, sub))
+        # piped on, its output reaches another program: denied
+        for cmd in ('cat tools/hub.py | head',):
             with self.subTest(cmd):
                 self.denied(lambda sub, cmd=cmd: bash(cmd, self.w.wt, sub), 'hub-owner-verb')
 
@@ -781,7 +785,8 @@ class FailClosed(Hub):
 
     def rows(self, rows, deny):
         for shell, line in rows:
-            with self.subTest(line):
+            # a keyword, not the message: a nested session subTest keeps the line in its report
+            with self.subTest(line=line):
                 make = lambda sub, shell=shell, line=line: shell(line, self.w.wt, sub)
                 if deny:
                     self.denied(make, 'hub-owner-verb')
@@ -943,6 +948,103 @@ class FailClosed(Hub):
             (bash, 'python -c "import os; print(os.listdir(\'Z:/x/hub/\'))"; echo hub'),
         ), True)
 
+    def test_hub_in_a_folder_name_a_message_or_a_file_written_is_not_the_hub_tool(self):
+        # observed refusals (2026-10-15): hub inside a folder or file name (hub-conductor,
+        # docs/hub-mcp.md), a heredoc that cat writes to a file (data, as a file the Write tool
+        # writes: rules.hub_code_names), commit.py's -m message after its script word (python's own
+        # -m comes before the script: rules.hub_module_names), and a log row quoting such a command
+        body = ("import json, os\nroot = 'hub-conductor/docs-tab-check/test-store'\n"
+                "hub = os.path.join(root, 'questions')\nprint(hub, 'Hub store ready')\n")
+        gen = "mkdir -p hub-conductor/docs-tab-check/test-store && cat > gen.py <<'EOF'\n" + body + "EOF\n"
+        commit = ('python Z:/k/tools/commit.py -C $PWD -m "Hub store: pass the PM\'s configured repo names" '
+                  '--model M kitlib/hubsite/store.py')
+        self.rows((
+            (bash, gen), (bash, gen + 'python gen.py'), (bash, gen + 'python gen.py --out docs/hub-mcp.md'),
+            (bash, "mkdir -p hub-conductor/x && cat >> gen.py <<EOF\nimport os\n# write the hub store\nEOF"),
+            (bash, 'cat docs/hub-mcp.md'), (bash, 'mkdir -p hub-conductor/refusals && python -c "import json"'),
+            # hub followed by a hyphen, or inside a backslash path, in python code with an import
+            (bash, 'python -c "import os; print(os.listdir(\'Z:/x/hub-conductor\'))"'),
+            (ps, 'python -c "import os; print(os.listdir(r\'Z:\\x\\hub-conductor\\y\'))"'),
+            (bash, 'python -c "import os; print(os.listdir(r\'Z:\\x\\hub-conductor\\y\'))"'),
+            (ps, 'python -c "import os; print(os.path.exists(\'docs/hub-mcp.md\'))"'),
+            (bash, 'git commit -m "Hub store: fix x"'), (bash, 'git commit -m "Hub store: import the todos"'),
+            (bash, 'cd %s && %s' % (W.fwd(self.w.wt), commit)), (bash, commit),
+            (bash, 'python Z:/k/tools/backlog.py add K-1 -m "Hub store" --summary x'),
+            (bash, 'python -I "Z:/k/tools/ledger.py" add -m hub --q x'),
+            (ps, 'cd %s; %s' % (W.fwd(self.w.wt), commit)),
+            (ps, "Add-Content -Encoding utf8 -LiteralPath refusals.md -Value '| 2026-10-15 | worker | Bash | "
+                 "%s | names the hub tool (... -m \"Hub) [kit guard: rule=hub-owner-verb role=subagent] |'"
+                 % commit.replace("'", "''")),
+            (ps, "Add-Content -Encoding utf8 -LiteralPath refusals.md -Value '| 2026-10-15 | planner | Bash | "
+                 "mkdir -p Z:/AgentTemp/hub-conductor/x && cat > gen.py <<''EOF'' ... EOF | names the hub tool "
+                 "(hub) [kit guard: rule=hub-owner-verb role=subagent] |'"),
+        ), False)
+        # what reaches python stays read: a heredoc python or a pipe takes, a hub path or import in
+        # a file cat writes, and python's own -m before any script word
+        self.rows((
+            (bash, "cat <<'EOF' | python -\nimport json\nprint('hub page')\nEOF"),
+            (bash, "cat > gen.py <<'EOF' | python -\nimport json\nprint('hub page')\nEOF"),
+            (bash, "cat > gen.py <<'EOF'\nimport tools.hub as h\nh.main(['answer', 'Q-1'])\nEOF\npython gen.py"),
+            (bash, "cat > gen.py <<'EOF'\nimport json\nEOF\npython - <<'EOF'\nimport json\nhub = 1\nEOF"),
+            (bash, "cat > $f <<'EOF'\nimport json\nhub = 1\nEOF\npython gen.py"),
+            (bash, "cat > /dev/stdout <<'EOF'\nimport json\nhub = 1\nEOF\npython gen.py"),
+            (bash, "cat > gen.py <<EOF\nimport json\n$(python -c 'print(1)')\nhub = 1\nEOF\npython gen.py"),
+            (bash, "cat() { python -; }; cat > gen.py <<'EOF'\nimport json\nhub = 1\nEOF"),
+            (bash, "{ cat > gen.py <<'EOF'\nimport json\nhub = 1\nEOF\n} ; python gen.py"),
+            # a device however the path spells it, and a line that can open a stream into python
+            # (exec, eval, source, ., coproc): rules.hub_device_target, HUB_CAT_REDEFINED_RE
+            (bash, "cat > /./dev/stdout <<'EOF'\nimport json\nhub = 1\nEOF\npython gen.py"),
+            (bash, "cat > /dev/../dev/stdout <<'EOF'\nimport json\nhub = 1\nEOF\npython gen.py"),
+            (bash, "cat > //dev/stdout <<'EOF'\nimport json\nhub = 1\nEOF\npython gen.py"),
+            (bash, "cat > dev/stdout <<'EOF'\nimport json\nhub = 1\nEOF\npython gen.py"),
+            (bash, "cat > /proc/self/fd/1 <<'EOF'\nimport json\nhub = 1\nEOF\npython gen.py"),
+            (bash, "exec 3> >(python -); cat > /./dev/fd/3 <<'EOF'\nimport json\nhub = 1\nEOF"),
+            (bash, "exec 3> >(python -); cat > gen.py <<'EOF'\nimport json\nhub = 1\nEOF"),
+            (bash, "exec 3> >(python -); cat >&3 <<'EOF'\nimport json\nhub = 1\nEOF"),
+            (bash, "eval x; cat > gen.py <<'EOF'\nimport json\nhub = 1\nEOF\npython gen.py"),
+            (bash, "source x; cat > gen.py <<'EOF'\nimport json\nhub = 1\nEOF\npython gen.py"),
+            (bash, ". x; cat > gen.py <<'EOF'\nimport json\nhub = 1\nEOF\npython gen.py"),
+            (bash, "coproc python -; cat > gen.py <<'EOF'\nimport json\nhub = 1\nEOF"),
+            (bash, 'python Z:/k/tools/commit.py -m "$(python -m hub answer Q-1)" x.py'),
+            (bash, 'python -- Z:/k/tools/commit.py -m hub'), (bash, 'python -m Z:/k/tools/commit.py -m hub'),
+            (bash, 'cd tools && python -W ignore -m hub answer Q-1'), (bash, 'cd tools && python -Bm hub answer Q-1'),
+            (bash, 'cd tools && python C:/Python/Lib/cProfile.py -m hub answer Q-1'),
+            (bash, 'cd tools && python "$S" -m hub answer Q-1'), (bash, 'cd tools && python $S -m hub answer Q-1'),
+            (bash, 'cd tools && python -m cProfile -m hub answer Q-1'),
+            (bash, 'cd tools && python -c "x" Z:/k/tools/commit.py -m hub answer Q-1'),
+            (ps, 'cd tools; python -X dev -m hub answer Q-1'),
+            # the shell joins what the guard's split parts: an escaped space, a quote, a backtick, a
+            # variable or an expansion before the script word may hand it to -X or -W as a value,
+            # leaving python's own -m (rules.hub_py_script_first)
+            (bash, 'cd tools && python -Xa\\ commit.py -m hub answer Q-1'),
+            (bash, 'cd tools && python -X a\\ commit.py -m hub answer Q-1'),
+            (ps, 'cd tools; python -X a` commit.py -m hub answer Q-1'),
+            (bash, 'cd tools && python -W a\\ commit.py -m hub answer Q-1'),
+            (bash, 'cd tools && python -X a\\\tcommit.py -m hub answer Q-1'),
+            (bash, 'cd tools && python --check-hash-based-pycs a\\ commit.py -m hub answer Q-1'),
+            (bash, 'cd tools && python -X "a "commit.py -m hub answer Q-1'),
+            (bash, "cd tools && python -X a' 'commit.py -m hub answer Q-1"),
+            (bash, 'cd tools && python -X $v commit.py -m hub answer Q-1'),
+            (bash, 'cd tools && python -X ${v} commit.py -m hub answer Q-1'),
+            (bash, 'cd tools && python -X {a,b} commit.py -m hub answer Q-1'),
+            (bash, 'cd tools && python -X * commit.py -m hub answer Q-1'),
+            (ps, 'cd tools; python -X $v commit.py -m hub answer Q-1'),
+            (ps, "cd tools; python -X 'a commit.py' -m hub answer Q-1"),
+            # bash splits words on space and tab only: a no-break space, a control or an em space
+            # between -X's value and commit.py is part of that value, so the -m is python's
+            (bash, 'cd tools && python -X a commit.py -m hub answer Q-1'),
+            (bash, 'cd tools && python -X a\x1fcommit.py -m hub answer Q-1'),
+            (bash, 'cd tools && python -X a\vcommit.py -m hub answer Q-1'),
+            (bash, 'cd tools && python -X a\fcommit.py -m hub answer Q-1'),
+            (bash, 'cd tools && python -X a commit.py -m hub answer Q-1'),
+            (bash, 'cd tools && python -Xa commit.py -m hub answer Q-1'),
+            (bash, 'cd tools && python -X a commit.py -m hub answer Q-1'),
+            # and inside a nested shell, read by its words as well as the line's text
+            (bash, "bash -c 'cd tools && python -X a commit.py -m hub answer Q-1'"),
+            (bash, 'bash -c "cd tools && python -X \'a commit.py\' -m hub answer Q-1"'),
+            (ps, 'cmd /c "cd tools && python -X a commit.py -m hub answer Q-1"'),
+        ), True)
+
     def test_hub_in_python_code_from_anywhere_on_the_line(self):
         # a pipe of any length, a module that runs code it reads (code, asyncio, timeit -s,
         # pdb -c), and a newline the shell decodes ($'...', PowerShell's backtick n) all reach
@@ -999,15 +1101,17 @@ class FailClosed(Hub):
             (ps, 'Select-String -Path tools/hub.py -Pattern answer'),
             (bash, 'python Z:/k/tools/commit.py -C Z:/r -m "guard: read tools/hub.py" --model M tools/hub.py'),
             (bash, 'python -B Z:/k/tools/commit.py -m x --owner-authored -- tools/hub.py'),
+            # a plain chain of family commands and others (rules.hub_family); git commit is family too
+            (bash, 'git diff tools/hub.py && echo ok'), (bash, 'git commit -m x tools/hub.py'),
         ), False)
-        # anything beside it, a program or form outside the list, or a wildcard leaves the family
+        # a program or form outside the list, an outlet beside it, or a wildcard leaves the family
         self.rows((
-            (bash, 'git diff tools/hub.py; python -m tools.hub answer Q-1'), (bash, 'git diff tools/hub.py && echo ok'),
+            (bash, 'git diff tools/hub.py; python -m tools.hub answer Q-1'),
             (bash, 'cat tools/hub.py | python'), (bash, 'cat $(echo tools/hub.py)'), (bash, 'cat tools/hub.py &'),
             (bash, 'cat tools/hub.py # import hub'), (bash, 'GIT_EXTERNAL_DIFF=x git diff tools/hub.py'),
             (bash, 'command cat tools/hub.py'), (bash, 'sudo cat tools/hub.py'), (bash, 'less tools/hub.py'),
             (bash, 'cat tools/hub.py > tools/h*.py'), (bash, 'grep -n answer tools/hub.py tools/hu?.py'),
-            (bash, 'git commit -m x tools/hub.py'), (bash, 'git restore tools/hub.py'),
+            (bash, 'git restore tools/hub.py'),
             (bash, 'git log --grep tools.hub'), (bash, 'grep -rn tools.hub kitlib'), (bash, 'grep "import hub" tools/hub.py'),
             (bash, 'python -i Z:/k/tools/commit.py -m x tools/hub.py'),
             (bash, 'python Z:/k/tools/commit.py -m "$m" tools/hub.py'),
@@ -1055,14 +1159,207 @@ class FailClosed(Hub):
                    '--why-not-folded x'),
             (bash, 'python Z:/k/tools/backlog.py close K-1 --reason "fixed in tools/hub.py"'),
             (ps, 'python Z:/k/tools/commit.py -m "guard: fix tools.hub" tools/x.py'),
+            # git commit's message is message text too (rules.hub_git_family)
+            (bash, 'git commit -m "fix tools.hub"'),
         ), False)
         self.rows((
             # argparse reads --summ as --summary, the guard reads only the option written in full
             (bash, 'python Z:/k/tools/backlog.py add K-1 --summ "tools.hub" --found-on none --why-not-folded x'),
             (bash, 'python Z:/k/tools/backlog.py add K-1 --summary x --found-on tools.hub --why-not-folded x'),
-            (bash, 'git commit -m "fix tools.hub"'), (bash, 'echo "tools.hub" | python Z:/k/tools/commit.py -m x a'),
+            (bash, 'echo "tools.hub" | python Z:/k/tools/commit.py -m x a'),
             (bash, 'python Z:/k/tools/commit.py -m "fix tools.hub" tools/x.py; python -m tools.hub answer Q-1'),
             (bash, 'python -c "import x" Z:/k/tools/commit.py -m "tools.hub" tools/x.py'),
+        ), True)
+
+    def test_git_commit_message_spellings(self):
+        # every spelling of git commit's message is text (rules.hub_git_words): a flag cluster
+        # ending in m with its value apart or joined, --message apart or with =
+        self.rows((
+            (bash, 'git commit -am "fix tools.hub"'), (bash, 'git commit -qam "fix tools.hub" tools/hub.py'),
+            (bash, 'git commit -amtools.hub'), (bash, 'git commit -mtools.hub tools/hub.py'),
+            (bash, 'git commit --message "fix tools.hub" tools/hub.py'),
+            (bash, 'git commit --message="fix tools.hub" tools/hub.py'),
+            (ps, 'git commit -am "fix tools.hub"'), (ps, 'git commit --message="fix tools.hub"'),
+        ), False)
+        # the cluster's other letters and the words after the message are still read
+        self.rows((
+            (bash, 'git commit -am x tools.hub'), (bash, 'git commit -amx tools.hub'),
+            (bash, 'git commit --message=x tools.hub'), (bash, 'git commit --message x tools.hub'),
+            (bash, 'git commit -em "fix tools.hub"'), (bash, 'git commit -pm x tools/hub.py'),
+            (bash, 'git commit -m x -- tools.hub'),
+        ), True)
+
+    def test_the_compiled_hub_tool(self):
+        # python runs a .pyc as it runs hub.py (rules.HUB_NAME_RES)
+        self.rows((
+            (bash, 'python tools/__pycache__/hub.cpython-312.pyc answer Q-1'),
+            (bash, 'cd tools/__pycache__ && python hub.cpython-312.pyc answer Q-1'),
+            (bash, 'python tools/hub.pyc answer Q-1'), (ps, 'python tools\\hub.pyw answer Q-1'),
+            (bash, 'python tools/__pycache__/hub.cpython-312.opt-1.pyc answer Q-1'),
+            (bash, 'python tools/__pycache__/hub.cpython-312.opt-2.pyc answer Q-1'),
+            # over-reach: a read of the compiled file is denied too, as the path family takes only
+            # a path ending in hub.py
+            (bash, 'cat tools/__pycache__/hub.cpython-312.pyc'),
+            (ps, 'Get-Content tools\\__pycache__\\hub.cpython-312.pyc'),
+        ), True)
+        # owner ruling Q-1010: only a bare python word takes commit.py's -m as its message; a python
+        # with a path before it, in a folder named like python or not, keeps the -m python's
+        # (fail-closed; agents use bare python). A variable keeps the line out of the path family
+        self.rows((
+            (bash, 'D:/bin/python.exe Z:/k/tools/commit.py -C $PWD -m "Hub store: x" a.py'),
+            (ps, '& D:\\bin\\python.exe Z:/k/tools/commit.py -C $PWD -m "Hub store: x" a.py'),
+            (bash, 'D:/bin/python.exe Z:/k/tools/commit.py -C $PWD -m Hub a.py'),
+            (bash, 'D:/Programs/Python/Python312/python.exe Z:/k/tools/commit.py '
+                   '-C $PWD -m "Hub store: x" a.py'),
+            (ps, '& D:\\Programs\\Python\\Python312\\python.exe Z:/k/tools/commit.py '
+                 '-C $PWD -m "Hub store: x" a.py'),
+            (bash, 'C:/Python312/python.exe -X utf8 Z:/k/tools/commit.py -C $PWD -m "Hub store: x" a.py'),
+            (ps, 'C:\\Python312\\python Z:/k/tools/commit.py -C $PWD -m "Hub store: x" a.py'),
+            (bash, '"D:/Programs/Python312/python.exe" Z:/k/tools/commit.py -C $PWD -m "Hub store: x" a.py'),
+            (bash, 'bash -c "D:/bin/python.exe Z:/k/tools/commit.py -C . -m \'Hub store: x\' a.py"'),
+            # a ( inside a path is no group: cmd runs D:/a(python.exe as the program
+            (ps, 'cmd /c "D:/a(python.exe Z:/k/tools/commit.py -C . -m Hub a.py"'),
+            (bash, 'cmd //c "D:/a((python.exe Z:/k/tools/commit.py -C . -m Hub a.py"'),
+        ), True)
+        # a bare python word still does (owner ruling Q-1009)
+        self.rows((
+            (bash, 'python Z:/k/tools/commit.py -C $PWD -m "Hub store: x" a.py'),
+            (ps, '& python Z:/k/tools/commit.py -C $PWD -m "Hub store: x" a.py'),
+            (bash, 'python3.12 -X utf8 Z:/k/tools/commit.py -C $PWD -m "Hub store: x" a.py'),
+            (ps, 'python.exe Z:/k/tools/commit.py -C $PWD -m "Hub store: x" a.py'),
+            (bash, 'echo $(python Z:/k/tools/commit.py -C $PWD -m "Hub store: x" a.py)'),
+        ), False)
+        # and a python in that folder runs hub as a module
+        self.rows((
+            (bash, 'D:/Programs/Python312/python.exe -m hub answer Q-1'),
+            (ps, '& D:\\Programs\\Python312\\python.exe -m hub answer Q-1'),
+            (bash, 'cd tools && C:/Python312/python.exe -X a\\ commit.py -m hub answer Q-1'),
+            # a python word before / or \ with no python word after it in that word is the program:
+            # cmd ends a command's name at an unquoted /, so `python/x` runs python with /x
+            (bash, 'cd tools && python/x -m hub answer Q-1'),
+            (ps, 'cd tools; python/x -m hub answer Q-1'),
+            (ps, 'cd tools; python\\x -m hub answer Q-1'),
+            (ps, 'cmd /c "cd tools && python/x -m hub answer Q-1"'),
+            (bash, 'cmd //c "cd tools && python/x -m hub answer Q-1"'),
+            # and what is glued to it is the program's own name (argv[0]), never its script
+            (bash, 'cmd //c "cd tools && python/commit.py -m hub answer Q-1"'),
+            (ps, 'cmd /c "cd tools && python\\commit.py -m hub answer Q-1"'),
+            # a quote glued to a python word makes words of its own: the whole quoted run is argv[0]
+            (bash, 'cmd //c \'cd tools && python/" commit.py x" -m hub answer Q-1\''),
+            (ps, 'cmd /c \'cd tools && python/" commit.py x" -m hub answer Q-1\''),
+            (bash, 'cmd //c \'cd tools && python/python" commit.py x" -m hub answer Q-1\''),
+            (ps, 'cmd /c \'cd tools && python/python" commit.py x" -m hub answer Q-1\''),
+            (bash, 'cd tools && python/" commit.py x" -m hub answer Q-1'),
+            (ps, 'cmd /c "cd tools && python/\' commit.py x\' -m hub answer Q-1"'),
+            (bash, 'cd tools && "python/" commit.py x" -m hub answer Q-1'),
+            # cmd ends a command's name at ; , = as at a space, and none of them ends the command
+            (ps, 'cmd /c "cd tools && python;x -m hub answer Q-1"'),
+            (bash, 'cmd //c "cd tools && python;x -m hub answer Q-1"'),
+            (ps, 'cmd /c "cd tools && python;-m hub answer Q-1"'),
+            (ps, 'cmd /c "cd tools && python;a; -m hub answer Q-1"'),
+            (ps, 'cmd /c "cd tools && python,x -m hub answer Q-1"'),
+            (ps, 'cmd /c "cd tools && python=x -m hub answer Q-1"'),
+        ), True)
+        # owner ruling Q-1012: a python word in quotes, a path or not, keeps commit.py's -m python's
+        self.rows((
+            (ps, '& "D:\\Programs\\Python312\\python.exe" Z:/k/tools/commit.py -C $PWD -m "Hub store: x" a.py'),
+            (bash, "'D:/Programs/Python312/python.exe' Z:/k/tools/commit.py -C $PWD -m \"Hub store: x\" a.py"),
+            (bash, '"python" Z:/k/tools/commit.py -C $PWD -m "Hub store: x" a.py'),
+            (ps, "& 'python.exe' Z:/k/tools/commit.py -C $PWD -m \"Hub store: x\" a.py"),
+        ), True)
+
+    def test_a_separator_inside_one_of_pythons_words(self):
+        # round-6 review item 1: a ; | & or newline the shell keeps inside one of python's words
+        # (quoted, escaped, or inside a nested shell's string) ended the read of the line's text
+        # before python's -m; python's parsed words are read too (rules.hub_word_module_names),
+        # and a line the parser cannot read whole is read past every separator
+        # (rules.HUB_PY_MODULE_ANY_RE)
+        self.rows((
+            (bash, "cd tools && python -X ';' -m hub answer Q-1"),
+            (bash, 'cd tools && python -X a\\;b -m hub answer Q-1'),
+            (bash, "cd tools && python -X 'a|b' -m hub answer Q-1"),
+            (ps, "cd tools && python -X 'a|b' -m hub answer Q-1"),
+            (ps, "cd tools; python -X 'a|b' -m hub answer Q-1"),
+            (ps, 'cmd /c "cd tools && python -X a;b -m hub answer Q-1"'),
+            (bash, 'cmd //c "cd tools && python -X a;b -m hub answer Q-1"'),
+            (bash, "cd tools && python -X 'a&b' -m hub answer Q-1"),
+            (bash, 'cd tools && python -X "a;b" -m hub answer Q-1'),
+            (bash, "cd tools && python -X $'a\\nb' -m hub answer Q-1"),
+            (bash, "cd tools && python -X 'a\nb' -m hub answer Q-1"),
+            (bash, "cd tools && python -W 'a;b' -m hub answer Q-1"),
+            (ps, "cd tools; python -X 'a;b' -m hub answer Q-1"),
+            (ps, 'cd tools; python -X "a;b" -m hub answer Q-1'),
+            (ps, 'cd tools; python -X a`;b -m hub answer Q-1'),
+            # every spelling of python's -m after such a word
+            (bash, "cd tools && python -X ';' -Bm hub answer Q-1"),
+            (bash, "cd tools && python -X ';' -mhub answer Q-1"),
+            (bash, "cd tools && python -X ';' -m 'hub' answer Q-1"),
+            (bash, "cd tools && python -X ';' -m runpy hub answer Q-1"),
+            (bash, "cd tools && python -X ';' -mrunpy hub answer Q-1"),
+            (bash, "cd tools && python -X ';' -m trace --count --module=hub answer Q-1"),
+            (bash, "cd tools && python -X ';' -m trace --count --module hub answer Q-1"),
+            # inside a nested shell's string
+            (bash, 'bash -c "cd tools && python -X \';\' -m hub answer Q-1"'),
+            (ps, 'powershell -Command "cd tools; python -X \'a;b\' -m hub answer Q-1"'),
+            # a quoted word before commit.py is not plain, so the -m after it is python's
+            (bash, "cd tools && python -X 'a b' commit.py -X ';' -m hub answer Q-1"),
+            # Windows PowerShell 5.1 passes a word holding a double quote on unescaped, so python
+            # gets -X a; and then -m hub as words of their own
+            (ps, 'cd tools; python -X \'a;" -m hub "b\' answer Q-1'),
+            # and the program's C runtime drops a quote inside a word: python gets -Bm
+            (ps, 'cd tools; python \'-B"m"\' hub answer Q-1'),
+            # a line the parser cannot read whole (an unclosed quote)
+            (bash, "cd tools && python -X ';' -m hub answer Q-1 \""),
+            (ps, "cd tools; python -X 'a;b' -m hub answer Q-1 \""),
+            # a python in a quoted folder with a space in it
+            (ps, 'cd tools; & "C:\\Program Files\\Python312\\python.exe" -X \'a;b\' -m hub answer Q-1'),
+            (bash, 'cd tools && "C:/Program Files/Python312/python.exe" -X \'a;b\' -m hub answer Q-1'),
+        ), True)
+        # cmd ends a command at an unquoted |, so b, not python, gets -m hub: the guard reads
+        # cmd's string as cmd does and passes it; a | cmd quotes or escapes is python's word
+        self.rows(((ps, 'cmd /c "cd tools && python -X a|b -m hub answer Q-1"'),), False)
+        self.rows((
+            (bash, 'cmd //c \'cd tools && python -X "a|b" -m hub answer Q-1\''),
+            (bash, 'cmd //c \'cd tools && python -X a^|b -m hub answer Q-1\''),
+            (ps, 'cmd /c "cd tools && python -X a^|b -m hub answer Q-1"'),
+            (ps, 'cmd /c \'cd tools && python -X "a|b" -m hub answer Q-1\''),
+            (ps, 'cmd /c "cd tools && python -X a^&b -m hub answer Q-1"'),
+        ), True)
+        # over-reach, fail-closed (round-6 review item 3): a ; glued to a python word is read as cmd
+        # reads it, ending only the command's name, so the next python word counts as python's
+        # argument and commit.py's -m as python's own
+        self.rows(((bash, 'which python; python Z:/k/tools/commit.py -C $PWD -m "Hub store: x" a.py'),), True)
+        # a separator inside a message, or in python's words with no hub module named, passes
+        self.rows((
+            (bash, 'python -X utf8 Z:/k/tools/commit.py -C $PWD -m "Hub store: a; b | c & d" a.py'),
+            (ps, 'python Z:/k/tools/commit.py -C $PWD -m "Hub store: a; b | c" a.py'),
+            (bash, 'python Z:/k/tools/backlog.py add K-1 -m "Hub store; a | b" --summary x'),
+            (bash, "cd tools && python -X utf8 Z:/k/tools/commit.py -X ';' -m hub answer Q-1"),
+            (bash, "cd tools && python -X ';' -m hubby answer Q-1"),
+            (bash, "python -X 'a;b' -m unittest"), (ps, "python -X 'a|b' -m json.tool x.json"),
+        ), False)
+
+    def test_a_python_in_a_quoted_folder_with_a_space(self):
+        # owner rulings Q-1010 and Q-1012: a quoted python path with a space in it is a full path
+        # and quoted, so commit.py's -m after it stays python's (fail-closed; agents use bare python)
+        self.rows((
+            (ps, '& "C:\\Program Files\\Python312\\python.exe" Z:/k/tools/commit.py -C $PWD '
+                 '-m "Hub store: x" a.py'),
+            (ps, '& "C:\\Program Files\\Python312\\python.exe" -X utf8 Z:/k/tools/commit.py -C $PWD '
+                 '-m "Hub store: x" a.py'),
+            (bash, '"C:/Program Files/Python312/python.exe" Z:/k/tools/commit.py -C $PWD -m "Hub store: x" a.py'),
+            (bash, '"C:/Program Files/Python312/python.exe" -X utf8 Z:/k/tools/commit.py -C $PWD '
+                   '-m "Hub store: x" a.py'),
+            (bash, "'C:/Program Files/Python312/python.exe' Z:/k/tools/commit.py -C $PWD -m \"Hub store: x\" a.py"),
+            (bash, "'C:/Program Files/Python/python.exe' Z:/k/tools/commit.py -C $PWD -m Hub a.py"),
+        ), True)
+        # and the folder's python runs hub as a module, and a quoted run glued after its closing
+        # quote is read as part of python's own name
+        self.rows((
+            (ps, 'cd tools; & "C:\\Program Files\\Python312\\python.exe" -m hub answer Q-1'),
+            (bash, 'cd tools && "C:/Program Files/Python312/python.exe" -m hub answer Q-1'),
+            (ps, 'cd tools; & "C:\\Program Files\\Python312\\python.exe"" commit.py x" -m hub answer Q-1'),
+            (bash, 'cd tools && "C:/Program Files/Python312/python.exe"" commit.py x" -m hub answer Q-1'),
         ), True)
 
     def test_backlog_paths_naming_the_hub_tool(self):
@@ -1105,6 +1402,95 @@ class FailClosed(Hub):
         self.rows((
             (bash, 'git add -A'), (bash, 'git add tools'), (bash, 'python Z:/k/tools/commit.py -m x tools'),
         ), False)
+
+    def test_family_commands_on_a_plain_line(self):
+        # the string-literal false positives: a line of plain commands joined by ;, &&, || or
+        # a newline, where every command naming the hub tool is a family command, passes
+        # (rules.hub_family); git commit and ledger.py are family commands, their messages text
+        wt = W.fwd(self.w.wt)
+        self.rows((
+            (bash, 'cd %s && python tools/commit.py -m "Hub: x" tools/hub.py' % wt),
+            (ps, 'cd %s; python tools/commit.py -m "Hub: x" tools/hub.py' % wt),
+            (bash, 'python Z:/k/tools/ledger.py add --repo kit --q "does tools/hub.py answer twice?" --a no'),
+            (bash, 'git commit -m "Hub: fix tools/hub.py"'),
+            (bash, 'git add tools/hub.py && python Z:/k/tools/commit.py -m "Hub: x" tools/hub.py'),
+            (bash, 'python Z:/k/tools/backlog.py close K-1 --reason "fixed in tools/hub.py" 2>&1; git status'),
+            (bash, 'git diff tools/hub.py\ngit status'),
+        ), False)
+        # a way for one command's output, name or state to reach another, or a command that is not
+        # plain, leaves the family; the hub tool run anywhere on the line stays denied
+        self.rows((
+            (bash, 'cat tools/hub.py; python "$_" answer Q-1'), (bash, 'cat tools/hub.py; python ${_} answer Q-1'),
+            (ps, 'gc tools/hub.py -ov c; python -c "$c" answer Q-1'), (ps, 'gc tools/hub.py; python -c @c'),
+            (ps, 'Get-Content tools/hub.py; python $$ answer Q-1'), (ps, 'gc tools/hub.py; python $^'),
+            (ps, 'gc tools/hub.py -OutVariable c; python -c "$c"'),
+            (bash, 'cat tools/hub.py > x.py; python x.py answer Q-1'),
+            (bash, 'cat() { python "$1" answer Q-1; }; cat tools/hub.py'),
+            (ps, 'function cat { python $args }; cat tools/hub.py'),
+            (ps, 'Set-Alias cat python; cat tools/hub.py answer Q-1'),
+            (bash, 'alias cat=python; cat tools/hub.py answer Q-1'),
+            (bash, 'cd x && python tools/hub.py answer Q-1'),
+            (bash, 'echo x & python tools/hub.py answer Q-1'), (bash, 'cat tools/hub.py & echo x'),
+            (bash, 'git commit -m x tools/hub.py; python -c "import tools.hub"'),
+            (bash, 'git commit -e -m x tools/hub.py'), (bash, 'git commit --edit -m x tools/hub.py'),
+            (bash, 'git commit -p -m x tools/hub.py'),
+            (bash, 'git -c user.name=x commit -m x tools/hub.py'),
+            (bash, 'GIT_EDITOR=python git commit -e tools/hub.py'),
+            (bash, 'git show HEAD:tools/hub.py --output=x.py; python x.py answer Q-1'),
+            (bash, 'git commit -m x tools.hub'),
+            (bash, 'python Z:/k/tools/ledger.py add --repo tools.hub --q x'),
+            # a drive made on the line, or a write to a provider drive, can define what a later
+            # name runs (a function, PATH) on PowerShell: a drive maker is refused on the line
+            # (rules.HUB_LINE_DENIED), a write to env: is a variable set (commands.line_env_names),
+            # and function: by its provider's name is a drive (rules.HUB_LINE_DRIVES)
+            (ps, 'New-PSDrive -Name f -PSProvider Function -Root \\; Get-Content tools/hub.py'),
+            (ps, 'ndr f Function \\; Get-Content tools/hub.py'),
+            (ps, 'mount f Function \\; Get-Content tools/hub.py'),
+            (ps, 'Set-Content env:PATH Z:\\x; git diff tools/hub.py'),
+            (ps, 'Set-Content -Path Env:\\Path -Value Z:\\x; git diff tools/hub.py'),
+            (ps, 'Add-Content -Path:env:PATH -Value ;Z:\\x; git diff tools/hub.py'),
+            (ps, "Copy-Item Z:\\x\\f.ps1 Microsoft.PowerShell.Core\\Function::cat; Get-Content tools/hub.py"),
+        ), True)
+        # a write to a file beside a family command stays plain
+        self.rows((
+            (ps, 'Get-Content tools/hub.py; Set-Content notes.txt x'),
+            (ps, 'git show HEAD:tools/hub.py; Add-Content -Path notes.txt -Value x'),
+        ), False)
+
+    def test_only_a_bare_python_is_a_family_command(self):
+        # owner rulings Q-1010 and Q-1012: a python with a path, or in quotes, before commit.py is
+        # no family command (rules.hub_family_cmd), on a plain line or alone, so its -m is python's
+        wt = W.fwd(self.w.wt)
+        self.rows((
+            (bash, 'cd %s && D:/bin/python.exe Z:/k/tools/commit.py -m "Hub store: x" a.py' % wt),
+            (ps, 'cd %s; D:\\bin\\python.exe Z:/k/tools/commit.py -m "Hub store: x" a.py' % wt),
+            (bash, 'cd %s && "D:/bin/python.exe" Z:/k/tools/commit.py -m "Hub store: x" a.py' % wt),
+            (ps, "cd %s; & 'D:\\bin\\python.exe' Z:/k/tools/commit.py -m \"Hub store: x\" a.py" % wt),
+            (bash, 'D:/bin/python.exe Z:/k/tools/commit.py -m "Hub store: x" a.py'),
+            (ps, '& D:\\bin\\python.exe Z:/k/tools/commit.py -m "Hub store: x" a.py'),
+            (bash, '"D:/bin/python.exe" Z:/k/tools/commit.py -m "Hub store: x" a.py'),
+            (ps, "& 'D:\\bin\\python.exe' Z:/k/tools/commit.py -m \"Hub store: x\" a.py"),
+            (bash, '"python" Z:/k/tools/commit.py -m "Hub store: x" a.py'),
+            # a backslash-newline joins the lines; the python after it still has a path
+            (bash, 'cd %s && \\\nD:/bin/python.exe Z:/k/tools/commit.py -m "Hub store: x" a.py' % wt),
+        ), True)
+        # a bare python is (owner ruling Q-1009); pyth""on reaches python bare
+        self.rows((
+            (bash, 'python Z:/k/tools/commit.py -m "Hub store: x" a.py'),
+            (ps, '& python Z:/k/tools/commit.py -m "Hub store: x" a.py'),
+            (ps, 'cd %s; & python Z:/k/tools/commit.py -m "Hub store: x" a.py' % wt),
+            (bash, 'pyth""on Z:/k/tools/commit.py -m "Hub store: x" a.py'),
+        ), False)
+        # a bare python starting a nested shell's text is judged by that text (owner ruling Q-1009)
+        self.rows((
+            (bash, "bash -c 'python Z:/k/tools/commit.py -m \"Hub store: x\" a.py'"),
+            (ps, "cmd /c 'python Z:/k/tools/commit.py -m \"Hub store: x\" a.py'"),
+        ), False)
+        # a full or quoted python path inside the nested text keeps its -m python's
+        self.rows((
+            (bash, 'bash -c \'"D:/bin/python.exe" Z:/k/tools/commit.py -m "Hub store: x" a.py\''),
+            (bash, "bash -c 'D:/bin/python.exe Z:/k/tools/commit.py -m \"Hub store: x\" a.py'"),
+        ), True)
 
 
 # ---------------------------------------------------------------- hub-mcp
@@ -1219,6 +1605,26 @@ class Plumbing(unittest.TestCase):
     def test_params_do_not_change_equality(self):
         from kitlib.host import Action
         self.assertEqual(Action('mcp', tool='t', params={'a': 1}), Action('mcp', tool='t'))
+
+
+class CrtWords(unittest.TestCase):
+    """rules.hub_crt_words: the C runtime's split of a native program's command-line text."""
+
+    def test_splits(self):
+        from kitlib.guard.rules import hub_crt_words
+        for text, words in (
+                ('a b\tc', ['a', 'b', 'c']),
+                ('"a;" -m hub "b"', ['a;', '-m', 'hub', 'b']),
+                ('a;" -m hub "b', ['a; -m hub b']),
+                ('-B"m"', ['-Bm']),
+                ('"a ""b"" c"', ['a "b" c']),
+                ('a\\\\"b c"', ['a\\b c']),
+                ('a\\"b', ['a"b']),
+                ('a\\b', ['a\\b']),
+                ('""', ['']),
+                ('', [])):
+            with self.subTest(text=text):
+                self.assertEqual(hub_crt_words(text), words)
 
 
 if __name__ == '__main__':
