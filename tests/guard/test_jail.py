@@ -1197,8 +1197,9 @@ class UnplacedGit(MainGit):
 
     def test_an_env_read_in_a_path_is_not_an_env_write(self):
         g = 'git -C "%s" branch -m main old' % W.fwd(self.w.wt)
-        for text in ('Set-Content "$env:TEMP\\x.txt" hi', 'New-Item -ItemType Directory -Path "$env:TEMP\\x"',
-                     'Copy-Item a.txt $env:TEMP', 'Set-Item env:PATH "$env:PATH;C:\\tools"',
+        # (a $env:TEMP write target is refused as not literal: test_ps_drive_paths DynamicTargets)
+        for text in ('Get-Content "$env:TEMP\\x.txt"', 'Test-Path "$env:TEMP\\x"',
+                     'Get-ChildItem $env:TEMP', 'Set-Item env:PATH "$env:PATH;C:\\tools"',
                      "[Environment]::GetEnvironmentVariable('FOO')"):
             for line in (text, '%s; %s' % (text, g)):
                 with self.subTest(line):
@@ -1380,7 +1381,7 @@ class UnplacedGit(MainGit):
                 self.assertIn('PowerShell provider item (env:', d.reason)
                 for environ in (COORDINATOR, OLD_MARK):
                     self.jailed(self.marked(text, environ, 'PowerShell'))
-        for text in ('$env:FOO ="x"; %s' % g, "Rename-Item env:FOO BAR; Set-Content \"$env:TEMP\\x.txt\" hi; %s" % g):
+        for text in ('$env:FOO ="x"; %s' % g, "Rename-Item env:FOO BAR; Get-Content \"$env:TEMP\\x.txt\"; %s" % g):
             with self.subTest(text):
                 self.allowed(self.git(text, 'worker', tool='PowerShell'))
 
@@ -1453,11 +1454,12 @@ class UnplacedGit(MainGit):
                 self.assertFalse(cm.read(text, sh.PS, wt).clean, text)
                 self.denied(self.git(text, 'worker', tool='PowerShell'))
                 self.denied(self.marked(text, COORDINATOR, 'PowerShell'))
-        # pinned as it is: a property cmdlet on a computed Environment:: path passes, as "env:$n"
-        # already did; the environment provider has no property operations, so it sets no variable
+        # a property cmdlet on a computed Environment:: path is refused: its -Path is a write
+        # target that is not literal ($n), so the guard cannot tell where it writes (the main-checkout
+        # rule for a worker, the write jail for the coordinator's mark), before its git is judged
         text = 'Set-ItemProperty -Path "Environment::$n" -Name GIT_DIR -Value x; %s' % g
-        self.allowed(self.git(text, 'worker', tool='PowerShell'))
-        self.allowed(self.marked(text, COORDINATOR, 'PowerShell'))
+        self.assertIn('not literal', self.jailed(self.git(text, 'worker', tool='PowerShell'), 'main-checkout').reason)
+        self.assertIn('not literal', self.jailed(self.marked(text, COORDINATOR, 'PowerShell')).reason)
         # a curly double quote may end the string where the guard reads on: it stays a static call
         self.held_everywhere(['$hits += "$b :: “ x"; %s' % g, '$hits += "$b :: ” x"; %s' % g],
                              tool='PowerShell')
