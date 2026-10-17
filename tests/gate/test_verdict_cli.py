@@ -90,6 +90,28 @@ class VerdictCli(GateRepoCase):
         self.assert_usage(self.run_tool(*self.add_args(**{'--branch': 'refs/heads/kit/a'})))
         self.assert_usage(self.run_tool('drop', 'kit/a', '--tip', self.tip[:12]))
 
+    def test_list_drops_a_landed_entry_and_says_so(self):
+        self.assertEqual(self.run_tool(*self.add_args())[0], 0)
+        self.repo.git('push', '-q', 'origin', '%s:refs/heads/main' % self.tip)
+        self.repo.git('fetch', '-q', 'origin')
+        code, out, _ = self.run_tool('list')
+        self.assertEqual(code, 0)
+        self.assertEqual(out.splitlines(), [
+            'EXPIRED kit/a %s: landed: %s is in main %s' % (self.tip, self.tip[:10], self.tip[:10]),
+            'NOTHING QUEUED'])
+        self.assertEqual(V.scan(self.repo.common_dir()), ([], []))
+
+    def test_list_keeps_all_when_main_as_fetched_cannot_be_read(self):
+        self.assertEqual(self.run_tool(*self.add_args())[0], 0)
+        self.repo.git('update-ref', '-d', 'refs/remotes/origin/main')
+        code, out, _ = self.run_tool('list')
+        self.assertEqual(code, 0)
+        lines = out.splitlines()
+        self.assertTrue(lines[0].startswith('KEPT ALL: main as fetched cannot be read (origin/main'),
+                        out)
+        self.assertRegex(lines[1], r'^QUEUED kit/a %s ' % self.tip)
+        self.assertEqual(len(lines), 2, out)
+
     def test_list_names_a_file_that_is_not_an_entry_and_exits_1(self):
         folder = V.queue_dir(self.repo.common_dir())
         os.makedirs(folder)

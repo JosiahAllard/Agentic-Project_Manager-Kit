@@ -12,9 +12,13 @@
       (`<remote>/<main_branch>`). Prints `CARRIED <branch> <head> from reviewed <sha>: ...`, or
       `NOT CARRIED: <why>` (exit 1, nothing written; review and queue the head instead).
   verdict.py list [-C DIR]
-      one line per entry, oldest first: `<STATE> <branch> <tip> <risk> <verdict> <queued_utc> ...`
+      first drops each entry that waits to land no more (verdicts.expire), one line each:
+      `EXPIRED <branch> <tip>: landed: ...` when the tip is in main as last fetched
+      (`<remote>/<main_branch>`), `EXPIRED <branch> <tip>: superseded: ...` when it is not and the
+      branch is gone; `KEPT ALL: ...` when main as fetched cannot be read (nothing dropped). Then
+      one line per entry left, oldest first: `<STATE> <branch> <tip> <risk> <verdict> <queued_utc> ...`
       (`carried_from=<sha>` on a carried one); `BAD <file>: <why>` for a file in the queue that is
-      not an entry; `NOTHING QUEUED` when empty.
+      not an entry; `NOTHING QUEUED` when none is left.
   verdict.py drop BRANCH [--tip SHA] [-C DIR]
       remove BRANCH's entry (with --tip, only when it is queued at SHA). Prints `DROPPED <branch>`.
 
@@ -94,6 +98,17 @@ def line(e):
                     + (['last=%s' % last[0]] if last else []))
 
 
+def main_as_fetched(root):
+    """`(<remote>/<main_branch> as last fetched, None)`, or `(None, why)`; no network."""
+    root = os.path.abspath(root)
+    try:
+        cfg = kconfig.load(root)
+    except kconfig.ConfigError as e:
+        return None, 'the kit configuration cannot be read: %s' % e
+    sha, why = refs.remote_tip(cfg.remote, cfg.main_branch, root)
+    return (sha, None) if sha else (None, '%s/%s: %s' % (cfg.remote, cfg.main_branch, why))
+
+
 def carry(a, common_dir):
     root = os.path.abspath(a.root)
     try:
@@ -135,6 +150,15 @@ def run(a, common_dir):
         return DONE
     if a.cmd == 'list':
         good, bad = verdicts.scan(common_dir)
+        main, why = main_as_fetched(a.root) if good else (None, None)
+        if good and not main:
+            print('KEPT ALL: main as fetched cannot be read (%s), so no entry is dropped as landed '
+                  'or superseded' % why)
+        gone = verdicts.expire(common_dir, good, main)
+        for e, why in gone:
+            print('EXPIRED %s %s: %s' % (e['branch'], e['tip'], why))
+        dropped = [id(e) for e, _ in gone]
+        good = [e for e in good if id(e) not in dropped]
         for e in good:
             print(line(e))
         for path, why in bad:
