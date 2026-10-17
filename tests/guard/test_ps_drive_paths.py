@@ -328,6 +328,82 @@ class DynamicTargets(Base):
             with self.subTest(text):
                 self.allowed(self.run_ps(text))
 
+    def test_a_group_argument_to_a_writer_is_a_computed_target_wherever_it_sits(self):
+        # shell.Command.group_arg, rules.group_target: a { } or a ( ) the scanner reads as a group
+        # among a writer's arguments, last on the line too, is a target it cannot tell; a member
+        # call is one word not literal, bound as any argument (shell._Scan.ps_paren_arg)
+        for text in (r"'x' | Set-Content -Path {{ $p }}", r"'x' | Set-Content {{ $p }}",
+                     r'Get-ChildItem *.txt | Copy-Item -Destination {{ "{main}\$($_.Name)" }}',
+                     r'robocopy . {{ $p }}', r'Set-Content -Value hi -Path [x]::y($p)',
+                     r"Set-Content -Value hi -Path 's'.M($p)", r'Set-Content -Value hi -Path $s.Trim()',
+                     r'Set-Content -Value hi -$x(Join-Path {main} x.txt)'):
+            with self.subTest(text):
+                self.refused_for_both(text)
+        p = cm.read("'x' | Set-Content -Path { $p }", sh.PS, W.fwd(self.w.wt))
+        self.assertEqual([(c.argv, c.group_arg, c.split) for c in p.commands],
+                         [(["x"], False, False), (['Set-Content', '-Path'], True, False), (['$p'], False, False)])
+        # not a writer, or a member call bound to a parameter that is no target: not judged
+        for text in ('Get-ChildItem | ForEach-Object {{ $_.Name }}', 'Write-Output $s.Trim()',
+                     'Set-Content x.txt -Value $s.Trim()'):
+            with self.subTest(text):
+                self.allowed(self.run_ps(text))
+
+    def test_a_paren_that_does_not_touch_the_word_before_is_an_argument(self):
+        # shell._Scan.ps_paren_arg: after a redirection, a line continuation or an inline comment
+        for text in (r'Set-Content -Value hi 2>&1 (Join-Path {main} x.txt)',
+                     'Set-Content -Value hi -Path `\n(Join-Path {main} x.txt)',
+                     'Set-Content -Value hi -Path<#c#>(Join-Path {main} x.txt)',
+                     'Set-Content -Value hi -Path <#c#>(Join-Path {main} x.txt)'):
+            with self.subTest(text):
+                self.refused_for_both(text)
+        for text in ('Set-Content -Value hi 2>&1 (Join-Path a b)', 'Set-Content -Value hi <#c#>(Join-Path a b)'):
+            with self.subTest(text):
+                p = cm.read(text, sh.PS, W.fwd(self.w.wt))
+                self.assertEqual([c.argv for c in p.commands if c.nested_in is None],
+                                 [['Set-Content', '-Value', 'hi', '(Join-Path a b)']])
+
+    def test_a_splat_to_a_copier_is_a_computed_target(self):
+        # rules.write_targets: robocopy and xcopy bind a splat as a cmdlet does
+        for text in (r'robocopy . @a', r'robocopy @a', r'xcopy a.txt @a'):
+            with self.subTest(text):
+                self.refused_for_both(text)
+        self.allowed(self.run_ps("robocopy . '@a'"))
+
+    def test_a_redirection_to_a_group_is_a_computed_target(self):
+        # shell._Scan.target: PowerShell writes to the value of the ( ) or the text of the { }
+        for text in (r"'x' > (Join-Path {main} x.txt)", r"'x' >> (Join-Path {main} x.txt)",
+                     r"'x' 2> ($p)", r"'x' > {{ {main}\x.txt }}"):
+            with self.subTest(text):
+                self.refused_for_both(text)
+        p = cm.read("'x' > (Join-Path a b)", sh.PS, W.fwd(self.w.wt))
+        self.assertEqual(p.unclean, [])
+        self.assertEqual(sorted(c.argv for c in p.commands), [['Join-Path', 'a', 'b'], ['x']])
+        self.assertEqual([(r.target.text, r.target.dyn) for c in p.commands for r in c.redirects],
+                         [('(Join-Path a b)', True)])
+
+    def test_a_keywords_own_group_marks_no_command(self):
+        # shell._Scan.commands: if ( ) { }, $r = if ( ) { }, foreach ( ) { }: the keyword's own
+        # groups cut no command
+        for text in ('if ($a) { 1 } else { 2 }', '$r = if ($a) { 1 }', 'foreach ($f in $g) { 1 }',
+                     'try { 1 } catch [IO.IOException] { 2 }', 'function f($a) { 1 }'):
+            with self.subTest(text):
+                p = cm.read(text, sh.PS, W.fwd(self.w.wt))
+                self.assertEqual([c.argv for c in p.commands if c.split], [])
+                self.assertEqual([c.argv for c in p.commands if c.group_arg], [])
+        # a switch label written as a bare word is no keyword: its { } is its group argument
+        p = cm.read('switch ($x) { a { 1 } }', sh.PS, W.fwd(self.w.wt))
+        self.assertEqual([c.argv for c in p.commands if c.group_arg], [['a']])
+
+    def test_a_script_block_to_any_writer_fails_closed(self):
+        # rules.group_target, as docs/guard.md "Rules" names them: a delay-bind script block, a
+        # { } to a parameter that is no target, an Export-* cmdlet, tar from PowerShell; and a
+        # ( ) touching a group's ), last on the line
+        for text in ("Get-ChildItem *.txt | Rename-Item -NewName {{ $_.Name + '.bak' }}",
+                     'Set-Content x.txt -Value {{ 1 }}', 'Export-Csv -Path x.csv -InputObject {{ 1 }}',
+                     'tar -xf a.tar -C {{ x }}', r'Copy-Item a.txt $a.M(1)(Join-Path {main} x)'):
+            with self.subTest(text):
+                self.refused_for_both(text)
+
     def test_cd_inside_a_subexpression_makes_the_location_unknown(self):
         # $( ) and ( ) run in the caller's scope: the cd moves the location for what follows
         for text in (r'echo $(cd {main}) ; New-Item x.txt', r'echo (cd {main}) ; New-Item x.txt'):

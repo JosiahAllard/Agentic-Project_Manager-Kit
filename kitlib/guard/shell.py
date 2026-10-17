@@ -47,6 +47,19 @@ _BASH_VAR = re.compile(r'\$(?:[A-Za-z_]\w*|\d|[@*#?$!\-])')
 # -Param: before it or not (_Scan.ps_paren_arg; `.Name` after a ) ] or } is one too)
 _PS_MEMBER_HEAD = re.compile(r'^(?:-[^\s:]+:)?[$\'"@(\[]')
 _PS_MEMBER_TAIL = re.compile(r'(?:\.|::)[A-Za-z_]\w*$')
+_PS_ASSIGN = ('=', '+=', '-=', '*=', '/=', '%=', '??=')
+
+
+def _ps_keyword_led(words):
+    """True when PowerShell words (a command's, up to a ( or { ) start with a keyword that takes a
+    ( ) or { } (PS_PAREN_KEYWORDS), first or first after an assignment's `=`: `$r = if (...)`."""
+    if not words:
+        return False
+    first = words[0]
+    for k, w in enumerate(words[:-1]):
+        if w.text in _PS_ASSIGN:
+            first = words[k + 1]
+    return first.text.lower() in PS_PAREN_KEYWORDS
 _BRACE = re.compile(r'\{([^\s{}\'"$`\\;|&()<>]*,[^\s{}\'"$`\\;|&()<>]*)\}')
 _ANSI = {'n': '\n', 't': '\t', 'r': '\r', '\\': '\\', "'": "'", '"': '"', '?': '?', 'a': '\a',
          'b': '\b', 'f': '\f', 'v': '\v', 'e': '\x1b', 'E': '\x1b'}
@@ -88,7 +101,7 @@ class Command(object):
     __slots__ = ('words', 'redirects', 'start', 'end', 'source', 'shell', 'depth', 'cwd',
                  'piped_out', 'piped_in', 'subs', 'groups', 'nested_in', 'prev_op', 'next_op',
                  'pipe_from', 'git_env', 'home_env', 'path_env', 'cwd_ps_drive', 'cwd_home', 'home', 'subs_cwd',
-                 'split')
+                 'split', 'group_arg')
 
     def __init__(self, source, shell, depth, home=None):
         self.words, self.redirects, self.subs = [], [], []
@@ -111,6 +124,11 @@ class Command(object):
         # block) and more of the line follows the group before a separator, words or another group:
         # its arguments go on past the group, in commands of their own (_Scan.commands)
         self.split = False
+        # PowerShell: one of its arguments is a ( ) or { } group, a script block (`-Path { $p }`)
+        # or what follows a group's ) (`$a.M(1)(...)`), not a method call's ( ) nor the group of
+        # a keyword it starts (if, foreach): what the group passes is computed (_Scan.commands).
+        # Every split command has one.
+        self.group_arg = False
 
     @property
     def grouped(self):
@@ -155,7 +173,7 @@ class _Scan(object):
     def __init__(self, text, shell, depth, parsed):
         self.s, self.n, self.i = text, len(text), 0
         self.shell, self.depth, self.parsed = shell, depth, parsed
-        self.toks = []              # ('w', Word, subs) | ('op', text) | ('r', Redirect) | ('subs', cmds)
+        self.toks = []              # ('w', Word, subs) | ('op', text[, call]) | ('r', Redirect) | ('subs', cmds)
         self.heredocs = []          # (delimiter, strip_tabs, quoted, Redirect) waiting for a newline
         self.brace = 0
         self.closed = False
@@ -285,7 +303,8 @@ class _Scan(object):
                 return '}'
             return None
         if self.shell == PS:
-            if c == '(' and self.ps_paren_arg():
+            kind = self.ps_paren_arg() if c == '(' else None
+            if kind == 'arg':
                 # `Set-Content (Join-Path a b) x`: PowerShell runs what the ( ) holds and passes its
                 # value, one argument (not literal) whose commands are read as nested ones;
                 # `-Path:(...)` is that parameter's value, one word as `-Path:$x` is
@@ -293,7 +312,7 @@ class _Scan(object):
                 self.i += 1
                 cmds = self.sub_until()
                 last = self.toks[-1]
-                if self.s[j - 1] == ':':
+                if self.s[j - 1] == ':' and last[0] == 'w' and last[1].end == j:
                     w = last[1]
                     self.toks[-1] = ('w', Word(w.text + self.s[j:self.i], True, w.start, self.i), last[2] + cmds)
                 else:
@@ -301,6 +320,8 @@ class _Scan(object):
                 return 'arg'
             if c in ';|(){}':
                 self.op(c, 1)
+                if kind == 'call':
+                    self.toks[-1] = ('op', c, True)     # a method call's ( ): no group argument
                 return c
             if c == '&':
                 # the call operator: `& prog args` runs prog
@@ -326,45 +347,45 @@ class _Scan(object):
         return None
 
     def ps_paren_arg(self):
-        """True when the PowerShell ( at self.i opens an argument: it follows a word of the
-        command after a space or a comma, or is the value of a `-Param:` or a `-Param` it touches
-        (`-Destination(...)`, after the command's first word), and the word in first position (the
-        command's first, or the first after an assignment's `=`) is no keyword that takes a ( )
-        (if, foreach, while...): `Copy-Item data (...)` passes an argument. A ( touching any other
+        """What the PowerShell ( at self.i opens: 'arg', an argument; 'call', a method call's
+        arguments; None, a group. In a command that has words before it, whose first word (or
+        first after an assignment's `=`) is no keyword that takes a ( ) (if, foreach, while...;
+        _ps_keyword_led), a ( that does not touch the word before it is an argument, whatever
+        stands between (a space, a comma, a redirection, a backtick line continuation, a
+        <#comment#>): `Copy-Item data (...)`. So is the value of a `-Param:` or a `-Param` it
+        touches (`-Destination(...)`, after the command's first word). A ( touching any other
         word passes the word and then the ( ) as the next argument, as PowerShell reads it
         (`func(arg)`: `Copy-Item a.txt(...)`, `./x(...)`, `'x'(...)`, `$x(...)`, `[string](...)`),
         unless the word is a member access (_PS_MEMBER_HEAD/_TAIL: `$s.Replace(...)`,
         `'abc'.Replace(...)`, `[IO.Path]::Combine(...)`, `(Get-Date).AddDays(...)`): that ( calls
-        the method, a group, and the word, the method's result, is marked not literal. A ( that
-        starts a command is a group too; one that touches a group's ) (`$a.M(1)(...)`) as well,
-        and the command it cuts is marked split (commands)."""
-        if not self.toks or self.toks[-1][0] != 'w':
-            return False
-        last = self.toks[-1][1]
-        before = self.s[self.i - 1] if self.i else ''
+        the method, and the word, the method's result, is marked not literal. A ( that starts a
+        command is a group, and so is one that touches a group's ) (`$a.M(1)(...)`): the
+        command it cuts has a group argument (commands)."""
         words = []
         for t in reversed(self.toks):
             if t[0] == 'op':
                 break
             if t[0] == 'w':
                 words.insert(0, t[1])
-        touch = last.end == self.i and last.start < last.end
+        if not words:
+            return None
+        last = self.toks[-1][1] if self.toks[-1][0] == 'w' else None
+        touch = last is not None and last.end == self.i and last.start < last.end
         src = self.s[last.start:last.end] if touch else ''
         if touch and _PS_MEMBER_TAIL.search(src) and (
                 _PS_MEMBER_HEAD.match(src) or (src[0] == '.' and self.s[last.start - 1:last.start] in (')', ']', '}'))):
             # `$s.Replace(...)`: a method call, its value only known at run time
             self.toks[-1] = ('w', Word(last.text, True, last.start, last.end, last.synth, last.alt), self.toks[-1][2])
-            return False
-        param = touch and last.text.startswith('-') and len(last.text) > 1 and not last.dyn
-        plain = touch and (src[0] != '-' or ':' in src)        # -Path:$x(...) too, not -Path(...)
-        if not (self.space(before) or before == ',' or (before == ':' and param) or plain or
-                (param and before != ':' and len(words) > 1)):
-            return False
-        first = words[0]
-        for k, w in enumerate(words[:-1]):
-            if w.text in ('=', '+=', '-=', '*=', '/=', '%=', '??='):
-                first = words[k + 1]            # `$r = if (...)`: the statement after it
-        return first.text.lower() not in PS_PAREN_KEYWORDS
+            return 'call'
+        if _ps_keyword_led(words):
+            return None
+        if not touch:
+            return 'arg'
+        param = last.text.startswith('-') and len(last.text) > 1 and not last.dyn
+        plain = src[0] != '-' or ':' in src                     # -Path:$x(...) too, not -Path(...)
+        if plain or (param and len(words) > 1):
+            return 'arg'
+        return None
 
     _BASH_REDIR = re.compile(r'(\d+|&)?(>>|>\||>&|>|<<<|<<-|<<|<&|<>|<)')
     _PS_REDIR = re.compile(r'(\d|\*)?(>>|>|<)(&\d)?')
@@ -423,6 +444,18 @@ class _Scan(object):
     def target(self, raw=False):
         while self.i < self.n and self.space(self.s[self.i]):
             self.i += 1
+        if self.shell == PS and not raw and self.i < self.n and self.s[self.i] in '({':
+            # `> (Join-Path a b)`: the file the ( ) computes, its commands read as nested ones;
+            # `> { ... }`: the script block's text. Either is a target that is not literal
+            j = self.i
+            if self.s[j] == '(':
+                self.i += 1
+                cmds = self.sub_until()
+                if cmds:
+                    self.toks.append(('subs', cmds))
+            else:
+                self.i = self.balanced(j, '{', '}')
+            return Word(self.s[j:self.i], True, j, self.i)
         if self.i >= self.n or self.s[self.i] in '\r\n;|&()<>':
             return None
         if raw:
@@ -843,8 +876,10 @@ class _Scan(object):
                 return True
             return False
 
-        # PowerShell: a command a ( or { cuts (`Set-Content -Value $s.Trim() -Path x`) is split when
-        # more of the line follows the group's close before a separator, words or another group
+        # PowerShell: a command a ( or { cuts has a group argument, unless the ( calls a method or
+        # the group is a keyword's (`if (...) {`); a command a ( or { cuts (`Set-Content -Value
+        # $s.Trim() -Path x`) is split when more of the line follows the group's close before a
+        # separator, words or another group
         ps = self.shell == PS
         cuts = []                   # per open group, the command it cut (None: it cut none)
         after = None                # the command the group that just closed cut
@@ -860,7 +895,12 @@ class _Scan(object):
                 o = t[1]
                 if o in ('(', '{'):
                     go_on()                     # `$a.M(1)(...)`: a group right after a group
-                    cuts.append(cur if cur.words or cur.redirects else after)
+                    cut = cur if cur.words or cur.redirects else after
+                    if cut is not None and ps and _ps_keyword_led(cut.words):
+                        cut = None              # `if (...) {`, `foreach (...)`: the keyword's own
+                    elif cut is not None and ps and not (len(t) > 2 and t[2]):
+                        cut.group_arg = True
+                    cuts.append(cut)
                     after = None
                 elif o in (')', '}') and stack:
                     after = cuts.pop()

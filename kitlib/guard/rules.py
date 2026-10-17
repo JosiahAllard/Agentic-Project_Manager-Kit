@@ -3423,13 +3423,15 @@ def _python(cmd, name, args, cmd_word, via=None):
 PS_SPLAT_RE = re.compile(r'^@[A-Za-z_][\w:]*$')    # a PowerShell splat argument: @a, @global:a
 
 
-def split_target(cmd):
-    """[Word]: for a writing command the scanner split around a group (shell.Command.split:
-    `Set-Content -Value $s.Trim() -Path x`, `Copy-Item $a.M(1)(...)`), a target that is not
-    literal and has no span, standing for the arguments read past the group; else []."""
-    if not cmd.split:
+def group_target(cmd):
+    """[Word]: for a writing command with a ( ) or { } group among its arguments, wherever it
+    sits (shell.Command.group_arg: `Set-Content -Path { $p }`, `Copy-Item $a.M(1)(...)`), or one
+    the scanner split around a group (shell.Command.split: `Set-Content -Value $s.Trim() -Path
+    x`), a target that is not literal and has no span, standing for what the group passes and
+    the arguments read past it; else []."""
+    if not (cmd.split or cmd.group_arg):
         return []
-    return [sh.Word('(its arguments past a ( ) or { } group)', True, cmd.end, cmd.end)]
+    return [sh.Word('(an argument in or past a ( ) or { } group)', True, cmd.end, cmd.end)]
 
 
 def write_targets(cmd, inv):
@@ -3458,7 +3460,15 @@ def write_targets(cmd, inv):
         # xargs appends the names it reads: a stand-in name in the directory it runs in
         args = list(args) + [here(word)]
     if name in COPIERS:
-        return out + _copier(args) + split_target(cmd)
+        splats = []
+        if cmd.shell == sh.PS:
+            # `robocopy . @a`: a splat passes whatever its list holds, the destination among them
+            splats = [sh.Word(x.text, True, x.start, x.end) for x in args
+                      if not x.dyn and PS_SPLAT_RE.match(x.text) and not cm.quoted(cmd, x)]
+            spans = dict(((x.start, x.end), x) for x in splats)
+            args = [spans.get((x.start, x.end), x) if not x.dyn else x for x in args]
+        dest = _copier(args)
+        return out + dest + [x for x in splats if not any(x is y for y in dest)] + group_target(cmd)
     if cmd.shell != sh.PS and name == 'find':
         if any(w.text == '-delete' for w in args):
             return out + (_find_paths(args)[0] or [here(word)])
@@ -3481,7 +3491,7 @@ def write_targets(cmd, inv):
                 out.extend(x for x in bound.get(p, []) if native or not ps_provider_item(cmd, x))
             out.extend(x for x in splats if not any(x is y for y in out))
             if spec.writes:
-                out.extend(split_target(cmd))
+                out.extend(group_target(cmd))
             if cmdlet == 'expand-archive' and not bound.get('destinationpath'):
                 out.append(here(word))
             if cmdlet == 'new-item' and bound.get('name'):
@@ -3495,7 +3505,7 @@ def write_targets(cmd, inv):
                 return out
         elif cmdlet.startswith('export-') and cmdlet not in PS_CMDLETS:
             bound = ps_bound(PS_CMDLETS['export-clixml'], *ps_params(cmd, args, PS_CMDLETS['export-clixml']))
-            return out + bound.get('path', []) + bound.get('literalpath', [])
+            return out + bound.get('path', []) + bound.get('literalpath', []) + group_target(cmd)
     if cmd.shell == sh.CMD and name in CMD_WRITERS:
         pos = [w for w in args if not w.text.startswith('/')]
         if name == 'type':
@@ -3503,16 +3513,20 @@ def write_targets(cmd, inv):
         if name in ('copy', 'xcopy', 'robocopy', 'ren', 'rename'):
             return out + pos[-1:] if name != 'robocopy' else out + pos[1:2]
         return out + pos
+    # a native writer PowerShell runs: a group among its arguments may be where it writes
+    grouped = group_target(cmd) if cmd.shell == sh.PS and name in ('curl', 'wget', 'tar') else []
+    if grouped and any(x.text == grouped[0].text for x in out):
+        grouped = []                            # the cmdlet branch's stand-in already
     if name == 'curl':
-        return out + _curl(args, word)
+        return out + _curl(args, word) + grouped
     if name == 'wget':
-        return out + _wget(args, word)
+        return out + _wget(args, word) + grouped
     if cm.PYTHON_RE.match(name):
         return out + _python(cmd, name, args, word, inv.via)
     if name in EVALS:
         return out + _evals(name, args, word)
     if name == 'tar':                           # Windows' own tar.exe runs from PowerShell too
-        return out + _tar(args, word)
+        return out + _tar(args, word) + grouped
     if cmd.shell == sh.PS:
         return out
     if name == 'sed':
@@ -3852,7 +3866,7 @@ def shell_writes(event, ctx, cmd, inv, cwd, role):
                 ctx.place(cmd.cwd).kind not in (repo.MAIN, repo.UNKNOWN):
             continue                            # a target it cannot place, from a worktree or elsewhere
         what = '`%s` writes %s' % (cmd.text, w.text if w.text != '.' else 'files in the directory it runs in')
-        # here() or split_target(): no word to aim
+        # here() or group_target(): no word to aim
         stand_in = (w.text == '.' and cmd.source[w.start:w.end] != '.') or w.start == w.end
         part = any((x.start, x.end) == (w.start, w.end) and x.text != w.text for x in cmd.words)
         rewrite = None if stand_in or part else (lambda path, w=w: retarget(cmd, w, path))   # part: -tDIR
