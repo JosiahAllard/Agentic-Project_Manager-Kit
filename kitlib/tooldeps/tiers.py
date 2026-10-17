@@ -12,11 +12,18 @@ each pass a `kit_tests: tier <tier>: OK|FAILED, exit N` line; then one verdict: 
 both tiers green (fake git, real git)` only when every pass exited 0, else `kit_tests: FAILED,
 exit 1: red tier(s): ...`. A pass that is interrupted (exit 130) stops the run with 130.
 
+The real-git pass runs only REAL_GIT_MODULES, not the whole selection.
+
 Nothing here starts a process or reads the environment.
 """
 import threading
 
 PREFIX = 'kit_tests: '
+# The real-git pass runs only these modules (prefixes): the git, worktree and landing tests, and
+# the daily-only tests/stubs/test_new_repo.py, which skips unless the pass is on real git. The
+# fake pass runs every module.
+REAL_GIT_MODULES = ('tests.git.', 'tests.worktree.', 'tests.gate.test_land',
+                    'tests.stubs.test_new_repo')
 TIERS = (('fake git', '1'), ('real git', '0'))
 INTERRUPTED = 130
 
@@ -55,6 +62,11 @@ class TierOut(object):
                 self._line(self._pending)
                 self._pending = ''
             self.out.flush()
+
+
+def real_git_modules(modules):
+    """The modules of `modules` the real-git pass runs (REAL_GIT_MODULES)."""
+    return [m for m in modules if m.startswith(REAL_GIT_MODULES)]
 
 
 def run_tiers(run_one, out):
