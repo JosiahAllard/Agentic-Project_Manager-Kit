@@ -8,7 +8,7 @@ by anyone without the key no longer verifies. The commit and land steps ask the 
 their change is the approved one (Verifier) and fail closed on any doubt.
 
   PENDING_TTL_S, APPROVED_TTL_S   how long a request waits for a decision, and how long an
-                                  approval lasts (both await the owner's answer to Q-1019)
+                                  approval lasts (the owner's choice: 7 days, 24 hours)
   blob_id(content)                git's blob id of the content (SHA-1 object format)
   repo_id(url)                    a remote URL as the repository's identity: credentials,
                                   scheme and `.git` dropped, the host lower-cased
@@ -17,7 +17,7 @@ their change is the approved one (Verifier) and fail closed on any doubt.
   new_doc(repo, title, head, files, now, reason=None)
                                   the pending document of a request; ApprovalError
   canonical(doc_id, doc)          the bytes a decision's signature covers
-  sign(key, doc_id, doc)          that signature: HMAC-SHA256 under the approval key, hex
+  sign(key, doc_id, doc)          that signature: HMAC with SHA-256 under the approval key, hex
   expires_at(doc)                 when the document stops counting, or None (never or unknown)
   status_at(doc, now)             its status at `now`, expiry applied; None for a bad document
   decide_fields(key, doc_id, doc, decision, now)
@@ -39,7 +39,7 @@ their change is the approved one (Verifier) and fail closed on any doubt.
 
 The document (collection `approvals`, ids A-<n>):
   status      pending, approved, denied, consumed or expired (STATUSES)
-  repo        repo_id of the repository's remote (owner answer Q-1004: the remote URL)
+  repo        repo_id of the repository's remote (the owner's choice: the remote URL)
   title, reason
   head        the commit the change applies to (40 hex)
   files       [{path, base_blob, blob, content}] sorted by path: base_blob is the blob at
@@ -55,7 +55,7 @@ out, as blob binds it. The status is not covered: only `approved` and `consumed`
 both need a signed approval.
 
 Expiry is read, never written by a timer: a pending request expires PENDING_TTL_S after
-created_at; an approval APPROVED_TTL_S after decided_at, consumed or not (owner answer Q-1005:
+created_at; an approval APPROVED_TTL_S after decided_at, consumed or not (the owner's choice:
 a consumed approval verifies until it expires, so a land after the commit can still check it).
 A time that cannot be read counts as expired. Denied and expired are final.
 
@@ -75,12 +75,12 @@ from kitlib.git import cmd
 from .api import AGENT
 from .client import part as _part
 
-# Q-1019 (expiry durations) is still open with the owner: both values below are the plan's
-# recommendation (owner-approval-plan Q3), held here until the answer is wired.
-PENDING_TTL_S = 7 * 86400       # awaits Q-1019: a request not decided by then is expired
-APPROVED_TTL_S = 24 * 3600      # awaits Q-1019: an approval, consumed or not, lasts this long
+# How long an approval counts, as the owner chose them.
+PENDING_TTL_S = 7 * 86400       # a request not decided within 7 days is expired
+APPROVED_TTL_S = 24 * 3600      # an approval, consumed or not, lasts 24 hours
 
-PENDING, APPROVED, DENIED, CONSUMED, EXPIRED = 'pending', 'approved', 'denied', 'consumed', 'expired'
+PENDING, APPROVED, DENIED = 'pending', 'approved', 'denied'
+CONSUMED, EXPIRED = 'consumed', 'expired'
 STATUSES = (PENDING, APPROVED, DENIED, CONSUMED, EXPIRED)
 APPROVE, DENY = 'approve', 'deny'
 DECISIONS = (APPROVE, DENY)
@@ -300,8 +300,8 @@ def canonical(doc_id, doc):
 
 
 def sign(key, doc_id, doc):
-    """The signature of the decision in `doc`: HMAC-SHA256 of canonical() under the approval
-    key `key` (auth.read_approval_key), as 64 lowercase hex digits."""
+    """The signature of the decision in `doc`: HMAC with SHA-256 of canonical() under the
+    approval key `key` (auth.read_approval_key), as 64 lowercase hex digits."""
     return hmac.new(key.encode('ascii'), canonical(doc_id, doc), hashlib.sha256).hexdigest()
 
 
@@ -419,7 +419,7 @@ def remote_id(checkout, remote='origin', run=None):
 
 
 def read_base(checkout, base_blob, run=None):
-    """(text, None) of the blob `base_blob` in the git checkout `checkout` (owner answer Q-1004:
+    """(text, None) of the blob `base_blob` in the git checkout `checkout` (the owner's choice:
     the server reads the base with git for the page's diff), or (None, why). The bytes read must
     hash to `base_blob` and be UTF-8. `run` is kitlib.git.cmd.run or a stand-in."""
     if not isinstance(base_blob, str) or not _HEX40.match(base_blob):

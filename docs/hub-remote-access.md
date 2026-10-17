@@ -278,19 +278,20 @@ strong owner and nobody else; every other caller gets 403 `forbidden`, field `ro
 message that names the Cloudflare Access login. The owner token, a PC browser paired from it and
 an agent are never strong, on either port.
 
-The PC's browser can be made strong from the Access login (owner answer Q-1000):
+The PC's browser can be made strong from the Access login (the owner's choice):
 
-- Logged in through the tunnel, POST `/api/v1/pair/strong` (`kitlib.hubsite.httpd.STRONG_PAIR_ROUTE`,
-  served on the tunnel listener only) answers a one-time link to `/pair` on the local listener,
-  good for `PAIR_TTL_S` (`kitlib/hubsite/auth.py`). The PC's browser that opens it holds a strong
-  session: the local gate marks its requests strong. Anyone but the strong owner gets 403, field
-  `role`, and no code is made.
-- A strong session is kept on disk with the other browser sessions (owner answer Q-1001) and
+- Logged in through the tunnel, POST `/api/v1/pair/strong`
+  (`kitlib.hubsite.httpd.STRONG_PAIR_ROUTE`, served on the tunnel listener only) answers a
+  one-time link to `/pair` on the local listener, good for `PAIR_TTL_S`
+  (`kitlib/hubsite/auth.py`). The PC's browser that opens it holds a strong session: the local
+  gate marks its requests strong. Anyone but the strong owner gets 403, field `role`, and no
+  code is made.
+- A strong session is kept on disk with the other browser sessions (the owner's choice) and
   lasts `SESSION_TTL_S`, as they do. It is held under a key derived from the owner token and the
   approval key, so the owner token alone cannot make one, and replacing either file ends every
   strong session. `hub.py unpair` ends them too.
-- `approval.key` sits beside `owner.token` and `agent.token` in the token folder (owner answer
-  Q-1002). The server makes it at start (`kitlib.hubsite.auth.ensure_approval_key`) and never
+- `approval.key` sits beside `owner.token` and `agent.token` in the token folder (the owner's
+  choice). The server makes it at start (`kitlib.hubsite.auth.ensure_approval_key`) and never
   replaces it; a key that cannot be read stops the start and names the file. Without a usable
   key a strong link pairs nothing. The key is meant to sign the owner's approvals
   (`kitlib/hubsite/approvals.py`).

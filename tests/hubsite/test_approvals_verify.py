@@ -1,8 +1,8 @@
 """kitlib.hubsite.approvals: a request's document, the owner's signed decision, its expiry, the
 check that a change is the approved one, and the Verifier that asks the server and fails closed.
 
-The expiry durations are the module's PENDING_TTL_S and APPROVED_TTL_S (they await the owner's
-answer to Q-1019); every time here is reckoned from them, never from a number of its own."""
+The expiry durations are the module's PENDING_TTL_S and APPROVED_TTL_S, as the owner chose
+them; every time here is reckoned from them, never from a number of its own."""
 import datetime
 import unittest
 
