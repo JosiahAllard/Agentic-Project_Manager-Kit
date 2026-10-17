@@ -86,8 +86,11 @@ repository; Questions, To do and Docs also by id or title.
   incomplete the tunnel stays off and the local listener keeps serving; `status` says why. The
   owner's step-by-step guide to reach the hub from a phone: docs/hub-remote-access.md. A valid
   Access token also makes the caller the strong owner, the only caller a route of role
-  `approver` (`kitlib.hubsite.api.APPROVER`) answers (docs/hub-remote-access.md "The strong
-  owner"). The
+  `approver` (`kitlib.hubsite.api.APPROVER`) answers; from it the tunnel's
+  `/api/v1/pair/strong` makes a one-time link that pairs the PC's browser as the strong owner on
+  the local listener, a session kept on disk under a key derived from the owner token and
+  `approval.key`, which the server makes beside the tokens at start (docs/hub-remote-access.md
+  "The strong owner"). The
   health answer through the tunnel holds fixed words only: `ok`, `version`, `store` (`ok`),
   `git` (`ok`, `failed`, `off` or `unknown`) and `tunnel` (`on` or `bound, keys not fetched`);
   no folder, branch, reason or revision. A health answer the server cannot give leaves as its

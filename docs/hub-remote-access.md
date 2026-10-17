@@ -252,7 +252,8 @@ The start-up notes say that the tunnel listener is on, or why it is off.
    rule).
 
 If the phone reaches the page but the hub says it is not paired or is read-only, remember that the
-tunnel listener has no pairing link: a valid Access token makes you the owner there. How long the
+tunnel listener pairs nothing for itself: a valid Access token makes you the owner there (its one
+pairing route makes a link for the PC's browser, "The strong owner"). How long the
 phone stays signed in is Cloudflare Access's own session; the hub's browser sessions and
 `hub.py unpair` are for the PC's browser on the local port only.
 
@@ -275,8 +276,27 @@ A request that passes the tunnel's Access check makes you the strong owner: the 
 the API as `strong=True`. A route of role `approver` (`kitlib.hubsite.api.APPROVER`) answers the
 strong owner and nobody else; every other caller gets 403 `forbidden`, field `role`, with a
 message that names the Cloudflare Access login. The owner token, a PC browser paired from it and
-an agent are never strong, on either port. Today the tunnel is the only way to be strong. No
-route of the hub uses the `approver` role yet.
+an agent are never strong, on either port.
+
+The PC's browser can be made strong from the Access login (owner answer Q-1000):
+
+- Logged in through the tunnel, POST `/api/v1/pair/strong` (`kitlib.hubsite.httpd.STRONG_PAIR_ROUTE`,
+  served on the tunnel listener only) answers a one-time link to `/pair` on the local listener,
+  good for `PAIR_TTL_S` (`kitlib/hubsite/auth.py`). The PC's browser that opens it holds a strong
+  session: the local gate marks its requests strong. Anyone but the strong owner gets 403, field
+  `role`, and no code is made.
+- A strong session is kept on disk with the other browser sessions (owner answer Q-1001) and
+  lasts `SESSION_TTL_S`, as they do. It is held under a key derived from the owner token and the
+  approval key, so the owner token alone cannot make one, and replacing either file ends every
+  strong session. `hub.py unpair` ends them too.
+- `approval.key` sits beside `owner.token` and `agent.token` in the token folder (owner answer
+  Q-1002). The server makes it at start (`kitlib.hubsite.auth.ensure_approval_key`) and never
+  replaces it; a key that cannot be read stops the start and names the file. Without a usable
+  key a strong link pairs nothing. The key is meant to sign the owner's approvals
+  (`kitlib/hubsite/approvals.py`).
+
+No route of the hub uses the `approver` role yet: the approvals collection and its routes are
+still to come.
 
 ## Checked against Cloudflare's documentation
 
