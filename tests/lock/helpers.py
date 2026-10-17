@@ -13,6 +13,8 @@ import tempfile
 import unittest
 from ctypes import wintypes
 
+from kitlib.host import registry
+
 if os.name == "nt":
     from kitlib.lock import holds as hl
     from kitlib.lock import layout as lay
@@ -91,9 +93,10 @@ def under_agent_host(tmp, argv, timeout=120):
 
 
 def clean_env(**extra):
-    """os.environ without the Claude Code and machine lock variables a test run inherits."""
+    """Inherited environment without registered host sessions and machine lock markers."""
+    sessions = {name.upper() for name in registry.union('session_env')} | {"CLAUDE_PID"}
     env = {k: v for k, v in os.environ.items()
-           if k not in ("CLAUDE_CODE_SESSION_ID", "CLAUDE_PID") and not k.startswith("MACHINE_LOCK_")}
+           if k.upper() not in sessions and not k.upper().startswith("MACHINE_LOCK_")}
     env.update(extra)
     return env
 
