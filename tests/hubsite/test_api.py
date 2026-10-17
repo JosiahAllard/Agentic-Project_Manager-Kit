@@ -2019,6 +2019,12 @@ class ApprovalRouteTest(ApiCase):
             self.assertEqual(cols['approvals'][doc_id]['title'], 'Edit the readme', role)
             self.assertIn('+hello world\n', cols['approvals'][doc_id]['diff'], role)
 
+    def test_the_snapshot_says_strong_to_the_strong_owner_alone(self):
+        self.assertIs(self.ok('GET', '/snapshot', OWNER, strong=True)['strong'], True)
+        for role, strong in ((OWNER, False), (AGENT, True), (AGENT, False), (OWNER, 'yes')):
+            with self.subTest(role=role, strong=strong):
+                self.assertIs(self.ok('GET', '/snapshot', role, strong=strong)['strong'], False)
+
 
 if __name__ == '__main__':
     unittest.main()

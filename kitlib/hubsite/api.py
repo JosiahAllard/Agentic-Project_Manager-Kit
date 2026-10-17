@@ -39,6 +39,8 @@ approval consumed by a commit. Both take the `if_version` the caller read and ar
 and an ApprovalError is answered as a HubError of its code and field. GET approvals/{id}/verify
 (AGENT, query repo, head, files as JSON {path: blob} and an optional commit) answers
 {ok, valid, why} and never the key or the sig; an unknown id is valid false, approvals.WHY_UNKNOWN.
+GET snapshot carries `strong`: true only on the strong owner's call (Request.strong), so the page
+shows Approve and Deny as usable; the decide route checks the role itself all the same.
 
 Fields. A write route names the body fields it takes; any other field is refused (`invalid`, the
 field named), so a body cannot carry a field another role owns (an agent posting a question
@@ -1246,7 +1248,8 @@ def snapshot(api, req):
             missing[name] = _reason(e)
     return {'revision': revision, 'collections': docs,
             'pending': api.pending(),
-            'views': views, 'unavailable': missing, 'pm_seen': api.pm_seen()}
+            'views': views, 'unavailable': missing, 'pm_seen': api.pm_seen(),
+            'strong': req.strong is True}
 
 
 def health(api, req):
