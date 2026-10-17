@@ -3,6 +3,7 @@ are all under a temp home; a server is on port 0 or is one this test built; no b
 opened."""
 import _thread
 import contextlib
+import datetime
 import importlib.util
 import io
 import json
@@ -16,7 +17,7 @@ import threading
 import unittest
 from unittest import mock
 
-from kitlib.hubsite import auth, httpd, schema, serve, todosteps, tunnel
+from kitlib.hubsite import approvals, auth, httpd, schema, serve, todosteps, tunnel
 from kitlib.hubsite import settings as hub_settings
 from kitlib.hubsite.store import Store, StoreBusy
 from tests.hubsite import httpfix
@@ -94,8 +95,8 @@ class UsageCase(CliCase):
         code, out, err = self.run_cli()
         self.assertEqual((code, out), (2, ''))
         self.assertIn('USAGE: give a verb: serve, status, setup, open, unpair, stop, restart, '
-                      'migrate, questions, answer, todos, stories, to-pm, inbox, pending, wait '
-                      'or validate\n', err)
+                      'migrate, questions, answer, todos, stories, to-pm, inbox, approvals, '
+                      'pending, wait or validate\n', err)
         self.assertEqual(sorted(HUB.VERBS), sorted(HUB.VERB_NAMES))     # every verb it has
         self.assertEqual(self.run_cli('launch')[0], 2)
         self.assertEqual(self.run_cli('serve', '--bind', '0.0.0.0')[0], 2)
@@ -1205,6 +1206,56 @@ class VerbCase(CliCase):
                        '--option', 'left::go left', '--option', 'right :: go right')
 
 
+class ApprovalsCase(VerbCase):
+    """`approvals` lists and shows the store's requests with their status read now."""
+
+    def setUp(self):
+        VerbCase.setUp(self)
+        now = datetime.datetime.now(datetime.timezone.utc)
+        old = now - datetime.timedelta(seconds=approvals.APPROVED_TTL_S + 60)
+        files = [{'path': 'AGENTS.md', 'base_blob': 'b' * 40, 'content': 'new\n'},
+                 {'path': 'gone.md', 'base_blob': 'c' * 40, 'content': None}]
+        live = approvals.new_doc('https://github.com/o/r', 'live one', 'a' * 40, files, now,
+                                 reason='why not')
+        stale = dict(approvals.new_doc('https://github.com/o/other', 'stale one', 'a' * 40,
+                                       files, old),
+                     status='approved', decision='approve', decided_at=old.isoformat())
+        self.assertEqual(self.hub.store.add('approvals', live).id, 'A-001')
+        self.assertEqual(self.hub.store.add('approvals', stale).id, 'A-002')
+        self.blob = approvals.blob_id('new\n')
+
+    def test_the_list_applies_the_expiry_and_filters(self):
+        self.assertEqual(self.ok('approvals'), ['A-001 pending [github.com/o/r] live one',
+                                                'A-002 expired [github.com/o/other] stale one'])
+        self.assertEqual(self.ok('approvals', '--status', 'expired'),
+                         ['A-002 expired [github.com/o/other] stale one'])
+        self.assertEqual(self.ok('approvals', '--status', 'approved'), [])
+        self.assertEqual(self.ok('approvals', '--repo', 'GitHub.com/o/r'),
+                         ['A-001 pending [github.com/o/r] live one'])
+        items = json.loads('\n'.join(self.ok('approvals', '--json')))['items']
+        self.assertEqual([(d['id'], d['status']) for d in items],
+                         [('A-001', 'pending'), ('A-002', 'expired')])
+
+    def test_show_prints_the_request_and_its_files(self):
+        self.assertEqual(self.ok('approvals', 'show', 'A-001'), [
+            'A-001 pending [github.com/o/r] live one', 'head ' + 'a' * 40, 'reason why not',
+            'AGENTS.md %s -> %s' % ('b' * 40, self.blob), 'gone.md %s -> deleted' % ('c' * 40)])
+        self.assertIn('no approval A-009', self.refused('approvals', 'show', 'A-009'))
+
+    def test_a_document_that_is_not_an_object_is_malformed(self):
+        real = self.hub.store.snapshot
+
+        def snapshot():
+            revision, docs = real()
+            docs['approvals']['A-003'] = ['not', 'an', 'object']
+            return revision, docs
+
+        with mock.patch.object(self.hub.store, 'snapshot', snapshot):
+            self.assertEqual(self.ok('approvals')[2].rstrip(), 'A-003 malformed [-]')
+            self.assertEqual(self.ok('approvals', 'show', 'A-003')[0].rstrip(),
+                             'A-003 malformed [-]')
+
+
 class PendingCase(VerbCase):
     def test_pending_prints_the_items_get_pending_answers(self):
         self.assertEqual(self.ok('pending'), [])
@@ -1559,8 +1610,8 @@ class ArgumentCase(CliCase):
              ('stories', 'set', 'S-001', '--status', 'review', '--if-version', '1'),
              ('stories', 'withdraw', 'S-001'), ('to-pm',), ('to-pm', 'add', '--text', 't'),
              ('to-pm', 'send'), ('to-pm', 'reply', 'P-001', 'text'), ('inbox',),
-             ('inbox', 'add', '--text', 't'), ('inbox', 'read', 'M-001'), ('pending',),
-             ('wait', '--timeout', '0'))
+             ('inbox', 'add', '--text', 't'), ('inbox', 'read', 'M-001'), ('approvals',),
+             ('approvals', 'show', 'A-001'), ('pending',), ('wait', '--timeout', '0'))
 
     def test_every_verb_that_asks_is_exit_3_with_the_start_command_when_no_server_runs(self):
         self.assertEqual(self.run_cli('setup')[0], 0)
