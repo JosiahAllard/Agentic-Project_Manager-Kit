@@ -4849,7 +4849,7 @@ def home_config(event, ctx, gc, role):
     (commands.HOME_ENV_NAMES, Command.home_env), in a repository with a PM data record, in every
     session but the owner's own (rule git-push-pmdata): git would read another user config, whose
     url.<base>.pushInsteadOf can send the push to a public remote while the pre-push hook, reading
-    the same config, takes it for the private one (KIT-GUARD-HOME-GITCONFIG)."""
+    the same config, takes it for the private one."""
     name = gc.inv.cmd.home_env if gc.inv is not None else False
     if not name or is_owner_session(event, ctx) or not pmdata_recorded(ctx, gc.dir):
         return None

@@ -1,4 +1,4 @@
-"""The routes past the pre-push leak stage that KIT-GUARD-REMOTE-REWRITE and KIT-GUARD-PMDATA-BYPASS
+"""The routes past the pre-push leak stage that the remote-rewrite and pm-data-bypass guards
 name (docs/guard.md "Rules", docs/pm-data-branch.md "Pre-push guard"). Each is denied only when the
 repository has a PM data record (or, for a copy, holds the recorded root), and never in the owner's
 own session:
@@ -226,7 +226,7 @@ class ConfigFileEnv(Base):
 
 
 class HomeConfig(Base):
-    """KIT-GUARD-HOME-GITCONFIG: a line that sets HOME, XDG_CONFIG_HOME, USERPROFILE, HOMEDRIVE or
+    """A line that sets HOME, XDG_CONFIG_HOME, USERPROFILE, HOMEDRIVE or
     HOMEPATH (git for Windows finds the user config through each) with a git push makes git read
     another user config, whose url.*.pushInsteadOf the pre-push hook would read too."""
 

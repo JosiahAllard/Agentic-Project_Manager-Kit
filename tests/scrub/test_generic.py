@@ -16,7 +16,7 @@ invented paths on purpose), the two name checks read tests/ too.
   retired name (kitlib.config.migration.OLD_DIR_NAME), read from those files at test time, so this
   file names none of them. Each may stand only on a line of KIT_NAMES_ALLOWED; everywhere else code
   derives it and text says what it is. The folder's current name (kitlib.config.user.DIR_NAME) is
-  neutral (KIT-CONFIG-DIR-RENAME), and so is the Claude plugin's name (.claude-plugin/plugin.json),
+  neutral, and so is the Claude plugin's name (.claude-plugin/plugin.json),
   so neither is a kit name.
 
 An allow entry that matches nothing is printed as stale, not failed: the line it allowed is gone.

@@ -545,7 +545,7 @@ class DefaultBase(GitRepo):
         self.assertEqual(self.bases, ['master'])
 
     def test_a_killed_read_of_main_is_no_base_never_master(self):
-        """KIT-GIT-EXIT1-ANSWERS-2: a git ended from outside exits 1 having printed nothing, the
+        """A git ended from outside exits 1 having printed nothing, the
         shape `rev-parse --verify --quiet` gave for "no such ref"; it picked master."""
         real = gitcmd.spawner()
 

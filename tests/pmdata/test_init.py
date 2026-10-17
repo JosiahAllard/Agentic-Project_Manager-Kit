@@ -504,7 +504,7 @@ class ReviewFixTest(_Base):
 
 
 class KilledReadsTest(_Base):
-    """KIT-GIT-EXIT1-ANSWERS: `rev-parse -q`, `config --get` and `config --get-regexp` answer "no
+    """`rev-parse -q`, `config --get` and `config --get-regexp` answer "no
     such ref/key" as exit 1 with no output, which is also what a git ended from outside leaves. A
     killed read must refuse or fail, never pass for "absent"."""
 

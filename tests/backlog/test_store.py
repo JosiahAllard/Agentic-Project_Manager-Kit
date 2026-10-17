@@ -680,7 +680,7 @@ def kill_store_reads(when=lambda: True):
 
 
 class AKilledStoreReadIsNoAnswer(StoreCase):
-    """KIT-GIT-EXIT1-ANSWERS: `rev-parse --verify --quiet` says "no such ref" as exit 1 with no
+    """`rev-parse --verify --quiet` says "no such ref" as exit 1 with no
     output, which a git ended from outside also leaves; the store must not read a kill as an
     empty store."""
     remote = False
@@ -700,7 +700,7 @@ class AKilledStoreReadIsNoAnswer(StoreCase):
         self.assertTrue(why)
 
     def test_landable_reads_a_killed_branch_read_as_no_answer_not_no_branch(self):
-        """KIT-GIT-EXIT1-ANSWERS-2: `rev-parse --verify --quiet refs/heads/<b>` said "no such
+        """`rev-parse --verify --quiet refs/heads/<b>` said "no such
         branch" as exit 1 with no output, the shape a kill leaves."""
         from kitlib.backlog import landable as L
         snap = self.store.load()

@@ -212,7 +212,7 @@ def _check(root, out, base, head, worktree, report, failures):
 
     # A base that does not resolve would make every comparison below empty, and an empty one passes.
     # known=True: '' is git's "no such commit"; None is no answer, a git ended from outside
-    # included (KIT-GIT-EXIT1-ANSWERS-2: `rev-parse --verify --quiet` said "no such commit" as exit
+    # included (`rev-parse --verify --quiet` said "no such commit" as exit
     # 1 with no output, a killed git's shape, gitrefs.KILLED_SHAPE).
     verified, why = gitrefs.resolve(base, root, known=True)
     if verified == '':

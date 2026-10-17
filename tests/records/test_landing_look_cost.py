@@ -1,5 +1,5 @@
-"""kitlib.records.landing: a take that finds the lock held asks git nothing and looks up no process
-(KIT-LANDLOCK-LOOK-COST); a take that wins writes the same record as before."""
+"""kitlib.records.landing: a take that finds the lock held asks git nothing and looks up no process;
+a take that wins writes the same record as before."""
 import json
 import os
 import unittest

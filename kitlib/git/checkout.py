@@ -36,7 +36,7 @@ def main_refusal(path, what, tool, rule_pointer=None):
                                       listing))
 
 
-# Scratch patch scripts (from the PM kit's worktree_paths.py, GUARD-WORKTREE-WRITES): an agent's
+# Scratch patch scripts (from the PM kit's worktree_paths.py): an agent's
 # script that opens a RELATIVE path writes wherever its cwd happens to be, the main checkout
 # included. Through these, a relative path joins the worktree `root` the script names, never the
 # cwd, and every path is judged by repo.check_write first. There is one kit copy, so the

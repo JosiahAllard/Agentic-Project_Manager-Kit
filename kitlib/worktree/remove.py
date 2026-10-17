@@ -982,7 +982,7 @@ def tag_tip(main, tag):
     """`(commit, None)` `refs/tags/<tag>` peels to, `('', None)` when there is no such tag, or
     `(None, why)` when git cannot tell.
 
-    GOTCHA: KIT-GIT-EXIT1-ANSWERS - this asked `rev-parse -q --verify`, whose "no such tag" is exit
+    GOTCHA: this asked `rev-parse -q --verify`, whose "no such tag" is exit
     1 with no output, a killed git's shape (refs.KILLED_SHAPE): a kill read as a free tag name.
     refs.resolve(known=True) tells the two apart."""
     return refs.resolve('refs/tags/%s' % tag, main, known=True)

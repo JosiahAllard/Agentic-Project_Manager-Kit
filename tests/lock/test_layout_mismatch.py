@@ -1,4 +1,4 @@
-"""KIT-LOCK-RUN-LAYOUT-MISMATCH regression guards (kitlib.lock.run.book).
+"""Layout-mismatch regression guards (kitlib.lock.run.book).
 
 A run record's `layout` is a label (kitlib.lock.layout.slot_key); every booking counts slots from
 the store's layout.json (kitlib.lock.layout.in_force), and the queue plans only from queue.json's
