@@ -140,14 +140,27 @@ RERUN_ENV = "RENDER_GLB_LOCKED"     # set only for the Blender run machine_lock_
 
 
 def usable_python(python, binary):
-    """True when `python` is a real file, not under a WindowsApps folder (the Store stub) and not
-    the Blender binary itself."""
+    """The real interpreter path behind `python`, or None. `python` is asked for its sys.executable,
+    so the Python Install Manager alias in WindowsApps resolves to the real install. None when it is
+    not a file, the run fails, times out or prints nothing, or the answer is still under a
+    WindowsApps folder (the Store stub) or is the Blender binary itself."""
     if not python or not os.path.isfile(python):
-        return False
-    path = os.path.normcase(os.path.abspath(python))
+        return None
+    try:
+        done = subprocess.run([python, "-c", "import sys;print(sys.executable)"], capture_output=True,
+                              text=True, timeout=10, creationflags=subprocess.CREATE_NO_WINDOW)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    lines = done.stdout.strip().splitlines() if done.returncode == 0 else []
+    real = lines[-1].strip() if lines else ""
+    if not real or not os.path.isfile(real):
+        return None
+    path = os.path.normcase(os.path.abspath(real))
     if "windowsapps" in path.split(os.sep):
-        return False
-    return not binary or path != os.path.normcase(os.path.abspath(binary))
+        return None
+    if binary and path == os.path.normcase(os.path.abspath(binary)):
+        return None
+    return real
 
 
 def machine_lock_rerun(opts, argv, binary):
@@ -164,9 +177,10 @@ def machine_lock_rerun(opts, argv, binary):
               "KIT_MACHINE_LOCK to it. Exit 2.", file=sys.stderr)
         sys.exit(2)
     # inside Blender sys.executable may be Blender itself, so the lock tool runs under a python on PATH
-    python = shutil.which("python") or sys.executable
-    if not usable_python(python, binary):
-        print(f"[machine-lock] refused: no usable python to run the lock tool (got {python!r}: missing, "
+    found = shutil.which("python") or sys.executable
+    python = usable_python(found, binary)
+    if not python:
+        print(f"[machine-lock] refused: no usable python to run the lock tool (got {found!r}: missing, "
               "a WindowsApps Store stub, or Blender itself). Put a real python first on PATH. Exit 2.",
               file=sys.stderr)
         sys.exit(2)
