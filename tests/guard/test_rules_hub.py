@@ -545,6 +545,7 @@ class OwnerVerbs(Hub):
         'serve',
         'setup --whatif',
         'approvals',
+        'approvals show A-1',
     )
 
     def test_owner_verbs_are_denied(self):

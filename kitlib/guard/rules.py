@@ -2228,7 +2228,15 @@ def worktree_alternative(ctx, target, main_top, cwd, rewrite=None, run=None):
     no_wt, instead = new_worktree(ctx, main_top)
     if no_wt:
         return no_wt, instead
+    if rewrite is None and run is not None and cwd and paths.norm(target) == paths.norm(cwd):
+        return (MAIN_CWD_HINT, instead)          # it writes through the main checkout it runs in
     return 'Make the change in a worktree of it (%s there); the lander brings it to main:' % fwd(rel), instead
+
+
+MAIN_CWD_HINT = ('It writes through its working directory, which is the main checkout: cd into your worktree first, '
+                 'in the same call (no tool keeps a cd between calls), or run a script or module by absolute path '
+                 '(python <worktree>/tools/x.py -C <worktree>; python -m unittest discover -s <worktree>/tests/<pkg> '
+                 '-t <worktree>). No worktree yet:')
 
 
 # ---------------------------------------------------------------- shell writes

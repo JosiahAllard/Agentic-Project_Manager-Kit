@@ -8,7 +8,7 @@ Layout under the store folder `root` (the caller resolves it; nothing here reads
                                     holds, so that folder opens as a store with no conversion),
                                     plus the store's own `version` (int) and `updated_at`; a
                                     document with no `version` (an old-hub file) is at version 0
-    <root>/_meta.json               {revision, counters: {Q, M, T, P, S}}
+    <root>/_meta.json               {revision, counters: {Q, M, T, P, S, A}}
     <root>/_store.lock              the single-writer lock (below); never a document
 
 Only schema.COLLECTIONS are read and written; any other folder (parked/ from the old hub) is left
