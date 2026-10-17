@@ -7,12 +7,15 @@ import os
 import unittest
 from unittest import mock
 
+from kitlib import pmdata
+from kitlib.backlog import opener
 from kitlib.backlog import plan as pmod
+from kitlib.backlog import pull_branch
 from kitlib.backlog.errors import Failure, Refusal, Usage
 from kitlib.git import cmd, refs
 
 from tests.backlog import test_cli, test_verbs
-from tests.backlog.helpers import ADD_FLAGS, TODAY, StoreCase, priced
+from tests.backlog.helpers import ADD_FLAGS, TODAY, StoreCase, kit_json_ref, priced
 from tests.realgit import real_git
 
 FOO = 'kit/foo'
@@ -501,6 +504,101 @@ class FoundOnNoRemote(StoreCase):
                       found_on='kit/nowhere', why_not_folded=WHY)
         self.assertIn('names a branch that exists neither here nor on a remote', str(cm.exception))
         self.assertIsNone(self.get('NEW'))
+
+
+# The PM data worktree's own .kit.json, as a pmdata store writes it: its main branch is
+# the data branch and its remote the data remote; `code_main` names the code's main (or is unset).
+PM_KIT_JSON = {'backlog': {'id_grammar': 'upper', 'code_main': 'main'},
+               'repo': {'main_branch': 'pmdata', 'remote': 'private'}}
+
+
+class PmDataWorktree(StoreCase):
+    """The PM data worktree (kitlib.pmdata): a worktree of the code repository on the data branch,
+    whose .kit.json names the data remote. The code lands on the main checkout's remote
+    (`repo.remote`, origin here), so `add --found-on` measures from that remote's main, not from
+    the local main, which lags it until somebody pulls (kitlib/backlog/opener.py `open_store`,
+    kitlib/backlog/pull_branch.py `code_config`). Build the branches first, the worktree last:
+    `branch_with` adds everything under the main checkout."""
+    branch_with = FoundOn.branch_with
+    land = FoundOn.land
+
+    def pm_worktree(self, kit_json=PM_KIT_JSON):
+        tree = self.repo.git('rev-parse', 'main^{tree}')
+        root = self.repo.git('commit-tree', tree, '-m', 'PM data root')    # no history with main
+        pmdata.write(self.repo.common_dir(), 'pmdata', 'private', root)
+        self.repo.git('branch', 'pmdata', root)
+        self.repo.git('remote', 'add', 'private', self.repo.remote)
+        path = os.path.join(self.repo.root, '.claude', 'worktrees', 'pm')
+        self.repo.git('worktree', 'add', '-q', path, 'pmdata')
+        kit_json_ref(self.repo, kit_json, root=path)
+        return path
+
+    def lag_main(self, stale):
+        """Local main back at `stale`, behind origin/main: a main checkout nobody pulled into."""
+        self.repo.git('update-ref', 'refs/heads/main', stale)
+        self.repo.git('checkout', '-q', '-f', 'main')
+        self.assertNotEqual(self.repo.git('rev-parse', 'main'),
+                            self.repo.git('rev-parse', 'refs/remotes/origin/main'))
+
+    def later_on_main(self, path='kitlib/x/later.py'):
+        """A commit on origin/main touching `path`; returns the commit before it."""
+        stale = self.repo.head()
+        self.repo.write(path, 'later\n')
+        self.repo.commit('later on main', path)
+        self.repo.git('push', '-q', 'origin', 'main')
+        return stale
+
+    def plan(self, ctx, scopes, found_on):
+        return pmod.plan_add(ctx.store.load(), ctx, 'NEW', 'a defect found while working', scopes,
+                             found_on=found_on, why_not_folded=WHY)
+
+
+class FoundOnInThePmDataWorktree(PmDataWorktree):
+
+    def test_a_branch_cut_from_the_code_remotes_main_is_measured_from_it(self):
+        # kit/new is cut after kitlib/x/later.py landed; local main still lacks it. Measured from
+        # the local main, later.py would read as kit/new's own work.
+        stale = self.later_on_main()
+        self.branch_with('kit/new', 'kitlib/y/own.py')
+        self.lag_main(stale)
+        ctx = opener.open_store(self.pm_worktree(), fetch=False)
+        change = self.plan(ctx, ['kitlib/x/later.py'], 'kit/new')
+        self.assertIn('ADDED NEW, found on kit/new', change.lines)
+        with self.assertRaises(Refusal) as cm:
+            self.plan(ctx, ['kitlib/y/**'], 'kit/new')
+        self.assertIn('kitlib/y/** vs kitlib/y/own.py (changed on kit/new)', str(cm.exception))
+
+    def test_a_branch_that_landed_on_the_code_remotes_main_is_proof(self):
+        stale = self.repo.head()
+        self.land('kit/done', 'kitlib/x/done.py')
+        self.lag_main(stale)
+        ctx = opener.open_store(self.pm_worktree(), fetch=False)
+        change = self.plan(ctx, ['docs/y.md'], 'kit/done')
+        self.assertTrue(any(line.startswith('NOTE: branch kit/done landed on main as ')
+                            for line in change.lines), change.lines)
+
+    def test_an_unset_code_main_is_the_main_checkouts_main(self):
+        self.branch_with(FOO, 'kitlib/x/a.py')
+        kit_json = {'backlog': {'id_grammar': 'upper'}, 'repo': PM_KIT_JSON['repo']}
+        ctx = opener.open_store(self.pm_worktree(kit_json), fetch=False)
+        self.assertEqual(ctx.code_main, 'main')
+        change = self.plan(ctx, ['docs/y.md'], FOO)
+        self.assertIn('ADDED NEW, found on kit/foo', change.lines)
+
+    def test_a_code_main_that_does_not_resolve_still_fails(self):
+        kit_json = {'backlog': {'id_grammar': 'upper', 'code_main': 'trunk'},
+                    'repo': PM_KIT_JSON['repo']}
+        ctx = opener.open_store(self.pm_worktree(kit_json), fetch=False)
+        with self.assertRaises(Failure) as cm:
+            self.plan(ctx, ['docs/y.md'], 'kit/gone')
+        self.assertIn('`trunk` does not resolve', str(cm.exception))
+        self.assertIn('backlog.code_main', str(cm.exception))
+
+    def test_outside_the_pm_data_worktree_the_code_remote_is_repo_remote(self):
+        self.pm_worktree()
+        self.assertIsNone(pull_branch.code_config(self.repo.root))
+        ctx = opener.open_store(self.repo.root, fetch=False)
+        self.assertEqual((ctx.code_remote, ctx.code_main), (ctx.remote, ctx.main_branch))
 
 
 class FoundOnCli(unittest.TestCase):
