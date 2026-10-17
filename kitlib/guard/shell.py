@@ -514,7 +514,7 @@ class _Scan(object):
             if self.space(c) or c in '\r\n':
                 break
             if sh == PS and c == '(' and index:
-                # `$x[(sv PWD C:\m)]`: a ( inside the word's [ ] index is part of the word, and its
+                # `$x[(sv PWD <main>)]`: a ( inside the word's [ ] index is part of the word, and its
                 # commands nested ones
                 j = self.i
                 self.i += 1
