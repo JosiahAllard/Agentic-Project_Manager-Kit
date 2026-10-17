@@ -75,6 +75,46 @@ def blocked_on_error(v, rules):
         v, ', '.join(BLOCKED_ON_PLAIN), ', '.join(p + '<name>' for p in BLOCKED_ON_PREFIXES)))
 
 
+# --- hold citations (R-2092: a hold cites the ruling, question or item it waits on) ---------------
+
+UNCITED_KINDS = ('deliberate', 'owner')     # members that name nothing they wait on
+CITE_RE = re.compile(r'(?<![A-Za-z0-9-])(?:R-[0-9]{4,}|Q-[0-9]{3,}|item:[A-Za-z0-9][A-Za-z0-9.-]*)')
+BLOCK_NOTE = 'Blocked on '                  # the body line plan_block writes for `--reason`
+
+
+def cites(text):
+    """The R-nnnn, Q-nnn and item:<ID> citations in `text`, in order."""
+    return CITE_RE.findall(text or '')
+
+
+def hold_citations(rec):
+    """What a record's hold cites: ids in `q`, `owner_ask`, the `blocked_on` members and the body
+    lines `block --reason` writes (`Blocked on ...`). `hold_ruling` and `resume` are not read:
+    they are the rulings that released a hold or unparked the record, not why it is held, and
+    `ref` is where the record came from."""
+    out = []
+    for key in ('q', 'owner_ask', 'blocked_on'):
+        for v in rec.all(key):
+            out.extend(cites(v))
+    for line in (rec.body or '').split('\n'):
+        if line.startswith(BLOCK_NOTE):
+            out.extend(cites(line))
+    return out
+
+
+def block_citation_error(members, reason=None, owner_ask=None):
+    """None, or why `block --on <members>` may not be written: a `deliberate` or `owner` member
+    names nothing it waits on, so `--reason` or `--owner-ask` must cite an R-nnnn, Q-nnn or
+    item:<ID> (R-2092: an uncited hold is void)."""
+    bare = [m for m in members if m in UNCITED_KINDS]
+    if not bare or cites(reason) or cites(owner_ask):
+        return None
+    return ('`block --on %s` cites nothing it waits on: name the ruling, question or item and its '
+            'end condition in `--reason` (or `--owner-ask`), e.g. `--reason "R-nnnn: until <end '
+            'condition>"`, a Q-nnnn or an item:<ID> (R-2092: an uncited hold is void)'
+            % ' --on '.join(bare))
+
+
 def blocker_kind(member):
     """The held-breakdown group of a `blocked_on` member, or None for `-` or an unknown one."""
     for prefix in BLOCKED_ON_PREFIXES:
