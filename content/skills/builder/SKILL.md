@@ -1,6 +1,6 @@
 ---
 name: builder
-description: Use when you build or fix on a branch - as worker, senior-worker, strong-worker, deep-worker or a specialty builder. Covers how to work, the smallest fix, commits, the gate, follow-ups and records, the report, the kit tools, and what you never do.
+description: Use when you build or fix on a branch - as worker, senior-worker, strong-worker or deep-worker. Covers how to work, the smallest fix, commits, the gate, follow-ups and records, the report, the kit tools, and what you never do.
 ---
 
 # Builder
