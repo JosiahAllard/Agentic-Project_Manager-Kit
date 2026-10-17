@@ -11,6 +11,10 @@ kit's tools/_owner_only.py; config moved from "doc_budget" to the `owner` sectio
                  time the email is asked for, so rules that never judge an identity read no
                  machine config).
   agent_emails   author emails known to be agents'. Never the owner's, whatever else says so.
+  trailer        the claim's trailer key (default Owner-Approved). Never Owner-Approval, in any
+                 case: that is the hub approval's trailer (docs/commit.md "Owner approval"), and
+                 read as the claim key every hub:A-<n> value would be an owner claim. load()
+                 refuses it through trailer_problem().
 
 Fail-closed: an unset owner email (or one also listed as an agent's) proves nothing, so every
 owner-only change blocks. For a landing check `merge()` unions the path lists of the base and the
@@ -25,6 +29,17 @@ from . import schema
 DEFAULT = tuple(schema.OWNER_PATHS)
 DEFAULT_EXCEPT = tuple(schema.OWNER_PATHS_EXCEPT)
 TRAILER = 'Owner-Approved'
+APPROVAL_TRAILER = 'Owner-Approval'     # kitlib.guard.ownercommits.TRAILER
+
+
+def trailer_problem(key):
+    """None when `key` may be the "owner".trailer, else why not: git matches trailer keys
+    without regard to case, so Owner-Approval in any case is the hub approval's trailer."""
+    if (key or '').strip().lower() == APPROVAL_TRAILER.lower():
+        return ('"owner".trailer may not be %s: that is the hub approval\'s trailer (commit.py '
+                '--owner-approval), and a claim key equal to it would read every hub approval as '
+                'an owner claim' % APPROVAL_TRAILER)
+    return None
 
 
 def norm(path):

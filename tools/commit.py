@@ -4,6 +4,12 @@
             [--owner-authored] [--owner-approved VALUE ...] [--lander-main-checkout] PATH ...
       commit exactly PATH ... in the work tree DIR is in (default: here); in a kit checkout, a
       PATH under content/ (or kit.json, hosts.json) renders first and commits the rendered files too
+  commit.py [-C DIR] -m SUBJECT [-b BODY | --body-file FILE] [--model NAME] [--host NAME]
+            --owner-approval hub:A-<n> PATH ...
+      write, commit and consume the change the owner approved on the hub; PATH ... are exactly
+      its files (docs/commit.md "Owner approval")
+  commit.py [-C DIR] --owner-approval hub:A-<n> --consume COMMIT
+      consume the approval for COMMIT, made already, when the consume after the commit failed
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.commit, prints and exits.
 Exit codes (kitlib.commit): 0 committed, 1 refused or git failed, 2 USAGE (also the main-checkout
@@ -43,7 +49,7 @@ def parser():
                description='Stage explicit paths and commit them with the right trailers.')
     p.add_argument('-C', dest='root', default='.',
                    help='a path in the work tree to commit in (default: here)')
-    p.add_argument('-m', dest='subject', required=True, action=OneSubject,
+    p.add_argument('-m', dest='subject', default=None, action=OneSubject,
                    help='the subject line (once; the body goes in -b or --body-file)')
     body = p.add_mutually_exclusive_group()
     body.add_argument('-b', dest='b', default='',
@@ -61,15 +67,26 @@ def parser():
                    help="the owner's own commit: Owner-Authored: yes, no Co-Authored-By")
     p.add_argument('--owner-approved', action='append', default=[],
                    help='an owner-only path or blanket entry the owner approved (repeatable)')
+    p.add_argument('--owner-approval', dest='owner_approval', default=None, metavar='hub:A-<n>',
+                   help='commit the change the owner approved on the hub (its id); the paths '
+                        'are exactly its files')
+    p.add_argument('--consume', default=None, metavar='COMMIT',
+                   help='with --owner-approval: consume the approval for COMMIT, made already '
+                        '(no -m, no paths)')
     p.add_argument('--lander-main-checkout', action='store_true',
                    help='a lander commit in the main checkout (refused anywhere else)')
-    p.add_argument('paths', nargs='+', help='the files to commit, each named')
+    p.add_argument('paths', nargs='*', help='the files to commit, each named')
     return p
 
 
 def main(argv=None):
     p = parser()
     a = p.parse_args(argv)
+    if a.consume is None:           # --consume's own mistakes are kitlib.commit's usage errors
+        if a.subject is None:
+            p.error('the following arguments are required: -m')
+        if not a.paths:
+            p.error('the following arguments are required: paths')
     try:
         host = registry.choose(a.host)
     except registry.RegistryError as e:
@@ -81,7 +98,8 @@ def main(argv=None):
     out = C.commit(C.request(root, a.subject, a.paths, b=a.b, body_file=a.body_file,
                              model=a.model, owner_authored=a.owner_authored,
                              owner_approved=a.owner_approved,
-                             lander_main_checkout=a.lander_main_checkout, provider=host))
+                             lander_main_checkout=a.lander_main_checkout, provider=host,
+                             owner_approval=a.owner_approval, consume=a.consume))
     for line in out.lines:
         print(line, flush=True)
     return out.code

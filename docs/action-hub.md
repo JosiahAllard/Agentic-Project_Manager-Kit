@@ -411,7 +411,7 @@ what verifies) are `kitlib/hubsite/approvals.py`, "The document"; the routes are
 | repo | agent | the repository, as the repo_id of its remote URL (`approvals.repo_id`) |
 | title, reason | agent | what the change is and why; reason is optional |
 | head | agent | the commit the change applies to (40 hex) |
-| files | agent, server | `[{path, base_blob, blob, content}]` sorted by path; the server computes `blob` from `content` |
+| files | agent, server | `[{path, base_blob, blob, content}]` sorted by path; the server computes `blob` from `content`. A null `base_blob` is a new file, a null `content` (and `blob`) a delete (`approvals.new_doc`) |
 | diff | server | the unified diff lines the page shows, from the base read with git from this machine's checkout of `repo` to `content` (`approvals.diff`) |
 | created_at | server | ISO time of the request |
 | decision, decided_at, sig | server | once the owner decides; `sig` (the approval key's signature) on an approval only |
@@ -430,6 +430,12 @@ Routes, below `/api/v1`:
 - GET `/approvals/{id}/verify` (agent): query `repo`, `head`, `files` (JSON `{path: blob}`) and an
   optional `commit`; answers `{ok, valid, why}`, never the key or the sig. With `commit`, only an
   approval consumed by that commit is valid.
+
+The agent's side of an approval is `commit.py --owner-approval hub:A-<n>` (docs/commit.md "Owner
+approval"): it verifies, writes and commits the approved files, then consumes the approval for that
+commit and verifies it with the commit; `gate land` and the pre-push hook verify it again
+(`kitlib.guard.ownercommits`). An approval verifies for 24 hours after the decision, consumed or
+not (`approvals.APPROVED_TTL_S`).
 
 `GET /api/v1/snapshot` carries the collection whole, and `strong`: true only on the strong owner's
 call (`test_the_snapshot_says_strong_to_the_strong_owner_alone` in `tests/hubsite/test_api.py`).
