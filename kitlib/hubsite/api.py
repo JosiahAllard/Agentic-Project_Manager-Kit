@@ -4,7 +4,8 @@ hub site design, section 2 "HTTP API" and section 9).
   ROUTES     the table every transport iterates: Route(method, pattern, role, handler). A pattern
              is a full path under BASE; a `{name}` segment takes one path segment. role is OWNER,
              AGENT, ANY or APPROVER: who may call it ("Roles").
-  Api(store, views=None, clock=None, session_keys=None, now=None)
+  Api(store, views=None, clock=None, session_keys=None, now=None, approval_key=None,
+      checkout=None)
              .call(method, path, role, body=None, query=None, via='', raise_unexpected=False,
                    agent_words=False, strong=False) -> (status, object)
              via names the transport (web, desktop-mcp, cli, tunnel, ...); every write records
@@ -26,7 +27,18 @@ that request, kitlib.hubsite.httpd passes it on). Every other caller is refused 
 field `role`, with NOT_STRONG: the owner token, a browser session paired from it and an agent are
 never strong. strong is a call argument, never a field of the body or the query, and it opens no
 other route: on OWNER, AGENT and ANY routes the role alone decides. A handler reads it as
-Request.strong. No route of ROUTES names APPROVER yet (the approvals routes will).
+Request.strong. POST approvals/{id}/decide is the APPROVER route ("Approvals").
+
+Approvals (kitlib.hubsite.approvals holds the rules; these routes only carry them). POST approvals
+(AGENT) adds a pending request: the base of each file is read with git from this machine's
+checkout of the request's repo (Api's checkout; no checkout is `invalid`, field repo, and a base
+that is not the file at head is `invalid`, field files), and the unified diff lines the page
+shows are stored in the document as `diff`. POST approvals/{id}/decide (APPROVER) writes the
+owner's decision, signed with Api's approval_key; POST approvals/{id}/consume (AGENT) marks an
+approval consumed by a commit. Both take the `if_version` the caller read and are pinned to it,
+and an ApprovalError is answered as a HubError of its code and field. GET approvals/{id}/verify
+(AGENT, query repo, head, files as JSON {path: blob} and an optional commit) answers
+{ok, valid, why} and never the key or the sig; an unknown id is valid false, approvals.WHY_UNKNOWN.
 
 Fields. A write route names the body fields it takes; any other field is refused (`invalid`, the
 field named), so a body cannot carry a field another role owns (an agent posting a question
@@ -124,6 +136,7 @@ store's folder to the owner only.
 """
 import collections
 import datetime
+import json
 import math
 import re
 import time
@@ -370,12 +383,17 @@ class Api(object):
     views (module docstring) or is None; `clock` gives the time stamp of a write as an ISO
     string (default: the store's clock); `session_keys` gives the launcher's session keys as an
     iterable, called afresh on each use (default: launcher_keys); `now` gives monotonic seconds
-    for the routes (default: time.monotonic)."""
+    for the routes (default: time.monotonic). `approval_key()` gives the approval key or None,
+    read on each decide and verify; `checkout(repo_id)` gives the root of this machine's checkout
+    of that repository or None ("Approvals"); both default to None, which no approval passes."""
 
-    def __init__(self, store, views=None, clock=None, session_keys=None, now=None):
+    def __init__(self, store, views=None, clock=None, session_keys=None, now=None,
+                 approval_key=None, checkout=None):
         self.store = store
         self.views = views
         self.clock = clock or store.clock
+        self.approval_key = approval_key or (lambda: None)
+        self.checkout = checkout or (lambda repo: None)
         self._session_keys = session_keys or launcher_keys
         self._seen = {'waited': None, 'pulled': None}
         self._waits = {}            # one key per agent wait that is blocked right now
@@ -971,6 +989,72 @@ def inbox_read(api, req):
     return api.change('inbox', doc_id, d, changes, req, changes)
 
 
+# approvals: imported here, not at the top, as kitlib.hubsite.approvals imports this module
+def _approval(make, *args):
+    from . import approvals as ap
+    try:
+        return make(*args)
+    except ap.ApprovalError as e:
+        raise HubError(e.code, e.message, e.field)
+
+
+def approvals_add(api, req):
+    from . import approvals as ap
+    b = _fields(req, ('repo', 'title', 'head', 'files', 'reason'))
+    doc = _approval(ap.new_doc, b.get('repo'), b.get('title'), b.get('head'), b.get('files'),
+                    _when(api.clock(), ''), b.get('reason'))
+    root = api.checkout(doc['repo'])
+    if not root:
+        raise _invalid('this machine has no checkout of %s' % doc['repo'], 'repo')
+    lines = []
+    for f in doc['files']:
+        base, why = ap.read_base(root, doc['head'], f['path'], f['base_blob'])
+        if why:
+            raise _invalid('%s: %s' % (f['path'], why), 'files')
+        lines.extend(ap.diff(f['path'], base, f['content']))
+    doc['diff'] = lines
+    return api.add(ap.COLLECTION, doc, req)
+
+
+def approvals_decide(api, req):
+    from . import approvals as ap
+    b = _fields(req, ('decision', 'if_version'))
+    _pin(b, required=True)
+    doc_id = req.params['id']
+    d = api.doc(ap.COLLECTION, doc_id, b)
+    changes = _approval(ap.decide_fields, api.approval_key(), doc_id, d, b.get('decision'),
+                        _when(api.clock(), ''))
+    return api.change(ap.COLLECTION, doc_id, d, changes, req, {'status': changes['status']})
+
+
+def approvals_consume(api, req):
+    from . import approvals as ap
+    b = _fields(req, ('commit', 'if_version'))
+    _pin(b, required=True)
+    doc_id = req.params['id']
+    d = api.doc(ap.COLLECTION, doc_id, b)
+    changes = _approval(ap.consume_fields, api.approval_key(), doc_id, d, b.get('commit'),
+                        _when(api.clock(), ''))
+    return api.change(ap.COLLECTION, doc_id, d, changes, req, {'status': changes['status']})
+
+
+def approvals_verify(api, req):
+    from . import approvals as ap
+    doc_id = req.params['id']
+    d = api.store.get(ap.COLLECTION, doc_id) if schema.check_id(doc_id) is None else None
+    if d is None:
+        return {'ok': True, 'valid': False, 'why': ap.WHY_UNKNOWN}
+    try:
+        blobs = json.loads(_q(req, 'files'))
+    except ValueError:
+        blobs = None                # check() answers WHY_FILES
+    # a commit given, even empty, is checked: only an absent one leaves it out
+    commit = _q(req, 'commit') if 'commit' in (req.query or {}) else None
+    valid, why = ap.check(api.approval_key(), doc_id, d, _q(req, 'repo'), _q(req, 'head'), blobs,
+                          _when(api.clock(), ''), commit)
+    return {'ok': True, 'valid': valid, 'why': why}
+
+
 def backlog(api, req):
     return {'repos': api.shown('backlog', repo=_q(req, 'repo'), state=_q(req, 'state'),
                                fresh=_q_flag(req, 'fresh'))}
@@ -1207,6 +1291,10 @@ ROUTES = (
     _r('POST', '/to_pm/{id}/delete', OWNER, to_pm_delete),
     _r('POST', '/inbox', AGENT, inbox_add),
     _r('POST', '/inbox/{id}/read', OWNER, inbox_read),
+    _r('POST', '/approvals', AGENT, approvals_add),
+    _r('POST', '/approvals/{id}/decide', APPROVER, approvals_decide),
+    _r('POST', '/approvals/{id}/consume', AGENT, approvals_consume),
+    _r('GET', '/approvals/{id}/verify', AGENT, approvals_verify),
     _r('GET', '/backlog', ANY, backlog),
     _r('GET', '/completed', ANY, completed),
     _r('GET', '/records/{repo}/new', ANY, record_new),
