@@ -272,9 +272,29 @@ class ConsumeTest(unittest.TestCase):
 
 class CheckTest(unittest.TestCase):
 
-    def check(self, doc, key=KEY, repo=URL, head=HEAD, given=None, now=T0 + SECOND):
+    def check(self, doc, key=KEY, repo=URL, head=HEAD, given=None, now=T0 + SECOND, **kw):
         return ap.check(key, 'A-1', doc, repo, head, blobs(doc) if given is None else given,
-                        now)
+                        now, **kw)
+
+    def consumed(self, commit=COMMIT):
+        doc = approved()
+        doc.update(ap.consume_fields(KEY, 'A-1', doc, commit, T0 + SECOND))
+        return doc
+
+    def test_with_a_commit_the_approval_it_consumed_verifies(self):
+        self.assertEqual(self.check(self.consumed(), commit=COMMIT), (True, ''))
+
+    def test_with_a_commit_an_approval_not_consumed_does_not_verify(self):
+        self.assertEqual(self.check(approved(), commit=COMMIT), (False, ap.WHY_COMMIT))
+
+    def test_with_a_commit_an_approval_consumed_by_another_does_not_verify(self):
+        self.assertEqual(self.check(self.consumed('d' * 40), commit=COMMIT),
+                         (False, ap.WHY_COMMIT))
+
+    def test_without_a_commit_approved_and_consumed_both_verify(self):
+        self.assertEqual(self.check(approved()), (True, ''))
+        self.assertEqual(self.check(self.consumed('d' * 40)), (True, ''))
+        self.assertEqual(self.check(approved(), commit=None), (True, ''))
 
     def test_the_approved_change_verifies_by_any_form_of_its_remote(self):
         doc = approved()
@@ -487,6 +507,13 @@ class VerifierTest(unittest.TestCase):
         self.assertEqual(client.calls, [('GET', '/approvals/A-1%2Fx/verify', AGENT,
                                          {'repo': URL, 'head': HEAD,
                                           'files': '{"a.md":null,"b.md":"%s"}' % ('f' * 40)})])
+
+    def test_a_commit_is_asked_for_in_the_query(self):
+        client = FakeClient({'ok': True, 'valid': True, 'why': ''})
+        self.assertEqual(ap.Verifier(client).verify('A-1', URL, HEAD, {}, commit=COMMIT),
+                         (True, ''))
+        self.assertEqual(client.calls[0][3], {'repo': URL, 'head': HEAD, 'files': '{}',
+                                              'commit': COMMIT})
 
     def test_any_other_answer_fails_closed(self):
         for answer in ({'ok': True, 'valid': False, 'why': ap.WHY_FILES},
