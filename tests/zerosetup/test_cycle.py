@@ -10,8 +10,9 @@ The cycle, in the order a PM and a worker run it:
   2. the PM makes the worker's worktree (kitlib.worktree.new.create, tools/new_worktree.py),
      which runs the first-use repo prep (kitlib.git.prep: info/exclude, core.hooksPath);
   3. the worker commits in the worktree (kitlib.commit.commit, tools/commit.py);
-  4. the worker gates the branch with no gate configured (kitlib.gate.runner.branch_gate: the
-     stack is detected, `source: auto`, and the clone's own unittest tests run);
+  4. the worker gates the branch --full with no gate configured (kitlib.gate.runner.branch_gate:
+     the stack is detected, `source: auto`, and the clone's own unittest tests run), which writes
+     the full-gate OK record a landing takes for the tip;
   5. the PM lands it from the main checkout (kitlib.gate.land.Lander, `gate.py land`): merge, the
      merged tree's gate, the push to the remote, the branch cleanup.
 
@@ -194,8 +195,9 @@ class Cycle(object):
         # ... and pushes its branch: the worktree shares the clone's remote (decision 23)
         self.git('push', '-q', 'origin', 'kit/fix-add', cwd=wt)
         self.assertEqual(self.remote_git('rev-parse', 'kit/fix-add'), tip)
-        # 4. the worker's gate: no gate configured, the clone's own tests detected and run
-        gated = runner.branch_gate(wt, book_kw=self.book_kw, log_dir=self.logs)
+        # 4. the worker's gate: no gate configured, the clone's own tests detected and run, --full
+        #    (the record a landing takes for the tip)
+        gated = runner.branch_gate(wt, full=True, book_kw=self.book_kw, log_dir=self.logs)
         self.assertEqual(gated.code, G.OK, gated.lines)
         self.assertEqual(gated.source, 'auto')
         self.assertEqual([(r['name'], r['status']) for r in gated.results], [('python-tests', 'PASS')])

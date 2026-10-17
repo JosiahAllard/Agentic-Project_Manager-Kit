@@ -20,7 +20,8 @@ holds it (docs/worktree-remove.md).
 
 -C names the repository by any of its work trees (default: here); the worktrees acted on are always
 the MAIN checkout's, and the sweep takes only the main checkout. A relative path argument means
-the caller's directory. A thin entry point (ARCHITECTURE.md, Layers): it parses, calls
+the caller's directory. A registered DETACHED worktree outside the worktree folders is named by
+its path, never its slug. A thin entry point (ARCHITECTURE.md, Layers): it parses, calls
 kitlib.worktree.remove, .scratch or .sweep, prints and exits. Exit codes: 0 done (or nothing to do); 1
 refused, a leftover, git failed, or the sweep deferred; 2 usage, or the kit configuration was
 refused; 130 Ctrl+C.

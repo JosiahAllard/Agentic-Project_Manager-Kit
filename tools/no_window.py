@@ -16,7 +16,7 @@ unless whoever started it gave it one; a scheduled task gives none). Exit codes:
 
 So that a failure is not silent with no stderr, an exit of 127 and an exception out of the carry
 each append one JSON line (PROGRAM's file name, never its arguments; for an exception, its type
-only) to the kit's console incident log (kitlib.lock.detach.note_carrier_failure); a line that
+only) to the kit's console incident log (kitlib.proc.console.note_carrier_failure, how carrier-fail); a line that
 cannot be written is skipped and changes nothing else. A PROGRAM that itself exits 127 is logged too:
 the exit code alone cannot tell the two apart.
 """
@@ -34,8 +34,8 @@ USAGE = 'USAGE: pythonw no_window.py PROGRAM [ARGS...]'
 def note(argv, why):
     """The incident line; a failure to write it never replaces the exit code or the exception."""
     try:
-        from kitlib.lock import detach    # only on the way out: a carried run starts no sooner
-        detach.note_carrier_failure(argv[0], why)
+        from kitlib.proc import console   # only on the way out: a carried run starts no sooner
+        console.note_carrier_failure(argv[0], why)
     except Exception:
         pass
 

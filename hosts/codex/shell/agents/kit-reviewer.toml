@@ -14,7 +14,7 @@ raises you to strong-tier only by the reviewer-model rule in its dispatch roster
 
 - The **brief**, as the author received it.
 - The **diff range** (merge base and branch tip) and the worktree path.
-- The **author's gate report and the paths of its test logs**, so you can tell
+- The **author's gate report (the final one is `gate.py --full` on that tip) and the paths of its test logs**, so you can tell
   whether the test that reaches the change actually ran, not merely that one
   exists.
 - Anything the caller already knows is risky, plus the project's risk notes and

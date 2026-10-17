@@ -49,10 +49,10 @@ import sys
 
 from kitlib.config import schema
 from kitlib.config.load import CONFIG_NAME
-from kitlib.gate import result, runner
+from kitlib.gate import gitstatus, result, runner
 from kitlib.gate import steps as S
 from kitlib.gate.strict_defaults import STRICT_DEFAULTS
-from kitlib.git import cmd, refs, repo
+from kitlib.git import cmd, repo
 from kitlib.records import gate_ok
 
 # reused: {step name: why}; lines to say; keep(results) -> lines, after the run (None: store nothing)
@@ -157,7 +157,7 @@ def landing_why(root, cfg, base, merge, prior, fresh, full):
     why = _change_why(cfg, changed)
     if why:
         return why
-    entries, why = refs.status(root)
+    entries, why = gitstatus.status(root)
     if entries != []:
         return 'the main checkout is not clean%s' % (': %s' % why if why else '')
     return None

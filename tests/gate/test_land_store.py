@@ -175,7 +175,7 @@ class ClosesAtLanding(StoreLandCase):
 class DefaultStoreCloses(StoreLandCase):
     KIT = test_land.LandCase.KIT                     # names no backlog store
 
-    def test_a_close_on_the_default_store_is_refused_as_a_warning_and_the_landing_stands(self):
+    def test_a_pull_only_the_default_store_holds_is_a_stranded_warning_and_the_landing_stands(self):
         before = self.seed(pulled('FOO'))
         _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
         out = self.lander(BRANCH, self.main, tip).run()
@@ -186,8 +186,11 @@ class DefaultStoreCloses(StoreLandCase):
         warn = [l for l in out.lines if l.startswith('WARNING')]
         self.assertEqual(len(warn), 1, out.lines)
         self.assertIn('FOO', warn[0])
-        self.assertIn('is the default backlog store', warn[0])
-        self.assertIn('close it, once .kit.json names its "backlog".store, with: ', warn[0])
+        self.assertIn('it holds FOO pulled only in refs/backlog/main: the default backlog store',
+                      warn[0])
+        self.assertIn('the record is stranded there', warn[0])
+        self.assertIn('name it in .kit.json ("backlog": {"store": "ref"}) and close it with: ',
+                      warn[0])
         self.assertEqual(len([l for l in out.lines if l.startswith('LANDED ')]), 1, out.lines)
         self.assertIsNone(self.lock().read())
 

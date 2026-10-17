@@ -18,6 +18,28 @@ RED_AWARE = ['{python}', '-c',
 GATE = {'steps': [{'name': 'unit', 'always': True, 'cmd': RED_AWARE, 'pass': '^ok$'}]}
 
 
+def gate_full(root, *tips):
+    """Each of `tips` given the gate-OK record a passing `gate.py --full` writes (a record whose
+    `full` is true): a landing takes only such a tip (docs/gate.md "Landing"). A tip that is not
+    a commit of the repository is skipped (the landing refuses it for that); a record already
+    there is kept and only marked full. The record file names this wrote that were not there
+    before."""
+    from kitlib.git import refs
+    from kitlib.records import gate_ok
+    made = []
+    for tip in tips:
+        if not isinstance(tip, str) or not refs.is_sha(tip) or refs.resolve(tip, root)[0] != tip:
+            continue
+        rec, _ = gate_ok.read(root, tip)
+        if rec is None:
+            rec = gate_ok.build(root, tip, {}, {'version': 'test'}, 'test', gate_ok.utc(),
+                                [{'name': 'unit'}])
+            made.append(tip + '.json')
+        rec['full'] = True
+        gate_ok.write(root, rec)
+    return made
+
+
 def test_env():
     """The fixture's git environment without the Claude Code and machine lock variables: what the
     gate's steps and git writes get in a test. KIT_PINNED is `live`: a tools/gate.py or land.py a

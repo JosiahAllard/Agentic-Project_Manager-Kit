@@ -50,7 +50,9 @@ than the baseline fails, a file with no baseline fails on its first hit, and few
   docs/content.md): backlog-ops, branch-review, branch-sync,
   coordinator-dispatch, doc-claims-discipline, flaky-test-triage, land-branch (uses
   `tools/land.py`), machine-lock-run, mutation-testing, session-handoff,
-  shell-and-worktree-traps, subagent-dispatch. branch-review and coordinator-dispatch hold the
+  shell-and-worktree-traps, subagent-dispatch, specialty-3d-assets, specialty-tech-art,
+  specialty-sound, specialty-review, specialty-research, specialty-records, specialty-spec.
+  branch-review and coordinator-dispatch hold the
   coordinator's procedure, loaded only when needed. Skills name kit tools by path
   (`tests/skills` checks each exists); `tools/doc_index.py`, `tools/doc_budget.py` and
   `tools/gate.json` are each repository's own.
@@ -85,7 +87,8 @@ than the baseline fails, a file with no baseline fails on its first hit, and few
   input, and an output that is not .html/.htm, is one of the images, or is an existing non-HTML
   file.
 - `procwatch`: a process watcher. It spares ComfyUI; add patterns with env `PROCWATCH_PROTECT`
-  (`;`-separated regexes).
+  (`;`-separated regexes). It labels a process by its nearest known ancestor; add ancestor apps
+  (exe names) with env `PROCWATCH_ORIGINS` (`;`-separated).
 - `usage`: usage reports and the statusline (`statusline-usage.ps1`, `write-usage-status.ps1`).
 - `bridge`: agent-to-agent messaging between open host chats, an optional install that no host
   shell mentions until the owner registers it (`optional/bridge/README.md`; what works:

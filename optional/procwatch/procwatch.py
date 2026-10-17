@@ -21,11 +21,14 @@ rule's age floor; idle where the rule says so), it is not protected, and its cre
 re-checked immediately before TerminateProcess. Protected (never touched, listed as expected):
 PROTECT_PATTERNS - ComfyUI plus any regexes in the PROCWATCH_PROTECT environment variable
 (';'-separated, matched against the command line), e.g. a repo's live production process.
+The origin label names the nearest known ancestor app; the PROCWATCH_ORIGINS environment
+variable (';'-separated exe names) adds more.
 
 Exit: 0 no suspects, 1 suspects reported, 2 error. Standard library only; Windows only.
 """
 import argparse
 import datetime
+import functools
 import json
 import os
 import re
@@ -150,6 +153,26 @@ def _r_agent_script(p, ctx):
     return "agent background script whose session is gone" if _dead_parent_older(p, 60 * MIN) else None
 
 
+@functools.lru_cache(maxsize=None)
+def _agent_temp_claude():
+    """'<agent temp folder>\\claude\\', lower case, backslashes: the agents' TEMP, which the launcher
+    sets from AGENT_TEMP (kitlib.pmstart.agent_temp_env: process environment, then the user
+    registry). A string that matches no command line when AGENT_TEMP is unset or kitlib cannot be
+    read, e.g. a copy of this tool outside the kit."""
+    root = os.path.normpath(os.path.join(HERE, "..", ".."))
+    if root not in sys.path:
+        sys.path.append(root)
+    try:
+        from kitlib.pmstart import agent_temp_env
+        temp = agent_temp_env()
+    except (ImportError, OSError):
+        # kitlib missing or the registry unreadable: keep this rule off rather than guess a folder
+        return "\x00"           # an impossible path: no match
+    if not temp:
+        return "\x00"
+    return os.path.join(temp.replace("/", "\\"), "claude", "").lower()
+
+
 def _r_conhost(p, ctx):
     return "console host with a dead parent" if _dead_parent_older(p, 30 * MIN) else None
 
@@ -190,7 +213,8 @@ RULES = [
     ("agent-script", "agent background script (python/node from a .claude path)",
      lambda p: _name(p) in {"python.exe", "pythonw.exe", "node.exe"} and
      ("\\.claude" in _cmd(p) or "/.claude" in _cmd(p) or "\\temp\\claude\\" in _cmd(p)
-      or "\\agenttemp\\claude\\" in _cmd(p)),             # agents' TEMP moved off the system drive
+      or "\\agenttemp\\claude\\" in _cmd(p)                # agents' TEMP moved off the system drive
+      or _agent_temp_claude() in _cmd(p)),                # ... or the agent temp folder, as resolved
      _r_agent_script, False),
     ("conhost", "console host", lambda p: _name(p) == "conhost.exe", _r_conhost, False),
 ]
@@ -200,6 +224,15 @@ RULE_IDS = [r[0] for r in RULES]
 def protected(p):
     s = ((p.get("image") or "") + " " + (p.get("cmd") or "")).lower()
     return any(re.search(x, s) for x in PROTECT_PATTERNS)
+
+
+ORIGIN_APPS = {"code.exe", "explorer.exe", "services.exe", "svchost.exe", "comfy desktop.exe",
+               "windowsterminal.exe"}
+
+
+def _extra_origins():
+    """Exe names from env PROCWATCH_ORIGINS (';'-separated), read per call."""
+    return {x.strip().lower() for x in os.environ.get("PROCWATCH_ORIGINS", "").split(";") if x.strip()}
 
 
 def origin(p, by_pid):
@@ -216,8 +249,7 @@ def origin(p, by_pid):
                 m = re.search(r"-n\s+(\S+)", q.get("cmd") or "")
                 return "coordinator claude.exe " + (m.group(1) if m else str(q["pid"]))
             return f"claude.exe {q['pid']} session"
-        if n in {"code.exe", "explorer.exe", "services.exe", "svchost.exe", "steam.exe",
-                 "discord.exe", "comfy desktop.exe", "windowsterminal.exe"}:
+        if n in ORIGIN_APPS or n in _extra_origins():
             return n
         hops += 1
     return "orphan" if not p["parent_alive"] else f"{q['name']} {q['pid']} (its parent is gone)"
