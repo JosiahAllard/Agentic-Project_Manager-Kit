@@ -22,7 +22,8 @@ import re
 
 from kitlib import hubvalidate
 
-COLLECTIONS = ('questions', 'inbox', 'todos', 'to_pm', 'stories', 'pages', 'page_html', 'repos')
+COLLECTIONS = ('questions', 'inbox', 'todos', 'to_pm', 'stories', 'pages', 'page_html', 'repos',
+               'approvals')
 ID_PREFIX = {coll: prefix for prefix, coll in hubvalidate.REF_COLLECTIONS.items()}
 STORE_KEYS = ('version', 'updated_at')
 CODE = 'schema-field'
@@ -51,6 +52,11 @@ FIELDS = {
     'pages': (('title',), {'title': _STR}),
     'page_html': (('html',), {'html': _STR}),
     'repos': ((), {'name': _STR, 'added_at': _STR, 'aliases': _LIST}),
+    # kitlib.hubsite.approvals, "The document"
+    'approvals': (('status', 'repo', 'title', 'head', 'files', 'created_at'), {
+        'status': _STR, 'repo': _STR, 'title': _STR, 'head': _STR, 'files': _LIST,
+        'created_at': _STR, 'reason': _STR, 'decision': _STR, 'decided_at': _STR, 'sig': _STR,
+        'commit': _STR, 'consumed_at': _STR}),
 }
 KINDS = {'to_pm': ('question', 'fyi')}
 

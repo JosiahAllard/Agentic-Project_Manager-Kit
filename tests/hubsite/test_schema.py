@@ -1,7 +1,8 @@
 """kitlib.hubsite.schema: required fields, types and ids."""
+import datetime
 import unittest
 
-from kitlib.hubsite import schema
+from kitlib.hubsite import approvals, schema
 
 
 def codes(findings):
@@ -37,6 +38,15 @@ class CheckTest(unittest.TestCase):
     def test_story_ids_come_from_hubvalidate(self):
         self.assertEqual(schema.ID_PREFIX['stories'], 'S')
         self.assertEqual(schema.ID_PREFIX['questions'], 'Q')
+        self.assertEqual(schema.ID_PREFIX['approvals'], 'A')
+
+    def test_an_approval_request_passes_and_needs_its_head(self):
+        doc = approvals.new_doc('https://github.com/o/r', 't', 'a' * 40,
+                                [{'path': 'x.md', 'base_blob': None, 'content': 'x\n'}],
+                                datetime.datetime(2026, 1, 2, tzinfo=datetime.timezone.utc))
+        self.assertEqual(schema.check('approvals', doc), [])
+        doc.pop('head')
+        self.assertEqual(codes(schema.check('approvals', doc)), [('head', 'schema-field')])
 
 
 class IdTest(unittest.TestCase):
