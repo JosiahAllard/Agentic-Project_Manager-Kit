@@ -131,8 +131,69 @@ class IntoMain(Base):
         self.denied(self.run_ps('Get-ChildItem FileSystem::%s\\ -Recurse' % drive), 'root-search')
 
 
+class DynamicTargets(Base):
+    """A PowerShell write target the guard cannot read as a literal ($p, "...$n...", $env:TEMP, a
+    ( ) expression), from a worktree: refused, where before it was skipped and allowed
+    (rules.shell_writes). $PWD and a literal rest is read against the tracked location
+    (rules.ps_pwd_path); a ( ) target fails closed from a main checkout too (shell._Scan.ps_paren_arg)."""
+
+    def test_variable_target_into_main(self):
+        d = self.denied(self.run_ps(r'$p="{main}\x.txt"; Set-Content $p x'), 'main-checkout')
+        self.assertIn('cannot tell where it writes', d.reason)
+
+    def test_jailed_session_variable_target_is_refused_by_the_jail(self):
+        self.denied(self.run_ps(r'$p="{main}\x.txt"; Set-Content $p x', env=COORDINATOR, sub=False), 'write-jail')
+
+    def test_variable_inside_a_literal_path(self):
+        self.denied(self.run_ps(r'Set-Content "{wt}\$n.txt" x'), 'main-checkout')
+
+    def test_env_temp_target(self):
+        self.denied(self.run_ps(r'Set-Content $env:TEMP\x.txt x'), 'main-checkout')
+
+    def test_pwd_and_a_literal_rest_is_read_against_the_location(self):
+        self.allowed(self.run_ps(r'Set-Content "$PWD\x.txt" x'))
+        self.allowed(self.run_ps(r'Set-Content "${{PWD}}\x.txt" x'))
+        d = self.denied(self.run_ps(r'cd {main}; Set-Content "$PWD\x.txt" x'), 'main-checkout')
+        self.assertIn('is in the main checkout', d.reason)
+
+    def test_pwd_the_line_may_set_fails_closed(self):
+        for text in (r'$PWD = "{main}"; Set-Content "$PWD\x.txt" x',
+                     r'Set-Variable PWD {main}; Set-Content "$PWD\x.txt" x'):
+            with self.subTest(text):
+                self.denied(self.run_ps(text), 'main-checkout')
+
+    def test_parenthesised_target(self):
+        for text in (r'Set-Content (Join-Path {main} x.txt) x',
+                     r'Set-Content -Path:(Join-Path {main} x.txt) x',
+                     r'Remove-Item ("{main}\x.txt")'):
+            for cwd in (self.w.wt, self.w.main):
+                with self.subTest(text=text, cwd=cwd):
+                    ev = W.ps(text.format(main=self.w.main), cwd, True)
+                    self.denied(decide(ev, self.w.ctx()), 'main-checkout')
+
+    def test_cd_inside_a_subexpression_makes_the_location_unknown(self):
+        # $( ) and ( ) run in the caller's scope: the cd moves the location for what follows
+        for text in (r'echo $(cd {main}) ; New-Item x.txt', r'echo (cd {main}) ; New-Item x.txt'):
+            with self.subTest(text):
+                self.denied(self.run_ps(text), 'main-checkout')
+
+
 class Unchanged(Base):
     """What the fix leaves as it was."""
+
+    def test_dynamic_targets_outside_powershell_and_reads(self):
+        self.allowed(self.run_bash('p={main}/x.txt; echo 1 > "$p"'))
+        self.allowed(self.run_ps(r'git status 2>$null'))
+        self.allowed(self.run_ps(r'$p="{main}\x.txt"; Get-Content $p'))
+
+    def test_owner_session_dynamic_target_is_not_refused(self):
+        self.allowed(self.run_ps(r'$p="{main}\x.txt"; Set-Content $p x', sub=False))
+
+    def test_parenthesised_values_that_are_not_targets(self):
+        for text in (r'New-Item x.txt -Value (Get-Date)', r'Write-Output (Get-Date)',
+                     r'$x = (Get-Date); New-Item y.txt', r'if (Test-Path x) {{ New-Item y.txt }}'):
+            with self.subTest(text):
+                self.allowed(self.run_ps(text))
 
     def test_missing_one_letter_drive_still_refused(self):
         letter = missing_drive()

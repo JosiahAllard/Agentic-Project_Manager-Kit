@@ -166,7 +166,10 @@ ROWS = [
     ('subagent Out-File into main', lambda w: ps('"x" | Out-File -Encoding utf8 %s\\o.txt' % w.main, w.wt, sub=True), 'deny', 'main-checkout', None),
     ('subagent rm in main', lambda w: bash('rm -f %s/stale.txt' % W.fwd(w.main), w.wt, sub=True), 'deny', 'main-checkout', None),
     ('subagent Remove-Item in main', lambda w: ps('Remove-Item %s\\stale.txt -Force' % w.main, w.wt, sub=True), 'deny', 'main-checkout', None),
-    ('subagent write to a variable path', lambda w: ps('"x" > $env:OUT', w.wt, sub=True), None, None, None),
+    # a PowerShell target that is not literal can name the main checkout: refused from a worktree too
+    ('subagent write to a variable path', lambda w: ps('"x" > $env:OUT', w.wt, sub=True), 'deny', 'main-checkout',
+     '"x" > "{wt}/<file>"'),
+    ('subagent bash write to a variable path', lambda w: bash('echo x > "$OUT"', w.wt, sub=True), None, None, None),
     ('subagent redirect in its worktree', lambda w: bash('echo hi > notes.txt', w.wt, sub=True), None, None, None),
     ('subagent redirect in a heredoc body is data', lambda w: bash("cat > notes.txt <<'EOF'\nx > %s/y.txt\nEOF" % W.fwd(w.main), w.wt, sub=True),
      None, None, None),
@@ -1173,6 +1176,22 @@ class MainCwdHint(unittest.TestCase):
         # a redirect to a named file keeps the plain worktree advice
         d = decide(bash('python x.py > out.log 2>&1', w.main, sub=True), w.ctx())
         self.assertNotIn('cd into your worktree first', d.reason)
+
+    def test_a_python_c_refusal_names_the_isolated_form(self):
+        # the refusal of python -c in a main checkout names python -I -c (rules.PY_C_HINT), which
+        # runs there when its code only reads; python - and other runs do not get the clause
+        w = W.World()
+        self.addCleanup(w.cleanup)
+        for ev in (ps('python -c "print(1)"', w.main, sub=True), bash("python3 -Bc 'print(1)'", w.main, sub=True),
+                   ps('& "C:\\Py\\python.exe" -c "print(1)"', w.main, sub=True)):
+            d = decide(ev, w.ctx())
+            self.assertEqual(d and d.rule, 'main-checkout', d and d.reason)
+            self.assertIn('python -I -c', d.reason)
+            self.assertIn(rules.MAIN_CWD_HINT, d.reason)
+        self.assertIsNone(decide(ps('python -I -c "print(1)"', w.main, sub=True), w.ctx()))
+        d = decide(bash("python - <<'EOF'\nprint(1)\nEOF", w.main, sub=True), w.ctx())
+        self.assertEqual(d and d.rule, 'main-checkout', d and d.reason)
+        self.assertNotIn('python -I -c', d.reason)
 
 
 class OtherTools(unittest.TestCase):

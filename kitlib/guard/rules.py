@@ -2229,7 +2229,8 @@ def worktree_alternative(ctx, target, main_top, cwd, rewrite=None, run=None):
     if no_wt:
         return no_wt, instead
     if rewrite is None and run is not None and cwd and paths.norm(target) == paths.norm(cwd):
-        return (MAIN_CWD_HINT, instead)          # it writes through the main checkout it runs in
+        py_c = PY_C_HINT if PY_C_RUN_RE.search(run) else ''
+        return (py_c + MAIN_CWD_HINT, instead)   # it writes through the main checkout it runs in
     return 'Make the change in a worktree of it (%s there); the lander brings it to main:' % fwd(rel), instead
 
 
@@ -2237,6 +2238,12 @@ MAIN_CWD_HINT = ('It writes through its working directory, which is the main che
                  'in the same call (no tool keeps a cd between calls), or run a script or module by absolute path '
                  '(python <worktree>/tools/x.py -C <worktree>; python -m unittest discover -s <worktree>/tests/<pkg> '
                  '-t <worktree>). No worktree yet:')
+# a run that is a python -c (python, python3, py, python.exe; -c alone or in a cluster such as -Ic):
+# its refusal names the isolated form that may run in a main checkout when the code only reads
+PY_C_RUN_RE = re.compile(r'(?i)(?:^|[\s&("\'\\/])py(?:thon[\d.]*)?(?:\.exe)?["\']?(?:\s+-[A-Za-z]+)*\s+-[A-Za-z]*c'
+                         r'(?=[\s"\']|$)')
+PY_C_HINT = ('A python -c whose code only reads may run in a main checkout as python -I -c (isolated; docs/guard.md '
+             '"Rules" lists what the code may use). ')
 
 
 # ---------------------------------------------------------------- shell writes
@@ -3741,6 +3748,24 @@ def ps_provider_item(cmd, w):
     return ps_line_plain(cmd)
 
 
+# a PowerShell word that is the location and a literal rest: $PWD, "${PWD}\x", $pwd/x/y
+PS_PWD_WORD_RE = re.compile(r'(?i)^(?:\$pwd|\$\{pwd\})((?:[\\/][^$`]*)?)$')
+# a line that may give $PWD another value: an assignment, a *-Variable cmdlet or the variable: drive
+PS_PWD_SET_RE = re.compile(r'(?i)\$\{?pwd\}?\s*[-+*/%]?=|variable')
+
+
+def ps_pwd_path(cmd, w):
+    """The path text a PowerShell word spells as $PWD (or ${PWD}) and a literal rest, with the
+    location as cmd.cwd, or None: the word is not one, the directory is unknown, or the line may
+    set $PWD (PS_PWD_SET_RE)."""
+    if cmd.shell != sh.PS or not w.dyn or cmd.cwd is None:
+        return None
+    m = PS_PWD_WORD_RE.match(w.text)
+    if not m or PS_PWD_SET_RE.search(cmd.source or ''):
+        return None
+    return cmd.cwd + m.group(1)
+
+
 BASH_DEVICE_RE = re.compile(r'^/dev/')         # /dev/stderr, /dev/tty, /dev/fd/3: no file
 BASH_TMP_RE = re.compile(r'^/tmp(?:/|$)')        # Git Bash mounts /tmp on a temp folder: jail.bash_tmp
 
@@ -3760,7 +3785,10 @@ def shell_writes(event, ctx, cmd, inv, cwd, role):
         if cmd.shell == sh.BASH and not w.dyn and BASH_DEVICE_RE.match(w.text):
             continue
         ps_drive = False                        # a PowerShell drive or provider it cannot place
-        if w.dyn:
+        pwd = ps_pwd_path(cmd, w)
+        if pwd is not None:
+            target, why = sh.resolve_path(pwd, cmd.cwd, cmd.shell, getattr(ctx, 'home', None)), None
+        elif w.dyn:
             target, why = None, 'a target that is not literal: %s' % w.text
         elif cmd.shell == sh.BASH and BASH_TMP_RE.match(w.text):
             target, why = paths.norm(os.path.join(jail.bash_tmp(ctx), w.text[5:]), fold=False), None
@@ -3781,7 +3809,9 @@ def shell_writes(event, ctx, cmd, inv, cwd, role):
                 why = 'the directory it runs in is a PowerShell drive or provider path the guard cannot place'
         if target is None and cmd.cwd is not None and not ps_drive and \
                 ctx.place(cmd.cwd).kind not in (repo.MAIN, repo.UNKNOWN):
-            continue                            # a target it cannot place, from a worktree or elsewhere
+            if cmd.shell != sh.PS or not w.dyn:
+                continue                        # a bash or cmd target it cannot place, from a worktree or elsewhere
+            ps_drive = True                     # PowerShell's: one $p or (...) can name the main checkout
         what = '`%s` writes %s' % (cmd.text, w.text if w.text != '.' else 'files in the directory it runs in')
         stand_in = w.text == '.' and cmd.source[w.start:w.end] != '.'     # here(): no word to aim
         part = any((x.start, x.end) == (w.start, w.end) and x.text != w.text for x in cmd.words)
@@ -3853,7 +3883,7 @@ def dotnet_process_dir(event, ctx, cmd, cwd, role):
     """A .NET write the guard does not read the path of, or one it cannot place (net_writes,
     net_placed), judged in each directory its process may have started in (edit_target): the
     directory the call runs in (`cwd`) and the PowerShell location of each command it is nested
-    in. .NET reads a relative path there (NET_RELATIVE), so a Set-Location into a worktree does not
+    in, before and after a cd in that command's $( ) (shell.track). .NET reads a relative path there (NET_RELATIVE), so a Set-Location into a worktree does not
     take the write with it; write_targets judges the PowerShell location itself. A session that
     runs outside a worktree of its own (in the main checkout, or outside any repository) is told to
     give the call literal absolute paths, not to make a worktree (that does not move where its
@@ -3865,7 +3895,7 @@ def dotnet_process_dir(event, ctx, cmd, cwd, role):
         return None
     dirs, outer = [cwd], cmd.nested_in
     while outer is not None:
-        dirs.append(outer.cwd)
+        dirs.extend((outer.cwd, outer.subs_cwd))    # subs_cwd: where it stood before a cd in its $( ) moved it
         outer = outer.nested_in
     seen = set([paths.norm(cmd.cwd)] if cmd.cwd else [])
     for d in dirs:
