@@ -409,6 +409,34 @@ Never stored; read from their sources (`kitlib.hubsite.derived`, `kitlib.hubsite
 - usage: `launch.py usage` (docs/launcher.md "Usage").
 - agents: the agent definitions in `claude/agents`.
 
+## The record page
+One backlog record, read live and never part of the snapshot (`kitlib/hubsite/api.py` `record`,
+`record_new` and the record writes block; `kitlib/hubsite/serve.py` `SiteViews`). `{repo}` only
+picks a configured repository (`Views._named` in `kitlib/hubsite/backlog.py`); its folder never
+comes from the caller.
+- `GET /api/v1/records/{repo}/{id}` (owner and agents): `read_record` in
+  `kitlib/hubsite/backlog.py`, whose docstring lists the keys: every field, the body, the
+  blockers, the hold with its ruling or question, the branch for a pulled or parked record, and
+  `version`. `GET /api/v1/records/{repo}/new` is the blank record (`record_template`).
+- `POST /api/v1/records/{repo}` (owner only), body `id`, `summary`, `scope` (a list), `effort`,
+  `ref`: adds an unpriced record through the backlog library's add (`kitlib/hubsite/recordwrite.py`
+  `add`). It is written `found_on: none`, with the store's `Session: owner-hub` trailer and a
+  `review: owner-hub <date>` mark, so `pull` refuses it and `next` never offers it until a
+  coordinator runs `clear-review` (docs/backlog.md "Records").
+- `POST /api/v1/records/{repo}/{id}/edit` (owner only), body `version` (the one the read
+  answered), `changes` (`{key: [values]}`), `unset`, `body`, `ruling`: the backlog library's set.
+  A record that changed since that read is `conflict` on field `version`; read it again.
+- `POST /api/v1/records/{repo}/{id}/delete` (owner only), body `why`, `confirm`, `ruling`:
+  `confirm` must repeat the id, or the call is `invalid` on field `confirm` and nothing is
+  written. The store's delete rules apply unchanged: a live pull is refused until it is released.
+- `ruling` is sent only when the store's refusal asks for one (an owner-priced or owner-held
+  record); the store checks it as it checks `--ruling`.
+- Each write answers `lines`, what the store printed (its notes included), and an add or edit
+  also answers the record as it reads now. A store refusal is `invalid` in the store's words; a
+  record not there is `not_found`. A repository whose `.kit.json` names no backlog store, or whose
+  store cannot be written from the hub's checkout (a folder store outside a linked worktree), is
+  `store`: the owner sees the store's text, an agent or the tunnel the fixed phrase.
+
 ## Data from the old hub
 The hub was once a claude.ai artifact page, one copy per Claude account; it is retired. What the
 owner and the PM wrote on it was mirrored in git as `hub/<collection>/<doc_id>.json` in the PM
