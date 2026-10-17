@@ -928,6 +928,11 @@ class RecordBacklog(FakeBacklog):
             raise self.raises
         return {'repo': repo, 'fields': []}
 
+    def _named(self, repo):
+        if repo.lower() != 'alpha':
+            raise backlog.RecordError('not_found', backlog.NO_REPO, 'repo')
+        return 'Alpha', 'C:\\alpha'
+
 
 class RecordViewsCase(ServeCase):
     def site(self, raises=None):
@@ -985,6 +990,43 @@ class RecordViewsCase(ServeCase):
         self.assertEqual([c for c in self.calls if isinstance(c, tuple)],
                          [('record', 'Alpha', 'A-1'), ('record_template', 'Alpha'),
                           ('record', 'Alpha', 'A-404')])
+
+    def test_the_record_writes_are_bound_only_with_a_backlog(self):
+        bare = serve.SiteViews(None, serve.Sources())
+        for name in ('record_add', 'record_edit', 'record_delete'):
+            self.assertFalse(hasattr(bare, name))
+            self.assertTrue(callable(getattr(self.site()[0], name)))
+
+    def test_a_write_goes_to_the_configured_root_and_answers_the_record_read_after(self):
+        views, source = self.site()
+        seen = []
+
+        def fake(name):
+            return lambda *a: seen.append((name,) + a) or {'lines': [name]}
+        with mock.patch.multiple(serve.recordwrite, add=fake('add'), edit=fake('edit'),
+                                 delete=fake('delete')):
+            self.assertEqual(views.record_add('alpha', 'A-2', 's', ['x'], None, None),
+                             {'lines': ['add'], 'record': {'repo': 'Alpha', 'id': 'A-2',
+                                                           'where': 'open'}})
+            self.assertEqual(views.record_edit('ALPHA', 'A-2', 'c:v', [('effort', ['s'])], [],
+                                               None, 'R-1')['record']['id'], 'A-2')
+            self.assertEqual(views.record_delete('Alpha', 'A-2', 'w', None), {'lines': ['delete']})
+        self.assertEqual(seen, [('add', 'C:\\alpha', 'A-2', 's', ['x'], None, None),
+                                ('edit', 'C:\\alpha', 'A-2', 'c:v', [('effort', ['s'])], [],
+                                 None, 'R-1'),
+                                ('delete', 'C:\\alpha', 'A-2', 'w', None)])
+
+    def test_a_bad_id_or_a_repository_not_configured_is_refused_before_any_write(self):
+        views, _ = self.site()
+        with mock.patch.object(serve.recordwrite, 'add') as add:
+            for repo, rid, want in (('Alpha', 'A..B', ('invalid', backlog.BAD_ID, 'id')),
+                                    ('beta', 'A-2', ('not_found', backlog.NO_REPO, 'repo'))):
+                with self.subTest(repo=repo, rid=rid):
+                    with self.assertRaises(serve.HubError) as got:
+                        views.record_add(repo, rid, 's', ['x'], None, None)
+                    e = got.exception
+                    self.assertEqual((e.code, e.message, e.field), want)
+            add.assert_not_called()
 
 
 class ReasonCase(ServeCase):

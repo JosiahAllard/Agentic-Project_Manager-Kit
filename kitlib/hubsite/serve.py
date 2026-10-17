@@ -215,7 +215,7 @@ from kitlib.config.types import ConfigError
 from kitlib.proc import process
 
 from . import api as _api
-from . import access, auth, backlog, derived, gitsync, httpd, tunnel
+from . import access, auth, backlog, derived, gitsync, httpd, recordwrite, tunnel
 from .store import HubError, Store, StoreBusy
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'web')
@@ -472,7 +472,8 @@ def _record_call(fn, *args):
 
 class SiteViews(object):
     """The Api's `views` (module docstring, "Views"). A view is bound only where its source
-    exists: `backlog_views` for backlog, completed, record and record_template, sources.repos and .agents for theirs.
+    exists: `backlog_views` for backlog, completed, record, record_template and the record
+    writes (record_add, record_edit, record_delete), sources.repos and .agents for theirs.
     notices, usage and health are always there (kitlib.hubsite.derived answers a missing notice
     folder with no notices and a missing usage source with its own phrase). `sync` is the git
     sync or None, `sync_off` the fixed phrase health gives when there is none. `log(level,
@@ -495,6 +496,9 @@ class SiteViews(object):
             self.completed = self._completed
             self.record = self._record
             self.record_template = self._record_template
+            self.record_add = self._record_add
+            self.record_edit = self._record_edit
+            self.record_delete = self._record_delete
         if sources.repos is not None:
             self.repos = self._repos
         if sources.agents:
@@ -573,6 +577,26 @@ class SiteViews(object):
 
     def _record_template(self, repo):
         return _record_call(self._backlog.record_template, repo)
+
+    # The owner's record writes (kitlib.hubsite.recordwrite) to the store of the configured
+    # repository `repo` names; the root never comes from the caller. add and edit answer the
+    # record as read after the write.
+    def _record_root(self, repo, rid):
+        _record_call(backlog.check_id, rid)
+        return _record_call(self._backlog._named, repo)
+
+    def _record_add(self, repo, id, summary, scopes, effort, ref):
+        name, root = self._record_root(repo, id)
+        out = recordwrite.add(root, id, summary, scopes, effort, ref)
+        return dict(out, record=self._record(name, id))
+
+    def _record_edit(self, repo, id, version, changes, unset, body, ruling):
+        name, root = self._record_root(repo, id)
+        out = recordwrite.edit(root, id, version, changes, unset, body, ruling)
+        return dict(out, record=self._record(name, id))
+
+    def _record_delete(self, repo, id, why, ruling):
+        return recordwrite.delete(self._record_root(repo, id)[1], id, why, ruling)
 
     def _notices(self):
         return derived.notices(self._sources.notices)

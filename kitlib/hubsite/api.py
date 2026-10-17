@@ -75,6 +75,12 @@ The two record views differ: what they raise as a HubError is the answer (a 404 
 repository that is not there, a 400 for a name that cannot be one), so their messages are fixed
 phrases with no path, no id and nothing the caller sent; only anything else is `unavailable`.
 Both are read now, never cached, and neither is part of GET snapshot.
+  record_add(repo, id, summary, scopes, effort, ref)               the owner's three writes to
+  record_edit(repo, id, version, changes, unset, body, ruling)     a repository's backlog store
+  record_delete(repo, id, why, ruling)                             (OWNER routes; kitlib.hubsite.
+                                                                   recordwrite)
+They raise HubErrors as the record views do; a `store` one carries the store's text, which only
+the local owner is given. POST records/{repo}/{id}/delete takes `confirm`, which must repeat the id.
 
 Nothing here opens a socket, starts a thread, prints, parses arguments or exits. GET wait blocks
 in Store.wait for at most WAIT_MAX_S; how many may wait at once is the listener's rule.
@@ -1010,6 +1016,47 @@ def record_new(api, req):
     return _record_view(api, 'record_template', _segment(req, 'repo'))
 
 
+# ---- the owner's record writes (docs/action-hub.md "The record page")
+def _strings(b, name):
+    """b[name] as a list of strings: absent is [], one string is a list of one."""
+    v = b.get(name)
+    if v is None:
+        return []
+    if isinstance(v, str):
+        v = [v]
+    if not isinstance(v, list) or not all(isinstance(s, str) for s in v):
+        raise _invalid('%s must be a list of strings' % name, name)
+    return v
+
+
+def record_add(api, req):
+    repo = _segment(req, 'repo')
+    b = _fields(req, ('id', 'summary', 'scope', 'effort', 'ref'), ('id', 'summary', 'scope'))
+    out = _record_view(api, 'record_add', repo, _text(b, 'id'), _text(b, 'summary'),
+                       _strings(b, 'scope'), _text(b, 'effort'), _text(b, 'ref'))
+    return dict(out, ok=True)
+
+
+def record_edit(api, req):
+    repo, rid = _segment(req, 'repo'), _segment(req, 'id')
+    b = _fields(req, ('version', 'changes', 'unset', 'body', 'ruling'), ('version',))
+    changes = _typed(b, 'changes', (dict,), 'an object of field names and values') or {}
+    out = _record_view(api, 'record_edit', repo, rid, _text(b, 'version'),
+                       [(k, _strings(changes, k)) for k in changes], _strings(b, 'unset'),
+                       _text(b, 'body'), _text(b, 'ruling'))
+    return dict(out, ok=True)
+
+
+def record_delete(api, req):
+    repo, rid = _segment(req, 'repo'), _segment(req, 'id')
+    b = _fields(req, ('why', 'confirm', 'ruling'), ('why', 'confirm'))
+    if _text(b, 'confirm') != rid:
+        raise _invalid('confirm must repeat the record id to delete it', 'confirm')
+    out = _record_view(api, 'record_delete', repo, rid, _text(b, 'why'), _text(b, 'ruling'))
+    return dict(out, ok=True)
+# ---- end of the owner's record writes
+
+
 def _listing(name):
     def handler(api, req):
         return {'items': api.shown(name)}
@@ -1164,6 +1211,9 @@ ROUTES = (
     _r('GET', '/completed', ANY, completed),
     _r('GET', '/records/{repo}/new', ANY, record_new),
     _r('GET', '/records/{repo}/{id}', ANY, record),
+    _r('POST', '/records/{repo}', OWNER, record_add),
+    _r('POST', '/records/{repo}/{id}/edit', OWNER, record_edit),
+    _r('POST', '/records/{repo}/{id}/delete', OWNER, record_delete),
     _r('GET', '/notices', ANY, _listing('notices')),
     _r('GET', '/repos', ANY, _listing('repos')),
     _r('GET', '/usage', ANY, _listing('usage')),

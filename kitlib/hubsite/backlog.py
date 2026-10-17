@@ -347,7 +347,9 @@ _RID = re.compile(r"[A-Za-z0-9][A-Za-z0-9.-]{0,127}\Z")
 _REPO_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}\Z")
 # A branch a record names (`pulled_by:`, `parked_from:`), before git is asked about it.
 _BRANCH = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,199}\Z")
-_HOW = (("closes ", "closed"), ("retires ", "retired"), ("backlog: delete ", "deleted"))
+# How a removal's subject names it: `deletes ID: why` is what kitlib.backlog.plan plan_delete writes.
+_HOW = (("closes ", "closed"), ("retires ", "retired"), ("deletes ", "deleted"),
+        ("backlog: delete ", "deleted"))
 
 
 class RecordError(Exception):

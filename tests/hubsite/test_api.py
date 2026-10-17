@@ -1770,5 +1770,96 @@ class RecordRouteTest(ApiCase):
         self.assertEqual(self.views.calls, [])
 
 
+class WriteViews(object):
+    """The three record writes as SiteViews gives them: each call is kept, and `fail` is raised
+    when set."""
+
+    def __init__(self):
+        self.calls = []
+        self.fail = None
+
+    def _do(self, *call):
+        self.calls.append(call)
+        if self.fail:
+            raise self.fail
+        return {'lines': ['DONE']}
+
+    def record_add(self, repo, id, summary, scopes, effort, ref):
+        return self._do('add', repo, id, summary, scopes, effort, ref)
+
+    def record_edit(self, repo, id, version, changes, unset, body, ruling):
+        return self._do('edit', repo, id, version, changes, unset, body, ruling)
+
+    def record_delete(self, repo, id, why, ruling):
+        return self._do('delete', repo, id, why, ruling)
+
+
+class RecordWriteRouteTest(ApiCase):
+    def setUp(self):
+        ApiCase.setUp(self)
+        self.views = WriteViews()
+        self.api = api.Api(self.store, views=self.views, clock=CLOCK)
+
+    def test_each_write_hands_the_view_its_fields(self):
+        self.assertEqual(self.ok('POST', '/records/kit', OWNER,
+                                 {'id': 'EX-2', 'summary': 's', 'scope': 'tools/x.py'}),
+                         {'lines': ['DONE'], 'ok': True, 'revision': self.store.revision})
+        self.ok('POST', '/records/kit/EX-1/edit', OWNER,
+                {'version': 'c:v', 'changes': {'effort': 's', 'scope': ['a', 'b']},
+                 'unset': ['ref'], 'body': 'B\n', 'ruling': 'R-1'})
+        self.ok('POST', '/records/kit/EX-1/delete', OWNER, {'why': 'w', 'confirm': 'EX-1'})
+        self.assertEqual(self.views.calls, [
+            ('add', 'kit', 'EX-2', 's', ['tools/x.py'], None, None),
+            ('edit', 'kit', 'EX-1', 'c:v', [('effort', ['s']), ('scope', ['a', 'b'])], ['ref'],
+             'B\n', 'R-1'),
+            ('delete', 'kit', 'EX-1', 'w', None)])
+
+    def test_the_writes_are_the_owners(self):
+        for method, path, body in (('POST', '/records/kit', {'id': 'A', 'summary': 's',
+                                                             'scope': ['x']}),
+                                   ('POST', '/records/kit/A/edit', {'version': 'v'}),
+                                   ('POST', '/records/kit/A/delete', {'why': 'w',
+                                                                      'confirm': 'A'})):
+            with self.subTest(path=path):
+                self.refused('forbidden', None, method, path, AGENT, body)
+        self.assertEqual(self.views.calls, [])
+
+    def test_a_delete_whose_confirm_is_not_the_id_never_reaches_the_view(self):
+        for confirm in ('EX-2', 'ex-1'):
+            with self.subTest(confirm=confirm):
+                obj = self.refused('invalid', 'confirm', 'POST', '/records/kit/EX-1/delete',
+                                   OWNER, {'why': 'w', 'confirm': confirm})
+                self.assertEqual(obj['error']['message'],
+                                 'confirm must repeat the record id to delete it')
+        self.refused('invalid', 'why', 'POST', '/records/kit/EX-1/delete', OWNER,
+                     {'confirm': 'EX-1'})
+        self.assertEqual(self.views.calls, [])
+
+    def test_a_body_of_the_wrong_shape_never_reaches_the_view(self):
+        for path, body, field in (
+                ('/records/kit/EX-1/edit', {'version': 'v', 'changes': ['effort']}, 'changes'),
+                ('/records/kit/EX-1/edit', {'version': 'v', 'changes': {'effort': 3}},
+                 'effort'),
+                ('/records/kit/EX-1/edit', {'version': 'v', 'state': 'open'}, None),
+                ('/records/kit/EX-1/edit', {'changes': {}}, 'version'),
+                ('/records/kit', {'id': 'A', 'summary': 's'}, 'scope'),
+                ('/records/kit', {'id': 'A', 'summary': 's', 'scope': [1]}, 'scope')):
+            with self.subTest(body=body):
+                self.refused('invalid', field, 'POST', path, OWNER, body)
+        self.assertEqual(self.views.calls, [])
+
+    def test_a_store_refusal_is_the_owners_text_and_the_fixed_phrase_to_anyone_else(self):
+        self.views.fail = HubError('store', 'C:\\repo names no "backlog".store', 'repo')
+        body = {'id': 'A', 'summary': 's', 'scope': ['x']}
+        obj = self.refused('store', 'repo', 'POST', '/records/kit', OWNER, body)
+        self.assertEqual(obj['error']['message'], 'C:\\repo names no "backlog".store')
+        status, obj = self.api.call('POST', BASE + '/records/kit', OWNER, body,
+                                    agent_words=True)
+        self.assertEqual((status, obj['error']['message']), (503, api.AGENT_SAYS['store']))
+        self.views.fail = HubError('conflict', 'stale', 'version')
+        self.refused('conflict', 'version', 'POST', '/records/kit/A/edit', OWNER,
+                     {'version': 'v'})
+
+
 if __name__ == '__main__':
     unittest.main()
