@@ -966,6 +966,7 @@ def _approvals(a, stop):
     docs = (_hub(a).get('/snapshot').get('collections') or {}).get('approvals') or {}
     now = datetime.datetime.now(datetime.timezone.utc)
     items = [dict(docs[k], id=k, status=approvals.status_at(docs[k], now) or 'malformed')
+             if isinstance(docs[k], dict) else {'id': k, 'status': 'malformed'}
              for k in sorted(docs, key=api._natural)]
     if a.sub == 'show':
         d = next((d for d in items if d['id'] == a.id), None)

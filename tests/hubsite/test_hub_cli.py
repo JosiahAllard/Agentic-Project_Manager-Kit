@@ -1242,6 +1242,19 @@ class ApprovalsCase(VerbCase):
             'AGENTS.md %s -> %s' % ('b' * 40, self.blob), 'gone.md %s -> deleted' % ('c' * 40)])
         self.assertIn('no approval A-009', self.refused('approvals', 'show', 'A-009'))
 
+    def test_a_document_that_is_not_an_object_is_malformed(self):
+        real = self.hub.store.snapshot
+
+        def snapshot():
+            revision, docs = real()
+            docs['approvals']['A-003'] = ['not', 'an', 'object']
+            return revision, docs
+
+        with mock.patch.object(self.hub.store, 'snapshot', snapshot):
+            self.assertEqual(self.ok('approvals')[2].rstrip(), 'A-003 malformed [-]')
+            self.assertEqual(self.ok('approvals', 'show', 'A-003')[0].rstrip(),
+                             'A-003 malformed [-]')
+
 
 class PendingCase(VerbCase):
     def test_pending_prints_the_items_get_pending_answers(self):
