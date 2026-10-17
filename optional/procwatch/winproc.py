@@ -171,11 +171,13 @@ def command_line(h):
 
 def details(pid):
     """dict of ctime, cpu, image, cmd, handles, ws, priv for one pid; fields None when unreadable
-    (other users' and protected processes)."""
+    (other users' and protected processes). gone = True when no process has that pid any more
+    (it exited after the snapshot listed it)."""
     d = {"ctime": None, "cpu": None, "image": None, "cmd": None, "handles": None, "ws": None,
-         "priv": None}
+         "priv": None, "gone": False}
     h = open_process(pid, PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ) or open_process(pid)
     if not h:
+        d["gone"] = ctypes.get_last_error() == 87      # ERROR_INVALID_PARAMETER: no such pid
         return d
     try:
         d["ctime"], d["cpu"] = times(h)
