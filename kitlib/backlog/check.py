@@ -130,7 +130,7 @@ HOLD_CITATIONS = 'hold citations'
 
 def check_hold_citations(snap):
     """One WARN per `blocked_on: deliberate` or `owner` line on a blocked record whose hold cites
-    no ruling, question or item (record.hold_citations; R-2092: an uncited hold is void). Never
+    no ruling, question or item (record.hold_citations; an uncited hold is void). Never
     red: the store holds such records already, and `block` refuses new ones."""
     subjects, warned = 0, []
     for rec in snap.readable:
@@ -143,7 +143,7 @@ def check_hold_citations(snap):
             if not rmod.hold_citations(rec):
                 warned.append(rmod.Finding(HOLD_CITATIONS, rec.path, n, '`blocked_on: %s` cites '
                                            'no R-nnnn, Q-nnn or item:<ID> it waits on, so the hold '
-                                           'is void (R-2092): unblock it, or cite the ruling and '
+                                           'is void: unblock it, or cite the ruling and '
                                            'its end condition with `block %s --on %s --reason '
                                            '"R-nnnn: until ..."`' % (value, rec.id, value)))
     return CheckResult(HOLD_CITATIONS, subjects, (), unit='deliberate or owner holds',

@@ -1,5 +1,5 @@
-"""Hold hygiene (R-2092: every block or hold cites the ruling, question or item it waits on; an
-uncited hold is void). `check` warns on a `deliberate` or `owner` hold that cites nothing
+"""Hold hygiene (every block or hold cites the ruling, question or item it waits on; an uncited
+hold is void). `check` warns on a `deliberate` or `owner` hold that cites nothing
 (kitlib.backlog.check.check_hold_citations, never red); `block` refuses to write one
 (kitlib.backlog.record.block_citation_error, called by tools/backlog.py); a hold on an item that
 closed or retired is the `item: targets` WARN (kitlib.backlog.store.dangling_items)."""
@@ -13,7 +13,7 @@ from tests.backlog import test_cli
 from tests.backlog.helpers import ADD_FLAGS, parse
 
 DELIBERATE = dict(state='blocked', blocked_on='deliberate')
-NOTE = 'Blocked on deliberate (2026-10-10): R-2092: held until the guard rewrite lands'
+NOTE = 'Blocked on deliberate (2026-10-10): R-9092: held until the guard rewrite lands'
 
 
 def snapshot(*recs):
@@ -34,14 +34,14 @@ class HoldCitations(unittest.TestCase):
         res = result(snapshot(parse('FOO', id='FOO', **DELIBERATE)), checkmod.HOLD_CITATIONS)
         self.assertEqual(len(res.warnings), 1)
         self.assertIn('`blocked_on: deliberate` cites no', res.warnings[0].message)
-        self.assertIn('R-2092', res.warnings[0].message)
+        self.assertIn('so the hold is void', res.warnings[0].message)
         self.assertEqual((res.subject, res.findings, res.red), (1, [], False))
 
     def test_the_block_reason_note_cites_the_hold(self):
         self.assertEqual(hold_warnings(parse('FOO', id='FOO', body=NOTE, **DELIBERATE)), [])
 
     def test_a_question_or_an_item_in_the_note_cites_it(self):
-        for cite in ('Q-1027', 'item:KIT-OTHER'):
+        for cite in ('Q-1027', 'item:EX-OTHER'):
             body = 'Blocked on deliberate (2026-10-10): waits on %s, until it is answered' % cite
             with self.subTest(cite=cite):
                 self.assertEqual(hold_warnings(parse('FOO', id='FOO', body=body, **DELIBERATE)), [])
@@ -51,13 +51,13 @@ class HoldCitations(unittest.TestCase):
 
     def test_hold_ruling_resume_and_ref_are_not_citations(self):
         # hold_ruling released a hold and resume unparked one; ref is where the record came from.
-        for key, value in (('hold_ruling', 'R-1561'), ('resume', 'R-1561'), ('ref', 'R-1721')):
+        for key, value in (('hold_ruling', 'R-9561'), ('resume', 'R-9561'), ('ref', 'R-9721')):
             with self.subTest(key=key):
                 self.assertEqual(len(hold_warnings(parse('FOO', id='FOO', **dict(DELIBERATE,
                                                                                **{key: value})))), 1)
 
     def test_an_id_elsewhere_in_the_body_is_not_a_citation(self):
-        body = 'Filed as a follow-up of the round-9 review (R-1721).'
+        body = 'Filed as a follow-up of the round-9 review (R-9721).'
         self.assertEqual(len(hold_warnings(parse('FOO', id='FOO', body=body, **DELIBERATE))), 1)
 
     def test_an_owner_hold_is_cited_by_an_id_in_owner_ask(self):
@@ -103,13 +103,13 @@ class BlockCitationError(unittest.TestCase):
             with self.subTest(members=members):
                 err = rmod.block_citation_error(members, 'waiting for the next pass', 'which?')
                 self.assertIn('cites nothing it waits on', err)
-                self.assertIn('R-2092', err)
+                self.assertIn('an uncited hold is void', err)
         self.assertIn('--on deliberate', rmod.block_citation_error(['deliberate']))
 
     def test_an_r_q_or_item_id_in_the_reason_or_the_ask_passes(self):
-        for reason, ask in (('R-2092: until the rewrite lands', None),
+        for reason, ask in (('R-9092: until the rewrite lands', None),
                             ('until Q-1027 is answered', None),
-                            ('until item:KIT-OTHER closes', None),
+                            ('until item:EX-OTHER closes', None),
                             (None, 'Q-1027: which of the two?')):
             with self.subTest(reason=reason, ask=ask):
                 self.assertIsNone(rmod.block_citation_error(['deliberate', 'owner'], reason, ask))
@@ -120,7 +120,7 @@ class BlockCitationError(unittest.TestCase):
                 self.assertIsNone(rmod.block_citation_error([m]))
 
     def test_a_malformed_id_is_not_a_citation(self):
-        for reason in ('per R-12 for now', 'per XR-2092 for now', 'per Q-12 for now'):
+        for reason in ('per R-12 for now', 'per aR-9092 for now', 'per Q-12 for now'):
             with self.subTest(reason=reason):
                 self.assertIsNotNone(rmod.block_citation_error(['deliberate'], reason))
 
@@ -140,7 +140,7 @@ class BlockCli(unittest.TestCase):
         self.assertIn('USAGE: `block --on deliberate` cites nothing it waits on', out)
         self.assertEqual(self.repo.git('rev-parse', smod.STORE_REF), before)
         self.ok('block', 'FOO', '--on', 'deliberate', '--reason',
-                'R-2092: held until the guard rewrite lands')
+                'R-9092: held until the guard rewrite lands')
         out = self.ok('check')
         self.assertIn('hold citations   1 ok, 0 FAILED', out)
         self.assertNotIn('WARN', out)
