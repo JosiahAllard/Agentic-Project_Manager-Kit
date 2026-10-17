@@ -89,11 +89,11 @@ ACTIONS = collections.OrderedDict([
     ('block-owner', Row(('block', 'unblock'), MEDIUM, LEADS, (), ('block',))),
     ('set-status', Row(('set-status', 'unpark'), MEDIUM, LEADS, (), ())),
     ('close', Row(('close',), MEDIUM, LEADS, tuple((r, VIA_LAND) for r in LANDERS), ())),
-    # A held record: closing, retiring or deleting it is TOP's (R-2033 added delete).
+    # A held record: closing, retiring or deleting it is TOP's (the owner added delete).
     ('close-held', Row(('close', 'retire', 'delete'), HIGH, TOP, (), ('close', 'retire', 'delete'))),
     ('retire', Row(('retire',), MEDIUM, LEADS, (), ())),
-    ('delete', Row(('delete',), MEDIUM, LEADS, (), ())),                # R-2033
-    ('clear-review', Row(('clear-review',), MEDIUM, LEADS, (), ())),    # R-2033
+    ('delete', Row(('delete',), MEDIUM, LEADS, (), ())),
+    ('clear-review', Row(('clear-review',), MEDIUM, LEADS, (), ())),
     ('retarget', Row(('retarget', 'migrate'), HIGH, TOP, (), ())),
     # A raw write: a direct edit of a record file or a ref write (refs/backlog, git update-ref),
     # judged at the write; a commit of what the backlog tool wrote (land.py's deletions) is not.

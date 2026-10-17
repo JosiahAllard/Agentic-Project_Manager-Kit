@@ -38,8 +38,8 @@ DESIGN = {
     'close': ('medium', CPO, {'lander': 'via-land'}),
     'close-held': ('high', TOP, {}),
     'retire': ('medium', CPO, {}),
-    'delete': ('medium', CPO, {}),          # R-2033
-    'clear-review': ('medium', CPO, {}),    # R-2033
+    'delete': ('medium', CPO, {}),
+    'clear-review': ('medium', CPO, {}),
     'retarget': ('high', TOP, {}),
     'raw-write': ('high', (), {}),
 }
@@ -139,7 +139,7 @@ class RolesTest(unittest.TestCase):
             self.assertEqual(R.allows('set-other', role, R.FACTS), role in CPO, role)
 
     def test_a_lead_deletes_and_clears_a_review_and_a_held_record_takes_the_top_gate(self):
-        """R-2033: delete and clear-review are the leads' (medium, audited); deleting a held record
+        """Delete and clear-review are the leads' (medium, audited); deleting a held record
         takes close-held, the TOP gate that closing and retiring one take."""
         held = R.ACTIONS['close-held']
         self.assertEqual((set(held.verbs), set(held.over)), ({'close', 'retire', 'delete'},) * 2)
