@@ -1,8 +1,7 @@
-"""kitlib.gate.land: which steps a landing's merged gate runs (`.kit.json` landing.select,
-docs/gate.md "Landing"). By default every step that is not manual, as the author's
-`gate.py --full` selects them, whatever paths the merge changes: a step gated on globs the branch
-did not touch (an asset import a fresh landing tree needs before the engine tests) still runs.
-landing.select "diff" keeps the selection by the merge's changed paths."""
+"""kitlib.gate.land: a landing's merged gate runs every step that is not manual, as the author's
+`gate.py --full` selects them, whatever paths the merge changes (docs/gate.md "Landing"): a step
+gated on globs the branch did not touch (an asset import a fresh landing tree needs before the
+engine tests) still runs. Each runs its cmd; only a strict landing runs its full_cmd."""
 import unittest
 
 from kitlib import gate as G
@@ -14,7 +13,7 @@ FAILS = ['{python}', '-c', 'import sys; print("ok"); sys.exit(1)']
 GATE = {'steps': [
     {'name': 'unit', 'always': True, 'cmd': fixtures.RED_AWARE, 'pass': '^ok$'},
     # globbed on paths the branch never changes; its full_cmd fails, and a landing that is not
-    # strict runs its cmd, as before
+    # strict runs its cmd
     {'name': 'asset-import', 'globs': ['assets/*'], 'cmd': fixtures.RED_AWARE,
      'full_cmd': FAILS, 'pass': '^ok$'},
     {'name': 'engine', 'manual': True, 'cmd': FAILS},
@@ -24,35 +23,22 @@ GATE = {'steps': [
 ]}
 
 
-class SelectCase(LandCase):
+class SelectsEveryStep(LandCase):
     GATE = GATE
 
-    def land_scripts_only(self):
+    def test_a_globbed_step_the_merge_does_not_touch_runs(self):
+        # before the fix the landing's step list was ['unit']: it lacked asset-import (and
+        # tools-tests-all), which the author's --full gate ran
         _, tip = self.branch('feature', {'scripts/a.py': 'x = 1\n'})
         said = []
         out = self.lander(BRANCH, self.main, tip, say=said.append).run()
         self.assertEqual(out.code, G.OK, out.lines)
         rec, why = gate_ok.verify(self.repo.root, out.merge)
         self.assertIsNone(why)
-        return [s['name'] for s in rec['steps']], said
-
-
-class SelectFullByDefault(SelectCase):
-    def test_a_globbed_step_the_merge_does_not_touch_runs(self):
-        # before the fix the landing's step list was ['unit']: it lacked asset-import (and
-        # tools-tests-all), which the author's --full gate ran
-        names, said = self.land_scripts_only()
-        self.assertEqual(names, ['unit', 'asset-import', 'tools-tests-all'])
+        self.assertEqual([s['name'] for s in rec['steps']],
+                         ['unit', 'asset-import', 'tools-tests-all'])
         line = [l for l in said if l.startswith('merged-tree gate at ')]
         self.assertTrue(line and line[0].endswith(': unit, asset-import, tools-tests-all'), said)
-
-
-class SelectDiff(SelectCase):
-    KIT = dict(LandCase.KIT, landing=dict(LandCase.KIT['landing'], select='diff'))
-
-    def test_diff_selects_by_the_changed_paths(self):
-        names, _ = self.land_scripts_only()
-        self.assertEqual(names, ['unit'])
 
 
 if __name__ == '__main__':

@@ -276,11 +276,13 @@ class HookFromMain(LandCase):
 
 
 class NoStepSelected(LandCase):
-    # landing.select "diff": the merge's changed paths select the steps (the default, "full",
-    # selects every step that is not manual: tests/gate/test_land_select.py)
-    KIT = dict(LandCase.KIT, landing=dict(LandCase.KIT['landing'], select='diff'))
-    GATE = {'steps': [{'name': 'unit', 'globs': ['src/*'], 'cmd': fixtures.RED_AWARE,
-                       'pass': '^ok$'}]}
+    # The merged gate selects every step that is not manual (tests/gate/test_land_select.py), and
+    # a base whose steps are all manual is refused before the merge (Lander.manual_only); what is
+    # left to select nothing is two steps that each drop the other (skip_if_selected).
+    GATE = {'steps': [{'name': 'unit', 'always': True, 'cmd': fixtures.RED_AWARE,
+                       'pass': '^ok$', 'skip_if_selected': ['other']},
+                      {'name': 'other', 'always': True, 'cmd': fixtures.RED_AWARE,
+                       'pass': '^ok$', 'skip_if_selected': ['unit']}]}
 
     def test_a_landing_with_no_step_selected_is_refused_and_undone(self):
         _, tip = self.branch('feature', {'a.py': 'x = 1\n'})

@@ -771,13 +771,12 @@ def _gate_checkout(top, cfg, seen, base=None, full=False, only=None, plan=False,
 # ---------------------------------------------------------------- the merged-tree gate
 
 def merged_gate(root, cfg, base, full=False, slug='land', log_dir=None, say=None, book_kw=None,
-                lane_args=None, reuse=None, slot=None, tree=None, select_all=False):
+                lane_args=None, reuse=None, slot=None, tree=None):
     """_merged_gate() with its source (kitlib.gate.detect) in facts['source'] and as the last
     line. With no "gate" section in `cfg` the gate is detected from the merged tree, plus the
     steps `base` owes (detect.effective). `slot`: the Slot the landing already holds; the steps
     run in it and no second slot is booked (gated). `tree`: the checkout holding the merge (a
-    landing's landing tree, kitlib.gate.land); default `root`. `select_all`: select every
-    non-manual step, as `full` does, but run each step's cmd (landing.select "full")."""
+    landing's landing tree, kitlib.gate.land); default `root`."""
     try:
         eff = detect.effective(cfg, tree or root, base=base)
     except detect.DetectError as e:
@@ -785,23 +784,25 @@ def merged_gate(root, cfg, base, full=False, slug='land', log_dir=None, say=None
     if eff.source == detect.AUTO:
         (say or _quiet)(detect.label(eff))
     out = _merged_gate(root, cfg, eff, base, full=full, slug=slug, log_dir=log_dir, say=say,
-                       book_kw=book_kw, lane_args=lane_args, reuse=reuse, slot=slot, tree=tree,
-                       select_all=select_all)
+                       book_kw=book_kw, lane_args=lane_args, reuse=reuse, slot=slot, tree=tree)
     out.facts['source'] = eff.source
     out.lines.append(detect.label(eff))
     return out
 
 
 def _merged_gate(root, cfg, eff, base, full=False, slug='land', log_dir=None, say=None,
-                 book_kw=None, lane_args=None, reuse=None, slot=None, tree=None, select_all=False):
+                 book_kw=None, lane_args=None, reuse=None, slot=None, tree=None):
     """Gate the merged tree at HEAD of `tree` (a landing's merge, in its landing tree; default
     `root`) against `base` (the main it was merged into). The steps run in `tree`, and their hook
     checks get it as ctx['root']; the repository's name and its log folder are `root`'s (the main
-    checkout's), wherever the tree is. The paths base..HEAD changes select the steps (every
-    non-manual step with full or select_all, each running its full_cmd, when it has one, only
-    with full), and each step's
+    checkout's), wherever the tree is. Every non-manual step is selected, as gate.py --full
+    selects them, whatever paths base..HEAD changes: a fresh landing tree lacks the main
+    checkout's ignored caches, so a step the branch's paths would not select (an asset import)
+    must still run. Each runs its cmd, or its full_cmd, when it has one, with `full` (a strict
+    landing). Each step's
     merged_args are appended, then `lane_args` (the landing lane's merged_args). Outcome codes:
-    OK, FAILED, REFUSED (also when no step is selected) or a machine lock code; facts verdict,
+    OK, FAILED, REFUSED (also when no step is selected: every step manual, or each dropped by
+    another's skip_if_selected) or a machine lock code; facts verdict,
     results, log_dir, head, windows (as the branch gate's). Check steps run the hook module of
     commit `base`, as the config is read from it (kitlib.gate.hookrev), never the merged tree's.
 
@@ -823,8 +824,7 @@ def _merged_gate(root, cfg, eff, base, full=False, slug='land', log_dir=None, sa
     try:
         all_steps = S.build(gate, tree, base, cfg.tools_dir, merged=True, extra=lane_args,
                             full=full)
-        chosen, _ = S.select(gate, all_steps, changed, full=full or select_all,
-                             read=S.working_tree_reader(tree))
+        chosen, _ = S.select(gate, all_steps, changed, full=True, read=S.working_tree_reader(tree))
     except S.GateConfigError as e:
         return G.Outcome(G.REFUSED, ['REFUSED: %s' % e])
     if not chosen and not empty:
