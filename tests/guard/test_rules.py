@@ -1158,6 +1158,24 @@ class RolesFromConfig(unittest.TestCase):
                 self.assertEqual(git('git merge --no-ff kit/wt', kind).rule, 'git-main-history')
 
 
+class MainCwdHint(unittest.TestCase):
+    def test_a_command_writing_through_a_main_cwd_is_told_to_cd_first(self):
+        # a subagent whose cwd is the main checkout runs python - or -c;
+        # the refusal stays, its advice is to cd into the worktree (or run a script by path)
+        w = W.World()
+        self.addCleanup(w.cleanup)
+        for ev in (bash("python - <<'EOF'\nprint(1)\nEOF", w.main, sub=True),
+                   ps('python -c "print(1)"', w.main, sub=True)):
+            d = decide(ev, w.ctx())
+            self.assertEqual(d and d.rule, 'main-checkout', d and d.reason)
+            self.assertIn(rules.MAIN_CWD_HINT, d.reason)
+            self.assertIn('cd into your worktree first', d.reason)
+            self.assertNotIn('Make the change in a worktree of it', d.reason)
+        # a redirect to a named file keeps the plain worktree advice
+        d = decide(bash('python x.py > out.log 2>&1', w.main, sub=True), w.ctx())
+        self.assertNotIn('cd into your worktree first', d.reason)
+
+
 class OtherTools(unittest.TestCase):
     def test_reads_and_unknown_tools_pass(self):
         w = W.World()
