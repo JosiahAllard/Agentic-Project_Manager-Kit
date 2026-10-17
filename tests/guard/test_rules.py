@@ -1160,7 +1160,7 @@ class RolesFromConfig(unittest.TestCase):
 
 class MainCwdHint(unittest.TestCase):
     def test_a_command_writing_through_a_main_cwd_is_told_to_cd_first(self):
-        # KIT-GUARD-MAIN-CWD-HINT: a subagent whose cwd is the main checkout runs python - or -c;
+        # a subagent whose cwd is the main checkout runs python - or -c;
         # the refusal stays, its advice is to cd into the worktree (or run a script by path)
         w = W.World()
         self.addCleanup(w.cleanup)
