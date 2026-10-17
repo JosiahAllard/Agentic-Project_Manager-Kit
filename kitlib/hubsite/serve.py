@@ -579,24 +579,31 @@ class SiteViews(object):
         return _record_call(self._backlog.record_template, repo)
 
     # The owner's record writes (kitlib.hubsite.recordwrite) to the store of the configured
-    # repository `repo` names; the root never comes from the caller. add and edit answer the
-    # record as read after the write.
+    # repository `repo` names; the root never comes from the caller. After a write the backlog
+    # source reads that repository again (Views.reread), so the snapshot the page reads shows
+    # it; add and edit also answer the record as read after the write.
     def _record_root(self, repo, rid):
         _record_call(backlog.check_id, rid)
+        # Views._named, the record reads' own lookup: its one caller outside backlog.Views
         return _record_call(self._backlog._named, repo)
 
     def _record_add(self, repo, id, summary, scopes, effort, ref):
         name, root = self._record_root(repo, id)
         out = recordwrite.add(root, id, summary, scopes, effort, ref)
+        self._backlog.reread(name, root)
         return dict(out, record=self._record(name, id))
 
     def _record_edit(self, repo, id, version, changes, unset, body, ruling):
         name, root = self._record_root(repo, id)
         out = recordwrite.edit(root, id, version, changes, unset, body, ruling)
+        self._backlog.reread(name, root)
         return dict(out, record=self._record(name, id))
 
     def _record_delete(self, repo, id, why, ruling):
-        return recordwrite.delete(self._record_root(repo, id)[1], id, why, ruling)
+        name, root = self._record_root(repo, id)
+        out = recordwrite.delete(root, id, why, ruling)
+        self._backlog.reread(name, root)
+        return out
 
     def _notices(self):
         return derived.notices(self._sources.notices)

@@ -706,6 +706,12 @@ class Views(object):
         name, root = self._named(repo)
         return record_template(name, root)
 
+    def reread(self, name, root):
+        """Read one repository again now, after the hub wrote to its store (kitlib.hubsite.serve,
+        the record writes), so held() and get() show the write without waiting for the timer's
+        next round. No fetch: the write left the store's local ref at its own commit."""
+        self._read(name, root, self.clock(), self.opener(root, False))
+
     def _lock(self, name):
         """The lock that makes a repository's read single-flight: one per name, made once."""
         with self._guard:

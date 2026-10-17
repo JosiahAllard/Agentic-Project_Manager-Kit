@@ -933,6 +933,9 @@ class RecordBacklog(FakeBacklog):
             raise backlog.RecordError('not_found', backlog.NO_REPO, 'repo')
         return 'Alpha', 'C:\\alpha'
 
+    def reread(self, name, root):
+        self.calls.append(('reread', name, root))
+
 
 class RecordViewsCase(ServeCase):
     def site(self, raises=None):
@@ -999,7 +1002,7 @@ class RecordViewsCase(ServeCase):
 
     def test_a_write_goes_to_the_configured_root_and_answers_the_record_read_after(self):
         views, source = self.site()
-        seen = []
+        seen = source.calls
 
         def fake(name):
             return lambda *a: seen.append((name,) + a) or {'lines': [name]}
@@ -1011,10 +1014,13 @@ class RecordViewsCase(ServeCase):
             self.assertEqual(views.record_edit('ALPHA', 'A-2', 'c:v', [('effort', ['s'])], [],
                                                None, 'R-1')['record']['id'], 'A-2')
             self.assertEqual(views.record_delete('Alpha', 'A-2', 'w', None), {'lines': ['delete']})
-        self.assertEqual(seen, [('add', 'C:\\alpha', 'A-2', 's', ['x'], None, None),
+        # each write is followed by a read of that repository, so the snapshot shows it
+        reread = ('reread', 'Alpha', 'C:\\alpha')
+        self.assertEqual(seen, [('add', 'C:\\alpha', 'A-2', 's', ['x'], None, None), reread,
+                                ('record', 'Alpha', 'A-2'),
                                 ('edit', 'C:\\alpha', 'A-2', 'c:v', [('effort', ['s'])], [],
-                                 None, 'R-1'),
-                                ('delete', 'C:\\alpha', 'A-2', 'w', None)])
+                                 None, 'R-1'), reread, ('record', 'Alpha', 'A-2'),
+                                ('delete', 'C:\\alpha', 'A-2', 'w', None), reread])
 
     def test_a_bad_id_or_a_repository_not_configured_is_refused_before_any_write(self):
         views, _ = self.site()

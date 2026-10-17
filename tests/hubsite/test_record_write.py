@@ -84,6 +84,19 @@ class Add(Case):
         self.assertEqual(self.repo.git('for-each-ref', smod.STORE_REF), before)
 
 
+class Reread(Case):
+
+    def test_a_reread_after_a_write_puts_it_in_the_held_view(self):
+        self.named()
+        views = backlog.Views([('r', self.repo.root)])
+        views.get()
+        recordwrite.add(self.repo.root, 'FOO', SUMMARY, ['tools/x.py'])
+        ids = lambda: [i['id'] for i in views.held()['repos'][0]['open']]
+        self.assertEqual(ids(), [], 'held until something reads the repository again')
+        views.reread('r', self.repo.root)
+        self.assertEqual(ids(), ['FOO'])
+
+
 class Edit(Case):
 
     def setUp(self):
