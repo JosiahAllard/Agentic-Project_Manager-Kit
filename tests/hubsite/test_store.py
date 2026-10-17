@@ -1,5 +1,6 @@
 """kitlib.hubsite.store: the file store, its single-writer lock, ids, revision, events, pending and
 validation on write, and a crash in the middle of a write."""
+import datetime
 import json
 import os
 import shutil
@@ -11,7 +12,7 @@ import time
 import unittest
 from unittest import mock
 
-from kitlib.hubsite import store
+from kitlib.hubsite import approvals, store
 from kitlib.hubsite.store import HubError, Store, StoreBusy
 from kitlib.proc import spawn
 
@@ -137,6 +138,16 @@ class IdTest(StoreCase):
                                            'story': 's'}).id, 'S-001')
         self.assertEqual(s.add('to_pm', {'status': 'queued', 'kind': 'fyi', 'text': 'x'}).id,
                          'P-001')
+
+    def test_an_approval_is_an_a_id_with_a_known_status(self):
+        s = self.open()
+        doc = approvals.new_doc('https://github.com/o/r', 't', 'a' * 40,
+                                [{'path': 'x.md', 'base_blob': None, 'content': 'x\n'}],
+                                datetime.datetime(2026, 1, 2, tzinfo=datetime.timezone.utc))
+        self.assertEqual(s.add('approvals', doc).id, 'A-001')
+        with self.assertRaises(HubError) as cm:
+            s.add('approvals', dict(doc, status='granted'))
+        self.assertEqual(cm.exception.code, 'invalid')
 
     def test_the_counter_starts_above_ids_on_disk(self):
         root = tmpdir(self)

@@ -22,15 +22,17 @@ their change is the approved one (Verifier) and fail closed on any doubt.
   status_at(doc, now)             its status at `now`, expiry applied; None for a bad document
   decide_fields(key, doc_id, doc, decision, now)
                                   the fields a decision writes; ApprovalError
-  consume_fields(doc, commit, now)
-                                  the fields a consume writes; ApprovalError
+  consume_fields(key, doc_id, doc, commit, now)
+                                  the fields a consume writes, for a signed approval never
+                                  consumed; ApprovalError
   check(key, doc_id, doc, repo, head, blobs, now)
                                   (True, '') when this change is the approved one, else
                                   (False, why): the server's verify, pure
   remote_id(checkout, remote='origin', run=None)
                                   (repo_id, None) of a checkout's remote, or (None, why)
-  read_base(checkout, base_blob, run=None)
-                                  (text, None) of a base blob, read with git, or (None, why)
+  read_base(checkout, head, path, base_blob, cat=None)
+                                  (text, None) of a file at head, read with git and checked to
+                                  be base_blob, or (None, why)
   diff(path, base, content)       the unified diff lines the page shows for one file
   Verifier(client)                .verify(doc_id, repo, head, blobs) -> (ok, why), through the
                                   verify route; fails closed
@@ -57,7 +59,8 @@ both need a signed approval.
 Expiry is read, never written by a timer: a pending request expires PENDING_TTL_S after
 created_at; an approval APPROVED_TTL_S after decided_at, consumed or not (the owner's choice:
 a consumed approval verifies until it expires, so a land after the commit can still check it).
-A time that cannot be read counts as expired. Denied and expired are final.
+A time that cannot be read, a decision dated after now and a naive now count as expired. Denied
+and expired are final.
 
 Routes: the helpers below call ROUTE (POST add), ROUTE/<id>/consume (POST) and
 ROUTE/<id>/verify (GET, query repo, head and files as JSON {path: blob}; it answers
@@ -70,7 +73,8 @@ import hmac
 import json
 import re
 
-from kitlib.git import cmd
+from kitlib import hubvalidate
+from kitlib.git import batch, cmd
 
 from .api import AGENT
 from .client import part as _part
@@ -81,7 +85,7 @@ APPROVED_TTL_S = 24 * 3600      # an approval, consumed or not, lasts 24 hours
 
 PENDING, APPROVED, DENIED = 'pending', 'approved', 'denied'
 CONSUMED, EXPIRED = 'consumed', 'expired'
-STATUSES = (PENDING, APPROVED, DENIED, CONSUMED, EXPIRED)
+STATUSES = tuple(hubvalidate.STATUSES['approvals'])     # the single source
 APPROVE, DENY = 'approve', 'deny'
 DECISIONS = (APPROVE, DENY)
 COLLECTION = 'approvals'
@@ -285,14 +289,16 @@ def new_doc(repo, title, head, files, now, reason=None):
 def canonical(doc_id, doc):
     """The bytes sign() covers: JSON of the id, repo, head, each file's [path, base_blob, blob]
     sorted by path, the decision and decided_at, with sorted keys and no spaces. ValueError for a
-    document that has not their shape."""
+    document that has not their shape, or that names a path twice."""
     files = doc.get('files') if isinstance(doc, dict) else None
     if not isinstance(files, list) or not all(isinstance(f, dict) for f in files):
         raise ValueError('the approval has no files list')
-    triples = sorted([f.get('path'), f.get('base_blob'), f.get('blob')] for f in files
-                     if isinstance(f.get('path'), str))
+    triples = sorted(([f.get('path'), f.get('base_blob'), f.get('blob')] for f in files
+                      if isinstance(f.get('path'), str)), key=lambda t: t[0])
     if len(triples) != len(files):
         raise ValueError('a file of the approval has no path')
+    if len({t[0] for t in triples}) != len(triples):
+        raise ValueError('a path of the approval is named twice')
     body = {'id': doc_id, 'repo': doc.get('repo'), 'head': doc.get('head'), 'files': triples,
             'decision': doc.get('decision'), 'decided_at': doc.get('decided_at')}
     return json.dumps(body, sort_keys=True, separators=(',', ':'),
@@ -321,14 +327,20 @@ def expires_at(doc):
 
 def status_at(doc, now):
     """The status of `doc` at `now` (an aware datetime): EXPIRED for a pending, approved or
-    consumed one past expires_at or with a time that cannot be read; its stored status
+    consumed one past expires_at or with a time that cannot be read, for an approved or consumed
+    one decided after `now`, and for any of them when `now` is naive; its stored status
     otherwise; None for a document with no known status."""
     status = doc.get('status') if isinstance(doc, dict) else None
     if status not in STATUSES:
         return None
     if status in (PENDING, APPROVED, CONSUMED):
         end = expires_at(doc)
-        if end is None or now >= end:
+        try:
+            if end is None or now >= end:
+                return EXPIRED
+            if status != PENDING and now < _when(doc.get('decided_at')):
+                return EXPIRED
+        except TypeError:           # a naive `now` cannot be compared: no time, no approval
             return EXPIRED
     return status
 
@@ -358,12 +370,36 @@ def decide_fields(key, doc_id, doc, decision, now):
     return fields
 
 
-def consume_fields(doc, commit, now):
+def _signed(key, doc_id, doc):
+    """'' when `doc` is an approval signed under `key`, else the WHY_ phrase of why not."""
+    if not key:
+        return WHY_NO_KEY
+    if not isinstance(doc, dict):
+        return WHY_UNKNOWN
+    sig = doc.get('sig')
+    if doc.get('decision') != APPROVE or not isinstance(sig, str):
+        return WHY_UNSIGNED
+    try:
+        good = hmac.compare_digest(sign(key, doc_id, doc).encode('ascii'),
+                                   sig.encode('ascii', 'replace'))
+    except ValueError:
+        return WHY_BAD
+    return '' if good else WHY_UNSIGNED
+
+
+def consume_fields(key, doc_id, doc, commit, now):
     """The fields consuming `doc` for `commit` writes: status, commit and consumed_at. Only an
-    approved document that has not expired is consumed, once. ApprovalError (code conflict for
-    one that is not approved now)."""
+    approval signed under `key` that is approved now and was never consumed is consumed (the
+    status is not signed, so a stored commit counts too). ApprovalError (code conflict for one
+    that cannot be consumed now)."""
     if not isinstance(commit, str) or not _HEX40.match(commit):
         raise ApprovalError('commit is a commit id of 40 lowercase hex digits', 'commit')
+    why = _signed(key, doc_id, doc)
+    if why:
+        raise ApprovalError(why, 'sig', 'conflict')
+    if doc.get('commit'):
+        raise ApprovalError('the approval was consumed already by %s' % doc['commit'],
+                            'commit', 'conflict')
     status = status_at(doc, now)
     if status != APPROVED:
         raise ApprovalError('only an approved approval is consumed; this one is %s'
@@ -376,20 +412,9 @@ def check(key, doc_id, doc, repo, head, blobs, now):
     with the files `blobs` ({path: blob, None for a delete}) is the one `doc` approved and the
     approval still counts at `now`; else (False, one of the WHY_ phrases). A document is trusted
     only once its signature checks under `key`, before any of its fields is compared."""
-    if not key:
-        return False, WHY_NO_KEY
-    if not isinstance(doc, dict):
-        return False, WHY_UNKNOWN
-    sig = doc.get('sig')
-    if doc.get('decision') != APPROVE or not isinstance(sig, str):
-        return False, WHY_UNSIGNED
-    try:
-        good = hmac.compare_digest(sign(key, doc_id, doc).encode('ascii'),
-                                   sig.encode('ascii', 'replace'))
-    except ValueError:
-        return False, WHY_BAD
-    if not good:
-        return False, WHY_UNSIGNED
+    why = _signed(key, doc_id, doc)
+    if why:
+        return False, why
     status = status_at(doc, now)
     if status not in (APPROVED, CONSUMED):
         return False, WHY_STATUS % (status or 'malformed')
@@ -418,19 +443,33 @@ def remote_id(checkout, remote='origin', run=None):
         return None, str(e)
 
 
-def read_base(checkout, base_blob, run=None):
-    """(text, None) of the blob `base_blob` in the git checkout `checkout` (the owner's choice:
-    the server reads the base with git for the page's diff), or (None, why). The bytes read must
-    hash to `base_blob` and be UTF-8. `run` is kitlib.git.cmd.run or a stand-in."""
-    if not isinstance(base_blob, str) or not _HEX40.match(base_blob):
+def read_base(checkout, head, path, base_blob, cat=None):
+    """(text, None) of the file `path` at commit `head` in the git checkout `checkout` (the
+    owner's choice: the server reads the base with git for the page's diff), or (None, why). The
+    file must be the blob `base_blob` (40 hex) and UTF-8; with base_blob None (a new file) it must
+    be absent at head, and the answer is (None, None). `head` must be a commit of the checkout.
+    One `git cat-file --batch`: `cat` is kitlib.git.batch.cat_file or a stand-in."""
+    if not isinstance(head, str) or not _HEX40.match(head):
+        return None, 'not a commit id'
+    if check_path(path) is not None:
+        return None, 'not a path that can be approved'
+    if base_blob is not None and (not isinstance(base_blob, str) or not _HEX40.match(base_blob)):
         return None, 'not a blob id'
-    out, why = (run or cmd.run)(['cat-file', 'blob', base_blob], checkout)
-    if out is None:
-        return None, why or 'git could not read the blob'
-    if blob_id(out) != base_blob:
-        return None, 'git gave other bytes than the blob'
+    commit, spec = head + '^{commit}', head + ':' + path
+    got, why = (cat or batch.cat_file)([commit, spec], checkout)
+    if got is None:
+        return None, why or 'git could not read the base'
+    if got.get(commit) is None:
+        return None, 'head is not a commit in the checkout'
+    obj = got.get(spec)
+    if base_blob is None:
+        return (None, None) if obj is None else (None, 'the file exists at head')
+    if obj is None:
+        return None, 'the file is not at head'
+    if obj[0] != 'blob' or blob_id(obj[1]) != base_blob:
+        return None, 'the base differs from the file at head'
     try:
-        return out.decode('utf-8'), None
+        return obj[1].decode('utf-8'), None
     except UnicodeDecodeError:
         return None, 'the base is not text'
 
