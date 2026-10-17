@@ -37,9 +37,12 @@ or after an unpair or a session that ran out) is told so on the page and to run
   done. You can add, edit and delete your own. Tabs: To do and Done.
 - **Backlog.** Three tabs: Current backlog (each repository's open work, with priority, status
   and text filters), Parked (backlog items a coordinator has parked waiting on you, with their
-  question, branch and age) and Completed (1, 7, 30 or 90 days). A row's id opens its record page,
-  and the New story button opens a blank one ("The record page" below). The page no longer lists
-  stories (stories/S-NNN below); the stories API and the `stories` verbs are unchanged.
+  question, branch and age) and Completed (1, 7, 30 or 90 days). Current backlog also shows your
+  stories: those in progress above the table, those filed or closed below it, with Withdraw while
+  a story is still submitted; the Backlog button counts the stories in progress (highlighted when
+  one has questions for you). A row's id in any of the three tabs opens its record page, and the
+  New story button opens a blank one ("The record page" below). The New story tab and its form
+  are gone; `stories add` still files a story.
 - **Docs.** The agents' documents (a plan, research, a visual choice), newest first, from the
   store's `pages/` and `page_html/` ("pages/<id> and page_html/<id>" below). Read here opens one in
   a full-screen reader; Close shuts it, and so does Esc while the focus is outside the document. Read only: nothing on the page writes or deletes a
@@ -333,9 +336,9 @@ that repo's coordinator.
 | backlog_id, added_at | PM | the record the coordinator filed |
 | closed_note, closed_at | PM, owner | why it was not added, or when it was withdrawn |
 
-Follow-up questions are ordinary questions with `story` set; a question's card names its story's
-title. The page has no story list or form: the owner writes new work on the record page instead
-("The record page" below), and `stories add` still files a story.
+Follow-up questions are ordinary questions with `story` set; the page links them both ways. The
+page has no story form: the owner writes new work on the record page instead ("The record page"
+below), and `stories add` still files a story.
 
 PM steps:
 1. On a `submitted` story, send it verbatim to that repo's coordinator (coordinators stay in
@@ -441,7 +444,7 @@ comes from the caller.
   `store`: the owner sees the store's text, an agent or the tunnel the fixed phrase.
 
 On the page (the record page block in `kitlib/hubsite/web/index.html`, `RecordPageTest` in
-`tests/hubsite/test_page.py`), a row's id in Current backlog or Completed opens the record, and
+`tests/hubsite/test_page.py`), a row's id in Current backlog, Parked or Completed opens the record, and
 Back to the backlog returns. The record shows its id, repository and where it is (`open` or
 `completed`), then four sections:
 - Fields: every header field except the hold keys, one `key: value` line per value.
