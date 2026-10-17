@@ -7,6 +7,7 @@ drives and relative paths are read as before."""
 import os
 import unittest
 
+from kitlib.guard import commands as cm
 from kitlib.guard import context
 from kitlib.guard import shell as sh
 
@@ -170,6 +171,82 @@ class DynamicTargets(Base):
                 with self.subTest(text=text, cwd=cwd):
                     ev = W.ps(text.format(main=self.w.main), cwd, True)
                     self.denied(decide(ev, self.w.ctx()), 'main-checkout')
+
+    def refused_for_both(self, text, cwd=None):
+        """`text` is refused for a worker (main-checkout) and for the coordinator's mark, which may
+        edit a main checkout, by the jail (write-jail, rules.ps_drive_jail), each because the guard
+        cannot tell where it writes."""
+        text = text.format(main=self.w.main, wt=self.w.wt)
+        cwd = cwd or self.w.wt
+        d = self.denied(decide(W.ps(text, cwd, True), self.w.ctx()), 'main-checkout')
+        self.assertIn('cannot tell where it writes', d.reason)
+        d = self.denied(decide(W.ps(text, cwd, False), self.w.ctx(environ=COORDINATOR)), 'write-jail')
+        self.assertIn('cannot tell where it writes', d.reason)
+
+    def test_computed_target_is_judged_from_every_location(self):
+        # rules.shell_writes: after a computed cd (the location is unknown) and in the main
+        # checkout too, where only main_checkout judged it and let the coordinator's mark through
+        for text, cwd in ((r'cd (Get-Location); Set-Content $p x', self.w.wt),
+                          (r'$p="{main}\x.txt"; Set-Content $p x', self.w.main),
+                          (r'Set-Content (Join-Path {main} x.txt) x', self.w.main)):
+            with self.subTest(text=text, cwd=cwd):
+                self.refused_for_both(text, cwd)
+
+    def test_a_splat_is_a_computed_target(self):
+        # rules.write_targets: @a binds what its table holds, -Path among them
+        for text in (r"$a=@{{Path='{main}\x.txt'}}; Set-Content @a hi", r'Set-Content @a hi',
+                     r'Copy-Item a.txt @a', r'Remove-Item @a', r'New-Item x.txt @a'):
+            with self.subTest(text):
+                self.refused_for_both(text)
+
+    def test_pwd_named_any_other_way_fails_closed(self):
+        # rules.ps_pwd_path: any mention of PWD but a $PWD read in a path
+        for text in (r'sv PWD {main}; Set-Content "$PWD\x.txt" x',
+                     r'set PWD {main}; Set-Content "$PWD\x.txt" x',
+                     r'nv PWD {main} -Force; Set-Content "$PWD\x.txt" x',
+                     r'$global:PWD = "{main}"; Set-Content "$PWD\x.txt" x',
+                     r'$script:PWD = "{main}"; Set-Content "$PWD\x.txt" x',
+                     r'${{global:PWD}} = "{main}"; Set-Content "$PWD\x.txt" x',
+                     r'$a,$PWD = 1,"{main}"; Set-Content "$PWD\x.txt" x',
+                     r'foreach ($PWD in "{main}") {{ Set-Content "$PWD\x.txt" x }}',
+                     r'& {{ param($PWD) Set-Content "$PWD\x.txt" x }} {main}',
+                     r'Get-Item {main} -ov PWD; Set-Content "$PWD\x.txt" x',
+                     r'Get-Item {main} -pv PWD | % {{ Set-Content "$PWD\x.txt" x }}',
+                     r'Write-Output $PWD; Set-Content "$PWD\x.txt" x'):
+            with self.subTest(text):
+                self.refused_for_both(text)
+
+    def test_pwd_reads_in_paths_still_place(self):
+        self.allowed(self.run_ps(r'Set-Content "$PWD\x.txt" x; Get-Content "$PWD\y.txt"'))
+        self.allowed(self.run_ps(r'Copy-Item "${{PWD}}/a.txt" "$PWD\b.txt"'))
+
+    def test_a_colon_then_a_space_binds_the_next_word(self):
+        # rules.ps_params: `-Path: x` is -Path x, not -Path '' and a positional x
+        d = self.denied(self.run_ps(r'Set-Content -Path: {main}\x.txt hi'), 'main-checkout')
+        self.assertIn('is in the main checkout', d.reason)
+        self.refused_for_both(r'Set-Content -Path: $p hi')
+        self.allowed(self.run_ps(r'Set-Content -Path: x.txt hi'))
+        self.allowed(self.run_ps(r'Set-Content -Value: {main}\x.txt x.txt'))
+
+    def test_a_paren_argument_after_a_keyword_word_or_touching_a_parameter(self):
+        # shell._Scan.ps_paren_arg: the keyword is checked in first position only, and
+        # -Destination(...) is that parameter's value
+        for text in (r'Copy-Item data (Join-Path {main} x)', r'Copy-Item in (Join-Path {main} x)',
+                     r'Copy-Item end (Join-Path {main} x)', r'Copy-Item process (Join-Path {main} x)',
+                     r'Copy-Item a.txt -Destination(Join-Path {main} x)'):
+            with self.subTest(text):
+                self.refused_for_both(text)
+        for text, words in (('Copy-Item data (Join-Path a b)', ['Copy-Item', 'data', '(Join-Path a b)']),
+                            ('Copy-Item a -Destination(Join-Path a b)',
+                             ['Copy-Item', 'a', '-Destination', '(Join-Path a b)'])):
+            with self.subTest(text):
+                p = cm.read(text, sh.PS, W.fwd(self.w.wt))
+                self.assertEqual([c.argv for c in p.commands if c.nested_in is None], [words])
+        for text in ('$r = if (Test-Path x) { 1 }', 'if (-not(Test-Path x)) { 1 }'):
+            with self.subTest(text):
+                p = cm.read(text, sh.PS, W.fwd(self.w.wt))
+                self.assertTrue(any(c.argv[:1] == ['Test-Path'] and c.nested_in is None and c.groups
+                                    for c in p.commands), [(c.argv, c.groups) for c in p.commands])
 
     def test_cd_inside_a_subexpression_makes_the_location_unknown(self):
         # $( ) and ( ) run in the caller's scope: the cd moves the location for what follows

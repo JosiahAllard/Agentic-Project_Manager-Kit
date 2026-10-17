@@ -692,6 +692,29 @@ class LockVerbs(Base):
             ('powershell', 'xcopy %s status; python status stop 42' % lock),
             ('powershell', 'Write-Host -InformationVariable c %s; python $c stop 42' % lock)))
 
+    def test_a_paren_argument_beside_a_lock_path_still_catches_it(self):
+        """A PowerShell argument in ( ) is one computed word (shell._Scan.ps_paren_arg), not a
+        group: a reader with one beside the lock path is still caught (_ps_caught), as the ( )
+        group was, and a copy whose destination is one still hands the path on."""
+        lock = 'tools/machine_lock.py'
+        from kitlib.guard import commands as cm, shell as sh
+        for text in ('gc %s (x)' % lock, 'Get-Content %s (Join-Path a b)' % lock):
+            parsed = cm.read(text, sh.PS, self.w.wt)
+            with self.subTest(text=text):
+                self.assertTrue(parsed.clean, text)
+                reader = [c for c in parsed.commands if c.words and c.words[0].text in ('gc', 'Get-Content')]
+                self.assertEqual(len(reader), 1, text)
+                self.assertTrue(rolepolicy._ps_caught(reader[0]), text)
+                self.assertIsNotNone(rolepolicy.lock_verb(parsed, 'read', self.w.kit_dir))
+            for role in ('reviewer', 'senior-worker', 'pm'):
+                with self.subTest(text=text, role=role):
+                    d = rolepolicy.check(self.shell(text, role), self.w.ctx())
+                    self.assertIsNotNone(d, text)
+                    self.assertEqual((d.verdict, d.rule), ('deny', 'role-lock'), d.reason)
+        self.handed_on((
+            ('powershell', 'Copy-Item %s (Join-Path a status); python status stop 42' % lock),
+            ('powershell', 'Copy-Item %s -Destination(Join-Path a status); python status stop 42' % lock)))
+
     def test_the_lock_cli_run_as_a_module_is_read(self):
         """python -m with a module whose last part is machine_lock runs the lock CLI: its words
         are judged by their verb, as a run of the script is."""

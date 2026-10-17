@@ -1196,7 +1196,7 @@ class UnplacedGit(MainGit):
             "$p='env:GIT_DIR'; Set-Item -Path $p '%s/.git'; %s" % (m, g),
             "Set-Item \"${e}:GIT_DIR\" '%s/.git'; %s" % (m, g),
             "Set-Item -Path (\"env:GIT_\"+\"DIR\") '%s/.git'; %s" % (m, g),
-            "Set-Location env:;Set-Item GIT_DIR '%s/.git'; %s" % (m, g),
+            "Set-Location env:; Set-Item GIT_DIR '%s/.git'; %s" % (m, g),
             "[Environment]::$m('GIT_DIR', '%s/.git'); %s" % (m, g),
             # assignments the one-target reading missed
             "$env:A, $env:GIT_DIR = 1, '%s/.git'; %s" % (m, g),

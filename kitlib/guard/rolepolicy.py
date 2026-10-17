@@ -609,6 +609,8 @@ def _ps_caught(cmd):
     inv = cm.invocation(cmd)
     if inv is None or inv.index > 0 or cmd.next_op in ('(', '{') or cmd.prev_op in (')', '}'):
         return True
+    if any(w.dyn and w.text.startswith('(') for w in cmd.words):
+        return True                             # a ( ) argument (shell._Scan.ps_paren_arg) is caught as the group was
     for t in cmd.argv:
         p = t.split(':', 1)[0].lower()
         if '{' in t or '}' in t or p in PS_VARIABLE_ALIASES or len(p) >= 3 and any(

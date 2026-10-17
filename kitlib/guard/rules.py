@@ -2368,7 +2368,10 @@ def ps_params(cmd, words, spec):
                 cands = [n for n in names if n.startswith(body)]
             k += 1
             vals = []
-            if colon:
+            if colon and val == '' and k < len(words):
+                vals = [words[k]]               # `-Path: x`: a colon then a space binds the next word
+                k += 1
+            elif colon:
                 vals = [sh.Word(val, w.dyn, w.start, w.end)]
             elif any(c in spec.values for c in cands) and k < len(words):
                 vals = [words[k]]
@@ -3412,6 +3415,9 @@ def _python(cmd, name, args, cmd_word, via=None):
     return []
 
 
+PS_SPLAT_RE = re.compile(r'^@[A-Za-z_][\w:]*$')    # a PowerShell splat argument: @a, @global:a
+
+
 def write_targets(cmd, inv):
     """[Word]: what the command writes, by its redirections and the file commands the guard
     knows. A Word whose text is '.' stands for the directory the command runs in."""
@@ -3447,12 +3453,19 @@ def write_targets(cmd, inv):
         cmdlet = PS_ALIASES.get(name, name)
         if cmdlet in PS_CMDLETS and cmdlet != 'get-childitem':
             spec = PS_CMDLETS[cmdlet]
+            # a splat (@a) binds whatever its table or list holds, -Path among them: a target the
+            # line computes, in whichever slot it lands and in its own right
+            splats = [sh.Word(x.text, True, x.start, x.end) for x in args
+                      if PS_SPLAT_RE.match(x.text) and not cm.quoted(cmd, x)]
+            spans = dict(((x.start, x.end), x) for x in splats)
+            args = [spans.get((x.start, x.end), x) if not x.dyn else x for x in args]
             bound = ps_args(cmd, args, cmdlet)
             # a provider-aware cmdlet's item on a drive that holds no files (env:FOO) is no file;
             # every other writer (a native program, a script function, Out-File) gets a file
             native = name not in PS_PROVIDER_CMDLETS or inv.via is not None
             for p in spec.writes:
                 out.extend(x for x in bound.get(p, []) if native or not ps_provider_item(cmd, x))
+            out.extend(x for x in splats if not any(x is y for y in out))
             if cmdlet == 'expand-archive' and not bound.get('destinationpath'):
                 out.append(here(word))
             if cmdlet == 'new-item' and bound.get('name'):
@@ -3750,19 +3763,28 @@ def ps_provider_item(cmd, w):
 
 # a PowerShell word that is the location and a literal rest: $PWD, "${PWD}\x", $pwd/x/y
 PS_PWD_WORD_RE = re.compile(r'(?i)^(?:\$pwd|\$\{pwd\})((?:[\\/][^$`]*)?)$')
-# a line that may give $PWD another value: an assignment, a *-Variable cmdlet or the variable: drive
-PS_PWD_SET_RE = re.compile(r'(?i)\$\{?pwd\}?\s*[-+*/%]?=|variable')
+PS_PWD_NAME_RE = re.compile(r'(?i)pwd')
+PS_PWD_READ_RE = re.compile(r'(?i)\$(?:pwd|\{pwd\})(?=[\\/])')    # $PWD\ or ${PWD}/: a read in a path
 
 
 def ps_pwd_path(cmd, w):
     """The path text a PowerShell word spells as $PWD (or ${PWD}) and a literal rest, with the
-    location as cmd.cwd, or None: the word is not one, the directory is unknown, or the line may
-    set $PWD (PS_PWD_SET_RE)."""
+    location as cmd.cwd, or None: the word is not one, the directory is unknown, or the line
+    names PWD anywhere but in such a path word of this command or a $PWD read a path separator
+    follows (PS_PWD_READ_RE). The ways to give $PWD another value are many (sv PWD,
+    $global:PWD =, foreach ($PWD in ...), param($PWD), -ov PWD), so any other mention fails
+    closed."""
     if cmd.shell != sh.PS or not w.dyn or cmd.cwd is None:
         return None
     m = PS_PWD_WORD_RE.match(w.text)
-    if not m or PS_PWD_SET_RE.search(cmd.source or ''):
+    if not m:
         return None
+    src = cmd.source or ''
+    reads = [(x.start, x.end) for x in cmd.words if x.dyn and PS_PWD_WORD_RE.match(x.text)]
+    reads += [x.span() for x in PS_PWD_READ_RE.finditer(src)]
+    for hit in PS_PWD_NAME_RE.finditer(src):
+        if not any(s <= hit.start() and hit.end() <= e for s, e in reads):
+            return None
     return cmd.cwd + m.group(1)
 
 
@@ -3807,11 +3829,11 @@ def shell_writes(event, ctx, cmd, inv, cwd, role):
             if target is None and cmd.cwd is None and cmd.cwd_ps_drive:
                 ps_drive = True                 # after cd Main:\ or cd Registry::x
                 why = 'the directory it runs in is a PowerShell drive or provider path the guard cannot place'
-        if target is None and cmd.cwd is not None and not ps_drive and \
+        if target is None and cmd.shell == sh.PS and w.dyn:
+            ps_drive = True                     # PowerShell's, from any location: one $p or (...) can name the main checkout
+        elif target is None and cmd.cwd is not None and not ps_drive and \
                 ctx.place(cmd.cwd).kind not in (repo.MAIN, repo.UNKNOWN):
-            if cmd.shell != sh.PS or not w.dyn:
-                continue                        # a bash or cmd target it cannot place, from a worktree or elsewhere
-            ps_drive = True                     # PowerShell's: one $p or (...) can name the main checkout
+            continue                            # a target it cannot place, from a worktree or elsewhere
         what = '`%s` writes %s' % (cmd.text, w.text if w.text != '.' else 'files in the directory it runs in')
         stand_in = w.text == '.' and cmd.source[w.start:w.end] != '.'     # here(): no word to aim
         part = any((x.start, x.end) == (w.start, w.end) and x.text != w.text for x in cmd.words)

@@ -317,23 +317,30 @@ class _Scan(object):
 
     def ps_paren_arg(self):
         """True when the PowerShell ( at self.i opens an argument: it follows a word of the
-        command after a space or a comma (or is the value of `-Param:`), and neither the command's
-        first word nor the word before it is a keyword that takes a ( ) (if, foreach, while...).
-        A ( that starts a command, or follows a word directly (a method call), is still a group."""
+        command after a space or a comma, or is the value of a `-Param:` or a `-Param` it touches
+        (`-Destination(...)`, after the command's first word), and the word in first position (the
+        command's first, or the first after an assignment's `=`) is no keyword that takes a ( )
+        (if, foreach, while...): `Copy-Item data (...)` passes an argument. A ( that starts a
+        command, or follows a word directly (a method call), is still a group."""
         if not self.toks or self.toks[-1][0] != 'w':
             return False
         last = self.toks[-1][1]
         before = self.s[self.i - 1] if self.i else ''
-        if not (self.space(before) or before == ',' or
-                (before == ':' and last.end == self.i and last.text.startswith('-') and not last.dyn)):
-            return False
-        first = last
+        words = []
         for t in reversed(self.toks):
             if t[0] == 'op':
                 break
             if t[0] == 'w':
-                first = t[1]
-        return not ({first.text.lower(), last.text.lower()} & PS_PAREN_KEYWORDS)
+                words.insert(0, t[1])
+        param = last.end == self.i and last.text.startswith('-') and len(last.text) > 1 and not last.dyn
+        if not (self.space(before) or before == ',' or (before == ':' and param) or
+                (param and before != ':' and len(words) > 1)):
+            return False
+        first = words[0]
+        for k, w in enumerate(words[:-1]):
+            if w.text in ('=', '+=', '-=', '*=', '/=', '%=', '??='):
+                first = words[k + 1]            # `$r = if (...)`: the statement after it
+        return first.text.lower() not in PS_PAREN_KEYWORDS
 
     _BASH_REDIR = re.compile(r'(\d+|&)?(>>|>\||>&|>|<<<|<<-|<<|<&|<>|<)')
     _PS_REDIR = re.compile(r'(\d|\*)?(>>|>|<)(&\d)?')
