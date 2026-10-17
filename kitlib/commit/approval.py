@@ -62,8 +62,9 @@ def usage_error(req):
         return ('--owner-approval takes %s, the approval\'s id on the hub (not %r)'
                 % (VALUE, req.owner_approval))
     if req.owner_authored:
-        return ('--owner-approval and --owner-authored do not go together: the owner commits his '
-                'own change with --owner-authored, an agent the approved one with --owner-approval')
+        return ('--owner-approval and --owner-authored do not go together: the owner commits a '
+                'change of their own with --owner-authored, an agent the approved one with '
+                '--owner-approval')
     if req.owner_approved:
         return ('--owner-approval and --owner-approved do not go together: --owner-approved is '
                 'for the owner\'s own commit')

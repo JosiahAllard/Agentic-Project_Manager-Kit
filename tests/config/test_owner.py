@@ -102,7 +102,7 @@ class TrailerTest(unittest.TestCase):
         return config.load(t.root)
 
     def test_owner_approval_is_refused_in_any_case(self):
-        for key in ('Owner-Approval', 'owner-approval', 'OWNER-APPROVAL'):
+        for key in ('Owner-Approval', 'owner-approval', 'Owner-Approval'.upper()):
             with self.assertRaises(ConfigError) as cm:
                 self.load(key)
             self.assertIn('"owner".trailer', str(cm.exception))
