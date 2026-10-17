@@ -4,6 +4,9 @@
   ensure_tokens(folder)             make the folder and the two token files when absent;
                                     TokenFileError for one that exists and cannot serve
   read_token(folder, role)          a role's token as a client sends it, or None
+  ensure_approval_key(folder)       make the approval key file when absent (APPROVAL_FILE);
+                                    TokenFileError for one that exists and cannot serve
+  read_approval_key(folder)         the approval key, or None ("The approval key")
   parse_cookies(text)               a Cookie header as {name: value}
   cookie_name(port)                 the session cookie's name on that listener
   cookie_header(value, port)        the Set-Cookie value of a paired browser
@@ -11,7 +14,9 @@
   Credentials(folder, port=port, persist=False, log=None)
                                     .role_for(headers, cookies) -> OWNER, AGENT or None
                                     .resolve(headers, cookies) -> (role, renewed session or None)
-                                    .new_pairing_code() / .pair(code) for the PC's browser
+                                    .seen(headers, cookies) -> Seen(role, renewed, strong)
+                                    .new_pairing_code(strong=False) / .pair(code) for the PC's
+                                    browser
                                     .unpair_all() ends every browser session; .notes
 
 Two roles, each a token file: OWNER_FILE and AGENT_FILE, sent as `Authorization: Bearer <token>`.
@@ -42,6 +47,22 @@ unpair_all: a temp file beside it, then os.replace. A write that fails leaves th
 this process and logs one `error` line saying it will not survive a restart. A clock stepped back
 lengthens a session by the step; that is accepted.
 
+Strong sessions. A pairing code made with strong=True (only the tunnel listener's route that
+answers the owner logged in through Cloudflare Access asks for one: httpd.strong_pair_route)
+pairs a strong session: the browser is then the strong owner on the local listener too (seen's
+`strong`), the caller an api.APPROVER route answers. A strong session is held as the HMAC of its
+cookie value under a key derived from both the owner token and the approval key (_strong_key),
+in the same table and the same sessions file as the others, so it lives, renews and ends as they
+do, and a restart keeps it. Nothing in the file says which entries are strong: an entry is strong
+when it matches under the derived key. So the owner token alone cannot make a strong entry (the
+writer needs the approval key too), and replacing either file ends every strong session. A strong
+code that cannot bind its session (no approval key that read_approval_key accepts) pairs
+nothing. Only a cookie is ever strong: a Bearer token, the owner's included, never is.
+
+The approval key. APPROVAL_FILE beside the token files, made like them (ensure_approval_key) and
+read like them (read_approval_key); a key equal to either token is no key. It binds the strong
+sessions here and signs the owner's approval decisions (kitlib.hubsite.approvals.sign).
+
 Every comparison of a secret is hmac.compare_digest. Whatever cannot be checked is no role:
 an absent, short or unreadable token file, two token files holding the same token, a second
 Authorization header, a scheme other than Bearer. An Authorization header that does not resolve
@@ -69,6 +90,8 @@ FOLDER_NAME = 'hub'
 OWNER_FILE = 'owner.token'
 AGENT_FILE = 'agent.token'
 TOKEN_FILES = {OWNER: OWNER_FILE, AGENT: AGENT_FILE}
+APPROVAL_FILE = 'approval.key'      # kitlib.guard.hub.APPROVAL_FILE names the same file
+STRONG_LABEL = b'hub strong session\x00'    # what _strong_key signs before the owner token
 COOKIE = 'hub_session'
 TOKEN_BYTES = 32             # the random bytes of a generated token
 MIN_TOKEN = 43               # characters, a generated token's length; a shorter file grants nothing
@@ -82,6 +105,10 @@ SESSIONS_VERSION = 1
 MAX_SESSIONS_BYTES = 1 << 16                 # a sessions file past this is not read
 
 _MAC = re.compile(r'[0-9a-f]{64}\Z')
+
+# what Credentials.seen answers: the role, the renewed session value or None, and whether the
+# caller is the strong owner (module docstring, "Strong sessions")
+Seen = collections.namedtuple('Seen', 'role renewed strong')
 
 
 class TokenFileError(Exception):
@@ -118,19 +145,7 @@ def ensure_tokens(folder):
     out = {}
     for role in ROLES:
         path = os.path.join(folder, TOKEN_FILES[role])
-        if not os.path.lexists(path):
-            tmp = '%s.%s.tmp' % (path, secrets.token_hex(8))
-            try:
-                with open(tmp, 'x', encoding='ascii', newline='\n') as f:
-                    f.write(secrets.token_urlsafe(TOKEN_BYTES) + '\n')
-                os.rename(tmp, path)       # Windows: fails when `path` exists, never replaces
-            except FileExistsError:
-                pass
-            finally:
-                try:
-                    os.remove(tmp)         # gone already after a rename that worked
-                except OSError:
-                    pass
+        _make_secret(path)
         if read_token(folder, role) is None:
             raise TokenFileError(
                 'the hub token file %s holds no usable token (one line of %d to %d ASCII '
@@ -140,13 +155,68 @@ def ensure_tokens(folder):
     return out
 
 
+def ensure_approval_key(folder):
+    """Make `folder` and the approval key file (APPROVAL_FILE) when it is absent, as
+    ensure_tokens makes a token file, and return its path. One that exists and read_approval_key
+    cannot use (as a token file, or holding the owner's or the agent's token) is a TokenFileError
+    naming it: never replaced, never adopted. OSError propagates."""
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, APPROVAL_FILE)
+    _make_secret(path)
+    if read_approval_key(folder) is None:
+        raise TokenFileError(
+            'the hub approval key file %s holds no usable key (one line of %d to %d ASCII '
+            'characters, no spaces, not a token of %s or %s): delete it to have a new one made'
+            % (path, MIN_TOKEN, MAX_TOKEN, OWNER_FILE, AGENT_FILE))
+    return path
+
+
+def _make_secret(path):
+    """Write a fresh random secret to `path` when nothing is there (ensure_tokens): whole beside
+    it, then renamed in, never over a file another process made first."""
+    if os.path.lexists(path):
+        return
+    tmp = '%s.%s.tmp' % (path, secrets.token_hex(8))
+    try:
+        with open(tmp, 'x', encoding='ascii', newline='\n') as f:
+            f.write(secrets.token_urlsafe(TOKEN_BYTES) + '\n')
+        os.rename(tmp, path)       # Windows: fails when `path` exists, never replaces
+    except FileExistsError:
+        pass
+    finally:
+        try:
+            os.remove(tmp)         # gone already after a rename that worked
+        except OSError:
+            pass
+
+
 def read_token(folder, role):
     """The token in `role`'s file under `folder`, stripped, or None when the file is absent,
     unreadable, not ASCII, or holds fewer than MIN_TOKEN or more than MAX_TOKEN characters."""
+    if role not in TOKEN_FILES:
+        return None
+    return _read_secret(os.path.join(folder, TOKEN_FILES[role]))
+
+
+def read_approval_key(folder):
+    """The approval key in APPROVAL_FILE under `folder`, read as read_token reads a token, or
+    None; None too when it equals the owner's or the agent's token, since a holder of that
+    token would then hold the key."""
+    key = _read_secret(os.path.join(folder, APPROVAL_FILE))
+    if key is None:
+        return None
+    for role in ROLES:
+        if _same(key, read_token(folder, role)):
+            return None
+    return key
+
+
+def _read_secret(path):
+    """The secret in the file at `path` (read_token's rules), or None."""
     try:
-        with open(os.path.join(folder, TOKEN_FILES[role]), 'rb') as f:
+        with open(path, 'rb') as f:
             raw = f.read(MAX_TOKEN + 64)
-    except (OSError, KeyError):
+    except OSError:
         return None
     try:
         token = raw.decode('ascii').strip()
@@ -222,6 +292,14 @@ def _mac(key, value):
     return hmac.new(key.encode('ascii'), msg, hashlib.sha256).hexdigest()
 
 
+def _strong_key(owner, approval):
+    """The key a strong session is held under (module docstring, "Strong sessions"): the SHA-256
+    HMAC of STRONG_LABEL and the owner token under the approval key, as 64 lowercase hex digits.
+    Both are read_token's ASCII."""
+    return hmac.new(approval.encode('ascii'), STRONG_LABEL + owner.encode('ascii'),
+                    hashlib.sha256).hexdigest()
+
+
 class Credentials(object):
     """The local listener's credentials: the token files in `folder`, read at every request (a
     replaced token file takes effect at once), this process's pairing codes, and the browser
@@ -248,8 +326,9 @@ class Credentials(object):
         self._mono = monotonic
         self._log = log
         self._lock = threading.Lock()
-        self._codes = collections.OrderedDict()       # code -> expiry
-        self._sessions = collections.OrderedDict()    # _mac(owner token, value) -> expiry
+        self._codes = collections.OrderedDict()       # code -> (expiry, strong)
+        # _mac(owner token, value), or _mac(_strong_key(...), value) for a strong one -> expiry
+        self._sessions = collections.OrderedDict()
         if self.path is not None:
             self._load()
 
@@ -257,40 +336,52 @@ class Credentials(object):
         """OWNER, AGENT or None for a request with these headers and cookies ({name: value}).
         A Bearer token decides alone when an Authorization header is present; else the session
         cookie may give OWNER. No other header is read. Never renews a session (resolve)."""
-        return self._resolve(headers, cookies, False)[0]
+        return self._resolve(headers, cookies, False).role
 
     def resolve(self, headers, cookies=None):
         """(role, renewed): role_for's role, and the session value when this request's cookie
         renewed its session (less than half of SESSION_TTL_S was left), else None. The caller
         sends cookie_header(renewed, self.port) with its answer."""
+        seen = self._resolve(headers, cookies, True)
+        return seen.role, seen.renewed
+
+    def seen(self, headers, cookies=None):
+        """resolve's answer as a Seen, with `strong`: True only when the role is OWNER from a
+        strong session's cookie (module docstring, "Strong sessions"); a Bearer token never is.
+        Renews as resolve does."""
         return self._resolve(headers, cookies, True)
 
     def _resolve(self, headers, cookies, renew):
         present, token = _bearer(headers)
         if present:
-            return (self._token_role(token) if token else None), None
+            return Seen((self._token_role(token) if token else None), None, False)
+        none = Seen(None, None, False)
         value = cookies.get(self.cookie) if cookies else None
         if not isinstance(value, str) or not value:
-            return None, None
+            return none
         key = self._owner_key()
         mac = _mac(key, value) if key is not None else None
         if mac is None:
-            return None, None
+            return none
+        strong_key = self._strong_key(key)
+        strong_mac = _mac(strong_key, value) if strong_key is not None else None
         now = self._clock()
         with self._lock:
             self._expire(now)
-            found = None
+            found, strong = None, False
             for k in self._sessions:
                 if hmac.compare_digest(k, mac):
-                    found = k
+                    found, strong = k, False
+                if strong_mac is not None and hmac.compare_digest(k, strong_mac):
+                    found, strong = k, True
             if found is None:
-                return None, None
+                return none
             if not renew or self._sessions[found] - now >= SESSION_TTL_S / 2:
-                return OWNER, None
+                return Seen(OWNER, None, strong)
             self._sessions[found] = int(now + SESSION_TTL_S)
             self._sessions.move_to_end(found)
             self._save()
-        return OWNER, value
+        return Seen(OWNER, value, strong)
 
     def _owner_key(self):
         """The owner token sessions are bound to, or None when it is unreadable or the agent's
@@ -299,6 +390,14 @@ class Credentials(object):
         if owner is None or (agent is not None and _same(owner, agent)):
             return None
         return owner
+
+    def _strong_key(self, owner):
+        """The key strong sessions are held under for the owner token `owner` (_owner_key's), or
+        None when there is no owner token or no approval key (read_approval_key)."""
+        if owner is None:
+            return None
+        approval = read_approval_key(self.folder)
+        return _strong_key(owner, approval) if approval is not None else None
 
     def _token_role(self, token):
         owner, agent = read_token(self.folder, OWNER), read_token(self.folder, AGENT)
@@ -310,26 +409,29 @@ class Credentials(object):
         return AGENT if is_agent else None
 
     def _take_code(self, code):
-        """True when `code` is a live pairing code, which is then removed, so a second look
-        fails. Expired codes are dropped on every look. Under self._lock."""
+        """None when `code` is no live pairing code, else whether it is a strong one; a live
+        code is removed, so a second look fails. Expired codes are dropped on every look. Under
+        self._lock."""
         now = self._mono()
-        for k in [k for k, exp in self._codes.items() if exp <= now]:
+        for k in [k for k, (exp, _) in self._codes.items() if exp <= now]:
             del self._codes[k]
         found = None
         for k in self._codes:
             if _same(k, code):
                 found = k
-        if found is not None:
-            del self._codes[found]
-        return found is not None
+        if found is None:
+            return None
+        return self._codes.pop(found)[1]
 
-    def new_pairing_code(self):
+    def new_pairing_code(self, strong=False):
         """A fresh one-time pairing code, good for PAIR_TTL_S on the monotonic clock. The caller
         has already checked that the request is the owner's: whoever holds a code becomes the
-        owner's browser."""
+        owner's browser. With strong=True (only True itself) it pairs a strong session, and the
+        caller has checked that the request is the strong owner's (module docstring, "Strong
+        sessions")."""
         code = secrets.token_urlsafe(32)
         with self._lock:
-            self._codes[code] = self._mono() + PAIR_TTL_S
+            self._codes[code] = (self._mono() + PAIR_TTL_S, strong is True)
             while len(self._codes) > MAX_CODES:
                 self._codes.popitem(last=False)
         return code
@@ -337,19 +439,23 @@ class Credentials(object):
     def pair(self, code):
         """Redeem `code`: the session value to send as cookie_header(value, self.port), or None
         when the code is unknown, expired or already redeemed, or no owner token can bind the
-        session (_owner_key). A code works once. Past MAX_SESSIONS the session renewed or made
-        longest ago ends. The code is taken and the session added under one hold of the lock,
-        so an unpair_all either ends the code first or the session after."""
+        session (_owner_key), or, for a strong code, no approval key can (_strong_key). A code
+        works once, and a strong code that cannot bind is spent all the same. Past MAX_SESSIONS
+        the session renewed or made longest ago ends. The code is taken and the session added
+        under one hold of the lock, so an unpair_all either ends the code first or the session
+        after."""
         if not isinstance(code, str) or not code:
             return None
         key = self._owner_key()         # files: read before the lock
+        strong_key = self._strong_key(key)
         value = secrets.token_urlsafe(32)
         with self._lock:
-            if not self._take_code(code) or key is None:
+            strong = self._take_code(code)
+            if strong is None or key is None or (strong and strong_key is None):
                 return None
             now = self._clock()
             self._expire(now)
-            self._sessions[_mac(key, value)] = int(now + SESSION_TTL_S)
+            self._sessions[_mac(strong_key if strong else key, value)] = int(now + SESSION_TTL_S)
             while len(self._sessions) > MAX_SESSIONS:
                 self._sessions.popitem(last=False)
             self._save()

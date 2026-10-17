@@ -670,7 +670,12 @@ class StartTest(TunnelCase):
         self.assertIs(local.host_rule, httpd.local_hosts)
         self.assertIsNone(tunnelled.host_rule)
         self.assertEqual((local.origin_scheme, tunnelled.origin_scheme), ('http', 'https'))
-        self.assertEqual(sorted(tunnelled.routes), [('GET', HEALTH)])
+        # its one route besides health hands an Access login a strong pairing code; the local
+        # listener never has that route, and the tunnel's redeems no code
+        self.assertEqual(sorted(tunnelled.routes),
+                         [('GET', HEALTH), ('POST', httpd.STRONG_PAIR_ROUTE)])
+        self.assertNotIn(('POST', httpd.STRONG_PAIR_ROUTE), local.routes)
+        self.assertIn(('GET', httpd.PAIR_PATH), local.routes)
         self.assertEqual(hub.notes, ['the tunnel listener is on %s: every request there needs '
                                      'a Cloudflare Access token' % tunnelled.url])
         self.assertNoSecret()

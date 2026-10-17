@@ -19,6 +19,7 @@
   local_hosts(host, port)          the local listener's host_rule
   local_gate(creds)                the local listener's gate, over kitlib.hubsite.auth.Credentials
   pair_routes(creds)               the local listener's pairing routes (PAIR_ROUTE, PAIR_PATH)
+  strong_pair_route(creds)         the tunnel listener's strong pairing route (STRONG_PAIR_ROUTE)
   stop_route(creds, request_stop, identity)    the local listener's stop route (STOP_ROUTE)
   static_file(static_dir, path)    the file a URL path names under static_dir, or None
 
@@ -35,9 +36,10 @@ One request, in this order, for every method and every path:
      A gate may also set request.strong = True: the caller is the strong owner, the one an
      api.APPROVER route answers. It counts only as True itself and only for auth.OWNER; for
      any other answer it is set back to False, and the Api is told strong=True for that request
-     alone (strong_words). Only kitlib.hubsite.tunnel's gate sets it, for a valid Access token;
-     local_gate never does, so the owner token, a paired session cookie and an agent are never
-     strong.
+     alone (strong_words). kitlib.hubsite.tunnel's gate sets it for a valid Access token, and
+     local_gate for the cookie of a strong session alone (auth, "Strong sessions"), which only
+     a code from strong_pair_route pairs: the owner token, a browser paired from it and an
+     agent are never strong.
   2. host_rule(the Host header or None, the port), when the listener has one: False is a 403.
      local_hosts allows 127.0.0.1:<port> and localhost:<port>, which is what stops a page on
      another origin from reaching this server under a name it controls (DNS rebinding).
@@ -142,6 +144,9 @@ TUNNEL_VIA = 'tunnel'               # the tunnel listener's own source: no VIA_H
 PAIR_ROUTE = _api.BASE + '/pair'    # POST, the owner's token: a one-time link for the browser
 PAIR_PATH = '/pair'                 # GET ?code=...: redeems it and sets the session cookie
 UNPAIR_ROUTE = _api.BASE + '/unpair'    # POST, the owner's token: ends every browser session
+# POST on the tunnel listener, the strong owner only: a one-time link that pairs the PC's browser
+# as the strong owner on the local listener (strong_pair_route)
+STRONG_PAIR_ROUTE = _api.BASE + '/pair/strong'
 STOP_ROUTE = _api.BASE + '/stop'    # POST, the owner's token: the server closes (hub.py stop)
 BUSY = 'busy'
 RETRY_AFTER_S = 1
@@ -251,14 +256,18 @@ def local_gate(creds):
     """The local listener's gate: the role `creds` (auth.Credentials) gives the request's
     Authorization header or session cookie, or None. It never answers a Response: a request
     with no credential still reaches the page's files, and the Api refuses it everything else.
-    A session cookie that renewed its session (Credentials.resolve) is sent again with the
-    answer, auth.cookie_header on creds.port, so the browser's copy lives as long."""
+    A session cookie that renewed its session (Credentials.seen) is sent again with the
+    answer, auth.cookie_header on creds.port, so the browser's copy lives as long. The cookie of
+    a strong session marks the request strong (module docstring, step 1); nothing else does."""
     def gate(request):
         cookies = auth.parse_cookies('; '.join(request.headers.get_all('Cookie') or ()))
-        role, renewed = creds.resolve(request.headers, cookies)
-        if renewed is not None:
-            request.reply_headers = (('Set-Cookie', auth.cookie_header(renewed, creds.port)),)
-        return role
+        seen = creds.seen(request.headers, cookies)
+        if seen.renewed is not None:
+            request.reply_headers = (('Set-Cookie', auth.cookie_header(seen.renewed,
+                                                                       creds.port)),)
+        if seen.strong is True and seen.role == auth.OWNER:
+            request.strong = True
+        return seen.role
     return gate
 
 
@@ -272,7 +281,7 @@ def pair_routes(creds):
     unless it is used (auth, "Sessions").
     GET PAIR_PATH?code=...: redeems the code, sets the session cookie (auth.cookie_header on
     creds.port) and sends the browser to "/"; a code that is unknown, expired or already used
-    is a 403.
+    is a 403. A code from strong_pair_route is redeemed here too and pairs a strong session.
     POST UNPAIR_ROUTE, the owner's token only, as PAIR_ROUTE: {"ok": true}; every browser
     session and every pairing code not yet redeemed ends (Credentials.unpair_all)."""
     def owners(request):
@@ -303,6 +312,31 @@ def pair_routes(creds):
 
     return {('POST', PAIR_ROUTE): new, ('GET', PAIR_PATH): redeem,
             ('POST', UNPAIR_ROUTE): unpair}
+
+
+def strong_pair_route(creds):
+    """The route that lets the owner logged in through Cloudflare Access make the PC's browser
+    the strong owner on the local listener (auth, "Strong sessions"), for the tunnel listener's
+    `routes` alone: the local listener is never given it.
+
+    POST STRONG_PAIR_ROUTE, the strong owner only (the request its gate marked strong;
+    strong_words): {"ok", "ttl", "path", "url"}; `path` is PAIR_PATH with a fresh one-time strong
+    code (Credentials.new_pairing_code(strong=True)), good for `ttl` seconds, and `url` that path
+    on the local listener (LOOPBACK and creds.port; absent for a creds with no port), the link
+    to open on the PC itself. Anyone
+    else is a 403 `forbidden` on the field `role`, and no code is made."""
+    def new(request):
+        if not strong_words(request):
+            return refusal(403, 'forbidden', 'only the owner logged in through Cloudflare '
+                           'Access may pair a browser as the strong owner', 'role')
+        code = creds.new_pairing_code(strong=True)
+        path = '%s?code=%s' % (PAIR_PATH, code)
+        said = {'ok': True, 'ttl': auth.PAIR_TTL_S, 'path': path}
+        if isinstance(creds.port, int) and not isinstance(creds.port, bool):
+            said['url'] = 'http://%s:%d%s' % (LOOPBACK, creds.port, path)
+        return json_response(200, said)
+
+    return {('POST', STRONG_PAIR_ROUTE): new}
 
 
 def _bearer_owner(creds, request):

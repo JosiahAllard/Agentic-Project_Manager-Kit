@@ -49,8 +49,10 @@ hosts (cut to host characters and HOST_CHARS), as an 'error' on the same once-a-
 header does to every write, and the line says which setting to empty.
 
 The listener differs from the local one in this and no more: its gate; no Host rule (the tunnel
-hands on the public host name); writes need an `https` Origin that names that Host; no pairing
-routes, as this port hands out no local session; the source of a write; and the wording of an
+hands on the public host name); writes need an `https` Origin that names that Host; no local
+pairing routes, as this port redeems no code and sets no session cookie (serve gives it
+httpd.strong_pair_route alone, which hands the Access-logged owner a code to redeem on the local
+port); the source of a write; and the wording of an
 error. Every write through it is recorded with the source VIA: the listener is made with
 via_header=False, so the X-Hub-Via header a client sends on this port is never read, and VIA is
 httpd.TUNNEL_VIA, the one source the local listener never records for a client that claims it.
