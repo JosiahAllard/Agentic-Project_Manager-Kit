@@ -3423,6 +3423,15 @@ def _python(cmd, name, args, cmd_word, via=None):
 PS_SPLAT_RE = re.compile(r'^@[A-Za-z_][\w:]*$')    # a PowerShell splat argument: @a, @global:a
 
 
+def split_target(cmd):
+    """[Word]: for a writing command the scanner split around a group (shell.Command.split:
+    `Set-Content -Value $s.Trim() -Path x`, `Copy-Item $a.M(1)(...)`), a target that is not
+    literal and has no span, standing for the arguments read past the group; else []."""
+    if not cmd.split:
+        return []
+    return [sh.Word('(its arguments past a ( ) or { } group)', True, cmd.end, cmd.end)]
+
+
 def write_targets(cmd, inv):
     """[Word]: what the command writes, by its redirections and the file commands the guard
     knows. A Word whose text is '.' stands for the directory the command runs in."""
@@ -3449,7 +3458,7 @@ def write_targets(cmd, inv):
         # xargs appends the names it reads: a stand-in name in the directory it runs in
         args = list(args) + [here(word)]
     if name in COPIERS:
-        return out + _copier(args)
+        return out + _copier(args) + split_target(cmd)
     if cmd.shell != sh.PS and name == 'find':
         if any(w.text == '-delete' for w in args):
             return out + (_find_paths(args)[0] or [here(word)])
@@ -3471,6 +3480,8 @@ def write_targets(cmd, inv):
             for p in spec.writes:
                 out.extend(x for x in bound.get(p, []) if native or not ps_provider_item(cmd, x))
             out.extend(x for x in splats if not any(x is y for y in out))
+            if spec.writes:
+                out.extend(split_target(cmd))
             if cmdlet == 'expand-archive' and not bound.get('destinationpath'):
                 out.append(here(word))
             if cmdlet == 'new-item' and bound.get('name'):
@@ -3841,7 +3852,8 @@ def shell_writes(event, ctx, cmd, inv, cwd, role):
                 ctx.place(cmd.cwd).kind not in (repo.MAIN, repo.UNKNOWN):
             continue                            # a target it cannot place, from a worktree or elsewhere
         what = '`%s` writes %s' % (cmd.text, w.text if w.text != '.' else 'files in the directory it runs in')
-        stand_in = w.text == '.' and cmd.source[w.start:w.end] != '.'     # here(): no word to aim
+        # here() or split_target(): no word to aim
+        stand_in = (w.text == '.' and cmd.source[w.start:w.end] != '.') or w.start == w.end
         part = any((x.start, x.end) == (w.start, w.end) and x.text != w.text for x in cmd.words)
         rewrite = None if stand_in or part else (lambda path, w=w: retarget(cmd, w, path))   # part: -tDIR
         if (w.start, w.end) in net and not w.dyn:

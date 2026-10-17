@@ -1537,6 +1537,11 @@ def expand(parsed):
         inv = invocation(cmd)
         if inv is None:
             continue
+        if cmd.split:
+            # `Set-Content -Value $s.Trim() -Path x`: the scanner cut the command at a ( ) or { }
+            # and read the rest as commands of their own; its arguments are not all known
+            parsed.flag('a command the line splits around a ( ) or { } group, its arguments past it '
+                        'read as other commands (%s)' % inv.path)
         if inv.dyn:
             if not call_subexpr(inv):           # rules.call_subexpr_pmdata judges `& (...)`
                 parsed.flag('a command whose program is not literal (%s)' % inv.path)

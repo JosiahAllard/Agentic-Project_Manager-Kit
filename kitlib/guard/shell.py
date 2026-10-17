@@ -42,6 +42,11 @@ PS_ESC = {'n': '\n', 't': '\t', 'r': '\r', '0': '\0', 'a': '\a', 'b': '\b', 'f':
           'e': '\x1b'}
 _PS_VAR = re.compile(r'\$(?:[A-Za-z_]\w*:)?[\w?^$]+')
 _BASH_VAR = re.compile(r'\$(?:[A-Za-z_]\w*|\d|[@*#?$!\-])')
+# A PowerShell word a touching ( calls a method of, as PowerShell reads a command's arguments: a
+# member access on an expression ($s.Replace, 'abc'.Replace, @a.Count, [IO.Path]::Combine), with a
+# -Param: before it or not (_Scan.ps_paren_arg; `.Name` after a ) ] or } is one too)
+_PS_MEMBER_HEAD = re.compile(r'^(?:-[^\s:]+:)?[$\'"@(\[]')
+_PS_MEMBER_TAIL = re.compile(r'(?:\.|::)[A-Za-z_]\w*$')
 _BRACE = re.compile(r'\{([^\s{}\'"$`\\;|&()<>]*,[^\s{}\'"$`\\;|&()<>]*)\}')
 _ANSI = {'n': '\n', 't': '\t', 'r': '\r', '\\': '\\', "'": "'", '"': '"', '?': '?', 'a': '\a',
          'b': '\b', 'f': '\f', 'v': '\v', 'e': '\x1b', 'E': '\x1b'}
@@ -82,7 +87,8 @@ class Redirect(object):
 class Command(object):
     __slots__ = ('words', 'redirects', 'start', 'end', 'source', 'shell', 'depth', 'cwd',
                  'piped_out', 'piped_in', 'subs', 'groups', 'nested_in', 'prev_op', 'next_op',
-                 'pipe_from', 'git_env', 'home_env', 'path_env', 'cwd_ps_drive', 'cwd_home', 'home', 'subs_cwd')
+                 'pipe_from', 'git_env', 'home_env', 'path_env', 'cwd_ps_drive', 'cwd_home', 'home', 'subs_cwd',
+                 'split')
 
     def __init__(self, source, shell, depth, home=None):
         self.words, self.redirects, self.subs = [], [], []
@@ -101,6 +107,10 @@ class Command(object):
         self.git_env = False        # the GIT_DIR-like variable some command of the line sets (commands.mark_git_env), else False
         self.home_env = False       # the variable naming git's user config folder the line sets (HOME, ...), else False
         self.path_env = False       # True when some command of the line sets PATH (commands.mark_git_env)
+        # PowerShell: a ( ) or { } it touches is read as a group (a method call's arguments, a script
+        # block) and more of the line follows the group before a separator, words or another group:
+        # its arguments go on past the group, in commands of their own (_Scan.commands)
+        self.split = False
 
     @property
     def grouped(self):
@@ -320,11 +330,14 @@ class _Scan(object):
         command after a space or a comma, or is the value of a `-Param:` or a `-Param` it touches
         (`-Destination(...)`, after the command's first word), and the word in first position (the
         command's first, or the first after an assignment's `=`) is no keyword that takes a ( )
-        (if, foreach, while...): `Copy-Item data (...)` passes an argument. A ( touching a plain
-        literal word passes the word and then the ( ) as the next argument (`func(arg)`:
-        `Copy-Item a.txt(...)`, `Set-Content(...)`), where a word that starts with $ [ ( . a quote
-        or @ is an expression and its ( a method call (`$s.Replace(...)`, `[IO.Path]::Combine(...)`,
-        `'abc'.Replace(...)`), still a group. A ( that starts a command is a group too."""
+        (if, foreach, while...): `Copy-Item data (...)` passes an argument. A ( touching any other
+        word passes the word and then the ( ) as the next argument, as PowerShell reads it
+        (`func(arg)`: `Copy-Item a.txt(...)`, `./x(...)`, `'x'(...)`, `$x(...)`, `[string](...)`),
+        unless the word is a member access (_PS_MEMBER_HEAD/_TAIL: `$s.Replace(...)`,
+        `'abc'.Replace(...)`, `[IO.Path]::Combine(...)`, `(Get-Date).AddDays(...)`): that ( calls
+        the method, a group, and the word, the method's result, is marked not literal. A ( that
+        starts a command is a group too; one that touches a group's ) (`$a.M(1)(...)`) as well,
+        and the command it cuts is marked split (commands)."""
         if not self.toks or self.toks[-1][0] != 'w':
             return False
         last = self.toks[-1][1]
@@ -335,9 +348,15 @@ class _Scan(object):
                 break
             if t[0] == 'w':
                 words.insert(0, t[1])
-        param = last.end == self.i and last.text.startswith('-') and len(last.text) > 1 and not last.dyn
-        plain = last.end == self.i and not last.dyn and last.start < last.end and \
-            self.s[last.start] not in '$[(.\'"@-{'
+        touch = last.end == self.i and last.start < last.end
+        src = self.s[last.start:last.end] if touch else ''
+        if touch and _PS_MEMBER_TAIL.search(src) and (
+                _PS_MEMBER_HEAD.match(src) or (src[0] == '.' and self.s[last.start - 1:last.start] in (')', ']', '}'))):
+            # `$s.Replace(...)`: a method call, its value only known at run time
+            self.toks[-1] = ('w', Word(last.text, True, last.start, last.end, last.synth, last.alt), self.toks[-1][2])
+            return False
+        param = touch and last.text.startswith('-') and len(last.text) > 1 and not last.dyn
+        plain = touch and (src[0] != '-' or ':' in src)        # -Path:$x(...) too, not -Path(...)
         if not (self.space(before) or before == ',' or (before == ':' and param) or plain or
                 (param and before != ':' and len(words) > 1)):
             return False
@@ -489,10 +508,20 @@ class _Scan(object):
             cmds = self.sub_until()
             self.toks.append(('w', Word('@(...)', True, start, self.i), cmds))
             return
+        index = 0                   # PowerShell: [ ] open in the word
         while self.i < self.n:
             c = s[self.i]
             if self.space(c) or c in '\r\n':
                 break
+            if sh == PS and c == '(' and index:
+                # `$x[(sv PWD C:\m)]`: a ( inside the word's [ ] index is part of the word, and its
+                # commands nested ones
+                j = self.i
+                self.i += 1
+                subs = subs + self.sub_until()
+                out.append(s[j:self.i])
+                dyn = True
+                continue
             if sh == BASH:
                 if c in ';|&()<>':
                     break
@@ -570,6 +599,10 @@ class _Scan(object):
                     d, sb = self.dollar(out)
                     dyn, subs = dyn or d, subs + sb
                     continue
+                if c == '[':
+                    index += 1
+                elif c == ']' and index:
+                    index -= 1
                 out.append(c)
                 self.i += 1
                 continue
@@ -810,11 +843,29 @@ class _Scan(object):
                 return True
             return False
 
+        # PowerShell: a command a ( or { cuts (`Set-Content -Value $s.Trim() -Path x`) is split when
+        # more of the line follows the group's close before a separator, words or another group
+        ps = self.shell == PS
+        cuts = []                   # per open group, the command it cut (None: it cut none)
+        after = None                # the command the group that just closed cut
+
+        def go_on():
+            if ps and after is not None:
+                after.split = True
+
         cur = new(None)
         for t in self.toks:
             kind = t[0]
             if kind == 'op':
                 o = t[1]
+                if o in ('(', '{'):
+                    go_on()                     # `$a.M(1)(...)`: a group right after a group
+                    cuts.append(cur if cur.words or cur.redirects else after)
+                    after = None
+                elif o in (')', '}') and stack:
+                    after = cuts.pop()
+                else:
+                    after = None                # ; && || | newline: the command ended
                 if o == '|':
                     src = None
                     if keep(cur):
@@ -835,6 +886,8 @@ class _Scan(object):
                 cur = new(o)
                 continue
             if kind == 'subs':
+                go_on()
+                after = None
                 cur.subs.extend(t[1])
                 continue
             if kind == 'r':
@@ -843,6 +896,8 @@ class _Scan(object):
                 if r.target is not None and not r.body:
                     self.span(cur, r.target)
                 continue
+            go_on()
+            after = None
             w, subs = t[1], t[2]
             cur.words.append(w)
             cur.subs.extend(subs)

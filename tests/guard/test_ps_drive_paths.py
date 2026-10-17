@@ -277,6 +277,57 @@ class DynamicTargets(Base):
             with self.subTest(text):
                 self.allowed(self.run_ps(text))
 
+    def test_a_paren_touching_any_word_but_a_member_is_the_next_argument(self):
+        # shell._Scan.ps_member_call: PowerShell reads `'x'(...)`, `$x(...)`, `$x[(...)]`,
+        # `[string](...)` and `.\x(...)` as the word, then the ( ) as the next argument; only a
+        # member access ($s.M(, 'lit'.M(, (x).M(, [T]::M() calls a method
+        for text in (r'Set-Content -Value $x[(1)] -Path $p',
+                     r'Set-Content -Value $x[(sv PWD {main})] -Path "$PWD\x.txt"',
+                     r"Set-Content -Value 'x'(sv PWD {main}) -Path " + r'"$PWD\x.txt"',
+                     r'Set-Content -Value .\x(sv PWD {main}) -Path "$PWD\x.txt"',
+                     r'Set-Content -Value $x(sv PWD {main}) -Path "$PWD\x.txt"',
+                     r'Set-Content -Value [string](sv PWD {main}) -Path "$PWD\x.txt"',
+                     r'Copy-Item .\a.txt(Join-Path {main} x)', r"Copy-Item 'a'(Join-Path {main} x)",
+                     r'Copy-Item $a(Join-Path {main} x)', r'Copy-Item $a[0](Join-Path {main} x)',
+                     r'Copy-Item [string](Join-Path {main} x)'):
+            with self.subTest(text):
+                self.refused_for_both(text)
+        d = self.denied(self.run_ps(r'Set-Content -Value $x[(1)] -Path {main}\x.txt'), 'main-checkout')
+        self.assertIn('is in the main checkout', d.reason)
+        p = cm.read("Set-Content -Value 'x'(1) -Path x.txt", sh.PS, W.fwd(self.w.wt))
+        self.assertEqual([c.argv for c in p.commands if c.nested_in is None],
+                         [['Set-Content', '-Value', 'x', '(1)', '-Path', 'x.txt']])
+
+    def test_a_command_the_line_splits_around_a_group_fails_closed(self):
+        # shell.Command.split: a { } or a method call's ( ) the scanner reads as a group, with more
+        # of the command's arguments after it: the write's target is unknown (rules.write_targets)
+        # and the line unreadable (commands.expand)
+        # rules.ps_pwd_path: a $PWD write whose own arguments hold a group the line is cut at is not
+        # the line's one command, split or not
+        for text in (r'Set-Content -Value {{sv PWD {main}}} "$PWD\x.txt"',
+                     r'Set-Content "$PWD\x.txt" -Value {{sv PWD {main}}}', r'Set-Content "$PWD\x.txt" -Value $s.Trim()',
+                     r'Set-Content -Value $s.Trim() -Path {main}\x.txt',
+                     r'Copy-Item $a.M(1)(Join-Path {main} x)',
+                     r'Set-Content -Value hi -Path "{wt}\x.txt".Trim()'):
+            with self.subTest(text):
+                self.refused_for_both(text)
+        for text in (r'Write-Output $s.Trim() x', r'Get-Item a | ForEach-Object -Begin {{ 1 }} -Process {{ 2 }}'):
+            with self.subTest(text):
+                d = self.denied(self.run_ps(text), 'unreadable')
+                self.assertIn('a command the line splits', d.reason)
+        p = cm.read('Set-Content -Value $s.Trim() -Path x.txt', sh.PS, W.fwd(self.w.wt))
+        self.assertEqual([(c.argv, c.split) for c in p.commands],
+                         [(['Set-Content', '-Value', '$s.Trim'], True), (['-Path', 'x.txt'], False)])
+        # a keyword's own ( ) and { }, a method chain, a pipeline after a block: no split
+        for text in ('(Get-Date).AddDays(1) | Out-File x.txt', "$s.Replace('a','b').Trim()",
+                     "[IO.File]::ReadAllText('a').Trim()", 'if ((Test-Path a) -and (Test-Path b)) {{ 1 }} else {{ 2 }}',
+                     'try {{ Get-Item a }} catch {{ 1 }} finally {{ 2 }}', 'do {{ 1 }} while ($x)',
+                     '$r = if ($a) {{ 1 }} else {{ 2 }}', 'Get-ChildItem | Where-Object {{ $_.Length -gt 1 }} | Select-Object Name',
+                     '& Set-Content x.txt y', "Set-Content x.txt -Value [IO.Path]::Combine('a','b')",
+                     'Set-Content x.txt -Value $s.Trim()', 'git status 2>$null'):
+            with self.subTest(text):
+                self.allowed(self.run_ps(text))
+
     def test_cd_inside_a_subexpression_makes_the_location_unknown(self):
         # $( ) and ( ) run in the caller's scope: the cd moves the location for what follows
         for text in (r'echo $(cd {main}) ; New-Item x.txt', r'echo (cd {main}) ; New-Item x.txt'):
