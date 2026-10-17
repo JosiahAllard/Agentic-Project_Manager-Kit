@@ -350,6 +350,42 @@ class WhatIsRefusedAfterTheWrite(ApprovalCase):
         self.assert_not_consumed()
 
 
+@real_git('index modes: a symbolic link kept by core.symlinks=false, and a gitlink')
+class WhatIsNotARegularFile(ApprovalCase):
+    """An approval holds regular files (100644 or 100755) only: a symbolic link or gitlink entry
+    carrying the approved blob, or standing where the approval deletes, is refused."""
+
+    def test_a_staged_symbolic_link_with_the_approved_blob(self):
+        # With core.symlinks off, git keeps a link entry's mode when it stages the plain file that
+        # stands for it, so the approved blob is staged as a link (approval.staged_error).
+        self.git('config', 'core.symlinks', 'false')
+        link = self.git('hash-object', '-w', '--', 'CLAUDE.md')
+        self.git('update-index', '--cacheinfo', '120000,%s,CLAUDE.md' % link)
+        self.git('commit', '-q', '-m', 'the owner\'s rules, as a link')
+        self.base = self.head()
+        self.approve({'CLAUDE.md': 'new rules\n'})
+        out = self.assert_refused('the staged CLAUDE.md has mode 120000: an approval holds regular '
+                                  'files only (100644 or 100755)', 'CLAUDE.md')
+        self.assertIn('The work tree is as it was, and nothing this call staged is staged.', out)
+        self.assertEqual(self.read('CLAUDE.md'), 'rules\n')
+        self.assert_not_consumed()
+
+    def test_the_consume_of_a_commit_with_a_gitlink_where_the_approval_deletes(self):
+        # A gitlink has no blob, so a reading by blob alone would take it for the delete.
+        self.approve({'CLAUDE.md': None})
+        self.git('rm', '-q', '--cached', '--', 'CLAUDE.md')
+        self.git('update-index', '--add', '--cacheinfo', '160000,%s,CLAUDE.md' % self.base)
+        self.git('commit', '-q', '-m', 'apply', '-m', 'Owner-Approval: hub:A-1')
+        sha = self.head()
+        out = C.commit(C.request(self.wt, None, [], owner_approval='hub:A-1', consume=sha,
+                                 hub=self.hub, cwd=self.wt))
+        self.assertEqual(out.code, 1, out.lines)
+        self.assertIn('the commit %s holds CLAUDE.md (mode 160000) %s: an approval holds regular '
+                      'files only' % (sha[:12], oc.NOT_A_FILE), '\n'.join(out.lines))
+        self.assertEqual(self.hub.asked, [])
+        self.assert_not_consumed()
+
+
 class WhatTheHubRefusesBeforeTheWrite(ApprovalCase):
     """The hub verifies the change (no commit yet) before the approved content is written."""
 
