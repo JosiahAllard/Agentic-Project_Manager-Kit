@@ -245,6 +245,71 @@ class Queue(QueueCase):
         self.assertEqual(self.folder_names(), [])
 
 
+class Expire(QueueCase):
+    """expire(): an entry whose tip is in main as fetched, or whose branch is gone, is dropped;
+    a live one, and any whose fate git cannot tell, is kept."""
+
+    def queued(self, name):
+        wt, tip = self.branch(name, {'%s.txt' % name: name + '\n'})
+        return wt, V.add(self.common, given('kit/%s' % name, tip))[1]
+
+    def land(self, tip):
+        """Push `tip` as the remote's main and fetch it: origin/main as fetched holds it."""
+        self.repo.git('push', '-q', 'origin', '%s:refs/heads/main' % tip)
+        self.repo.git('fetch', '-q', 'origin')
+        return self.repo.git('rev-parse', 'refs/remotes/origin/main')
+
+    def gone(self, wt, branch):
+        self.repo.git('worktree', 'remove', '--force', wt)
+        self.repo.git('branch', '-D', branch)
+
+    def test_a_landed_entry_is_dropped_and_a_live_one_kept(self):
+        _, landed = self.queued('a')
+        _, live = self.queued('b')
+        main = self.land(landed['tip'])
+        gone = V.expire(self.common, V.entries(self.common), main)
+        self.assertEqual([(e['branch'], why.split(':')[0]) for e, why in gone],
+                         [('kit/a', 'landed')])
+        self.assertEqual(V.entries(self.common), [live])
+
+    def test_an_entry_whose_branch_is_gone_is_superseded(self):
+        wt, _ = self.queued('a')
+        self.gone(wt, 'kit/a')
+        gone = V.expire(self.common, V.entries(self.common), self.main)
+        self.assertEqual([(e['branch'], why) for e, why in gone],
+                         [('kit/a', 'superseded: there is no branch kit/a')])
+        self.assertEqual(self.folder_names(), [])
+
+    def test_a_moved_branch_keeps_its_entry_for_a_carry(self):
+        wt, e = self.queued('a')
+        self.more(wt, 'a', {'a.txt': 'moved\n'})
+        self.assertEqual(V.expire(self.common, V.entries(self.common), self.main), [])
+        self.assertEqual(V.entries(self.common), [e])
+
+    def test_nothing_is_dropped_when_ancestry_cannot_be_told(self):
+        wt, e = self.queued('a')
+        self.gone(wt, 'kit/a')              # gone, yet kept: its tip's fate in main is unknown
+        for main in (None, ''):
+            self.assertEqual(V.expire(self.common, [e], main), [], main)
+        with mock.patch.object(V.refs, 'is_ancestor', return_value=(None, 'git gave no answer')):
+            self.assertEqual(V.expire(self.common, [e], self.main), [])
+        self.assertEqual(V.entries(self.common), [e])
+
+    def test_a_branch_git_cannot_read_keeps_its_entry(self):
+        _, e = self.queued('a')
+        with mock.patch.object(V.refs, 'ref_commit', return_value=(None, 'no answer')):
+            self.assertEqual(V.expire(self.common, [e], self.main), [])
+        self.assertEqual(V.entries(self.common), [e])
+
+    def test_an_entry_re_added_at_another_tip_meanwhile_is_kept(self):
+        wt, first = self.queued('a')
+        second = self.more(wt, 'a', {'a.txt': 'b\n'})
+        again = V.add(self.common, given('kit/a', second))[1]
+        main = self.land(first['tip'])      # the old tip landed; the re-added one did not
+        self.assertEqual(V.expire(self.common, [first], main), [])
+        self.assertEqual(V.entries(self.common), [again])
+
+
 class Lock(QueueCase):
     def race(self, call):
         """Queue kit/a at its first tip, move it, then run call(first) with an add of the new tip
