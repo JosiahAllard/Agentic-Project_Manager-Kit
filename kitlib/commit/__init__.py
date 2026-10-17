@@ -41,6 +41,13 @@ commit(Request) -> Outcome(code, lines). Nothing here prints or exits; tools/com
   --owner-approved is required only when an owner-only path is in the commit, and
   every value given must be a blanket entry or a path committed in this call. An --owner-authored
   commit carries `Owner-Authored: yes` in place of Co-Authored-By.
+- Or an agent commits the change the owner approved on the hub: --owner-approval hub:A-<n>
+  (kitlib.commit.approval; docs/commit.md "Owner approval"). The paths named must be exactly the
+  approval's, HEAD its base and each file its approved base; the hub verifies it, then the approved
+  content is written, staged and checked blob for blob, committed with `Owner-Approval: hub:A-<n>`
+  before Co-Authored-By, and the approval consumed for that commit. A refusal after the write
+  puts the work tree back and unstages what this call staged. A consume that fails leaves the
+  commit (REFUSED, naming the retry): --owner-approval hub:A-<n> --consume <commit> consumes it.
 - Otherwise the trailer is `Co-Authored-By: Claude <model> <noreply@anthropic.com>`, "Claude "
   added when the name lacks it - unless the name is a family in .kit.json
   "commit".coauthor_families or starts with one followed by a space, '.' or '-'.
@@ -81,6 +88,8 @@ from kitlib.content import oncommit
 from kitlib.git import checkout, cmd, repo
 from kitlib.proc import spawn
 
+from kitlib.commit import approval
+
 OK, REFUSED, USAGE = 0, 1, 2
 TOOL = 'commit.py'
 MODEL_ENV = attribution.model_environment()       # the default host's (hosts.json)
@@ -92,17 +101,21 @@ norm = ownermod.norm
 
 # root: the work tree's top level; cwd: the caller's directory (a relative --body-file); env: the
 # environment the host's model variable is read from (None: os.environ); provider: the host name
-# (None: the hosts.json default).
+# (None: the hosts.json default); owner_approval: `hub:A-<n>` (--owner-approval); consume: the
+# commit --consume names; hub: the hub client to ask (None: the machine's hub; tests pass one).
 Request = collections.namedtuple(
     'Request', 'root subject b body_file model owner_authored owner_approved '
-               'lander_main_checkout paths cwd env provider', defaults=(None,))
+               'lander_main_checkout paths cwd env provider owner_approval consume hub',
+    defaults=(None, None, None, None))
 Outcome = collections.namedtuple('Outcome', 'code lines')
 
 
 def request(root, subject, paths, b='', body_file=None, model=None, owner_authored=False,
-            owner_approved=(), lander_main_checkout=False, cwd=None, env=None, provider=None):
+            owner_approved=(), lander_main_checkout=False, cwd=None, env=None, provider=None,
+            owner_approval=None, consume=None, hub=None):
     return Request(root, subject, b, body_file, model, owner_authored, list(owner_approved),
-                   lander_main_checkout, list(paths), cwd or os.getcwd(), env, provider)
+                   lander_main_checkout, list(paths), cwd or os.getcwd(), env, provider,
+                   owner_approval, consume, hub)
 
 
 class _Stop(Exception):
@@ -965,6 +978,126 @@ def render_sources(root, paths):
     return got
 
 
+# The approval an --owner-approval commit carries: the hub client, its id (A-<n>), its document.
+_Hub = collections.namedtuple('_Hub', 'client did doc')
+
+
+def _approval_first(req, root, paths):
+    """_Hub for --owner-approval once the hub has the approval, approved and not consumed; raises
+    _Stop for what refuses it before the index is read: no hub, no such approval, its state, a
+    render source among `paths` (the commit would carry rendered files the owner did not approve)
+    or a merge in progress (the commit would have two parents)."""
+    did = approval.doc_id(req.owner_approval)
+    client, why = approval.hub_client(req.hub)
+    doc = None
+    if client is not None:
+        doc, why = approval.fetch(client, did)
+    why = why if doc is None else approval.state_error(did, doc)
+    if why:
+        raise _Stop(REFUSED, 'refused: %s. Nothing was written or committed.' % why)
+    if oncommit.wants_render(paths) and oncommit.is_kit(root):
+        raise _Stop(REFUSED, 'refused: a render source is named, and an approved commit carries '
+                    'the approved files only. Nothing was written or committed.')
+    heads = merge_heads(root)
+    if heads:
+        raise _Stop(REFUSED, 'refused: a merge in progress (MERGE_HEAD %s): an approved commit has '
+                    'one parent, its base. Nothing was written or committed.'
+                    % ', '.join(h[:12] for h in heads))
+    return _Hub(client, did, doc)
+
+
+def _approval_before_write(root, hub, paths, status_before):
+    """`hub` once the approved change may be written: none of its paths staged already, the paths
+    and base its own (approval.prewrite_error), and the hub verifying it for HEAD; else _Stop."""
+    staged = sorted(set(status_before) & set(approval.approved_paths(hub.doc)))
+    why = None
+    if staged:
+        why = ('%s is staged already: an approved commit records the approved content only. '
+               'Unstage it first' % ', '.join(staged))
+    head = None if why else head_commit(root)
+    why = why or approval.prewrite_error(root, hub.did, hub.doc, paths, head)
+    why = why or approval.preverify_error(root, hub.client, hub.did, hub.doc, head)
+    if why:
+        raise _Stop(REFUSED, 'refused: %s. Nothing was written or committed.' % why)
+    return hub
+
+
+def _stage(req, root, paths, rendered, named, merged, status_before, msg_warnings, body, trailers,
+           lines, hub):
+    """`(head, snap, status_after, others, message)`: the named paths staged and checked, for
+    commit_only; raises _Stop on a refusal."""
+    # A listed path is always added again. The one skip: a listed path staged as a deletion and
+    # absent from the work tree (`git add` would fail "pathspec did not match"); its deletion is
+    # committed because it was named. Nothing unnamed is ever added.
+    to_add = [p for p in paths
+              if not (status_before.get(p) == 'D' and not os.path.lexists(os.path.join(root, p)))]
+    if to_add:
+        rc, _out, err = _git(root, 'add', '--', *to_add, timeout=None)
+        if rc != 0:
+            raise _Stop(REFUSED, 'git add failed: %s' % (err or 'exit %s' % rc))
+    err = oncommit.stage(root, rendered) if rendered else None
+    if err:
+        raise _Stop(REFUSED, *unstage_added(root, sorted(named), status_before, [
+            'refused: the rendered files could not be staged: %s.' % err]))
+    # Only what this call named, rendered or the merge staged is committed: anything another
+    # writer staged since the check above stays staged, out of this commit.
+    staged_now = staged_status(root)
+    status_after = {p: s for p, s in staged_now.items() if p in named or p in merged}
+    others = set(staged_now) - set(status_after)
+    if not status_after:
+        raise _Stop(REFUSED, 'nothing to commit in: %s' % ', '.join(paths))
+    # What is committed is this one read of HEAD and of the index; the index must still hold it
+    # after the machine-path check, so the blobs checked are the blobs committed.
+    head = head_commit(root)
+    snap = index_snapshot(root, status_after)
+    why = hub and approval.staged_error(hub.doc, head, status_after, snap)
+    if why:
+        raise _Stop(REFUSED, 'refused: %s. Nothing was committed.' % why)
+    refusal, warnings = staged_machine_path_error(root, status_after, status_before)
+    # The message check printed the same machine-config WARNING already: once is enough.
+    if refusal:
+        raise _Stop(REFUSED, *[l for l in refusal if l not in msg_warnings])
+    changed = sorted(p for p, e in index_snapshot(root, status_after).items() if snap[p] != e)
+    if changed:
+        raise _Stop(REFUSED, 'refused: %s was staged again during this call, after its staged copy '
+                    'was checked. Nothing was committed; run this again.' % ', '.join(changed))
+    lines.extend(l for l in warnings if l not in msg_warnings)
+    return head, snap, status_after, others, build_message(req.subject, body, trailers)
+
+
+def _put_back(root, written, paths, stop_lines):
+    """`stop_lines` and how the work tree and index were left, after an --owner-approval commit
+    was refused once the approved content was written: the files put back, the paths unstaged
+    (none was staged before the call: _approval_before_write)."""
+    failed = approval.restore(written)
+    rc, _out, gerr = _git(root, 'reset', '-q', '--', *paths)
+    if not failed and rc == 0:
+        return stop_lines + ['The work tree is as it was, and nothing this call staged is staged.']
+    return stop_lines + ['The work tree and index could not be put back: %s. Check `git status` by '
+                         'hand.' % '; '.join(failed + (
+                             ['git reset failed: %s' % (gerr or 'exit %s' % rc)] if rc else []))]
+
+
+def _consume(req, lines):
+    """--owner-approval hub:A-<n> --consume COMMIT: consume the approval for COMMIT, made already
+    (approval.consume_commit)."""
+    did = approval.doc_id(req.owner_approval)
+    value = req.consume.strip()
+    rc, out, _err = ((1, '', '') if not value or value.startswith('-')
+                     else _git(req.root, 'rev-parse', '-q', '--verify', value + '^{commit}'))
+    sha = out.strip()
+    if rc != 0 or not sha:
+        raise _Stop(REFUSED, 'refused: --consume %s is not a commit here. Nothing was consumed.'
+                    % req.consume)
+    client, why = approval.hub_client(req.hub)
+    line = None
+    if client is not None:
+        line, why = approval.consume_commit(req.root, client, did, req.owner_approval, sha)
+    if line is None:
+        raise _Stop(REFUSED, 'refused: %s. %s was not consumed.' % (why, req.owner_approval))
+    lines.append(line)
+
+
 def commit(req):
     """Outcome(code, lines) for one commit request (module docstring)."""
     lines = []
@@ -988,6 +1121,11 @@ def _commit(req, lines):
     except kconfig.ConfigError as e:
         raise _Stop(USAGE, 'REFUSED: the kit configuration is refused: %s. Nothing was committed.'
                     % e)
+    err = approval.usage_error(req)
+    if err:
+        raise _usage(err)
+    if req.consume is not None:
+        return _consume(req, lines)
     model, source, err = resolve_model(req.owner_authored, req.model, req.env, req.provider)
     if err:
         raise _usage(err)
@@ -1023,6 +1161,7 @@ def _commit(req, lines):
     if err:
         raise _usage(err)
 
+    hub = _approval_first(req, root, paths) if req.owner_approval else None
     ran = render_sources(root, paths)
     rendered = ran or []
     named = set(paths) | set(rendered)
@@ -1032,18 +1171,21 @@ def _commit(req, lines):
     foreign = set(status_before) - named - merged
     if foreign:
         raise _Stop(REFUSED, foreign_refusal(foreign, merge_why, len(heads) == 1))
+    if hub:
+        hub = _approval_before_write(root, hub, paths, status_before)
     approved = canonical_approved(rules, req.owner_approved, paths)
     locked = locked_paths(rules, paths + [p for p in rendered if p not in paths])
-    if locked and not req.owner_authored:
+    if locked and not req.owner_authored and not hub:
         # The hint only for a path the merge would carry unnamed, as it is staged now.
         carried = sorted(merge_owned(root, rules, set(locked) & set(status_before), heads)[0])
         raise _Stop(REFUSED, 'refused: %s is owner-only, and only a commit the owner authors (his '
                     'own git identity, --owner-authored) can carry its approval. Propose the '
-                    'change to the owner.%s' % (', '.join(locked), (
+                    'change to the owner.%s Or ask the owner on the hub and commit with '
+                    '--owner-approval hub:A-<n>.' % (', '.join(locked), (
                         ' (A merge in progress carries the merged branch\'s own copy of %s '
                         'without it being named: leave it out of your list.)'
                         % ', '.join(carried)) if carried else ''))
-    for p in unapproved_locked(rules, locked, approved):
+    for p in ([] if hub else unapproved_locked(rules, locked, approved)):
         raise _Stop(REFUSED, 'refused: %s is owner-only and no --owner-approved value names it.' % p)
     if req.owner_authored:
         err = owner_identity_error(rules, author_email(root))
@@ -1052,44 +1194,30 @@ def _commit(req, lines):
     body, session = session_lines(body, req.owner_authored, req.env, req.provider)
     trailers = build_trailers(rules, approved, req.owner_authored, model, opts['coauthor_families'],
                               req.provider, session)
-
-    # A listed path is always added again. The one skip: a listed path staged as a deletion and
-    # absent from the work tree (`git add` would fail "pathspec did not match"); its deletion is
-    # committed because it was named. Nothing unnamed is ever added.
-    to_add = [p for p in paths
-              if not (status_before.get(p) == 'D' and not os.path.lexists(os.path.join(root, p)))]
-    if to_add:
-        rc, _out, err = _git(root, 'add', '--', *to_add, timeout=None)
+    written = None
+    if hub:
+        trailers.insert(0, approval.trailer(req.owner_approval))
+        written, why = approval.write(root, hub.doc)
+        if written is None:
+            raise _Stop(REFUSED, 'refused: %s. Nothing was committed.' % why)
+    try:
+        head, snap, status_after, others, msg = _stage(
+            req, root, paths, rendered, named, merged, status_before, msg_warnings, body,
+            trailers, lines, hub)
+        try:
+            rc, out, err, new, notes, trees = commit_only(root, head, snap, msg)
+        except _Stop as stop:
+            if hub:                 # the commit may stand: the work tree is left as committed
+                stop.lines.append('%s was not consumed; the approved content is left in the work '
+                                  'tree.' % req.owner_approval)
+            written = None
+            raise
         if rc != 0:
-            raise _Stop(REFUSED, 'git add failed: %s' % (err or 'exit %s' % rc))
-    err = oncommit.stage(root, rendered) if rendered else None
-    if err:
-        raise _Stop(REFUSED, *unstage_added(root, sorted(named), status_before, [
-            'refused: the rendered files could not be staged: %s.' % err]))
-    # Only what this call named, rendered or the merge staged is committed: anything another
-    # writer staged since the check above stays staged, out of this commit.
-    staged_now = staged_status(root)
-    status_after = {p: s for p, s in staged_now.items() if p in named or p in merged}
-    others = set(staged_now) - set(status_after)
-    if not status_after:
-        raise _Stop(REFUSED, 'nothing to commit in: %s' % ', '.join(paths))
-    # What is committed is this one read of HEAD and of the index; the index must still hold it
-    # after the machine-path check, so the blobs checked are the blobs committed.
-    head = head_commit(root)
-    snap = index_snapshot(root, status_after)
-    refusal, warnings = staged_machine_path_error(root, status_after, status_before)
-    # The message check printed the same machine-config WARNING already: once is enough.
-    if refusal:
-        raise _Stop(REFUSED, *[l for l in refusal if l not in msg_warnings])
-    changed = sorted(p for p, e in index_snapshot(root, status_after).items() if snap[p] != e)
-    if changed:
-        raise _Stop(REFUSED, 'refused: %s was staged again during this call, after its staged copy '
-                    'was checked. Nothing was committed; run this again.' % ', '.join(changed))
-    lines.extend(l for l in warnings if l not in msg_warnings)
-    msg = build_message(req.subject, body, trailers)
-    rc, out, err, new, notes, trees = commit_only(root, head, snap, msg)
-    if rc != 0:
-        raise _Stop(REFUSED, 'commit failed: %s' % (err or out.strip() or 'exit %s' % rc))
+            raise _Stop(REFUSED, 'commit failed: %s' % (err or out.strip() or 'exit %s' % rc))
+    except _Stop as stop:
+        if written is None:
+            raise
+        raise _Stop(stop.code, *_put_back(root, written, paths, stop.lines))
     _rc, short, _err = _git(root, 'rev-parse', '--short', new)
     lines.append('committed %s  %s' % (short.strip() or new[:12], req.subject))
     lines.append('files     %s' % ', '.join(
@@ -1114,5 +1242,17 @@ def _commit(req, lines):
             lines.append(iline)
         if not (ok and iok):
             lines.append('          fix it in a follow-up commit before this branch can land')
+    if hub:
+        line, why = approval.consume_commit(root, hub.client, hub.did, req.owner_approval, new)
+        if line:
+            lines.append(line)
+        else:
+            misaligned = [
+                'refused: %s was not consumed: %s.' % (req.owner_approval, why),
+                'The commit %s stands; gate land and the pre-push hook refuse it until the approval '
+                'is consumed. Run in this work tree: python %s' % (
+                    new[:12], approval.retry_command(os.path.join(KIT_ROOT, 'tools', 'commit.py'),
+                                                     req.owner_approval, new))
+            ] + list(misaligned)
     if misaligned:
         raise _Stop(REFUSED, *misaligned)
