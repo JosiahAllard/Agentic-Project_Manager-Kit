@@ -85,7 +85,7 @@ from kitlib import attribution, machinepaths, verdict
 from kitlib.docs import callers as doc_callers
 from kitlib.config import owner as ownermod
 from kitlib.content import oncommit
-from kitlib.git import checkout, cmd, repo
+from kitlib.git import checkout, cmd, refs, repo
 from kitlib.proc import spawn
 
 from kitlib.commit import approval
@@ -126,7 +126,8 @@ class _Stop(Exception):
 
 
 def settings(cfg):
-    """`{'merge_fold', 'coauthor_families', 'main_branch', 'rule_pointer'}` from a checked Config.
+    """`{'merge_fold', 'coauthor_families', 'main_branch', 'remote', 'rule_pointer'}` from a
+    checked Config.
     Raises ConfigError on a family name that is blank or not single-spaced."""
     sec = cfg.section('commit')
     families = sec['coauthor_families'] or []
@@ -134,7 +135,7 @@ def settings(cfg):
         raise kconfig.ConfigError('.kit.json "commit".coauthor_families must be a list of names '
                                   '(one or more words, single-spaced), e.g. ["Codex"]')
     return {'merge_fold': bool(sec['merge_fold']), 'coauthor_families': families,
-            'main_branch': cfg.main_branch,
+            'main_branch': cfg.main_branch, 'remote': cfg.remote,
             'rule_pointer': cfg.section('checkout_guard')['rule_pointer']}
 
 
@@ -404,14 +405,15 @@ def carries_merged_copy(root, path, head, bases):
     return True
 
 
-def merge_owned(root, rules, staged, heads):
+def merge_owned(root, rules, staged, heads, landed=()):
     """`(paths, why)`: the staged paths a merge in progress put there itself. An ordinary path
     counts only when its staged content equals the clean merge result (`git merge-tree
     --write-tree`) and merge-tree does not list it as conflicted. An owner-only path counts only
     when its staged state is exactly the merged branch's own copy, which that branch changed from
     the merge base (carries_merged_copy: same mode and blob as `<MERGE_HEAD>:<path>`, or a deletion
     of a path the merged branch deleted), whether the merge took it cleanly or a conflict was
-    resolved to it, and every commit the merge brings that changes it is the owner's
+    resolved to it, and every commit the merge brings that changes it, other than those reachable
+    from `landed` (landed_main), is the owner's or carries an approval the hub verifies
     (non_owner_paths); any other staged state of an owner-only path is never the merge's. No
     merge, or an octopus one, gives `(set(), None)`; a git failure gives `(set(), why)` (or the
     ordinary paths and `why`, when only the authors could not be checked)."""
@@ -430,7 +432,7 @@ def merge_owned(root, rules, staged, heads):
     locked = {p for p in candidates if rules.is_locked(p)}
     owned = (candidates - locked) - differs - conflicted
     if locked:
-        foreign, why = non_owner_paths(root, rules, heads[0])
+        foreign, why = non_owner_paths(root, rules, heads[0], landed)
         if foreign is None:
             return owned, why
         bases = merge_bases(root, heads[0])
@@ -438,14 +440,26 @@ def merge_owned(root, rules, staged, heads):
     return owned, None
 
 
-def non_owner_paths(root, rules, head):
-    """`(paths, None)`: the owner-only paths that a commit the merged-in `head` brings (one not
-    reachable from HEAD) changes without the owner as its author, judged as `gate land` judges a
-    branch (kitlib.guard.ownercommits.violations against HEAD); or `(None, why)` when git cannot
-    tell. A merged copy one of those paths carries is not the owner's, so it is never the
-    merge's."""
+def landed_main(root, remote, main):
+    """`[the commit of <remote>/<main> as last fetched]` when it resolves, else `[]`: the commits
+    already on main, which `gate land` and pre-push judged when they landed. The same ref pre-push
+    trusts (kitlib.guard.prepush); no network."""
+    if not remote or refs.bad_rev(remote) or not main:
+        return []
+    sha = refs.resolve('refs/remotes/%s/%s' % (remote, main), root, known=True)[0]
+    return [sha] if sha else []
+
+
+def non_owner_paths(root, rules, head, landed=()):
+    """`(paths, None)`: the owner-only paths that a commit the merged-in `head` brings (one
+    reachable neither from HEAD nor from `landed`) changes without the owner as its author or an
+    approval the hub verifies, judged as `gate land` judges a branch
+    (kitlib.guard.ownercommits.violations); or `(None, why)` when git cannot tell. A commit already
+    on main is not asked of the hub again: its approval was verified when it landed, and stops
+    verifying once past its lifetime or while the hub is down. A merged copy one of those paths carries is not the owner's,
+    so it is never the merge's."""
     from kitlib.guard import ownercommits     # here: kitlib.guard reaches back into this module
-    bad, why = ownercommits.violations(root, rules, head, ['HEAD'])
+    bad, why = ownercommits.violations(root, rules, head, ['HEAD'] + list(landed))
     if bad is None:
         return None, 'the authors of the merged commits could not be checked: %s' % why
     return {p for v in bad for p in v.paths}, None
@@ -1167,7 +1181,8 @@ def _commit(req, lines):
     named = set(paths) | set(rendered)
     status_before = staged_status(root)
     heads = merge_heads(root) if opts['merge_fold'] else []
-    merged, merge_why = merge_owned(root, rules, set(status_before) - named, heads)
+    landed = landed_main(root, opts['remote'], opts['main_branch']) if heads else []
+    merged, merge_why = merge_owned(root, rules, set(status_before) - named, heads, landed)
     foreign = set(status_before) - named - merged
     if foreign:
         raise _Stop(REFUSED, foreign_refusal(foreign, merge_why, len(heads) == 1))
@@ -1177,7 +1192,8 @@ def _commit(req, lines):
     locked = locked_paths(rules, paths + [p for p in rendered if p not in paths])
     if locked and not req.owner_authored and not hub:
         # The hint only for a path the merge would carry unnamed, as it is staged now.
-        carried = sorted(merge_owned(root, rules, set(locked) & set(status_before), heads)[0])
+        carried = sorted(merge_owned(root, rules, set(locked) & set(status_before), heads,
+                                     landed)[0])
         raise _Stop(REFUSED, 'refused: %s is owner-only, and only a commit the owner authors (his '
                     'own git identity, --owner-authored) can carry its approval. Propose the '
                     'change to the owner.%s Or ask the owner on the hub and commit with '

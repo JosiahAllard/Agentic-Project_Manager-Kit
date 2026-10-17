@@ -17,6 +17,7 @@ from unittest import mock
 from kitlib import commit as C
 from kitlib.config import owner as ownermod
 from kitlib.git import cmd
+from kitlib.guard import ownercommits
 from tests import gitfixture
 from tests.gitfixture import TempRepo
 from tests.home import TempHomeCase, machine_config, no_machine_owner
@@ -1567,11 +1568,13 @@ class MergeCarriesAnOwnerChange(MergeCase):
 
     F = 'CLAUDE.md'
 
-    def merge(self, main_side, branch_side=None, path=None, main_author=OWNER):
+    def merge(self, main_side, branch_side=None, path=None, main_author=OWNER,
+              main_message='owner moves main'):
         """The base holds work.txt and the owner-only file. main sets the file to `main_side`
-        (None: deletes it; KEEP: leaves it) in a commit `main_author` wrote; the branch sets it to
-        `branch_side` when given (an owner commit made outside the tool). Both change work.txt,
-        so the merge stops; work.txt is resolved in the work tree. (branch tip, main tip)."""
+        (None: deletes it; KEEP: leaves it) in a commit `main_author` wrote with `main_message`;
+        the branch sets it to `branch_side` when given (an owner commit made outside the tool).
+        Both change work.txt, so the merge stops; work.txt is resolved in the work tree. (branch
+        tip, main tip)."""
         f = path or self.F
         self.assertTrue(C.kconfig.load(self.wt).owner_rules().is_locked(f), f)
         self.t.write('work.txt', 'base\n')
@@ -1584,7 +1587,7 @@ class MergeCarriesAnOwnerChange(MergeCase):
         elif main_side is not KEEP:
             self.t.write(f, main_side)
             self.t.git('add', '--', f)
-        self.main_commit('owner moves main', ['work.txt'], main_author)
+        self.main_commit(main_message, ['work.txt'], main_author)
         self.put('work.txt', 'branch\n')
         self.git('commit', '-q', '-m', 'branch work', '--', 'work.txt')
         if branch_side is not None:
@@ -1714,6 +1717,44 @@ class MergeCarriesAnOwnerChange(MergeCase):
         self.assertEqual(code, 1, out)
         self.assertIn('refused: CLAUDE.md is owner-only', out)
         self.assertNotIn('leave it out of your list', out)
+
+    def merge_approved_main(self, why, landed=True):
+        """main's owner-only change is an agent's commit carrying `Owner-Approval: hub:A-1`, and
+        the hub now refuses it with `why` (the approval past its lifetime, or the hub down); with
+        `landed`, <remote>/<main> as last fetched holds it. (branch tip, main tip, the approval
+        ids the hub was asked about)."""
+        asked = []
+
+        class Stale(object):
+            def check(self, root, doc_id, head, blobs, commit):
+                asked.append(doc_id)
+                return False, why
+        p = mock.patch.object(ownercommits, 'default_approvals', Stale)
+        p.start()
+        self.addCleanup(p.stop)
+        tip, main = self.merge('approved edit\n', main_author=AGENT,
+                               main_message='approved edit\n\nOwner-Approval: hub:A-1')
+        if landed:
+            self.t.git('update-ref', 'refs/remotes/origin/main', main)
+        return tip, main, asked
+
+    def test_an_approved_change_main_has_landed_is_not_judged_again_once_expired(self):
+        tip, main, asked = self.merge_approved_main('the approval is past its lifetime')
+        code, out = self.commit('merge main', 'work.txt')
+        self.assert_merged(tip, main, out, code)
+        self.assertEqual(self.git('show', 'HEAD:CLAUDE.md'), 'approved edit')
+        self.assertEqual(asked, [])
+
+    def test_an_approved_change_main_has_landed_is_not_judged_again_with_the_hub_down(self):
+        tip, main, asked = self.merge_approved_main('the hub server did not answer')
+        code, out = self.commit('merge main', 'work.txt')
+        self.assert_merged(tip, main, out, code)
+        self.assertEqual(asked, [])
+
+    def test_an_approved_change_not_on_the_remote_main_is_still_judged(self):
+        tip, _, asked = self.merge_approved_main('the approval is past its lifetime', landed=False)
+        self.assert_refused_naming(self.F, tip)
+        self.assertEqual(asked, ['A-1'])
 
     def test_outside_a_merge_a_staged_owner_file_is_still_refused(self):
         self.t.write(self.F, 'owner base\n')
