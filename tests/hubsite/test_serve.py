@@ -1410,6 +1410,26 @@ class WaitCase(ServeCase):
         self.assertEqual(httpfix.http_threads(), [])
         self.assertIs(hub.close(), False)
 
+    def test_a_ctrl_c_in_the_last_two_steps_leaves_the_close_with_a_sync_too(self):
+        hub = self.build(sync=self.sync_factory())
+        hub.start()
+        lis = hub.listeners[0]
+        join = lis.join
+
+        def cut(timeout=None):
+            join(timeout)
+            raise KeyboardInterrupt()
+
+        lis.join = cut
+        with self.assertRaises(KeyboardInterrupt):
+            hub.close(TIMEOUT)
+        # every wait for git had ended: no line says that a git command may be left half-way
+        self.assertEqual(self.lines, [('note', serve.LAST_PASS)])
+        self.assertEqual(self.calls, ['sync.start', 'sync.stop', 'sync.sync_once'])
+        self.assertFalse(self.locked(), 'the store was not released')
+        self.assertEqual(httpfix.http_threads(), [])
+        self.assertIs(hub.close(), False)
+
     def test_a_store_closed_beside_a_pass_that_may_still_run_is_said(self):
         for ends in (False, True, RuntimeError(SECRET)):
             with self.subTest(ends=ends):

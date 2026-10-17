@@ -433,7 +433,8 @@ class ServeCase(CliCase):
         self.assertEqual(HUB.INTERRUPTED, 'interrupted')
 
     def test_a_closed_console_at_the_closing_line_is_still_a_clean_close(self):
-        for gone in (OSError(9, 'Bad file descriptor'),):
+        for gone in (OSError(9, 'Bad file descriptor'),
+                     ValueError('I/O operation on closed file')):
             with self.subTest(gone=type(gone).__name__):
                 class Shut(io.StringIO):        # the console closed while the server served
                     def write(self, text):
