@@ -1351,7 +1351,7 @@ class UnreadableRequestTest(TunnelCase):
 
 class TunnelStrongTest(TunnelCase):
     """The owner who passed the tunnel gate is the strong owner, who alone may call a route of
-    role api.APPROVER (KIT-HUB-APPROVALS stage B1); the local listener's owner is not."""
+    role api.APPROVER; the local listener's owner token is not."""
 
     def setUp(self):
         TunnelCase.setUp(self)

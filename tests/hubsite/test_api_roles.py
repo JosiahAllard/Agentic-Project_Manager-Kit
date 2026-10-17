@@ -227,7 +227,7 @@ NOT_TRUE = (False, None, 0, 1, '', 'true', 'yes', [True], (True,), {'strong': Tr
 
 
 class ApproverRoleTest(unittest.TestCase):
-    """APPROVER (KIT-HUB-APPROVALS stage B1): a route for the owner who logged in through
+    """APPROVER: a route for the owner who logged in through
     Cloudflare Access. No route of ROUTES names it yet, so each test adds one of its own."""
 
     fresh = RolesCase.fresh

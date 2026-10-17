@@ -26,7 +26,7 @@ that request, kitlib.hubsite.httpd passes it on). Every other caller is refused 
 field `role`, with NOT_STRONG: the owner token, a browser session paired from it and an agent are
 never strong. strong is a call argument, never a field of the body or the query, and it opens no
 other route: on OWNER, AGENT and ANY routes the role alone decides. A handler reads it as
-Request.strong. No route of ROUTES names APPROVER yet (KIT-HUB-APPROVALS stage B2 adds them).
+Request.strong. No route of ROUTES names APPROVER yet (the approvals routes will).
 
 Fields. A write route names the body fields it takes; any other field is refused (`invalid`, the
 field named), so a body cannot carry a field another role owns (an agent posting a question

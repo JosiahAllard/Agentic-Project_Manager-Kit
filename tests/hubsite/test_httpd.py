@@ -1226,7 +1226,7 @@ class StrongRecorder(Recorder):
 
 
 class StrongCase(httpfix.ListenerCase):
-    """Request.strong (KIT-HUB-APPROVALS stage B1): only a gate makes a request strong, and only
+    """Request.strong: only a gate makes a request strong, and only
     for the owner. The local gate never does: neither the owner's token nor a browser paired
     from it is the Access login."""
 
@@ -1312,7 +1312,7 @@ class StrongCase(httpfix.ListenerCase):
 
 
 class StrongPairCase(httpfix.ListenerCase):
-    """Strong pairing (Q-1000 "Both"): the owner logged in through Access asks the tunnel
+    """Strong pairing: the owner logged in through Access asks the tunnel
     listener for a code, and the PC's browser that redeems it on the local listener is the
     strong owner there."""
 
