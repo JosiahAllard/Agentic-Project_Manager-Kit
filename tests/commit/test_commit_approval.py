@@ -10,8 +10,15 @@ import copy
 import datetime
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
+import unittest
+from unittest import mock
+
+if os.name == 'nt':
+    import _winapi
 
 from kitlib import commit as C
 from kitlib.config import owner as ownermod
@@ -35,15 +42,18 @@ setUpModule = tc.setUpModule
 class Hub(object):
     """A stand-in hub client: GET /snapshot, GET /approvals/<id>/verify and POST
     /approvals/<id>/consume, each as the server's route answers, on the documents in `docs`.
-    `consume_fails`: the consume call raises that exception instead. `asked` lists each call."""
+    `consume_fails`: the consume call raises that exception instead. `commit_verify_fails`: a
+    verify for a commit answers invalid with that why. `asked` lists each call."""
 
     def __init__(self):
-        self.docs, self.asked, self.consume_fails = {}, [], None
+        self.docs, self.asked, self.consume_fails, self.commit_verify_fails = {}, [], None, None
 
     def get(self, path, role=hubclient.ANY, query=None):
         self.asked.append(('GET', path))
         if path == '/snapshot':
             return {'ok': True, 'collections': {'approvals': copy.deepcopy(self.docs)}}
+        if self.commit_verify_fails and query.get('commit'):
+            return {'ok': True, 'valid': False, 'why': self.commit_verify_fails}
         doc_id = path.split('/')[2]
         doc = self.docs.get(doc_id)
         if doc is None:
@@ -244,6 +254,21 @@ class WhatIsRefusedBeforeAnythingIsWritten(ApprovalCase):
         self.addCleanup(os.remove, path)
         self.assert_refused('a merge in progress', 'CLAUDE.md')
 
+    def test_a_render_source_among_the_paths(self):
+        # The kit's layout: a render would add rendered files the owner did not approve.
+        self.put('content/roles/x.md', 'one\n')
+        self.git('add', '--', 'content/roles/x.md')
+        self.git('commit', '-q', '-m', 'kit layout')
+        self.put('tools/render_content.py', tc.RENDER_STUB)
+        self.approve({'CLAUDE.md': 'new rules\n', 'content/roles/x.md': 'two\n'},
+                     head=self.head())
+        self.assert_refused('refused: a render source is named, and an approved commit carries '
+                            'the approved files only', 'CLAUDE.md', 'content/roles/x.md')
+        self.assertFalse(os.path.exists(os.path.join(self.wt, 'out', 'role.txt')))
+        self.assertEqual(self.read('content/roles/x.md'), 'one\n')
+        self.assertEqual(self.read('CLAUDE.md'), 'rules\n')
+        self.assert_not_consumed()
+
     def test_something_else_staged(self):
         self.approve({'CLAUDE.md': 'new rules\n'})
         self.put('other.py', 'x\n')
@@ -266,6 +291,48 @@ class WhatIsRefusedBeforeAnythingIsWritten(ApprovalCase):
         self.assertEqual(self.head(), self.base)
         self.assertEqual(self.git('diff', '--cached', '--name-only'), 'CLAUDE.md')
         self.assertEqual(self.read('CLAUDE.md'), 'rules\n')
+
+
+@real_git('a link in the work tree: the fake refuses one, so a missing check would show as that')
+class WhatThePathCheckRefuses(ApprovalCase):
+    """An approved path is written as a plain file of the work tree only (approval._path_error):
+    never through a link, so the write cannot land outside the work tree."""
+
+    def outside(self):
+        """A folder outside the work tree, removed after the test (after any link to it)."""
+        folder = tempfile.mkdtemp(prefix='kit-approval-outside-')
+        self.addCleanup(shutil.rmtree, folder, True)
+        return folder
+
+    def test_an_approved_path_that_is_a_symbolic_link(self):
+        target = os.path.join(self.outside(), 'rules.md')
+        with open(target, 'w', encoding='utf-8', newline='') as fh:
+            fh.write('rules\n')
+        full = os.path.join(self.wt, 'CLAUDE.md')
+        os.remove(full)
+        try:
+            os.symlink(target, full)
+        except OSError as e:
+            self.skipTest('this machine makes no symbolic link without a privilege (%s)' % e)
+        self.addCleanup(lambda: os.path.lexists(full) and os.remove(full))
+        self.approve({'CLAUDE.md': 'new rules\n'})
+        self.assert_refused('CLAUDE.md is a symbolic link: an approval writes plain files only',
+                            'CLAUDE.md')
+        with open(target, encoding='utf-8', newline='') as fh:
+            self.assertEqual(fh.read(), 'rules\n')
+        self.assert_not_consumed()
+
+    @unittest.skipUnless(os.name == 'nt', 'a directory junction is a Windows feature')
+    def test_an_approved_path_reached_through_a_link_out_of_the_work_tree(self):
+        folder = self.outside()
+        link = os.path.join(self.wt, '.github')
+        _winapi.CreateJunction(folder, link)       # needs no privilege
+        self.addCleanup(os.rmdir, link)            # the junction itself, never its target
+        self.approve({'.github/workflows/ci.yml': 'on: push\n'})
+        self.assert_refused('.github/workflows/ci.yml is reached through a link out of the work '
+                            'tree', '.github/workflows/ci.yml')
+        self.assertEqual(os.listdir(folder), [])
+        self.assert_not_consumed()
 
 
 @real_git('a git attribute changes the blob staged: the fake reads no .gitattributes')
@@ -333,6 +400,54 @@ class TheConsume(ApprovalCase):
         self.assertIn('approval  hub:A-1 consumed by %s' % head[:12], out.lines)
         self.assertEqual(self.hub.docs['A-1']['commit'], head)
 
+    def test_a_consume_the_hub_then_does_not_verify_says_it_was_consumed(self):
+        self.approve({'CLAUDE.md': 'new rules\n'})
+        self.hub.commit_verify_fails = 'a stand-in refusal'
+        code, out = self.approved_commit('CLAUDE.md')
+        self.assertEqual(code, 1, out)
+        head = self.head()
+        self.assertNotEqual(head, self.base)
+        self.assertEqual(self.hub.docs['A-1']['commit'], head)
+        self.assertIn('refused: hub:A-1 was consumed by %s, and the hub does not verify it for '
+                      'that commit: hub:A-1 refused: a stand-in refusal.' % head[:12], out)
+        self.assertNotIn('was not consumed', out)
+        self.assertIn('Run in this work tree to ask the hub again: python ', out)
+        self.assertIn('commit.py --owner-approval hub:A-1 --consume %s' % head, out)
+        # The retry, while the hub still does not verify it, says the same and names itself.
+        retry = C.request(self.wt, None, [], owner_approval='hub:A-1', consume=head,
+                          hub=self.hub, cwd=self.wt)
+        got = C.commit(retry)
+        text = '\n'.join(got.lines)
+        self.assertEqual(got.code, 1, text)
+        self.assertIn('hub:A-1 was consumed by %s, and the hub does not verify it' % head[:12],
+                      text)
+        self.assertNotIn('was not consumed', text)
+        self.assertIn('Run this again to ask the hub again: python ', text)
+        self.assertIn('--owner-approval hub:A-1 --consume %s' % head, text)
+        # Once the hub verifies it, the same retry passes without consuming it again.
+        self.hub.commit_verify_fails = None
+        posts = self.hub.asked.count(('POST', '/approvals/A-1/consume'))
+        got = C.commit(retry)
+        self.assertEqual(got.code, 0, got.lines)
+        self.assertIn('approval  hub:A-1 consumed by %s' % head[:12], got.lines)
+        self.assertEqual(self.hub.asked.count(('POST', '/approvals/A-1/consume')), posts)
+
+    def test_a_commit_step_that_stops_leaves_the_approved_content_and_consumes_nothing(self):
+        # commit_only stops where a commit may stand (git commit ran, and HEAD could not be
+        # checked): the approved content is not put back, and nothing is consumed.
+        self.approve({'CLAUDE.md': 'new rules\n'})
+        stop = C._Stop(C.REFUSED, 'refused: a stand-in stop in the commit step.')
+        with mock.patch.object(C, 'commit_only', side_effect=stop):
+            code, out = self.approved_commit('CLAUDE.md')
+        self.assertEqual(code, 1, out)
+        self.assertIn('a stand-in stop in the commit step', out)
+        self.assertIn('hub:A-1 was not consumed; the approved content is left in the work tree.',
+                      out)
+        self.assertNotIn('The work tree is as it was', out)
+        self.assertEqual(self.read('CLAUDE.md'), 'new rules\n')
+        self.assertEqual(self.head(), self.base)
+        self.assert_not_consumed()
+
     def test_the_retry_refuses_a_commit_that_is_not_the_approved_change(self):
         self.approve({'CLAUDE.md': 'new rules\n'})
         self.put('a.py', 'x\n')
@@ -354,6 +469,36 @@ class TheConsume(ApprovalCase):
         self.assertEqual(out.code, 1, out.lines)
         self.assertIn('does not carry Owner-Approval: hub:A-1', '\n'.join(out.lines))
         self.assert_not_consumed()
+
+
+@real_git('commit-tree makes a merge and a root commit; the fake makes neither')
+class TheConsumeOfACommitWithoutOneParent(ApprovalCase):
+    """--consume refuses a merge or a root commit that carries the trailer before the hub is
+    asked anything (approval.consume_commit)."""
+
+    def odd_commit(self, *parents):
+        tree = self.git('rev-parse', self.base + '^{tree}')
+        args = ['commit-tree', tree]
+        for p in parents:
+            args += ['-p', p]
+        return self.git(*(args + ['-m', 'apply', '-m', 'Owner-Approval: hub:A-1']))
+
+    def assert_consume_refused(self, sha, text):
+        self.approve({'CLAUDE.md': 'new rules\n'})
+        out = C.commit(C.request(self.wt, None, [], owner_approval='hub:A-1', consume=sha,
+                                 hub=self.hub, cwd=self.wt))
+        self.assertEqual(out.code, 1, out.lines)
+        self.assertIn('the commit %s is %s: an approved commit has one parent' % (sha[:12], text),
+                      '\n'.join(out.lines))
+        self.assertEqual(self.hub.asked, [])
+        self.assert_not_consumed()
+
+    def test_a_merge(self):
+        other = self.git('commit-tree', self.base + '^{tree}', '-p', self.base, '-m', 'other')
+        self.assert_consume_refused(self.odd_commit(self.base, other), 'a merge')
+
+    def test_a_root_commit(self):
+        self.assert_consume_refused(self.odd_commit(), 'a root commit')
 
 
 class UsageMistakes(ApprovalCase):
