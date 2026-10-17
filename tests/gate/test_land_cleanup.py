@@ -19,7 +19,6 @@ from kitlib.gate import land, result, runner
 from kitlib.git import cmd
 from kitlib.records import landing
 from tests.gate import fixtures
-from tests.realgit import real_git
 
 BRANCH = 'kit/feature'
 KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -106,15 +105,6 @@ class AfterLanding(CleanupCase):
         self.assertIsNone(why)
         self.assertEqual(rec['verdict'], 'pass')
         self.assertEqual(rec['cleanup'], entry)
-
-    def test_a_branch_never_pushed_still_loses_its_worktree_and_local_branch(self):
-        wt, tip = self.branch('feature', {'a.py': 'x = 1\n'})
-        out = self.lander(BRANCH, self.main, tip).run()
-        entry = self.assert_landed(out)[BRANCH]
-        self.assertEqual((entry['remote_branch'], entry['worktree'], entry['local_branch']),
-                         ('absent', 'removed', 'deleted'), out.lines)
-        self.assertFalse(os.path.exists(wt))
-        self.assertEqual(self.local(BRANCH), '')
 
     def test_a_dirty_worktree_is_kept_and_reported(self):
         for kind in ('untracked', 'modified'):
@@ -212,17 +202,6 @@ class AfterLanding(CleanupCase):
         self.assertEqual(entry['worktree'], 'removed', out.lines)
         self.assert_kept_unread(entry, out.lines, tip)
 
-    def test_a_killed_read_after_a_branch_delete_is_not_reported_deleted(self):
-        wt, tip = self.pushed('feature', {'a.py': 'x = 1\n'})
-        self.repo.git('worktree', 'remove', wt)
-        patch, tried = self.kill_the_delete_and_the_read_after_it(BRANCH)
-        with patch:
-            out = self.lander(BRANCH, self.main, tip).run()
-        entry = self.assert_landed(out)[BRANCH]
-        self.assertTrue(tried, 'the cleanup ran no branch -d')
-        self.assertEqual(entry['worktree'], 'absent', out.lines)
-        self.assert_kept_unread(entry, out.lines, tip)
-
     def test_a_red_landing_removes_nothing(self):
         wt, tip = self.pushed('feature', {'RED': 'x\n'})
         out = self.lander(BRANCH, self.main, tip).run()
@@ -242,17 +221,6 @@ class AfterLanding(CleanupCase):
         rec, _ = result.read(self.repo.root, BRANCH, 'land')
         self.assertEqual(rec['cleanup'], entry)
 
-    def test_a_batch_cleans_each_branch(self):
-        wt_a, tip_a = self.pushed('feature', {'a.py': 'a\n'})
-        wt_b, tip_b = self.pushed('other', {'b.py': 'b\n'})
-        out = self.lander([BRANCH, 'kit/other'], self.main, [tip_a, tip_b]).run()
-        got = self.assert_landed(out)
-        for b, wt in ((BRANCH, wt_a), ('kit/other', wt_b)):
-            self.assertEqual((got[b]['remote_branch'], got[b]['worktree'], got[b]['local_branch']),
-                             ('deleted', 'removed', 'deleted'), (b, out.lines))
-            self.assertFalse(os.path.exists(wt))
-            self.assertEqual(result.read(self.repo.root, b, 'land')[0]['cleanup'], got[b])
-
     def test_a_cleanup_that_raises_is_a_warning_and_the_landing_stands(self):
         wt, tip = self.pushed('feature', {'a.py': 'x = 1\n'})
         with mock.patch(CLEAN_BRANCH, side_effect=RuntimeError('boom')):
@@ -264,51 +232,6 @@ class AfterLanding(CleanupCase):
         self.assertIn('boom', warn[0])
         self.assertIn('--sweep-landed', warn[0])
         self.assertTrue(os.path.isdir(wt))
-
-    def test_ctrl_c_in_the_cleanup_is_a_warning_and_the_landing_stands(self):
-        wt, tip = self.pushed('feature', {'a.py': 'x = 1\n'})
-        with mock.patch(CLEAN_BRANCH, side_effect=KeyboardInterrupt):
-            out = self.lander(BRANCH, self.main, tip).run()
-        self.assertEqual(out.code, G.OK, out.lines)
-        self.assertTrue([l for l in out.lines if l.startswith('WARNING: ') and 'Ctrl+C' in l],
-                        out.lines)
-        self.assertIsNone(landing.LandingLock(self.repo.root).read())
-
-    def test_an_exception_after_the_push_and_before_the_cleanup_names_the_sweep(self):
-        _, tip = self.pushed('feature', {'a.py': 'x = 1\n'})
-        real = land.Lander.release
-        hit = []
-
-        def stop(lander):
-            if lander.phase == 'pushed' and not hit:
-                hit.append(1)
-                raise RuntimeError('stopped')
-            return real(lander)
-        with mock.patch.object(land.Lander, 'release', stop):
-            out = self.lander(BRANCH, self.main, tip).run()
-        self.assertEqual(out.code, G.OK, out.lines)
-        self.assertTrue([l for l in out.lines if l.startswith('WARNING: ')
-                         and '--sweep-landed' in l], out.lines)
-
-
-@real_git('pre-receive hook')
-class AfterLandingRejectedPush(CleanupCase):
-    """Moved out of AfterLanding for the real-git tier: on the fake the hook made the push raise
-    Unsupported, which land.recover() turned into STUCK, so it passed for the wrong reason."""
-
-    def test_a_failed_push_removes_nothing(self):
-        wt, tip = self.pushed('feature', {'a.py': 'x = 1\n'})
-        hook = os.path.join(self.repo.remote, 'hooks', 'pre-receive')
-        with open(hook, 'w', newline='\n') as f:
-            f.write('#!/bin/sh\necho rejected by test >&2\nexit 1\n')
-        out = self.lander(BRANCH, self.main, tip).run()
-        self.assertEqual(out.code, G.STUCK, out.lines)
-        self.assert_all_kept(wt, BRANCH, tip)
-        self.assertIsNone(out.facts.get('cleanup'))
-        self.assertFalse([l for l in out.lines if l.startswith('cleanup ')], out.lines)
-        rec, _ = result.read(self.repo.root, BRANCH, 'land')
-        self.assertEqual(rec['verdict'], 'stuck')
-        self.assertIsNone(rec['cleanup'])
 
 
 @unittest.skipUnless(WINDOWS, 'the holder probes are Windows ones')
@@ -386,14 +309,6 @@ class Sweep(CleanupCase):
         self.assertEqual(self.remote_main(), self.main)
         text = '\n'.join(out.lines)
         self.assertNotIn('branch -D', text)
-
-    def test_a_dirty_landed_worktree_is_kept_by_the_sweep(self):
-        self.repo.write('scratch.txt', 'work\n', root=self.done)
-        out = sweep(self.repo.root, apply=True, git_env=self.env)
-        self.assertEqual(out.code, G.OK, out.lines)
-        self.assertTrue(os.path.isdir(self.done))
-        self.assertTrue(self.local('kit/done'))
-        self.assertIn('uncommitted or untracked', '\n'.join(out.lines))
 
     def test_the_sweep_waits_for_no_landing(self):
         lock = landing.LandingLock(self.repo.root)

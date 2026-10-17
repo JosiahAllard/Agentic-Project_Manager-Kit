@@ -9,3 +9,6 @@ The one rules file for every agent host; `CLAUDE.md` imports it.
 - Tools outside this repo (a repository's own tools, an older kit) are reference only. Never edit them.
 - A kit coordinator's state note lives outside the repo, in the kit-coordinator subfolder of the machine's agent temp folder (`state-<session>.md`): an untracked file in the main checkout makes `gate.py land` refuse. `docs/ops/*.local.md` is git-ignored as a backstop.
 - Heavy runs (the full test suite) go through `python tools/gate.py --full`; it takes the machine lock itself. From another directory: `python <worktree>/tools/gate.py -C <worktree> --full`, both absolute (docs/gate.md "The caller's checkout").
+- Never put the owner's personal details (email address, name, account names) in anything sent off this machine.
+- Never chain a write (commit, merge, reset, backlog.py write, landing command) with other commands in one shell call.
+- A safety-check or hook refusal is final: stop at the first, report it verbatim; no retry, rewording, other shell or agent.
