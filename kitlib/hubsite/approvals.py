@@ -501,6 +501,8 @@ class Verifier(object):
     def verify(self, doc_id, repo, head, blobs, commit=None):
         """(True, '') only when the server answers valid true for this change (and, given a
         `commit`, the approval was consumed by it: check's commit); else (False, why)."""
+        if commit is not None and not commit:   # the client drops an empty value: unbound
+            return False, WHY_COMMIT
         try:
             files = json.dumps(blobs, sort_keys=True, separators=(',', ':'))
             query = {'repo': repo, 'head': head, 'files': files}

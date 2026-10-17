@@ -515,6 +515,12 @@ class VerifierTest(unittest.TestCase):
         self.assertEqual(client.calls[0][3], {'repo': URL, 'head': HEAD, 'files': '{}',
                                               'commit': COMMIT})
 
+    def test_an_empty_commit_is_refused_without_asking_the_server(self):
+        client = FakeClient({'ok': True, 'valid': True, 'why': ''})
+        self.assertEqual(ap.Verifier(client).verify('A-1', URL, HEAD, {}, commit=''),
+                         (False, ap.WHY_COMMIT))
+        self.assertEqual(client.calls, [])
+
     def test_any_other_answer_fails_closed(self):
         for answer in ({'ok': True, 'valid': False, 'why': ap.WHY_FILES},
                        {'ok': True, 'valid': 'true'}, {'ok': True, 'valid': 1}, {'ok': True},
