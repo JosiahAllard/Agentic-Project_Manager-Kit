@@ -10,6 +10,7 @@ from unittest import mock
 
 from kitlib.hubsite import api, auth, httpd
 from kitlib.hubsite.api import AGENT, ANY, BASE, OWNER
+from tests.gitfixture import TempRepo
 from tests.hubsite import httpfix
 from tests.hubsite import test_api_roles as roles
 from tests.hubsite.httpfix import TIMEOUT, get, post, send
@@ -484,9 +485,14 @@ class WriteCase(httpfix.ListenerCase):
 # ------------------------------------------------------------------ the api behind it
 class ApiCase(httpfix.ListenerCase):
     def test_every_route_answers_its_role_and_never_a_500(self):
-        lis = self.listener()
+        git = TempRepo()                # the checkout POST /approvals reads its bases from
+        self.addCleanup(git.cleanup)
+        lis = self.listener(api.Api(self.store, views=httpfix.Views(), clock=httpfix.CLOCK,
+                                    approval_key=lambda: roles.KEY, checkout=lambda r: git.root))
         for route in api.ROUTES:
             seed, body, query = roles.ROWS[roles.key(route)]
+            if roles.key(route) == ('POST', '/approvals'):
+                body = dict(body, head=git.initial)
             for role, token in ((OWNER, self.owner), (AGENT, self.agent)):
                 with self.subTest(route=route.method + ' ' + route.pattern, role=role):
                     doc_id = seed(self.store) if seed else 'X-1'

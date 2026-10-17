@@ -310,6 +310,34 @@ class ServeCase(unittest.TestCase):
 
 
 class BuildCase(ServeCase):
+    def test_the_api_reads_the_approval_key_and_finds_a_checkout_by_its_remote(self):
+        from kitlib.hubsite import approvals
+        lists = [[('alpha', 'X:\\alpha'), ('beta', 'X:\\beta')]]
+
+        class Repos(FakeBacklog):
+            def repos(self):
+                if isinstance(lists[0], Exception):
+                    raise lists[0]
+                return lists[0]
+
+        ids = {'X:\\alpha': 'github.com/team/alpha', 'X:\\beta': 'github.com/team/beta'}
+        patcher = mock.patch.object(approvals, 'remote_id', lambda root: (
+            ids.get(root), None if root in ids else 'no remote'))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        hub = self.build(backlog=lambda refresh_s: Repos(self.calls))
+        key = hub.api.approval_key()
+        self.assertIsNotNone(key)
+        self.assertEqual(key, auth.read_approval_key(self.tokens))
+        self.assertNotIn(key, (self.owner, self.agent))
+        self.assertEqual(hub.api.checkout('github.com/team/beta'), 'X:\\beta')
+        self.assertIsNone(hub.api.checkout('github.com/team/gamma'))
+        lists[0] = KeyError('no list')                  # a list that cannot be read: none
+        self.assertIsNone(hub.api.checkout('github.com/team/beta'))
+        hub.close()
+        # no backlog at all: no checkout
+        self.assertIsNone(self.build().api.checkout('github.com/team/beta'))
+
     def test_health_answers_on_the_bound_port_and_a_foreign_host_is_refused(self):
         hub = self.build()
         self.assertIsInstance(hub.listeners, list)
@@ -2336,6 +2364,17 @@ class TunnelCase(ServeCase):
                 self.assertFalse(thread.is_alive(), 'the key fetch thread never ended')
         # was assertEqual(hub.tunnel, serve.TUNNEL_BOUND): a closed hub says it is closed
         self.assertEqual(hub.tunnel, 'closed')
+
+    def test_the_strong_pairing_route_is_served_on_the_tunnel_port_alone(self):
+        hub = self.build()
+        hub.start()
+        local, tunnelled = hub.listeners
+        r = send(tunnelled.port, 'POST', httpd.STRONG_PAIR_ROUTE,
+                 [(tunnel.HEADER, ak.token(ak.KEY_A)), ('Content-Type', httpd.JSON),
+                  ('Origin', 'https://hub.example.invalid')], b'', host='hub.example.invalid')
+        self.assertEqual(r.status, 200, r.body)
+        self.assertTrue(r.json()['path'].startswith(httpd.PAIR_PATH + '?code='), r.body)
+        self.assertEqual(post(local.port, httpd.STRONG_PAIR_ROUTE, None, self.owner).status, 404)
 
     def test_a_closed_hub_says_closed_of_its_tunnel_and_a_running_one_never_does(self):
         hub = self.build()

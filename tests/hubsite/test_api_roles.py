@@ -93,7 +93,8 @@ def seed_approval(store, decision=None):
     now = datetime.datetime.fromisoformat(CLOCK())
     doc = ap.new_doc(URL, 't', 'a' * 40, [{'path': 'x.md', 'base_blob': None,
                                             'content': 'x\n'}], now)
-    doc_id = 'A-1'
+    # an id not yet used, so a store seeded again (tests.hubsite.test_httpd) starts at version 1
+    doc_id = 'A-%d' % (len(store.snapshot()[1].get('approvals') or {}) + 1)
     if decision:
         doc.update(ap.decide_fields(KEY, doc_id, doc, decision, now))
     store.put('approvals', doc_id, doc)      # the id the signature covers
