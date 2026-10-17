@@ -3,10 +3,10 @@ hub site design, section 2 "HTTP API" and section 9).
 
   ROUTES     the table every transport iterates: Route(method, pattern, role, handler). A pattern
              is a full path under BASE; a `{name}` segment takes one path segment. role is OWNER,
-             AGENT or ANY: who may call it.
+             AGENT, ANY or APPROVER: who may call it ("Roles").
   Api(store, views=None, clock=None, session_keys=None, now=None)
              .call(method, path, role, body=None, query=None, via='', raise_unexpected=False,
-                   agent_words=False) -> (status, object)
+                   agent_words=False, strong=False) -> (status, object)
              via names the transport (web, desktop-mcp, cli, tunnel, ...); every write records
              it as the document's `via` (`api` when none is given), an answer in `answer.via`
              too. A delete leaves no document to carry it. raise_unexpected: an exception
@@ -20,6 +20,13 @@ Roles. The caller resolves who is asking and passes OWNER or AGENT; this module 
 A role that is neither is refused before the path is looked at, a route whose role is not one of
 ROLES is refused for everybody, and the check runs before the handler reads the body. So a route
 added without a role answers `forbidden`, never the data.
+APPROVER is a route role and never a caller: such a route answers only OWNER with strong=True,
+the owner the transport saw log in through Cloudflare Access (kitlib.hubsite.tunnel's gate marks
+that request, kitlib.hubsite.httpd passes it on). Every other caller is refused `forbidden`,
+field `role`, with NOT_STRONG: the owner token, a browser session paired from it and an agent are
+never strong. strong is a call argument, never a field of the body or the query, and it opens no
+other route: on OWNER, AGENT and ANY routes the role alone decides. A handler reads it as
+Request.strong. No route of ROUTES names APPROVER yet (KIT-HUB-APPROVALS stage B2 adds them).
 
 Fields. A write route names the body fields it takes; any other field is refused (`invalid`, the
 field named), so a body cannot carry a field another role owns (an agent posting a question
@@ -124,8 +131,12 @@ from .store import HubError
 BASE = '/api/v1'
 API_VERSION = 'v1'
 OWNER, AGENT, ANY = 'owner', 'agent', 'any'
-ROLES = (OWNER, AGENT, ANY)         # what a route may ask for
+APPROVER = 'approver'               # a route for the strong owner alone ("Roles")
+ROLES = (OWNER, AGENT, ANY, APPROVER)   # what a route may ask for
 CALLERS = (OWNER, AGENT)            # what a caller may be
+# why a route of role APPROVER refused a caller who is not the strong owner
+NOT_STRONG = ('%s %s needs the owner logged in through Cloudflare Access: the owner token, a '
+              'browser paired from it and an agent are not enough')
 STATUS = {'invalid': 400, 'forbidden': 403, 'not_found': 404, 'conflict': 409, 'store': 503,
           'unavailable': 503, 'internal': 500}
 WAIT_MAX_S = 55
@@ -141,7 +152,7 @@ DAYS_MAX = 3650
 AGENT_SAYS = {'store': 'the hub store is not available: the owner sees why'}
 
 Route = collections.namedtuple('Route', 'method pattern role handler')
-Request = collections.namedtuple('Request', 'role params body query via')
+Request = collections.namedtuple('Request', 'role params body query via strong')
 
 _TRUE = ('1', 'true', 'yes', 'on')
 _FALSE = ('', '0', 'false', 'no', 'off')
@@ -371,20 +382,23 @@ class Api(object):
         self._handed = {}           # (kind, id) -> (session key, `now` of the first hand-over)
 
     def call(self, method, path, role, body=None, query=None, via='', raise_unexpected=False,
-             agent_words=False):
+             agent_words=False, strong=False):
         """(status, object) for one request. role is OWNER or AGENT as the caller resolved it;
         body is the decoded JSON body or None; query is {name: value}; via names the transport
         (web, cli, ...) and is recorded on every write. With raise_unexpected an exception that
         is no HubError is raised, not answered: the caller logs it and words its own 500. With
         agent_words=True an error answer says what an agent is told (module docstring), to the
         owner too; only False leaves the owner the error's own text, so a value that is neither
-        is read as True. The role decides what the request may do either way."""
+        is read as True. The role decides what the request may do either way. strong=True says
+        the caller is the owner logged in through Cloudflare Access (module docstring, "Roles");
+        it counts only for OWNER, and any value but True is not strong."""
         # read before the handler copies any data: a write in between then has a later
         # revision, so a client waiting since this one is told of it
         revision = self.store.revision
         full = role == OWNER and agent_words is False       # the error's own text: paths and all
+        strong = strong is True and role == OWNER
         try:
-            status, obj = 200, self._call(method, path, role, body, query, via)
+            status, obj = 200, self._call(method, path, role, body, query, via, strong)
         except HubError as e:
             said = e.message if full else AGENT_SAYS.get(e.code, e.message)
             status, obj = STATUS.get(e.code, 500), error_body(e.code, said, e.field)
@@ -396,7 +410,7 @@ class Api(object):
         obj.setdefault('revision', revision)
         return status, obj
 
-    def _call(self, method, path, role, body, query, via):
+    def _call(self, method, path, role, body, query, via, strong):
         if not isinstance(role, str) or role not in CALLERS:
             raise HubError('forbidden', 'this request carries no owner or agent credential',
                            'role')
@@ -407,13 +421,16 @@ class Api(object):
         if route.role not in ROLES:
             raise HubError('forbidden', 'the route %s %s names no role, so nobody may call it'
                            % (route.method, route.pattern), 'role')
-        if route.role != ANY and route.role != role:
+        if route.role == APPROVER:
+            if not (role == OWNER and strong is True):
+                raise HubError('forbidden', NOT_STRONG % (route.method, route.pattern), 'role')
+        elif route.role != ANY and route.role != role:
             raise HubError('forbidden', '%s %s is for the %s, not the %s'
                            % (route.method, route.pattern, route.role, role), 'role')
         if query is not None and not isinstance(query, dict):
             raise _invalid('the query is an object of names and values', 'query')
         out = route.handler(self, Request(role, params, body, query, via if isinstance(via, str)
-                                          else ''))
+                                          else '', strong))
         if not isinstance(out, dict):
             raise HubError('internal', 'the handler of %s gave no object' % route.pattern)
         return out

@@ -1376,7 +1376,8 @@ class TunnelStrongTest(TunnelCase):
         # an Access token is no credential on the local port, beside the owner token or alone
         for token in (self.owner, None):
             r = post(self.lport, DECIDE, {}, token=token, headers=[(tunnel.HEADER, self.good)])
-            self.assertEqual(r.status, 403 if token else 401, r.body)
+            self.assertEqual((r.status, r.code(), r.json()['error']['field']),
+                             (403, 'forbidden', 'role'), r.body)
         self.assertEqual(self.calls, [])
 
     def test_a_refused_tunnel_request_reaches_nothing(self):

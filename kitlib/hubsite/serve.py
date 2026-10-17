@@ -750,9 +750,11 @@ def health_route(api, views, tunnel='', fixed=False):
     route, the answer is _fixed_health's instead: the Api is asked all the same, and nothing of
     its answer but a fixed word leaves."""
     def route(request):
-        # raise_unexpected: as the listener's own Api call, so an error is logged there
+        # raise_unexpected: as the listener's own Api call, so an error is logged there; and
+        # strong, as that call, only for the request its gate marked (httpd.strong_words)
         status, obj = api.call(request.method, request.path, request.role, request.body,
-                               request.query, request.via, raise_unexpected=True)
+                               request.query, request.via, raise_unexpected=True,
+                               **httpd.strong_words(request))
         said = tunnel() if callable(tunnel) else tunnel
         if fixed:
             return _fixed_health(status, obj, said)

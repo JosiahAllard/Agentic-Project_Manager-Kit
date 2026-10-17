@@ -6,7 +6,7 @@
         cannot be bound.
   check(access_settings)        None when the Access settings can serve, else TunnelConfigError
   gate(access_settings, keys, now=None, log=None, clock=None) -> the listener's Gate
-  Gate      (request) -> auth.OWNER or the one refusal
+  Gate      (request) -> auth.OWNER (and request.strong = True) or the one refusal
             .stop()             shut it for good: every request from now on is refused
             .keys()             (True, '') when there are keys to check a token with, else
                                 (False, one of access.REASONS or '')
@@ -22,9 +22,11 @@ Who may pass. A request passes the gate only with a valid Cloudflare Access toke
 (kitlib.hubsite.access.verify: this team's signature, this audience, not expired, an email of the
 allow-list) in HEADER, sent exactly once. There is no exception: not for a path, a method, a
 static file or GET health, since httpd asks the gate before it reads any of them. A valid token
-makes the caller the owner. Nothing else is read: a local token, a session cookie, a token in
-the query or in a cookie are all no credential here, and a local token beside a valid Access
-token changes nothing.
+makes the caller the strong owner: the gate answers auth.OWNER and sets request.strong = True,
+so a route of role api.APPROVER answers it (httpd's step 1). A request refused here is never
+marked, and one that cannot carry the mark is refused (GATE_ERROR). Nothing else is read: a
+local token, a session cookie, a token in the query or in a cookie are all no credential here,
+and a local token beside a valid Access token changes nothing.
 
 What a refused caller sees. One answer for every reason: 403 with the Api's error shape, code
 `forbidden`, field `access`, the message REFUSED. It says nothing of why, sets no header, and is
@@ -207,7 +209,8 @@ def host_note(log, clock=None):
 
 class Gate(object):
     """The tunnel listener's gate (the module docstring), as gate() makes it. Called with a
-    request it answers auth.OWNER when HEADER holds a valid Access token, else the one refusal.
+    request it answers auth.OWNER, and marks the request strong, when HEADER holds a valid Access
+    token, else the one refusal.
     Whatever goes wrong in a call is the refusal, never a pass and never an exception."""
 
     def __init__(self, access_settings, keys, now=None, log=None, clock=None):
@@ -228,6 +231,9 @@ class Gate(object):
                                   self._now())
                     # a stop() that came while the token was being checked refuses it too
                     if not self._stopped.is_set():
+                        # the Access login makes the strong owner; a request that cannot carry
+                        # the mark raises here and is refused
+                        request.strong = True
                         return auth.OWNER
         except access.AccessError as e:
             reason, detail = e.reason, e.detail

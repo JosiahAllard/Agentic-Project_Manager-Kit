@@ -84,7 +84,10 @@ repository; Questions, To do and Docs also by id or title.
   (`kitlib.hubsite.tunnel`). The tool never runs the tunnel program. Both listeners bind the
   loopback address only, and `hub.port` and `hub.tunnel_port` must differ. If `hub.access` is
   incomplete the tunnel stays off and the local listener keeps serving; `status` says why. The
-  owner's step-by-step guide to reach the hub from a phone: docs/hub-remote-access.md. The
+  owner's step-by-step guide to reach the hub from a phone: docs/hub-remote-access.md. A valid
+  Access token also makes the caller the strong owner, the only caller a route of role
+  `approver` (`kitlib.hubsite.api.APPROVER`) answers (docs/hub-remote-access.md "The strong
+  owner"). The
   health answer through the tunnel holds fixed words only: `ok`, `version`, `store` (`ok`),
   `git` (`ok`, `failed`, `off` or `unknown`) and `tunnel` (`on` or `bound, keys not fetched`);
   no folder, branch, reason or revision. A health answer the server cannot give leaves as its

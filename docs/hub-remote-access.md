@@ -268,6 +268,16 @@ config and restart the hub (step 8).
 - A write through the tunnel is recorded with the source `tunnel`.
 - The health answer through the tunnel holds fixed words only (no store folder, no git reason).
 
+## The strong owner
+
+A request that passes the tunnel's Access check makes you the strong owner: the tunnel gate
+(`kitlib.hubsite.tunnel.Gate`) marks the request, and `kitlib.hubsite.httpd` passes the mark to
+the API as `strong=True`. A route of role `approver` (`kitlib.hubsite.api.APPROVER`) answers the
+strong owner and nobody else; every other caller gets 403 `forbidden`, field `role`, with a
+message that names the Cloudflare Access login. The owner token, a PC browser paired from it and
+an agent are never strong, on either port. Today the tunnel is the only way to be strong. No
+route of the hub uses the `approver` role yet.
+
 ## Checked against Cloudflare's documentation
 
 Steps 3 to 6 follow developers.cloudflare.com (downloads, create a remotely-managed tunnel,
