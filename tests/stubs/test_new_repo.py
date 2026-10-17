@@ -20,7 +20,13 @@ SCRIPT = os.path.join(stubs.KIT_ROOT, 'installer', 'new-repo.ps1')
 OWNER = 'owner@example.invalid'
 AGENT = 'agent@example.invalid'
 
+# Daily only (kitlib/tooldeps/tiers.py REAL_GIT_MODULES): ~100 s of PowerShell, run in the real-git
+# pass of `kit_tests --both-tiers`, or by hand with `kit_tests --real-git`.
+daily_only = unittest.skipIf(os.environ.get('KIT_FAKE_GIT') != '0',
+                             'daily tier only: run with KIT_FAKE_GIT=0 (kit_tests --real-git)')
 
+
+@daily_only
 class NewRepo(unittest.TestCase):
 
     def setUp(self):
@@ -215,6 +221,7 @@ class NewRepo(unittest.TestCase):
         self.assertNotIn('\\303', out)
 
 
+@daily_only
 class PmData(unittest.TestCase):
     """-PmData/-PrivateRemote (docs/pm-data-branch.md "Other users"). pm_data.py init acts on the
     kit's own repository, so these run a copy of the kit (installer, tools, kitlib, templates) in a

@@ -3,8 +3,8 @@
 A coordinator queues a branch after reading its review (tools/verdict.py add); a reviewer never
 does, so no reviewer can queue its own verdict. After a main sync of a queued branch the
 coordinator carries the verdict to the new head (tools/verdict.py carry) when the sync is all that
-changed (kitlib.gate.carry). A landing takes what is ready (ready()) and drops
-what it landed.
+changed (kitlib.gate.carry). A landing reads its branch's entry and never removes it;
+tools/verdict.py list drops each entry that landed or whose branch is gone (expire()).
 
 Where: `<git common dir>/kit-verdicts/<branch>.json`, the branch name percent-encoded
 (urllib.parse.quote with no safe characters: '/' is '%2F', '%' is '%25'), so the file name gives
@@ -546,6 +546,40 @@ def mark_failed(common_dir, branch, why, tip=None):
         entry.update(state=FAILED, last_result=why.strip())
         _write(path, entry)
         return True
+
+
+def expired(common_dir, entry, main):
+    """Why `entry` waits to land no more, or None: `landed` when its tip is an ancestor of `main`
+    (main as fetched, a commit), `superseded` when it is not and `refs/heads/<branch>` is gone.
+    None, the entry kept, whenever that cannot be told: no `main`, or git gives no answer."""
+    if not main:
+        return None
+    landed, _ = refs.is_ancestor(entry['tip'], main, common_dir)
+    if landed:
+        return 'landed: %s is in main %s' % (entry['tip'][:10], main[:10])
+    if landed is None:
+        return None
+    head, _ = refs.ref_commit('refs/heads/%s' % entry['branch'], common_dir)
+    if head == '':
+        return 'superseded: there is no branch %s' % entry['branch']
+    return None
+
+
+def expire(common_dir, items, main):
+    """Drop each of the entries `items` that expired(): `[(entry, why)]` for those dropped. Git runs
+    outside the queue lock; each drop is drop(tip=the entry's tip), so an entry re-added at another
+    tip meanwhile is kept, and one that cannot be dropped (VerdictError) is kept too."""
+    gone = []
+    for e in items:
+        why = expired(common_dir, e, main)
+        if not why:
+            continue
+        try:
+            if drop(common_dir, e['branch'], tip=e['tip']):
+                gone.append((e, why))
+        except VerdictError:
+            continue
+    return gone
 
 
 def ready(items, tip_of, strict_hits, batch_max):

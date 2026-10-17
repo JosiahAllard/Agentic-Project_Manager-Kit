@@ -640,6 +640,128 @@ class RenewTest(PersistCase):
         self.assertEqual(self.creds.role_for({}, self.cookie(later[1])), auth.OWNER)
 
 
+class ApprovalKeyTest(Case):
+    def key_path(self):
+        return os.path.join(self.folder, auth.APPROVAL_FILE)
+
+    def test_the_key_is_made_beside_the_tokens_and_kept(self):
+        self.assertIsNone(auth.read_approval_key(self.folder))      # ensure_tokens makes none
+        path = auth.ensure_approval_key(self.folder)
+        self.assertEqual(path, self.key_path())
+        self.assertEqual(sorted(os.listdir(self.folder)),
+                         ['agent.token', 'approval.key', 'owner.token'])
+        key = auth.read_approval_key(self.folder)
+        self.assertGreaterEqual(len(key), auth.MIN_TOKEN)
+        self.assertNotIn(key, (self.owner, self.agent))
+        self.assertEqual(auth.ensure_approval_key(self.folder), path)
+        self.assertEqual(auth.read_approval_key(self.folder), key)
+
+    def test_a_key_that_cannot_serve_is_an_error_naming_it_and_is_never_replaced(self):
+        path = self.key_path()
+        for text in ('', 'x' * (auth.MIN_TOKEN - 1), self.owner, self.agent + '\n'):
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write(text)
+            self.assertIsNone(auth.read_approval_key(self.folder), repr(text[:12]))
+            with self.assertRaises(auth.TokenFileError, msg=repr(text[:12])) as cm:
+                auth.ensure_approval_key(self.folder)
+            self.assertIn(path, str(cm.exception))
+            with open(path, encoding='utf-8') as f:
+                self.assertEqual(f.read(), text)
+
+    def test_a_credentials_never_makes_the_key(self):
+        self.creds.pair(self.creds.new_pairing_code(strong=True))
+        self.assertFalse(os.path.exists(self.key_path()))
+
+
+class StrongTest(PersistCase):
+    def setUp(self):
+        PersistCase.setUp(self)
+        auth.ensure_approval_key(self.folder)
+
+    def strong(self, creds=None):
+        creds = creds or self.creds
+        return creds.pair(creds.new_pairing_code(strong=True))
+
+    def test_a_strong_code_pairs_a_strong_session_and_a_plain_code_a_plain_one(self):
+        strong, plain = self.strong(), self.creds.pair(self.creds.new_pairing_code())
+        self.assertEqual(self.creds.seen({}, self.cookie(strong)), (auth.OWNER, None, True))
+        self.assertEqual(self.creds.seen({}, self.cookie(plain)), (auth.OWNER, None, False))
+        self.assertEqual(self.creds.role_for({}, self.cookie(strong)), auth.OWNER)
+        self.assertEqual(self.creds.resolve({}, self.cookie(strong)), (auth.OWNER, None))
+        self.assertEqual(self.creds.seen({}, self.cookie('x' * 43)), (None, None, False))
+
+    def test_only_true_itself_makes_a_strong_code(self):
+        value = self.creds.pair(self.creds.new_pairing_code(strong=1))
+        self.assertIs(self.creds.seen({}, self.cookie(value)).strong, False)
+
+    def test_a_bearer_token_is_never_strong_even_beside_a_strong_cookie(self):
+        value = self.strong()
+        self.assertEqual(self.creds.seen(bearer(self.owner), self.cookie(value)),
+                         (auth.OWNER, None, False))
+        self.assertEqual(self.creds.seen(bearer(self.owner), {}), (auth.OWNER, None, False))
+        self.assertEqual(self.creds.seen(bearer(self.agent), self.cookie(value)),
+                         (auth.AGENT, None, False))
+
+    def test_the_file_entry_is_held_under_the_key_of_both_files(self):
+        value = self.strong()
+        key = auth.read_approval_key(self.folder)
+        derived = hmac.new(key.encode('ascii'), auth.STRONG_LABEL + self.owner.encode('ascii'),
+                           hashlib.sha256).hexdigest()
+        self.assertEqual([e['mac'] for e in self.read()['sessions']], [mac(derived, value)])
+        # the owner token alone makes a plain entry, never a strong one
+        forged = 'f' * 43
+        self.write({'v': auth.SESSIONS_VERSION,
+                    'sessions': [{'mac': mac(self.owner, forged),
+                                  'exp': int(self.clock.now) + auth.SESSION_TTL_S}]})
+        self.assertEqual(self.fresh().seen({}, self.cookie(forged)), (auth.OWNER, None, False))
+
+    def test_a_strong_session_survives_a_restart_and_renews_strong(self):
+        start = self.clock.now
+        value = self.strong()
+        again = self.fresh()
+        self.assertEqual(again.seen({}, self.cookie(value)), (auth.OWNER, None, True))
+        self.clock.now = start + auth.SESSION_TTL_S // 2 + 1
+        self.assertEqual(again.seen({}, self.cookie(value)), (auth.OWNER, value, True))
+        self.clock.now = start + auth.SESSION_TTL_S + 1     # alive only through the renewal
+        self.assertEqual(self.fresh().seen({}, self.cookie(value)), (auth.OWNER, None, True))
+
+    def test_replacing_the_approval_key_ends_every_strong_session_only(self):
+        strong, plain = self.strong(), self.creds.pair(self.creds.new_pairing_code())
+        os.remove(os.path.join(self.folder, auth.APPROVAL_FILE))
+        auth.ensure_approval_key(self.folder)
+        self.assertEqual(self.creds.seen({}, self.cookie(strong)), (None, None, False))
+        self.assertEqual(self.creds.seen({}, self.cookie(plain)), (auth.OWNER, None, False))
+
+    def test_replacing_the_owner_token_ends_the_strong_sessions_too(self):
+        value = self.strong()
+        self.put(auth.OWNER, 'n' * 43)
+        self.assertEqual(self.creds.seen({}, self.cookie(value)), (None, None, False))
+
+    def test_with_no_approval_key_a_strong_session_is_no_role(self):
+        value = self.strong()
+        os.remove(os.path.join(self.folder, auth.APPROVAL_FILE))
+        self.assertEqual(self.creds.seen({}, self.cookie(value)), (None, None, False))
+
+    def test_a_strong_code_with_no_approval_key_pairs_nothing_and_is_spent(self):
+        os.remove(os.path.join(self.folder, auth.APPROVAL_FILE))
+        code = self.creds.new_pairing_code(strong=True)
+        self.assertIsNone(self.creds.pair(code))
+        auth.ensure_approval_key(self.folder)
+        self.assertIsNone(self.creds.pair(code))
+        self.assertFalse(os.path.exists(self.path))
+        # a key equal to the owner token is no key either
+        with open(os.path.join(self.folder, auth.APPROVAL_FILE), 'w', encoding='ascii') as f:
+            f.write(self.owner)
+        self.assertIsNone(self.strong())
+
+    def test_unpair_all_ends_the_strong_sessions_and_codes(self):
+        value = self.strong()
+        code = self.creds.new_pairing_code(strong=True)
+        self.creds.unpair_all()
+        self.assertEqual(self.creds.seen({}, self.cookie(value)), (None, None, False))
+        self.assertIsNone(self.creds.pair(code))
+
+
 class ParseCookiesTest(unittest.TestCase):
     def test_a_cookie_header_is_split_into_names_and_values(self):
         self.assertEqual(auth.parse_cookies('a=1; b = 2 ;c=x=y; junk; =z; a=3'),

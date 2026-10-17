@@ -1,6 +1,6 @@
 ---
 name: worker
-description: Default coder for routine low- and medium-risk work - additive content, UI, pure logic with tests, small known-cause fixes, behaviour-neutral moves, plan-only and sync work. Networking, concurrency, ordering, CI, crash hunts or design go to `{{agent:senior-worker}}` or `{{agent:strong-worker}}`.
+description: Default coder for routine low- and medium-risk work - additive content, UI, pure logic with tests, small known-cause fixes, behaviour-neutral moves, plan-only and sync work. Networking, concurrency, ordering, CI, crash hunts or design go to `{{agent:strong-worker}}` or `{{agent:senior-worker}}`; small, well-defined low-risk changes can go to `{{agent:weak-worker}}`.
 tier: standard
 effort: medium
 sandbox: workspace-write

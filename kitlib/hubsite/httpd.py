@@ -12,12 +12,14 @@
       .await_waits(n, timeout)     block until n waits are counted (tests need no sleep)
       .await_idle(n, timeout)      ... until n connections are open with no request read yet
       .await_reads(n, timeout)     ... until n writes are having their body read
-  Request   .method .target .path .query .headers .client .port, then .role .via .body
+  Request   .method .target .path .query .headers .client .port, then .role .strong .via .body
   Response(status, body=b'', content_type=JSON, headers=())
   json_response(status, obj, headers=())    refusal(status, code, message, field='', headers=())
+  strong_words(request)            {'strong': True} for the strong owner's request, else {}
   local_hosts(host, port)          the local listener's host_rule
   local_gate(creds)                the local listener's gate, over kitlib.hubsite.auth.Credentials
   pair_routes(creds)               the local listener's pairing routes (PAIR_ROUTE, PAIR_PATH)
+  strong_pair_route(creds)         the tunnel listener's strong pairing route (STRONG_PAIR_ROUTE)
   stop_route(creds, request_stop, identity)    the local listener's stop route (STOP_ROUTE)
   static_file(static_dir, path)    the file a URL path names under static_dir, or None
 
@@ -31,6 +33,13 @@ One request, in this order, for every method and every path:
      its routes with `forbidden`; a static file needs none) or a Response, which is sent as it
      stands and ends the request. A listener with no gate refuses everything, and a gate that
      raises is a 500: neither lets a request through. `listener.gate` may be set until start().
+     A gate may also set request.strong = True: the caller is the strong owner, the one an
+     api.APPROVER route answers. It counts only as True itself and only for auth.OWNER; for
+     any other answer it is set back to False, and the Api is told strong=True for that request
+     alone (strong_words). kitlib.hubsite.tunnel's gate sets it for a valid Access token, and
+     local_gate for the cookie of a strong session alone (auth, "Strong sessions"), which only
+     a code from strong_pair_route pairs: the owner token, a browser paired from it and an
+     agent are never strong.
   2. host_rule(the Host header or None, the port), when the listener has one: False is a 403.
      local_hosts allows 127.0.0.1:<port> and localhost:<port>, which is what stops a page on
      another origin from reaching this server under a name it controls (DNS rebinding).
@@ -135,6 +144,9 @@ TUNNEL_VIA = 'tunnel'               # the tunnel listener's own source: no VIA_H
 PAIR_ROUTE = _api.BASE + '/pair'    # POST, the owner's token: a one-time link for the browser
 PAIR_PATH = '/pair'                 # GET ?code=...: redeems it and sets the session cookie
 UNPAIR_ROUTE = _api.BASE + '/unpair'    # POST, the owner's token: ends every browser session
+# POST on the tunnel listener, the strong owner only: a one-time link that pairs the PC's browser
+# as the strong owner on the local listener (strong_pair_route)
+STRONG_PAIR_ROUTE = _api.BASE + '/pair/strong'
 STOP_ROUTE = _api.BASE + '/stop'    # POST, the owner's token: the server closes (hub.py stop)
 BUSY = 'busy'
 RETRY_AFTER_S = 1
@@ -179,10 +191,11 @@ class Request(object):
     `body` (the decoded JSON of a write, else None) are filled in as the request passes each
     step; a gate sees them empty. `reply_headers` ((name, value) pairs) is what the gate adds to
     whatever answer the request gets, refusals too; they go before the answer's own headers, so
-    a header the answer sets as well (a route's Set-Cookie) comes last and wins."""
+    a header the answer sets as well (a route's Set-Cookie) comes last and wins. `strong` starts
+    False; only a gate sets it (module docstring, step 1)."""
 
     __slots__ = ('method', 'target', 'path', 'query_text', 'query', 'headers', 'client', 'port',
-                 'role', 'via', 'body', 'reply_headers')
+                 'role', 'via', 'body', 'reply_headers', 'strong')
 
     def __init__(self, method, target, headers, client='', port=None):
         self.method = method
@@ -196,6 +209,7 @@ class Request(object):
         self.via = ''
         self.body = None
         self.reply_headers = ()
+        self.strong = False
 
     def header(self, name):
         """The header's value when it was sent exactly once, else None."""
@@ -226,6 +240,12 @@ def refusal(status, code, message, field='', headers=()):
     return json_response(status, _api.error_body(code, message, field), headers)
 
 
+def strong_words(request):
+    """{'strong': True} for a request its gate marked as the strong owner, else {}: the words a
+    route adds to its Api.call (module docstring, step 1)."""
+    return {'strong': True} if request.strong is True and request.role == auth.OWNER else {}
+
+
 def local_hosts(host, port):
     """True when the Host header `host` names this machine's loopback listener at `port`."""
     return isinstance(host, str) and host.lower() in ('%s:%d' % (LOOPBACK, port),
@@ -236,14 +256,18 @@ def local_gate(creds):
     """The local listener's gate: the role `creds` (auth.Credentials) gives the request's
     Authorization header or session cookie, or None. It never answers a Response: a request
     with no credential still reaches the page's files, and the Api refuses it everything else.
-    A session cookie that renewed its session (Credentials.resolve) is sent again with the
-    answer, auth.cookie_header on creds.port, so the browser's copy lives as long."""
+    A session cookie that renewed its session (Credentials.seen) is sent again with the
+    answer, auth.cookie_header on creds.port, so the browser's copy lives as long. The cookie of
+    a strong session marks the request strong (module docstring, step 1); nothing else does."""
     def gate(request):
         cookies = auth.parse_cookies('; '.join(request.headers.get_all('Cookie') or ()))
-        role, renewed = creds.resolve(request.headers, cookies)
-        if renewed is not None:
-            request.reply_headers = (('Set-Cookie', auth.cookie_header(renewed, creds.port)),)
-        return role
+        seen = creds.seen(request.headers, cookies)
+        if seen.renewed is not None:
+            request.reply_headers = (('Set-Cookie', auth.cookie_header(seen.renewed,
+                                                                       creds.port)),)
+        if seen.strong is True and seen.role == auth.OWNER:
+            request.strong = True
+        return seen.role
     return gate
 
 
@@ -257,7 +281,7 @@ def pair_routes(creds):
     unless it is used (auth, "Sessions").
     GET PAIR_PATH?code=...: redeems the code, sets the session cookie (auth.cookie_header on
     creds.port) and sends the browser to "/"; a code that is unknown, expired or already used
-    is a 403.
+    is a 403. A code from strong_pair_route is redeemed here too and pairs a strong session.
     POST UNPAIR_ROUTE, the owner's token only, as PAIR_ROUTE: {"ok": true}; every browser
     session and every pairing code not yet redeemed ends (Credentials.unpair_all)."""
     def owners(request):
@@ -288,6 +312,31 @@ def pair_routes(creds):
 
     return {('POST', PAIR_ROUTE): new, ('GET', PAIR_PATH): redeem,
             ('POST', UNPAIR_ROUTE): unpair}
+
+
+def strong_pair_route(creds):
+    """The route that lets the owner logged in through Cloudflare Access make the PC's browser
+    the strong owner on the local listener (auth, "Strong sessions"), for the tunnel listener's
+    `routes` alone: the local listener is never given it.
+
+    POST STRONG_PAIR_ROUTE, the strong owner only (the request its gate marked strong;
+    strong_words): {"ok", "ttl", "path", "url"}; `path` is PAIR_PATH with a fresh one-time strong
+    code (Credentials.new_pairing_code(strong=True)), good for `ttl` seconds, and `url` that path
+    on the local listener (LOOPBACK and creds.port; absent for a creds with no port), the link
+    to open on the PC itself. Anyone
+    else is a 403 `forbidden` on the field `role`, and no code is made."""
+    def new(request):
+        if not strong_words(request):
+            return refusal(403, 'forbidden', 'only the owner logged in through Cloudflare '
+                           'Access may pair a browser as the strong owner', 'role')
+        code = creds.new_pairing_code(strong=True)
+        path = '%s?code=%s' % (PAIR_PATH, code)
+        said = {'ok': True, 'ttl': auth.PAIR_TTL_S, 'path': path}
+        if isinstance(creds.port, int) and not isinstance(creds.port, bool):
+            said['url'] = 'http://%s:%d%s' % (LOOPBACK, creds.port, path)
+        return json_response(200, said)
+
+    return {('POST', STRONG_PAIR_ROUTE): new}
 
 
 def _bearer_owner(creds, request):
@@ -557,6 +606,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         if isinstance(answer, Response):
             return answer
         request.role = answer if answer in auth.ROLES else None
+        # a gate's strong mark holds for the owner alone, and only as True itself
+        request.strong = request.strong is True and request.role == auth.OWNER
         # 2. the name the client reached this server under
         host = request.header('Host')
         if listener.host_rule is not None and not listener.host_rule(host, listener.port):
@@ -675,9 +726,10 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             return refusal(429, BUSY, 'this server already holds its %d waits: ask again in a '
                            'moment' % listener.max_waits, 'wait',
                            (('Retry-After', str(RETRY_AFTER_S)),))
-        # agent_words is passed only by a listener made with it, so the local listener's call is
-        # the one it always was
+        # agent_words is passed only by a listener made with it, and strong only for a request
+        # its gate marked, so the local listener's call is the one it always was
         words = {'agent_words': True} if listener.agent_words else {}
+        words.update(strong_words(request))
         try:
             # raise_unexpected: an error the Api did not expect comes here as an exception, so
             # _handle logs its cause and answers the fixed 500, to the owner as to anyone

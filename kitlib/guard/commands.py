@@ -1689,7 +1689,7 @@ def git_call(inv):
             if k + 1 >= len(a) or a[k + 1].dyn:
                 d, unknown = None, True
             elif not blind:                     # after --git-dir and the like, -C moves only the cwd
-                d = sh.resolve_path(a[k + 1].text, None if unknown else d)
+                d = sh.resolve_path(a[k + 1].text, None if unknown else d, home=inv.cmd.home)
                 unknown = d is None
             k += 2
             continue

@@ -364,6 +364,10 @@ def collect(sample_s=3.0):
         if pid == 0:
             continue
         d = W.details(pid)
+        if d.get("gone"):
+            # exited since the snapshot. Listed with an unknown creation time it would pass as the
+            # live parent of any process whose dead parent's pid it had taken (classify).
+            continue
         age = (now - d["ctime"]) / 1e7 if d["ctime"] else None
         cpu_pct = None
         f = first.get(pid)

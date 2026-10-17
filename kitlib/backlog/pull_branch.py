@@ -40,31 +40,58 @@ def refusal(rid, branch, main_branch):
             % (rid, branch, rid, rid))
 
 
-def code_mains(root):
-    """The code repository's main branches when `root` is its PM data worktree (the repository has
-    a PM data record and `root` has the recorded data branch checked out): the main checkout's
-    configured mains (Config.guarded_mains), or FALLBACK_MAINS when that cannot be read. () for
-    any other checkout, or when the PM data record cannot be read (no data branch is known).
-    Failing open there is deliberate: a landing warns that it could not read that store."""
+def _main_checkout(root):
+    """The main checkout's path when `root` is the code repository's PM data worktree (the
+    repository has a PM data record and `root` has the recorded data branch checked out); '' for
+    any other checkout, or when the PM data record cannot be read (no data branch is known); None
+    when it is a PM data repository whose worktrees git cannot list."""
     common, _why = gitrepo.common_dir(root)
     if common is None:
-        return ()
+        return ''
     try:
         record = pmdata.read(common)
     except pmdata.PmDataError:
-        return ()
+        return ''
     if record is None:
-        return ()
+        return ''
     wts, _why = gitrepo.worktrees(root)
     if not wts:
-        return FALLBACK_MAINS
+        return None
     here = [w for w in wts if not w.bare and _same_path(w.path, root)]
     if not here or here[0].branch != record.branch:
+        return ''
+    return wts[0].path
+
+
+def code_mains(root):
+    """The code repository's main branches when `root` is its PM data worktree (_main_checkout):
+    the main checkout's configured mains (Config.guarded_mains), or FALLBACK_MAINS when that
+    cannot be read. () for any other checkout, or when the PM data record cannot be read (no data
+    branch is known). Failing open there is deliberate: a landing warns that it could not read
+    that store."""
+    path = _main_checkout(root)
+    if path == '':
         return ()
+    if path is None:
+        return FALLBACK_MAINS
     try:
-        return tuple(kconfig.load(wts[0].path).guarded_mains())
+        return tuple(kconfig.load(path).guarded_mains())
     except (kconfig.ConfigError, OSError):
         return FALLBACK_MAINS
+
+
+def code_config(root):
+    """The main checkout's Config when `root` is the PM data worktree (_main_checkout), else None;
+    None too when it cannot be read. kitlib.backlog.opener.open_store measures the code main on
+    its `remote` (docs/backlog.md "The fold-in guard"); with None the store's own configuration is
+    used, as for any other checkout."""
+    path = _main_checkout(root)
+    if not path:
+        return None
+    try:
+        return kconfig.load(path)
+    except (kconfig.ConfigError, OSError):
+        return None
 
 
 def _same_path(a, b):
