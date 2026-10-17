@@ -1137,8 +1137,21 @@ class UnplacedGit(MainGit):
         # [Environment]:: is read only as a literal-name GetEnvironmentVariable, and Set-Content
         # writes env: items too, so a computed item path may be one
         self.fail_closed(["[Environment]::SetEnvironmentVariable('FOO', $v); %s" % g,
-                          "[Environment]::SetEnvironmentVariable('FOO', 'x'); %s" % g,
-                          'Set-Content $f x; %s' % g], tool='PowerShell')
+                          "[Environment]::SetEnvironmentVariable('FOO', 'x'); %s" % g], tool='PowerShell')
+        self.unplaced_behind_a_computed_target(['Set-Content $f x; %s' % g])
+
+    def unplaced_behind_a_computed_target(self, texts):
+        """Each PowerShell line writes to a computed item path that may be an env: item: the parse
+        leaves its git unplaceable, and the target, not literal, is refused before the git is judged
+        (main-checkout for a worker, write-jail for the coordinator's mark)."""
+        for text in texts:
+            with self.subTest(text):
+                p = cm.read(text, sh.PS, W.fwd(self.w.wt))
+                self.assertTrue(p.clean, text)
+                self.assertTrue(p.commands[-1].git_env, text)
+                self.assertIn('not literal', self.jailed(self.git(text, 'worker', tool='PowerShell'),
+                                                         'main-checkout').reason)
+                self.assertIn('not literal', self.jailed(self.marked(text, COORDINATOR, 'PowerShell')).reason)
 
     def fail_closed(self, texts, tool='Bash'):
         """Each line runs a git write after something that may change the environment unread:
@@ -1183,8 +1196,7 @@ class UnplacedGit(MainGit):
             "$p='env:GIT_DIR'; Set-Item -Path $p '%s/.git'; %s" % (m, g),
             "Set-Item \"${e}:GIT_DIR\" '%s/.git'; %s" % (m, g),
             "Set-Item -Path (\"env:GIT_\"+\"DIR\") '%s/.git'; %s" % (m, g),
-            "New-Item -Path $p -Name GIT_DIR -Value '%s/.git'; %s" % (m, g),
-            "Set-Location env:; Set-Item GIT_DIR '%s/.git'; %s" % (m, g),
+            "Set-Location env:;Set-Item GIT_DIR '%s/.git'; %s" % (m, g),
             "[Environment]::$m('GIT_DIR', '%s/.git'); %s" % (m, g),
             # assignments the one-target reading missed
             "$env:A, $env:GIT_DIR = 1, '%s/.git'; %s" % (m, g),
@@ -1194,6 +1206,7 @@ class UnplacedGit(MainGit):
             # an item from a pipe, a script run in this process
             "'env:GIT_DIR' | Set-Item -Value '%s/.git'; %s" % (m, g),
             '. .\\setenv.ps1; %s' % g], tool='PowerShell')
+        self.unplaced_behind_a_computed_target(["New-Item -Path $p -Name GIT_DIR -Value '%s/.git'; %s" % (m, g)])
 
     def test_an_env_read_in_a_path_is_not_an_env_write(self):
         g = 'git -C "%s" branch -m main old' % W.fwd(self.w.wt)
