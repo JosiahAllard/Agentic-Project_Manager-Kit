@@ -30,13 +30,14 @@ module lines only.
 
 ## Landing
 Landing is standing owner-approved work: the lander lands a reviewed branch on the coordinator's or
-project manager's go, with the reviewer's verdict in its brief. From the main checkout, on main,
-after `git merge --ff-only <remote>/<main>`:
-`python tools/gate.py land <branch> --expect-main <sha> --expect-tip <sha>`.
-It queues, locks, merges and gates the merge in its own landing tree, pushes and verifies, then
-brings the main checkout to the merge (docs/gate.md "Landing"). Success: a `LANDED ` line and exit
-0; any other verdict line (`NOT LANDED:`, `STUCK:`, `REFUSED:`, `BUSY:`) is
-reported as is, with the doc's recovery steps, and not retried. Batches: docs/gate.md.
+project manager's go, with the reviewer's verdict in its brief. From the main checkout, on main:
+`python tools/gate.py land <branch> --expect-tip <sha>` (`--expect-main` is optional).
+It books its turn in the machine lock (the landing queue), merges onto `<remote>/<main>` as it is at
+its turn and gates the merge in its own landing tree, pushes and verifies, then brings the main
+checkout to the merge (docs/gate.md "Landing"). Success: a `LANDED ` line and exit 0.
+`CONFLICT <branch> with main <sha>: the author merges main` goes back to the branch's author; any
+other verdict line (`NOT LANDED:`, `STUCK:`, `REFUSED:`, `BUSY:`, `NOT RUN:`) is reported as is,
+with the doc's recovery steps, and not retried. Batches: docs/gate.md.
 
 ## Shared resources that must be serialised
 The machine lock (docs/lock-api.md), through the live install only, never a copy on a branch.
