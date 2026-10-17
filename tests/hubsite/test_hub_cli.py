@@ -419,9 +419,21 @@ class ServeCase(CliCase):
         self.assertNotIn('hub closed', out)
         self.assertFalse(self.locked(), 'the store lock outlived the server')
 
+    def test_a_ctrl_c_in_another_verb_is_exit_1(self):
+        def pressed(*args, **kw):
+            raise KeyboardInterrupt()
+
+        with mock.patch.object(HUB.settings, 'load', pressed):
+            try:
+                code, out, err = self.run_cli('status')
+            except KeyboardInterrupt:
+                self.fail('the Ctrl+C left hub.py as a KeyboardInterrupt')
+        # no server was closing: the line does not say that one did not close
+        self.assertEqual((code, out, err), (1, '', HUB.INTERRUPTED + '\n'))
+        self.assertEqual(HUB.INTERRUPTED, 'interrupted')
+
     def test_a_closed_console_at_the_closing_line_is_still_a_clean_close(self):
-        for gone in (OSError(9, 'Bad file descriptor'),
-                     ValueError('I/O operation on closed file')):
+        for gone in (OSError(9, 'Bad file descriptor'),):
             with self.subTest(gone=type(gone).__name__):
                 class Shut(io.StringIO):        # the console closed while the server served
                     def write(self, text):
@@ -1075,7 +1087,7 @@ class ClosedConsoleCase(CliCase):
         self.assertFalse(self.locked(), 'the store lock outlived the server')
         return code, out.getvalue(), err.getvalue()
 
-    GONE = (OSError(9, 'Bad file descriptor'), ValueError('I/O operation on closed file'))
+    GONE = (OSError(9, 'Bad file descriptor'),)     # ValueError takes the same except in hub.py
 
     def test_a_start_line_that_cannot_be_written_does_not_stop_the_server(self):
         served = []
