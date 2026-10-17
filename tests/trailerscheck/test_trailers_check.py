@@ -71,6 +71,19 @@ class Branch(TrailersCase):
         self.assertIn('an owner claim that proves nothing', out)
         self.assertIn('FAILED: ', out)
 
+    def test_an_owner_approval_on_an_agent_commit_is_not_an_owner_claim(self):
+        # Owner-Approval: hub:A-<n> (docs/commit.md "Owner approval") is checked against the hub by
+        # gate land and the pre-push hook; this rule neither warns on it nor lets it excuse a commit.
+        self.commit('1', 'approved\n\nOwner-Approval: hub:A-3\n' + TRAILERED_MSG, author=AGENT)
+        code, out = self.run_tool('--base', 'main')
+        self.assertEqual(code, 0, out)
+        self.assertNotIn('WARNING', out)
+        self.commit('2', 'approval alone\n\nOwner-Approval: hub:A-3', author=AGENT)
+        code, out = self.run_tool('--base', 'main')
+        self.assertEqual(code, 1, out)
+        self.assertIn('"approval alone" has no Co-Authored-By trailer', out)
+        self.assertNotIn('owner claim', out)
+
     def test_a_sync_merge_without_a_trailer_fails(self):
         self.commit('1', 'work\n\n' + TRAILERED_MSG)
         self.git('checkout', '-q', 'main')
