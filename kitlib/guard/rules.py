@@ -2346,6 +2346,9 @@ NET_DEVICE_RE = re.compile(r'^[\\/]{2}[?.][\\/](?=[A-Za-z]:[\\/])')
 WIN_OPT_RE = re.compile(r'^/[A-Za-z]+(?::\S*)?$')
 
 
+PS_NAMED_DYN_RE = re.compile(r'^-[A-Za-z_]\w*:')    # -Name: and a computed value, in one word
+
+
 def ps_params(cmd, words, spec):
     """({canonical param: [value Word]}, [positional Word]) of a cmdlet's arguments, by `spec`.
     A parameter is matched as PowerShell does: exactly, by an alias, or by the one name it is a
@@ -2357,7 +2360,9 @@ def ps_params(cmd, words, spec):
     while k < len(words):
         w = words[k]
         t = w.text
-        if t.startswith('-') and len(t) > 1 and not w.dyn and not cm.quoted(cmd, w) and not re.match(r'^-\d', t):
+        # `-Destination:$p`: a literal name and a colon bind the computed rest to that parameter
+        if t.startswith('-') and len(t) > 1 and (not w.dyn or PS_NAMED_DYN_RE.match(t)) and \
+                not cm.quoted(cmd, w) and not re.match(r'^-\d', t):
             body, colon, val = t[1:].partition(':')
             body = body.lower()
             if body in names:
@@ -3765,6 +3770,12 @@ def ps_provider_item(cmd, w):
 PS_PWD_WORD_RE = re.compile(r'(?i)^(?:\$pwd|\$\{pwd\})((?:[\\/][^$`]*)?)$')
 PS_PWD_NAME_RE = re.compile(r'(?i)pwd')
 PS_PWD_READ_RE = re.compile(r'(?i)\$(?:pwd|\{pwd\})(?=[\\/])')    # $PWD\ or ${PWD}/: a read in a path
+# on a line that writes to $PWD\...: what can set a variable whose name it escapes or computes
+# (sv, set, nv, *-Variable, variable:, -OutVariable and the other common variable parameters)
+# or run text (iex, Invoke-Expression, a dot-sourced command)
+PS_PWD_SETTER_RE = re.compile(r'(?i)(?<![\w-])(?:sv|set|nv|iex|invoke-expression|[a-z]+-variable)(?![\w-])'
+                              r'|variable:|(?<![\w$])-(?:ov|pv|ev|wv|iv|infa|\w*var\w*)\b'
+                              r'''|(?:^|[;&|{(=\r\n])\s*\.(?=[\s'"$({&])''')
 
 
 def ps_pwd_path(cmd, w):
@@ -3773,13 +3784,16 @@ def ps_pwd_path(cmd, w):
     names PWD anywhere but in such a path word of this command or a $PWD read a path separator
     follows (PS_PWD_READ_RE). The ways to give $PWD another value are many (sv PWD,
     $global:PWD =, foreach ($PWD in ...), param($PWD), -ov PWD), so any other mention fails
-    closed."""
+    closed, as does a line that may spell the name another way (a backtick, or a setter or a
+    runner of text, PS_PWD_SETTER_RE)."""
     if cmd.shell != sh.PS or not w.dyn or cmd.cwd is None:
         return None
     m = PS_PWD_WORD_RE.match(w.text)
     if not m:
         return None
     src = cmd.source or ''
+    if '`' in src or PS_PWD_SETTER_RE.search(src):
+        return None                             # a name it may spell some other way: P`WD, ('P'+'WD'), iex
     reads = [(x.start, x.end) for x in cmd.words if x.dyn and PS_PWD_WORD_RE.match(x.text)]
     reads += [x.span() for x in PS_PWD_READ_RE.finditer(src)]
     for hit in PS_PWD_NAME_RE.finditer(src):

@@ -698,7 +698,7 @@ class LockVerbs(Base):
         group was, and a copy whose destination is one still hands the path on."""
         lock = 'tools/machine_lock.py'
         from kitlib.guard import commands as cm, shell as sh
-        for text in ('gc %s (x)' % lock, 'Get-Content %s (Join-Path a b)' % lock):
+        for text in ('gc %s (x)' % lock, 'Get-Content %s (Join-Path a b)' % lock, 'gc %s -Encoding:(x)' % lock):
             parsed = cm.read(text, sh.PS, self.w.wt)
             with self.subTest(text=text):
                 self.assertTrue(parsed.clean, text)

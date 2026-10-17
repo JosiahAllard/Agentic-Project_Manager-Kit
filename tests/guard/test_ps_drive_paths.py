@@ -216,6 +216,35 @@ class DynamicTargets(Base):
             with self.subTest(text):
                 self.refused_for_both(text)
 
+    def test_pwd_with_a_hidden_setter_fails_closed(self):
+        # rules.PS_PWD_SETTER_RE: an escaped or computed name, or anything that can run text
+        for text in (r'Set-Variable P`WD {main}; Set-Content "$PWD\x.txt" x',
+                     r"sv -Name ('P'+'WD') {main}; Set-Content " + r'"$PWD\x.txt" x',
+                     r"iex ('s'+'v P'+'WD {main}'); Set-Content " + r'"$PWD\x.txt" x',
+                     r"Invoke-Expression $s; Set-Content " + r'"$PWD\x.txt" x',
+                     r"New-Variable -Name ('P'+'WD') -Value {main} -Force; Set-Content " + r'"$PWD\x.txt" x',
+                     r"Set-Item ('variable:P'+'WD') {main}; Set-Content " + r'"$PWD\x.txt" x',
+                     r'. $f; Set-Content "$PWD\x.txt" x',
+                     r"Get-Item {main} -ov ('P'+'WD'); Set-Content " + r'"$PWD\x.txt" x',
+                     r"Get-Item {main} -PipelineVariable ('P'+'WD') | % {{ Set-Content " + r'"$PWD\x.txt" x }}'):
+            with self.subTest(text):
+                self.refused_for_both(text)
+        # a backtick, a setter or a dot elsewhere on a line whose target is literal still passes
+        for text in ('Write-Output "a`nb"; Set-Content x.txt "c`nd"', 'sv a 1; Set-Content x.txt $a',
+                     r'Set-Content "$PWD\x.txt" x', r'Set-Content "$PWD\x.txt" x; Copy-Item a.txt .'):
+            with self.subTest(text):
+                self.allowed(self.run_ps(text))
+
+    def test_a_named_parameter_with_a_computed_value_binds_it(self):
+        # rules.ps_params: `-Destination:$p` is that parameter's value, not a positional
+        for text in (r'Copy-Item -Destination:$p a.txt', r'Copy-Item -Destination:(Join-Path {main} x) a.txt',
+                     r'Compress-Archive -DestinationPath:$p x.zip', r'Expand-Archive x.zip -DestinationPath:$p'):
+            with self.subTest(text):
+                self.refused_for_both(text)
+        for text in (r'Set-Content -Value:$v x.txt', r'Copy-Item -Path:$p x.txt'):
+            with self.subTest(text):
+                self.allowed(self.run_ps(text))
+
     def test_pwd_reads_in_paths_still_place(self):
         self.allowed(self.run_ps(r'Set-Content "$PWD\x.txt" x; Get-Content "$PWD\y.txt"'))
         self.allowed(self.run_ps(r'Copy-Item "${{PWD}}/a.txt" "$PWD\b.txt"'))
