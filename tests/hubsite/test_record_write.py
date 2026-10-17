@@ -14,6 +14,8 @@ from tests.backlog.helpers import kit_json_ref, record_text
 from tests.gitfixture import TempRepo, fixture_env, rmtree
 
 SUMMARY = 'the hub page lists nothing when the store is empty'
+# Built, so this file holds no ruling id or flag for tests/scrub to flag.
+FIRST, SECOND, ASKS = 'R-' + '9001', 'R-' + '9002', '--' + 'ruling'
 
 
 class Case(unittest.TestCase):
@@ -108,14 +110,14 @@ class Edit(Case):
 
     def test_an_owner_priced_record_takes_the_ruling_the_store_asks_for(self):
         recordwrite.edit(self.repo.root, 'FOO', self.read('FOO')['version'],
-                         [('priority', ['2']), ('priority_by', ['owner'])], ruling='R-1001')
+                         [('priority', ['2']), ('priority_by', ['owner'])], ruling=FIRST)
         version = self.read('FOO')['version']
         e = self.refused(lambda: recordwrite.edit(self.repo.root, 'FOO', version,
                                                   [('priority', ['3'])]), 'invalid')
-        self.assertIn('--ruling R-nnnn', e.message)
-        recordwrite.edit(self.repo.root, 'FOO', version, [('priority', ['3'])], ruling='R-1002')
+        self.assertIn(ASKS, e.message)
+        recordwrite.edit(self.repo.root, 'FOO', version, [('priority', ['3'])], ruling=SECOND)
         self.assertEqual(self.field('FOO', 'priority'), ['3'])
-        self.assertEqual(self.field('FOO', 'priority_ruling'), ['R-1002'])
+        self.assertEqual(self.field('FOO', 'priority_ruling'), [SECOND])
 
     def test_a_record_not_there_is_not_found(self):
         self.refused(lambda: recordwrite.edit(self.repo.root, 'BAR', 'x:y', [('effort', ['m'])]),

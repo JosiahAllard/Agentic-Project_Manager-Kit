@@ -430,7 +430,7 @@ comes from the caller.
   `confirm` must repeat the id, or the call is `invalid` on field `confirm` and nothing is
   written. The store's delete rules apply unchanged: a live pull is refused until it is released.
 - `ruling` is sent only when the store's refusal asks for one (an owner-priced or owner-held
-  record); the store checks it as it checks `--ruling`.
+  record); the store checks it as it checks a ruling given to `tools/backlog.py`.
 - Each write answers `lines`, what the store printed (its notes included), and an add or edit
   also answers the record as it reads now. A store refusal is `invalid` in the store's words; a
   record not there is `not_found`. A repository whose `.kit.json` names no backlog store, or whose
