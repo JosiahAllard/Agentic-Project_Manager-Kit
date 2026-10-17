@@ -2,7 +2,7 @@
 "Commands"): the record goes with the subject `deletes ID: <why>`, which history reads as it
 reads `closes` and `retires` (store._last_closing), so `add` again needs `--reopen`, `show`
 names the deleting commit and a `requires: item:` on it is never met. Retire's owner gates; a
-live pull refuses, a dead one goes with the record."""
+live pull refuses, a dead one goes with the record, and `retire` shares that guard."""
 import unittest
 from unittest import mock
 
@@ -132,6 +132,40 @@ class States(DeleteCase):
     def test_a_marked_record_can_be_deleted(self):
         self.seed(rec('FOO', review='owner-hub 2026-10-15'))
         self.verb('delete', 'FOO', WHY)
+        self.assertIsNone(self.get('FOO'))
+
+
+class RetireShares(DeleteCase):
+    """`retire` runs delete's live-pull guard (plan._refuse_live_pulls): it removes the record
+    just as `delete` does, so a branch building it must release it first."""
+
+    def test_a_live_pull_refuses_and_a_dead_one_goes_with_the_record(self):
+        self.repo.git('branch', 'tools/live-one')
+        self.seed(priced('LIVE', state='pulled', pulled_at=TODAY, pulled_by='tools/live-one'),
+                  priced('DEAD', state='pulled', pulled_at=TODAY, pulled_by='tools/gone'))
+        with self.assertRaises(Refusal) as cm:
+            self.verb('retire', 'LIVE', WHY)
+        self.assertIn('`LIVE` is being built on `tools/live-one`; release it first '
+                      '(`release LIVE --reason T`, from that branch)', str(cm.exception))
+        self.assertEqual(self.get('LIVE').get('state'), 'pulled')
+        change = self.verb('retire', 'DEAD', WHY)
+        self.assertIsNone(self.get('DEAD'))
+        self.assertEqual(change.lines[:2], ['RETIRED DEAD',
+                                            '  dead pull on `tools/gone` dropped with the record'])
+
+    def test_a_failed_branch_probe_fails_and_retires_nothing(self):
+        self.seed(priced('DEAD', state='pulled', pulled_at=TODAY, pulled_by='tools/gone'))
+        with mock.patch.object(omod, 'live_branches', return_value=(None, 'git failed')):
+            with self.assertRaises(Failure) as cm:
+                self.verb('retire', 'DEAD', WHY)
+        self.assertIn('cannot tell whether the pull of `DEAD` by `tools/gone` is live: git failed',
+                      str(cm.exception))
+        self.assertIsNotNone(self.get('DEAD'))
+
+    def test_an_unpulled_record_never_asks_git(self):
+        self.seed(priced('FOO'))
+        with mock.patch.object(omod, 'live_branches', return_value=(None, 'git failed')):
+            self.verb('retire', 'FOO', WHY)
         self.assertIsNone(self.get('FOO'))
 
 

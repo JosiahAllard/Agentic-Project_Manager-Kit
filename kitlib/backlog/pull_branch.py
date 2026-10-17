@@ -5,7 +5,7 @@ A pull records the branch it was made from (plan.Context.current_branch: `--as`,
 checked out in -C). Made in the main checkout, that is the main branch, which never lands, so the
 landing's close (kitlib.backlog.at_landing, which closes what the landed branch holds pulled)
 would never match the record and it would stay pulled. plan_pull refuses that pull and says how to
-make it: from the branch's worktree, or with `--as <branch>`.
+make it: with `--as <branch>`, or from the branch's worktree.
 
 In the PM data worktree (kitlib.pmdata) the configured main branch is the data branch, so the code
 repository's main (main_branches: the main checkout's) is refused there too.
@@ -28,16 +28,19 @@ from .errors import Refusal
 FALLBACK_MAINS = ('main', 'master')
 
 
-def refusal(rid, branch, main_branch):
+def refusal(rid, branch, main_branch, session=None):
     """Why `rid` may not be pulled as `branch`, or None. `main_branch`: one name, or the names
-    (main_branches) a pull may not record. Pure."""
+    (main_branches) a pull may not record. `session`: the caller's `--session`, filled into the
+    `--as` form when known. The `--as` form comes first: a coordinator pulling at dispatch, from
+    this checkout, can run it as it stands. Pure."""
     mains = (main_branch,) if isinstance(main_branch, str) else tuple(main_branch)
     if branch not in mains:
         return None
     return ('a pull of %s here would record pulled_by: %s, and the main branch never lands, so '
-            'no landing would close %s: pull it from the branch\'s worktree (backlog.py -C '
-            '<worktree> pull %s), or name the branch with --as <branch>'
-            % (rid, branch, rid, rid))
+            'no landing would close %s: name the branch with --as <branch> (backlog.py -C <store> '
+            '--session %s --as <branch> pull %s), or pull it from the branch\'s worktree '
+            '(backlog.py -C <worktree> pull %s)'
+            % (rid, branch, rid, session or '<session>', rid, rid))
 
 
 def _main_checkout(root):
@@ -111,7 +114,7 @@ def plan_pull(snap, ctx, rid, reason=None, ruling=None, blocker=None):
     record's own refusals come first: an unpullable record says why before where it is pulled
     from."""
     change = pmod.plan_pull(snap, ctx, rid, reason, ruling, blocker)
-    why = refusal(rid, ctx.current_branch(), main_branches(ctx))
+    why = refusal(rid, ctx.current_branch(), main_branches(ctx), ctx.session)
     if why:
         raise Refusal(why)
     return change

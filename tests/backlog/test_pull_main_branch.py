@@ -28,6 +28,7 @@ class PullFromTheMainBranch(StoreCase):
         self.assertIn('pulled_by: main', text)
         self.assertIn('--as <branch>', text)
         self.assertIn("branch's worktree", text)
+        self.assertLess(text.index('--as <branch>'), text.index("branch's worktree"))
         self.assertEqual(self.remote_tip(), before)
         self.assertEqual(self.get('FOO').get('state'), 'open')
 
@@ -124,6 +125,16 @@ class RefusalText(unittest.TestCase):
         self.assertIn('pulled_by: master',
                       pull_branch.refusal('FOO', 'master', ['pmdata', 'main', 'master']))
         self.assertIsNone(pull_branch.refusal('FOO', BRANCH, ('pmdata', 'main')))
+
+    def test_the_as_form_comes_first_with_the_session_filled_in(self):
+        # A coordinator pulls at dispatch from the main checkout: the `--as` form is the one it
+        # can run as it stands, so it leads, with its own `--session` when known.
+        text = pull_branch.refusal('FOO', 'main', 'main', 'kit')
+        as_form = 'backlog.py -C <store> --session kit --as <branch> pull FOO'
+        self.assertIn(as_form, text)
+        self.assertLess(text.index(as_form), text.index('backlog.py -C <worktree> pull FOO'))
+        self.assertIn('--session <session> --as <branch> pull FOO',
+                      pull_branch.refusal('FOO', 'main', 'main'))
 
 
 if __name__ == '__main__':

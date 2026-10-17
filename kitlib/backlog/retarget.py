@@ -30,7 +30,7 @@ import re
 from . import record as rmod
 from . import scope as smod
 from .errors import Usage
-from .plan import refuse_machine_paths
+from .plan import _refuse_live_pulls, refuse_machine_paths
 from .store import Change
 
 REWRITTEN_TEXT = ('ref', 'summary')
@@ -166,12 +166,17 @@ _KEPT = {
 }
 
 
-def plan_retarget(snap, old, new):
+def plan_retarget(snap, ctx, old, new):
     """The Change rewriting OLD to NEW in every readable record: one write per changed record,
-    one commit. Lines that name OLD but are left (scope_member's notes, a bare word) are listed."""
+    one commit. Lines that name OLD but are left (scope_member's notes, a bare word) are listed.
+    A pulled record whose `scope:` it would rewrite refuses while its branch is live (the branch
+    is building against that scope: its holder releases it, or retargets after it lands), and
+    fails when git cannot tell (`_refuse_live_pulls`, which `retire` and `delete` share)."""
     check_paths(old, new)
     edits = [edit_record(r, old, new) for r in snap.readable]
     changed = [e for e in edits if e.lines]
+    _refuse_live_pulls(snap, ctx, [e.rec for e in changed
+                                   if any(key == 'scope' for key, _b, _a in e.lines)], note=None)
     writes = {e.rec.stem: rmod.render(e.pairs, e.rec.body) for e in changed}
     out = ['RETARGET %s -> %s: %d record(s), %d line(s)'
            % (old, new, len(changed), sum(len(e.lines) for e in changed))]

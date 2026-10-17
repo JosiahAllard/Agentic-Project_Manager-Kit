@@ -7,7 +7,7 @@ docs/backlog.md).
   open_store(root, fetch=True, session=None, branch=None) -> plan.Context over the store
   planner(args, ctx) -> the plan `Store.write` runs for `args.verb` (one of WRITES, or `retarget`);
                        Usage for any other verb, raised before a plan exists
-  retarget_dry(args, store) -> the Change `retarget` would write, checked as a write would be;
+  retarget_dry(args, ctx) -> the Change `retarget` would write, checked as a write would be;
                        nothing is published
 
 `planner` and `retarget_dry` take an object with tools/backlog.py's argument names (`verb`, `id`,
@@ -79,7 +79,7 @@ def planner(args, ctx):
         return lambda s: pmod.plan_block(s, ctx, args.id, args.on, args.owner_ask, args.ruling,
                                          reason=args.reason)
     if v == 'retarget':
-        return lambda s: retmod.plan_retarget(s, args.old, args.new)
+        return lambda s: retmod.plan_retarget(s, ctx, args.old, args.new)
     if v == 'unblock':
         return lambda s: pmod.plan_unblock(s, ctx, args.id, args.ruling, args.on, args.reason)
     if v == 'pull':
@@ -103,13 +103,13 @@ def planner(args, ctx):
     raise Usage('`%s` is not a write verb: `planner` plans %s' % (v, ', '.join(WRITES + ('retarget',))))
 
 
-def retarget_dry(args, store):
+def retarget_dry(args, ctx):
     """`retarget` without `--apply`: the change it would write, planned against a fresh read and
     checked as a write would be; nothing is published."""
-    snap = store.load()
+    snap = ctx.store.load()
     smod.require_readable(snap)
     with smod.plan_notes() as notes, smod.notes_on_refusal(notes):
-        change = retmod.plan_retarget(snap, args.old, args.new)
+        change = retmod.plan_retarget(snap, ctx, args.old, args.new)
     change = smod.with_plan_notes(change, notes)
     if change.writes:
         with smod.notes_on_refusal(notes):

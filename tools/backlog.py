@@ -346,10 +346,10 @@ def do_write(args, ctx, store):
     return 0
 
 
-def do_retarget_dry(args, store):
+def do_retarget_dry(args, ctx):
     """`retarget` without `--apply`: prints the change it would write (kitlib/backlog/opener.py
     `retarget_dry`); nothing is published."""
-    change = retarget_dry(args, store)
+    change = retarget_dry(args, ctx)
     for line in change.lines:
         say(line)
     say('DRY RUN: nothing was written%s' % ('; `--apply` writes it as one store commit'
@@ -445,7 +445,7 @@ def main(argv=None):
         if args.verb in WRITES or (args.verb == 'retarget' and args.apply):
             return do_write(args, ctx, store)
         if args.verb == 'retarget':
-            return do_retarget_dry(args, store)
+            return do_retarget_dry(args, ctx)
         if args.verb == 'catch-up':
             return do_catch_up(args, store)
         if args.verb == 'check':
