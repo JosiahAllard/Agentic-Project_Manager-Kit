@@ -34,8 +34,10 @@ text is for the owner's console (it may name a folder):
      (gitsync.Refused: the folder is no work tree, the wrong branch, ...) does not stop the
      server: the reason goes to `Hub.notes` for the console, the server serves with sync off,
      and GET health says so in a fixed phrase (the reason itself names folders).
-  4. the Api over the store and a SiteViews, then the local listener on settings.port with
-     httpd.local_hosts, httpd.local_gate, httpd.pair_routes over an auth.Credentials made for
+  4. the Api over the store and a SiteViews (with approval_key reading the approval key from
+     the token folder on each use, and checkout matching a repo_id to the backlog's configured
+     repositories by their origin remote: _checkout), then the local listener on
+     settings.port with httpd.local_hosts, httpd.local_gate, httpd.pair_routes over an auth.Credentials made for
      the port that was really bound, httpd.stop_route (it sets Hub.stopping and answers this
      process's pid and creation time; the tunnel listener never has it) and health_route. The
      Credentials keep the browser
@@ -819,6 +821,24 @@ def _follow_rounds(backlog_views, views):
     backlog_views.wait = pause
 
 
+def _checkout(backlog_views):
+    """Api's checkout(repo_id) (kitlib.hubsite.api, "Approvals"): the root of the configured
+    repository (backlog_views.repos(), its (name, root) pairs) whose origin remote is that
+    repo_id (approvals.remote_id), read with git on each call; None when none is, when there is
+    no backlog, or when the repositories cannot be listed, so a request fails closed."""
+    def checkout(repo_id):
+        from . import approvals     # it imports kitlib.hubsite.client, which imports this module
+        try:
+            pairs = backlog_views.repos() if backlog_views is not None else []
+        except Exception:           # noqa: BLE001 - no list, no checkout: the request is refused
+            return None
+        for _name, root in pairs:
+            if approvals.remote_id(root)[0] == repo_id:
+                return root
+        return None
+    return checkout
+
+
 def build(settings, sources, log=None):
     """The Hub for `settings` (kitlib.hubsite.settings.Settings) from `sources` (a Sources):
     module docstring, "Start-up". Nothing is started; close() the Hub to release the store.
@@ -851,7 +871,9 @@ def build(settings, sources, log=None):
         views = SiteViews(store, sources, views_b, sync, sync_off, log=log)
         if views_b is not None:
             _follow_rounds(views_b, views)
-        api = _api.Api(store, views)
+        api = _api.Api(store, views,
+                       approval_key=functools.partial(auth.read_approval_key, sources.tokens),
+                       checkout=_checkout(views_b))
         try:
             local = httpd.Listener((httpd.LOOPBACK, settings.port), api, None,
                                    static_dir=sources.static_dir, host_rule=httpd.local_hosts,

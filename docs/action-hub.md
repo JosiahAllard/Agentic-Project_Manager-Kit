@@ -399,6 +399,46 @@ page's title is missing or empty, when a `page_html` has no string `html`, and w
 has no `pages` document (only when the `pages` collection exists). It does not warn about a page
 with no body.
 
+## approvals/A-NNN
+A change an agent asks the owner to approve before it commits it. The rules (signature, expiry,
+what verifies) are `kitlib/hubsite/approvals.py`, "The document"; the routes are
+`kitlib.hubsite.api` ("Approvals" in its docstring).
+
+| Field | Written by | Meaning |
+|---|---|---|
+| (doc id) | server | `A-1`, `A-2`, ...: the document's id, not a field |
+| status | server | `pending`, `approved`, `denied`, `consumed` or `expired` (`approvals.STATUSES`); expiry is read from the times, never written |
+| repo | agent | the repository, as the repo_id of its remote URL (`approvals.repo_id`) |
+| title, reason | agent | what the change is and why; reason is optional |
+| head | agent | the commit the change applies to (40 hex) |
+| files | agent, server | `[{path, base_blob, blob, content}]` sorted by path; the server computes `blob` from `content` |
+| diff | server | the unified diff lines the page shows, from the base read with git from this machine's checkout of `repo` to `content` (`approvals.diff`) |
+| created_at | server | ISO time of the request |
+| decision, decided_at, sig | server | once the owner decides; `sig` (the approval key's signature) on an approval only |
+| commit, consumed_at | server | once an agent consumes the approval for a commit |
+
+Routes, below `/api/v1`:
+
+- POST `/approvals` (agent): body `repo`, `title`, `head`, `files`, optional `reason`; adds a
+  pending request. A repository this machine has no checkout of is refused (`invalid`, field
+  `repo`), and so is a `base_blob` that is not the file at `head` (field `files`).
+- POST `/approvals/{id}/decide` (role `approver`: the strong owner alone, docs/hub-remote-access.md
+  "The strong owner"): body `decision` (`approve` or `deny`) and `if_version`. Only a pending
+  request is decided.
+- POST `/approvals/{id}/consume` (agent): body `commit` and `if_version`; only an approval that is
+  `approved` is consumed.
+- GET `/approvals/{id}/verify` (agent): query `repo`, `head`, `files` (JSON `{path: blob}`) and an
+  optional `commit`; answers `{ok, valid, why}`, never the key or the sig. With `commit`, only an
+  approval consumed by that commit is valid.
+
+`GET /api/v1/snapshot` carries the collection whole, and `strong`: true only on the strong owner's
+call (`test_the_snapshot_says_strong_to_the_strong_owner_alone` in `tests/hubsite/test_api.py`).
+The page draws each pending request above the open questions in Inbox (`approvalCard` in
+`kitlib/hubsite/web/index.html`), counted in the Inbox and Questions badges: its title, repo, head,
+reason and the stored diff as text. Approve and Deny post the decide route with the version the page
+read; they are disabled unless the snapshot says `strong`, and a refusal (a 403 included) is shown
+on the card in the server's words (`DomTest` in `tests/hubsite/test_page.py`).
+
 ## Views read live
 Never stored; read from their sources (`kitlib.hubsite.derived`, `kitlib.hubsite.backlog`):
 - backlog and completed: each repository's backlog store (`.kit.json` backlog.store), every open

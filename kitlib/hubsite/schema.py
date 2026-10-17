@@ -56,7 +56,7 @@ FIELDS = {
     'approvals': (('status', 'repo', 'title', 'head', 'files', 'created_at'), {
         'status': _STR, 'repo': _STR, 'title': _STR, 'head': _STR, 'files': _LIST,
         'created_at': _STR, 'reason': _STR, 'decision': _STR, 'decided_at': _STR, 'sig': _STR,
-        'commit': _STR, 'consumed_at': _STR}),
+        'commit': _STR, 'consumed_at': _STR, 'diff': _LIST}),
 }
 KINDS = {'to_pm': ('question', 'fyi')}
 

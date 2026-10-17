@@ -1,6 +1,7 @@
 """kitlib.hubsite.api: what each verb writes and answers, the fields it refuses, the error
 shape, versions, the views it borrows, wait, pending, snapshot and health. Who may call a route
 is tests/hubsite/test_api_roles.py."""
+import datetime
 import inspect
 import json
 import os
@@ -9,9 +10,10 @@ import tempfile
 import threading
 import unittest
 
-from kitlib.hubsite import api, todosteps
+from kitlib.hubsite import api, approvals, todosteps
 from kitlib.hubsite.api import AGENT, BASE, OWNER
 from kitlib.hubsite.store import HubError, Store
+from tests.gitfixture import TempRepo
 
 NOW = '2026-01-02T03:04:05+00:00'
 CLOCK = lambda: NOW      # noqa: E731
@@ -56,9 +58,9 @@ class ApiCase(unittest.TestCase):
         self.assertEqual((status, obj.get('error')), (200, None))
         return obj
 
-    def refused(self, code, field, method, path, role, body=None, query=None):
+    def refused(self, code, field, method, path, role, body=None, query=None, **kw):
         before = self.store.snapshot()
-        status, obj = self.call(method, path, role, body, query)
+        status, obj = self.call(method, path, role, body, query, **kw)
         self.assertEqual(obj['error']['code'], code, obj)
         self.assertEqual(status, api.STATUS[code])
         self.assertIs(obj['ok'], False)
@@ -1859,6 +1861,169 @@ class RecordWriteRouteTest(ApiCase):
         self.views.fail = HubError('conflict', 'stale', 'version')
         self.refused('conflict', 'version', 'POST', '/records/kit/A/edit', OWNER,
                      {'version': 'v'})
+
+
+class ApprovalRouteTest(ApiCase):
+    """The approvals routes over a real checkout: TempRepo's one commit holds README.md
+    "hello\\n". The rules themselves are tests/hubsite/test_approvals_verify.py."""
+
+    KEY = 'k' * 64
+    URL = 'https://github.com/Owner/Repo.git'
+    COMMIT = 'c' * 40
+
+    @classmethod
+    def setUpClass(cls):
+        cls.repo = TempRepo()
+        cls.addClassCleanup(cls.repo.cleanup)
+
+    def setUp(self):
+        super().setUp()
+        self.asked = []
+
+        def checkout(repo_id):
+            self.asked.append(repo_id)
+            return self.repo.root if repo_id == approvals.repo_id(self.URL) else None
+        self.api = api.Api(self.store, clock=CLOCK, approval_key=lambda: self.KEY,
+                           checkout=checkout)
+
+    def files(self):
+        return [{'path': 'README.md', 'base_blob': approvals.blob_id('hello\n'),
+                 'content': 'hello world\n'},
+                {'path': 'docs/new.md', 'base_blob': None, 'content': 'fresh\n'}]
+
+    def add(self, **kw):
+        body = {'repo': self.URL, 'title': 'Edit the readme', 'head': self.repo.initial,
+                'files': self.files(), 'reason': 'asked for'}
+        body.update(kw)
+        return self.ok('POST', '/approvals', AGENT, body)
+
+    def decide(self, doc_id, decision='approve', version=1):
+        return self.ok('POST', '/approvals/%s/decide' % doc_id, OWNER,
+                       {'decision': decision, 'if_version': version}, strong=True)
+
+    def verify(self, doc_id, files=None, **query):
+        doc = self.store.get('approvals', doc_id)
+        q = {'repo': self.URL, 'head': self.repo.initial,
+             'files': json.dumps(files if files is not None else
+                                 {f['path']: f['blob'] for f in doc['files']})}
+        q.update(query)
+        return self.ok('GET', '/approvals/%s/verify' % doc_id, AGENT, query=q)
+
+    def test_a_request_is_added_with_its_diff(self):
+        obj = self.add()
+        self.assertEqual(obj['version'], 1)
+        doc = self.store.get('approvals', obj['id'])
+        self.assertEqual((doc['status'], doc['repo'], doc['via']),
+                         ('pending', 'github.com/Owner/Repo', 'api'))
+        self.assertEqual(self.asked, ['github.com/Owner/Repo'])
+        self.assertIn('-hello\n', doc['diff'])
+        self.assertIn('+hello world\n', doc['diff'])
+        self.assertIn('+++ b/docs/new.md\n', doc['diff'])
+
+    def test_a_base_that_is_not_the_file_at_head_is_refused(self):
+        files = self.files()
+        files[0]['base_blob'] = approvals.blob_id('else\n')
+        self.refused('invalid', 'files', 'POST', '/approvals', AGENT,
+                     {'repo': self.URL, 'title': 't', 'head': self.repo.initial,
+                      'files': files})
+
+    def test_a_repo_with_no_checkout_here_is_refused(self):
+        self.refused('invalid', 'repo', 'POST', '/approvals', AGENT,
+                     {'repo': 'https://github.com/Owner/Other', 'title': 't',
+                      'head': self.repo.initial, 'files': self.files()})
+        self.api = api.Api(self.store, clock=CLOCK)         # no checkout given: fails closed
+        self.refused('invalid', 'repo', 'POST', '/approvals', AGENT,
+                     {'repo': self.URL, 'title': 't', 'head': self.repo.initial,
+                      'files': self.files()})
+
+    def test_only_the_strong_owner_decides(self):
+        doc_id = self.add()['id']
+        self.refused('forbidden', 'role', 'POST', '/approvals/%s/decide' % doc_id, OWNER,
+                     {'decision': 'approve', 'if_version': 1})
+        self.refused('forbidden', 'role', 'POST', '/approvals/%s/decide' % doc_id, AGENT,
+                     {'decision': 'approve', 'if_version': 1}, strong=True)
+
+    def test_an_approval_is_signed_so_check_accepts_it(self):
+        doc_id = self.add()['id']
+        obj = self.decide(doc_id)
+        self.assertEqual((obj['status'], obj['version']), ('approved', 2))
+        doc = self.store.get('approvals', doc_id)
+        blobs = {f['path']: f['blob'] for f in doc['files']}
+        now = datetime.datetime.fromisoformat(NOW)
+        self.assertEqual(approvals.check(self.KEY, doc_id, doc, self.URL, self.repo.initial,
+                                         blobs, now), (True, ''))
+
+    def test_a_decision_on_a_stale_version_is_a_conflict(self):
+        doc_id = self.add()['id']
+        self.refused('conflict', 'if_version', 'POST', '/approvals/%s/decide' % doc_id, OWNER,
+                     {'decision': 'approve', 'if_version': 7}, strong=True)
+        self.refused('invalid', 'if_version', 'POST', '/approvals/%s/decide' % doc_id, OWNER,
+                     {'decision': 'approve'}, strong=True)
+        self.decide(doc_id, 'deny')
+        self.refused('conflict', 'status', 'POST', '/approvals/%s/decide' % doc_id, OWNER,
+                     {'decision': 'approve', 'if_version': 2}, strong=True)
+
+    def test_an_approval_is_consumed_once(self):
+        doc_id = self.add()['id']
+        self.decide(doc_id)
+        obj = self.ok('POST', '/approvals/%s/consume' % doc_id, AGENT,
+                      {'commit': self.COMMIT, 'if_version': 2})
+        self.assertEqual(obj['status'], 'consumed')
+        self.assertEqual(self.store.get('approvals', doc_id)['commit'], self.COMMIT)
+        self.refused('conflict', 'commit', 'POST', '/approvals/%s/consume' % doc_id, AGENT,
+                     {'commit': self.COMMIT, 'if_version': 3})
+
+    def test_a_request_not_approved_is_not_consumed(self):
+        doc_id = self.add()['id']
+        self.refused('conflict', None, 'POST', '/approvals/%s/consume' % doc_id, AGENT,
+                     {'commit': self.COMMIT, 'if_version': 1})
+
+    def test_verify_answers_the_check_and_never_the_sig(self):
+        doc_id = self.add()['id']
+        self.decide(doc_id)
+        obj = self.verify(doc_id)
+        self.assertEqual(obj, {'ok': True, 'valid': True, 'why': '',
+                               'revision': self.store.revision})
+        self.assertNotIn(self.store.get('approvals', doc_id)['sig'], json.dumps(obj))
+        files = self.store.get('approvals', doc_id)['files']
+        files[0]['blob'] = approvals.blob_id('else\n')     # an edit of the store folder
+        self.store.update('approvals', doc_id, {'files': files})
+        obj = self.verify(doc_id)
+        self.assertEqual((obj['valid'], obj['why']), (False, approvals.WHY_UNSIGNED))
+
+    def test_verify_of_an_unknown_id_or_bad_files_is_not_valid(self):
+        obj = self.ok('GET', '/approvals/A-404/verify', AGENT, query={'files': '{}'})
+        self.assertEqual((obj['valid'], obj['why']), (False, approvals.WHY_UNKNOWN))
+        doc_id = self.add()['id']
+        self.decide(doc_id)
+        for files in ('not json', '', '["README.md"]'):
+            obj = self.ok('GET', '/approvals/%s/verify' % doc_id, AGENT,
+                          query={'repo': self.URL, 'head': self.repo.initial, 'files': files})
+            self.assertEqual((obj['valid'], obj['why']), (False, approvals.WHY_FILES), files)
+
+    def test_verify_with_a_commit_needs_the_approval_consumed_by_it(self):
+        doc_id = self.add()['id']
+        self.decide(doc_id)
+        self.assertEqual(self.verify(doc_id, commit=self.COMMIT)['why'], approvals.WHY_COMMIT)
+        self.assertEqual(self.verify(doc_id, commit='')['why'], approvals.WHY_COMMIT)
+        self.assertIs(self.verify(doc_id)['valid'], True)
+        self.ok('POST', '/approvals/%s/consume' % doc_id, AGENT,
+                {'commit': self.COMMIT, 'if_version': 2})
+        self.assertIs(self.verify(doc_id, commit=self.COMMIT)['valid'], True)
+        self.assertEqual(self.verify(doc_id, commit='d' * 40)['why'], approvals.WHY_COMMIT)
+
+    def test_the_snapshot_carries_approvals(self):
+        doc_id = self.add()['id']
+        for role in (OWNER, AGENT):
+            cols = self.ok('GET', '/snapshot', role)['collections']
+            self.assertEqual(cols['approvals'][doc_id]['title'], 'Edit the readme', role)
+            self.assertIn('+hello world\n', cols['approvals'][doc_id]['diff'], role)
+
+    def test_the_snapshot_says_strong_to_the_strong_owner_alone(self):
+        self.assertIs(self.ok('GET', '/snapshot', OWNER, strong=True)['strong'], True)
+        for role, strong in ((OWNER, False), (AGENT, True), (AGENT, False), (OWNER, 'yes')):
+            with self.subTest(role=role, strong=strong):
+                self.assertIs(self.ok('GET', '/snapshot', role, strong=strong)['strong'], False)
 
 
 if __name__ == '__main__':

@@ -961,8 +961,8 @@ def _inbox(a, stop):
 
 
 def _approvals(a, stop):
-    """The requests from GET /snapshot (the api has no approvals route yet), each with its
-    status read now: approvals.status_at applies the expiry, `malformed` for a bad document."""
+    """The requests from GET /snapshot (the api has no route that lists approvals), each with
+    its status read now: approvals.status_at applies the expiry, `malformed` for a bad document."""
     docs = (_hub(a).get('/snapshot').get('collections') or {}).get('approvals') or {}
     now = datetime.datetime.now(datetime.timezone.utc)
     items = [dict(docs[k], id=k, status=approvals.status_at(docs[k], now) or 'malformed')
