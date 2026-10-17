@@ -35,10 +35,14 @@ or after an unpair or a session that ran out) is told so on the page and to run
   reply; the last 30 days, with Show older).
 - **To do.** Hand steps for you, each with the exact commands and a Copy button. Tick one when
   done. You can add, edit and delete your own. Tabs: To do and Done.
-- **Backlog.** Four tabs: New story (the form, then your stories in progress and filed; Withdraw
-  while a story is still submitted), Current backlog (each repository's open work, with priority,
-  status and text filters), Parked (backlog items a coordinator has parked waiting on you, with
-  their question, branch and age) and Completed (1, 7, 30 or 90 days).
+- **Backlog.** Three tabs: Current backlog (each repository's open work, with priority, status
+  and text filters), Parked (backlog items a coordinator has parked waiting on you, with their
+  question, branch and age) and Completed (1, 7, 30 or 90 days). Current backlog also shows your
+  stories: those in progress above the table, those filed or closed below it, with Withdraw while
+  a story is still submitted; the Backlog button counts the stories in progress (highlighted when
+  one has questions for you). A row's id in any of the three tabs opens its record page, and the
+  New story button opens a blank one ("The record page" below). The New story tab and its form
+  are gone; `stories add` still files a story.
 - **Docs.** The agents' documents (a plan, research, a visual choice), newest first, from the
   store's `pages/` and `page_html/` ("pages/<id> and page_html/<id>" below). Read here opens one in
   a full-screen reader; Close shuts it, and so does Esc while the focus is outside the document. Read only: nothing on the page writes or deletes a
@@ -332,7 +336,9 @@ that repo's coordinator.
 | backlog_id, added_at | PM | the record the coordinator filed |
 | closed_note, closed_at | PM, owner | why it was not added, or when it was withdrawn |
 
-Follow-up questions are ordinary questions with `story` set; the page links them both ways.
+Follow-up questions are ordinary questions with `story` set; the page links them both ways. The
+page has no story form: the owner writes new work on the record page instead ("The record page"
+below), and `stories add` still files a story.
 
 PM steps:
 1. On a `submitted` story, send it verbatim to that repo's coordinator (coordinators stay in
@@ -408,6 +414,64 @@ Never stored; read from their sources (`kitlib.hubsite.derived`, `kitlib.hubsite
   timer (`backlog_refresh_s` unset) the snapshot reads as the routes do.
 - usage: `launch.py usage` (docs/launcher.md "Usage").
 - agents: the agent definitions in `claude/agents`.
+
+## The record page
+One backlog record, read live and never part of the snapshot (`kitlib/hubsite/api.py` `record`,
+`record_new` and the record writes block; `kitlib/hubsite/serve.py` `SiteViews`). `{repo}` only
+picks a configured repository (`Views._named` in `kitlib/hubsite/backlog.py`); its folder never
+comes from the caller.
+- `GET /api/v1/records/{repo}/{id}` (owner and agents): `read_record` in
+  `kitlib/hubsite/backlog.py`, whose docstring lists the keys: every field, the body, the
+  blockers, the hold with its ruling or question, the branch for a pulled or parked record, and
+  `version`. `GET /api/v1/records/{repo}/new` is the blank record (`record_template`).
+- `POST /api/v1/records/{repo}` (owner only), body `id`, `summary`, `scope` (a list), `effort`,
+  `ref`: adds an unpriced record through the backlog library's add (`kitlib/hubsite/recordwrite.py`
+  `add`). It is written `found_on: none`, with the store's `Session: owner-hub` trailer and a
+  `review: owner-hub <date>` mark, so `pull` refuses it and `next` never offers it until a
+  coordinator runs `clear-review` (docs/backlog.md "Records").
+- `POST /api/v1/records/{repo}/{id}/edit` (owner only), body `version` (the one the read
+  answered), `changes` (`{key: [values]}`), `unset`, `body`, `ruling`: the backlog library's set.
+  A record that changed since that read is `conflict` on field `version`; read it again.
+- `POST /api/v1/records/{repo}/{id}/delete` (owner only), body `why`, `confirm`, `ruling`:
+  `confirm` must repeat the id, or the call is `invalid` on field `confirm` and nothing is
+  written. The store's delete rules apply unchanged: a live pull is refused until it is released.
+- `ruling` is sent only when the store's refusal asks for one (an owner-priced or owner-held
+  record); the store checks it as it checks a ruling given to `tools/backlog.py`.
+- Each write answers `lines`, what the store printed (its notes included), and an add or edit
+  also answers the record as it reads now. A store refusal is `invalid` in the store's words; a
+  record not there is `not_found`. A repository whose `.kit.json` names no backlog store, or whose
+  store cannot be written from the hub's checkout (a folder store outside a linked worktree), is
+  `store`: the owner sees the store's text, an agent or the tunnel the fixed phrase.
+
+On the page (the record page block in `kitlib/hubsite/web/index.html`, `RecordPageTest` in
+`tests/hubsite/test_page.py`), a row's id in Current backlog, Parked or Completed opens the record, and
+Back to the backlog returns. The record shows its id, repository and where it is (`open` or
+`completed`), then four sections:
+- Fields: every header field except the hold keys, one `key: value` line per value.
+- Blocker or hold: each `blocked_on` (with a button that opens the record it names), `owner_ask`,
+  `hold_ruling` and `q`, or "Not blocked or held."
+- Body: the record's text.
+- Branch: the branch, its tip, date, worktree and how far it is ahead of and behind main. Read
+  only.
+
+On an open record, Fields, Blocker or hold and Body each have an Edit button that opens the
+section as text. In the two field sections a key left out is unset, a changed key is sent with all
+its values, and a line that is not `key: value` is refused on the page. Save sends only what
+changed, at the version the page read, and draws the record the answer carries; a refusal shows
+as "Not saved: " and the store's text. A Ruling id box appears only after a refusal that names a
+ruling, and a ruling typed there is sent with the next save.
+
+Delete… (open records only) opens a panel with a reason and a box to type the id again; the
+Delete button stays disabled until both are filled and the typed id matches. After the delete the
+page reads the record again, which now shows as removed and has no Edit or Delete. A record the
+store cannot read ("A header line of this record is not key: value") says so above its sections.
+
+The New story button (Backlog, beside the backlog menu) opens a blank record for the backlog that
+menu picks, else the first repository: a backlog menu, then id, summary, scope (one path per line)
+and effort, defaulting to the first effort in the template. Create is enabled once id, summary and
+scope are filled; it adds the record and opens it. "Not added: " shows the store's text, such as a
+repository whose `.kit.json` names no backlog store (this kit's repository, on the implicit
+store, is one).
 
 ## Data from the old hub
 The hub was once a claude.ai artifact page, one copy per Claude account; it is retired. What the

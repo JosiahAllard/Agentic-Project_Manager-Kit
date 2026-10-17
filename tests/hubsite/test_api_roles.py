@@ -42,6 +42,15 @@ class Views(object):
     def record_template(self, repo):
         return {}
 
+    def record_add(self, repo, id, summary, scopes, effort, ref):
+        return {}
+
+    def record_edit(self, repo, id, version, changes, unset, body, ruling):
+        return {}
+
+    def record_delete(self, repo, id, why, ruling):
+        return {}
+
 
 def seed_question(store, status='open'):
     return store.add('questions', {'status': status, 'title': 't', 'options': OPTIONS}).id
@@ -94,6 +103,10 @@ ROWS = {
     ('GET', '/completed'): (None, None, None),
     ('GET', '/records/{repo}/new'): (None, None, None),
     ('GET', '/records/{repo}/{id}'): (None, None, None),
+    ('POST', '/records/{repo}'): (None, {'id': 'A', 'summary': 's', 'scope': ['x']}, None),
+    ('POST', '/records/{repo}/{id}/edit'): (None, {'version': 'v', 'changes': {'effort': 's'}},
+                                            None),
+    ('POST', '/records/{repo}/{id}/delete'): (None, {'why': 'w', 'confirm': 'X-1'}, None),
     ('GET', '/notices'): (None, None, None),
     ('GET', '/repos'): (None, None, None),
     ('GET', '/usage'): (None, None, None),
@@ -163,7 +176,9 @@ class RolesCase(unittest.TestCase):
                 ('POST', '/stories/{id}/withdraw'): OWNER, ('POST', '/to_pm'): OWNER,
                 ('POST', '/to_pm/send'): OWNER, ('POST', '/to_pm/{id}/reply'): AGENT,
                 ('POST', '/to_pm/{id}/edit'): OWNER, ('POST', '/to_pm/{id}/delete'): OWNER,
-                ('POST', '/inbox'): AGENT, ('POST', '/inbox/{id}/read'): OWNER}
+                ('POST', '/inbox'): AGENT, ('POST', '/inbox/{id}/read'): OWNER,
+                ('POST', '/records/{repo}'): OWNER, ('POST', '/records/{repo}/{id}/edit'): OWNER,
+                ('POST', '/records/{repo}/{id}/delete'): OWNER}
         have = {key(r): r.role for r in api.ROUTES}
         for k, role in sorted(want.items()):
             with self.subTest(route=k):

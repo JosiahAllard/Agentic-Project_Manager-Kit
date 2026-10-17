@@ -130,10 +130,11 @@ form.add textarea{min-height:44px}
 .flow span.on{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
 .flow span.past{color:var(--fg)}
 .links{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
-.story-to{margin:0;font:500 .85rem var(--f-body);color:var(--muted)}
-.story-to strong{color:var(--fg)}
 form.add select{font:inherit;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg)}
-form.add textarea.story{min-height:110px}
+.rec input[type=text],.rec textarea,.rec select{font:inherit;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg);width:100%;box-sizing:border-box}
+.rec textarea{min-height:110px;font-family:var(--f-mono)}
+.rec .kv{margin:0;overflow-wrap:anywhere}
+.rec .kv b{font:500 .85rem var(--f-mono)}
 .q.unread{border-left:4px solid var(--accent)}
 .quote{margin:0;padding-left:10px;border-left:3px solid var(--line);color:var(--muted);white-space:pre-wrap;overflow-wrap:anywhere;max-width:68ch}
 .reply{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;max-width:68ch}
@@ -201,8 +202,7 @@ button.danger{color:var(--warn)}
       <button class="tab" role="tab" data-tf="done" aria-selected="false" id="ttab-done">Done <span class="n" id="n-tdone">0</span></button>
     </div>
     <div class="tabs" role="tablist" id="stabs" data-for="backlog" hidden>
-      <button class="tab" role="tab" data-sf="new" aria-selected="true" id="stab-new">New story <span class="n" id="n-sactive">0</span></button>
-      <button class="tab" role="tab" data-sf="current" aria-selected="false" id="stab-current">Current backlog <span class="n" id="n-bcur">0</span></button>
+      <button class="tab" role="tab" data-sf="current" aria-selected="true" id="stab-current">Current backlog <span class="n" id="n-bcur">0</span></button>
       <button class="tab" role="tab" data-sf="parked" aria-selected="false" id="stab-parked">Parked <span class="n" id="n-p">0</span></button>
       <button class="tab" role="tab" data-sf="done" aria-selected="false" id="stab-done">Completed</button>
     </div>
@@ -221,6 +221,7 @@ button.danger{color:var(--warn)}
     <select id="repo" aria-label="Filter by repository"><option value="">All repos</option></select>
     <input type="search" id="idq" placeholder="Find by id or title" aria-label="Find a question, to-do or document by id or title">
     <select id="brepo" aria-label="Backlog" hidden><option value="">All backlogs</option></select>
+    <button class="primary" type="button" id="rec-new" hidden>New story</button>
   </div>
 
   <form class="add" id="addform" hidden>
@@ -232,13 +233,6 @@ button.danger{color:var(--warn)}
   <form class="add" id="pmform" hidden aria-label="Write to the PM">
     <div id="pm-fields"></div>
     <div class="act"><button class="primary" type="submit" id="pm-add" disabled>Add</button><span class="status" id="pm-addstatus" role="status"></span></div>
-  </form>
-
-  <form class="add" id="storyform" hidden>
-    <p class="story-to" id="story-repo" aria-live="polite"></p>
-    <input type="text" id="story-title" placeholder="Story title" aria-label="Story title" maxlength="200">
-    <textarea class="story" id="story-text" placeholder="What you want and why. The coordinator reviews it and asks you here if anything is unclear." aria-label="Story"></textarea>
-    <div class="act"><label class="urg" for="story-urgent"><input type="checkbox" id="story-urgent"> Urgent</label><button class="primary" type="submit" id="story-btn" disabled>Submit story</button><span class="status" id="story-status" role="status"></span></div>
   </form>
 
   <div class="list" id="list">
@@ -254,7 +248,7 @@ button.danger{color:var(--warn)}
 <script>
 (function(){
   const $ = s => document.querySelector(s);
-  const state = { docs: [], inbox: [], ifilter: "unread", todos: [], stories: [], backlog: [], completed: [], period: 7, bprio: new Set(["1", "2", "3"]), bstat: new Set(["open", "blocked", "parked", "pulled"]), bq: "", idq: "", usage: [], agents: [], parked: [], gone: {}, partial: {}, seen: null, repos: [], brepo: "", sfilter: "new", infotab: "usage", inboxtab: "questions", topm: [], pages: [], pageHtml: {}, pfilter: "queued", pmOlder: false, pmEdit: new Map(), todoEdit: new Map(), stale: {}, section: "questions", filter: "open", tfilter: "open", repo: "", editing: new Set() };
+  const state = { docs: [], inbox: [], ifilter: "unread", todos: [], stories: [], backlog: [], completed: [], period: 7, bprio: new Set(["1", "2", "3"]), bstat: new Set(["open", "blocked", "parked", "pulled"]), bq: "", idq: "", usage: [], agents: [], parked: [], gone: {}, partial: {}, seen: null, repos: [], brepo: "", sfilter: "current", rec: null, infotab: "usage", inboxtab: "questions", topm: [], pages: [], pageHtml: {}, pfilter: "queued", pmOlder: false, pmEdit: new Map(), todoEdit: new Map(), stale: {}, section: "questions", filter: "open", tfilter: "open", repo: "", editing: new Set() };
   if (location.hash === "#inbox") state.section = "inbox";
   if (location.hash === "#todo") state.section = "todo";
   if (location.hash === "#topm") state.section = "topm";
@@ -311,7 +305,7 @@ button.danger{color:var(--warn)}
   const why = e => (e && e.message) || "the hub server refused the write";
   const NOT_READY = "Waiting for the hub server", NOT_READY_WHY = "Nothing has been read from the hub server yet. The line at the top says why when it cannot be reached.";
 
-  try { const f = localStorage.getItem("oq.filter"); if (f) state.filter = f; const sct = localStorage.getItem("oq.section"); if (sct && !["#inbox", "#todo", "#questions", "#backlog", "#stories", "#usage", "#info", "#agents", "#parked", "#topm", "#docs"].includes(location.hash)) { state.section = {stories: "backlog", parked: "backlog", agents: "info", usage: "info", pages: "docs"}[sct] || sct; if (sct === "parked") state.sfilter = "parked"; } const sf = localStorage.getItem("oq.sfilter"); if (["new", "current", "parked", "done"].includes(sf) && location.hash !== "#parked") state.sfilter = sf; state.brepo = localStorage.getItem("oq.brepo") || ""; const pd = +localStorage.getItem("oq.period"); if ([1, 7, 30, 90].includes(pd)) state.period = pd; for (const [k, v] of [["bprio", "oq.bprio"], ["bstat", "oq.bstat"]]) { const x = JSON.parse(localStorage.getItem(v) || "null"); if (Array.isArray(x)) state[k] = new Set(x.map(String)); } } catch(e){}
+  try { const f = localStorage.getItem("oq.filter"); if (f) state.filter = f; const sct = localStorage.getItem("oq.section"); if (sct && !["#inbox", "#todo", "#questions", "#backlog", "#stories", "#usage", "#info", "#agents", "#parked", "#topm", "#docs"].includes(location.hash)) { state.section = {stories: "backlog", parked: "backlog", agents: "info", usage: "info", pages: "docs"}[sct] || sct; if (sct === "parked") state.sfilter = "parked"; } const sf = localStorage.getItem("oq.sfilter"); if (["current", "parked", "done"].includes(sf) && location.hash !== "#parked") state.sfilter = sf; state.brepo = localStorage.getItem("oq.brepo") || ""; const pd = +localStorage.getItem("oq.period"); if ([1, 7, 30, 90].includes(pd)) state.period = pd; for (const [k, v] of [["bprio", "oq.bprio"], ["bstat", "oq.bstat"]]) { const x = JSON.parse(localStorage.getItem(v) || "null"); if (Array.isArray(x)) state[k] = new Set(x.map(String)); } } catch(e){}
   // An answer's draft is kept in the browser's storage and in the page itself, so it survives a redraw
   // where the browser gives the page no storage.
   const draftKey = id => "oq.draft." + id, drafts = new Map();
@@ -407,7 +401,7 @@ button.danger{color:var(--warn)}
     $("#tabs").hidden = !q; $("#itabs").hidden = sc !== "inbox"; $("#ttabs").hidden = sc !== "todo"; $("#pmtabs").hidden = sc !== "topm"; $("#pmform").hidden = sc !== "topm" || !ready; $("#stabs").hidden = $("#brepo").hidden = sc !== "backlog"; $("#ftabs").hidden = sc !== "info";
     if (sc === "topm") pmCompose.fill();     // the repos arrive after the form is built: the menu is filled without a click
     $("#addform").hidden = sc !== "todo" || !ready;
-    $("#storyform").hidden = sc !== "backlog" || state.sfilter !== "new" || !ready;
+    $("#rec-new").hidden = sc !== "backlog" || !ready;
     q ? renderQuestions() : sc === "inbox" ? renderInbox() : sc === "todo" ? renderTodos() : sc === "topm" ? renderToPm() : sc === "info" ? renderInfo() : sc === "docs" ? renderDocs() : renderBacklog();
   }
 
@@ -476,7 +470,7 @@ button.danger{color:var(--warn)}
       for (const item of g.items) out.push(drawn(p => {
         const q = p.q ? state.docs.find(d => d.id === p.q) : null, age = ageOf(p.parked_at);
         return el("article", {class:"pk", id: "pk-" + p.id},
-          el("div", {class:"meta"}, el("span", {class:"id", text: p.item || p.id}),
+          el("div", {class:"meta"}, el("button", {class:"link", type:"button", text: p.item || p.id, onclick: () => openRecord(p.repo, p.item || p.id)}),
             age ? el("span", {class:"age" + (p.old ? " old" : ""), title: "Parked " + when(p.parked_at) + (PARKED_FROM[p.parked_at_from] || ""), text: age}) : el("span", {class:"age", text: "parked, time unknown"}),
             p.session ? el("span", {text: "session " + p.session}) : null),
           p.title ? el("h2", {text: p.title}) : null,
@@ -909,14 +903,14 @@ button.danger{color:var(--warn)}
     render();
     const n = document.getElementById("q-" + qid); if (n) n.scrollIntoView({block:"start"});
   }
+  // A story's card is on Current backlog (its in-progress cards above the table, filed ones below).
   function goStory(sid){
-    const st = state.stories.find(x => x.id === sid);
-    state.section = "backlog"; state.sfilter = "new"; state.repo = ""; $("#repo").value = "";
+    state.section = "backlog"; state.sfilter = "current"; state.rec = null; state.repo = ""; $("#repo").value = "";
     render();
     const n = document.getElementById("story-" + sid); if (n) n.scrollIntoView({block:"start"});
   }
 
-  // Backlog: New story (the form and your stories), Current backlog, Completed.
+  // Backlog: Current backlog (with the owner's story cards), Parked, Completed, and the record page a row or New story opens.
   // repo "all" is a scope (an item for every repo), never a menu choice: it shows under every repo.
   // Every repo menu lists the same items, only the real repos (repos/). An old tag maps to the repo
   // whose repos/ doc lists it in `aliases` (none by default); a tag that names no repo (machine)
@@ -941,25 +935,11 @@ button.danger{color:var(--warn)}
     state.brepo = hit || ""; sel.value = state.brepo;
   }
   function renderBacklog(){
-    fillBrepo(); storyTo();
-    const active = state.stories.filter(st => ACTIVE.includes(st.status));
-    $("#n-sactive").textContent = active.length; $("#n-bcur").textContent = state.backlog.length;
+    fillBrepo();
+    $("#n-bcur").textContent = state.backlog.length;
     document.querySelectorAll("#stabs .tab").forEach(t => t.setAttribute("aria-selected", String(t.dataset.sf === state.sfilter)));
-    state.sfilter === "current" ? renderCurrent() : state.sfilter === "parked" ? renderParked() : state.sfilter === "done" ? renderCompleted() : renderStories();
-  }
-  function renderStories(){
-    const mine = state.stories.filter(inB), active = mine.filter(st => ACTIVE.includes(st.status)), closed = mine.filter(st => !ACTIVE.includes(st.status));
-    const need = st => st.status === "questions" ? 1 : 0;
-    active.sort((a,b) => (b.urgent ? 1 : 0) - (a.urgent ? 1 : 0) || need(b) - need(a) || String(a.submitted_at||"").localeCompare(String(b.submitted_at||"")));
-    closed.sort((a,b) => String(b.added_at||b.closed_at||"").localeCompare(String(a.added_at||a.closed_at||"")));
-    if (!active.length && !closed.length) {
-      show(["repos"], el("div", {class:"empty"}, el("strong", {text: ready ? "No stories yet" + (state.brepo ? " in this backlog" : "") : NOT_READY}), ready ? (state.brepo ? "Write one above." : "Pick a backlog at the top and write one above.") + " The PM hands it to that repo's coordinator, whose follow-up questions come to your Questions tab." : NOT_READY_WHY));
-      return;
-    }
-    const out = [];
-    if (active.length) out.push(el("h3", {class:"blk", text: "In progress"}), ...active.map(st => drawn(storyCard, st)));
-    if (closed.length) out.push(el("h3", {class:"blk", text: "Filed or closed"}), ...closed.map(st => drawn(storyCard, st)));
-    show(["repos"], out);
+    if (state.rec) return show([], recView);
+    state.sfilter === "parked" ? renderParked() : state.sfilter === "done" ? renderCompleted() : renderCurrent();
   }
   // The backlog and completed views are the server's, one entry per repository (hubState flattens them).
   const prioOf = b => { const n = parseInt(b.priority, 10); return isNaN(n) ? 9 : n; };
@@ -975,10 +955,12 @@ button.danger{color:var(--warn)}
       t, el("span", {class: "c", text: String(counts[v] || 0)}))));
   }
   bsearch.addEventListener("input", () => { state.bq = bsearch.value; fillCurrent(); });
+  // A row's id opens its record page.
   function itemTable(rows, cols){
+    const cell = (c, b) => c[0] === "Id" ? el("button", {class:"link", type:"button", text: c[1](b), onclick: () => openRecord(b.repo, c[1](b))}) : c[1](b);
     return el("div", {class:"agwrap"}, el("table", {class:"agt"},
       el("thead", {}, el("tr", {}, ...cols.map(c => el("th", {text: c[0]})))),
-      el("tbody", {}, rows.map(b => el("tr", {}, ...cols.map(c => el("td", {class: c[2] || "", text: c[1](b)})))))));
+      el("tbody", {}, rows.map(b => el("tr", {}, ...cols.map(c => el("td", {class: c[2] || ""}, cell(c, b))))))));
   }
   function byRepo(rows, cols){
     const grp = b => String(b.repo || "").toLowerCase() === "all" ? "all" : canonRepo(b.repo) || "other";
@@ -987,12 +969,23 @@ button.danger{color:var(--warn)}
   }
   // A view the server last read more than 3 days ago says since when.
   const staleNote = rows => { const f = pmFresh(rows, Date.now()); return f.kind === "stale" ? " Last read " + when(f.since) + ", more than 3 days ago." : ""; };
+  // The owner's stories, on Current backlog: those in progress above the table, those filed or closed below it.
+  const bstories = el("div", {}), bfiled = el("div", {});
+  function fillStories(){
+    const mine = state.stories.filter(inB), active = mine.filter(st => ACTIVE.includes(st.status)), closed = mine.filter(st => !ACTIVE.includes(st.status));
+    const need = st => st.status === "questions" ? 1 : 0;
+    active.sort((a,b) => (b.urgent ? 1 : 0) - (a.urgent ? 1 : 0) || need(b) - need(a) || String(a.submitted_at||"").localeCompare(String(b.submitted_at||"")));
+    closed.sort((a,b) => String(b.added_at||b.closed_at||"").localeCompare(String(a.added_at||a.closed_at||"")));
+    bstories.replaceChildren(...(active.length ? [el("h3", {class:"blk", text: "In progress"}), ...active.map(st => drawn(storyCard, st))] : []));
+    bfiled.replaceChildren(...(closed.length ? [el("h3", {class:"blk", text: "Filed or closed"}), ...closed.map(st => drawn(storyCard, st))] : []));
+  }
   function renderCurrent(){
-    if (!state.backlog.length) { show(["backlog"], state.gone.backlog ? null : el("div", {class:"empty"}, el("strong", {text: ready ? "Nothing open" : NOT_READY}), ready ? "No repository's backlog has an open record, or no repository is configured on the hub server." : NOT_READY_WHY)); return; }
-    // The filter row stays in place between renders (the search box keeps its focus); only the notes above it are redrawn.
+    fillStories();
+    if (!state.backlog.length) { show(["backlog"], bstories, state.gone.backlog ? null : el("div", {class:"empty"}, el("strong", {text: ready ? "Nothing open" : NOT_READY}), ready ? "No repository's backlog has an open record, or no repository is configured on the hub server." : NOT_READY_WHY), bfiled); return; }
+    // The filter row stays in place between renders (the search box keeps its focus); only the notes and stories around it are redrawn.
     const list = $("#list");
     bnotes.replaceChildren(...goneNote("backlog"));
-    if (list.firstChild !== bnotes || list.childNodes.length !== 3) list.replaceChildren(bnotes, bfil, bout);
+    if (list.firstChild !== bnotes || list.childNodes.length !== 5) list.replaceChildren(bnotes, bstories, bfil, bout, bfiled);
     if (bsearch.value !== state.bq) bsearch.value = state.bq;
     fillCurrent();
   }
@@ -1068,6 +1061,125 @@ button.danger{color:var(--warn)}
       parts.push(el("div", {class:"act"}, w, status));
     }
     return el("article", {class: "q" + (live ? "" : " logged") + (st.urgent && live ? " urgent" : ""), id: "story-" + st.id}, ...parts);
+  }
+
+  // ---- The record page: one backlog record, each section edited through the store (docs/action-hub.md "The record page").
+  // state.rec is {repo, id} (id null: a blank record); recView is the page drawn for it, kept across redraws.
+  const HOLD = ["blocked_on", "owner_ask", "hold_ruling", "q"];
+  let recView = null;
+  const recPage = inner => el("div", {class:"pmf rec"}, el("div", {class:"links"}, el("button", {class:"link", type:"button", text:"Back to the backlog", onclick: closeRecord})), inner);
+  const recSay = (n, cls, text) => { n.className = cls; n.textContent = text; };
+  function closeRecord(){ state.rec = null; recView = null; render(); }
+  function openRecord(repo, id){ state.rec = {repo, id}; recView = recPage(el("p", {class:"status", role:"status", text:"Reading…"})); render(); loadRecord(); }
+  async function loadRecord(){
+    const r = state.rec; if (!r) return;
+    let inner;
+    try {
+      const d = await hub.call("GET", "/records/" + seg(r.repo) + "/" + (r.id == null ? "new" : seg(r.id)));
+      inner = r.id == null ? blankRecord(r.repo, d) : recordView(d);
+    } catch (e) { inner = el("p", {class:"status err", role:"status", text: "Cannot read " + (r.id == null ? "a blank record" : r.id) + ": " + why(e)}); }
+    if (state.rec !== r) return;
+    recView = recPage(inner); render();
+  }
+  function showRecord(d){ recView = recPage(recordView(d)); render(); }
+  // The ruling id, asked for only when the store's refusal names one (the PM's default; the one place to switch it).
+  function rulingField(){
+    const n = el("input", {type:"text", placeholder:"Ruling id", "aria-label":"Ruling id", hidden:true});
+    n.ask = e => { if (/ruling/.test(why(e))) n.hidden = false; };
+    n.put = b => { if (!n.hidden && n.value.trim()) b.ruling = n.value.trim(); return b; };
+    return n;
+  }
+  // One section: what it shows, and an Edit that opens its text; post turns the text into the edit's body
+  // (null: nothing changed). Every save is pinned to the version the page read.
+  function recSection(d, title, shown, text, post){
+    const box = el("div", {class:"pk"}, el("h2", {text: title}), el("div", {}, ...shown));
+    if (!post || d.where !== "open") return box;
+    const ta = el("textarea", {"aria-label": title}), ruling = rulingField(), status = el("span", {class:"status", role:"status"});
+    const save = el("button", {class:"primary", type:"button", text:"Save"}), cancel = el("button", {class:"link", type:"button", text:"Cancel"});
+    const pane = el("div", {class:"pmf", hidden:true}, ta, ruling, el("div", {class:"act"}, save, cancel, status));
+    const open = el("button", {class:"link", type:"button", text:"Edit " + title.toLowerCase()});
+    open.addEventListener("click", () => { ta.value = text; pane.hidden = false; open.hidden = true; recSay(status, "status", ""); });
+    cancel.addEventListener("click", () => { pane.hidden = true; open.hidden = false; });
+    save.addEventListener("click", async () => {
+      let body;
+      try { body = post(ta.value); } catch (e) { recSay(status, "status err", why(e)); return; }
+      if (!body) { recSay(status, "status", "Nothing changed."); return; }
+      save.disabled = true; recSay(status, "status", "Saving…");
+      try { const out = await write("/records/" + seg(d.repo) + "/" + seg(d.id) + "/edit", ruling.put(Object.assign({version: d.version}, body))); showRecord(out.record); }
+      catch (e) { recSay(status, "status err", "Not saved: " + why(e)); ruling.ask(e); save.disabled = false; }
+    });
+    box.append(open, pane);
+    return box;
+  }
+  // A field section's text is one "key: value" line per value; a key left out is unset.
+  const kvText = rows => rows.map(f => f[0] + ": " + f[1]).join("\n");
+  function fieldPost(d, rows){
+    return txt => {
+      const now = {}, was = {};
+      for (const line of txt.split("\n").map(s => s.trim()).filter(Boolean)) {
+        const i = line.indexOf(":"); if (i < 1) throw new Error("Each line is key: value");
+        (now[line.slice(0, i).trim()] ||= []).push(line.slice(i + 1).trim());
+      }
+      for (const [k, v] of rows) (was[k] ||= []).push(v);
+      const changes = {}, unset = Object.keys(was).filter(k => !(k in now));
+      for (const k of Object.keys(now)) if (JSON.stringify(now[k]) !== JSON.stringify(was[k])) changes[k] = now[k];
+      return Object.keys(changes).length || unset.length ? {changes, unset} : null;
+    };
+  }
+  function recordView(d){
+    const kv = (k, v) => el("p", {class:"kv"}, el("b", {text: k + ": "}), String(v == null ? "" : v));
+    const plain = d.fields.filter(f => !HOLD.includes(f[0])), hold = d.fields.filter(f => HOLD.includes(f[0]));
+    const parts = [el("div", {class:"meta"}, el("span", {class:"id", text: d.id}), el("span", {class:"chip", text: d.repo}), el("span", {class:"chip", text: d.where}))];
+    if (d.removed) parts.push(el("p", {class:"gone", role:"status", text: "This record is " + d.removed.how + (d.removed.at ? " (" + d.removed.at + ")" : "") + (d.removed.subject ? ": " + d.removed.subject : "") + "."}));
+    if (!d.readable) parts.push(el("p", {class:"gone", role:"status", text: "A header line of this record is not key: value; the store refuses edits until it is fixed."}));
+    parts.push(recSection(d, "Fields", plain.map(f => kv(f[0], f[1])), kvText(plain), fieldPost(d, plain)));
+    const held = [...d.blockers.map(b => el("p", {class:"kv"}, el("b", {text: "blocked on: "}), b.value + " ", b.target ? el("button", {class:"link", type:"button", text:"open " + b.target, onclick: () => openRecord(d.repo, b.target)}) : null)),
+      ...["owner_ask", "hold_ruling", "q"].filter(k => d.hold[k]).map(k => kv(k, d.hold[k]))];
+    parts.push(recSection(d, "Blocker or hold", held.length ? held : [el("p", {class:"status", text:"Not blocked or held."})], kvText(hold), fieldPost(d, hold)));
+    parts.push(recSection(d, "Body", [el("p", {class:"kv", text: d.body || "(no body)"})], d.body || "", txt => txt === (d.body || "") ? null : {body: txt}));
+    const b = d.branch;
+    parts.push(recSection(d, "Branch", b ? [kv("branch", b.name + " (" + b.source + ")"),
+      ...(b.error ? [kv("error", b.error)] : b.exists ? [kv("tip", b.tip + " " + b.subject), kv("date", b.date), kv("worktree", b.worktree || "none"), kv("ahead / behind main", b.ahead + " / " + b.behind)] : [kv("tip", "not found")])]
+      : [el("p", {class:"status", text:"No branch: the record is not pulled or parked."})], "", null));
+    if (d.where === "open") parts.push(deletePanel(d));
+    return el("div", {class:"pmf"}, ...parts);
+  }
+  // Delete is the owner's: the record's id typed again and a reason, then the store's own checks.
+  function deletePanel(d){
+    const reason = el("input", {type:"text", placeholder:"Why delete it", "aria-label":"Why delete it"});
+    const typed = el("input", {type:"text", placeholder:"Type " + d.id + " to confirm", "aria-label":"Type the id to confirm"});
+    const ruling = rulingField(), status = el("span", {class:"status", role:"status"});
+    const go = el("button", {class:"danger", type:"button", text:"Delete " + d.id, disabled:true});
+    const check = () => { go.disabled = !(reason.value.trim() && typed.value.trim() === d.id); };
+    reason.addEventListener("input", check); typed.addEventListener("input", check);
+    const pane = el("div", {class:"pmf", hidden:true}, reason, typed, ruling, el("div", {class:"act"}, go, status));
+    const open = el("button", {class:"link", type:"button", text:"Delete…", onclick: () => { pane.hidden = false; open.hidden = true; }});
+    go.addEventListener("click", async () => {
+      go.disabled = true; recSay(status, "status", "Deleting…");
+      try { await write("/records/" + seg(d.repo) + "/" + seg(d.id) + "/delete", ruling.put({why: reason.value.trim(), confirm: typed.value.trim()})); loadRecord(); }
+      catch (e) { recSay(status, "status err", "Not deleted: " + why(e)); ruling.ask(e); check(); }
+    });
+    return el("div", {class:"pk"}, el("h2", {text:"Delete"}), open, pane);
+  }
+  // A blank record: what the store needs to add one (id, summary, scope); the rest is edited once it exists.
+  function blankRecord(repo, t){
+    const sel = el("select", {"aria-label":"Backlog"}, ...knownRepos().map(r => el("option", {value: r, text: r})));
+    sel.value = repo; sel.addEventListener("change", () => openRecord(sel.value, null));
+    const id = el("input", {type:"text", placeholder:"Id (" + t.id_grammar + ")", "aria-label":"Id"});
+    const summary = el("input", {type:"text", placeholder:"Summary", "aria-label":"Summary"});
+    const scope = el("textarea", {placeholder:"Scope: one path per line", "aria-label":"Scope"});
+    const effort = el("select", {"aria-label":"Effort"}, ...t.efforts.map(v => el("option", {value: v, text: "effort " + v})));
+    effort.value = t.efforts[0];
+    const go = el("button", {class:"primary", type:"button", text:"Create", disabled:true}), status = el("span", {class:"status", role:"status"});
+    const lines = () => scope.value.split("\n").map(s => s.trim()).filter(Boolean);
+    const check = () => { go.disabled = !(id.value.trim() && summary.value.trim() && lines().length); };
+    [id, summary, scope].forEach(n => n.addEventListener("input", check));
+    go.addEventListener("click", async () => {
+      const rid = id.value.trim(); go.disabled = true; recSay(status, "status", "Adding…");
+      try { await write("/records/" + seg(repo), {id: rid, summary: summary.value.trim(), scope: lines(), effort: effort.value}); openRecord(repo, rid); }
+      catch (e) { recSay(status, "status err", "Not added: " + why(e)); check(); }
+    });
+    return el("div", {class:"pk"}, el("h2", {text:"New story"}), sel, id, summary, scope, effort, el("div", {class:"act"}, go, status));
   }
 
   // The Questions, Inbox and To-do repo menu: every repo the PM knows plus any the rows name.
@@ -1288,33 +1400,12 @@ button.danger{color:var(--warn)}
   });
   $("#stabs").addEventListener("click", e => {
     const t = e.target.closest(".tab"); if (!t) return;
-    state.sfilter = t.dataset.sf; try { localStorage.setItem("oq.sfilter", state.sfilter); } catch(err){}
+    state.sfilter = t.dataset.sf; state.rec = null; try { localStorage.setItem("oq.sfilter", state.sfilter); } catch(err){}
     render();
   });
-  function storyTo(){
-    const r = state.brepo;
-    $("#story-repo").replaceChildren(...(r ? ["Adding to the ", el("strong", {text: r}), " backlog"] : ["Pick a backlog at the top to add a story."]));
-    $("#story-btn").disabled = !(r && $("#story-title").value.trim() && $("#story-text").value.trim());
-  }
   $("#brepo").addEventListener("change", e => { state.brepo = e.target.value; try { localStorage.setItem("oq.brepo", state.brepo); } catch(err){} render(); });
-  const sR = {get value(){ return state.brepo; }}, sT = $("#story-title"), sX = $("#story-text"), sB = $("#story-btn"), sS = $("#story-status");
-  try { const d = JSON.parse(localStorage.getItem("oq.story") || "null"); if (d) { sT.value = d.t || ""; sX.value = d.x || ""; } } catch(e){}
-  // The server takes a story only with a repository, a title and its text.
-  const sCheck = () => { sB.disabled = !(sR.value && sT.value.trim() && sX.value.trim()); try { localStorage.setItem("oq.story", JSON.stringify({t: sT.value, x: sX.value})); } catch(e){} };
-  sCheck();
-  [sT, sX].forEach(n => n.addEventListener("input", sCheck));
-  $("#storyform").addEventListener("submit", async e => {
-    e.preventDefault();
-    const title = sT.value.trim(), story = sX.value.trim(); if (!title || !story || !sR.value) return;
-    sB.disabled = true; sS.className = "status"; sS.textContent = "Submitting…";
-    try {
-      await hub.post("/stories", { repo: sR.value, title, story, urgent: $("#story-urgent").checked });
-      sT.value = ""; sX.value = ""; $("#story-urgent").checked = false; sCheck(); sS.textContent = "Submitted. The PM hands it to the coordinator.";
-      await refresh().catch(() => {});
-    } catch (err) {
-      sS.className = "status err"; sS.textContent = "Not submitted: " + why(err) + ". Your draft is kept."; sB.disabled = false;
-    }
-  });
+  // New story opens a blank record page for the backlog picked at the top (the first one under All).
+  $("#rec-new").addEventListener("click", () => { const r = state.brepo || knownRepos()[0]; if (r) openRecord(r, null); });
   $("#repo").addEventListener("change", e => { state.repo = e.target.value; render(); });
 
   // Loading. One snapshot fills every list. Then one long-poll at a time waits for the next change and the
