@@ -89,7 +89,7 @@ class IntoMain(Base):
         for text in (r'cd 1:\; New-Item x.txt', r'cd _:\; New-Item x.txt', 'cd é:\\; New-Item x.txt'):
             with self.subTest(text):
                 d = self.denied(self.run_ps(text), 'main-checkout')
-                self.assertIn('Edit or Write tool on a literal path', d.reason)
+                self.assertIn('Name a literal path inside your worktree', d.reason)
 
     def test_literal_path_filesystem_provider(self):
         d = self.denied(self.run_ps(r'New-Item -LiteralPath FileSystem::{main}\x.txt'), 'main-checkout')
