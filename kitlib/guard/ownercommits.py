@@ -30,14 +30,58 @@ The author email is what the committer says it is (`--author`, GIT_AUTHOR_EMAIL)
 stops a plain agent commit, not an agent that forges the owner's identity. The guard's
 owner-identity rule (kitlib.guard.rules) denies a session other than the owner's setting the
 owner's email on the command line; an identity in the session's starting environment is not seen.
+
+An owner approval (docs/commit.md "Owner approval"): a commit not authored by the owner that would
+be a violation is not one when it carries exactly one `Owner-Approval: hub:A-<n>` trailer
+(TRAILER) and the hub server verifies that approval for exactly this commit
+(kitlib.hubsite.approvals, Verifier with the commit): the commit has one parent, the approval's
+base; every path it changes, with its blob at the commit (None when it deletes it), is the
+approval's, all of them; and the approval was consumed by this commit. A merge, a root commit, a
+value that is not one hub:A-<n>, and any doubt of the hub (not running, no answer) keep the
+violation, with why in its `why`. `approvals` is the seam: an object with
+check(root, doc_id, head, blobs, commit) -> (ok, why); default_approvals() is the hub's.
 """
 import collections
+import re
 
 from kitlib.git import cmd, refs
 
-Violation = collections.namedtuple('Violation', 'sha author paths')
+Violation = collections.namedtuple('Violation', 'sha author paths why', defaults=('',))
 NOREPLACE = ['--no-replace-objects']
 LIST_TIMEOUT = 120    # seconds
+TRAILER = 'Owner-Approval'          # the one key; kitlib.config.owner refuses it as its own trailer
+APPROVAL_RE = re.compile(r'hub:(A-[1-9][0-9]*)\Z')
+_SEP = '\x01'                       # between the trailer values of one commit in commits()
+
+
+class HubApprovals(object):
+    """The approvals seam of violations() that asks the hub server (approvals.Verifier, with the
+    commit). `client` and `repo` default to the machine's hub (kitlib.hubsite.settings) and the
+    checkout's origin remote; any failure to make either is a refusal, never a pass."""
+
+    def __init__(self, client=None, repo=None):
+        self.client, self.repo = client, repo
+
+    def check(self, root, doc_id, head, blobs, commit):
+        from kitlib.hubsite import approvals as ap      # here: a guard without the hub still loads
+        repo = self.repo
+        if repo is None:
+            repo, why = ap.remote_id(root)
+            if repo is None:
+                return False, 'the repository has no remote to name it: %s' % why
+        client = self.client
+        if client is None:
+            try:
+                from kitlib.hubsite import client as hubclient, settings
+                client = hubclient.Client(settings.load().port)
+            except Exception as e:      # noqa: BLE001 - fail closed: no client is no approval
+                return False, ap.WHY_SERVER % type(e).__name__
+        return ap.Verifier(client).verify(doc_id, repo, head, blobs, commit=commit)
+
+
+def default_approvals():
+    """The approvals seam violations() uses when given none: the hub server's (HubApprovals)."""
+    return HubApprovals()
 
 
 def _git(root, args, env, timeout=cmd.GIT_TIMEOUT):
@@ -58,13 +102,15 @@ def _parse_merge_tree(raw):
 
 
 def commits(root, tip, exclude=(), env=None):
-    """`([(sha, [parents], author email)], None)` reachable from `tip` and from no `exclude`
-    revision, or `(None, why)`."""
+    """`([(sha, [parents], author email, [Owner-Approval values])], None)` reachable from `tip`
+    and from no `exclude` revision, or `(None, why)`."""
     for rev in [tip] + list(exclude):
         why = refs.bad_rev(rev)
         if why:
             return None, why
-    args = ['log', '--no-use-mailmap', '--format=%H %P%x00%ae%x00', tip]
+    args = ['log', '--no-use-mailmap',
+            '--format=%%H %%P%%x00%%ae%%x00%%(trailers:key=%s,valueonly,separator=%%x01)%%x00'
+            % TRAILER, tip]
     if exclude:
         args += ['--not'] + list(exclude)
     out, why = _git(root, args + ['--'], env, timeout=LIST_TIMEOUT)
@@ -72,11 +118,12 @@ def commits(root, tip, exclude=(), env=None):
         return None, why
     fields = out.split('\0')
     found = []
-    for i in range(0, len(fields) - 1, 2):
+    for i in range(0, len(fields) - 2, 3):
         ids = fields[i].split()
         if not ids:
             continue
-        found.append((ids[0], ids[1:], fields[i + 1].strip().lower()))
+        values = [v.strip() for v in fields[i + 2].split(_SEP) if v.strip()]
+        found.append((ids[0], ids[1:], fields[i + 1].strip().lower(), values))
     return found, None
 
 
@@ -148,10 +195,47 @@ def changed(root, sha, parents, env=None):
     return sorted(paths), None
 
 
-def violations(root, rules, tip, exclude=(), env=None):
+def blobs_at(root, sha, paths, env=None):
+    """`({path: blob id at `sha`, None where `sha` has no such file}, None)` for `paths`, in one
+    `git ls-tree`, or `(None, why)`."""
+    out, why = _git(root, ['ls-tree', '-r', '-z', '--full-tree', sha, '--'] + list(paths), env)
+    if out is None:
+        return None, why
+    found = dict.fromkeys(paths)
+    for row in _paths(out):
+        meta, tab, name = row.partition('\t')
+        cols = meta.split()
+        if tab and name in found and len(cols) == 3 and cols[1] == 'blob':
+            found[name] = cols[2]
+    return found, None
+
+
+def approval_refusal(root, sha, parents, values, paths, approvals, env=None):
+    """`(refusal, None)` for the commit `sha` (`parents`, its Owner-Approval `values`, the
+    `paths` it changes): refusal None when it carries no approval, '' when the hub verifies its
+    approval (module docstring), else why the approval does not count. `(None, why)` when git
+    cannot read the commit's blobs."""
+    if not values:
+        return None, None
+    if len(values) != 1 or not APPROVAL_RE.match(values[0]):
+        return 'its Owner-Approval %s is not one hub:A-<n>' % ', '.join(values), None
+    doc_id = APPROVAL_RE.match(values[0]).group(1)
+    name = 'owner approval hub:%s' % doc_id
+    if len(parents) != 1:
+        return '%s refused: %s' % (name, 'a merge cannot carry an owner approval' if parents
+                                   else 'a root commit has no approved base'), None
+    blobs, why = blobs_at(root, sha, paths, env)
+    if blobs is None:
+        return None, why
+    ok, why = (approvals or default_approvals()).check(root, doc_id, parents[0], blobs, sha)
+    return ('' if ok else '%s refused: %s' % (name, why or 'no reason given')), None
+
+
+def violations(root, rules, tip, exclude=(), env=None, approvals=None):
     """`([Violation], None)`: the commits from `tip` not in `exclude` that change an owner-only path
-    that landing `tip` on `exclude` would change (module docstring) and are not authored by the
-    owner; `(None, why)` when git cannot tell."""
+    that landing `tip` on `exclude` would change (module docstring), are not authored by the
+    owner and carry no owner approval the hub verifies (`approvals`: the seam, default
+    default_approvals()); `(None, why)` when git cannot tell."""
     found, why = commits(root, tip, exclude, env)
     if found is None:
         return None, why
@@ -163,25 +247,33 @@ def violations(root, rules, tip, exclude=(), env=None):
         if not any(rules.is_locked(p) for p in net):
             return [], None
     judged = [c for c in found if not rules.is_owner(c[2])]
-    plain, why = plain_changes(root, [sha for sha, parents, _ in judged if len(parents) <= 1], env)
+    plain, why = plain_changes(root, [c[0] for c in judged if len(c[1]) <= 1], env)
     if plain is None:
         return None, why
     bad = []
-    for sha, parents, author in judged:
+    for sha, parents, author, values in judged:
         paths, why = (plain[sha], None) if sha in plain else changed(root, sha, parents, env)
         if paths is None:
             return None, why
         locked = [p for p in paths if rules.is_locked(p) and (net is None or p in net)]
-        if locked:
-            bad.append(Violation(sha, author, locked))
+        if not locked:
+            continue
+        refusal, why = approval_refusal(root, sha, parents, values, paths, approvals, env)
+        if why:
+            return None, why
+        if refusal != '':
+            bad.append(Violation(sha, author, locked, refusal or ''))
     return bad, None
 
 
 def describe(rules, bad, limit=5):
-    """One line naming the offending commits (at most `limit`), their authors and paths, and why
-    no author counts as the owner when that is the case."""
-    parts = ['%s by %s changes %s' % (v.sha[:10], v.author or '(no email)',
-                                      ', '.join(v.paths[:5]) + (' ...' if len(v.paths) > 5 else ''))
+    """One line naming the offending commits (at most `limit`), their authors and paths, why an
+    owner approval a commit carries did not count, and why no author counts as the owner when
+    that is the case."""
+    parts = ['%s by %s changes %s%s' % (v.sha[:10], v.author or '(no email)',
+                                        ', '.join(v.paths[:5]) + (' ...' if len(v.paths) > 5
+                                                                  else ''),
+                                        ' (%s)' % v.why if v.why else '')
              for v in bad[:limit]]
     more = ' (and %d more)' % (len(bad) - limit) if len(bad) > limit else ''
     line = ('owner-only paths changed by a commit not authored by the owner: %s%s'
