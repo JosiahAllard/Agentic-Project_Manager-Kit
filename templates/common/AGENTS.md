@@ -124,6 +124,9 @@ Any denial: stop and report it.
   refusal printed by a repo tool and caused by your own mistake (`USAGE:`, `NOT FOUND:`,
   `ERROR:`) may be fixed and retried ONCE; any other refusal is reported verbatim, never routed
   around.
+- Never put the owner's personal details (email address, name, account names) in anything sent off this machine.
+- Never chain a write (commit, merge, reset, backlog.py write, landing command) with other commands in one shell call.
+- A safety-check or hook refusal is final: stop at the first, report it verbatim; no retry, rewording, other shell or agent.
 - Secrets never enter the repo, a URL or a transcript. Deleting data is the owner's action:
   report the exact path and hash.
 - Citations name `path` plus `Type.member`, heading or quoted title, and you have read it. Never
