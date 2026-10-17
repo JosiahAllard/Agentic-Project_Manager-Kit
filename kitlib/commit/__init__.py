@@ -1104,9 +1104,14 @@ def _consume(req, lines):
         raise _Stop(REFUSED, 'refused: --consume %s is not a commit here. Nothing was consumed.'
                     % req.consume)
     client, why = approval.hub_client(req.hub)
-    line = None
+    line, consumed = None, False
     if client is not None:
-        line, why = approval.consume_commit(req.root, client, did, req.owner_approval, sha)
+        line, why, consumed = approval.consume_commit(req.root, client, did, req.owner_approval,
+                                                      sha)
+    if line is None and consumed:
+        raise _Stop(REFUSED, approval.consume_refusal(req.owner_approval, sha, why, True),
+                    'Run this again to ask the hub again: python %s' % approval.retry_command(
+                        os.path.join(KIT_ROOT, 'tools', 'commit.py'), req.owner_approval, sha))
     if line is None:
         raise _Stop(REFUSED, 'refused: %s. %s was not consumed.' % (why, req.owner_approval))
     lines.append(line)
@@ -1259,16 +1264,18 @@ def _commit(req, lines):
         if not (ok and iok):
             lines.append('          fix it in a follow-up commit before this branch can land')
     if hub:
-        line, why = approval.consume_commit(root, hub.client, hub.did, req.owner_approval, new)
+        line, why, consumed = approval.consume_commit(root, hub.client, hub.did,
+                                                      req.owner_approval, new)
         if line:
             lines.append(line)
         else:
             misaligned = [
-                'refused: %s was not consumed: %s.' % (req.owner_approval, why),
-                'The commit %s stands; gate land and the pre-push hook refuse it until the approval '
-                'is consumed. Run in this work tree: python %s' % (
-                    new[:12], approval.retry_command(os.path.join(KIT_ROOT, 'tools', 'commit.py'),
-                                                     req.owner_approval, new))
+                approval.consume_refusal(req.owner_approval, new, why, consumed),
+                'The commit %s stands; gate land and the pre-push hook refuse it until the hub '
+                'verifies the approval as consumed by it. Run in this work tree%s: python %s' % (
+                    new[:12], ' to ask the hub again' if consumed else '',
+                    approval.retry_command(os.path.join(KIT_ROOT, 'tools', 'commit.py'),
+                                           req.owner_approval, new))
             ] + list(misaligned)
     if misaligned:
         raise _Stop(REFUSED, *misaligned)

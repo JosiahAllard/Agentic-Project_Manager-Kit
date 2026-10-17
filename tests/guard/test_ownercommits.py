@@ -13,6 +13,7 @@ from kitlib.guard import ownercommits as oc
 from kitlib.hubsite import approvals as ap
 from kitlib.hubsite import serve
 from tests import gitfixture
+from tests.realgit import real_git
 
 OWNER = 'owner@example.invalid'
 AGENT = 'agent@example.invalid'
@@ -399,10 +400,8 @@ def approval_message(subject, *values):
     return '%s\n\n%s' % (subject, '\n'.join('Owner-Approval: %s' % v for v in values))
 
 
-class OwnerApprovals(OwnerCommitsCase):
-    """An agent commit of an owner-only path counts as the owner's when its Owner-Approval:
-    hub:A-<n> trailer names an approval the hub verifies for exactly that commit: its parent as
-    the base, every path it changes with the approved blob, and consumed by it."""
+class ApprovalsCase(OwnerCommitsCase):
+    """main holds the owner's CLAUDE.md; approvals are signed into a stand-in hub."""
 
     def setUp(self):
         OwnerCommitsCase.setUp(self)
@@ -439,6 +438,12 @@ class OwnerApprovals(OwnerCommitsCase):
         if consume:
             self.consume(doc_id, sha)
         return sha
+
+
+class OwnerApprovals(ApprovalsCase):
+    """An agent commit of an owner-only path counts as the owner's when its Owner-Approval:
+    hub:A-<n> trailer names an approval the hub verifies for exactly that commit: its parent as
+    the base, every path it changes with the approved blob, and consumed by it."""
 
     def test_an_approved_commit_that_consumed_its_approval_is_not_a_violation(self):
         sha = self.approved_commit()
@@ -550,6 +555,50 @@ class OwnerApprovals(OwnerCommitsCase):
         line = oc.describe(self.rules, self.judge(sha))
         self.assertIn('%s by %s changes CLAUDE.md (owner approval hub:A-1 refused: %s)'
                       % (sha[:10], AGENT, ap.WHY_COMMIT), line)
+
+    def test_a_root_commit_cannot_carry_an_approval(self):
+        self.repo.git('checkout', '-q', '--orphan', 'other')
+        self.repo.git('rm', '-q', '-r', '--cached', '.')
+        sha = self.commit_as(AGENT, approval_message('root', 'hub:A-1'),
+                             {'CLAUDE.md': 'approved\n'})
+        found, why = oc.violations(self.repo.root, self.rules, sha, approvals=self.hub)
+        self.assertIsNone(why)
+        self.assertEqual([v.sha for v in found], [sha])
+        self.assertIn('a root commit has no approved base', found[0].why)
+        self.assertEqual(self.hub.asked, [])
+
+
+@real_git('update-index --cacheinfo with a symbolic link or gitlink mode: the fake has none')
+class NotARegularFile(ApprovalsCase):
+    """An approval holds regular files: a commit that records an approved path as a symbolic link
+    (with the approved blob) or a gitlink (which has no blob, as a deletion has none) is refused
+    without asking the hub."""
+
+    def entry_commit(self, mode, oid, doc_id):
+        self.repo.git('update-index', '--cacheinfo', '%s,%s,CLAUDE.md' % (mode, oid))
+        self.repo.git('-c', 'user.email=%s' % AGENT, 'commit', '-q', '-m',
+                      approval_message('owner-approved edit', 'hub:A-1'))
+        sha = self.repo.git('rev-parse', 'HEAD')
+        self.consume(doc_id, sha)
+        return sha
+
+    def assert_refused_unasked(self, sha, mode):
+        found = self.judge(sha)
+        self.assertEqual([(v.sha, v.paths) for v in found], [(sha, ['CLAUDE.md'])])
+        self.assertIn('owner approval hub:A-1 refused: CLAUDE.md (mode %s) %s'
+                      % (mode, oc.NOT_A_FILE), found[0].why)
+        self.assertEqual(self.hub.asked, [])
+
+    def test_a_symbolic_link_with_the_approved_blob_is_refused(self):
+        doc_id = self.approve({'CLAUDE.md': 'approved\n'})
+        self.repo.write('blob.txt', 'approved\n')
+        blob = self.repo.git('hash-object', '-w', 'blob.txt')
+        self.assertEqual(blob, ap.blob_id('approved\n'))
+        self.assert_refused_unasked(self.entry_commit('120000', blob, doc_id), '120000')
+
+    def test_a_gitlink_in_place_of_an_approved_delete_is_refused(self):
+        doc_id = self.approve({'CLAUDE.md': None})
+        self.assert_refused_unasked(self.entry_commit('160000', self.main, doc_id), '160000')
 
 
 if __name__ == '__main__':

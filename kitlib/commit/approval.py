@@ -19,8 +19,8 @@ each answers why it refuses, or None.
   staged_error(doc, head, staged, snap)
                                     why what was staged is not the approved blobs on its base
   consume_commit(root, client, doc_id, value, sha)
-                                    (line, why): consume the approval for the commit `sha`, then
-                                    ask the hub to verify it for that commit
+                                    (line, why, consumed): consume the approval for the commit
+                                    `sha`, then ask the hub to verify it for that commit
 
 The hub is asked through kitlib.hubsite (approvals.Verifier and approvals.consume, the agent's
 calls); every failure to ask it is a refusal, never a pass. The commit gate land and the pre-push
@@ -50,6 +50,15 @@ def trailer(value):
 def retry_command(tool, value, sha):
     """The command line (after `python`) that consumes `value` for the commit `sha`."""
     return '%s --owner-approval %s --consume %s' % (tool, value, sha)
+
+
+def consume_refusal(value, sha, why, consumed):
+    """The `refused:` line for a consume_commit of `value` for the commit `sha` that failed:
+    `consumed` says whether the hub did consume it (consume_commit)."""
+    if consumed:
+        return ('refused: %s was consumed by %s, and the hub does not verify it for that commit: '
+                '%s.' % (value, sha[:12], why))
+    return 'refused: %s was not consumed: %s.' % (value, why)
 
 
 def usage_error(req):
@@ -221,6 +230,9 @@ def staged_error(doc, head, staged, snap):
             ', '.join(sorted(staged)) or 'none', ', '.join(want))
     for f in doc['files']:
         entry = snap.get(f['path'])
+        if entry and entry[0] not in oc.REGULAR_MODES:
+            return ('the staged %s has mode %s: an approval holds regular files only (100644 or '
+                    '100755)' % (f['path'], entry[0]))
         if (entry[1] if entry else None) != f.get('blob'):
             return ('the staged %s is not the approved blob (a git filter or .gitattributes '
                     'changed it on staging)' % f['path'])
@@ -292,45 +304,50 @@ def commit_facts(root, sha):
 
 
 def consume_commit(root, client, did, value, sha):
-    """(the `approval` line, None) once the hub has consumed `did` for the commit `sha` (40 hex)
-    and verifies it for that commit; else (None, why). The commit must carry exactly
-    `Owner-Approval: <value>` and have one parent; the hub checks the rest (its base and files)
-    before the consume (Verifier, no commit) and after it (with the commit)."""
+    """(the `approval` line, None, True) once the hub has consumed `did` for the commit `sha` (40
+    hex) and verifies it for that commit; else (None, why, consumed): `consumed` True when the hub
+    did consume it for `sha` (now or before) and only the verify for the commit failed, so a retry
+    (--consume) asks that verify again. The commit must carry exactly `Owner-Approval: <value>`
+    and have one parent; the hub checks the rest (its base and files) before the consume
+    (Verifier, no commit) and after it (with the commit)."""
     from kitlib.hubsite import approvals as ap
     facts, why = commit_facts(root, sha)
     if facts is None:
-        return None, why
+        return None, why, False
     parents, values = facts
     if values != [value]:
-        return None, 'the commit %s does not carry %s alone' % (sha[:12], trailer(value))
+        return None, 'the commit %s does not carry %s alone' % (sha[:12], trailer(value)), False
     if len(parents) != 1:
         return None, 'the commit %s is %s: an approved commit has one parent' % (
-            sha[:12], 'a merge' if parents else 'a root commit')
+            sha[:12], 'a merge' if parents else 'a root commit'), False
     changed, why = oc.plain_changes(root, [sha])
     if changed is None:
-        return None, why
+        return None, why, False
     blobs, why = oc.blobs_at(root, sha, changed[sha])
     if blobs is None:
-        return None, why
+        return None, why, False
+    odd = oc.irregular(blobs)
+    if odd:
+        return None, 'the commit %s holds %s' % (sha[:12], odd), False
     repo, why = ap.remote_id(root)
     if repo is None:
-        return None, 'the repository has no remote to name it: %s' % why
+        return None, 'the repository has no remote to name it: %s' % why, False
     doc, why = fetch(client, did)
     if doc is None:
-        return None, why
+        return None, why, False
     verifier = ap.Verifier(client)
     if doc.get('commit') != sha:
         if doc.get('commit'):
-            return None, state_error(did, doc)
+            return None, state_error(did, doc), False
         ok, why = verifier.verify(did, repo, parents[0], blobs)
         if not ok:
-            return None, 'hub:%s refused: %s' % (did, why)
+            return None, 'hub:%s refused: %s' % (did, why), False
         version = doc.get('version', 0)
         try:
             ap.consume(client, did, sha, version if isinstance(version, int) else 0)
         except Exception as e:      # noqa: BLE001 - the commit stands; the caller says so
-            return None, 'the hub did not consume hub:%s (%s)' % (did, _err(e))
+            return None, 'the hub did not consume hub:%s (%s)' % (did, _err(e)), False
     ok, why = verifier.verify(did, repo, parents[0], blobs, commit=sha)
     if not ok:
-        return None, 'hub:%s refused: %s' % (did, why)
-    return 'approval  hub:%s consumed by %s' % (did, sha[:12]), None
+        return None, 'hub:%s refused: %s' % (did, why), True
+    return 'approval  hub:%s consumed by %s' % (did, sha[:12]), None, True

@@ -37,6 +37,7 @@ be a violation is not one when it carries exactly one `Owner-Approval: hub:A-<n>
 (kitlib.hubsite.approvals, Verifier with the commit): the commit has one parent, the approval's
 base; every path it changes, with its blob at the commit (None when it deletes it), is the
 approval's, all of them; and the approval was consumed by this commit. A merge, a root commit, a
+path the commit holds as anything but a regular file (a symbolic link, a gitlink: blobs_at), a
 value that is not one hub:A-<n>, and any doubt of the hub (not running, no answer) keep the
 violation, with why in its `why`. `approvals` is the seam: an object with
 check(root, doc_id, head, blobs, commit) -> (ok, why); default_approvals() is the hub's.
@@ -52,6 +53,8 @@ LIST_TIMEOUT = 120    # seconds
 TRAILER = 'Owner-Approval'          # the one key; kitlib.config.owner refuses it as its own trailer
 APPROVAL_RE = re.compile(r'hub:(A-[1-9][0-9]*)\Z')
 _SEP = '\x01'                       # between the trailer values of one commit in commits()
+REGULAR_MODES = ('100644', '100755')    # the tree modes of a regular file
+NOT_A_FILE = 'is not a regular file'    # blobs_at's text for any other entry
 
 
 class HubApprovals(object):
@@ -196,8 +199,10 @@ def changed(root, sha, parents, env=None):
 
 
 def blobs_at(root, sha, paths, env=None):
-    """`({path: blob id at `sha`, None where `sha` has no such file}, None)` for `paths`, in one
-    `git ls-tree`, or `(None, why)`."""
+    """`({path: blob id at `sha`}, None)` for `paths`, in one `git ls-tree`, or `(None, why)`. A
+    path `sha` has no entry for maps to None (a deletion); one whose entry is not a regular file
+    (mode 100644 or 100755: a symbolic link 120000, a gitlink 160000) maps to a text starting
+    with NOT_A_FILE, which equals no blob id and no deletion (irregular() names them)."""
     out, why = _git(root, ['ls-tree', '-r', '-z', '--full-tree', sha, '--'] + list(paths), env)
     if out is None:
         return None, why
@@ -205,9 +210,19 @@ def blobs_at(root, sha, paths, env=None):
     for row in _paths(out):
         meta, tab, name = row.partition('\t')
         cols = meta.split()
-        if tab and name in found and len(cols) == 3 and cols[1] == 'blob':
-            found[name] = cols[2]
+        if tab and name in found and len(cols) == 3:
+            regular = cols[0] in REGULAR_MODES and cols[1] == 'blob'
+            found[name] = cols[2] if regular else '%s (mode %s)' % (NOT_A_FILE, cols[0])
     return found, None
+
+
+def irregular(blobs):
+    """Why a path of `blobs` (blobs_at) is in the commit but not as a regular file, or None."""
+    odd = sorted('%s %s' % (p, b[len(NOT_A_FILE) + 1:]) for p, b in blobs.items()
+                 if isinstance(b, str) and b.startswith(NOT_A_FILE))
+    if not odd:
+        return None
+    return '%s %s: an approval holds regular files only' % (', '.join(odd), NOT_A_FILE)
 
 
 def approval_refusal(root, sha, parents, values, paths, approvals, env=None):
@@ -227,6 +242,9 @@ def approval_refusal(root, sha, parents, values, paths, approvals, env=None):
     blobs, why = blobs_at(root, sha, paths, env)
     if blobs is None:
         return None, why
+    odd = irregular(blobs)
+    if odd:
+        return '%s refused: %s' % (name, odd), None
     ok, why = (approvals or default_approvals()).check(root, doc_id, parents[0], blobs, sha)
     return ('' if ok else '%s refused: %s' % (name, why or 'no reason given')), None
 
