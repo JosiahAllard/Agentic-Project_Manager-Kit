@@ -64,7 +64,9 @@ tools/land.py).
                  lock released: FAILED, the verdict line `CONFLICT <branch> with main <base>:
                  the author merges main`. Main is never moved
   7  gate        the landing tree gated in the slot of step 3 (kitlib.gate.runner.merged_gate,
-                 tree=, slot=) with the config of the base; a step that passed in the branch gate
+                 tree=, slot=) with the config of the base: every step that is not manual, as
+                 gate.py --full selects them, whatever paths the merge changes; a step that
+                 passed in the branch gate
                  of exactly this tree may count without running (kitlib.gate.reuse; never with
                  --fresh, --full or a batch). Red, or a gate where nothing ran: NOT LANDED, the
                  merge dropped (it is only in the landing tree; the landing never moves main),

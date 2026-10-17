@@ -795,10 +795,14 @@ def _merged_gate(root, cfg, eff, base, full=False, slug='land', log_dir=None, sa
     """Gate the merged tree at HEAD of `tree` (a landing's merge, in its landing tree; default
     `root`) against `base` (the main it was merged into). The steps run in `tree`, and their hook
     checks get it as ctx['root']; the repository's name and its log folder are `root`'s (the main
-    checkout's), wherever the tree is. The paths base..HEAD changes select the steps (every
-    non-manual step with full, each running its full_cmd when it has one), and each step's
+    checkout's), wherever the tree is. Every non-manual step is selected, as gate.py --full
+    selects them, whatever paths base..HEAD changes: a fresh landing tree lacks the main
+    checkout's ignored caches, so a step the branch's paths would not select (an asset import)
+    must still run. Each runs its cmd, or its full_cmd, when it has one, with `full` (a strict
+    landing). Each step's
     merged_args are appended, then `lane_args` (the landing lane's merged_args). Outcome codes:
-    OK, FAILED, REFUSED (also when no step is selected) or a machine lock code; facts verdict,
+    OK, FAILED, REFUSED (also when no step is selected: every step manual, or each dropped by
+    another's skip_if_selected) or a machine lock code; facts verdict,
     results, log_dir, head, windows (as the branch gate's). Check steps run the hook module of
     commit `base`, as the config is read from it (kitlib.gate.hookrev), never the merged tree's.
 
@@ -820,7 +824,7 @@ def _merged_gate(root, cfg, eff, base, full=False, slug='land', log_dir=None, sa
     try:
         all_steps = S.build(gate, tree, base, cfg.tools_dir, merged=True, extra=lane_args,
                             full=full)
-        chosen, _ = S.select(gate, all_steps, changed, full=full, read=S.working_tree_reader(tree))
+        chosen, _ = S.select(gate, all_steps, changed, full=True, read=S.working_tree_reader(tree))
     except S.GateConfigError as e:
         return G.Outcome(G.REFUSED, ['REFUSED: %s' % e])
     if not chosen and not empty:
