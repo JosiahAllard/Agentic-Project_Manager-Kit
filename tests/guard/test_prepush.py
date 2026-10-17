@@ -10,9 +10,11 @@ from unittest import mock
 
 from kitlib import pmdata
 from kitlib.gate import runner
-from kitlib.guard import context, prepush
+from kitlib.guard import context, ownercommits, prepush
+from kitlib.hubsite import approvals as ap
 from kitlib.records import gate_ok
 from tests import gitfixture
+from tests.guard import test_ownercommits as toc
 from tests.home import child_home
 from tests.realgit import real_git
 
@@ -294,6 +296,54 @@ class OwnerTest(PrePushCase):
         code, err = self.push('origin', 'main')
         self.assertEqual(code, 1, err)
         self.assertIn('identity is not configured', err)
+
+
+class OwnerApprovalTest(PrePushCase):
+    """An agent commit carrying `Owner-Approval: hub:A-<n>` is pushed to main when the hub
+    verifies that approval for exactly that commit, and refused like any agent commit when it does
+    not (kitlib.guard.ownercommits, through its approvals seam: the stand-in hub of
+    tests/guard/test_ownercommits.py). prepush.check runs in this process, so the seam is patched;
+    git running the hook would ask the machine's hub."""
+
+    def setUp(self):
+        PrePushCase.setUp(self)
+        self.repo.git('push', '-q', 'origin', 'main')
+        self.hub = toc.StandInHub()
+        patcher = mock.patch.object(ownercommits, 'default_approvals', lambda: self.hub)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def approved_commit(self, content):
+        """An agent commit of CLAUDE.md `content` on main, carrying hub:A-1, which the owner
+        approved as 'approved' and the hub consumed for it: its id."""
+        doc = ap.new_doc(toc.REPO, 'owner-only edit', self.with_kit, [
+            {'path': 'CLAUDE.md', 'base_blob': None, 'content': 'approved\n'}], toc.NOW)
+        doc.update(ap.decide_fields(toc.KEY, 'A-1', doc, ap.APPROVE, toc.NOW))
+        self.hub.docs['A-1'] = doc
+        self.repo.write('CLAUDE.md', content)
+        self.repo.git('add', '--', 'CLAUDE.md')
+        self.repo.git('-c', 'user.email=%s' % AGENT, 'commit', '-q', '-m',
+                      toc.approval_message('owner-approved edit', 'hub:A-1'))
+        tip = self.repo.git('rev-parse', 'HEAD')
+        doc.update(ap.consume_fields(toc.KEY, 'A-1', doc, tip, toc.NOW))
+        return tip
+
+    def check(self, tip):
+        line = 'refs/heads/main %s refs/heads/main %s' % (tip, self.with_kit)
+        return prepush.check(self.repo.root, [line], gate_ok=lambda r, s: ({'commit': s}, None))
+
+    def test_an_approved_agent_commit_is_pushed(self):
+        tip = self.approved_commit('approved\n')
+        self.assertEqual(self.check(tip), (True, None))
+        self.assertEqual([a[0] for a in self.hub.asked], ['A-1'])
+
+    def test_a_forged_approval_is_refused(self):
+        tip = self.approved_commit('not what the owner approved\n')
+        ok, msg = self.check(tip)
+        self.assertFalse(ok)
+        self.assertIn('pre-push: refused, owner-only paths changed by a commit not authored by '
+                      'the owner: %s by %s changes CLAUDE.md (owner approval hub:A-1 refused: %s)'
+                      % (tip[:10], AGENT, ap.WHY_FILES), msg)
 
 
 class CheckTest(PrePushCase):
