@@ -7,9 +7,10 @@ coordinator profile lists the roles it actually has; use only those. Roles are n
 
 ## Roles and what each is for
 
+- weak-worker: small, well-defined, low-risk changes expected under 100k tokens (named edits to named files, doc lines, small additive changes with their test).
 - worker: routine coding, low and medium risk; plan-only and sync or prep work (merging main into a branch, rebasing, conflict-free syncs, preparation).
-- senior-worker: High-risk build and fix work on standard paths (API changes, live fixes, ordinary tool features).
-- strong-worker: concurrency, networking, simulation or ordering, landing or lock tools, migrations, CI config, known-area crash fixes.
+- strong-worker: the default for High-risk build and fix work on standard paths (API changes, live fixes, ordinary tool features, generated-data wiring).
+- senior-worker: concurrency, networking, simulation or ordering, landing, gate or lock tools, build-cache and codegen design, migrations, CI config, known-area crash fixes.
 - deep-worker: its own launched session for the hardest issues; never a subagent dispatch.
 - reviewer: read-only review of one branch against its brief. Never the author.
 - lander: optional wrapper that submits one reviewed branch (or a batch) for landing, waits for the result and reports. Never edits code.
@@ -30,13 +31,16 @@ coordinator profile lists the roles it actually has; use only those. Roles are n
 - The worker = default coding, low/medium risk (`--find risk`): additive content, UI, pure logic
   with tests, known-cause fixes, behaviour-preserving moves and renames (brief names **Moves and
   renames**; its equivalence check is not optional). Coding ladder by need:
-  worker (standard/medium: Low, Medium) -> senior-worker (strong/medium: High-risk build and fix
-  work - API changes, live fixes, ordinary tool features; never plan-only or sync/prep) ->
-  strong-worker (strong/high: concurrency, networking, landing/lock tools, build-cache
-  correctness, codegen design; builds and plans) -> deep-worker (deep/xhigh, own session: root
-  cause or concurrency work strong-worker failed at or plainly cannot do). senior-worker not
-  installed -> the worker raised to strong. Never the host's general-purpose agent for code. An
-  escalation = reassign upward with its findings, not a failure.
+  weak-worker (light/high: Low, small and well-defined, expected under 100k tokens) -> worker
+  (standard/medium: Low, Medium) -> strong-worker (strong/medium: High-risk build and fix work -
+  API changes, live fixes, ordinary tool features, generated-data wiring; never plan-only or
+  sync/prep) -> senior-worker (strong/high: concurrency, networking, simulation or ordering,
+  migrations, CI config, landing/gate/lock tools, build-cache correctness, codegen design; builds
+  and plans) -> deep-worker (deep/xhigh, own session: root cause or concurrency work
+  senior-worker failed at or plainly cannot do). weak-worker not installed -> the worker.
+  strong-worker not installed -> the worker raised to strong. Never the host's general-purpose
+  agent for code. An escalation = reassign upward with its findings, not a failure. A
+  weak-worker's branch is reviewed like a worker's: the reviewer as pinned, by the rule below.
 - Tier and effort per role are pinned in each role's front matter (`<kit>/docs/ROSTER.md` is rendered from it).
   A kit role is dispatched with no model of its own choosing. Override only upward for risk, and
   say so in status; never the lander (light as pinned, whatever is being landed), and the reviewer
@@ -59,8 +63,8 @@ coordinator profile lists the roles it actually has; use only those. Roles are n
      raise to strong for a risk you name in status, never must.
 
   No review pack in the repo -> the same rows on the risk level the brief states.
-- Effort is not settable per dispatch: pick the role for it. High risk -> senior-worker, or
-  strong-worker for the kinds the ladder names. Only when strong-worker has been defeated, or
+- Effort is not settable per dispatch: pick the role for it. High risk -> strong-worker, or
+  senior-worker for the kinds the ladder names. Only when senior-worker has been defeated, or
   plainly will be, on a race or crash root-cause or subtle concurrency (never a build or a
   plan): request a deep-worker session; say in status when and why.
 - The deep-worker is never a subagent dispatch: it is its own session - own window, deep tier,

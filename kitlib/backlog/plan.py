@@ -42,15 +42,18 @@ WRITTEN_BY = {
 class Context(object):
     """What a plan needs beyond the snapshot. `branch` None: the branch checked out in `root`.
     `code_main` (None: `main_branch`) is the branch code lands on, which `add --found-on`
-    measures a branch's diff from (`.kit.json` backlog.code_main)."""
+    measures a branch's diff from (`.kit.json` backlog.code_main), as last fetched from
+    `code_remote` (None: `remote`; the main checkout's remote in the PM data worktree,
+    opener.open_store)."""
 
     def __init__(self, store, root, remote='origin', main_branch='main', branch=None, today=None,
-                 code_main=None):
+                 code_main=None, code_remote=None):
         self.store = store
         self.root = root
         self.remote = remote
         self.main_branch = main_branch
         self.code_main = code_main or main_branch
+        self.code_remote = code_remote or remote
         self.branch = branch
         self.today = today
 
@@ -473,9 +476,10 @@ def _diff_hits(ctx, branch, tip, scopes, base=None, mb=None):
 
 
 def _code_main(ctx):
-    """`(rev, sha)` of the code main as `refs.default_base` picks it; `sha` is '' when it does
+    """`(rev, sha)` of the code main as `refs.default_base` picks it on the code remote
+    (`<code_remote>/<code_main>` as last fetched, else the local branch); `sha` is '' when it does
     not resolve. Failure when git cannot read it."""
-    base, _note = refs.default_base(ctx.root, ctx.remote, ctx.code_main)
+    base, _note = refs.default_base(ctx.root, ctx.code_remote, ctx.code_main)
     sha, why = refs.resolve(base, ctx.root, known=True)
     if sha is None:
         raise Failure('cannot read the code main `%s`: %s' % (base, why))

@@ -102,6 +102,14 @@ class PullFromThePmDataWorktree(StoreCase):
             self.assertEqual(pull_branch.main_branches(self.ctx_as('master')),
                              ['pmdata', 'main', 'master'])
 
+    def test_code_config_is_the_main_checkouts_configuration(self):
+        cfg = pull_branch.code_config(self.pm)
+        self.assertEqual((cfg.main_branch, cfg.remote), ('main', 'origin'))
+        self.assertIsNone(pull_branch.code_config(self.repo.root))
+        self.assertIsNone(pull_branch.code_config(self.repo.worktree('other')))
+        with mock.patch.object(kconfig, 'load', side_effect=kconfig.ConfigError('bad')):
+            self.assertIsNone(pull_branch.code_config(self.pm))
+
     def test_another_worktree_has_only_its_own_main(self):
         wt = self.repo.worktree('other')
         self.assertEqual(pull_branch.code_mains(wt), ())

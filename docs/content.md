@@ -217,11 +217,18 @@ The coordinator's SessionStart hook stays a separate entry: hooks.json runs both
 joins their context. Keeping it apart keeps its path, which settings re-pointed by machine setup
 still name (docs/machine-setup.md "Settings"), and its role check.
 
-Open: the Claude Code docs show SubagentStart's `additionalContext` reaching the subagent only for
-a hook in settings.json. Whether a plugin's hooks.json may register SubagentStart needs a live
-check on the owner's machine: start a subagent with the plugin enabled and ask it for the kit
-folder. If it cannot, only the main session gets the header, and a brief must name the kit folder
-for a subagent.
+A plugin's SubagentStart reaches the subagent: on 2026-10-16 a subagent dispatched on the owner's
+machine with the plugin enabled opened with "SubagentStart hook additional context: PM kit header"
+and the plugin's kit folder, from the plugin's hooks.json entry (hosts/claude/adapter/content.py
+HOOKS). So a dispatched agent gets the header without its brief naming the kit folder.
+
+At SubagentStart a dispatched kit role also gets the agent-start block after the header
+(kitlib.agentstart; docs/preflight.md "Agent start block"): `start_text` adds it when the payload's
+`agent_type` names a kit role that is not `run: session` (hosts/claude/adapter/host.py
+`_agent_start`, its one call site). A host's own agent (Explore) and a session role get the header
+alone. With no `agent_id` (tools/agent_view.py asking for a role) the session mark names the role,
+so the "At start" section shows the block. On Codex every child gets it after the child note
+(hosts/codex/adapter/start.py): its hooks carry no child identity.
 
 ## Agent view
 

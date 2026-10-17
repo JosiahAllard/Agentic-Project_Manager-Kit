@@ -454,6 +454,24 @@ class BuildCase(ServeCase):
         self.assertEqual(httpfix.http_threads(), [])
         self.assertEqual(os.path.getsize(bad), 0, 'the bad token file was replaced')
 
+    def test_the_approval_key_is_made_beside_the_tokens_at_start(self):
+        self.build()
+        key = auth.read_approval_key(self.tokens)
+        self.assertIsNotNone(key)
+        self.assertNotIn(key, (auth.read_token(self.tokens, auth.OWNER),
+                               auth.read_token(self.tokens, auth.AGENT)))
+
+    def test_an_approval_key_that_cannot_serve_is_refused_and_the_store_is_released(self):
+        auth.ensure_tokens(self.tokens)
+        bad = os.path.join(self.tokens, auth.APPROVAL_FILE)
+        with open(bad, 'w', encoding='ascii') as f:
+            f.write(auth.read_token(self.tokens, auth.OWNER))   # the owner's token is no key
+        with self.assertRaises(serve.ServeError) as cm:
+            serve.build(self.settings, serve.Sources(tokens=self.tokens), log=self.log)
+        self.assertIn(bad, str(cm.exception))
+        self.assertFalse(self.locked())
+        self.assertEqual(httpfix.http_threads(), [])
+
     def test_a_taken_port_is_refused_and_the_store_is_released(self):
         first = self.build()
         other = os.path.join(self.root, 'other')

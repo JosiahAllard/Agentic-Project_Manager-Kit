@@ -247,7 +247,7 @@ def changed_paths(root, base, worktree=False):
     mb, why = gitrefs.merge_base(base, 'HEAD', root)
     if not mb:
         raise ForbiddenError('cannot find the merge base with %s: %s' % (base, why or 'none'))
-    head, _why = gitrefs.resolve('HEAD', root)
+    head, _why = gitrefs.resolve('HEAD', root, known=True)
     if head == mb:
         return sorted(set(tree_paths(root) if worktree else tracked_paths(root))), True
     args = ['diff', '--name-only', '-z', '--no-renames', '--diff-filter=d', mb]

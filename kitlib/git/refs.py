@@ -213,8 +213,8 @@ def default_base(cwd, remote, main):
     `note` is None when the local branch is absent or at the same commit; else one line naming
     both commits, how far apart they are, and the ref used. A caller prints it."""
     tracking = 'refs/remotes/%s/%s' % (remote, main)
-    remote_sha = resolve(tracking, cwd)[0] if remote and not bad_rev(remote) else None
-    local_sha = resolve('refs/heads/%s' % main, cwd)[0]
+    remote_sha = resolve(tracking, cwd, known=True)[0] if remote and not bad_rev(remote) else None
+    local_sha = resolve('refs/heads/%s' % main, cwd, known=True)[0]
     if not remote_sha:
         return main, None
     if not local_sha or local_sha == remote_sha:

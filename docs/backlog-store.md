@@ -71,7 +71,7 @@ the hub's backlog snapshot (`kitlib.hubbacklog`), kit pmstart/coordinatorstart, 
 
 ## Build order
 
-1. kitlib/backlog rewrite with the store layer and three backends. The write path is compare-and-swap concurrency: strong-worker.
+1. kitlib/backlog rewrite with the store layer and three backends. The write path is compare-and-swap concurrency: senior-worker.
 2. Landing close and the ancestry refusal in kitlib/gate land. Built on kit/store-landing.
 3. The hub's backlog view (`kitlib.hubbacklog`) reads the store.
 4. migrate verb, tested on a scratch clone of each repo. Built on kit/store-landing.

@@ -18,6 +18,7 @@
     "./hosts/claude/shell/agents/strong-worker.md",
     "./hosts/claude/shell/agents/tech-artist.md",
     "./hosts/claude/shell/agents/test-runner.md",
+    "./hosts/claude/shell/agents/weak-worker.md",
     "./hosts/claude/shell/agents/worker.md"
   ],
   "skills": [

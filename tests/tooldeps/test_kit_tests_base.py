@@ -240,13 +240,16 @@ class HomeFenceEnvironment(unittest.TestCase):
                 mock.patch.object(cli.gitrepo, 'toplevel', return_value=(here, None)), \
                 mock.patch.object(cli.gitrepo, 'common_dir', return_value=(here, None)), \
                 mock.patch.object(cli.selftree, 'config', return_value={'serial': []}), \
-                mock.patch.object(cli.selftree, 'all_test_modules', return_value=['tests.a.test_m']), \
+                mock.patch.object(cli.selftree, 'all_test_modules', return_value=MODULES), \
                 mock.patch.object(cli.giveback, 'drainer', return_value=lambda n: None), \
                 mock.patch.object(cli.selfrun, 'run', side_effect=run):
             os.environ.pop(self.MARK, None)
             rc = cli.main(['--full', '--jobs', '2', '--both-tiers'], out=out)
         self.assertEqual(rc, 0, out.getvalue())
         self.assertEqual([os.path.normcase(m or '') for m in seen], [os.path.normcase(home)] * 2)
+
+
+MODULES = ['tests.a.test_m', 'tests.git.test_g', 'tests.gate.test_land_x', 'tests.gate.test_other']
 
 
 class BothTiers(unittest.TestCase):
@@ -267,7 +270,7 @@ class BothTiers(unittest.TestCase):
                 mock.patch.object(cli.gitrepo, 'toplevel', return_value=(here, None)), \
                 mock.patch.object(cli.gitrepo, 'common_dir', return_value=(here, None)), \
                 mock.patch.object(cli.selftree, 'config', return_value={'serial': []}), \
-                mock.patch.object(cli.selftree, 'all_test_modules', return_value=['tests.a.test_m']), \
+                mock.patch.object(cli.selftree, 'all_test_modules', return_value=MODULES), \
                 mock.patch.object(cli.giveback, 'drainer', return_value=lambda n: None), \
                 mock.patch.object(cli.selfrun, 'run', side_effect=run):
             rc = cli.main(['--full', '--jobs', '2', '--both-tiers'] + list(extra), out=out)
@@ -284,6 +287,13 @@ class BothTiers(unittest.TestCase):
         self.assertEqual([ln for ln in lines if ln.startswith('kit_tests: OK')], lines[-1:])
         self.assertIn('kit_tests [fake git]: OK in 1s (full)', lines)
         self.assertIn('kit_tests [real git]: OK in 1s (full)', lines)
+
+    def test_the_real_git_pass_runs_only_git_worktree_and_landing_modules(self):
+        ran = []
+        with mock.patch.object(cli, 'run_pass', side_effect=lambda args, *a, **k: ran.append(args) or 0):
+            rc, calls, text = self.run_both([0, 0])
+        self.assertEqual(rc, 0, text)
+        self.assertEqual(ran, [cli.FULL, ['tests.git.test_g', 'tests.gate.test_land_x']])
 
     def test_a_red_real_git_pass_fails_the_run_and_prints_no_ok(self):
         rc, calls, text = self.run_both([0, 1])

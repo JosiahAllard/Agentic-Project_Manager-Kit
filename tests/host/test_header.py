@@ -47,11 +47,36 @@ class ClaudeContext(unittest.TestCase):
 
 
 class Entry(unittest.TestCase):
-    def run_entry(self, *args, **env):
-        environ = {k: v for k, v in os.environ.items() if k not in ('PM_KIT_ROOT', 'PM_KIT_RELEASE_ID')}
+    def run_entry(self, *args, payload=None, **env):
+        # No PM_KIT_ROLE either: a SubagentStart with no agent_id reads the role from the mark, and
+        # this case wants the plain hook whatever session runs the tests.
+        environ = {k: v for k, v in os.environ.items()
+                   if k not in ('PM_KIT_ROOT', 'PM_KIT_RELEASE_ID', 'PM_KIT_ROLE')}
         environ.update(env)
+        stdin = {'input': json.dumps(payload)} if payload is not None else {'stdin': subprocess.DEVNULL}
         return subprocess.run([sys.executable, ENTRY, 'claude'] + list(args), capture_output=True, text=True,
-                              encoding='utf-8', env=environ, timeout=60, stdin=subprocess.DEVNULL)
+                              encoding='utf-8', env=environ, timeout=60, **stdin)
+
+    def test_a_dispatched_kit_agent_gets_the_header_then_the_agent_start_block(self):
+        # The whole path, nothing mocked: boot/hook.py -> hookmain -> the Claude adapter's start_text
+        # -> kitlib.agentstart, on a worktree of a repository built on disk.
+        from tests import gitfixture
+        repo = gitfixture.TempRepo(branch='main')
+        self.addCleanup(repo.cleanup)
+        repo.git('update-ref', 'refs/remotes/origin/main', 'HEAD')
+        head = repo.git('rev-parse', '--short', 'HEAD')
+        wt = repo.worktree('y', 'x/y')
+        r = self.run_entry('SubagentStart', payload={
+            'hook_event_name': 'SubagentStart', 'cwd': wt, 'session_id': 's',
+            'agent_id': 'a1', 'agent_type': 'pm-kit:worker'})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = json.loads(r.stdout)['hookSpecificOutput']
+        self.assertEqual(out['hookEventName'], 'SubagentStart')
+        text = out['additionalContext']
+        self.assertTrue(text.startswith(header.text(ROOT) + '\nAgent start (worker): '), text)
+        self.assertIn('\n- checkout  worktree ', text)
+        self.assertIn('| branch x/y @ %s' % head, text)
+        self.assertNotIn('could not check', text)
 
     def test_each_event_gets_the_header_for_this_kit(self):
         for event in ('SessionStart', 'SubagentStart'):

@@ -18,7 +18,8 @@ kitlib.host.hookmain.dispatch.
                        CONTEXT_EVENTS take it.
   start_text(event_name, kit, payload, environ, part)   the text of one start hook, by its part
                        (PARTS): None the kit header (kitlib.host.header; hooks.json, SessionStart
-                       and SubagentStart); 'coordinator' the coordinator rules
+                       and SubagentStart), and at a SubagentStart of a dispatched kit role the
+                       agent-start block after it (kitlib.agentstart, _agent_start); 'coordinator' the coordinator rules
                        (kitlib.coordinatorstart.render, checked in the payload's cwd) in a session
                        marked coordinator, else nothing; 'pm' the PM checklist (kitlib.pmstart; the
                        PM settings' SessionStart hook, docs/pm-start.md). A check that fails says
@@ -96,7 +97,12 @@ class ClaudeAdapter(object):
     def start_text(event_name, kit, payload=None, environ=None, part=None):
         if part is None:
             from kitlib.host import header
-            return header.text(kit)
+            head = header.text(kit)
+            if event_name == 'SubagentStart':
+                block = _agent_start(kit, payload, environ)
+                if block:
+                    return head + '\n' + block
+            return head
         if event_name != 'SessionStart' or part not in PARTS:
             raise ValueError('no %s start check %r' % (event_name, part))
         if part == 'coordinator':
@@ -141,6 +147,23 @@ class ClaudeAdapter(object):
 
     def plugin_installer(self):
         return None
+
+
+def _agent_start(kit, payload, environ):
+    """The agent-start block (kitlib.agentstart) for a SubagentStart, or None. The role is the
+    payload's agent_type when it names a subagent (agent_id); with no agent_id (tools/agent_view.py
+    asking for a dispatched role) it is the session mark. Only a dispatched kit role gets the block:
+    a host's own agent (Explore) and a session role do not. The one call site: an opt-in setting
+    would go here."""
+    try:
+        from kitlib import agentstart, sessionmark
+        act = events.parse('SubagentStart', payload or {})
+        role = act.agent_role if act.agent else sessionmark.mark(environ)
+        if not agentstart.is_dispatched(role, kit):
+            return None
+        return agentstart.text(act.cwd, kit, role)
+    except Exception as e:
+        return 'Agent start: could not check: %s: %s' % (type(e).__name__, e)
 
 
 ADAPTER = ClaudeAdapter()
