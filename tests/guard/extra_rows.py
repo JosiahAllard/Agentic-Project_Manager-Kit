@@ -313,8 +313,13 @@ ROWS = [
         "cmd /c \"python -I -c print(open('x','w').write('y'))\"", w.main, sub=True),
      'deny', 'main-checkout', None),
     ('main-checkout: python -I -c opening to write inside one cmd word, PowerShell', lambda w: ps(
-        "cmd /c python -I -c print(open('x','w').write('y'))", w.main, sub=True),
+        "cmd /c \"python -I -c print(open('x','w').write('y'))\"", w.main, sub=True),
      'deny', 'main-checkout', None),
+    # unquoted, PowerShell passes `print` and then runs the ( ) itself (shell._Scan.ps_paren_arg):
+    # the text cmd gets is computed
+    ('unreadable: a ( ) touching a word in a PowerShell cmd /c', lambda w: ps(
+        "cmd /c python -I -c print(open('x','w').write('y'))", w.main, sub=True),
+     'deny', 'unreadable', None),
     ('main-checkout: python -I -c in double quotes, cmd', lambda w: bash(
         "cmd /c 'python -I -c \"print(1)\"'", w.main, sub=True), 'deny', 'main-checkout', None),
     ('main-checkout: python -I -c through cmd, in a worktree', lambda w: bash(

@@ -3768,37 +3768,29 @@ def ps_provider_item(cmd, w):
 
 # a PowerShell word that is the location and a literal rest: $PWD, "${PWD}\x", $pwd/x/y
 PS_PWD_WORD_RE = re.compile(r'(?i)^(?:\$pwd|\$\{pwd\})((?:[\\/][^$`]*)?)$')
-PS_PWD_NAME_RE = re.compile(r'(?i)pwd')
-PS_PWD_READ_RE = re.compile(r'(?i)\$(?:pwd|\{pwd\})(?=[\\/])')    # $PWD\ or ${PWD}/: a read in a path
-# on a line that writes to $PWD\...: what can set a variable whose name it escapes or computes
-# (sv, set, nv, *-Variable, variable:, -OutVariable and the other common variable parameters)
-# or run text (iex, Invoke-Expression, a dot-sourced command)
-PS_PWD_SETTER_RE = re.compile(r'(?i)(?<![\w-])(?:sv|set|nv|iex|invoke-expression|[a-z]+-variable)(?![\w-])'
-                              r'|variable:|(?<![\w$])-(?:ov|pv|ev|wv|iv|infa|\w*var\w*)\b'
-                              r'''|(?:^|[;&|{(=\r\n])\s*\.(?=[\s'"$({&])''')
+PS_BRACED_VAR_RE = re.compile(r'\$\{[^}]*\}')     # ${name}: a variable, no code
 
 
 def ps_pwd_path(cmd, w):
     """The path text a PowerShell word spells as $PWD (or ${PWD}) and a literal rest, with the
-    location as cmd.cwd, or None: the word is not one, the directory is unknown, or the line
-    names PWD anywhere but in such a path word of this command or a $PWD read a path separator
-    follows (PS_PWD_READ_RE). The ways to give $PWD another value are many (sv PWD,
-    $global:PWD =, foreach ($PWD in ...), param($PWD), -ov PWD), so any other mention fails
-    closed, as does a line that may spell the name another way (a backtick, or a setter or a
-    runner of text, PS_PWD_SETTER_RE)."""
+    location as cmd.cwd, or None: the word is not one, the directory is unknown, or the write is
+    not the line's only command. $PWD can be given another value under many spellings of its
+    name (sv PWD, -OutVariable ('P'+'WD'), [scriptblock]::Create(...).Invoke()), and only code
+    run before the target is read can do it: another command (a ; && || or newline, a pipeline,
+    a script block or ( ) group around it) or an argument of its own that runs code (a ( ),
+    $( ) or { } in a computed word). Each of those fails closed."""
     if cmd.shell != sh.PS or not w.dyn or cmd.cwd is None:
         return None
     m = PS_PWD_WORD_RE.match(w.text)
     if not m:
         return None
     src = cmd.source or ''
-    if '`' in src or PS_PWD_SETTER_RE.search(src):
-        return None                             # a name it may spell some other way: P`WD, ('P'+'WD'), iex
-    reads = [(x.start, x.end) for x in cmd.words if x.dyn and PS_PWD_WORD_RE.match(x.text)]
-    reads += [x.span() for x in PS_PWD_READ_RE.finditer(src)]
-    for hit in PS_PWD_NAME_RE.finditer(src):
-        if not any(s <= hit.start() and hit.end() <= e for s, e in reads):
-            return None
+    if cmd.start is None or cmd.nested_in is not None or cmd.groups or cmd.subs or cmd.prev_op or cmd.next_op or \
+            cmd.piped_in or cmd.piped_out or src[:cmd.start].strip() or src[cmd.end:].strip():
+        return None                             # not the line's one command
+    args = list(cmd.words) + [r.target for r in cmd.redirects if r.target is not None]
+    if any(x is not w and x.dyn and re.search(r'[({]', PS_BRACED_VAR_RE.sub('', x.text)) for x in args):
+        return None                             # an argument that runs code: (...), $(...), {...}
     return cmd.cwd + m.group(1)
 
 

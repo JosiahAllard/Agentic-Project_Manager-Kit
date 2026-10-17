@@ -154,14 +154,11 @@ class DynamicTargets(Base):
     def test_pwd_and_a_literal_rest_is_read_against_the_location(self):
         self.allowed(self.run_ps(r'Set-Content "$PWD\x.txt" x'))
         self.allowed(self.run_ps(r'Set-Content "${{PWD}}\x.txt" x'))
-        d = self.denied(self.run_ps(r'cd {main}; Set-Content "$PWD\x.txt" x'), 'main-checkout')
+        self.allowed(self.run_ps(r'Set-Content "$PWD\set\x.txt" x'))
+        self.allowed(self.run_ps(r'Copy-Item "${{PWD}}/a.txt" "$PWD\b.txt"'))
+        d = self.denied(decide(W.ps(r'Set-Content "$PWD\x.txt" x', self.w.main, True), self.w.ctx()),
+                        'main-checkout')
         self.assertIn('is in the main checkout', d.reason)
-
-    def test_pwd_the_line_may_set_fails_closed(self):
-        for text in (r'$PWD = "{main}"; Set-Content "$PWD\x.txt" x',
-                     r'Set-Variable PWD {main}; Set-Content "$PWD\x.txt" x'):
-            with self.subTest(text):
-                self.denied(self.run_ps(text), 'main-checkout')
 
     def test_parenthesised_target(self):
         for text in (r'Set-Content (Join-Path {main} x.txt) x',
@@ -199,39 +196,28 @@ class DynamicTargets(Base):
             with self.subTest(text):
                 self.refused_for_both(text)
 
-    def test_pwd_named_any_other_way_fails_closed(self):
-        # rules.ps_pwd_path: any mention of PWD but a $PWD read in a path
-        for text in (r'sv PWD {main}; Set-Content "$PWD\x.txt" x',
-                     r'set PWD {main}; Set-Content "$PWD\x.txt" x',
-                     r'nv PWD {main} -Force; Set-Content "$PWD\x.txt" x',
-                     r'$global:PWD = "{main}"; Set-Content "$PWD\x.txt" x',
-                     r'$script:PWD = "{main}"; Set-Content "$PWD\x.txt" x',
-                     r'${{global:PWD}} = "{main}"; Set-Content "$PWD\x.txt" x',
-                     r'$a,$PWD = 1,"{main}"; Set-Content "$PWD\x.txt" x',
+    def test_pwd_is_read_only_when_the_write_is_the_lines_one_command(self):
+        # rules.ps_pwd_path: another command, a pipeline, a script block or an argument that runs
+        # code could set PWD first, under any spelling of its name
+        for text in (r'$PWD = "{main}"; Set-Content "$PWD\x.txt" x',
+                     r'cd {main}; Set-Content "$PWD\x.txt" x',
+                     r"Get-Item {main} -OutV ('P'+'WD'); Set-Content " + r'"$PWD\x.txt" x',
+                     r"[scriptblock]::Create('sv PWD {main}').Invoke(); Set-Content " + r'"$PWD\x.txt" x',
+                     r'Set-Content a.txt x; Set-Content "$PWD\x.txt" x',
+                     r'Set-Content "$PWD\x.txt" x; Copy-Item a.txt .',
+                     r'Get-Item {main} -pv PWD | % {{ Set-Content "$PWD\x.txt" x }}',
+                     r'Get-Item {main} | Set-Content "$PWD\x.txt"',
                      r'foreach ($PWD in "{main}") {{ Set-Content "$PWD\x.txt" x }}',
                      r'& {{ param($PWD) Set-Content "$PWD\x.txt" x }} {main}',
-                     r'Get-Item {main} -ov PWD; Set-Content "$PWD\x.txt" x',
-                     r'Get-Item {main} -pv PWD | % {{ Set-Content "$PWD\x.txt" x }}',
-                     r'Write-Output $PWD; Set-Content "$PWD\x.txt" x'):
+                     r"Set-Content -Value ([scriptblock]::Create('sv PWD {main}').Invoke()) " + r'"$PWD\x.txt"',
+                     r'Set-Content -Value "$(sv PWD {main})" -Path "$PWD\x.txt"'):
             with self.subTest(text):
                 self.refused_for_both(text)
-
-    def test_pwd_with_a_hidden_setter_fails_closed(self):
-        # rules.PS_PWD_SETTER_RE: an escaped or computed name, or anything that can run text
-        for text in (r'Set-Variable P`WD {main}; Set-Content "$PWD\x.txt" x',
-                     r"sv -Name ('P'+'WD') {main}; Set-Content " + r'"$PWD\x.txt" x',
-                     r"iex ('s'+'v P'+'WD {main}'); Set-Content " + r'"$PWD\x.txt" x',
-                     r"Invoke-Expression $s; Set-Content " + r'"$PWD\x.txt" x',
-                     r"New-Variable -Name ('P'+'WD') -Value {main} -Force; Set-Content " + r'"$PWD\x.txt" x',
-                     r"Set-Item ('variable:P'+'WD') {main}; Set-Content " + r'"$PWD\x.txt" x',
-                     r'. $f; Set-Content "$PWD\x.txt" x',
-                     r"Get-Item {main} -ov ('P'+'WD'); Set-Content " + r'"$PWD\x.txt" x',
-                     r"Get-Item {main} -PipelineVariable ('P'+'WD') | % {{ Set-Content " + r'"$PWD\x.txt" x }}'):
-            with self.subTest(text):
-                self.refused_for_both(text)
-        # a backtick, a setter or a dot elsewhere on a line whose target is literal still passes
-        for text in ('Write-Output "a`nb"; Set-Content x.txt "c`nd"', 'sv a 1; Set-Content x.txt $a',
-                     r'Set-Content "$PWD\x.txt" x', r'Set-Content "$PWD\x.txt" x; Copy-Item a.txt .'):
+        # & and a computed program is refused before any write is read (rule unreadable)
+        self.denied(self.run_ps(r"& ([scriptblock]::Create('sv PWD {main}')); Set-Content " + r'"$PWD\x.txt" x'),
+                    'unreadable')
+        # a line that writes to a literal target is not judged by this rule
+        for text in ('Write-Output "a`nb"; Set-Content x.txt "c`nd"', 'sv a 1; Set-Content x.txt $a'):
             with self.subTest(text):
                 self.allowed(self.run_ps(text))
 
@@ -244,10 +230,6 @@ class DynamicTargets(Base):
         for text in (r'Set-Content -Value:$v x.txt', r'Copy-Item -Path:$p x.txt'):
             with self.subTest(text):
                 self.allowed(self.run_ps(text))
-
-    def test_pwd_reads_in_paths_still_place(self):
-        self.allowed(self.run_ps(r'Set-Content "$PWD\x.txt" x; Get-Content "$PWD\y.txt"'))
-        self.allowed(self.run_ps(r'Copy-Item "${{PWD}}/a.txt" "$PWD\b.txt"'))
 
     def test_a_colon_then_a_space_binds_the_next_word(self):
         # rules.ps_params: `-Path: x` is -Path x, not -Path '' and a positional x
@@ -276,6 +258,24 @@ class DynamicTargets(Base):
                 p = cm.read(text, sh.PS, W.fwd(self.w.wt))
                 self.assertTrue(any(c.argv[:1] == ['Test-Path'] and c.nested_in is None and c.groups
                                     for c in p.commands), [(c.argv, c.groups) for c in p.commands])
+
+    def test_a_paren_touching_a_plain_word_is_an_argument(self):
+        # shell._Scan.ps_paren_arg: `func(arg)` passes the word, then the ( ) as the next argument
+        for text in (r'Copy-Item a.txt(Join-Path {main} x)', r'Set-Content(Join-Path {main} x.txt) hi'):
+            with self.subTest(text):
+                self.refused_for_both(text)
+        for text, words in (('Copy-Item a.txt(Join-Path a b)', ['Copy-Item', 'a.txt', '(Join-Path a b)']),
+                            ('Set-Content(Join-Path a b) hi', ['Set-Content', '(Join-Path a b)', 'hi'])):
+            with self.subTest(text):
+                p = cm.read(text, sh.PS, W.fwd(self.w.wt))
+                self.assertEqual([c.argv for c in p.commands if c.nested_in is None], [words])
+        # a method call stays one word: $x.M( ), [T]::M( ), 'lit'.M( ), (expr).M( )
+        for text in (r"Set-Content x.txt -Value $s.Replace('a','b')", r"$t = $s.Replace('a','b'); Set-Content x.txt $t",
+                     r"Set-Content x.txt -Value ([IO.Path]::Combine('a','b'))", r"Set-Content x.txt -Value 'abc'.Replace('a','b')",
+                     r'Set-Content x.txt -Value (Get-Date).AddDays(1)', r'if(Test-Path x) {{ New-Item y.txt }}',
+                     r'foreach($f in 1,2) {{ New-Item y.txt }}'):
+            with self.subTest(text):
+                self.allowed(self.run_ps(text))
 
     def test_cd_inside_a_subexpression_makes_the_location_unknown(self):
         # $( ) and ( ) run in the caller's scope: the cd moves the location for what follows

@@ -320,8 +320,11 @@ class _Scan(object):
         command after a space or a comma, or is the value of a `-Param:` or a `-Param` it touches
         (`-Destination(...)`, after the command's first word), and the word in first position (the
         command's first, or the first after an assignment's `=`) is no keyword that takes a ( )
-        (if, foreach, while...): `Copy-Item data (...)` passes an argument. A ( that starts a
-        command, or follows a word directly (a method call), is still a group."""
+        (if, foreach, while...): `Copy-Item data (...)` passes an argument. A ( touching a plain
+        literal word passes the word and then the ( ) as the next argument (`func(arg)`:
+        `Copy-Item a.txt(...)`, `Set-Content(...)`), where a word that starts with $ [ ( . a quote
+        or @ is an expression and its ( a method call (`$s.Replace(...)`, `[IO.Path]::Combine(...)`,
+        `'abc'.Replace(...)`), still a group. A ( that starts a command is a group too."""
         if not self.toks or self.toks[-1][0] != 'w':
             return False
         last = self.toks[-1][1]
@@ -333,7 +336,9 @@ class _Scan(object):
             if t[0] == 'w':
                 words.insert(0, t[1])
         param = last.end == self.i and last.text.startswith('-') and len(last.text) > 1 and not last.dyn
-        if not (self.space(before) or before == ',' or (before == ':' and param) or
+        plain = last.end == self.i and not last.dyn and last.start < last.end and \
+            self.s[last.start] not in '$[(.\'"@-{'
+        if not (self.space(before) or before == ',' or (before == ':' and param) or plain or
                 (param and before != ':' and len(words) > 1)):
             return False
         first = words[0]
