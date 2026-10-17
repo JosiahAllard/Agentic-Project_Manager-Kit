@@ -309,7 +309,7 @@ The guard reads the command line, not the shell's state:
 
 - **Agent types** (`agentname.bare`): Claude's adapter (`hosts/claude/adapter/events.py`) drops the prefix once, into `Action.agent_role`, which `kitlib/config/policy.py` `role_name` (so the `roles` table, and through it `main-checkout`, `git-main-history` and `rules.lander_check`) and `rules.lander_check` itself read. Exactly one leading `PREFIX`, in its exact case, is dropped. Any other form keeps its name, which no role names, and is held as `subagent`: another plugin's prefix, the prefix twice, another case, the prefix alone, `PREFIX` + `main`. An event without `agent_id` is `main` whatever its `agent_type`.
 - **Session marks** (`agentname.bare_mark`): `kitlib/sessionmark.py` `mark`, and again `rules.agent_session` and `rules.session_mark` (a `role_resolver` that does not strip it). The prefix is dropped in any case and as often as it repeats, since a mark that names a known kind is the restrictive reading; a mark that would be left empty keeps its value, since an empty mark would be the owner's.
-- **Tests:** tests/agentname, tests/config/test_policy.py, tests/guard/test_session.py, and tests/guard/test_prefix_parity.py, which runs every tests/guard test again with each subagent's `agent_type` and each mark prefixed and expects the same decisions.
+- **Tests:** tests/agentname, tests/config/test_policy.py, tests/guard/test_session.py, and tests/guard/test_prefix_parity.py, which runs the rule table, role policy and session tests again (its `SENTINEL_MODULES`) with each subagent's `agent_type` and each mark prefixed and expects the same decisions.
 
 ## Owner lock tools
 

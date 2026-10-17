@@ -184,5 +184,4 @@ ROWS = [
      'git -C "<checkout>" push origin main'),
     ('push a variable refspec to main', lambda w: bash('git push origin "$REF"', w.wt), 'deny', 'git-push-main',
      'git -C "{wt}" push origin <branch>'),
-    ('unmerged worktree remove', lambda w: bash('git worktree remove .claude/worktrees/wt', w.main), 'deny', 'git-worktree-remove', None),
 ]

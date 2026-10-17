@@ -173,7 +173,8 @@ ROWS = [
     ('main session redirect into main', lambda w: bash('echo hi > out.txt', w.main), None, None, None),
 
     # ---------------------------------------------------------------- unreadable lines (fallback)
-    ('unclosed quote hiding a checkout', lambda w: bash("echo 'x ; git checkout main", w.main), 'deny', 'git-checkout', None),
+    ('unclosed quote hiding a checkout', lambda w: bash("echo 'x ; git checkout main", w.main), 'deny', 'git-checkout',
+     'git -C "{main}" worktree add .claude/worktrees/<slug> <branch>'),
     ('unclosed quote in a worktree', lambda w: bash("echo 'x ; git checkout main", w.wt), None, None, None),
     ('unclosed quote hiding a restore', lambda w: bash("echo 'x ; git restore a.py", w.main), 'deny', 'git-restore', None),
     ('unclosed quote hiding restore --staged', lambda w: bash("echo 'x ; git restore --staged a.py", w.main), None, None, None),
@@ -182,8 +183,6 @@ ROWS = [
     ('unclosed quote hiding a main-role merge', lambda w: bash("echo 'x ; git merge kit/wt", w.main), 'deny', 'unreadable',
      "echo 'x ; git merge kit/wt'"),
     ('unclosed quote hiding a subagent merge in its worktree', lambda w: bash("echo 'x ; git merge kit/wt", w.wt, sub=True), 'deny', 'unreadable', None),
-    ('unclosed quote hiding a checkout, real alternative', lambda w: bash("echo 'x ; git checkout main", w.main), 'deny', 'git-checkout',
-     'git -C "{main}" worktree add .claude/worktrees/<slug> <branch>'),
     ('cmd /c with a trailing backslash root', lambda w: bash('cmd /c "dir /s C:\\"', w.wt), 'deny', 'root-search', None),
     ('variable program running godot', lambda w: bash('GODOT=/c/tools/godot.exe; $GODOT --headless', w.wt), 'deny', 'heavy',
      LOCK + ' --kind engine-run --repo demo --slug wt -- <the program $GODOT names> --headless'),
