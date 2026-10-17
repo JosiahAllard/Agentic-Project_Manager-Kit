@@ -2,9 +2,9 @@
 (docs/gate.md "Landing", the locked checks): a record a `gate.py --full` pass wrote (`full` true).
 A default-mode or --only run, a record from before records said whether the gate was --full, a
 record for another commit and one git no longer agrees with are each REFUSED before any merge.
-The refusal says what gates the tip whole (merge the base first, in the kit, when the tip lacks
-it); a base gate with no step that is not manual is refused first; the record's gate_config is not
-compared."""
+The refusal says what gates the tip whole (merge the base first, in the kit, when the tip's record
+lacks the `full` key); a base gate --full selects no step from is refused first; the record's
+gate_config is not compared."""
 import json
 import os
 import re
@@ -69,6 +69,9 @@ class Refused(TipCase):
         gate_ok.write(self.repo.root, rec)
         out = self.lander(BRANCH, self.main, tip).run()
         self.assert_refused(out, BRANCH, tip, wt, 'does not say whether the gate ran --full')
+        # not the kit: the running kit's gate.py writes `full`, so no merge is asked for
+        self.assertIn(GATE_WHOLE, out.lines[0])
+        self.assertNotIn('merge origin/main', out.lines[0])
 
     def test_a_record_of_the_commit_before_the_tip_does_not_count(self):
         wt, first = self.branch('feature', {'a.py': 'x = 1\n'})
@@ -114,8 +117,9 @@ class GateCommand(TipCase):
     """The refusal's command names the worktree's own tools/gate.py when the repository being
     landed is the kit (its main checkout has the kit's layout, kitlib.content.oncommit.is_kit),
     wherever the running kit came from; any other repository is gated by the running kit's. In
-    the kit, a tip that does not contain the base is told to merge it in first: the branch's own
-    gate.py may be from before records said `full` (Lander.full_gate_advice)."""
+    the kit, a tip whose record lacks the `full` key is told to merge the base in first: the
+    branch's own gate.py is from before records said `full` (Lander.full_gate_advice). Being
+    behind the base alone does not ask for a merge."""
 
     def kit_layout(self):
         self.repo.write('content/roles/worker.md', 'role\n')
@@ -128,10 +132,16 @@ class GateCommand(TipCase):
         self.main = self.repo.commit('main moves on', 'later.txt')
         self.repo.git('push', '-q', 'origin', 'main')
 
-    def refusal(self, behind=False):
-        """The refused landing of an ungated branch (`behind`: main moves on after it branched):
-        (gate.py it names, the worktree, the first line)."""
+    def refusal(self, behind=False, old_record=False):
+        """The refused landing of an ungated branch (`behind`: main moves on after it branched;
+        `old_record`: the tip has a --full record without the `full` key, as a gate.py from
+        before the key wrote it): (gate.py it names, the worktree, the first line)."""
         wt, tip = self.branch('feature', {'a.py': 'x = 1\n'})
+        if old_record:
+            self.gate(wt, full=True)
+            rec, _ = gate_ok.read(self.repo.root, tip)
+            del rec['full']
+            gate_ok.write(self.repo.root, rec)
         if behind:
             self.main_moves()
         out = self.lander(BRANCH, self.main, tip).run()
@@ -157,19 +167,30 @@ class GateCommand(TipCase):
         self.assertIn(GATE_WHOLE, first)            # the tip holds the base: no merge to make
         self.assertNotIn('merge origin/main', first)
 
-    def test_a_kit_branch_behind_its_base_is_told_to_merge_it_first(self):
+    def test_a_kit_branch_behind_its_base_with_no_record_is_told_to_gate_it_whole(self):
+        # behind says nothing about the age of its gate.py: no record is asked for, no merge
         self.kit_layout()
         gate_py, wt, first = self.refusal(behind=True)
         self.assertTrue(same_path(gate_py, os.path.join(wt, 'tools', 'gate.py')), gate_py)
+        self.assertIn(GATE_WHOLE, first)
+        self.assertNotIn('merge origin/main', first)
+
+    def test_a_kit_tip_whose_record_lacks_full_is_told_to_merge_the_base_first(self):
+        # it holds the base, yet its record shows its own gate.py never writes `full`
+        self.kit_layout()
+        gate_py, wt, first = self.refusal(old_record=True)
+        self.assertTrue(same_path(gate_py, os.path.join(wt, 'tools', 'gate.py')), gate_py)
+        self.assertIn('does not say whether the gate ran --full', first)
         self.assertIn(MERGE_FIRST % (self.main[:10], BRANCH), first)
         self.assertIn('then gate the merge whole and land that tip: python', first)
         self.assertNotIn(GATE_WHOLE, first)
 
 
-class ManualOnly(TipCase):
-    """A base whose "gate" section has no step that is not manual is refused before any tip is
-    read (Lander.manual_only): neither `gate.py --full` nor the merged gate would select a step,
-    so the tip check's command could never be met. One runnable step among manual ones lands."""
+class NoFullStep(TipCase):
+    """A base whose "gate" section leaves no step for --full to select (every step manual, none,
+    or each dropped by another's skip_if_selected) is refused before any tip is read
+    (Lander.no_full_step): neither `gate.py --full` nor the merged gate would select a step, so
+    the tip check's command could never be met. One runnable step among manual ones lands."""
 
     def set_gate(self, gate):
         self.repo.write('.kit.json', json.dumps(dict(test_land.LandCase.KIT, gate=gate), indent=1))
@@ -183,9 +204,10 @@ class ManualOnly(TipCase):
         out = self.lander(BRANCH, self.main, tip).run()
         self.assertEqual(out.code, G.REFUSED, out.lines)
         first = out.lines[0]
-        self.assertIn('the "gate" section of .kit.json at %s has no step that is not manual'
+        self.assertIn('the "gate" section of .kit.json at %s leaves no step for --full to select'
                       % self.main[:10], first)
         self.assertIn('nothing was merged', first)
+        self.assertFalse(out.facts.get('undone'))      # refused before the merge, not undone
         self.assertEqual(self.main_now(), self.main)
         self.assertEqual(self.remote_main(), self.main)
         self.assertIsNone(self.lock().read())
@@ -196,6 +218,11 @@ class ManualOnly(TipCase):
 
     def test_a_gate_with_no_step_is_refused(self):
         self.assert_manual_refusal({'steps': []})
+
+    def test_two_steps_that_drop_each_other_are_refused(self):
+        self.assert_manual_refusal({'steps': [
+            dict(fixtures.GATE['steps'][0], name='unit', skip_if_selected=['other']),
+            dict(fixtures.GATE['steps'][0], name='other', skip_if_selected=['unit'])]})
 
     def test_one_step_that_is_not_manual_lands(self):
         self.set_gate({'steps': [
