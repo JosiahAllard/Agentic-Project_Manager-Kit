@@ -57,8 +57,9 @@ Missing any: say what you need, do nothing.
    (the repo's stub; `<kit>/tools/land.py` where the repo has none).
    A detached process lands it: it waits as one entry in the machine-lock queue (landings go
    ahead of ordinary runs), merges the main it finds with `--no-ff`, gates the merged tree,
-   pushes, verifies with `ls-remote`, and undoes the merge on red. The call prints one
-   `SUBMITTED ... wait: ...` line and exits 0. Start the
+   pushes, verifies with `ls-remote`, and undoes the merge on red. The call prints a `REVIEW` line for
+   each branch whose queued verdict is at the tip submitted, then the one
+   `SUBMITTED ... wait: ...` line, and exits 0. Start the
    `gate.py wait-result ... --kind land -C <main checkout>` command it prints, as it prints it, with `run_in_background`, and wait for the task
    notification, never a polling loop (the classifier denies it); no Monitor either
    (<kit>/docs/gate.md \"Waiting on a gate: who arms what\"). `python <kit>/tools/land.py -C <main checkout> --queue`

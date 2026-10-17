@@ -267,11 +267,14 @@ At its turn the landing takes the landing lock file (kitlib/records/landing.py).
 
 ### Submitting a landing
 
-kitlib/gate/submit.py. `land.py --submit` and `gate.py land --submit` check the arguments (USAGE as without `--submit`, nothing written), refuse with nothing written (`submit.blocked`, exit 4, `REFUSED: ...; nothing was changed`) when a branch's land record is `running` in a process that lives (`result.running_state` `live`; one whose process died does not count) or already says it landed at that tip (`pass`, or an old record's `landed-ungated`, so the record is left as it is), write each branch's `running` land record (Result record) with one `run_id` for the batch and no `pid` yet, start the same landing again as a detached, windowless process, wait up to 15 s (`submit.CLAIM_WAIT_S`) for it to record itself (`submit.claim`), and print exactly one line, then exit 0:
+kitlib/gate/submit.py. `land.py --submit` and `gate.py land --submit` check the arguments (USAGE as without `--submit`, nothing written), refuse with nothing written (`submit.blocked`, exit 4, `REFUSED: ...; nothing was changed`) when a branch's land record is `running` in a process that lives (`result.running_state` `live`; one whose process died does not count) or already says it landed at that tip (`pass`, or an old record's `landed-ungated`, so the record is left as it is), write each branch's `running` land record (Result record) with one `run_id` for the batch and no `pid` yet, start the same landing again as a detached, windowless process, wait up to 15 s (`submit.CLAIM_WAIT_S`) for it to record itself (`submit.claim`), and print one `REVIEW` line for each branch with a verdict queued at the tip submitted (`submit.review_lines`; none for a branch with no entry at that tip), then the `SUBMITTED` line last, and exit 0:
 
 ```
+REVIEW <branch> <tip>: <verdict> by <reviewer>/<model> (<reviewer_id>)[, carried from <sha> over <n> main merge(s)]
 SUBMITTED <branch>[+<branch>...] tip <sha>[,<sha>] wait: python <kit>/tools/gate.py wait-result <branch> --tip <sha> --kind land -C <main checkout>
 ```
+
+The `REVIEW` lines only show the review on record (a carried one names the commit reviewed: Carrying a verdict forward); they decide nothing, and a queue that cannot be read gives none. The landing's own checks decide (Strict paths). The `SUBMITTED` line is unchanged and always last.
 
 The wait command names the batch's first branch and tip; `<kit>` is the kit's live folder (`pluginsource.live_root`); `-C` names the main checkout of the submitter's `-C` (`repo.main_checkout_toplevel`, that `-C` itself when git cannot place it), a checkout no branch cleanup removes; each path is in double quotes when it holds a space (`submit.wait_line`). The record is in the git common dir, so the command reads the same record from any working directory. The coordinator runs it, as printed, in the background and wakes on its exit (Waking a waiting session).
 
@@ -296,7 +299,7 @@ The strict paths are the list in strict_defaults.py, which is owner-authored: th
 
 - it lands alone. A batch holding it is REFUSED: `<branch> changes strict path <paths>: a branch that changes a strict path lands alone, never in a batch`. It names at most `land.STRICT_SHOWN` paths and counts the rest.
 - a verdict is queued for it (kitlib/gate/verdicts.py; `tools/verdict.py add`), read whole: an entry that is not well formed, a missing `reviewer_model` or `author` included, is `its verdict entry cannot be used: <why>`; none is `it lands only with a queued verdict (tools/verdict.py add), and none is queued for it`; one a landing marked failed is `its verdict entry is marked failed (<why>): queue it again with tools/verdict.py add`.
-- the verdict was given at the tip being landed, else `the verdict was given at <sha>, and the branch is at <sha>: review and queue the tip`.
+- the verdict is queued at the tip being landed, else `the verdict was given at <sha>, and the branch is at <sha>: review and queue the tip, or carry the verdict (tools/verdict.py carry) when a main sync is all that changed`. An entry carried to the tip (`carried`, Carrying a verdict forward) counts only when `kitlib.gate.carry.check` passes again here, from the commit reviewed to the tip against the base this landing merges onto, never on the facts the entry stores; else `the verdict was given at <sha> and carried to <sha>, but the carry does not hold against <main> <sha>: <why>; review and queue the tip`.
 - its `reviewer_model` names a strong-tier model: one hosts.json gives a host's `strong` or `deep` tier and no host's `light` or `standard` tier (`land.strong_models`). On Claude that is `opus`. `land.strong_alias` accepts the model itself (`opus`, case aside) or a full model id that holds it as a word of its own and names no other model of hosts.json's tiers (`claude-opus-5-5` names `opus`). An id that names no tier model (`gpt-5`), a weaker one (`claude-sonnet-4-6`) or two is refused: `the reviewer ran on <model>, not a strong-tier model (...)`. Codex's `account-default` is in every tier, so a Codex review never counts.
 - its reviewer is not the author (`land.is_author`): the `reviewer_id` is not a word of `author`, and the reviewer's agent type (`pm-kit:strong-worker` is `strong-worker`) is not one of the parts of `author` split on `/`, `,` or `;` (`Kit Test / strong-worker` and `Kit Test (agent), strong-worker` both name `strong-worker`). Otherwise `the reviewer <id> (<type>) is its author (<author>): ...`.
 
@@ -310,7 +313,27 @@ The coordinator queues the verdict with `tools/verdict.py add` (its arguments ar
 
 Each refusal starts `<branch> changes strict path <paths>: ` and ends `; nothing was merged`. A list that cannot be read at the base (git fails, or the file does not assign `STRICT_DEFAULTS` once as a literal tuple of non-empty strings) refuses every landing: `cannot read the strict paths from <main> at <sha>: <why>`. So does hosts.json that cannot be read, and paths git cannot list.
 
-A strict branch that passes lands automatically, as any other: its merged gate runs `--full --fresh` whatever the caller passed (it only ever tightens), and the landing says `STRICT: <branch> changes strict path <paths>: reviewed by <reviewer> on <model> (<reviewer_id>); the merged gate runs --full --fresh` before the merge (`Lander.strict_escalate`). Tests: tests/gate/test_land_strict.py.
+A strict branch that passes lands automatically, as any other: its merged gate runs `--full --fresh` whatever the caller passed (it only ever tightens), and the landing says `STRICT: <branch> changes strict path <paths>: reviewed by <reviewer> on <model> (<reviewer_id>)[ at <sha>, carried over <n> main merge(s)]; the merged gate runs --full --fresh` before the merge (`Lander.strict_escalate`; the bracket only for a carried verdict). Tests: tests/gate/test_land_strict.py.
+
+### Carrying a verdict forward
+
+A reviewed branch needs no fresh review because main moved: a merge of main that git made with no conflict adds nothing of the branch's own to review. After a main sync of a branch whose verdict is queued, the coordinator moves the verdict to the branch's head with:
+
+`python <kit>/tools/verdict.py carry -C <repo> --branch <branch>`
+
+It checks the head against main as last fetched (`<remote>/<main_branch>`; `NOT CARRIED: main as fetched (...) cannot be read: <why>; fetch first` when there is none) with `kitlib.gate.carry.check`, read-only. The head carries the verdict given at the commit reviewed when all of these hold (its module docstring has the detail):
+
+- every commit after the review is a merge with exactly two parents, on one first-parent line from the head down to the commit reviewed: no commit of the branch's own after the review;
+- each merge's second parent is in main, and its tree is the one `git merge-tree --write-tree` makes of its parents with no conflict: no conflict resolved by hand, no merge edited before its commit;
+- the branch's own diff against main is the one reviewed: the same paths, and the same `-U3` patch once the `index` lines and hunk positions are taken out (`carry.CONTEXT`). An edit of main within three lines of a branch hunk changes the patch and refuses: the fail-closed choice. A binary file counts as the same only when both sides hold the very same blobs.
+
+A pass rewrites the entry under the queue lock (`verdicts.carry`): `tip` becomes the head, and `carried` records `{from, merges, main, diff, utc}`: the commit reviewed, the merges carried over (oldest first, the last the head), main as checked, the sha256 of the normalized patch and when. Who reviewed, `queued_utc` and `range` (still ending at the commit reviewed) stay as they were; a second sync carries again from the same commit reviewed, and `verdict.py add` (a fresh review) drops `carried`. It prints:
+
+`CARRIED <branch> <head> from reviewed <sha>: <n> main merge(s), no conflict, the branch's own diff unchanged against <remote>/<main> <sha>; <verdict> by <reviewer>/<model> (<reviewer_id>)`
+
+Anything else writes nothing and exits 1: `NOT CARRIED: <why>; review and queue the head instead` (a branch commit after the review, a conflict, a changed diff, an entry marked failed, one already at the head), `NOT QUEUED: <branch>` when nothing is queued. When the entry or the branch moves while the check runs (outside the lock), nothing is written either: `NOT DONE: ... run carry again`. `verdict.py list` shows `carried_from=<sha>` on a carried entry, and `land.py --submit` its `REVIEW` line (Submitting a landing).
+
+A strict landing never trusts the stored facts: it runs the check again under its lock, from `carried.from` to the tip, against the base it merges onto (Strict paths), so main moving on after the carry is checked too. A queue entry holding `carried` is checked like every other key (`verdicts.check`): it is set only by `carry`, never given to `add`, and its `from` is not the tip. Tests: tests/gate/test_carry.py, tests/gate/test_verdict_carry.py, tests/gate/test_land_strict.py `CarriedVerdict`, tests/gate/test_land_submit.py `ReviewLines`.
 
 ### Gate reuse
 

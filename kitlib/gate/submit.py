@@ -5,9 +5,10 @@
             in a live process or once a branch landed at its tip (blocked); write each branch's
             `running` land record (one run_id for the batch, no pid yet), start the tool again,
             detached, with `--submitted <payload>`, wait for it to record itself (claim), and
-            give the one line `SUBMITTED <branch>[+<branch>...] tip <sha>[,<sha>] wait: python
-            <kit>/tools/gate.py wait-result <branch> --tip <sha> --kind land -C <main checkout>`
-            (wait_line)
+            give a `REVIEW <branch> <tip>: ...` line for each branch with a verdict queued at
+            its tip (review_lines), then the last line `SUBMITTED <branch>[+<branch>...] tip
+            <sha>[,<sha>] wait: python <kit>/tools/gate.py wait-result <branch> --tip <sha>
+            --kind land -C <main checkout>` (wait_line)
   restore   the payload, read back by the detached tool: the result.Run of each branch (the same
             run_id and started_at), the output file and the land records those runs replaced,
             for kitlib.gate.land.Lander(submitted=...); it writes its own pid into the records
@@ -53,7 +54,7 @@ import time
 from kitlib import gate as G
 from kitlib import pluginsource
 from kitlib.gate import pin
-from kitlib.gate import result
+from kitlib.gate import result, verdicts
 from kitlib.git import repo
 from kitlib.lock import detach as lockdetach
 from kitlib.lock import run as lockrun
@@ -189,7 +190,8 @@ def submit(root, tool_file, child_args, branches, tips, expect_main=None, enviro
            clock=time.monotonic, sleep=time.sleep, landing_of=None):
     """Start the landing of `branches` at `tips` detached: `tool_file` (tools/land.py or
     tools/gate.py) again with `child_args` (the landing's own arguments, -C absolute) and
-    `--submitted <payload>`. An Outcome: OK with the SUBMITTED line, USAGE for arguments the
+    `--submitted <payload>`. An Outcome: OK with the REVIEW lines (review_lines) and the
+    SUBMITTED line last, USAGE for arguments the
     landing would refuse as usage (nothing written), REFUSED with nothing written when a
     branch's landing is running or it landed at its tip already (blocked), REFUSED when the
     records or the payload cannot be written or the start fails (records written are finished
@@ -253,8 +255,35 @@ def submit(root, tool_file, child_args, branches, tips, expect_main=None, enviro
     if died:
         return G.Outcome(G.REFUSED, ['REFUSED: %s; nothing was changed; its output: %s' % (
             died, output)], pid=pid, payload=payload, output=output)
-    return G.Outcome(G.OK, [wait_line(branches, tips, root, kit)], pid=pid, payload=payload,
-                     output=output)
+    return G.Outcome(G.OK, review_lines(root, branches, tips) + [wait_line(branches, tips, root, kit)],
+                     pid=pid, payload=payload, output=output)
+
+
+def review_lines(root, branches, tips):
+    """`REVIEW <branch> <tip>: <verdict> by <reviewer>/<model> (<id>)[, carried from <sha> over N
+    main merge(s)]` for each branch with a verdict queued at the tip submitted
+    (kitlib.gate.verdicts), so the submission shows the review on record. Read only, and only for
+    the reader: a branch with no entry at its tip, or a queue that cannot be read, has no line
+    (the landing's own checks decide; this decides nothing)."""
+    common, _ = repo.common_dir(root)
+    if not common:
+        return []
+    lines = []
+    for b, t in zip(branches, tips):
+        try:
+            e = verdicts._load(verdicts.entry_path(common, b), b)
+        except verdicts.VerdictError:
+            continue
+        if e is None or e['state'] != verdicts.QUEUED or e['tip'].lower() != t.lower():
+            continue
+        c = e.get(verdicts.CARRIED)
+        more = ''
+        if c:
+            n = len(c['merges'])
+            more = ', carried from %s over %d main merge%s' % (c['from'], n, '' if n == 1 else 's')
+        lines.append('REVIEW %s %s: %s by %s/%s (%s)%s' % (
+            b, e['tip'], e['verdict'], e['reviewer'], e['reviewer_model'], e['reviewer_id'], more))
+    return lines
 
 
 def _landing(carrier, landing_of=None):
