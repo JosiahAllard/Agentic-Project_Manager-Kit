@@ -2102,8 +2102,8 @@ def main_checkout(event, ctx, target, cwd, role, what, unknown_why=None, rewrite
     if target is None:
         mine = own_worktree(ctx, cwd)
         instead = rewrite(fwd(mine) + '/<file>') if mine and rewrite is not None else new_wt
-        return refuse('main-checkout', role, '%s: the guard cannot tell where it writes (%s), and this '
-                      'role may not edit a main checkout. Write to a literal path inside your worktree.' %
+        return refuse('main-checkout', role, '%s: the guard cannot tell where it writes (%s). Name a literal path '
+                      'inside your worktree (the Edit or Write tool for a file).' %
                       (what, unknown_why or 'unknown path'), instead)
     place = ctx.place(target)
     if place.kind not in (repo.MAIN, repo.UNKNOWN):
