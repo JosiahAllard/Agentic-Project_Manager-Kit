@@ -78,12 +78,12 @@ def blocked_on_error(v, rules):
 # --- hold citations (a hold cites the ruling, question or item it waits on, or it is void) --------
 
 UNCITED_KINDS = ('deliberate', 'owner')     # members that name nothing they wait on
-CITE_RE = re.compile(r'(?<![A-Za-z0-9-])(?:R-[0-9]{4,}|Q-[0-9]{3,}|item:[A-Za-z0-9][A-Za-z0-9.-]*)')
+CITE_RE = re.compile(r'(?<![A-Za-z0-9-])(?:R-[0-9]{4,}|[QT]-[0-9]{3,}|item:[A-Za-z0-9][A-Za-z0-9.-]*)')
 BLOCK_NOTE = 'Blocked on '                  # the body line plan_block writes for `--reason`
 
 
 def cites(text):
-    """The R-nnnn, Q-nnn and item:<ID> citations in `text`, in order."""
+    """The R-nnnn, Q-nnn, T-nnn and item:<ID> citations in `text`, in order."""
     return CITE_RE.findall(text or '')
 
 
@@ -104,14 +104,14 @@ def hold_citations(rec):
 
 def block_citation_error(members, reason=None, owner_ask=None):
     """None, or why `block --on <members>` may not be written: a `deliberate` or `owner` member
-    names nothing it waits on, so `--reason` or `--owner-ask` must cite an R-nnnn, Q-nnn or
-    item:<ID> (an uncited hold is void)."""
+    names nothing it waits on, so `--reason` or `--owner-ask` must cite an R-nnnn, Q-nnn, T-nnn
+    or item:<ID> (an uncited hold is void; `block` takes no `--ruling`, so the reason carries it)."""
     bare = [m for m in members if m in UNCITED_KINDS]
     if not bare or cites(reason) or cites(owner_ask):
         return None
     return ('`block --on %s` cites nothing it waits on: name the ruling, question or item and its '
             'end condition in `--reason` (or `--owner-ask`), e.g. `--reason "R-nnnn: until <end '
-            'condition>"`, a Q-nnnn or an item:<ID> (an uncited hold is void)'
+            'condition>"`, a Q-nnn, a T-nnn or an item:<ID> (an uncited hold is void)'
             % ' --on '.join(bare))
 
 

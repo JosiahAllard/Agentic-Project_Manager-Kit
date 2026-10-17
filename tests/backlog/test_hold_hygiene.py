@@ -46,6 +46,14 @@ class HoldCitations(unittest.TestCase):
             with self.subTest(cite=cite):
                 self.assertEqual(hold_warnings(parse('FOO', id='FOO', body=body, **DELIBERATE)), [])
 
+    def test_an_r_q_or_t_id_in_the_reason_note_cites_it(self):
+        # `block` takes no --ruling: the reason text carries the citation.
+        for cite in ('R-9647', 'Q-1027', 'T-104'):
+            body = ('Blocked on deliberate (2026-10-10): %s: until no live session uses a '
+                    '*-conductor stem' % cite)
+            with self.subTest(cite=cite):
+                self.assertEqual(hold_warnings(parse('FOO', id='FOO', body=body, **DELIBERATE)), [])
+
     def test_a_q_key_cites_it(self):
         self.assertEqual(hold_warnings(parse('FOO', id='FOO', q='Q-1027', **DELIBERATE)), [])
 
@@ -108,7 +116,9 @@ class BlockCitationError(unittest.TestCase):
 
     def test_an_r_q_or_item_id_in_the_reason_or_the_ask_passes(self):
         for reason, ask in (('R-9092: until the rewrite lands', None),
+                            ('R-9647: until no live session uses a *-conductor stem', None),
                             ('until Q-1027 is answered', None),
+                            ('until T-104 is done', None),
                             ('until item:EX-OTHER closes', None),
                             (None, 'Q-1027: which of the two?')):
             with self.subTest(reason=reason, ask=ask):
@@ -140,7 +150,7 @@ class BlockCli(unittest.TestCase):
         self.assertIn('USAGE: `block --on deliberate` cites nothing it waits on', out)
         self.assertEqual(self.repo.git('rev-parse', smod.STORE_REF), before)
         self.ok('block', 'FOO', '--on', 'deliberate', '--reason',
-                'R-9092: held until the guard rewrite lands')
+                'R-9647: until no live session uses a *-conductor stem')
         out = self.ok('check')
         self.assertIn('hold citations   1 ok, 0 FAILED', out)
         self.assertNotIn('WARN', out)

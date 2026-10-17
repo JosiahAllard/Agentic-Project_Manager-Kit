@@ -142,8 +142,8 @@ def check_hold_citations(snap):
             subjects += 1
             if not rmod.hold_citations(rec):
                 warned.append(rmod.Finding(HOLD_CITATIONS, rec.path, n, '`blocked_on: %s` cites '
-                                           'no R-nnnn, Q-nnn or item:<ID> it waits on, so the hold '
-                                           'is void: unblock it, or cite the ruling and '
+                                           'no R-nnnn, Q-nnn, T-nnn or item:<ID> it waits on, so '
+                                           'the hold is void: unblock it, or cite the ruling and '
                                            'its end condition with `block %s --on %s --reason '
                                            '"R-nnnn: until ..."`' % (value, rec.id, value)))
     return CheckResult(HOLD_CITATIONS, subjects, (), unit='deliberate or owner holds',
