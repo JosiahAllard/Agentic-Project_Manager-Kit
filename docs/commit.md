@@ -6,6 +6,8 @@ Two tools, both ported from the PM kit (PM 9813c73). `tools/commit.py` is the en
 
 `commit.py [-C DIR] -m SUBJECT [-b BODY | --body-file FILE] [--model NAME] [--host NAME] [--owner-authored] [--owner-approved VALUE ...] [--lander-main-checkout] PATH ...`
 
+`commit.py [-C DIR] -m SUBJECT [-b BODY | --body-file FILE] [--model NAME] [--host NAME] --owner-approval hub:A-<n> PATH ...` and `commit.py [-C DIR] --owner-approval hub:A-<n> --consume COMMIT` commit, and consume, a change the owner approved on the hub ("Owner approval" below).
+
 `--host NAME` names the agent host for the Co-Authored-By trailer: a host in `hosts.json`, default `PM_KIT_HOST`, else the registry's default host (Claude). `--provider` is its old name, accepted for one release. A name `hosts.json` lacks is a usage error (exit 2) before any work. The trailer comes from `kitlib.attribution`: Claude's is `Claude <model>` as below; Codex's needs the actual explicit model id, emits `Codex <model-id> <noreply@openai.com>` and never uses CLAUDE_AGENT_MODEL. Explicit paths, owner identity/approval, staged-file and document checks keep their rules. The shared trailer classifier recognizes both forms.
 
 It stages exactly the PATHs named and commits them in the work tree that DIR is in (default: here). `-C` is resolved by `kitlib.git.repo.toplevel`.
@@ -38,10 +40,11 @@ What it refuses (`kitlib/commit/__init__.py`, `_commit`):
   - `--owner-authored` requires the author identity git will record (`git var GIT_AUTHOR_IDENT`) to be `"owner".email`. It must not be in `"owner".agent_emails`.
   - `--owner-approved` is required only when an owner-only path is in the commit.
   - Every `--owner-approved` value must be a blanket entry or a committed path. It is written in its canonical spelling under `"owner".trailer`.
+  - Or an agent commits the exact change the owner approved on the hub, with `--owner-approval hub:A-<n>` ("Owner approval" below).
 - **The main checkout** (`kitlib.git.checkout.main_refusal`), unless `--lander-main-checkout` is given. That flag is a usage error anywhere else.
 
 The message is the subject, then the body, then the trailers:
-- The trailers are the owner-approval lines, then `Co-Authored-By: Claude <model> <noreply@anthropic.com>`.
+- The trailers are the owner-approval lines (`Owner-Approval: hub:A-<n>` first, with `--owner-approval`), then `Co-Authored-By: Claude <model> <noreply@anthropic.com>`.
 - An `--owner-authored` commit carries `Owner-Authored: yes` instead of `Co-Authored-By`.
 - The model comes from `--model`, else `CLAUDE_AGENT_MODEL`. A blank value counts as unset.
 - `"Claude "` is added unless the name is a `"commit".coauthor_families` family, or starts with one followed by a space, `.` or `-`.
@@ -64,8 +67,35 @@ After a commit that includes a `.md` file or an owner-only file, it prints the d
 | Code | Meaning |
 |---|---|
 | 0 | committed (`committed <hash>  <subject>`, `files     ...`, and `rendered  ...` after a render) |
-| 1 | refused (`refused: ...`), or git failed (`git add failed`, `commit failed`, `nothing to commit in`) |
+| 1 | refused (`refused: ...`), or git failed (`git add failed`, `commit failed`, `nothing to commit in`); with `--owner-approval`, also a consume that failed after the commit, which stands |
 | 2 | `USAGE: ...`, the main-checkout refusal, or a refused `.kit.json` |
+
+## Owner approval
+
+`--owner-approval hub:A-<n>` commits a change to owner-only paths that an agent asked for and the owner approved on the Action Hub (docs/action-hub.md "approvals/A-NNN"), without the owner authoring it. The steps are `kitlib/commit/approval.py`; `kitlib/commit/__init__.py` runs them (`_approval_first`, `_approval_before_write`, `_stage`, `_put_back`, `_consume`).
+
+Usage errors (exit 2, `approval.usage_error`): a value that is not `hub:A-<n>`; `--owner-approval` with `--owner-authored` or `--owner-approved`; `--consume` without `--owner-approval`, or with paths, `-m`, `-b` or `--body-file`.
+
+Refused before anything is written (exit 1, `Nothing was written or committed.`):
+- The hub cannot be asked, has no such approval, or it is not `approved`: consumed already, pending, denied or expired (`fetch`, `state_error`).
+- A render source is named (the commit would carry rendered files nobody approved), or a merge is in progress (the commit would have two parents).
+- An approved path is staged already.
+- `prewrite_error`: the paths named are not exactly the approval's files; HEAD is not its `head`; a path is not a plain file of the work tree (`..`, absolute, a backslash, a colon, a `.git` part, a symlink, or a parent outside the tree); a file in the work tree is not its `base_blob`; a content is not its `blob`; or a file would not change.
+- `preverify_error`: the hub's verify route does not verify the approval for this repository (its `origin` remote, `kitlib.hubsite.approvals.remote_id`), HEAD and the approved blobs.
+
+A staged file the call does not name refuses first, as for any commit.
+
+Then the approved content is written (UTF-8; a null content deletes the file), the paths are staged, and each staged blob is checked against the approval: a git filter or `.gitattributes` that changed one on staging refuses (`staged_error`). The other checks above (HEAD moved, machine paths) hold as for any commit; the owner-only refusal and `--owner-approved` do not apply. A refusal after the write and before the commit step puts every file back and unstages the paths (`The work tree is as it was, and nothing this call staged is staged.`). A refusal from the commit step itself (HEAD moved during the call; a commit made may stand or be undone, as for any commit) leaves the approved content in the work tree and the approval not consumed (`hub:A-<n> was not consumed; the approved content is left in the work tree.`).
+
+The message carries `Owner-Approval: hub:A-<n>` first in its trailer block, then `Co-Authored-By`: it is an agent's commit. After the commit, `consume_commit`:
+- The commit must carry that one `Owner-Approval` value and have one parent.
+- Its changed paths and their blobs go to the verify route, then to the consume route with the version the snapshot gave, then to the verify route again with the commit. An approval this commit consumed already is only verified again.
+- It prints `approval  hub:A-<n> consumed by <commit>`.
+- On any failure the commit stands and the call exits 1 with `refused: hub:A-<n> was not consumed: <why>.` and the command that retries the consume: `python <kit>/tools/commit.py --owner-approval hub:A-<n> --consume <commit>`, run in the same work tree. That form (`_consume`) runs only these steps, for a COMMIT that `git rev-parse` resolves in the work tree.
+
+Landing it: `gate land` and the pre-push hook (`kitlib.guard.ownercommits.violations`) pass a non-owner commit that changes an owner-only path only when it carries exactly one `Owner-Approval: hub:A-<n>`, has one parent (the approval's `head`), changes exactly the approval's files to their approved blobs, and the hub verifies the approval as consumed by that commit. A merge, a root commit, or any doubt of the hub keeps it refused. An approval verifies until 24 hours after the owner's decision, consumed or not (`APPROVED_TTL_S`, `kitlib/hubsite/approvals.py`), so the branch must land within that time.
+
+Elsewhere the trailer is shown and claims nothing. The review pack's co-author section shows `| owner approval hub:A-<n>` on the commit's row (`kitlib.reviewpack.coauthor_section`). Neither it nor `tools/trailers.py` reads the trailer as an owner claim (`kitlib.reviewpack.trailers`), and `"owner".trailer` may not be `Owner-Approval` in any case (`kitlib.config.owner.trailer_problem`).
 
 ## machine_paths.py
 
