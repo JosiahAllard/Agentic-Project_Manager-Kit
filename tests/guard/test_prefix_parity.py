@@ -74,8 +74,8 @@ class Knob(object):
                 mock.patch.object(agentname, 'bare_mark', self.bare_mark))
 
 
-# Each drives all four sentinels above zero in about 8 s together; the whole guard suite took ~64 s
-# for the same proof (KIT-TEST-CUTS-GUARD).
+# Together they drive all four sentinels above zero in about 8 s; the whole guard suite took ~64 s
+# for the same proof.
 SENTINEL_MODULES = ('test_rules', 'test_rolepolicy', 'test_session')
 
 
