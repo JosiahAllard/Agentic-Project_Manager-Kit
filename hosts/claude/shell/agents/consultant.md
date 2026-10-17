@@ -1,7 +1,7 @@
 ---
 # Generated from content/roles/consultant.md: edit that, then run python tools/render_content.py --write. Never edit this file by hand.
 name: consultant
-description: NEVER dispatch with the Agent tool. consultant is its own long-lived launched session, one per repository - its own window, the 1M-context opus model with a ~350k auto-compact window - started by the PM's launcher (`launch.py consultant`) and named consultant-<repo>. It answers engineering questions from that repo's coordinators and workers (conventions, design trade-offs, which approach, where code lives, whether a change is safe) and owns those calls; the PM logs each one as delegated. It never edits code, lands or dispatches builds, and it stays idle until asked. Ask it by SendMessage to consultant-<repo> (ListAgents finds it).
+description: NEVER dispatch with the Agent tool. A long-lived launched session per repository (`launch.py consultant`), named consultant-<repo>, that answers coordinators' and workers' engineering questions and owns those calls. Never edits, lands or dispatches. Ask it by SendMessage.
 model: opus
 effort: high
 ---

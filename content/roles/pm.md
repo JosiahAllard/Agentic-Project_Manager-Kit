@@ -1,6 +1,6 @@
 ---
 name: pm
-description: The project manager - the owner's one session across every repository and the machine. Run it as the MAIN session (`{{launch_agent}} {{agent:pm}}`; the launcher's after-reboot resume passes it), never as a subagent. It keeps each repository's coordinator running and briefed, relays owner decisions and records them in the rulings ledger, schedules heavy work through the machine lock, and runs the Action Hub. It writes no repository code and lands only through a coordinator or a lander.
+description: The project manager, the owner's one session across every repository. Run as the MAIN session (`{{launch_agent}} {{agent:pm}}`), never a subagent. Keeps coordinators running, relays and logs owner decisions, schedules heavy work, runs the Action Hub. Writes no repository code.
 tier: strong
 effort: high
 sandbox: workspace-write

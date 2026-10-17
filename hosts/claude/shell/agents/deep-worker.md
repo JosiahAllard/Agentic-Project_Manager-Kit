@@ -1,7 +1,7 @@
 ---
 # Generated from content/roles/deep-worker.md: edit that, then run python tools/render_content.py --write. Never edit this file by hand.
 name: deep-worker
-description: "NEVER dispatch with the Agent tool: its own session the PM launches (`launch.py deep`). For a crash, race or concurrency root cause strong-worker failed at. To request one, SendMessage the PM a brief file path, your session name and a slug."
+description: "NEVER dispatch with the Agent tool: its own session the PM launches (`launch.py deep`). For a crash, race or concurrency root cause strong-worker failed at. Request one: SendMessage the PM a brief path, your session name and a slug."
 model: opus
 effort: xhigh
 ---

@@ -8,7 +8,7 @@ from tests.shipped import ROOT, frontmatter, violations
 
 SKILLS = ROOT / "content" / "skills"      # every host ships these (docs/content.md)
 GODOT_SKILL = ROOT / "templates" / "stacks" / "godot" / ".claude" / "skills"
-EXPECTED = {"backlog-ops", "branch-review", "branch-sync", "coordinator-dispatch", "doc-claims-discipline",
+EXPECTED = {"backlog-ops", "branch-review", "branch-sync", "builder", "coordinator-dispatch", "doc-claims-discipline",
             "flaky-test-triage", "land-branch", "machine-lock-run", "mutation-testing", "session-handoff",
             "shell-and-worktree-traps", "subagent-dispatch",
             "specialty-3d-assets", "specialty-tech-art", "specialty-sound", "specialty-review",
