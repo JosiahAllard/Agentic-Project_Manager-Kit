@@ -562,8 +562,10 @@ class DynamicTargets(Base):
         def said(text):
             parsed = cm.read(text, sh.PS, self.w.wt)
             return [c for c in parsed.commands if c.words and c.words[0].text.lower() == 'write-output']
-        self.assertEqual(len(said('powershell %s-c "Write-Output hi"' % ('-i ' * 16))), 1)
-        self.assertEqual(len(said('echo "Write-Output hi" | powershell -i -i -i -i -Zork')), 1)
+        for text in ('powershell %s-c "Write-Output hi"' % ('-i ' * 16),
+                     'echo "Write-Output hi" | powershell -i -i -i -i -Zork'):
+            with self.subTest(text):
+                self.assertEqual(len(said(text)), 1)
 
     def test_an_unclosed_block_comment_is_not_read(self):
         # shell._Scan.tokens: powershell.exe runs no -Command text whose <# has no #> ("The
