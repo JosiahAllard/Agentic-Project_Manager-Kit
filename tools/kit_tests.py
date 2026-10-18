@@ -38,8 +38,9 @@ The units also get the home fence's marker (docs/test-tools.md "Home fence"): KI
 home folder this process resolves, unless the environment already carries one. The tools a test
 starts inherit it and refuse that home.
 No test child gets the session's kit binding: PM_KIT_ROOT, PM_KIT_RELEASE_ID, KIT_LIVE_ROOT and
-KIT_PINNED, PM_KIT_ROLE and PM_KIT_HOST are dropped from its environment (KIT_SESSION_ENV), so a
-session's env cannot steer the suite.
+KIT_PINNED, PM_KIT_ROLE, PM_KIT_HOST, PM_KIT_SESSION_NAME, PM_KIT_CODEX_STATE, PM_KIT_CODEX_EXE
+and each registered host's session_env variable (hosts.json) are dropped from its environment
+(KIT_SESSION_ENV, session_env_names()), so a session's env cannot steer the suite.
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls the library, prints, runs, exits.
 Exit codes: the unittest run's (0 passed or nothing selected, 1 failed); 2 USAGE or a refusal
 (git could not list the change - for --full too, unless --real-git - or --select with a
@@ -58,6 +59,8 @@ from kitlib import config as kconfig                                # noqa: E402
 from kitlib.config import user as kuser                             # noqa: E402
 from kitlib.git import refs as gitrefs                              # noqa: E402
 from kitlib.git import repo as gitrepo                              # noqa: E402
+from kitlib.host import registry as hostregistry                    # noqa: E402
+from kitlib import sessionmark                                      # noqa: E402
 from kitlib.lock import giveback                                    # noqa: E402
 from kitlib.proc import spawn                                       # noqa: E402
 from kitlib.pytests import runner as unit_runner                    # noqa: E402
@@ -65,13 +68,17 @@ from kitlib.tooldeps import selflist, selfrun, selftree, tiers              # no
 
 USAGE = 2
 FULL = ['-m', 'unittest', 'discover', '-s', 'tests', '-t', '.']
-# The session's kit binding, never passed to a test child (child_env): boot/kitboot.py reads
-# PM_KIT_ROOT and PM_KIT_RELEASE_ID (the kit a host entry binds, kitlib.kitrelease's pin),
+# The session's identity and kit binding, never passed to a test child (child_env): boot/kitboot.py
+# reads PM_KIT_ROOT and PM_KIT_RELEASE_ID (the kit a host entry binds, kitlib.kitrelease's pin),
 # kitlib.gate.pin KIT_PINNED (run live, never pin) and kitlib.pluginsource.live_root
-# KIT_LIVE_ROOT (the checkout a printed command names). Inherited, they would steer the code
-# under test toward the session's kit; a test that wants one sets it itself.
+# KIT_LIVE_ROOT (the checkout a printed command names); PM_KIT_ROLE and PM_KIT_HOST are the
+# session's role and host, PM_KIT_SESSION_NAME its name (kitlib.sessionmark), PM_KIT_CODEX_STATE
+# and PM_KIT_CODEX_EXE the Codex adapter's state folder and binary. Inherited, they would steer the
+# code under test toward the session's kit; a test that wants one sets it itself. Each registered
+# host's session_env variable (hosts.json) is dropped too: session_env_names().
 KIT_SESSION_ENV = ('PM_KIT_ROOT', 'PM_KIT_RELEASE_ID', 'KIT_LIVE_ROOT', 'KIT_PINNED',
-                   'PM_KIT_ROLE', 'PM_KIT_HOST')
+                   'PM_KIT_ROLE', 'PM_KIT_HOST', sessionmark.SESSION_NAME_ENV,
+                   'PM_KIT_CODEX_STATE', 'PM_KIT_CODEX_EXE')
 
 
 class Parser(argparse.ArgumentParser):
@@ -327,12 +334,23 @@ def drainer(say):
     return give
 
 
+def session_env_names():
+    """KIT_SESSION_ENV and every registered host's session_env variable (hosts.json), upper-cased;
+    just KIT_SESSION_ENV when hosts.json cannot be read."""
+    try:
+        hosts = hostregistry.union('session_env')
+    except hostregistry.RegistryError:
+        hosts = ()
+    return {n.upper() for n in KIT_SESSION_ENV + hosts}
+
+
 def child_env():
     """The environment every test child starts from (the units, the count child, --list's loader):
-    this process's without KIT_SESSION_ENV, with the home fence's marker (kitlib.config.user.
+    this process's without session_env_names(), with the home fence's marker (kitlib.config.user.
     fence_env: a pool worker (kitlib/tooldeps/pool_worker.py) replaces its environment for each
     unit, so tests/__init__.py's marker would not reach it)."""
-    env = {k: v for k, v in os.environ.items() if k.upper() not in KIT_SESSION_ENV}
+    names = session_env_names()
+    env = {k: v for k, v in os.environ.items() if k.upper() not in names}
     return kuser.fence_env(env)
 
 
