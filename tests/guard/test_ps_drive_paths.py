@@ -538,8 +538,42 @@ class DynamicTargets(Base):
         for text in ('powershell -i Text "Write-Output hi"', 'pwsh -i -nop -c "Write-Output hi"'):
             with self.subTest(text):
                 self.allowed(self.run_ps(text))
-        # commands.PS_FORKS_MAX: past that many such switches the line is not read
+        # commands.PS_FORKS_MAX: past that many such switches on one reading path the line is not
+        # read; the reading that takes no value is still judged
         self.denied(self.run_ps('powershell %s"Write-Output hi"' % ('-i ' * 40)), 'unreadable')
+        for shell in ('powershell', 'pwsh'):
+            for n in (17, 18, 40):
+                text = '%s %s-c "Remove-Item {main}\\x.txt"' % (shell, '-i ' * n)
+                with self.subTest(text):
+                    self.denied(self.run_ps(text), 'main-checkout')
+
+    def test_each_reading_of_a_powershell_line_is_parsed_on_its_own(self):
+        # commands._nested_text gives each reading as a text of its own and commands.expand parses
+        # each: an unclosed <# in one reading hides no other reading, nor standard input
+        for text in ('pwsh -CustomPipeName "<#" -c "Remove-Item {main}\\x.txt"',
+                     'powershell -CustomPipeName "<#" -c "Remove-Item {main}\\x.txt"',
+                     'echo "Remove-Item {main}\\x.txt" | pwsh -CustomPipeName "<#"'):
+            with self.subTest(text):
+                self.denied(self.run_ps(text), 'main-checkout')
+
+    def test_the_readings_of_a_switch_line_are_counted_once(self):
+        # commands._nested_text: readings are kept once each, so sixteen -i give one copy of the
+        # command, not one per reading path (1597), and standard input is read once
+        def said(text):
+            parsed = cm.read(text, sh.PS, self.w.wt)
+            return [c for c in parsed.commands if c.words and c.words[0].text.lower() == 'write-output']
+        self.assertEqual(len(said('powershell %s-c "Write-Output hi"' % ('-i ' * 16))), 1)
+        self.assertEqual(len(said('echo "Write-Output hi" | powershell -i -i -i -i -Zork')), 1)
+
+    def test_an_unclosed_block_comment_is_not_read(self):
+        # shell._Scan.tokens: powershell.exe runs no -Command text whose <# has no #> ("The
+        # terminator '#>' is missing from the multiline comment", probe10.log); the line is flagged
+        for text in ('Write-Output hi <# rest', 'powershell -c "Write-Output hi <# rest"'):
+            with self.subTest(text):
+                self.denied(self.run_ps(text), 'unreadable')
+        for text in ('Write-Output hi <# rest #>', 'powershell -c "Write-Output hi <# rest #>"'):
+            with self.subTest(text):
+                self.allowed(self.run_ps(text))
 
     def test_a_double_dash_switch_is_read_as_pwsh_reads_it(self):
         # pwsh reads --c and --command as -Command; powershell.exe runs the unknown --c and what
