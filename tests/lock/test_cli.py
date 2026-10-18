@@ -246,6 +246,28 @@ class Cli(StoreCase):
         self.assertIn("the gpus could not be read (Win32_VideoController: exit 1)", first)
         self.assertNotIn("applies once nothing is live", out)
 
+    def test_division_with_an_invalid_layout_json_under_a_live_run_is_not_in_force_now(self):
+        """The wanted layout is used but layout.json is not written: the CLI says that, not
+        "in force now"."""
+        self.layout()
+        self.live_record("r-20261006T120000Z-abcdef")
+        self.store.drop("layout.json")
+        code, out, _ = self.call("division", "--set", '{"cpu_slots": 6}', owner=True)
+        self.assertEqual(code, 0)
+        first = out.splitlines()[0]
+        self.assertNotIn("in force now", first)
+        self.assertIn("is written once no run is live or queued (1 now)", first)
+
+    def test_division_on_a_fresh_failed_look_says_it_is_provisional(self):
+        with open(self.hw_path, "w", encoding="utf-8") as f:
+            json.dump(dict(self.hw, gpus=[], source=dict(self.hw["source"], gpu="none"),
+                           failed=["gpus"], problems=["Win32_VideoController: exit 1"]), f)
+        code, out, _ = self.call("division", "--set", '{"cpu_slots": 6}', owner=True)
+        self.assertEqual(code, 0)
+        first = out.splitlines()[0]
+        self.assertNotIn("in force now", first)
+        self.assertIn("provisional", first)
+
     def test_division_under_a_live_run_applies_once_idle(self):
         self.layout()
         self.live_record("r-20261006T120000Z-abcdef")

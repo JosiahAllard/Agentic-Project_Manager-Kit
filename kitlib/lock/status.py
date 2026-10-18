@@ -82,7 +82,7 @@ def render(snap):
                    "; WARNING: " + L["warning"] if L.get("warning") else ""))
     why = L["hardware_change"]["pending"]
     if why and not waits_for_idle(why):
-        out.append("layout not adopted: %s" % why)
+        out.append("layout: %s" % why)
     elif L["hardware_change"]["changed"]:
         out.append("hardware or division changed: the new layout applies once nothing is live or "
                    "queued%s" % (" (waiting for that)" if L["hardware_change"]["pending"] else ""))

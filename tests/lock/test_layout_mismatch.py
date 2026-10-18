@@ -196,3 +196,18 @@ class InvalidLayoutUnderLiveRuns(StoreCase):
                 got = lay.in_force(self.store)
                 self.assertIsNone(got["pending"])
                 self.assertEqual(self.store.read("layout.json")["key"], good["key"])
+
+    def test_an_unreadable_queue_leaves_an_invalid_layout_unwritten_and_says_so(self):
+        # Whether a run is queued is not known, so layout.json is not rewritten, and pending says
+        # why the layout in use is the wanted one, unwritten.
+        good = self.layout()
+        with open(self.store.path("queue.json"), "w", encoding="utf-8") as f:
+            f.write("not a queue")
+        for how in ("missing", "unreadable", "another version"):
+            with self.subTest(layout_json=how):
+                self.spoil(how, good)
+                before = self.raw()
+                got = lay.in_force(self.store)
+                self.assertEqual(self.raw(), before)
+                self.assertEqual(got["layout"]["key"], good["key"])
+                self.assertIn("the layout could not be checked (queue unreadable", got["pending"])

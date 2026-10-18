@@ -426,36 +426,62 @@ def in_force(store, adopt=True):
     mutex, so a run in the queue never sees its slots renumbered; until then `pending` says why
     it waits. A layout.json that is missing, unreadable or invalid to this version waits the same
     way: the runs live now count their slots from it, so it is rewritten only once none is, and
-    until then the wanted layout is used without being written. A wanted layout from a failed
-    look at the hardware (detect's `failed`) is never adopted: the valid layout.json stays in
-    force (the wanted one, unwritten, when there is none) until a look succeeds. adopt False:
-    never write (a read-only look)."""
+    until then the wanted layout is used without being written (and recomputed on each call, so
+    a division change applies to it at once). A look at the hardware that failed (detect's
+    `failed`) never replaces a layout.json written from a good look. With no valid layout.json it
+    is written as before, marked `provisional`, so the runs booked on it keep their numbering; a
+    provisional layout.json is replaced under the same rule as any other (by a good look, or by
+    another failed look such as a division change), and a good look with its key makes it final.
+    adopt False: never write (a read-only look)."""
     hw = hardware(store)
     want, source, warning = wanted(store, hw)
+    failed = list(hw.get("failed") or [])
+    why = None
+    if failed:
+        why = "the %s could not be read (%s)" % (" and ".join(failed),
+                                                 "; ".join(hw.get("problems") or ()) or "no detail")
+    provisional = why and "%s; the layout in use came from such a look and is provisional: the " \
+        "first look that succeeds replaces it while no run is live or queued" % why
+
+    def settled(c):
+        """Nothing to write: c is the wanted layout, final unless this look failed too."""
+        return valid_layout(c) and c["key"] == want["key"] and (failed or not c.get("provisional"))
+
+    def kept(c):
+        """A failed look does not replace c, a layout.json from a good look."""
+        return failed and valid_layout(c) and not c.get("provisional") and c["key"] != want["key"]
+
     cur = store.read("layout.json")
     out = {"layout": want, "wanted": want, "source": source, "warning": warning, "pending": None}
-    if valid_layout(cur) and cur["key"] == want["key"]:
+    if settled(cur):
+        out.update(pending=provisional if cur.get("provisional") else None)
         return out
-    failed = hw.get("failed") or []
-    if failed:
-        out.update(layout=cur if valid_layout(cur) else want,
-                   pending="the %s could not be read (%s); no layout is adopted from that look "
-                           "until one succeeds" % (" and ".join(failed),
-                                                   "; ".join(hw.get("problems") or ()) or "no detail"))
+    if kept(cur):
+        out.update(layout=cur, pending="%s; no layout is adopted from that look until one "
+                                       "succeeds" % why)
         return out
     if not adopt:
-        if valid_layout(cur):
+        if valid_layout(cur) and cur["key"] != want["key"]:
             out.update(layout=cur, pending="the machine or division changed; it is used once "
                                             "no run is live or queued")
+        elif not valid_layout(cur):
+            out.update(pending=provisional)
         return out
     from kitlib.lock import queue as q_mod
     try:
         with store.lock("queue", store.settings.queue_lock_s):
             cur = store.read("layout.json")
-            if valid_layout(cur) and cur["key"] == want["key"]:
+            if settled(cur):
+                out.update(pending=provisional if cur.get("provisional") else None)
                 return out
-            busy = [e["id"] for e in q_mod.load(store)["entries"] if not store.run_dead(e)]
-            busy += [r["id"] for r in store.live_runs() if r["id"] not in busy]
+            if kept(cur):
+                out.update(layout=cur, pending="%s; no layout is adopted from that look until one "
+                                               "succeeds" % why)
+                return out
+            same = valid_layout(cur) and cur["key"] == want["key"]  # only the mark goes: no renumbering
+            busy = [] if same else [e["id"] for e in q_mod.load(store)["entries"]
+                                    if not store.run_dead(e)]
+            busy += [] if same else [r["id"] for r in store.live_runs() if r["id"] not in busy]
             if busy and valid_layout(cur):
                 out.update(layout=cur, pending="the machine or division changed (%s -> %s); it "
                            "is used once no run is live or queued (%d now)" % (
@@ -466,7 +492,9 @@ def in_force(store, adopt=True):
                                    "version; %s is written once no run is live or queued (%d now)"
                                    % (want["key"], len(busy)))
                 return out
-            store.write("layout.json", dict(want, adopted_at=time.time()))
+            store.write("layout.json", dict(want, adopted_at=time.time(),
+                                            **({"provisional": True} if failed else {})))
+            out.update(pending=provisional)
     except (OSError, q_mod.QueueUnreadable) as e:
         out.update(layout=cur if valid_layout(cur) else want,
                    pending="the layout could not be checked (%s)" % e)

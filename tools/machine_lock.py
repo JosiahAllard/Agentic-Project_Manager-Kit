@@ -419,6 +419,9 @@ def cmd_division(a, store):
     if a.set is not None or a.default:
         r = api.set_division(actor(a, store), None if a.default else a.set, store)
         code = api_result(r, lambda res: "division written; %s" % (
+            # applied: the layout in use is the wanted one; with a pending reason it is used
+            # unwritten (layout.json invalid under live runs) or provisional (a failed look).
+            "in use now, but %s" % res["pending"] if res["applied"] and res["pending"] else
             "in force now" if res["applied"] else
             "not in force: %s" % res["pending"]
             if res["pending"] and not st.waits_for_idle(res["pending"]) else

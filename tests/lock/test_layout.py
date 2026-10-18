@@ -303,17 +303,75 @@ class FailedDetection(StoreCase):
         self.assertIsNone(got["pending"])
         self.assertEqual(got["layout"]["key"], good["key"])
 
-    def test_a_fresh_store_writes_no_layout_from_a_failed_look(self):
+    def test_a_fresh_store_writes_a_provisional_layout_from_a_failed_look(self):
+        # Runs booked now count their slots from it, so it is written; a good look replaces it.
         real = self.hw
         self.on(no_gpu_answer(real))
         got = lay.in_force(self.store)
         self.assertEqual(got["layout"]["gpu_slots"], 1)        # all there is to count with
         self.assertIn("could not be read", got["pending"])
-        self.assertIsNone(self.store.read("layout.json"))
+        self.assertIn("provisional", got["pending"])
+        written = self.store.read("layout.json")
+        self.assertEqual(written["key"], got["layout"]["key"])
+        self.assertTrue(written["provisional"])
         self.on(real)
         got = lay.in_force(self.store)
         self.assertIsNone(got["pending"])
-        self.assertEqual(self.store.read("layout.json")["gpu_slots"], 2)
+        written = self.store.read("layout.json")
+        self.assertEqual(written["gpu_slots"], 2)
+        self.assertFalse(written.get("provisional"))
+
+    def test_a_good_look_waits_for_idle_before_replacing_a_provisional_layout(self):
+        # A run booked on the failed look's numbering keeps it: the good look waits for idle.
+        real = self.hw
+        self.on(no_cores_answer(real))
+        first = self.layout()
+        self.assertEqual(first["cpu_slots"], 24)
+        self.live_record("r-20261017T120000Z-0000a1", cores=[0])
+        self.on(real)
+        got = lay.in_force(self.store)
+        self.assertEqual(got["layout"]["key"], first["key"])
+        self.assertEqual(got["wanted"]["cpu_slots"], 12)
+        self.assertIn("no run is live or queued (1 now)", got["pending"])
+        self.assertEqual(self.store.read("layout.json")["key"], first["key"])
+        self.store.drop("active/r-20261017T120000Z-0000a1.json")
+        got = lay.in_force(self.store)
+        self.assertIsNone(got["pending"])
+        self.assertEqual(got["layout"]["cpu_slots"], 12)
+
+    def test_a_machine_whose_look_always_fails_changes_division_only_when_idle(self):
+        self.on(no_gpu_answer(self.hw))
+        first = self.layout()
+        self.assertEqual(first["cpu_slots"], 12)
+        self.live_record("r-20261017T120000Z-0000b1", cores=[0])
+        self.store.write("machine.json", {"cpu_slots": 6})
+        got = lay.in_force(self.store)
+        self.assertEqual(got["layout"]["key"], first["key"])
+        self.assertEqual(got["wanted"]["cpu_slots"], 6)
+        self.assertIn("no run is live or queued (1 now)", got["pending"])
+        self.store.drop("active/r-20261017T120000Z-0000b1.json")
+        got = lay.in_force(self.store)                  # idle: adopted, still provisional
+        self.assertEqual(got["layout"]["cpu_slots"], 6)
+        self.assertIn("provisional", got["pending"])
+        self.assertTrue(self.store.read("layout.json")["provisional"])
+
+    def test_a_good_look_that_confirms_a_provisional_layout_makes_it_final(self):
+        # One thread per core: the look that cannot list the cores gives the same layout. Once a
+        # good look confirms it, a later failed look may not replace it.
+        real = lay.fake_hardware(threads=24, smt=1, l3=2)
+        self.on(no_cores_answer(real))
+        first = self.layout()
+        self.assertTrue(self.store.read("layout.json")["provisional"])
+        self.on(real)
+        got = lay.in_force(self.store)
+        self.assertEqual(got["layout"]["key"], first["key"])
+        self.assertIsNone(got["pending"])
+        self.assertFalse(self.store.read("layout.json").get("provisional"))
+        self.on(no_gpu_answer(real))
+        got = lay.in_force(self.store)
+        self.assertEqual(got["layout"]["key"], first["key"])
+        self.assertEqual(got["layout"]["gpu_slots"], 2)
+        self.assertIn("no layout is adopted from that look", got["pending"])
 
     def test_unlisted_cores_are_not_adopted_either(self):
         good = self.layout()
