@@ -1,7 +1,7 @@
 """kitlib.gate.land and strict paths (docs/gate.md "Strict paths"): a branch that changes a path
 matching the list in kitlib/gate/strict_defaults.py, read from the base and never from the branch,
 lands only alone, with a queued verdict (kitlib.gate.verdicts) at its tip from a strong-tier
-reviewer who is not its author; its merged gate then runs --full --fresh whatever the caller
+reviewer (or haiku, for a worker or weak-worker build) who is not its author; its merged gate then runs --full --fresh whatever the caller
 passed. Anything unreadable refuses (fail closed)."""
 import json
 import os
@@ -151,6 +151,52 @@ class LandsAloneFullFresh(StrictCase):
         _, out, _ = self.land_it([BRANCH, 'kit/strict'], [plain_tip, strict_tip])
         self.assert_refused(out, 'kit/strict changes strict path %s' % STRICT,
                             'lands alone, never in a batch')
+
+
+class ReviewerTierByAuthor(StrictCase):
+    """Owner rulings R-1717 and R-2220 (land.REVIEWER_MODELS_BY_AUTHOR): a haiku review counts
+    for a strict branch built by worker or weak-worker only; every other build needs opus."""
+    GATE = LandsAloneFullFresh.GATE
+
+    def lands(self, model, author):
+        _, tip = self.branch('feature', {STRICT: 'x = 1\n'})
+        self.queue(BRANCH, tip, reviewer_model=model, author=author)
+        lander, out, said = self.land_it(BRANCH, tip)
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertEqual(self.remote_main(), out.merge)
+        self.assertTrue(lander.full and lander.fresh)
+        self.assertIn('STRICT: %s changes strict path %s: reviewed by pm-kit:reviewer on %s '
+                      '(agent-r1); the merged gate runs --full --fresh' % (BRANCH, STRICT, model),
+                      said)
+
+    def refused(self, model, author):
+        _, tip = self.branch('feature', {STRICT: 'x = 1\n'})
+        self.queue(BRANCH, tip, reviewer_model=model, author=author)
+        _, out, _ = self.land_it(BRANCH, tip)
+        self.assert_refused(out, 'the reviewer ran on %s, not a strong-tier model' % model,
+                            'haiku counts only for a build by weak-worker or worker',
+                            'its author is %s' % author)
+
+    def test_a_haiku_verdict_for_a_worker_build_lands(self):
+        self.lands('haiku', 'Kit Test / worker')
+
+    def test_a_haiku_model_id_for_a_weak_worker_build_lands(self):
+        self.lands('claude-haiku-4-5', 'Kit Test / pm-kit:weak-worker')
+
+    def test_a_haiku_verdict_for_a_strong_worker_build_is_refused(self):
+        self.refused('haiku', 'Kit Test / strong-worker')
+
+    def test_a_haiku_verdict_for_a_senior_worker_build_is_refused(self):
+        self.refused('haiku', 'Kit Test / senior-worker')
+
+    def test_a_haiku_verdict_with_no_author_type_is_refused(self):
+        self.refused('haiku', 'Kit Test')
+
+    def test_an_opus_verdict_still_lands_for_a_worker_build(self):
+        self.lands('opus', 'Kit Test / worker')
+
+    def test_an_opus_verdict_still_lands_for_a_senior_worker_build(self):
+        self.lands('opus', 'Kit Test / senior-worker')
 
 
 class CarriedVerdict(StrictCase):
@@ -312,6 +358,47 @@ class Pure(unittest.TestCase):
         # a model in a strong and a weak tier (Codex's account-default) never counts
         self.assertIsNone(land.strong_alias('account-default', {'opus', 'account-default'},
                                             {'account-default'}))
+
+    def test_the_reviewer_tier_table_is_r1717_and_r2220(self):
+        self.assertEqual(land.REVIEWER_MODELS_BY_AUTHOR, {
+            'worker': ('haiku',), 'weak-worker': ('haiku',), 'opus-worker': (),
+            'strong-worker': (), 'deep-worker': (), 'senior-worker': ()})
+
+    def test_author_types_are_the_parts_after_the_commit_author(self):
+        for author, types in (('Kit Test / worker', ['worker']),
+                              ('Kit Test (agent), pm-kit:Weak-Worker', ['weak-worker']),
+                              ('Kit Test / worker; strong-worker', ['worker', 'strong-worker']),
+                              ('worker', []), ('Kit Test /', []), ('', [])):
+            with self.subTest(author=author):
+                self.assertEqual(land.author_types(author), types)
+
+    def test_light_alias_allows_haiku_only_for_a_worker_or_weak_worker_build(self):
+        strong, weak = {'opus'}, {'haiku', 'sonnet', 'account-default'}
+        for model, author, alias in (
+                ('haiku', 'Kit Test / worker', 'haiku'),
+                (' Claude-Haiku-4-5 ', 'Kit Test / weak-worker', 'haiku'),
+                ('haiku', 'Kit Test / pm-kit:worker', 'haiku'),
+                ('haiku', 'Kit Test / strong-worker', None),
+                ('haiku', 'Kit Test / senior-worker', None),
+                ('haiku', 'Kit Test / deep-worker', None),
+                ('haiku', 'Kit Test / opus-worker', None),
+                ('haiku', 'Kit Test / worker, strong-worker', None),    # every type must allow it
+                ('haiku', 'Kit Test / worker / mystery-worker', None),  # an unknown type
+                ('haiku', 'worker / strong-worker', None),   # the first part is the commit author
+                ('haiku', 'worker', None), ('haiku', 'Kit Test', None), ('haiku', '', None),
+                ('sonnet', 'Kit Test / worker', None),
+                ('claude-sonnet-4-6', 'Kit Test / worker', None),
+                ('gpt-5', 'Kit Test / worker', None), ('', 'Kit Test / worker', None),
+                ('claude-haiku-sonnet', 'Kit Test / worker', None),
+                ('account-default', 'Kit Test / worker', None),
+                ('opus', 'Kit Test / worker', None)):       # opus is strong_alias's, not this
+            with self.subTest(model=model, author=author):
+                self.assertEqual(land.light_alias(
+                    dict(REVIEWER, reviewer_model=model, author=author), strong, weak), alias)
+        # a model in a strong tier too (Codex's account-default) never counts
+        self.assertIsNone(land.light_alias(
+            dict(REVIEWER, reviewer_model='haiku', author='Kit Test / worker'),
+            {'opus', 'haiku'}, {'haiku'}))
 
 
 if __name__ == '__main__':
