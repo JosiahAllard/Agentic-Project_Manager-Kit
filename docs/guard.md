@@ -57,7 +57,8 @@ The guard judges a neutral `kitlib.host.Action` and answers a `kitlib.host.Decis
   - `iex`/`Invoke-Expression` of a computed value (`iex ("git " + "stash")`, or `"git $s" | iex`);
   - a shell or `source` reading a process substitution (`bash <(...)`, `source <(...)`);
   - a non-literal `bash -c`, `powershell -Command`, `cmd /c`, `eval` or `env -S` text, `trap` handler or `mapfile -C` callback;
-  - a shell `Start-Process` starts with a computed `-ArgumentList` element (an `@(...)` array included) or `-WorkingDirectory`, or with a `cmd` switch word that may hold `/c` but is not it alone (`/cecho`, `/q/c`, `"/c"`; `commands.CMD_RUN_HIDDEN_RE`);
+  - a shell `Start-Process` starts with a computed `-ArgumentList` element (an `@(...)` array included) or `-WorkingDirectory`;
+  - a `cmd` word before its run switch, typed or passed by `Start-Process`, that holds `/c`, `/k` or `/r` anywhere but is not that switch alone (`/cecho`, `/q/c`, `;/c`, `,/c`, `=/c`, `x/c`, `"/c"`; `commands.CMD_RUN_HIDDEN_RE`, searched, not matched at the word's start), since cmd splits its switches at `,`, `;` and `=` as well as spaces; or a typed `cmd` word before its run switch that is computed (`commands._shell_text`);
   - a program named by a variable or a substitution;
   - a git subcommand or read option that is not literal;
   - a brace expansion, ANSI-C escape or backslash in a program name;
