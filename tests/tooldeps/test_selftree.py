@@ -421,7 +421,12 @@ class GitAndCli(TempHomeCase):
 
     def test_full_plan_and_usage(self):
         rc, out = self.run_cli('--full', '--plan')
-        self.assertEqual((rc, out), (0, 'kit_tests: full suite (--full)\n'))
+        want = 'kit_tests: full suite (--full)\n'
+        if os.environ.get('KIT_FAKE_GIT', '1') == '1':
+            # on the fake, --full diffs for its real-git pass and says against what
+            want += ("kit_tests: --full: the real-git pass's change list against the merge-base "
+                     "with main: 0 changed path(s)\n")
+        self.assertEqual((rc, out), (0, want))
         with self.assertRaises(SystemExit) as e, \
                 unittest.mock.patch('sys.stderr', io.StringIO()):
             cli.main(['--full', '--changed', 'a'])
