@@ -115,6 +115,25 @@ class Window(unittest.TestCase):
         self.assertEqual(d.vars["cpu_slots"].get(), "12")
         self.assertEqual(d.vars["agent_cap"].get(), "")
 
+    def test_the_division_dialog_says_a_failed_look_as_one(self):
+        lay = {"cpu_slots": 12, "owner_division": {}, "default_division": {},
+               "hardware_change": {"changed": False, "pending": (
+                   "the gpus could not be read (DXGI said no); no layout is adopted from that "
+                   "look until one succeeds")}}
+        app = self.window.App(self.root, FakeClient(snap=dict(GOOD, layout=lay)),
+                              auto_refresh=False, threaded=False)
+        d = app.open_division()
+        self.addCleanup(d.destroy)
+        texts, todo = [], [d]
+        while todo:
+            w = todo.pop()
+            todo += w.winfo_children()
+            if isinstance(w, self.window.ttk.Label):
+                texts.append(str(w.cget("text")))
+        said = "\n".join(texts)
+        self.assertIn("A look at the hardware failed", said)
+        self.assertNotIn("A new division waits", said)
+
     def division_app(self, default):
         """A window whose client records division writes; the owner set cpu_slots 12."""
         snap = dict(GOOD, layout={"cpu_slots": 12, "owner_division": {"cpu_slots": 12},

@@ -22,7 +22,10 @@ The division is the owner's (machine.json); any key missing takes its default:
 
 Every process must count slots the same way, so the layout in force is the store's layout.json.
 A changed machine or division is adopted only while nothing is live or queued (in_force), under
-the queue mutex; until then the old layout stays and the change is reported as pending.
+the queue mutex; until then the old layout stays and the change is reported as pending. A
+layout.json that is missing or invalid is rewritten under the same rule. A look at the hardware
+that failed (detect's `failed`) never replaces a layout.json from a good look; with no valid
+layout.json its layout is written marked provisional, and replaced under the same rule.
 """
 import ctypes
 import hashlib
@@ -175,12 +178,25 @@ def gpu_entries(adapters, source):
 # ------------------------------------------------------------------ hardware
 def detect():
     """This machine, as a JSON-ready dict (thread ids, never masks: a mask past 53 bits does not
-    survive a JavaScript reader). Never raises: what cannot be read is in `problems`."""
-    problems = []
-    ids = cpu.threads()
+    survive a JavaScript reader). Never raises: what cannot be read is in `problems`, and `failed`
+    names the parts read as a stand-in rather than from Windows ("groups": the processor groups
+    were not listed (cpu.listed_groups), so group 0 alone stands in, as cpu.groups() would, and the
+    threads are that group's; "cores": each thread counted as one; "gpus": neither DXGI nor CIM answered, so
+    no card). A layout from such a look never replaces a layout.json from a good look, and is
+    otherwise written provisional (in_force). CIM answering for DXGI is not a failed look. One
+    listing of the groups gives both `groups` and `threads`, so the two never disagree, and a
+    failed listing is not asked again: a second answer would mark "groups" failed over every group."""
+    problems, failed = [], []
+    listed = cpu.listed_groups()
+    if listed is None:
+        problems.append("Windows did not list the processor groups; group 0 alone stands in")
+        failed.append("groups")
+    grps = listed or [(0, process.system_mask())]  # cpu.groups()'s stand-in, without asking again
+    ids = [cpu.gid(g, i) for g, m in grps for i in range(cpu.GROUP_BITS) if m >> i & 1]
     cores = cpu.cores()
     if cores is None:
         problems.append("Windows did not list the physical cores; each thread counts as one")
+        failed.append("cores")
         cores = [{"threads": [i], "smt": False, "efficiency": 0} for i in ids]
     try:
         gpus, gsrc = gpu_entries(dxgi_adapters(), "dxgi"), "dxgi"
@@ -190,16 +206,17 @@ def detect():
             gpus, gsrc = gpu_entries(cim_adapters(), "cim"), "cim"
         except OSError as e2:
             problems.append(str(e2))
+            failed.append("gpus")
             gpus, gsrc = [], "none"
     mem = process.memory_mb() or {}
     return {"threads": ids,
             "groups": [{"group": g, "threads": [cpu.gid(g, i) for i in range(64) if m >> i & 1]}
-                       for g, m in cpu.groups()],
+                       for g, m in grps],
             "cores": [{"threads": sorted(c["threads"]), "smt": bool(c["smt"]),
                        "efficiency": c["efficiency"]} for c in cores],
             "l3": [cpu.bits(m) for m in cpu.l3_domains()], "cpu_sets": cpu.cpu_sets(),
             "memory_mb": mem.get("total_mb"), "gpus": gpus,
-            "source": {"cpu": "windows", "gpu": gsrc}, "problems": problems}
+            "source": {"cpu": "windows", "gpu": gsrc}, "problems": problems, "failed": failed}
 
 
 def fake_hardware(threads=24, smt=2, l3=1, gpus=1, vram_mb=12288, group_size=64,
@@ -236,7 +253,7 @@ def fake_hardware(threads=24, smt=2, l3=1, gpus=1, vram_mb=12288, group_size=64,
     return {"threads": ids, "groups": [{"group": g, "threads": ts} for g, ts in sorted(groups.items())],
             "cores": cores, "l3": l3s, "cpu_sets": sets, "memory_mb": memory_mb,
             "gpus": gpu_entries(adapters, "fake"), "source": {"cpu": "fake", "gpu": "fake"},
-            "problems": []}
+            "problems": [], "failed": []}
 
 
 def hardware(store):
@@ -412,39 +429,91 @@ def valid_layout(L):
         return False
 
 
+# How in_force's `pending` texts start or end, one per reason (kitlib.lock.status.pending_reason
+# reads the reason from these, so the words and the reason never drift apart).
+PENDING_IDLE = "the machine or division changed"                    # starts: waits for idle
+PENDING_UNWRITTEN = "layout.json is missing, unreadable or not valid to this kit version"  # starts
+PENDING_FAILED_LOOK = "; no layout is adopted from that look until one succeeds"          # ends
+PENDING_PROVISIONAL = ("; the layout in use came from such a look and is provisional: the first "
+                       "look that succeeds replaces it while no run is live or queued")   # ends
+PENDING_UNCHECKED = "the layout could not be checked"                                    # starts
+
+
 def in_force(store, adopt=True):
     """{layout, wanted, source, warning, pending}: the layout every process uses now (the store's
     layout.json) and the one this machine and division ask for. A different wanted layout is
     adopted only while no run is live or queued (never under live runs), under the queue
     mutex, so a run in the queue never sees its slots renumbered; until then `pending` says why
-    it waits. adopt False: never write (a read-only look)."""
-    want, source, warning = wanted(store)
+    it waits. A layout.json that is missing, unreadable or invalid to this version waits the same
+    way: the runs live now count their slots from it, so it is rewritten only once none is, and
+    until then the wanted layout is used without being written (and recomputed on each call, so
+    a division change applies to it at once). A look at the hardware that failed (detect's
+    `failed`) never replaces a layout.json written from a good look. With no valid layout.json it
+    is written as before, marked `provisional`, so the runs booked on it keep their numbering; a
+    provisional layout.json is replaced under the same rule as any other (by a good look, or by
+    another failed look such as a division change), and a good look with its key makes it final.
+    adopt False: never write (a read-only look)."""
+    hw = hardware(store)
+    want, source, warning = wanted(store, hw)
+    failed = list(hw.get("failed") or [])
+    why = None
+    if failed:
+        parts = ", ".join(failed[:-1]) + " and " + failed[-1] if len(failed) > 1 else failed[0]
+        why = "the %s could not be read (%s)" % (parts,
+                                                 "; ".join(hw.get("problems") or ()) or "no detail")
+    provisional = why and why + PENDING_PROVISIONAL
+
+    def settled(c):
+        """Nothing to write: c is the wanted layout, final unless this look failed too."""
+        return valid_layout(c) and c["key"] == want["key"] and (failed or not c.get("provisional"))
+
+    def kept(c):
+        """A failed look does not replace c, a layout.json from a good look."""
+        return failed and valid_layout(c) and not c.get("provisional") and c["key"] != want["key"]
+
     cur = store.read("layout.json")
     out = {"layout": want, "wanted": want, "source": source, "warning": warning, "pending": None}
-    if valid_layout(cur) and cur["key"] == want["key"]:
+    if settled(cur):
+        out.update(pending=provisional if cur.get("provisional") else None)
+        return out
+    if kept(cur):
+        out.update(layout=cur, pending=why + PENDING_FAILED_LOOK)
         return out
     if not adopt:
-        if valid_layout(cur):
-            out.update(layout=cur, pending="the machine or division changed; it is used once "
-                                            "no run is live or queued")
+        if valid_layout(cur) and cur["key"] != want["key"]:
+            out.update(layout=cur, pending=PENDING_IDLE + "; it is used once no run is live or "
+                                                          "queued")
+        elif not valid_layout(cur):
+            out.update(pending=provisional)
         return out
     from kitlib.lock import queue as q_mod
     try:
         with store.lock("queue", store.settings.queue_lock_s):
             cur = store.read("layout.json")
-            if valid_layout(cur) and cur["key"] == want["key"]:
+            if settled(cur):
+                out.update(pending=provisional if cur.get("provisional") else None)
                 return out
-            busy = [e["id"] for e in q_mod.load(store)["entries"] if not store.run_dead(e)]
-            busy += [r["id"] for r in store.live_runs() if r["id"] not in busy]
+            if kept(cur):
+                out.update(layout=cur, pending=why + PENDING_FAILED_LOOK)
+                return out
+            same = valid_layout(cur) and cur["key"] == want["key"]  # only the mark goes: no renumbering
+            busy = [] if same else [e["id"] for e in q_mod.load(store)["entries"]
+                                    if not store.run_dead(e)]
+            busy += [] if same else [r["id"] for r in store.live_runs() if r["id"] not in busy]
             if busy and valid_layout(cur):
-                out.update(layout=cur, pending="the machine or division changed (%s -> %s); it "
-                           "is used once no run is live or queued (%d now)" % (
-                               cur["key"], want["key"], len(busy)))
+                out.update(layout=cur, pending=PENDING_IDLE + " (%s -> %s); it is used once no "
+                           "run is live or queued (%d now)" % (cur["key"], want["key"], len(busy)))
                 return out
-            store.write("layout.json", dict(want, adopted_at=time.time()))
+            if busy:
+                out.update(pending=PENDING_UNWRITTEN + "; %s is written once no run is live or "
+                                   "queued (%d now)" % (want["key"], len(busy)))
+                return out
+            store.write("layout.json", dict(want, adopted_at=time.time(),
+                                            **({"provisional": True} if failed else {})))
+            out.update(pending=provisional)
     except (OSError, q_mod.QueueUnreadable) as e:
-        if valid_layout(cur):
-            out.update(layout=cur, pending="the layout could not be checked (%s)" % e)
+        out.update(layout=cur if valid_layout(cur) else want,
+                   pending=PENDING_UNCHECKED + " (%s)" % e)
     return out
 
 

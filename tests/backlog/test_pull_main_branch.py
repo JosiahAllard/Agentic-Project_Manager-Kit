@@ -28,6 +28,7 @@ class PullFromTheMainBranch(StoreCase):
         self.assertIn('pulled_by: main', text)
         self.assertIn('--as <branch>', text)
         self.assertIn("branch's worktree", text)
+        self.assertLess(text.index('--as <branch>'), text.index("branch's worktree"))
         self.assertEqual(self.remote_tip(), before)
         self.assertEqual(self.get('FOO').get('state'), 'open')
 
@@ -102,6 +103,14 @@ class PullFromThePmDataWorktree(StoreCase):
             self.assertEqual(pull_branch.main_branches(self.ctx_as('master')),
                              ['pmdata', 'main', 'master'])
 
+    def test_code_config_is_the_main_checkouts_configuration(self):
+        cfg = pull_branch.code_config(self.pm)
+        self.assertEqual((cfg.main_branch, cfg.remote), ('main', 'origin'))
+        self.assertIsNone(pull_branch.code_config(self.repo.root))
+        self.assertIsNone(pull_branch.code_config(self.repo.worktree('other')))
+        with mock.patch.object(kconfig, 'load', side_effect=kconfig.ConfigError('bad')):
+            self.assertIsNone(pull_branch.code_config(self.pm))
+
     def test_another_worktree_has_only_its_own_main(self):
         wt = self.repo.worktree('other')
         self.assertEqual(pull_branch.code_mains(wt), ())
@@ -116,6 +125,16 @@ class RefusalText(unittest.TestCase):
         self.assertIn('pulled_by: master',
                       pull_branch.refusal('FOO', 'master', ['pmdata', 'main', 'master']))
         self.assertIsNone(pull_branch.refusal('FOO', BRANCH, ('pmdata', 'main')))
+
+    def test_the_as_form_comes_first_with_the_session_filled_in(self):
+        # A coordinator pulls at dispatch from the main checkout: the `--as` form is the one it
+        # can run as it stands, so it leads, with its own `--session` when known.
+        text = pull_branch.refusal('FOO', 'main', 'main', 'kit')
+        as_form = 'backlog.py -C <store> --session kit --as <branch> pull FOO'
+        self.assertIn(as_form, text)
+        self.assertLess(text.index(as_form), text.index('backlog.py -C <worktree> pull FOO'))
+        self.assertIn('--session <session> --as <branch> pull FOO',
+                      pull_branch.refusal('FOO', 'main', 'main'))
 
 
 if __name__ == '__main__':

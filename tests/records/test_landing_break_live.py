@@ -1,6 +1,6 @@
 """kitlib.records.landing: break_lock(holder_gone=True) never removes a lock whose file is empty or
-not a JSON record - what a taker leaves between its exclusive create and its write
-(KIT-LANDLOCK-BREAK-LIVE). Fail closed: such a file is never judged "holder gone"."""
+not a JSON record - what a taker leaves between its exclusive create and its write.
+Fail closed: such a file is never judged "holder gone"."""
 import json
 import os
 import unittest

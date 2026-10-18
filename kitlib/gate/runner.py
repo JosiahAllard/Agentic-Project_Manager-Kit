@@ -46,6 +46,7 @@ from kitlib.config import policy
 from kitlib.config import user as kuser
 from kitlib.config.types import ConfigError
 from kitlib.gate import detect
+from kitlib.gate import gitstatus
 from kitlib.gate import hookrev
 from kitlib.gate import result
 from kitlib.gate import stash
@@ -58,8 +59,15 @@ from kitlib.proc.job import JobError
 from kitlib.records import gate_ok
 
 NO_STEP = ('REFUSED: no gate step selected: the "gate".steps of .kit.json cover none of the %d '
-           'changed path(s), so nothing would run; no gate-OK record is written. Give a step '
-           '"always": true or globs that cover these paths')
+           'changed path(s), or each step they select is dropped by another\'s skip_if_selected, '
+           'so nothing would run; no gate-OK record is written. Give a step "always": true or '
+           'globs that cover these paths')
+# --full and the merged gate select every step but the manual ones, whatever changed: none left
+# means every step is manual, or each is dropped by another selected step's skip_if_selected.
+NO_STEP_FULL = ('REFUSED: no gate step selected: every step in the "gate".steps of .kit.json is '
+                'manual, or is dropped by another selected step\'s skip_if_selected, so nothing '
+                'would run; no gate-OK record is written. Give the gate a step that is not manual '
+                'and that no other step\'s skip_if_selected names')
 NO_CHECKS = ('GATE OK (auto-detected: no stack found, so NO checks ran; give the gate steps with a '
              '"gate" section in .kit.json or tools/gate.json)')
 PROBE_TIMEOUT = 60      # seconds a `requires` probe argv may take
@@ -696,9 +704,10 @@ def _gate_checkout(top, cfg, seen, base=None, full=False, only=None, plan=False,
         return G.Outcome(G.OK, plan_lines(chosen, picked, all_steps, base_text, changed),
                          chosen=[s.name for s in chosen])
     if not chosen and not empty:
-        return G.Outcome(G.REFUSED, [NO_STEP % len(changed)], record=None,
+        text = NO_STEP_FULL if full and not only else NO_STEP % len(changed)
+        return G.Outcome(G.REFUSED, [text], record=None,
                          no_record='no gate step selected', head=head, base=mb, changed=changed)
-    entries, why = refs.status(top)
+    entries, why = gitstatus.status(top)
     if entries is None:
         return G.Outcome(G.REFUSED, ['REFUSED: git status failed: %s' % why])
     untracked = [p for xy, p in entries if xy == '??']
@@ -735,7 +744,7 @@ def _gate_checkout(top, cfg, seen, base=None, full=False, only=None, plan=False,
     if refused:
         facts['no_record'] = 'no gate step ran'
         return G.Outcome(G.REFUSED, [refused, 'logs: %s' % logs], **facts)
-    after, _ = refs.status(top)
+    after, _ = gitstatus.status(top)
     head_now, _ = refs.head(top)
     no = None
     if only:
@@ -794,10 +803,14 @@ def _merged_gate(root, cfg, eff, base, full=False, slug='land', log_dir=None, sa
     """Gate the merged tree at HEAD of `tree` (a landing's merge, in its landing tree; default
     `root`) against `base` (the main it was merged into). The steps run in `tree`, and their hook
     checks get it as ctx['root']; the repository's name and its log folder are `root`'s (the main
-    checkout's), wherever the tree is. The paths base..HEAD changes select the steps (every
-    non-manual step with full, each running its full_cmd when it has one), and each step's
+    checkout's), wherever the tree is. Every non-manual step is selected, as gate.py --full
+    selects them, whatever paths base..HEAD changes: a fresh landing tree lacks the main
+    checkout's ignored caches, so a step the branch's paths would not select (an asset import)
+    must still run. Each runs its cmd, or its full_cmd, when it has one, with `full` (a strict
+    landing). Each step's
     merged_args are appended, then `lane_args` (the landing lane's merged_args). Outcome codes:
-    OK, FAILED, REFUSED (also when no step is selected) or a machine lock code; facts verdict,
+    OK, FAILED, REFUSED (also when no step is selected: every step manual, or each dropped by
+    another's skip_if_selected) or a machine lock code; facts verdict,
     results, log_dir, head, windows (as the branch gate's). Check steps run the hook module of
     commit `base`, as the config is read from it (kitlib.gate.hookrev), never the merged tree's.
 
@@ -819,11 +832,11 @@ def _merged_gate(root, cfg, eff, base, full=False, slug='land', log_dir=None, sa
     try:
         all_steps = S.build(gate, tree, base, cfg.tools_dir, merged=True, extra=lane_args,
                             full=full)
-        chosen, _ = S.select(gate, all_steps, changed, full=full, read=S.working_tree_reader(tree))
+        chosen, _ = S.select(gate, all_steps, changed, full=True, read=S.working_tree_reader(tree))
     except S.GateConfigError as e:
         return G.Outcome(G.REFUSED, ['REFUSED: %s' % e])
     if not chosen and not empty:
-        return G.Outcome(G.REFUSED, [NO_STEP % len(changed)], head=head)
+        return G.Outcome(G.REFUSED, [NO_STEP_FULL], head=head)
     name = repo_name(cfg, root)
     logs = new_log_dir(cfg, root, name, 'land-' + slug, log_dir)
     say('merged-tree gate at %s against %s: %s' % (

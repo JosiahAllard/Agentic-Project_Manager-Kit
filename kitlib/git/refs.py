@@ -47,7 +47,7 @@ def resolve(rev, cwd, peel='commit', known=False):
     `('', None)` for the first, so a caller can tell "no such rev" from "git cannot tell" without
     reading the why.
 
-    GOTCHA: KIT-GIT-EXIT1-ANSWERS - `rev-parse --verify --quiet` said "no such rev" as exit 1 with
+    GOTCHA: `rev-parse --verify --quiet` said "no such rev" as exit 1 with
     no output, a killed git's shape (KILLED_SHAPE), so a kill read as "no such rev". The question
     is asked without --quiet: "no such rev" is exit 128 with NO_SUCH_REV as the last stderr line,
     and anything else that is not exit 0 with a hash is no answer. A stray line before it (a
@@ -98,7 +98,7 @@ def current_branch(cwd):
     """`(branch name, None)`; `('', None)` on a detached HEAD; `(None, why)` when git fails or
     HEAD points outside refs/heads.
 
-    GOTCHA: KIT-GIT-EXIT1-ANSWERS - `symbolic-ref --quiet` says "detached" as exit 1 with no
+    GOTCHA: `symbolic-ref --quiet` says "detached" as exit 1 with no
     output, which is also what a git ended from outside leaves (KILLED_SHAPE), so a killed git
     read as a detached HEAD. `branch --show-current` answers with exit 0 either way (the name,
     or nothing when detached; an unborn branch still has its name), so anything but exit 0 is no
@@ -116,7 +116,7 @@ def ref_commit(ref, cwd):
     """`(commit, None)` the full ref `ref` (`refs/...`) points at, peeled to a commit; `('', None)`
     when there is no such ref; `(None, why)` when git cannot tell or the ref names no commit.
 
-    GOTCHA: KIT-GIT-EXIT1-ANSWERS - `rev-parse --verify --quiet <ref>` says "no such ref" as exit
+    GOTCHA: `rev-parse --verify --quiet <ref>` says "no such ref" as exit
     1 with no output, a killed git's shape (KILLED_SHAPE), so a kill read as "no ref". The
     question is asked as `for-each-ref <ref>`, which exits 0 whether or not the ref exists: no
     line with exactly that refname is "no ref", and anything but exit 0 is no answer.
@@ -213,8 +213,8 @@ def default_base(cwd, remote, main):
     `note` is None when the local branch is absent or at the same commit; else one line naming
     both commits, how far apart they are, and the ref used. A caller prints it."""
     tracking = 'refs/remotes/%s/%s' % (remote, main)
-    remote_sha = resolve(tracking, cwd)[0] if remote and not bad_rev(remote) else None
-    local_sha = resolve('refs/heads/%s' % main, cwd)[0]
+    remote_sha = resolve(tracking, cwd, known=True)[0] if remote and not bad_rev(remote) else None
+    local_sha = resolve('refs/heads/%s' % main, cwd, known=True)[0]
     if not remote_sha:
         return main, None
     if not local_sha or local_sha == remote_sha:
@@ -259,7 +259,7 @@ def is_ancestor(ancestor, descendant, cwd):
     """`(True/False, None)`: is `ancestor` an ancestor of (or equal to) `descendant`; `(None, why)`
     when git cannot tell (an unknown rev, a non-commit, a failure, a git ended from outside).
 
-    GOTCHA: KIT-TEST-GRANDCHILD-SHIELD - `merge-base --is-ancestor` says NO as exit 1 with no
+    GOTCHA: `merge-base --is-ancestor` says NO as exit 1 with no
     output, and a git ended from outside (KILLED_SHAPE) exits the same way, so a killed git read as
     a NO nobody gave. The question is asked as `rev-list -n 1 <descendant>..<ancestor>` instead:
     exit 0 with no output is YES, exit 0 with one commit is NO, and anything else - a killed git's
@@ -330,7 +330,7 @@ def is_fast_forward(old, new, cwd):
 def merge_base(a, b, cwd):
     """`(the best common ancestor, None)`, `('', None)` when there is none, or `(None, why)`.
 
-    GOTCHA: KIT-GIT-EXIT1-ANSWERS - `merge-base` says "none" as exit 1 with no output, a killed
+    GOTCHA: `merge-base` says "none" as exit 1 with no output, a killed
     git's shape (KILLED_SHAPE). So that answer is confirmed (_confirm_no_base) before it is
     given; one that cannot be confirmed is no answer."""
     for rev in (a, b):

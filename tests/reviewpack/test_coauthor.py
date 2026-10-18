@@ -120,6 +120,40 @@ class OwnerClaims(CoAuthorCase):
         self.assertIn('carries Owner-Approved, an unproven owner claim', out)
 
 
+class OwnerApproval(CoAuthorCase):
+    """Owner-Approval: hub:A-<n> (commit.py --owner-approval; docs/commit.md "Owner approval") is
+    shown on the commit's row, trailered or not, and is never an owner claim: what it proves is
+    checked by gate land and the pre-push hook against the hub, not here."""
+
+    def test_an_agents_approval_commit_shows_the_approval_on_its_row(self):
+        self.write('f.txt', '1')
+        self.commit_all('approved change\n\nOwner-Approval: hub:A-7\n' + TRAILERED_MSG,
+                        author=AGENT)
+        code, out = self.pack()
+        self.assertEqual(code, 0, out)
+        self.assertIn('owner approval hub:A-7', self.row(out, 'approved change'))
+        self.assertIn('0 without a Co-Authored-By trailer | 0 failing', out)
+        self.assertNotIn('WARNING', out)
+
+    def test_an_approval_without_a_coauthor_is_no_claim_and_fails(self):
+        self.write('f.txt', '1')
+        self.commit_all('approval alone\n\nOwner-Approval: hub:A-7', author=AGENT)
+        code, out = self.pack()
+        self.assertEqual(code, 1, out)
+        row = self.row(out, 'approval alone')
+        self.assertIn(' FAIL ', row)
+        self.assertIn('owner approval hub:A-7', row)
+        self.assertNotIn('unproven owner claim', out)
+
+    def test_the_owners_approval_commit_without_a_coauthor_is_not_owner_approved(self):
+        self.write('f.txt', '1')
+        self.commit_all('owner approval alone\n\nOwner-Approval: hub:A-7')   # the owner's identity
+        code, out = self.pack()
+        self.assertEqual(code, 1, out)
+        self.assertIn(' FAIL ', self.row(out, 'owner approval alone'))
+        self.assertNotIn('owner-approved', out)
+
+
 class OwnerClaimsWithNoOwnerConfigured(CoAuthorCase):
     CONFIG = {'review_pack': {'coauthor': True}}
 

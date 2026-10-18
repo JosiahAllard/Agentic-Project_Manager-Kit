@@ -37,10 +37,12 @@ Rules, in the order they are checked:
                    in full (HUB_SHAPE: python, plain options, tools/hub.py or -m tools.hub, an agent
                    verb, every word literal with no unquoted wildcard) and outside the path family
                    (hub_path_family: one simple command of cat, Get-Content, type, grep, rg,
-                   Select-String, git add|diff|log|show|blame|status|restore --staged, commit.py or
-                   backlog.py naming hub.py only as a path, or anyhow in a commit or backlog
-                   message; git -c, --exec-path, --ext-diff, --textconv and rg --pre, --pre-glob,
-                   --hostname-bin denied), and that shape running an owner verb (answer, open, pair, unpair, stop,
+                   Select-String, git add|commit|diff|log|show|blame|status|restore --staged,
+                   commit.py, backlog.py or ledger.py naming hub.py only as a path, or anyhow in a
+                   commit, ledger or backlog message; git -c, --exec-path, --ext-diff, --textconv,
+                   commit's editor and prompts, and rg --pre, --pre-glob, --hostname-bin denied;
+                   hub_family: such commands on a plain line of ;, &&, || or newlines whose other
+                   commands are read as before), and that shape running an owner verb (answer, open, pair, unpair, stop,
                    restart, todos done, stories add|withdraw, to-pm add|send, inbox read, approvals
                    approve|deny, todos add --owner), in any session but the owner's own. Known
                    limit: a name built at run time (string concatenation, an encoding, a variable,
@@ -199,7 +201,7 @@ def judge(event, ctx):
         target = event.path
         if not isinstance(target, str) or not target:
             return None
-        target = sh.resolve_path(target, cwd) or target
+        target = sh.resolve_path(target, cwd, home=getattr(ctx, 'home', None)) or target
         form = event.retarget
         return edit_target(event, ctx, target, cwd, role, '%s of %s' % (tool, target),
                            rewrite=(lambda path: form.replace('{path}', fwd(path))) if form else None)
@@ -568,20 +570,45 @@ HUB_MODULE = 'tools.hub'
 # tool as a module or a script is refused, unless the command is the one shape hub_shape reads in
 # full. HUB_NAME_RES are the namings, each searched with the case ignored, in the line's own text
 # and in every command's words as the shell passes them (hub_named):
-#   hub.py as a word or a path's last part (tools/hub.py, ./hub.py; test_rules_hub.py is not it);
+#   hub.py as a word or a path's last part (tools/hub.py, ./hub.py; test_rules_hub.py is not it),
+#   and the compiled hub python runs as well (hub.pyc, __pycache__/hub.cpython-312.pyc) or hub.pyw;
 #   a dotted name ending in hub (tools.hub, 'tools.hub'; tests.hub.test_x and tools.hubsite are not);
 #   an import of hub: import hub, import os, tools.hub as h, from tools import (x, hub),
 #   from .hub import main, from tools.hub import main;
-#   python's -m (or a cluster ending in m, --module, `runpy`) naming hub itself: cd tools && python -m hub.
+#   python's -m (or a cluster ending in m, --module, `runpy`) naming hub itself: cd tools && python -m hub
+#   (hub_module_names).
 HUB_NAME_RES = (
-    re.compile(r'(?i)(?<![\w-])hub\.py\b'),
+    re.compile(r'(?i)(?<![\w-])hub(?:\.py[cw]?|(?:\.[\w-]+)+\.pyc)\b'),
     re.compile(r'(?i)(?<=\w)\.hub(?![\w.-])'),
     re.compile(r'(?i)import\s+(?:[\w. \t]+,\s*)*(?:\w+\s*\.\s*)*hub(?![\w-])'),
     re.compile(r'(?i)\bfrom\s+(?:\w+\s*\.\s*)*\.*\s*hub\s+import\b'),
     re.compile(r'(?i)\bfrom\s+[\w.]+\s+import\s*\(?\s*(?:[\w \t]+,\s*)*hub(?![\w-])'),
-    re.compile(r'''(?i)(?<![\w.-])py(?:thon)?w?(?:\d+(?:\.\d+)*)?(?:\.exe)?(?![\w.-])[^;|&\n]*?'''
-               r'''(?:(?<![\w-])-[A-Za-z]*m[ \t]*|(?<![\w-])--module(?:[ \t]+|=)|\brunpy[ \t]+)['"]?hub(?![\w.-])'''),
 )
+# hub_module_names: a python word (python, py, pythonw, python3.12.exe), then on the same command
+# (`mid`, no ; | & or newline) a -m naming hub
+HUB_PY_WORD_RE = re.compile(r'(?i)(?<![\w.-])py(?:thon)?w?(?:\d+(?:\.\d+)*)?(?:\.exe)?(?![\w.-])')
+HUB_PY_MODULE_RE = re.compile(r'''(?i)(?P<mid>[^;|&\n]*?)(?:(?<![\w-])-[A-Za-z]*m[ \t]*|'''
+                              r'''(?<![\w-])--module(?:[ \t]+|=)|\brunpy[ \t]+)['"]?hub(?![\w.-])''')
+# the kit's record tools, whose own -m is a message: `python <kit>/tools/commit.py -m "Hub store: x"`
+# runs commit.py, and python reads no option after its script word
+HUB_PY_MESSAGE_SCRIPTS = frozenset(('commit.py', 'backlog.py', 'ledger.py'))
+HUB_PY_PLAIN_WORD_RE = re.compile(r'''^(['"]?)([\w./\\:+,=-]+)\1$''')
+# a word before that script word (an option or its value) the shell passes as written: no quote,
+# escape, backtick, variable, wildcard or brace, which could join or split words; ASCII only, so
+# no Unicode space or control is taken for part of a plain word
+HUB_PY_OPT_WORD_RE = re.compile(r'^[\w./:+,=-]+$', re.ASCII)
+# the text glued to a python word up to bash's word break (space, tab) or a command's end; a ;
+# is taken in, as cmd ends only a command's name there (hub_module_names)
+HUB_PY_GLUED_RE = re.compile(r'[^ \t\n|&]*')
+# hub_module_names on a line the parser could not read whole: `mid` crosses ; | & and newline too,
+# so a separator the shell may keep inside one of python's words cannot hide its -m (fail-closed)
+HUB_PY_MODULE_ANY_RE = re.compile(HUB_PY_MODULE_RE.pattern.replace('[^;|&\\n]*?', '[\\s\\S]*?', 1))
+# hub_word_module_names: one of python's words, as the shell passes it, that is a -m (a cluster
+# ending in m) naming hub glued to it (-mhub, -Bmhub), or that takes the module as the next word
+# (-m, -Bm, --module, runpy); --module=hub; and the module word itself
+HUB_PY_WORD_MODULE_GLUED_RE = re.compile(r'''(?i)^(?:-[A-Za-z]*m[ \t]*|--module=)['"]?hub(?![\w.-])''')
+HUB_PY_WORD_MODULE_NEXT_RE = re.compile(r'(?i)^(?:-[A-Za-z]*m|--module)$|(?:\b|^-[A-Za-z]*m|^--module=)runpy$')
+HUB_PY_WORD_HUB_RE = re.compile(r'''(?i)^[ \t]*['"]?hub(?![\w.-])''')
 # hub quoted as a name ('hub', ".hub") counts in a command whose text also loads a module by name:
 # __import__('tools', fromlist=['hub']), importlib.import_module('.hub', 'tools'), run_module('hub')
 HUB_QUOTED_RE = re.compile(r'''(?i)['"]\.*hub['"]''')
@@ -605,29 +632,77 @@ HUB_SHAPE = 'python, its plain options, then tools/hub.py or -m tools.hub, then 
 # <dir>/hub/todos), is not the tool; hub\ still counts, as a backslash may be Python's line join.
 HUB_BARE_RE = re.compile(r'(?i)(?<![\w-])(?<!\w\.)hub(?![\w/-])')
 HUB_IMPORT_RE = re.compile(r'(?i)\bimport\b')
+# a line that can make `cat` run another program, or send what cat writes to one (exec's or
+# coproc's descriptors, code run by eval, source or .), so a heredoc cat takes is read
+# (hub_written_bodies). Read anywhere on the line, heredoc bodies included: fail-closed
+HUB_CAT_REDEFINED_RE = re.compile(r'(?<![\w-])cat\s*\(\s*\)|\bfunction\s+cat\b|\bhash\b|\balias\b|\benable\b'
+                                  r'|\bexec\b|\beval\b|\bsource\b|\bcoproc\b|(?<![^\s;&|(){}])\.(?![^\s;&|()])')
 # the interpreters whose word makes a line one that runs python for hub_code_names (a program's
 # base name, cm.base_name: case and .exe folded, any path before it): UI_PYTHON_RE's, plus ipython
 # and pypy, with a version (pypy3, pypy3.10, ipython3). Kept apart from UI_PYTHON_RE, whose other
 # readers (the allowed shape, the path family, inline_code) take only CPython
 HUB_CODE_PYTHON_RE = re.compile(r'^(python|pythonw|py|pyw|ipython|pypy)(\d+(\.\d+)*)?$')
-# The path family, the one other form the guard reads in full (hub_path_family; docs/guard.md
-# "Hub secrets"): a single simple command of a program that only reads or records a file, naming
-# the hub tool only as a path argument (a word of its own whose last part is hub.py), or naming it
-# anyhow in a commit or backlog message. Each program's options that can run another program are
-# refused by name, a long option's unique prefix included (git abbreviates long options).
+# The path family, the one other form the guard reads in full (hub_path_family, hub_family;
+# docs/guard.md "Hub secrets"): a simple command of a program that only reads or records a file,
+# naming the hub tool only as a path argument (a word of its own whose last part is hub.py), or
+# naming it anyhow in a commit, ledger or backlog message. Each program's options that can run
+# another program are refused by name, a long option's unique prefix included (git abbreviates
+# long options). The command is the line's one command, or one of a plain line's (hub_family).
 HUB_READERS = frozenset(('cat', 'get-content', 'type', 'grep', 'rg', 'select-string'))
 HUB_READER_DENIED = {'rg': ('--pre', '--pre-glob', '--hostname-bin')}
-HUB_GIT_SUBS = frozenset(('add', 'diff', 'log', 'show', 'blame', 'status', 'restore'))
+HUB_GIT_SUBS = frozenset(('add', 'commit', 'diff', 'log', 'show', 'blame', 'status', 'restore'))
 HUB_GIT_DENIED = ('--ext-diff', '--textconv')
-# git add's and restore's own options that open an editor or ask (and restore's that write the work tree)
+# git add's, commit's and restore's own options that open an editor or ask (and restore's that
+# write the work tree); commit's -c is --reedit-message (-C, which reuses one, opens no editor)
 HUB_GIT_SUB_DENIED = {'add': (('--edit', '--interactive', '--patch'), 'eip'),
+                      'commit': (('--edit', '--interactive', '--patch', '--reedit-message'), 'epc'),
                       'restore': (('--patch', '--worktree'), 'pW')}
+# git commit's message: -m v, -mV, --message v, --message=v, and a cluster of flags that take no
+# value ending in m (-am v, -amV); its value is text, not a path or an option
+HUB_GIT_MESSAGE_RE = re.compile(r'^-[aqvsn]*m(.*)$', re.S)
 HUB_COMMIT_VALUES = ('-C', '-m', '-b', '--body-file', '--model', '--host', '--provider', '--owner-approved')
 HUB_COMMIT_FLAGS = ('--owner-authored', '--lander-main-checkout', '-h', '--help')
 HUB_COMMIT_MESSAGES = ('-m', '-b')
 HUB_BACKLOG_MESSAGES = ('--summary', '--reason', '--why', '--why-not-folded', '--owner-ask')
+# tools/ledger.py's options whose value is text: an entry's fields, a retirement's why, the commit title
+HUB_LEDGER_MESSAGES = ('--q', '--a', '--decides', '--source', '--title', '--why')
 # the text the parser leaves after a command's span that the path family takes: stream dups (2>&1)
 HUB_DUPS_RE = re.compile(r'^(?:\s*[\d*]?>&[\d-])*\s*$')
+# A plain line (hub_family): commands joined only by these operators, so no command's output or
+# state reaches another but through a file, a variable or the shell's own memory, each refused
+# below, or through what git keeps (a commit's message, the index), which a later command may read
+# and run: that is a script the agent wrote, a documented limit (hub_named), not modelled
+HUB_LINE_OPS = frozenset((None, ';', '&&', '||', '\n'))
+# words that define or change what a later name runs (an alias, a function, a variable, a module,
+# an item on a provider drive, a drive of its own: a New-PSDrive on the Function provider makes a
+# Get-Content item on it a function), read the shell's memory (history, the call stack), run text as a
+# command, or open a compound command whose body the line's own order does not show. A write to
+# the env drive in any spelling is an environment variable set (commands.line_env_names); the
+# alias, function and variable drives are HUB_LINE_DRIVES
+HUB_LINE_DENIED = frozenset((
+    'alias', 'unalias', 'function', 'filter', 'hash', 'enable', 'source', '.', 'shopt', 'eval', 'exec',
+    'builtin', 'declare', 'typeset', 'local', 'readonly', 'export', 'set', 'unset', 'read', 'mapfile',
+    'readarray', 'trap', 'history', 'fc',
+    'for', 'while', 'until', 'do', 'done', 'if', 'then', 'else', 'elif', 'fi', 'case', 'esac', 'select',
+    'coproc', 'foreach', 'switch',
+    'set-alias', 'sal', 'new-alias', 'nal', 'import-alias', 'ipal', 'import-module', 'ipmo',
+    'invoke-expression', 'iex', 'get-variable', 'set-variable', 'new-variable', 'clear-variable',
+    'remove-variable', 'gv', 'sv', 'nv', 'clv', 'rv', 'get-history', 'ghy', 'h', 'r', 'invoke-history',
+    'ihy', 'get-pscallstack', 'set-item', 'si', 'new-item', 'ni', 'new-psdrive', 'ndr', 'mount'))
+# text naming a provider drive or preference that changes what a name runs or where output goes
+HUB_LINE_DRIVES = ('alias:', 'function:', 'variable:', 'psvariable', 'psdefault', 'pscallstack')
+# PowerShell's common parameters that store a command's output or messages in a variable, matched
+# as a prefix of two letters or more (-ou, -OutV, -outvariable:c; -p alone, the one a single
+# letter can name), and their aliases; PowerShell takes an en dash, em dash or bar for the hyphen
+HUB_LINE_PS_VARS = ('-outvariable', '-pipelinevariable', '-errorvariable', '-warningvariable',
+                    '-informationvariable')
+HUB_LINE_PS_ALIASES = ('-ov', '-pv', '-ev', '-wv', '-iv')
+HUB_LINE_PS_DASHES = sh.PS_DASHES
+# what one command's text, value or history reaches another by: bash's $_ and ${_} (the last
+# word), $! and ${!...}, BASH_ variables, history expansion (!!, !$, !*, !^); PowerShell's $$, $^,
+# ${$}, ${^}, $_, and the automatic variables holding a command's text or errors
+HUB_LINE_TEXT_RE = re.compile(r'(?i)\$\{?_(?!\w)|\$\{?!|BASH_\w+|\$\$|\$\^|\$\{[$^]\}'
+                              r'|\$\{?(?:\w+:)?(?:error|myinvocation|psitem|executioncontext)\b|![!$*^]')
 NODE_EVAL = ('-e', '--eval', '-p', '--print')
 HUB_SECRETS_WHY = ('the Action Hub\'s token folder holds the owner\'s key to the hub (owner.token answers as the '
                    'owner) and its store is the hub server\'s to write; an agent reaches the hub only through its '
@@ -824,19 +899,195 @@ def hub_unexempt(text):
     return text
 
 
-def hub_text_names(text, loader=False):
+def hub_text_names(text, loader=False, whole=True, bare=()):
     """The text of `text` that names the hub tool as a module or a script (HUB_NAME_RES; with
-    `loader`, also hub quoted as a name in text that loads a module by name), else None."""
-    text = hub_unexempt(text)
+    `loader`, also hub quoted as a name in text that loads a module by name), else None.
+    `whole` and `bare` are hub_module_names' own; `bare` is dropped when hub_unexempt changes
+    the text, since its spans would no longer fit (fail-closed)."""
+    unexempt = hub_unexempt(text)
+    bare = bare if unexempt == text else ()
+    text = unexempt
     for rx in HUB_NAME_RES:
         m = rx.search(text)
         if m:
             return m.group(0).strip()
+    found = hub_module_names(text, whole, bare)
+    if found:
+        return found
     if loader and HUB_LOADER_RE.search(text):
         m = HUB_QUOTED_RE.search(text)
         if m:
             return m.group(0)
     return None
+
+
+def hub_module_names(text, whole=True, bare=()):
+    """The text of `text` from a python word to a -m (a cluster ending in m, --module, runpy)
+    naming hub on the same command (HUB_PY_WORD_RE, HUB_PY_MODULE_RE), else None. With `whole`
+    False (a line the parser could not read whole) the -m may be past a ; | & or newline
+    (HUB_PY_MODULE_ANY_RE). Every python
+    word is tried, so one inside another's arguments (`$(python -m hub)`) is read too. The -m is
+    python's own unless the python word is bare (hub_py_bare) and python's words before the -m
+    reach a script word first (hub_py_script_first): `python <kit>/tools/commit.py -m "Hub
+    store: x"` gives commit.py its message. A python word with a path, a quote or any other text
+    before or glued to it (`<dir>/python.exe`, `"<dir>/python.exe"`, `"python"`,
+    `.../Python312/python.exe`, `python/x`, `python;x`) keeps the -m python's, whatever follows
+    (owner rulings Q-1010, Q-1012: agents use bare python; fail-closed). Glued text is cmd's to
+    read: cmd ends a command's name at an unquoted /, ; , or = and passes the whole word as
+    argv[0] (`cmd /c python/commit.py -m hub` and `cmd /c python;x -m hub` run python's -m), and
+    a ; there is read as cmd reads it, so in bash too (fail-closed). This reads text, not words:
+    a ; | & or newline the shell keeps inside a word (`-X 'a;b'`) ends `mid` here, so every
+    command is also read by its parsed words (hub_word_module_names). A python word whose
+    (start, end) is in `bare` counts as bare too: one that starts the text a nested shell runs
+    and is bare in that text (hub_nested_bare, owner ruling Q-1009)."""
+    module_re = HUB_PY_MODULE_RE if whole else HUB_PY_MODULE_ANY_RE
+    for w in HUB_PY_WORD_RE.finditer(text):
+        glued = HUB_PY_GLUED_RE.match(text, w.end()).end()
+        m = module_re.match(text, w.end())
+        if not m and ';' in text[w.end():glued]:
+            m = module_re.match(text, text.rindex(';', w.end(), glued) + 1)
+        is_bare = w.span() in bare or hub_py_bare(text, w.start(), w.end())
+        if m and not (is_bare and hub_py_script_first(text[w.end():m.end('mid')])):
+            return text[w.start():m.end()].strip()
+    return None
+
+
+def hub_py_bare(text, start, end):
+    """True when the python word at `start`..`end` of `text` is a word by itself: before it the
+    text's start, a space, a tab, a newline or ; & |, or a ( opening a group or a substitution
+    (one or more, after one of those or a $: `$(python`, `(python`; not `<dir>(python`), so no
+    path, quote, backtick or other text; and nothing glued after it up to a space, a tab or the
+    command's end (HUB_PY_GLUED_RE)."""
+    i = start
+    while i > 0 and text[i - 1] == '(':
+        i -= 1
+    before = ' \t\n;&|$' if i < start else ' \t\n;&|'
+    return (i == 0 or text[i - 1] in before) and HUB_PY_GLUED_RE.match(text, end).end() == end
+
+
+def hub_word_module_names(cmd):
+    """The words of `cmd`, as the shell passes them (Word.text, and Word.alt where bash's own
+    differs), from a word holding a python word (HUB_PY_WORD_RE) to a later word that is python's
+    -m naming hub (HUB_PY_WORD_MODULE_GLUED_RE; or HUB_PY_WORD_MODULE_NEXT_RE and the next word
+    HUB_PY_WORD_HUB_RE), joined, else None. A ; | & or newline inside a word is part of that
+    word here, never a command's end (`python -X 'a;b' -m hub`). The -m is python's own unless
+    the word is a python word and nothing else (no path: `<dir>/python.exe` keeps it python's,
+    owner ruling Q-1010) and python's words before it reach a record tool's script word first
+    (hub_py_script_words). A
+    PowerShell word holding a double quote may reach a native program as other words: Windows
+    PowerShell 5.1 passes the quote on unescaped, wrapping the word in quotes or not, and the
+    program's C runtime splits it (hub_crt_words). Both splits are read as well as the word
+    itself (`python -X 'a;" -m hub "b'` and `python '-B"m"' hub` run python's -m)."""
+    variants = [[[t] for t in (w.text for w in cmd.words)]]
+    alts = [[w.alt if w.alt is not None else w.text] for w in cmd.words]
+    if alts != variants[0]:
+        variants.append(alts)
+    if cmd.shell == sh.PS and any('"' in w.text for w in cmd.words):
+        for wrap in (False, True):
+            variants.append([hub_crt_words('"%s"' % w.text if wrap else w.text) if '"' in w.text
+                             else [w.text] for w in cmd.words])
+    for texts in variants:
+        toks = [(k, p) for k, parts in enumerate(texts) for p in parts]
+        dyn = {i for i, (k, _) in enumerate(toks) if cmd.words[k].dyn}
+        for i, (k, t) in enumerate(toks):
+            if not HUB_PY_WORD_RE.search(t):
+                continue
+            bare = HUB_PY_WORD_RE.fullmatch(t) is not None and i not in dyn
+            args = [p for _, p in toks[i + 1:]]
+            bad = {j - i - 1 for j in dyn if j > i}
+            for j, a in enumerate(args):
+                hit = HUB_PY_WORD_MODULE_GLUED_RE.match(a) or (
+                    HUB_PY_WORD_MODULE_NEXT_RE.search(a) and j + 1 < len(args) and
+                    HUB_PY_WORD_HUB_RE.match(args[j + 1]))
+                if hit and not (bare and hub_py_script_words(args[:j], bad)):
+                    return ' '.join([t] + args[:j + 2])
+    return None
+
+
+def hub_crt_words(s):
+    """The words a Windows program's C runtime (the UCRT, which python uses) reads from the
+    command-line text `s`: space and tab split words outside quotes; a double quote opens or
+    closes quoting, and two inside quoting give one literal quote; 2n backslashes before a quote
+    give n and the quote acts, 2n+1 give n and a literal quote; other backslashes are kept."""
+    out, cur, have, quoted, i = [], [], False, False, 0
+    while i < len(s):
+        c = s[i]
+        if c == '\\':
+            n = len(s) - i - len(s[i:].lstrip('\\'))
+            i += n
+            if i < len(s) and s[i] == '"':
+                cur.append('\\' * (n // 2))
+                if n % 2:
+                    cur.append('"')
+                    i += 1
+            else:
+                cur.append('\\' * n)
+            have = True
+        elif c == '"':
+            if quoted and s[i + 1:i + 2] == '"':
+                cur.append('"')
+                i += 2
+            else:
+                quoted = not quoted
+                i += 1
+            have = True
+        elif c in ' \t' and not quoted:
+            if have:
+                out.append(''.join(cur))
+            cur, have = [], False
+            i += 1
+        else:
+            cur.append(c)
+            have = True
+            i += 1
+    if have:
+        out.append(''.join(cur))
+    return out
+
+
+def hub_py_script_first(mid):
+    """True when python's words `mid` (between the python word and a -m naming hub) reach a
+    record tool's script word (HUB_PY_MESSAGE_SCRIPTS, a plain word: no variable, no wildcard)
+    before any option that takes code or a module (a cluster holding c or m) or `--`. A -W or -X
+    at a cluster's end takes the next word; --check-hash-based-pycs takes one. Every word before
+    the script word, option values included, must be plain (HUB_PY_OPT_WORD_RE): the split here is
+    on space and tab, as bash splits (str.split would also split on a no-break space or a control
+    bash keeps inside a word), and an escaped space, a quote, a backtick, a variable or an
+    expansion lets the shell hand python other words (`-X a\\ commit.py -m hub` gives -X the value
+    `a commit.py`). Anything else is python's -m: fail-closed."""
+    return hub_py_script_words([t for t in re.split(r'[ \t]+', mid) if t])
+
+
+def hub_py_script_words(toks, bad=()):
+    """hub_py_script_first on python's words `toks` as already split; a word whose index is in
+    `bad` (one the shell may change or split) is never plain, so reaching it first is python's
+    -m (fail-closed)."""
+    toks = [None if i in bad else t for i, t in enumerate(toks)]
+    i = 0
+    while i < len(toks):
+        if toks[i] is None:
+            return False
+        t = toks[i]
+        if t == '--':
+            return False
+        if t.startswith('--'):
+            i += 2 if t == '--check-hash-based-pycs' else 1
+            continue
+        if t.startswith('-') and len(t) > 1:
+            skip = 1
+            for k, ch in enumerate(t[1:], 1):
+                if ch in 'cmCM':
+                    return False
+                if ch in 'WX':
+                    if k == len(t) - 1:
+                        skip = 2
+                    break
+            i += skip
+            continue
+        m = HUB_PY_PLAIN_WORD_RE.match(t)
+        return (bool(m) and ntpath.basename(m.group(2)).lower() in HUB_PY_MESSAGE_SCRIPTS and
+                all(o is not None and HUB_PY_OPT_WORD_RE.match(o) for o in toks[:i]))
+    return False
 
 
 def hub_glob_names(cmd):
@@ -955,11 +1206,43 @@ def hub_opt_denied(text, longs, shorts=''):
     return bool(shorts) and text.startswith('-') and len(text) > 1 and any(c in shorts for c in text[1:])
 
 
-def hub_git_family(args):
-    """True when git's arguments `args` (the words after git) read or stage files the way the path
-    family takes them: global options only -C <path>, --no-pager and -P; a HUB_GIT_SUBS
+def hub_git_words(sub, rest):
+    """git's words `rest` after the subcommand `sub` with a commit's message values left out
+    (HUB_GIT_MESSAGE_RE, --message, --message=; none after `--`): they are text, not paths or
+    options. An -m with no word after it is kept, to be read as an option."""
+    if sub != 'commit':
+        return list(rest)
+    out, k = [], 0
+    while k < len(rest):
+        t = rest[k]
+        if t == '--':
+            return out + list(rest[k:])
+        m = HUB_GIT_MESSAGE_RE.match(t)
+        if t == '--message' or (m and not m.group(1)):
+            if k + 1 >= len(rest):
+                return out + [t]
+            if m:
+                out.append(t[:-1])
+            k += 2
+            continue
+        if t.startswith('--message='):
+            k += 1
+            continue
+        if m:
+            out.append(t[:t.index('m')])
+            k += 1
+            continue
+        out.append(t)
+        k += 1
+    return out
+
+
+def hub_git_family(args, outlet=False):
+    """True when git's arguments `args` (the words after git) read, stage or commit files the way
+    the path family takes them: global options only -C <path>, --no-pager and -P; a HUB_GIT_SUBS
     subcommand (restore only with --staged or -S); none of HUB_GIT_DENIED or the subcommand's own
-    HUB_GIT_SUB_DENIED; the hub tool named only by path words."""
+    HUB_GIT_SUB_DENIED; the hub tool named only by path words or in a commit's message
+    (hub_git_words). With `outlet`, no --output or -o either (a file a later command could run)."""
     k = 0
     while k < len(args) and args[k].startswith('-'):
         if args[k] == '-C' and k + 1 < len(args) and not args[k + 1].startswith('-'):
@@ -970,12 +1253,13 @@ def hub_git_family(args):
             return False
     if k >= len(args) or args[k] not in HUB_GIT_SUBS:
         return False
-    sub, rest = args[k], args[k + 1:]
+    sub, rest = args[k], hub_git_words(args[k], args[k + 1:])
     if sub == 'restore' and not any(t in ('--staged', '-S') for t in rest):
         return False
     longs, shorts = HUB_GIT_SUB_DENIED.get(sub, ((), ''))
     for t in rest:
-        if t.startswith('-') and (hub_opt_denied(t, HUB_GIT_DENIED) or hub_opt_denied(t, longs, shorts)):
+        if t.startswith('-') and len(t) > 1 and (hub_opt_denied(t, HUB_GIT_DENIED) or hub_opt_denied(t, longs, shorts)
+                                                 or outlet and hub_opt_denied(t, ('--output',), 'o')):
             return False
         if hub_text_names(t) and not hub_path_word(t):
             return False
@@ -1009,16 +1293,17 @@ def hub_commit_family(args):
     return True
 
 
-def hub_backlog_family(args):
+def hub_backlog_family(args, messages=HUB_BACKLOG_MESSAGES):
     """True when tools/backlog.py's arguments `args` name the hub tool only in the value of a
-    message option (HUB_BACKLOG_MESSAGES, written in full: argparse's own abbreviations are not
-    read as one) or as a path word (hub_path_word: a word of its own, or an option's =value, as
-    --scope, --body-file and show take them; backlog.py records and reads paths, it runs none)."""
+    message option (`messages`, written in full: argparse's own abbreviations are not read as
+    one) or as a path word (hub_path_word: a word of its own, or an option's =value, as --scope,
+    --body-file and show take them; backlog.py records and reads paths, it runs none). The same
+    reading takes tools/ledger.py with HUB_LEDGER_MESSAGES: it records text and runs nothing given."""
     k = 0
     while k < len(args):
         t = args[k]
         name, value = (t.split('=', 1) + [None])[:2] if t.startswith('--') else (t, None)
-        if name in HUB_BACKLOG_MESSAGES:
+        if name in messages:
             if value is None and k + 1 < len(args) and not args[k + 1].startswith('-'):
                 k += 1
             k += 1
@@ -1029,20 +1314,16 @@ def hub_backlog_family(args):
     return True
 
 
-def hub_path_family(parsed):
-    """True when the line `parsed` is the path family's one command (HUB_READERS, git, commit.py
-    or backlog.py; docs/guard.md "Hub secrets"): a clean line of a single simple command (no
-    chaining, pipe, substitution, nested shell, heredoc or text beside it), its program its first
-    word, every word literal with no wildcard (hub_literal), and the hub tool named only where
-    that program's reading allows (hub_path_word, a message, no option that runs a program)."""
-    if not parsed.clean or len(parsed.commands) != 1:
-        return False
-    cmd = parsed.commands[0]
+def hub_family_cmd(parsed, cmd, outlet=False):
+    """True when `cmd` of the line `parsed` is a path family command (HUB_READERS, git, commit.py,
+    backlog.py or ledger.py; docs/guard.md "Hub secrets"): a simple command of the line itself
+    (no pipe, substitution or nested shell), its program its first word, every word literal with
+    no wildcard (hub_literal), and the hub tool named only where that program's reading allows
+    (hub_path_word, a message, no option that runs a program; with `outlet`, git writes no
+    --output file: hub_git_family)."""
     if cmd.depth or cmd.source != parsed.text or cmd.subs or cmd.nested_in is not None:
         return False
     if cmd.pipe_from is not None or cmd.piped_in or cmd.piped_out or cmd.start is None:
-        return False
-    if parsed.text[:cmd.start].strip() or not HUB_DUPS_RE.match(parsed.text[cmd.end:]):
         return False
     inv = cm.invocation(cmd)
     if inv is None or inv.via is not None or inv.dyn or not hub_literal(cmd, inv):
@@ -1053,8 +1334,8 @@ def hub_path_family(parsed):
         return not any(t.startswith('-') and hub_opt_denied(t, denied) for t in args) and \
             all(hub_path_word(t) or not hub_text_names(t) for t in args)
     if inv.name == 'git':
-        return hub_git_family(args)
-    if not UI_PYTHON_RE.match(inv.name or ''):
+        return hub_git_family(args, outlet)
+    if not UI_PYTHON_RE.match(inv.name or '') or not hub_family_py_bare(parsed, cmd, inv):
         return False
     k = 0
     while k < len(args) and HUB_SHAPE_OPT_RE.match(args[k]):
@@ -1066,7 +1347,87 @@ def hub_path_family(parsed):
         return hub_commit_family(args[k + 1:])
     if script == 'backlog.py':
         return hub_backlog_family(args[k + 1:])
+    if script == 'ledger.py':
+        return hub_backlog_family(args[k + 1:], HUB_LEDGER_MESSAGES)
     return False
+
+
+def hub_family_py_bare(parsed, cmd, inv):
+    """True when the program word of `cmd` (inv.index; after PowerShell's `&`) is a bare python
+    word as the line spells it and as the shell passes it (HUB_PY_WORD_RE, whole): no path, quote,
+    escape or other text, so `<dir>/python.exe`, `"<dir>/python.exe"` and `"python"` before
+    commit.py are no family command (owner rulings Q-1010, Q-1012). A word with no place in the
+    line's text is not bare (fail-closed)."""
+    if inv.index is None or not 0 <= inv.index < len(cmd.words):
+        return False
+    w = cmd.words[inv.index]
+    o, e = w.start, w.end
+    if not (isinstance(o, int) and isinstance(e, int) and 0 <= o < e <= len(parsed.text)):
+        return False
+    return (HUB_PY_WORD_RE.fullmatch(parsed.text[o:e]) is not None and
+            HUB_PY_WORD_RE.fullmatch(w.text) is not None)
+
+
+def hub_path_family(parsed):
+    """True when the line `parsed` is the path family's one command (hub_family_cmd): a clean line
+    of a single simple command with no text beside it but stream dups (HUB_DUPS_RE: no chaining,
+    heredoc or comment)."""
+    if not parsed.clean or len(parsed.commands) != 1:
+        return False
+    cmd = parsed.commands[0]
+    if cmd.start is None or parsed.text[:cmd.start].strip() or not HUB_DUPS_RE.match(parsed.text[cmd.end:]):
+        return False
+    return hub_family_cmd(parsed, cmd)
+
+
+def hub_line_plain(parsed):
+    """True when the line `parsed` is plain (hub_family): clean; its commands joined only by
+    HUB_LINE_OPS, with no group, substitution, nested shell or pipe; no redirect but a stream dup;
+    no environment variable set (commands.line_env_names); every word literal (on PowerShell, no
+    `$` or splat `@` in one either); every command a program run; none of HUB_LINE_DENIED as a
+    first word or a program, HUB_LINE_DRIVES in a word, PowerShell's variable-storing common
+    parameters (HUB_LINE_PS_VARS, HUB_LINE_PS_ALIASES), or HUB_LINE_TEXT_RE in the text."""
+    if not parsed.clean or len(parsed.commands) < 2 or HUB_LINE_TEXT_RE.search(parsed.text):
+        return False
+    if cm.line_env_names(parsed.commands):
+        return False
+    ps = parsed.shell == sh.PS
+    for c in parsed.commands:
+        if c.prev_op not in HUB_LINE_OPS or c.next_op not in HUB_LINE_OPS or c.groups or c.subs:
+            return False
+        if c.depth or c.nested_in is not None or c.pipe_from is not None or c.piped_in or c.piped_out:
+            return False
+        if c.start is None or c.source != parsed.text or not c.words:
+            return False
+        if any(not r.dup for r in c.redirects):
+            return False
+        inv = cm.invocation(c)
+        if inv is None or (inv.name or '').lower() in HUB_LINE_DENIED or c.words[0].text.lower() in HUB_LINE_DENIED:
+            return False
+        for w in c.words:
+            t = w.text.lower()
+            if w.dyn or w.synth or (ps and (t.startswith('@') or '$' in t)):
+                return False
+            if any(d in t for d in HUB_LINE_DRIVES):
+                return False
+            if ps and t[:1] in HUB_LINE_PS_DASHES:
+                name = '-' + t[1:].split(':', 1)[0]
+                if name in HUB_LINE_PS_ALIASES or ((len(name) > 2 or name == '-p')
+                                                   and any(v.startswith(name) for v in HUB_LINE_PS_VARS)):
+                    return False
+    return True
+
+
+def hub_family(parsed):
+    """The commands of a plain line (hub_line_plain) that are path family commands
+    (hub_family_cmd, git with no --output file), else []: on such a line no command's output,
+    name or state reaches another through the shell, so a family command there names the hub tool
+    no more than it does alone, and the line's other commands are read as before (hub_named).
+    State git keeps (a commit's message, the index) may still reach a later command that reads
+    and runs it; that is a script the agent wrote (hub_named's limit), not modelled."""
+    if not hub_line_plain(parsed):
+        return []
+    return [c for c in parsed.commands if hub_family_cmd(parsed, c, outlet=True)]
 
 
 def hub_code_names(parsed, text, shaped):
@@ -1077,17 +1438,24 @@ def hub_code_names(parsed, text, shaped):
     texts are the line's own `text` (allowed-shape commands blanked) and, for every other command
     at any depth, its source, its words as the shell passes them (bash's $'...' and PowerShell's
     backtick escapes decoded, Word.alt too) and its redirects' targets and bodies. `shaped` are
-    the allowed-shape commands, which run no python code given on the line. The guard's own
-    kitlib.guard.hub is read as another name first."""
+    the allowed-shape and path family commands, which run no python code given on the line. The guard's own
+    kitlib.guard.hub is read as another name first. A heredoc that cat writes to a file
+    (hub_written_bodies) is data, as a file the Write tool writes is: its body is not read here
+    (hub_text_names still reads it for an import of hub or a path to hub.py)."""
     rest = [c for c in parsed.commands if not any(c is s for s in shaped)]
     if not any(not w.dyn and HUB_CODE_PYTHON_RE.match(cm.base_name(w.text)) for c in rest for w in c.words):
         return None
+    written = hub_written_bodies(parsed)
+    for r in written:
+        t = r.target
+        text = text[:t.start] + ' ' * (t.end - t.start) + text[t.end:]
     texts = [text]
     for c in rest:
         texts.append(c.text or '')
         texts.extend(w.text for w in c.words)
         texts.extend(w.alt for w in c.words if w.alt is not None)
-        texts.extend(r.target.text for r in c.redirects if r.target is not None)
+        texts.extend(r.target.text for r in c.redirects
+                     if r.target is not None and not any(r is b for b in written))
     texts = [hub_unexempt(t) for t in texts]
     if not any(HUB_IMPORT_RE.search(t) for t in texts):
         return None
@@ -1096,6 +1464,53 @@ def hub_code_names(parsed, text, shaped):
         if m:
             return m.group(0)
     return None
+
+
+def hub_written_bodies(parsed):
+    """The heredoc redirects of the line `parsed` whose body cat only writes to a file: a bash
+    command of the line's own text (no substitution, group or nested shell) whose program is cat
+    itself, every word literal, in no pipe, its output sent with > or >> to a literal file that is
+    no device by any spelling (hub_device_target: /./dev/fd/3, /proc/..., CON), and the body
+    quoted (<<'EOF') or holding no $( or backtick bash would run. Anything else may reach python:
+    its body stays read, as on a line that can make cat another program or hand its file to one
+    (HUB_CAT_REDEFINED_RE: a function named cat, hash, alias, exec, eval, source, ., coproc; a
+    PATH set)."""
+    out = []
+    if HUB_CAT_REDEFINED_RE.search(parsed.text):
+        return out
+    for c in parsed.commands:
+        bodies = [r for r in c.redirects if r.body and r.target is not None]
+        if not bodies or c.shell != sh.BASH or c.depth != 0 or c.source != parsed.text:
+            continue
+        if (c.groups or c.subs or c.nested_in is not None or c.pipe_from is not None or c.piped_in
+                or c.piped_out or c.path_env):
+            continue
+        inv = cm.invocation(c)
+        if inv is None or inv.via is not None or (inv.name or '').lower() != 'cat' or c.words[0].text != 'cat':
+            continue
+        if any(w.dyn or w.synth for w in c.words):
+            continue
+        others = [r for r in c.redirects if not r.body]
+        if not any(r.writes and r.fd in ('1', '&') for r in others):
+            continue
+        if not all(r.writes and r.target is not None and not r.target.dyn and not r.target.synth
+                   and not hub_device_target(r.target.text) for r in others):
+            continue
+        if any(r.target.dyn and ('$(' in r.target.text or '`' in r.target.text) for r in bodies):
+            continue
+        out.extend(bodies)
+    return out
+
+
+def hub_device_target(text):
+    """True when a redirect target `text` is a device or a process's file, not a file on disk, by
+    any spelling: any folder of the path named dev or proc (/./dev/fd/3, //dev/stdout, dev/stdout,
+    ../dev/stdout) counts, so a folder of that name on disk does too (fail-closed)."""
+    t = text.replace('\\', '/').lower()
+    base = t.rstrip('/').rsplit('/', 1)[-1].split('.', 1)[0].rstrip(':')
+    parts = posixpath.normpath(t).split('/')[:-1]
+    return (t.startswith(('/dev/', '/proc/', '//./', '//?/')) or 'dev' in parts or 'proc' in parts or
+            base in ('con', 'prn', 'aux', 'nul', 'conin$', 'conout$') or re.fullmatch(r'(com|lpt)\d', base) is not None)
 
 
 def hub_command_texts(cmd):
@@ -1110,39 +1525,78 @@ def hub_command_texts(cmd):
     return out
 
 
+def hub_nested_bare(parsed):
+    """The (start, end) spans, in the line's text, of each python word that starts the text a
+    nested bash/sh -c '...' or cmd /c "..." runs and is bare in that text, judged by that text's
+    own spelling (hub_py_bare on Command.source; owner ruling Q-1009): in the line's text the
+    quote that holds the nested text sits before it, and that quote is the outer shell's, not
+    part of the word. Only a nested text that one quoted word of a command on the line itself
+    holds verbatim (no escape inside) is placed; any other has no span here, so its python is
+    judged by the line's text (fail-closed)."""
+    out = set()
+    for c in parsed.commands:
+        outer = c.nested_in
+        if outer is None or c.source == parsed.text or outer.source != parsed.text or not c.words:
+            continue
+        inv = cm.invocation(outer)
+        if inv is None or (inv.name not in cm.BASH_SHELLS and inv.name != 'cmd'):
+            continue
+        hits = [x for x in outer.words if not x.dyn and x.text == c.source]
+        if len(hits) != 1:
+            continue
+        h, src, w = hits[0], c.source, c.words[0]
+        raw = parsed.text[h.start:h.end]
+        if len(raw) != len(src) + 2 or raw[0] not in '\'"' or raw[-1] != raw[0] or raw[1:-1] != src:
+            continue
+        if not 0 <= w.start < w.end <= len(src) or src[:w.start].strip('( \t\n'):
+            continue
+        if (HUB_PY_WORD_RE.fullmatch(src[w.start:w.end]) is not None and
+                HUB_PY_WORD_RE.fullmatch(w.text) is not None and hub_py_bare(src, w.start, w.end)):
+            out.add((h.start + 1 + w.start, h.start + 1 + w.end))
+    return out
+
+
 def hub_named(parsed):
     """What the line `parsed` names of the hub tool outside the allowed shape, as text, or None
     (docs/guard.md "Hub secrets"). The line's own text is read with every command of the
-    allowed shape (hub_shape) blanked out, and every other command, at any depth (a substitution,
+    allowed shape (hub_shape) blanked out (a python word starting a nested shell's text judged by
+    that text: hub_nested_bare), and every other command, at any depth (a substitution,
     a nested shell, a heredoc's body), by its words as the shell passes them (hub_command_texts:
     quotes and escapes inside a name are gone), and any standalone hub on a line that runs python
     and holds `import` (hub_code_names). A line of the path family (hub_path_family) names
-    nothing. A name
+    nothing, and on a plain line the path family's commands (hub_family) are read like the
+    allowed shape's: blanked from the line's text and not read by their words. A name
     the code builds at run time (string concatenation, an encoding, a variable's value, a script
     the agent wrote) is not read: the rule guards against accidents, not an adversary."""
     if hub_path_family(parsed):
         return None
     text = parsed.text
     shaped = []
+    family = hub_family(parsed)
     for cmd in parsed.commands:
-        if hub_shape(parsed, cmd, cm.invocation(cmd)):
-            shaped.append(cmd)
+        fam = any(cmd is f for f in family)
+        if fam or hub_shape(parsed, cmd, cm.invocation(cmd)):
+            if not fam:
+                shaped.append(cmd)
             if cmd.start is not None:
                 text = text[:cmd.start] + ' ' * (cmd.end - cmd.start) + text[cmd.end:]
-    found = hub_text_names(text)
+    found = hub_text_names(text, whole=parsed.clean, bare=hub_nested_bare(parsed))
     if found:
         return found
     for cmd in parsed.commands:
-        if any(cmd is s for s in shaped):
+        if any(cmd is s for s in shaped + family):
             continue
         for t in hub_command_texts(cmd):
             found = hub_text_names(t, loader=True)
             if found:
                 return found
+        found = hub_word_module_names(cmd)
+        if found:
+            return found
         found = hub_glob_names(cmd)
         if found:
             return found
-    return hub_code_names(parsed, text, shaped)
+    return hub_code_names(parsed, text, shaped + family)
 
 
 def hub_name(text):
@@ -1246,7 +1700,7 @@ def _hub_sls_patterns(args):
     named, positional, k = [], None, 0
     while k < len(args):
         w = args[k]
-        t = w.text
+        t = sh.ps_dashed(w.text)
         if w.dyn:
             return []
         if t.startswith('-') and len(t) > 1:
@@ -1639,17 +2093,22 @@ def edit_target(event, ctx, target, cwd, role, what, unknown_why=None, rewrite=N
 
 
 def main_checkout(event, ctx, target, cwd, role, what, unknown_why=None, rewrite=None, run=None):
-    cfg = ctx.config(target) if target else None
-    perms = kconfig.permissions(event, kconfig.roles(cfg))
-    if perms.get('edit_main_checkout'):
+    # a target it cannot place may be in any checkout, so both the kit defaults and the roles of
+    # the repository the call runs in must let the role edit one: the defaults alone would let a
+    # role that repository keeps out of its main checkout write anywhere, and the repository's
+    # alone a role it lets into its own main checkout (a lander) write into any other
+    may = kconfig.permissions(event, kconfig.roles(ctx.config(target) if target else None)).get('edit_main_checkout')
+    if may and target is None and cwd:
+        may = kconfig.permissions(event, kconfig.roles(ctx.config(cwd))).get('edit_main_checkout')
+    if may:
         return None
     main_top = ctx.main_top(cwd) if cwd else None
     new_wt = new_worktree(ctx, main_top)[1]
     if target is None:
         mine = own_worktree(ctx, cwd)
         instead = rewrite(fwd(mine) + '/<file>') if mine and rewrite is not None else new_wt
-        return refuse('main-checkout', role, '%s: the guard cannot tell where it writes (%s), and this '
-                      'role may not edit a main checkout. Write to a literal path inside your worktree.' %
+        return refuse('main-checkout', role, '%s: the guard cannot tell where it writes (%s). Name a literal path '
+                      'inside your worktree (the Edit or Write tool for a file).' %
                       (what, unknown_why or 'unknown path'), instead)
     place = ctx.place(target)
     if place.kind not in (repo.MAIN, repo.UNKNOWN):
@@ -1774,7 +2233,22 @@ def worktree_alternative(ctx, target, main_top, cwd, rewrite=None, run=None):
     no_wt, instead = new_worktree(ctx, main_top)
     if no_wt:
         return no_wt, instead
+    if rewrite is None and run is not None and cwd and paths.norm(target) == paths.norm(cwd):
+        py_c = PY_C_HINT if PY_C_RUN_RE.search(run) else ''
+        return (py_c + MAIN_CWD_HINT, instead)   # it writes through the main checkout it runs in
     return 'Make the change in a worktree of it (%s there); the lander brings it to main:' % fwd(rel), instead
+
+
+MAIN_CWD_HINT = ('It writes through its working directory, which is the main checkout: cd into your worktree first, '
+                 'in the same call (no tool keeps a cd between calls), or run a script or module by absolute path '
+                 '(python <worktree>/tools/x.py -C <worktree>; python -m unittest discover -s <worktree>/tests/<pkg> '
+                 '-t <worktree>). No worktree yet:')
+# a run that is a python -c (python, python3, py, python.exe; -c alone or in a cluster such as -Ic):
+# its refusal names the isolated form that may run in a main checkout when the code only reads
+PY_C_RUN_RE = re.compile(r'(?i)(?:^|[\s&("\'\\/])py(?:thon[\d.]*)?(?:\.exe)?["\']?(?:\s+-[A-Za-z]+)*\s+-[A-Za-z]*c'
+                         r'(?=[\s"\']|$)')
+PY_C_HINT = ('A python -c whose code only reads may run in a main checkout as python -I -c (isolated; docs/guard.md '
+             '"Rules" lists what the code may use). ')
 
 
 # ---------------------------------------------------------------- shell writes
@@ -1859,6 +2333,7 @@ PS_ALIASES = {'sc': 'set-content', 'ac': 'add-content', 'clc': 'clear-content', 
               'mi': 'move-item', 'mv': 'move-item', 'move': 'move-item', 'rni': 'rename-item',
               'ren': 'rename-item', 'iwr': 'invoke-webrequest', 'irm': 'invoke-restmethod',
               'curl': 'invoke-webrequest', 'wget': 'invoke-webrequest', 'epcsv': 'export-csv',
+              'epal': 'export-alias', 'epsn': 'export-pssession',
               'gci': 'get-childitem', 'ls': 'get-childitem', 'dir': 'get-childitem', 'sp': 'set-itemproperty'}
 BASH_WRITERS = {'tee', 'touch', 'mkdir', 'rm', 'rmdir', 'cp', 'mv', 'truncate', 'install', 'ln',
                 'unlink', 'shred'}
@@ -1877,6 +2352,20 @@ NET_DEVICE_RE = re.compile(r'^[\\/]{2}[?.][\\/](?=[A-Za-z]:[\\/])')
 WIN_OPT_RE = re.compile(r'^/[A-Za-z]+(?::\S*)?$')
 
 
+PS_NAMED_DYN_RE = re.compile(r'^-[A-Za-z_]\w*:')    # -Name: and a computed value, in one word
+
+
+def ps_param_word(cmd, w):
+    """The text of `w` with its dash as '-' when PowerShell reads it as a parameter name (-Path,
+    –Path, -Path:$p), else None. `-Destination:$p`: a literal name and a colon bind the
+    computed rest to that parameter. A quoted word or a negative number is never a parameter."""
+    t = sh.ps_dashed(w.text)
+    if t.startswith('-') and len(t) > 1 and (not w.dyn or PS_NAMED_DYN_RE.match(t)) and \
+            not cm.quoted(cmd, w) and not re.match(r'^-\d', t):
+        return t
+    return None
+
+
 def ps_params(cmd, words, spec):
     """({canonical param: [value Word]}, [positional Word]) of a cmdlet's arguments, by `spec`.
     A parameter is matched as PowerShell does: exactly, by an alias, or by the one name it is a
@@ -1887,8 +2376,8 @@ def ps_params(cmd, words, spec):
     k = 0
     while k < len(words):
         w = words[k]
-        t = w.text
-        if t.startswith('-') and len(t) > 1 and not w.dyn and not cm.quoted(cmd, w) and not re.match(r'^-\d', t):
+        t = ps_param_word(cmd, w)
+        if t is not None:
             body, colon, val = t[1:].partition(':')
             body = body.lower()
             if body in names:
@@ -1899,7 +2388,10 @@ def ps_params(cmd, words, spec):
                 cands = [n for n in names if n.startswith(body)]
             k += 1
             vals = []
-            if colon:
+            if colon and val == '' and k < len(words):
+                vals = [words[k]]               # `-Path: x`: a colon then a space binds the next word
+                k += 1
+            elif colon:
                 vals = [sh.Word(val, w.dyn, w.start, w.end)]
             elif any(c in spec.values for c in cands) and k < len(words):
                 vals = [words[k]]
@@ -1910,6 +2402,34 @@ def ps_params(cmd, words, spec):
         pos.extend(_split_commas(w))
         k += 1
     return named, pos
+
+
+# an Export-* cmdlet's parameters that never name the file it writes (ps_export_targets)
+PS_EXPORT_NO_PATH = ('inputobject', 'depth', 'encoding') + PS_COMMON_VALUES
+
+
+def ps_export_targets(cmd, words):
+    """[Word]: every argument of an Export-* cmdlet with no spec in PS_CMDLETS that could name the
+    file it writes. Its parameters are unknown, so a positional, the next word after any parameter
+    and a colon value are each a target; only the value of a parameter named exactly in
+    PS_EXPORT_NO_PATH is not (`Export-Alias -As Script $p` judges Script and $p)."""
+    out, k = [], 0
+    while k < len(words):
+        w = words[k]
+        t = ps_param_word(cmd, w)
+        k += 1
+        if t is None:
+            out.extend(_split_commas(w))
+            continue
+        body, colon, val = t[1:].partition(':')
+        body = body.lower()
+        no_path = PS_COMMON_ALIASES.get(body, body) in PS_EXPORT_NO_PATH
+        if colon and val:
+            if not no_path:
+                out.append(sh.Word(val, w.dyn, w.start, w.end))
+        elif no_path and k < len(words) and ps_param_word(cmd, words[k]) is None:
+            k += 1                              # its value
+    return out
 
 
 def ps_bound(spec, named, pos):
@@ -1956,7 +2476,7 @@ class NetWrite(object):
 
 
 NET_QUOTES = '‘’‚‛“”„'     # PowerShell reads these as quotes too
-NET_DASHES = '-–—―'              # and these as the dash an operator starts with
+NET_DASHES = ''.join(sh.PS_DASHES)  # and these as the dash an operator starts with
 NET_UNARY = frozenset(('not', 'bnot', 'join', 'split', 'csplit', 'isplit'))   # -op operand
 
 
@@ -2943,16 +3463,168 @@ def _python(cmd, name, args, cmd_word, via=None):
     return []
 
 
+# The coarse rule for a PowerShell writer (ps_unread). Parameters whose value is no path: their one
+# value is passed over when it holds no command (_ps_value_end).
+PS_VALUE_PARAMS = frozenset(('value', 'encoding', 'filter', 'include', 'exclude', 'newname', 'inputobject',
+                             'delimiter', 'itemtype', 'uri', 'body', 'headers'))
+_PS_SQ = r"'(?:[^'‘’‚‛]|'')*'"
+_PS_DQ_PLAIN = r'"[^"“”„`$]*"'
+_PS_BARE = r'[^\s$(){}\[\]@`\'"“”„‘’‚‛,;|&<>#]+'
+_PS_VAR = r'\$(?:\{[A-Za-z_]\w*(?::[A-Za-z_]\w*)?\}|[A-Za-z_]\w*(?::[A-Za-z_]\w*)?)'
+_PS_DQ = r'"(?:[^"“”„`$]|`[^\r\n]|%s)*"' % _PS_VAR
+_PS_END = r'(?=[\s;|)}]|$)'
+# a native program's argument: plain words and strings with no variable
+PS_PLAIN_ARG_RE = re.compile(r'(?:%s|%s|%s)+%s' % (_PS_BARE, _PS_SQ, _PS_DQ_PLAIN, _PS_END))
+# a cmdlet's argument: a variable, or a string with one, is one argument too
+PS_CMDLET_ARG_RE = re.compile(r'(?:%s|%s|%s|%s(?:\.[A-Za-z_]\w*)*)+%s' % (_PS_BARE, _PS_SQ, _PS_DQ, _PS_VAR, _PS_END))
+_PS_CALL_ARG = r"\s*(?:%s|%s|-?\d+)\s*" % (_PS_SQ, _PS_VAR)
+_PS_CHAIN = re.compile(r'(?:\.[A-Za-z_]\w*(?:\((?:%s(?:,%s)*)?\))?)*' % (_PS_CALL_ARG, _PS_CALL_ARG))
+_PS_VALUE_ATOM = re.compile(r'%s|%s|%s|%s' % (_PS_VAR, _PS_SQ, _PS_DQ, _PS_BARE))
+_PS_VALUE_END = re.compile(_PS_END)
+# a here-string body line PowerShell may end it on: any quote of its kind then @, indented or not
+_PS_HERE_CLOSE = {"'": re.compile("(?m)^\\s*['‘’‚‛]@"), '"': re.compile('(?m)^\\s*["“”„]@')}
+
+
+def _ps_group_end(src, k):
+    """The offset just past the ( ) that opens at src[k], or None when it holds what this does not
+    follow (a comment, a here-string, a typographic quote) or does not close."""
+    depth, n = 0, len(src)
+    while k < n:
+        c = src[k]
+        if c == '`':
+            k += 2
+            continue
+        if c in "'\"":
+            if src[k - 1:k] == '@':
+                return None
+            k = _net_string_end(src, k)
+            continue
+        if c in '#“”„‘’‚‛':
+            return None
+        if c == '(':
+            depth += 1
+        elif c == ')':
+            depth -= 1
+            if depth == 0:
+                return k + 1
+        k += 1
+    return None
+
+
+def _ps_value_end(cmd, p):
+    """The offset just past the one value that starts at source offset p, when it holds no command
+    and PowerShell passes it as one argument: a plain word or string, a variable, a ( ) the
+    scanner's word spans too, each with member calls on plain arguments after it ($s.Trim(),
+    (Get-Date).AddDays(1)), then a space or the end; else None."""
+    src = cmd.source
+    if src.startswith('(', p):
+        e = _ps_group_end(src, p)
+        if e is None or not any(w.start <= p and w.end == e for w in cmd.words if w.start is not None):
+            return None
+    elif src.startswith(("@'", '@"'), p):
+        q = src[p + 1]
+        w = next((w for w in cmd.words if w.start == p and w.end is not None and
+                  src[w.end - 2:w.end] == q + '@' and src[p + 2:p + 4].lstrip('\r')[:1] == '\n'), None)
+        if w is None:
+            return None
+        body = src[p + 2:w.end - 2]
+        # a $( ) runs a command; a line PowerShell would close on (a typographic quote) is not
+        # the end the scanner read
+        if (q == '"' and '$(' in body) or _PS_HERE_CLOSE[q].search(body):
+            return None
+        e = w.end
+    else:
+        m = _PS_VALUE_ATOM.match(src, p)
+        if not m:
+            return None
+        e = m.end()
+    e = _PS_CHAIN.match(src, e).end()
+    return e if _PS_VALUE_END.match(src, e) else None
+
+
+def ps_unread(cmd, args, spec=None):
+    """[Word]: for a PowerShell writer (a write cmdlet, an Export-*, robocopy or xcopy, curl, wget
+    or tar), a target that is not literal and has no span when any argument is one the guard does
+    not read as the scanner did, else []. Coarse by design, it does not depend on how the scanner
+    read a ( or a { : the arguments of a cmdlet (`spec`) other than one value of a parameter in
+    PS_VALUE_PARAMS must each be a plain word, string or variable (PS_CMDLET_ARG_RE), a native
+    program's a plain word or string (PS_PLAIN_ARG_RE: PowerShell spreads a splat or an array into
+    its arguments); none may follow a comma (an array binds to the parameter before it); and the
+    command may be neither split nor followed by a ( ) or { } that no value accounts for."""
+    stand_in = [sh.Word('(an argument the guard does not read)', True, cmd.end, cmd.end)]
+    if cmd.split:
+        return stand_in
+    src = cmd.source
+    spans = []                          # [start, end) of the values passed over
+    if spec is not None:
+        for k, w in enumerate(args):
+            t = sh.ps_dashed(w.text)
+            if w.start is None or cm.quoted(cmd, w) or not t.startswith('-') or len(t) < 2:
+                continue
+            body, colon, val = t[1:].partition(':')
+            body = body.lower()
+            names = spec.names()
+            cands = [body] if body in names else [spec.aliases[body]] if body in spec.aliases \
+                else [x for x in names if x.startswith(body)]
+            if not cands or not all(c in PS_VALUE_PARAMS for c in cands) or not any(c in spec.values for c in cands):
+                continue
+            if colon and val:
+                p = src.find(':', w.start) + 1
+            elif k + 1 < len(args) and args[k + 1].start is not None:
+                p = args[k + 1].start
+            else:
+                continue
+            e = _ps_value_end(cmd, p)
+            if e is not None:
+                spans.append((p, e))
+    arg_re = PS_CMDLET_ARG_RE if spec is not None else PS_PLAIN_ARG_RE
+    first = next((w.start for w in args if w.start is not None), None)
+    prev = None                         # the word before the first argument: the program's name
+    if first is not None:
+        prev = max((x for x in cmd.words if x.end is not None and x.end <= first),
+                   key=lambda x: x.end, default=None)
+    for w in args:
+        if w.start is None or w.start == w.end:
+            if w.dyn:
+                return stand_in
+            continue
+        if prev is not None and prev.end is not None and ',' in src[prev.end:w.start]:
+            return stand_in
+        prev = w
+        if any(s <= w.start and w.end <= e for s, e in spans):
+            continue
+        if sh.ps_dashed(w.text).startswith('-') and not cm.quoted(cmd, w) and spec is not None and \
+                any(s == src.find(':', w.start) + 1 and w.start < s and w.end <= e for s, e in spans):
+            continue                    # -Value:$v: the value passed over
+        m = arg_re.match(src, w.start)
+        if not m or m.end() != w.end:
+            return stand_in
+    if cmd.next_op in ('(', '{') and not any(s < cmd.end < e for s, e in spans):
+        return stand_in
+    return []
+
+
 def write_targets(cmd, inv):
     """[Word]: what the command writes, by its redirections and the file commands the guard
     knows. A Word whose text is '.' stands for the directory the command runs in."""
     out = []
     for r in cmd.redirects:
-        if not r.writes or r.target is None:
+        if not r.writes:
             continue
-        if r.target.text.lower() in NULL_TARGETS:
+        t = r.target
+        if t is None:
+            if cmd.shell == sh.PS:      # `> <#c#>(...)`: a target the scanner did not read
+                out.append(sh.Word('(a redirection target the guard does not read)', True, cmd.end, cmd.end))
             continue
-        out.append(r.target)
+        if t.text.lower() in NULL_TARGETS:
+            continue
+        if cmd.shell == sh.PS and not t.dyn and t.start is not None and t.start != t.end:
+            # the coarse rule (ps_unread) for a redirection: a target that is not one plain word,
+            # string or variable (`> `<newline>(...)`) is one the line computes
+            m = PS_CMDLET_ARG_RE.match(cmd.source, t.start)
+            if not m or m.end() != t.end:
+                t = sh.Word(t.text, True, t.start, t.end)
+        out.append(t)
     if net_mentioned(cmd):
         net, unread = net_writes(cmd)
         out.extend(x.word for x in net if net_placed(x.word))
@@ -2969,7 +3641,7 @@ def write_targets(cmd, inv):
         # xargs appends the names it reads: a stand-in name in the directory it runs in
         args = list(args) + [here(word)]
     if name in COPIERS:
-        return out + _copier(args)
+        return out + _copier(args) + (ps_unread(cmd, args) if cmd.shell == sh.PS else [])
     if cmd.shell != sh.PS and name == 'find':
         if any(w.text == '-delete' for w in args):
             return out + (_find_paths(args)[0] or [here(word)])
@@ -2984,6 +3656,8 @@ def write_targets(cmd, inv):
             native = name not in PS_PROVIDER_CMDLETS or inv.via is not None
             for p in spec.writes:
                 out.extend(x for x in bound.get(p, []) if native or not ps_provider_item(cmd, x))
+            if spec.writes:
+                out.extend(ps_unread(cmd, args, spec))
             if cmdlet == 'expand-archive' and not bound.get('destinationpath'):
                 out.append(here(word))
             if cmdlet == 'new-item' and bound.get('name'):
@@ -2996,8 +3670,7 @@ def write_targets(cmd, inv):
             if name not in ('curl', 'wget'):
                 return out
         elif cmdlet.startswith('export-') and cmdlet not in PS_CMDLETS:
-            bound = ps_bound(PS_CMDLETS['export-clixml'], *ps_params(cmd, args, PS_CMDLETS['export-clixml']))
-            return out + bound.get('path', []) + bound.get('literalpath', [])
+            return out + ps_export_targets(cmd, args) + ps_unread(cmd, args, PS_CMDLETS['export-clixml'])
     if cmd.shell == sh.CMD and name in CMD_WRITERS:
         pos = [w for w in args if not w.text.startswith('/')]
         if name == 'type':
@@ -3005,16 +3678,20 @@ def write_targets(cmd, inv):
         if name in ('copy', 'xcopy', 'robocopy', 'ren', 'rename'):
             return out + pos[-1:] if name != 'robocopy' else out + pos[1:2]
         return out + pos
+    # a native writer PowerShell runs (curl and wget are also Invoke-WebRequest's aliases there)
+    grouped = ps_unread(cmd, args) if cmd.shell == sh.PS and name in ('curl', 'wget', 'tar') else []
+    if grouped and any(x.start == x.end == cmd.end and x.dyn for x in out):
+        grouped = []                            # the cmdlet branch's stand-in already
     if name == 'curl':
-        return out + _curl(args, word)
+        return out + _curl(args, word) + grouped
     if name == 'wget':
-        return out + _wget(args, word)
+        return out + _wget(args, word) + grouped
     if cm.PYTHON_RE.match(name):
         return out + _python(cmd, name, args, word, inv.via)
     if name in EVALS:
         return out + _evals(name, args, word)
     if name == 'tar':                           # Windows' own tar.exe runs from PowerShell too
-        return out + _tar(args, word)
+        return out + _tar(args, word) + grouped
     if cmd.shell == sh.PS:
         return out
     if name == 'sed':
@@ -3181,11 +3858,11 @@ def copy_into(cmd, inv):
     return (ca.pos[-1], ca.pos[:-1], False) if len(ca.pos) > 1 else None
 
 
-def into_folder(target, w, into, cwd):
+def into_folder(target, w, into, cwd, home=None):
     """[path]: what a write of `target` (the Word `w`) writes. When `into` (copy_into) names `w`
     as the destination and `target` is an existing folder, <target>/<each source's name>; a
     source the guard cannot name (not literal, a wildcard, a drive-qualified name, no name, or a
-    folder where only a file is read so) keeps the folder itself."""
+    folder where only a file is read so) keeps the folder itself. `~` is `home` (ctx.home)."""
     if into is None or not os.path.isdir(target):
         return [target]
     dest, srcs, files_only = into
@@ -3197,7 +3874,7 @@ def into_folder(target, w, into, cwd):
         if not base or base in ('.', '..') or GLOB_CHARS & set(base):
             return [target]
         if files_only:
-            src = sh.resolve_path(s.text, cwd)
+            src = sh.resolve_path(s.text, cwd, home=home)
             if not src or not os.path.isfile(src):
                 return [target]
         out.append(os.path.join(target, base))
@@ -3245,11 +3922,12 @@ def ps_line_plain(cmd):
     no assignment or other expression statement, no computed name, no Start-Process); every word is
     literal or only reads an environment variable (PS_ENV_READ_WORD_RE; no other variable, member
     call or subexpression); and neither the raw line nor any decoded word matches
-    PS_DRIVE_REMAP_RE, commands.PS_SCRIPT_TEXT_RE or PS_DOTNET_RE. Anything else may remap a drive."""
+    PS_DRIVE_REMAP_RE, commands.PS_SCRIPT_TEXT_RE or PS_DOTNET_RE. Anything else may remap a drive.
+    The line is read again with `~` as the home its own parse read (Command.home)."""
     src = cmd.source
     if any(r.search(src) for r in (PS_DRIVE_REMAP_RE, cm.PS_SCRIPT_TEXT_RE, PS_DOTNET_RE)):
         return False
-    parsed = cm.read(src, sh.PS, cmd.cwd)
+    parsed = cm.read(src, sh.PS, cmd.cwd, home=cmd.home)
     if not parsed.clean:
         return False
     for c in parsed.commands:
@@ -3278,6 +3956,34 @@ def ps_provider_item(cmd, w):
     return ps_line_plain(cmd)
 
 
+# a PowerShell word that is the location and a literal rest: $PWD, "${PWD}\x", $pwd/x/y
+PS_PWD_WORD_RE = re.compile(r'(?i)^(?:\$pwd|\$\{pwd\})((?:[\\/][^$`]*)?)$')
+PS_BRACED_VAR_RE = re.compile(r'\$\{[^}]*\}')     # ${name}: a variable, no code
+
+
+def ps_pwd_path(cmd, w):
+    """The path text a PowerShell word spells as $PWD (or ${PWD}) and a literal rest, with the
+    location as cmd.cwd, or None: the word is not one, the directory is unknown, or the write is
+    not the line's only command. $PWD can be given another value under many spellings of its
+    name (sv PWD, -OutVariable ('P'+'WD'), [scriptblock]::Create(...).Invoke()), and only code
+    run before the target is read can do it: another command (a ; && || or newline, a pipeline,
+    a script block or ( ) group around it) or an argument of its own that runs code (a ( ),
+    $( ) or { } in a computed word). Each of those fails closed."""
+    if cmd.shell != sh.PS or not w.dyn or cmd.cwd is None:
+        return None
+    m = PS_PWD_WORD_RE.match(w.text)
+    if not m:
+        return None
+    src = cmd.source or ''
+    if cmd.start is None or cmd.nested_in is not None or cmd.groups or cmd.subs or cmd.prev_op or cmd.next_op or \
+            cmd.piped_in or cmd.piped_out or src[:cmd.start].strip() or src[cmd.end:].strip():
+        return None                             # not the line's one command
+    args = list(cmd.words) + [r.target for r in cmd.redirects if r.target is not None]
+    if any(x is not w and x.dyn and re.search(r'[({]', PS_BRACED_VAR_RE.sub('', x.text)) for x in args):
+        return None                             # an argument that runs code: (...), $(...), {...}
+    return cmd.cwd + m.group(1)
+
+
 BASH_DEVICE_RE = re.compile(r'^/dev/')         # /dev/stderr, /dev/tty, /dev/fd/3: no file
 BASH_TMP_RE = re.compile(r'^/tmp(?:/|$)')        # Git Bash mounts /tmp on a temp folder: jail.bash_tmp
 
@@ -3297,7 +4003,10 @@ def shell_writes(event, ctx, cmd, inv, cwd, role):
         if cmd.shell == sh.BASH and not w.dyn and BASH_DEVICE_RE.match(w.text):
             continue
         ps_drive = False                        # a PowerShell drive or provider it cannot place
-        if w.dyn:
+        pwd = ps_pwd_path(cmd, w)
+        if pwd is not None:
+            target, why = sh.resolve_path(pwd, cmd.cwd, cmd.shell, getattr(ctx, 'home', None)), None
+        elif w.dyn:
             target, why = None, 'a target that is not literal: %s' % w.text
         elif cmd.shell == sh.BASH and BASH_TMP_RE.match(w.text):
             target, why = paths.norm(os.path.join(jail.bash_tmp(ctx), w.text[5:]), fold=False), None
@@ -3310,22 +4019,25 @@ def shell_writes(event, ctx, cmd, inv, cwd, role):
             ps_drive = True
             target, why = None, 'a PowerShell drive or provider path the guard cannot place: %s' % w.text
         else:
-            target = sh.resolve_path(w.text, cmd.cwd, cmd.shell)
+            target = sh.resolve_path(w.text, cmd.cwd, cmd.shell, getattr(ctx, 'home', None))
             why = None if target else 'the directory it runs in is unknown' if cmd.cwd is None \
                 else 'a path the text cannot place: %s' % w.text
             if target is None and cmd.cwd is None and cmd.cwd_ps_drive:
                 ps_drive = True                 # after cd Main:\ or cd Registry::x
                 why = 'the directory it runs in is a PowerShell drive or provider path the guard cannot place'
-        if target is None and cmd.cwd is not None and not ps_drive and \
+        if target is None and cmd.shell == sh.PS and w.dyn:
+            ps_drive = True                     # PowerShell's, from any location: one $p or (...) can name the main checkout
+        elif target is None and cmd.cwd is not None and not ps_drive and \
                 ctx.place(cmd.cwd).kind not in (repo.MAIN, repo.UNKNOWN):
             continue                            # a target it cannot place, from a worktree or elsewhere
         what = '`%s` writes %s' % (cmd.text, w.text if w.text != '.' else 'files in the directory it runs in')
-        stand_in = w.text == '.' and cmd.source[w.start:w.end] != '.'     # here(): no word to aim
+        # here() or ps_unread(): no word to aim
+        stand_in = (w.text == '.' and cmd.source[w.start:w.end] != '.') or w.start == w.end
         part = any((x.start, x.end) == (w.start, w.end) and x.text != w.text for x in cmd.words)
         rewrite = None if stand_in or part else (lambda path, w=w: retarget(cmd, w, path))   # part: -tDIR
         if (w.start, w.end) in net and not w.dyn:
             rewrite = lambda path, x=net[(w.start, w.end)]: net_retarget(cmd, x, path)
-        for t in into_folder(target, w, into, cmd.cwd) if target else [target]:
+        for t in into_folder(target, w, into, cmd.cwd, getattr(ctx, 'home', None)) if target else [target]:
             d = edit_target(event, ctx, t, cwd, role, what, why, rewrite=rewrite, run=bare(cmd))
             if d:
                 return d
@@ -3390,7 +4102,7 @@ def dotnet_process_dir(event, ctx, cmd, cwd, role):
     """A .NET write the guard does not read the path of, or one it cannot place (net_writes,
     net_placed), judged in each directory its process may have started in (edit_target): the
     directory the call runs in (`cwd`) and the PowerShell location of each command it is nested
-    in. .NET reads a relative path there (NET_RELATIVE), so a Set-Location into a worktree does not
+    in, before and after a cd in that command's $( ) (shell.track). .NET reads a relative path there (NET_RELATIVE), so a Set-Location into a worktree does not
     take the write with it; write_targets judges the PowerShell location itself. A session that
     runs outside a worktree of its own (in the main checkout, or outside any repository) is told to
     give the call literal absolute paths, not to make a worktree (that does not move where its
@@ -3402,7 +4114,7 @@ def dotnet_process_dir(event, ctx, cmd, cwd, role):
         return None
     dirs, outer = [cwd], cmd.nested_in
     while outer is not None:
-        dirs.append(outer.cwd)
+        dirs.extend((outer.cwd, outer.subs_cwd))    # subs_cwd: where it stood before a cd in its $( ) moved it
         outer = outer.nested_in
     seen = set([paths.norm(cmd.cwd)] if cmd.cwd else [])
     for d in dirs:
@@ -3503,13 +4215,14 @@ WILD = re.compile(r'[*?\[]')
 
 def is_root(text, cwd, ctx=None, shell=None):
     """True when `text` names a drive or filesystem root, the user's home, or a variable that is
-    one of those; `shell` the shell whose word it is (sh.resolve_path: FileSystem::<drive root> in PS)."""
+    one of those; `shell` the shell whose word it is (sh.resolve_path: FileSystem::<drive root> in PS).
+    `~` is ctx.home; with no ctx, or one without a home, sh.home_folder's."""
     t = text.strip()
     if not t:
         return False
     if ROOT_VAR_RE.match(t):
         return True
-    p = sh.resolve_path(t, cwd, shell)
+    p = sh.resolve_path(t, cwd, shell, getattr(ctx, 'home', None))
     if not p:
         return False
     if ctx is not None and getattr(ctx, 'home', None) and same_dir(p, ctx.home):
@@ -3671,7 +4384,7 @@ def kit_wrapper(ctx, cmd, inv, cwd):
     word = inv.args[found[0]] if found else inv.word
     if word is None or word.dyn:
         return None
-    path = sh.resolve_path(word.text, cmd.cwd or cwd, cmd.shell) or (
+    path = sh.resolve_path(word.text, cmd.cwd or cwd, cmd.shell, getattr(ctx, 'home', None)) or (
         word.text if os.path.isabs(word.text) else None)
     if not path:
         return None
@@ -3944,6 +4657,19 @@ GIT_LISTING_OPTS = GIT_LIST_FLAGS | {'-i', '--ignore-case', '--sort', '--format'
 GIT_STRICT_READ_OPTS = {'branch': (GIT_LISTING_OPTS | {'--all', '--remotes', '-vv', '--verbose', '--abbrev',
                                                        '--no-abbrev'}, re.compile(r'-[ailrv]+$')),
                         'tag': (GIT_LISTING_OPTS, re.compile(r'-(?=.)[il]*(?:n\d*)?$'))}
+# strict reads (strict_dyn_read): reads no option of which writes a file or runs a program the line
+# names, so a computed word (any number of words) leaves them reads; and reads with such an option
+# (log, show and diff: --output), where a computed word stays a read only when the text pins it to
+# one argument that is no option, or the value of one of GIT_DYN_VALUE_OPTS
+GIT_DYN_ANY_READS = {'rev-parse', 'ls-files', 'cat-file', 'merge-base', 'for-each-ref'}
+GIT_DYN_PINNED_READS = {'log', 'show', 'diff'}
+GIT_DYN_VALUE_OPTS = ('--format=', '--pretty=')
+# characters a pinned word may carry outside quotes: none the shell expands, splits or joins on
+# (bash globs and braces, PowerShell's array comma and splat @), and no backslash or backtick
+DYN_SAFE_BARE = {sh.BASH: frozenset('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_./~^:=%+-@,'),
+                 sh.PS: frozenset('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_./~^:=%+-')}
+DYN_VAR_RE = re.compile(r'\$(?:\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Za-z_][A-Za-z0-9_]*|[0-9])')
+DYN_PS_VAR_RE = re.compile(r'(?i)\$(?:\{[A-Za-z_][A-Za-z0-9_:]*\}|(?:env:|script:|global:|local:)?[A-Za-z_][A-Za-z0-9_]*)')
 
 
 def opens_pager(t):
@@ -4008,6 +4734,95 @@ def native_unsure(cmd, w):
     if cmd.shell == sh.CMD:
         return cmd_native_unsure(cmd, w)
     return False
+
+
+def dyn_head(cmd, w):
+    """The literal text before the first variable of the computed word `w`, read from its source
+    when the shell (bash or PowerShell) is sure to hand it to git as one argument that starts with
+    that text: outside quotes only DYN_SAFE_BARE characters, inside '...' anything but the quote,
+    inside "..." plain text and $name or ${name} only (no $( or backtick that runs code, no "$@" or
+    other variable that is many words, no backslash, no embedded quote); else None. PowerShell
+    ends an argument that opens with a quote at its closing quote and passes what follows as
+    another ('HEAD'"$f" is two), so such a word with text after its closing quote is None. A word
+    with no variable, or no valid place in the source, is None too (fail closed)."""
+    src = cmd.source or ''
+    if cmd.shell not in DYN_SAFE_BARE or w.start is None or w.end is None or not 0 <= w.start < w.end <= len(src):
+        return None
+    raw, ps = src[w.start:w.end], cmd.shell == sh.PS
+    if ps and (cm.PS_SPLAT_RE.match(raw) or any(c in raw for c in '“”„‘’‚‛')):
+        return None
+    # a doubled quote or a backtick inside returns None below, so the first matching quote after
+    # the opening one is its close
+    if ps and raw[0] in '\'"' and raw.find(raw[0], 1) != len(raw) - 1:
+        return None
+    var_re, bare = (DYN_PS_VAR_RE if ps else DYN_VAR_RE), DYN_SAFE_BARE[cmd.shell]
+    head, seen, i, quote = [], False, 0, None
+    while i < len(raw):
+        c = raw[i]
+        if quote == "'":
+            if c == "'":
+                if ps and raw[i + 1:i + 2] == "'":
+                    return None                 # '' is a quote inside the word
+                quote = None
+            elif not seen:
+                head.append(c)
+            i += 1
+            continue
+        if c in '\\`':
+            return None
+        if c == '"':
+            if quote == '"' and ps and raw[i + 1:i + 2] == '"':
+                return None                     # "" is a quote inside the word
+            quote = None if quote == '"' else '"'
+            i += 1
+            continue
+        if c == "'" and quote is None:
+            quote = "'"
+            i += 1
+            continue
+        if c == '$':
+            m = var_re.match(raw, i)
+            if quote != '"' or not m:
+                return None
+            seen = True
+            i = m.end()
+            continue
+        if quote is None and c not in bare:
+            return None
+        if not seen:
+            head.append(c)
+        i += 1
+    if quote is not None or not seen:
+        return None
+    return ''.join(head)
+
+
+def strict_dyn_read(gc):
+    """True when every computed word of git read `gc` leaves it a read whatever it stands for
+    (git_reads strict): a GIT_DYN_ANY_READS subcommand in bash or PowerShell, or a
+    GIT_DYN_PINNED_READS one whose every computed word is one argument (dyn_head) that starts with
+    literal text that keeps it from being an option (HEAD~$n, origin/$b, ./$f) or with
+    --format= or --pretty=. Residual (inferred): PowerShell 5.1 splits an argument whose value
+    holds a double quote (ps_native_unsure), which the text cannot show."""
+    cmd = gc.inv.cmd if gc.inv is not None else None
+    if cmd is None or cmd.shell not in DYN_SAFE_BARE:
+        return False
+    if gc.sub in GIT_DYN_ANY_READS:
+        return True
+    if gc.sub not in GIT_DYN_PINNED_READS:
+        return False
+    for w in (w for w in gc.rest if w.dyn):
+        head = dyn_head(cmd, w)
+        if not head or (head.startswith('-') and not head.startswith(GIT_DYN_VALUE_OPTS)):
+            return False
+    return True
+
+
+def ps_splat(gc, w):
+    """True when the word `w` of git `gc` is a PowerShell splat (@a) the shell spreads into words
+    the text does not show; a quoted '@a' is plain text."""
+    return (gc.inv is not None and gc.inv.cmd.shell == sh.PS and not w.dyn and cm.PS_SPLAT_RE.match(w.text)
+            and (w.start is None or not cm.quoted(gc.inv.cmd, w)))
 
 
 def archive_words(gc):
@@ -4168,12 +4983,14 @@ def strict_read_opts(sub, words):
 
 def git_reads(gc, strict=False):
     """True when git `gc` changes nothing in the checkout it runs in. `strict` (a checkout the text
-    cannot place) counts only what is plainly a read: no computed word, no --output file, no grep
-    -O (opens_pager), and branch, tag and config only with options it names in full
-    (strict_read_opts)."""
+    cannot place) counts only what is plainly a read: no computed word but those strict_dyn_read
+    allows, no PowerShell splat (ps_splat), no --output file, no grep -O (opens_pager), and
+    branch, tag and config only with options it names in full (strict_read_opts)."""
     sub = gc.sub
     words = [w.text for w in gc.rest]
-    if strict and (any(w.dyn for w in gc.rest) or any(writes_output_file(t) for t in words)):
+    if strict and (any(ps_splat(gc, w) for w in gc.rest) or any(writes_output_file(t) for t in words)):
+        return False
+    if strict and any(w.dyn for w in gc.rest) and not strict_dyn_read(gc):
         return False
     if strict and sub == 'grep' and any(opens_pager(t) for t in words):
         return False
@@ -4249,16 +5066,16 @@ def lander_forms(cfg):
     return {'fetch': ([remote], [remote, main]), 'merge': (['--ff-only', '%s/%s' % (remote, main)],)}
 
 
-def lander_alone(event, cmd, gc):
+def lander_alone(event, cmd, gc, home=None):
     """True when `cmd` (git) is the whole command line of `event`, or follows one literal cd,
     Set-Location or pushd into the checkout git runs in, joined by && or ;. The line is read again
-    from the event; an unclean parse, a pipe, a group, a nested shell or any third command is not
-    alone."""
+    from the event, `~` as `home` (ctx.home); an unclean parse, a pipe, a group, a nested shell or
+    any third command is not alone."""
     shell = SHELLS.get(event.shell) if event is not None and event.kind == 'shell' else None
     text, cwd = (event.command, event.workdir or event.cwd) if event is not None else (None, None)
     if shell is None or not isinstance(text, str) or cmd.depth or cmd.nested_in is not None:
         return False
-    parsed = cm.read(text, shell, cwd)
+    parsed = cm.read(text, shell, cwd, home=home)
     cmds = parsed.commands
     if not parsed.clean or not cmds or len(cmds) > 2 or cmds[-1].start != cmd.start or cmds[-1].end != cmd.end:
         return False
@@ -4266,7 +5083,7 @@ def lander_alone(event, cmd, gc):
         return False
     if len(cmds) == 1:
         return True
-    is_cd, where = sh.cd_target(cmds[0], cwd)
+    is_cd, where = sh.cd_target(cmds[0], cwd, home)
     if not is_cd or where is None or cmds[1].prev_op not in ('&&', ';') or cmds[0].redirects:
         return False
     return jail.real(where) == jail.real(gc.dir)
@@ -4293,7 +5110,7 @@ def lander_check(event, ctx, cmd, inv, gc):
     table = kconfig.roles(cfg)
     if kconfig.role_name(event, table) != LANDER or not table[LANDER].get('edit_main_checkout'):
         return False, LANDER_NO_ROLE
-    if not lander_alone(event, cmd, gc):
+    if not lander_alone(event, cmd, gc, getattr(ctx, 'home', None)):
         return False, LANDER_NOT_ALONE
     pre = inv.args[:len(inv.args) - len(gc.rest) - 1]
     if inv.via is not None or inv.dyn or [w.text for w in cmd.words[:inv.index]] not in ([], ['&']) or \
@@ -4331,7 +5148,7 @@ def git_jail_unknown(ctx, cmd, gc, cwd, role):
     computed -C; a -C after any of them does not place it), by any role: it may be a main
     checkout, and the main-checkout git rules judge only history writes there, so a symbolic-ref
     or branch -m that re-points main's HEAD would pass them. Only a plain read passes
-    (git_reads strict). The hint names what hides the place (git_unplaced): drop it, or name a
+    (git_reads strict; a computed word only as strict_dyn_read allows). The hint names what hides the place (git_unplaced): drop it, or name a
     computed -C literally."""
     if git_reads(gc, strict=True):
         return None
@@ -4361,7 +5178,7 @@ def git_jail(event, ctx, cmd, inv, cwd, role):
     for w in git_targets(gc):
         if w.dyn:
             continue
-        target = sh.resolve_path(w.text, gc.dir)
+        target = sh.resolve_path(w.text, gc.dir, home=getattr(ctx, 'home', None))
         if not target:
             continue
         rs = rs or jail_roots(event, ctx, cwd)
@@ -4715,8 +5532,8 @@ def git_worktree_remove(ctx, gc, role, text):
     if not pos or pos[0].dyn or gc.dir is None:
         target = None
     else:
-        target = sh.resolve_path(pos[0].text, gc.dir)
-    main_top = (ctx.main_top(gc.dir) if gc.dir else None) or gc.dir
+        target = sh.resolve_path(pos[0].text, gc.dir, home=getattr(ctx, 'home', None))
+    main_top =(ctx.main_top(gc.dir) if gc.dir else None) or gc.dir
     if target is None:
         return refuse('git-worktree-remove', role, '`%s`: the guard cannot tell which worktree it removes. Name it '
                       'by a literal path:' % text,
@@ -4849,7 +5666,7 @@ def home_config(event, ctx, gc, role):
     (commands.HOME_ENV_NAMES, Command.home_env), in a repository with a PM data record, in every
     session but the owner's own (rule git-push-pmdata): git would read another user config, whose
     url.<base>.pushInsteadOf can send the push to a public remote while the pre-push hook, reading
-    the same config, takes it for the private one (KIT-GUARD-HOME-GITCONFIG)."""
+    the same config, takes it for the private one."""
     name = gc.inv.cmd.home_env if gc.inv is not None else False
     if not name or is_owner_session(event, ctx) or not pmdata_recorded(ctx, gc.dir):
         return None
@@ -5157,7 +5974,7 @@ def _config_file_recorded(ctx, path, where):
     folder, or the git common dir two folders up from a worktree's config, holds the record), or
     is a user or system config (scope_all, judged by machine_pm_data); a path that cannot be
     resolved counts (fail closed)."""
-    p = sh.resolve_path(path, where) if path else None
+    p = sh.resolve_path(path, where, home=getattr(ctx, 'home', None)) if path else None
     if not p:
         return True
     parts = [x.lower() for x in fwd(posixpath.normpath(fwd(p))).split('/') if x]
@@ -5883,8 +6700,8 @@ def git_prefix_configs(gc):
     return out
 
 
-def _is_kit_hooks(text, cwd):
-    p = sh.resolve_path(text, cwd) if text else None
+def _is_kit_hooks(text, cwd, home=None):
+    p = sh.resolve_path(text, cwd, home=home) if text else None
     return bool(p) and same_dir(p, kit_githooks())
 
 
@@ -5963,7 +6780,7 @@ def git_hooks_path(event, ctx, cmd, inv, cwd, role):
         return None
     configs = git_prefix_configs(gc) + (clone_configs(gc) if gc.sub == 'clone' else [])
     for key, val, first, last in configs:
-        if key == HOOKS_KEY and not _is_kit_hooks(val, gc.dir):
+        if key == HOOKS_KEY and not _is_kit_hooks(val, gc.dir, getattr(ctx, 'home', None)):
             return refuse('git-hooks-path', role, '`%s` runs git with core.hooksPath=%s, which replaces the '
                           'repository\'s hooks. %s Run it without the setting:' %
                           (bare(cmd), val, why), _without(cmd, first, last))
@@ -5978,7 +6795,8 @@ def hooks_config_write(ctx, gc, role, shown):
     the temp folder (not --global or --system), and -f on a config under it, are left alone."""
     if _under_temp(ctx, gc.dir) and not _config_scope_all(gc):
         return None
-    if any(_under_temp(ctx, os.path.dirname(sh.resolve_path(f, gc.dir) or '')) for f in _config_files(gc)):
+    home = getattr(ctx, 'home', None)
+    if any(_under_temp(ctx, os.path.dirname(sh.resolve_path(f, gc.dir, home=home) or '')) for f in _config_files(gc)):
         return None                              # -f on a scratch repository's config under temp
     call = git_config_call(gc)
     if call is None:
@@ -5986,7 +6804,7 @@ def hooks_config_write(ctx, gc, role, shown):
     key, value, writes = call
     if key != HOOKS_KEY or not writes:
         return None
-    if value is not None and not value.dyn and _is_kit_hooks(value.text, gc.dir):
+    if value is not None and not value.dyn and _is_kit_hooks(value.text, gc.dir, home):
         return None
     where = quote(gc.dir) if gc.dir else '"<checkout>"'
     return refuse('git-hooks-path', role, '`%s` changes core.hooksPath. %s Ask the owner (through the PM) when it '
@@ -6011,7 +6829,7 @@ def ps_proc_params(cmd, args):
     k = 0
     while k < len(args):
         w = args[k]
-        t = w.text
+        t = sh.ps_dashed(w.text)
         if t.startswith('-') and len(t) > 1 and not w.dyn and not cm.quoted(cmd, w):
             p = cm.canon_param(t, names, PS_PROC_ALIASES) or t.lower()
             k += 1
@@ -6023,7 +6841,7 @@ def ps_proc_params(cmd, args):
             else:
                 named[p] = ''
             continue
-        pos.append(t)
+        pos.append(w.text)
         k += 1
     return named, pos
 

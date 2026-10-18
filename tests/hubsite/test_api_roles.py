@@ -1,17 +1,33 @@
 """kitlib.hubsite.api: who may call each route. One row per ROUTES entry and caller role: the
 role the route names gets its answer, the other one gets `forbidden` and changes nothing. A route
 added to ROUTES with no row here, or with no role, fails."""
+import datetime
 import shutil
 import tempfile
 import unittest
 from unittest import mock
 
 from kitlib.hubsite import api
-from kitlib.hubsite.api import AGENT, ANY, BASE, OWNER
+from kitlib.hubsite import approvals as ap
+from kitlib.hubsite.api import AGENT, ANY, APPROVER, BASE, OWNER
 from kitlib.hubsite.store import Store
+from tests.gitfixture import TempRepo
 
 CLOCK = lambda: '2026-01-02T03:04:05+00:00'      # noqa: E731
 OPTIONS = [{'label': 'a', 'description': 'b'}]
+KEY = 'k' * 64
+URL = 'https://github.com/Owner/Repo.git'
+GIT = []        # the TempRepo the approvals routes read their bases from (setUpModule)
+
+
+def setUpModule():
+    repo = TempRepo()
+    GIT.append(repo)
+    ADD_BODY['head'] = repo.initial
+
+
+def tearDownModule():
+    GIT.pop().cleanup()
 
 
 class Views(object):
@@ -42,6 +58,15 @@ class Views(object):
     def record_template(self, repo):
         return {}
 
+    def record_add(self, repo, id, summary, scopes, effort, ref):
+        return {}
+
+    def record_edit(self, repo, id, version, changes, unset, body, ruling):
+        return {}
+
+    def record_delete(self, repo, id, why, ruling):
+        return {}
+
 
 def seed_question(store, status='open'):
     return store.add('questions', {'status': status, 'title': 't', 'options': OPTIONS}).id
@@ -62,6 +87,22 @@ def seed_to_pm(store, status='sent'):
 
 def seed_inbox(store):
     return store.add('inbox', {'text': 'x'}).id
+
+
+def seed_approval(store, decision=None):
+    now = datetime.datetime.fromisoformat(CLOCK())
+    doc = ap.new_doc(URL, 't', 'a' * 40, [{'path': 'x.md', 'base_blob': None,
+                                            'content': 'x\n'}], now)
+    # an id not yet used, so a store seeded again (tests.hubsite.test_httpd) starts at version 1
+    doc_id = 'A-%d' % (len(store.snapshot()[1].get('approvals') or {}) + 1)
+    if decision:
+        doc.update(ap.decide_fields(KEY, doc_id, doc, decision, now))
+    store.put('approvals', doc_id, doc)      # the id the signature covers
+    return doc_id
+
+
+ADD_BODY = {'repo': URL, 'title': 't', 'head': None,        # head: setUpModule
+            'files': [{'path': 'new.md', 'base_blob': None, 'content': 'x\n'}]}
 
 
 # (method, path under BASE): (seed -> id or None, body, query). `{id}` takes the seeded id,
@@ -90,10 +131,21 @@ ROWS = {
     ('POST', '/to_pm/{id}/delete'): (lambda s: seed_to_pm(s, 'queued'), None, None),
     ('POST', '/inbox'): (None, {'text': 'x'}, None),
     ('POST', '/inbox/{id}/read'): (seed_inbox, None, None),
+    ('POST', '/approvals'): (None, ADD_BODY, None),
+    ('POST', '/approvals/{id}/decide'): (seed_approval, {'decision': 'approve', 'if_version': 1},
+                                         None),
+    ('POST', '/approvals/{id}/consume'): (lambda s: seed_approval(s, ap.APPROVE),
+                                          {'commit': 'c' * 40, 'if_version': 1}, None),
+    ('GET', '/approvals/{id}/verify'): (lambda s: seed_approval(s, ap.APPROVE), None,
+                                        {'repo': URL, 'head': 'a' * 40, 'files': '{}'}),
     ('GET', '/backlog'): (None, None, None),
     ('GET', '/completed'): (None, None, None),
     ('GET', '/records/{repo}/new'): (None, None, None),
     ('GET', '/records/{repo}/{id}'): (None, None, None),
+    ('POST', '/records/{repo}'): (None, {'id': 'A', 'summary': 's', 'scope': ['x']}, None),
+    ('POST', '/records/{repo}/{id}/edit'): (None, {'version': 'v', 'changes': {'effort': 's'}},
+                                            None),
+    ('POST', '/records/{repo}/{id}/delete'): (None, {'why': 'w', 'confirm': 'X-1'}, None),
     ('GET', '/notices'): (None, None, None),
     ('GET', '/repos'): (None, None, None),
     ('GET', '/usage'): (None, None, None),
@@ -124,13 +176,14 @@ class RolesCase(unittest.TestCase):
         store = Store.open(root, clock=CLOCK)
         self.addCleanup(store.close)
         doc_id = seed(store) if seed else 'X-1'
-        return store, api.Api(store, views=Views(), clock=CLOCK), doc_id
+        return store, api.Api(store, views=Views(), clock=CLOCK, approval_key=lambda: KEY,
+                              checkout=lambda repo: GIT[0].root), doc_id
 
     def test_every_route_has_a_role_and_a_row(self):
         self.assertTrue(api.ROUTES)
         for route in api.ROUTES:
             with self.subTest(route=route.method + ' ' + route.pattern):
-                self.assertIn(route.role, (OWNER, AGENT, ANY))
+                self.assertIn(route.role, (OWNER, AGENT, ANY, APPROVER))
                 self.assertTrue(route.pattern.startswith(BASE + '/'))
                 self.assertTrue(callable(route.handler))
                 self.assertIn(key(route), ROWS, 'a route with no row in the role table')
@@ -163,12 +216,19 @@ class RolesCase(unittest.TestCase):
                 ('POST', '/stories/{id}/withdraw'): OWNER, ('POST', '/to_pm'): OWNER,
                 ('POST', '/to_pm/send'): OWNER, ('POST', '/to_pm/{id}/reply'): AGENT,
                 ('POST', '/to_pm/{id}/edit'): OWNER, ('POST', '/to_pm/{id}/delete'): OWNER,
-                ('POST', '/inbox'): AGENT, ('POST', '/inbox/{id}/read'): OWNER}
+                ('POST', '/inbox'): AGENT, ('POST', '/inbox/{id}/read'): OWNER,
+                ('POST', '/records/{repo}'): OWNER, ('POST', '/records/{repo}/{id}/edit'): OWNER,
+                ('POST', '/records/{repo}/{id}/delete'): OWNER,
+                ('POST', '/approvals'): AGENT, ('POST', '/approvals/{id}/decide'): APPROVER,
+                ('POST', '/approvals/{id}/consume'): AGENT,
+                ('GET', '/approvals/{id}/verify'): AGENT}
         have = {key(r): r.role for r in api.ROUTES}
         for k, role in sorted(want.items()):
             with self.subTest(route=k):
                 self.assertEqual(have.get(k), role)
         for k, role in sorted(have.items()):
+            if k in want:
+                continue
             if k[0] == 'GET':
                 with self.subTest(route=k):
                     self.assertEqual(role, ANY)
@@ -220,6 +280,111 @@ class RolesCase(unittest.TestCase):
                                  query)
             self.assertEqual((status, obj['error']['code']), (403, 'forbidden'))
         self.assertEqual(store.get('questions', doc_id)['status'], 'open')
+
+
+# a value of `strong` that is not exactly True: none of them makes a caller strong
+NOT_TRUE = (False, None, 0, 1, '', 'true', 'yes', [True], (True,), {'strong': True})
+
+
+class ApproverRoleTest(unittest.TestCase):
+    """APPROVER: a route for the owner who logged in through Cloudflare Access. Each test adds a
+    route of its own, so the role's rule is tested apart from the approvals decide route's."""
+
+    fresh = RolesCase.fresh
+
+    def approver_route(self, calls):
+        def handler(a, req):
+            calls.append(req)
+            return {'ok': True, 'strong': req.strong}
+        return api.Route('POST', BASE + '/decide-test', api.APPROVER, handler)
+
+    def call(self, role, strong, body=None, **kw):
+        calls = []
+        routes = api.ROUTES + (self.approver_route(calls),)
+        with mock.patch.object(api, 'ROUTES', routes):
+            _, a, _ = self.fresh(None)
+            if strong is _ABSENT:
+                status, obj = a.call('POST', BASE + '/decide-test', role, body, **kw)
+            else:
+                status, obj = a.call('POST', BASE + '/decide-test', role, body, strong=strong,
+                                     **kw)
+        return status, obj, calls
+
+    def test_approver_is_a_route_role_and_never_a_caller(self):
+        self.assertIn(api.APPROVER, api.ROLES)
+        self.assertNotIn(api.APPROVER, api.CALLERS)
+        self.assertNotIn(api.APPROVER, (OWNER, AGENT, ANY))
+        status, obj, calls = self.call(api.APPROVER, True)
+        self.assertEqual((status, obj['error']['code']), (403, 'forbidden'))
+        self.assertEqual(calls, [])
+
+    def test_only_the_strong_owner_reaches_an_approver_route(self):
+        status, obj, calls = self.call(OWNER, True)
+        self.assertEqual(status, 200, obj)
+        self.assertEqual((obj['ok'], obj['strong']), (True, True))
+        self.assertEqual(len(calls), 1)
+        self.assertIs(calls[0].strong, True)
+        self.assertEqual(calls[0].role, OWNER)
+
+    def test_the_owner_who_is_not_strong_is_refused(self):
+        for strong in NOT_TRUE + (_ABSENT,):
+            for words in ({}, {'agent_words': True}):
+                with self.subTest(strong=repr(strong), words=words):
+                    status, obj, calls = self.call(OWNER, strong, {'x': 1}, **words)
+                    self.assertEqual((status, obj['error']['code'], obj['error']['field']),
+                                     (403, 'forbidden', 'role'))
+                    self.assertIn('Access', obj['error']['message'])
+                    self.assertEqual(calls, [], 'the handler ran for a caller who is not strong')
+
+    def test_an_agent_is_refused_strong_or_not(self):
+        for strong in (True,) + NOT_TRUE + (_ABSENT,):
+            with self.subTest(strong=repr(strong)):
+                status, obj, calls = self.call(AGENT, strong)
+                self.assertEqual((status, obj['error']['code']), (403, 'forbidden'))
+                self.assertEqual(calls, [])
+
+    def test_strong_opens_no_other_route(self):
+        # strong adds nothing to what a role may do on an OWNER, AGENT or ANY route
+        _, a, _ = self.fresh(None)
+        status, obj = a.call('POST', BASE + '/questions', OWNER,
+                             {'title': 't', 'options': OPTIONS}, strong=True)
+        self.assertEqual((status, obj['error']['code']), (403, 'forbidden'))
+        store, a, doc_id = self.fresh(seed_todo)
+        status, obj = a.call('POST', BASE + '/todos/%s/done' % doc_id, AGENT, {'done': True},
+                             strong=True)
+        self.assertEqual((status, obj['error']['code']), (403, 'forbidden'))
+        self.assertEqual(store.get('todos', doc_id)['status'], 'open')
+        # and a caller who is not strong keeps every route it had
+        for strong in (True, False):
+            store, a, doc_id = self.fresh(seed_todo)
+            status, obj = a.call('POST', BASE + '/todos/%s/done' % doc_id, OWNER,
+                                 {'done': True}, strong=strong)
+            self.assertEqual((status, obj.get('error')), (200, None))
+
+    def test_strong_is_never_read_from_the_body_or_the_query(self):
+        for body, query in (({'strong': True}, None), (None, {'strong': '1'}),
+                            ({'strong': True}, {'strong': 'true'})):
+            with self.subTest(body=body, query=query):
+                status, obj, calls = self.call(OWNER, _ABSENT, body, query=query)
+                self.assertEqual((status, obj['error']['code']), (403, 'forbidden'))
+                self.assertEqual(calls, [])
+
+    def test_every_handler_sees_whether_its_caller_is_strong(self):
+        seen = []
+
+        def handler(a, req):
+            seen.append(req.strong)
+            return {'ok': True}
+        routes = api.ROUTES + (api.Route('GET', BASE + '/strong-test', ANY, handler),)
+        with mock.patch.object(api, 'ROUTES', routes):
+            _, a, _ = self.fresh(None)
+            for role, strong in ((OWNER, True), (OWNER, False), (AGENT, True), (OWNER, 1)):
+                a.call('GET', BASE + '/strong-test', role, strong=strong)
+            a.call('GET', BASE + '/strong-test', OWNER)
+        self.assertEqual(seen, [True, False, False, False, False])
+
+
+_ABSENT = object()                      # the call names no `strong` at all
 
 
 if __name__ == '__main__':

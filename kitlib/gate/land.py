@@ -33,12 +33,18 @@ tools/land.py).
                  (kitlib.guard.ownercommits; rules of the base merged with the tip's), and the
                  branch's history free of the backlog store's root commit (`ref` and `branch`
                  stores; kitlib.backlog.at_landing). Then the tip gate check
-                 (Lander.tip_gate_check): every tip has a gate-OK record of exactly that commit
-                 written by a `gate.py --full` pass (kitlib.records.gate_ok.verify_full); a miss
-                 names the `gate.py -C <worktree> --full` command that gates it. Then the
+                 (Lander.tip_gate_check): a base whose "gate" section has no step that is not
+                 manual is refused first (nothing could gate a tip or the merge); then every tip
+                 has a gate-OK record of exactly that commit written by a `gate.py --full` pass
+                 (kitlib.records.gate_ok.verify_full); a miss names the `gate.py -C <worktree>
+                 --full` command that gates it, and, when the kit lands itself and the tip does
+                 not contain the base, says to merge <remote>/<main> into the branch first (its
+                 own gate.py may predate the record's `full` key). Then the
                  strict check (Lander.strict_check; docs/gate.md "Strict paths"): a branch that changes a path in STRICT_DEFAULTS as
                  the base holds it lands alone, with a verdict queued for its tip
-                 (kitlib.gate.verdicts) by a strong-tier reviewer who is not its author; its
+                 (kitlib.gate.verdicts) by a strong-tier reviewer who is not its author (a
+                 verdict carried to the tip, tools/verdict.py carry, counts only when
+                 kitlib.gate.carry passes it again here against the base); its
                  merged gate then runs --full --fresh. Any miss: REFUSED, the lock released, nothing
                  merged. Last, the scope check (Lander.scope_check): every path the branch changes
                  in a scope of a record it holds, in SCOPE_ALWAYS or in a folder store's folder;
@@ -58,7 +64,9 @@ tools/land.py).
                  lock released: FAILED, the verdict line `CONFLICT <branch> with main <base>:
                  the author merges main`. Main is never moved
   7  gate        the landing tree gated in the slot of step 3 (kitlib.gate.runner.merged_gate,
-                 tree=, slot=) with the config of the base; a step that passed in the branch gate
+                 tree=, slot=) with the config of the base: every step that is not manual, as
+                 gate.py --full selects them, whatever paths the merge changes; a step that
+                 passed in the branch gate
                  of exactly this tree may count without running (kitlib.gate.reuse; never with
                  --fresh, --full or a batch). Red, or a gate where nothing ran: NOT LANDED, the
                  merge dropped (it is only in the landing tree; the landing never moves main),
@@ -144,7 +152,8 @@ from kitlib.backlog.errors import Refusal
 import kitlib.config as kconfig
 from kitlib.config.types import ConfigError
 from kitlib.content import oncommit
-from kitlib.gate import cleanup, result, reuse, runner, stash, strict_defaults, verdicts
+from kitlib.gate import cleanup, detect, gitstatus, result, reuse, runner, stash, strict_defaults
+from kitlib.gate import carry, verdicts
 from kitlib.gate import steps as S
 from kitlib.git import cmd, refs, repo
 from kitlib.guard import ownercommits
@@ -403,6 +412,10 @@ class Lander(object):
         # from its start (the submission wrote them running)
         self.result_runs = list(sub.get('runs') or [])
         self.own_runs = set(rr.run_id for rr in self.result_runs)
+        # a direct landing's result.Run per branch, made when it joins the landing queue (_run,
+        # before book_turn) so started_at says so, as a submitted landing's does; started, and
+        # moved into result_runs, only once the locked checks passed (_locked)
+        self.queued_runs = []
         self.output_log = sub.get('output')
         self.replaced = [r for r in (sub.get('replaced') or []) if isinstance(r, dict)]
         self.keep_branch = keep_branch  # True: no branch cleanup after the landing
@@ -419,6 +432,7 @@ class Lander(object):
         self.scope_reads = {}       # the stores the scope check read once per landing: key -> read
         self.strict_hits = {}       # branch -> the strict paths it changes (strict_check)
         self.strict_review = None   # the verdict entry a strict branch lands with (strict_check)
+        self.strict_carry = None    # its carry facts, checked again here, when it was carried
 
     @property
     def pairs(self):
@@ -623,7 +637,7 @@ class Lander(object):
             tip = self.ref('refs/heads/%s' % b)
             if tip != t:
                 return '%s is at %s, and the caller expects %s' % (b, (tip or '?')[:10], t[:10])
-        entries, why = refs.status(self.root)
+        entries, why = gitstatus.status(self.root)
         if entries is None:
             return 'git status failed: %s' % why
         if entries:
@@ -674,14 +688,60 @@ class Lander(object):
         exactly that commit that git still agrees with and that a `gate.py --full` pass wrote
         (gate_ok.verify_full). A default-mode run's record, a record from before records said
         whether the gate was --full, and a record of any other commit do not count; an --only run
-        writes none. None, or the first miss: why, and the command that gates that tip whole
-        (REFUSED, nothing merged). It only adds to the merged gate, which runs as before."""
+        writes none. None, or the first miss: why, and what gates that tip whole
+        (full_gate_advice; REFUSED, nothing merged). It only adds to the merged gate, which runs
+        as before. A base gate that --full selects no step from refuses first (no_full_step).
+
+        The record's `gate_config` is not compared with any config: the branch gate writes a
+        record only for a clean tree, with `config_rev` the tip, so the hash is of the tip's own
+        committed config. Re-reading that config here would use the landing kit's defaults and
+        schema, which refuse honest records whenever the two kits differ (a kit branch that
+        changes the gate's defaults or adds a config key); and the config that decides what
+        lands is the base's, which the merged gate reads."""
+        why = self.no_full_step()
+        if why:
+            return why
         for b, t in self.pairs:
             _, why = gate_ok.verify_full(self.root, t)
             if why:
-                return '%s tip %s has no full-gate OK record: %s; gate that tip whole first: %s' % (
-                    b, t[:10], why, self.full_gate_command(b))
+                return '%s tip %s has no full-gate OK record: %s; %s' % (
+                    b, t[:10], why, self.full_gate_advice(b, t))
         return None
+
+    def no_full_step(self):
+        """Why no tip can be gated whole, or None: the base's `.kit.json` has a "gate" section
+        (detect.configured) from which --full selects no step (steps.select with full and no
+        changed path): every step is `manual`, there is none, or each is dropped by another
+        selected step's skip_if_selected. `gate.py --full` and the merged gate select the same
+        steps, so both would refuse and the tip check's command could never be met."""
+        if not detect.configured(self.cfg):
+            return None
+        _, picked = S.select(self.cfg.section('gate'), [], [], full=True)
+        if picked:
+            return None
+        return ('the "gate" section of .kit.json at %s leaves no step for --full to select (every '
+                'step is manual, or is dropped by another selected step\'s skip_if_selected), so '
+                'neither `gate.py --full` nor the merged gate would run anything (both refuse: '
+                'no gate step selected); no branch can land until %s gives the gate a step that '
+                'is not manual and that no other step\'s skip_if_selected names'
+                % (self.expect_main[:10], self.cfg.main_branch))
+
+    def full_gate_advice(self, branch, tip):
+        """What gates `branch`'s tip whole: `gate that tip whole first: <full_gate_command>`. When
+        the kit lands itself (oncommit.is_kit) the command runs the branch's own gate.py, and one
+        from before records said `full` never writes it: a tip whose record lacks the key (the
+        record gate_ok.verify takes, without `full`) is told to merge <remote>/<main> in first,
+        then gate and land the merge. Any other repository's command runs the running kit's
+        gate.py, which writes it whatever the branch holds."""
+        command = self.full_gate_command(branch)
+        if oncommit.is_kit(self.root):
+            rec, _ = gate_ok.verify(self.root, tip)
+            if rec is not None and 'full' not in rec:
+                return ('merge %s/%s (%s) into %s first (a branch\'s own gate.py from before '
+                        'records said `full` never writes it), then gate the merge whole and land '
+                        'that tip: %s' % (self.cfg.remote, self.cfg.main_branch,
+                                          self.expect_main[:10], branch, command))
+        return 'gate that tip whole first: %s' % command
 
     def full_gate_command(self, branch):
         """The command that gates `branch`'s worktree --full: `python "<gate.py>" -C "<worktree>"
@@ -723,7 +783,7 @@ class Lander(object):
         self.strict_hits and self.strict_review are set, and _locked escalates the merged gate to
         --full --fresh. None, or why not (REFUSED, nothing merged). Every read that fails
         refuses."""
-        self.strict_hits, self.strict_review = {}, None
+        self.strict_hits, self.strict_review, self.strict_carry = {}, None, None
         globs, why = self.strict_globs()
         if globs is None:
             return 'cannot read the strict paths from %s at %s: %s' % (
@@ -757,7 +817,9 @@ class Lander(object):
 
     def strict_verdict(self, b, t):
         """None when the verdict queued for branch `b` lets its tip `t` land on a strict path
-        (self.strict_review set to it); else why not."""
+        (self.strict_review set to it); else why not. A carried entry (verdicts.carry) lands only
+        when kitlib.gate.carry.check passes again, from the commit reviewed to `t` against
+        self.expect_main (self.strict_carry set to its facts)."""
         common, why = repo.common_dir(self.root)
         if not common:
             return 'its verdict queue cannot be found: %s' % (why or 'no git common dir')
@@ -773,7 +835,19 @@ class Lander(object):
                     'add' % (entry['state'], entry['last_result'] or 'no reason given'))
         if entry['tip'].lower() != t.lower():
             return ('the verdict was given at %s, and the branch is at %s: review and queue the '
-                    'tip' % (entry['tip'][:10], t[:10]))
+                    'tip, or carry the verdict (tools/verdict.py carry) when a main sync is all '
+                    'that changed' % (entry['tip'][:10], t[:10]))
+        if verdicts.CARRIED in entry:
+            # Never the stored facts: the carry is checked again here, against the base this
+            # landing merges onto (docs/gate.md "Carrying a verdict forward").
+            reviewed = entry[verdicts.CARRIED]['from']
+            facts, why = carry.check(self.root, reviewed, t, self.expect_main,
+                                     git=lambda args: self.git(*args))
+            if facts is None:
+                return ('the verdict was given at %s and carried to %s, but the carry does not '
+                        'hold against %s %s: %s; review and queue the tip'
+                        % (reviewed[:10], t[:10], self.cfg.main_branch, self.expect_main[:10], why))
+            self.strict_carry = facts
         strong, weak, why = tier_models()
         if strong is None:
             return 'the strong-tier models cannot be read: %s' % why
@@ -793,10 +867,15 @@ class Lander(object):
         """A strict branch passed strict_check: its merged gate runs --full --fresh, whatever the
         caller passed (it only ever tightens), and one line says so."""
         (b, _), = self.pairs
-        e = self.strict_review
+        e, c = self.strict_review, self.strict_carry
         self.full = self.fresh = True
-        self.say('STRICT: %s: reviewed by %s on %s (%s); the merged gate runs --full --fresh' % (
-            self.strict_says(b), e['reviewer'], e['reviewer_model'], e['reviewer_id']))
+        carried = ''
+        if c:
+            n = len(c['merges'])
+            carried = ' at %s, carried over %d main merge%s' % (c['from'][:10], n,
+                                                                 '' if n == 1 else 's')
+        self.say('STRICT: %s: reviewed by %s on %s (%s)%s; the merged gate runs --full --fresh' % (
+            self.strict_says(b), e['reviewer'], e['reviewer_model'], e['reviewer_id'], carried))
 
     # ---------------------------------------------------------------- the scope check
 
@@ -1092,7 +1171,7 @@ class Lander(object):
         if current != main_b:
             return '%s, and the main checkout is on %s, not %s' % (
                 behind, current or why or '(detached HEAD)', main_b)
-        entries, why = refs.status(self.root)
+        entries, why = gitstatus.status(self.root)
         if entries is None:
             return 'git status failed: %s' % why
         if entries:
@@ -1210,7 +1289,7 @@ class Lander(object):
             return self.add_tree(why)
         r = self.git('checkout', '--quiet', '--detach', self.expect_main, cwd=tree,
                      timeout=PUSH_TIMEOUT)
-        entries, _ = refs.status(tree)
+        entries, _ = gitstatus.status(tree)
         if r.rc == 0 and self.tree_head() == self.expect_main and entries == []:
             return None
         return self.add_tree('could not be put at the base %s (%s)' % (
@@ -1227,7 +1306,7 @@ class Lander(object):
         merging, why = refs.merge_in_progress(tree)
         if merging is not False:
             return 'has a merge in progress' if merging else 'cannot be read (%s)' % why
-        entries, why = refs.status(tree)
+        entries, why = gitstatus.status(tree)
         if entries is None:
             return 'cannot be read: git status failed (%s)' % why
         if entries:
@@ -1258,7 +1337,7 @@ class Lander(object):
                      self.expect_main, timeout=PUSH_TIMEOUT)
         if r.rc != 0:
             return 'git worktree add %s failed: %s' % (tree, r.err or 'exit %s' % r.rc)
-        entries, err = refs.status(tree)
+        entries, err = gitstatus.status(tree)
         if self.tree_head() != self.expect_main or entries != []:
             return 'the landing tree %s, just added, is not clean at the base %s: %s' % (
                 tree, self.expect_main[:10], _paths(entries) if entries else err or 'HEAD differs')
@@ -1316,7 +1395,7 @@ class Lander(object):
     def tracked_and_untracked(self, where=None):
         """`(tracked entries, untracked paths)` of the status of `where` (default the main
         checkout); None, None when git cannot say."""
-        entries, _ = refs.status(where or self.root)
+        entries, _ = gitstatus.status(where or self.root)
         if entries is None:
             return None, None
         return ([(xy, p) for xy, p in entries if xy != '??'],
@@ -1463,7 +1542,7 @@ class Lander(object):
             return ['%s: %s; finish it, then: %s' % (
                 lead, 'a merge is in progress there' if merging else 'git cannot tell whether a '
                 'merge is in progress there (%s)' % why, ff)]
-        entries, why = refs.status(self.root)
+        entries, why = gitstatus.status(self.root)
         changed, why2 = runner.changed_between(self.root, main, self.merge)
         if entries is None or changed is None:
             return ['%s: git cannot tell whether local changes are in the way (%s); check, then: %s'
@@ -1487,10 +1566,12 @@ class Lander(object):
         """_run(), and the landing's result records (kitlib.gate.result, kind "land"), one per
         branch at its --expect-tip: `running` once the locked checks pass, just before the merge
         (_locked), then the outcome's, or `error` when an exception or Ctrl+C escapes _run (raised
-        again, unchanged). A landing that ends before that (USAGE, REFUSED before the merge, BUSY,
-        the machine lock's refusal: a retry or a duplicate) writes no record, so it never replaces
-        a real result; a submitted landing's records were written running before it started, so
-        every outcome finishes them. The record lines are said as progress: the verdict stays the
+        again, unchanged). Their started_at is when the landing joined the landing queue: a direct
+        landing's just before book_turn, a submitted one's at the submission. A landing that ends
+        before the locked checks pass (USAGE, REFUSED before the merge, BUSY, the machine lock's
+        refusal: a retry or a duplicate) writes no record, so it never replaces a real result; a
+        submitted landing's records were written running before it started, so every outcome
+        finishes them. The record lines are said as progress: the verdict stays the
         outcome's last line. The machine-lock slot is released however _run ends.
         facts['result_record']: the path (one branch), the list of paths (a batch), or None."""
         try:
@@ -1531,6 +1612,9 @@ class Lander(object):
             if why.startswith('USAGE: '):
                 return G.Outcome(G.USAGE, [why])
             return G.Outcome(G.REFUSED, ['REFUSED: %s; nothing was changed' % why])
+        if not self.submitted:      # joins the queue now: its records' started_at
+            runs = (result.Run.maybe(self.root, 'land', b, t) for b, t in self.pairs)
+            self.queued_runs = [rr for rr in runs if rr is not None]
         try:
             self.book_turn()
         except (landing.LockError, ConfigError) as e:
@@ -1701,12 +1785,11 @@ class Lander(object):
             for rr in self.result_runs:
                 rr.base = self.expect_main
                 self.say(rr.start(log=self.output_log)[1])
-        else:
-            for b, t in self.pairs:
-                rr = result.Run.maybe(self.root, 'land', b, t, self.expect_main)
-                if rr is not None:
-                    self.result_runs.append(rr)
-                    self.say(rr.start()[1])
+        else:                       # made when the landing joined the queue (_run)
+            for rr in self.queued_runs:
+                rr.base = self.expect_main
+                self.result_runs.append(rr)
+                self.say(rr.start()[1])
         started = gate_ok.utc()
         failed = self.do_merge()
         if failed is not None:

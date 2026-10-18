@@ -11,6 +11,11 @@ An owner claim - `Owner-Approved: <path>`, or `Owner-Authored: yes` - excuses a 
 only when its AUTHOR email is the owner's (`kitlib.config.owner.Rules.is_owner`). Anyone can type a
 trailer; with "owner".email unset nothing is the owner's. A claim on any other commit is an
 unproven claim: `unproven_claim()` says why, and the commit is judged as if it carried no claim.
+
+`Owner-Approval: hub:A-<n>` (commit.py --owner-approval; docs/commit.md "Owner approval") is read
+into `approval` for the row to show, and is never an owner claim: gate land and the pre-push hook
+check it against the hub (kitlib.guard.ownercommits), and this rule judges the commit by its
+Co-Authored-By as any other.
 """
 import calendar
 import collections
@@ -24,12 +29,14 @@ TRAILER_FAIL_SINCE = calendar.timegm((2026, 10, 2, 0, 0, 0))
 OWNER_APPROVED = 'Owner-Approved'
 OWNER_AUTHORED = 'Owner-Authored'
 OWNER_AUTHORED_VALUE = 'yes'
+OWNER_APPROVAL = 'Owner-Approval'       # kitlib.guard.ownercommits.TRAILER
 
 # One branch commit as the rule reads it: the Co-Authored-By, Owner-Approved and Owner-Authored
-# values git's trailer parser finds, `committed` the committer date in epoch seconds (or None), and
-# `author` the author email.
+# values git's trailer parser finds, `committed` the committer date in epoch seconds (or None),
+# `author` the author email, and `approval` the Owner-Approval values (no claim; shown only).
 BranchCommit = collections.namedtuple(
-    'BranchCommit', 'hash merge subject coauthors approved committed authored author')
+    'BranchCommit', 'hash merge subject coauthors approved committed authored author approval',
+    defaults=((),))
 
 TRAILERED, LANDER, OWNER, OLD, MISSING, UNDATED = (
     'trailered', 'lander-merge', 'owner-approved', 'old', 'missing', 'undated')
@@ -42,7 +49,8 @@ def log_format(approved_key=OWNER_APPROVED):
     """The `git log --format` parse_log() reads; `approved_key` is the owner's approval trailer."""
     return _SEP.join(('%H', '%P', '%ct', '%ae', '%(trailers:key=Co-Authored-By,valueonly)',
                       '%(trailers:key=' + approved_key + ',valueonly)',
-                      '%(trailers:key=' + OWNER_AUTHORED + ',valueonly)', '%s')) + _END
+                      '%(trailers:key=' + OWNER_AUTHORED + ',valueonly)',
+                      '%(trailers:key=' + OWNER_APPROVAL + ',valueonly)', '%s')) + _END
 
 
 def _values(text):
@@ -57,14 +65,15 @@ def parse_log(out):
         record = record.strip('\n')
         if not record:
             continue
-        h, parents, ct, author, coauthors, approved, authored, subject = record.split(_SEP, 7)
+        (h, parents, ct, author, coauthors, approved, authored, approval,
+         subject) = record.split(_SEP, 8)
         try:
             committed = int(ct.strip())
         except ValueError:
             committed = None
         commits.append(BranchCommit(h, len(parents.split()) > 1, subject, _values(coauthors),
                                     _values(approved), committed, _values(authored),
-                                    author.strip()))
+                                    author.strip(), _values(approval)))
     return commits
 
 
@@ -80,7 +89,7 @@ def branch_commits(base, root, head='HEAD', remote='origin', approved_key=OWNER_
     if not base.startswith('refs/'):         # a full ref has no tracking ref of its own
         tracking = 'refs/remotes/%s/%s' % (remote, base)
         # known=True: a git ended from outside is no answer, never "no tracking ref", which
-        # counted the remote's newer base commits as the branch's (KIT-GIT-EXIT1-ANSWERS-2).
+        # counted the remote's newer base commits as the branch's.
         got, why = gitrefs.resolve(tracking, root, peel=None, known=True)
         if got is None:
             return None, 'cannot read %s: %s' % (tracking, why)

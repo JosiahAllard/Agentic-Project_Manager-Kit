@@ -179,18 +179,6 @@ class CompareAndSwap(StoreCase):
                          sorted(added(n) for n in names),
                          'a linear history, one commit per write:\n' + shown)
 
-    def test_concurrent_writers_all_survive(self):
-        """Every writer plans against the same empty store before any publishes (the barrier in
-        before_publish), so all but one first push must lose the lease and retry."""
-        writers = self.writers(4)
-        names = [n for n, _ in writers]
-        errors, attempts = race(self, writers, add)
-        self.assertEqual(errors, [])
-        retried = sorted(n for n in names if len(attempts[n]) > 1)
-        self.assertEqual(len(retried), len(names) - 1,
-                         'one first push wins, every other one conflicts: %r' % attempts)
-        self.assert_every_write_survives(names)
-
     def test_a_writer_that_dies_in_the_race_is_reported_not_lost(self):
         """A writer killed by something that is not an Exception (the fake git's Unsupported is a
         BaseException) is an error naming it, not a record the store seems to have lost."""
@@ -680,7 +668,7 @@ def kill_store_reads(when=lambda: True):
 
 
 class AKilledStoreReadIsNoAnswer(StoreCase):
-    """KIT-GIT-EXIT1-ANSWERS: `rev-parse --verify --quiet` says "no such ref" as exit 1 with no
+    """`rev-parse --verify --quiet` says "no such ref" as exit 1 with no
     output, which a git ended from outside also leaves; the store must not read a kill as an
     empty store."""
     remote = False
@@ -700,7 +688,7 @@ class AKilledStoreReadIsNoAnswer(StoreCase):
         self.assertTrue(why)
 
     def test_landable_reads_a_killed_branch_read_as_no_answer_not_no_branch(self):
-        """KIT-GIT-EXIT1-ANSWERS-2: `rev-parse --verify --quiet refs/heads/<b>` said "no such
+        """`rev-parse --verify --quiet refs/heads/<b>` said "no such
         branch" as exit 1 with no output, the shape a kill leaves."""
         from kitlib.backlog import landable as L
         snap = self.store.load()

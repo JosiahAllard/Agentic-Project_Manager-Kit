@@ -136,7 +136,7 @@ class ManifestTest(unittest.TestCase):
         """The owner's table (docs/guard.md "Role policy"): leads control, builders write, the
         read-only roles read, the test-runner tests, the lander lands. role_modes reads the same."""
         want = {'pm': 'controller', 'coordinator': 'controller',
-                'worker': 'write', 'senior-worker': 'write', 'strong-worker': 'write', 'deep-worker': 'write',
+                'weak-worker': 'write', 'worker': 'write', 'senior-worker': 'write', 'strong-worker': 'write', 'deep-worker': 'write',
                 'asset-smith': 'write', 'sound-smith': 'write', 'tech-artist': 'write', 'spec-writer': 'write',
                 'records': 'write', 'reviewer': 'read', 'researcher': 'read', 'consultant': 'read',
                 'test-runner': 'test', 'lander': 'lander'}

@@ -1284,7 +1284,7 @@ class FailedGitReads(BudgetRepo):
         self.assertIn('git exit 0, but it listed no file', out)
 
     def test_a_base_ref_read_with_no_answer_is_a_failed_read_never_absent(self):
-        """KIT-GIT-EXIT1-ANSWERS-2: exit 1 having printed nothing was read as "no such commit"
+        """Exit 1 having printed nothing was read as "no such commit"
         (`rev-parse --verify --quiet`), and a git ended from outside leaves that shape too
         (kitlib.git.refs.KILLED_SHAPE). It, and any other failure, is a failed read."""
         self.size(GOTCHAS, 100)

@@ -138,11 +138,6 @@ publish.
 ## Never
 
 - Never put the owner's personal details (email address, name, account names) in anything sent off this machine: no User-Agent, header, URL, query string or form field. Web fetches use a neutral User-Agent.
-- Never chain a write (a commit, merge, reset, backlog.py write, landing command) with other commands
-  in one shell call: run each on its own. Compound commands draw safety-check refusals that the
-  same steps run singly do not.
-- A safety-check (classifier) refusal is final: stop at the FIRST one, report it verbatim; no retry,
-  no rewording, no other shell or agent.
 - Never kill a process by name or command-line match (`Stop-Process -Name`, `taskkill /IM`,
   `CommandLine -match ... | Stop-Process`): other sessions' gates match too. End only a process
   you started, by its pid, while it still has the start time you saw.
@@ -161,8 +156,8 @@ with its intent, source and why the cheaper source could not; measurements befor
 and after as a table; what you saw in the spectrograms; the critique's three
 weaknesses; **what the owner should listen for, as a question the owner can answer** ("does the
 impact still read at distance?"); licence and where you recorded it; branch and
-commit; the gate with the line that proves each result. For a shortlist, end with
-"Which of these three, or none?"
+commit; the gate (the final one `--full` on that tip) with the line that proves each result.
+For a shortlist, end with "Which of these three, or none?"
 
 ## Kit tools
 

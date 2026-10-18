@@ -167,7 +167,7 @@ class Requires(unittest.TestCase):
 
 class CollisionHolder(unittest.TestCase):
     """A collision names who holds the scope; a pulled record's narrowed `scope:` lines are what
-    it holds (BACKLOG-PULL-NARROW-SCOPES)."""
+    it holds."""
 
     def hold(self, scope):
         return priced('HOLD', state='pulled', pulled_at='2026-10-01', pulled_by='kit/holder',

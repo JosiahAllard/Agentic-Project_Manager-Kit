@@ -41,9 +41,11 @@ The owner's own session (nothing marks it) is never held, and its calls read no 
                   name the lock CLI (machine_lock.py in any spelling Windows opens as it - any
                   case, a trailing dot or space, a `::$DATA` stream: rules.is_lock_script - or its
                   module tools.machine_lock: _lock_seq). It passes only when its program never
-                  runs them with its output staying (backlog.py and commit.py under tools/ of the
-                  kit folder or of a checkout of the kit repository, a bare reader or printer, a
-                  git read (LOCK_PATH_GIT) with plain options and no environment assignment on the line:
+                  runs them with its output staying (backlog.py, ledger.py and commit.py under
+                  tools/ of the kit folder, of a checkout of the kit repository or of the kit's
+                  plugin export: kit_checkout, kit_export; a bare reader or printer; a git read or
+                  commit (LOCK_PATH_GIT; a commit's message is text) with plain options and no
+                  environment assignment on the line:
                   _lock_path_only, _git_plain), or runs the lock CLI itself (its script, python
                   -m: _run_words; the python a launcher starts as its program: _launched) with a
                   verb inside the mode's LOCK_VERBS and no --force in any abbreviation, and no
@@ -52,7 +54,8 @@ The owner's own session (nothing marks it) is never held, and its calls read no 
                   xargs, python -, runpy, a python given to a shell as $0 or $1: HANDED_ON; so is
                   the name glued to other text in a launcher's line the guard does not read:
                   _hidden_launch), and a command with no program the guard can name (an
-                  assignment alone, `$c=gc ...`) whose words name it is NO_PROGRAM; both are
+                  assignment alone, `$c=gc ...`) whose words name it (but for a Where-Object
+                  pattern only compared on a line that runs nothing: _pattern_only) is NO_PROGRAM; both are
                   refused in every mode. Not read (_lock_words): an environment assignment's
                   value, a glob, a name built from pieces, an 8.3 short name. A lock MCP
                   tool (lock_mcp_tool) whose verb (MCP_VERBS) is outside the mode's verbs, or that
@@ -82,6 +85,7 @@ from kitlib.host.content import MODES
 from kitlib.git import repo
 
 from . import commands as cm
+from . import jail
 from . import paths
 from . import rules
 from . import shell as sh
@@ -196,7 +200,7 @@ def check(action, ctx):
     cwd = action.cwd or os.getcwd()
     top = checkout(ctx, cwd)
     if action.kind == 'edit':
-        target = edit_path(action, cwd)
+        target = edit_path(action, cwd, getattr(ctx, 'home', None))
         if m in NO_EDIT and target and inside(target, top) and not role_may_write(ctx, role, target, top):
             return _deny('role-edit', tag, '%s of %s: the %s role (mode %s) does not edit files in the '
                          'checkout it works in (%s); its scratch and temp folders stay open.'
@@ -210,13 +214,14 @@ def check(action, ctx):
     text = action.command
     if not isinstance(text, str) or not text.strip():
         return None
-    parsed = cm.read(text, rules.SHELLS.get(action.shell, sh.BASH), where or cwd)
+    parsed = cm.read(text, rules.SHELLS.get(action.shell, sh.BASH), where or cwd, home=getattr(ctx, 'home', None))
     gap = shell_gap(parsed)
     if gap:
         name, why, instead = gap
         return _deny('role-shell', tag, '`%s` %s; a hook cannot answer an interpreter that waits for input. '
                      'Give it the script or command to run:' % (name, why), instead)
-    found = lock_verb(parsed, m, ctx.kit, lambda root: kit_checkout(ctx, root, top))
+    found = lock_verb(parsed, m, ctx.kit,
+                      lambda root: kit_checkout(ctx, root, top) or kit_export(ctx, root, action, cwd))
     if found:
         verb, allowed = found
         return _deny('role-lock', tag, 'machine_lock.py %s is not one of the lock verbs the %s role (mode %s) '
@@ -225,12 +230,13 @@ def check(action, ctx):
     return None
 
 
-def edit_path(action, cwd):
-    """The file an edit Action writes, made absolute against `cwd` as the shared rules do."""
+def edit_path(action, cwd, home=None):
+    """The file an edit Action writes, made absolute against `cwd` as the shared rules do, `~` as
+    `home` (ctx.home; None: sh.home_folder's)."""
     path = action.path
     if not isinstance(path, str) or not path:
         return None
-    return sh.resolve_path(path, cwd) or path
+    return sh.resolve_path(path, cwd, home=home) or path
 
 
 def role_may_write(ctx, role, target, top):
@@ -442,18 +448,20 @@ def _python_script(args):
 
 
 # Programs that never run the words they are given, so a path naming the lock CLI there is a path
-# (_lock_path_only). The kit's record and commit tools, as the program or as python's script, and
-# only where the path, made absolute against the command's working directory, is tools/ of the kit
-# folder or of a checkout of the kit repository (_kit_tool):
-LOCK_PATH_SCRIPTS = frozenset(('backlog.py', 'commit.py'))
+# (_lock_path_only). The kit's record, ledger and commit tools, as the program or as python's
+# script, and only where the path, made absolute against the command's working directory, is
+# tools/ of the kit folder, of a checkout of the kit repository or of an export of the kit
+# (_kit_tool, kit_checkout, kit_export):
+LOCK_PATH_SCRIPTS = frozenset(('backlog.py', 'commit.py', 'ledger.py'))
 # readers, named bare (_reader), that take no command or pager (rg only without --pre). PowerShell's
 # take a script block for a delay-bind parameter (-Path { ... }), which _ps_caught refuses:
 LOCK_PATH_READERS = frozenset((
     'cat', 'head', 'tail', 'wc', 'grep', 'egrep', 'fgrep', 'rg', 'findstr', 'ls', 'dir', 'stat',
     'type', 'get-content', 'gc', 'select-string', 'sls', 'get-childitem', 'gci', 'get-item', 'gi',
     'test-path', 'get-filehash'))
-# git subcommands that only read or stage a path given after the subcommand:
-LOCK_PATH_GIT = frozenset(('add', 'blame', 'diff', 'log', 'ls-files', 'show', 'status'))
+# git subcommands that only read, stage or commit a path given after the subcommand (a commit's
+# message is text; its options that open an editor or ask, LOCK_GIT_SUB_DENIED, are refused):
+LOCK_PATH_GIT = frozenset(('add', 'blame', 'commit', 'diff', 'log', 'ls-files', 'show', 'status'))
 # PowerShell's preference variable that can set -OutVariable on every later command (_output_stays),
 # matched as this prefix so a wildcard (Get-Variable PSDefault*) is caught too; and the ways to
 # reach a variable by a name the line does not spell out (a *-Variable cmdlet given a wildcard, the
@@ -494,6 +502,21 @@ LOCK_MODULE = 'machine_lock'
 # inside a longer name (`tests.lock.test_machine_lock`):
 LOCK_MODULE_WORD_RE = re.compile(r'(?:\w+\.)*%s' % LOCK_MODULE, re.I)
 LOCK_MODULE_CODE_RE = re.compile(r'(?<!\w)%s(?!\w)' % LOCK_MODULE, re.I)
+# the module's name in the one word of a command with no program (lock_verb's NO_PROGRAM) that is
+# a pattern only compared (_pattern_only): next to a `|` there it is a regex alternative
+# (`-match 'MACHINE_LOCK|KIT'`). Anywhere else a `|` beside it proves nothing, since PowerShell can
+# split the word before python sees it (`'tools.machine_lock|x' -split '\|'`, `.Split('|')`), so
+# every other word keeps LOCK_MODULE_CODE_RE.
+LOCK_MODULE_TEXT_RE = re.compile(r'(?<![\w|])%s(?![\w|])' % LOCK_MODULE, re.I)
+# PowerShell's operators that only compare their right side as a pattern (-split, -replace hand
+# pieces of it on, and are not here), and the filter whose { } block may hold that comparison:
+PS_MATCH_OPS = frozenset('-%s%s' % (c, op) for c in ('', 'i', 'c') for op in ('match', 'notmatch', 'like', 'notlike'))
+PS_FILTERS = frozenset(('where-object', 'where', '?'))
+# what else a line holding such a pattern may run, each named bare (_reader): the readers and
+# printers, the filters, and cmdlets that only shape what they are piped; git only as
+# _lock_path_only allows it (LOCK_PATH_GIT with plain options, _git_plain):
+PS_TEXT_LINE = LOCK_PATH_READERS | LOCK_PATH_PRINTERS | PS_FILTERS | frozenset((
+    'format-table', 'ft', 'format-list', 'fl', 'select-object', 'select', 'sort-object', 'sort'))
 
 
 def _lock_names(t):
@@ -515,7 +538,7 @@ def _kit_tool(path, name, cmd, kit, kit_checkout=None, program=False):
     else is not it."""
     if program and '/' not in path and '\\' not in path:
         return False
-    full = sh.resolve_path(path, cmd.cwd, cmd.shell)
+    full = sh.resolve_path(path, cmd.cwd, cmd.shell, cmd.home)
     if not full:
         return False
     tools, base = os.path.split(full)
@@ -535,6 +558,40 @@ def kit_checkout(ctx, root, top):
     if not (p.top and p.common and s.common) or paths.norm(p.top) != paths.norm(root):
         return False
     return paths.norm(p.common) == paths.norm(s.common) and oncommit.is_kit(root)
+
+
+# An export of the kit (kitlib.pluginsource): <export root>/<12 hex digits>, holding the marker
+# file the export writes and the kit's version file.
+EXPORT_NAME_RE = re.compile(r'[0-9a-f]{12}')
+EXPORT_FILES = ('.pm-kit-export', 'kit.json')
+
+
+def kit_export(ctx, root, action, cwd):
+    """True when the folder `root` is an export of the kit the machine runs from: a folder named
+    by 12 hex digits (EXPORT_NAME_RE) right under the machine's plugin export root (the machine
+    config's plugin.export_dir, else %LOCALAPPDATA%\\pm-kit\\plugin: kitlib.pluginsource.settings),
+    holding EXPORT_FILES, and neither inside nor holding a folder the session may write (its jail
+    roots that are not read-only: rules.jail_roots), so a session cannot make one of its own. A
+    machine config the guard cannot read, an export root it cannot name, a pin folder or any
+    other place is not one."""
+    from kitlib import pluginsource
+    user = ctx.user()
+    if not isinstance(user, dict) or user.get('error'):
+        return False
+    try:
+        export = pluginsource.settings(user.get(pluginsource.CONFIG_KEY), ctx.environ).export_dir
+    except (pluginsource.RefreshError, OSError, ValueError, TypeError):
+        return False
+    parent, name = os.path.split(paths.norm(root, fold=False))
+    if not EXPORT_NAME_RE.fullmatch(name) or paths.norm(parent) != paths.norm(export):
+        return False
+    if not all(os.path.isfile(os.path.join(root, f)) for f in EXPORT_FILES):
+        return False
+    here = jail.real(root)
+    for r in rules.jail_roots(action, ctx, cwd):
+        if r.mode != jail.READ_ONLY and (jail.inside(here, r.real) or jail.inside(r.real, here)):
+            return False
+    return True
 
 
 def _reader(inv, names=LOCK_PATH_READERS):
@@ -568,6 +625,8 @@ def _ps_caught(cmd):
     inv = cm.invocation(cmd)
     if inv is None or inv.index > 0 or cmd.next_op in ('(', '{') or cmd.prev_op in (')', '}'):
         return True
+    if any(w.dyn and '(' in w.text for w in cmd.words):
+        return True                             # a ( ) argument (shell._Scan.ps_paren_arg), -Param:(...) too, is caught as the group was
     for t in cmd.argv:
         p = t.split(':', 1)[0].lower()
         if '{' in t or '}' in t or p in PS_VARIABLE_ALIASES or len(p) >= 3 and any(
@@ -635,6 +694,7 @@ PS_LAST_NAMES = ('error', 'myinvocation', 'psitem', 'input', 'matches')
 # git's options that run a program or write a file (an external diff, a textconv filter, --output),
 # matched as rules.hub_opt_denied does (any prefix: --ext, --out), and the short -o:
 LOCK_GIT_DENIED = rules.HUB_GIT_DENIED + ('--output',)
+LOCK_GIT_SUB_DENIED = {'commit': rules.HUB_GIT_SUB_DENIED['commit']}
 
 
 def _last_words(commands, items=False):
@@ -667,7 +727,8 @@ def _ps_names_last(cmd):
 def _git_plain(args, g, commands):
     """True when git's words `args` (GitCall `g`) only read: global options only -C <path>,
     --no-pager and -P (no -c, --config-env, --exec-path, --git-dir: rules.hub_git_family's
-    rule), none of LOCK_GIT_DENIED or -o before a `--`, no alias or place git cannot be told
+    rule), none of LOCK_GIT_DENIED, -o or the subcommand's LOCK_GIT_SUB_DENIED (git commit's
+    editor and prompts) before a `--`, no alias or place git cannot be told
     (g.blind), and the line sets no environment variable (commands.line_env_names: GIT_PAGER,
     GIT_EXTERNAL_DIFF, PAGER, PATH; and what git_env or home_env marks): a pager, an external
     diff or a textconv filter git starts may run the path it is given."""
@@ -685,7 +746,9 @@ def _git_plain(args, g, commands):
         else:
             return False
     head = g.argv[:g.argv.index('--')] if '--' in g.argv else g.argv
-    return not any(t == '-o' or rules.hub_opt_denied(t, LOCK_GIT_DENIED) for t in head)
+    longs, shorts = LOCK_GIT_SUB_DENIED.get(g.sub, ((), ''))
+    return not any(t == '-o' or rules.hub_opt_denied(t, LOCK_GIT_DENIED)
+                   or t.startswith('-') and rules.hub_opt_denied(t, longs, shorts) for t in head)
 
 
 def _lock_path_only(inv, commands, kit=None, kit_checkout=None):
@@ -1013,6 +1076,35 @@ def _hidden_launch(inv, commands):
 
 # The verb named for a command that runs no program the guard can name (an assignment alone, a
 # PowerShell expression) whose words name machine_lock.py: lock_verb refuses it in every mode.
+def _pattern_only(cmd, k, commands):
+    """True when word `k` of the PowerShell command `cmd`, which has no program, is a pattern the
+    line only compares and nothing on it can run: `cmd` is the whole of a bare Where-Object's
+    (PS_FILTERS) { } block, three words `<left> <op> <pattern>` with `op` one of PS_MATCH_OPS and
+    word `k` the literal pattern, and every other command of the line, nested ones too, is a
+    program of PS_TEXT_LINE named bare (_reader) or git as _lock_path_only allows it. So
+    `Get-ChildItem env: | Where-Object { $_.Name -match 'MACHINE_LOCK|KIT' } | Format-Table` is
+    read as text, and `$a = 'tools.machine_lock|stop' -split '\\|'; python -m @a` is not."""
+    i = next((j for j, c in enumerate(commands) if c is cmd), None)
+    if cmd.shell != sh.PS or i is None or i == 0 or k != 2 or len(cmd.words) != 3:
+        return False
+    if cmd.prev_op != '{' or cmd.next_op != '}' or cmd.words[1].text.lower() not in PS_MATCH_OPS or cmd.words[2].dyn:
+        return False
+    owner = commands[i - 1]
+    inv = cm.invocation(owner)
+    if owner.next_op != '{' or not _reader(inv, PS_FILTERS) or len(owner.words) != 1:
+        return False
+    for c in commands:
+        if c is cmd:
+            continue
+        inv = cm.invocation(c)
+        if _reader(inv, PS_TEXT_LINE):
+            continue
+        g = cm.git_call(inv) if _reader(inv, ('git',)) else None
+        if g is None or g.sub_dyn or g.sub not in LOCK_PATH_GIT or not _git_plain(inv.argv, g, commands):
+            return False
+    return True
+
+
 NO_PROGRAM = '(in a command that names no program)'
 # The verb named for a lock path given to a program that neither runs it (_run_words, _launched)
 # nor only reads or prints it (_lock_path_only), so may copy, store or pass it on: lock_verb
@@ -1027,7 +1119,10 @@ def lock_verb(parsed, m, kit=None, kit_checkout=None):
     A command with no invocation (an assignment alone, `$c=gc tools/machine_lock.py`, which
     PowerShell reads as one word with no program the guard can name; `$a = 'tools/...','stop'`
     for splatting) whose words or redirects name machine_lock.py is refused as NO_PROGRAM, in any
-    mode: fail-closed, since its value may reach a program later on the line. Fail-closed too, a
+    mode: fail-closed, since its value may reach a program later on the line. Its words and
+    redirects' text name it too with the module's name standing alone (_lock_code), except next
+    to a `|` in the one pattern _pattern_only proves is only compared on a line that runs nothing
+    (LOCK_MODULE_TEXT_RE: `Where-Object { $_.Name -match 'MACHINE_LOCK|KIT' }`). Fail-closed too, a
     command whose words, heredoc body, here-string or redirect name it (_lock_seq) passes only
     when its program only reads or prints it with its output staying (_lock_path_only), or runs
     it (_run_words, _launched: then judged by its verb); any other program - cp, Copy-Item, ln,
@@ -1039,7 +1134,8 @@ def lock_verb(parsed, m, kit=None, kit_checkout=None):
     for cmd in parsed.commands:
         inv = cm.invocation(cmd)
         if inv is None:
-            if any(_lock_code(t) for t in [w.text for w in cmd.words] + _fed(cmd)):
+            if any(_lock_names(w.text) or LOCK_MODULE_TEXT_RE.search(w.text) if _pattern_only(cmd, k, parsed.commands)
+                   else _lock_code(w.text) for k, w in enumerate(cmd.words)) or any(_lock_code(t) for t in _fed(cmd)):
                 return NO_PROGRAM, allowed
             continue
         words = _lock_words(inv, parsed.commands, kit, kit_checkout)
@@ -1156,7 +1252,7 @@ def writes_file(action, ctx, role, cwd, top):
     """True for a file-tool edit of a file the role's `writes` names (role_may_write)."""
     if action.kind != 'edit':
         return False
-    target = edit_path(action, cwd)
+    target = edit_path(action, cwd, getattr(ctx, 'home', None))
     return bool(target) and inside(target, top) and role_may_write(ctx, role, target, top)
 
 

@@ -151,7 +151,7 @@ def set_path(tools, path=None, drop=()):
 def run_child(name, shard_spec, audit, root, tools, out, path=None):
     """Run one unit in this process; return 0 if every test passed and the audit found nothing,
     else 1. `tools` is the checkout's tools folder, already first on sys.path (set_path)."""
-    # No auto gc or auto maintenance in any git this unit starts (TOOLS-GIT-SPAWN-DIET): every
+    # No auto gc or auto maintenance in any git this unit starts: every
     # fixture commit would otherwise start a second git process.
     os.environ.update(fixture_env())
     module = name.split('.')[0]

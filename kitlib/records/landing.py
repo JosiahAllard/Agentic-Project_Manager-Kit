@@ -313,7 +313,7 @@ class LandingLock(object):
 
         Fail closed: a file that cannot be read, is empty, or is not a JSON object is never
         broken, holder_gone or not - a taker between its exclusive create and its write leaves
-        exactly that (KIT-LANDLOCK-BREAK-LIVE)."""
+        exactly that."""
         judged = self._text()
         if judged is None:
             if not os.path.exists(self.path):

@@ -233,7 +233,7 @@ class BreakTest(LockCase):
         self.assertTrue(self.lock().break_lock(holder_gone=True)[0])
 
     def test_an_unparseable_lock_is_never_broken(self):
-        # KIT-LANDLOCK-BREAK-LIVE: it was a token holder, broken on holder_gone=True; a taker
+        # It was a token holder, broken on holder_gone=True; a taker
         # mid-write leaves such a file, so it now fails closed (tests/records/test_landing_break_live.py)
         self.write_raw('{')
         self.assertFalse(self.lock().break_lock()[0])

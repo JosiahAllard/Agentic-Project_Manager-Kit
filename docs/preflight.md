@@ -45,6 +45,19 @@ The line reads `unknown (<why>)` in any of these cases:
 
 A queue or holds file the lock could not read is shown as `queue unreadable: <error>` or `holds unreadable: <error>`, never as none.
 
+## Agent start block
+
+`kitlib/agentstart` is the cheap part of preflight, read by a host's SubagentStart hook so that a dispatched agent starts knowing where it stands (docs/content.md "Kit header" says which agents get it). Its title line names the role, the time it was read, that nothing was fetched and how long it took, and points to `preflight.py` for the full report. Then, in this order:
+
+- **checkout**: `MAIN checkout <top>` or `worktree <top>`, with the branch and head. At a subagent's start the folder is its parent's, so it is usually the main checkout.
+- **next**: in the main checkout only, `<kit>/tools/new_worktree.py -C "<top>" <area>/<slug>`, the command that makes the agent's worktree.
+- **base**: the base against `<remote>/<base>`, `(equal)` or `(DIFFERENT)` only when both refs were read, else `(not compared: <ref> not read)`; then how old the remote side is, from the mtime of `FETCH_HEAD` in the common git folder (`<remote> as of the last fetch N min ago`, or `never fetched here`). The base is picked as preflight picks it (`settings.base_names`, `settings.pick_base`).
+- **vs base**: in a worktree off the base only, behind and ahead, measured as preflight measures them (`settings.measure_rev`).
+- **dirty**: in a worktree only, the count from `git --no-optional-locks status`, so a status cut off at the budget's timeout leaves no `index.lock` behind.
+- **stray lines**: from `kitlib.git.stray.check`, at most four.
+
+A folder in no git work tree, or no absolute folder in the hook payload, is one `checkout  NOT CHECKED` line. It never fetches and runs no git command that reaches a remote. It never raises: a failure is a `could not check` line, and each host's call site turns an exception that escapes anyway into one such line after the header (`_agent_start` in hosts/claude/adapter/host.py, `text` in hosts/codex/adapter/start.py). The hook waits at most 1 s (`agentstart.BUDGET`): the reading runs on a daemon thread, each git call it makes itself is given what is left of the budget as its timeout (`repo.classify` and `stray.check` keep their own), and what is not done in time is one `NOT CHECKED - the rest: over the 1.0 s budget` line.
+
 ## board.py
 
 `python tools/board.py [-C DIR] [--base REV] [--write-state]` prints the coordinator's whole board. `kitlib.board.report.lines` produces, in order:

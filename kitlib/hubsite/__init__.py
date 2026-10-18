@@ -5,9 +5,11 @@
   settings the site's machine settings, the machine config's `hub` key
   auth     who a request on the local listener is: the owner token, the pairing code, the session cookie
   access   the Cloudflare Access token check for the tunnel listener: verify, KeyCache
+  approvals the approvals a request waits on: asked, decided, verified
   api      the site's JSON API: routes, roles, and the writes behind them
   derived  views read from files other tools write (notices, repos, usage, agents), never stored
   backlog  the backlog views the site shows
+  recordwrite the owner's add, edit and delete from the record page, through the backlog store
   todosteps an owner to-do's steps (edit, open, run) as PowerShell, and the to-do refusals
   gitsync  the store's commits, and its pull and push against the PM data remote
   httpd    one loopback HTTP listener in front of the api: the gate, the write rules, the waits

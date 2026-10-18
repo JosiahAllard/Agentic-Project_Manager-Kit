@@ -10,6 +10,7 @@ from unittest import mock
 
 from kitlib.hubsite import api, auth, httpd
 from kitlib.hubsite.api import AGENT, ANY, BASE, OWNER
+from tests.gitfixture import TempRepo
 from tests.hubsite import httpfix
 from tests.hubsite import test_api_roles as roles
 from tests.hubsite.httpfix import TIMEOUT, get, post, send
@@ -484,9 +485,14 @@ class WriteCase(httpfix.ListenerCase):
 # ------------------------------------------------------------------ the api behind it
 class ApiCase(httpfix.ListenerCase):
     def test_every_route_answers_its_role_and_never_a_500(self):
-        lis = self.listener()
+        git = TempRepo()                # the checkout POST /approvals reads its bases from
+        self.addCleanup(git.cleanup)
+        lis = self.listener(api.Api(self.store, views=httpfix.Views(), clock=httpfix.CLOCK,
+                                    approval_key=lambda: roles.KEY, checkout=lambda r: git.root))
         for route in api.ROUTES:
             seed, body, query = roles.ROWS[roles.key(route)]
+            if roles.key(route) == ('POST', '/approvals'):
+                body = dict(body, head=git.initial)
             for role, token in ((OWNER, self.owner), (AGENT, self.agent)):
                 with self.subTest(route=route.method + ' ' + route.pattern, role=role):
                     doc_id = seed(self.store) if seed else 'X-1'
@@ -1209,6 +1215,186 @@ class StaticCase(httpfix.ListenerCase):
         old, httpd.MAX_STATIC = httpd.MAX_STATIC, 99
         self.addCleanup(setattr, httpd, 'MAX_STATIC', old)
         self.assertEqual(get(lis.port, '/big.txt').status, 404)
+
+
+# ------------------------------------------------------------------ the strong owner
+class StrongRecorder(Recorder):
+    """A Recorder that also takes the keywords a strong request adds."""
+
+    def __init__(self):
+        Recorder.__init__(self)
+        self.kw = []                # the keywords of each call beyond raise_unexpected
+
+    def call(self, method, path, role, body=None, query=None, via='', raise_unexpected=False,
+             **kw):
+        self.kw.append(kw)
+        return Recorder.call(self, method, path, role, body, query, via, raise_unexpected)
+
+
+class StrongCase(httpfix.ListenerCase):
+    """Request.strong: only a gate makes a request strong, and only
+    for the owner. The local gate never does: neither the owner's token nor a browser paired
+    from it is the Access login."""
+
+    def strong_gate(self, role, strong=True, seen=None):
+        def gate(request):
+            if seen is not None:
+                seen.append(request.strong)
+            request.strong = strong
+            return role
+        return gate
+
+    def test_a_request_starts_not_strong(self):
+        seen = []
+        lis = self.listener(StrongRecorder(), gate=self.strong_gate(OWNER, seen=seen))
+        get(lis.port, HEALTH)
+        self.assertEqual(seen, [False])
+        self.assertIs(httpd.Request('GET', '/', None).strong, False)
+
+    def test_the_strong_owner_reaches_the_api_as_strong(self):
+        rec = StrongRecorder()
+        lis = self.listener(rec, gate=self.strong_gate(OWNER))
+        get(lis.port, HEALTH)
+        post(lis.port, TODOS, {'title': 't'})
+        self.assertEqual(rec.kw, [{'strong': True}, {'strong': True}])
+        self.assertEqual([c['role'] for c in rec.calls], [OWNER, OWNER])
+
+    def test_a_strong_mark_is_dropped_for_any_caller_but_the_owner(self):
+        for role in (AGENT, None, ANY, 'admin', True):
+            with self.subTest(role=repr(role)):
+                rec = StrongRecorder()
+                lis = self.listener(rec, gate=self.strong_gate(role))
+                get(lis.port, HEALTH)
+                self.assertEqual(rec.kw, [{}], 'the api was told a caller who is no owner is '
+                                 'strong')
+                lis.close_door()
+
+    def test_only_true_is_strong(self):
+        for strong in (1, 'yes', 'true', [True], object()):
+            with self.subTest(strong=repr(strong)):
+                rec = StrongRecorder()
+                lis = self.listener(rec, gate=self.strong_gate(OWNER, strong))
+                get(lis.port, HEALTH)
+                self.assertEqual(rec.kw, [{}])
+                lis.close_door()
+
+    def test_the_local_gate_never_makes_a_request_strong(self):
+        rec = StrongRecorder()
+        lis = self.listener(rec)
+        path = post(lis.port, httpd.PAIR_ROUTE, None, self.owner).json()['path']
+        name, _, value = get(lis.port, path).header('Set-Cookie')[0].split(';')[0].partition('=')
+        cookie = ('Cookie', '%s=%s' % (name, value))
+        get(lis.port, HEALTH, self.owner)
+        get(lis.port, HEALTH, self.agent)
+        get(lis.port, HEALTH, headers=[cookie])
+        get(lis.port, HEALTH, self.owner, headers=[cookie])
+        post(lis.port, TODOS, {'title': 't'}, self.owner)
+        post(lis.port, TODOS, {'title': 't'}, headers=[cookie])
+        self.assertEqual([c['role'] for c in rec.calls], [OWNER, AGENT, OWNER, OWNER, OWNER,
+                                                          OWNER])
+        self.assertEqual(rec.kw, [{}] * 6)
+
+    def test_an_approver_route_is_open_to_the_strong_owner_alone(self):
+        def handler(a, req):
+            return {'ok': True, 'decided': True}
+        routes = api.ROUTES + (api.Route('POST', BASE + '/decide-test', api.APPROVER, handler),)
+        with mock.patch.object(api, 'ROUTES', routes):
+            strong = self.listener(gate=self.strong_gate(OWNER))
+            r = post(strong.port, BASE + '/decide-test', {})
+            self.assertEqual((r.status, r.json().get('decided')), (200, True))
+            for role in (AGENT, None):
+                weak = self.listener(gate=self.strong_gate(role))
+                r = post(weak.port, BASE + '/decide-test', {})
+                self.assertEqual((r.status, r.code()), (403, 'forbidden'))
+            local = self.listener()
+            path = post(local.port, httpd.PAIR_ROUTE, None, self.owner).json()['path']
+            cookie = get(local.port, path).header('Set-Cookie')[0].split(';')[0]
+            for token, headers in ((self.owner, []), (self.agent, []), (None, [('Cookie', cookie)]),
+                                   (self.owner, [('Cookie', cookie)])):
+                with self.subTest(token=token and token[:4], cookie=bool(headers)):
+                    r = post(local.port, BASE + '/decide-test', {}, token, headers=headers)
+                    self.assertEqual((r.status, r.code()), (403, 'forbidden'))
+                    self.assertIn('Access', r.json()['error']['message'])
+
+
+class StrongPairCase(httpfix.ListenerCase):
+    """Strong pairing: the owner logged in through Access asks the tunnel
+    listener for a code, and the PC's browser that redeems it on the local listener is the
+    strong owner there."""
+
+    def setUp(self):
+        httpfix.ListenerCase.setUp(self)
+        auth.ensure_approval_key(self.tokens)
+
+    def tunnel_like(self, local, role=OWNER, strong=True):
+        """A listener whose gate marks the request as the tunnel's does, with the strong pairing
+        route over the local listener's Credentials."""
+        def gate(request):
+            request.strong = strong
+            return role
+        return self.listener(gate=gate, routes=httpd.strong_pair_route(local.creds))
+
+    def cookie_of(self, lis, path):
+        r = get(lis.port, path)
+        self.assertEqual(r.status, 303, r.body)
+        return ('Cookie', r.header('Set-Cookie')[0].split(';')[0])
+
+    def test_the_strong_owner_gets_a_code_that_pairs_a_strong_browser(self):
+        rec = StrongRecorder()
+        local = self.listener(rec)
+        r = post(self.tunnel_like(local).port, httpd.STRONG_PAIR_ROUTE)
+        self.assertEqual(r.status, 200, r.body)
+        said = r.json()
+        self.assertEqual(sorted(said), ['ok', 'path', 'ttl', 'url'])
+        self.assertEqual((said['ok'], said['ttl']), (True, auth.PAIR_TTL_S))
+        self.assertTrue(said['path'].startswith(httpd.PAIR_PATH + '?code='))
+        self.assertEqual(said['url'], 'http://127.0.0.1:%d%s' % (local.port, said['path']))
+        cookie = self.cookie_of(local, said['path'])
+        get(local.port, HEALTH, headers=[cookie])
+        post(local.port, TODOS, {'title': 't'}, headers=[cookie])
+        get(local.port, HEALTH, self.owner, headers=[cookie])    # a Bearer token decides alone
+        self.assertEqual(rec.kw, [{'strong': True}, {'strong': True}, {}])
+        self.assertEqual([c['role'] for c in rec.calls], [OWNER] * 3)
+        self.assertEqual(get(local.port, said['path']).status, 403)     # used once
+
+    def test_a_browser_paired_by_the_owner_token_stays_weak(self):
+        rec = StrongRecorder()
+        local = self.listener(rec)
+        path = post(local.port, httpd.PAIR_ROUTE, None, self.owner).json()['path']
+        get(local.port, HEALTH, headers=[self.cookie_of(local, path)])
+        self.assertEqual(rec.kw, [{}])
+
+    def test_anyone_but_the_strong_owner_is_refused_and_no_code_is_made(self):
+        local = self.listener()
+        for role, strong in ((OWNER, False), (AGENT, True), (None, True)):
+            with self.subTest(role=role, strong=strong):
+                r = post(self.tunnel_like(local, role, strong).port, httpd.STRONG_PAIR_ROUTE)
+                self.assertEqual((r.status, r.code(), r.json()['error']['field']),
+                                 (403, 'forbidden', 'role'))
+                self.assertEqual(len(local.creds._codes), 0)
+        # the local listener never has the route: the owner's token and its browser get no code
+        r = post(local.port, httpd.STRONG_PAIR_ROUTE, None, self.owner)
+        self.assertNotEqual(r.status, 200)
+        self.assertEqual(len(local.creds._codes), 0)
+
+    def test_an_approver_route_answers_a_strong_browser_on_the_local_listener(self):
+        def handler(a, req):
+            return {'ok': True, 'decided': True}
+        routes = api.ROUTES + (api.Route('POST', BASE + '/decide-test', api.APPROVER, handler),)
+        with mock.patch.object(api, 'ROUTES', routes):
+            local = self.listener()
+            path = post(self.tunnel_like(local).port, httpd.STRONG_PAIR_ROUTE).json()['path']
+            cookie = self.cookie_of(local, path)
+            r = post(local.port, BASE + '/decide-test', {}, headers=[cookie])
+            self.assertEqual((r.status, r.json().get('decided')), (200, True))
+            r = post(local.port, BASE + '/decide-test', {}, self.owner, headers=[cookie])
+            self.assertEqual((r.status, r.code()), (403, 'forbidden'))
+
+    def test_a_strong_code_with_no_approval_key_pairs_nothing(self):
+        local = self.listener()
+        path = post(self.tunnel_like(local).port, httpd.STRONG_PAIR_ROUTE).json()['path']
+        os.remove(os.path.join(self.tokens, auth.APPROVAL_FILE))
+        self.assertEqual(get(local.port, path).status, 403)
 
 
 if __name__ == '__main__':

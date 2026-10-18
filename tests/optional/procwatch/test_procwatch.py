@@ -14,6 +14,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CODE = os.path.join(HERE, '..', '..', '..', 'optional', 'procwatch')
 sys.path.insert(0, CODE)
 sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.join(CODE, '..', '..'))      # the kit root, for kitlib
 import procwatch as PW  # noqa: E402
 
 MIN, HOUR = 60, 3600
@@ -21,6 +22,29 @@ GIT = r"C:\Program Files\Git\usr\bin"
 NOW = 10**17
 LIVE_BASH = (50, 1)      # the tool shell's MSYS ids: pid 50, started from Windows (MSYS parent 1)
 GONE = 99                # an MSYS parent pid that no longer exists
+
+
+_SAVED_HOME = {}
+_HOME_DIR = None
+
+
+def setUpModule():
+    # procwatch reads the machine config through kitlib (the kit temp folder); under the kit's home
+    # fence that needs a temp home, here and in the procwatch processes the tests start.
+    global _HOME_DIR
+    _HOME_DIR = tempfile.TemporaryDirectory()
+    for k in ('USERPROFILE', 'HOME'):
+        _SAVED_HOME[k] = os.environ.get(k)
+        os.environ[k] = _HOME_DIR.name
+
+
+def tearDownModule():
+    for k, v in _SAVED_HOME.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+    _HOME_DIR.cleanup()
 
 
 def proc(pid, ppid, name, cmd="", image=None, age=HOUR, cpu=0.0, ws=10 * 2**20, msys=None):
@@ -63,6 +87,53 @@ class Classify(unittest.TestCase):
             else:
                 os.environ["PROCWATCH_ORIGINS"] = old
         self.assertEqual(ps[701]["origin"], "obs64.exe")
+
+    def _with_agent_temp(self, reader):
+        """Run `reader` as the launcher's AGENT_TEMP reader (kitlib.pmstart.agent_temp_env); the
+        kit's own temp folder (work_temp) is set to a different folder so a wrong source shows."""
+        import kitlib.config.user as KU
+        import kitlib.pmstart as PS
+        old = PS.agent_temp_env, KU.work_temp
+        PS.agent_temp_env = reader
+        KU.work_temp = lambda *a, **k: r"Q:\kit-own-temp"
+
+        def clear():
+            for name in ("_agent_temp_claude", "_kit_temp_claude"):     # the resolver is cached
+                if hasattr(PW, name):
+                    getattr(PW, name).cache_clear()
+
+        def restore():
+            PS.agent_temp_env, KU.work_temp = old
+            clear()
+        self.addCleanup(restore)
+        clear()
+
+    def test_agent_script_in_the_agent_temp_folder_is_an_agent_script(self):
+        # the agents' TEMP is AGENT_TEMP (kitlib.pmstart.agent_temp_env), not the kit's own temp folder
+        calls = []
+        self._with_agent_temp(lambda: calls.append(1) or r"Q:\odd-agent-temp")
+        ps = by_pid(world(
+            proc(900, 77, "python.exe", r"python.exe Q:\odd-agent-temp\claude\x\job.py", age=2 * HOUR),
+            # the kit's own temp folder is not where agents run from
+            proc(901, 77, "python.exe", r"python.exe Q:\kit-own-temp\claude\x\job.py", age=2 * HOUR),
+            *[proc(910 + i, 77, "python.exe", "python.exe job.py") for i in range(5)]))
+        self.assertEqual(ps[900]["rule"], "agent-script")
+        self.assertNotEqual(ps[901]["rule"], "agent-script")
+        self.assertEqual(len(calls), 1)         # resolved once, not once per process
+
+    def test_agent_temp_given_with_forward_slashes_matches_a_backslashed_command_line(self):
+        self._with_agent_temp(lambda: "D:/Foo")
+        ps = by_pid(world(proc(900, 77, "python.exe", r"python.exe D:\Foo\claude\x\job.py", age=2 * HOUR)))
+        self.assertEqual(ps[900]["rule"], "agent-script")
+
+    def test_unset_or_unreadable_agent_temp_keeps_the_rule_off(self):
+        def unreadable():
+            raise OSError("registry")
+        for reader in (lambda: None, lambda: "", unreadable):
+            with self.subTest(reader):
+                self._with_agent_temp(reader)
+                ps = by_pid(world(proc(900, 77, "python.exe", r"python.exe Q:\x\claude\job.py", age=2 * HOUR)))
+                self.assertNotEqual(ps[900]["rule"], "agent-script")
 
     def test_orphaned_tail_follow_and_grep_are_kill_ok_suspects(self):
         ps = by_pid(world(gitp(900, 77, "tail.exe", r"tail.exe -n +1 -f C:\t\x.output", 2 * HOUR, (60, GONE)),
@@ -239,6 +310,52 @@ class LogPath(unittest.TestCase):
             os.rmdir(link)                              # removes the junction, not its target
 
 
+class FakeWinproc:
+    """A stand-in for winproc in collect(): pid 10 is listed by the snapshot but has exited by the
+    time collect reads it (a short-lived process that took a dead parent's pid); pid 20 is that
+    dead parent's child."""
+    CT = NOW - int(HOUR * 1e7)
+
+    def snapshot(self):
+        return [(10, 4, "git.exe"), (20, 10, "python.exe")]
+
+    def cpu_sample(self, pids):
+        return {}
+
+    def sleep(self, s):
+        pass
+
+    def filetime_now(self):
+        return NOW
+
+    def msys_table(self):
+        return None
+
+    def details(self, pid):
+        d = {"ctime": None, "cpu": None, "image": None, "cmd": None, "handles": None, "ws": None,
+             "priv": None, "gone": False}
+        if pid == 10:
+            d["gone"] = True
+        else:
+            d.update(ctime=self.CT, cpu=0.0, image=r"C:\x\python.exe", cmd="python.exe x.py")
+        return d
+
+
+class CollectRace(unittest.TestCase):
+    def test_a_process_gone_before_it_is_read_is_not_listed_so_its_child_is_an_orphan(self):
+        saved = sys.modules.get("winproc")
+        sys.modules["winproc"] = FakeWinproc()
+        try:
+            procs = PW.classify(PW.collect(sample_s=0), 0)
+        finally:
+            if saved is None:
+                sys.modules.pop("winproc", None)
+            else:
+                sys.modules["winproc"] = saved
+        self.assertEqual([p["pid"] for p in procs], [20])
+        self.assertFalse(procs[0]["parent_alive"])
+
+
 def _terminate(W, pid):
     h = W.open_process(pid, W.PROCESS_TERMINATE)
     if h:
@@ -269,14 +386,22 @@ class Live(unittest.TestCase):
         spawner = (f"import subprocess,sys; g=subprocess.Popen([sys.executable,'-c',"
                    f"'import time; time.sleep(120)  # {tag}'], stdin=subprocess.DEVNULL, "
                    f"stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); open(sys.argv[1],'w').write(str(g.pid))")
-        subprocess.run([sys.executable, "-c", spawner, pidfile], check=True, timeout=30)   # parent exits
+        # The parent exits, but this Popen keeps its process handle open until the test ends, so
+        # Windows cannot give its pid to another process. With the handle closed (subprocess.run),
+        # a busy machine could reuse the pid for a process collect cannot read (it exits before it
+        # is read, or belongs to another user); an unreadable parent counts as alive, and the
+        # orphan was once reported with a live parent.
+        parent = subprocess.Popen([sys.executable, "-c", spawner, pidfile])
+        self.assertEqual(parent.wait(30), 0)
         with open(pidfile) as f:
             orphan = int(f.read())
         os.remove(pidfile)
         try:
             procs = PW.collect(sample_s=0.5)
+            self.assertNotIn(parent.pid, {p["pid"] for p in procs})     # exited, and its pid still held
             mine = [p for p in procs if p["pid"] == orphan]
             self.assertEqual(len(mine), 1)
+            self.assertEqual(mine[0]["ppid"], parent.pid)
             self.assertIn(tag, mine[0]["cmd"])
             rule = ("selftest", "self-test orphan", lambda p: tag in (p.get("cmd") or ""),
                     lambda p, ctx: "self-test orphan" if not p["parent_alive"] else None, True)
@@ -294,6 +419,7 @@ class Live(unittest.TestCase):
             self.assertEqual(done, [(orphan, "python.exe", "selftest", "killed")])
         finally:
             _terminate(W, orphan)
+            del parent                  # closes the held handle
 
     def test_a_live_git_bash_program_is_not_called_an_orphan(self):
         import winproc as W

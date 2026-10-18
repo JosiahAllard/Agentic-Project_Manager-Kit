@@ -96,7 +96,7 @@ def _left(ctx, branch):
     """After a delete: `(tip, None)` when the local branch is still there, `('', None)` when it is
     gone, `(None, why kept)` when git cannot tell.
 
-    GOTCHA: KIT-GIT-EXIT1-ANSWERS-2 - a git ended from outside exits 1 having printed nothing
+    GOTCHA: a git ended from outside exits 1 having printed nothing
     (refs.KILLED_SHAPE), and a resolve without known=True read that as "gone": DELETED was reported
     for a branch nobody had seen go. A branch that cannot be read is reported kept, with why."""
     now, why = refs.resolve('refs/heads/%s' % branch, ctx.main, known=True)

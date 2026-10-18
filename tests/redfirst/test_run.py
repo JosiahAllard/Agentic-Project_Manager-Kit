@@ -260,7 +260,7 @@ class Arguments(unittest.TestCase):
 
 
 class AKilledGitIsNoAnswer(Case):
-    """KIT-GIT-EXIT1-ANSWERS-2: `rev-parse --verify --quiet` said "no such commit" as exit 1 with
+    """`rev-parse --verify --quiet` said "no such commit" as exit 1 with
     no output, which a git ended from outside also leaves. Both ways git is started here are
     stubbed (cmd._run, and cmd.subprocess_run, which rev() used), so the old code meets the kill
     too and fails on what it says, not because real git answered."""

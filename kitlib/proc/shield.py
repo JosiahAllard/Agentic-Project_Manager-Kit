@@ -207,7 +207,7 @@ class PidHold(object):
 
         It waits until time.monotonic() reaches the target, not for one wait of the time left:
         on Windows an Event.wait can wake a fraction of a millisecond early (0.3997 s of 0.4 s
-        seen once, KIT-SHIELD-WARM-EARLY)."""
+        seen once)."""
         self._first.wait(timeout)
         if self._first_at is None or self.stopped:
             raise OSError('the pid hold %s' % self._why())

@@ -3,10 +3,11 @@ hub site design, section 2 "HTTP API" and section 9).
 
   ROUTES     the table every transport iterates: Route(method, pattern, role, handler). A pattern
              is a full path under BASE; a `{name}` segment takes one path segment. role is OWNER,
-             AGENT or ANY: who may call it.
-  Api(store, views=None, clock=None, session_keys=None, now=None)
+             AGENT, ANY or APPROVER: who may call it ("Roles").
+  Api(store, views=None, clock=None, session_keys=None, now=None, approval_key=None,
+      checkout=None)
              .call(method, path, role, body=None, query=None, via='', raise_unexpected=False,
-                   agent_words=False) -> (status, object)
+                   agent_words=False, strong=False) -> (status, object)
              via names the transport (web, desktop-mcp, cli, tunnel, ...); every write records
              it as the document's `via` (`api` when none is given), an answer in `answer.via`
              too. A delete leaves no document to carry it. raise_unexpected: an exception
@@ -20,6 +21,26 @@ Roles. The caller resolves who is asking and passes OWNER or AGENT; this module 
 A role that is neither is refused before the path is looked at, a route whose role is not one of
 ROLES is refused for everybody, and the check runs before the handler reads the body. So a route
 added without a role answers `forbidden`, never the data.
+APPROVER is a route role and never a caller: such a route answers only OWNER with strong=True,
+the owner the transport saw log in through Cloudflare Access (kitlib.hubsite.tunnel's gate marks
+that request, kitlib.hubsite.httpd passes it on). Every other caller is refused `forbidden`,
+field `role`, with NOT_STRONG: the owner token, a browser session paired from it and an agent are
+never strong. strong is a call argument, never a field of the body or the query, and it opens no
+other route: on OWNER, AGENT and ANY routes the role alone decides. A handler reads it as
+Request.strong. POST approvals/{id}/decide is the APPROVER route ("Approvals").
+
+Approvals (kitlib.hubsite.approvals holds the rules; these routes only carry them). POST approvals
+(AGENT) adds a pending request: the base of each file is read with git from this machine's
+checkout of the request's repo (Api's checkout; no checkout is `invalid`, field repo, and a base
+that is not the file at head is `invalid`, field files), and the unified diff lines the page
+shows are stored in the document as `diff`. POST approvals/{id}/decide (APPROVER) writes the
+owner's decision, signed with Api's approval_key; POST approvals/{id}/consume (AGENT) marks an
+approval consumed by a commit. Both take the `if_version` the caller read and are pinned to it,
+and an ApprovalError is answered as a HubError of its code and field. GET approvals/{id}/verify
+(AGENT, query repo, head, files as JSON {path: blob} and an optional commit) answers
+{ok, valid, why} and never the key or the sig; an unknown id is valid false, approvals.WHY_UNKNOWN.
+GET snapshot carries `strong`: true only on the strong owner's call (Request.strong), so the page
+shows Approve and Deny as usable; the decide route checks the role itself all the same.
 
 Fields. A write route names the body fields it takes; any other field is refused (`invalid`, the
 field named), so a body cannot carry a field another role owns (an agent posting a question
@@ -68,6 +89,12 @@ The two record views differ: what they raise as a HubError is the answer (a 404 
 repository that is not there, a 400 for a name that cannot be one), so their messages are fixed
 phrases with no path, no id and nothing the caller sent; only anything else is `unavailable`.
 Both are read now, never cached, and neither is part of GET snapshot.
+  record_add(repo, id, summary, scopes, effort, ref)               the owner's three writes to
+  record_edit(repo, id, version, changes, unset, body, ruling)     a repository's backlog store
+  record_delete(repo, id, why, ruling)                             (OWNER routes; kitlib.hubsite.
+                                                                   recordwrite)
+They raise HubErrors as the record views do; a `store` one carries the store's text, which only
+the local owner is given. POST records/{repo}/{id}/delete takes `confirm`, which must repeat the id.
 
 Nothing here opens a socket, starts a thread, prints, parses arguments or exits. GET wait blocks
 in Store.wait for at most WAIT_MAX_S; how many may wait at once is the listener's rule.
@@ -111,6 +138,7 @@ store's folder to the owner only.
 """
 import collections
 import datetime
+import json
 import math
 import re
 import time
@@ -124,8 +152,12 @@ from .store import HubError
 BASE = '/api/v1'
 API_VERSION = 'v1'
 OWNER, AGENT, ANY = 'owner', 'agent', 'any'
-ROLES = (OWNER, AGENT, ANY)         # what a route may ask for
+APPROVER = 'approver'               # a route for the strong owner alone ("Roles")
+ROLES = (OWNER, AGENT, ANY, APPROVER)   # what a route may ask for
 CALLERS = (OWNER, AGENT)            # what a caller may be
+# why a route of role APPROVER refused a caller who is not the strong owner
+NOT_STRONG = ('%s %s needs the owner logged in through Cloudflare Access: the owner token, a '
+              'browser paired from it and an agent are not enough')
 STATUS = {'invalid': 400, 'forbidden': 403, 'not_found': 404, 'conflict': 409, 'store': 503,
           'unavailable': 503, 'internal': 500}
 WAIT_MAX_S = 55
@@ -141,7 +173,7 @@ DAYS_MAX = 3650
 AGENT_SAYS = {'store': 'the hub store is not available: the owner sees why'}
 
 Route = collections.namedtuple('Route', 'method pattern role handler')
-Request = collections.namedtuple('Request', 'role params body query via')
+Request = collections.namedtuple('Request', 'role params body query via strong')
 
 _TRUE = ('1', 'true', 'yes', 'on')
 _FALSE = ('', '0', 'false', 'no', 'off')
@@ -353,12 +385,17 @@ class Api(object):
     views (module docstring) or is None; `clock` gives the time stamp of a write as an ISO
     string (default: the store's clock); `session_keys` gives the launcher's session keys as an
     iterable, called afresh on each use (default: launcher_keys); `now` gives monotonic seconds
-    for the routes (default: time.monotonic)."""
+    for the routes (default: time.monotonic). `approval_key()` gives the approval key or None,
+    read on each decide and verify; `checkout(repo_id)` gives the root of this machine's checkout
+    of that repository or None ("Approvals"); both default to None, which no approval passes."""
 
-    def __init__(self, store, views=None, clock=None, session_keys=None, now=None):
+    def __init__(self, store, views=None, clock=None, session_keys=None, now=None,
+                 approval_key=None, checkout=None):
         self.store = store
         self.views = views
         self.clock = clock or store.clock
+        self.approval_key = approval_key or (lambda: None)
+        self.checkout = checkout or (lambda repo: None)
         self._session_keys = session_keys or launcher_keys
         self._seen = {'waited': None, 'pulled': None}
         self._waits = {}            # one key per agent wait that is blocked right now
@@ -371,20 +408,23 @@ class Api(object):
         self._handed = {}           # (kind, id) -> (session key, `now` of the first hand-over)
 
     def call(self, method, path, role, body=None, query=None, via='', raise_unexpected=False,
-             agent_words=False):
+             agent_words=False, strong=False):
         """(status, object) for one request. role is OWNER or AGENT as the caller resolved it;
         body is the decoded JSON body or None; query is {name: value}; via names the transport
         (web, cli, ...) and is recorded on every write. With raise_unexpected an exception that
         is no HubError is raised, not answered: the caller logs it and words its own 500. With
         agent_words=True an error answer says what an agent is told (module docstring), to the
         owner too; only False leaves the owner the error's own text, so a value that is neither
-        is read as True. The role decides what the request may do either way."""
+        is read as True. The role decides what the request may do either way. strong=True says
+        the caller is the owner logged in through Cloudflare Access (module docstring, "Roles");
+        it counts only for OWNER, and any value but True is not strong."""
         # read before the handler copies any data: a write in between then has a later
         # revision, so a client waiting since this one is told of it
         revision = self.store.revision
         full = role == OWNER and agent_words is False       # the error's own text: paths and all
+        strong = strong is True and role == OWNER
         try:
-            status, obj = 200, self._call(method, path, role, body, query, via)
+            status, obj = 200, self._call(method, path, role, body, query, via, strong)
         except HubError as e:
             said = e.message if full else AGENT_SAYS.get(e.code, e.message)
             status, obj = STATUS.get(e.code, 500), error_body(e.code, said, e.field)
@@ -396,7 +436,7 @@ class Api(object):
         obj.setdefault('revision', revision)
         return status, obj
 
-    def _call(self, method, path, role, body, query, via):
+    def _call(self, method, path, role, body, query, via, strong):
         if not isinstance(role, str) or role not in CALLERS:
             raise HubError('forbidden', 'this request carries no owner or agent credential',
                            'role')
@@ -407,13 +447,16 @@ class Api(object):
         if route.role not in ROLES:
             raise HubError('forbidden', 'the route %s %s names no role, so nobody may call it'
                            % (route.method, route.pattern), 'role')
-        if route.role != ANY and route.role != role:
+        if route.role == APPROVER:
+            if not (role == OWNER and strong is True):
+                raise HubError('forbidden', NOT_STRONG % (route.method, route.pattern), 'role')
+        elif route.role != ANY and route.role != role:
             raise HubError('forbidden', '%s %s is for the %s, not the %s'
                            % (route.method, route.pattern, route.role, role), 'role')
         if query is not None and not isinstance(query, dict):
             raise _invalid('the query is an object of names and values', 'query')
         out = route.handler(self, Request(role, params, body, query, via if isinstance(via, str)
-                                          else ''))
+                                          else '', strong))
         if not isinstance(out, dict):
             raise HubError('internal', 'the handler of %s gave no object' % route.pattern)
         return out
@@ -948,6 +991,72 @@ def inbox_read(api, req):
     return api.change('inbox', doc_id, d, changes, req, changes)
 
 
+# approvals: imported here, not at the top, as kitlib.hubsite.approvals imports this module
+def _approval(make, *args):
+    from . import approvals as ap
+    try:
+        return make(*args)
+    except ap.ApprovalError as e:
+        raise HubError(e.code, e.message, e.field)
+
+
+def approvals_add(api, req):
+    from . import approvals as ap
+    b = _fields(req, ('repo', 'title', 'head', 'files', 'reason'))
+    doc = _approval(ap.new_doc, b.get('repo'), b.get('title'), b.get('head'), b.get('files'),
+                    _when(api.clock(), ''), b.get('reason'))
+    root = api.checkout(doc['repo'])
+    if not root:
+        raise _invalid('this machine has no checkout of %s' % doc['repo'], 'repo')
+    lines = []
+    for f in doc['files']:
+        base, why = ap.read_base(root, doc['head'], f['path'], f['base_blob'])
+        if why:
+            raise _invalid('%s: %s' % (f['path'], why), 'files')
+        lines.extend(ap.diff(f['path'], base, f['content']))
+    doc['diff'] = lines
+    return api.add(ap.COLLECTION, doc, req)
+
+
+def approvals_decide(api, req):
+    from . import approvals as ap
+    b = _fields(req, ('decision', 'if_version'))
+    _pin(b, required=True)
+    doc_id = req.params['id']
+    d = api.doc(ap.COLLECTION, doc_id, b)
+    changes = _approval(ap.decide_fields, api.approval_key(), doc_id, d, b.get('decision'),
+                        _when(api.clock(), ''))
+    return api.change(ap.COLLECTION, doc_id, d, changes, req, {'status': changes['status']})
+
+
+def approvals_consume(api, req):
+    from . import approvals as ap
+    b = _fields(req, ('commit', 'if_version'))
+    _pin(b, required=True)
+    doc_id = req.params['id']
+    d = api.doc(ap.COLLECTION, doc_id, b)
+    changes = _approval(ap.consume_fields, api.approval_key(), doc_id, d, b.get('commit'),
+                        _when(api.clock(), ''))
+    return api.change(ap.COLLECTION, doc_id, d, changes, req, {'status': changes['status']})
+
+
+def approvals_verify(api, req):
+    from . import approvals as ap
+    doc_id = req.params['id']
+    d = api.store.get(ap.COLLECTION, doc_id) if schema.check_id(doc_id) is None else None
+    if d is None:
+        return {'ok': True, 'valid': False, 'why': ap.WHY_UNKNOWN}
+    try:
+        blobs = json.loads(_q(req, 'files'))
+    except ValueError:
+        blobs = None                # check() answers WHY_FILES
+    # a commit given, even empty, is checked: only an absent one leaves it out
+    commit = _q(req, 'commit') if 'commit' in (req.query or {}) else None
+    valid, why = ap.check(api.approval_key(), doc_id, d, _q(req, 'repo'), _q(req, 'head'), blobs,
+                          _when(api.clock(), ''), commit)
+    return {'ok': True, 'valid': valid, 'why': why}
+
+
 def backlog(api, req):
     return {'repos': api.shown('backlog', repo=_q(req, 'repo'), state=_q(req, 'state'),
                                fresh=_q_flag(req, 'fresh'))}
@@ -991,6 +1100,47 @@ def record(api, req):
 
 def record_new(api, req):
     return _record_view(api, 'record_template', _segment(req, 'repo'))
+
+
+# ---- the owner's record writes (docs/action-hub.md "The record page")
+def _strings(b, name):
+    """b[name] as a list of strings: absent is [], one string is a list of one."""
+    v = b.get(name)
+    if v is None:
+        return []
+    if isinstance(v, str):
+        v = [v]
+    if not isinstance(v, list) or not all(isinstance(s, str) for s in v):
+        raise _invalid('%s must be a list of strings' % name, name)
+    return v
+
+
+def record_add(api, req):
+    repo = _segment(req, 'repo')
+    b = _fields(req, ('id', 'summary', 'scope', 'effort', 'ref'), ('id', 'summary', 'scope'))
+    out = _record_view(api, 'record_add', repo, _text(b, 'id'), _text(b, 'summary'),
+                       _strings(b, 'scope'), _text(b, 'effort'), _text(b, 'ref'))
+    return dict(out, ok=True)
+
+
+def record_edit(api, req):
+    repo, rid = _segment(req, 'repo'), _segment(req, 'id')
+    b = _fields(req, ('version', 'changes', 'unset', 'body', 'ruling'), ('version',))
+    changes = _typed(b, 'changes', (dict,), 'an object of field names and values') or {}
+    out = _record_view(api, 'record_edit', repo, rid, _text(b, 'version'),
+                       [(k, _strings(changes, k)) for k in changes], _strings(b, 'unset'),
+                       _text(b, 'body'), _text(b, 'ruling'))
+    return dict(out, ok=True)
+
+
+def record_delete(api, req):
+    repo, rid = _segment(req, 'repo'), _segment(req, 'id')
+    b = _fields(req, ('why', 'confirm', 'ruling'), ('why', 'confirm'))
+    if _text(b, 'confirm') != rid:
+        raise _invalid('confirm must repeat the record id to delete it', 'confirm')
+    out = _record_view(api, 'record_delete', repo, rid, _text(b, 'why'), _text(b, 'ruling'))
+    return dict(out, ok=True)
+# ---- end of the owner's record writes
 
 
 def _listing(name):
@@ -1098,7 +1248,8 @@ def snapshot(api, req):
             missing[name] = _reason(e)
     return {'revision': revision, 'collections': docs,
             'pending': api.pending(),
-            'views': views, 'unavailable': missing, 'pm_seen': api.pm_seen()}
+            'views': views, 'unavailable': missing, 'pm_seen': api.pm_seen(),
+            'strong': req.strong is True}
 
 
 def health(api, req):
@@ -1143,10 +1294,17 @@ ROUTES = (
     _r('POST', '/to_pm/{id}/delete', OWNER, to_pm_delete),
     _r('POST', '/inbox', AGENT, inbox_add),
     _r('POST', '/inbox/{id}/read', OWNER, inbox_read),
+    _r('POST', '/approvals', AGENT, approvals_add),
+    _r('POST', '/approvals/{id}/decide', APPROVER, approvals_decide),
+    _r('POST', '/approvals/{id}/consume', AGENT, approvals_consume),
+    _r('GET', '/approvals/{id}/verify', AGENT, approvals_verify),
     _r('GET', '/backlog', ANY, backlog),
     _r('GET', '/completed', ANY, completed),
     _r('GET', '/records/{repo}/new', ANY, record_new),
     _r('GET', '/records/{repo}/{id}', ANY, record),
+    _r('POST', '/records/{repo}', OWNER, record_add),
+    _r('POST', '/records/{repo}/{id}/edit', OWNER, record_edit),
+    _r('POST', '/records/{repo}/{id}/delete', OWNER, record_delete),
     _r('GET', '/notices', ANY, _listing('notices')),
     _r('GET', '/repos', ANY, _listing('repos')),
     _r('GET', '/usage', ANY, _listing('usage')),

@@ -5,9 +5,13 @@
             in a live process or once a branch landed at its tip (blocked); write each branch's
             `running` land record (one run_id for the batch, no pid yet), start the tool again,
             detached, with `--submitted <payload>`, wait for it to record itself (claim), and
-            give the one line `SUBMITTED <branch>[+<branch>...] tip <sha>[,<sha>] wait: python
-            <kit>/tools/gate.py wait-result <branch> --tip <sha> --kind land -C <main checkout>`
-            (wait_line)
+            give a `REVIEW <branch> <tip>: ...` line for each branch with a verdict queued at
+            its tip (review_lines), then the last line `SUBMITTED <branch>[+<branch>...] tip
+            <sha>[,<sha>] wait: python <kit>/tools/gate.py wait-result <branch> --tip <sha>
+            --kind land -C <main checkout>` (wait_line; a batch's last branch and tip), and
+            prune old submissions' files (prune)
+  prune     delete the payload and output files of submissions older than KEEP_S whose run no
+            land record has running
   restore   the payload, read back by the detached tool: the result.Run of each branch (the same
             run_id and started_at), the output file and the land records those runs replaced,
             for kitlib.gate.land.Lander(submitted=...); it writes its own pid into the records
@@ -41,7 +45,8 @@ records itself, `error` here (claim); one that dies later, `error` by the first 
 sees it gone. Files, in the result folder (<git common dir>/kit-gate-result): <stem>.land.json
 per branch (the record), and, named by the batch's first branch and the run_id,
 <stem>.<run_id>.land.submit (the payload) and <stem>.<run_id>.land.log (the detached tool's
-output, the records' `log` until a merged gate names its own). Nothing here prints or exits.
+output, the records' `log` until a merged gate names its own); each submission deletes the old
+ones (prune). Nothing here prints or exits.
 """
 import json
 import os
@@ -53,7 +58,7 @@ import time
 from kitlib import gate as G
 from kitlib import pluginsource
 from kitlib.gate import pin
-from kitlib.gate import result
+from kitlib.gate import result, verdicts
 from kitlib.git import repo
 from kitlib.lock import detach as lockdetach
 from kitlib.lock import run as lockrun
@@ -69,6 +74,11 @@ RUN_ID = re.compile(r'[0-9a-f]{16}')
 CLAIM_WAIT_S = 15.0
 CLAIM_POLL_S = 0.25
 LANDED = ('pass', 'landed-ungated')    # landed-ungated: an old record's (exit 9 is retired)
+# How old a finished submission's payload and output are before prune deletes them: 14 days, 14
+# times the longest a landing may wait for its turn ("landing".wait_s at most 86400 s,
+# kitlib/config/schema.py), so the age alone never reaches a landing still queued; prune also
+# keeps every run a land record has running whatever its age.
+KEEP_S = 14 * 86400
 
 
 class SubmitError(Exception):
@@ -92,6 +102,50 @@ def run_id_of(payload):
         return None
     rid = name[:-len(PAYLOAD_EXT)].rsplit('.', 1)[-1]
     return rid if RUN_ID.fullmatch(rid) else None
+
+
+def prune(root, now=None, keep_s=KEEP_S):
+    """Delete the payload and output files (files()) in the result folder modified more than
+    `keep_s` seconds before `now` (default: the time now) whose run_id no land record names with
+    a verdict that is not final (running: a submitted landing's records are running from the
+    submission, through its wait in the queue, until it ends; a record with no verdict counts as
+    running). A land record that cannot be read may be such a run, so then nothing is deleted. A
+    file that cannot be deleted (in use: the detached landing holds its output open) is left.
+    The paths deleted; never raises."""
+    try:
+        folder = result.result_dir(root)
+        names = os.listdir(folder)
+    except (OSError, result.ResultError):
+        return []
+    running = set()
+    for name in names:
+        if not name.endswith('.land.json'):
+            continue
+        rec, why = result.read_path(os.path.join(folder, name))
+        if rec is None:
+            if why == 'none':       # replaced or removed since the listing
+                continue
+            return []
+        if rec.get('verdict') in (None, result.RUNNING):
+            running.add(rec.get('run_id'))
+    now = time.time() if now is None else now
+    gone = []
+    for name in names:
+        ext = next((e for e in (PAYLOAD_EXT, OUTPUT_EXT) if name.endswith(e)), None)
+        if ext is None:
+            continue
+        rid = name[:-len(ext)].rsplit('.', 1)[-1]
+        if not RUN_ID.fullmatch(rid) or rid in running:
+            continue
+        path = os.path.join(folder, name)
+        try:
+            if now - os.path.getmtime(path) <= keep_s:
+                continue
+            os.remove(path)
+        except OSError:
+            continue
+        gone.append(path)
+    return gone
 
 
 def command(tool_file, args, python=None):
@@ -136,15 +190,17 @@ def _arg(path):
 
 
 def wait_line(branches, tips, root, kit=None):
-    """The SUBMITTED line. Its wait command names the repository with -C: the main checkout of
-    `root` (where the landing runs, and a checkout no cleanup removes), or `root` itself when git
-    cannot place it. The record is in the git common dir, so any checkout of the repository reads
-    the same one."""
+    """The SUBMITTED line. Its wait command waits on the batch's last branch: each branch has its
+    own land record, but a batch has one outcome, which Lander.run writes into the records in the
+    batch's order, so the last branch's record is final only once every branch's is. The command
+    names the repository with -C: the main checkout of `root` (where the landing runs, and a
+    checkout no cleanup removes), or `root` itself when git cannot place it. The record is in the
+    git common dir, so any checkout of the repository reads the same one."""
     kit = kit or pluginsource.live_root()
     main = repo.main_checkout_toplevel(root) or root
     return 'SUBMITTED %s tip %s wait: python %s wait-result %s --tip %s --kind land -C %s' % (
         '+'.join(branches), ','.join(tips), _arg(os.path.join(kit, 'tools', 'gate.py')),
-        branches[0], tips[0], _arg(main))
+        branches[-1], tips[-1], _arg(main))
 
 
 def _write_json(path, data):
@@ -189,7 +245,8 @@ def submit(root, tool_file, child_args, branches, tips, expect_main=None, enviro
            clock=time.monotonic, sleep=time.sleep, landing_of=None):
     """Start the landing of `branches` at `tips` detached: `tool_file` (tools/land.py or
     tools/gate.py) again with `child_args` (the landing's own arguments, -C absolute) and
-    `--submitted <payload>`. An Outcome: OK with the SUBMITTED line, USAGE for arguments the
+    `--submitted <payload>`. An Outcome: OK with the REVIEW lines (review_lines) and the
+    SUBMITTED line last, once old submissions' files are pruned (prune), USAGE for arguments the
     landing would refuse as usage (nothing written), REFUSED with nothing written when a
     branch's landing is running or it landed at its tip already (blocked), REFUSED when the
     records or the payload cannot be written or the start fails (records written are finished
@@ -253,8 +310,39 @@ def submit(root, tool_file, child_args, branches, tips, expect_main=None, enviro
     if died:
         return G.Outcome(G.REFUSED, ['REFUSED: %s; nothing was changed; its output: %s' % (
             died, output)], pid=pid, payload=payload, output=output)
-    return G.Outcome(G.OK, [wait_line(branches, tips, root, kit)], pid=pid, payload=payload,
-                     output=output)
+    try:
+        prune(root, now=now)
+    except Exception:   # noqa: BLE001 - the landing is submitted whatever the prune meets
+        pass
+    return G.Outcome(G.OK, review_lines(root, branches, tips) + [wait_line(branches, tips, root, kit)],
+                     pid=pid, payload=payload, output=output)
+
+
+def review_lines(root, branches, tips):
+    """`REVIEW <branch> <tip>: <verdict> by <reviewer>/<model> (<id>)[, carried from <sha> over N
+    main merge(s)]` for each branch with a verdict queued at the tip submitted
+    (kitlib.gate.verdicts), so the submission shows the review on record. Read only, and only for
+    the reader: a branch with no entry at its tip, or a queue that cannot be read, has no line
+    (the landing's own checks decide; this decides nothing)."""
+    common, _ = repo.common_dir(root)
+    if not common:
+        return []
+    lines = []
+    for b, t in zip(branches, tips):
+        try:
+            e = verdicts._load(verdicts.entry_path(common, b), b)
+        except verdicts.VerdictError:
+            continue
+        if e is None or e['state'] != verdicts.QUEUED or e['tip'].lower() != t.lower():
+            continue
+        c = e.get(verdicts.CARRIED)
+        more = ''
+        if c:
+            n = len(c['merges'])
+            more = ', carried from %s over %d main merge%s' % (c['from'], n, '' if n == 1 else 's')
+        lines.append('REVIEW %s %s: %s by %s/%s (%s)%s' % (
+            b, e['tip'], e['verdict'], e['reviewer'], e['reviewer_model'], e['reviewer_id'], more))
+    return lines
 
 
 def _landing(carrier, landing_of=None):
@@ -274,7 +362,8 @@ def claim(root, runs, pid, output, wait_s=CLAIM_WAIT_S, poll_s=CLAIM_POLL_S, clo
     (restore writes its pid into them). Once every record is claimed, or finished: None. When
     the process died first: its unclaimed records are finished `error` and the reason is
     returned. When the wait ends with the process alive: its pid (and creation time) is written
-    into the records still unclaimed, so a death after this is seen by result.wait."""
+    into the records still unclaimed, each read again just before, so one the landing claimed or
+    finished meanwhile is kept, and a death after this is seen by result.wait."""
     alive = alive or process.alive
     try:
         ctime = process.proc_ctime(pid)
@@ -284,9 +373,8 @@ def claim(root, runs, pid, output, wait_s=CLAIM_WAIT_S, poll_s=CLAIM_POLL_S, clo
     while True:
         open_ = []
         for rr in runs:
-            rec, _ = result.read(root, rr.branch, 'land')
-            if (isinstance(rec, dict) and rec.get('verdict') == result.RUNNING
-                    and rec.get('run_id') == rr.run_id and rec.get('pid') is None):
+            rec = _unclaimed(root, rr)
+            if rec:
                 open_.append((rr, rec))
         if not open_:
             return None
@@ -304,10 +392,20 @@ def claim(root, runs, pid, output, wait_s=CLAIM_WAIT_S, poll_s=CLAIM_POLL_S, clo
             return why
         if clock() >= end:
             for rr, _rec in open_:
-                rr.pid, rr.ctime = pid, ctime
-                rr.start(log=output)
+                if _unclaimed(root, rr):
+                    rr.pid, rr.ctime = pid, ctime
+                    rr.start(log=output)
             return None
         sleep(max(0.0, min(poll_s, end - clock())))
+
+
+def _unclaimed(root, rr):
+    """The land record of `rr` when it is still `rr`'s run, running and with no pid; else None."""
+    rec, _ = result.read(root, rr.branch, 'land')
+    if (isinstance(rec, dict) and rec.get('verdict') == result.RUNNING
+            and rec.get('run_id') == rr.run_id and rec.get('pid') is None):
+        return rec
+    return None
 
 
 def _note(path, line):

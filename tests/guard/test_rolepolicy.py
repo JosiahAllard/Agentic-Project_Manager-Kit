@@ -45,10 +45,10 @@ def write_roles(kit_dir, modes):
 
 def kit_tree(root):
     """Make `root` look like a kit checkout to kitlib.content.oncommit.is_kit (content/roles/ and
-    tools/render_content.py), with the kit's record and commit tools beside it."""
+    tools/render_content.py), with the kit's record, ledger and commit tools beside it."""
     os.makedirs(os.path.join(root, 'content', 'roles'), exist_ok=True)
     os.makedirs(os.path.join(root, 'tools'), exist_ok=True)
-    for name in ('render_content.py', 'backlog.py', 'commit.py'):
+    for name in ('render_content.py', 'backlog.py', 'commit.py', 'ledger.py'):
         with open(os.path.join(root, 'tools', name), 'w', encoding='utf-8') as f:
             f.write('')
 
@@ -564,6 +564,88 @@ class LockVerbs(Base):
                     self.assertIsNotNone(d, text)
                     self.assertEqual((d.verdict, d.rule), ('deny', 'role-lock'), d.reason)
 
+    def test_a_start_process_with_no_program_and_an_unread_parameter_names_no_program(self):
+        """commands.Unread reaches commands.expand alone: lock_verb still gets None for a
+        Start-Process call with no program the guard can name, so its words naming the lock CLI
+        are refused as NO_PROGRAM, in every mode, for the main roles too."""
+        text = "Start-Process -ArgumentList 'tools/machine_lock.py stop 42' -Bogus"
+        from kitlib.guard import commands as cm, shell as sh
+        for m in ('read', 'write', 'controller'):
+            with self.subTest(mode=m):
+                parsed = cm.read(text, sh.PS, self.w.wt)
+                self.assertEqual(rolepolicy.lock_verb(parsed, m, self.w.kit_dir)[0], rolepolicy.NO_PROGRAM)
+        for role in ('coordinator', 'pm', 'senior-worker'):
+            with self.subTest(role=role):
+                d = rolepolicy.check(self.shell(text, role), self.w.ctx())
+                self.assertIsNotNone(d, text)
+                self.assertEqual((d.verdict, d.rule), ('deny', 'role-lock'), d.reason)
+
+    def test_the_module_name_inside_a_regex_alternation_is_not_a_lock_call(self):
+        """A read-only env listing filtered on a regex naming
+        MACHINE_LOCK among others (a Where-Object block's comparison has no program) names no lock
+        CLI: next to `|` the module name is a regex alternative, never a module python runs. The
+        same words as a whole module name, an array a splat hands on, or the CLI's file name stay
+        refused, and a real call with a verb the mode lacks is still denied."""
+        wt = self.w.wt.replace('\\', '/')
+        passing = ("Get-ChildItem env: | Where-Object { $_.Name -match 'MACHINE_LOCK|KIT|GATE' } | "
+                   "Format-Table Name, Value; git -C %s status; git -C %s log -1" % (wt, wt),
+                   "gci env: | ? { $_.Name -match 'KIT|machine_lock' }")
+        from kitlib.guard import commands as cm, shell as sh
+        for text in passing:
+            for role in ('reviewer', 'senior-worker', 'pm'):
+                with self.subTest(role=role, text=text):
+                    parsed = cm.read(text, sh.PS, self.w.wt)
+                    self.assertIsNone(rolepolicy.lock_verb(parsed, 'read', self.w.kit_dir))
+                    self.assertIsNone(rolepolicy.check(self.shell(text, role), self.w.ctx()))
+                    self.allowed(self.shell(text, role))        # the whole guard, not the policy alone
+        refused = ("$m = 'tools.machine_lock'; python -m $m stop 42",
+                   "$m = 'machine_lock'; python -m $m stop 42",
+                   "$a = 'MACHINE_LOCK','stop'; python -m @a",
+                   "$c = \"import runpy; runpy.run_module('tools.machine_lock')\"; python -c $c stop 42",
+                   "$p = 'x|tools/machine_lock.py'; python $p.Split('|')[1] stop 42",
+                   "Get-ChildItem env: | Where-Object { $_.Name -match 'MACHINE_LOCK|KIT' }; "
+                   "python tools/machine_lock.py hold create x")
+        for text in refused:
+            for role in ('reviewer', 'senior-worker', 'pm'):
+                with self.subTest(role=role, text=text):
+                    d = rolepolicy.check(self.shell(text, role), self.w.ctx())
+                    self.assertIsNotNone(d, text)
+                    self.assertEqual((d.verdict, d.rule), ('deny', 'role-lock'), d.reason)
+
+    def test_the_module_name_next_to_a_pipe_split_apart_is_a_lock_call(self):
+        """A `|` beside the module's name proves nothing outside a pattern only compared
+        (rolepolicy._pattern_only): PowerShell splits the word before python sees it, so
+        `-split '\\|'` or `.Split('|')` hands python `tools.machine_lock` (owner-lock matches only
+        the file's name, so owner-only `hold create` would run). A Where-Object pattern on a line
+        that may run something, or compared other than by a match operator, is refused too."""
+        rows = ("$a = 'tools.machine_lock|hold|create|x' -split '\\|'; python -m @a",
+                "$m = 'tools.machine_lock|x'; python -m $m.Split('|')[0] stop 42",
+                "$a = 'tools.machine_lock|stop|42' -csplit '\\|'; python -m @a",
+                "$a = [regex]::Split('tools.machine_lock|stop|42', '\\|'); python -m @a",
+                "$m = 'x|machine_lock'.Split('|')[1]; python -m $m stop 42",
+                # a Where-Object pattern, but the line runs a python, another program, or git
+                # with a config option, or the pattern is split, built or not under Where-Object:
+                "gci env: | ? { $_.Name -match 'tools.machine_lock|x' }; python -m $Matches[0] stop 42",
+                "gci env: | ? { $_.Name -match 'machine_lock|x' } | % { python -m $_.Name stop 42 }",
+                "gci env: | ? { $_.Name -match 'MACHINE_LOCK|KIT' }; notepad x",
+                "gci env: | ? { $_.Name -match 'MACHINE_LOCK|KIT' }; git -c core.pager=cat log -1",
+                "gci env: | ? { $_.Name -split 'tools.machine_lock|x' }",
+                "gci env: | ? { $_.Name -match 'machine_lock|x' -split '\\|' }",
+                "gci env: | ? { $_.Name -match \"MACHINE_LOCK|$x\" }",
+                "gci env: | Select-Object { $_.Name -match 'MACHINE_LOCK|KIT' }",
+                "gci env: | Where-Object -OutVariable c { $_.Name -match 'MACHINE_LOCK|KIT' }",
+                "'a' -match 'machine_lock|x'")
+        from kitlib.guard import commands as cm, shell as sh
+        for text in rows:
+            with self.subTest(text=text):
+                parsed = cm.read(text, sh.PS, self.w.wt)
+                self.assertEqual(rolepolicy.lock_verb(parsed, 'write', self.w.kit_dir)[0], rolepolicy.NO_PROGRAM)
+            for role in ('reviewer', 'senior-worker', 'pm'):
+                with self.subTest(role=role, text=text):
+                    d = rolepolicy.check(self.shell(text, role), self.w.ctx())
+                    self.assertIsNotNone(d, text)
+                    self.assertEqual((d.verdict, d.rule), ('deny', 'role-lock'), d.reason)
+
     def test_psdefaultparametervalues_on_the_line_catches_a_reader(self):
         """It can give every later command an -OutVariable (rolepolicy._output_stays)."""
         lock = 'tools/machine_lock.py'
@@ -691,6 +773,29 @@ class LockVerbs(Base):
             ('powershell', 'New-Item -ItemType HardLink -Path status -Target %s; python status stop 42' % lock),
             ('powershell', 'xcopy %s status; python status stop 42' % lock),
             ('powershell', 'Write-Host -InformationVariable c %s; python $c stop 42' % lock)))
+
+    def test_a_paren_argument_beside_a_lock_path_still_catches_it(self):
+        """A PowerShell argument in ( ) is one computed word (shell._Scan.ps_paren_arg), not a
+        group: a reader with one beside the lock path is still caught (_ps_caught), as the ( )
+        group was, and a copy whose destination is one still hands the path on."""
+        lock = 'tools/machine_lock.py'
+        from kitlib.guard import commands as cm, shell as sh
+        for text in ('gc %s (x)' % lock, 'Get-Content %s (Join-Path a b)' % lock, 'gc %s -Encoding:(x)' % lock):
+            parsed = cm.read(text, sh.PS, self.w.wt)
+            with self.subTest(text=text):
+                self.assertTrue(parsed.clean, text)
+                reader = [c for c in parsed.commands if c.words and c.words[0].text in ('gc', 'Get-Content')]
+                self.assertEqual(len(reader), 1, text)
+                self.assertTrue(rolepolicy._ps_caught(reader[0]), text)
+                self.assertIsNotNone(rolepolicy.lock_verb(parsed, 'read', self.w.kit_dir))
+            for role in ('reviewer', 'senior-worker', 'pm'):
+                with self.subTest(text=text, role=role):
+                    d = rolepolicy.check(self.shell(text, role), self.w.ctx())
+                    self.assertIsNotNone(d, text)
+                    self.assertEqual((d.verdict, d.rule), ('deny', 'role-lock'), d.reason)
+        self.handed_on((
+            ('powershell', 'Copy-Item %s (Join-Path a status); python status stop 42' % lock),
+            ('powershell', 'Copy-Item %s -Destination(Join-Path a status); python status stop 42' % lock)))
 
     def test_the_lock_cli_run_as_a_module_is_read(self):
         """python -m with a module whose last part is machine_lock runs the lock CLI: its words
@@ -931,6 +1036,111 @@ class LockVerbs(Base):
                     self.assertIsNone(rolepolicy.check(self.shell(text, role, shell=shell), self.w.ctx()))
                     if role == 'pm':                # a read role may not commit (write-jail)
                         self.allowed(self.shell(text, role, shell=shell))
+
+
+SHA = 'b85318db49bd'
+
+
+class KitExport(Base):
+    """rolepolicy.kit_export: the kit's record, ruling and commit tools run from the plugin export
+    folder (<plugin.export_dir>/<sha12>, kitlib.pluginsource) are the kit's own, so a lock path or
+    the lock module's name in their words is a path or text, not a lock call (refusals.md row 116).
+    Only a folder kitlib.pluginsource would have written passes: its name a 12-hex sha, its marker
+    and kit.json in it, directly under the configured export root, and no root the session may
+    write holding it or lying inside it."""
+
+    def setUp(self):
+        super().setUp()
+        self.export = os.path.join(self.w.base, 'plugin')
+        self.root = self.export_tree(self.export, SHA)
+        self.w.user_config({'plugin': {'export_dir': self.export}})
+
+    def export_tree(self, parent, name, marker=True, manifest=True):
+        root = os.path.join(parent, name)
+        os.makedirs(os.path.join(root, 'tools'), exist_ok=True)
+        for tool in ('backlog.py', 'commit.py', 'ledger.py'):
+            with open(os.path.join(root, 'tools', tool), 'w', encoding='utf-8') as f:
+                f.write('')
+        if marker:
+            with open(os.path.join(root, '.pm-kit-export'), 'w', encoding='utf-8') as f:
+                f.write(name + '\n')
+        if manifest:
+            with open(os.path.join(root, 'kit.json'), 'w', encoding='utf-8') as f:
+                f.write('{"version": "1.0.0"}\n')
+        return root.replace('\\', '/')
+
+    def passes(self, rows, roles=('pm', 'coordinator', 'senior-worker')):
+        for shell in ('bash', 'powershell'):
+            for text in rows:
+                for role in roles:
+                    with self.subTest(shell=shell, role=role, text=text):
+                        self.assertIsNone(rolepolicy.check(self.shell(text, role, shell=shell), self.w.ctx()))
+
+    def handed_on(self, rows):
+        for shell in ('bash', 'powershell'):
+            for text in rows:
+                with self.subTest(shell=shell, text=text):
+                    d = self.denied(self.shell(text, 'reviewer', shell=shell), 'role-lock')
+                    self.assertIn('machine_lock.py %s is not' % rolepolicy.HANDED_ON, d.reason)
+
+    def test_a_record_naming_the_lock_cli_in_its_text_passes(self):
+        """refusals.md row 116, verbatim but for the folders: the coordinator's backlog add whose
+        --summary named the lock CLI (`machine_lock run`; `machine_lock.py run` too)."""
+        data = self.w.data.replace('\\', '/')
+        row = ('python "%s/tools/backlog.py" -C "%s" --session kit add EX-LOCK-RUN-BAT-RESOLVE --summary '
+               '"%s on Windows: \'-- ./gradlew\' fails WinError 193 ... or the heavy guard remedy should name '
+               'the absolute .bat ..." --scope kitlib/lock/run.py --found-on none --why-not-folded "..."')
+        self.passes([row % (self.root, data, 'machine_lock run'), row % (self.root, data, 'machine_lock.py run'),
+                     'python %s/tools/backlog.py -C %s --session kit add EX-X --summary '
+                     '"tools/hub.py answer and machine_lock.py stop"' % (self.root, data),
+                     'python %s/tools/ledger.py add --repo kit --prov owner --q "may machine_lock.py run stop 42?" '
+                     '--a "yes: tools/hub.py answer" --decides "machine_lock run" --source chat' % self.root])
+
+    def test_a_commit_of_the_lock_cli_passes(self):
+        """commit.py from the export folder, from a worktree of the kit, and git commit, given the
+        lock CLI's path and a message naming it."""
+        kit_tree(self.w.wt)
+        files = 'tools/machine_lock.py tests/lock/test_cli.py docs/lock-api.md'
+        wt = self.w.wt.replace('\\', '/')
+        self.passes(['python %s/tools/commit.py -C %s -m "lock: giveback" %s' % (self.root, wt, files),
+                     'python tools/commit.py -m "lock: giveback" %s' % files,
+                     'python tools/ledger.py add --repo kit --q "machine_lock.py stop 42"',
+                     'git commit -m "lock: fix machine_lock.py"',
+                     'git commit -m "lock: fix machine_lock.py" tools/machine_lock.py'])
+
+    def test_the_default_export_root_is_under_localappdata(self):
+        self.w.user_config({})
+        self.w.environ['LOCALAPPDATA'] = os.path.join(self.w.base, 'local')
+        root = self.export_tree(os.path.join(self.w.base, 'local', 'pm-kit', 'plugin'), SHA)
+        self.passes(['python %s/tools/backlog.py set EX-LOCK --scope tools/machine_lock.py' % root])
+
+    def test_a_folder_that_only_looks_like_an_export_hands_the_path_on(self):
+        lock = 'tools/machine_lock.py'
+        rows = []
+        for parent, name, kw in ((self.export, 'notasha00000', {}), (self.export, 'b85318db49bdX', {}),
+                                 (self.export, '0123456789ab', {'marker': False}),
+                                 (self.export, 'ba9876543210', {'manifest': False}),
+                                 (os.path.join(self.w.base, 'other'), SHA, {}),
+                                 (os.path.join(self.export, 'pins'), SHA, {}),
+                                 (os.path.join(self.root, 'tools'), SHA, {})):
+            root = self.export_tree(parent, name, **kw)
+            rows.append('python %s/tools/backlog.py %s stop 42' % (root, lock))
+        self.handed_on(rows)
+
+    def test_an_export_root_the_session_may_write_is_not_the_kits(self):
+        """An export_dir under temp (a root the session writes) holds folders it could have made."""
+        temp_export = os.path.join(self.w.temp, 'plugin')
+        root = self.export_tree(temp_export, SHA)
+        self.w.user_config({'plugin': {'export_dir': temp_export}})
+        self.handed_on(['python %s/tools/backlog.py tools/machine_lock.py stop 42' % root])
+
+    def test_no_export_root_the_guard_can_name_fails_closed(self):
+        """No plugin config and no LOCALAPPDATA (kitlib.pluginsource.settings raises), or a config
+        the guard cannot read: the export folder is no kit tool's."""
+        self.w.user_config({})
+        self.handed_on(['python %s/tools/backlog.py tools/machine_lock.py stop 42' % self.root])
+        self.w.user_config({'plugin': {'export_dir': 'relative/plugin'}})
+        self.handed_on(['python %s/tools/backlog.py tools/machine_lock.py stop 42' % self.root])
 
 
 class LockMcp(Base):
@@ -1190,6 +1400,79 @@ class Rules(Base):
                          .section('guard').get('data_roots') or []]
                 self.assertEqual(os.path.join(self.w.wt, 'CLAUDE.md') in roots,
                                  self.row(rolepolicy.OWNER_PATHS_READ_ONLY) in texts)
+
+
+class ComputedCheckoutReads(Base):
+    """git with a computed -C may be a main checkout, so the write jail passes only a plain read
+    (rules.git_jail_unknown, rules.git_reads strict). A computed word in a read that has no option
+    writing a file still reads; in log, show and diff (--output writes one) it reads only when
+    literal text before it keeps it from being an option (rules.strict_dyn_read). Writes stay
+    refused, for every session the jail holds (docs/guard.md "Write jail")."""
+
+    # (label, role, environ): two subagents and two marked main sessions
+    SESSIONS = (('senior-worker', 'senior-worker', {}), ('reviewer', 'reviewer', {}),
+                ('pm', None, {context.ROLE_ENV: 'pm'}), ('coordinator', None, {context.ROLE_ENV: 'coordinator'}))
+
+    def each(self, rows, check):
+        for shell, text in rows:
+            for label, role, environ in self.SESSIONS:
+                with self.subTest(text, shell=shell, session=label):
+                    check(self.shell(text, role, shell=shell), environ=dict(environ))
+
+    def test_a_read_with_computed_words_passes(self):
+        self.each([('powershell', 'git -C $p log -1 --format="$w %h %cr %s"'),     # observed refused 15:15
+                   ('powershell', 'git -C $p rev-parse $ref'),
+                   ('powershell', 'git -C $p show --stat "HEAD~$n"'),
+                   ('bash', 'git -C "$p" log -1 --format="$w %h"'),
+                   ('bash', 'git -C "$p" log --pretty="tformat:%h $w" -3'),
+                   ('bash', 'git -C "$p" show --stat "HEAD~$n"'),
+                   ('bash', 'git -C "$p" diff "origin/$b" -- "./$f"'),
+                   ('bash', 'git -C "$p" rev-parse "$ref"'),
+                   ('bash', 'git -C "$p" rev-parse $ref'),
+                   ('bash', 'git -C "$p" ls-files "$f"'),
+                   ('bash', 'git -C "$p" cat-file -p "$sha"'),
+                   ('bash', 'git -C "$p" merge-base HEAD "$b"'),
+                   ('bash', 'git -C "$p" for-each-ref --format="%(refname)" "$pat"')],
+                  lambda a, **kw: self.allowed(a, **kw))
+
+    def test_a_plain_read_still_passes(self):
+        self.each([('bash', 'git -C "$p" log --oneline -3'), ('bash', 'git -C "$p" branch --list'),
+                   ('powershell', 'git -C $p log -1 --format="%h %cr %s"')],
+                  lambda a, **kw: self.allowed(a, **kw))
+
+    def test_a_computed_word_that_may_be_an_option_that_writes_is_refused(self):
+        self.each([('bash', 'git -C "$p" log "$R"'),                       # $R may be --output=<file>
+                   ('bash', 'git -C "$p" show $sha'),
+                   ('bash', 'git -C "$p" diff "--outp$x"'),
+                   ('bash', 'git -C "$p" log "--output=$f"'),
+                   ('bash', 'git -C "$p" log --format=$w'),                # bash splits it: a second word
+                   ('bash', 'git -C "$p" log HEAD~$n'),
+                   ('bash', 'git -C "$p" log --format="$(cat f)"'),
+                   ('bash', 'git -C "$p" log --format="$w" --output=x.txt'),
+                   ('powershell', 'git -C $p log $f'),                      # an array is many arguments
+                   ('powershell', 'git -C $p log @f'),
+                   ('powershell', 'git -C $p log -1 --format="$w" --outp=x.txt'),
+                   # status, describe and branch are not loosened: they may write (an index refresh, a ref)
+                   ('bash', 'git -C "$p" status "$f"'),
+                   ('bash', 'git -C "$p" describe "$x"'),
+                   ('bash', 'git -C "$p" branch --list "$pat"')],
+                  lambda a, **kw: self.denied(a, 'write-jail', **kw))
+
+    def test_a_powershell_word_that_runs_on_after_its_closing_quote_is_refused(self):
+        # PowerShell ends an argument that opens with a quote at its closing quote: what follows is
+        # another argument, which may be --output=<file> (rules.dyn_head)
+        self.each([('powershell', 'git -C $p log \'HEAD\'"$f"'), ('powershell', 'git -C $p log "HEAD~"$f'),
+                   ('powershell', 'git -C $p show "x$n"\'y\''), ('powershell', 'git -C $p diff "origin/$b""$f"')],
+                  lambda a, **kw: self.denied(a, 'write-jail', **kw))
+        # a word that opens with bare text runs on through its quotes as one argument
+        self.each([('powershell', 'git -C $p log HEAD~"$n"'), ('powershell', 'git -C $p show "HEAD~$n"')],
+                  lambda a, **kw: self.allowed(a, **kw))
+
+    def test_a_write_stays_refused(self):
+        self.each([('bash', 'git -C "$p" tag "v$n"'), ('bash', 'git -C "$p" symbolic-ref HEAD refs/heads/x'),
+                   ('bash', 'git -C "$p" branch -m main old'), ('powershell', 'git -C $p branch -m main "$b"'),
+                   ('bash', 'git -C "$p" config user.name "$n"')],
+                  lambda a, **kw: self.denied(a, 'write-jail', **kw))
 
 
 if __name__ == '__main__':

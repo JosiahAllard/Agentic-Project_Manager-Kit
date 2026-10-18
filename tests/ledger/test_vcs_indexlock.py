@@ -3,7 +3,6 @@
 Real git in a throwaway repository (tests/gitfixture.py); the lock is a file made in its git folder."""
 import ctypes
 import os
-import threading
 import time
 import unittest
 from ctypes import wintypes
@@ -88,6 +87,25 @@ class IndexLockTest(unittest.TestCase):
             os.close(os.open(self.lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_BINARY))
         return close
 
+    def free_at_first_pause(self, action):
+        """Run action the first time commit_file pauses to retry, so the lock is present at the
+        first try and gone before the next: an order, not a wall-clock race. The bound gets
+        GONE_WAIT of headroom for a delete another handle lags on. Later pauses really sleep."""
+        real, fired = time.sleep, []
+
+        def pause(seconds):
+            if not fired:
+                fired.append(seconds)
+                action()
+            real(seconds)
+        bound = mock.patch.object(vcs, 'INDEX_LOCK_WAIT', GONE_WAIT + WAIT)
+        bound.start()
+        self.addCleanup(bound.stop)
+        sleep = mock.patch.object(vcs.time, 'sleep', side_effect=pause)
+        sleep.start()
+        self.addCleanup(sleep.stop)
+        return fired
+
     def test_a_lock_still_being_deleted_is_busy_to_git_as_a_held_one(self):
         """Real git (2.55.0.windows.5, probed 2026-10-14) reports it as an existing lock."""
         self.hold()
@@ -99,10 +117,9 @@ class IndexLockTest(unittest.TestCase):
 
     def test_a_lock_still_being_deleted_at_the_release_gives_one_commit(self):
         self.hold()
-        timer = threading.Timer(0.4, self.pending())
-        timer.start()
-        self.addCleanup(timer.cancel)
+        fired = self.free_at_first_pause(self.pending())
         lines = vcs.finish(self.plan, self.got.id, None, 'Use this one.')
+        self.assertEqual(fired, [vcs.INDEX_LOCK_PAUSE], 'the first sleep was not the retry pause')
         self.assertTrue(lines[0].startswith('commit '))
         self.assertEqual(self.count(), self.before + 1)
         self.assertEqual(self.repo.git('show', '--name-only', '--format=', 'HEAD'), 'rulings/LEDGER.md')
@@ -111,10 +128,9 @@ class IndexLockTest(unittest.TestCase):
 
     def test_a_lock_released_before_the_bound_gives_one_commit(self):
         self.hold()
-        timer = threading.Timer(0.4, self.release)
-        timer.start()
-        self.addCleanup(timer.cancel)
+        fired = self.free_at_first_pause(self.release)
         lines = vcs.finish(self.plan, self.got.id, None, 'Use this one.')
+        self.assertEqual(fired, [vcs.INDEX_LOCK_PAUSE], 'the first sleep was not the retry pause')
         self.assertTrue(lines[0].startswith('commit '))
         self.assertEqual(self.count(), self.before + 1)
         self.assertEqual(self.repo.git('show', '--name-only', '--format=', 'HEAD'), 'rulings/LEDGER.md')

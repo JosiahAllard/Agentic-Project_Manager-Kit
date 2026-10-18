@@ -5,7 +5,7 @@ A pull records the branch it was made from (plan.Context.current_branch: `--as`,
 checked out in -C). Made in the main checkout, that is the main branch, which never lands, so the
 landing's close (kitlib.backlog.at_landing, which closes what the landed branch holds pulled)
 would never match the record and it would stay pulled. plan_pull refuses that pull and says how to
-make it: from the branch's worktree, or with `--as <branch>`.
+make it: with `--as <branch>`, or from the branch's worktree.
 
 In the PM data worktree (kitlib.pmdata) the configured main branch is the data branch, so the code
 repository's main (main_branches: the main checkout's) is refused there too.
@@ -28,43 +28,73 @@ from .errors import Refusal
 FALLBACK_MAINS = ('main', 'master')
 
 
-def refusal(rid, branch, main_branch):
+def refusal(rid, branch, main_branch, session=None):
     """Why `rid` may not be pulled as `branch`, or None. `main_branch`: one name, or the names
-    (main_branches) a pull may not record. Pure."""
+    (main_branches) a pull may not record. `session`: the caller's `--session`, filled into the
+    `--as` form when known. The `--as` form comes first: a coordinator pulling at dispatch, from
+    this checkout, can run it as it stands. Pure."""
     mains = (main_branch,) if isinstance(main_branch, str) else tuple(main_branch)
     if branch not in mains:
         return None
     return ('a pull of %s here would record pulled_by: %s, and the main branch never lands, so '
-            'no landing would close %s: pull it from the branch\'s worktree (backlog.py -C '
-            '<worktree> pull %s), or name the branch with --as <branch>'
-            % (rid, branch, rid, rid))
+            'no landing would close %s: name the branch with --as <branch> (backlog.py -C <store> '
+            '--session %s --as <branch> pull %s), or pull it from the branch\'s worktree '
+            '(backlog.py -C <worktree> pull %s)'
+            % (rid, branch, rid, session or '<session>', rid, rid))
 
 
-def code_mains(root):
-    """The code repository's main branches when `root` is its PM data worktree (the repository has
-    a PM data record and `root` has the recorded data branch checked out): the main checkout's
-    configured mains (Config.guarded_mains), or FALLBACK_MAINS when that cannot be read. () for
-    any other checkout, or when the PM data record cannot be read (no data branch is known).
-    Failing open there is deliberate: a landing warns that it could not read that store."""
+def _main_checkout(root):
+    """The main checkout's path when `root` is the code repository's PM data worktree (the
+    repository has a PM data record and `root` has the recorded data branch checked out); '' for
+    any other checkout, or when the PM data record cannot be read (no data branch is known); None
+    when it is a PM data repository whose worktrees git cannot list."""
     common, _why = gitrepo.common_dir(root)
     if common is None:
-        return ()
+        return ''
     try:
         record = pmdata.read(common)
     except pmdata.PmDataError:
-        return ()
+        return ''
     if record is None:
-        return ()
+        return ''
     wts, _why = gitrepo.worktrees(root)
     if not wts:
-        return FALLBACK_MAINS
+        return None
     here = [w for w in wts if not w.bare and _same_path(w.path, root)]
     if not here or here[0].branch != record.branch:
+        return ''
+    return wts[0].path
+
+
+def code_mains(root):
+    """The code repository's main branches when `root` is its PM data worktree (_main_checkout):
+    the main checkout's configured mains (Config.guarded_mains), or FALLBACK_MAINS when that
+    cannot be read. () for any other checkout, or when the PM data record cannot be read (no data
+    branch is known). Failing open there is deliberate: a landing warns that it could not read
+    that store."""
+    path = _main_checkout(root)
+    if path == '':
         return ()
+    if path is None:
+        return FALLBACK_MAINS
     try:
-        return tuple(kconfig.load(wts[0].path).guarded_mains())
+        return tuple(kconfig.load(path).guarded_mains())
     except (kconfig.ConfigError, OSError):
         return FALLBACK_MAINS
+
+
+def code_config(root):
+    """The main checkout's Config when `root` is the PM data worktree (_main_checkout), else None;
+    None too when it cannot be read. kitlib.backlog.opener.open_store measures the code main on
+    its `remote` (docs/backlog.md "The fold-in guard"); with None the store's own configuration is
+    used, as for any other checkout."""
+    path = _main_checkout(root)
+    if not path:
+        return None
+    try:
+        return kconfig.load(path)
+    except (kconfig.ConfigError, OSError):
+        return None
 
 
 def _same_path(a, b):
@@ -84,7 +114,7 @@ def plan_pull(snap, ctx, rid, reason=None, ruling=None, blocker=None):
     record's own refusals come first: an unpullable record says why before where it is pulled
     from."""
     change = pmod.plan_pull(snap, ctx, rid, reason, ruling, blocker)
-    why = refusal(rid, ctx.current_branch(), main_branches(ctx))
+    why = refusal(rid, ctx.current_branch(), main_branches(ctx), ctx.session)
     if why:
         raise Refusal(why)
     return change

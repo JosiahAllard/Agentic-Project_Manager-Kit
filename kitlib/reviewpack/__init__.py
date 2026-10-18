@@ -398,7 +398,7 @@ def tips(root, base, branch, mb):
     --no-walk=unsorted` (the base tip is in the branch exactly when it is the merge-base `mb`). A
     failed or odd answer falls back to one read per rev, each through git_answer(): a read that
     fails or prints nothing stops the pack naming it, so no answer comes from a read that failed.
-    GOTCHA: TOOLS-REVIEWPACK-PERREV-FLAKE - a git ended from outside (a stale `taskkill /PID`
+    GOTCHA: a git ended from outside (a stale `taskkill /PID`
     that reached a reused pid, kitlib.proc.shield's GOTCHA) exits 1 having printed nothing, the
     same shape as `merge-base --is-ancestor`'s NO. The fallback asked that read, so a killed one
     printed a NO git never said; it now compares the base's full hash with `mb`, as the log does."""
@@ -416,9 +416,11 @@ def tips(root, base, branch, mb):
 
 
 def coauthor_section(root, base, branch, remote, rules):
-    """`(lines, failing count)`: the branch's commits with no Co-Authored-By trailer, each with
-    its trailers-rule verdict, then a WARNING per unproven owner claim. Stop when the range cannot
-    be read: an unread range must not read as "every commit trailered"."""
+    """`(lines, failing count)`: the branch's commits with no Co-Authored-By trailer or with an
+    Owner-Approval, each with its trailers-rule verdict and `owner approval hub:A-<n>` when it has
+    one (docs/commit.md "Owner approval"; shown, never an owner claim), then a WARNING per
+    unproven owner claim. Stop when the range cannot be read: an unread range must not read as
+    "every commit trailered"."""
     commits, err = trailers.branch_commits(base, root, head=branch, remote=remote,
                                            approved_key=rules.trailer)
     if commits is None:
@@ -429,9 +431,12 @@ def coauthor_section(root, base, branch, remote, rules):
     failing = sum(v in trailers.FAILED_VERDICTS for _, v in lacking)
     lines = ['co-author  %d commit(s) | %d without a Co-Authored-By trailer | %d failing'
              % (len(commits), len(lacking), failing)]
-    for c, v in lacking:
-        lines.append('  %-7s %-14s %s "%s"' % (c.hash[:7], trailers.label(c, v),
-                                               'merge' if c.merge else 'commit', c.subject[:60]))
+    for c, v in judged:
+        if v == trailers.TRAILERED and not c.approval:
+            continue
+        lines.append('  %-7s %-14s %s "%s"%s' % (
+            c.hash[:7], trailers.label(c, v), 'merge' if c.merge else 'commit', c.subject[:60],
+            ''.join(' | owner approval %s' % a for a in c.approval)))
     for c, _v in lacking:
         why = trailers.unproven_claim(c, rules)
         if why:

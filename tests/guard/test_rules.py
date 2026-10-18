@@ -166,14 +166,18 @@ ROWS = [
     ('subagent Out-File into main', lambda w: ps('"x" | Out-File -Encoding utf8 %s\\o.txt' % w.main, w.wt, sub=True), 'deny', 'main-checkout', None),
     ('subagent rm in main', lambda w: bash('rm -f %s/stale.txt' % W.fwd(w.main), w.wt, sub=True), 'deny', 'main-checkout', None),
     ('subagent Remove-Item in main', lambda w: ps('Remove-Item %s\\stale.txt -Force' % w.main, w.wt, sub=True), 'deny', 'main-checkout', None),
-    ('subagent write to a variable path', lambda w: ps('"x" > $env:OUT', w.wt, sub=True), None, None, None),
+    # a PowerShell target that is not literal can name the main checkout: refused from a worktree too
+    ('subagent write to a variable path', lambda w: ps('"x" > $env:OUT', w.wt, sub=True), 'deny', 'main-checkout',
+     '"x" > "{wt}/<file>"'),
+    ('subagent bash write to a variable path', lambda w: bash('echo x > "$OUT"', w.wt, sub=True), None, None, None),
     ('subagent redirect in its worktree', lambda w: bash('echo hi > notes.txt', w.wt, sub=True), None, None, None),
     ('subagent redirect in a heredoc body is data', lambda w: bash("cat > notes.txt <<'EOF'\nx > %s/y.txt\nEOF" % W.fwd(w.main), w.wt, sub=True),
      None, None, None),
     ('main session redirect into main', lambda w: bash('echo hi > out.txt', w.main), None, None, None),
 
     # ---------------------------------------------------------------- unreadable lines (fallback)
-    ('unclosed quote hiding a checkout', lambda w: bash("echo 'x ; git checkout main", w.main), 'deny', 'git-checkout', None),
+    ('unclosed quote hiding a checkout', lambda w: bash("echo 'x ; git checkout main", w.main), 'deny', 'git-checkout',
+     'git -C "{main}" worktree add .claude/worktrees/<slug> <branch>'),
     ('unclosed quote in a worktree', lambda w: bash("echo 'x ; git checkout main", w.wt), None, None, None),
     ('unclosed quote hiding a restore', lambda w: bash("echo 'x ; git restore a.py", w.main), 'deny', 'git-restore', None),
     ('unclosed quote hiding restore --staged', lambda w: bash("echo 'x ; git restore --staged a.py", w.main), None, None, None),
@@ -182,8 +186,6 @@ ROWS = [
     ('unclosed quote hiding a main-role merge', lambda w: bash("echo 'x ; git merge kit/wt", w.main), 'deny', 'unreadable',
      "echo 'x ; git merge kit/wt'"),
     ('unclosed quote hiding a subagent merge in its worktree', lambda w: bash("echo 'x ; git merge kit/wt", w.wt, sub=True), 'deny', 'unreadable', None),
-    ('unclosed quote hiding a checkout, real alternative', lambda w: bash("echo 'x ; git checkout main", w.main), 'deny', 'git-checkout',
-     'git -C "{main}" worktree add .claude/worktrees/<slug> <branch>'),
     ('cmd /c with a trailing backslash root', lambda w: bash('cmd /c "dir /s C:\\"', w.wt), 'deny', 'root-search', None),
     ('variable program running godot', lambda w: bash('GODOT=/c/tools/godot.exe; $GODOT --headless', w.wt), 'deny', 'heavy',
      LOCK + ' --kind engine-run --repo demo --slug wt -- <the program $GODOT names> --headless'),
@@ -1156,6 +1158,40 @@ class RolesFromConfig(unittest.TestCase):
             with self.subTest(kind):
                 self.assertEqual(write(kind).rule, 'main-checkout')
                 self.assertEqual(git('git merge --no-ff kit/wt', kind).rule, 'git-main-history')
+
+
+class MainCwdHint(unittest.TestCase):
+    def test_a_command_writing_through_a_main_cwd_is_told_to_cd_first(self):
+        # a subagent whose cwd is the main checkout runs python - or -c;
+        # the refusal stays, its advice is to cd into the worktree (or run a script by path)
+        w = W.World()
+        self.addCleanup(w.cleanup)
+        for ev in (bash("python - <<'EOF'\nprint(1)\nEOF", w.main, sub=True),
+                   ps('python -c "print(1)"', w.main, sub=True)):
+            d = decide(ev, w.ctx())
+            self.assertEqual(d and d.rule, 'main-checkout', d and d.reason)
+            self.assertIn(rules.MAIN_CWD_HINT, d.reason)
+            self.assertIn('cd into your worktree first', d.reason)
+            self.assertNotIn('Make the change in a worktree of it', d.reason)
+        # a redirect to a named file keeps the plain worktree advice
+        d = decide(bash('python x.py > out.log 2>&1', w.main, sub=True), w.ctx())
+        self.assertNotIn('cd into your worktree first', d.reason)
+
+    def test_a_python_c_refusal_names_the_isolated_form(self):
+        # the refusal of python -c in a main checkout names python -I -c (rules.PY_C_HINT), which
+        # runs there when its code only reads; python - and other runs do not get the clause
+        w = W.World()
+        self.addCleanup(w.cleanup)
+        for ev in (ps('python -c "print(1)"', w.main, sub=True), bash("python3 -Bc 'print(1)'", w.main, sub=True),
+                   ps('& "C:\\Py\\python.exe" -c "print(1)"', w.main, sub=True)):
+            d = decide(ev, w.ctx())
+            self.assertEqual(d and d.rule, 'main-checkout', d and d.reason)
+            self.assertIn('python -I -c', d.reason)
+            self.assertIn(rules.MAIN_CWD_HINT, d.reason)
+        self.assertIsNone(decide(ps('python -I -c "print(1)"', w.main, sub=True), w.ctx()))
+        d = decide(bash("python - <<'EOF'\nprint(1)\nEOF", w.main, sub=True), w.ctx())
+        self.assertEqual(d and d.rule, 'main-checkout', d and d.reason)
+        self.assertNotIn('python -I -c', d.reason)
 
 
 class OtherTools(unittest.TestCase):

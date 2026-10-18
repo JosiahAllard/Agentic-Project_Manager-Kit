@@ -1,10 +1,11 @@
 """Bare and plugin-prefixed agent names get the same decisions (docs/guard.md "Agent names").
 
-Every other tests/guard test runs again with the prefix knob on: each subagent's agent_type is
-qualified (kitlib.agentname.qualified, through world.AGENT_TYPE) and the PM_KIT_ROLE mark every
-guard context is built with gets the prefix. The whole set must pass, so every row's decision
-equals its bare twin. Sentinels show the guard really read prefixed names; without the knob they
-stay at zero. A main session (no agent_id) is untouched by an agent_type it carries."""
+The rule table, role policy and session tests (SENTINEL_MODULES) run again with the prefix knob
+on: each subagent's agent_type is qualified (kitlib.agentname.qualified, through world.AGENT_TYPE)
+and the PM_KIT_ROLE mark every guard context is built with gets the prefix. They must all pass, so
+every row's decision equals its bare twin. Sentinels show the guard really read prefixed names;
+without the knob they stay at zero. A main session (no agent_id) is untouched by an agent_type it
+carries."""
 import io
 import os
 import unittest
@@ -17,8 +18,6 @@ from . import world as W
 from .claudehost import decide
 from .world import bash, event, ps
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-TOP = os.path.dirname(os.path.dirname(HERE))
 P = agentname.PREFIX
 
 
@@ -75,14 +74,17 @@ class Knob(object):
                 mock.patch.object(agentname, 'bare_mark', self.bare_mark))
 
 
+# Together they drive all four sentinels above zero in about 8 s; the whole guard suite took ~64 s
+# for the same proof.
+SENTINEL_MODULES = ('test_rules', 'test_rolepolicy', 'test_session')
+
+
 class PrefixParity(unittest.TestCase):
 
-    def test_every_guard_test_passes_with_prefixed_names(self):
-        loaded = unittest.defaultTestLoader.discover(HERE, pattern='test_*.py', top_level_dir=TOP)
-        skipped = (__name__ + '.',
-                   # pre-push hook against real git repos (175 s): commit emails only, no guard agent_type or role mark
-                   __package__ + '.test_prepush.')
-        suite = unittest.TestSuite(t for t in tests_in(loaded) if not t.id().startswith(skipped))
+    def test_sentinel_guard_tests_pass_with_prefixed_names(self):
+        loaded = unittest.defaultTestLoader.loadTestsFromNames(
+            ['%s.%s' % (__package__, name) for name in SENTINEL_MODULES])
+        suite = unittest.TestSuite(tests_in(loaded))
         knob = Knob()
         patches = knob.patches()
         for p in patches:

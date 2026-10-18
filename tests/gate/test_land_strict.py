@@ -153,6 +153,66 @@ class LandsAloneFullFresh(StrictCase):
                             'lands alone, never in a batch')
 
 
+class CarriedVerdict(StrictCase):
+    """A verdict carried over main merges (tools/verdict.py carry; docs/gate.md "Carrying a
+    verdict forward") lets the merge land, and only when kitlib.gate.carry passes it again here
+    against the base, never on the facts stored."""
+    GATE = LandsAloneFullFresh.GATE
+
+    def synced(self):
+        """kit/feature reviewed and queued at a strict change, then main moved and was merged in:
+        (wt, reviewed, the merge)."""
+        wt, reviewed = self.branch('feature', {STRICT: 'x = 1\n'})
+        self.queue(BRANCH, reviewed)
+        self.on_main({'m.py': 'm\n'})
+        self.repo.git('merge', '-q', '--no-edit', 'main', cwd=wt)
+        return wt, reviewed, self.repo.head(wt)
+
+    def test_the_merge_of_a_reviewed_branch_needs_a_carry(self):
+        _, reviewed, tip = self.synced()
+        _, out, _ = self.land_it(BRANCH, tip)
+        self.assert_refused(out, 'the verdict was given at %s, and the branch is at %s: review and '
+                            'queue the tip, or carry the verdict (tools/verdict.py carry)'
+                            % (reviewed[:10], tip[:10]))
+
+    def test_a_carried_verdict_lands_with_a_full_fresh_merged_gate(self):
+        _, reviewed, tip = self.synced()
+        verdicts.carry(self.common(), self.repo.root, BRANCH, self.main)
+        lander, out, said = self.land_it(BRANCH, tip)
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertEqual(self.remote_main(), out.merge)
+        self.assertTrue(lander.full and lander.fresh)
+        self.assertEqual(lander.strict_carry['from'], reviewed)
+        self.assertIn('STRICT: %s changes strict path %s: reviewed by pm-kit:reviewer on opus '
+                      '(agent-r1) at %s, carried over 1 main merge; the merged gate runs --full '
+                      '--fresh' % (BRANCH, STRICT, reviewed[:10]), said)
+
+    def test_the_carry_is_checked_against_the_base_landed_on(self):
+        _, reviewed, tip = self.synced()
+        carried = self.main
+        verdicts.carry(self.common(), self.repo.root, BRANCH, carried)
+        self.on_main({'n.py': 'n\n'})          # main moves on after the carry: it still holds
+        lander, out, _ = self.land_it(BRANCH, tip)
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertEqual((lander.strict_carry['from'], lander.strict_carry['main']),
+                         (reviewed, self.main))
+        self.assertNotEqual(self.main, carried)
+
+    def test_a_stored_carry_that_does_not_hold_is_refused(self):
+        wt, reviewed, _ = self.synced()
+        self.repo.write('b.py', 'b\n', root=wt)
+        tip = self.repo.commit('own work after the sync', 'b.py', cwd=wt)
+        # facts no check would give: a carry record written past kitlib.gate.carry
+        fake = {'from': reviewed, 'merges': [tip], 'main': self.main, 'diff': '0' * 64}
+        verdicts.carry(self.common(), self.repo.root, BRANCH, self.main,
+                       checker=lambda *a: (dict(fake), None))
+        _, out, _ = self.land_it(BRANCH, tip)
+        self.assert_refused(out, 'the verdict was given at %s and carried to %s, but the carry '
+                            'does not hold against main %s' % (reviewed[:10], tip[:10],
+                                                               self.main[:10]),
+                            'not a merge', 'review and queue the tip')
+
+
 class ReadFromTheBase(StrictCase):
     # The fixture identity is the owner: the list file is owner-only (kitlib.guard.ownercommits),
     # and these branches change it only to show the strict check reads the base's copy.

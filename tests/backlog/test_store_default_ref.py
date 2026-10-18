@@ -128,20 +128,12 @@ class DefaultRef(unittest.TestCase):
         self.assertTrue(text.endswith('; set %s in .kit.json to write this store' % OPT_IN), text)
         self.assertEqual(self.ref_tip(), ('', ''))
 
-    def test_a_landing_close_refused_there_is_advised_in_the_pm_data_worktree(self):
-        """at_landing._close_in's WARNING: the WORKTREE command meets the same refusal, so the
-        advice names the PM data worktree; another store's refusal keeps the plain command."""
-        pmdata.write(self.repo.common_dir(), 'pmdata', 'private', self.repo.head())
-        wt = self.repo.worktree('pm', branch='pmdata')
-        backend = self.backend()
-        with self.assertRaises(Refusal) as caught:
-            self.publish(backend, priced('FOO'))
+    def test_a_landing_close_refusal_keeps_the_plain_command(self):
+        """at_landing._close_in's WARNING for a refused close names the store's own command: a
+        landing never writes the default store (it only reads it: tests/backlog/
+        test_default_store_warn.py), so no refusal of its reaches the advice."""
         act = at_landing._Act('FOO', 'kit/x', 'abc')
         args = ['close', 'FOO', '--reason', '"landed abc"']
-        said = at_landing._refused_advice(caught.exception, backend, self.root, act, args,
-                                          lambda *a: 'PLAIN ' + ' '.join(a))
-        self.assertEqual(said, 'close it in the PM data worktree with: %s'
-                         % at_landing.backlog_command(wt.replace('\\', '/'), *args))
         named = self.backend(store='ref')
         said = at_landing._refused_advice(Refusal('busy'), named, self.root, act, args,
                                           lambda *a: 'PLAIN ' + ' '.join(a))

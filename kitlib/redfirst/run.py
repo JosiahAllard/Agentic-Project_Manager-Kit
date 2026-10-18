@@ -79,7 +79,7 @@ def git(cwd, *args):
 def rev(cwd, name):
     """`name`'s commit; V.Usage when it names none or git gives no answer.
 
-    GOTCHA: KIT-GIT-EXIT1-ANSWERS-2 - this asked `rev-parse --verify --quiet`, whose "no such
+    GOTCHA: this asked `rev-parse --verify --quiet`, whose "no such
     commit" is exit 1 with no output, a killed git's shape (gitrefs.KILLED_SHAPE), so a kill read
     as "does not name a commit". gitrefs.resolve(known=True) tells the two apart."""
     out, why = gitrefs.resolve(name, cwd, known=True)

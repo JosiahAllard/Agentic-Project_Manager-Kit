@@ -200,6 +200,54 @@ class Build(unittest.TestCase):
         self.assertEqual(len(v["warnings"]), 4)
         self.assertEqual(v["queue"], [])
 
+    def wait(self, pending, changed=False):
+        lay = dict(snap()["layout"], hardware_change={"pending": pending, "changed": changed})
+        return m.build(snap(layout=lay), now=NOW)["warnings"]
+
+    def test_a_failed_look_is_said_as_one_not_as_a_division_wait(self):
+        # Written as kitlib.lock.layout.in_force writes it; the snapshot reads changed False.
+        got = self.wait("the gpus could not be read (DXGI said no); no layout is adopted from "
+                        "that look until one succeeds")
+        self.assertEqual(len(got), 1, got)
+        self.assertIn("a look at the hardware failed", got[0])
+        self.assertNotIn("a new division waits", got[0])
+
+    def test_a_provisional_layout_whose_look_keeps_failing_is_said_as_provisional(self):
+        got = self.wait("the cores could not be read (no answer); the layout in use came from "
+                        "such a look and is provisional: the first look that succeeds replaces "
+                        "it while no run is live or queued")
+        self.assertEqual(len(got), 1, got)
+        self.assertIn("the layout in force is provisional", got[0])
+        self.assertNotIn("a new division waits", got[0])
+
+    def test_a_division_change_is_still_the_division_wait(self):
+        got = self.wait("the machine or division changed (a -> b); it is used once no run is "
+                        "live or queued (1 now)", changed=True)
+        self.assertEqual(got, ["a new division waits until nothing runs or queues"])
+
+    def test_an_unwritten_layout_says_so(self):
+        got = self.wait("layout.json is missing, unreadable or not valid to this kit version; "
+                        "abc is written once no run is live or queued (1 now)")
+        self.assertEqual(len(got), 1, got)
+        self.assertIn("layout.json is missing", got[0])
+
+    def test_an_unchecked_layout_shows_its_own_text(self):
+        text = "the layout could not be checked (queue.json unreadable)"
+        self.assertEqual(self.wait(text), [text])
+
+    def test_a_text_this_kit_does_not_give_shows_its_own_text(self):
+        text = "an older kit's words for a pending layout"
+        self.assertEqual(self.wait(text), [text])
+
+    def test_the_snapshots_reason_is_read_not_derived_again(self):
+        # The snapshot carries hardware_change.reason (kitlib.lock.api); the window says that
+        # reason, whatever words the pending text has.
+        lay = dict(snap()["layout"], hardware_change={
+            "pending": "words of a newer kit", "reason": "failed_look", "changed": False})
+        got = m.build(snap(layout=lay), now=NOW)["warnings"]
+        self.assertEqual(len(got), 1, got)
+        self.assertIn("a look at the hardware failed", got[0])
+
     def test_a_bare_snapshot_does_not_raise(self):
         v = m.build({}, now=NOW)
         self.assertEqual(v["holds"], [])

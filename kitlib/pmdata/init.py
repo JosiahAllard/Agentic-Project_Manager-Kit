@@ -93,7 +93,7 @@ def _config_list(cwd, *scope):
     '--local'), in git's order, keys as git prints them (section and variable name lower-cased,
     a subsection as written), a key with no value as ''; or `(None, why)`.
 
-    GOTCHA: KIT-GIT-EXIT1-ANSWERS - `config --get`/`--get-regexp` say "no such key" as exit 1
+    GOTCHA: `config --get`/`--get-regexp` say "no such key" as exit 1
     with no output, which is also what a git ended from outside leaves (refs.KILLED_SHAPE), so a
     kill read as "not set". `config --list` exits 0 whether or not a key is set, so anything but
     exit 0 is no answer."""

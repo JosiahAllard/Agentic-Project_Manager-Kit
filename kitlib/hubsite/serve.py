@@ -28,13 +28,16 @@ Start-up, in this order; a failure releases everything taken before it and is a 
 text is for the owner's console (it may name a folder):
   1. the store (Store.open). A store another server holds is refused at once, never waited for.
      A lock left by a server that died is taken over, with a note.
-  2. the token files (auth.ensure_tokens): a token file that cannot serve is refused, named.
+  2. the token files (auth.ensure_tokens) and the approval key beside them
+     (auth.ensure_approval_key): a file that cannot serve is refused, named.
   3. the backlog views and the git sync, from the Sources' factories. A sync that is refused
      (gitsync.Refused: the folder is no work tree, the wrong branch, ...) does not stop the
      server: the reason goes to `Hub.notes` for the console, the server serves with sync off,
      and GET health says so in a fixed phrase (the reason itself names folders).
-  4. the Api over the store and a SiteViews, then the local listener on settings.port with
-     httpd.local_hosts, httpd.local_gate, httpd.pair_routes over an auth.Credentials made for
+  4. the Api over the store and a SiteViews (with approval_key reading the approval key from
+     the token folder on each use, and checkout matching a repo_id to the backlog's configured
+     repositories by their origin remote: _checkout), then the local listener on
+     settings.port with httpd.local_hosts, httpd.local_gate, httpd.pair_routes over an auth.Credentials made for
      the port that was really bound, httpd.stop_route (it sets Hub.stopping and answers this
      process's pid and creation time; the tunnel listener never has it) and health_route. The
      Credentials keep the browser
@@ -54,8 +57,9 @@ text is for the owner's console (it may name a folder):
 start() and close() carry every listener in it, and a start-up that fails after one was bound
 closes its door. Each gets a health_route of its own: the local listener's answers as it did
 with no tunnel, the tunnel's (fixed=True) answers fixed words only, so the tunnel's owner is
-told that a sync failed and not why. The tunnel listener has no pairing routes and no Host
-rule, and its error answers are the agent's wording for the owner too (tunnel.start makes it
+told that a sync failed and not why. The tunnel listener has no local pairing routes, only
+httpd.strong_pair_route (an Access login asks there for a code that pairs a local browser as
+the strong owner; the code is redeemed on the local listener), and no Host rule, and its error answers are the agent's wording for the owner too (tunnel.start makes it
 with httpd's agent_words), so none names the store folder; the local listener's rules are what
 they were with no tunnel, and it never reads the Access header.
 
@@ -213,7 +217,7 @@ from kitlib.config.types import ConfigError
 from kitlib.proc import process
 
 from . import api as _api
-from . import access, auth, backlog, derived, gitsync, httpd, tunnel
+from . import access, auth, backlog, derived, gitsync, httpd, recordwrite, tunnel
 from .store import HubError, Store, StoreBusy
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'web')
@@ -470,7 +474,8 @@ def _record_call(fn, *args):
 
 class SiteViews(object):
     """The Api's `views` (module docstring, "Views"). A view is bound only where its source
-    exists: `backlog_views` for backlog, completed, record and record_template, sources.repos and .agents for theirs.
+    exists: `backlog_views` for backlog, completed, record, record_template and the record
+    writes (record_add, record_edit, record_delete), sources.repos and .agents for theirs.
     notices, usage and health are always there (kitlib.hubsite.derived answers a missing notice
     folder with no notices and a missing usage source with its own phrase). `sync` is the git
     sync or None, `sync_off` the fixed phrase health gives when there is none. `log(level,
@@ -493,6 +498,9 @@ class SiteViews(object):
             self.completed = self._completed
             self.record = self._record
             self.record_template = self._record_template
+            self.record_add = self._record_add
+            self.record_edit = self._record_edit
+            self.record_delete = self._record_delete
         if sources.repos is not None:
             self.repos = self._repos
         if sources.agents:
@@ -571,6 +579,33 @@ class SiteViews(object):
 
     def _record_template(self, repo):
         return _record_call(self._backlog.record_template, repo)
+
+    # The owner's record writes (kitlib.hubsite.recordwrite) to the store of the configured
+    # repository `repo` names; the root never comes from the caller. After a write the backlog
+    # source reads that repository again (Views.reread), so the snapshot the page reads shows
+    # it; add and edit also answer the record as read after the write.
+    def _record_root(self, repo, rid):
+        _record_call(backlog.check_id, rid)
+        # Views._named, the record reads' own lookup: its one caller outside backlog.Views
+        return _record_call(self._backlog._named, repo)
+
+    def _record_add(self, repo, id, summary, scopes, effort, ref):
+        name, root = self._record_root(repo, id)
+        out = recordwrite.add(root, id, summary, scopes, effort, ref)
+        self._backlog.reread(name, root)
+        return dict(out, record=self._record(name, id))
+
+    def _record_edit(self, repo, id, version, changes, unset, body, ruling):
+        name, root = self._record_root(repo, id)
+        out = recordwrite.edit(root, id, version, changes, unset, body, ruling)
+        self._backlog.reread(name, root)
+        return dict(out, record=self._record(name, id))
+
+    def _record_delete(self, repo, id, why, ruling):
+        name, root = self._record_root(repo, id)
+        out = recordwrite.delete(root, id, why, ruling)
+        self._backlog.reread(name, root)
+        return out
 
     def _notices(self):
         return derived.notices(self._sources.notices)
@@ -750,9 +785,11 @@ def health_route(api, views, tunnel='', fixed=False):
     route, the answer is _fixed_health's instead: the Api is asked all the same, and nothing of
     its answer but a fixed word leaves."""
     def route(request):
-        # raise_unexpected: as the listener's own Api call, so an error is logged there
+        # raise_unexpected: as the listener's own Api call, so an error is logged there; and
+        # strong, as that call, only for the request its gate marked (httpd.strong_words)
         status, obj = api.call(request.method, request.path, request.role, request.body,
-                               request.query, request.via, raise_unexpected=True)
+                               request.query, request.via, raise_unexpected=True,
+                               **httpd.strong_words(request))
         said = tunnel() if callable(tunnel) else tunnel
         if fixed:
             return _fixed_health(status, obj, said)
@@ -784,6 +821,24 @@ def _follow_rounds(backlog_views, views):
     backlog_views.wait = pause
 
 
+def _checkout(backlog_views):
+    """Api's checkout(repo_id) (kitlib.hubsite.api, "Approvals"): the root of the configured
+    repository (backlog_views.repos(), its (name, root) pairs) whose origin remote is that
+    repo_id (approvals.remote_id), read with git on each call; None when none is, when there is
+    no backlog, or when the repositories cannot be listed, so a request fails closed."""
+    def checkout(repo_id):
+        from . import approvals     # it imports kitlib.hubsite.client, which imports this module
+        try:
+            pairs = backlog_views.repos() if backlog_views is not None else []
+        except Exception:           # noqa: BLE001 - no list, no checkout: the request is refused
+            return None
+        for _name, root in pairs:
+            if approvals.remote_id(root)[0] == repo_id:
+                return root
+        return None
+    return checkout
+
+
 def build(settings, sources, log=None):
     """The Hub for `settings` (kitlib.hubsite.settings.Settings) from `sources` (a Sources):
     module docstring, "Start-up". Nothing is started; close() the Hub to release the store.
@@ -804,6 +859,7 @@ def build(settings, sources, log=None):
             notes.append('the store lock was left by a server that did not close: taken over')
         try:
             auth.ensure_tokens(sources.tokens)
+            auth.ensure_approval_key(sources.tokens)
         except auth.TokenFileError as e:
             raise ServeError(str(e))
         except OSError as e:
@@ -815,7 +871,9 @@ def build(settings, sources, log=None):
         views = SiteViews(store, sources, views_b, sync, sync_off, log=log)
         if views_b is not None:
             _follow_rounds(views_b, views)
-        api = _api.Api(store, views)
+        api = _api.Api(store, views,
+                       approval_key=functools.partial(auth.read_approval_key, sources.tokens),
+                       checkout=_checkout(views_b))
         try:
             local = httpd.Listener((httpd.LOOPBACK, settings.port), api, None,
                                    static_dir=sources.static_dir, host_rule=httpd.local_hosts,
@@ -837,6 +895,8 @@ def build(settings, sources, log=None):
         health = ('GET', _api.BASE + '/health')
         if tunnelled is not None:
             listeners.append(tunnelled)     # at once: a failure below closes its door too
+            # the tunnel listener's alone: only an Access login may ask for a strong code
+            tunnelled.routes.update(httpd.strong_pair_route(creds))
             # the local listener's health and Hub.tunnel say why there are no keys; the
             # tunnel's own health never does
             said = functools.partial(_tunnel_state, tunnelled, True)

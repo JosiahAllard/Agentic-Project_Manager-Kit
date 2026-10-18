@@ -219,6 +219,8 @@ class GuardError(unittest.TestCase):
             r = subprocess.run([sys.executable, entry] + ARGS, input=ev, capture_output=True, text=True,
                                encoding='utf-8', env=env, cwd=base, timeout=60)
             self.assertEqual((r.returncode, r.stdout), (want, ''), tool)
+            if want == 2:                              # the block's own reason, not a crash that also exits 2
+                self.assertIn('kit hook: ModuleNotFoundError: No module named', r.stderr, tool)
 
     def test_an_unguarded_call_loads_no_kit_module(self):
         """The fast path: a TodoWrite decides on hosts.json alone, so the hook loads no kit module but
@@ -249,7 +251,7 @@ class GuardError(unittest.TestCase):
 
 class Unguarded(unittest.TestCase):
     """The early exit (hosts.json's claude hook.guarded_tools, read by boot/hook.py) and the
-    settings entry cover exactly the tools kitlib.guard.decide can refuse (KIT-HOOK-SPAWNS)."""
+    settings entry cover exactly the tools kitlib.guard.decide can refuse."""
 
     def load(self):
         return load()

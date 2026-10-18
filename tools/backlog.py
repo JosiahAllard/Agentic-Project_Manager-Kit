@@ -281,7 +281,7 @@ def do_stale(args, ctx, snap):
 def do_check(args, ctx, snap):
     say('CHECK %s (%s)' % (snap.head_label(), snap.where))
     red = False
-    for res in checkmod.check_store(snap):
+    for res in checkmod.check_store(snap, implicit=getattr(ctx.store.backend, 'implicit', False)):
         say(res.line())
         for f in res.findings:
             say('    FAIL %s:%s %s' % (f.path, f.line, f.message))
@@ -346,10 +346,10 @@ def do_write(args, ctx, store):
     return 0
 
 
-def do_retarget_dry(args, store):
+def do_retarget_dry(args, ctx):
     """`retarget` without `--apply`: prints the change it would write (kitlib/backlog/opener.py
     `retarget_dry`); nothing is published."""
-    change = retarget_dry(args, store)
+    change = retarget_dry(args, ctx)
     for line in change.lines:
         say(line)
     say('DRY RUN: nothing was written%s' % ('; `--apply` writes it as one store commit'
@@ -432,6 +432,10 @@ def main(argv=None):
             raise Usage('`--owner-said` is gone: owner words are never copied into a record. '
                         '%s an owner-held record takes `--ruling R-nnnn`'
                         % ('Retiring' if args.verb == 'retire' else 'Deleting'))
+        if args.verb == 'block':
+            err = rmod.block_citation_error(args.on, args.reason, args.owner_ask)
+            if err:
+                raise Usage(err)
         root = os.path.abspath(args.root or os.getcwd())
         if args.verb == 'migrate':
             top, cfg, rules = open_repo(root)
@@ -441,10 +445,15 @@ def main(argv=None):
         if args.verb in WRITES or (args.verb == 'retarget' and args.apply):
             return do_write(args, ctx, store)
         if args.verb == 'retarget':
-            return do_retarget_dry(args, store)
+            return do_retarget_dry(args, ctx)
         if args.verb == 'catch-up':
             return do_catch_up(args, store)
-        snap = store.load()
+        if args.verb == 'check':
+            snap, note = checkmod.load_for_check(store)
+            if note:
+                say('NOTE: %s' % note)
+        else:
+            snap = store.load()
         if args.verb == 'landable':
             return do_landable(args, ctx, snap, store.backend)
         return {'next': do_next, 'show': do_show, 'list': do_list,

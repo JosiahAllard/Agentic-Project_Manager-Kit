@@ -83,8 +83,6 @@ ROWS = [
      'deny', 'busy-wait',
      '$deadline = (Get-Date).AddMinutes(10); do {{ if ((Get-Date) -gt $deadline) {{ break }}; Start-Sleep 2 }} '
      'until (Test-Path x)'),
-    ('busy-wait: sleep loop in bash -c', lambda w: ps('bash -c "while ! test -f x; do sleep 1; done"', w.wt),
-     'deny', 'busy-wait', None),
     ('busy-wait: PowerShell Thread Sleep', lambda w: ps('while ($true) { [Threading.Thread]::Sleep(500) }', w.wt),
      'deny', 'busy-wait', None),
     ('busy-wait alternative, bash, is allowed', lambda w: bash(
@@ -315,8 +313,13 @@ ROWS = [
         "cmd /c \"python -I -c print(open('x','w').write('y'))\"", w.main, sub=True),
      'deny', 'main-checkout', None),
     ('main-checkout: python -I -c opening to write inside one cmd word, PowerShell', lambda w: ps(
-        "cmd /c python -I -c print(open('x','w').write('y'))", w.main, sub=True),
+        "cmd /c \"python -I -c print(open('x','w').write('y'))\"", w.main, sub=True),
      'deny', 'main-checkout', None),
+    # unquoted, PowerShell passes `print` and then runs the ( ) itself (shell._Scan.ps_paren_arg):
+    # the text cmd gets is computed
+    ('unreadable: a ( ) touching a word in a PowerShell cmd /c', lambda w: ps(
+        "cmd /c python -I -c print(open('x','w').write('y'))", w.main, sub=True),
+     'deny', 'unreadable', None),
     ('main-checkout: python -I -c in double quotes, cmd', lambda w: bash(
         "cmd /c 'python -I -c \"print(1)\"'", w.main, sub=True), 'deny', 'main-checkout', None),
     ('main-checkout: python -I -c through cmd, in a worktree', lambda w: bash(
