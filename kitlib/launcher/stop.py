@@ -15,10 +15,11 @@ whose script (plain or -EncodedCommand) carries the same name quoted as the wind
 that window's conhost.exe when the window is its only child. Never by window title alone. Each
 process is stopped by pid and creation time, read when it is chosen, so a reused pid is never hit;
 the session's command line is read again at that creation time and must still carry the name.
+After a stop it drops the session's pipes.json entry (pipes.remove).
 """
 import re
 
-from kitlib.launcher import lookup, state, window
+from kitlib.launcher import lookup, pipes, state, window
 from kitlib.launcher.settings import LaunchError
 
 PM_RC_NAME = 'pm-session'
@@ -145,11 +146,21 @@ def stop(settings, host, name, successor=None, pid=0, dry_run=False, procs=None,
         name, tpid, win['ProcessId'] if win else '-', con['ProcessId'] if con else '-', successor or '-')
     if pid:
         line += ' (picked by --pid)'
+    said = [line]
     try:
         state.log(settings, LOG, line)
     except (OSError, LaunchError) as e:              # the stop happened; say the log line is missing
         msg = 'could not write %s: %s' % (LOG, e)
         if warn is None:
-            return [line, msg]
-        warn(msg)
-    return [line]
+            said.append(msg)
+        else:
+            warn(msg)
+    try:
+        pipes.remove(settings, name)
+    except (OSError, LaunchError) as e:              # a stale pipes.json entry is a hint the hub re-checks
+        msg = 'could not update %s: %s' % (pipes.PIPES, e)
+        if warn is None:
+            said.append(msg)
+        else:
+            warn(msg)
+    return said

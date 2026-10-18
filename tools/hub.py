@@ -18,8 +18,11 @@
       The port is hub.port of the machine config (default 8790); --port 0 takes a free one,
       named on the start line. The store is hub.store, else hub/ in the PM data worktree.
       --store PATH serves that folder instead, as a scratch copy: git sync is off for that run,
-      so nothing in it is committed or pushed, here or at the close. An empty PATH is a usage
-      error, never the configured store. A store another server holds is refused.
+      so nothing in it is committed or pushed, here or at the close, and no push notification
+      is sent. An empty PATH is a usage error, never the configured store. A store another
+      server holds is refused.
+      Push notifications (docs/action-hub.md "Push notifications") run when the host adapter
+      has push() and launcher.state_dir is set; otherwise a start-up note says why they are off.
       With hub.access set in the machine config the server also listens on hub.tunnel_port
       (default 8791, loopback too) for a tunnel program, which this tool never runs: every
       request there needs a Cloudflare Access token (kitlib.hubsite.tunnel). A start-up note
@@ -574,6 +577,25 @@ def _log(level, text):
     _say('%s: %s' % (word, serve.scrub(text)), sys.stderr)   # closed console: a handler goes on
 
 
+def _push_delivery():
+    """(delivery, folder) for push notifications (docs/action-hub.md "Push notifications"): the
+    host adapter's push() and the launcher's state folder, or (None, None) with one note line
+    saying why there are none. A scratch store (`serve --store`) never asks."""
+    from kitlib.launcher import settings as launcher_settings
+    try:
+        launch = launcher_settings.load()
+        folder = launch.state_dir()
+        import _host
+        make = getattr(_host.adapter_module().ADAPTER, 'push', None)
+        if make is None:
+            _log('note', 'push notifications off: this host has no delivery')
+            return None, None
+        return make(launch), folder
+    except Exception as e:              # noqa: BLE001 - the hub serves without push notifications
+        _log('note', 'push notifications off: %s: %s' % (type(e).__name__, e))
+        return None, None
+
+
 def _serve(a, stop):
     s = settings.load()
     if a.port is not None:
@@ -581,7 +603,10 @@ def _serve(a, stop):
     scratch = a.store is not None       # never the truth of the text: '' is refused by the parser
     if scratch:
         s = s._replace(store=os.path.abspath(a.store), push=False)
-    hub = serve.build(s, serve.machine_sources(sync=not scratch), log=_log)
+    sources = serve.machine_sources(sync=not scratch)
+    if not scratch:
+        sources.push, sources.push_dir = _push_delivery()
+    hub = serve.build(s, sources, log=_log)
 
     def started(h):
         for note in h.notes:

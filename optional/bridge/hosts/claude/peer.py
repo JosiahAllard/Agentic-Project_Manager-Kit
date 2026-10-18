@@ -15,16 +15,16 @@ import secrets
 import stat
 import threading
 import time
-from urllib.parse import quote, unquote
+from urllib.parse import unquote
 import uuid
 
+from hosts.claude.adapter import peer as claude_peer
 from optional.bridge.hosts.claude.sessions import ClaudeDirectory, ClaudeSession, canonical_pipe
 from optional.bridge.core.contracts import AdapterDescription, Capability
 from optional.bridge.core.jsonwire import JsonLineDecoder, encode_frame
 from optional.bridge.core.messages import BeforeWriteError, DeliveryError, NativeResult, OutboundMessage
 from optional.bridge.core.prompt import delivery_prompt
 from kitlib.proc.pipe import PrivateListener, client_pid, peek, protect_file, read
-from optional.bridge.win.transport import PipeTarget, write_peer
 from kitlib.proc.process import own_ctime
 
 MAX_PENDING = 512
@@ -33,7 +33,7 @@ STATES = {'held':'held', 'refused':'refused', 'denied':'refused', 'expired':'exp
 
 def peer_address(pipe):
     canonical_pipe(pipe)  # accepts only local Claude peer pipes.
-    return 'uds:' + quote(pipe, safe=':_/.-')
+    return claude_peer.sender_address(pipe)
 
 
 def native_message_id(message):
@@ -283,20 +283,20 @@ class ClaudePeerAdapter:
             token = self.directory.peer_token(snapshot)
             native_id, source = native_message_id(message), peer_address(self.endpoint.pipe)
             text = delivery_prompt(message)
-            frame = {'msgV':1,'msg_id':native_id,'uuid':native_id,'type':'user','priority':'next',
-                'from':source,'message':{'role':'user','content':
-                '<cross-session-message from="'+source+'" from-mode="'+mode+'">\n'+text+'\n</cross-session-message>'}}
-            packet = encode_frame({'type':'auth','token':token}) + encode_frame(frame)
+            # The wire format and the write are the hub's (hosts.claude.adapter.peer), held once.
+            packet = b''.join(encode_frame(frame) for frame in
+                              claude_peer.message_frames(token, source, text, native_id, mode))
         except Exception:
             raise BeforeWriteError('native-claude-context-unverified') from None
         self.endpoint.expect(message,snapshot)
-        try:
-            # This is a single attempt. Even a lost helper acknowledgement must
-            # leave the expectation intact for a later correlated native status.
-            write_peer(PipeTarget(snapshot.pipe,snapshot.pid,snapshot.creation),packet)
-        except BeforeWriteError:
+        # This is a single attempt. Even a lost helper acknowledgement must
+        # leave the expectation intact for a later correlated native status.
+        state = claude_peer.write_once(snapshot.pipe, snapshot.pid, snapshot.creation, packet)
+        if state == claude_peer.push.NOT_WRITTEN:
             self.endpoint.forget_before_write(native_id)
-            raise
+            raise BeforeWriteError('native-peer-unavailable-before-write')
+        if state != claude_peer.push.WRITTEN:
+            raise DeliveryError('native-write-uncertain')
         result = self.endpoint.result(message,native_id)
         if result is None:
             raise DeliveryError('native-outcome-unconfirmed')

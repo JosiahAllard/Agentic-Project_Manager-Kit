@@ -1,7 +1,7 @@
 """What the launcher touches outside its own files, in one object so tests can fake it: the home
 folder, the environment (process first, then the user's registry values), the process list, the
-clock, opening a window, git check-ignore, a folder's git place, the home worktree (home.py), and
-stopping a process by pid and creation time.
+clock, opening a window, git check-ignore, a folder's git place, the home worktree (home.py),
+stopping a process by pid and creation time, and recording a new session's pipe (pipes.py).
 """
 import datetime
 import os
@@ -101,3 +101,10 @@ class Host(object):
 
     def sleep(self, seconds):
         time.sleep(seconds)
+
+    def record_pipe(self, settings, name, after_ms):
+        """kitlib.launcher.pipes.record for a session just started: polls the peer registry for
+        up to about 20 s; None when recorded, else the line to say."""
+        from kitlib.launcher import pipes
+        from kitlib.proc import process
+        return pipes.record(settings, name, after_ms, process.proc_ctime, time.sleep, self.now)

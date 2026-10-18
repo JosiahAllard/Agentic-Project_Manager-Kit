@@ -206,6 +206,9 @@ class HostAdapter(Protocol):
     content()                    an object whose renderer() is the host's ContentRenderer
                                  (kitlib.host.content: rendered agents, skills, manifests)
     launcher(), plugin_installer()   None where the host has none
+    push(settings)               optional: the Action Hub's push-notification delivery over the
+                                 launcher's settings (kitlib.hubsite.push: deliver, is_pm); without
+                                 it the hub serves with none (docs/action-hub.md "Push notifications")
     """
     name: str
     profile: HostProfile

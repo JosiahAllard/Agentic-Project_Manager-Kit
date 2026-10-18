@@ -35,7 +35,8 @@ This is the bridge from `codex/robust-bridge-plan`, ported as plan step 10
 Layer rules:
 - The core kit never imports `optional/` (tests/host/test_layering.py).
 - The bridge imports from the kit only `kitlib.ident`, `kitlib.proc` (`pipe`, `errors`,
-  `process`, `job`) and `kitlib.host.registry` (to read `hosts.json`). Its Win32 code is in
+  `process`, `job`), `kitlib.host.registry` (to read `hosts.json`) and, in the Claude half,
+  `hosts.claude.adapter.peer` (the peer wire format and pipe write). Its Win32 code is in
   `win/`, the halves and `kitlib/proc`.
 - `core/` names no host and touches no Win32. Nothing outside `hosts/` names a host
   (tests/bridge/test_port.py). The service loops over the served halves.
