@@ -444,13 +444,15 @@ LINE_CD_RE = re.compile(r'(?i)(?<![\w.-])(?:%s)(?![\w.-])' % '|'.join(
 BASH_VALUE_OPTS = {'-o', '+o', '-O', '+O', '--rcfile', '--init-file'}
 PS_VALUE_PARAMS = ('executionpolicy', 'windowstyle', 'workingdirectory', 'configurationname',
                    'outputformat', 'inputformat', 'version', 'psconsolefile', 'settingsfile',
-                   'custompipename', 'configurationfile', 'encodedarguments')
+                   'custompipename', 'configurationfile')
 PS_VALUE_ALIASES = {'ep', 'ex', 'w', 'wd', 'of', 'o', 'if', 'v', 'ea'}
 # switches whose next word is read both as their value and as the start of the command: -i and
 # -in are -InputFormat with a value to powershell.exe and -Interactive without one to pwsh; an
-# -EncodedArguments prefix is judged both ways too
+# -EncodedArguments prefix is judged both ways too (so it is read before PS_VALUE_PARAMS is)
 PS_VALUE_EITHER = {'i', 'in', 'ea'}
-PS_FORKS_MAX = 16               # such switches in one line _nested_text follows before it flags the line
+# such switches on one reading path that _nested_text follows both ways; past that it flags the
+# line and reads each further one as taking no value
+PS_FORKS_MAX = 16
 # the switches powershell.exe 5.1 knows, each (name, shortest prefix it takes), and its aliases
 # (observed on 5.1 for every prefix). It runs any other switch, and every word after it, as the
 # command. The server modes are left out: they read no command line, so treating them as
@@ -505,7 +507,8 @@ def span_text(cmd, words):
 
 def _nested_text(inv, parsed):
     """(text, shell) a nested shell or eval runs, (text, shell, cwd) when it runs elsewhere
-    (env -C), (STDIN, shell) when the shell reads its commands from standard input, or None."""
+    (env -C), (STDIN, shell) when the shell reads its commands from standard input, or None. For
+    powershell and pwsh the text is a tuple of readings, each a text or STDIN, once each."""
     name, a = inv.name, inv.args
     if name == 'env':
         found = env_nested(inv.cmd.words, inv.index, inv.cmd)
@@ -550,6 +553,8 @@ def _nested_text(inv, parsed):
             return None                         # bash script.sh: a file, not text
         return STDIN, sh.BASH
     if name in PS_SHELLS:
+        # the readings, each a text or STDIN, kept once each and parsed each on its own
+        # (commands.expand): one reading's unclosed <# or quote hides no other
         lit = 'a nested powershell command whose text is not literal'
         seen = {}
 
@@ -559,25 +564,20 @@ def _nested_text(inv, parsed):
             if any(w.dyn for words in texts for w in words):
                 parsed.flag(why)
                 return None
-            return '\n'.join(' '.join(w.text for w in words) for words in texts), sh.PS
+            return joined(tuple(' '.join(w.text for w in words) for words in texts))
 
         def joined(*found):
-            # the texts of several readings, standard input read once when any of them reads it
-            texts = [f[0] for f in found if f and f[0] is not STDIN]
-            if any(f and f[0] is STDIN for f in found):
-                if not texts:
-                    return STDIN, sh.PS
-                piped = _stdin_text(inv.cmd, parsed)
-                texts += [piped] if piped else []
-            return ('\n'.join(texts), sh.PS) if texts else None
+            out = []
+            for r in (r for f in found for r in f or ()):
+                if r not in out:
+                    out.append(r)
+            return tuple(out) or None
 
-        def scan(k, unknown, forks=0):
-            if forks > PS_FORKS_MAX:
-                parsed.flag('a powershell switch line with too many readings')
-                return None
-            if (k, unknown) not in seen:
-                seen[(k, unknown)] = read_from(k, unknown, forks)
-            return seen[(k, unknown)]
+        def scan(k, unknown, forks):
+            # forks is in the key: past PS_FORKS_MAX a path reads less, so its result is its own
+            if (k, unknown, forks) not in seen:
+                seen[(k, unknown, forks)] = read_from(k, unknown, forks)
+            return seen[(k, unknown, forks)]
 
         def read_from(k, unknown, forks):
             while k < len(a):
@@ -592,7 +592,7 @@ def _nested_text(inv, parsed):
                     rest = a[k + 1:]
                     if [w.text for w in rest] == ['-']:
                         if unknown is None:
-                            return STDIN, sh.PS
+                            return (STDIN,)
                         parsed.flag(lit)
                         return None
                     return nested('a nested powershell -Command whose text is not literal', first, rest)
@@ -602,8 +602,13 @@ def _nested_text(inv, parsed):
                 if t.startswith('-') and len(t) > 1 and 'file'.startswith(t[1:]):
                     return nested(lit, first) if first else None
                 if t.startswith('-') and _ps_value_either(t) and k + 1 < len(a):
-                    # the next word as the switch's value, and as the start of the command
-                    return joined(scan(k + 1, unknown, forks + 1), scan(k + 2, unknown, forks + 1))
+                    if forks < PS_FORKS_MAX:
+                        # the next word as the switch's value, and as the start of the command
+                        return joined(scan(k + 1, unknown, forks + 1), scan(k + 2, unknown, forks + 1))
+                    # past the cap the line is flagged, and the reading with no value still judged
+                    parsed.flag('a powershell switch line with too many readings')
+                    k += 1
+                    continue
                 if t.startswith('-'):
                     k += 2 if _ps_takes_value(t) else 1      # as pwsh reads it
                     continue
@@ -621,9 +626,10 @@ def _nested_text(inv, parsed):
                 # powershell.exe runs the words from the unknown switch on; pwsh, when it knows
                 # the switch, reads standard input
                 found = nested(lit, a[unknown:])
-                return found and joined(found, (STDIN, sh.PS))
-            return STDIN, sh.PS
-        return scan(0, None)
+                return found and joined(found, (STDIN,))
+            return (STDIN,)
+        readings = scan(0, None, 0)
+        return (readings, sh.PS) if readings else None
     if name == 'cmd':
         for k, w in enumerate(a):
             if w.text.lower() in ('/c', '/k', '/r', '//c', '//k', '//r'):
@@ -1655,11 +1661,13 @@ def expand(parsed):
             continue
         text, shell = found[:2]
         where, where_home = (found[2], found[2]) if len(found) > 2 else (cmd.cwd, cmd.cwd_home)
-        if text is STDIN:
-            text = _stdin_text(cmd, parsed)
-            if text is None:
-                continue
-        _nest(parsed, cmd, text, shell, where, where_home)
+        # a tuple is a powershell line's readings: each is parsed on its own, standard input once
+        for one in text if isinstance(text, tuple) else (text,):
+            if one is STDIN:
+                one = _stdin_text(cmd, parsed)
+                if one is None:
+                    continue
+            _nest(parsed, cmd, one, shell, where, where_home)
     return parsed
 
 

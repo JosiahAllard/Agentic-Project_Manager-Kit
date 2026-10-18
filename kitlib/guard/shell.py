@@ -255,6 +255,9 @@ class _Scan(object):
                 continue
             if self.shell == PS and self.startswith('<#'):
                 j = self.s.find('#>', self.i + 2)
+                if j < 0:
+                    # powershell.exe runs no -Command text whose <# has no #>; fail closed
+                    self.flag('an unclosed <# comment')
                 self.i = self.n if j < 0 else j + 2
                 continue
             if c == '#' and self.shell != CMD:

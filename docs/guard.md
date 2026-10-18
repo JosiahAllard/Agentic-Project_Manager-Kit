@@ -33,7 +33,7 @@ The guard judges a neutral `kitlib.host.Action` and answers a `kitlib.host.Decis
 - **Seen as text, not commands:** quotes, here-docs and PowerShell here-strings.
 - **Seen as commands:**
   - `;`, `&&`, `||` and `|` split commands;
-  - `$(...)`, backticks, a PowerShell argument in `( )` (one computed word, `shell._Scan.ps_paren_arg`; "Rules") and `powershell -Command "..."` (`/Command`, `–Command`; after a switch powershell.exe does not know (any switch outside `commands.PS51_SWITCHES` and `PS51_ALIASES`, pwsh's value switches included; after `-i`, `-in` or an `-EncodedArguments` prefix the next word is read both as its value and as the command, `PS_VALUE_EITHER`), which starts its command, both that text and a later `-Command` or standard input: `commands._nested_text`), `bash -c`, `cmd /c` (`//c`, `/k`, `//k` too, as Git Bash passes them) bodies are parsed again as nested commands;
+  - `$(...)`, backticks, a PowerShell argument in `( )` (one computed word, `shell._Scan.ps_paren_arg`; "Rules") and `powershell -Command "..."` (`/Command`, `–Command`; after a switch powershell.exe does not know (any switch outside `commands.PS51_SWITCHES` and `PS51_ALIASES`, pwsh's value switches included; after `-i`, `-in` or an `-EncodedArguments` prefix the next word is read both as its value and as the command, `PS_VALUE_EITHER`; past `PS_FORKS_MAX` of them on one reading path the line is flagged `a powershell switch line with too many readings` and each further one is read as taking no value), which starts its command, both that text and a later `-Command` or standard input, each reading kept once and parsed on its own (`commands.expand`): `commands._nested_text`), `bash -c`, `cmd /c` (`//c`, `/k`, `//k` too, as Git Bash passes them) bodies are parsed again as nested commands;
   - the command after find `-exec`, `-execdir`, `-ok` or `-okdir` (up to `;` or `+`) is a nested command at find's working directory (`-execdir`/`-okdir`: at an unknown one), its words that hold `{}` computed;
   - a `trap` handler is a nested command at the trap's working directory, or at an unknown one when the line holds `cd`, `pushd`, `popd` or `Set-Location` anywhere (`commands.LINE_CD_RE`); a `mapfile`/`readarray -C` callback is a nested command;
   - `env -S <string>` is a nested command;
@@ -51,7 +51,7 @@ The guard judges a neutral `kitlib.host.Action` and answers a `kitlib.host.Decis
   - A subcommand the text does not spell out (a variable, a substitution) makes the parse unclean. So does such a word in an option position that the git rules read.
   - Put `--` before a variable path, so it is not read as an option.
 - **Unclean parse:** the parse is unclean when the text holds something the tokeniser does not model:
-  - an unclosed quote, substitution or heredoc, or a `case` statement;
+  - an unclosed quote, substitution or heredoc, a PowerShell `<#` with no `#>` (`shell._Scan.tokens`), or a `case` statement;
   - an encoded command, or a shell, `iex` or `Invoke-Expression` reading its commands from a pipe;
   - `iex`/`Invoke-Expression` of a computed value (`iex ("git " + "stash")`, or `"git $s" | iex`);
   - a shell or `source` reading a process substitution (`bash <(...)`, `source <(...)`);
