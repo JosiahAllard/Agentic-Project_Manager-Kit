@@ -74,3 +74,4 @@ with sources; the open forks with your proposed defaults. No preamble.
 You have no shell, so the kit's python tools are not yours to run. Find docs by {{tool:search}} over
 `docs/INDEX.md` for your topic and {{tool:read}} only the section an entry points to; never read the index
 whole. Long notes go in your scratch folder, never in the repo.
+A page for the owner: {{tool:read}} `<kit>/content/skills/hub-ops/SKILL.md` step 4 (Page); your caller publishes it.
