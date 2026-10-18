@@ -9,7 +9,9 @@ from kitlib.config import ConfigError
 from kitlib.git import cmd
 
 SECTION = 'preflight'
-DEFAULT_TRAPS = 'docs/ops/gotchas.md (read once per task; add yours)'
+DEFAULT_TRAPS_FILE = 'docs/ops/gotchas.md'
+# Printed only when the checkout has DEFAULT_TRAPS_FILE (report.py): many repos, the kit among them, do not.
+DEFAULT_TRAPS = DEFAULT_TRAPS_FILE + ' (read once per task; add yours)'
 
 
 def is_hook(text):

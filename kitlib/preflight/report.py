@@ -105,7 +105,10 @@ def report(top, cfg, kit_root, base=None, fetch=False, lock_reader=lockline.read
     out.extend(hooks.lines(os.path.join(top, cfg.tools_dir), s['report_hooks']))
     out.extend(machine.preflight_lines(s))
     out.append(configline.line(home))
-    out.append('traps     %s' % s['traps'])
+    # The default names a file; with no "preflight".traps set and no such file, there is no line.
+    if (cfg.section(st.SECTION)['traps'] is not None
+            or os.path.isfile(os.path.join(top, st.DEFAULT_TRAPS_FILE))):
+        out.append('traps     %s' % s['traps'])
     index = cfg.section('doc_index')['index']
     gone = '' if os.path.isfile(os.path.join(top, index)) else ' (none: the doc index is opt-in)'
     out.append('index     docs: %s%s | a doc section: %s -C %s --section "<title>"'
