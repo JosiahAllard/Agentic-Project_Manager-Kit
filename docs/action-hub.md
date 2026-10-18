@@ -420,8 +420,8 @@ An agent publishes with `hub.py pages publish ID --title T --html-file F` or the
 `hub.py pages show ID [--out F]` or `hub_page`. Both run `kitlib.hubsite.pagecheck.check` on the
 file before sending, so a body the server would refuse is never sent. Publishing over an existing
 page needs the card's version as `if_version` (`--if-version`); without it the write is
-`conflict`. One lock in the hub process (`_PAGES_LOCK` in `kitlib/hubsite/api.py`) is held from a
-publish's reads to its last write, and over a delete, so of two publishers with the same pin the
+`conflict`. One lock in the hub process (`PAGES_LOCK` in `kitlib/hubsite/store.py`, which
+`api.py` takes) is held from a publish's reads to its last write, and over a delete, so of two publishers with the same pin the
 second reads only after the first has written body and card, and is `conflict` with nothing
 written. The body is put first and the card second, so a card never names a missing body
 (`test_the_body_is_written_before_the_card` and
@@ -435,7 +435,8 @@ What a body may hold (`kitlib/hubsite/pagecheck.py`, its docstring has the full 
 512 KiB of UTF-8 (`MAX_BYTES`); no `script`, `iframe`, `object`, `embed`, `form`, `link`, `meta`,
 `base` or other element of `TAGS`; no `on*` attribute; no `href` that is not a `#fragment` (a
 `data:` image on an svg `image` is the one exception); `src` and CSS `url()` only as `data:`; no
-`@import`, CSS backslash escape or `image-set()`. Markup that the check's parser and a browser
+`@import`, CSS backslash escape or function of `CSS_FUNCTIONS` (`image-set()`, `image()`,
+`src()`). Markup that the check's parser and a browser
 could read differently is refused too: `<` or `&` in a style element's text, a self-closing
 `<style/>`, and the words of `RAW` anywhere in the text: `<title`, `<textarea`, `<xmp`,
 `<noembed`, `<noframes`, `<plaintext`, and the comment and CDATA endings the two may place

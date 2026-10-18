@@ -53,7 +53,7 @@ LINK_DATA_TAGS = ('image', 'feimage')       # svg elements whose href may be a d
 ANIMATES = ('animate', 'set')
 RAW = ('<script', 'javascript:', 'http-equiv', '<title', '<textarea', '<xmp', '<noembed',
        '<noframes', '<plaintext', '<![cdata[', '<!-->', '<!--->', '--!>')
-CSS_FUNCTIONS = ('image-set(', '-webkit-image-set(', 'image(')  # each can load an image by url
+CSS_FUNCTIONS = ('image-set(', '-webkit-image-set(', 'image(', 'src(')  # each can load by url
 TEXT_ATTRS = ('title', 'alt')               # read only as text; so are aria-* (_text_attr)
 STYLE_NEVER = ('<', '&')                    # in a style element's text (module docstring)
 

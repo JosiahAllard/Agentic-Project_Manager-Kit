@@ -49,8 +49,9 @@ letter or digit either side, anywhere, so a ref that names a page is never read 
 html is judged by kitlib.hubsite.pagecheck (at most PAGE_HTML_MAX bytes of UTF-8, no script, no
 outside link or load, no unrendered Mermaid), and a refusal is `invalid`, field html, with
 nothing written. Publishing over a page takes the card's `if_version`; without it, or with
-another, it is `conflict`. _PAGES_LOCK is held from the reads to the last write of a publish or a
-delete, so a second publisher reads only after the first has written both, and with the same pin
+another, it is `conflict`. store.PAGES_LOCK is held from the reads to the last write of a publish or a
+delete (a page is two documents), so a second publisher reads only after the first has written
+both, and with the same pin
 it is `conflict` with nothing written. The body is put first and the card second, each pinned to
 the version read (0: not there yet), so a card never names a missing body; a card write that
 fails after its body leaves an orphan body, which kitlib.hubvalidate warns of and the next
@@ -172,14 +173,13 @@ import json
 import math
 import re
 import time
-from threading import Lock      # the one name taken from threading: this module starts no thread
 
 from kitlib import hubvalidate
 
 from . import pagecheck
 from . import schema
 from . import todosteps
-from .store import HubError
+from .store import PAGES_LOCK, HubError
 
 BASE = '/api/v1'
 API_VERSION = 'v1'
@@ -216,10 +216,6 @@ _SURROGATE = re.compile('[\ud800-\udfff]')     # a lone one: half a character
 # A and R, searched, so neither `plan-Q-1` nor `Q-1.v2` holds a ref a reader would follow.
 _REF_SHAPED = re.compile(r'(?<![A-Za-z0-9])[QMTPSAR]-\d+(?![A-Za-z0-9])', re.I)
 PAGE_HTML_MAX = pagecheck.MAX_BYTES
-# Held across the reads, checks and both writes of one publish or delete: a page is two documents,
-# and without it a second publisher could read between the first's body and card writes, write
-# its body over the first's and leave the first's card naming it ("Pages").
-_PAGES_LOCK = Lock()
 
 
 def error_body(code, message, field=''):
@@ -1376,12 +1372,12 @@ def pages_publish(api, req):
     why = pagecheck.check(b['html'])
     if why:
         raise _invalid(why, 'html')
-    with _PAGES_LOCK:
+    with PAGES_LOCK:
         return _pages_write(api, req, b, doc_id, pin)
 
 
 def _pages_write(api, req, b, doc_id, pin):
-    """pages_publish from the reads on, called with _PAGES_LOCK held."""
+    """pages_publish from the reads on, called with PAGES_LOCK held."""
     card, body = api.store.get('pages', doc_id), api.store.get('page_html', doc_id)
     if card is not None and pin is None:
         raise HubError('conflict', 'pages/%s is at version %d: give it as if_version to publish '
@@ -1414,7 +1410,7 @@ def pages_delete(api, req):
     b = _fields(req, ('if_version',))
     _pin(b)
     doc_id = req.params['id']
-    with _PAGES_LOCK:       # no publish runs between the reads and the two deletes
+    with PAGES_LOCK:        # no publish runs between the reads and the two deletes
         d = api.doc('pages', doc_id, b)
         r = api.store.delete('pages', doc_id, if_version=_version(d))
         body = api.store.get('page_html', doc_id)   # the card first: it never names no body

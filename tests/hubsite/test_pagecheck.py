@@ -65,6 +65,7 @@ DIFFERENTIAL = (
     ('<div style="background-image: image-set( \'https://x\' 1x)">x</div>', 'image-set('),
     ('<style>a{background:-webkit-image-set("https://x" 1x)}</style>', 'image-set('),
     ('<svg><rect style="fill:image(\'https://x/a.png\')"/></svg>', 'image('),
+    ('<style>a{background:src("https://x/a.png")}</style>', 'src('),
     ('<style/>a{background:url(https://x/a.png)}</style>', 'self-closing'),
     ('<style/><p>x</p>', 'self-closing'),
     ('<style>a{background:url(https://x/a.png)}', 'url('),        # never closed: checked at the end

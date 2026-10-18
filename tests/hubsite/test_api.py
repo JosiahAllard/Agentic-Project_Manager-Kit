@@ -5,7 +5,6 @@ import datetime
 import inspect
 import json
 import os
-import re
 import shutil
 import tempfile
 import threading
@@ -88,15 +87,6 @@ class ModuleTest(unittest.TestCase):
         for word in ('import socket', 'import http', 'import threading', 'import argparse',
                      'print(', 'sys.exit', 'import urllib', 'import subprocess'):
             self.assertNotIn(word, src)
-
-    def test_the_one_name_from_threading_is_lock(self):
-        # _PAGES_LOCK guards a publish's reads and writes; the module still starts no thread.
-        src = inspect.getsource(api)
-        self.assertEqual(re.findall(r'^from threading import .*$', src, re.M),
-                         ['from threading import Lock      # the one name taken from threading: '
-                          'this module starts no thread'])
-        self.assertNotIn('threading.', src)
-        self.assertNotIn('Thread(', src)
 
     def test_routes_is_plain_data_another_module_can_walk(self):
         self.assertIsInstance(api.ROUTES, tuple)
@@ -812,7 +802,7 @@ class PagesTest(ApiCase):
 
     def test_two_publishers_with_one_pin_the_second_writes_nothing(self):
         """B arrives after A has written its body and before A writes its card. Without
-        api._PAGES_LOCK, B reads card 1 and body 2, writes its body over A's, and A's card then
+        store.PAGES_LOCK, B reads card 1 and body 2, writes its body over A's, and A's card then
         names B's body. With it, B waits for A's two writes, reads card 2 and is refused."""
         self.publish()
         real_put, real_get, lock = self.store.put, self.store.get, threading.Lock()
@@ -844,7 +834,7 @@ class PagesTest(ApiCase):
             return r
         answers = []
         self.store.get, self.store.put = get, put
-        with mock.patch.object(api, '_PAGES_LOCK', Watched()):
+        with mock.patch.object(api, 'PAGES_LOCK', Watched()):
             a = self.publish(html='<p>A</p>', title='A', if_version=1)
             b_thread[0].join(10)
         self.store.get, self.store.put = real_get, real_put
