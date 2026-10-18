@@ -1,6 +1,7 @@
-"""kitlib.gate.land Lander.push: a push git refused (exit 1) while <remote>/<main> is still the
-base published nothing, so the landing is NOT LANDED (FAILED) and the lock is released, as on a
-red merged gate. Every push whose outcome git cannot settle stays STUCK: exit 128 (git died, so a
+"""kitlib.gate.land Lander.push: a push git refused (exit 1, with git's own message) while
+<remote>/<main> is still the base published nothing, so the landing is NOT LANDED (FAILED) and the
+lock is released, as on a red merged gate. Every push whose outcome git cannot settle stays STUCK:
+exit 1 with no message (a git ended from outside, refs.KILLED_SHAPE), exit 128 (git died, so a
 dropped connection after the upload may still be applied), no exit (timed out or not started),
 exit 0 that the remote does not show, an unreadable or absent remote main.
 
@@ -60,6 +61,21 @@ class PushFailsAtBase(PushCase):
             128, b'', 'fatal: the remote end hung up unexpectedly'))
         self.assert_stuck(out, tip)
         self.assertIn('failed (fatal: the remote end hung up unexpectedly)', out.lines[0])
+
+    def test_a_push_killed_from_outside_at_the_base_is_stuck(self):
+        # exit 1 with no output is also a git ended from outside (refs.KILLED_SHAPE), which may
+        # have died after the upload: git never said it refused, so it is not told
+        _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
+        out = self.land_with_push(tip, cmd.Result(1, b'', ''))
+        self.assert_stuck(out, tip)
+        self.assertIn(refs.KILLED_SHAPE, out.lines[0])
+
+    def test_a_push_that_exited_0_with_the_remote_still_at_the_base_is_stuck(self):
+        # git said it pushed and the remote's main is the base: the two disagree, so not told
+        _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
+        out = self.land_with_push(tip, cmd.Result(0, b'', ''))
+        self.assert_stuck(out, tip)
+        self.assertIn('the push exited 0', out.lines[0])
 
     def test_a_push_that_timed_out_at_the_base_is_stuck(self):
         _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
