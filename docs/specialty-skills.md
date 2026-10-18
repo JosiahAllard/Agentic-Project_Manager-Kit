@@ -83,9 +83,9 @@ creative brief block (FEEL / REFERENCES / AVOID / SCOPE OF CHOICE) and options-f
 
 ## The merged read type (reviewer + researcher)
 
-Mode `read`, sandbox `read-only`, standard tier, effort high: both inputs agree. The reviewer stays
-at the default standard tier; the "Reviewer model" rule in `roster.md` raises it per dispatch,
-unchanged. Guard: `LOCK_VERBS['read'] = {'status'}`, checkout read-only to the shell, owner paths
+Mode `read`, sandbox `read-only`, effort high: both inputs agree. The researcher is standard tier;
+the reviewer is pinned to the light tier (since the reviewer split) and the "Reviewer model" rule in
+`roster.md` raises it per dispatch. Guard: `LOCK_VERBS['read'] = {'status'}`, checkout read-only to the shell, owner paths
 read-only (`kitlib/guard/rolepolicy.py` `RULES`); identical to today.
 
 What replaces the researcher's `write` capability (decided): the report is returned as text, plus a
