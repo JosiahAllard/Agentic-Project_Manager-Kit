@@ -72,7 +72,14 @@ def render(snap):
                    else "%d threads" % L["cpu_slot_threads"],
                    L["gpus"], L["gpu_slots"], L["agent_cap"], L["half"]["cpu"], L["half"]["gpu"],
                    "; WARNING: " + L["warning"] if L.get("warning") else ""))
-    if L["hardware_change"]["changed"]:
+    why = L["hardware_change"]["pending"]
+    # layout.in_force's pending text says why the wanted layout is not in force. Only a change
+    # that waits for an idle machine says "once no run is live or queued"; any other (a look at
+    # the hardware that failed) is not adopted when the machine is idle either, so its reason is
+    # shown in place of the line that the new layout applies then.
+    if why and "once no run is live or queued" not in why:
+        out.append("layout not adopted: %s" % why)
+    elif L["hardware_change"]["changed"]:
         out.append("hardware or division changed: the new layout applies once nothing is live or "
                    "queued%s" % (" (waiting for that)" if L["hardware_change"]["pending"] else ""))
     if L.get("other_labels"):

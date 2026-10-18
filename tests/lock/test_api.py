@@ -246,6 +246,20 @@ class Division(ApiCase):
         self.assertTrue(lay_["hardware_change"]["pending"])
         self.assertTrue(any("hardware or division changed" in x for x in st.render(res["snapshot"])))
 
+    def test_status_says_why_a_failed_look_is_not_adopted(self):
+        """A look that could not read the gpus is never adopted, idle or not: status gives the
+        reason, not the line that the new layout applies once nothing is live or queued."""
+        self.layout()
+        self.hw = dict(self.hw, gpus=[], source=dict(self.hw["source"], gpu="none"),
+                       failed=["gpus"], problems=["Win32_VideoController: exit 1"])
+        self.store = self.make_store()
+        s = self.snap()
+        self.assertTrue(s["layout"]["hardware_change"]["changed"])
+        lines = st.render(s)
+        self.assertTrue(any("the gpus could not be read (Win32_VideoController: exit 1)" in x
+                            for x in lines), lines)
+        self.assertFalse(any("applies once nothing is live" in x for x in lines), lines)
+
 
 class Holds(ApiCase):
     def owner_hold(self, **spec):
