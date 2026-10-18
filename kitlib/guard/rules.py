@@ -1777,10 +1777,15 @@ def hub_not_paths(inv):
     return {id(w) for w in words if w is not None and not hubg.has_glob(w.text)}
 
 
-def inline_code(cmd, inv):
+def inline_code(cmd, inv, tool_run=None):
     """The code python or node runs from its own command line (-c, -e) or from standard input
     (a heredoc, a here-string, the command piped in), as texts; [] for a script run or another
-    program. The command line's texts are every argument (a path the code is given counts)."""
+    program. The command line's texts are every argument (a path the code is given counts).
+    With code on the command line, the command piped in is left out when `tool_run(it)` is true:
+    the hub tool run in the one shape the guard reads in full (hub_shape), any verb it allows.
+    What the code does with that input is not read: code that execs it passes as a script file
+    would. Its heredocs and here-strings still count, and standard input run as code (`-` or no
+    script) always counts the command piped in."""
     if inv is None:
         return []
     py, node = UI_PYTHON_RE.match(inv.name or '') is not None, inv.name == 'node'
@@ -1809,14 +1814,14 @@ def inline_code(cmd, inv):
         for c in (cmd, cmd.pipe_from):
             if c is None:
                 continue
-            if c is not cmd:
+            if c is not cmd and not (code and tool_run is not None and tool_run(c)):
                 texts.append(c.text)
             texts.extend(r.target.text for r in c.redirects
                          if r.target is not None and (r.body or r.op == '<<<'))
     return texts
 
 
-def hub_secret_shell(ctx, cmd, inv, places):
+def hub_secret_shell(ctx, cmd, inv, places, parsed=None):
     """What the command `cmd` names of the hub's secrets, as text, or None: a word naming the
     token folder or a token file (hub_name; a search's or git's literal words are its patterns
     and messages, so only their words that are not literal count), a literal path in the token
@@ -1826,7 +1831,8 @@ def hub_secret_shell(ctx, cmd, inv, places):
     %USERPROFILE%, $env:HOMEDRIVE$env:HOMEPATH: shell.home_text, read as ctx.home), and a
     relative one is read from the directory a cd to the home folder, or a bare cd, moved to
     (the command's cwd_home).
-    `places()` gives the HubPlaces."""
+    `places()` gives the HubPlaces; `parsed`, the whole line, lets python -c parse what the hub
+    tool piped into it prints (inline_code, hub_shape)."""
     name_only = inv is not None and inv.name in hubg.NAME_ONLY_PROGRAMS
     targets = [r.target for r in cmd.redirects if r.target is not None and not r.body and r.op != '<<<']
     for w in cmd.words:
@@ -1857,7 +1863,8 @@ def hub_secret_shell(ctx, cmd, inv, places):
                 continue                        # exempt from the store, never the token folder
             if where == 'secret' or (where == 'store' and not runs_hub):
                 return 'reaches %s (%s)' % (p_.label(where), w.text)
-    for text in inline_code(cmd, inv):
+    tool_run = None if parsed is None else (lambda c: hub_shape(parsed, c, cm.invocation(c)))
+    for text in inline_code(cmd, inv, tool_run):
         m = hubg.INLINE_RE.search(text)
         if m:
             return 'runs code that names %s' % m.group(0)
@@ -1903,7 +1910,7 @@ class HubShell(object):
         """hub-secrets: a shell command that names the hub's secrets (hub_secret_shell)."""
         if self.owner:
             return None
-        found = hub_secret_shell(ctx, cmd, inv, self.places)
+        found = hub_secret_shell(ctx, cmd, inv, self.places, self.parsed)
         if not found:
             return None
         return hub_secrets_refusal(event, ctx, role, '`%s` %s' % (bare(cmd), found))
@@ -3999,32 +4006,16 @@ def shell_writes(event, ctx, cmd, inv, cwd, role):
     if net_mentioned(cmd):
         net = dict(((x.word.start, x.word.end), x) for x in net_writes(cmd)[0])
     into = copy_into(cmd, inv)
+    searched = False
     for w in write_targets(cmd, inv):
         if cmd.shell == sh.BASH and not w.dyn and BASH_DEVICE_RE.match(w.text):
             continue
-        ps_drive = False                        # a PowerShell drive or provider it cannot place
-        pwd = ps_pwd_path(cmd, w)
-        if pwd is not None:
-            target, why = sh.resolve_path(pwd, cmd.cwd, cmd.shell, getattr(ctx, 'home', None)), None
-        elif w.dyn:
-            target, why = None, 'a target that is not literal: %s' % w.text
-        elif cmd.shell == sh.BASH and BASH_TMP_RE.match(w.text):
-            target, why = paths.norm(os.path.join(jail.bash_tmp(ctx), w.text[5:]), fold=False), None
-        elif cmd.shell == sh.PS and PS_PROVIDER_ITEM_RE.match(w.text) and sh.ps_unplaceable(w.text):
-            ps_drive = True                     # ps_provider_item did not skip it: the line may remap the drive
-            target, why = None, ('a PowerShell provider item (%s) on a line that is not only plain cmdlet calls, '
-                                 'so the drive may be remapped to a folder; run the item write in a call of '
-                                 'its own' % w.text)
-        elif cmd.shell == sh.PS and sh.ps_unplaceable(w.text):
-            ps_drive = True
-            target, why = None, 'a PowerShell drive or provider path the guard cannot place: %s' % w.text
-        else:
-            target = sh.resolve_path(w.text, cmd.cwd, cmd.shell, getattr(ctx, 'home', None))
-            why = None if target else 'the directory it runs in is unknown' if cmd.cwd is None \
-                else 'a path the text cannot place: %s' % w.text
-            if target is None and cmd.cwd is None and cmd.cwd_ps_drive:
-                ps_drive = True                 # after cd Main:\ or cd Registry::x
-                why = 'the directory it runs in is a PowerShell drive or provider path the guard cannot place'
+        target, why, ps_drive = write_place(ctx, cmd, w)
+        if target is None and not searched:
+            searched = True                     # find's start paths answer for every such target at once
+            d = find_exec_writes(event, ctx, cmd, cwd, role)
+            if d:
+                return d
         if target is None and cmd.shell == sh.PS and w.dyn:
             ps_drive = True                     # PowerShell's, from any location: one $p or (...) can name the main checkout
         elif target is None and cmd.cwd is not None and not ps_drive and \
@@ -4043,6 +4034,75 @@ def shell_writes(event, ctx, cmd, inv, cwd, role):
                 return d
         if ps_drive:
             d = ps_drive_jail(event, ctx, cwd, role, what, why, rewrite)
+            if d:
+                return d
+    return None
+
+
+def write_place(ctx, cmd, w):
+    """(path, why, ps_drive) of the Word `w` the command `cmd` writes, read from cmd's directory
+    and shell: path None when the guard cannot place it (why says why), and ps_drive when that is
+    a PowerShell drive or provider path (ps_drive_jail judges it)."""
+    ps_drive = False                            # a PowerShell drive or provider it cannot place
+    pwd = ps_pwd_path(cmd, w)
+    if pwd is not None:
+        target, why = sh.resolve_path(pwd, cmd.cwd, cmd.shell, getattr(ctx, 'home', None)), None
+    elif w.dyn:
+        target, why = None, 'a target that is not literal: %s' % w.text
+    elif cmd.shell == sh.BASH and BASH_TMP_RE.match(w.text):
+        target, why = paths.norm(os.path.join(jail.bash_tmp(ctx), w.text[5:]), fold=False), None
+    elif cmd.shell == sh.PS and PS_PROVIDER_ITEM_RE.match(w.text) and sh.ps_unplaceable(w.text):
+        ps_drive = True                         # ps_provider_item did not skip it: the line may remap the drive
+        target, why = None, ('a PowerShell provider item (%s) on a line that is not only plain cmdlet calls, '
+                             'so the drive may be remapped to a folder; run the item write in a call of '
+                             'its own' % w.text)
+    elif cmd.shell == sh.PS and sh.ps_unplaceable(w.text):
+        ps_drive = True
+        target, why = None, 'a PowerShell drive or provider path the guard cannot place: %s' % w.text
+    else:
+        target = sh.resolve_path(w.text, cmd.cwd, cmd.shell, getattr(ctx, 'home', None))
+        why = None if target else 'the directory it runs in is unknown' if cmd.cwd is None \
+            else 'a path the text cannot place: %s' % w.text
+        if target is None and cmd.cwd is None and cmd.cwd_ps_drive:
+            ps_drive = True                     # after cd Main:\ or cd Registry::x
+            why = 'the directory it runs in is a PowerShell drive or provider path the guard cannot place'
+    return target, why, ps_drive
+
+
+def find_runs(cmd):
+    """[(find command, its invocation)]: each bash find whose -exec, -execdir, -ok or -okdir runs
+    `cmd`, nearest first, through any shell nested between (commands.expand nests only those
+    words under a find)."""
+    out, outer = [], cmd.nested_in
+    while outer is not None:
+        if outer.shell == sh.BASH:
+            inv = cm.invocation(outer)
+            if inv is not None and not inv.dyn and inv.name == 'find':
+                out.append((outer, inv))
+        outer = outer.nested_in
+    return out
+
+
+def find_exec_writes(event, ctx, cmd, cwd, role):
+    """A write the guard cannot place by a command a bash find runs (find_runs): the found path
+    filled into {}, a path the line computes ("$1" in a shell given {}), or a relative path in a
+    found file's folder (-execdir). It is judged as each such find's start paths, or the directory
+    find runs in when it names none, as -delete is (write_targets): every path find hands the
+    command is under them. A start path the guard cannot place passes from a worktree, as any
+    target does (shell_writes)."""
+    for f, inv in find_runs(cmd):
+        for w in _find_paths(inv.args)[0] or [here(inv.word)]:
+            if not w.dyn and BASH_DEVICE_RE.match(w.text):
+                continue
+            target, why = write_place(ctx, f, w)[:2]
+            if target is None and f.cwd is not None and ctx.place(f.cwd).kind not in (repo.MAIN, repo.UNKNOWN):
+                continue
+            what = '`%s` runs `%s` on what it finds in %s' % (
+                bare(f), bare(cmd), w.text if w.text != '.' else 'the directory it runs in')
+            stand_in = (w.text == '.' and f.source[w.start:w.end] != '.') or w.start == w.end
+            part = any((x.start, x.end) == (w.start, w.end) and x.text != w.text for x in f.words)
+            rewrite = None if stand_in or part else (lambda path, w=w, f=f: retarget(f, w, path))
+            d = edit_target(event, ctx, target, cwd, role, what, why, rewrite=rewrite, run=bare(f))
             if d:
                 return d
     return None
