@@ -164,6 +164,7 @@ class Parsed(object):
         self.home = home            # the folder `~` names (home_folder)
         self.commands = []
         self.unclean = []
+        self.nests = 0              # nested shell texts parsed into it (commands._nest, MAX_NESTS)
 
     @property
     def clean(self):

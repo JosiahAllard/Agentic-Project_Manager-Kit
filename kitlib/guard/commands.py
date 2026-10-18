@@ -1671,12 +1671,24 @@ def expand(parsed):
     return parsed
 
 
+# the nested texts one line's read parses at most (every one passes through _nest), past which the
+# line is flagged: each nested powershell reading may fork again, so without a cap on the total a
+# line of repeated `-i pwsh` makes some 17 readings per level, 17^6 parses down to MAX_DEPTH. The
+# readings are not merged across levels: the same text under another outer command is judged with
+# that command's chain (nested_in), so only this total bounds the work.
+MAX_NESTS = 64
+
+
 def _nest(parsed, cmd, text, shell, cwd, cwd_home):
     """Parse `text` as commands `cmd` runs, at `cwd` (cwd_home: shell.track), into parsed;
     returns those commands."""
     if cmd.depth + 1 > sh.MAX_DEPTH:
         parsed.flag('shells nested deeper than %d' % sh.MAX_DEPTH)
         return []
+    if parsed.nests >= MAX_NESTS:
+        parsed.flag('more than %d nested shell texts' % MAX_NESTS)
+        return []
+    parsed.nests += 1
     _p, cmds = sh.parse(text, shell, cwd, depth=cmd.depth + 1, parsed=parsed, cwd_home=cwd_home)
     for c in cmds:
         if c.nested_in is None:

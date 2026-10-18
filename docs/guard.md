@@ -59,7 +59,8 @@ The guard judges a neutral `kitlib.host.Action` and answers a `kitlib.host.Decis
   - a program named by a variable or a substitution;
   - a git subcommand or read option that is not literal;
   - a brace expansion, ANSI-C escape or backslash in a program name;
-  - a `cmd` `if` statement or `for ... do` loop.
+  - a `cmd` `if` statement or `for ... do` loop;
+  - more than `commands.MAX_NESTS` (64) nested shell texts in one line (`commands._nest`): each powershell reading may be a powershell line that forks again (`pwsh -i pwsh -i pwsh ...`), so the line's total is capped; a reading is not merged with the same text under another outer command, whose chain the rules read.
 
   The rules still run on what was read, then "Fallback" runs.
 
