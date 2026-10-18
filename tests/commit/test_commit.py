@@ -14,6 +14,7 @@ import tempfile
 import unittest
 from unittest import mock
 
+from kitlib import attribution
 from kitlib import commit as C
 from kitlib.config import owner as ownermod
 from kitlib.git import cmd
@@ -79,7 +80,7 @@ class CoAuthorTrailer(unittest.TestCase):
     def test_display_names_and_other_ids_are_left_as_they_are(self):
         for model in ('Claude Opus 5.5', 'Opus 5.5', 'Claude-Opus-5-5', 'claude-opus',
                       'claude-opus-5-5-20260101'):
-            self.assertEqual(C.display_name(model), model)
+            self.assertEqual(attribution.display_name(model), model)
         self.assertEqual(C.coauthor('claude-opus'),
                          'Co-Authored-By: Claude claude-opus <noreply@anthropic.com>')
 

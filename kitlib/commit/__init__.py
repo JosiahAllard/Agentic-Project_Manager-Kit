@@ -86,7 +86,6 @@ from kitlib.docs import callers as doc_callers
 from kitlib.config import owner as ownermod
 from kitlib.content import oncommit
 from kitlib.git import checkout, cmd, refs, repo
-from kitlib.host import registry
 from kitlib.proc import spawn
 
 from kitlib.commit import approval
@@ -140,29 +139,12 @@ def settings(cfg):
             'rule_pointer': cfg.section('checkout_guard')['rule_pointer']}
 
 
-def display_name(model, provider=None):
-    """`<name>-opus-5-5` -> `Opus 5.5` (<name>: the provider's attribution name, lower case, from
-    hosts.json); any other value as given. Only a lower-case id of that exact shape is mapped, so
-    a display name or a longer id (a date suffix) is never reworded."""
-    if not isinstance(model, str):
-        return model
-    registered = attribution.providers()
-    host = registry.default() if provider is None else provider
-    if host not in registered:
-        return model
-    found = re.match(r'%s-(opus|sonnet|haiku)-(\d{1,2}(?:-\d{1,2})?)\Z'
-                     % re.escape(registered[host].name.lower()), model.strip())
-    if found is None:
-        return model
-    return '%s %s' % (found.group(1).capitalize(), found.group(2).replace('-', '.'))
-
-
 def coauthor(model, families=(), provider=None):
     """The co-author trailer for `model`: `Claude <model>`, never a bare model name - unless the
     name is one of `families` or starts with one followed by a space, '.' or '-' (`Codex GPT-5`,
     `Codex-mini`, `Codex.2`; never `Codexer`): that name is kept as given. A lower-case Claude
-    model id is written as its display name (display_name)."""
-    return attribution.coauthor(display_name(model, provider), provider, families)
+    model id is written as its display name (attribution.display_name)."""
+    return attribution.coauthor(model, provider, families)
 
 
 def repo_path(path, root):
