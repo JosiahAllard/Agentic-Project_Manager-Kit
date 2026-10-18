@@ -43,9 +43,20 @@ SP_SWITCHES = ('-wait', '-nonewwindow', '-passthru', '-usenewenvironment', '-loa
                '-whatif', '-confirm')
 SP_VALUES = ('-filepath', '-argumentlist', '-workingdirectory', '-verb', '-windowstyle', '-credential',
              '-redirectstandardinput', '-redirectstandardoutput', '-redirectstandarderror', '-environment')
-SP_ALIASES = {'-args': '-argumentlist', '-path': '-filepath', '-lup': '-loaduserprofile',
+SP_ALIASES = {'-args': '-argumentlist', '-path': '-filepath', '-pspath': '-filepath', '-lup': '-loaduserprofile',
               '-nnw': '-nonewwindow', '-rso': '-redirectstandardoutput', '-rse': '-redirectstandarderror',
-              '-rsi': '-redirectstandardinput', '-wd': '-workingdirectory'}
+              '-rsi': '-redirectstandardinput', '-wd': '-workingdirectory', '-runas': '-credential',
+              '-wi': '-whatif', '-cf': '-confirm',
+              '-vb': '-verbose', '-db': '-debug', '-ea': '-erroraction', '-wa': '-warningaction',
+              '-infa': '-informationaction', '-ev': '-errorvariable', '-wv': '-warningvariable',
+              '-iv': '-informationvariable', '-ov': '-outvariable', '-ob': '-outbuffer',
+              '-pv': '-pipelinevariable', '-proga': '-progressaction'}
+# the common parameters every cmdlet takes, Start-Process among them: the switches, the ones that take a
+# value. Kept apart from SP_SWITCHES and SP_VALUES, which name Start-Process's own (ps_env_unsafe reads
+# -Environment among those alone)
+PS_COMMON_SWITCHES = ('-verbose', '-debug')
+PS_COMMON_VALUES = ('-erroraction', '-warningaction', '-informationaction', '-errorvariable', '-warningvariable',
+                    '-informationvariable', '-outvariable', '-outbuffer', '-pipelinevariable', '-progressaction')
 
 
 class Invocation(object):
@@ -54,13 +65,19 @@ class Invocation(object):
     words); `cmd` the Command; `dyn` the program word is not literal; `index` the program word's
     place in cmd.words; `via` 'start-process' when Start-Process runs it, 'xargs' when xargs
     feeds it its arguments; `writes` the files Start-Process redirects into; `word` the program
-    Word."""
-    __slots__ = ('name', 'path', 'args', 'cmd', 'dyn', 'index', 'via', 'writes', 'word')
+    Word. Start-Process only: `listed` the -ArgumentList elements as written, before any split
+    (the program's command line is their texts joined with spaces), `workdir` the
+    -WorkingDirectory Word or None, `unread` why the guard cannot read the call's parameters (expand
+    flags it), or None."""
+    __slots__ = ('name', 'path', 'args', 'cmd', 'dyn', 'index', 'via', 'writes', 'word', 'listed', 'workdir',
+                 'unread')
 
-    def __init__(self, name, path, args, cmd, dyn, index, via=None, writes=(), word=None):
+    def __init__(self, name, path, args, cmd, dyn, index, via=None, writes=(), word=None, listed=(),
+                 workdir=None, unread=None):
         self.name, self.path, self.args, self.cmd, self.dyn, self.index = (
             name, path, args, cmd, dyn, index)
         self.via, self.writes, self.word = via, list(writes), word
+        self.listed, self.workdir, self.unread = list(listed), workdir, unread
 
     @property
     def argv(self):
@@ -174,47 +191,122 @@ def canon_param(text, names, aliases=None):
     return hits[0] if len(hits) == 1 else None
 
 
+def _ps_param_word(cmd, w):
+    """True when PowerShell reads the word as a parameter name: not quoted, not computed, a dash
+    (any of shell.PS_DASHES) and then a letter, _ or ?. `--headless` and `-1` are values."""
+    if quoted(cmd, w) or w.dyn:
+        return False
+    t = sh.ps_dashed(w.text)
+    return len(t) > 1 and t[0] == '-' and (t[1].isalpha() or t[1] in '_?')
+
+
+class Unread(object):
+    """A Start-Process call with no program the guard can name and a parameter it cannot read:
+    `why`. invocation gives it only to expand (which flags it); every other caller gets None, as
+    for any call with no program, so rolepolicy.lock_verb still reads its words (NO_PROGRAM)."""
+    __slots__ = ('why',)
+
+    def __init__(self, why):
+        self.why = why
+
+
+# PowerShell's stop-parsing token between two words (the scanner keeps no word for it)
+PS_STOP_PARSING_RE = re.compile('[%s]{2}%%' % ''.join(sh.PS_DASHES))
+
+
+def _sp_unreadable(cmd, words, i):
+    """Why a Start-Process call's binding cannot be read from its words, or None: an unquoted `--`
+    (every later word positional), a splat (`@p`: its parameters are in the hashtable) or `--%`
+    (the rest of the line passed as written). The guard refuses these rather than read them."""
+    for w in words[i + 1:]:
+        if quoted(cmd, w):
+            continue
+        if PS_SPLAT_RE.match(w.text):
+            return 'a splatted Start-Process argument (%s)' % w.text
+        t = w.text
+        if len(t) >= 2 and t[0] in sh.PS_DASHES and t[1] in sh.PS_DASHES and (len(t) == 2 or t[2] == '%'):
+            return 'a Start-Process %s (end of parameters or stop-parsing)' % t
+    src = cmd.source or ''
+    for a, b in zip(words[i:], words[i + 1:]):
+        if a.end is None or b.start is None or not 0 <= a.end <= b.start <= len(src):
+            return 'a Start-Process call whose words the guard cannot place in its line'
+        if PS_STOP_PARSING_RE.search(src[a.end:b.start]):
+            return 'a Start-Process --% (stop-parsing)'
+    return None
+
+
 def _start_process(cmd, words, i):
-    """Start-Process [-FilePath] prog [[-ArgumentList] args] with its switches anywhere."""
+    """Start-Process [-FilePath] prog [[-ArgumentList] args] with its switches anywhere.
+
+    The words carry no commas, so an array (`'/c','echo x'`) is several words. -ArgumentList, in
+    its space or colon form, takes every word up to the next parameter word: a FilePath given by
+    position after it is the last of them. With no -ArgumentList, every positional word after the
+    program is the list (PowerShell binds the whole array). A parameter word that is neither a
+    Start-Process parameter nor a common one (or an ambiguous prefix), or a switch given `-Name:`
+    and its value after a space, sets `unread`: the guard cannot tell what PowerShell binds, so the
+    line is refused, never read with the program shifted. The readings are close to PowerShell's
+    binding, not exact: a line PowerShell refuses is read as more text, never less."""
     rest = words[i + 1:]
-    names = SP_SWITCHES + SP_VALUES
-    prog, args, writes, positional = None, [], [], []
+    names = SP_SWITCHES + SP_VALUES + PS_COMMON_SWITCHES + PS_COMMON_VALUES
+    switches = SP_SWITCHES + PS_COMMON_SWITCHES
+    prog, writes, positional, listed, workdir = None, [], [], [], None
+    unread = _sp_unreadable(cmd, words, i)
     k = 0
+
+    def list_words(j):
+        # the words from rest[j] up to the next parameter word
+        e = j
+        while e < len(rest) and not _ps_param_word(cmd, rest[e]):
+            e += 1
+        return rest[j:e], e
+
     while k < len(rest):
         w = rest[k]
-        p = None if quoted(cmd, w) or w.dyn else canon_param(w.text, names, SP_ALIASES)
-        if p is None:
+        if not _ps_param_word(cmd, w):
             positional.append(w)
             k += 1
             continue
-        if p in SP_SWITCHES:
+        p = canon_param(w.text, names, SP_ALIASES)
+        if p is None:
+            unread = unread or 'a Start-Process parameter the guard does not know (%s)' % w.text
             k += 1
             continue
-        if ':' in w.text:
+        raw = cmd.source[w.start:w.end] if 0 <= w.start < w.end <= len(cmd.source) else w.text
+        # -Name: value, its value the next word; -Name:C: is its value C:, never bare
+        bare = ':' in w.text and ':' in raw and raw.split(':', 1)[1] == ''
+        if p in switches:
+            if bare:
+                unread = unread or 'a Start-Process switch given a value after a space (%s)' % w.text
+            k += 1
+            continue
+        if ':' in w.text and not bare:
             vals, k = [sh.Word(w.text.split(':', 1)[1], w.dyn, w.start, w.end)], k + 1
+            if p == '-argumentlist':
+                more, k = list_words(k)             # -ArgumentList:'/c','echo x'
+                vals += more
         elif p == '-argumentlist':
-            j = k + 1
-            while j < len(rest) and (quoted(cmd, rest[j]) or rest[j].dyn or
-                                     canon_param(rest[j].text, names, SP_ALIASES) is None):
-                j += 1
-            vals, k = rest[k + 1:j], j
+            vals, k = list_words(k + 1)
         else:
             vals, k = rest[k + 1:k + 2], k + 2
         if p == '-filepath' and vals:
             prog = vals[0]
         elif p == '-argumentlist':
-            for v in vals:
-                args.extend(_split_list(v))
+            listed.extend(vals)
         elif p in ('-redirectstandardoutput', '-redirectstandarderror'):
             writes.extend(vals)
+        elif p == '-workingdirectory' and vals:
+            workdir = vals[0]
     if prog is None and positional:
         prog = positional.pop(0)
-    if not args and positional:
-        args = _split_list(positional[0])
+    if prog is None and len(listed) > 1:
+        prog = listed.pop()                         # -ArgumentList '/c ...' cmd: FilePath by position
+    listed = positional + listed
     if prog is None:
-        return None
+        # no program the guard can name: None as for any such call, an Unread for expand to refuse
+        return None if unread is None else Unread(unread)
+    args = [x for v in listed for x in _split_list(v)]
     return Invocation(base_name(prog.text), prog.text, args, cmd, prog.dyn, i, via='start-process',
-                      writes=writes, word=prog)
+                      writes=writes, word=prog, listed=listed, workdir=workdir, unread=unread)
 
 
 def _split_list(w):
@@ -250,9 +342,10 @@ def passed(cmd, w):
     return w.text
 
 
-def invocation(cmd):
+def invocation(cmd, unread=False):
     """The Invocation `cmd` runs, or None (an assignment only, an empty command, a keyword that
-    runs no program, a PowerShell expression)."""
+    runs no program, a PowerShell expression). With `unread` (expand only), a Start-Process call
+    with no program and a parameter the guard cannot read gives an Unread instead of None."""
     words = cmd.words
     i = 0
     called = False
@@ -319,7 +412,8 @@ def invocation(cmd):
                                       word=words[g])
             continue
         if cmd.shell == sh.PS and name in ('start-process', 'saps', 'start'):
-            return _start_process(cmd, words, i)
+            sp = _start_process(cmd, words, i)
+            return sp if unread or not isinstance(sp, Unread) else None
         if cmd.shell == sh.CMD and name == 'start':
             i += 1
             if i < len(words) and quoted(cmd, words[i]):
@@ -505,10 +599,95 @@ def span_text(cmd, words):
     return ' '.join(x.text for x in words)
 
 
+SP_SHELLS = BASH_SHELLS | PS_SHELLS | {'cmd'}
+CMD_RUN_SWITCHES = ('/c', '/k', '/r', '//c', '//k', '//r')
+# a word that may hold a run switch cmd reads, not on its own: cmd splits its switches at , ; =
+# as well as spaces and finds a / switch inside a word (/cecho, /q/c, ;/c, x/c, "/c"), so a /c,
+# /k or /r anywhere in a word before the run switch is searched for, never matched at its start
+CMD_RUN_HIDDEN_RE = re.compile(r'(?i)/[ckr]')
+
+
+def _cmd_hidden_switch(text):
+    """True when a cmd word that is not a run switch on its own may still hold one."""
+    return bool(CMD_RUN_HIDDEN_RE.search(text))
+
+
 def _nested_text(inv, parsed):
     """(text, shell) a nested shell or eval runs, (text, shell, cwd) when it runs elsewhere
-    (env -C), (STDIN, shell) when the shell reads its commands from standard input, or None. For
-    powershell and pwsh the text is a tuple of readings, each a text or STDIN, once each."""
+    (env -C, Start-Process -WorkingDirectory), (STDIN, shell) when the shell reads its commands
+    from standard input, or None. For powershell and pwsh, and cmd started by Start-Process, the
+    text is a tuple of readings, each a text or STDIN, once each."""
+    if inv.via == 'start-process' and inv.name in SP_SHELLS:
+        return _sp_shell_text(inv, parsed)
+    return _shell_text(inv, parsed)
+
+
+# the characters PowerShell reads in a -WorkingDirectory as a wildcard pattern (Start-Process
+# resolves the text as a pattern, so '<drive>\repo?' finds <drive>\repo1) and its pattern escape
+SP_WORKDIR_WILD = frozenset('*?[`')
+SP_WORKDIR_DEVICE = ('\\\\.\\', '\\\\?\\')
+
+
+def sp_workdir_unplaceable(text):
+    """True when the literal -WorkingDirectory `text` of a Start-Process call names no one folder
+    the guard can place exactly: empty; a wildcard character (SP_WORKDIR_WILD); a bare drive C:
+    or a drive-relative C:x (PowerShell reads both from that drive's current location, which the
+    text does not tell); a colon past the drive (another PowerShell drive or provider, a stream);
+    a device path \\\\.\\ or \\\\?\\; a Git Bash /c/x spelling (shell.msys_to_win), which PowerShell
+    reads as a folder on the current drive. An absolute path, a share, a FileSystem::<abs> path,
+    ~ and a plain relative path are placed (shell.resolve_path)."""
+    p = sh.ps_filesystem_path(text) or text
+    if not p or any(c in SP_WORKDIR_WILD for c in p):
+        return True
+    if re.match(r'^[A-Za-z]:(?![\\/])', p) or ':' in p[2:]:
+        return True
+    if p[:4].replace('/', '\\') in SP_WORKDIR_DEVICE:
+        return True
+    return sh.msys_to_win(p) != p
+
+
+def _sp_shell_text(inv, parsed):
+    """_nested_text for a shell Start-Process starts. Start-Process hands the program one command
+    line, its -ArgumentList elements joined with spaces; a computed element, or a computed
+    -WorkingDirectory, makes the text unreadable. A literal -WorkingDirectory the guard cannot
+    place exactly (sp_workdir_unplaceable) gives the nested line no directory (None), so a write
+    there is refused as one whose directory is unknown. cmd runs the rest of that line after its
+    /c (/k, /r), read with its outer quotes kept and dropped (cmd keeps or drops them by what lies
+    between); bash and powershell read the words _split_list made of each element."""
+    if any(w.dyn for w in inv.listed):
+        parsed.flag('a shell Start-Process starts with an argument list that is not literal (%s)' % inv.path)
+        return None
+    where = ()
+    if inv.workdir is not None:
+        if inv.workdir.dyn:
+            parsed.flag('a shell Start-Process starts in a working directory that is not literal (%s)' % inv.path)
+            return None
+        text = inv.workdir.text
+        where = (None if sp_workdir_unplaceable(text) else
+                 sh.resolve_path(text, inv.cmd.cwd, shell=sh.PS, home=parsed.home),)
+    if inv.name != 'cmd':
+        found = _shell_text(inv, parsed)
+        return found and found[:2] + where
+    line = ' '.join(w.text for w in inv.listed)
+    for m in re.finditer(r'\S+', line):
+        t = m.group(0).lower()
+        if t in CMD_RUN_SWITCHES:
+            rest = line[m.end():].strip()
+            if not rest:
+                return None
+            readings = (rest,)
+            if rest.startswith('"'):
+                k = rest.rfind('"')
+                readings += ((rest[1:k] + rest[k + 1:]) if k > 0 else rest[1:],)
+            return (readings, sh.CMD) + where
+        if _cmd_hidden_switch(t):
+            parsed.flag('a cmd switch Start-Process passes that the guard cannot read (%s)' % m.group(0))
+            return None
+    return None
+
+
+def _shell_text(inv, parsed):
+    """_nested_text for every program but a shell Start-Process starts."""
     name, a = inv.name, inv.args
     if name == 'env':
         found = env_nested(inv.cmd.words, inv.index, inv.cmd)
@@ -632,7 +811,14 @@ def _nested_text(inv, parsed):
         return (readings, sh.PS) if readings else None
     if name == 'cmd':
         for k, w in enumerate(a):
-            if w.text.lower() in ('/c', '/k', '/r', '//c', '//k', '//r'):
+            if w.dyn:
+                # a computed word before the run switch may itself be /c
+                parsed.flag('a cmd switch that is not literal')
+                return None
+            if w.text.lower() not in CMD_RUN_SWITCHES and _cmd_hidden_switch(w.text):
+                parsed.flag('a cmd switch the guard cannot read (%s)' % w.text)
+                return None
+            if w.text.lower() in CMD_RUN_SWITCHES:
                 rest = a[k + 1:]
                 if any(x.dyn for x in rest):
                     parsed.flag('a nested cmd /c whose text is not literal')
@@ -1626,9 +1812,15 @@ def expand(parsed):
             parsed.flag('a cmd if statement')
         if cmd.shell == sh.CMD and first == 'for':
             parsed.flag('a cmd for loop')
-        inv = invocation(cmd)
+        inv = invocation(cmd, unread=True)
+        if isinstance(inv, Unread):
+            parsed.flag(inv.why)                # Start-Process, no program and a parameter unread
+            continue
         if inv is None:
             continue
+        if inv.unread:
+            # Start-Process with a parameter the guard cannot read: refused, its program still read
+            parsed.flag(inv.unread)
         if cmd.split:
             # `Set-Content -Value $s.Trim() -Path x`: the scanner cut the command at a ( ) or { }
             # and read the rest as commands of their own; its arguments are not all known

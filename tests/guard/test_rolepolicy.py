@@ -564,6 +564,22 @@ class LockVerbs(Base):
                     self.assertIsNotNone(d, text)
                     self.assertEqual((d.verdict, d.rule), ('deny', 'role-lock'), d.reason)
 
+    def test_a_start_process_with_no_program_and_an_unread_parameter_names_no_program(self):
+        """commands.Unread reaches commands.expand alone: lock_verb still gets None for a
+        Start-Process call with no program the guard can name, so its words naming the lock CLI
+        are refused as NO_PROGRAM, in every mode, for the main roles too."""
+        text = "Start-Process -ArgumentList 'tools/machine_lock.py stop 42' -Bogus"
+        from kitlib.guard import commands as cm, shell as sh
+        for m in ('read', 'write', 'controller'):
+            with self.subTest(mode=m):
+                parsed = cm.read(text, sh.PS, self.w.wt)
+                self.assertEqual(rolepolicy.lock_verb(parsed, m, self.w.kit_dir)[0], rolepolicy.NO_PROGRAM)
+        for role in ('coordinator', 'pm', 'senior-worker'):
+            with self.subTest(role=role):
+                d = rolepolicy.check(self.shell(text, role), self.w.ctx())
+                self.assertIsNotNone(d, text)
+                self.assertEqual((d.verdict, d.rule), ('deny', 'role-lock'), d.reason)
+
     def test_the_module_name_inside_a_regex_alternation_is_not_a_lock_call(self):
         """A read-only env listing filtered on a regex naming
         MACHINE_LOCK among others (a Where-Object block's comparison has no program) names no lock

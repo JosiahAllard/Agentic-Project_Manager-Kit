@@ -768,11 +768,33 @@ class RealUnits(TempHomeCase):
         from kitlib.proc import process
         mods, env = self.pid_units(4, extra=SLEEP_AFTER)
         out = io.StringIO()
-        timer = threading.Timer(1.5, _thread.interrupt_main)     # Ctrl+C, as the console
-        timer.start()
-        self.addCleanup(timer.cancel)
+        probe_out = env['PROBE_OUT']
+        stop = threading.Event()
+        self.addCleanup(stop.set)
+        failed = []
+
+        def interrupt_once_two_units_run():
+            # Ctrl+C, as the console, once both running units have written their probe (each then
+            # sleeps 4 s): a fixed delay fires before any unit started when the machine is loaded.
+            deadline = time.time() + 60
+            while not stop.is_set():
+                if len(os.listdir(probe_out)) >= 2:
+                    _thread.interrupt_main()
+                    return
+                if time.time() > deadline:
+                    failed.append('fewer than 2 units wrote a probe within 60 s: %s'
+                                  % os.listdir(probe_out))
+                    _thread.interrupt_main()      # so the run ends; the check below then fails
+                    return
+                stop.wait(0.02)
+
+        poller = threading.Thread(target=interrupt_once_two_units_run, daemon=True)
+        poller.start()
         t = time.time()
         rc, summary = selfrun.run(mods, self.root, 2, out=out, environ=env, timeout=120)
+        stop.set()
+        poller.join(5)
+        self.assertEqual(failed, [])
         self.assertEqual(rc, selfrun.INTERRUPTED, out.getvalue())
         self.assertLess(time.time() - t, 30)
         found = self.probes()
