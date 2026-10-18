@@ -11,8 +11,9 @@ item itself is read through the hub. Nothing here imports a host: the delivery o
                        none); ambiguous: several live sessions had that name.
   is_pm(recipient)     the recipient is the PM's own session
 
-What fires (a fingerprint per item: a question's (status, answer.at), a to-do's (status,
-done_at); only a changed fingerprint fires, so a pm_ack, which leaves both alone, never does):
+What fires (a fingerprint per item: a question's status, answer.at and a digest of its answer,
+a to-do's status and done_at; only a changed fingerprint fires, so a pm_ack, which leaves them
+alone, never does):
   answered    a question answered or answered again
   done        a to-do marked done or done again
   reopened    a done to-do back to open: informational, acknowledged by the first written
@@ -61,6 +62,7 @@ while the thread runs).
 """
 import collections
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -95,9 +97,13 @@ def field(value):
 
 
 def fingerprint(kind, doc):
+    """What a push is about: a question's status and answer, a to-do's status and done_at. The
+    answer goes in as a digest (its time has whole seconds, so two answers in one second differ
+    only in what they say; the outbox never holds that text)."""
     if kind == 'question':
         ans = doc.get('answer') if isinstance(doc.get('answer'), dict) else {}
-        return [doc.get('status'), ans.get('at')]
+        said = json.dumps(ans, sort_keys=True, default=str).encode('utf-8')
+        return [doc.get('status'), ans.get('at'), hashlib.sha256(said).hexdigest()[:16]]
     return [doc.get('status'), doc.get('done_at')]
 
 
