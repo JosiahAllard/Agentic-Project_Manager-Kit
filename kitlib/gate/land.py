@@ -81,7 +81,8 @@ tools/land.py).
   9  push        `git push <remote> <merge>:refs/heads/<main>` from the main checkout, never
                  forced. Someone pushed <remote>/<main> to a commit without the merge while the
                  gate ran: the push is refused, NOT LANDED (FAILED, `nothing landed`), the lock
-                 released; so is a push git refuses (exit 1) while <remote>/<main> is the base
+                 released; so is a push git refuses (exit 1 with git's own refusal message)
+                 while <remote>/<main> is the base
   10 verify      `git ls-remote` must show the merge on <remote>/<main>; then the tracking ref
                  is fetched, the main checkout's main brought to the merge (sync_main: a
                  fast-forward when HEAD is on main, main has nothing of its own and no local
@@ -115,9 +116,10 @@ OK` line appears only in a landing that LANDED (a green merged gate that is not 
 reworded).
 
 STUCK is only a push that may have landed and cannot be told: interrupted, timed out, died (exit
-128) or reported done while <remote>/<main> is still the base, or with <remote>/<main> unreadable.
-A push git refused (exit 1) while <remote>/<main> is still the base published nothing: NOT LANDED
-(FAILED), the lock released, as on a red merged gate. The landing lock stays held at phase
+128), ended with exit 1 and no message (a git ended from outside, refs.KILLED_SHAPE) or reported
+done while <remote>/<main> is still the base, or with <remote>/<main> unreadable. A push git
+refused (exit 1 with git's own refusal message) while <remote>/<main> is still the base published
+nothing: NOT LANDED (FAILED), the lock released, as on a red merged gate. The landing lock stays held at phase
 `stuck` so no other landing starts on top of it, and the message says what is left and the
 commands that clear it. Nothing is ever reset: the main checkout was never merged into.
 
@@ -1464,12 +1466,13 @@ class Lander(object):
         """Step 9: write the merge's gate-OK record, push the merge to <remote>/<main> (never
         forced) and verify it there with ls-remote. None once verified (phase pushed: landed);
         else why nothing landed (NOT LANDED: the record could not be written, the remote's main
-        moved on while the gate ran, so the push was refused, or git refused the push, exit 1,
-        with the remote's main still the base). _Stuck when the push may have landed and git
-        cannot tell (ls-remote unreadable, or a remote main this checkout cannot place), or when
-        any other push did not land on a remote main still at the base or absent: exit 0, no
-        exit (timed out), or exit 128 (git died: a connection dropped after the upload may still
-        be applied on the remote)."""
+        moved on while the gate ran, so the push was refused, or git refused the push, exit 1
+        with git's own refusal message, with the remote's main still the base). _Stuck when the
+        push may have landed and git cannot tell (ls-remote unreadable, or a remote main this
+        checkout cannot place), or when any other push did not land on a remote main still at the
+        base or absent: exit 0, no exit (timed out), exit 1 with no message (a git ended from
+        outside, refs.KILLED_SHAPE) or exit 128 (git died: a connection dropped after the upload
+        may still be applied on the remote)."""
         main_b, remote = self.cfg.main_branch, self.cfg.remote
         try:
             path = self.write_record(started, results)
@@ -1497,18 +1500,20 @@ class Lander(object):
                              'against the merge %s' % (how, remote, main_b, pushed[:10] or 'absent',
                                                        self.merge[:10]))
             if not on:
-                if r.rc == 1 and pushed == self.expect_main:
-                    # git ran to the end and refused it (a hook, a rejected ref): nothing was
-                    # published. Exit 128 (git died) stays STUCK: a connection dropped after the
-                    # upload may still be applied on the remote after this ls-remote
-                    said = ' | '.join(l.strip() for l in (r.err or '').splitlines() if l.strip())
+                said = ' | '.join(l.strip() for l in (r.err or '').splitlines() if l.strip())
+                if r.rc == 1 and said and pushed == self.expect_main:
+                    # git ran to the end and said why it refused (a hook, a rejected ref): nothing
+                    # was published. Exit 1 with no message is also a git ended from outside
+                    # (refs.KILLED_SHAPE), and exit 128 a git that died: either may have gone after
+                    # the upload, which the remote may still apply after this ls-remote: STUCK
                     return ('the push of the merge %s failed (%s), and %s/%s is still the base %s; '
                             'nothing landed, and the merge of %s was undone: land again once the '
-                            'push can go' % (self.merge[:10], said or 'exit 1', remote, main_b,
+                            'push can go' % (self.merge[:10], said, remote, main_b,
                                              self.expect_main[:10], self.branch))
                 if r.rc == 0 or not pushed or pushed == self.expect_main:
-                    raise _Stuck('the push %s, and %s/%s is %s, not the merge %s' % (
-                        how, remote, main_b, (pushed or 'absent')[:10], self.merge[:10]))
+                    raise _Stuck('the push %s, and %s/%s is %s, not the merge %s%s' % (
+                        how, remote, main_b, (pushed or 'absent')[:10], self.merge[:10],
+                        '' if said or r.rc != 1 else '; %s' % refs.KILLED_SHAPE))
                 return ('%s/%s moved on to %s while the merged gate ran, so the push of the merge '
                         '%s was refused (a landing never forces); nothing landed, and the merge '
                         'of %s was undone: land again' % (remote, main_b, pushed[:10],
