@@ -141,7 +141,7 @@ class Culprit(BisectCase):
         self.assertEqual(r['bisect']['culprit'], culprit)
         rec = self.record(rid)
         self.assertEqual(rec.text, before)
-        ids = [i for i in self.ids() if 'DAILY-RED' in i]
+        ids = [i for i in self.ids() if '-DAILY-RED-' in i]
         self.assertEqual(ids, [rid])
 
     def ids(self):
