@@ -54,8 +54,19 @@ back to: a key of the launcher's sessions.json, read on each add (Api's session_
 which is also what an absent one is; any other is `invalid`, and the refusal names the known
 keys, never the file. A new to-do's `steps` are made into its commands and detail here and are
 not kept (todo_steps); an agent's to-do is judged by the owner's to-do rules (kitlib.hubsite.
-todosteps.check) for every client. On the two edit routes a null `repo` (and a to-do's
+todosteps.check) for every client. On the edit routes a null `repo` (and a to-do's
 null `detail`) clears the field exactly as "" does; any other null field is read as absent.
+
+Creators. An agent edits (POST questions/{id}/edit, todos/{id}/edit) or withdraws (POST
+questions/{id}/delete, todos/{id}/delete) only an open item it added: the body gives the item's
+own `from` (`pm` matches an item with none) and the `if_version` it read, both required, and an
+owner's to-do (`from: you`) is never an agent's. A wrong `from` is `forbidden`, an item no longer
+open is `conflict`, field status, and neither changes it. Every agent shares one token, so the
+`from` is a claim: the check stops a mistake, not an agent that gives another's name. An agent's
+to-do edit is judged by the owner's to-do rules (todo_steps), the changed fields only; it takes
+no `steps`. The owner edits only a to-do of their own (any status) and deletes one of their own
+at any status, or any open question or open to-do; the owner never edits an agent's item. A
+withdrawal deletes the document: there is no withdrawn status.
 
 Results. status is 200 with the route's object, or the status of STATUS[code] with
 {"ok": false, "error": {"code", "message", "field"}}; both carry `revision`. The codes are the
@@ -727,8 +738,9 @@ def todo_steps(b, judge=True):
     their commands after the given ones, their summary at the end of the detail (or the detail,
     when there is none), and no `steps` field left. Refused (`invalid`, the field named): a
     `commands` that is not a list, a given command holding a lone surrogate, a bad step and, when
-    `judge` (an agent's to-do), text the owner's to-do rules forbid (todosteps.check). The rules
-    judge the text as given, before any step is rendered: an edit's text is never judged."""
+    `judge` (an agent's to-do or edit), text the owner's to-do rules forbid (todosteps.check).
+    The rules judge the text as given, before any step is rendered: the owner's text is never
+    judged."""
     b = dict(b)
     steps = b.pop('steps', None)
     commands = _typed(b, 'commands', (list,), 'a list of strings')
@@ -795,36 +807,110 @@ def _own(doc_id, d, what):
                        'added (from: %s)' % (doc_id, who or 'nobody', what, OWNER_FROM), 'from')
 
 
+def _creator(b, doc_id, d, what):
+    """An agent's edit or withdrawal: refused (`forbidden`, field from) unless the `from` the
+    agent gives is the item's own (AGENT_FROM when the item has none) and the item is not the
+    owner's. All agents share one token, so this is a claim checked against the item: it stops a
+    mistake, not an agent that gives another's name."""
+    stored = d.get('from') or AGENT_FROM
+    claimed = (b.get('from') or '').strip()
+    if stored == OWNER_FROM or claimed != stored:
+        raise HubError('forbidden', '%s is from %s: an agent can %s only an item it added, '
+                       'giving that item\'s from (%s was given)'
+                       % (doc_id, stored, what, ascii(claimed)), 'from')
+
+
+def _still_open(doc_id, d, what):
+    """Refused (`conflict`, field status) once the item is no longer open: an answered, logged
+    or done item is the owner's record and is not changed under it."""
+    if d.get('status') != 'open':
+        raise HubError('conflict', '%s is %s: only an open item can be %s'
+                       % (doc_id, d.get('status'), what), 'status')
+
+
+def _withdrawn(api, coll, doc_id, d):
+    r = api.store.delete(coll, doc_id, if_version=_version(d))
+    return {'ok': True, 'id': doc_id, 'deleted': True, 'revision': r.revision}
+
+
+def questions_edit(api, req):
+    names = ('title', 'context', 'options', 'recommended', 'refs', 'urgent')
+    b = _fields(req, names + ('from', 'if_version'), required=('from',), flags=('urgent',))
+    _pin(b, required=True)
+    for name in ('from', 'title', 'context'):
+        _text(b, name)
+    _typed(b, 'options', (list,), 'a list of {label, description}')
+    changes = {k: v for k, v in b.items() if k not in ('from', 'if_version')}
+    if not changes:
+        raise _invalid('give at least one of %s to change' % ', '.join(names), 'body')
+    if 'title' in changes and not changes['title'].strip():
+        raise _invalid('title cannot be made empty', 'title')
+    doc_id = req.params['id']
+    d = api.doc('questions', doc_id, b)
+    _creator(b, doc_id, d, 'edit')
+    _still_open(doc_id, d, 'edited')
+    return api.change('questions', doc_id, d, changes, req, {'status': 'open'})
+
+
+def questions_delete(api, req):
+    owner = req.role == OWNER
+    b = _fields(req, ('if_version',) if owner else ('from', 'if_version'),
+                required=() if owner else ('from',))
+    _pin(b, required=not owner)
+    _text(b, 'from')
+    doc_id = req.params['id']
+    d = api.doc('questions', doc_id, b)
+    if not owner:
+        _creator(b, doc_id, d, 'withdraw')
+    _still_open(doc_id, d, 'withdrawn')
+    return _withdrawn(api, 'questions', doc_id, d)
+
+
 def todos_edit(api, req):
-    b = _fields(req, ('title', 'detail', 'commands', 'repo', 'refs', 'urgent', 'if_version'),
-                flags=('urgent',), blank=('repo', 'detail'))
-    _pin(b)
-    for name in ('title', 'detail', 'repo'):
+    owner = req.role == OWNER
+    names = ('title', 'detail', 'commands', 'repo', 'refs', 'urgent')
+    b = _fields(req, names + (('if_version',) if owner else ('from', 'if_version')),
+                required=() if owner else ('from',), flags=('urgent',),
+                blank=('repo', 'detail'))
+    _pin(b, required=not owner)
+    for name in ('title', 'detail', 'repo', 'from'):
         _text(b, name)
     for name in ('commands', 'refs'):
         _typed(b, name, (list,), 'a list')
-    changes = {k: v for k, v in b.items() if k != 'if_version'}
+    changes = {k: v for k, v in b.items() if k not in ('from', 'if_version')}
     if not changes:
-        raise _invalid('give at least one of title, detail, commands, repo, refs, urgent to '
-                       'change', 'body')
+        raise _invalid('give at least one of %s to change' % ', '.join(names), 'body')
     if 'title' in changes and not changes['title'].strip():
         raise _invalid('title cannot be made empty', 'title')
     doc_id = req.params['id']
     d = api.doc('todos', doc_id, b)
-    _own(doc_id, d, 'edit')
+    if owner:
+        _own(doc_id, d, 'edit')
+    else:
+        _creator(b, doc_id, d, 'edit')
+        _still_open(doc_id, d, 'edited')
+        # the text an agent gives is judged by the rules its add was (todo_steps)
+        changes = todo_steps(changes, judge=True)
     if d.get('pm_ack'):             # the PM read the old text: the changed one is pending again
         changes['pm_ack'] = False
     return api.change('todos', doc_id, d, changes, req, {'status': d.get('status')})
 
 
 def todos_delete(api, req):
-    b = _fields(req, ('if_version',))
-    _pin(b)
+    owner = req.role == OWNER
+    b = _fields(req, ('if_version',) if owner else ('from', 'if_version'),
+                required=() if owner else ('from',))
+    _pin(b, required=not owner)
+    _text(b, 'from')
     doc_id = req.params['id']
     d = api.doc('todos', doc_id, b)
-    _own(doc_id, d, 'delete')
-    r = api.store.delete('todos', doc_id, if_version=_version(d))
-    return {'ok': True, 'id': doc_id, 'deleted': True, 'revision': r.revision}
+    if not owner:
+        _creator(b, doc_id, d, 'withdraw')
+        _still_open(doc_id, d, 'withdrawn')
+    elif d.get('from') != OWNER_FROM:
+        # the owner deletes a to-do of their own at any status, an agent's only while open
+        _still_open(doc_id, d, 'deleted')
+    return _withdrawn(api, 'todos', doc_id, d)
 
 
 def stories_list(api, req):
@@ -1276,12 +1362,14 @@ ROUTES = (
     _r('POST', '/questions', AGENT, questions_add),
     _r('POST', '/questions/{id}/answer', OWNER, questions_answer),
     _r('POST', '/questions/{id}/log', AGENT, questions_log),
+    _r('POST', '/questions/{id}/edit', AGENT, questions_edit),
+    _r('POST', '/questions/{id}/delete', ANY, questions_delete),
     _r('GET', '/todos', ANY, todos_list),
     _r('POST', '/todos', ANY, todos_add),
     _r('POST', '/todos/{id}/done', OWNER, todos_done),
     _r('POST', '/todos/{id}/ack', AGENT, todos_ack),
-    _r('POST', '/todos/{id}/edit', OWNER, todos_edit),
-    _r('POST', '/todos/{id}/delete', OWNER, todos_delete),
+    _r('POST', '/todos/{id}/edit', ANY, todos_edit),
+    _r('POST', '/todos/{id}/delete', ANY, todos_delete),
     _r('GET', '/stories', ANY, stories_list),
     _r('POST', '/stories', OWNER, stories_add),
     _r('POST', '/stories/{id}', AGENT, stories_set),

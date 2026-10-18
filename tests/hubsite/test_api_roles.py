@@ -76,6 +76,11 @@ def seed_todo(store):
     return store.add('todos', {'status': 'open', 'title': 't', 'from': 'you'}).id
 
 
+def seed_agent_todo(store):
+    return store.add('todos', {'status': 'open', 'title': 't', 'from': 'pm',
+                               'commands': ['dir']}).id
+
+
 def seed_story(store):
     return store.add('stories', {'status': 'submitted', 'repo': 'r', 'title': 't',
                                  'story': 's'}).id
@@ -117,8 +122,18 @@ ROWS = {
     ('POST', '/todos'): (None, {'title': 't', 'commands': ['dir']}, None),
     ('POST', '/todos/{id}/done'): (seed_todo, {'done': True}, None),
     ('POST', '/todos/{id}/ack'): (seed_todo, None, None),
-    ('POST', '/todos/{id}/edit'): (seed_todo, {'title': 'u'}, None),
-    ('POST', '/todos/{id}/delete'): (seed_todo, None, None),
+    ('POST', '/questions/{id}/edit'): (seed_question,
+                                       {'from': 'pm', 'title': 'u', 'if_version': 1}, None),
+    # an ANY route whose two roles take different bodies: a row for each
+    ('POST', '/questions/{id}/delete'): {OWNER: (seed_question, None, None),
+                                         AGENT: (seed_question, {'from': 'pm', 'if_version': 1},
+                                                 None)},
+    ('POST', '/todos/{id}/edit'): {OWNER: (seed_todo, {'title': 'u'}, None),
+                                   AGENT: (seed_agent_todo,
+                                           {'from': 'pm', 'title': 'u', 'if_version': 1}, None)},
+    ('POST', '/todos/{id}/delete'): {OWNER: (seed_todo, None, None),
+                                     AGENT: (seed_agent_todo, {'from': 'pm', 'if_version': 1},
+                                             None)},
     ('GET', '/stories'): (None, None, None),
     ('POST', '/stories'): (None, {'repo': 'r', 'title': 't', 'story': 's'}, None),
     ('POST', '/stories/{id}'): (seed_story, {'status': 'review', 'if_version': 1}, None),
@@ -164,6 +179,12 @@ def key(route):
     return route.method, route.pattern[len(BASE):]
 
 
+def row(route, role):
+    """(seed, body, query) of route for the caller role."""
+    r = ROWS[key(route)]
+    return r.get(role, r[OWNER]) if isinstance(r, dict) else r
+
+
 def path(route, doc_id):
     """route.pattern with its `{id}` and `{repo}` segments filled in."""
     return route.pattern.replace('{id}', doc_id).replace('{repo}', REPO)
@@ -193,8 +214,8 @@ class RolesCase(unittest.TestCase):
 
     def test_one_row_per_route_and_role(self):
         for route in api.ROUTES:
-            seed, body, query = ROWS[key(route)]
             for role in (OWNER, AGENT):
+                seed, body, query = row(route, role)
                 with self.subTest(route=route.method + ' ' + route.pattern, role=role):
                     store, a, doc_id = self.fresh(seed)
                     before = store.snapshot()
@@ -211,7 +232,8 @@ class RolesCase(unittest.TestCase):
         want = {('POST', '/questions'): AGENT, ('POST', '/questions/{id}/answer'): OWNER,
                 ('POST', '/questions/{id}/log'): AGENT, ('POST', '/todos'): ANY,
                 ('POST', '/todos/{id}/done'): OWNER, ('POST', '/todos/{id}/ack'): AGENT,
-                ('POST', '/todos/{id}/edit'): OWNER, ('POST', '/todos/{id}/delete'): OWNER,
+                ('POST', '/questions/{id}/edit'): AGENT, ('POST', '/questions/{id}/delete'): ANY,
+                ('POST', '/todos/{id}/edit'): ANY, ('POST', '/todos/{id}/delete'): ANY,
                 ('POST', '/stories'): OWNER, ('POST', '/stories/{id}'): AGENT,
                 ('POST', '/stories/{id}/withdraw'): OWNER, ('POST', '/to_pm'): OWNER,
                 ('POST', '/to_pm/send'): OWNER, ('POST', '/to_pm/{id}/reply'): AGENT,
@@ -253,7 +275,7 @@ class RolesCase(unittest.TestCase):
 
     def test_a_caller_that_is_neither_owner_nor_agent_is_refused(self):
         for route in api.ROUTES:
-            seed, body, query = ROWS[key(route)]
+            seed, body, query = row(route, AGENT)
             for role in (None, '', ANY, 'Owner', 'OWNER', 'owner ', 'admin', True, 1,
                          ['owner'], ('owner',), {'owner': 1}):
                 with self.subTest(route=route.method + ' ' + route.pattern, role=repr(role)):

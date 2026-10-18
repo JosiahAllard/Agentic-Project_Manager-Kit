@@ -490,10 +490,10 @@ class ApiCase(httpfix.ListenerCase):
         lis = self.listener(api.Api(self.store, views=httpfix.Views(), clock=httpfix.CLOCK,
                                     approval_key=lambda: roles.KEY, checkout=lambda r: git.root))
         for route in api.ROUTES:
-            seed, body, query = roles.ROWS[roles.key(route)]
-            if roles.key(route) == ('POST', '/approvals'):
-                body = dict(body, head=git.initial)
             for role, token in ((OWNER, self.owner), (AGENT, self.agent)):
+                seed, body, query = roles.row(route, role)
+                if roles.key(route) == ('POST', '/approvals'):
+                    body = dict(body, head=git.initial)
                 with self.subTest(route=route.method + ' ' + route.pattern, role=role):
                     doc_id = seed(self.store) if seed else 'X-1'
                     path = roles.path(route, doc_id)
