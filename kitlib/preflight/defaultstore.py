@@ -61,6 +61,9 @@ def _lines(top, cfg, tools):
     if pm_root is not None and pm_named is not None:
         return [head + ', so backlog.py -C on this checkout reads that copy; the live store: '
                 '%s -C "%s" list' % (command, _slash(pm_root))]
+    if why and pm_root is not None:
+        return [head + ', so backlog.py -C on this checkout reads that copy; '
+                + smod.unreadable_kit_json(pm_root, why)]
     if why:
         return [head + ", so backlog.py -C on this checkout reads that copy; the live store's PM "
                 'data worktree was not found (%s)' % why]

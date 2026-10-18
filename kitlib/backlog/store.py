@@ -1307,8 +1307,8 @@ def pm_data_live_store(root):
     (at_landing.pm_data_root) and the "backlog".store its `.kit.json` writes, `named` None when it
     writes none (it then reads the same implicit ref as `root`, refs being shared by every
     worktree). `(None, None, None)` when the repository has no PM data record or `root` is that
-    worktree; `(None, None, why)` when the worktree cannot be found or its `.kit.json` read.
-    Shared by default_store_refusal and preflight's backlog line (kitlib/preflight/defaultstore.py)."""
+    worktree; `(None, None, why)` when the worktree cannot be found; `(pm_root, None, why)` when it
+    was found and its `.kit.json` cannot be read (`why` the error). Shared by default_store_refusal and preflight's backlog line (kitlib/preflight/defaultstore.py)."""
     from . import at_landing                         # at_landing imports this module
     pm_root, why = at_landing.pm_data_root(root)
     if pm_root is None:
@@ -1319,9 +1319,14 @@ def pm_data_live_store(root):
     try:
         named = load_config(pm_root).written('backlog', 'store')
     except (ConfigError, OSError) as exc:
-        return None, None, 'cannot read the .kit.json of the PM data worktree %s: %s' % (
-            pm_root.replace('\\', '/'), exc)
+        return pm_root, None, str(exc) or type(exc).__name__
     return pm_root, named, None
+
+
+def unreadable_kit_json(pm_root, why):
+    """The clause naming a PM data worktree whose `.kit.json` cannot be read (pm_data_live_store)."""
+    return 'the .kit.json of the PM data worktree %s cannot be read: %s' % (
+        pm_root.replace('\\', '/'), why)
 
 
 def default_store_refusal(root):
@@ -1340,6 +1345,8 @@ def default_store_refusal(root):
     if pm_root is None:
         where = '; the PM data worktree was not found (%s)' % why if why else ''
         return '%s%s; %s' % (head, where, opt_in)
+    if why:
+        return '%s; %s; %s' % (head, unreadable_kit_json(pm_root, why), opt_in)
     if named is None:
         return ('%s; the PM data worktree "%s" names no "backlog".store either, so a write there '
                 'is refused too; %s' % (head, pm_root.replace('\\', '/'), opt_in))

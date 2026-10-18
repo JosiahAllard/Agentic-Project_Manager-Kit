@@ -126,8 +126,10 @@ class DefaultRef(unittest.TestCase):
             self.publish(self.backend(), priced('FOO'))
         text = str(caught.exception)
         self.assertNotIn('write to the live store', text)
-        self.assertIn('the PM data worktree was not found (cannot read the .kit.json of the PM data '
-                      'worktree %s: ' % wt.replace('\\', '/'), text)
+        self.assertIn('; the .kit.json of the PM data worktree %s cannot be read: '
+                      % wt.replace('\\', '/'), text)
+        self.assertNotIn('was not found', text)
+        self.assertTrue(text.endswith('; set %s in .kit.json to write this store' % OPT_IN), text)
         self.assertEqual(self.ref_tip(), ('', ''))
 
     def test_the_refusal_in_the_pm_data_worktree_itself_never_points_at_itself(self):

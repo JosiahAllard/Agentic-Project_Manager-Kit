@@ -115,9 +115,9 @@ class TheDefaultStoreLine(tp.Fixture):
         got = defaultstore.lines(self.root, load_config(self.root), 'T')
         self.assertEqual(len(got), 1, got)
         self.assertTrue(got[0].startswith(
-            HEAD % 1 + IMPLICIT + ", so backlog.py -C on this checkout reads that copy; the live "
-            "store's PM data worktree was not found (cannot read the .kit.json of the PM data "
-            'worktree %s: ' % wt.replace('\\', '/')), got)
+            HEAD % 1 + IMPLICIT + ', so backlog.py -C on this checkout reads that copy; the '
+            '.kit.json of the PM data worktree %s cannot be read: ' % wt.replace('\\', '/')), got)
+        self.assertNotIn('was not found', got[0])
         self.assertNotIn('-C "%s"' % wt.replace('\\', '/'), got[0])
 
     def test_the_warn_naming_the_pm_data_worktree_costs_four_git_processes(self):
