@@ -69,6 +69,20 @@ class CoAuthorTrailer(unittest.TestCase):
                          'Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>')
         self.assertEqual(C.coauthor('Claude'), 'Co-Authored-By: Claude <noreply@anthropic.com>')
 
+    def test_a_lower_case_model_id_is_written_as_its_display_name(self):
+        for model, name in (('claude-opus-5-5', 'Opus 5.5'), ('claude-sonnet-5-5', 'Sonnet 5.5'),
+                            ('claude-haiku-4-5', 'Haiku 4.5'), ('claude-opus-5', 'Opus 5'),
+                            (' claude-opus-5-5 ', 'Opus 5.5')):
+            self.assertEqual(C.coauthor(model),
+                             'Co-Authored-By: Claude %s <noreply@anthropic.com>' % name)
+
+    def test_display_names_and_other_ids_are_left_as_they_are(self):
+        for model in ('Claude Opus 5.5', 'Opus 5.5', 'Claude-Opus-5-5', 'claude-opus',
+                      'claude-opus-5-5-20260101'):
+            self.assertEqual(C.display_name(model), model)
+        self.assertEqual(C.coauthor('claude-opus'),
+                         'Co-Authored-By: Claude claude-opus <noreply@anthropic.com>')
+
     def test_whitespace_is_collapsed(self):
         self.assertEqual(C.coauthor('  Opus   5.5 '),
                          'Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>')

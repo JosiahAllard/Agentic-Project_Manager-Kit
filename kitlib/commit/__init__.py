@@ -139,11 +139,25 @@ def settings(cfg):
             'rule_pointer': cfg.section('checkout_guard')['rule_pointer']}
 
 
+# A lower-case Claude model id (`claude-opus-5-5`): family, then the version's numbers.
+MODEL_ID = re.compile(r'claude-(opus|sonnet|haiku)-(\d{1,2}(?:-\d{1,2})?)\Z')
+
+
+def display_name(model):
+    """`claude-opus-5-5` -> `Opus 5.5`; any other value as given. Only a lower-case id of that
+    exact shape is mapped, so a display name or a longer id (a date suffix) is never reworded."""
+    found = MODEL_ID.match(model.strip()) if isinstance(model, str) else None
+    if found is None:
+        return model
+    return '%s %s' % (found.group(1).capitalize(), found.group(2).replace('-', '.'))
+
+
 def coauthor(model, families=(), provider=None):
     """The co-author trailer for `model`: `Claude <model>`, never a bare model name - unless the
     name is one of `families` or starts with one followed by a space, '.' or '-' (`Codex GPT-5`,
-    `Codex-mini`, `Codex.2`; never `Codexer`): that name is kept as given."""
-    return attribution.coauthor(model, provider, families)
+    `Codex-mini`, `Codex.2`; never `Codexer`): that name is kept as given. A lower-case Claude
+    model id is written as its display name (display_name)."""
+    return attribution.coauthor(display_name(model), provider, families)
 
 
 def repo_path(path, root):
