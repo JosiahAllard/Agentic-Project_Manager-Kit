@@ -446,10 +446,23 @@ PS_VALUE_PARAMS = ('executionpolicy', 'windowstyle', 'workingdirectory', 'config
                    'outputformat', 'inputformat', 'version', 'psconsolefile', 'settingsfile',
                    'custompipename', 'configurationfile')
 PS_VALUE_ALIASES = {'ep', 'ex', 'w', 'wd', 'of', 'o', 'if', 'v', 'ea'}
-# powershell.exe and pwsh switches without a value (by any prefix)
-PS_SWITCHES = ('nologo', 'noexit', 'sta', 'mta', 'noprofile', 'noninteractive', 'help', '?', 'login',
-               'interactive', 'namedpipeservermode', 'servermode', 'socketservermode', 'sshservermode',
-               'noprofileloadtime')
+# the switches powershell.exe 5.1 knows, each (name, shortest prefix it takes), and its aliases
+# (observed on 5.1 for every prefix). It runs any other switch, and every word after it, as the
+# command. The server modes are left out: they read no command line, so treating them as
+# unknown only reads more.
+PS51_SWITCHES = (('command', 'c'), ('configurationname', 'config'), ('encodedcommand', 'e'),
+                 ('encodedarguments', 'encodeda'), ('executionpolicy', 'ex'), ('file', 'f'),
+                 ('help', 'h'), ('inputformat', 'i'), ('mta', 'mta'), ('noexit', 'noe'),
+                 ('nologo', 'nol'), ('noninteractive', 'noni'), ('noprofile', 'nop'),
+                 ('outputformat', 'o'), ('sta', 'st'), ('windowstyle', 'w'), ('workingdirectory', 'wo'))
+PS51_ALIASES = {'ec', 'ea', 'ep', 'if', 'of', 'wd', '?'}
+
+
+def _ps51_known(t):
+    """True when powershell.exe 5.1 reads the switch word `t` ('-name', lower case) as a switch."""
+    body = t[1:]
+    return body in PS51_ALIASES or any(body.startswith(short) and name.startswith(body)
+                                       for name, short in PS51_SWITCHES)
 
 
 def _ps_takes_value(t):
@@ -553,15 +566,13 @@ def _nested_text(inv, parsed):
                     parsed.flag(lit)
                     return None
                 return nested('a nested powershell -Command whose text is not literal', first, rest)
+            if unknown is None and t.startswith('-') and t != '-' and not _ps51_known(t):
+                # a value switch included: powershell.exe never takes its value
+                unknown = k
             if t.startswith('-') and len(t) > 1 and 'file'.startswith(t[1:]):
                 return nested(lit, first) if first else None
-            if t.startswith('-') and _ps_takes_value(t):
-                k += 2
-                continue
             if t.startswith('-'):
-                if unknown is None and t != '-' and not any(s.startswith(t[1:]) for s in PS_SWITCHES):
-                    unknown = k
-                k += 1
+                k += 2 if _ps_takes_value(t) else 1      # as pwsh reads it
                 continue
             # a word that is no switch starts the command; a shell that took it as the value of a
             # switch before it reads a later -Command
@@ -572,7 +583,11 @@ def _nested_text(inv, parsed):
                 return None
             return nested(lit, first or a[k:], then)
         if unknown is not None:
-            return nested(lit, a[unknown:])
+            # powershell.exe runs the words from the unknown switch on; pwsh, when it knows the
+            # switch, reads standard input
+            found = nested(lit, a[unknown:])
+            piped = _stdin_text(inv.cmd, parsed) if found else None
+            return found and ((found[0] + '\n' + piped) if piped else found[0], sh.PS)
         return STDIN, sh.PS
     if name == 'cmd':
         for k, w in enumerate(a):

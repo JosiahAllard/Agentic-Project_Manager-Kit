@@ -509,7 +509,8 @@ class DynamicTargets(Base):
                      'powershell "-x; Remove-Item {main}\\x.txt" -c "Write-Output hi"',
                      'pwsh -Zork -c "Remove-Item {main}\\x.txt"',
                      'pwsh -ConfigurationFile c.json -c "Remove-Item {main}\\x.txt"',
-                     # a one-letter switch with a value (-o Text, -i Text) before -Command
+                     # -o Text is -OutputFormat and its value; -i is -InputFormat with a value
+                     # to powershell.exe, -Interactive without one to pwsh: both readings judged
                      'powershell -o Text -c "Remove-Item {main}\\x.txt"',
                      'powershell -i Text -c "Remove-Item {main}\\x.txt"'):
             with self.subTest(text):
@@ -521,6 +522,27 @@ class DynamicTargets(Base):
                      'pwsh -nop -noni -NoProfileLoadTime -c "Write-Output hi"', 'pwsh -Zork -c "Write-Output hi"'):
             with self.subTest(text):
                 self.allowed(self.run_ps(text))
+
+    def test_a_value_switch_powershell_exe_does_not_know_is_no_value(self):
+        # commands.PS51_SWITCHES: value switches powershell.exe 5.1 does not know, which it runs,
+        # and every word after, as the command (observed: probe8.log)
+        for sw in ('-ConfigurationFile', '-SettingsFile', '-CustomPipeName', '-conf', '-PSConsoleFile'):
+            with self.subTest(sw):
+                self.denied(self.run_ps('powershell %s "; Remove-Item {main}\\x.txt"' % sw), 'main-checkout')
+
+    def test_a_pwsh_only_switch_is_unknown_to_powershell_exe(self):
+        # commands.PS51_SWITCHES: -Login, -l, -Interactive and -NoProfileLoadTime are pwsh's; to
+        # powershell.exe the switch and what follows are the command; pwsh reads standard input
+        for sw in ('-Login', '-l', '-Interactive', '-NoProfileLoadTime', '-mt', '-cwa'):
+            with self.subTest(sw):
+                self.denied(self.run_ps('powershell %s -ep "; Remove-Item {main}\\x.txt"' % sw), 'main-checkout')
+        self.denied(self.run_ps("'Remove-Item {main}\\x.txt' | pwsh -NoProfileLoadTime"), 'main-checkout')
+
+    def test_a_version_prefix_powershell_exe_rejects_is_no_value(self):
+        # powershell.exe 5.1 knows no -Version prefix as a switch and runs it as the command
+        for sw in ('-v', '-ve', '-Version'):
+            with self.subTest(sw):
+                self.denied(self.run_ps('powershell %s "; Remove-Item {main}\\x.txt"' % sw), 'main-checkout')
 
     def test_a_literal_here_string_value_passes(self):
         # rules._ps_value_end: a -Value here-string with no substitution is one value
