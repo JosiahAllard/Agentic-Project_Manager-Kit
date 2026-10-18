@@ -460,6 +460,32 @@ class DomTest(unittest.TestCase):
         self.assertIn("drawn at last", got["list"])
         self.assertEqual((got["err"], got["hidden"], got["add"]), ("", True, False))
 
+    def test_a_later_list_that_cannot_be_drawn_is_drawn_again_even_while_the_owner_types(self):
+        # The page is ready; a later read's draw throws. The next read brings the same lists while the owner is
+        # in a field: a read whose lists did not change is normally not redrawn under a typing owner, but this
+        # one never was drawn, so it must be.
+        got = dom("""
+            let armed = false;
+            const L = $("#list"), put = L.insertBefore.bind(L);
+            L.insertBefore = (n, r) => { if (armed) throw new Error("drawing failed"); return put(n, r); };
+            await start();
+            const before = text($("#list"));
+            server.snap.collections.todos["T-1"].title = "the new title"; server.snap.revision++;
+            armed = true;
+            await wake();
+            const broken = { err: text($("#loaderr")), sleeps: sleeps() };
+            armed = false;
+            $("#idq").focus();
+            await fireTimers();
+            return { before, broken, typing: document.activeElement === $("#idq"), list: text($("#list")), err: text($("#loaderr")) };
+        """, snapshot(collections={"todos": {"T-1": {"status": "open", "title": "the old title", "from": "pm"}}}), hash="#todo")
+        self.assertIn("the old title", got["before"])
+        self.assertIn("could not show what the hub server sent (drawing failed)", got["broken"]["err"])
+        self.assertEqual(got["broken"]["sleeps"], [2000])
+        self.assertTrue(got["typing"])
+        self.assertIn("the new title", got["list"])
+        self.assertEqual(got["err"], "")
+
     def test_a_tunnel_access_refusal_is_not_unpaired_and_keeps_the_servers_words(self):
         # The tunnel listener refuses a call whose Cloudflare Access token it cannot accept with 403, field
         # `access` (kitlib.hubsite.tunnel.REFUSED): a read or a write, and pairing again cannot help it.
