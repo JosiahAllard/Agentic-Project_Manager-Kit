@@ -467,6 +467,16 @@ class DynamicTargets(Base):
                      r'Export-Alias -Description d {main}\x.ps1'):
             with self.subTest(text):
                 self.denied(self.run_ps(text), 'main-checkout')
+
+    def test_the_built_in_export_aliases_are_the_cmdlets(self):
+        # rules.PS_ALIASES: epal is Export-Alias, epsn is Export-PSSession
+        for text in (r'epal {main}\x.ps1', r'epsn -OutputModule {main}\m', r'epsn {main}\m'):
+            with self.subTest(text):
+                self.denied(self.run_ps(text), 'main-checkout')
+        for text in (r'epal $p', r'epsn -OutputModule $p'):
+            with self.subTest(text):
+                self.refused_for_both(text)
+        self.allowed(self.run_ps(r'epal x.ps1'))
         for text in (r'Export-Alias -As Script x.ps1', r'Export-Alias -Name a x.ps1',
                      r'Export-Clixml -Depth 2 x.xml', r'Export-Alias -Encoding utf8 x.ps1'):
             with self.subTest(text):
