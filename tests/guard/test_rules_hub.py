@@ -143,7 +143,7 @@ class SecretShell(Hub):
         out = W.fwd(os.path.join(self.w.temp, 'out.txt'))
         parse = ("import json,sys; d=json.load(sys.stdin); [print(i['id'], i['title'][:80], '->', "
                  "i['answer']['label'], '|', i['answer'].get('note','')) for i in d['items']]")
-        line = ('Get-Content %s; python "%s" questions --status answered --repo GriffBall --json | python -c "%s"'
+        line = ('Get-Content %s; python "%s" questions --status answered --repo Game --json | python -c "%s"'
                 % (out, self.hub, parse))
         self.allowed(lambda sub: ps(line, self.w.wt, sub))
         self.allowed(lambda sub: ps(line, self.w.main, sub), (('coordinator', False, COORDINATOR),))
