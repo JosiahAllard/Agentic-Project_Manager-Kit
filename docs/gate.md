@@ -435,6 +435,8 @@ kitlib/gate/stash.py. A repository has one stash stack: `refs/stash` and its log
 
 The guard only reads the ref (`stash.tip`): it never runs `git stash` and never changes the stack. To clear a refusal, run `git stash list`; whoever made each entry commits it on a branch or drops it. No key turns the guard off.
 
+A red run (a new test shown failing without the fix) uses `tools/redfirst.py -C <worktree> --tests <file>` (docs/redfirst.md), never a stash or a scratch copy of kitlib. The test file must be committed first. A test that only calls a symbol the fix adds is RED because the symbol is missing (an AttributeError or ImportError), which does not show the behaviour wrong: say so in the report.
+
 Limits:
 
 - An entry made and dropped again wholly within a run leaves nothing to read.
