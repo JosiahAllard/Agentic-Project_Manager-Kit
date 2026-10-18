@@ -118,6 +118,204 @@ ROWS = [
      'deny', 'heavy', heavy('wt', 'blender -b x.blend', 'render')),
     ('Start-Process redirect into main', lambda w: ps('Start-Process python -ArgumentList x.py -RedirectStandardOutput %s' % win(w.main, 'o.txt'), w.wt, sub=True),
      'deny', 'main-checkout', None),
+    # a shell Start-Process starts runs its -ArgumentList as a nested line: the elements joined with
+    # spaces, as Start-Process passes them (commands._sp_shell_text)
+    ('Start-Process cmd /c redirect into main, double-quoted list', lambda w: ps(
+        'Start-Process cmd -ArgumentList "/c echo x > %s"' % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'main-checkout', None),
+    ('saps cmd /c redirect into main, list as an array', lambda w: ps(
+        "saps cmd -ArgumentList '/c','echo','x','>','%s'" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process -FilePath cmd.exe /c redirect into main, split list', lambda w: ps(
+        "Start-Process -FilePath cmd.exe -ArgumentList '/c', 'echo x > %s' -Wait" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process cmd /c redirect into main, single-quoted list', lambda w: ps(
+        "Start-Process cmd -ArgumentList '/c echo x > %s'" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process cmd /c quoted command redirecting into main', lambda w: ps(
+        "Start-Process cmd -ArgumentList '/c \"echo x > %s\"'" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process cmd in main as its working directory', lambda w: ps(
+        "Start-Process cmd -WorkingDirectory %s -ArgumentList '/c echo x > f.txt'" % w.main, w.wt, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process cmd with a computed argument list', lambda w: ps('Start-Process cmd -ArgumentList $a', w.wt, sub=True),
+     'deny', 'unreadable', None),
+    ('Start-Process cmd with a /c the guard cannot read', lambda w: ps(
+        "Start-Process cmd -ArgumentList '/q/c echo x > %s'" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'unreadable', None),
+    ('Start-Process cmd /c echo stays allowed', lambda w: ps("Start-Process cmd -ArgumentList '/c echo hi'", w.wt, sub=True),
+     None, None, None),
+    ('Start-Process cmd /c redirect in its worktree stays allowed', lambda w: ps(
+        "Start-Process cmd -ArgumentList '/d', '/c', 'echo hi > out.txt' -Wait", w.wt, sub=True), None, None, None),
+    # cmd splits its switches at , ; = too and finds a /c inside a word: any word before the run
+    # switch that holds /c (/k, /r) is unreadable (commands.CMD_RUN_HIDDEN_RE)
+    ('Start-Process cmd ;/c into main', lambda w: ps(
+        "Start-Process cmd -ArgumentList ';/c echo x > %s'" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'unreadable', None),
+    ('Start-Process cmd ,/c into main', lambda w: ps(
+        "Start-Process cmd -ArgumentList ',/c echo x > %s'" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'unreadable', None),
+    ('Start-Process cmd =/C into main', lambda w: ps(
+        "Start-Process cmd -ArgumentList '=/C echo x > %s'" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'unreadable', None),
+    ('Start-Process cmd x/c into main', lambda w: ps(
+        "Start-Process cmd -ArgumentList 'x/c echo x > %s'" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'unreadable', None),
+    ('Start-Process cmd x"/c" into main', lambda w: ps(
+        "Start-Process cmd -ArgumentList 'x\"/c\" echo x > %s'" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'unreadable', None),
+    ('cmd ;/c into main', lambda w: ps("cmd ';/c' 'echo x > %s'" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'unreadable', None),
+    ('cmd ,/c into main', lambda w: ps("cmd ',/c' 'echo x > %s'" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'unreadable', None),
+    ('cmd =/k into main', lambda w: ps("cmd =/k 'echo x > %s'" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'unreadable', None),
+    ('cmd x/c into main', lambda w: ps("cmd x/c 'echo x > %s'" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'unreadable', None),
+    ('cmd x"/c" into main', lambda w: ps("cmd 'x\"/c\"' 'echo x > %s'" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'unreadable', None),
+    ('cmd ;//c into main, Git Bash', lambda w: bash("cmd ';//c' 'echo x > %s/f.txt'" % W.fwd(w.main), w.wt, sub=True),
+     'deny', 'unreadable', None),
+    ('cmd with a computed word before its switch', lambda w: ps(
+        "cmd $a 'echo x > %s'" % win(w.main, 'f.txt'), w.wt, sub=True), 'deny', 'unreadable', None),
+    ('cmd /d /c echo stays allowed', lambda w: ps("cmd /d /c 'echo hi > out.txt'", w.wt, sub=True), None, None, None),
+    # bash and powershell Start-Process starts run at its -WorkingDirectory too
+    ('Start-Process powershell in main as its working directory', lambda w: ps(
+        "Start-Process powershell -WorkingDirectory %s -ArgumentList '-Command', 'echo x > f.txt'" % w.main,
+        w.wt, sub=True), 'deny', 'main-checkout', None),
+    ('Start-Process bash in main as its working directory', lambda w: ps(
+        "Start-Process bash -WorkingDirectory %s -ArgumentList '-c', '\"echo x > f.txt\"'" % w.main, w.wt, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process bash in its worktree stays allowed', lambda w: ps(
+        "Start-Process bash -WorkingDirectory %s -ArgumentList '-c', '\"echo x > f.txt\"'" % w.wt, w.wt, sub=True),
+     None, None, None),
+    ('Start-Process powershell in a computed working directory', lambda w: ps(
+        "Start-Process powershell -WorkingDirectory $d -ArgumentList '-Command', 'echo hi'", w.wt, sub=True),
+     'deny', 'unreadable', None),
+    ('start cmd /c redirect into main', lambda w: ps(
+        "start cmd -ArgumentList '/c echo x > %s'" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'main-checkout', None),
+    # the words carry no commas: an array is several words, every one of them in the list, and a
+    # program given by position after -ArgumentList is the last word it took
+    ('Start-Process cmd with a positional array into main', lambda w: ps(
+        "Start-Process cmd '/c','echo x > %s'" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process cmd -ArgumentList: with an array into main', lambda w: ps(
+        "Start-Process cmd -ArgumentList:'/c','echo x > %s'" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process with cmd after its list into main', lambda w: ps(
+        "Start-Process -ArgumentList '/c echo x > %s' cmd" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process with cmd after an array into main', lambda w: ps(
+        "Start-Process -ArgumentList '/c','echo x > %s' cmd" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process with cmd after its list in its worktree stays allowed', lambda w: ps(
+        "Start-Process -ArgumentList '/c echo x > f.txt' cmd", w.wt, sub=True), None, None, None),
+    # the common parameters (-Verbose, -ErrorAction/-ea ...) and -PSPath are parameters too: a list
+    # ends at them and none is the program; any other parameter word makes the call unreadable
+    ('Start-Process with cmd after its list then -Verbose into main', lambda w: ps(
+        "Start-Process -ArgumentList '/c echo x > %s' cmd -Verbose" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process with cmd after its list then -ErrorAction into main', lambda w: ps(
+        "Start-Process -ArgumentList '/c echo x > %s' cmd -ErrorAction Stop" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process -ErrorAction before cmd into main', lambda w: ps(
+        "Start-Process -ErrorAction Stop cmd '/c echo x > %s'" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process -Verbose before cmd into main', lambda w: ps(
+        "Start-Process -Verbose cmd -ArgumentList '/c echo x > %s'" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'main-checkout', None),
+    ('saps -ea before cmd with an array into main', lambda w: ps(
+        "saps -ea 0 cmd '/c','echo x > %s'" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process -PSPath cmd into main', lambda w: ps(
+        "Start-Process -PSPath cmd -ArgumentList '/c echo x > %s'" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process -FilePath: then cmd into main', lambda w: ps(
+        "Start-Process -FilePath: cmd -ArgumentList '/c echo x > %s'" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process cmd -WorkingDirectory: then main', lambda w: ps(
+        "Start-Process cmd -WorkingDirectory: %s -ArgumentList '/c echo x > f.txt'" % w.main, w.wt, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process cmd -WorkingDirectory: then its worktree stays allowed', lambda w: ps(
+        "Start-Process cmd -WorkingDirectory: %s -ArgumentList '/c echo x > f.txt'" % w.wt, w.wt, sub=True),
+     None, None, None),
+    # a -WorkingDirectory is a directory only when its text names one place exactly: a bare drive
+    # (that drive's current location), a wildcard (Start-Process resolves the text as a pattern) or
+    # a drive-relative C:x leaves the nested line with no directory, so a write there is refused
+    # (commands.sp_workdir_unplaceable). A subagent's write jail refused these before, judged at the
+    # wrong place; tests/guard/test_start_process_workdir.py holds the roles the jail does not cover
+    ('Start-Process cmd in a bare drive from main', lambda w: ps(
+        "Start-Process cmd -WorkingDirectory %s -ArgumentList '/c','echo x > f.txt'" % w.main[:2], w.main, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process cmd -WorkingDirectory: a bare drive from main', lambda w: ps(
+        "Start-Process cmd -WorkingDirectory:%s '/c','echo x > f.txt'" % w.main[:2], w.main, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process cmd in a ? wildcard directory from main', lambda w: ps(
+        "Start-Process cmd -WorkingDirectory '%s?' -ArgumentList '/c echo x > f.txt'" % w.main[:-1], w.main, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process cmd in a * wildcard directory from main', lambda w: ps(
+        "Start-Process cmd -WorkingDirectory '%s*' -ArgumentList '/c echo x > f.txt'" % w.main[:-1], w.main, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process cmd in a [ wildcard directory from main', lambda w: ps(
+        "Start-Process cmd -WorkingDirectory '%s[r]epo' -ArgumentList '/c echo x > f.txt'" % w.main[:-4], w.main,
+        sub=True), 'deny', 'main-checkout', None),
+    ('Start-Process powershell in a ? wildcard directory from main', lambda w: ps(
+        "Start-Process powershell -WorkingDirectory '%s?' -ArgumentList '-Command', 'echo x > f.txt'" % w.main[:-1],
+        w.main, sub=True), 'deny', 'main-checkout', None),
+    ('Start-Process cmd in a drive-relative directory from main', lambda w: ps(
+        "Start-Process cmd -WorkingDirectory %srepo -ArgumentList '/c echo x > f.txt'" % w.main[:2], w.main, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process cmd in a relative wildcard directory from main', lambda w: ps(
+        "Start-Process cmd -WorkingDirectory '..%srep?' -ArgumentList '/c echo x > f.txt'" % BS, w.main, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process cmd in a relative directory that is main', lambda w: ps(
+        "Start-Process cmd -WorkingDirectory %s -ArgumentList '/c echo x > f.txt'" % win('..', 'repo'), w.main, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process cmd in a relative directory from main into its worktree stays allowed', lambda w: ps(
+        "Start-Process cmd -WorkingDirectory %s -ArgumentList '/c echo x > f.txt'" % win('.claude', 'worktrees', 'wt'),
+        w.main, sub=True), None, None, None),
+    ('Start-Process cmd in its worktree from main stays allowed', lambda w: ps(
+        "Start-Process cmd -WorkingDirectory '%s' -ArgumentList '/c echo x > f.txt'" % w.wt, w.main, sub=True),
+     None, None, None),
+    ('Start-Process with an unknown parameter', lambda w: ps(
+        "Start-Process cmd -Bogus -ArgumentList '/c echo hi'", w.wt, sub=True), 'deny', 'unreadable', None),
+    ('Start-Process with an unknown parameter and no program', lambda w: ps(
+        "Start-Process -ArgumentList '/c echo hi' -Bogus", w.wt, sub=True), 'deny', 'unreadable', None),
+    ('Start-Process with an ambiguous parameter prefix', lambda w: ps(
+        "Start-Process cmd -e x '/c echo hi'", w.wt, sub=True), 'deny', 'unreadable', None),
+    ('Start-Process switch given its value after a space', lambda w: ps(
+        "Start-Process -Wait: $true cmd '/c echo hi'", w.wt, sub=True), 'deny', 'unreadable', None),
+    ('Start-Process -ErrorAction Stop in its worktree stays allowed', lambda w: ps(
+        "Start-Process cmd -ArgumentList '/c echo x > f.txt' -ErrorAction Stop", w.wt, sub=True), None, None, None),
+    ('Start-Process -Wait in its worktree stays allowed', lambda w: ps(
+        "Start-Process -Wait -NoNewWindow -PassThru cmd -ArgumentList '/c echo x > f.txt'", w.wt, sub=True),
+     None, None, None),
+    ('Start-Process with its own parameters in its worktree stays allowed', lambda w: ps(
+        "Start-Process cmd -ArgumentList '/c echo hi' -Verb Open -WindowStyle Minimized -LoadUserProfile "
+        "-UseNewEnvironment -RedirectStandardInput in.txt -RedirectStandardOutput out.txt "
+        "-RedirectStandardError err.txt -Credential $c", w.wt, sub=True), None, None, None),
+    ('Start-Process pwsh with a dashed list stays allowed', lambda w: ps(
+        "Start-Process pwsh -ArgumentList '-NoProfile','-File','x.ps1'", w.wt, sub=True), None, None, None),
+    # `--` (every later word positional), a splat (`@p`) and `--%` (the rest passed as written): the
+    # guard does not read what PowerShell binds, so the call is refused
+    ('Start-Process -- before cmd into main', lambda w: ps(
+        "Start-Process -- cmd '/c echo x > %s'" % win(w.main, 'f.txt'), w.wt, sub=True), 'deny', 'unreadable', None),
+    ('Start-Process of a splat into main', lambda w: ps(
+        "$p = @{FilePath='cmd'; ArgumentList='/c echo x > %s'}; Start-Process @p" % win(w.main, 'f.txt'), w.wt,
+        sub=True), 'deny', 'unreadable', None),
+    ('Start-Process cmd with a splat into main', lambda w: ps(
+        "$p = @{ArgumentList='/c echo x > %s'}; Start-Process cmd @p" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'unreadable', None),
+    ('Start-Process cmd --% into main', lambda w: ps(
+        "Start-Process cmd --%% /c echo -ea > %s" % win(w.main, 'f.txt'), w.wt, sub=True), 'deny', 'unreadable', None),
+    ('Start-Process with en dash parameters into main', lambda w: ps(
+        "Start-Process \u2013ArgumentList '/c echo x > %s' cmd \u2013Verbose" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'main-checkout', None),
+    ('main-role Start-Process with an unknown parameter in main', lambda w: ps(
+        "Start-Process cmd -Bogus -ArgumentList '/c echo hi'", w.main), 'deny', 'unreadable', None),
+    ('Start-Process with a quoted -- in its worktree stays allowed', lambda w: ps(
+        "Start-Process cmd '--','/c echo x > f.txt'", w.wt, sub=True), None, None, None),
     ('cmd start with a quoted title', lambda w: ps('cmd /c start "Godot" godot.exe --headless', w.wt), 'deny', 'heavy',
      heavy('wt', 'godot.exe --headless')),
     ('cmd start /b /wait', lambda w: ps('cmd /c start /b /wait godot.exe --headless', w.wt), 'deny', 'heavy',
