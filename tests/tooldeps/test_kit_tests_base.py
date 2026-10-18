@@ -12,6 +12,7 @@ import tempfile
 import unittest
 from unittest import mock
 
+from kitlib.host import registry as hostregistry
 from tests import gitfixture
 from tests.home import temp_home
 
@@ -276,15 +277,20 @@ MODULES = ['tests.a.test_m', 'tests.git.test_g', 'tests.gate.test_land_x', 'test
 
 class KitSessionEnvironment(unittest.TestCase):
     """No test child gets the session's kit binding (kit_tests KIT_SESSION_ENV): PM_KIT_ROOT,
-    PM_KIT_RELEASE_ID, KIT_LIVE_ROOT, KIT_PINNED, PM_KIT_ROLE and PM_KIT_HOST are dropped from the pooled units', the --jobs
-    1 process's, the real-git count child's and --list's loader's environment, while another
-    variable passes and kit_tests' own process keeps them all."""
-    SESSION = {'PM_KIT_ROOT': r'C:\session\kit', 'PM_KIT_RELEASE_ID': 'session-pin',
-               'KIT_LIVE_ROOT': r'C:\session\main', 'KIT_PINNED': 'live',
-               'PM_KIT_ROLE': 'worker', 'PM_KIT_HOST': 'claude'}
+    PM_KIT_RELEASE_ID, KIT_LIVE_ROOT, KIT_PINNED, PM_KIT_ROLE, PM_KIT_HOST, PM_KIT_SESSION_NAME,
+    PM_KIT_CODEX_STATE, PM_KIT_CODEX_EXE and every host's session_env variable (hosts.json) are
+    dropped from the pooled units', the --jobs 1 process's, the real-git count child's and --list's
+    loader's environment, while another variable passes and kit_tests' own process keeps them all."""
+    HOST_SESSION = {n: 'host-session' for n in hostregistry.union('session_env')}
+    SESSION = dict({'PM_KIT_ROOT': r'C:\session\kit', 'PM_KIT_RELEASE_ID': 'session-pin',
+                    'KIT_LIVE_ROOT': r'C:\session\main', 'KIT_PINNED': 'live',
+                    'PM_KIT_ROLE': 'worker', 'PM_KIT_HOST': 'claude',
+                    'PM_KIT_SESSION_NAME': 'coord-x', 'PM_KIT_CODEX_STATE': r'C:\codex\state',
+                    'PM_KIT_CODEX_EXE': r'C:\codex\codex.exe'}, **HOST_SESSION)
     OTHER = 'KIT_TESTS_UNRELATED_MARK'
 
     def test_the_session_kit_binding_reaches_no_test_child(self):
+        self.assertGreaterEqual(len(self.HOST_SESSION), 2)     # hosts.json registers every host
         temp_home(self)
         seen, out = {}, io.StringIO()
 
