@@ -268,7 +268,7 @@ header hook tells each session and subagent the folder `<kit>` stands for (docs/
 header"). `${CLAUDE_PLUGIN_ROOT}` is substituted in a plugin skill's text (machine test, Claude Code 2.1.302, R-2104, T-095); agent text was not tested, so no kit agent or skill uses it.
 Source: https://code.claude.com/docs/en/plugin-marketplaces.
 `claude plugin validate` passes with warnings only (no author field; CLAUDE.md is not loaded) and
-reports no reserved name. With `CLAUDE_CONFIG_DIR` set to an account folder and `CLAUDE_CODE_PLUGIN_DIRS` naming another kit export, `claude plugin list` shows the per-config-dir install (scope user, and scope project when run from a folder whose settings enable it) and a session-only `pm-kit@inline` from the `CLAUDE_CODE_PLUGIN_DIRS` folder; all load side by side with no duplicate error (observed on 2.1.302, R-2104).
+reports no reserved name. With `CLAUDE_CONFIG_DIR` set to an account folder and `CLAUDE_CODE_PLUGIN_DIRS` naming another kit export, `claude plugin list` shows the per-config-dir install (scope user, and scope project when run from a folder whose settings enable it) and a session-only `pm-kit@inline` from the `CLAUDE_CODE_PLUGIN_DIRS` folder; all load side by side with no duplicate error (observed on 2.1.302, R-2104). The Desktop app (Code tab) picks the plugin up and lists its skills under `/` as `pm-kit:<skill>`; a Desktop session's kit header names the same plugin folder that `claude plugin list` shows for `pm-kit@pm-kit` (observed, R-2104).
 
 The plugin root is the whole kit (export), and `.claude-plugin/plugin.json` stays at its root: the
 hooks and the MCP server run kitlib and tools beside them. plugin.json, marketplace.json and the hooks
