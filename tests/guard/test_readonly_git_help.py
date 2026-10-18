@@ -10,8 +10,7 @@ from .world import bash, ps
 
 
 class ReadOnlyGitElsewhere(Base):
-    """KIT-GUARD-READONLY-GIT-WRITEJAIL: both forms were refused by write-jail in a folder outside
-    the session's roots."""
+    """Both forms were refused by write-jail in a folder outside the session's roots (observed)."""
 
     def test_patch_id_reads(self):
         d = W.fwd(self.w.plain)
@@ -40,7 +39,7 @@ class ReadOnlyGitElsewhere(Base):
 
 
 class LockRunHelpPiped(unittest.TestCase):
-    """KIT-GUARD-WRAPPED-GATE-HELP-FALSE-POSITIVE: run --help prints usage and runs nothing."""
+    """A piped run --help was refused as a wrapped gate (observed); it prints usage and runs nothing."""
 
     def setUp(self):
         self.w = W.World()
