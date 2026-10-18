@@ -16,6 +16,7 @@ times out.
 """
 import collections
 import os
+import re
 
 from . import cmd
 
@@ -175,6 +176,17 @@ def same_repository(a, b):
     return ca == cb, None
 
 
+def not_a_directory(path):
+    """`'<path> is not a directory'`, with a hint added when `path` looks like a Windows path
+    whose separators were stripped (a drive letter, then text with no `\\` or `/`): Git Bash
+    drops the backslashes of an unquoted `-C Z:\\GitHub\\x`."""
+    msg = '%s is not a directory' % path
+    if re.match(r'^[A-Za-z]:[^\\/]+$', path):
+        msg += ('; an unquoted backslash path in Git Bash loses its backslashes; quote the path'
+                ' or use forward slashes')
+    return msg
+
+
 def toplevel(path):
     """`(top level, None)` of the work tree `path` is in, any repository, or `(None, why)`.
 
@@ -182,7 +194,7 @@ def toplevel(path):
     current directory), and no tool hands off to a copy of itself inside that checkout (there
     is one kit copy)."""
     if not os.path.isdir(path):
-        return None, '%s is not a directory' % path
+        return None, not_a_directory(path)
     place = classify(path)
     if place.kind not in (MAIN, LINKED) or not place.top:
         return None, '%s is in no git work tree git could name (%s%s)' % (
