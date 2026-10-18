@@ -124,6 +124,13 @@ def strict_hits(cfg, changed):
     return [p for p in changed if S._match(p, list(STRICT_DEFAULTS))]
 
 
+def docs_only_change(cfg, gate, changed):
+    """steps.docs_only under `gate` (the config the decision is read from: the branch's in a
+    branch gate, main's in a landing), barring every path reuse never crosses (never_hits: the
+    config files and the hook module) and every strict path (strict_hits)."""
+    return S.docs_only(gate, changed, barred=never_hits(cfg, changed) + strict_hits(cfg, changed))
+
+
 def _change_why(cfg, changed):
     if cfg.section('landing')['reuse_max_age_h'] <= 0:
         return '"landing".reuse_max_age_h is 0'

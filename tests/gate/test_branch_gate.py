@@ -327,6 +327,49 @@ class FullCmd(fixtures.GateRepoCase):
         self.assertEqual(self.ran(gate(full=True)), 'mode full')
 
 
+class DocsOnlyAndSmoke(fixtures.GateRepoCase):
+    """A docs-only change (the branch's "gate".docs_only) runs only the docs_only steps and writes
+    a gate-OK record of mode `docs`; any other change runs what it selects plus the smoke steps
+    and writes mode `select`; --full writes `full` (docs/gate.md "Docs-only changes")."""
+    GATE = {'smoke_steps': ['boot'],
+            'docs_only': {'globs': ['docs/*.md'], 'steps': ['scrub']},
+            'steps': [{'name': 'suite', 'always': True, 'cmd': mode_step('suite'), 'pass': '^mode '},
+                      {'name': 'boot', 'manual': True, 'cmd': mode_step('boot'), 'pass': '^mode '},
+                      {'name': 'scrub', 'globs': ['*.md'], 'cmd': mode_step('scrub'),
+                       'pass': '^mode '}]}
+
+    def gate(self, wt, **kw):
+        return runner.branch_gate(wt, book_kw=self.book_kw, log_dir=self.logs, **kw)
+
+    def record(self, wt, out):
+        self.assertEqual(out.code, G.OK, out.lines)
+        rec, why = gate_ok.verify(wt, out.head, runner.gate_config(kconfig.load(wt)))
+        self.assertIsNone(why, out.lines)
+        return [s['name'] for s in rec['steps']], gate_ok.mode_of(rec)
+
+    def test_a_docs_only_change_runs_only_the_docs_steps_and_writes_mode_docs(self):
+        wt, _ = self.branch('docs', {'docs/a.md': 'words\n'})
+        self.assertEqual(self.record(wt, self.gate(wt)), (['scrub'], 'docs'))
+
+    def test_any_other_change_runs_its_steps_and_the_smoke_steps_and_writes_mode_select(self):
+        wt, _ = self.branch('code', {'docs/a.md': 'words\n', 'a.py': 'x = 1\n'})
+        names, mode = self.record(wt, self.gate(wt))
+        self.assertEqual((sorted(names), mode), (['boot', 'scrub', 'suite'], 'select'))
+
+    def test_full_and_only_never_take_the_docs_only_path(self):
+        wt, _ = self.branch('docs', {'docs/a.md': 'words\n'})
+        names, mode = self.record(wt, self.gate(wt, full=True))
+        self.assertEqual((sorted(names), mode), (['scrub', 'suite'], 'full'))
+        out = self.gate(wt, only=['suite'])
+        self.assertEqual([r['name'] for r in out.results], ['suite'])
+
+    def test_a_docs_path_under_a_strict_path_is_not_docs_only(self):
+        wt, _ = self.branch('strict', {'docs/a.md': 'words\n'})
+        with mock.patch('kitlib.gate.reuse.STRICT_DEFAULTS', ('docs/*',)):
+            names, mode = self.record(wt, self.gate(wt))
+        self.assertEqual((sorted(names), mode), (['boot', 'scrub', 'suite'], 'select'))
+
+
 class DefaultBaseNote(fixtures.GateRepoCase):
     """With no --base the gate measures against origin/main and prints the line naming a local
     main that differs; an explicit --base prints none."""

@@ -698,10 +698,14 @@ def _gate_checkout(top, cfg, seen, base=None, full=False, only=None, plan=False,
         gate = eff.gate
         say(detect.label(eff))
     empty = detect.nothing_detected(eff)
+    from kitlib.gate import reuse   # reuse imports this module
+    docs = not (full or only or empty) and reuse.docs_only_change(cfg, gate, changed)
+    if docs:
+        say('a docs-only change: only the "docs_only" steps run (docs/gate.md "Docs-only changes")')
     try:
         all_steps = S.build(gate, top, mb, cfg.tools_dir, full=full)
         chosen, picked = S.select(gate, all_steps, changed, full=full, only=only,
-                                  read=S.working_tree_reader(top))
+                                  read=S.working_tree_reader(top), docs=docs)
     except S.UnknownStep as e:
         return G.Outcome(G.USAGE, ['USAGE: --only: %s' % e])
     except S.GateConfigError as e:
@@ -726,7 +730,6 @@ def _gate_checkout(top, cfg, seen, base=None, full=False, only=None, plan=False,
     logs = new_log_dir(cfg, top, name, branch or head[:10], log_dir)
     say('gate %s at %s, base %s: %s' % (branch or '(detached)', head[:10], base_text,
                                         ', '.join(s.name for s in chosen) or 'no step'))
-    from kitlib.gate import reuse   # reuse imports this module
     plan = None if empty else reuse.branch_plan(top, cfg, chosen, mb, changed, full=full,
                                                 only=only, head=head, branch=branch)
     reused = _say_plan(plan, chosen, logs, say)
@@ -773,7 +776,8 @@ def _gate_checkout(top, cfg, seen, base=None, full=False, only=None, plan=False,
     try:
         path, _rec = gate_ok.record_pass(top, head, gate_config(cfg), kit_identity(), name, started,
                                          record_steps(results), base=mb, config_rev=head,
-                                         source=eff.source, full=bool(full))
+                                         source=eff.source, full=bool(full),
+                                         mode='docs' if docs else None)
     except gate_ok.RecordError as e:
         facts['no_record'] = str(e)
         lines.append('FAILED: the gate passed, and its gate-OK record could not be written: %s' % e)
