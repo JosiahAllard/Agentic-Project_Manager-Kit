@@ -310,7 +310,8 @@ class MessagePieces(unittest.TestCase):
 # ---------------------------------------------------------------------------------- end to end
 
 def _seed(t):
-    """The seed commit, built once per process; each test's repository is a copy."""
+    """The seed commit, built once per template key (fixture_env is in it, so each test's own home
+    gives a fresh build); each test's repository is a copy."""
     t.write('seed.txt', '0\n')
     t.commit('seed', 'seed.txt')
 
@@ -322,15 +323,10 @@ class LinkedCase(TempHomeCase):
 
     def setUp(self):
         super().setUp()
-        prepare, key = self.template()
-        self.t = TempRepo(prepare=prepare, prepare_key=key)
+        self.t = TempRepo(prepare=_seed, prepare_key='test_commit.LinkedCase')
         self.addCleanup(self.t.cleanup)
         self.wt = self.t.worktree('wt')
         self.configure(owner={'email': OWNER, 'agent_emails': [AGENT]})
-
-    def template(self):
-        """(prepare, prepare_key) of this test's repository: the seed commit."""
-        return _seed, 'test_commit.LinkedCase'
 
     def configure(self, **sections):
         """An untracked .kit.json in the worktree (kitlib.config.load reads the work tree)."""
@@ -1578,15 +1574,6 @@ class MergeInProgress(MergeCase):
 KEEP = object()        # main leaves the owner-only file as the base has it
 
 
-def _owner_base(t):
-    """_seed, then MergeCarriesAnOwnerChange.merge's base commit on main: work.txt and the
-    owner-only file. Built once per process; the copy's kit/wt branch starts at it. Its id."""
-    _seed(t)
-    t.write('work.txt', 'base\n')
-    t.write(MergeCarriesAnOwnerChange.F, 'owner base\n')
-    return t.commit('base', 'work.txt', MergeCarriesAnOwnerChange.F)
-
-
 @real_git('modify/delete conflicts, checkout --theirs and update-index --chmod: the fake has '
           'none; and the index and tree entries the rule compares are git\'s own')
 class MergeCarriesAnOwnerChange(MergeCase):
@@ -1596,14 +1583,6 @@ class MergeCarriesAnOwnerChange(MergeCase):
     changes it; anything else under that path stays refused."""
 
     F = 'CLAUDE.md'
-    # These build their own base; every other test starts from _owner_base's copy.
-    OWN_BASE = ('test_an_owner_deletion_under_a_locked_directory_is_committed',
-                'test_outside_a_merge_a_staged_owner_file_is_still_refused')
-
-    def template(self):
-        if self._testMethodName in self.OWN_BASE:
-            return LinkedCase.template(self)
-        return _owner_base, 'test_commit.MergeCarriesAnOwnerChange'
 
     def merge(self, main_side, branch_side=None, path=None, main_author=OWNER,
               main_message='owner moves main'):
@@ -1614,14 +1593,10 @@ class MergeCarriesAnOwnerChange(MergeCase):
         tip, main tip)."""
         f = path or self.F
         self.assertTrue(C.kconfig.load(self.wt).owner_rules().is_locked(f), f)
-        if self._testMethodName in self.OWN_BASE:
-            self.t.write('work.txt', 'base\n')
-            self.t.write(f, 'owner base\n')
-            self.t.commit('base', 'work.txt', f)
-            self.git('merge', '-q', '--ff-only', 'main')
-        else:                       # the template's base, which the branch was made at
-            self.assertEqual(f, self.F)
-            self.assertEqual(self.head(), self.t.prepared)
+        self.t.write('work.txt', 'base\n')
+        self.t.write(f, 'owner base\n')
+        self.t.commit('base', 'work.txt', f)
+        self.git('merge', '-q', '--ff-only', 'main')
         self.t.write('work.txt', 'main\n')
         if main_side is None:
             self.t.git('rm', '-q', '--', f)

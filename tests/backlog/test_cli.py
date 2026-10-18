@@ -283,7 +283,8 @@ class RulingCitesUnchecked(unittest.TestCase):
                     *ADD_FLAGS)
             self.ok('set', rid, '--priority', '1', '--priority-by', 'owner', '--ruling', ruling)
         self.configure()
-        rc, out = self.run_tool('--no-fetch', 'check')
+        # a real child: the machine config reaches backlog.py only through the env it inherits
+        rc, out = self.run_process('--no-fetch', 'check')
         self.assertEqual(rc, 0, out)
         self.assertTrue(out.rstrip().endswith('GREEN'), out)
         self.assertNotIn('priority rulings', out)
