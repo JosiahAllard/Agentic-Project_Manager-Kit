@@ -145,18 +145,52 @@ def literal_word(path):
     return quote(p)
 
 
+def advice_kit(ctx):
+    """The kit folder an alternative names (docs/guard.md "Kit paths in advice"): the installed
+    export the sessions' kit tools run from, when the guard can know it, else the kit the guard
+    runs from (ctx.kit). A guard run from an export names that export. A guard run from a kit
+    checkout names the export the machine's plugin marketplace names now
+    (kitlib.pluginsource.current_folder under the plugin export root), when that folder is an
+    export (a 12-hex-digit name, the marker and kit.json in it) whose marker names this checkout
+    (export_checkout). The hook is not told which folder a session's header named, so a session
+    that started on an older export is still pointed at the current one."""
+    kit = getattr(ctx, 'kit', None)
+    if not kit or os.path.isfile(os.path.join(kit, '.pm-kit-export')):
+        return kit
+    from kitlib import pluginsource
+    from . import rolepolicy
+    user = ctx.user()
+    if not isinstance(user, dict) or user.get('error'):
+        return kit
+    try:
+        root = pluginsource.settings(user.get(pluginsource.CONFIG_KEY), ctx.environ).export_dir
+    except (pluginsource.RefreshError, OSError, ValueError, TypeError):
+        return kit
+    name = pluginsource.current_folder(root)
+    if not isinstance(name, str) or not rolepolicy.EXPORT_NAME_RE.fullmatch(name):
+        return kit
+    folder = os.path.join(root, name)
+    if not all(os.path.isfile(os.path.join(folder, f)) for f in rolepolicy.EXPORT_FILES):
+        return kit
+    checkout = pluginsource.export_checkout(folder)
+    if not checkout or paths.norm(checkout) != paths.norm(kit):
+        return kit
+    return folder
+
+
 def lock_tool(ctx):
-    """The lock CLI an alternative names: tools/machine_lock.py of the kit the guard runs from
-    (ctx.kit, kitlib.kitroot.lock_tool), as one literal word (literal_word) since a kit path may
+    """The lock CLI an alternative names: tools/machine_lock.py of the kit folder advice names
+    (advice_kit, kitlib.kitroot.lock_tool), as one literal word (literal_word) since a kit path may
     hold a space or a `$`. Its `run` takes no --lock flag: it always locks."""
-    return literal_word(kitroot.lock_tool(ctx.kit))
+    return literal_word(kitroot.lock_tool(advice_kit(ctx)))
 
 
 def kit_tool(ctx, name):
-    """A kit tool an alternative names: tools/<name>.py of the kit the guard runs from (ctx.kit),
-    quoted. A repository holds no copy of the kit's tools (decision 21 in docs/multi-host-plan.md
-    section 7), so an alternative never names a repository's own tools folder."""
-    return quote(kitroot.tool(name, ctx.kit))
+    """A kit tool an alternative names: tools/<name>.py of the kit folder advice names
+    (advice_kit), quoted. A repository holds no copy of the kit's tools (decision 21 in
+    docs/multi-host-plan.md section 7), so an alternative never names a repository's own tools
+    folder."""
+    return quote(kitroot.tool(name, advice_kit(ctx)))
 
 
 def subagent(event):
@@ -3995,6 +4029,78 @@ BASH_DEVICE_RE = re.compile(r'^/dev/')         # /dev/stderr, /dev/tty, /dev/fd/
 BASH_TMP_RE = re.compile(r'^/tmp(?:/|$)')        # Git Bash mounts /tmp on a temp folder: jail.bash_tmp
 
 
+PY_SLEEP_CALLS = ('time.sleep', 'sleep')
+
+
+def py_only_sleeps(text):
+    """True when the python program `text` only imports time (import time, from time import sleep)
+    and calls time.sleep or sleep with a number: a pause and nothing else."""
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return False
+    slept = False
+    for node in tree.body:
+        if isinstance(node, ast.Import) and all(a.name == 'time' and a.asname is None for a in node.names):
+            continue
+        if isinstance(node, ast.ImportFrom) and node.module == 'time' and not node.level and \
+                all(a.name == 'sleep' and a.asname is None for a in node.names):
+            continue
+        call = node.value if isinstance(node, ast.Expr) else None
+        if not isinstance(call, ast.Call) or call.keywords or len(call.args) != 1:
+            return False
+        f, arg = call.func, call.args[0]
+        name = f.id if isinstance(f, ast.Name) else \
+            '%s.%s' % (f.value.id, f.attr) if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) \
+            else None
+        if name not in PY_SLEEP_CALLS or not isinstance(arg, ast.Constant) or \
+                isinstance(arg.value, bool) or not isinstance(arg.value, (int, float)):
+            return False
+        slept = True
+    return slept
+
+
+def sleep_wait(cmd, inv, w):
+    """True when `w` is the stand-in for the directory a python -c runs in (here) and that program
+    only pauses (py_only_sleeps): a sleep-wait, which the main-checkout refusal names as one
+    (sleep_refusal) rather than as writing files. Its verdict is unchanged."""
+    if inv is None or inv.dyn or inv.via == 'start-process' or not cm.PYTHON_RE.match(inv.name or ''):
+        return False
+    if w.text != '.' or cmd.source[w.start:w.end] == '.':
+        return False
+    kind, code, _ = py_program(inv.name, inv.args)
+    return kind == 'code' and code is not None and not code.dyn and py_only_sleeps(code.text)
+
+
+SLEEP_WAIT_WHY = ('is a sleep-wait: it only pauses, and a pause in the foreground holds the session while '
+                  'what it waits for runs (a python -c the guard cannot prove reads only is also read as '
+                  'writing the main checkout it runs in). Never sleep-wait: run the work in the background '
+                  '(run_in_background: true) and wait for the notice it sends when it exits; to wait on a '
+                  'condition, run a command that exits when the condition holds in the background, or use '
+                  'the Monitor tool with one:')
+SLEEP_WAIT_INSTEAD = 'until <condition>; do sleep 5; done'
+
+
+def py_unread(cmd, inv, w):
+    """Why python's stand-in write `w` (_python's here()) is one, or None for any other write: the
+    guard does not read its program as read-only, which is the reason a refusal gives (not a file
+    it names). The verdict is unchanged."""
+    if inv is None or not cm.PYTHON_RE.match(inv.name or '') or w.text != '.' or \
+            cmd.source[w.start:w.end] == '.':
+        return None
+    if inv.via == 'start-process':
+        return 'Start-Process hands python a command line the guard does not read'
+    if not inv.dyn and py_program(inv.name, inv.args)[0] == 'code':
+        return 'the guard does not read the code of that python -c as read-only'
+    return 'the guard does not read the program python is given'
+
+
+def sleep_refusal(d, cmd, role):
+    """The main-checkout Decision `d` for a sleep-wait (sleep_wait), its reason saying so: same
+    verdict and rule, the background wait as its alternative."""
+    return refuse(d.rule, role, '`%s` %s' % (cmd.text, SLEEP_WAIT_WHY), SLEEP_WAIT_INSTEAD, kind=d.verdict)
+
+
 def shell_writes(event, ctx, cmd, inv, cwd, role):
     d = git_jail(event, ctx, cmd, inv, cwd, role)
     if d:
@@ -4007,42 +4113,76 @@ def shell_writes(event, ctx, cmd, inv, cwd, role):
         net = dict(((x.word.start, x.word.end), x) for x in net_writes(cmd)[0])
     into = copy_into(cmd, inv)
     searched = False
-    for w in write_targets(cmd, inv):
+    # A Start-Process program with a -WorkingDirectory runs there (commands.run_dir), while
+    # PowerShell places the call's redirections and the -RedirectStandard* files from its own
+    # location, the command's directory. Only git's targets are read from the workdir alone; any
+    # other program's are judged from both folders, so a workdir never lets a write pass that the
+    # command's own directory refuses.
+    moved = len(write_targets(cmd, None)) + len(inv.writes) \
+        if inv is not None and inv.via == 'start-process' and inv.workdir is not None else None
+    git = inv is not None and (inv.name == 'git' or (inv.name or '').startswith('git-'))
+    for k, w in enumerate(write_targets(cmd, inv)):
         if cmd.shell == sh.BASH and not w.dyn and BASH_DEVICE_RE.match(w.text):
             continue
-        target, why, ps_drive = write_place(ctx, cmd, w)
-        if target is None and not searched:
-            searched = True                     # find's start paths answer for every such target at once
-            d = find_exec_writes(event, ctx, cmd, cwd, role)
-            if d:
-                return d
-        if target is None and cmd.shell == sh.PS and w.dyn:
-            ps_drive = True                     # PowerShell's, from any location: one $p or (...) can name the main checkout
-        elif target is None and cmd.cwd is not None and not ps_drive and \
-                ctx.place(cmd.cwd).kind not in (repo.MAIN, repo.UNKNOWN):
-            continue                            # a target it cannot place, from a worktree or elsewhere
-        what = '`%s` writes %s' % (cmd.text, w.text if w.text != '.' else 'files in the directory it runs in')
-        # here() or ps_unread(): no word to aim
-        stand_in = (w.text == '.' and cmd.source[w.start:w.end] != '.') or w.start == w.end
-        part = any((x.start, x.end) == (w.start, w.end) and x.text != w.text for x in cmd.words)
-        rewrite = None if stand_in or part else (lambda path, w=w: retarget(cmd, w, path))   # part: -tDIR
-        if (w.start, w.end) in net and not w.dyn:
-            rewrite = lambda path, x=net[(w.start, w.end)]: net_retarget(cmd, x, path)
-        for t in into_folder(target, w, into, cmd.cwd, getattr(ctx, 'home', None)) if target else [target]:
-            d = edit_target(event, ctx, t, cwd, role, what, why, rewrite=rewrite, run=bare(cmd))
-            if d:
-                return d
-        if ps_drive:
-            d = ps_drive_jail(event, ctx, cwd, role, what, why, rewrite)
+        bases = (OUTER,) if moved is None or k < moved else \
+            (cm.run_dir(inv),) if git else (OUTER, cm.run_dir(inv))
+        for base in bases:
+            d, searched = _write_from(event, ctx, cmd, inv, cwd, role, w, base, net, into, searched)
             if d:
                 return d
     return None
 
 
-def write_place(ctx, cmd, w):
+def _write_from(event, ctx, cmd, inv, cwd, role, w, base, net, into, searched):
+    """(Decision or None, searched) for the write target `w` of shell_writes read from `base`
+    (OUTER, or the folder a Start-Process -WorkingDirectory names)."""
+    runs_in = cmd.cwd if base is OUTER else base
+    target, why, ps_drive = write_place(ctx, cmd, w, base)
+    if target is None and not searched:
+        searched = True                         # find's start paths answer for every such target at once
+        d = find_exec_writes(event, ctx, cmd, cwd, role)
+        if d:
+            return d, searched
+    if target is None and cmd.shell == sh.PS and w.dyn:
+        ps_drive = True                         # PowerShell's, from any location: one $p or (...) can name the main checkout
+    elif target is None and runs_in is not None and not ps_drive and \
+            ctx.place(runs_in).kind not in (repo.MAIN, repo.UNKNOWN):
+        return None, searched                   # a target it cannot place, from a worktree or elsewhere
+    sleep = sleep_wait(cmd, inv, w)
+    unread = py_unread(cmd, inv, w)
+    what = '`%s` writes %s' % (cmd.text, w.text if w.text != '.' else 'files in the directory it runs in') \
+        if unread is None else \
+        'the directory `%s` runs in (counted as written: %s)' % (cmd.text, unread)
+    # here() or ps_unread(): no word to aim
+    stand_in = (w.text == '.' and cmd.source[w.start:w.end] != '.') or w.start == w.end
+    part = any((x.start, x.end) == (w.start, w.end) and x.text != w.text for x in cmd.words)
+    rewrite = None if stand_in or part else (lambda path, w=w: retarget(cmd, w, path))   # part: -tDIR
+    if (w.start, w.end) in net and not w.dyn:
+        rewrite = lambda path, x=net[(w.start, w.end)]: net_retarget(cmd, x, path)
+    if stand_in and base is not OUTER and base is not None:
+        # the folder it runs in is the -WorkingDirectory value: aim that word instead
+        rewrite = lambda path, x=inv.workdir: retarget(cmd, x, paths.norm(path, fold=False))
+    for t in into_folder(target, w, into, runs_in, getattr(ctx, 'home', None)) if target else [target]:
+        d = edit_target(event, ctx, t, cwd, role, what, why, rewrite=rewrite, run=bare(cmd))
+        if d:
+            return (sleep_refusal(d, cmd, role) if sleep and d.rule == 'main-checkout' else d), searched
+    if ps_drive:
+        d = ps_drive_jail(event, ctx, cwd, role, what, why, rewrite)
+        if d:
+            return d, searched
+    return None, searched
+
+
+OUTER = object()                                # write_place: the command's own directory
+
+
+def write_place(ctx, cmd, w, base=OUTER):
     """(path, why, ps_drive) of the Word `w` the command `cmd` writes, read from cmd's directory
     and shell: path None when the guard cannot place it (why says why), and ps_drive when that is
-    a PowerShell drive or provider path (ps_drive_jail judges it)."""
+    a PowerShell drive or provider path (ps_drive_jail judges it). `base`, when given, is the
+    folder a relative `w` is read from instead of cmd's directory: the -WorkingDirectory a
+    Start-Process program runs in (commands.run_dir), None when the guard cannot place that."""
+    here_dir = cmd.cwd if base is OUTER else base
     ps_drive = False                            # a PowerShell drive or provider it cannot place
     pwd = ps_pwd_path(cmd, w)
     if pwd is not None:
@@ -4060,10 +4200,12 @@ def write_place(ctx, cmd, w):
         ps_drive = True
         target, why = None, 'a PowerShell drive or provider path the guard cannot place: %s' % w.text
     else:
-        target = sh.resolve_path(w.text, cmd.cwd, cmd.shell, getattr(ctx, 'home', None))
-        why = None if target else 'the directory it runs in is unknown' if cmd.cwd is None \
+        target = sh.resolve_path(w.text, here_dir, cmd.shell, getattr(ctx, 'home', None))
+        why = None if target else 'the directory it runs in is unknown' if here_dir is None \
             else 'a path the text cannot place: %s' % w.text
-        if target is None and cmd.cwd is None and cmd.cwd_ps_drive:
+        if target is None and base is None:
+            why = 'the folder its Start-Process -WorkingDirectory names is computed or not one the guard can place'
+        if target is None and base is OUTER and cmd.cwd is None and cmd.cwd_ps_drive:
             ps_drive = True                     # after cd Main:\ or cd Registry::x
             why = 'the directory it runs in is a PowerShell drive or provider path the guard cannot place'
     return target, why, ps_drive
@@ -4231,30 +4373,66 @@ def retarget(cmd, w, path):
 
 # ---------------------------------------------------------------- wrapped gates (P16)
 
-def gate_log(ctx, cmd):
-    place = ctx.place(cmd.cwd) if cmd.cwd else None
-    slug = os.path.basename(place.top) if place is not None and place.kind == repo.LINKED else 'gate'
-    return fwd(os.path.join(ctx.tempdir, '%s-gate.log' % slug))
-
-
 def bare(cmd):
     if not cmd.words:
         return cmd.text
     return cmd.source[cmd.words[0].start:cmd.words[-1].end]
 
 
+def bare_wrapper(ctx, cmd, inv, cwd):
+    """(command, from_dir) the wrapped_gate alternative names: the call from its first word to its
+    last (bare: no pipe, no redirection), the script by absolute path, and for a gate.py run with
+    no -C and no subcommand ` -C <the directory it ran in>` after it, so it runs the same from any
+    directory. The script is the kit's (tools/<name>.py of advice_kit) when it is the kit the guard
+    runs from or no such file is there (a repository holds no copy of the kit's tools); a script
+    that is there, such as the kit repository's own tools/gate.py, keeps its folder. from_dir is
+    the directory the alternative must still run in (a lock run's program, or a gate run with a
+    subcommand), else None. (bare(cmd), from_dir) when the script word is not literal, or no
+    python runs one (a gate.py run as a program). When the directory it runs in is unknown (a
+    computed cd before it: cmd.cwd None) a relative script is kept as written, no -C is added and
+    from_dir is None: wrapped_gate then says to run it from the worktree root."""
+    where = cmd.cwd
+    found = cm.python_script(inv) if inv.via != 'start-process' else None
+    word = inv.args[found[0]] if found else None
+    if word is None or word.dyn or word.synth or not cmd.words or word.end > len(cmd.source):
+        return bare(cmd), where
+    path = sh.resolve_path(word.text, where, cmd.shell, getattr(ctx, 'home', None))
+    if not path:
+        return bare(cmd), where
+    kit_tools = paths.norm(os.path.join(ctx.kit, 'tools'), real=True)
+    if paths.norm(os.path.dirname(path), real=True) == kit_tools or not os.path.isfile(path):
+        path = os.path.join(advice_kit(ctx), 'tools', ntpath.basename(path.replace('/', '\\')))
+    rest = inv.args[found[0] + 1:]
+    tail = cmd.source[word.end:cmd.words[-1].end] if rest else ''
+    head = cmd.source[cmd.words[0].start:word.start] + literal_word(path)
+    from_dir = where
+    if cm.wrapper(inv) == 'gate' and not (rest and not rest[0].text.startswith('-')):    # no subcommand
+        given = None
+        for k, a in enumerate(rest):
+            if a.text == '-C':
+                given = rest[k + 1] if k + 1 < len(rest) else a
+                break
+            if a.text.startswith('-C'):
+                given = sh.Word(a.text[2:], a.dyn, a.start, a.end)
+                break
+        if given is None and where:
+            head += ' -C %s' % literal_word(where)
+            from_dir = None
+        elif given is not None and not given.dyn and os.path.isabs(given.text):
+            from_dir = None                     # -C <absolute>: it runs the same from anywhere
+    return (head + tail).strip(), from_dir
+
+
 def wrapped_gate(event, ctx, cmd, inv, cwd, role):
     kind = cm.wrapper(inv)
     if not kind or not cmd.piped_out:
         return None
-    instead = '%s > %s 2>&1' % (bare(cmd), quote(gate_log(ctx, cmd)))
-    if cmd.cwd and not same_dir(cmd.cwd, cwd):
-        how = 'Run it as its own call with %s as the working directory (no cd chain), then read the log:' % \
-            quote(cmd.cwd)
-    elif cmd.cwd is None:
-        how = 'Run it as its own call from the worktree root, then read the log:'
-    else:
-        how = 'Run it as a command of its own, then read the log:'
+    instead, from_dir = bare_wrapper(ctx, cmd, inv, cwd)
+    read = 'read the log gate.py names' if kind == 'gate' else 'read its output'
+    where = ' with %s as the working directory' % quote(from_dir) if from_dir and not same_dir(from_dir, cwd) \
+        else ' from the worktree root' if cmd.cwd is None else ''
+    how = ('Run it bare, as a call of its own in the background%s (run_in_background: true; no pipe and no '
+           'redirection), and when its completion notice comes, %s:' % (where, read))
     return refuse('wrapped-gate', role, '%s is piped into another command; a wrapped gate reads to the '
                   'classifier as something else and is refused (refusal pattern P16). %s' % (bare(cmd), how), instead)
 
@@ -4429,14 +4607,16 @@ def run_from(cmd, cwd):
     return ''
 
 
-def kit_wrapper(ctx, cmd, inv, cwd):
+def kit_wrapper(ctx, cmd, inv, cwd, event=None):
     """cm.wrapper(inv) when the script it runs is the kit's own (tools/gate.py or
-    tools/machine_lock.py of the kit the guard runs from, ctx.kit, the path resolved from the
-    command's directory with links followed), else None. Only the kit's tool takes the machine lock
-    itself, so only it may run an interpreter a repository lists as heavy: a script that shares its
-    file name (a branch's copy, `python <temp>/gate.py`) is judged as any other script. A repository
-    holds no copy of the kit's tools (decision 21 in docs/multi-host-plan.md section 7), so an
-    opt-in stub fails closed here too."""
+    tools/machine_lock.py of the kit the guard runs from, ctx.kit, or, given the Action `event`, of
+    an export of it the session cannot write, rolepolicy.kit_export, the folder advice names
+    (advice_kit) among them; the path resolved from the command's directory with links followed),
+    else None. Only the kit's tool takes the machine lock itself, so only it may run an
+    interpreter a repository lists as heavy: a script that shares its file name (a branch's copy,
+    `python <temp>/gate.py`) is judged as any other script. A repository holds no copy of the
+    kit's tools (decision 21 in docs/multi-host-plan.md section 7), so an opt-in stub fails closed
+    here too."""
     kind = cm.wrapper(inv)
     if not kind:
         return None
@@ -4449,11 +4629,17 @@ def kit_wrapper(ctx, cmd, inv, cwd):
     if not path:
         return None
     tools = paths.norm(os.path.join(ctx.kit, 'tools'), real=True)
-    return kind if paths.norm(os.path.dirname(path), real=True) == tools else None
+    folder = paths.norm(os.path.dirname(path), real=True)
+    if folder == tools:
+        return kind
+    if event is None or os.path.basename(folder) != 'tools':
+        return None
+    from . import rolepolicy
+    return kind if rolepolicy.kit_export(ctx, os.path.dirname(folder), event, cwd) else None
 
 
 def heavy(event, ctx, cmd, inv, cwd, role):
-    if inv is None or inv.dyn or kit_wrapper(ctx, cmd, inv, cwd):
+    if inv is None or inv.dyn or kit_wrapper(ctx, cmd, inv, cwd, event):
         return None
     where = cmd.cwd or cwd
     cfg = ctx.config(where) if where else None
@@ -5753,7 +5939,7 @@ def git_send_pack_pmdata(event, ctx, inv, role):
     if inv is None or inv.dyn:
         return None
     if inv.name.startswith('git-') and hookless_sub(inv.name[len('git-'):]):
-        sub, where, args = inv.name[len('git-'):], inv.cmd.cwd, [w.text for w in inv.args]
+        sub, where, args = inv.name[len('git-'):], cm.run_dir(inv), [w.text for w in inv.args]
     else:
         gc = cm.git_call(inv)
         if gc is None or not hookless_sub(gc.sub):
@@ -5913,9 +6099,12 @@ def git_alias_config(event, ctx, gc, role):
 def _unknown_dir_counts(ctx, gc):
     """For a git call whose directory the text cannot tell: True when the machine config names
     pm_data (or cannot be read), or the directory the command itself runs in has a PM data record
-    (pmdata_recorded). Otherwise an unknown directory is no ground to deny."""
-    here = gc.inv.cmd.cwd if gc.inv is not None else None
-    return bool(ctx.pm_data_named() or (here and pmdata_recorded(ctx, here)))
+    (pmdata_recorded), or the folder a Start-Process -WorkingDirectory starts it in
+    (commands.run_dir) has one. Otherwise an unknown directory is no ground to deny."""
+    if gc.inv is None:
+        return bool(ctx.pm_data_named())
+    heres = [d for d in (gc.inv.cmd.cwd, cm.run_dir(gc.inv)) if d]
+    return bool(ctx.pm_data_named() or any(pmdata_recorded(ctx, d) for d in heres))
 
 
 def _alias_config_moved(gc):
