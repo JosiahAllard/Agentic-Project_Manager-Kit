@@ -261,12 +261,18 @@ def drift(root, renderers, content=None, tiers=None):
 def write(root, renderers, content=None, tiers=None):
     """Write every differing or missing rendered file and remove every stale one, then each folder
     above a removed file that is left empty (a retired folder goes, as git removes it); the paths
-    touched, sorted. A root holding the export marker (an installed plugin, kitlib.pluginsource)
-    is a ContentError: nothing is written there."""
+    touched, sorted. A root in an installed plugin export (the root or a folder above it holds
+    kitlib.pluginsource's marker) is a ContentError: nothing is written there."""
     from kitlib.pluginsource import MARKER
-    if os.path.isfile(os.path.join(root, MARKER)):
-        raise ContentError('%s is an installed plugin export (%s); not written: render into a kit '
-                           'checkout with -C <checkout>' % (root, MARKER))
+    here = os.path.abspath(root)
+    while True:
+        if os.path.isfile(os.path.join(here, MARKER)):
+            raise ContentError('%s is in an installed plugin export (%s in %s); not written: render '
+                               'into a kit checkout with -C <checkout>' % (root, MARKER, here))
+        up = os.path.dirname(here)
+        if up == here:
+            break
+        here = up
     changed, stale = diff(root, renderers, content, tiers)
     for p, data in changed.items():
         path = _join(root, p)
