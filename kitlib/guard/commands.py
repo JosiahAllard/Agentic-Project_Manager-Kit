@@ -515,8 +515,15 @@ def span_text(cmd, words):
 
 SP_SHELLS = BASH_SHELLS | PS_SHELLS | {'cmd'}
 CMD_RUN_SWITCHES = ('/c', '/k', '/r', '//c', '//k', '//r')
-# /cecho, /q/c, "/c": a word that may hold a run switch cmd reads, not on its own
-CMD_RUN_HIDDEN_RE = re.compile(r'(?i)^"?/(.*/)?[ckr]')
+# a word that may hold a run switch cmd reads, not on its own: cmd splits its switches at , ; =
+# as well as spaces and finds a / switch inside a word (/cecho, /q/c, ;/c, x/c, "/c"), so a /c,
+# /k or /r anywhere in a word before the run switch is searched for, never matched at its start
+CMD_RUN_HIDDEN_RE = re.compile(r'(?i)/[ckr]')
+
+
+def _cmd_hidden_switch(text):
+    """True when a cmd word that is not a run switch on its own may still hold one."""
+    return bool(CMD_RUN_HIDDEN_RE.search(text))
 
 
 def _nested_text(inv, parsed):
@@ -559,7 +566,7 @@ def _sp_shell_text(inv, parsed):
                 k = rest.rfind('"')
                 readings += ((rest[1:k] + rest[k + 1:]) if k > 0 else rest[1:],)
             return (readings, sh.CMD) + where
-        if CMD_RUN_HIDDEN_RE.match(t):
+        if _cmd_hidden_switch(t):
             parsed.flag('a cmd switch Start-Process passes that the guard cannot read (%s)' % m.group(0))
             return None
     return None
@@ -690,7 +697,14 @@ def _shell_text(inv, parsed):
         return (readings, sh.PS) if readings else None
     if name == 'cmd':
         for k, w in enumerate(a):
-            if w.text.lower() in ('/c', '/k', '/r', '//c', '//k', '//r'):
+            if w.dyn:
+                # a computed word before the run switch may itself be /c
+                parsed.flag('a cmd switch that is not literal')
+                return None
+            if w.text.lower() not in CMD_RUN_SWITCHES and _cmd_hidden_switch(w.text):
+                parsed.flag('a cmd switch the guard cannot read (%s)' % w.text)
+                return None
+            if w.text.lower() in CMD_RUN_SWITCHES:
                 rest = a[k + 1:]
                 if any(x.dyn for x in rest):
                     parsed.flag('a nested cmd /c whose text is not literal')

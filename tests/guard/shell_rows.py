@@ -147,6 +147,54 @@ ROWS = [
      None, None, None),
     ('Start-Process cmd /c redirect in its worktree stays allowed', lambda w: ps(
         "Start-Process cmd -ArgumentList '/d', '/c', 'echo hi > out.txt' -Wait", w.wt, sub=True), None, None, None),
+    # cmd splits its switches at , ; = too and finds a /c inside a word: any word before the run
+    # switch that holds /c (/k, /r) is unreadable (commands.CMD_RUN_HIDDEN_RE)
+    ('Start-Process cmd ;/c into main', lambda w: ps(
+        "Start-Process cmd -ArgumentList ';/c echo x > %s'" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'unreadable', None),
+    ('Start-Process cmd ,/c into main', lambda w: ps(
+        "Start-Process cmd -ArgumentList ',/c echo x > %s'" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'unreadable', None),
+    ('Start-Process cmd =/C into main', lambda w: ps(
+        "Start-Process cmd -ArgumentList '=/C echo x > %s'" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'unreadable', None),
+    ('Start-Process cmd x/c into main', lambda w: ps(
+        "Start-Process cmd -ArgumentList 'x/c echo x > %s'" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'unreadable', None),
+    ('Start-Process cmd x"/c" into main', lambda w: ps(
+        "Start-Process cmd -ArgumentList 'x\"/c\" echo x > %s'" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'unreadable', None),
+    ('cmd ;/c into main', lambda w: ps("cmd ';/c' 'echo x > %s'" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'unreadable', None),
+    ('cmd ,/c into main', lambda w: ps("cmd ',/c' 'echo x > %s'" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'unreadable', None),
+    ('cmd =/k into main', lambda w: ps("cmd =/k 'echo x > %s'" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'unreadable', None),
+    ('cmd x/c into main', lambda w: ps("cmd x/c 'echo x > %s'" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'unreadable', None),
+    ('cmd x"/c" into main', lambda w: ps("cmd 'x\"/c\"' 'echo x > %s'" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'unreadable', None),
+    ('cmd ;//c into main, Git Bash', lambda w: bash("cmd ';//c' 'echo x > %s/f.txt'" % W.fwd(w.main), w.wt, sub=True),
+     'deny', 'unreadable', None),
+    ('cmd with a computed word before its switch', lambda w: ps(
+        "cmd $a 'echo x > %s'" % win(w.main, 'f.txt'), w.wt, sub=True), 'deny', 'unreadable', None),
+    ('cmd /d /c echo stays allowed', lambda w: ps("cmd /d /c 'echo hi > out.txt'", w.wt, sub=True), None, None, None),
+    # bash and powershell Start-Process starts run at its -WorkingDirectory too
+    ('Start-Process powershell in main as its working directory', lambda w: ps(
+        "Start-Process powershell -WorkingDirectory %s -ArgumentList '-Command', 'echo x > f.txt'" % w.main,
+        w.wt, sub=True), 'deny', 'main-checkout', None),
+    ('Start-Process bash in main as its working directory', lambda w: ps(
+        "Start-Process bash -WorkingDirectory %s -ArgumentList '-c', '\"echo x > f.txt\"'" % w.main, w.wt, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process bash in its worktree stays allowed', lambda w: ps(
+        "Start-Process bash -WorkingDirectory %s -ArgumentList '-c', '\"echo x > f.txt\"'" % w.wt, w.wt, sub=True),
+     None, None, None),
+    ('Start-Process powershell in a computed working directory', lambda w: ps(
+        "Start-Process powershell -WorkingDirectory $d -ArgumentList '-Command', 'echo hi'", w.wt, sub=True),
+     'deny', 'unreadable', None),
+    ('start cmd /c redirect into main', lambda w: ps(
+        "start cmd -ArgumentList '/c echo x > %s'" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'main-checkout', None),
     ('cmd start with a quoted title', lambda w: ps('cmd /c start "Godot" godot.exe --headless', w.wt), 'deny', 'heavy',
      heavy('wt', 'godot.exe --headless')),
     ('cmd start /b /wait', lambda w: ps('cmd /c start /b /wait godot.exe --headless', w.wt), 'deny', 'heavy',
