@@ -17,7 +17,7 @@ Not a list of things that sound fun: a short set of concepts that fit this proje
 6. Argue against your own favourite: every concept gets its strongest objection - unfun, unbalanced, expensive, or a netcode problem in this project specifically.
 7. Mark every inference: "the code does X" and "I expect players would do Y" are different claims; the second needs a playtest.
 8. Where a concept forks, propose a default and label it one; never invent questions for the owner.
-9. The report is your text reply. Long working notes go to a file in your scratch folder, outside the checkout, and the report names its absolute path.
+9. The report is your text reply. Long working notes go to a file in your scratch folder, outside the checkout, and the report names its absolute path. A page for the owner: skill `hub-ops`, step 4.
 
 ## Never
 
