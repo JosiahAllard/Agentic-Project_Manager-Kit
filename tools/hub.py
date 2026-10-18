@@ -148,6 +148,16 @@ the server alone decides what a role may do.
   hub.py inbox add --text T [--title T] [--repo R] [--ref ID] [--asked TEXT] [--refs ID ...]
         [--from NAME]                                `POSTED M-2`
   hub.py inbox read M-1 [--undo] [--if-version V]   (owner) `READ M-1`, `UNREAD M-1`
+  hub.py pages [--repo R]                           `ID v2 - [repo] title` for each published page
+  hub.py pages publish ID --title T --html-file F [--repo R] [--summary S] [--refs ID ...]
+        [--from NAME] [--if-version V]               `PUBLISHED ID`; F is a UTF-8 HTML file the
+                                                     hub's page check (kitlib.hubsite.pagecheck)
+                                                     passes, checked here before it is sent;
+                                                     over a page already published, --if-version
+                                                     is its version (docs/action-hub.md
+                                                     "pages/<id> and page_html/<id>")
+  hub.py pages show ID [--out F]                    the page's HTML, or with --out F written to F
+                                                     as UTF-8 and `WROTE F` printed
   hub.py approvals [--status S] [--repo R]          `A-1 pending [repo] title` for each request
                                                      for the owner's approval, its status read
                                                      now (an expired one says expired;
@@ -207,14 +217,15 @@ from kitlib.hubsite import approvals                               # noqa: E402
 from kitlib.hubsite import autostart as hub_autostart              # noqa: E402
 from kitlib.hubsite import control                                 # noqa: E402
 from kitlib.hubsite import migrate as hub_migrate                  # noqa: E402
+from kitlib.hubsite import pagecheck                               # noqa: E402
 
 START = 'python "%s" serve' % os.path.abspath(__file__)
 OPEN = 'python "%s" open' % os.path.abspath(__file__)
 HEALTH = api.BASE + '/health'
 # every verb, in the order the usage error names them
 VERB_NAMES = ('serve', 'status', 'setup', 'open', 'unpair', 'stop', 'restart', 'migrate',
-              'questions', 'answer', 'todos', 'stories', 'to-pm', 'inbox', 'approvals', 'pending',
-              'wait', 'validate')
+              'questions', 'answer', 'todos', 'stories', 'to-pm', 'inbox', 'pages', 'approvals',
+              'pending', 'wait', 'validate')
 NO_VERB = 'give a verb: %s or %s' % (', '.join(VERB_NAMES[:-1]), VERB_NAMES[-1])
 
 
@@ -448,6 +459,21 @@ def _client_verbs(sub):
     x.add_argument('id')
     x.add_argument('--undo', action='store_true')
     _pins(x)
+
+    g = _listed(sub, 'pages', 'list the published pages; publish, show')
+    x = _leaf(g, 'publish', 'publish an HTML page to the hub')
+    x.add_argument('id')
+    x.add_argument('--title', required=True)
+    x.add_argument('--html-file', dest='html_file', required=True, metavar='F',
+                   help='a UTF-8 HTML file: no script, no remote URL, Mermaid rendered to svg')
+    _repo(x)
+    x.add_argument('--summary')
+    x.add_argument('--refs', nargs='+', metavar='ID')
+    x.add_argument('--from', dest='who', metavar='NAME')
+    _pins(x)
+    x = _leaf(g, 'show', "a page's HTML")
+    x.add_argument('id')
+    x.add_argument('--out', metavar='F', help='write the HTML to this file instead')
 
     x = _listed(sub, 'approvals', "list the requests for the owner's approval; show",
                 S['approvals'])
@@ -1030,6 +1056,40 @@ def _inbox(a, stop):
                  [_item(d, 'read' if d.get('read') else 'unread') for d in items])
 
 
+def _pages(a, stop):
+    """No delete: deleting a page is the owner's, on the hub page only."""
+    hub = _hub(a)
+    if a.sub == 'publish':
+        html = _text_of(a.html_file, 'html')
+        why = pagecheck.check(html)
+        if why:
+            raise serve.ServeError('the page check refuses %s: %s' % (a.html_file, why))
+        got = hub.post('/pages', client.AGENT, _body(
+            id=a.id, title=a.title, html=html, repo=getattr(a, 'repo', None), summary=a.summary,
+            refs=a.refs, if_version=a.if_version, **{'from': a.who}))
+        return _wrote(a, got, 'PUBLISHED %s' % got.get('id'))
+    if a.sub == 'show':
+        got = hub.page(a.id)
+        html = got.get('html') if isinstance(got.get('html'), str) else ''
+        if a.out:
+            try:
+                with open(a.out, 'w', encoding='utf-8', newline='') as f:
+                    f.write(html)
+            except OSError as e:
+                raise serve.ServeError('cannot write %s: %s' % (a.out, type(e).__name__))
+            return _show(a, {'ok': True, 'id': got.get('id'), 'version': got.get('version'),
+                             'out': a.out}, ['WROTE %s' % a.out])
+        if getattr(a, 'json', False):
+            return _show(a, got, [])
+        try:
+            sys.stdout.write(html + '\n')
+        except UnicodeEncodeError:
+            enc = getattr(sys.stdout, 'encoding', None) or 'ascii'
+            sys.stdout.write(html.encode(enc, 'backslashreplace').decode(enc) + '\n')
+        return client.OK
+    return _list(a, 'pages', version=True)
+
+
 def _approvals(a, stop):
     """The requests from GET /snapshot (the api has no route that lists approvals), each with
     its status read now: approvals.status_at applies the expiry, `malformed` for a bad document."""
@@ -1088,7 +1148,8 @@ def _wait(a, stop):
 VERBS = {'serve': _serve, 'status': _status, 'setup': _setup, 'open': _open,
          'unpair': _unpair, 'stop': _stop, 'restart': _restart, 'migrate': _migrate,
          'questions': _questions, 'answer': _answer, 'todos': _todos,
-         'stories': _stories, 'to-pm': _to_pm, 'inbox': _inbox, 'approvals': _approvals,
+         'stories': _stories, 'to-pm': _to_pm, 'inbox': _inbox, 'pages': _pages,
+         'approvals': _approvals,
          'pending': _pending,
          'wait': _wait, 'validate': _validate}
 

@@ -1,6 +1,6 @@
 # Hub MCP server
 
-`mcp/hub_server.py` serves the Action Hub (docs/action-hub.md) as a stdio MCP server. Each tool is one HTTP call to the hub server on this machine through `kitlib.hubsite.client.Client`, on the loopback address only: the hub's own checks (roles, fields, versions) are the ones that hold, and this process never opens the hub store. The logic is `kitlib/hubmcp/server.py`; the names the guard reads are in `kitlib/hubmcp/__init__.py`, which imports nothing. The stdio JSON-RPC loop and response shapes (`ok`, `err`, `serve`) are `kitlib/mcpwire`, shared with the lock server. In `tools/list`, `destructiveHint` is true for a tool that changes an existing document (a non-GET with an `{id}` in its path) and false for one that only adds; `readOnlyHint` is true for the GET tools.
+`mcp/hub_server.py` serves the Action Hub (docs/action-hub.md) as a stdio MCP server. Each tool is one HTTP call to the hub server on this machine through `kitlib.hubsite.client.Client`, on the loopback address only: the hub's own checks (roles, fields, versions) are the ones that hold, and this process never opens the hub store. The logic is `kitlib/hubmcp/server.py`; the names the guard reads are in `kitlib/hubmcp/__init__.py`, which imports nothing. The stdio JSON-RPC loop and response shapes (`ok`, `err`, `serve`) are `kitlib/mcpwire`, shared with the lock server. In `tools/list`, `destructiveHint` is true for a tool that changes an existing document (a non-GET with an `{id}` in its path, or one of `server.REPLACES`: `hub_page_publish`, which can publish over a page) and false for one that only adds; `readOnlyHint` is true for the GET tools.
 
 - **Transport:** JSON-RPC 2.0, one message per line on stdin and stdout, on the standard library, in the shape of the lock MCP server (docs/lock-mcp.md). It answers `initialize` (protocol 2025-06-18, 2025-03-26 or 2024-11-05), `ping`, `tools/list` and `tools/call`.
 - **Plugin:** `.claude-plugin/plugin.json` names it `hub` (`kitlib.hubmcp.SERVER_NAME`), rendered from `hosts/claude/adapter/content.py` `MCP_SERVERS`. A client shows its tools as `mcp__plugin_pm-kit_hub__<tool>`. Codex's plugin carries it as server `hub` (`hosts/codex/shell/mcp/hub_server.py`); `hosts/codex/adapter/policy.py` refuses its tools to a marked Codex session.
@@ -37,6 +37,7 @@ Endpoints are below `/api/v1` (`kitlib.hubsite.api.BASE`).
 | `hub_completed` | `repo`, `days` | `GET /completed` |
 | `hub_view` | `view` (notices, repos, usage or agents) | `GET /<view>` |
 | `hub_health` | none | `GET /health` |
+| `hub_page` | `id` | `GET /pages/<id>`: `{ok, id, html, version}` of a published page's body |
 
 `hub_pending` and `hub_wait` take an optional `for`, a session key, sent as the `for` query of the
 hub's api as given (blank sends none). With it they list or wait for that key's pending items only:
@@ -67,6 +68,21 @@ Each calls a route the agent's token may call (`kitlib.hubsite.api.ROUTES`, role
 | `hub_story_set` | `id`, `status` (`api.AGENT_STORY_STATUSES`), `if_version`; `reviewer`, `review_note`, `backlog_id`, `closed_note` | `POST /stories/<id>` |
 | `hub_to_pm_reply` | `id`; `reply`, `ruling`, `if_version` | `POST /to_pm/<id>/reply` |
 | `hub_inbox_post` | `text`; `title`, `ref`, `asked`, `repo`, `from`, `refs` | `POST /inbox` |
+| `hub_page_publish` | `id`, `title`, `html_file`; `summary`, `repo`, `from`, `refs`, `if_version` | `POST /pages` |
+
+`hub_page_publish` takes the page's HTML as a file, never inline: `html_file` is an absolute path
+to a UTF-8 file, read here (at most `pagecheck.MAX_BYTES` + 1 characters, line endings kept as the
+file has them) and posted as `html`. This process reads the file outside the guard, so
+`Server._page_file` judges it by its real path, symbolic links and junctions followed: it must end
+in one of `server.PAGE_SUFFIXES` (`.html`, `.htm`), and it must not lie in the hub's token folder or
+its store, so no token can be posted as a page and read back with `hub_page`. Such a file, a
+relative path, a file that cannot be read or is not UTF-8 is `invalid`, field `html_file`, before
+the file is opened or any call is made; a body `kitlib.hubsite.pagecheck.check` refuses is
+`invalid`, field `html`, also before any call (`Server._t_hub_page_publish`;
+`tests/hubmcp/test_server.py` `Pages`). Publishing over a page needs
+its card's version as `if_version`. What a body may hold, and why Mermaid must be drawn as svg
+first, is docs/action-hub.md "pages/<id> and page_html/<id>". No tool deletes a page: that is the
+owner's, in the Docs tab.
 
 The `from` of `hub_ask` is the session the answer goes back to: a launcher session key or `pm`,
 the default when it is absent or blank. The hub refuses any other value, a free-text name

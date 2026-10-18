@@ -14,7 +14,7 @@ import re
 import shutil
 import unittest
 
-from kitlib.hubsite import httpd, serve
+from kitlib.hubsite import httpd, pagecheck, serve
 from kitlib.hubsite.api import BASE
 from kitlib.proc import spawn
 from tests.hubsite import httpfix, pagedom
@@ -109,8 +109,33 @@ class ServedTest(httpfix.ListenerCase):
         self.assertEqual(got["todos"][0]["id"], made.json()["id"])
         for k in ("docs", "inbox", "stories", "topm", "repos", "backlog", "completed", "parked", "usage", "agents", "pages"):
             self.assertEqual(got[k], [], k)
-        self.assertEqual(got["pageHtml"], {})
+        self.assertNotIn("pageHtml", got)
         self.assertEqual(got["gone"], snap.json()["unavailable"])
+
+    @unittest.skipUnless(NODE, "node is needed to run the page's logic")
+    def test_a_published_page_is_listed_and_its_body_is_read_on_its_own(self):
+        lis = self.listener(static_dir=serve.STATIC_DIR)
+        made = post(lis.port, BASE + "/pages", {"id": "plan-1", "title": "The plan", "html": "<p>body-mark</p>"}, token=self.agent)
+        self.assertEqual(made.status, 200, made.body)
+        snap = get(lis.port, BASE + "/snapshot", token=self.owner)
+        self.assertNotIn("body-mark", snap.body.decode("utf-8"))      # the body is not in the snapshot
+        got = js("hubState(items)", snap.json())
+        self.assertEqual([(p["id"], p["title"], p["version"]) for p in got["pages"]], [("plan-1", "The plan", 1)])
+        body = get(lis.port, BASE + "/pages/plan-1", token=self.owner)  # the route the reader asks
+        self.assertEqual((body.status, body.json()["html"]), (200, "<p>body-mark</p>"))
+
+    def test_a_body_the_check_lets_through_can_still_be_over_the_listeners_limit(self):
+        # JSON writes a '"' as two bytes, so a body at the check's cap is over MAX_BODY as the
+        # transport encodes it (serve.py: json.dumps), and the listener refuses it by its length
+        html = '"' * pagecheck.MAX_BYTES
+        self.assertIsNone(pagecheck.check(html))
+        sent = json.dumps({"id": "plan-1", "title": "T", "html": html}).encode("utf-8")
+        self.assertGreater(len(sent), httpd.MAX_BODY)
+        lis = self.listener(static_dir=serve.STATIC_DIR)
+        head = httpfix.write_headers(lis.port, self.agent) + [("Content-Length", str(len(sent)))]
+        r = httpfix.send(lis.port, "POST", BASE + "/pages", head)     # the length alone refuses it
+        self.assertEqual((r.status, r.code()), (413, "invalid"))
+        self.assertEqual(get(lis.port, BASE + "/pages/plan-1", token=self.owner).status, 404)
 
 
 @unittest.skipUnless(NODE, "node is needed to run the page's logic")
@@ -261,10 +286,9 @@ class StateTest(unittest.TestCase):
             for k in ("docs", "inbox", "todos", "stories", "topm", "repos", "backlog", "completed", "parked", "usage", "agents",
                       "pages"):
                 self.assertEqual(got[k], [], (k, snap))
-            self.assertEqual(got["pageHtml"], {}, snap)
         self.assertEqual(js("hubState(items).revision", {}), 0)
         odd = js("hubState(items)", snapshot(collections={"pages": ["x"], "page_html": "y"}))
-        self.assertEqual((odd["pages"], odd["pageHtml"]), ([], {}))
+        self.assertEqual(odd["pages"], [])
 
     def test_only_pending_approvals_oldest_first_and_strong_only_when_true(self):
         got = js("hubState(items)", snapshot(strong=True, collections={"approvals": {
@@ -277,17 +301,18 @@ class StateTest(unittest.TestCase):
             got = js("hubState(items)", snap)
             self.assertEqual((got["approvals"], got["strong"]), ([], False), snap)
 
-    def test_pages_newest_first_with_their_bodies(self):
+    def test_pages_newest_first_and_no_body_is_kept(self):
         got = js("hubState(items)", snapshot(collections={
-            "pages": {"old": {"title": "Old", "at": "2026-10-01T00:00:00Z"},
+            "pages": {"old": {"title": "Old", "at": "2026-10-01T00:00:00Z", "version": 4},
                       "new": {"title": "New", "at": "2026-10-01T00:00:00Z", "updated_at": "2026-10-05T00:00:00Z"},
-                      "mid": {"title": "Mid", "at": "2026-10-03T00:00:00Z"},
+                      "mid": {"title": "Mid", "at": "2026-10-03T00:00:00Z", "version": "2"},
                       "bare": {"title": "No body", "at": "2026-10-02T00:00:00Z"}},
-            "page_html": {"old": {"html": "<p>old</p>"}, "new": {"html": "<p>new</p>"}, "mid": {"html": "<p>mid</p>"},
-                          "stray": {"html": "<p>no page</p>"}}}))
+            "page_html": {"old": {"html": "<p>old</p>"}, "stray": {"html": "<p>no page</p>"}}}))
         self.assertEqual([p["id"] for p in got["pages"]], ["new", "mid", "bare", "old"])
-        # A page with no body is still listed; a body with no page is not kept.
-        self.assertEqual(got["pageHtml"], {"old": "<p>old</p>", "new": "<p>new</p>", "mid": "<p>mid</p>"})
+        # The version a Delete is pinned to is kept only when it is a whole number.
+        self.assertEqual([p["version"] for p in got["pages"]], [None, None, None, 4])
+        # A body, even one an older server still sends, is never kept: the reader reads it on its own.
+        self.assertNotIn("<p>old</p>", json.dumps(got))
 
     def test_page_fields_are_read_as_text(self):
         got = js("hubState(items)", snapshot(collections={
@@ -299,7 +324,6 @@ class StateTest(unittest.TestCase):
         self.assertEqual((p["p"]["title"], p["p"]["repo"], p["p"]["from"], p["p"]["summary"], p["p"]["at"]), ("", "", "7", "", ""))
         self.assertEqual(p["p"]["refs"], ["Q-1", "T-3"])
         self.assertEqual(p["q"]["refs"], [])
-        self.assertEqual(got["pageHtml"], {"q": "<p>q</p>"})              # an html that is not a string is no body
 
     def test_usage_and_agents_views(self):
         got = js("hubState(items)", snapshot(views={
@@ -1694,14 +1718,29 @@ DIAGRAM = ('<h1>Plan</h1><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10
 
 
 def docs_snap():
+    # The snapshot carries no body (kitlib.hubsite.api.snapshot leaves page_html out): BODIES below answers the
+    # reader's GET /pages/<id>, and bare-3 has none, so the server answers it 404.
     return snapshot(
         collections={
             "pages": {"plan-1": {"title": "The <b>plan</b>", "repo": "alpha", "from": "worker", "summary": "what we build",
-                                 "refs": ["Q-1"], "at": "2026-10-03T00:00:00Z"},
-                      "research-2": {"title": "Research notes", "repo": "beta", "at": "2026-10-04T00:00:00Z"},
-                      "bare-3": {"title": "No body yet", "repo": "alpha", "at": "2026-10-01T00:00:00Z"}},
-            "page_html": {"plan-1": {"html": DIAGRAM}, "research-2": {"html": "<p>notes</p>"}}},
+                                 "refs": ["Q-1"], "at": "2026-10-03T00:00:00Z", "version": 3},
+                      "research-2": {"title": "Research notes", "repo": "beta", "at": "2026-10-04T00:00:00Z",
+                                     "refs": ["plan-1", "Q-9"], "version": 1},
+                      "bare-3": {"title": "No body yet", "repo": "alpha", "at": "2026-10-01T00:00:00Z", "version": 1}}},
         views={"repos": [{"name": "alpha", "aliases": []}, {"name": "beta", "aliases": []}]})
+
+
+# The server's answer to the reader's GET /pages/<id>, as kitlib.hubsite.api.pages_get gives it.
+BODIES = {"plan-1": DIAGRAM, "research-2": "<p>notes</p>"}
+READS = """
+            const BODIES = %s;
+            server.route = c => {
+              if (c.method !== "GET" || !c.path.startsWith("/pages/")) return undefined;
+              const id = decodeURIComponent(c.path.slice(7));
+              return id in BODIES ? { status: 200, body: { ok: true, id, html: BODIES[id], version: 1 } }
+                : { status: 404, body: { ok: false, error: { code: "not_found", message: "no page_html/" + id, field: "id" } } };
+            };
+""" % json.dumps(BODIES)
 
 
 @unittest.skipUnless(NODE, "node is needed to run the page's logic")
@@ -1718,7 +1757,9 @@ class DocsTest(unittest.TestCase):
             const plan = $("#doc-plan-1");
             return { count, cards, plan: text(plan), title: text(plan.querySelector("h2")), idq: $("#idq").hidden,
                      bare: { disabled: $("#dr-bare-3").disabled, text: text($("#doc-bare-3")) },
-                     read: !$("#dr-plan-1").disabled, tags: [...new Set(created)], sinks };
+                     read: !$("#dr-plan-1").disabled, tags: [...new Set(created)], sinks,
+                     deletes: $$("#list article").map(a => !!button(a, "Delete")),
+                     reads: calls.filter(c => c.path.startsWith("/pages")).length };
         """, docs_snap())
         self.assertEqual(got["count"], "3")
         self.assertEqual(got["cards"], ["doc-research-2", "doc-plan-1", "doc-bare-3"])
@@ -1727,8 +1768,11 @@ class DocsTest(unittest.TestCase):
             self.assertIn(part, got["plan"], part)
         self.assertFalse(got["idq"])
         self.assertTrue(got["read"])
-        self.assertTrue(got["bare"]["disabled"])                            # a page with no body cannot be opened
-        self.assertIn("no body", got["bare"]["text"])
+        # The list does not know which pages have a body: every Read here is live, and asks the server when pressed.
+        self.assertFalse(got["bare"]["disabled"])
+        self.assertNotIn("no body", got["bare"]["text"])
+        self.assertEqual(got["reads"], 0)                                   # no body is read until Read here
+        self.assertEqual(got["deletes"], [True, True, True])                # the owner's Delete on every card
         self.assertNotIn("iframe", got["tags"])                             # nothing is framed until Read here
         self.assertEqual(got["sinks"], [])
 
@@ -1751,10 +1795,11 @@ class DocsTest(unittest.TestCase):
     def test_an_empty_docs_section_says_where_documents_come_from(self):
         got = dom("""await start(); return text($("#list"));""", snapshot(), hash="#docs")
         self.assertIn("No documents yet", got)
-        self.assertIn("page_html/", got)
+        self.assertIn("once an agent publishes it", got)
+        self.assertNotIn("No tool writes them", got)
 
     def test_read_here_opens_one_sandboxed_frame_with_the_body_unchanged(self):
-        got = dom("""
+        got = dom(READS + """
             await start();
             const hidden0 = $("#reader").hidden;
             await click($("#dr-plan-1"));
@@ -1771,8 +1816,10 @@ class DocsTest(unittest.TestCase):
             let stopped = false;
             for (const f of $("#reader").listeners.keydown) f({ key: "Escape", preventDefault(){ stopped = true; } });
             const esc = { hidden: $("#reader").hidden, focus: document.activeElement.id, stopped };
-            return { hidden0, open, closed, again, esc, sinks };
+            const reads = calls.filter(c => c.path.startsWith("/pages")).map(c => c.method + " " + c.path);
+            return { hidden0, open, closed, again, esc, sinks, reads };
         """, docs_snap(), hash="#docs")
+        self.assertEqual(got["reads"], ["GET /pages/plan-1", "GET /pages/research-2"])   # each body read when opened
         self.assertTrue(got["hidden0"])
         o = got["open"]
         self.assertFalse(o["hidden"])
@@ -1788,6 +1835,80 @@ class DocsTest(unittest.TestCase):
         self.assertEqual(got["again"], [DOC_CSP + "<p>notes</p>"])
         self.assertEqual(got["esc"], {"hidden": True, "focus": "dr-research-2", "stopped": True})
         self.assertEqual(got["sinks"], [])
+
+    def test_a_page_with_no_body_or_a_failed_read_says_so_and_frames_nothing(self):
+        got = dom(READS + """
+            await start();
+            await click($("#dr-bare-3"));
+            const none = { hidden: $("#reader").hidden, said: text($("#reader-body")), frames: all().filter(e => e.tag === "iframe").length };
+            await click($("#reader-close"));
+            server.route = c => c.path.startsWith("/pages/") ? { status: 500, body: { ok: false, error: { code: "internal", message: "store down" } } } : undefined;
+            await click($("#dr-plan-1"));
+            const failed = { said: text($("#reader-body")), frames: all().filter(e => e.tag === "iframe").length };
+            return { none, failed };
+        """, docs_snap(), hash="#docs")
+        self.assertEqual(got["none"], {"hidden": False, "said": "This document has no body on the hub server.", "frames": 0})
+        self.assertEqual(got["failed"], {"said": "Not read: store down.", "frames": 0})
+
+    def test_a_ref_that_names_a_document_opens_it_and_the_focus_comes_back_to_it(self):
+        got = dom(READS + """
+            await start();
+            const refs = $("#doc-research-2 .refs");
+            const btns = refs.querySelectorAll("button").map(b => text(b));
+            const ref = refs.querySelector("button");
+            await click(ref);
+            const open = { title: text($("#reader-title")), srcdoc: all().filter(e => e.tag === "iframe").map(e => e.srcdoc) };
+            await click($("#reader-close"));
+            return { line: text(refs), btns, open, back: document.activeElement === ref };
+        """, docs_snap(), hash="#docs")
+        self.assertEqual(got["line"], "Refs: plan-1, Q-9")
+        self.assertEqual(got["btns"], ["plan-1"])                            # Q-9 is no document: it stays text
+        self.assertEqual(got["open"], {"title": "The <b>plan</b>", "srcdoc": [DOC_CSP + DIAGRAM]})
+        self.assertTrue(got["back"])
+
+    def test_a_page_id_in_a_question_or_a_to_do_opens_the_reader(self):
+        snap = docs_snap()
+        snap["collections"]["questions"] = {"Q-1": {
+            "status": "open", "title": "which", "context": "as asked", "version": 1, "asked_at": NOW,
+            "options": [{"label": "one"}, {"label": "two"}], "refs": ["plan-1", "Q-9"]}}
+        snap["collections"]["todos"] = {"T-1": {
+            "status": "open", "title": "read it", "from": "pm", "version": 1, "added_at": NOW,
+            "refs": ["research-2", "T-9"]}}
+        for hash_, card, title, body in (("", "#q-Q-1", "The <b>plan</b>", DIAGRAM),
+                                         ("#todo", "#todo-T-1", "Research notes", "<p>notes</p>")):
+            with self.subTest(card=card):
+                got = dom(READS + """
+                    await start();
+                    const refs = $("%s .refs");
+                    const btns = refs.querySelectorAll("button").map(b => text(b));
+                    const ref = refs.querySelector("button");
+                    await click(ref);
+                    const open = { title: text($("#reader-title")), srcdoc: all().filter(e => e.tag === "iframe").map(e => e.srcdoc) };
+                    await click($("#reader-close"));
+                    return { btns, open, reads: calls.filter(c => c.method === "GET" && c.path.startsWith("/pages/")).map(c => c.path), back: document.activeElement === ref };
+                """ % card, snap, hash=hash_)
+                self.assertEqual(len(got["btns"]), 1)                       # the other ref is no document: text
+                self.assertEqual(got["open"], {"title": title, "srcdoc": [DOC_CSP + body]})
+                self.assertEqual(len(got["reads"]), 1)
+                self.assertTrue(got["back"])
+
+    def test_delete_asks_twice_and_is_pinned_to_the_cards_version(self):
+        got = dom("""
+            await start();
+            const card = $("#doc-plan-1"), del = button(card, "Delete");
+            await click(del);
+            const armed = { text: text(del), sent: calls.filter(c => c.method === "POST").length };
+            await click(del);
+            const sent = calls.filter(c => c.method === "POST").map(c => [c.path, c.body]);
+            server.route = c => c.method === "POST" ? { status: 409, body: { ok: false, error: { code: "conflict", message: "pages/research-2 is at version 2, not 1" } } } : undefined;
+            const other = $("#doc-research-2"), d2 = button(other, "Delete");
+            await click(d2); await click(d2);
+            return { armed, sent, refused: text(other.querySelector(".status")), d2: text(d2) };
+        """, docs_snap(), hash="#docs")
+        self.assertEqual(got["armed"], {"text": "Confirm delete", "sent": 0})
+        self.assertEqual(got["sent"], [["/pages/plan-1/delete", {"if_version": 3}]])
+        self.assertEqual(got["refused"], "Not deleted: pages/research-2 is at version 2, not 1.")
+        self.assertEqual(got["d2"], "Delete")
 
 
 class PageTextTest(unittest.TestCase):
@@ -1818,7 +1939,8 @@ class PageTextTest(unittest.TestCase):
         self.assertIn('if (k === "class") n.className = v; else if (k === "text") n.textContent = v;', self.script)
         # The one place server html goes: the reader's frame, behind the policy (test_the_reader_is_one_locked_frame).
         self.assertEqual(self.p.count("srcdoc"), 1)
-        self.assertIn("frame.srcdoc = DOC_CSP + html;", self.script)
+        self.assertIn("frame.srcdoc = DOC_CSP + r.html;", self.script)
+        self.assertIn('r = await hub.call("GET", "/pages/" + seg(id));', self.script)   # r is the server's body read
 
     def test_the_reader_is_one_locked_frame(self):
         """The page makes one frame, with a sandbox that grants nothing, and gives it the body behind a policy that
@@ -1866,11 +1988,14 @@ class PageTextTest(unittest.TestCase):
         self.assertNotIn("style:", self.script)
 
     def test_only_the_decided_routes(self):
-        self.assertEqual(re.findall(r'call\("GET", "(/[a-z_]+)', self.script), ["/snapshot", "/wait", "/records"])
-        roots = set(re.findall(r'(?:write|hub\.post)\("(/[a-z_]+)', self.script))
-        self.assertEqual(roots, {"/questions", "/todos", "/stories", "/records", "/to_pm", "/inbox", "/approvals"})
+        self.assertEqual(sorted(re.findall(r'call\("GET", "(/[a-z_]+)', self.script)), ["/pages", "/records", "/snapshot", "/wait"])
+        roots = set(re.findall(r'(?:write|hub\.post|delButton)\("(/[a-z_]+)', self.script))
+        self.assertEqual(roots, {"/questions", "/todos", "/stories", "/records", "/to_pm", "/inbox", "/approvals", "/pages"})
         self.assertEqual(re.findall(r'"/approvals/" \+ seg\([^)]*\) \+ "(/[a-z]+)"', self.script), ["/decide"])
-        for route in ("/alert", "/logout", "/sessions", "/session", "/pair", "/alias", "/aliases", "/pages", "/page",
+        # A page is read (GET /pages/<id>) and deleted, never written: publishing is the agents'.
+        self.assertEqual(re.findall(r'"/pages/" \+ seg\([^)]*\) \+ "(/[a-z]+)"', self.script), ["/delete"])
+        self.assertEqual(self.script.count('"/pages'), 2)
+        for route in ("/alert", "/logout", "/sessions", "/session", "/pair", "/alias", "/aliases", "/page\"",
                       "/health", "/notices"):
             self.assertNotIn('"%s' % route, self.script, route)
         self.assertEqual(re.findall(r'"/inbox[^"]*"[^;]*?"(/[a-z]+)"', self.script), ["/read"])

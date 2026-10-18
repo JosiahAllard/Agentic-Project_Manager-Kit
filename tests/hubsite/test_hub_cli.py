@@ -95,7 +95,7 @@ class UsageCase(CliCase):
         code, out, err = self.run_cli()
         self.assertEqual((code, out), (2, ''))
         self.assertIn('USAGE: give a verb: serve, status, setup, open, unpair, stop, restart, '
-                      'migrate, questions, answer, todos, stories, to-pm, inbox, approvals, '
+                      'migrate, questions, answer, todos, stories, to-pm, inbox, pages, approvals, '
                       'pending, wait or validate\n', err)
         self.assertEqual(sorted(HUB.VERBS), sorted(HUB.VERB_NAMES))     # every verb it has
         self.assertEqual(self.run_cli('launch')[0], 2)
@@ -1455,6 +1455,47 @@ class WriteCase(VerbCase):
         self.assertEqual([(m['id'], m['read'], m['text']) for m in got['items']],
                          [('M-001', False, 'the answer')])
 
+    def test_a_page_is_published_listed_and_shown(self):
+        html = '<h1>Plan</h1>\n<p>café &amp; more</p>\n'
+        page = self.file('plan.html', html)
+        self.assertEqual(self.ok('pages'), [])
+        self.assertEqual(self.ok('pages', 'publish', 'plan', '--title', 'The plan', '--html-file',
+                                 page, '--repo', 'kit', '--summary', 'what we do',
+                                 '--refs', 'B-1', '--from', 'coord'), ['PUBLISHED plan'])
+        self.assertEqual(self.ok('pages'), ['plan v1 - [kit] The plan'])
+        card = self.direct('/pages')['items'][0]
+        self.assertEqual((card['summary'], card['refs'], card['bytes']),
+                         ('what we do', ['B-1'], len(html.encode('utf-8'))))
+        out = os.path.join(self.home, 'out.html')
+        self.assertEqual(self.ok('pages', 'show', 'plan', '--out', out), ['WROTE %s' % out])
+        with open(out, encoding='utf-8', newline='') as f:
+            self.assertEqual(f.read(), html)
+        self.assertEqual(json.loads(self.ok('pages', 'show', 'plan', '--json')[0])['html'], html)
+        # over a published page: its version, or a conflict
+        err = self.refused('pages', 'publish', 'plan', '--title', 'again', '--html-file', page)
+        self.assertTrue(err.startswith('REFUSED conflict: '), err)
+        self.assertEqual(self.ok('pages', 'publish', 'plan', '--title', 'again', '--html-file',
+                                 page, '--if-version', '1'), ['PUBLISHED plan'])
+        err = self.refused('pages', 'show', 'absent')
+        self.assertTrue(err.startswith('REFUSED not_found: '), err)
+
+    def test_a_page_the_check_refuses_is_never_sent(self):
+        bad = self.file('bad.html', '<p>x</p><script>alert(1)</script>')
+        err = self.refused('pages', 'publish', 'plan', '--title', 't', '--html-file', bad)
+        self.assertTrue(err.startswith('REFUSED: the page check refuses '), err)
+        self.assertIn('<script>', err)
+        mermaid = self.file('m.html', '<div class="mermaid">graph TD; A-->B</div>')
+        self.assertIn('render it to svg first', self.refused(
+            'pages', 'publish', 'plan', '--title', 't', '--html-file', mermaid))
+        self.assertIn('cannot read the html file', self.refused(
+            'pages', 'publish', 'plan', '--title', 't', '--html-file',
+            os.path.join(self.home, 'absent.html')))
+        self.assertEqual(self.direct('/pages')['items'], [])
+
+    def test_pages_has_no_delete(self):
+        code, out, err = self.run_cli('pages', 'delete', 'plan', '--port', self.port)
+        self.assertEqual((code, out), (2, ''))
+
     def test_a_listed_title_is_one_line_with_no_user_or_password_of_a_url(self):
         self.ok('todos', 'add', '--owner', '--title',
                 'clone https://someone:s3cret@git.example.test/x\n  then build')
@@ -1605,7 +1646,8 @@ class ArgumentCase(CliCase):
              ('stories', 'set', 'S-001', '--status', 'review', '--if-version', '1'),
              ('stories', 'withdraw', 'S-001'), ('to-pm',), ('to-pm', 'add', '--text', 't'),
              ('to-pm', 'send'), ('to-pm', 'reply', 'P-001', 'text'), ('inbox',),
-             ('inbox', 'add', '--text', 't'), ('inbox', 'read', 'M-001'), ('approvals',),
+             ('inbox', 'add', '--text', 't'), ('inbox', 'read', 'M-001'), ('pages',),
+             ('pages', 'show', 'plan'), ('approvals',),
              ('approvals', 'show', 'A-001'), ('pending',), ('wait', '--timeout', '0'))
 
     def test_every_verb_that_asks_is_exit_3_with_the_start_command_when_no_server_runs(self):
@@ -1740,6 +1782,9 @@ class ArgumentCase(CliCase):
         self.assertEqual(self.run_cli('setup')[0], 0)
         owner, agent = (auth.read_token(self.tokens, r) for r in (auth.OWNER, auth.AGENT))
         seen = []
+        self.page = os.path.join(self.home, 'page.html')
+        with open(self.page, 'w', encoding='utf-8') as f:
+            f.write('<h1>plan</h1>')
 
         def ask(port, method, path, token=None, body=None, timeout=None):
             seen.append((method, path, {owner: 'owner', agent: 'agent'}[token]))
@@ -1769,6 +1814,10 @@ class ArgumentCase(CliCase):
                      ('POST', '/questions/Q-001/log', 'agent')),
                     (('questions',), ('GET', '/questions', 'agent')),
                     (('inbox',), ('GET', '/snapshot', 'agent')),
+                    (('pages', 'publish', 'plan', '--title', 't', '--html-file', self.page),
+                     ('POST', '/pages', 'agent')),
+                    (('pages',), ('GET', '/pages', 'agent')),
+                    (('pages', 'show', 'plan'), ('GET', '/pages/plan', 'agent')),
                     (('pending',), ('GET', '/pending', 'agent')),
                     (('wait', '--timeout', '0'), ('GET', '/wait?timeout=0', 'agent'))):
                 del seen[:]

@@ -23,6 +23,7 @@ Client(port, tokens, via=serve.VIA_CLI)
                                         key's)
   inbox()                               the inbox documents, from GET /snapshot (the api has no
                                         route that lists them)
+  page(id)                              a published page's body, from GET /pages/<id>
   version(collection, id)               the version of one document now, for a write that pins it
   wait(since, timeout, pending, for_key) the long-poll: GET /wait again and again, each for at
                                         most api.WAIT_MAX_S, until the server answers with a
@@ -123,6 +124,11 @@ class Client(object):
     def inbox(self):
         docs = (self.get('/snapshot').get('collections') or {}).get('inbox') or {}
         return [dict(docs[k], id=k) for k in sorted(docs, key=_api._natural)]
+
+    def page(self, doc_id):
+        """{id, html, version} of a page's body (GET /pages/<id>); Refused (not_found) when
+        it has none."""
+        return self.get('/pages/' + part(doc_id))
 
     def version(self, collection, doc_id):
         """Refused (not_found) when the collection holds no such document."""

@@ -42,6 +42,26 @@ and an ApprovalError is answered as a HubError of its code and field. GET approv
 GET snapshot carries `strong`: true only on the strong owner's call (Request.strong), so the page
 shows Approve and Deny as usable; the decide route checks the role itself all the same.
 
+Pages. POST pages (AGENT) publishes a page: the card `pages/<id>` and its body `page_html/<id>`.
+The body is {id, title, html, repo?, from?, summary?, refs?, if_version?}. The id is the
+caller's (a document id that holds no hub item's or ruling's id, `[QMTPSAR]-<digits>` with no
+letter or digit either side, anywhere, so a ref that names a page is never read as an item);
+html is judged by kitlib.hubsite.pagecheck (at most PAGE_HTML_MAX bytes of UTF-8, no script, no
+outside link or load, no unrendered Mermaid), and a refusal is `invalid`, field html, with
+nothing written. Publishing over a page takes the card's `if_version`; without it, or with
+another, it is `conflict`. store.PAGES_LOCK is held from the reads to the last write of a publish or a
+delete (a page is two documents), so a second publisher reads only after the first has written
+both, and with the same pin
+it is `conflict` with nothing written. The body is put first and the card second, each pinned to
+the version read (0: not there yet), so a card never names a missing body; a card write that
+fails after its body leaves an orphan body, which kitlib.hubvalidate warns of and the next
+publish overwrites. The card carries title, repo, summary, refs, from (an agent's name, as a
+to-do's), `at` and `bytes`. GET pages lists the cards; GET pages/{id} gives {ok, id, html,
+version} of the body. GET snapshot leaves `page_html` out: the Docs tab reads a body when it is
+opened. POST pages/{id}/delete (OWNER, if_version optional) deletes the card, then the body; a
+body delete that fails leaves the card deleted and the body an orphan, as above. One process
+lock is enough: Store.open lets one process write a store (`_store.lock`).
+
 Fields. A write route names the body fields it takes; any other field is refused (`invalid`, the
 field named), so a body cannot carry a field another role owns (an agent posting a question
 cannot post its answer). status, the time stamps and a to-do's `from: you` are set here from the
@@ -156,9 +176,10 @@ import time
 
 from kitlib import hubvalidate
 
+from . import pagecheck
 from . import schema
 from . import todosteps
-from .store import HubError
+from .store import PAGES_LOCK, HubError
 
 BASE = '/api/v1'
 API_VERSION = 'v1'
@@ -191,6 +212,10 @@ _FALSE = ('', '0', 'false', 'no', 'off')
 _ID_SPLIT = re.compile(r'([0-9]+)')
 _NAME = re.compile(r'[\x21-\x7e]+(?: [\x21-\x7e]+)*')
 _SURROGATE = re.compile('[\ud800-\udfff]')     # a lone one: half a character
+# A hub item's id or a ruling's anywhere in a page id ("Pages"): hubvalidate._REF's pattern, plus
+# A and R, searched, so neither `plan-Q-1` nor `Q-1.v2` holds a ref a reader would follow.
+_REF_SHAPED = re.compile(r'(?<![A-Za-z0-9])[QMTPSAR]-\d+(?![A-Za-z0-9])', re.I)
+PAGE_HTML_MAX = pagecheck.MAX_BYTES
 
 
 def error_body(code, message, field=''):
@@ -1323,8 +1348,84 @@ def _wait_for(api, since, timeout, mine, routes=False):
     return api.store.changes_since(since)
 
 
+def pages_list(api, req):
+    return {'items': api.items('pages', req)}
+
+
+def pages_publish(api, req):
+    b = _fields(req, ('id', 'title', 'html', 'repo', 'from', 'summary', 'refs', 'if_version'),
+                required=('id', 'title', 'html'))
+    for name in ('id', 'title', 'html', 'repo', 'from', 'summary'):
+        _text(b, name)
+    pin = _pin(b)
+    doc_id = b['id']
+    why = schema.check_id(doc_id)
+    if why:
+        raise _invalid(why, 'id')
+    shaped = _REF_SHAPED.search(doc_id)
+    if shaped:
+        raise _invalid('a page id cannot hold a hub item\'s or a ruling\'s id (%s holds %s): a ref '
+                       'that names it would be read as that item' % (doc_id, shaped.group()), 'id')
+    refs = _typed(b, 'refs', (list,), 'a list of strings')
+    if refs is not None and not all(isinstance(r, str) for r in refs):
+        raise _invalid('refs must be a list of strings', 'refs')
+    why = pagecheck.check(b['html'])
+    if why:
+        raise _invalid(why, 'html')
+    with PAGES_LOCK:
+        return _pages_write(api, req, b, doc_id, pin)
+
+
+def _pages_write(api, req, b, doc_id, pin):
+    """pages_publish from the reads on, called with PAGES_LOCK held."""
+    card, body = api.store.get('pages', doc_id), api.store.get('page_html', doc_id)
+    if card is not None and pin is None:
+        raise HubError('conflict', 'pages/%s is at version %d: give it as if_version to publish '
+                       'over it' % (doc_id, _version(card)), 'if_version')
+    if card is not None and pin != _version(card):
+        raise HubError('conflict', 'pages/%s is at version %d, not %d'
+                       % (doc_id, _version(card), pin), 'if_version')
+    if card is None and pin:
+        raise HubError('conflict', 'there is no pages/%s at version %d: it is not there'
+                       % (doc_id, pin), 'if_version')
+    size = len(b['html'].encode('utf-8'))
+    fields = {k: b[k] for k in ('title', 'repo', 'summary', 'refs') if k in b}
+    fields.update({'from': _agent_from(b.get('from') or ''), 'at': api.clock(), 'bytes': size,
+                   'via': _via(req)})
+    # the body first, each write pinned to what was read under the lock: a card never names a
+    # body that is not there, and a second publisher reads only after both writes ("Pages")
+    wrote = api.store.put('page_html', doc_id, {'html': b['html'], 'via': _via(req)},
+                          if_version=_version(body) if body is not None else 0)
+    r = api.store.put('pages', doc_id, fields, if_version=_version(card) if card is not None else 0)
+    return api.written(r, {'bytes': size, 'html_version': wrote.version})
+
+
+def pages_get(api, req):
+    doc_id = req.params['id']
+    d = api.doc('page_html', doc_id)
+    return {'ok': True, 'id': doc_id, 'html': d.get('html'), 'version': _version(d)}
+
+
+def pages_delete(api, req):
+    b = _fields(req, ('if_version',))
+    _pin(b)
+    doc_id = req.params['id']
+    with PAGES_LOCK:        # no publish runs between the reads and the two deletes
+        d = api.doc('pages', doc_id, b)
+        r = api.store.delete('pages', doc_id, if_version=_version(d))
+        body = api.store.get('page_html', doc_id)   # the card first: it never names no body
+        if body is not None:
+            # A body delete that fails (the store's own error: under the lock no publish can
+            # move its version) leaves an orphan body with no card. The card stays deleted:
+            # hubvalidate warns of the orphan, no card offers it, and the next publish of
+            # this id writes over it ("Pages").
+            r = api.store.delete('page_html', doc_id, if_version=_version(body))
+    return {'ok': True, 'id': doc_id, 'deleted': True, 'revision': r.revision}
+
+
 def snapshot(api, req):
     revision, docs = api.store.snapshot()
+    docs.pop('page_html', None)     # a body is read on its own (GET pages/{id}, "Pages")
     views, missing = {}, {}
     for name in VIEWS:
         try:
@@ -1382,6 +1483,10 @@ ROUTES = (
     _r('POST', '/to_pm/{id}/delete', OWNER, to_pm_delete),
     _r('POST', '/inbox', AGENT, inbox_add),
     _r('POST', '/inbox/{id}/read', OWNER, inbox_read),
+    _r('GET', '/pages', ANY, pages_list),
+    _r('POST', '/pages', AGENT, pages_publish),
+    _r('GET', '/pages/{id}', ANY, pages_get),
+    _r('POST', '/pages/{id}/delete', OWNER, pages_delete),
     _r('POST', '/approvals', AGENT, approvals_add),
     _r('POST', '/approvals/{id}/decide', APPROVER, approvals_decide),
     _r('POST', '/approvals/{id}/consume', AGENT, approvals_consume),

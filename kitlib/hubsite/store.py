@@ -79,6 +79,7 @@ from kitlib.fs.treelock import TreeBusy, TreeLock, TreeLockError, describe
 from . import schema
 
 LOCK_NAME = '_store.lock'
+PAGES_LOCK = threading.Lock()   # serialises a hub page's write or delete: its card and body docs
 META_NAME = '_meta.json'
 RING = 512                      # events held for changes_since and wait
 REPLACE_S = 2.0                 # how long os.replace is retried while a reader holds the file
