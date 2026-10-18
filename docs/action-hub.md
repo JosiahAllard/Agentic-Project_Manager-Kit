@@ -432,9 +432,10 @@ What a body may hold (`kitlib/hubsite/pagecheck.py`, its docstring has the full 
 nothing written). Mermaid is not rendered by the kit: a body with `class="mermaid"` or a
 ` ```mermaid ` fence is refused with "render it to svg first", and the publisher draws the
 diagram as inline `<svg>`. The listener refuses any request body over 1 MiB (`MAX_BODY` in
-`kitlib/hubsite/httpd.py`) with 413 before the check runs; a body near the 512 KiB cap whose JSON
-encoding more than doubles it (mostly quotes, backslashes or escaped non-ASCII) can reach that
-first (inferred from the two limits, not measured).
+`kitlib/hubsite/httpd.py`) with 413 before the check runs, so a body near the 512 KiB cap whose
+JSON encoding about doubles it (mostly quotes, backslashes or escaped non-ASCII) is refused there
+(`test_a_body_the_check_lets_through_can_still_be_over_the_listeners_limit` in
+`tests/hubsite/test_page.py`: 512 KiB of `"` is 1048618 bytes as JSON).
 
 `GET /api/v1/snapshot` carries the cards and leaves every body out
 (`test_snapshot_carries_the_cards_but_not_the_bodies` in `tests/hubsite/test_api.py`). Every card

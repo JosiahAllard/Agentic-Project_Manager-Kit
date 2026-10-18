@@ -14,7 +14,7 @@ import re
 import shutil
 import unittest
 
-from kitlib.hubsite import httpd, serve
+from kitlib.hubsite import httpd, pagecheck, serve
 from kitlib.hubsite.api import BASE
 from kitlib.proc import spawn
 from tests.hubsite import httpfix, pagedom
@@ -123,6 +123,19 @@ class ServedTest(httpfix.ListenerCase):
         self.assertEqual([(p["id"], p["title"], p["version"]) for p in got["pages"]], [("plan-1", "The plan", 1)])
         body = get(lis.port, BASE + "/pages/plan-1", token=self.owner)  # the route the reader asks
         self.assertEqual((body.status, body.json()["html"]), (200, "<p>body-mark</p>"))
+
+    def test_a_body_the_check_lets_through_can_still_be_over_the_listeners_limit(self):
+        # JSON writes a '"' as two bytes, so a body at the check's cap is over MAX_BODY as the
+        # transport encodes it (serve.py: json.dumps), and the listener refuses it by its length
+        html = '"' * pagecheck.MAX_BYTES
+        self.assertIsNone(pagecheck.check(html))
+        sent = json.dumps({"id": "plan-1", "title": "T", "html": html}).encode("utf-8")
+        self.assertGreater(len(sent), httpd.MAX_BODY)
+        lis = self.listener(static_dir=serve.STATIC_DIR)
+        head = httpfix.write_headers(lis.port, self.agent) + [("Content-Length", str(len(sent)))]
+        r = httpfix.send(lis.port, "POST", BASE + "/pages", head)     # the length alone refuses it
+        self.assertEqual((r.status, r.code()), (413, "invalid"))
+        self.assertEqual(get(lis.port, BASE + "/pages/plan-1", token=self.owner).status, 404)
 
 
 @unittest.skipUnless(NODE, "node is needed to run the page's logic")
