@@ -100,8 +100,9 @@ owner's stop route):
      is still open and locked, so what was written since the last pass is committed whole. A
      pass that fails is an error line in the log and is tried again at the next start;
   5. the store: the push-notification worker is told to begin no further delivery, every long
-     wait ends and the store lock is released, then the worker's thread is joined (at most
-     push.STOP_S: a delivery in flight ends within its own write limit) and it writes its outbox;
+     wait ends and the store lock is released, then the worker's thread is joined (for the
+     longer of `timeout` and push.STOP_S, which outlasts a delivery in flight) and it writes its
+     outbox;
   6. the handler threads.
 Each step is given `timeout` seconds. One that raises, or that has not ended when its time is
 up, is an 'error' line in the log that names the step; the next step still runs, and the store
@@ -1170,7 +1171,8 @@ class Hub(object):
                     clean.append(False)
                     self._say('closing: the store failed: %s: %s' % (type(e).__name__, e))
                 if self.push is not None:
-                    wait = _push.STOP_S if timeout is None else min(timeout, _push.STOP_S)
+                    # at least STOP_S: a deliver in flight ends, and the outbox is saved
+                    wait = _push.STOP_S if timeout is None else max(timeout, _push.STOP_S)
                     clean.append(self._step('the push worker', wait, self.push.stop, wait))
                 for lis in self.listeners:
                     clean.append(self._step('the handler threads', timeout, lis.join, timeout))

@@ -55,6 +55,8 @@ TOKEN_LEN = 32
 MAX_PACKET_BYTES = 256 * 1024
 MAX_RESULT_BYTES = 2048
 WRITE_TIMEOUT_S = 5
+REAP_S = 3                      # _cleanup's wait for the helper, after its job is closed
+JOIN_S = 1                      # and for each of its two pump threads
 WORKER = Path(__file__).resolve().with_name('peer_worker.py')
 PYTHON_FLAGS = ('-I', '-B')
 
@@ -170,12 +172,12 @@ def _cleanup(job, process, threads):
         ok = False
     if process is not None:
         try:
-            process.wait(timeout=3)
+            process.wait(timeout=REAP_S)
         except subprocess.TimeoutExpired:
             return False
         for t in threads:
             if t.ident is not None:
-                t.join(timeout=1)
+                t.join(timeout=JOIN_S)
         ok = not any(t.is_alive() for t in threads)
         for stream in (process.stdin, process.stdout):
             if stream is not None:

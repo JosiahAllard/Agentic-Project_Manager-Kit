@@ -213,6 +213,12 @@ class Deliver(unittest.TestCase):
         self.assertEqual(self.m.hub().deliver('x-a1', '<b>').state, push.NOT_WRITTEN)
         self.assertEqual(self.m.writes, [])
 
+    def test_a_hung_write_ends_before_the_hubs_close_stops_waiting(self):
+        # write_once's worst case: the pump's limit, then the reap and both pump joins; 2 s more
+        # for the helper's start and the session lookup. Hub.close joins the worker STOP_S.
+        worst = peer.WRITE_TIMEOUT_S + peer.REAP_S + 2 * peer.JOIN_S + 2
+        self.assertLess(worst, push.STOP_S)
+
 
 class RealPipe(unittest.TestCase):
     """write_once through the hidden helper to a pipe this process serves."""

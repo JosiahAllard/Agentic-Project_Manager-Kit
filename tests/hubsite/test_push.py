@@ -548,7 +548,8 @@ class ThreadTest(unittest.TestCase):
         hub.push.stop, hub.store.close = stop, close
         thread = hub.push._thread
         self.assertTrue(hub.close(timeout=3))
-        self.assertEqual(order, [('push.stop', 0), ('store.close',), ('push.stop', 3)])
+        # red proof: Hub.close joining for min(timeout, STOP_S) cuts a deliver in flight short
+        self.assertEqual(order, [('push.stop', 0), ('store.close',), ('push.stop', push.STOP_S)])
         self.assertFalse(thread.is_alive())
         with open(os.path.join(self.folder, push.OUTBOX), encoding='utf-8') as f:
             self.assertIn('question:', f.read())

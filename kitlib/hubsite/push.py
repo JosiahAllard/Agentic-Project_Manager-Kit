@@ -8,7 +8,8 @@ item itself is read through the hub. Nothing here imports a host: the delivery o
   deliver(recipient, text) -> Sent(state, name, session, ambiguous)   one message to the live
                        session a recipient key stands for; state is WRITTEN, NOT_WRITTEN,
                        UNCERTAIN or NO_SESSION. name and session say which session (None when
-                       none); ambiguous: several live sessions had that name.
+                       none); ambiguous: several live sessions had that name. It must end
+                       within STOP_S, so Hub.close's join outlasts one in flight.
   is_pm(recipient)     the recipient is the PM's own session
 
 What fires (a fingerprint per item: a question's status, answer.at and a digest of its answer,
@@ -80,7 +81,7 @@ SCHEDULE_S = (120, 300, 900, 1800, 3600)    # after the 1st, 2nd, ... try
 HOURLY_S = 3600                             # after the rest
 GIVE_UP_S = 24 * 3600                       # from the first try
 WAIT_SLICE_S = 1.0                          # longest store wait between stop and retry checks
-STOP_S = 5                                  # Hub.close's join
+STOP_S = 15                                 # Hub.close's join: longer than a deliver can take
 MAX_ITEMS = 20                              # items in one message
 LOG_MAX = 1 << 20                           # push-undelivered.jsonl rotates past this
 OUTBOX = 'push-outbox.json'

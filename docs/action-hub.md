@@ -301,7 +301,9 @@ It is not the store's git push (the `push` setting).
   pick and per give-up; never a token or any item text; rotated once to `.1` past 1 MiB,
   `push.LOG_MAX`).
 - Stopping: `Hub.close` tells the worker to begin no further send before the store closes and
-  joins it after (`push.STOP_S`, 5 s).
+  joins it after, for at least `push.STOP_S` (15 s), longer than a host's delivery can take
+  (Claude: `peer.WRITE_TIMEOUT_S` plus the helper's reap and pump joins), so the last outbox
+  write is not cut off.
 - Known limit: an answer made in the moments before the server closes that the worker had not
   yet seen is not pushed after a restart: the outbox holds only what the worker saw. The PM's
   wait still shows it.
