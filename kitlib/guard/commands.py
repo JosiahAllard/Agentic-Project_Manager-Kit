@@ -145,7 +145,7 @@ def _param(words, names):
     """Index of the value of a PowerShell parameter (any unambiguous prefix of `names`, or
     -Name:value), or None."""
     for k, w in enumerate(words):
-        t = w.text.lower()
+        t = sh.ps_dashed(w.text.lower())
         if not t.startswith('-') or len(t) < 2:
             continue
         name, colon, _v = t.partition(':')
@@ -161,8 +161,9 @@ def quoted(cmd, w):
 
 def canon_param(text, names, aliases=None):
     """A PowerShell parameter word (-Name, -Name:value) as the canonical name it selects among
-    `names` (exact, an alias, or the one name it is a prefix of), or None."""
-    t = text.lower().split(':', 1)[0]
+    `names` (exact, an alias, or the one name it is a prefix of), or None. Its dash may be any of
+    shell.PS_DASHES."""
+    t = sh.ps_dashed(text.lower().split(':', 1)[0])
     if not t.startswith('-') or len(t) < 2:
         return None
     if t in names:
@@ -443,8 +444,32 @@ LINE_CD_RE = re.compile(r'(?i)(?<![\w.-])(?:%s)(?![\w.-])' % '|'.join(
 BASH_VALUE_OPTS = {'-o', '+o', '-O', '+O', '--rcfile', '--init-file'}
 PS_VALUE_PARAMS = ('executionpolicy', 'windowstyle', 'workingdirectory', 'configurationname',
                    'outputformat', 'inputformat', 'version', 'psconsolefile', 'settingsfile',
-                   'custompipename')
-PS_VALUE_ALIASES = {'ep', 'ex', 'w', 'wd', 'of', 'if', 'v', 'ea'}
+                   'custompipename', 'configurationfile')
+PS_VALUE_ALIASES = {'ep', 'ex', 'w', 'wd', 'of', 'o', 'if', 'v', 'ea'}
+# switches whose next word is read both as their value and as the start of the command: -i and
+# -in are -InputFormat with a value to powershell.exe and -Interactive without one to pwsh; an
+# -EncodedArguments prefix is judged both ways too (so it is read before PS_VALUE_PARAMS is)
+PS_VALUE_EITHER = {'i', 'in', 'ea'}
+# such switches on one reading path that _nested_text follows both ways; past that it flags the
+# line and reads each further one as taking no value
+PS_FORKS_MAX = 16
+# the switches powershell.exe 5.1 knows, each (name, shortest prefix it takes), and its aliases
+# (observed on 5.1 for every prefix). It runs any other switch, and every word after it, as the
+# command. The server modes are left out: they read no command line, so treating them as
+# unknown only reads more.
+PS51_SWITCHES = (('command', 'c'), ('configurationname', 'config'), ('encodedcommand', 'e'),
+                 ('encodedarguments', 'encodeda'), ('executionpolicy', 'ex'), ('file', 'f'),
+                 ('help', 'h'), ('inputformat', 'i'), ('mta', 'mta'), ('noexit', 'noe'),
+                 ('nologo', 'nol'), ('noninteractive', 'noni'), ('noprofile', 'nop'),
+                 ('outputformat', 'o'), ('sta', 'st'), ('windowstyle', 'w'), ('workingdirectory', 'wo'))
+PS51_ALIASES = {'ec', 'ea', 'ep', 'if', 'of', 'wd', '?'}
+
+
+def _ps51_known(t):
+    """True when powershell.exe 5.1 reads the switch word `t` ('-name', lower case) as a switch."""
+    body = t[1:]
+    return body in PS51_ALIASES or any(body.startswith(short) and name.startswith(body)
+                                       for name, short in PS51_SWITCHES)
 
 
 def _ps_takes_value(t):
@@ -452,6 +477,23 @@ def _ps_takes_value(t):
     if body in PS_VALUE_ALIASES:
         return True
     return len(body) >= 2 and body not in ('in', 'i') and any(p.startswith(body) for p in PS_VALUE_PARAMS)
+
+
+def _ps_value_either(t):
+    body = t[1:]
+    return body in PS_VALUE_EITHER or (body.startswith('encodeda') and 'encodedarguments'.startswith(body))
+
+
+def _ps_switch(w):
+    """A powershell.exe or pwsh switch word as '-name' in lower case (it reads /Command and
+    –Command as -Command), or its text in lower case."""
+    t = w.text.lower()
+    return '-' + t[1:] if t[:1] == '/' else sh.ps_dashed(t)
+
+
+def _ps_command_switch(t):
+    return t.startswith('-') and len(t) > 1 and ('command'.startswith(t[1:]) or t == '-cwa' or
+                                                 'commandwithargs'.startswith(t[1:]))
 
 
 def span_text(cmd, words):
@@ -465,7 +507,8 @@ def span_text(cmd, words):
 
 def _nested_text(inv, parsed):
     """(text, shell) a nested shell or eval runs, (text, shell, cwd) when it runs elsewhere
-    (env -C), (STDIN, shell) when the shell reads its commands from standard input, or None."""
+    (env -C), (STDIN, shell) when the shell reads its commands from standard input, or None. For
+    powershell and pwsh the text is a tuple of readings, each a text or STDIN, once each."""
     name, a = inv.name, inv.args
     if name == 'env':
         found = env_nested(inv.cmd.words, inv.index, inv.cmd)
@@ -510,34 +553,83 @@ def _nested_text(inv, parsed):
             return None                         # bash script.sh: a file, not text
         return STDIN, sh.BASH
     if name in PS_SHELLS:
-        k = 0
-        while k < len(a):
-            t = a[k].text.lower()
-            if t.startswith('-e') and 'encodedcommand'.startswith(t[1:]) or t in ('-ec', '-enc'):
-                parsed.flag('an encoded PowerShell command')
+        # the readings, each a text or STDIN, kept once each and parsed each on its own
+        # (commands.expand): one reading's unclosed <# or quote hides no other
+        lit = 'a nested powershell command whose text is not literal'
+        seen = {}
+
+        def nested(why, *readings):
+            # every way the shells may read the words is judged
+            texts = [words for words in readings if words]
+            if any(w.dyn for words in texts for w in words):
+                parsed.flag(why)
                 return None
-            if t.startswith('-') and len(t) > 1 and 'command'.startswith(t[1:]):
-                rest = a[k + 1:]
-                if [w.text for w in rest] == ['-']:
-                    return STDIN, sh.PS
-                if any(w.dyn for w in rest):
-                    parsed.flag('a nested powershell -Command whose text is not literal')
+            return joined(tuple(' '.join(w.text for w in words) for words in texts))
+
+        def joined(*found):
+            out = []
+            for r in (r for f in found for r in f or ()):
+                if r not in out:
+                    out.append(r)
+            return tuple(out) or None
+
+        def scan(k, unknown, forks):
+            # forks is in the key: past PS_FORKS_MAX a path reads less, so its result is its own
+            if (k, unknown, forks) not in seen:
+                seen[(k, unknown, forks)] = read_from(k, unknown, forks)
+            return seen[(k, unknown, forks)]
+
+        def read_from(k, unknown, forks):
+            while k < len(a):
+                t = _ps_switch(a[k])
+                if t.startswith('-e') and 'encodedcommand'.startswith(t[1:]) or t in ('-ec', '-enc'):
+                    parsed.flag('an encoded PowerShell command')
                     return None
-                return ' '.join(w.text for w in rest), sh.PS
-            if t.startswith('-') and len(t) > 1 and 'file'.startswith(t[1:]):
-                return None
-            if t.startswith('-') and _ps_takes_value(t):
-                k += 2
-                continue
-            if t.startswith('-'):
-                k += 1
-                continue
-            rest = a[k:]
-            if any(w.dyn for w in rest):
-                parsed.flag('a nested powershell command whose text is not literal')
-                return None
-            return ' '.join(w.text for w in rest), sh.PS
-        return STDIN, sh.PS
+                # powershell.exe runs a switch it does not know, and every word after it, as the
+                # command (unknown); pwsh refuses it, or reads it as a switch, and goes on
+                first = a[unknown:] if unknown is not None else []
+                if _ps_command_switch(t):
+                    rest = a[k + 1:]
+                    if [w.text for w in rest] == ['-']:
+                        if unknown is None:
+                            return (STDIN,)
+                        parsed.flag(lit)
+                        return None
+                    return nested('a nested powershell -Command whose text is not literal', first, rest)
+                if unknown is None and t.startswith('-') and t != '-' and not _ps51_known(t):
+                    # a value switch included: powershell.exe never takes its value
+                    unknown = k
+                if t.startswith('-') and len(t) > 1 and 'file'.startswith(t[1:]):
+                    return nested(lit, first) if first else None
+                if t.startswith('-') and _ps_value_either(t) and k + 1 < len(a):
+                    if forks < PS_FORKS_MAX:
+                        # the next word as the switch's value, and as the start of the command
+                        return joined(scan(k + 1, unknown, forks + 1), scan(k + 2, unknown, forks + 1))
+                    # past the cap the line is flagged, and the reading with no value still judged
+                    parsed.flag('a powershell switch line with too many readings')
+                    k += 1
+                    continue
+                if t.startswith('-'):
+                    k += 2 if _ps_takes_value(t) else 1      # as pwsh reads it
+                    continue
+                # a word that is no switch starts the command: pwsh's, and powershell.exe's when no
+                # unknown switch started it before (pwsh reads `--c x` as `-c x`, powershell.exe
+                # runs `--c x`); a shell that took it as the value of a switch before it reads a
+                # later -Command
+                later = next((j for j in range(k + 1, len(a)) if _ps_command_switch(_ps_switch(a[j]))), None)
+                then = a[later + 1:] if later is not None else []
+                if [w.text for w in then] == ['-']:
+                    parsed.flag(lit)
+                    return None
+                return nested(lit, first, a[k:], then)
+            if unknown is not None:
+                # powershell.exe runs the words from the unknown switch on; pwsh, when it knows
+                # the switch, reads standard input
+                found = nested(lit, a[unknown:])
+                return found and joined(found, (STDIN,))
+            return (STDIN,)
+        readings = scan(0, None, 0)
+        return (readings, sh.PS) if readings else None
     if name == 'cmd':
         for k, w in enumerate(a):
             if w.text.lower() in ('/c', '/k', '/r', '//c', '//k', '//r'):
@@ -559,7 +651,7 @@ def _nested_text(inv, parsed):
         if p:
             how, k = p
             words = [sh.Word(a[k].text.split(':', 1)[1], a[k].dyn, 0, 0)] if how == 'colon' else a[k:k + 1]
-        words = [w for w in words if not w.text.startswith('-')][:1]
+        words = [w for w in words if not sh.ps_dashed(w.text).startswith('-')][:1]
         if not words:
             if inv.cmd.piped_in:
                 return STDIN, sh.PS
@@ -1537,6 +1629,11 @@ def expand(parsed):
         inv = invocation(cmd)
         if inv is None:
             continue
+        if cmd.split:
+            # `Set-Content -Value $s.Trim() -Path x`: the scanner cut the command at a ( ) or { }
+            # and read the rest as commands of their own; its arguments are not all known
+            parsed.flag('a command the line splits around a ( ) or { } group, its arguments past it '
+                        'read as other commands (%s)' % inv.path)
         if inv.dyn:
             if not call_subexpr(inv):           # rules.call_subexpr_pmdata judges `& (...)`
                 parsed.flag('a command whose program is not literal (%s)' % inv.path)
@@ -1564,12 +1661,22 @@ def expand(parsed):
             continue
         text, shell = found[:2]
         where, where_home = (found[2], found[2]) if len(found) > 2 else (cmd.cwd, cmd.cwd_home)
-        if text is STDIN:
-            text = _stdin_text(cmd, parsed)
-            if text is None:
-                continue
-        _nest(parsed, cmd, text, shell, where, where_home)
+        # a tuple is a powershell line's readings: each is parsed on its own, standard input once
+        for one in text if isinstance(text, tuple) else (text,):
+            if one is STDIN:
+                one = _stdin_text(cmd, parsed)
+                if one is None:
+                    continue
+            _nest(parsed, cmd, one, shell, where, where_home)
     return parsed
+
+
+# the nested texts one line's read parses at most (every one passes through _nest), past which the
+# line is flagged: each nested powershell reading may fork again, so without a cap on the total a
+# line of repeated `-i pwsh` makes some 17 readings per level, 17^6 parses down to MAX_DEPTH. The
+# readings are not merged across levels: the same text under another outer command is judged with
+# that command's chain (nested_in), so only this total bounds the work.
+MAX_NESTS = 64
 
 
 def _nest(parsed, cmd, text, shell, cwd, cwd_home):
@@ -1578,6 +1685,10 @@ def _nest(parsed, cmd, text, shell, cwd, cwd_home):
     if cmd.depth + 1 > sh.MAX_DEPTH:
         parsed.flag('shells nested deeper than %d' % sh.MAX_DEPTH)
         return []
+    if parsed.nests >= MAX_NESTS:
+        parsed.flag('more than %d nested shell texts' % MAX_NESTS)
+        return []
+    parsed.nests += 1
     _p, cmds = sh.parse(text, shell, cwd, depth=cmd.depth + 1, parsed=parsed, cwd_home=cwd_home)
     for c in cmds:
         if c.nested_in is None:
