@@ -287,8 +287,9 @@ class PmDataStore(unittest.TestCase):
         self.assertEqual(self.status(), [])
 
     def test_a_write_that_is_not_clean_still_writes_over_an_edit(self):
-        """`clean` is the landing's (at_landing._pm_data_store): a backlog.py write keeps
-        committing the record as the worktree holds it."""
+        """A store write that is not `clean` (the landing opens its store with clean=True, see
+        at_landing.pm_data_store) still commits the record as the worktree holds it, over a
+        hand edit."""
         with open(self.path('BAR'), 'a', encoding='utf-8', newline='\n') as f:
             f.write('\nedited by hand\n')
         before = self.head()
