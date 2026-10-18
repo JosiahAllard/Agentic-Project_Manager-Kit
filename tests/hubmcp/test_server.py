@@ -29,8 +29,9 @@ WRITES = {"hub_ask", "hub_question_log", "hub_todo_add", "hub_todo_ack", "hub_st
 
 
 class Settings(object):
-    def __init__(self, port):
+    def __init__(self, port, store=None):
         self.port = port
+        self.store = store
 
 
 class FakeAsk(object):
@@ -356,6 +357,73 @@ class Pages(Case):
                                  ("invalid", "html_file"))
         self.assertEqual(self.ask.calls, [])
 
+    def refused_unread(self, path, server=None):
+        """hub_page_publish on `path` is invalid/html_file, with no file opened and no call."""
+        opened = mock.Mock(side_effect=AssertionError("opened %s" % path))
+        with mock.patch.object(srv, "open", opened, create=True):
+            payload, is_error = self.rpc(server or self.server(), "hub_page_publish", {
+                "id": "plan", "title": "t", "html_file": path})
+        self.assertTrue(is_error)
+        self.assertEqual((payload["error"]["code"], payload["error"]["field"]),
+                         ("invalid", "html_file"), payload)
+        self.assertEqual((opened.call_count, self.ask.calls), (0, []))
+        return payload["error"]["message"]
+
+    def test_a_token_file_is_refused_before_any_read_or_call(self):
+        names = sorted(os.listdir(self.tokens))
+        self.assertTrue(names)
+        for name in names:
+            with self.subTest(name=name):
+                self.refused_unread(os.path.join(self.tokens, name))
+
+    def test_an_html_file_in_the_token_folder_or_the_store_is_refused(self):
+        store = os.path.join(self.dir, "store")
+        os.makedirs(store)
+        for folder in (self.tokens, store):
+            with self.subTest(folder=folder):
+                path = os.path.join(folder, "x.html")
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write("<p>x</p>")
+                said = self.refused_unread(path, self.server(
+                    load_settings=lambda: Settings(8790, store=store)))
+                self.assertIn("never read from", said)
+
+    def test_a_file_that_is_not_html_is_refused(self):
+        for name in ("page.txt", "page.html.txt", "page", "owner.token"):
+            with self.subTest(name=name):
+                self.assertIn(".html", self.refused_unread(self.page("<p>x</p>", name)))
+
+    def test_a_link_or_junction_into_the_token_folder_is_refused(self):
+        inner = os.path.join(self.tokens, "x.html")
+        with open(inner, "w", encoding="utf-8") as f:
+            f.write("<p>x</p>")
+        made = []
+        link = os.path.join(self.dir, "link.html")
+        try:
+            os.symlink(inner, link)
+            made.append(link)
+        except (OSError, NotImplementedError):
+            pass
+        junction = os.path.join(self.dir, "junction")
+        try:
+            import _winapi
+            _winapi.CreateJunction(self.tokens, junction)
+            made.append(os.path.join(junction, "x.html"))
+        except (ImportError, AttributeError, OSError):
+            pass
+        if not made:
+            self.skipTest("this account can make neither a symbolic link nor a junction")
+        for path in made:
+            with self.subTest(path=path):
+                self.assertIn("token folder", self.refused_unread(path))
+
+    def test_line_endings_are_posted_as_the_file_has_them(self):
+        html = "<p>a</p>\r\n<p>b</p>\n"
+        payload, is_error = self.rpc(self.server(), "hub_page_publish", {
+            "id": "plan", "title": "t", "html_file": self.page(html)})
+        self.assertFalse(is_error, payload)
+        self.assertEqual(self.ask.calls[-1]["body"]["html"], html)
+
     def test_the_hubs_refusal_comes_back(self):
         self.ask.answer = (409, api.error_body("conflict", "pages/plan exists", "if_version"))
         payload, is_error = self.rpc(self.server(), "hub_page_publish", {
@@ -528,7 +596,9 @@ class Live(httpfix.ListenerCase):
     def setUp(self):
         httpfix.ListenerCase.setUp(self)
         self.lis = self.listener()
-        self.mcp = srv.Server(port=self.lis.port, tokens=self.tokens)
+        store = os.path.join(self.root, "store")        # the folder httpfix opened the store in
+        self.mcp = srv.Server(port=self.lis.port, tokens=self.tokens,
+                              load_settings=lambda: Settings(self.lis.port, store=store))
 
     def test_an_agent_asks_lists_and_logs_through_the_listener(self):
         payload, is_error = self.mcp.call("hub_ask", {"title": "which?",
@@ -619,6 +689,15 @@ class Live(httpfix.ListenerCase):
                                           {"id": "plan", "title": "again", "html_file": path})
         self.assertTrue(is_error)                       # over a page: its version, or a conflict
         self.assertEqual((payload["status"], payload["error"]["code"]), (409, "conflict"))
+        inside = os.path.join(self.root, "store", "x.html")    # the live store's own folder
+        with open(inside, "w", encoding="utf-8") as f:
+            f.write(html)
+        payload, is_error = self.mcp.call("hub_page_publish",
+                                          {"id": "x", "title": "x", "html_file": inside})
+        self.assertTrue(is_error)
+        self.assertEqual((payload["error"]["code"], payload["error"]["field"]),
+                         ("invalid", "html_file"))
+        self.assertNotIn("x", self.store.docs("pages"))
         self.assertEqual(self.errors(), [])
 
 

@@ -42,6 +42,7 @@ WAIT_DEFAULT_S = 30
 LISTS = ("questions", "todos", "stories", "to_pm")
 VIEWS = ("notices", "repos", "usage", "agents")
 ANY, AGENT = hubclient.ANY, hubclient.AGENT
+PAGE_SUFFIXES = (".html", ".htm")                           # the files hub_page_publish reads
 GUARD_WAIT = ("the guard already denies them to agents by name, but the tools themselves are not "
               "shipped yet")
 INSTRUCTIONS = ("The Action Hub on this machine (docs/hub-mcp.md): read tools for its questions, "
@@ -295,6 +296,15 @@ def _query(v):
     return v if isinstance(v, str) else str(v)
 
 
+def _inside(path, folder):
+    """True when the real path `path` is `folder` or under it (both compared normcased)."""
+    p, f = os.path.normcase(path), os.path.normcase(folder)
+    try:
+        return os.path.commonpath([p, f]) == f
+    except ValueError:                          # two drives: never inside
+        return False
+
+
 def _error(code, message, field=None, **more):
     return dict({"ok": False, "error": {"code": code, "message": message, "field": field}},
                 **more), True
@@ -402,16 +412,38 @@ class Server:
             raise ToolError(e.code, e.message, e.field)
         return self._route("hub_todo_edit", a)
 
+    def _page_file(self, path):
+        """html_file as the real path to read, or ToolError (invalid, html_file). This process
+        reads it outside the guard, so it reads only an .html or .htm file, judged by its real
+        path (links and junctions followed), and never one inside the hub's token folder or its
+        store: a token published as a page could be read back with hub_page."""
+        def refuse(why):
+            raise ToolError("invalid", "html_file %s: %s" % (path, why), "html_file")
+        if not os.path.isabs(path):
+            refuse("must be an absolute path")
+        real = os.path.realpath(path)
+        for p in (path, real):
+            if os.path.splitext(p)[1].lower() not in PAGE_SUFFIXES:
+                refuse("must be an %s file (its real path is %s)" % (" or ".join(PAGE_SUFFIXES), real))
+        try:
+            closed = [("the hub's token folder", self.tokens or hubauth.folder()),
+                      ("the hub store", getattr(self.load_settings(), "store", None))]
+        except (ConfigError, OSError, ValueError) as e:
+            refuse("cannot tell where the hub keeps its tokens and store (%s), so it is not read"
+                   % type(e).__name__)
+        for name, folder in closed:
+            if folder and _inside(real, os.path.realpath(folder)):
+                refuse("is inside %s, which a page is never read from" % name)
+        return real
+
     def _t_hub_page_publish(self, a):
         """The body goes to the hub as text, read here from html_file (absolute: this process's
-        working folder is not the caller's). The hub's page check runs here first, so a page it
-        refuses, too big or unsafe, is refused with the hub's words and never reaches it."""
-        path = a["html_file"]
-        if not os.path.isabs(path):
-            raise ToolError("invalid", "html_file must be an absolute path, not %r" % path,
-                            "html_file")
+        working folder is not the caller's; which files it may name: _page_file). It is read
+        with newline="" so its bytes are the file's. The hub's page check runs here first, so a
+        page it refuses, too big or unsafe, is refused with the hub's words and never reaches it."""
+        path = self._page_file(a["html_file"])
         try:
-            with open(path, encoding="utf-8") as f:
+            with open(path, encoding="utf-8", newline="") as f:
                 # a character is a byte at least: one past the cap is enough for the check to
                 # refuse, and a huge file is never read whole
                 html = f.read(pagecheck.MAX_BYTES + 1)

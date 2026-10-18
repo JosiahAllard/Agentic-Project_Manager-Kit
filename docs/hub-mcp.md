@@ -71,10 +71,15 @@ Each calls a route the agent's token may call (`kitlib.hubsite.api.ROUTES`, role
 | `hub_page_publish` | `id`, `title`, `html_file`; `summary`, `repo`, `from`, `refs`, `if_version` | `POST /pages` |
 
 `hub_page_publish` takes the page's HTML as a file, never inline: `html_file` is an absolute path
-to a UTF-8 file, read here (at most `pagecheck.MAX_BYTES` + 1 characters) and posted as `html`. A
-relative path, a file that cannot be read or is not UTF-8 is `invalid`, field `html_file`, and a
-body `kitlib.hubsite.pagecheck.check` refuses is `invalid`, field `html`, both before any call
-(`Server._t_hub_page_publish`; `tests/hubmcp/test_server.py` `Pages`). Publishing over a page needs
+to a UTF-8 file, read here (at most `pagecheck.MAX_BYTES` + 1 characters, line endings kept as the
+file has them) and posted as `html`. This process reads the file outside the guard, so
+`Server._page_file` judges it by its real path, symbolic links and junctions followed: it must end
+in one of `server.PAGE_SUFFIXES` (`.html`, `.htm`), and it must not lie in the hub's token folder or
+its store, so no token can be posted as a page and read back with `hub_page`. Such a file, a
+relative path, a file that cannot be read or is not UTF-8 is `invalid`, field `html_file`, before
+the file is opened or any call is made; a body `kitlib.hubsite.pagecheck.check` refuses is
+`invalid`, field `html`, also before any call (`Server._t_hub_page_publish`;
+`tests/hubmcp/test_server.py` `Pages`). Publishing over a page needs
 its card's version as `if_version`. What a body may hold, and why Mermaid must be drawn as svg
 first, is docs/action-hub.md "pages/<id> and page_html/<id>". No tool deletes a page: that is the
 owner's, in the Docs tab.
