@@ -1,11 +1,13 @@
-"""kitlib.tooldeps.tiers: kit_tests' two-tier pass loop and its verdict lines, and the modules the
-real-git pass runs (the added or changed test modules, and --both-tiers' REAL_GIT_MODULES)."""
+"""kitlib.tooldeps.tiers: kit_tests' two-tier pass loop and its verdict lines, the modules the
+real-git pass runs (the added or changed test modules, and --both-tiers' REAL_GIT_MODULES), and
+what the fake pass keeps for it when it gives cpu slots back."""
 import io
+import os
 import threading
 import time
 import unittest
 
-from kitlib.tooldeps import tiers
+from kitlib.tooldeps import selftree, tiers
 
 
 class TierOutTest(unittest.TestCase):
@@ -121,6 +123,59 @@ class ChangedTestModules(unittest.TestCase):
         # a changed module the list does not hold still runs
         self.assertEqual(tiers.real_git_modules(['tests.a.test_a'], also=['tests.b.test_b']),
                          ['tests.b.test_b'])
+
+
+KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+class ChangedTestModulesOfTheKitTree(unittest.TestCase):
+    """changed_test_modules against this checkout's own module list (selftree.all_test_modules),
+    the list kit_tests passes it, not a hand-made one: the dotted names it compares the paths to
+    are the ones the tree walk really produces."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.modules = selftree.all_test_modules(KIT)
+
+    def test_this_module_and_a_top_level_one_are_found_by_either_slash(self):
+        self.assertIn('tests.tooldeps.test_tiers', self.modules)
+        got = tiers.changed_test_modules(['tests/tooldeps/test_tiers.py',
+                                          'tests\\tooldeps\\test_selfrun.py'], self.modules)
+        self.assertEqual(got, ['tests.tooldeps.test_selfrun', 'tests.tooldeps.test_tiers'])
+
+    def test_every_module_of_the_tree_maps_back_to_itself(self):
+        paths = [m.replace('.', '/') + '.py' for m in reversed(self.modules)]
+        self.assertGreater(len(paths), 100)
+        self.assertEqual(tiers.changed_test_modules(paths, self.modules), self.modules)
+
+    def test_helpers_packages_and_data_of_the_tree_give_none(self):
+        changed = [p for p in ('tests/__init__.py', 'tests/tooldeps/__init__.py',
+                               'tests/gitfixture.py', 'tests/home.py', 'tests/selection.json',
+                               'tools/kit_tests.py', 'kitlib/tooldeps/tiers.py')
+                   if os.path.exists(os.path.join(KIT, *p.split('/')))]
+        self.assertGreaterEqual(len(changed), 6)       # the fixture names files that exist
+        self.assertEqual(tiers.changed_test_modules(changed, self.modules), [])
+
+
+class UnitBoundAndKeepForNext(unittest.TestCase):
+    """What the fake pass keeps for the real-git pass when it gives cpu slots back."""
+
+    def test_a_module_counts_one_unit_per_class_when_it_has_two_or_more(self):
+        classes = {'tests.a.test_split': ['A', 'B', 'C'], 'tests.a.test_one': ['A'],
+                   'tests.a.test_none': []}
+        self.assertEqual(tiers.unit_bound(['tests.a.test_split', 'tests.a.test_one',
+                                           'tests.a.test_none', 'tests.a.test_uncounted'],
+                                          classes), 6)
+        self.assertEqual(tiers.unit_bound([], classes), 0)
+
+    def test_the_earlier_pass_never_gives_back_below_the_next_pass_threads(self):
+        asked = []
+        give = tiers.keep_for_next(lambda n: asked.append(n) or 'ack', 3)
+        self.assertEqual([give(n) for n in (7, 3, 2, 1)], ['ack'] * 4)
+        self.assertEqual(asked, [7, 3, 3, 3])
+        nothing_next = tiers.keep_for_next(asked.append, 0)
+        nothing_next(1)
+        self.assertEqual(asked[-1], 1)
 
 
 if __name__ == '__main__':
