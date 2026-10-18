@@ -37,6 +37,9 @@ drainer serves both passes.
 The units also get the home fence's marker (docs/test-tools.md "Home fence"): KIT_HOME_FENCE, the
 home folder this process resolves, unless the environment already carries one. The tools a test
 starts inherit it and refuse that home.
+No test child gets the session's kit binding: PM_KIT_ROOT, PM_KIT_RELEASE_ID, KIT_LIVE_ROOT and
+KIT_PINNED are dropped from its environment (KIT_SESSION_ENV), so a session's env cannot steer
+the suite.
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls the library, prints, runs, exits.
 Exit codes: the unittest run's (0 passed or nothing selected, 1 failed); 2 USAGE or a refusal
 (git could not list the change - for --full too, unless --real-git - or --select with a
@@ -62,6 +65,12 @@ from kitlib.tooldeps import selflist, selfrun, selftree, tiers              # no
 
 USAGE = 2
 FULL = ['-m', 'unittest', 'discover', '-s', 'tests', '-t', '.']
+# The session's kit binding, never passed to a test child (child_env): boot/kitboot.py reads
+# PM_KIT_ROOT and PM_KIT_RELEASE_ID (the kit a host entry binds, kitlib.kitrelease's pin),
+# kitlib.gate.pin KIT_PINNED (run live, never pin) and kitlib.pluginsource.live_root
+# KIT_LIVE_ROOT (the checkout a printed command names). Inherited, they would steer the code
+# under test toward the session's kit; a test that wants one sets it itself.
+KIT_SESSION_ENV = ('PM_KIT_ROOT', 'PM_KIT_RELEASE_ID', 'KIT_LIVE_ROOT', 'KIT_PINNED')
 
 
 class Parser(argparse.ArgumentParser):
@@ -164,7 +173,7 @@ def main(argv=None, out=None):
         return USAGE
     if a.list_tests:
         modules = selftree.all_test_modules(top)
-        env = kuser.fence_env(dict(os.environ))
+        env = child_env()
         env.setdefault('KIT_FAKE_GIT', '1')
         entries = selflist.collect(top, modules, environ=env)
         if entries is None:
@@ -317,12 +326,19 @@ def drainer(say):
     return give
 
 
+def child_env():
+    """The environment every test child starts from (the units, the count child, --list's loader):
+    this process's without KIT_SESSION_ENV, with the home fence's marker (kitlib.config.user.
+    fence_env: a pool worker (kitlib/tooldeps/pool_worker.py) replaces its environment for each
+    unit, so tests/__init__.py's marker would not reach it)."""
+    env = {k: v for k, v in os.environ.items() if k.upper() not in KIT_SESSION_ENV}
+    return kuser.fence_env(env)
+
+
 def units_env(fake):
-    """The environment the units of a pass get: this process's, with the home fence's marker
-    (kitlib.config.user.fence_env: a pool worker (kitlib/tooldeps/pool_worker.py) replaces its
-    environment for each unit, so tests/__init__.py's marker would not reach it) and
-    KIT_FAKE_GIT `fake`. selfrun drops the give back's offer from what the units inherit."""
-    env = kuser.fence_env(dict(os.environ))
+    """The environment the units of a pass get: child_env() with KIT_FAKE_GIT `fake`. selfrun
+    drops the give back's offer from what the units inherit."""
+    env = child_env()
     env['KIT_FAKE_GIT'] = fake
     return env
 
