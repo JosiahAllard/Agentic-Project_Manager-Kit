@@ -33,6 +33,9 @@ kitlib.host.hookmain.dispatch.
   sessions()           hosts.claude.adapter.claude_host, Claude's session files (kitlib.pmwatch's seam)
   command_host(), launcher(), plugin_installer()   None: not behind the contract yet
   content()            hosts.claude.adapter.content (the content renderer)
+  push(settings)       the hub's push-notification delivery (hosts.claude.adapter.peer.HubPush:
+                       a session's peer pipe; docs/action-hub.md "Push notifications"). Optional:
+                       tools/hub.py asks for it with getattr, so a host without it has none
 
 MATCHER is the PreToolUse matcher: exactly the tools a guard rule can refuse (events.FILE_TOOLS,
 events.SHELL_TOOLS, events.READ_TOOLS, mcp__*), the same list as hosts.json's hook.guarded_tools,
@@ -147,6 +150,16 @@ class ClaudeAdapter(object):
 
     def plugin_installer(self):
         return None
+
+    def push(self, settings=None):
+        """The hub's push-notification delivery object (kitlib.hubsite.push: deliver, is_pm):
+        hosts.claude.adapter.peer.HubPush over the launcher's settings (`settings`, else
+        kitlib.launcher.settings.load()). Raises what loading the settings raises."""
+        from hosts.claude.adapter import peer
+        if settings is None:
+            from kitlib.launcher import settings as launcher_settings
+            settings = launcher_settings.load()
+        return peer.HubPush(settings)
 
 
 def _agent_start(kit, payload, environ):
