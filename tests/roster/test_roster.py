@@ -178,8 +178,8 @@ def _content(root):
 
 class ReviewerRuleTest(unittest.TestCase):
     """The "Reviewer model" rule in the dispatch skill's roster.md is prose a coordinator follows by
-    matching strings: the builder roles it names. Each one it
-    names must still be a role."""
+    matching strings: the builder roles its rows name. Each row names exactly its builders, each a
+    role, matched as whole words."""
 
     RULE_FILE = os.path.join(KIT_ROOT, 'content', 'skills', 'coordinator-dispatch', 'roster.md')
 
@@ -189,15 +189,39 @@ class ReviewerRuleTest(unittest.TestCase):
         self.assertIsNotNone(m, 'no "Reviewer model" bullet in roster.md')
         return re.sub(r'\s+', ' ', m.group(0))       # a wrapped line is still one sentence
 
+    STRONG_BUILDERS = {'strong-worker', 'senior-worker', 'deep-worker'}
+    LIGHT_BUILDERS = {'worker', 'weak-worker'}
+
     def test_rule_names_only_what_the_code_prints_and_defines(self):
         rule = self.rule()
-        # the reviewer is pinned to the light tier; the rule raises it for the builders it names
         roles = {r.name: r for r in content.load_roles(KIT_ROOT)}
         self.assertEqual(roles['reviewer'].tier, 'light')
         self.assertIn('light tier', rule)
-        for builder in ('strong-worker', 'senior-worker', 'deep-worker', 'worker', 'weak-worker'):
-            self.assertIn(builder, roles)
-            self.assertIn(builder, rule)
+
+        def named(text):        # whole words: 'worker' must not match inside 'strong-worker'
+            return {n for n in roles if re.search(r'(?<![\w-])%s(?![\w-])' % re.escape(n), text)}
+
+        self.assertIn('The first row that fits:', rule)
+        rows_text = rule.split('The first row that fits:', 1)[1].split('A light reviewer', 1)[0]
+        rows = [r for r in re.split(r'\s(?=\d\. )', rows_text.strip()) if r]
+        self.assertEqual(len(rows), 3, rows)
+        # every builder the rows name is a role, and every role they name is one of these builders
+        self.assertEqual(named(rows_text), self.STRONG_BUILDERS | self.LIGHT_BUILDERS)
+        self.assertEqual(named(rows[0]), self.STRONG_BUILDERS)
+        self.assertIn('raise to strong', rows[0])
+        self.assertEqual(named(rows[1]), self.LIGHT_BUILDERS)
+        self.assertIn('light as pinned', rows[1])
+        self.assertTrue(rows[2].startswith('3. Otherwise'), rows[2])
+        self.assertEqual(named(rows[2]), set())
+        # the rows split builders by their pinned tier
+        for name in self.STRONG_BUILDERS:
+            self.assertIn(roles[name].tier, ('strong', 'deep'), name)
+        for name in self.LIGHT_BUILDERS:
+            self.assertIn(roles[name].tier, ('light', 'standard'), name)
+
+    def test_agent_definitions_are_a_strict_landing_path(self):
+        from kitlib.gate import strict_defaults
+        self.assertIn('hosts/*/shell/agents/**', strict_defaults.STRICT_DEFAULTS)
 
 
 if __name__ == '__main__':

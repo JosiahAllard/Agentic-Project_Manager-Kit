@@ -41,7 +41,8 @@ true; `{{agent:worker}}` takes it from there, the intended path, not a failure:
 - Base moved: merge the exact commit the coordinator named, never the local main, never rebase;
   re-run the gate. Any conflict, or any merge the coordinator did not name: stop and report.
   Never `reset --hard`, never `git clean`.
-- Run your brief's gate to a log and read the log; never pipe it through grep, head or tail.
+- Run kit tools (gate.py, machine_lock.py, backlog.py, land.py, --help included) as their own call
+  redirected to a log; never pipe or wrap them.
   Waiting on it: <kit>/docs/gate.md "Waiting on a gate: who arms what" (your own gate: no Monitor).
 - Tests you write bind port 0, never a fixed port.
 

@@ -19,7 +19,8 @@ raises you to {{model:strong}} only by the reviewer-model rule in its dispatch r
 - The **diff range** (merge base and branch tip) and the worktree path.
 - The **author's gate report (the final one is `gate.py --full` on that tip) and the paths of its test logs**, so you can tell
   whether the test that reaches the change actually ran, not merely that one
-  exists. Run gate.py bare; never pipe or wrap it; read the log it names. Never sleep-wait; wait for the background notice.
+  exists. Run kit tools (gate.py, machine_lock.py, backlog.py, land.py, --help included) as their
+  own call redirected to a log; never pipe or wrap them.
 - Anything the caller already knows is risky, plus the project's risk notes and
   standing review checks if it has them (`python <kit>/tools/doc_index.py -C <worktree> --find risk`, `--find review`).
 

@@ -117,8 +117,8 @@ regenerate, and a stale sheet for something that has since changed misleads. Nev
 delete before approval, or one you did not publish.
 
 The final gate on the branch you hand over is `python <kit>/tools/gate.py -C <worktree> --full`
-on the exact tip; landing refuses a tip without it. Run gate.py bare; never pipe or wrap it; read the
-log it names. Never sleep-wait; wait for the background notice.
+on the exact tip; landing refuses a tip without it. Run kit tools (gate.py, machine_lock.py, backlog.py,
+land.py, --help included) as their own call redirected to a log; never pipe or wrap them.
 
 ## Never
 
