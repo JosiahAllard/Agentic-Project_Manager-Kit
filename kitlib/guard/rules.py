@@ -4113,50 +4113,64 @@ def shell_writes(event, ctx, cmd, inv, cwd, role):
         net = dict(((x.word.start, x.word.end), x) for x in net_writes(cmd)[0])
     into = copy_into(cmd, inv)
     searched = False
-    # A Start-Process program with a -WorkingDirectory runs there (commands.run_dir): what it names
-    # is read from that folder, while PowerShell places the call's redirections and the
-    # -RedirectStandard* files from its own location, the command's directory.
+    # A Start-Process program with a -WorkingDirectory runs there (commands.run_dir), while
+    # PowerShell places the call's redirections and the -RedirectStandard* files from its own
+    # location, the command's directory. Only git's targets are read from the workdir alone; any
+    # other program's are judged from both folders, so a workdir never lets a write pass that the
+    # command's own directory refuses.
     moved = len(write_targets(cmd, None)) + len(inv.writes) \
         if inv is not None and inv.via == 'start-process' and inv.workdir is not None else None
+    git = inv is not None and (inv.name == 'git' or (inv.name or '').startswith('git-'))
     for k, w in enumerate(write_targets(cmd, inv)):
         if cmd.shell == sh.BASH and not w.dyn and BASH_DEVICE_RE.match(w.text):
             continue
-        base = cm.run_dir(inv) if moved is not None and k >= moved else OUTER
-        runs_in = cmd.cwd if base is OUTER else base
-        target, why, ps_drive = write_place(ctx, cmd, w, base)
-        if target is None and not searched:
-            searched = True                     # find's start paths answer for every such target at once
-            d = find_exec_writes(event, ctx, cmd, cwd, role)
-            if d:
-                return d
-        if target is None and cmd.shell == sh.PS and w.dyn:
-            ps_drive = True                     # PowerShell's, from any location: one $p or (...) can name the main checkout
-        elif target is None and runs_in is not None and not ps_drive and \
-                ctx.place(runs_in).kind not in (repo.MAIN, repo.UNKNOWN):
-            continue                            # a target it cannot place, from a worktree or elsewhere
-        sleep = sleep_wait(cmd, inv, w)
-        unread = py_unread(cmd, inv, w)
-        what = '`%s` writes %s' % (cmd.text, w.text if w.text != '.' else 'files in the directory it runs in') \
-            if unread is None else \
-            'the directory `%s` runs in (counted as written: %s)' % (cmd.text, unread)
-        # here() or ps_unread(): no word to aim
-        stand_in = (w.text == '.' and cmd.source[w.start:w.end] != '.') or w.start == w.end
-        part = any((x.start, x.end) == (w.start, w.end) and x.text != w.text for x in cmd.words)
-        rewrite = None if stand_in or part else (lambda path, w=w: retarget(cmd, w, path))   # part: -tDIR
-        if (w.start, w.end) in net and not w.dyn:
-            rewrite = lambda path, x=net[(w.start, w.end)]: net_retarget(cmd, x, path)
-        if stand_in and base is not OUTER and base is not None:
-            # the folder it runs in is the -WorkingDirectory value: aim that word instead
-            rewrite = lambda path, x=inv.workdir: retarget(cmd, x, paths.norm(path, fold=False))
-        for t in into_folder(target, w, into, runs_in, getattr(ctx, 'home', None)) if target else [target]:
-            d = edit_target(event, ctx, t, cwd, role, what, why, rewrite=rewrite, run=bare(cmd))
-            if d:
-                return sleep_refusal(d, cmd, role) if sleep and d.rule == 'main-checkout' else d
-        if ps_drive:
-            d = ps_drive_jail(event, ctx, cwd, role, what, why, rewrite)
+        bases = (OUTER,) if moved is None or k < moved else \
+            (cm.run_dir(inv),) if git else (OUTER, cm.run_dir(inv))
+        for base in bases:
+            d, searched = _write_from(event, ctx, cmd, inv, cwd, role, w, base, net, into, searched)
             if d:
                 return d
     return None
+
+
+def _write_from(event, ctx, cmd, inv, cwd, role, w, base, net, into, searched):
+    """(Decision or None, searched) for the write target `w` of shell_writes read from `base`
+    (OUTER, or the folder a Start-Process -WorkingDirectory names)."""
+    runs_in = cmd.cwd if base is OUTER else base
+    target, why, ps_drive = write_place(ctx, cmd, w, base)
+    if target is None and not searched:
+        searched = True                         # find's start paths answer for every such target at once
+        d = find_exec_writes(event, ctx, cmd, cwd, role)
+        if d:
+            return d, searched
+    if target is None and cmd.shell == sh.PS and w.dyn:
+        ps_drive = True                         # PowerShell's, from any location: one $p or (...) can name the main checkout
+    elif target is None and runs_in is not None and not ps_drive and \
+            ctx.place(runs_in).kind not in (repo.MAIN, repo.UNKNOWN):
+        return None, searched                   # a target it cannot place, from a worktree or elsewhere
+    sleep = sleep_wait(cmd, inv, w)
+    unread = py_unread(cmd, inv, w)
+    what = '`%s` writes %s' % (cmd.text, w.text if w.text != '.' else 'files in the directory it runs in') \
+        if unread is None else \
+        'the directory `%s` runs in (counted as written: %s)' % (cmd.text, unread)
+    # here() or ps_unread(): no word to aim
+    stand_in = (w.text == '.' and cmd.source[w.start:w.end] != '.') or w.start == w.end
+    part = any((x.start, x.end) == (w.start, w.end) and x.text != w.text for x in cmd.words)
+    rewrite = None if stand_in or part else (lambda path, w=w: retarget(cmd, w, path))   # part: -tDIR
+    if (w.start, w.end) in net and not w.dyn:
+        rewrite = lambda path, x=net[(w.start, w.end)]: net_retarget(cmd, x, path)
+    if stand_in and base is not OUTER and base is not None:
+        # the folder it runs in is the -WorkingDirectory value: aim that word instead
+        rewrite = lambda path, x=inv.workdir: retarget(cmd, x, paths.norm(path, fold=False))
+    for t in into_folder(target, w, into, runs_in, getattr(ctx, 'home', None)) if target else [target]:
+        d = edit_target(event, ctx, t, cwd, role, what, why, rewrite=rewrite, run=bare(cmd))
+        if d:
+            return (sleep_refusal(d, cmd, role) if sleep and d.rule == 'main-checkout' else d), searched
+    if ps_drive:
+        d = ps_drive_jail(event, ctx, cwd, role, what, why, rewrite)
+        if d:
+            return d, searched
+    return None, searched
 
 
 OUTER = object()                                # write_place: the command's own directory
@@ -4374,8 +4388,10 @@ def bare_wrapper(ctx, cmd, inv, cwd):
     that is there, such as the kit repository's own tools/gate.py, keeps its folder. from_dir is
     the directory the alternative must still run in (a lock run's program, or a gate run with a
     subcommand), else None. (bare(cmd), from_dir) when the script word is not literal, or no
-    python runs one (a gate.py run as a program)."""
-    where = cmd.cwd or cwd
+    python runs one (a gate.py run as a program). When the directory it runs in is unknown (a
+    computed cd before it: cmd.cwd None) a relative script is kept as written, no -C is added and
+    from_dir is None: wrapped_gate then says to run it from the worktree root."""
+    where = cmd.cwd
     found = cm.python_script(inv) if inv.via != 'start-process' else None
     word = inv.args[found[0]] if found else None
     if word is None or word.dyn or word.synth or not cmd.words or word.end > len(cmd.source):
@@ -4414,7 +4430,7 @@ def wrapped_gate(event, ctx, cmd, inv, cwd, role):
     instead, from_dir = bare_wrapper(ctx, cmd, inv, cwd)
     read = 'read the log gate.py names' if kind == 'gate' else 'read its output'
     where = ' with %s as the working directory' % quote(from_dir) if from_dir and not same_dir(from_dir, cwd) \
-        else ''
+        else ' from the worktree root' if cmd.cwd is None else ''
     how = ('Run it bare, as a call of its own in the background%s (run_in_background: true; no pipe and no '
            'redirection), and when its completion notice comes, %s:' % (where, read))
     return refuse('wrapped-gate', role, '%s is piped into another command; a wrapped gate reads to the '

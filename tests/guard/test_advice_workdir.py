@@ -84,6 +84,16 @@ class StartProcessWorkdir(unittest.TestCase):
         self.assertIsNone(self.judge("Start-Process python -ArgumentList 'x.py' -WorkingDirectory %s" % self.w.wt,
                                      self.w.wt))
 
+    def test_a_worktree_workdir_does_not_free_a_writer_in_the_main_checkout(self):
+        # only git is placed from the workdir alone; any other program is judged from both folders
+        wt = self.w.wt
+        for text in ("Start-Process python -ArgumentList 'x.py' -WorkingDirectory %s" % wt,
+                     "Start-Process cp -ArgumentList 'a','b' -WorkingDirectory %s" % wt):
+            with self.subTest(text):
+                self.assertEqual(verdict(self.judge(text, self.w.main)), ('deny', 'main-checkout'))
+        self.assertIsNone(self.judge("Start-Process git -ArgumentList 'commit','-m','x' -WorkingDirectory %s" % wt,
+                                     self.w.main))
+
     def test_the_alternative_aims_the_workdir_at_the_worktree(self):
         d = self.judge("Start-Process python -ArgumentList 'x.py' -WorkingDirectory %s" % self.w.main, self.w.wt)
         self.assertEqual(d.instead, "Start-Process python -ArgumentList 'x.py' -WorkingDirectory \"%s\"" % W.fwd(self.w.wt))
@@ -122,6 +132,14 @@ class WrappedGateBare(unittest.TestCase):
                    self.w.ctx())
         self.assertEqual(d.instead, 'python "%s/tools/gate.py" -C "%s" --full' % (W.fwd(self.w.kit_dir), W.fwd(self.w.wt)))
         self.assertNotIn('working directory', d.reason)
+
+    def test_a_computed_cd_adds_no_directory(self):
+        # after `cd $x` the directory the gate runs in is unknown: no -C, run it from the worktree root
+        d = decide(bash('cd $x && python tools/gate.py --full | tail', self.w.wt, sub=True), self.w.ctx())
+        self.assertEqual(d.rule, 'wrapped-gate')
+        self.assertEqual(d.instead, 'python tools/gate.py --full')
+        self.assertNotIn(' -C ', d.instead)
+        self.assertIn('from the worktree root', d.reason)
 
     def test_a_lock_run_from_elsewhere_says_where_it_runs(self):
         d = decide(bash('cd %s && python tools/machine_lock.py run --kind build -- python x.py | tail'
