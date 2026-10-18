@@ -36,7 +36,9 @@ An entry (every key always present):
   reviewer        the reviewer's agent type
   reviewer_model  the model the reviewer ran on
   reviewer_id     the reviewer's agent or session id
-  author          the change's author: commit author and agent type
+  author          the change's author: commit author and agent type (`Kit Test / worker`); on a
+                  strict path the agent type picks the reviewer models that count
+                  (kitlib.gate.land.REVIEWER_MODELS_BY_AUTHOR)
   range           the range reviewed, `<base>..<tip>`; its right side is the tip or a prefix of
                   it (7 or more hex digits), so the review covered the commit queued
   session         the coordinator session that queued it
