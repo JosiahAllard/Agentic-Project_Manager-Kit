@@ -782,6 +782,21 @@ class PmDataStore(unittest.TestCase):
         with open(lock) as f:
             self.assertEqual(f.read(), 'another git\n')
 
+    def test_the_busy_message_says_how_to_remove_a_stale_lock(self):
+        """A writer hard-killed while it held the lock leaves it behind: the Busy message names
+        the lock file as a stale one and the step, deleting that file once no writer is running."""
+        lock = self.lock_path()
+        with open(lock, 'w') as f:
+            f.write('')
+        self.addCleanup(os.remove, lock)
+        with mock.patch.object(smod, 'INDEX_WAIT', 0.2):
+            with self.assertRaises(errors.Busy) as cm:
+                self.store.write(lambda s: pmod.plan_close(s, self.ctx, 'BAR', REASON))
+        text = str(cm.exception)
+        self.assertIn('stale', text)
+        self.assertIn('delete %s' % cm.exception.lock, text)
+        self.assertIn('no git command or store write is running', text)
+
     def test_a_lock_given_up_while_the_write_waits_is_taken(self):
         lock = self.lock_path()
         with open(lock, 'w') as f:
