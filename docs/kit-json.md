@@ -152,7 +152,7 @@ Off with no file, each switched on by its key: `repo.push_block` (a push to main
 - `worktree_remove.build_output` (list of string or {piece, path}, default []): build output path globs, or {piece, path} folders resolved through the pieces table
 - `worktree_remove.keepers` (list of string, default []): file globs that refuse a removal, added to the kit list
 - `worktree_remove.archive_next_free` (bool, default false): archive under the next free name
-- `worktree_remove.branch_template` (a branch name holding {slug} once): branch name for a slug
+- `worktree_remove.branch_template` (a branch name holding {slug} once or list of a branch name holding {slug} once): branch name for a slug, or a list of them (a worktree on any one is removable)
 
 ## Machine config keys
 

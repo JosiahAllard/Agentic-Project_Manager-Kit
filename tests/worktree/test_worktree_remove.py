@@ -291,6 +291,80 @@ class BranchTemplate(RemoveCase):
         self.assertFalse(os.path.exists(path))
 
 
+class BranchTemplateList(RemoveCase):
+
+    CONFIG = {'worktree_remove': {'branch_template': ['phase/{slug}', 'records/{slug}']}}
+
+    def test_a_worktree_on_any_listed_template_is_removed(self):
+        for prefix in ('phase', 'records'):
+            path = self.workstream('w-' + prefix, branch='%s/w-%s' % (prefix, prefix))
+            self.land('%s/w-%s' % (prefix, prefix))
+            rc, out = self.run_verb('remove', 'w-' + prefix)
+            self.assertEqual(rc, 0, out)
+            self.assertFalse(os.path.exists(path))
+
+    def test_a_branch_matching_no_entry_is_refused(self):
+        path = self.workstream('one')
+        self.land('kit/one')
+        rc, out = self.run_verb('remove', 'one')
+        self.assertEqual(rc, 1, out)
+        self.assertIn('is on kit/one, not phase/one or records/one', out)
+        self.assertIn('.kit.json worktree_remove.branch_template', out)
+        self.assertTrue(os.path.isdir(path))
+
+    def test_a_listed_template_branch_is_tagged_by_its_slug(self):
+        self.orphan('two', branch='records/two')
+        rc, out = self.run_verb('abandon_branch', 'records/two', 'x', today=datetime.date(2026, 10, 9))
+        self.assertEqual(rc, 0, out)
+        self.assertIn('tagged    archive/two -> ', out)
+
+
+class BranchTemplateRefusalText(RemoveCase):
+
+    CONFIG = {'worktree_remove': {'branch_template': 'phase/{slug}'}}
+
+    def test_the_refusal_names_the_real_key(self):
+        self.workstream('one')
+        self.land('kit/one')
+        rc, out = self.run_verb('remove', 'one')
+        self.assertEqual(rc, 1, out)
+        self.assertIn('.kit.json worktree_remove.branch_template', out)
+        self.assertNotIn('worktree_run_remove', out)
+
+
+class BranchTemplateMalformed(RemoveCase):
+
+    def cli(self, *args):
+        done = subprocess.run([sys.executable, TOOL] + list(args), cwd=self.repo,
+                              capture_output=True, text=True, encoding='utf-8', errors='replace',
+                              env=gitfixture.fixture_env(), timeout=300)
+        return done.returncode, (done.stdout or '') + (done.stderr or '')
+
+    def refused(self, value):
+        self.configure({'worktree_remove': {'branch_template': value}})
+        rc, out = self.cli('--check')
+        self.assertEqual(rc, 2, out)
+        self.assertIn('worktree_remove: refused: kit configuration:', out)
+        self.assertIn('branch_template', out)
+
+    def test_an_empty_list(self):
+        self.refused([])
+
+    def test_a_non_string_entry(self):
+        self.refused(['phase/{slug}', 3])
+
+    def test_an_entry_without_slug(self):
+        self.refused(['phase/{slug}', 'records'])
+
+    def test_an_entry_with_two_slugs(self):
+        self.refused(['phase/{slug}', '{slug}/{slug}'])
+
+    def test_a_list_is_accepted_when_well_formed(self):
+        self.configure({'worktree_remove': {'branch_template': ['phase/{slug}']}})
+        rc, out = self.cli('--check')
+        self.assertEqual(rc, 0, out)
+
+
 class Check(RemoveCase):
 
     def test_clean(self):
