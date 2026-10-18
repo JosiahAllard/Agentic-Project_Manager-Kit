@@ -623,7 +623,7 @@ def _nested_text(inv, parsed):
 
 
 # the characters PowerShell reads in a -WorkingDirectory as a wildcard pattern (Start-Process
-# resolves the text as a pattern, so 'C:\repo?' finds C:\repo1) and its pattern escape
+# resolves the text as a pattern, so '<drive>\repo?' finds <drive>\repo1) and its pattern escape
 SP_WORKDIR_WILD = frozenset('*?[`')
 SP_WORKDIR_DEVICE = ('\\\\.\\', '\\\\?\\')
 
