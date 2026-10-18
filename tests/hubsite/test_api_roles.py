@@ -94,6 +94,12 @@ def seed_inbox(store):
     return store.add('inbox', {'text': 'x'}).id
 
 
+def seed_page(store):
+    store.put('page_html', 'plan-1', {'html': '<p>x</p>'})
+    store.put('pages', 'plan-1', {'title': 't'})
+    return 'plan-1'
+
+
 def seed_approval(store, decision=None):
     now = datetime.datetime.fromisoformat(CLOCK())
     doc = ap.new_doc(URL, 't', 'a' * 40, [{'path': 'x.md', 'base_blob': None,
@@ -146,6 +152,10 @@ ROWS = {
     ('POST', '/to_pm/{id}/delete'): (lambda s: seed_to_pm(s, 'queued'), None, None),
     ('POST', '/inbox'): (None, {'text': 'x'}, None),
     ('POST', '/inbox/{id}/read'): (seed_inbox, None, None),
+    ('GET', '/pages'): (None, None, None),
+    ('POST', '/pages'): (None, {'id': 'plan-1', 'title': 't', 'html': '<p>x</p>'}, None),
+    ('GET', '/pages/{id}'): (seed_page, None, None),
+    ('POST', '/pages/{id}/delete'): (seed_page, None, None),
     ('POST', '/approvals'): (None, ADD_BODY, None),
     ('POST', '/approvals/{id}/decide'): (seed_approval, {'decision': 'approve', 'if_version': 1},
                                          None),
@@ -239,6 +249,7 @@ class RolesCase(unittest.TestCase):
                 ('POST', '/to_pm/send'): OWNER, ('POST', '/to_pm/{id}/reply'): AGENT,
                 ('POST', '/to_pm/{id}/edit'): OWNER, ('POST', '/to_pm/{id}/delete'): OWNER,
                 ('POST', '/inbox'): AGENT, ('POST', '/inbox/{id}/read'): OWNER,
+                ('POST', '/pages'): AGENT, ('POST', '/pages/{id}/delete'): OWNER,
                 ('POST', '/records/{repo}'): OWNER, ('POST', '/records/{repo}/{id}/edit'): OWNER,
                 ('POST', '/records/{repo}/{id}/delete'): OWNER,
                 ('POST', '/approvals'): AGENT, ('POST', '/approvals/{id}/decide'): APPROVER,

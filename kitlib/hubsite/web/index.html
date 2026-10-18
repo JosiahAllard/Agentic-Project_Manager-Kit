@@ -249,7 +249,7 @@ button.danger{color:var(--warn)}
 <script>
 (function(){
   const $ = s => document.querySelector(s);
-  const state = { docs: [], inbox: [], ifilter: "unread", todos: [], stories: [], backlog: [], completed: [], period: 7, bprio: new Set(["1", "2", "3"]), bstat: new Set(["open", "blocked", "parked", "pulled"]), bq: "", idq: "", usage: [], agents: [], parked: [], gone: {}, partial: {}, seen: null, repos: [], brepo: "", sfilter: "current", rec: null, infotab: "usage", inboxtab: "questions", topm: [], approvals: [], strong: false, pages: [], pageHtml: {}, pfilter: "queued", pmOlder: false, pmEdit: new Map(), todoEdit: new Map(), stale: {}, section: "questions", filter: "open", tfilter: "open", repo: "", editing: new Set() };
+  const state = { docs: [], inbox: [], ifilter: "unread", todos: [], stories: [], backlog: [], completed: [], period: 7, bprio: new Set(["1", "2", "3"]), bstat: new Set(["open", "blocked", "parked", "pulled"]), bq: "", idq: "", usage: [], agents: [], parked: [], gone: {}, partial: {}, seen: null, repos: [], brepo: "", sfilter: "current", rec: null, infotab: "usage", inboxtab: "questions", topm: [], approvals: [], strong: false, pages: [], pfilter: "queued", pmOlder: false, pmEdit: new Map(), todoEdit: new Map(), stale: {}, section: "questions", filter: "open", tfilter: "open", repo: "", editing: new Set() };
   if (location.hash === "#inbox") state.section = "inbox";
   if (location.hash === "#todo") state.section = "todo";
   if (location.hash === "#topm") state.section = "topm";
@@ -524,7 +524,7 @@ button.danger{color:var(--warn)}
       if (refText) parts.push(go ? el("div", {class:"links"}, el("button", {class:"link", type:"button", text: "Re " + refText, onclick: go})) : el("div", {class:"refs", text: "Re " + refText}));
       if (m.asked) parts.push(el("div", {class:"ans"}, el("b", {text: "You asked:"}), el("p", {class:"quote", text: m.asked})));
       parts.push(el("p", {class:"reply", text: m.text || ""}));
-      if (keptRefs(m.refs).length) parts.push(el("div", {class:"refs", text: keptRefs(m.refs).join(" · ")}));
+      parts.push(refsLine(m.refs, "", " · "));
       {
         const status = el("span", {class:"status", role:"status"});
         const b = el("button", {class: m.read ? "link" : "primary", type:"button", text: m.read ? "Mark unread" : "Mark read"});
@@ -597,16 +597,17 @@ button.danger{color:var(--warn)}
     const k = p => String(p.parked_at || "￿");
     return [...by.keys()].sort((a, b) => a.localeCompare(b)).map(repo => ({ repo, items: by.get(repo).sort((a, b) => k(a).localeCompare(k(b)) || String(a.item).localeCompare(String(b.item))) }));
   }
-  // The agents' documents (pages/<id>), newest first by updated_at, else at; every field is read as text. Each
-  // body (page_html/<id>) is kept, by id, only when it is a string and its page is listed.
+  // The agents' documents (pages/<id>), newest first by updated_at, else at; every field is read as text, and
+  // version is kept only when it is a whole number. A body (page_html/<id>) is not in the snapshot: the reader
+  // asks the server for it (GET /api/v1/pages/<id>) when a document is opened.
   const pageStr = v => typeof v === "string" ? v : typeof v === "number" && isFinite(v) ? String(v) : "";
   function pageRows(col){
     const rows = col("pages").map(d => ({ id: d.id, title: pageStr(d.title), repo: pageStr(d.repo), from: pageStr(d.from), summary: pageStr(d.summary),
-      refs: Array.isArray(d.refs) ? d.refs.filter(r => typeof r === "string") : [], at: pageStr(d.at), updated_at: pageStr(d.updated_at) }));
+      refs: Array.isArray(d.refs) ? d.refs.filter(r => typeof r === "string") : [], at: pageStr(d.at), updated_at: pageStr(d.updated_at),
+      version: Number.isInteger(d.version) ? d.version : null }));
     const k = p => p.updated_at || p.at;
     rows.sort((a, b) => k(b).localeCompare(k(a)) || a.id.localeCompare(b.id));
-    const ids = new Set(rows.map(p => p.id));
-    return { pages: rows, pageHtml: Object.fromEntries(col("page_html").filter(d => ids.has(d.id) && typeof d.html === "string").map(d => [d.id, d.html])) };
+    return rows;
   }
   // The page's lists from one snapshot. gone is {view: reason} for a view the server could not give at all;
   // partial is {view: [text]} for a repository whose part of a view failed while the rest is shown; stale is
@@ -635,8 +636,8 @@ button.danger{color:var(--warn)}
     const pct = v => v && typeof v === "object" ? v.pct ?? v.used ?? null : v;
     const usage = Object.entries(obj(u.accounts)).map(([account, v]) => ({ id: account, account, five_hour: pct(obj(v).five), seven_day: pct(obj(v).week), measured_at: u.as_of }));
     const agents = list(a.agents).map(x => ({ id: String(x.name || ""), model: x.model, effort: x.effort === "-" ? "" : x.effort, role: x.description }));
-    const { pages, pageHtml } = pageRows(col);
-    return { pages, pageHtml, revision: Number.isInteger(s.revision) ? s.revision : 0, gone, partial, stale, seen: s.pm_seen && typeof s.pm_seen === "object" ? s.pm_seen : null,
+    const pages = pageRows(col);
+    return { pages, revision: Number.isInteger(s.revision) ? s.revision : 0, gone, partial, stale, seen: s.pm_seen && typeof s.pm_seen === "object" ? s.pm_seen : null,
       docs: col("questions").map(d => ({ status: "open", ...d })), inbox: col("inbox"), todos: col("todos").map(d => ({ status: "open", ...d })),
       stories: col("stories").map(d => ({ status: "submitted", ...d })), topm: col("to_pm").map(d => ({ status: "queued", ...d })),
       repos: list(views.repos).map(r => ({ id: String(r.name || ""), ...r })), backlog, completed, parked: backlog.filter(b => b.status === "parked"), usage, agents,
@@ -863,7 +864,7 @@ button.danger{color:var(--warn)}
       });
       body.append(el("div", {class:"cmd"}, pre, btn));
     }
-    if (keptRefs(t.refs).length) body.append(el("div", {class:"refs", text: "Refs: " + keptRefs(t.refs).join(", ")}));
+    { const refs = refsLine(t.refs, "Refs: ", ", "); if (refs) body.append(refs); }
     if (mine) {
       const urg = el("button", {class:"link", type:"button", text: t.urgent ? "Not urgent" : "Mark urgent"});
       urg.addEventListener("click", async () => {
@@ -1274,7 +1275,7 @@ button.danger{color:var(--warn)}
     if (d.context) parts.push(el("p", {class:"ctx", text: d.context}));
     const replies = inboxFor(d.id);
     if (replies.length) parts.push(el("div", {class:"links"}, el("button", {class:"link", type:"button", text: (replies.some(m => !m.read) ? "New answer from the PM" : "The PM's answer") + (replies.length > 1 ? "s (" + replies.length + ")" : "") + " in the Inbox", onclick: () => goInbox(d.id)})));
-    if (keptRefs(d.refs).length) parts.push(el("div", {class:"refs", text: "Refs: " + keptRefs(d.refs).join(", ")}));
+    parts.push(refsLine(d.refs, "Refs: ", ", "));
 
     if (editable) {
       const draft = readDraft(d.id) || (d.answer ? {choice: d.answer.choice, note: d.answer.note || ""} : {choice: null, note: ""});
@@ -1335,18 +1336,29 @@ button.danger{color:var(--warn)}
   }
 
   // Docs: the agents' documents (pages/<id>), listed as text like every other card. A body (page_html/<id>) is
-  // agent-written html: it is shown only in the reader's one frame, made below with a sandbox that grants nothing
-  // (no scripts, no forms, no same-origin, no navigation of the page) and a policy in front of the body that blocks
-  // its own loads (inline styles and data: images only). A clicked link still navigates the frame itself, outside
-  // this policy (the sandbox still holds there); docs/action-hub.md says what that leaves open.
+  // agent-written html, read from the server (GET /api/v1/pages/<id>) when it is opened: it is shown only in the
+  // reader's one frame, made below with a sandbox that grants nothing (no scripts, no forms, no same-origin, no
+  // navigation of the page) and a policy in front of the body that blocks its own loads (inline styles and data:
+  // images only). A clicked link still navigates the frame itself, outside this policy (the sandbox still holds
+  // there); docs/action-hub.md says what that leaves open.
   const DOC_CSP = "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'; img-src data:; form-action 'none'; base-uri 'none'\">";
-  const docBody = id => Object.prototype.hasOwnProperty.call(state.pageHtml, id) && typeof state.pageHtml[id] === "string" ? state.pageHtml[id] : null;
-  let docOpen = null;
+  // A card's refs, kept as keptRefs keeps them: a ref that is a listed document's id is a button that opens it
+  // in the reader, and any other ref is text. lead goes before them and sep between them.
+  function refsLine(refs, lead, sep){
+    const kept = keptRefs(refs); if (!kept.length) return null;
+    const ids = new Set(state.pages.map(p => p.id)), kids = lead ? [lead] : [];
+    const open = r => { const b = el("button", {class:"link", type:"button", text: r, title: "Read document " + r}); b.addEventListener("click", () => openDoc(r, b)); return b; };
+    kept.forEach((r, i) => { if (i) kids.push(sep); kids.push(ids.has(r) ? open(r) : r); });
+    return el("div", {class:"refs"}, ...kids);
+  }
+  // docOpen is the id in the reader, docFrom the button that opened it (the focus goes back to it), and docAsk
+  // counts the reads, so a body that arrives after its reader was closed or opened on another is dropped.
+  let docOpen = null, docFrom = null, docAsk = 0;
   function renderDocs(){
     fillRepos(state.pages);
     const rows = state.pages.filter(p => inR(p) && inId(p));
     if (!rows.length) {
-      const msg = ["No documents yet", "An agent's document (a plan, research, a visual choice) shows here once its pages/ entry and its body in page_html/ are in the hub's store. No tool writes them yet."];
+      const msg = ["No documents yet", "An agent's document (a plan, research, a visual choice) shows here once an agent publishes it (hub.py pages publish, or the hub_page_publish tool)."];
       if (ready && (state.idq.trim() || state.repo) && state.pages.length) { msg[0] = state.idq.trim() ? "No match for \"" + state.idq.trim() + "\"" : "No documents for this repo"; msg[1] = "Clear the id box or pick All repos to see every document."; }
       show([], el("div", {class:"empty"}, el("strong", {text: ready ? msg[0] : NOT_READY}), ready ? msg[1] : NOT_READY_WHY));
       return;
@@ -1354,7 +1366,6 @@ button.danger{color:var(--warn)}
     show([], rows.map(p => drawn(docCard, p)));
   }
   function docCard(p){
-    const has = docBody(p.id) != null;
     const head = el("div", {class:"meta"},
       el("span", {class:"id", text: p.id}),
       p.repo ? el("span", {class:"chip", text: p.repo}) : null,
@@ -1362,30 +1373,42 @@ button.danger{color:var(--warn)}
       p.updated_at || p.at ? el("span", {text: when(p.updated_at || p.at)}) : null);
     const parts = [head, el("h2", {text: p.title || "(untitled)"})];
     if (p.summary) parts.push(el("p", {class:"ctx", text: p.summary}));
-    if (keptRefs(p.refs).length) parts.push(el("div", {class:"refs", text: "Refs: " + keptRefs(p.refs).join(", ")}));
+    parts.push(refsLine(p.refs, "Refs: ", ", "));
+    // Delete is the owner's (the server takes it from the owner only), asks twice and is pinned to the card's version.
+    const st = el("span", {class:"status", role:"status"});
     parts.push(el("div", {class:"act"},
-      el("button", {class:"primary", type:"button", id: "dr-" + p.id, text: "Read here", disabled: !has, onclick: () => openDoc(p.id)}),
-      has ? null : el("span", {class:"status", text: "no body"})));
+      el("button", {class:"primary", type:"button", id: "dr-" + p.id, text: "Read here", onclick: () => openDoc(p.id)}),
+      delButton("/pages/" + seg(p.id) + "/delete", st, p.version), st));
     return el("article", {class:"q", id: "doc-" + p.id}, ...parts);
   }
-  function openDoc(id){
-    const html = docBody(id); if (html == null) return;
-    const p = state.pages.find(x => x.id === id), title = (p && p.title) || id;
-    const frame = el("iframe", {class:"docframe", sandbox: "", title: "Document: " + title});
-    frame.srcdoc = DOC_CSP + html;
+  const readerSays = (text, bad) => $("#reader-body").replaceChildren(el("p", {class: bad ? "status err" : "status", role:"status", text}));
+  async function openDoc(id, from){
+    const p = state.pages.find(x => x.id === id), title = (p && p.title) || id, ask = ++docAsk;
     $("#reader-title").textContent = title;
-    $("#reader-body").replaceChildren(frame);
+    readerSays("Reading the document from the hub server…");
     $(".wrap").inert = true;
     $("#reader").hidden = false;
-    docOpen = id;
+    docOpen = id; docFrom = from || null;
     $("#reader-close").focus();
+    let r;
+    try { r = await hub.call("GET", "/pages/" + seg(id)); }
+    catch (err) {
+      if (ask === docAsk) readerSays(err.status === 404 ? "This document has no body on the hub server." : "Not read: " + why(err) + ".", true);
+      return;
+    }
+    if (ask !== docAsk) return;
+    if (typeof r.html !== "string") { readerSays("This document has no body on the hub server.", true); return; }
+    const frame = el("iframe", {class:"docframe", sandbox: "", title: "Document: " + title});
+    frame.srcdoc = DOC_CSP + r.html;
+    $("#reader-body").replaceChildren(frame);
   }
   function closeDoc(){
+    docAsk++;
     $("#reader").hidden = true;
     $("#reader-body").replaceChildren();
     $(".wrap").inert = false;
-    const back = docOpen != null ? document.getElementById("dr-" + docOpen) : null;
-    docOpen = null;
+    const back = docFrom && docFrom.isConnected ? docFrom : docOpen != null ? document.getElementById("dr-" + docOpen) : null;
+    docOpen = null; docFrom = null;
     if (back) back.focus();
   }
   $("#reader-close").addEventListener("click", closeDoc);
@@ -1455,7 +1478,7 @@ button.danger{color:var(--warn)}
     if (ready && next.revision < rev) return;         // an older answer that arrived late
     rev = next.revision;
     const first = !ready; ready = true;
-    for (const k of ["docs", "inbox", "todos", "stories", "topm", "repos", "backlog", "completed", "parked", "usage", "agents", "pages", "pageHtml", "gone", "partial", "stale", "seen", "approvals", "strong"]) state[k] = next[k];
+    for (const k of ["docs", "inbox", "todos", "stories", "topm", "repos", "backlog", "completed", "parked", "usage", "agents", "pages", "gone", "partial", "stale", "seen", "approvals", "strong"]) state[k] = next[k];
     // An edit outlasts its item: one that is gone, or no longer the owner's to edit, keeps its card (loseEdit).
     for (const id of [...state.pmEdit.keys()]) if (!state.topm.some(x => x.id === id && x.status === "queued")) loseEdit(state.pmEdit, id);
     for (const id of [...state.todoEdit.keys()]) if (!state.todos.some(t => t.id === id && t.from === "you")) loseEdit(state.todoEdit, id);
