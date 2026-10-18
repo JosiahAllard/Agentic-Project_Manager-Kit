@@ -2,9 +2,11 @@
 lock_adapter.py). hosts/codex/shell/mcp/lock_server.py serves it.
 
 The lock MCP server serves read tools only on every host (docs/lock-mcp.md "No write tools"); the owner changes the
-lock outside any agent session, never through this server. This wrapper stays as a second fence:
-a name that is not a read tool (the retired writes in kitlib.lockmcp.OWNER_ONLY among them) is
-left out of the list and refused as forbidden if called.
+lock outside any agent session, never through this server. A name that is not a read tool (the
+retired writes in kitlib.lockmcp.OWNER_ONLY among them) is left out of the list, and a tools/call
+of one over JSON-RPC gets -32602, unknown tool: Server.handle refuses it before call() runs. This
+wrapper's call() stays as a second fence for a direct in-process call: there such a name is
+refused as forbidden.
 """
 from kitlib.lockmcp.server import Server, TOOLS
 

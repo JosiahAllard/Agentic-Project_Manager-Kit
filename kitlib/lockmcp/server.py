@@ -60,7 +60,25 @@ TOOLS = {
         "found: false when there is none.",
         _obj({"id": _HOLD_ID}, ["id"])),
 }
-assert not set(TOOLS) & set(OWNER_ONLY)
+
+
+def check_read_only(tools, owner_only):
+    """Raises RuntimeError when `tools` names a retired owner write: a real check, not an assert,
+    so `python -O` keeps it. Run once at import, on TOOLS and OWNER_ONLY."""
+    served = sorted(set(tools) & set(owner_only))
+    if served:
+        raise RuntimeError("the lock MCP server must not serve a retired owner write: %s"
+                           % ", ".join(served))
+
+
+check_read_only(TOOLS, OWNER_ONLY)
+
+UNKNOWN_TOOL = "unknown_tool"
+
+
+def _unknown(name):
+    """True when `name` is no tool this server serves (a retired write among them)."""
+    return not (isinstance(name, str) and name in TOOLS)
 
 
 class ToolError(Exception):
@@ -127,7 +145,11 @@ class Server:
                 for n, (d, s) in TOOLS.items()]
 
     def call(self, name, args):
-        """(payload, is_error) for one tool call. Never raises."""
+        """(payload, is_error) for one tool call. Never raises. A name this server does not serve
+        is refused as handle refuses it over JSON-RPC (unknown tool), before any argument check."""
+        if _unknown(name):
+            return {"ok": False, "error": {"code": UNKNOWN_TOOL, "message": "unknown tool %s" % (name,),
+                                           "field": "name"}}, True
         try:
             a = _args(name, args if args is not None else {})
             return getattr(self, "_t_" + name)(a)
@@ -206,8 +228,8 @@ class Server:
             return _ok(mid, {"tools": self.tool_list()})
         if method == "tools/call":
             name = params.get("name")
-            if name not in TOOLS:
-                return _err(mid, -32602, "unknown tool %s" % name)
+            if _unknown(name):
+                return _err(mid, -32602, "unknown tool %s" % (name,))
             payload, is_error = self.call(name, params.get("arguments"))
             text = json.dumps(payload, ensure_ascii=False, default=str)
             res = {"content": [{"type": "text", "text": text}], "isError": is_error}

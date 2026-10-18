@@ -250,10 +250,37 @@ class ReadOnly(unittest.TestCase):
                 self.assertEqual(r["error"]["code"], -32602)
                 payload, is_error = server.call(name, arguments)
                 self.assertTrue(is_error)
+                self.assertEqual(payload["error"]["code"], srv.UNKNOWN_TOOL)
         with open(srv.__file__, encoding="utf-8") as f:
             source = f.read()
         for w in writes:              # nothing in the server module calls an api write
             self.assertNotIn("api.%s(" % w, source)
+
+    def test_a_direct_call_of_a_name_not_served_is_an_unknown_tool(self):
+        # In process (hosts/codex/adapter/lock.py's wrapper calls it so): the refusal handle gives
+        # over JSON-RPC, never an internal error with a traceback from the schema lookup.
+        server = srv.Server()
+        for name in ("lock_nope", None, ["lock_snapshot"]):
+            with self.subTest(name=name):
+                payload, is_error = server.call(name, {})
+                self.assertTrue(is_error)
+                self.assertEqual(payload, {"ok": False, "error": {
+                    "code": "unknown_tool", "message": "unknown tool %s" % (name,), "field": "name"}})
+                r = server.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                                   "params": {"name": name, "arguments": {}}})
+                self.assertEqual(r["error"], {"code": -32602, "message": "unknown tool %s" % (name,)})
+
+    def test_the_import_check_raises_on_a_served_retired_write(self):
+        # A real check, not an assert: python -O would skip an assert.
+        from kitlib import lockmcp
+        srv.check_read_only(srv.TOOLS, lockmcp.OWNER_ONLY)
+        with self.assertRaises(RuntimeError) as cm:
+            srv.check_read_only(dict(srv.TOOLS, lock_end_run=None), lockmcp.OWNER_ONLY)
+        self.assertIn("lock_end_run", str(cm.exception))
+        with open(srv.__file__, encoding="utf-8") as f:
+            source = f.read()
+        self.assertIn("\ncheck_read_only(TOOLS, OWNER_ONLY)\n", source)
+        self.assertNotIn("\nassert ", source)
 
 
 @unittest.skipUnless(os.name == "nt", "the lock is Windows only")
