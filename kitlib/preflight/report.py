@@ -78,7 +78,7 @@ def report(top, cfg, kit_root, base=None, fetch=False, lock_reader=lockline.read
     # docs/multi-host-plan.md section 7), so every command printed runs them from the kit, with -C.
     tools = kit_root.replace('\\', '/').rstrip('/') + '/tools'
     out.extend(defaultstore.lines(top, cfg, tools))
-    here ='"%s"' % top.replace('\\', '/')
+    here = '"%s"' % top.replace('\\', '/')
     in_main = repo.classify(top).kind == repo.MAIN
     if in_main:
         out.append('NOTE: this is the MAIN checkout %s. Agents: create your worktree (%s -C %s '

@@ -2,11 +2,15 @@
 default store refs/backlog/main holding records while it is not the live store is one WARN line
 naming the ref, its record count and the command that reads the live store. Read from the local
 ref, never fetched; never red; the exit code stays 0."""
+import json
+import os
 import unittest
 from unittest import mock
 
 from kitlib import pmdata
 from kitlib.backlog import store as smod
+from kitlib.config import load as load_config
+from kitlib.git import repo as gitrepo
 from kitlib.preflight import defaultstore
 from tests.preflight import test_preflight as tp
 
@@ -43,17 +47,79 @@ class TheDefaultStoreLine(tp.Fixture):
             HEAD % 2 + IMPLICIT + ', so it is read-only; if it is the live store, name it in '
             '.kit.json: "backlog": {"store": "ref"}'])
 
-    def test_the_pm_data_worktree_is_named_as_the_live_store(self):
-        self.seed('A')
+    def pm_worktree(self, store=None):
+        """The PM data worktree (branch pmdata, recorded in kit-pm-data.json); its .kit.json names
+        `store` as "backlog".store, or names none."""
         pmdata.write(self.repo.common_dir(), 'pmdata', 'private', self.repo.head())
         wt = self.repo.worktree('pm', branch='pmdata')
+        if store is not None:
+            with open(os.path.join(wt, '.kit.json'), 'w', encoding='utf-8') as fh:
+                json.dump({'backlog': {'store': store}}, fh)
+        return wt
+
+    def test_the_pm_data_worktree_is_named_as_the_live_store(self):
+        self.seed('A')
+        wt = self.pm_worktree('kit/backlog')
         code, out = self.run_preflight()
         self.assertEqual(code, 0, out)
         self.assertEqual(self.backlog_lines(out), [
             HEAD % 1 + IMPLICIT + ', so backlog.py -C on this checkout reads that copy; the live '
             'store: %s -C "%s" list' % (self.backlog_cmd(), wt.replace('\\', '/'))])
 
-    def test_a_missing_pm_data_worktree_is_named(self):
+    def test_a_pm_data_worktree_naming_the_ref_store_makes_the_ref_live_and_no_line(self):
+        """Refs are shared by every worktree: the ref the PM data worktree names is this one."""
+        self.seed('A')
+        self.pm_worktree('ref')
+        code, out = self.run_preflight()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.backlog_lines(out), [])
+
+    def test_a_pm_data_worktree_naming_no_store_reads_the_same_copy(self):
+        self.seed('A')
+        self.pm_worktree()
+        self.assertEqual(self.backlog_lines(self.run_preflight()[1]), [
+            HEAD % 1 + IMPLICIT + ', so it is read-only; if it is the live store, name it in '
+            '.kit.json: "backlog": {"store": "ref"}'])
+
+    def test_preflight_in_the_pm_data_worktree_itself_never_names_itself(self):
+        self.seed('A')
+        wt = self.pm_worktree()
+        out = self.run_preflight(where=wt)[1]
+        self.assertEqual(self.backlog_lines(out), [
+            HEAD % 1 + IMPLICIT + ', so it is read-only; if it is the live store, name it in '
+            '.kit.json: "backlog": {"store": "ref"}'])
+
+    def test_an_unreadable_pm_data_record_is_named(self):
+        self.seed('A')
+        self.pm_worktree('kit/backlog')
+        with mock.patch.object(pmdata, 'read', side_effect=pmdata.PmDataError('bad json')):
+            got = defaultstore.lines(self.root, load_config(self.root), 'T')
+        self.assertEqual(got, [
+            HEAD % 1 + IMPLICIT + ", so backlog.py -C on this checkout reads that copy; the live "
+            "store's PM data worktree was not found (cannot read the PM data record: bad json)"])
+
+    def test_worktrees_git_cannot_list_are_named(self):
+        self.seed('A')
+        self.pm_worktree('kit/backlog')
+        with mock.patch.object(gitrepo, 'worktrees', return_value=(None, 'boom')):
+            got = defaultstore.lines(self.root, load_config(self.root), 'T')
+        self.assertEqual(got, [
+            HEAD % 1 + IMPLICIT + ", so backlog.py -C on this checkout reads that copy; the live "
+            "store's PM data worktree was not found (cannot list the worktrees: boom)"])
+
+    def test_the_warn_naming_the_pm_data_worktree_costs_four_git_processes(self):
+        """for-each-ref of the ref, ls-tree of its records, rev-parse for the common git dir that
+        holds the PM data record, worktree list; the PM worktree's .kit.json is a file read."""
+        self.seed('A')
+        self.pm_worktree('kit/backlog')
+        cfg = load_config(self.root)
+        with tp.Spawns() as spawns:
+            got = defaultstore.lines(self.root, cfg, 'T')
+        self.assertEqual(len(got), 1, got)
+        self.assertEqual([a[1] for a in spawns.argvs],
+                         ['for-each-ref', 'ls-tree', 'rev-parse', 'worktree'], spawns.argvs)
+
+    def test_a_missing_pm_data_worktree_is_named_in_the_line(self):
         self.seed('A')
         pmdata.write(self.repo.common_dir(), 'pmdata', 'private', self.repo.head())
         out = self.run_preflight()[1]

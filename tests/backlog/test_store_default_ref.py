@@ -96,6 +96,38 @@ class DefaultRef(unittest.TestCase):
         self.assertIn('or set ' + OPT_IN, text)
         self.assertEqual(self.ref_tip(), ('', ''))
 
+    def test_a_pm_data_worktree_naming_no_store_is_not_advised_as_the_live_store(self):
+        """It reads the same implicit ref, so a write there is refused too."""
+        pmdata.write(self.repo.common_dir(), 'pmdata', 'private', self.repo.head())
+        wt = self.repo.worktree('pm', branch='pmdata')
+        with self.assertRaises(Refusal) as caught:
+            self.publish(self.backend(), priced('FOO'))
+        text = str(caught.exception)
+        self.assertNotIn('write to the live store', text)
+        self.assertIn('the PM data worktree "%s" names no "backlog".store either, so a write there '
+                      'is refused too; set %s' % (wt.replace('\\', '/'), OPT_IN), text)
+        self.assertEqual(self.ref_tip(), ('', ''))
+
+    def test_a_pm_data_worktree_naming_the_ref_store_is_where_to_write_it(self):
+        pmdata.write(self.repo.common_dir(), 'pmdata', 'private', self.repo.head())
+        wt = self.repo.worktree('pm', branch='pmdata')
+        self.kit_json({'backlog': {'store': 'ref'}}, root=wt)
+        with self.assertRaises(Refusal) as caught:
+            self.publish(self.backend(), priced('FOO'))
+        self.assertIn('write to the live store in the PM data worktree (store ref) with -C "%s"'
+                      % wt.replace('\\', '/'), str(caught.exception))
+
+    def test_the_refusal_in_the_pm_data_worktree_itself_never_points_at_itself(self):
+        pmdata.write(self.repo.common_dir(), 'pmdata', 'private', self.repo.head())
+        wt = self.repo.worktree('pm', branch='pmdata')
+        backend = smod.open_backend(wt, kconfig.load(wt), fetch=False)
+        with self.assertRaises(Refusal) as caught:
+            self.publish(backend, priced('FOO'))
+        text = str(caught.exception)
+        self.assertNotIn('-C "%s"' % wt.replace('\\', '/'), text)
+        self.assertTrue(text.endswith('; set %s in .kit.json to write this store' % OPT_IN), text)
+        self.assertEqual(self.ref_tip(), ('', ''))
+
     def test_a_landing_close_refused_there_is_advised_in_the_pm_data_worktree(self):
         """at_landing._close_in's WARNING: the WORKTREE command meets the same refusal, so the
         advice names the PM data worktree; another store's refusal keeps the plain command."""
