@@ -27,9 +27,10 @@ class Ticks(object):
 
     def __init__(self):
         self.n = 0
+        self.frozen = False
 
     def __call__(self):
-        self.n += 1
+        self.n += 0 if self.frozen else 1
         return '2026-01-02T%02d:%02d:%02d+00:00' % (self.n // 3600 % 24, self.n // 60 % 60, self.n % 60)
 
 
@@ -181,6 +182,16 @@ class FiresTest(PushCase):
         self.assertEqual(self.attempts('kit'), [1, 1],
                          'a session that held it before is acknowledged by the written push')
         self.assertEqual(self.attempts('pm'), [1, 1, 2])
+
+    def test_a_reanswer_in_the_same_second_pushes_again(self):
+        # red proof: fingerprint() without the answer's digest sees the same status and time
+        qid = self.ask(**{'from': 'kit'})
+        self.ticks.frozen = True
+        self.answer(qid)
+        self.worker.poll()
+        self.answer(qid, 1)
+        self.worker.poll()
+        self.assertEqual(self.attempts('pm'), [1, 1])
 
     def test_a_reopen_pushes_once_and_is_not_retried_after_written(self):
         tid = self.todo(**{'from': 'kit'})
