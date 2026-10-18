@@ -22,6 +22,7 @@ Server(port, tokens, ask, marked, load_settings).handle(message) -> the response
 notification); serve(server, rfile, wfile) runs it over two binary streams until rfile ends.
 """
 import json
+import os
 import traceback
 
 from kitlib import mcpwire
@@ -30,6 +31,7 @@ from kitlib.hubmcp import OWNER_ONLY, SERVER_NAME
 from kitlib.hubsite import api as hubapi
 from kitlib.hubsite import auth as hubauth
 from kitlib.hubsite import client as hubclient
+from kitlib.hubsite import pagecheck
 from kitlib.hubsite import serve as hubserve
 from kitlib.hubsite import settings as hubsettings
 
@@ -43,8 +45,9 @@ ANY, AGENT = hubclient.ANY, hubclient.AGENT
 GUARD_WAIT = ("the guard already denies them to agents by name, but the tools themselves are not "
               "shipped yet")
 INSTRUCTIONS = ("The Action Hub on this machine (docs/hub-mcp.md): read tools for its questions, "
-                "to-dos, stories, notes to the PM, inbox and views, and the agent's writes. The "
-                "owner's writes (answering, marking done, submitting, sending) are not tools here.")
+                "to-dos, stories, notes to the PM, inbox, pages and views, and the agent's "
+                "writes. The owner's writes (answering, marking done, submitting, sending, "
+                "deleting a page) are not tools here.")
 
 _ID = {"type": "string", "description": "The document's id, as the hub gave it (Q-12, T-3, ...)."}
 _PIN = {"type": "integer", "description": "The version of the document you read: the write is "
@@ -203,8 +206,33 @@ TOOLS = {
               "ref": {"type": "string", "description": "The id it answers."},
               "asked": {"type": "string", "description": "What the owner asked."},
               "repo": _REPO, "from": _FROM, "refs": _REFS}, ["text"]), "POST", "/inbox", AGENT),
+    "hub_page": (
+        "A published page's HTML (GET /pages/<id>), as {ok, id, html, version}; not_found when "
+        "it has no body.",
+        _obj({"id": {"type": "string", "description": "The page's id."}}, ["id"]),
+        "GET", "/pages/{id}", ANY),
+    "hub_page_publish": (
+        "Publishes an HTML page to the Action Hub (POST /pages), read from html_file. The page is "
+        "checked here first as the hub checks it (kitlib.hubsite.pagecheck): at most %d bytes of "
+        "UTF-8; no script, iframe, object, embed, form, link, meta or base, no on* handler, no "
+        "URL that leaves the page (links are #fragments, images data: URIs, CSS url() data: or "
+        "#); Mermaid must be rendered to inline svg first. Over a page already published, give "
+        "its version as if_version." % pagecheck.MAX_BYTES,
+        _obj({"id": {"type": "string", "description": "The page's id: letters, digits, . _ -; "
+                                                      "never shaped like a hub item or a ruling "
+                                                      "(Q-1, R-12)."},
+              "title": {"type": "string"},
+              "html_file": {"type": "string", "description": "The absolute path of a UTF-8 HTML "
+                                                             "file: the page's body."},
+              "summary": {"type": "string"}, "repo": _REPO, "from": _FROM, "refs": _REFS,
+              "if_version": {"type": "integer", "description": "The version of the page you "
+                                                               "are publishing over (absent for "
+                                                               "a new page)."}},
+             ["id", "title", "html_file"]), "POST", "/pages", AGENT),
 }
 assert not set(TOOLS) & set(OWNER_ONLY)
+# a POST below no {id} that can still replace a document: publishing over a page
+REPLACES = frozenset({"hub_page_publish"})
 
 
 class NoAgentToken(hubserve.ServeError):
@@ -294,7 +322,8 @@ class Server:
     # ---------------------------------------------------------------- tools
     def tool_list(self):
         return [{"name": n, "description": d, "inputSchema": s,
-                 "annotations": {"readOnlyHint": m == "GET", "destructiveHint": m != "GET" and "{" in p}}
+                 "annotations": {"readOnlyHint": m == "GET",
+                                 "destructiveHint": m != "GET" and ("{" in p or n in REPLACES)}}
                 for n, (d, s, m, p, _) in TOOLS.items()]
 
     def call(self, name, args):
@@ -372,6 +401,29 @@ class Server:
         except hubapi.HubError as e:
             raise ToolError(e.code, e.message, e.field)
         return self._route("hub_todo_edit", a)
+
+    def _t_hub_page_publish(self, a):
+        """The body goes to the hub as text, read here from html_file (absolute: this process's
+        working folder is not the caller's). The hub's page check runs here first, so a page it
+        refuses, too big or unsafe, is refused with the hub's words and never reaches it."""
+        path = a["html_file"]
+        if not os.path.isabs(path):
+            raise ToolError("invalid", "html_file must be an absolute path, not %r" % path,
+                            "html_file")
+        try:
+            with open(path, encoding="utf-8") as f:
+                # a character is a byte at least: one past the cap is enough for the check to
+                # refuse, and a huge file is never read whole
+                html = f.read(pagecheck.MAX_BYTES + 1)
+        except (OSError, ValueError) as e:
+            raise ToolError("invalid", "cannot read html_file %s: %s" % (path, type(e).__name__),
+                            "html_file")
+        why = pagecheck.check(html)
+        if why:
+            raise ToolError("invalid", why, "html")
+        body = {k: v for k, v in a.items() if k != "html_file"}
+        body["html"] = html
+        return self.client().post("/pages", AGENT, body)
 
     # ---------------------------------------------------------------- JSON-RPC
     def handle(self, msg):

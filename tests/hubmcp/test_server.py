@@ -14,7 +14,7 @@ from unittest import mock
 from kitlib import hubmcp
 from kitlib.config.types import ConfigError
 from kitlib.hubmcp import server as srv
-from kitlib.hubsite import api, auth, serve, todosteps
+from kitlib.hubsite import api, auth, pagecheck, serve, todosteps
 from tests.hubsite import httpfix
 from tests.lock.helpers import REPO, clean_env
 from tests.lockmcp.test_server import Client as Process
@@ -22,10 +22,10 @@ from tests.lockmcp.test_server import Client as Process
 ENTRY = os.path.join(REPO, "mcp", "hub_server.py")
 PINNED = ("hub_answer", "hub_todo_done", "hub_story_submit", "hub_to_pm_send")
 READS = {"hub_pending", "hub_wait", "hub_list", "hub_inbox", "hub_backlog", "hub_completed",
-         "hub_view", "hub_health"}
+         "hub_view", "hub_health", "hub_page"}
 CREATOR = {"hub_question_edit", "hub_question_withdraw", "hub_todo_edit", "hub_todo_withdraw"}
 WRITES = {"hub_ask", "hub_question_log", "hub_todo_add", "hub_todo_ack", "hub_story_set",
-          "hub_to_pm_reply", "hub_inbox_post"} | CREATOR
+          "hub_to_pm_reply", "hub_inbox_post", "hub_page_publish"} | CREATOR
 
 
 class Settings(object):
@@ -95,7 +95,7 @@ class Pinned(Case):
     def test_destructive_hint_is_only_on_tools_that_change_an_existing_document(self):
         additive = {"hub_ask", "hub_todo_add", "hub_inbox_post"}
         changes = {"hub_question_log", "hub_todo_ack", "hub_story_set",
-                   "hub_to_pm_reply"} | CREATOR
+                   "hub_to_pm_reply", "hub_page_publish"} | CREATOR    # publish replaces a page
         self.assertEqual(additive | changes, WRITES)
         for t in self.server().tool_list():
             ann = t["annotations"]
@@ -293,6 +293,86 @@ class TodoSteps(Case):
     def test_a_to_do_without_steps_posts_as_before(self):
         self.rpc(self.server(), "hub_todo_add", {"title": "t", "commands": ["x"]})
         self.assertEqual(self.ask.calls[-1]["body"], {"title": "t", "commands": ["x"]})
+
+
+class Pages(Case):
+    """hub_page_publish reads its body from an absolute file and checks it as the hub does
+    (kitlib.hubsite.pagecheck) before any call; hub_page reads one back. No tool deletes a page:
+    that is the owner's, on the hub page only."""
+
+    def setUp(self):
+        Case.setUp(self)
+        self.dir = tempfile.mkdtemp(prefix="kit-hubmcp-page-")
+        self.addCleanup(shutil.rmtree, self.dir, True)
+
+    def page(self, text, name="page.html"):
+        path = os.path.join(self.dir, name)
+        with open(path, "w", encoding="utf-8", newline="") as f:
+            f.write(text)
+        return path
+
+    def test_the_file_is_read_and_posted_as_html(self):
+        html = "<h1>Plan</h1>\n<p>café</p>\n"
+        args = {"id": "plan", "title": "The plan", "html_file": self.page(html),
+                "summary": "s", "refs": ["B-1"], "from": "coord", "if_version": 2}
+        payload, is_error = self.rpc(self.server(), "hub_page_publish", args)
+        self.assertFalse(is_error, payload)
+        call = self.ask.calls[-1]
+        self.assertEqual((call["method"], call["path"], call["token"], call["via"]),
+                         ("POST", api.BASE + "/pages", self.agent, serve.VIA_MCP))
+        want = {k: v for k, v in args.items() if k != "html_file"}
+        want["html"] = html
+        self.assertEqual(call["body"], want)
+
+    def test_what_the_check_refuses_never_reaches_the_hub(self):
+        cap = pagecheck.MAX_BYTES
+        for text, said in (("<script>x</script>", "<script>"),
+                           ('<div class="mermaid">graph TD</div>', "render it to svg first"),
+                           ('<a href="https://example.com">x</a>', "#fragment"),
+                           ("x" * (cap + 1), "bytes"),
+                           ("é" * (cap // 2 + 1), "bytes")):
+            with self.subTest(said=said):
+                payload, is_error = self.rpc(self.server(), "hub_page_publish", {
+                    "id": "plan", "title": "t", "html_file": self.page(text)})
+                self.assertTrue(is_error)
+                self.assertEqual((payload["error"]["code"], payload["error"]["field"]),
+                                 ("invalid", "html"))
+                self.assertIn(said, payload["error"]["message"])
+        payload, is_error = self.rpc(self.server(), "hub_page_publish", {
+            "id": "plan", "title": "t", "html_file": self.page("x" * cap)})
+        self.assertFalse(is_error, payload)                     # the cap itself is let through
+        self.assertEqual(len(self.ask.calls), 1)
+
+    def test_a_file_that_is_absent_relative_or_not_utf8_is_refused_before_any_call(self):
+        bad = os.path.join(self.dir, "bad.html")
+        with open(bad, "wb") as f:
+            f.write(b"<p>\xff</p>")
+        for path in (os.path.join(self.dir, "absent.html"), "page.html", bad):
+            with self.subTest(path=path):
+                payload, is_error = self.rpc(self.server(), "hub_page_publish", {
+                    "id": "plan", "title": "t", "html_file": path})
+                self.assertTrue(is_error)
+                self.assertEqual((payload["error"]["code"], payload["error"]["field"]),
+                                 ("invalid", "html_file"))
+        self.assertEqual(self.ask.calls, [])
+
+    def test_the_hubs_refusal_comes_back(self):
+        self.ask.answer = (409, api.error_body("conflict", "pages/plan exists", "if_version"))
+        payload, is_error = self.rpc(self.server(), "hub_page_publish", {
+            "id": "plan", "title": "t", "html_file": self.page("<p>x</p>")})
+        self.assertTrue(is_error)
+        self.assertEqual((payload["status"], payload["error"]["code"]), (409, "conflict"))
+
+    def test_a_page_is_read_by_its_id(self):
+        self.rpc(self.server(), "hub_page", {"id": "my plan"})
+        self.assertEqual((self.ask.calls[-1]["method"], self.ask.calls[-1]["path"]),
+                         ("GET", api.BASE + "/pages/my%20plan"))
+
+    def test_no_tool_deletes_a_page(self):
+        for name, (_, _, method, path, _) in srv.TOOLS.items():
+            self.assertFalse(path.startswith("/pages/") and method != "GET", name)
+            self.assertNotIn("delete", name)
+        self.assertNotIn("hub_page_delete", hubmcp.OWNER_ONLY)
 
 
 class Creator(Case):
@@ -518,6 +598,28 @@ class Live(httpfix.ListenerCase):
         payload, is_error = self.mcp.call("hub_health", {})
         self.assertFalse(is_error, payload)
         self.assertNotIn("store", payload)      # the agent's token: where the store is stays hidden
+
+    def test_a_page_is_published_and_read_back_through_the_listener(self):
+        folder = tempfile.mkdtemp(prefix="kit-hubmcp-live-")
+        self.addCleanup(shutil.rmtree, folder, True)
+        path = os.path.join(folder, "plan.html")
+        html = "<h1>Plan</h1><p>café</p>"
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(html)
+        payload, is_error = self.mcp.call("hub_page_publish",
+                                          {"id": "plan", "title": "The plan", "html_file": path})
+        self.assertFalse(is_error, payload)
+        card = self.store.docs("pages")["plan"]
+        self.assertEqual((card["title"], card["via"], card["bytes"]),
+                         ("The plan", serve.VIA_MCP, len(html.encode("utf-8"))))
+        payload, is_error = self.mcp.call("hub_page", {"id": "plan"})
+        self.assertFalse(is_error, payload)
+        self.assertEqual(payload["html"], html)
+        payload, is_error = self.mcp.call("hub_page_publish",
+                                          {"id": "plan", "title": "again", "html_file": path})
+        self.assertTrue(is_error)                       # over a page: its version, or a conflict
+        self.assertEqual((payload["status"], payload["error"]["code"]), (409, "conflict"))
+        self.assertEqual(self.errors(), [])
 
 
 class LiveKeys(httpfix.ListenerCase):
