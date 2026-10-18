@@ -42,6 +42,7 @@ CLAUDE.md (or equivalent) where they exist.
 6. Landing needs `python <kit>/tools/gate.py -C <worktree> --full` on the committed tip: run it
    now, or in a measurement window report that the full gate has not run. Then stop and report
    the hash. The coordinator lands it: you never land, merge to main, or push.
+   Run gate.py bare; never pipe or wrap it; read the log it names. Never sleep-wait; wait for the background notice.
 
 Shell is for git, the docs gate and the repo's read-only tools (`preflight.py`, `doc_index.py`,
 `codemap.py`). No test runs other than that final `--full`, no other project scripts.

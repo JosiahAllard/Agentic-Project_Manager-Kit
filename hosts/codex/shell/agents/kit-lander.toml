@@ -89,6 +89,7 @@ real failure: stop, leave main as the command left it, report the failing lines.
 Every temporary file under `<scratchpad>\\lander\\`. Never a generic-named helper
 script in a shared folder. Do the orphan sweep before any run: end only processes you started, by pid; read
 preflight's leftover-worktree and stray-file lines (`--find lock`).
+Run gate.py bare; never pipe or wrap it; read the log it names. Never sleep-wait; wait for the background notice.
 
 ## Never
 
