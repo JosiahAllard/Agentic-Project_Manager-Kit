@@ -150,7 +150,7 @@ PENDING_HISTORY = {
 # Owner-specific prose becomes generic: "the owner" for the pronouns, no one machine's parts.
 PENDING_OWNER_TEXT = {
     ('gender', 'kitlib/backlog/at_landing.py'): 1,
-    ('gender', 'kitlib/backlog/plan.py'): 7,
+    ('gender', 'kitlib/backlog/plan.py'): 2,
     ('gender', 'kitlib/backlog/record.py'): 1,
     ('gender', 'kitlib/commit/__init__.py'): 2,
     ('gender', 'kitlib/config/owner.py'): 1,
@@ -158,7 +158,6 @@ PENDING_OWNER_TEXT = {
     ('gender', 'kitlib/worktree/remove.py'): 6,
     ('gender', 'kitlib/worktree/task.py'): 1,
     ('gender', 'tests/coordinatorstart/test_coordinatorstart.py'): 1,
-    ('gender', 'tests/gate/test_hardening.py'): 1,
     ('gender', 'tests/gate/test_land_owner.py'): 1,
     ('gender', 'tests/guard/test_rules.py'): 1,
     ('hardware', 'kitlib/lock/layout.py'): 2,

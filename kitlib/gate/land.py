@@ -323,18 +323,70 @@ def strong_models(path=None):
     return (None, why) if strong is None else (strong - weak, None)
 
 
+def named_model(model, strong, weak):
+    """The one model of `strong` or `weak` that `model`, a verdict's reviewer_model, names; else
+    None. `model` names it when it is that model (case and outer spaces aside), or a full model
+    id holding it as a word of its own (`claude-opus-5-5` names opus) and no other model of
+    `strong` or `weak`. An id naming none or two is None. Pure."""
+    models, text = (strong | weak) - {''}, model.strip().casefold()
+    if text in models:
+        return text
+    named = [m for m in models if re.search(r'(?<![0-9a-z])%s(?![0-9a-z])' % re.escape(m), text)]
+    return named[0] if len(named) == 1 else None
+
+
 def strong_alias(model, strong, weak):
     """The strong-only model (strong less weak, as strong_models) that `model`, a verdict's
-    reviewer_model, names; else None. `model` names it when it is that model (case and outer
-    spaces aside), or a full model id holding it as a word of its own (`claude-opus-5-5` names
-    opus) and no other model of `strong` or `weak`. An id naming none, a weak one or two is
+    reviewer_model, names (named_model); else None. An id naming none, a weak one or two is
     None: fail closed. Pure."""
-    only, text = strong - weak, model.strip().casefold()
-    if text in only:
-        return text
-    named = [m for m in (strong | weak) - {''}
-             if re.search(r'(?<![0-9a-z])%s(?![0-9a-z])' % re.escape(m), text)]
-    return named[0] if len(named) == 1 and named[0] in only else None
+    named = named_model(model, strong, weak)
+    return named if named in strong - weak else None
+
+
+# The models below the strong tier that a strict branch's reviewer may run on, by the agent type
+# that built the branch. The owner's reviewer-tier rule: a build by a sonnet or haiku worker
+# (worker, weak-worker) may be reviewed by haiku at high effort; a build by an opus worker
+# (opus-worker, strong-worker, senior-worker, deep-worker) needs opus. A type not here needs the
+# strong tier (strong_alias), as does a type mapped to (); moving a type is its one entry.
+REVIEWER_MODELS_BY_AUTHOR = {
+    'worker': ('haiku',),
+    'weak-worker': ('haiku',),
+    'opus-worker': (),
+    'strong-worker': (),
+    'deep-worker': (),
+    'senior-worker': (),
+}
+
+
+def author_types(author):
+    """The agent types a verdict's `author` (`<commit author> / <author agent type>`) names: its
+    parts split on '/', ',' or ';' after the first (the commit author), stripped, casefolded, a
+    `plugin:` prefix dropped, empty ones left out. Pure."""
+    parts = [p.strip().rpartition(':')[2].strip().casefold() for p in re.split(r'[/,;]', author)]
+    return [p for p in parts[1:] if p]
+
+
+def light_alias(entry, strong, weak):
+    """The model below the strong tier that the verdict entry's reviewer_model names
+    (named_model) when REVIEWER_MODELS_BY_AUTHOR allows it for every agent type its `author`
+    names (author_types); else None. Fail closed: no agent type, a type not in the table, or a
+    model in a strong tier too (Codex's account-default) is None. Pure."""
+    named = named_model(entry['reviewer_model'], strong, weak)
+    types = author_types(entry['author'])
+    if named is None or named in strong or not types:
+        return None
+    return named if all(named in REVIEWER_MODELS_BY_AUTHOR.get(t, ()) for t in types) else None
+
+
+def light_rule():
+    """The refusal's clause naming which builds REVIEWER_MODELS_BY_AUTHOR lets a lighter model
+    review: `haiku counts only for a build by weak-worker or worker`."""
+    by_model = {}
+    for t, models in REVIEWER_MODELS_BY_AUTHOR.items():
+        for m in models:
+            by_model.setdefault(m, []).append(t)
+    return '; '.join('%s counts only for a build by %s' % (m, ' or '.join(sorted(ts)))
+                     for m, ts in sorted(by_model.items()))
 
 
 def _who(text):
@@ -789,7 +841,8 @@ class Lander(object):
         """A locked check (docs/gate.md "Strict paths"): the paths each branch changes (merge base
         with the base to its tip) against strict_globs(). A branch with a hit lands only alone,
         with a verdict queued for its tip (kitlib.gate.verdicts) whose reviewer ran on a
-        strong-tier model (strong_alias) and is not its author (is_author); then
+        strong-tier model (strong_alias), or the lighter one its builder's agent type allows
+        (light_alias), and is not its author (is_author); then
         self.strict_hits and self.strict_review are set, and _locked escalates the merged gate to
         --full --fresh. None, or why not (REFUSED, nothing merged). Every read that fails
         refuses."""
@@ -862,10 +915,12 @@ class Lander(object):
         if strong is None:
             return 'the strong-tier models cannot be read: %s' % why
         model = entry['reviewer_model']
-        if strong_alias(model, strong, weak) is None:
+        if strong_alias(model, strong, weak) is None and light_alias(entry, strong, weak) is None:
             return ('the reviewer ran on %s, not a strong-tier model (%s, or a full model id '
-                    'naming it; hosts.json "tiers")'
-                    % (model, ', '.join(sorted(strong - weak)) or 'none'))
+                    'naming it; hosts.json "tiers"); %s (land.REVIEWER_MODELS_BY_AUTHOR), and '
+                    'its author is %s'
+                    % (model, ', '.join(sorted(strong - weak)) or 'none', light_rule(),
+                       entry['author']))
         if is_author(entry):
             return ('the reviewer %s (%s) is its author (%s): it lands with a review by an agent '
                     'that did not write it' % (entry['reviewer_id'], entry['reviewer'],
