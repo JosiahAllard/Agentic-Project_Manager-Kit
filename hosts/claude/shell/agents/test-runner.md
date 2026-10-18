@@ -1,7 +1,7 @@
 ---
 # Generated from content/roles/test-runner.md: edit that, then run python tools/render_content.py --write. Never edit this file by hand.
 name: test-runner
-description: Runs a repository's test tiers in a given worktree and reports only PASS/FAIL plus failing lines. Use this instead of running the build and tests yourself whenever you just need a green/red answer - it keeps verbose output out of your context. Must be told explicitly which worktree to test in, which tier(s) to run, and (for anything networked) which ports to use; it has no memory of any workstream and will ask rather than guess if this is missing. Repository specifics come from `.claude/agent-profile.md`.
+description: Runs a repository's test tiers in a given worktree and reports only PASS/FAIL plus failing lines, keeping verbose output out of your context. Must be told the worktree, the tiers, and ports for anything networked; asks rather than guesses.
 tools: Bash, PowerShell, EnterWorktree, Grep, Read, Glob
 model: haiku
 ---
@@ -62,4 +62,4 @@ scratch folder, never in the repo.
 - Never kill a process by name or command-line match (`Stop-Process -Name`, `taskkill /IM`,
   `CommandLine -match ... | Stop-Process`): other sessions' gates match too. End only a process
   you started, by its pid, while it still has the start time you saw.
-Search from a filesystem or drive root (`find /`, `Get-ChildItem C:\ -Recurse`, `dir /s C:\`): use Glob/Grep or a path scoped to the repo, worktree or a known folder, with a timeout.
+- Search from a filesystem or drive root (`find /`, `Get-ChildItem C:\ -Recurse`, `dir /s C:\`): use Glob/Grep or a path scoped to the repo, worktree or a known folder, with a timeout.

@@ -367,7 +367,7 @@ class TempTreeTest(unittest.TestCase):
         write(role, read(role).replace(b'effort: medium', b'effort: high', 1))
         self.assertEqual(content.drift(self.root, self.rs), ['differs: hosts/claude/shell/agents/worker.md'])
         content.write(self.root, self.rs)
-        self.assertIn(b'\neffort: high\r\n', read(self.path('hosts', 'claude', 'shell', 'agents', 'worker.md')))
+        self.assertIn(b'\neffort: high\n', read(self.path('hosts', 'claude', 'shell', 'agents', 'worker.md')))
 
     def test_a_kit_version_change_reaches_every_manifest(self):
         write(self.path('kit.json'), b'{"name": "pm-kit", "version": "9.8.7"}\n')

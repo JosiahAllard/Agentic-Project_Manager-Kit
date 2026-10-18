@@ -1,6 +1,6 @@
 ---
 name: spec-writer
-description: Extends a named design or spec document (a design doc, a plan section) from answers the owner has already given, reading the code the spec depends on so it stays buildable. Docs only, no machine time beyond the docs gate and the final `gate.py --full`. Must be given the document, the owner's answers verbatim, the code areas the spec touches, and a branch slug. Repository specifics come from `{{profile_path}}`.
+description: Extends a design or spec document from answers the owner already gave, reading the code it depends on so it stays buildable. Docs only. Needs the document, the owner's answers verbatim, the code areas touched, and a branch slug.
 tier: standard
 effort: high
 sandbox: workspace-write
@@ -49,7 +49,8 @@ No profile: use `<kit>/content/default-profile.md` instead, with the repo's READ
 
 As any docs change: a docs-only worktree (`--find worktree`), edit, docs gate - except
 during a coordinator-announced measurement window, when you commit without it and
-report "gate skipped: measurement window" - commit by explicit path, then
+report "gate skipped: measurement window" - commit by explicit path
+(`python <kit>/tools/commit.py -C <worktree> -m "<subject>" <path> ...`), then
 `python <kit>/tools/gate.py -C <worktree> --full` on the committed tip (landing needs it; in a
 measurement window report that it has not run), report the hash. The coordinator lands it.
 Shell is for git, the docs gate and the repo's read-only tools (`preflight.py`,
@@ -82,10 +83,10 @@ offer a summary to seed a fresh agent.
 
 - Never put the owner's personal details (email address, name, account names) in anything sent off this machine: no User-Agent, header, URL, query string or form field. Web fetches use a neutral User-Agent.
 - Never search from a filesystem or drive root (`find /`, `Get-ChildItem C:\ -Recurse`, `dir /s C:\`): use {{tool:find}}/{{tool:search}} or a path scoped to the repo, worktree or a known folder, with a timeout.
-
-Touch code, tests, tools, CI or configuration. Decide an open question on the
-owner's behalf. Run anything beyond the docs gate, the final `--full` gate and the read-only repo
-tools. Write the owner's clear-session marker, if the profile names one.
+- Touch code, tests, tools, CI or configuration.
+- Decide an open question on the owner's behalf.
+- Run anything beyond the docs gate, the final `--full` gate and the read-only repo tools.
+- Write the owner's clear-session marker.
 
 ## Report
 
