@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 import threading
 
+from hosts.claude.adapter import peer as claude_peer
 from optional.bridge.hosts.claude.records import read_record
 from kitlib.proc.pipe import K, bind, close, process_image, process_sids, open_process
 from kitlib.proc.process import handle_ctime
@@ -20,7 +21,6 @@ from kitlib.proc.process import handle_ctime
 get_pid = bind(K, 'GetProcessId', [w.HANDLE], w.DWORD)
 wait = bind(K, 'WaitForSingleObject', [w.HANDLE, w.DWORD], w.DWORD)
 MAX_RECORDS = 4096
-PIPE = re.compile(r'\\\\\.\\pipe\\(?:(LOCAL)\\)?(cc-msg-[A-Za-z0-9_-]+)\Z', re.I)
 
 
 class NativeSessionError(ValueError):
@@ -44,12 +44,11 @@ class ClaudeSession:
 
 
 def canonical_pipe(value):
-    if type(value) is not str:
-        raise NativeSessionError('invalid-local-peer-pipe')
-    match = PIPE.fullmatch(value)
-    if match is None:
-        raise NativeSessionError('invalid-local-peer-pipe')
-    return '\\\\.\\pipe\\' + ('local\\' if match[1] else '') + match[2].lower()
+    """The adapter's canonical_pipe (hosts.claude.adapter.peer), its refusal as NativeSessionError."""
+    try:
+        return claude_peer.canonical_pipe(value)
+    except ValueError:
+        raise NativeSessionError('invalid-local-peer-pipe') from None
 
 
 class ClaudeDirectory:

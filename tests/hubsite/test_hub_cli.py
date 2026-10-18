@@ -255,9 +255,13 @@ class ServeCase(CliCase):
 
     def synced(self, sync):
         """The machine config of a server whose store is the configured one, so git sync is on;
-        `sync` stands where the real git sync is taken from. -> a patch to serve under."""
+        `sync` stands where the real git sync is taken from. -> a patch to serve under. Push
+        notifications are off without a word (PushCase covers them)."""
         self.store_dir = os.path.join(self.home, 'live-store')
         self.config({'hub': {'store': self.store_dir}})
+        quiet = mock.patch.object(HUB, '_push_delivery', lambda: (None, None))
+        quiet.start()
+        self.addCleanup(quiet.stop)
         return mock.patch.object(HUB.serve.gitsync, 'GitSync', lambda *args, **kw: sync)
 
     def test_a_clean_close_of_a_synced_server_says_the_wait_for_git_then_that_it_closed(self):
@@ -533,6 +537,61 @@ class ServeCase(CliCase):
         self.assertIn('git sync is off for that run', doc)
         self.assertIn('An empty PATH is a usage error', doc)
         self.assertIn('It writes nothing else: never the machine config', doc)
+
+
+class PushCase(CliCase):
+    """serve hands the server the host's push delivery and the launcher's state folder
+    (docs/action-hub.md "Push notifications"); a host stands in, so nothing is ever sent."""
+
+    def host(self, adapter):
+        fake = mock.Mock()
+        fake.adapter_module.return_value = mock.Mock(ADAPTER=adapter)
+        return mock.patch.dict(sys.modules, {'_host': fake})
+
+    def test_without_a_launcher_state_folder_push_is_off_with_one_note(self):
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(HUB._push_delivery(), (None, None))
+        self.assertTrue(err.getvalue().startswith('NOTE: push notifications off: LaunchError: '),
+                        err.getvalue())
+        self.assertIn('launcher.state_dir is not set', err.getvalue())
+
+    def test_a_host_without_a_delivery_is_off_with_one_note(self):
+        state = os.path.join(self.home, 'launcher-state')
+        os.makedirs(state)
+        self.config({'launcher': {'state_dir': state}})
+        with self.host(object()), contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(HUB._push_delivery(), (None, None))
+        self.assertEqual(err.getvalue(), 'NOTE: push notifications off: this host has no delivery\n')
+
+    def test_serve_passes_the_delivery_and_the_state_folder_and_a_scratch_store_none(self):
+        state = os.path.join(self.home, 'launcher-state')
+        os.makedirs(state)
+        self.store_dir = os.path.join(self.home, 'live-store')
+        self.config({'launcher': {'state_dir': state}, 'hub': {'store': self.store_dir}})
+        delivery, made = mock.Mock(), []
+
+        class Adapter(object):
+            def push(self, launch):
+                made.append(launch.state_dir())
+                return delivery
+
+        real, seen = HUB.serve.build, []
+
+        def build(settings, sources, log=None):     # what serve gave, then served without either
+            seen.append((sources.push, sources.push_dir))
+            sources.push = sources.sync = None
+            return real(settings, sources, log=log)
+
+        stop = threading.Event()
+        stop.set()
+        with self.host(Adapter()), mock.patch.object(HUB.serve, 'build', build):
+            code, out, err = self.run_cli('serve', '--port', '0', stop=stop)
+            self.assertEqual(code, 0, err)
+            code, out, err = self.run_cli('serve', '--store', os.path.join(self.home, 'scratch'),
+                                          '--port', '0', stop=stop)
+            self.assertEqual(code, 0, err)
+        self.assertEqual(made, [state])
+        self.assertEqual(seen, [(delivery, state), (None, None)])
 
 
 class SetupCase(CliCase):

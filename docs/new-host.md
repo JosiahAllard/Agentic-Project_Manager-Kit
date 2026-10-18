@@ -113,6 +113,11 @@ The package exports `ADAPTER`, a `kitlib.host.HostAdapter`:
   the file writes it: `model` when it names one, `tools` when it limits the role to a tool list).
   The conformance suite checks each against `render`.
 - `command_host()`, `launcher()` and `plugin_installer()`: `None` until the host has them.
+- `push(settings)` (optional): the Action Hub's push-notification delivery, an object with
+  `deliver(recipient, text)` and `is_pm(recipient)` (`kitlib/hubsite/push.py` docstring), over the
+  launcher's settings. `deliver` must end within `push.STOP_S`, the hub's close join. `tools/hub.py serve` asks for it with `getattr`; without it the hub serves
+  with no push notifications (docs/action-hub.md "Push notifications"; Claude:
+  `hosts/claude/adapter/peer.py` `HubPush`).
 - The renderer's optional `vendored(root)`: `{path: bytes}` of kit files the host's plugin ships a
   copy of, read from the kit checkout `root` and drift-checked with the rest. A plugin root that is
   not the whole kit cannot reach the kit's `boot/` from a plugin cache, so it ships `boot/kitboot.py`

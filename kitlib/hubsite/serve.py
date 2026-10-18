@@ -3,9 +3,11 @@ and 9).
 
   build(settings, sources, log=None) -> Hub     open the store, make the views, the Api and the
                                                 listeners; nothing is started. ServeError.
-  Hub   .settings .store .api .views .creds .listeners .sync .backlog .notes .tunnel .port .url
-        .stopping                               the event the owner's stop route sets
-        .start()                               start the git sync, the backlog timer, the listeners
+  Hub   .settings .store .api .views .creds .listeners .sync .backlog .push .notes .tunnel .port
+        .url .stopping                          (stopping: the event the owner's stop route sets;
+                                                push: the push-notification worker or None)
+        .start()                                start the git sync, the backlog timer, the push
+                                                notifications, the listeners
         .watch()                                log a git sync failure that is new (below)
         .close(timeout=CLOSE_TIMEOUT_S)         the clean close (below); safe to call twice
   run(hub, started=None, stop=None)             start, serve until `stop` is set, the owner's
@@ -53,6 +55,9 @@ text is for the owner's console (it may name a folder):
      of its text, and the reason is TUNNEL_FAILED. `Hub.tunnel` is then TUNNEL_OFF with the
      reason in fixed words. With a listener bound, a note says which port needs an Access
      token and `Hub.tunnel` is what "GET health and the sync's reason" gives below.
+  6. the push-notification worker (kitlib.hubsite.push.PushWorker), only when Sources.push and
+     Sources.push_dir are both set, with a line in `Hub.notes`. It is made here and started by
+     start(); one that fails to start is an 'error' line and the hub serves without it.
 `Hub.listeners` is a list: the local listener first, then the tunnel's when there is one.
 start() and close() carry every listener in it, and a start-up that fails after one was bound
 closes its door. Each gets a health_route of its own: the local listener's answers as it did
@@ -94,7 +99,10 @@ owner's stop route):
      begins, the sync's thread is stopped, then one last pass (sync_once) runs while the store
      is still open and locked, so what was written since the last pass is committed whole. A
      pass that fails is an error line in the log and is tried again at the next start;
-  5. the store: every long wait ends and the store lock is released;
+  5. the store: the push-notification worker is told to begin no further delivery, every long
+     wait ends and the store lock is released, then the worker's thread is joined (for the
+     longer of `timeout` and push.STOP_S, which outlasts a delivery in flight) and it writes its
+     outbox;
   6. the handler threads.
 Each step is given `timeout` seconds. One that raises, or that has not ended when its time is
 up, is an 'error' line in the log that names the step; the next step still runs, and the store
@@ -217,6 +225,7 @@ from kitlib.config.types import ConfigError
 from kitlib.proc import process
 
 from . import api as _api
+from . import push as _push
 from . import access, auth, backlog, derived, gitsync, httpd, recordwrite, tunnel
 from .store import HubError, Store, StoreBusy
 
@@ -349,11 +358,18 @@ class Sources(object):
                    checked all the same), `error` and stop() (called first at the close)
       access_now   callable() -> the Unix time the tunnel gate checks a token's times against;
                    None: time.time
+      push         push notifications (not the store's git push): the host's delivery object,
+                   deliver(recipient, text) and is_pm(recipient) (kitlib.hubsite.push); None:
+                   no push notifications
+      push_dir     the folder push notifications keep their outbox and undelivered log in (the
+                   launcher's state folder); push notifications run only when both are set
     """
 
     def __init__(self, tokens=None, static_dir=STATIC_DIR, pm_data=None, notices=None, repos=None,
                  usage=None, agents=None, backlog=None, sync=None, access_keys=None,
-                 access_now=None, known_repos=None):
+                 access_now=None, known_repos=None, push=None, push_dir=None):
+        self.push = push
+        self.push_dir = push_dir
         self.known_repos = known_repos
         self.tokens = tokens
         self.static_dir = static_dir
@@ -839,6 +855,16 @@ def _checkout(backlog_views):
     return checkout
 
 
+def _push_line(log, text):
+    """The push worker's one-argument log, as a 'note' line of the hub's log (scrubbed)."""
+    if log is None:
+        return
+    try:
+        log('note', scrub(text))
+    except Exception:               # noqa: BLE001 - a log that fails must not stop the worker
+        pass
+
+
 def build(settings, sources, log=None):
     """The Hub for `settings` (kitlib.hubsite.settings.Settings) from `sources` (a Sources):
     module docstring, "Start-up". Nothing is started; close() the Hub to release the store.
@@ -903,8 +929,14 @@ def build(settings, sources, log=None):
             tunnelled.routes[health] = health_route(
                 api, views, functools.partial(_tunnel_state, tunnelled), fixed=True)
         local.routes[health] = health_route(api, views, said)
+        pusher = None
+        if sources.push is not None and sources.push_dir:
+            pusher = _push.PushWorker(store, api, sources.push, sources.push_dir,
+                                     log=functools.partial(_push_line, log))
+            notes.append('push notifications on: the asking session and the PM hear of an answer '
+                         'or a done to-do')
         return Hub(settings, store, api, views, creds, listeners, sync, views_b, notes, log,
-                   tunnel=said, stopping=stopping)
+                   tunnel=said, stopping=stopping, push=pusher)
     except BaseException:
         for lis in listeners:
             lis.close_door()
@@ -920,10 +952,12 @@ class Hub(object):
     TUNNEL_CLOSED from the moment close() was called when there was a tunnel listener (with
     none it stays what it was). The `tunnel` given here is that text or a callable giving it.
     `stopping` is the event the local listener's stop route sets (httpd.stop_route); run()
-    closes the hub once it is set. A Hub made without one gets an event nothing sets."""
+    closes the hub once it is set. A Hub made without one gets an event nothing sets. `push` is
+    the push-notification worker (kitlib.hubsite.push.PushWorker: start, stop) or None."""
 
     def __init__(self, settings, store, api, views, creds, listeners, sync, backlog_views, notes,
-                 log=None, tunnel='', stopping=None):
+                 log=None, tunnel='', stopping=None, push=None):
+        self.push = push
         self.settings = settings
         self.store = store
         self.api = api
@@ -986,9 +1020,10 @@ class Hub(object):
             self._say('the git sync works again', 'note')
 
     def start(self):
-        """Start the git sync, the backlog timer and every listener, the listeners last so the
-        first request finds the rest running. False, and nothing started, when it was started
-        or closed already."""
+        """Start the git sync, the backlog timer, the push-notification worker and every
+        listener, the listeners last so the first request finds the rest running. A push worker
+        that fails to start is an 'error' line and the hub serves without it. False, and nothing
+        started, when it was started or closed already."""
         with self._life:
             if self._started or self._closed:
                 return False
@@ -997,6 +1032,12 @@ class Hub(object):
                 self.sync.start()
             if self.backlog is not None:
                 self.backlog.start()
+            if self.push is not None:
+                try:
+                    self.push.start()
+                except Exception as e:      # noqa: BLE001 - the hub serves without pushes
+                    self._say('push notifications did not start: %s: %s' % (type(e).__name__, e))
+                    self.push = None
             for lis in self.listeners:
                 lis.start()
             return True
@@ -1118,12 +1159,21 @@ class Hub(object):
                 clean.append(False)
                 self._cut_short()
             finally:
+                if self.push is not None:
+                    try:
+                        self.push.stop(0)   # no wait: no deliver begins after this
+                    except Exception:       # noqa: BLE001 - its own step below says so
+                        pass
                 try:
                     self.store.close()
                     clean.append(True)
                 except Exception as e:      # noqa: BLE001 - the threads are still joined
                     clean.append(False)
                     self._say('closing: the store failed: %s: %s' % (type(e).__name__, e))
+                if self.push is not None:
+                    # at least STOP_S: a deliver in flight ends, and the outbox is saved
+                    wait = _push.STOP_S if timeout is None else max(timeout, _push.STOP_S)
+                    clean.append(self._step('the push worker', wait, self.push.stop, wait))
                 for lis in self.listeners:
                     clean.append(self._step('the handler threads', timeout, lis.join, timeout))
             self._clean = all(x is True for x in clean)

@@ -30,7 +30,7 @@ class FakeHost(Host):
     def __init__(self, home, procs=(), env=None, ignored=None, own_pid=99999, uptime=5.0):
         Host.__init__(self, home, dict(env or {}))
         self.procs = list(procs)
-        self.opened, self.killed, self.slept = [], [], []
+        self.opened, self.killed, self.slept, self.piped = [], [], [], []
         self.ignored, self.mypid, self.uptime = ignored, own_pid, uptime
         self.where, self.homes = None, []      # place()'s kind (None: place() fails the test); home_worktree calls
 
@@ -82,6 +82,11 @@ class FakeHost(Host):
 
     def sleep(self, seconds):
         self.slept.append(seconds)
+
+    def record_pipe(self, settings, name, after_ms):
+        """No registry to poll: the call is noted (self.piped) and nothing is said."""
+        self.piped.append((name, after_ms))
+        return None
 
 
 class Home(object):

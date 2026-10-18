@@ -114,7 +114,17 @@ Nothing else removes a home: the nightly sweep skips it (`kitlib.worktree.sweep`
 
 ## Stop
 
-`stop --name` stops one session's `claude.exe`, then its window only when that window's script carries the same name, then the window's `conhost.exe` when the window was its only child. Each process is stopped by pid and creation time, and the session's command line is read again at that time, so a reused pid is never hit. Refused (nothing stopped): a name or successor naming the PM session (`pm-session` or `Project Manager`, any case), a name with surrounding spaces, a successor equal to the name or not running, no match, several matches unless `--pid` picks one, the PM session (by name or by `pm_session_id` in coordinators.json), and the caller's own ancestor; coordinators.json under its old name refuses every stop ("State files"). Each stop is logged to `stop.log`; a log write that fails is said on stderr, and the stop stands.
+`stop --name` stops one session's `claude.exe`, then its window only when that window's script carries the same name, then the window's `conhost.exe` when the window was its only child. Each process is stopped by pid and creation time, and the session's command line is read again at that time, so a reused pid is never hit. Refused (nothing stopped): a name or successor naming the PM session (`pm-session` or `Project Manager`, any case), a name with surrounding spaces, a successor equal to the name or not running, no match, several matches unless `--pid` picks one, the PM session (by name or by `pm_session_id` in coordinators.json), and the caller's own ancestor; coordinators.json under its old name refuses every stop ("State files"). Each stop is logged to `stop.log`; a log write that fails is said on stderr, and the stop stands. The stopped session's `pipes.json` entry is then dropped ("Pipe addresses"); a failure there is said the same way.
+
+## Pipe addresses
+
+Every live Claude Code session publishes a registry record, `<config folder>/sessions/<pid>.json`, with its pid, `sessionId`, `startedAt` (epoch ms), its creation time (`procStart` or `procStartFt`), `entrypoint`, `messagingSocketPath` (its peer pipe) and its name; a secret key file sits beside it, which the launcher never opens (`kitlib/launcher/pipes.py` docstring). The hub's push notifications send to that pipe (docs/action-hub.md "Push notifications").
+
+- After `start` opens a window it polls the registry folders of the default config folder and of every configured account and org (`pipes.registry_dirs`, each folder once) for a record of the new session's name started at or after the moment before the window opened, once a second for up to 20 s (`pipes.TRIES`, `pipes.POLL_S`), and writes its entry to `pipes.json` (`pipes.record`, through `Host.record_pipe`). Not found in time, it says `pipe not recorded yet: the hub resolves it at send time`; a fault says `pipe not recorded (...)`. Either way the start stands. With no `launcher.state_dir` nothing is polled or written.
+- A record alone is never proof that a session runs: `launch.py stop` leaves its record behind, and the pipe changes on every restart. A record counts only while its pid runs with the record's creation time (`pipes.is_live`).
+- `pipes.json` is a hint and an audit, never the truth: a sender resolves the live record at send time and uses `pipes.json` only to choose between two live sessions of one name. No token is ever written to it. Two launchers writing at once can drop one entry (the last write wins); the sender's registry scan still finds that session.
+
+Tests: tests/launcher/test_pipes.py.
 
 ## Hand-off
 
@@ -135,6 +145,8 @@ In `launcher.state_dir`, machine state outside git; copy the examples to start:
 - `sessions.json` (`docs/launcher.sessions.example.json`): `{key: {repo, agent, stem, state, brief?, account, name, autostart?}}`. `agent` true runs the coordinator agent, a string that agent, false a plain session. A `_` key is a note.
 - `coordinators.json` (`docs/launcher.coordinators.example.json`): `{repo: account, pm_session_id, pm_folder, pm_account}`. A value starting with `<` is a placeholder and is ignored. Its old name was `conductors.json`: when only the old file is there, every command that reads it refuses and names the rename (`kitlib/launcher/state.py` `read_coordinators`, `RenameNeeded`); the old file is never read. Rename it by hand (one release, removed after the switch, W2b).
 - `stop.log`, `after-reboot.log`: one timestamped line per action.
+- `pipes.json`: `{name: {pid, session_id, pipe, proc_start, entrypoint, recorded_at}}`, written by `start` and trimmed by `stop` ("Pipe addresses").
+- `push-outbox.json`, `push-undelivered.jsonl`: the hub's push notifications, written by the hub server, never by the launcher (docs/action-hub.md "Push notifications").
 
 JSON is read with or without a BOM and written UTF-8 without one.
 

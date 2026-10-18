@@ -8,9 +8,12 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 from tests.bridge import pipes
 import uuid
+
+from hosts.claude.adapter import peer as claude_peer
 
 from optional.bridge.hosts.claude.peer import ClaudePeerAdapter, ClaudePeerEndpoint, native_message_id, peer_address
 from optional.bridge.hosts.claude.sessions import ClaudeDirectory, NativeSessionError
@@ -124,6 +127,27 @@ class ClaudePeerTests(unittest.TestCase):
         self.assertIsNone(self.adapter.reconcile(self.message,None))
         with self.assertRaises(DeliveryError):
             self.adapter.send(self.message)  # direct use must not blindly retry either.
+
+    def test_the_frames_and_the_write_are_the_hub_adapters(self):
+        # One copy of the wire format and of the pipe write (hosts.claude.adapter.peer): a copy
+        # here never reaches these wrapped functions, and this fails.
+        with mock.patch.object(claude_peer, 'message_frames', wraps=claude_peer.message_frames) as frames, \
+                mock.patch.object(claude_peer, 'write_once', wraps=claude_peer.write_once) as write:
+            self.dispatch()
+        frames.assert_called_once_with('b'*32, peer_address(self.endpoint.pipe), mock.ANY,
+                                       native_message_id(self.message), 'prompting')
+        write.assert_called_once_with(self.snapshot.pipe, self.snapshot.pid, self.snapshot.creation, mock.ANY)
+        self.assertEqual(write.call_args.args[3], b''.join(encode_frame(f) for f in self.received))
+
+    def test_a_write_never_made_is_before_write_and_an_unknown_one_stays_attempted(self):
+        with mock.patch.object(claude_peer, 'write_once', return_value=claude_peer.push.NOT_WRITTEN):
+            with self.assertRaisesRegex(BeforeWriteError, 'native-peer-unavailable-before-write'):
+                self.adapter.send(self.message)
+        with mock.patch.object(claude_peer, 'write_once', return_value=claude_peer.push.UNCERTAIN):
+            with self.assertRaisesRegex(DeliveryError, 'native-write-uncertain'):
+                self.adapter.send(self.message)     # not refused as attempted: the first was forgotten
+        with self.assertRaisesRegex(DeliveryError, 'native-operation-already-attempted'):
+            self.adapter.send(self.message)
 
     def test_authenticated_correlated_hold_and_refusal_are_returned_without_resend(self):
         self.dispatch()

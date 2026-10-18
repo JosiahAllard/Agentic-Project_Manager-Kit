@@ -15,6 +15,7 @@
   gitsync  the store's commits, and its pull and push against the PM data remote
   httpd    one loopback HTTP listener in front of the api: the gate, the write rules, the waits
   tunnel   the listener a tunnel program points at: its Cloudflare Access gate, its write source
+  push     the push notifications: an answer or a done to-do told to its session and the PM
   serve    the server: the store, the api, the views and the listeners, started and closed
   client   the client of the hub server on this machine: one call, its refusal, the exit codes
   migrate  the earlier hub's documents (the old hub's data folder, an export) copied into the store
