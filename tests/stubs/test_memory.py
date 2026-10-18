@@ -231,6 +231,21 @@ class Files(unittest.TestCase):
         self.assertIn('settings.local.json', line)
         self.assertNotIn('commits', line)
 
+    def test_a_tracked_file_that_is_not_a_json_object_is_bad_and_nothing_is_written(self):
+        for raw in (b'[1]', b'{"a": '):
+            self.put_shared(raw)
+            m = self.survey()
+            self.assertEqual(m.state, memory.BAD, raw)
+            self.assertIn(self.shared, m.why)
+            with self.assertRaises(memory.Refused):
+                memory.apply(m)
+            self.assertFalse(os.path.exists(self.path), raw)
+            got = memory.run(self.root, apply=True, main_top=fake_top(self.TOP), kit='K', unignored=lambda c: None)
+            self.assertEqual(got.code, 1, got.lines)
+            self.assertFalse(os.path.exists(self.path), raw)
+            line = memory.problem_line(self.root, main_top=fake_top(self.TOP))
+            self.assertTrue(line.startswith('could not check memory ('), line)
+
     def test_run_on_a_bad_file_exits_1(self):
         self.put(b'[1]')
         got = memory.run(self.root, apply=True, main_top=fake_top(self.TOP), kit='K', unignored=lambda c: None)
