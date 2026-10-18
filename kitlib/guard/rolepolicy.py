@@ -54,7 +54,8 @@ The owner's own session (nothing marks it) is never held, and its calls read no 
                   xargs, python -, runpy, a python given to a shell as $0 or $1: HANDED_ON; so is
                   the name glued to other text in a launcher's line the guard does not read:
                   _hidden_launch), and a command with no program the guard can name (an
-                  assignment alone, `$c=gc ...`) whose words name it is NO_PROGRAM; both are
+                  assignment alone, `$c=gc ...`) whose words name it (but for a Where-Object
+                  pattern only compared on a line that runs nothing: _pattern_only) is NO_PROGRAM; both are
                   refused in every mode. Not read (_lock_words): an environment assignment's
                   value, a glob, a name built from pieces, an 8.3 short name. A lock MCP
                   tool (lock_mcp_tool) whose verb (MCP_VERBS) is outside the mode's verbs, or that
@@ -501,6 +502,21 @@ LOCK_MODULE = 'machine_lock'
 # inside a longer name (`tests.lock.test_machine_lock`):
 LOCK_MODULE_WORD_RE = re.compile(r'(?:\w+\.)*%s' % LOCK_MODULE, re.I)
 LOCK_MODULE_CODE_RE = re.compile(r'(?<!\w)%s(?!\w)' % LOCK_MODULE, re.I)
+# the module's name in the one word of a command with no program (lock_verb's NO_PROGRAM) that is
+# a pattern only compared (_pattern_only): next to a `|` there it is a regex alternative
+# (`-match 'MACHINE_LOCK|KIT'`). Anywhere else a `|` beside it proves nothing, since PowerShell can
+# split the word before python sees it (`'tools.machine_lock|x' -split '\|'`, `.Split('|')`), so
+# every other word keeps LOCK_MODULE_CODE_RE.
+LOCK_MODULE_TEXT_RE = re.compile(r'(?<![\w|])%s(?![\w|])' % LOCK_MODULE, re.I)
+# PowerShell's operators that only compare their right side as a pattern (-split, -replace hand
+# pieces of it on, and are not here), and the filter whose { } block may hold that comparison:
+PS_MATCH_OPS = frozenset('-%s%s' % (c, op) for c in ('', 'i', 'c') for op in ('match', 'notmatch', 'like', 'notlike'))
+PS_FILTERS = frozenset(('where-object', 'where', '?'))
+# what else a line holding such a pattern may run, each named bare (_reader): the readers and
+# printers, the filters, and cmdlets that only shape what they are piped; git only as
+# _lock_path_only allows it (LOCK_PATH_GIT with plain options, _git_plain):
+PS_TEXT_LINE = LOCK_PATH_READERS | LOCK_PATH_PRINTERS | PS_FILTERS | frozenset((
+    'format-table', 'ft', 'format-list', 'fl', 'select-object', 'select', 'sort-object', 'sort'))
 
 
 def _lock_names(t):
@@ -1060,6 +1076,35 @@ def _hidden_launch(inv, commands):
 
 # The verb named for a command that runs no program the guard can name (an assignment alone, a
 # PowerShell expression) whose words name machine_lock.py: lock_verb refuses it in every mode.
+def _pattern_only(cmd, k, commands):
+    """True when word `k` of the PowerShell command `cmd`, which has no program, is a pattern the
+    line only compares and nothing on it can run: `cmd` is the whole of a bare Where-Object's
+    (PS_FILTERS) { } block, three words `<left> <op> <pattern>` with `op` one of PS_MATCH_OPS and
+    word `k` the literal pattern, and every other command of the line, nested ones too, is a
+    program of PS_TEXT_LINE named bare (_reader) or git as _lock_path_only allows it. So
+    `Get-ChildItem env: | Where-Object { $_.Name -match 'MACHINE_LOCK|KIT' } | Format-Table` is
+    read as text, and `$a = 'tools.machine_lock|stop' -split '\\|'; python -m @a` is not."""
+    i = next((j for j, c in enumerate(commands) if c is cmd), None)
+    if cmd.shell != sh.PS or i is None or i == 0 or k != 2 or len(cmd.words) != 3:
+        return False
+    if cmd.prev_op != '{' or cmd.next_op != '}' or cmd.words[1].text.lower() not in PS_MATCH_OPS or cmd.words[2].dyn:
+        return False
+    owner = commands[i - 1]
+    inv = cm.invocation(owner)
+    if owner.next_op != '{' or not _reader(inv, PS_FILTERS) or len(owner.words) != 1:
+        return False
+    for c in commands:
+        if c is cmd:
+            continue
+        inv = cm.invocation(c)
+        if _reader(inv, PS_TEXT_LINE):
+            continue
+        g = cm.git_call(inv) if _reader(inv, ('git',)) else None
+        if g is None or g.sub_dyn or g.sub not in LOCK_PATH_GIT or not _git_plain(inv.argv, g, commands):
+            return False
+    return True
+
+
 NO_PROGRAM = '(in a command that names no program)'
 # The verb named for a lock path given to a program that neither runs it (_run_words, _launched)
 # nor only reads or prints it (_lock_path_only), so may copy, store or pass it on: lock_verb
@@ -1074,7 +1119,10 @@ def lock_verb(parsed, m, kit=None, kit_checkout=None):
     A command with no invocation (an assignment alone, `$c=gc tools/machine_lock.py`, which
     PowerShell reads as one word with no program the guard can name; `$a = 'tools/...','stop'`
     for splatting) whose words or redirects name machine_lock.py is refused as NO_PROGRAM, in any
-    mode: fail-closed, since its value may reach a program later on the line. Fail-closed too, a
+    mode: fail-closed, since its value may reach a program later on the line. Its words and
+    redirects' text name it too with the module's name standing alone (_lock_code), except next
+    to a `|` in the one pattern _pattern_only proves is only compared on a line that runs nothing
+    (LOCK_MODULE_TEXT_RE: `Where-Object { $_.Name -match 'MACHINE_LOCK|KIT' }`). Fail-closed too, a
     command whose words, heredoc body, here-string or redirect name it (_lock_seq) passes only
     when its program only reads or prints it with its output staying (_lock_path_only), or runs
     it (_run_words, _launched: then judged by its verb); any other program - cp, Copy-Item, ln,
@@ -1086,7 +1134,8 @@ def lock_verb(parsed, m, kit=None, kit_checkout=None):
     for cmd in parsed.commands:
         inv = cm.invocation(cmd)
         if inv is None:
-            if any(_lock_code(t) for t in [w.text for w in cmd.words] + _fed(cmd)):
+            if any(_lock_names(w.text) or LOCK_MODULE_TEXT_RE.search(w.text) if _pattern_only(cmd, k, parsed.commands)
+                   else _lock_code(w.text) for k, w in enumerate(cmd.words)) or any(_lock_code(t) for t in _fed(cmd)):
                 return NO_PROGRAM, allowed
             continue
         words = _lock_words(inv, parsed.commands, kit, kit_checkout)
