@@ -106,7 +106,7 @@ def docs_steps(gate):
 def unknown_names(gate):
     """What `smoke_steps` and `docs_only`.steps name that no configured step is, and a set
     `docs_only` whose steps are empty or missing (its docs-only gate would run nothing yet write
-    a record; R-2242: a docs-only change skips the tests but keeps the scrub)."""
+    a record: a docs-only change skips the tests but keeps the scrub)."""
     names = {s.get('name') for s in gate.get('steps') or []}
     out = []
     if gate.get('docs_only') is not None and not docs_steps(gate):
