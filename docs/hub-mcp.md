@@ -52,7 +52,7 @@ a pending `hub_wait` returns at once on such an item. `tests/hubmcp/test_server.
 
 ## Agent write tools
 
-Each calls a route the agent's token may call (`kitlib.hubsite.api.ROUTES`, role AGENT, or ANY for the two delete routes); `tests/hubmcp/test_server.py` `Routes.test_every_shipped_tool_maps_to_a_route_that_is_not_the_owners` checks every shipped tool against `api.match`.
+Each calls a route the agent's token may call (`kitlib.hubsite.api.ROUTES`, role AGENT, or ANY for the routes the owner shares: `todos/{id}/edit` and both delete routes); `tests/hubmcp/test_server.py` `Routes.test_every_shipped_tool_maps_to_a_route_that_is_not_the_owners` checks every shipped tool against `api.match`.
 
 | tool | arguments (required first) | endpoint |
 |---|---|---|

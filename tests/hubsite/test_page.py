@@ -1036,7 +1036,9 @@ class DomTest(unittest.TestCase):
         self.assertEqual(got["theirs"], {"del": True, "edit": False})      # an agent's to-do: the owner deletes, never edits
         self.assertEqual(got["mine"], {"del": True, "edit": True})
         self.assertEqual(got["done"], {"del": False, "edit": False})       # an agent's done to-do is the owner's record
-        self.assertEqual(got["sent"], ["POST /questions/Q-1/delete {}"] * 2 + ["POST /todos/T-2/delete {}"])
+        # pinned to the version each card shows, so an item changed since it was drawn is refused
+        self.assertEqual(got["sent"], ['POST /questions/Q-1/delete {"if_version":1}'] * 2
+                         + ['POST /todos/T-2/delete {"if_version":1}'])
 
     def test_a_follow_up_question_and_its_story_jump_to_each_other(self):
         lists = {"stories": {"S-1": {"status": "questions", "title": "mine", "story": "x", "repo": "alpha", "version": 1}},

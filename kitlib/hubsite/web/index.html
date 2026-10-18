@@ -747,13 +747,14 @@ button.danger{color:var(--warn)}
     return "Not saved: this item changed on the hub server while you were editing. Your text is kept; press Save again to put it in place of what the server holds now.";
   }
   // A delete asks twice: the first press arms the button, the second sends. `label` names it (Withdraw for a question).
-  function delButton(path, st, label = "Delete", done = "deleted"){
+  // It is pinned to the version the card shows (`v`), so an item changed since it was drawn is refused, not removed unseen.
+  function delButton(path, st, v, label = "Delete", done = "deleted"){
     const del = el("button", {class:"link danger", type:"button", text: label});
     let armed = false;
     del.addEventListener("click", async () => {
       if (!armed) { armed = true; del.textContent = "Confirm " + label.toLowerCase(); return; }
       del.disabled = true;
-      try { await write(path, {}); }
+      try { await write(path, pinAt(v)); }
       catch (err) { del.disabled = false; armed = false; del.textContent = label; st.className = "status err"; st.textContent = "Not " + done + ": " + why(err) + "."; }
     });
     return del;
@@ -780,7 +781,7 @@ button.danger{color:var(--warn)}
     const parts = [pmMeta(x, tab), el("p", {class:"ctx", text: x.text || ""})];
     if (tab === "queued") {
       const st = el("span", {class:"status", role:"status"});
-      parts.push(el("div", {class:"act"}, el("button", {class:"link", type:"button", text:"Edit", onclick: () => { state.pmEdit.set(x.id, { version: x.version }); render(); }}), delButton("/to_pm/" + seg(x.id) + "/delete", st), st));
+      parts.push(el("div", {class:"act"}, el("button", {class:"link", type:"button", text:"Edit", onclick: () => { state.pmEdit.set(x.id, { version: x.version }); render(); }}), delButton("/to_pm/" + seg(x.id) + "/delete", st, x.version), st));
     }
     if (tab === "sent") parts.push(el("div", {class:"status", text:"Waiting on the PM."}));
     if (tab === "done") parts.push(el("div", {class:"ans"}, el("b", {text:"PM:"}), el("p", {class:"reply", text: x.reply || "noted"})));
@@ -870,9 +871,9 @@ button.danger{color:var(--warn)}
         try { await write("/todos/" + seg(t.id) + "/edit", { urgent: !t.urgent, ...pin(t) }); }
         catch (e) { urg.disabled = false; status.className = "status err"; status.textContent = "Not saved: " + why(e) + "."; }
       });
-      body.append(el("div", {class:"act"}, urg, el("button", {class:"link", type:"button", text:"Edit", onclick: () => { state.todoEdit.set(t.id, { version: t.version }); render(); }}), delButton("/todos/" + seg(t.id) + "/delete", status)));
+      body.append(el("div", {class:"act"}, urg, el("button", {class:"link", type:"button", text:"Edit", onclick: () => { state.todoEdit.set(t.id, { version: t.version }); render(); }}), delButton("/todos/" + seg(t.id) + "/delete", status, t.version)));
     } else if (t.status === "open") {
-      body.append(el("div", {class:"act"}, delButton("/todos/" + seg(t.id) + "/delete", status)));
+      body.append(el("div", {class:"act"}, delButton("/todos/" + seg(t.id) + "/delete", status, t.version)));
     }
     body.append(status);
     return el("article", {class: "t" + (isDone ? " done" : "") + (t.urgent ? " urgent" : ""), id: "todo-" + t.id}, box, body);
@@ -1316,7 +1317,7 @@ button.danger{color:var(--warn)}
       const acts = el("div", {class:"act"}, btn, status);
       if (d.status === "answered") acts.append(el("button", {class:"link", type:"button", text:"Cancel", onclick: () => { state.editing.delete(d.id); clearDraft(d.id); said.delete(d.id); unread.delete(d.id); render(); }}));
       // An open question the owner does not mean to answer is withdrawn: it leaves the hub.
-      else acts.append(delButton("/questions/" + seg(d.id) + "/delete", status, "Withdraw", "withdrawn"));
+      else acts.append(delButton("/questions/" + seg(d.id) + "/delete", status, d.version, "Withdraw", "withdrawn"));
       parts.push(fs, note, acts);
     } else if (sent.has(d.id)) {
       parts.push(el("p", {class:"gone", role:"status", text: SENT_UNREAD}));
