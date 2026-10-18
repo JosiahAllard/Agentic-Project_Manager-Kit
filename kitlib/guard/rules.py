@@ -3420,18 +3420,130 @@ def _python(cmd, name, args, cmd_word, via=None):
     return []
 
 
-PS_SPLAT_RE = re.compile(r'^@[A-Za-z_][\w:]*$')    # a PowerShell splat argument: @a, @global:a
+# The coarse rule for a PowerShell writer (ps_unread). Parameters whose value is no path: their one
+# value is passed over when it holds no command (_ps_value_end).
+PS_VALUE_PARAMS = frozenset(('value', 'encoding', 'filter', 'include', 'exclude', 'newname', 'inputobject',
+                             'delimiter', 'itemtype', 'uri', 'body', 'headers'))
+_PS_SQ = r"'(?:[^'‘’‚‛]|'')*'"
+_PS_DQ_PLAIN = r'"[^"“”„`$]*"'
+_PS_BARE = r'[^\s$(){}\[\]@`\'"“”„‘’‚‛,;|&<>#]+'
+_PS_VAR = r'\$(?:\{[A-Za-z_]\w*(?::[A-Za-z_]\w*)?\}|[A-Za-z_]\w*(?::[A-Za-z_]\w*)?)'
+_PS_DQ = r'"(?:[^"“”„`$]|`[^\r\n]|%s)*"' % _PS_VAR
+_PS_END = r'(?=[\s;|)}]|$)'
+# a native program's argument: plain words and strings with no variable
+PS_PLAIN_ARG_RE = re.compile(r'(?:%s|%s|%s)+%s' % (_PS_BARE, _PS_SQ, _PS_DQ_PLAIN, _PS_END))
+# a cmdlet's argument: a variable, or a string with one, is one argument too
+PS_CMDLET_ARG_RE = re.compile(r'(?:%s|%s|%s|%s(?:\.[A-Za-z_]\w*)*)+%s' % (_PS_BARE, _PS_SQ, _PS_DQ, _PS_VAR, _PS_END))
+_PS_CALL_ARG = r"\s*(?:%s|%s|-?\d+)\s*" % (_PS_SQ, _PS_VAR)
+_PS_CHAIN = re.compile(r'(?:\.[A-Za-z_]\w*(?:\((?:%s(?:,%s)*)?\))?)*' % (_PS_CALL_ARG, _PS_CALL_ARG))
+_PS_VALUE_ATOM = re.compile(r'%s|%s|%s|%s' % (_PS_VAR, _PS_SQ, _PS_DQ, _PS_BARE))
+_PS_VALUE_END = re.compile(_PS_END)
 
 
-def group_target(cmd):
-    """[Word]: for a writing command with a ( ) or { } group among its arguments, wherever it
-    sits (shell.Command.group_arg: `Set-Content -Path { $p }`, `Copy-Item $a.M(1)(...)`), or one
-    the scanner split around a group (shell.Command.split: `Set-Content -Value $s.Trim() -Path
-    x`), a target that is not literal and has no span, standing for what the group passes and
-    the arguments read past it; else []."""
-    if not (cmd.split or cmd.group_arg):
-        return []
-    return [sh.Word('(an argument in or past a ( ) or { } group)', True, cmd.end, cmd.end)]
+def _ps_group_end(src, k):
+    """The offset just past the ( ) that opens at src[k], or None when it holds what this does not
+    follow (a comment, a here-string, a typographic quote) or does not close."""
+    depth, n = 0, len(src)
+    while k < n:
+        c = src[k]
+        if c == '`':
+            k += 2
+            continue
+        if c in "'\"":
+            if src[k - 1:k] == '@':
+                return None
+            k = _net_string_end(src, k)
+            continue
+        if c in '#“”„‘’‚‛':
+            return None
+        if c == '(':
+            depth += 1
+        elif c == ')':
+            depth -= 1
+            if depth == 0:
+                return k + 1
+        k += 1
+    return None
+
+
+def _ps_value_end(cmd, p):
+    """The offset just past the one value that starts at source offset p, when it holds no command
+    and PowerShell passes it as one argument: a plain word or string, a variable, a ( ) the
+    scanner's word spans too, each with member calls on plain arguments after it ($s.Trim(),
+    (Get-Date).AddDays(1)), then a space or the end; else None."""
+    src = cmd.source
+    if src.startswith('(', p):
+        e = _ps_group_end(src, p)
+        if e is None or not any(w.start <= p and w.end == e for w in cmd.words if w.start is not None):
+            return None
+    else:
+        m = _PS_VALUE_ATOM.match(src, p)
+        if not m:
+            return None
+        e = m.end()
+    e = _PS_CHAIN.match(src, e).end()
+    return e if _PS_VALUE_END.match(src, e) else None
+
+
+def ps_unread(cmd, args, spec=None):
+    """[Word]: for a PowerShell writer (a write cmdlet, an Export-*, robocopy or xcopy, curl, wget
+    or tar), a target that is not literal and has no span when any argument is one the guard does
+    not read as the scanner did, else []. Coarse by design, it does not depend on how the scanner
+    read a ( or a { : the arguments of a cmdlet (`spec`) other than one value of a parameter in
+    PS_VALUE_PARAMS must each be a plain word, string or variable (PS_CMDLET_ARG_RE), a native
+    program's a plain word or string (PS_PLAIN_ARG_RE: PowerShell spreads a splat or an array into
+    its arguments); none may follow a comma (an array binds to the parameter before it); and the
+    command may be neither split nor followed by a ( ) or { } that no value accounts for."""
+    stand_in = [sh.Word('(an argument the guard does not read)', True, cmd.end, cmd.end)]
+    if cmd.split:
+        return stand_in
+    src = cmd.source
+    spans = []                          # [start, end) of the values passed over
+    if spec is not None:
+        for k, w in enumerate(args):
+            if w.start is None or cm.quoted(cmd, w) or not w.text.startswith('-') or len(w.text) < 2:
+                continue
+            body, colon, val = w.text[1:].partition(':')
+            body = body.lower()
+            names = spec.names()
+            cands = [body] if body in names else [spec.aliases[body]] if body in spec.aliases \
+                else [x for x in names if x.startswith(body)]
+            if not cands or not all(c in PS_VALUE_PARAMS for c in cands) or not any(c in spec.values for c in cands):
+                continue
+            if colon and val:
+                p = src.find(':', w.start) + 1
+            elif k + 1 < len(args) and args[k + 1].start is not None:
+                p = args[k + 1].start
+            else:
+                continue
+            e = _ps_value_end(cmd, p)
+            if e is not None:
+                spans.append((p, e))
+    arg_re = PS_CMDLET_ARG_RE if spec is not None else PS_PLAIN_ARG_RE
+    first = next((w.start for w in args if w.start is not None), None)
+    prev = None                         # the word before the first argument: the program's name
+    if first is not None:
+        prev = max((x for x in cmd.words if x.end is not None and x.end <= first),
+                   key=lambda x: x.end, default=None)
+    for w in args:
+        if w.start is None or w.start == w.end:
+            if w.dyn:
+                return stand_in
+            continue
+        if prev is not None and prev.end is not None and ',' in src[prev.end:w.start]:
+            return stand_in
+        prev = w
+        if any(s <= w.start and w.end <= e for s, e in spans):
+            continue
+        if w.text.startswith('-') and not cm.quoted(cmd, w) and spec is not None and \
+                any(s == src.find(':', w.start) + 1 and w.start < s and w.end <= e for s, e in spans):
+            continue                    # -Value:$v: the value passed over
+        m = arg_re.match(src, w.start)
+        if not m or m.end() != w.end:
+            return stand_in
+    if cmd.next_op in ('(', '{') and not any(s < cmd.end < e for s, e in spans):
+        return stand_in
+    return []
 
 
 def write_targets(cmd, inv):
@@ -3439,11 +3551,22 @@ def write_targets(cmd, inv):
     knows. A Word whose text is '.' stands for the directory the command runs in."""
     out = []
     for r in cmd.redirects:
-        if not r.writes or r.target is None:
+        if not r.writes:
             continue
-        if r.target.text.lower() in NULL_TARGETS:
+        t = r.target
+        if t is None:
+            if cmd.shell == sh.PS:      # `> <#c#>(...)`: a target the scanner did not read
+                out.append(sh.Word('(a redirection target the guard does not read)', True, cmd.end, cmd.end))
             continue
-        out.append(r.target)
+        if t.text.lower() in NULL_TARGETS:
+            continue
+        if cmd.shell == sh.PS and not t.dyn and t.start is not None and t.start != t.end:
+            # the coarse rule (ps_unread) for a redirection: a target that is not one plain word,
+            # string or variable (`> `<newline>(...)`) is one the line computes
+            m = PS_CMDLET_ARG_RE.match(cmd.source, t.start)
+            if not m or m.end() != t.end:
+                t = sh.Word(t.text, True, t.start, t.end)
+        out.append(t)
     if net_mentioned(cmd):
         net, unread = net_writes(cmd)
         out.extend(x.word for x in net if net_placed(x.word))
@@ -3460,15 +3583,7 @@ def write_targets(cmd, inv):
         # xargs appends the names it reads: a stand-in name in the directory it runs in
         args = list(args) + [here(word)]
     if name in COPIERS:
-        splats = []
-        if cmd.shell == sh.PS:
-            # `robocopy . @a`: a splat passes whatever its list holds, the destination among them
-            splats = [sh.Word(x.text, True, x.start, x.end) for x in args
-                      if not x.dyn and PS_SPLAT_RE.match(x.text) and not cm.quoted(cmd, x)]
-            spans = dict(((x.start, x.end), x) for x in splats)
-            args = [spans.get((x.start, x.end), x) if not x.dyn else x for x in args]
-        dest = _copier(args)
-        return out + dest + [x for x in splats if not any(x is y for y in dest)] + group_target(cmd)
+        return out + _copier(args) + (ps_unread(cmd, args) if cmd.shell == sh.PS else [])
     if cmd.shell != sh.PS and name == 'find':
         if any(w.text == '-delete' for w in args):
             return out + (_find_paths(args)[0] or [here(word)])
@@ -3477,21 +3592,14 @@ def write_targets(cmd, inv):
         cmdlet = PS_ALIASES.get(name, name)
         if cmdlet in PS_CMDLETS and cmdlet != 'get-childitem':
             spec = PS_CMDLETS[cmdlet]
-            # a splat (@a) binds whatever its table or list holds, -Path among them: a target the
-            # line computes, in whichever slot it lands and in its own right
-            splats = [sh.Word(x.text, True, x.start, x.end) for x in args
-                      if PS_SPLAT_RE.match(x.text) and not cm.quoted(cmd, x)]
-            spans = dict(((x.start, x.end), x) for x in splats)
-            args = [spans.get((x.start, x.end), x) if not x.dyn else x for x in args]
             bound = ps_args(cmd, args, cmdlet)
             # a provider-aware cmdlet's item on a drive that holds no files (env:FOO) is no file;
             # every other writer (a native program, a script function, Out-File) gets a file
             native = name not in PS_PROVIDER_CMDLETS or inv.via is not None
             for p in spec.writes:
                 out.extend(x for x in bound.get(p, []) if native or not ps_provider_item(cmd, x))
-            out.extend(x for x in splats if not any(x is y for y in out))
             if spec.writes:
-                out.extend(group_target(cmd))
+                out.extend(ps_unread(cmd, args, spec))
             if cmdlet == 'expand-archive' and not bound.get('destinationpath'):
                 out.append(here(word))
             if cmdlet == 'new-item' and bound.get('name'):
@@ -3505,7 +3613,8 @@ def write_targets(cmd, inv):
                 return out
         elif cmdlet.startswith('export-') and cmdlet not in PS_CMDLETS:
             bound = ps_bound(PS_CMDLETS['export-clixml'], *ps_params(cmd, args, PS_CMDLETS['export-clixml']))
-            return out + bound.get('path', []) + bound.get('literalpath', []) + group_target(cmd)
+            return out + bound.get('path', []) + bound.get('literalpath', []) + \
+                ps_unread(cmd, args, PS_CMDLETS['export-clixml'])
     if cmd.shell == sh.CMD and name in CMD_WRITERS:
         pos = [w for w in args if not w.text.startswith('/')]
         if name == 'type':
@@ -3513,9 +3622,9 @@ def write_targets(cmd, inv):
         if name in ('copy', 'xcopy', 'robocopy', 'ren', 'rename'):
             return out + pos[-1:] if name != 'robocopy' else out + pos[1:2]
         return out + pos
-    # a native writer PowerShell runs: a group among its arguments may be where it writes
-    grouped = group_target(cmd) if cmd.shell == sh.PS and name in ('curl', 'wget', 'tar') else []
-    if grouped and any(x.text == grouped[0].text for x in out):
+    # a native writer PowerShell runs (curl and wget are also Invoke-WebRequest's aliases there)
+    grouped = ps_unread(cmd, args) if cmd.shell == sh.PS and name in ('curl', 'wget', 'tar') else []
+    if grouped and any(x.start == x.end == cmd.end and x.dyn for x in out):
         grouped = []                            # the cmdlet branch's stand-in already
     if name == 'curl':
         return out + _curl(args, word) + grouped
@@ -3866,7 +3975,7 @@ def shell_writes(event, ctx, cmd, inv, cwd, role):
                 ctx.place(cmd.cwd).kind not in (repo.MAIN, repo.UNKNOWN):
             continue                            # a target it cannot place, from a worktree or elsewhere
         what = '`%s` writes %s' % (cmd.text, w.text if w.text != '.' else 'files in the directory it runs in')
-        # here() or group_target(): no word to aim
+        # here() or ps_unread(): no word to aim
         stand_in = (w.text == '.' and cmd.source[w.start:w.end] != '.') or w.start == w.end
         part = any((x.start, x.end) == (w.start, w.end) and x.text != w.text for x in cmd.words)
         rewrite = None if stand_in or part else (lambda path, w=w: retarget(cmd, w, path))   # part: -tDIR

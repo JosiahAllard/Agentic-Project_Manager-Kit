@@ -50,16 +50,19 @@ _PS_MEMBER_TAIL = re.compile(r'(?:\.|::)[A-Za-z_]\w*$')
 _PS_ASSIGN = ('=', '+=', '-=', '*=', '/=', '%=', '??=')
 
 
-def _ps_keyword_led(words):
+def _ps_keyword_led(words, src):
     """True when PowerShell words (a command's, up to a ( or { ) start with a keyword that takes a
-    ( ) or { } (PS_PAREN_KEYWORDS), first or first after an assignment's `=`: `$r = if (...)`."""
+    ( ) or { } (PS_PAREN_KEYWORDS), first or first after an assignment's `=`: `$r = if (...)`.
+    Only a token spelled bare in `src` counts: a quoted '=' or 'if' is an argument."""
+    def bare(w):
+        return w.start is not None and src[w.start:w.end] == w.text
     if not words:
         return False
     first = words[0]
     for k, w in enumerate(words[:-1]):
-        if w.text in _PS_ASSIGN:
+        if w.text in _PS_ASSIGN and bare(w):
             first = words[k + 1]
-    return first.text.lower() in PS_PAREN_KEYWORDS
+    return first.text.lower() in PS_PAREN_KEYWORDS and bare(first)
 _BRACE = re.compile(r'\{([^\s{}\'"$`\\;|&()<>]*,[^\s{}\'"$`\\;|&()<>]*)\}')
 _ANSI = {'n': '\n', 't': '\t', 'r': '\r', '\\': '\\', "'": "'", '"': '"', '?': '?', 'a': '\a',
          'b': '\b', 'f': '\f', 'v': '\v', 'e': '\x1b', 'E': '\x1b'}
@@ -101,7 +104,7 @@ class Command(object):
     __slots__ = ('words', 'redirects', 'start', 'end', 'source', 'shell', 'depth', 'cwd',
                  'piped_out', 'piped_in', 'subs', 'groups', 'nested_in', 'prev_op', 'next_op',
                  'pipe_from', 'git_env', 'home_env', 'path_env', 'cwd_ps_drive', 'cwd_home', 'home', 'subs_cwd',
-                 'split', 'group_arg')
+                 'split')
 
     def __init__(self, source, shell, depth, home=None):
         self.words, self.redirects, self.subs = [], [], []
@@ -124,11 +127,6 @@ class Command(object):
         # block) and more of the line follows the group before a separator, words or another group:
         # its arguments go on past the group, in commands of their own (_Scan.commands)
         self.split = False
-        # PowerShell: one of its arguments is a ( ) or { } group, a script block (`-Path { $p }`)
-        # or what follows a group's ) (`$a.M(1)(...)`), not a method call's ( ) nor the group of
-        # a keyword it starts (if, foreach): what the group passes is computed (_Scan.commands).
-        # Every split command has one.
-        self.group_arg = False
 
     @property
     def grouped(self):
@@ -320,8 +318,6 @@ class _Scan(object):
                 return 'arg'
             if c in ';|(){}':
                 self.op(c, 1)
-                if kind == 'call':
-                    self.toks[-1] = ('op', c, True)     # a method call's ( ): no group argument
                 return c
             if c == '&':
                 # the call operator: `& prog args` runs prog
@@ -360,7 +356,7 @@ class _Scan(object):
         `'abc'.Replace(...)`, `[IO.Path]::Combine(...)`, `(Get-Date).AddDays(...)`): that ( calls
         the method, and the word, the method's result, is marked not literal. A ( that starts a
         command is a group, and so is one that touches a group's ) (`$a.M(1)(...)`): the
-        command it cuts has a group argument (commands)."""
+        command it cuts reads past it (commands); a writer's group is rules.ps_unread's."""
         words = []
         for t in reversed(self.toks):
             if t[0] == 'op':
@@ -377,7 +373,7 @@ class _Scan(object):
             # `$s.Replace(...)`: a method call, its value only known at run time
             self.toks[-1] = ('w', Word(last.text, True, last.start, last.end, last.synth, last.alt), self.toks[-1][2])
             return 'call'
-        if _ps_keyword_led(words):
+        if _ps_keyword_led(words, self.s):
             return None
         if not touch:
             return 'arg'
@@ -896,10 +892,8 @@ class _Scan(object):
                 if o in ('(', '{'):
                     go_on()                     # `$a.M(1)(...)`: a group right after a group
                     cut = cur if cur.words or cur.redirects else after
-                    if cut is not None and ps and _ps_keyword_led(cut.words):
+                    if cut is not None and ps and _ps_keyword_led(cut.words, self.s):
                         cut = None              # `if (...) {`, `foreach (...)`: the keyword's own
-                    elif cut is not None and ps and not (len(t) > 2 and t[2]):
-                        cut.group_arg = True
                     cuts.append(cut)
                     after = None
                 elif o in (')', '}') and stack:

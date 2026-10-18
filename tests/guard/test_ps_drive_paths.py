@@ -323,15 +323,14 @@ class DynamicTargets(Base):
                      "[IO.File]::ReadAllText('a').Trim()", 'if ((Test-Path a) -and (Test-Path b)) {{ 1 }} else {{ 2 }}',
                      'try {{ Get-Item a }} catch {{ 1 }} finally {{ 2 }}', 'do {{ 1 }} while ($x)',
                      '$r = if ($a) {{ 1 }} else {{ 2 }}', 'Get-ChildItem | Where-Object {{ $_.Length -gt 1 }} | Select-Object Name',
-                     '& Set-Content x.txt y', "Set-Content x.txt -Value [IO.Path]::Combine('a','b')",
-                     'Set-Content x.txt -Value $s.Trim()', 'git status 2>$null'):
+                     '& Set-Content x.txt y', 'Set-Content x.txt -Value $s.Trim()', 'git status 2>$null'):
             with self.subTest(text):
                 self.allowed(self.run_ps(text))
 
     def test_a_group_argument_to_a_writer_is_a_computed_target_wherever_it_sits(self):
-        # shell.Command.group_arg, rules.group_target: a { } or a ( ) the scanner reads as a group
-        # among a writer's arguments, last on the line too, is a target it cannot tell; a member
-        # call is one word not literal, bound as any argument (shell._Scan.ps_paren_arg)
+        # rules.ps_unread: a { } or a ( ) the scanner reads as a group among a writer's
+        # arguments, last on the line too, is a target it cannot tell; a member call is one word
+        # not literal, bound as any argument (shell._Scan.ps_paren_arg)
         for text in (r"'x' | Set-Content -Path {{ $p }}", r"'x' | Set-Content {{ $p }}",
                      r'Get-ChildItem *.txt | Copy-Item -Destination {{ "{main}\$($_.Name)" }}',
                      r'robocopy . {{ $p }}', r'Set-Content -Value hi -Path [x]::y($p)',
@@ -340,8 +339,8 @@ class DynamicTargets(Base):
             with self.subTest(text):
                 self.refused_for_both(text)
         p = cm.read("'x' | Set-Content -Path { $p }", sh.PS, W.fwd(self.w.wt))
-        self.assertEqual([(c.argv, c.group_arg, c.split) for c in p.commands],
-                         [(["x"], False, False), (['Set-Content', '-Path'], True, False), (['$p'], False, False)])
+        self.assertEqual([(c.argv, c.split, c.next_op) for c in p.commands],
+                         [(["x"], False, '|'), (['Set-Content', '-Path'], False, '{'), (['$p'], False, '}')])
         # not a writer, or a member call bound to a parameter that is no target: not judged
         for text in ('Get-ChildItem | ForEach-Object {{ $_.Name }}', 'Write-Output $s.Trim()',
                      'Set-Content x.txt -Value $s.Trim()'):
@@ -389,13 +388,9 @@ class DynamicTargets(Base):
             with self.subTest(text):
                 p = cm.read(text, sh.PS, W.fwd(self.w.wt))
                 self.assertEqual([c.argv for c in p.commands if c.split], [])
-                self.assertEqual([c.argv for c in p.commands if c.group_arg], [])
-        # a switch label written as a bare word is no keyword: its { } is its group argument
-        p = cm.read('switch ($x) { a { 1 } }', sh.PS, W.fwd(self.w.wt))
-        self.assertEqual([c.argv for c in p.commands if c.group_arg], [['a']])
 
     def test_a_script_block_to_any_writer_fails_closed(self):
-        # rules.group_target, as docs/guard.md "Rules" names them: a delay-bind script block, a
+        # rules.ps_unread, as docs/guard.md "Rules" names it: a delay-bind script block, a
         # { } to a parameter that is no target, an Export-* cmdlet, tar from PowerShell; and a
         # ( ) touching a group's ), last on the line
         for text in ("Get-ChildItem *.txt | Rename-Item -NewName {{ $_.Name + '.bak' }}",
@@ -403,6 +398,63 @@ class DynamicTargets(Base):
                      'tar -xf a.tar -C {{ x }}', r'Copy-Item a.txt $a.M(1)(Join-Path {main} x)'):
             with self.subTest(text):
                 self.refused_for_both(text)
+
+    def test_a_quoted_equals_or_keyword_is_no_keyword(self):
+        # shell._ps_keyword_led reads only a keyword spelled bare; rules.ps_unread: a word after a
+        # comma, and a writer cut at a group its words do not account for
+        for text in (r"Set-Content -Value '=','if' -Path (Join-Path {main} x.txt)",
+                     r"Set-Content -Value '=' if -Path (Join-Path {main} x.txt)",
+                     r"Set-Content -Value 'if' -Path (Join-Path {main} x.txt)"):
+            with self.subTest(text):
+                self.refused_for_both(text)
+        p = cm.read("Set-Content -Value '=','if' -Path (Join-Path a b)", sh.PS, W.fwd(self.w.wt))
+        self.assertEqual([c.argv for c in p.commands if c.nested_in is None],
+                         [['Set-Content', '-Value', '=', 'if', '-Path', '(Join-Path a b)']])
+
+    def test_a_value_that_is_a_type_members_call_fails_closed(self):
+        # rules.ps_unread: -Value's value is passed over only when it is one value that holds no
+        # command; `[x]::y(` and `[x].y(` are not (PowerShell passes [x]::y as a word, the ( ) next)
+        for text in (r'Set-Content -Value [x]::y(Join-Path {main} z.txt)',
+                     r'Set-Content -Value [x].y(Join-Path {main} z.txt)',
+                     r"Set-Content x.txt -Value [IO.Path]::Combine('a','b')"):
+            with self.subTest(text):
+                self.refused_for_both(text)
+
+    def test_a_splat_or_variable_to_a_native_writer_fails_closed(self):
+        # rules.ps_unread: PowerShell spreads a splat, and an array in a variable, into a native
+        # program's arguments; an Export-* cmdlet binds a splat as any cmdlet does
+        for text in (r'tar -xf a.tar @a', r'curl.exe -o x @a', r'wget.exe @a', r'Export-Alias @a',
+                     r'robocopy $a x', r'tar -xf a.tar $a', r'curl.exe -o x.txt -H $h', r'Remove-Item a.txt,b.txt'):
+            with self.subTest(text):
+                self.refused_for_both(text)
+
+    def test_a_redirection_past_a_continuation_or_comment_is_a_computed_target(self):
+        # rules.write_targets: a PowerShell redirection whose target is not a plain word, or that
+        # has none the scanner read
+        for text in ("'x' > `\n(Join-Path {main} x.txt)", "'x' > <#c#>(Join-Path {main} x.txt)",
+                     "'x' >> `\n(Join-Path {main} x.txt)"):
+            with self.subTest(text):
+                self.refused_for_both(text)
+
+    def test_a_group_to_an_export_cmdlet_or_native_downloader_fails_closed(self):
+        # rules.ps_unread on the Export-* branch (a cmdlet not in PS_CMDLETS) and on curl and wget,
+        # with a group their words do not hold: a block, or a ( ) touching a method call's )
+        for text in (r'Export-Alias -Path x.txt -Description {{ 1 }}',
+                     r'Export-Alias -Name a $a.M(1)(Join-Path {main} y.txt)',
+                     r'curl.exe -o x.txt -H {{ 1 }}', r'curl.exe -o x.txt $a.M(1)(Join-Path {main} y)',
+                     r'wget.exe -O x.txt $a.M(1)(Join-Path {main} y)', r'curl -o x.txt $a.M(1)(Join-Path {main} y)'):
+            with self.subTest(text):
+                self.refused_for_both(text)
+
+    def test_the_coarse_rule_passes_plain_arguments_and_a_value(self):
+        # rules.ps_unread: a value param's one value, a plain word, a quoted '@a', a variable a
+        # cmdlet binds as one argument
+        for text in (r'Set-Content x.txt -Value $s', r'Set-Content x.txt -Value $s.Trim()',
+                     r'Set-Content x.txt hi', r"robocopy . '@a'", r'Export-Alias x.txt',
+                     r'Set-Content x.txt -Value "a $s b"', r'Out-File -FilePath x.txt -Encoding utf8',
+                     r'tar -xf a.tar -C out', r'curl.exe -o x.txt https://example.invalid/a'):
+            with self.subTest(text):
+                self.allowed(self.run_ps(text))
 
     def test_cd_inside_a_subexpression_makes_the_location_unknown(self):
         # $( ) and ( ) run in the caller's scope: the cd moves the location for what follows
