@@ -346,8 +346,10 @@ token: `hub.py todos edit`, the MCP tool `hub_todo_edit`) or withdraw it (`POST
 /api/v1/todos/{id}/delete`: `todos withdraw`, `hub_todo_withdraw`), with the same `from` and
 `if_version` rules and refusals as a question ("questions/Q-NNN" above). An agent's edit takes no
 `steps`, its changed text is judged by the to-do rules above, and it clears `pm_ack`. `todos edit`
-replaces `commands` only with the `--command` values it is given, so it cannot clear them; the
-route and `hub_todo_edit` take an empty list. The owner
+replaces `commands` only with the `--command` values it is given, so it cannot clear them. Only
+the owner's own to-do can have its commands cleared (an empty list to the route); an agent's open
+to-do needs at least one, and the hub refuses an agent's edit that empties them (`invalid`:
+`tests/hubsite/test_api.py` `test_an_agent_to_do_edit_is_judged_by_the_to_do_rules`). The owner
 edits and deletes only their own to-dos (`from: you`) at any status, and deletes an agent's to-do
 (never edits it) while it is open (`kitlib.hubsite.api` `todos_edit`, `todos_delete`).
 

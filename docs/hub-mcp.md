@@ -97,13 +97,13 @@ The edit command is one Windows PowerShell 5.1 `& { ... }` block (`todosteps` mo
 - The file is read as bytes: a UTF-8 or UTF-16 BOM, or none, and then it must be valid UTF-8 (an ANSI file is a `MISS`). It is written back with the same BOM and encoding.
 - `old` must occur exactly once (an ordinal count, overlapping matches included); any other count, or any error, is a `MISS` and nothing is written.
 
-`todosteps.check` refuses an agent's to-do whose own text (title, detail, `commands`, `run` steps; never edit text) does any of these, as `invalid` naming the field:
+`todosteps.check` refuses an agent's to-do whose own text (title, detail, `commands`, `run` steps; never an `edit` step's `old` or `new`), on an agent's add and edit and never on the owner's text, does any of these, as `invalid` naming the field:
 
 - a command runs plain Notepad (Notepad++ is not matched): give an `open` step;
 - the text asks the owner to open a file and change it by hand ("open X and apply the edits", "make the following changes"): give `edit` steps;
 - a command is coordinator work, judged per segment between `&&`, `||`, `;`, `|` and newlines: `git worktree add`/`remove`/`move`/`prune`, `gate.py`, `land.py`, `new_worktree.py`, `worktree_remove.py`, `sync_base.py`, a branch or tag delete, `update-ref -d` or `--stdin`, and a push that deletes, forces, mirrors or prunes.
 
-The rules match words, so they can refuse a to-do that only mentions one of these in a command; `git merge` and a plain push are not refused. The hub's `POST /todos` applies them to every agent's to-do (`api.todo_steps`; the owner's own text is not judged), and refuses a lone surrogate in any `commands` entry for either role, as `invalid` field `commands`. `hub_todo_add` runs the same check before it calls the hub, so a refused to-do never reaches it, and posts `steps` as given for the hub to render (`kitlib.hubmcp.server` `_t_hub_todo_add`).
+The rules match words, so they can refuse a to-do that only mentions one of these in a command; `git merge` and a plain push are not refused. The hub's `POST /todos` and `POST /todos/<id>/edit` apply them to every agent's to-do (`api.todo_steps`, from `todos_add` and `todos_edit`; the owner's own text is not judged), and refuses a lone surrogate in any `commands` entry for either role, as `invalid` field `commands`. `hub_todo_add` runs the same check before it calls the hub, so a refused to-do never reaches it, and posts `steps` as given for the hub to render (`kitlib.hubmcp.server` `_t_hub_todo_add`); `hub_todo_edit` checks its changed text the same way (`_t_hub_todo_edit`).
 
 The hub server loads this code when it starts, and the MCP server when its client starts it, so after a change to it lands restart both together (`hub.py restart`, docs/action-hub.md "Serving it"): a new MCP server with an older hub is refused with "this route takes no 'steps' field", and an older MCP server with a newer hub posts already-rendered commands, which the hub's check can refuse when an edit's text holds a word the rules match.
 
