@@ -124,8 +124,7 @@ project's ignored preview folder. Never delete before approval, or a page you di
 not publish.
 
 The final gate on the branch you hand over is `python <kit>/tools/gate.py -C <worktree> --full`
-on the exact tip; landing refuses a tip without it. Run kit tools (gate.py, machine_lock.py, backlog.py,
-land.py, --help included) as their own call redirected to a log; never pipe or wrap them.
+on the exact tip; landing refuses a tip without it.
 
 ## Never
 
