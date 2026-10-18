@@ -4,16 +4,23 @@ import json
 import unittest
 from unittest import mock
 
+from hosts.codex.adapter import policy
 from hosts.codex.adapter.lock import INSTRUCTIONS, READ_TOOLS, ReadOnlyServer
-from kitlib.lockmcp.server import OWNER_ONLY, TOOLS, serve
+from kitlib.lockmcp import OWNER_ONLY
+from kitlib.lockmcp.server import TOOLS, serve
 
 
 class Lock(unittest.TestCase):
     def test_discovery_lists_the_read_tools(self):
         tools = ReadOnlyServer().tool_list()
         self.assertEqual({t['name'] for t in tools}, READ_TOOLS)
-        self.assertEqual(READ_TOOLS, set(TOOLS) - set(OWNER_ONLY))
         self.assertTrue(READ_TOOLS)
+
+    def test_every_served_tool_is_a_read(self):
+        # The server ships read tools only (docs/lock-mcp.md "No write tools"): nothing is left to filter out.
+        self.assertEqual(READ_TOOLS, frozenset(TOOLS))
+        self.assertEqual(policy.lock_read_tools(), frozenset(TOOLS))
+        self.assertFalse(READ_TOOLS & set(OWNER_ONLY))
 
     def test_a_write_call_never_reaches_the_lock(self):
         with mock.patch('kitlib.lockmcp.server.Server.call') as original:
@@ -23,15 +30,15 @@ class Lock(unittest.TestCase):
                 self.assertEqual(payload['error']['code'], 'forbidden')
             original.assert_not_called()
 
-    def test_a_write_over_jsonrpc_or_in_a_batch_is_refused(self):
+    def test_a_write_over_jsonrpc_or_in_a_batch_is_an_unknown_tool(self):
         calls = [{'jsonrpc': '2.0', 'id': i, 'method': 'tools/call', 'params': {'name': name, 'arguments': {}}}
                  for i, name in enumerate(OWNER_ONLY)]
         with mock.patch('kitlib.lockmcp.server.Server.call') as original:
             single = ReadOnlyServer().handle(calls[0])
-            self.assertTrue(single['result']['isError'])
+            self.assertEqual(single['error']['code'], -32602)
             responses = ReadOnlyServer().handle(calls)
             self.assertEqual(len(responses), len(OWNER_ONLY))
-            self.assertTrue(all(r['result']['isError'] for r in responses))
+            self.assertTrue(all(r['error']['code'] == -32602 for r in responses))
             original.assert_not_called()
 
     def test_a_read_goes_to_the_lock_api(self):

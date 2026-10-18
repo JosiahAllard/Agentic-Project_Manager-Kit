@@ -1,13 +1,14 @@
 """The machine lock's MCP server as Codex runs it: its read tools only (from the Codex branch's
 lock_adapter.py). hosts/codex/shell/mcp/lock_server.py serves it.
 
-Codex has no ask, so an owner's lock change through MCP cannot be put to the owner for approval;
-on Codex the lock is changed through the lock CLI or the owner's own tools, never this server. The
-write tools are left out of the list and refused if called; the read tools behave as on every host.
+The lock MCP server serves read tools only on every host (docs/lock-mcp.md "No write tools"); the owner changes the
+lock outside any agent session, never through this server. This wrapper stays as a second fence:
+a name that is not a read tool (the retired writes in kitlib.lockmcp.OWNER_ONLY among them) is
+left out of the list and refused as forbidden if called.
 """
 from kitlib.lockmcp.server import Server, TOOLS
 
-READ_TOOLS = frozenset(name for name, (_desc, _schema, write) in TOOLS.items() if not write)
+READ_TOOLS = frozenset(TOOLS)
 INSTRUCTIONS = 'Read-only view of the PM kit machine lock. Owner writes are unavailable here.'
 
 
