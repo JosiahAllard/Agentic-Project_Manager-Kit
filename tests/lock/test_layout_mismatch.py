@@ -8,7 +8,9 @@ entries (kitlib.lock.queue.plan), never from the active records' `layout` string
 - a gate booking (gate=True, as kitlib.gate.runner books) and a plain `run` booking record the
   same slot_key: one layout source;
 - a live record whose layout is in the old format with no `g<gpus>` part, or names another gpu
-  count, never makes book() refuse.
+  count, never makes book() refuse;
+- a layout.json that is missing, unreadable or invalid to this kit version is not rewritten while
+  a run is live, only once none is (kitlib.lock.layout.in_force).
 
 The refusal these guard against was the older kit's own check, which compared the strings."""
 import datetime
@@ -153,3 +155,59 @@ class LayoutMismatch(StoreCase):
                     rec = self.store.read("active/%s.json" % launch.id)
                 self.assertEqual(rec["layout"], lay.slot_key(self.layout()))
                 self.assertEqual(self.store.read("active/%s.json" % live["id"])["layout"], other)
+
+
+class InvalidLayoutUnderLiveRuns(StoreCase):
+    """layout.json as another kit version may leave it (missing, unreadable, or valid only to that
+    version's layout_key) is the layout of the runs live now: rewriting it under them renumbers
+    their slots, so it waits for nothing live or queued, as a changed layout does."""
+
+    def raw(self):
+        try:
+            with open(self.store.path("layout.json"), "rb") as f:
+                return f.read()
+        except FileNotFoundError:
+            return None
+
+    def spoil(self, how, good):
+        path = self.store.path("layout.json")
+        if how == "missing":
+            self.store.drop("layout.json")
+        elif how == "unreadable":
+            with open(path, "w", encoding="utf-8") as f:
+                f.write('{"key": "t24 cpu 12 x 2 gpu 2 m')
+        else:                       # another version's key formula: invalid to this one
+            self.store.write("layout.json", dict(good, key="v2 " + good["key"]))
+        self.assertFalse(lay.valid_layout(self.store.read("layout.json")))
+
+    def test_it_is_pending_while_a_run_is_live_then_adopted(self):
+        good = self.layout()
+        for n, how in enumerate(("missing", "unreadable", "another version")):
+            with self.subTest(layout_json=how):
+                rid = "r-20261017T120000Z-00000%d" % n
+                self.live_record(rid)
+                self.spoil(how, good)
+                before = self.raw()
+                got = lay.in_force(self.store)
+                self.assertEqual(self.raw(), before, "layout.json was rewritten under a live run")
+                self.assertIn("no run is live or queued (1 now)", got["pending"])
+                self.assertEqual(got["layout"]["key"], got["wanted"]["key"])
+                self.store.drop("active/%s.json" % rid)
+                got = lay.in_force(self.store)
+                self.assertIsNone(got["pending"])
+                self.assertEqual(self.store.read("layout.json")["key"], good["key"])
+
+    def test_an_unreadable_queue_leaves_an_invalid_layout_unwritten_and_says_so(self):
+        # Whether a run is queued is not known, so layout.json is not rewritten, and pending says
+        # why the layout in use is the wanted one, unwritten.
+        good = self.layout()
+        with open(self.store.path("queue.json"), "w", encoding="utf-8") as f:
+            f.write("not a queue")
+        for how in ("missing", "unreadable", "another version"):
+            with self.subTest(layout_json=how):
+                self.spoil(how, good)
+                before = self.raw()
+                got = lay.in_force(self.store)
+                self.assertEqual(self.raw(), before)
+                self.assertEqual(got["layout"]["key"], good["key"])
+                self.assertIn("the layout could not be checked (queue unreadable", got["pending"])

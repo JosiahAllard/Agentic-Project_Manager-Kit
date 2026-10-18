@@ -362,7 +362,8 @@ def claim(root, runs, pid, output, wait_s=CLAIM_WAIT_S, poll_s=CLAIM_POLL_S, clo
     (restore writes its pid into them). Once every record is claimed, or finished: None. When
     the process died first: its unclaimed records are finished `error` and the reason is
     returned. When the wait ends with the process alive: its pid (and creation time) is written
-    into the records still unclaimed, so a death after this is seen by result.wait."""
+    into the records still unclaimed, each read again just before, so one the landing claimed or
+    finished meanwhile is kept, and a death after this is seen by result.wait."""
     alive = alive or process.alive
     try:
         ctime = process.proc_ctime(pid)
@@ -372,9 +373,8 @@ def claim(root, runs, pid, output, wait_s=CLAIM_WAIT_S, poll_s=CLAIM_POLL_S, clo
     while True:
         open_ = []
         for rr in runs:
-            rec, _ = result.read(root, rr.branch, 'land')
-            if (isinstance(rec, dict) and rec.get('verdict') == result.RUNNING
-                    and rec.get('run_id') == rr.run_id and rec.get('pid') is None):
+            rec = _unclaimed(root, rr)
+            if rec:
                 open_.append((rr, rec))
         if not open_:
             return None
@@ -392,10 +392,20 @@ def claim(root, runs, pid, output, wait_s=CLAIM_WAIT_S, poll_s=CLAIM_POLL_S, clo
             return why
         if clock() >= end:
             for rr, _rec in open_:
-                rr.pid, rr.ctime = pid, ctime
-                rr.start(log=output)
+                if _unclaimed(root, rr):
+                    rr.pid, rr.ctime = pid, ctime
+                    rr.start(log=output)
             return None
         sleep(max(0.0, min(poll_s, end - clock())))
+
+
+def _unclaimed(root, rr):
+    """The land record of `rr` when it is still `rr`'s run, running and with no pid; else None."""
+    rec, _ = result.read(root, rr.branch, 'land')
+    if (isinstance(rec, dict) and rec.get('verdict') == result.RUNNING
+            and rec.get('run_id') == rr.run_id and rec.get('pid') is None):
+        return rec
+    return None
 
 
 def _note(path, line):
