@@ -103,5 +103,43 @@ class LockedMain(unittest.TestCase):
         self.denied(self.run_ps(self.sp(self.w.main), cwd=self.w.wt), 'main-checkout')
 
 
+class GrantedLander(unittest.TestCase):
+    """A repository whose .kit.json lets its lander edit the main checkout. A write the guard
+    cannot place is still refused to it: the repository grants an edit of its own main checkout,
+    and a write with no target may land in any checkout (rules.main_checkout needs the kit
+    defaults to allow it too)."""
+
+    def setUp(self):
+        self.w = W.World(kit={'repo': {'name': 'demo', 'push_block': True},
+                              'roles': {'lander': {'edit_main_checkout': True, 'why': 'test'}}})
+        self.addCleanup(self.w.cleanup)
+
+    def judge(self, tool, text, cwd):
+        return decide(W.event(tool, {'command': text, 'description': 'test'}, cwd, sub=True,
+                              agent_type='lander'), self.w.ctx())
+
+    def denied(self, d, rule='main-checkout'):
+        self.assertIsNotNone(d, 'allowed')
+        self.assertEqual((d.verdict, d.rule), ('deny', rule), d.reason)
+
+    def test_a_placed_write_in_main_is_still_its_own(self):
+        # the grant itself: a literal path in the main checkout, from the main checkout
+        self.assertIsNone(self.judge('PowerShell', "Set-Content -Path '%s' -Value x" % BS.join((self.w.main, 'a.md')),
+                                   self.w.main))
+
+    def test_a_write_it_cannot_place_is_refused(self):
+        for cwd in (self.w.main, self.w.wt):
+            with self.subTest(cwd=cwd):
+                self.denied(self.judge('Bash', 'cd "$D" && echo x > f.txt', cwd))
+                self.denied(self.judge('PowerShell', 'echo x > $p', cwd))
+
+    def test_a_start_process_workdir_it_cannot_place_is_refused(self):
+        for cwd in (self.w.main, self.w.wt):
+            for workdir in (self.w.main[:2], self.w.main[:-1] + '?'):
+                with self.subTest(cwd=cwd, workdir=workdir):
+                    self.denied(self.judge('PowerShell', "Start-Process cmd -WorkingDirectory '%s' -ArgumentList "
+                                         "'/c','echo x > f.txt'" % workdir, cwd))
+
+
 if __name__ == '__main__':
     unittest.main()

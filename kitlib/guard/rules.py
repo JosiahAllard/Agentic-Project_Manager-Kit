@@ -2093,11 +2093,14 @@ def edit_target(event, ctx, target, cwd, role, what, unknown_why=None, rewrite=N
 
 
 def main_checkout(event, ctx, target, cwd, role, what, unknown_why=None, rewrite=None, run=None):
-    # a target it cannot place is judged by the roles of the repository the call runs in: the
-    # kit defaults would let a role that repository keeps out of its main checkout write anywhere
-    cfg = ctx.config(target) if target else ctx.config(cwd) if cwd else None
-    perms = kconfig.permissions(event, kconfig.roles(cfg))
-    if perms.get('edit_main_checkout'):
+    # a target it cannot place may be in any checkout, so both the kit defaults and the roles of
+    # the repository the call runs in must let the role edit one: the defaults alone would let a
+    # role that repository keeps out of its main checkout write anywhere, and the repository's
+    # alone a role it lets into its own main checkout (a lander) write into any other
+    may = kconfig.permissions(event, kconfig.roles(ctx.config(target) if target else None)).get('edit_main_checkout')
+    if may and target is None and cwd:
+        may = kconfig.permissions(event, kconfig.roles(ctx.config(cwd))).get('edit_main_checkout')
+    if may:
         return None
     main_top = ctx.main_top(cwd) if cwd else None
     new_wt = new_worktree(ctx, main_top)[1]

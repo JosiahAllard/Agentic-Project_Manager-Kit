@@ -204,6 +204,8 @@ HAZARD_EXEMPT = {
      'LockVerbs.test_a_start_process_with_no_program_and_an_unread_parameter_names_no_program',
      'Start-Process'): (1, GUARD_TEST),
     ('tests/guard/test_rules.py', '<module>', 'Start-Process'): (2, GUARD_TEST),
+    ('tests/guard/test_start_process_workdir.py',
+     'GrantedLander.test_a_start_process_workdir_it_cannot_place_is_refused', 'Start-Process'): (1, GUARD_TEST),
     ('tests/guard/test_start_process_workdir.py', 'LockedMain.sp', 'Start-Process'): (1, GUARD_TEST),
     ('tests/guard/test_start_process_workdir.py', 'LockedMain.test_a_bare_drive_is_no_place',
      'Start-Process'): (2, GUARD_TEST),
