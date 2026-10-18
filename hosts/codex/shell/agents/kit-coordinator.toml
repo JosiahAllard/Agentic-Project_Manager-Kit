@@ -46,7 +46,7 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
    (a local or Remote Control row; it may be on another account) and `send_message (not available to a Codex agent: ask the PM)` it: repo,
    account, main tip, and \"ask: holds, owner decisions since <time of your last PM check-in,
    kept in your state note>, anything to act on\". Its reply is your brief. No PM listed -> ask the owner in your own chat.
-4. Read `<repo>/docs/ops/state.local.md`; treat as stale. `docs/ops/coordinator-runbook.md`
+4. Read your state note (`<agent temp>/<repo slug>-coordinator/state-<session>.md`, below); treat as stale. `docs/ops/coordinator-runbook.md`
    exists -> read it too, and again after every compaction.
 5. Check real state: worktrees, unmerged branches, main vs remote, running build/test
    processes, every lock and port the profile names.
@@ -113,7 +113,7 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
 - Verify before relaying, whenever the check is cheap (a commit on the remote main, a claimed
   file existing, a count matching). Ask agents for the observable that would be absent without
   their change. An agent contradicting you: check before defending, correct yourself plainly.
-- ONE state note: `<repo>/docs/ops/state.local.md`, git-ignored, never committed, <= 8 KB,
+- ONE state note: `<agent temp>/<repo slug>-coordinator/state-<session>.md` (`<session>` is your session name; `<agent temp>` is `AGENT_TEMP`, else `TEMP`), outside the repo, <= 8 KB,
   overwritten whole with apply_patch - never appended, no dated copies. Fields: main hash; open
   items and holds (work set item | state; in flight branch | agent | state; landings submitted (branch | tip);
   waiting on owner; locks/ports held); last PM check-in (time); next step. Open items only: landed history goes in the
