@@ -136,7 +136,7 @@ class Planner(StoreCase):
     def test_retarget_dry_refuses_a_store_with_an_unreadable_record(self):
         self.seed(rec('FOO', scope=OLD + '/**'), {'BAD': 'no separator here\n'})
         with self.assertRaises(errors.Failure) as caught:
-            opener.retarget_dry(args('retarget', old=OLD, new=NEW), self.store)
+            opener.retarget_dry(args('retarget', old=OLD, new=NEW), self.ctx)
         self.assertIn('unreadable (BAD)', str(caught.exception))
 
     def test_retarget_dry_checks_the_change_it_planned(self):
@@ -145,7 +145,7 @@ class Planner(StoreCase):
         with mock.patch.object(smod, 'check_change',
                                side_effect=errors.Usage('left invalid')) as check:
             with self.assertRaises(errors.Usage) as caught:
-                opener.retarget_dry(args('retarget', old=OLD, new=NEW), self.store)
+                opener.retarget_dry(args('retarget', old=OLD, new=NEW), self.ctx)
         self.assertEqual(str(caught.exception), 'left invalid')
         snap, change = check.call_args.args
         self.assertIsNotNone(snap.get('FOO'))
@@ -154,7 +154,7 @@ class Planner(StoreCase):
     def test_retarget_dry_plans_the_same_change_and_writes_nothing(self):
         self.seed(rec('FOO', scope=OLD + '/**'))
         tip = self.remote_tip()
-        change = opener.retarget_dry(args('retarget', old=OLD, new=NEW), self.store)
+        change = opener.retarget_dry(args('retarget', old=OLD, new=NEW), self.ctx)
         self.assertEqual(sorted(change.writes), ['FOO'])
         self.assertIn(NEW + '/**', change.writes['FOO'])
         self.assertEqual(self.remote_tip(), tip)
@@ -164,16 +164,16 @@ class Planner(StoreCase):
         self.seed(rec('FOO', scope=OLD + '/**'))
         note = 'WARNING: machine config X could not be read'
         with mock.patch.object(pmod.machinepaths, 'folders', return_value=((), note)):
-            change = opener.retarget_dry(args('retarget', old=OLD, new=NEW), self.store)
+            change = opener.retarget_dry(args('retarget', old=OLD, new=NEW), self.ctx)
             self.assertEqual(change.lines.count(note), 1, change.lines)
             written, _tip = self.store.write(
-                lambda s: opener.retmod.plan_retarget(s, OLD, NEW))
+                lambda s: opener.retmod.plan_retarget(s, self.ctx, OLD, NEW))
         self.assertEqual(written.lines.count(note), 1, written.lines)
 
     def test_retarget_dry_refuses_a_bad_path_as_the_write_does(self):
         self.seed(rec('FOO', scope=OLD + '/**'))
         with self.assertRaises(errors.Usage):
-            opener.retarget_dry(args('retarget', old=OLD, new=OLD), self.store)
+            opener.retarget_dry(args('retarget', old=OLD, new=OLD), self.ctx)
 
 
 class ReExport(unittest.TestCase):

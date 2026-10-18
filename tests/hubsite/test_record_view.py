@@ -211,6 +211,7 @@ class ACompletedRecord(RecordCase):
     def test_retired_deleted_and_any_other_removal(self):
         for subject, how in (("retires A: not needed", "retired"),
                              ("backlog: delete A: a mistake", "deleted"),
+                             ("deletes A: the owner says so", "deleted"),
                              ("tidy the store", "removed")):
             with self.subTest(subject=subject):
                 self.assertEqual(self.removed_by(subject)[1]["removed"]["how"], how)

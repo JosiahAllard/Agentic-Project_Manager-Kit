@@ -20,8 +20,9 @@ The record (SCHEMA 1), every key always present:
   tip             the full hash gated (the branch gate: HEAD; a landing: --expect-tip)
   base            the base commit: the merge base gated against, or --expect-main; or null
   run_id          one run's id: the running record and its final record share it
-  started_at      when the run started; finished_at when it ended, or null while running
-                  (UTC, YYYY-MM-DDTHH:MM:SSZ)
+  started_at      when the run started (a landing: when it joined the landing queue, before the
+                  machine lock gave it its turn, whether run directly or submitted); finished_at
+                  when it ended, or null while running (UTC, YYYY-MM-DDTHH:MM:SSZ)
   verdict         running; or final: pass, fail, refused, stuck, busy, usage, landed-ungated (an
                   old record's only: exit LANDED_UNGATED is retired, no landing writes it),
                   not-run (a machine lock refusal), error (an exception or Ctrl+C ended the run)

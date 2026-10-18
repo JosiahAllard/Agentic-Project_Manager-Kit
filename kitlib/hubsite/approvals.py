@@ -25,17 +25,18 @@ their change is the approved one (Verifier) and fail closed on any doubt.
   consume_fields(key, doc_id, doc, commit, now)
                                   the fields a consume writes, for a signed approval never
                                   consumed; ApprovalError
-  check(key, doc_id, doc, repo, head, blobs, now)
-                                  (True, '') when this change is the approved one, else
-                                  (False, why): the server's verify, pure
+  check(key, doc_id, doc, repo, head, blobs, now, commit=None)
+                                  (True, '') when this change is the approved one (given a
+                                  commit, also consumed by that commit), else (False, why):
+                                  the server's verify, pure
   remote_id(checkout, remote='origin', run=None)
                                   (repo_id, None) of a checkout's remote, or (None, why)
   read_base(checkout, head, path, base_blob, cat=None)
                                   (text, None) of a file at head, read with git and checked to
                                   be base_blob, or (None, why)
   diff(path, base, content)       the unified diff lines the page shows for one file
-  Verifier(client)                .verify(doc_id, repo, head, blobs) -> (ok, why), through the
-                                  verify route; fails closed
+  Verifier(client)                .verify(doc_id, repo, head, blobs, commit=None) -> (ok, why),
+                                  through the verify route; fails closed
   request(client, repo, title, head, files, reason=None) / consume(client, doc_id, commit,
   if_version)                     the agent's add and consume calls
 
@@ -62,9 +63,10 @@ a consumed approval verifies until it expires, so a land after the commit can st
 A time that cannot be read, a decision dated after now and a naive now count as expired. Denied
 and expired are final.
 
-Routes: the helpers below call ROUTE (POST add), ROUTE/<id>/consume (POST) and
-ROUTE/<id>/verify (GET, query repo, head and files as JSON {path: blob}; it answers
-{"ok": true, "valid": bool, "why": str} and never the key or the sig). No printing, no exit.
+Routes (kitlib.hubsite.api): the helpers below call ROUTE (POST add), ROUTE/<id>/consume (POST)
+and ROUTE/<id>/verify (GET, query repo, head, files as JSON {path: blob} and an optional commit;
+it answers {"ok": true, "valid": bool, "why": str} and never the key or the sig); the owner's
+ROUTE/<id>/decide (POST) is the page's. No printing, no exit.
 """
 import datetime
 import difflib
@@ -106,6 +108,7 @@ WHY_STATUS = 'the approval is %s'               # % its status at that moment
 WHY_REPO = 'the approval is for another repository'
 WHY_HEAD = 'the approval is for another base commit'
 WHY_FILES = 'the files differ from the approved ones'
+WHY_COMMIT = 'the approval was not consumed by this commit'
 WHY_SERVER = 'the hub server cannot say: %s'     # % the error's class
 WHY_ANSWER = 'the hub server gave no verdict'
 
@@ -407,17 +410,20 @@ def consume_fields(key, doc_id, doc, commit, now):
     return {'status': CONSUMED, 'commit': commit, 'consumed_at': _iso(now)}
 
 
-def check(key, doc_id, doc, repo, head, blobs, now):
+def check(key, doc_id, doc, repo, head, blobs, now, commit=None):
     """(True, '') when the change of `repo` (a remote URL or a repo_id) at base commit `head`
     with the files `blobs` ({path: blob, None for a delete}) is the one `doc` approved and the
-    approval still counts at `now`; else (False, one of the WHY_ phrases). A document is trusted
-    only once its signature checks under `key`, before any of its fields is compared."""
+    approval still counts at `now`; else (False, one of the WHY_ phrases). Given a `commit`, the
+    approval must also be consumed, and by that commit (WHY_COMMIT). A document is trusted only
+    once its signature checks under `key`, before any of its fields is compared."""
     why = _signed(key, doc_id, doc)
     if why:
         return False, why
     status = status_at(doc, now)
     if status not in (APPROVED, CONSUMED):
         return False, WHY_STATUS % (status or 'malformed')
+    if commit is not None and (status != CONSUMED or doc.get('commit') != commit):
+        return False, WHY_COMMIT
     try:
         if as_repo_id(repo) != doc.get('repo'):
             return False, WHY_REPO
@@ -492,13 +498,17 @@ class Verifier(object):
     def __init__(self, client):
         self.client = client
 
-    def verify(self, doc_id, repo, head, blobs):
-        """(True, '') only when the server answers valid true for this change; else (False,
-        why)."""
+    def verify(self, doc_id, repo, head, blobs, commit=None):
+        """(True, '') only when the server answers valid true for this change (and, given a
+        `commit`, the approval was consumed by it: check's commit); else (False, why)."""
+        if commit is not None and not commit:   # the client drops an empty value: unbound
+            return False, WHY_COMMIT
         try:
             files = json.dumps(blobs, sort_keys=True, separators=(',', ':'))
-            got = self.client.get('%s/%s/verify' % (ROUTE, _part(doc_id)), AGENT,
-                                  {'repo': repo, 'head': head, 'files': files})
+            query = {'repo': repo, 'head': head, 'files': files}
+            if commit is not None:
+                query['commit'] = commit
+            got = self.client.get('%s/%s/verify' % (ROUTE, _part(doc_id)), AGENT, query)
         except Exception as e:      # fail closed: no answer is no approval
             return False, WHY_SERVER % type(e).__name__
         if not isinstance(got, dict) or got.get('valid') is not True:

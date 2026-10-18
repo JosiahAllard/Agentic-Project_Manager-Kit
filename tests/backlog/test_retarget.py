@@ -1,13 +1,15 @@
 """`retarget OLD NEW` (docs/backlog.md "Retarget"): a moved path rewritten across every record's
 `scope:`, `ref:` and `summary:` lines in one store commit; a dry run unless `--apply`."""
 import unittest
+from unittest import mock
 
+from kitlib.backlog import offer as omod
 from kitlib.backlog import retarget as retmod
-from kitlib.backlog.errors import Usage
+from kitlib.backlog.errors import Failure, Refusal, Usage
 from kitlib.backlog import store as smod
 
 from tests.backlog import test_cli
-from tests.backlog.helpers import ADD_FLAGS, StoreCase, rec
+from tests.backlog.helpers import ADD_FLAGS, TODAY, StoreCase, priced, rec
 from tests.backlog import test_verbs
 from tests.home import TempHomeCase
 
@@ -84,7 +86,7 @@ class Plan(StoreCase):
     remote = False
 
     def plan(self):
-        return retmod.plan_retarget(self.store.load(), OLD, NEW)
+        return retmod.plan_retarget(self.store.load(), self.ctx, OLD, NEW)
 
     def seed_three(self):
         self.seed(rec('AAA', scope=[OLD + '/**', 'tools/x.py'], ref='%s/plan.md' % OLD,
@@ -106,7 +108,7 @@ class Plan(StoreCase):
     def test_apply_is_one_store_commit(self):
         self.seed_three()
         before = self.remote_tip()
-        change, tip = self.store.write(lambda s: retmod.plan_retarget(s, OLD, NEW))
+        change, tip = self.store.write(lambda s: retmod.plan_retarget(s, self.ctx, OLD, NEW))
         self.assertEqual(self.repo.git('rev-parse', tip + '^'), before)
         a = self.get('AAA')
         self.assertEqual(a.all('scope'), [NEW + '/**', 'tools/x.py'])
@@ -116,7 +118,7 @@ class Plan(StoreCase):
 
     def test_a_scope_already_at_new_is_dropped_not_doubled(self):
         self.seed(rec('AAA', scope=[OLD + '/a.md', NEW + '/a.md']))
-        change, _ = self.store.write(lambda s: retmod.plan_retarget(s, OLD, NEW))
+        change, _ = self.store.write(lambda s: retmod.plan_retarget(s, self.ctx, OLD, NEW))
         self.assertEqual(self.get('AAA').all('scope'), [NEW + '/a.md'])
         self.assertIn('(dropped: the record already has the new path)', '\n'.join(change.lines))
 
@@ -124,11 +126,11 @@ class Plan(StoreCase):
         self.seed(rec('AAA', scope=['docs', 'tools/x.py']),
                   rec('BBB', scope='Docs/Guide/a.md'),
                   rec('CCC', scope='tools/y.py', summary='make the tools faster, see tools/y.py'))
-        text = '\n'.join(retmod.plan_retarget(self.store.load(), OLD, NEW).lines)
+        text = '\n'.join(retmod.plan_retarget(self.store.load(), self.ctx, OLD, NEW).lines)
         self.assertIn('not rewritten: AAA `scope: docs` covers %s from above' % OLD, text)
         self.assertIn('not rewritten: BBB `scope: Docs/Guide/a.md` matches %s only when case is '
                       'ignored' % OLD, text)
-        change = retmod.plan_retarget(self.store.load(), 'tools', 'bin')
+        change = retmod.plan_retarget(self.store.load(), self.ctx, 'tools', 'bin')
         text = '\n'.join(change.lines)
         self.assertIn('summary: make the tools faster, see tools/y.py -> make the tools faster, '
                       'see bin/y.py', text)
@@ -141,16 +143,86 @@ class Plan(StoreCase):
         tip = self.remote_tip()
         for new in ('NONE', 'None'):
             with self.assertRaises(Usage, msg=new):
-                self.store.write(lambda s, n=new: retmod.plan_retarget(s, 'a/x', n))
+                self.store.write(lambda s, n=new: retmod.plan_retarget(s, self.ctx, 'a/x', n))
         self.assertEqual(self.remote_tip(), tip)
         self.assertEqual(self.get('AAA').get('ref'), 'a/x')
 
     def test_nothing_matches_writes_nothing(self):
         self.seed(rec('CCC', scope='tools/y.py'))
         tip = self.remote_tip()
-        change, _ = self.store.write(lambda s: retmod.plan_retarget(s, OLD, NEW))
+        change, _ = self.store.write(lambda s: retmod.plan_retarget(s, self.ctx, OLD, NEW))
         self.assertEqual(change.writes, {})
         self.assertEqual(self.remote_tip(), tip)
+
+
+class LivePulls(StoreCase):
+    """A pulled record whose `scope:` retarget would rewrite refuses while its branch is live,
+    fails when git cannot tell, and is rewritten when its pull is dead (plan._refuse_live_pulls,
+    the guard `retire` and `delete` share). Only a scope rewrite counts: the branch builds
+    against its scope, not its `ref:` or `summary:`."""
+    remote = False
+
+    def write(self):
+        change, _tip = self.store.write(lambda s: retmod.plan_retarget(s, self.ctx, OLD, NEW))
+        return change
+
+    def test_a_live_pulls_scope_refuses_and_writes_nothing(self):
+        self.repo.git('branch', 'tools/live-one')
+        self.seed(priced('LIVE', state='pulled', pulled_at=TODAY, pulled_by='tools/live-one',
+                         scope=OLD + '/**'), rec('FOO', scope=OLD + '/a.md'))
+        tip = self.remote_tip()
+        with self.assertRaises(Refusal) as cm:
+            self.write()
+        self.assertIn('`LIVE` is being built on `tools/live-one`; retarget after it lands, or '
+                      'release it first (`release LIVE --reason T`, from that branch)',
+                      str(cm.exception))
+        self.assertEqual(self.remote_tip(), tip)
+        self.assertEqual(self.get('FOO').all('scope'), [OLD + '/a.md'])
+
+    def test_every_live_pull_it_would_rewrite_is_named_in_one_refusal(self):
+        self.repo.git('branch', 'tools/live-one')
+        self.repo.git('branch', 'tools/live-two')
+        self.seed(priced('LIVE', state='pulled', pulled_at=TODAY, pulled_by='tools/live-one',
+                         scope=OLD + '/**'),
+                  priced('LIVE2', state='pulled', pulled_at=TODAY, pulled_by='tools/live-two',
+                         scope=OLD + '/a.md'),
+                  priced('DEAD', state='pulled', pulled_at=TODAY, pulled_by='tools/gone',
+                         scope=OLD + '/b.md'))
+        tip = self.remote_tip()
+        with self.assertRaises(Refusal) as cm:
+            self.write()
+        self.assertEqual(str(cm.exception),
+                         '`LIVE` is being built on `tools/live-one`; `LIVE2` is being built on '
+                         '`tools/live-two`; retarget after they land, or release them first '
+                         '(`release LIVE --reason T`, `release LIVE2 --reason T`, each from its '
+                         'branch)')
+        self.assertEqual(self.remote_tip(), tip)
+
+    def test_a_dead_pulls_scope_is_rewritten(self):
+        self.seed(priced('DEAD', state='pulled', pulled_at=TODAY, pulled_by='tools/gone',
+                         scope=OLD + '/**'))
+        self.write()
+        self.assertEqual(self.get('DEAD').all('scope'), [NEW + '/**'])
+
+    def test_a_failed_branch_probe_fails_and_writes_nothing(self):
+        self.seed(priced('DEAD', state='pulled', pulled_at=TODAY, pulled_by='tools/gone',
+                         scope=OLD + '/**'))
+        with mock.patch.object(omod, 'live_branches', return_value=(None, 'git failed')):
+            with self.assertRaises(Failure) as cm:
+                self.write()
+        self.assertIn('cannot tell whether the pull of `DEAD` by `tools/gone` is live: git failed',
+                      str(cm.exception))
+        self.assertEqual(self.get('DEAD').all('scope'), [OLD + '/**'])
+
+    def test_a_live_pull_whose_scope_is_untouched_does_not_stop_it(self):
+        # LIVE names OLD only in its ref; FOO is open: neither asks git whether a branch is live.
+        self.repo.git('branch', 'tools/live-one')
+        self.seed(priced('LIVE', state='pulled', pulled_at=TODAY, pulled_by='tools/live-one',
+                         scope='tools/x.py', ref=OLD + '/plan.md'), rec('FOO', scope=OLD + '/**'))
+        with mock.patch.object(omod, 'live_branches', return_value=(None, 'git failed')):
+            change = self.write()
+        self.assertEqual(sorted(change.writes), ['FOO', 'LIVE'])
+        self.assertEqual(self.get('LIVE').get('ref'), NEW + '/plan.md')
 
 
 class RetargetCli(unittest.TestCase):

@@ -347,7 +347,9 @@ _RID = re.compile(r"[A-Za-z0-9][A-Za-z0-9.-]{0,127}\Z")
 _REPO_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}\Z")
 # A branch a record names (`pulled_by:`, `parked_from:`), before git is asked about it.
 _BRANCH = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,199}\Z")
-_HOW = (("closes ", "closed"), ("retires ", "retired"), ("backlog: delete ", "deleted"))
+# How a removal's subject names it: `deletes ID: why` is what kitlib.backlog.plan plan_delete writes.
+_HOW = (("closes ", "closed"), ("retires ", "retired"), ("deletes ", "deleted"),
+        ("backlog: delete ", "deleted"))
 
 
 class RecordError(Exception):
@@ -703,6 +705,12 @@ class Views(object):
         """What a new record of a configured repository may hold (`record_template`)."""
         name, root = self._named(repo)
         return record_template(name, root)
+
+    def reread(self, name, root):
+        """Read one repository again now, after the hub wrote to its store (kitlib.hubsite.serve,
+        the record writes), so held() and get() show the write without waiting for the timer's
+        next round. No fetch: the write left the store's local ref at its own commit."""
+        self._read(name, root, self.clock(), self.opener(root, False))
 
     def _lock(self, name):
         """The lock that makes a repository's read single-flight: one per name, made once."""

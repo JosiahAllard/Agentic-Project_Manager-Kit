@@ -131,8 +131,17 @@ class GuardSites(unittest.TestCase):
 
     def test_the_delete_guards(self):
         fn = function(self.plan, 'plan_delete')
-        self.assertEqual(sorted(set(raised_kinds(fn))), ['Failure', 'Refusal', 'Usage'])
+        self.assertEqual(sorted(set(raised_kinds(fn))), ['Refusal', 'Usage'])
         self.assertEqual(first_raise_after(fn, 'guarded and ruling is None', self.src), 'Refusal')
+        # The live-pull guard `delete`, `retire` and `retarget` share: a live pull refuses, a
+        # branch probe git cannot answer fails.
+        guard = function(self.plan, '_refuse_live_pulls')
+        self.assertEqual(raised_kinds(guard), ['Failure', 'Refusal'])
+        retarget = function(parse('kitlib/backlog/retarget.py'), 'plan_retarget')
+        for fn in (fn, function(self.plan, 'plan_retire'), retarget):
+            calls = [n.func.id for n in ast.walk(fn) if isinstance(n, ast.Call)
+                     and isinstance(n.func, ast.Name)]
+            self.assertIn('_refuse_live_pulls', calls, fn.name)
 
     def test_the_missing_id_guard_raises_not_found(self):
         self.assertEqual(raised_kinds(function(self.plan, 'require')), ['NotFound'])
