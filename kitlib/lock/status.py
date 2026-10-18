@@ -69,15 +69,14 @@ UNCHECKED = "unchecked"         # the layout could not be checked (the queue or 
 OTHER = "other"                 # a text none of the above: a newer or older kit's
 REASONS = (IDLE, UNWRITTEN, FAILED_LOOK, PROVISIONAL, UNCHECKED, OTHER)
 
-# (reason, how in_force's text for it starts or ends), first match wins. The tests drive every
-# branch of in_force through pending_reason (tests/lock/test_status_reason.py), so a text changed
-# there without its line here fails them.
-_TEXTS = ((UNCHECKED, "start", "the layout could not be checked"),
-          (FAILED_LOOK, "end", "; no layout is adopted from that look until one succeeds"),
-          (PROVISIONAL, "end", "; the layout in use came from such a look and is provisional: the "
-                               "first look that succeeds replaces it while no run is live or queued"),
-          (UNWRITTEN, "start", "layout.json is missing, unreadable or not valid to this kit version"),
-          (IDLE, "start", "the machine or division changed"))
+# (reason, how in_force's text for it starts or ends), first match wins. The texts are layout's
+# own PENDING_* constants, which in_force builds its `pending` from; the tests drive every branch
+# of in_force through pending_reason (tests/lock/test_status_reason.py).
+_TEXTS = ((UNCHECKED, "start", lay.PENDING_UNCHECKED),
+          (FAILED_LOOK, "end", lay.PENDING_FAILED_LOOK),
+          (PROVISIONAL, "end", lay.PENDING_PROVISIONAL),
+          (UNWRITTEN, "start", lay.PENDING_UNWRITTEN),
+          (IDLE, "start", lay.PENDING_IDLE))
 
 
 def pending_reason(pending):

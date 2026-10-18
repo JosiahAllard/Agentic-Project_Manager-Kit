@@ -214,7 +214,8 @@ class Division(ApiCase):
 
     def test_applies_at_once_with_nothing_live_and_none_restores(self):
         r = self.ok(api.set_division(OWNER, {"cpu_slots": 6}, self.store))
-        self.assertEqual(r, {"applied": True, "pending": None})
+        self.assertEqual(r, {"applied": True, "pending": None, "reason": None})
+        self.assertIsNone(self.snap()["layout"]["hardware_change"]["reason"])
         self.assertEqual(self.snap()["layout"]["cpu_slots"], 6)
         self.assertEqual(self.snap()["layout"]["source"], "config")
         r = self.ok(api.set_division(OWNER, None, self.store))
@@ -239,11 +240,13 @@ class Division(ApiCase):
         r = self.ok(res)
         self.assertFalse(r["applied"])
         self.assertTrue(r["pending"])
+        self.assertEqual(r["reason"], st.IDLE)
         lay_ = res["snapshot"]["layout"]
         self.assertEqual(lay_["cpu_slots"], 12)
         self.assertEqual(lay_["wanted_division"]["cpu_slots"], 6)
         self.assertTrue(lay_["hardware_change"]["changed"])
         self.assertTrue(lay_["hardware_change"]["pending"])
+        self.assertEqual(lay_["hardware_change"]["reason"], st.IDLE)
         self.assertTrue(any("hardware or division changed" in x for x in st.render(res["snapshot"])))
 
     def test_status_says_why_a_failed_look_is_not_adopted(self):
@@ -255,6 +258,7 @@ class Division(ApiCase):
         self.store = self.make_store()
         s = self.snap()
         self.assertTrue(s["layout"]["hardware_change"]["changed"])
+        self.assertEqual(s["layout"]["hardware_change"]["reason"], st.FAILED_LOOK)
         lines = st.render(s)
         self.assertTrue(any("the gpus could not be read (Win32_VideoController: exit 1)" in x
                             for x in lines), lines)

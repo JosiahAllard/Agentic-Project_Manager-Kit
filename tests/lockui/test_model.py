@@ -235,6 +235,19 @@ class Build(unittest.TestCase):
         text = "the layout could not be checked (queue.json unreadable)"
         self.assertEqual(self.wait(text), [text])
 
+    def test_a_text_this_kit_does_not_give_shows_its_own_text(self):
+        text = "an older kit's words for a pending layout"
+        self.assertEqual(self.wait(text), [text])
+
+    def test_the_snapshots_reason_is_read_not_derived_again(self):
+        # The snapshot carries hardware_change.reason (kitlib.lock.api); the window says that
+        # reason, whatever words the pending text has.
+        lay = dict(snap()["layout"], hardware_change={
+            "pending": "words of a newer kit", "reason": "failed_look", "changed": False})
+        got = m.build(snap(layout=lay), now=NOW)["warnings"]
+        self.assertEqual(len(got), 1, got)
+        self.assertIn("a look at the hardware failed", got[0])
+
     def test_a_bare_snapshot_does_not_raise(self):
         v = m.build({}, now=NOW)
         self.assertEqual(v["holds"], [])

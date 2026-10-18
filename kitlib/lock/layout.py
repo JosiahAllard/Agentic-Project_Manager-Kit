@@ -180,17 +180,18 @@ def detect():
     """This machine, as a JSON-ready dict (thread ids, never masks: a mask past 53 bits does not
     survive a JavaScript reader). Never raises: what cannot be read is in `problems`, and `failed`
     names the parts read as a stand-in rather than from Windows ("groups": the processor groups
-    were not listed (cpu.listed_groups), so groups() stands in group 0 alone and the threads are
-    that group's; "cores": each thread counted as one; "gpus": neither DXGI nor CIM answered, so
+    were not listed (cpu.listed_groups), so group 0 alone stands in, as cpu.groups() would, and the
+    threads are that group's; "cores": each thread counted as one; "gpus": neither DXGI nor CIM answered, so
     no card). A layout from such a look never replaces a layout.json from a good look, and is
     otherwise written provisional (in_force). CIM answering for DXGI is not a failed look. One
-    listing of the groups gives both `groups` and `threads`, so the two never disagree."""
+    listing of the groups gives both `groups` and `threads`, so the two never disagree, and a
+    failed listing is not asked again: a second answer would mark "groups" failed over every group."""
     problems, failed = [], []
     listed = cpu.listed_groups()
     if listed is None:
         problems.append("Windows did not list the processor groups; group 0 alone stands in")
         failed.append("groups")
-    grps = listed or cpu.groups()
+    grps = listed or [(0, process.system_mask())]  # cpu.groups()'s stand-in, without asking again
     ids = [cpu.gid(g, i) for g, m in grps for i in range(cpu.GROUP_BITS) if m >> i & 1]
     cores = cpu.cores()
     if cores is None:
@@ -428,6 +429,16 @@ def valid_layout(L):
         return False
 
 
+# How in_force's `pending` texts start or end, one per reason (kitlib.lock.status.pending_reason
+# reads the reason from these, so the words and the reason never drift apart).
+PENDING_IDLE = "the machine or division changed"                    # starts: waits for idle
+PENDING_UNWRITTEN = "layout.json is missing, unreadable or not valid to this kit version"  # starts
+PENDING_FAILED_LOOK = "; no layout is adopted from that look until one succeeds"          # ends
+PENDING_PROVISIONAL = ("; the layout in use came from such a look and is provisional: the first "
+                       "look that succeeds replaces it while no run is live or queued")   # ends
+PENDING_UNCHECKED = "the layout could not be checked"                                    # starts
+
+
 def in_force(store, adopt=True):
     """{layout, wanted, source, warning, pending}: the layout every process uses now (the store's
     layout.json) and the one this machine and division ask for. A different wanted layout is
@@ -450,8 +461,7 @@ def in_force(store, adopt=True):
         parts = ", ".join(failed[:-1]) + " and " + failed[-1] if len(failed) > 1 else failed[0]
         why = "the %s could not be read (%s)" % (parts,
                                                  "; ".join(hw.get("problems") or ()) or "no detail")
-    provisional = why and "%s; the layout in use came from such a look and is provisional: the " \
-        "first look that succeeds replaces it while no run is live or queued" % why
+    provisional = why and why + PENDING_PROVISIONAL
 
     def settled(c):
         """Nothing to write: c is the wanted layout, final unless this look failed too."""
@@ -467,13 +477,12 @@ def in_force(store, adopt=True):
         out.update(pending=provisional if cur.get("provisional") else None)
         return out
     if kept(cur):
-        out.update(layout=cur, pending="%s; no layout is adopted from that look until one "
-                                       "succeeds" % why)
+        out.update(layout=cur, pending=why + PENDING_FAILED_LOOK)
         return out
     if not adopt:
         if valid_layout(cur) and cur["key"] != want["key"]:
-            out.update(layout=cur, pending="the machine or division changed; it is used once "
-                                            "no run is live or queued")
+            out.update(layout=cur, pending=PENDING_IDLE + "; it is used once no run is live or "
+                                                          "queued")
         elif not valid_layout(cur):
             out.update(pending=provisional)
         return out
@@ -485,29 +494,26 @@ def in_force(store, adopt=True):
                 out.update(pending=provisional if cur.get("provisional") else None)
                 return out
             if kept(cur):
-                out.update(layout=cur, pending="%s; no layout is adopted from that look until one "
-                                               "succeeds" % why)
+                out.update(layout=cur, pending=why + PENDING_FAILED_LOOK)
                 return out
             same = valid_layout(cur) and cur["key"] == want["key"]  # only the mark goes: no renumbering
             busy = [] if same else [e["id"] for e in q_mod.load(store)["entries"]
                                     if not store.run_dead(e)]
             busy += [] if same else [r["id"] for r in store.live_runs() if r["id"] not in busy]
             if busy and valid_layout(cur):
-                out.update(layout=cur, pending="the machine or division changed (%s -> %s); it "
-                           "is used once no run is live or queued (%d now)" % (
-                               cur["key"], want["key"], len(busy)))
+                out.update(layout=cur, pending=PENDING_IDLE + " (%s -> %s); it is used once no "
+                           "run is live or queued (%d now)" % (cur["key"], want["key"], len(busy)))
                 return out
             if busy:
-                out.update(pending="layout.json is missing, unreadable or not valid to this kit "
-                                   "version; %s is written once no run is live or queued (%d now)"
-                                   % (want["key"], len(busy)))
+                out.update(pending=PENDING_UNWRITTEN + "; %s is written once no run is live or "
+                                   "queued (%d now)" % (want["key"], len(busy)))
                 return out
             store.write("layout.json", dict(want, adopted_at=time.time(),
                                             **({"provisional": True} if failed else {})))
             out.update(pending=provisional)
     except (OSError, q_mod.QueueUnreadable) as e:
         out.update(layout=cur if valid_layout(cur) else want,
-                   pending="the layout could not be checked (%s)" % e)
+                   pending=PENDING_UNCHECKED + " (%s)" % e)
     return out
 
 

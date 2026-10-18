@@ -473,6 +473,20 @@ class DetectFailed(unittest.TestCase):
         self.assertTrue(any("processor groups" in p for p in hw["problems"]), hw["problems"])
         self.assertEqual(hw["threads"], [t for g in hw["groups"] for t in g["threads"]])
 
+    def test_unlisted_groups_use_the_group_0_stand_in_not_a_second_listing(self):
+        # Windows lists the groups only when asked again: the failed look must still be group 0's
+        # stand-in, never every group under a "groups" failure.
+        from kitlib.proc import process
+        answers = iter([None])
+        with mock.patch.object(lay.cpu, "listed_groups",
+                               side_effect=lambda: next(answers, [(0, 0b1111), (1, 0b1)])), \
+                mock.patch.object(process, "system_mask", return_value=0b11), \
+                mock.patch.object(lay, "dxgi_adapters", return_value=[]):
+            hw = lay.detect()
+        self.assertIn("groups", hw["failed"])
+        self.assertEqual(hw["groups"], [{"group": 0, "threads": [0, 1]}])
+        self.assertEqual(hw["threads"], [0, 1])
+
     def test_listed_groups_are_not(self):
         with mock.patch.object(lay, "dxgi_adapters", return_value=[]):
             hw = lay.detect()

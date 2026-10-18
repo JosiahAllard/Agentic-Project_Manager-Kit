@@ -383,14 +383,15 @@ _LAYOUT_WAITS = {
 
 
 def layout_wait(lay):
-    """What the window says about the snapshot layout `lay`'s hardware_change, or None: the
-    reason kitlib.lock.status.pending_reason gives for its pending text (that text itself for a
-    reason with no sentence here), the idle wait when only `changed` is set."""
+    """What the window says about the snapshot layout `lay`'s hardware_change, or None: its
+    `reason` (from an older snapshot without one, kitlib.lock.status.pending_reason of its pending
+    text), as a sentence here or else the pending text itself; the idle wait when only `changed`
+    is set."""
     hc = lay.get("hardware_change") or {}
-    reason = st.pending_reason(hc.get("pending"))
+    reason = hc["reason"] if "reason" in hc else st.pending_reason(hc.get("pending"))
     if reason in _LAYOUT_WAITS:
         return _LAYOUT_WAITS[reason]
-    if reason:
+    if reason and hc.get("pending"):
         return hc["pending"]
     if hc.get("pending") or hc.get("changed"):
         return _LAYOUT_WAITS[st.IDLE]
