@@ -109,16 +109,23 @@ def _group(spec):
     return r if isinstance(r, str) and r else None
 
 
-def never_hits(cfg, changed):
-    """The paths of `changed` reuse never crosses: `.kit.json`, a config section file, the hook
-    module, and "landing".reuse_never."""
-    never = [CONFIG_NAME] + [f for f in (cfg.section_file(n) for n in schema.SECTIONS) if f]
+def config_hits(cfg, changed):
+    """The paths of `changed` that are the gate's own config under `cfg`: `.kit.json`, a config
+    section file and the hook module."""
+    own = [CONFIG_NAME] + [f for f in (cfg.section_file(n) for n in schema.SECTIONS) if f]
     hook = cfg.hook()
     if hook:
-        never.append('%s/%s.py' % (cfg.tools_dir.replace('\\', '/').strip('/'), hook['module']))
-    never = [n.replace('\\', '/').lower() for n in never]
+        own.append('%s/%s.py' % (cfg.tools_dir.replace('\\', '/').strip('/'), hook['module']))
+    own = [n.replace('\\', '/').lower() for n in own]
+    return [p for p in changed if p.replace('\\', '/').lower() in own]
+
+
+def never_hits(cfg, changed):
+    """The paths of `changed` reuse never crosses: the gate's config (config_hits) and
+    "landing".reuse_never."""
+    own = set(config_hits(cfg, changed))
     globs = cfg.section('landing')['reuse_never']
-    return [p for p in changed if p.replace('\\', '/').lower() in never or S._match(p, globs)]
+    return [p for p in changed if p in own or S._match(p, globs)]
 
 
 def strict_hits(cfg, changed):
