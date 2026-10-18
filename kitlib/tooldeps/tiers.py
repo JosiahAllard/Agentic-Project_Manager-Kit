@@ -1,7 +1,9 @@
-"""kit_tests --both-tiers: the same tests on the fake git, then on real git (docs/test-tools.md
-"Fake git"). The daily full run uses it through a gate step's `daily_cmd` (docs/gate.md "Steps").
+"""kit_tests' two passes: the tests on the fake git, then a pass on real git (docs/test-tools.md
+"Fake git"). --both-tiers runs them (the daily full run, through a gate step's `daily_cmd`,
+docs/gate.md "Steps"), and so does a --select or --full run whose change adds or changes a test
+module (changed_test_modules): its real-git pass runs those modules.
 
-`run_tiers(run_one, out)` calls `run_one(fake, tier_out, last)` once per tier in TIERS order:
+`run_tiers(run_one, out, label)` calls `run_one(fake, tier_out, last)` once per tier in TIERS order:
 `fake` is the KIT_FAKE_GIT value the units get, `tier_out` the stream that pass writes to, and
 `last` is true only for the last pass (only it may give cpu slots back to the lock: an earlier
 pass that gave slots back would leave the next one running on slots the run no longer holds).
@@ -12,7 +14,12 @@ each pass a `kit_tests: tier <tier>: OK|FAILED, exit N` line; then one verdict: 
 both tiers green (fake git, real git)` only when every pass exited 0, else `kit_tests: FAILED,
 exit 1: red tier(s): ...`. A pass that is interrupted (exit 130) stops the run with 130.
 
-The real-git pass runs only REAL_GIT_MODULES, not the whole selection.
+Before each pass a `kit_tests: <label>: tier <tier> (KIT_FAKE_GIT=<0|1>)` header; `label` names
+what runs the two passes (default `--both-tiers`).
+
+The real-git pass runs only some modules, not the whole selection: under --both-tiers
+REAL_GIT_MODULES and the added or changed test modules (real_git_modules), otherwise only the
+added or changed ones.
 
 Nothing here starts a process or reads the environment.
 """
@@ -64,17 +71,32 @@ class TierOut(object):
             self.out.flush()
 
 
-def real_git_modules(modules):
-    """The modules of `modules` the real-git pass runs (REAL_GIT_MODULES)."""
-    return [m for m in modules if m.startswith(REAL_GIT_MODULES)]
+def real_git_modules(modules, also=()):
+    """The modules of `modules` --both-tiers' real-git pass runs: REAL_GIT_MODULES and those in
+    `also` (the added or changed test modules), in `modules`' order, then any of `also` that
+    `modules` does not hold; each once."""
+    picked = [m for m in modules if m.startswith(REAL_GIT_MODULES) or m in also]
+    return picked + [m for m in dict.fromkeys(also) if m not in picked]
 
 
-def run_tiers(run_one, out):
+def changed_test_modules(changed, modules):
+    """The test modules of `modules` (dotted names, the tree's) that the changed paths `changed`
+    (repo-relative, either slash) add or change, in `modules`' order. A path that is not a test
+    module of the tree - a deleted module, a helper, data, code - gives none."""
+    wanted = set()
+    for path in changed:
+        path = path.replace('\\', '/')
+        if path.endswith('.py'):
+            wanted.add(path[:-len('.py')].replace('/', '.'))
+    return [m for m in modules if m in wanted]
+
+
+def run_tiers(run_one, out, label='--both-tiers'):
     """Run every tier (module docstring); the run's exit status: 0 every pass green, 1 any red,
     INTERRUPTED when a pass was."""
     red = []
     for i, (tier, fake) in enumerate(TIERS):
-        out.write('%s--both-tiers: tier %s (KIT_FAKE_GIT=%s)\n' % (PREFIX, tier, fake))
+        out.write('%s%s: tier %s (KIT_FAKE_GIT=%s)\n' % (PREFIX, label, tier, fake))
         out.flush()
         stream = TierOut(out, tier)
         rc = run_one(fake, stream, i == len(TIERS) - 1)

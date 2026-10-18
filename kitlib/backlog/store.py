@@ -812,9 +812,11 @@ class MainBackend(object):
         if not took:
             raise Busy('%s not written in %s, and nothing was written: git\'s index lock %s '
                        'stayed held for %g s (another git command is writing that index; if none '
-                       'runs there, one that was stopped left it behind: remove it only then). '
+                       'runs there, a writer that was killed left a stale lock behind: once no '
+                       'git command or store write is running, delete %s). '
                        'Repeat the write once it is gone'
-                       % (', '.join(paths), self.root, held.path, INDEX_WAIT), held.path)
+                       % (', '.join(paths), self.root, held.path, INDEX_WAIT, held.path),
+                       held.path)
         return held
 
     def _publish(self, snap, writes, message, branch, held):
