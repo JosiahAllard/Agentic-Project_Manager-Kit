@@ -15,7 +15,8 @@ Selection (`select`):
   In diff and full, a step is then dropped when a step its `skip_if_selected` names is selected.
   Diff mode then adds every `smoke_steps` step not already selected (reason `smoke`, manual ones
   included, never dropped), so a landing can take its record (docs/gate.md "Landing"). A
-  `smoke_steps` or `docs_only`.steps name no step has is a GateConfigError (build).
+  `smoke_steps` or `docs_only`.steps name no step has, or a `docs_only` with no steps, is a
+  GateConfigError (build).
 Order: `stage` first, main (the default), last; `defer` steps after all of them; config order
 within each.
 
@@ -103,9 +104,13 @@ def docs_steps(gate):
 
 
 def unknown_names(gate):
-    """What `smoke_steps` and `docs_only`.steps name that no configured step is."""
+    """What `smoke_steps` and `docs_only`.steps name that no configured step is, and a set
+    `docs_only` whose steps are empty or missing (its docs-only gate would run nothing yet write
+    a record; R-2242: a docs-only change skips the tests but keeps the scrub)."""
     names = {s.get('name') for s in gate.get('steps') or []}
     out = []
+    if gate.get('docs_only') is not None and not docs_steps(gate):
+        out.append('"docs_only".steps is empty: list the repo\'s scrub step in docs_only.steps')
     for key, listed in (('"smoke_steps"', gate.get('smoke_steps') or []),
                         ('"docs_only".steps', docs_steps(gate))):
         missing = [n for n in listed if n not in names]

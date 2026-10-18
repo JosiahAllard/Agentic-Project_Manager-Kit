@@ -182,6 +182,17 @@ class Smoke(unittest.TestCase):
             self.assertIn('nosuch', str(cm.exception))
             self.assertNotIsInstance(cm.exception, S.UnknownStep)
 
+    def test_a_docs_only_section_with_empty_or_missing_steps_refuses_in_build(self):
+        # R-2242: a docs-only change skips the tests but keeps the scrub; without this a docs-only
+        # gate would run nothing and still write a record
+        for spec in ({'globs': ['*.md'], 'steps': []}, {'globs': ['*.md']}):
+            with self.assertRaises(S.GateConfigError, msg=spec) as cm:
+                S.build(gate_of(cmd('scrub'), docs_only=spec), ROOT, 'b', 't')
+            self.assertIn('"docs_only".steps is empty', str(cm.exception))
+            self.assertIn('scrub step', str(cm.exception))
+        S.build(gate_of(cmd('scrub'), docs_only={'globs': ['*.md'], 'steps': ['scrub']}),
+                ROOT, 'b', 't')
+
 
 class DocsOnly(unittest.TestCase):
     G = gate_of(cmd('scrub', globs=['*']), cmd('suite', always=True),
