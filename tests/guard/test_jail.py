@@ -601,10 +601,11 @@ class ShellForms(Base):
                      'find "%s" -exec cp a.txt {}/x %s' % (d, sq), 'find "%s" -exec touch "$X" %s' % (d, sq),
                      "find \"%s\" -exec sh -c 'rm \"$1\"' _ {} %s" % (d, sq),
                      'find -L "%s" . -exec rm {} +' % d, 'find . "%s" -exec rm {} +' % d,
-                     "find \"%s\" -exec sh -c 'find \"$1\" -exec rm {} +' _ {} %s" % (d, sq),
                      'find "%s" -delete' % d):
             with self.subTest(text):
                 self.jailed(self.run_bash(text))
+        # a find nested in find's sh -c is refused before it is placed: its text is not literal
+        self.jailed(self.run_bash("find \"%s\" -exec sh -c 'find \"$1\" -exec rm {} +' _ {} %s" % (d, sq)), 'unreadable')
         for text in ('find . -name "*.tmp" -exec rm {} +', 'find "%s" -exec rm {} +' % W.fwd(self.w.temp),
                      'find "%s" -exec rm {} +' % W.fwd(self.w.wt), 'find "%s" -exec grep -l x {} +' % d,
                      'find "%s" -exec wc -l {} %s' % (d, sq), 'find "%s" -exec cp {} . %s' % (d, sq)):
