@@ -435,6 +435,8 @@ kitlib/gate/stash.py. A repository has one stash stack: `refs/stash` and its log
 
 The guard only reads the ref (`stash.tip`): it never runs `git stash` and never changes the stack. To clear a refusal, run `git stash list`; whoever made each entry commits it on a branch or drops it. No key turns the guard off.
 
+A red run (a new test shown failing without the fix) needs neither a stash nor a scratch copy of kitlib: `git -C <main checkout> worktree add .claude/worktrees/<slug>-red --detach origin/main`, Write the new test file there, run it with `python -m unittest discover -t <that worktree> -s <its test folder> -p <file>` (`-t` puts that worktree's kitlib first on the path; it exits 1 on the red), then delete the test file and run `worktree_remove.py -C <main checkout> <that worktree's absolute path>`, which refuses while the file is untracked. Skip the run when the test only calls a symbol the fix adds: it would show an AttributeError or ImportError, not a failed assertion.
+
 Limits:
 
 - An entry made and dropped again wholly within a run leaves nothing to read.
