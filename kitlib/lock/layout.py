@@ -23,8 +23,9 @@ The division is the owner's (machine.json); any key missing takes its default:
 Every process must count slots the same way, so the layout in force is the store's layout.json.
 A changed machine or division is adopted only while nothing is live or queued (in_force), under
 the queue mutex; until then the old layout stays and the change is reported as pending. A
-layout.json that is missing or invalid is rewritten under the same rule, and a look at the
-hardware that failed (detect's `failed`) is never adopted.
+layout.json that is missing or invalid is rewritten under the same rule. A look at the hardware
+that failed (detect's `failed`) never replaces a layout.json from a good look; with no valid
+layout.json its layout is written marked provisional, and replaced under the same rule.
 """
 import ctypes
 import hashlib
@@ -179,8 +180,8 @@ def detect():
     """This machine, as a JSON-ready dict (thread ids, never masks: a mask past 53 bits does not
     survive a JavaScript reader). Never raises: what cannot be read is in `problems`, and `failed`
     names the parts read as a stand-in rather than from Windows ("cores": each thread counted as
-    one; "gpus": neither DXGI nor CIM answered, so no card). A layout from such a look is never
-    adopted (in_force). CIM answering for DXGI is not a failed look."""
+    one; "gpus": neither DXGI nor CIM answered, so no card). A layout from such a look never
+    replaces a layout.json from a good look, and is otherwise written provisional (in_force). CIM answering for DXGI is not a failed look."""
     problems, failed = [], []
     ids = cpu.threads()
     cores = cpu.cores()

@@ -279,8 +279,10 @@ def no_cores_answer(hw):
 
 
 class FailedDetection(StoreCase):
-    """A detection that could not read the gpus or the cores is never adopted: it would renumber
-    the gpu (or cpu) slots of every session on the machine until the next good look."""
+    """A detection that could not read the gpus or the cores never replaces a layout.json from a
+    good look: it would renumber the gpu (or cpu) slots of every session on the machine until the
+    next good look. With no valid layout.json it is written provisional, and replaced only under
+    the idle rule."""
 
     def on(self, hw):
         self.hw = hw
@@ -372,6 +374,31 @@ class FailedDetection(StoreCase):
         self.assertEqual(got["layout"]["key"], first["key"])
         self.assertEqual(got["layout"]["gpu_slots"], 2)
         self.assertIn("no layout is adopted from that look", got["pending"])
+
+    def test_a_confirming_good_look_makes_a_provisional_layout_final_under_a_live_run(self):
+        # Same key: nothing is renumbered, so the live run does not hold the mark back.
+        real = lay.fake_hardware(threads=24, smt=1, l3=2)
+        self.on(no_cores_answer(real))
+        first = self.layout()
+        self.live_record("r-20261017T120000Z-0000c1", cores=[0])
+        self.on(real)
+        got = lay.in_force(self.store)
+        self.assertEqual(got["layout"]["key"], first["key"])
+        self.assertIsNone(got["pending"])
+        self.assertFalse(self.store.read("layout.json").get("provisional"))
+
+    def test_a_confirming_good_look_makes_a_provisional_layout_final_with_an_unreadable_queue(self):
+        # Same key: the queue is not read, so a queue that cannot be read does not hold it back.
+        real = lay.fake_hardware(threads=24, smt=1, l3=2)
+        self.on(no_cores_answer(real))
+        first = self.layout()
+        with open(self.store.path("queue.json"), "w", encoding="utf-8") as f:
+            f.write("not a queue")
+        self.on(real)
+        got = lay.in_force(self.store)
+        self.assertEqual(got["layout"]["key"], first["key"])
+        self.assertIsNone(got["pending"])
+        self.assertFalse(self.store.read("layout.json").get("provisional"))
 
     def test_unlisted_cores_are_not_adopted_either(self):
         good = self.layout()

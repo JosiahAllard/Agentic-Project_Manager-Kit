@@ -63,8 +63,9 @@ def hold_line(h):
 def waits_for_idle(pending):
     """Whether layout.in_force's pending text is a change that is adopted once no run is live or
     queued. Only those texts say "once no run is live or queued"; any other (a look at the
-    hardware that failed) is not adopted when the machine is idle either, so its own reason is
-    shown in place of the line that the new layout applies then."""
+    hardware that failed, kept out or in use as provisional, or a layout that could not be
+    checked) is not settled by an idle machine alone, so its own reason is shown in place of the
+    line that the new layout applies then."""
     return "once no run is live or queued" in (pending or "")
 
 
