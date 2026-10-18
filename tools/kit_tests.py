@@ -24,15 +24,21 @@ in the git common dir (kit-tests-times.json), long modules split by class - then
 back to the lock (kitlib.lock.giveback.drainer) when the lock run offers it. --jobs 1 runs the
 one `python -m unittest` process the tool always ran.
 Tests run on the fake git (docs/test-tools.md "Fake git"): the units get KIT_FAKE_GIT=1 unless it
-is set; --real-git gives them 0, so the unit tier also runs on real git. --both-tiers runs the
-selection on KIT_FAKE_GIT 1, then only tiers.REAL_GIT_MODULES of it on 0, and prints
-`kit_tests: OK` only when both passed; each pass's own lines read `kit_tests [fake git]: ` / `kit_tests [real git]: `.
+is set; --real-git gives them 0, so the unit tier also runs on real git. On the fake, --select
+and --full also run the test modules the change adds or changes (tiers.changed_test_modules: the
+--select change list, or for --full the same diff against the default base) as a second pass on
+real git, with no flag (the gate's cmd and full_cmd); when there is none, one pass and a line
+`kit_tests: real-git pass: no added or changed test module`. --both-tiers runs the selection on
+KIT_FAKE_GIT 1, then tiers.REAL_GIT_MODULES of it and the added or changed test modules on 0.
+Two passes print `kit_tests: OK` only when both passed; each pass's own lines read
+`kit_tests [fake git]: ` / `kit_tests [real git]: `.
 The units also get the home fence's marker (docs/test-tools.md "Home fence"): KIT_HOME_FENCE, the
 home folder this process resolves, unless the environment already carries one. The tools a test
 starts inherit it and refuse that home.
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls the library, prints, runs, exits.
 Exit codes: the unittest run's (0 passed or nothing selected, 1 failed); 2 USAGE or a refusal
-(git could not list the change, or --select with a malformed table): no test ran; 130 Ctrl+C.
+(git could not list the change - for --full too, unless --real-git - or --select with a
+malformed table): no test ran; 130 Ctrl+C.
 --full never refuses a malformed table: it warns and runs every module, none serial.
 """
 import argparse
@@ -176,9 +182,26 @@ def main(argv=None, out=None):
     for m in stale:
         say('kit_tests: WARNING: skip_fails names %s, which is not a test module; its entry guards '
             'nothing (fix tests/selection.json)' % m)
+    # The tier the units get. On the fake git, the test modules the change adds or changes also run
+    # on real git, as a second pass (kitlib.tooldeps.tiers): a test that only ever ran on the fake
+    # cannot reach main unseen by real git.
+    tier = '0' if a.real_git else os.environ.get('KIT_FAKE_GIT', '1')
     if a.full:
         say('kit_tests: full suite (--full)')
         args = FULL
+        changed = []
+        if tier == '1':
+            base = a.base
+            if base is None:
+                base, note = default_base(top)
+                if note:
+                    say('kit_tests: %s' % note)
+            changed, why = selftree.changed_paths(base, top)
+            if changed is None:
+                say('kit_tests: refused: %s - no test ran; the real-git pass of the added or '
+                    'changed test modules needs the change list: fix git, or run --real-git'
+                    % why)
+                return USAGE
     else:
         changed = a.changed
         if changed is None:
@@ -194,8 +217,17 @@ def main(argv=None, out=None):
             say('kit_tests: --select against the merge-base with %s: %d changed path(s)'
                 % (base, len(changed)))
         args = plan(top, changed, cfg, say)
+    again = []
+    if tier == '1':
+        again = tiers.changed_test_modules(changed, selftree.all_test_modules(top))
+    if again:
+        say('kit_tests: real-git pass: %d added or changed test module(s): %s'
+            % (len(again), ', '.join(again)))
     if a.plan or args is None:
         return 0
+    if tier == '1' and not again and not a.both_tiers:
+        # Said before the pass, and never a verdict: the run's verdict is the pass's own.
+        say('kit_tests: real-git pass: no added or changed test module')
     hold = None
     if a.pid_hold:
         # Opt-in only (never in the gate): started before the units' environment is copied below,
@@ -207,30 +239,37 @@ def main(argv=None, out=None):
         say('kit_tests: jobs %d: %s' % (jobs, why))
     else:
         jobs = a.jobs
-    if a.both_tiers:
+    if a.both_tiers or again:
         # The fake pass, then the real-git pass (kitlib.tooldeps.tiers): only the last may give
         # cpu slots back, and only the fake pass records unit times (the landing tier's).
-        # The real-git pass runs only tiers.REAL_GIT_MODULES of the selection.
-        every = selftree.all_test_modules(top) if args is FULL else args
-        real = tiers.real_git_modules(every)
+        # The real-git pass runs only some modules: under --both-tiers tiers.REAL_GIT_MODULES of
+        # the selection and the added or changed test modules, otherwise only those.
+        if a.both_tiers:
+            every = selftree.all_test_modules(top) if args is FULL else args
+            real = tiers.real_git_modules(every, also=again)
+            label = '--both-tiers'
+        else:
+            real = again
+            label = '%s, then its added or changed test modules on real git' % (
+                '--full' if a.full else '--select')
+            if hold is not None:
+                say('kit_tests: the pid hold covers the fake-git pass; the real-git pass runs '
+                    'without the pid hold')
 
         def one_pass(fake, stream, last):
             use = args if fake == '1' else real
             if not use:
                 stream.write('kit_tests: no real-git module in the selection\n')
                 return 0
-            return run_pass(use, top, cfg, jobs, fake, stream, None, give_back=last,
-                            record_times=fake == '1')
-        return tiers.run_tiers(one_pass, out)
+            return run_pass(use, top, cfg, jobs, fake, stream, hold if fake == '1' else None,
+                            give_back=last, record_times=fake == '1')
+        return tiers.run_tiers(one_pass, out, label=label)
     # The units' environment carries the tier: a pool worker imports tests/__init__.py once, so
     # its default cannot reach each unit (kitlib/tooldeps/pool_worker.py). This process keeps
     # its own git real.
     if a.real_git:
-        fake = '0'
         say('kit_tests: --real-git: every test on real git')
-    else:
-        fake = os.environ.get('KIT_FAKE_GIT', '1')
-    return run_pass(args, top, cfg, jobs, fake, out, hold)
+    return run_pass(args, top, cfg, jobs, tier, out, hold)
 
 
 def run_pass(args, top, cfg, jobs, fake, out, hold, give_back=True, record_times=True):
