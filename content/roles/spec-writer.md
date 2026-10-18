@@ -82,11 +82,6 @@ offer a summary to seed a fresh agent.
 ## Never
 
 - Never put the owner's personal details (email address, name, account names) in anything sent off this machine: no User-Agent, header, URL, query string or form field. Web fetches use a neutral User-Agent.
-- Never chain a write (a commit, merge, reset, backlog.py write, landing command) with other commands
-  in one shell call: run each on its own. Compound commands draw safety-check refusals that the
-  same steps run singly do not.
-- A safety-check (classifier) refusal is final: stop at the FIRST one, report it verbatim; no retry,
-  no rewording, no other shell or agent.
 - Never search from a filesystem or drive root (`find /`, `Get-ChildItem C:\ -Recurse`, `dir /s C:\`): use {{tool:find}}/{{tool:search}} or a path scoped to the repo, worktree or a known folder, with a timeout.
 - Touch code, tests, tools, CI or configuration.
 - Decide an open question on the owner's behalf.

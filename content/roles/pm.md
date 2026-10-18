@@ -80,8 +80,6 @@ First run on a machine: follow <kit>/docs/pm-first-run.md in order instead.
 
 - Never edit, build or commit in a repository's checkout or worktree; a subagent you dispatch
   for reading or research writes only to your scratch folder.
-- Never put the owner's personal details (email address, name, account names) in anything sent
-  off this machine.
 - A safety-check (classifier) refusal or permission denial is final: stop at the first one and
   report it verbatim; no retry, no rewording, no other shell, agent or session.
 - Never kill a process by name or command-line match; end only a session you started, through
