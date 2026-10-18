@@ -26,6 +26,7 @@ from kitlib.lock import holds as hl
 from kitlib.lock import kinds as kinds_mod
 from kitlib.lock import layout as lay
 from kitlib.lock import queue as qm
+from kitlib.lock import status as st
 from kitlib.lock.run import expected_end, request_stop
 from kitlib.lock.store import (EXIT_BUSY, EXIT_HOLD, EXIT_REQUIRE, EXIT_RESERVED, EXIT_USAGE,
                                ID_RE, LockError, Store, actor_host, caller, iso, owns, parse_iso,
@@ -191,7 +192,8 @@ def _layout(store, lf, hw, runs):
             "wanted_division": want["division"], "wanted_key": want["key"],
             "owner_division": lay.read_division(store)[0] or {},
             "source": lf["source"], "warning": lf["warning"],
-            "hardware_change": {"pending": lf["pending"], "changed": want["key"] != L["key"]},
+            "hardware_change": {"pending": lf["pending"], "reason": st.pending_reason(lf["pending"]),
+                                "changed": want["key"] != L["key"]},
             "other_labels": lay.other_labels(runs, L)}
 
 
@@ -446,7 +448,7 @@ def set_division(actor, division, store=None):
     layout.hardware_change says which). Keys starting with _ (notes such as _comment) are not
     division keys: those already in machine.json are kept (one the division also names takes the
     division's value), and machine.json is removed only when it would hold neither division keys
-    nor notes. result: {applied, pending}."""
+    nor notes. result: {applied, pending, reason} (reason: kitlib.lock.status.pending_reason)."""
     def go(store):
         me = who(actor, store)
         _check(me, "set_division")
@@ -464,7 +466,8 @@ def set_division(actor, division, store=None):
         else:
             store.drop("machine.json")
         lf = lay.in_force(store)
-        return {"applied": lf["layout"]["key"] == lf["wanted"]["key"], "pending": lf["pending"]}
+        return {"applied": lf["layout"]["key"] == lf["wanted"]["key"], "pending": lf["pending"],
+                "reason": st.pending_reason(lf["pending"])}
     return _write(store, go)
 
 
