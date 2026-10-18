@@ -20,12 +20,24 @@ Refused:
   - src, poster, background or action that is not data:, and srcset at all (src with a data:
     image is the way);
   - an svg animate or set whose attributeName is href (it would make a link the check never saw);
-  - CSS url() that is not data: or a #fragment, and @import, in a style element or any attribute;
+  - CSS url() that is not data: or a #fragment, @import, any backslash (a CSS escape can spell
+    url or @import) and the image functions of CSS_FUNCTIONS, in a style element or in any
+    attribute but the plain-text ones of TEXT_ATTRS (which keep the url() and @import rules);
+  - in a style element's text, checked whole at its end: any `<` (inside svg or math a browser
+    reads tags there, which this parser never sees) and any `&` (there a browser decodes a
+    character reference, so `&#92;` would be a backslash this parser never sees);
+  - a self-closing `<style/>`: HTML ignores the slash, so what follows would be CSS that this
+    parser reads as text;
   - unrendered Mermaid: class mermaid or language-mermaid on any element, or a ```mermaid fence.
     The kit renders nothing: the publisher draws the diagram as inline svg (MERMAID_SAYS);
-  - anywhere in the text, whatever the parser made of it: `<script`, `javascript:`, `http-equiv`.
-Kept: inline svg with its style and foreignObject, style elements and attributes, data: images.
-Nothing here prints, parses arguments or exits.
+  - anywhere in the text, whatever the parser made of it, each of RAW: `<script`, `javascript:`,
+    `http-equiv`, the raw-text and escapable elements this parser and a browser may end in
+    different places (`<title`, `<textarea`, `<xmp`, `<noembed`, `<noframes`, `<plaintext`), and
+    the markup whose end the two may find in different places (`<![cdata[`, `<!-->`, `<!--->`,
+    `--!>`).
+So the parser sees every tag and attribute a browser would build from the body. Kept: inline svg
+(not its title element) with its style and foreignObject, style elements and attributes, data:
+images. Nothing here prints, parses arguments or exits.
 """
 import html.parser
 import re
@@ -39,7 +51,11 @@ NEVER = ('srcset', 'ping', 'formaction')
 LINKS = ('href', 'xlink:href')
 LINK_DATA_TAGS = ('image', 'feimage')       # svg elements whose href may be a data: image
 ANIMATES = ('animate', 'set')
-RAW = ('<script', 'javascript:', 'http-equiv')
+RAW = ('<script', 'javascript:', 'http-equiv', '<title', '<textarea', '<xmp', '<noembed',
+       '<noframes', '<plaintext', '<![cdata[', '<!-->', '<!--->', '--!>')
+CSS_FUNCTIONS = ('image-set(', '-webkit-image-set(', 'image(')  # each can load an image by url
+TEXT_ATTRS = ('title', 'alt')               # read only as text; so are aria-* (_text_attr)
+STYLE_NEVER = ('<', '&')                    # in a style element's text (module docstring)
 
 _SURROGATE = re.compile('[\ud800-\udfff]')
 _URL = re.compile(r'url\(\s*([\'"]?)(.*?)\1\s*\)', re.I | re.S)
@@ -55,7 +71,13 @@ def _url(value):
     return _SPACE.sub('', value or '').lower()
 
 
-def _css(text, where):
+def _text_attr(name):
+    return name in TEXT_ATTRS or name.startswith('aria-')
+
+
+def _css(text, where, plain=False):
+    """Refused when `text` is CSS that could load from outside the page. `plain`: an attribute
+    read only as text, which is held to the url() and @import rules alone."""
     low = (text or '').lower()
     if '@import' in low:
         raise Refused('%s has @import: a page loads no other stylesheet' % where)
@@ -64,27 +86,53 @@ def _css(text, where):
         if not (u.startswith('data:') or u.startswith('#')):
             raise Refused('%s has url(%s): a page loads nothing from outside it, only data: '
                           'and #fragment urls' % (where, m.group(2).strip()[:80]))
+    if plain:
+        return
+    if '\\' in low:
+        raise Refused('%s has a backslash: a CSS escape could spell a url or @import the check '
+                      'never saw, so a page has none' % where)
+    squeezed = _SPACE.sub('', low)
+    for fn in CSS_FUNCTIONS:
+        if fn in squeezed:
+            raise Refused('%s has %s): it loads an image, and a page loads nothing from '
+                          'outside it; use url() with a data: image' % (where, fn))
 
 
 class _Parser(html.parser.HTMLParser):
     def __init__(self):
         html.parser.HTMLParser.__init__(self, convert_charrefs=True)
-        self._style = False
+        self._style = None                      # a style element's text so far, or None
 
     def handle_starttag(self, tag, attrs):
         self._tag(tag, attrs)
-        self._style = tag == 'style'
+        if tag == 'style':
+            self._style = []
 
     def handle_startendtag(self, tag, attrs):
         self._tag(tag, attrs)
+        if tag == 'style':
+            raise Refused('the page has a self-closing <style/>: HTML ignores the slash, so what '
+                          'follows it would be CSS; write <style></style>')
 
     def handle_endtag(self, tag):
         if tag == 'style':
-            self._style = False
+            self.end_style()
 
     def handle_data(self, data):
-        if self._style:
-            _css(data, 'a <style> element')
+        if self._style is not None:
+            self._style.append(data)
+
+    def end_style(self):
+        """Check the open style element's text whole (at its end tag, or at the body's end)."""
+        if self._style is None:
+            return
+        text, self._style = ''.join(self._style), None
+        for c in STYLE_NEVER:
+            if c in text:
+                raise Refused('a <style> element holds %r: inside svg or math a browser reads '
+                              'it as markup this check never sees, so a style element has none'
+                              % c)
+        _css(text, 'a <style> element')
 
     def _tag(self, tag, attrs):
         if tag in TAGS:
@@ -113,7 +161,7 @@ class _Parser(html.parser.HTMLParser):
                 if any(c in _MERMAID_CLASS for c in classes):
                     raise Refused('<%s class="%s"> is unrendered Mermaid: %s (inline svg)'
                                   % (tag, value.strip()[:80], MERMAID_SAYS))
-            _css(value, where)
+            _css(value, where, plain=_text_attr(name))
         if tag in ANIMATES and named.get('attributename', '').strip().lower() in LINKS:
             raise Refused('an svg <%s> that changes href is not allowed: a page links nowhere '
                           'outside it' % tag)
@@ -137,6 +185,7 @@ def check(html):
     try:
         parser.feed(html)
         parser.close()
+        parser.end_style()                      # a style element the body never closed
     except Refused as e:
         return str(e)
     for word in RAW:

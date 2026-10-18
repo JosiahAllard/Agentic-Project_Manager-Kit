@@ -50,6 +50,51 @@ REFUSED = (
     ('<p http-equiv="x">x</p>', 'http-equiv'),
 )
 
+# Markup this parser and a browser could read differently, each refused whole: what a browser
+# would build from it (a link, a stylesheet) is markup the check would otherwise never see.
+DIFFERENTIAL = (
+    ('<svg><style><p></p><a href="https://x">click</a><link rel=dns-prefetch '
+     'href=//x.example></style></svg>', "'<'"),
+    ('<math><style><p></p><a href="https://x">click</a><link rel=dns-prefetch '
+     'href=//x.example></style></math>', "'<'"),
+    ('<svg><style>a{background:&#117;rl(https://x/a.png)}</style></svg>', "'&'"),
+    ('<style>a{background:\\75rl(https://x/a.png)}</style>', 'backslash'),
+    ('<div style="background:\\75rl(https://x/a.png)">x</div>', 'backslash'),
+    ('<style>@\\69mport "https://x/a.css";</style>', 'backslash'),
+    ('<style>a{background:image-set("https://x")}</style>', 'image-set('),
+    ('<div style="background-image: image-set( \'https://x\' 1x)">x</div>', 'image-set('),
+    ('<style>a{background:-webkit-image-set("https://x" 1x)}</style>', 'image-set('),
+    ('<svg><rect style="fill:image(\'https://x/a.png\')"/></svg>', 'image('),
+    ('<style/>a{background:url(https://x/a.png)}</style>', 'self-closing'),
+    ('<style/><p>x</p>', 'self-closing'),
+    ('<style>a{background:url(https://x/a.png)}', 'url('),        # never closed: checked at the end
+    # Where a browser ends these, Python 3.14's parser ends them too and refuses the link it
+    # finds (an older parser may not); RAW_ONLY below shows RAW refuses each by itself.
+    ('<title><b title="</title><a href=https://x>x</a>">', None),
+    ('<textarea><b title="</textarea><a href=https://x>x</a>">', None),
+    ('<xmp><b title="</xmp><a href=https://x>x</a>">', None),
+    ('<noembed><b title="</noembed><a href=https://x>x</a>">', None),
+    ('<noframes><b title="</noframes><a href=https://x>x</a>">', None),
+    ('<p><!--><a href="https://x">x</a>--></p>', None),
+    ('<p><!---><a href="https://x">x</a>--></p>', None),
+    ('<p><!-- --!><a href="https://x">x</a>--></p>', None),
+    ('<p><![CDATA[><a href="https://x">x</a>]]></p>', None),
+)
+
+# Each word of RAW in markup that holds nothing else the check refuses.
+RAW_ONLY = (
+    ('<svg><title>x</title></svg>', '<title'),
+    ('<textarea>x</textarea>', '<textarea'),
+    ('<xmp>x</xmp>', '<xmp'),
+    ('<noembed>x</noembed>', '<noembed'),
+    ('<noframes>x</noframes>', '<noframes'),
+    ('<plaintext>x', '<plaintext'),
+    ('<p><![CDATA[x]]></p>', '<![cdata['),
+    ('<p><!-->x</p>', '<!-->'),
+    ('<p><!--->x</p>', '<!--->'),
+    ('<p><!-- x --!>y</p>', '--!>'),
+)
+
 MERMAID_CLI_SVG = (
     '<svg aria-roledescription="flowchart-v2" role="graphics-document document" '
     'viewBox="-8 -8 200 120" style="max-width: 200px;" xmlns="http://www.w3.org/2000/svg" '
@@ -76,6 +121,9 @@ KEPT = (
     '<svg><animate attributeName="opacity" values="0;1" dur="1s"/></svg>',
     '<details><summary>More</summary><table><tr><td>1</td></tr></table></details>',
     MERMAID_CLI_SVG,
+    # text attributes are read as text only: a backslash or image( there is no CSS
+    '<img alt="C:\\x\\image(1).png" title="Z:\\w" aria-label="a\\b" src="data:image/png;base64,AA">',
+    '<style>a > b{color:#333}</style><p>C:\\x &amp; image(1)</p>',
 )
 
 
@@ -86,6 +134,23 @@ class CheckTest(unittest.TestCase):
                 why = pagecheck.check(html)
                 self.assertIsNotNone(why)
                 self.assertIn(word.lower(), why.lower())
+
+    def test_markup_a_browser_reads_differently_is_refused(self):
+        for html, word in DIFFERENTIAL:
+            with self.subTest(html=html):
+                why = pagecheck.check(html)
+                self.assertIsNotNone(why)
+                if word is not None:
+                    self.assertIn(word.lower(), why.lower())
+
+    def test_each_raw_word_is_refused_by_itself(self):
+        self.assertEqual(sorted(w for _, w in RAW_ONLY),
+                         sorted(set(pagecheck.RAW) - {'<script', 'javascript:', 'http-equiv'}))
+        for html, word in RAW_ONLY:
+            with self.subTest(html=html):
+                self.assertEqual(pagecheck.check(html),
+                                 'the page holds %r: a page is static HTML that runs nothing'
+                                 % word)
 
     def test_the_kept_samples_pass(self):
         for html in KEPT:

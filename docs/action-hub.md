@@ -429,8 +429,13 @@ What a body may hold (`kitlib/hubsite/pagecheck.py`, its docstring has the full 
 512 KiB of UTF-8 (`MAX_BYTES`); no `script`, `iframe`, `object`, `embed`, `form`, `link`, `meta`,
 `base` or other element of `TAGS`; no `on*` attribute; no `href` that is not a `#fragment` (a
 `data:` image on an svg `image` is the one exception); `src` and CSS `url()` only as `data:`; no
-`@import`. A body that breaks a rule is refused whole, never stripped (`invalid`, field `html`,
-nothing written). Mermaid is not rendered by the kit: a body with `class="mermaid"` or a
+`@import`, CSS backslash escape or `image-set()`. Markup that the check's parser and a browser
+could read differently is refused too: `<` or `&` in a style element's text, a self-closing
+`<style/>`, and the words of `RAW` anywhere in the text: `<title`, `<textarea`, `<xmp`,
+`<noembed`, `<noframes`, `<plaintext`, and the comment and CDATA endings the two may place
+differently (`DIFFERENTIAL` and `RAW_ONLY` in
+`tests/hubsite/test_pagecheck.py`). A body that breaks a rule is refused whole, never stripped
+(`invalid`, field `html`, nothing written). Mermaid is not rendered by the kit: a body with `class="mermaid"` or a
 ` ```mermaid ` fence is refused with "render it to svg first", and the publisher draws the
 diagram as inline `<svg>`. The listener refuses any request body over 1 MiB (`MAX_BODY` in
 `kitlib/hubsite/httpd.py`) with 413 before the check runs, so a body near the 512 KiB cap whose
@@ -454,8 +459,9 @@ and form posts. A diagram therefore shows only as an inline `<svg>` or a `data:`
 not blocked. A link clicked inside the reader moves the frame itself to that address, and the
 policy no longer applies there; the sandbox still blocks scripts and forms on that page. Some
 browsers may also look up the host names of links in advance (DNS prefetch). The page check
-refuses such a link, `<meta>` and `<link>` at publish, so a published body has none; one placed in
-the store by hand or copied in by `migrate` is not checked.
+refuses such a link, `<meta>` and `<link>` at publish, along with any markup where a browser
+could build one the check's parser never saw (the paragraph above), so a body published through
+the check has none. A body placed in the store by hand or copied in by `migrate` is not checked.
 
 Esc closes the reader only while the focus is outside the frame: keys typed inside the sandboxed
 document never reach the hub page. The Close button always works and gives the focus back to the
