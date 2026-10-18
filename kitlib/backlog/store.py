@@ -1302,30 +1302,49 @@ def catch_up(backend, paths, session):
                                                    session or '-'))
 
 
-def default_store_refusal(root):
-    """Why a write to the implicit `ref` store is refused, and where to write instead: the PM data
-    worktree and its store when the repository has one (at_landing.pm_data_root), else the
-    `.kit.json` setting that opts in. Records written there by default were lost to the live
-    store once, so a ref store is written only when named."""
+def pm_data_live_store(root):
+    """`(pm_root, named, None)`: the PM data worktree of `root`'s repository
+    (at_landing.pm_data_root) and the "backlog".store its `.kit.json` writes, `named` None when it
+    writes none (it then reads the same implicit ref as `root`, refs being shared by every
+    worktree). `(None, None, None)` when the repository has no PM data record or `root` is that
+    worktree; `(None, None, why)` when the worktree cannot be found or its `.kit.json` read.
+    Shared by default_store_refusal and preflight's backlog line (kitlib/preflight/defaultstore.py)."""
     from . import at_landing                         # at_landing imports this module
-    head = ('%s is the default backlog store: this repository\'s .kit.json names no '
-            '"backlog".store, so nothing was written' % STORE_REF)
-    opt_in = 'or set "backlog": {"store": "ref"} in .kit.json to write this store'
-    try:
-        pm_root, why = at_landing.pm_data_root(root)
-    except Exception as exc:                         # noqa: BLE001 - the advice is best effort
-        pm_root, why = None, str(exc)
+    pm_root, why = at_landing.pm_data_root(root)
     if pm_root is None:
-        where = '; the PM data worktree was not found (%s)' % why if why else ''
-        return '%s%s; %s' % (head, where, opt_in.replace('or set', 'set', 1))
+        return None, None, why
+    if os.path.normcase(os.path.normpath(pm_root)) == os.path.normcase(os.path.normpath(root)):
+        return None, None, None
     from kitlib.config import ConfigError, load as load_config
     try:
-        live = load_config(pm_root).section('backlog')['store']
-    except (ConfigError, OSError):
-        live = None
-    store = ' (store %s)' % live if live else ''
-    return ('%s; write to the live store in the PM data worktree%s with -C "%s", %s'
-            % (head, store, pm_root.replace('\\', '/'), opt_in))
+        named = load_config(pm_root).written('backlog', 'store')
+    except (ConfigError, OSError) as exc:
+        return None, None, 'cannot read the .kit.json of the PM data worktree %s: %s' % (
+            pm_root.replace('\\', '/'), exc)
+    return pm_root, named, None
+
+
+def default_store_refusal(root):
+    """Why a write to the implicit `ref` store is refused, and where to write instead: the PM data
+    worktree and its store when the repository has one that names a store (pm_data_live_store),
+    else the `.kit.json` setting that opts in. A PM data worktree naming no store reads the same
+    implicit ref, so a write there is refused too and it is not offered. Records written there by
+    default were lost to the live store once, so a ref store is written only when named."""
+    head = ('%s is the default backlog store: this repository\'s .kit.json names no '
+            '"backlog".store, so nothing was written' % STORE_REF)
+    opt_in = 'set "backlog": {"store": "ref"} in .kit.json to write this store'
+    try:
+        pm_root, named, why = pm_data_live_store(root)
+    except Exception as exc:                         # noqa: BLE001 - the advice is best effort
+        pm_root, named, why = None, None, str(exc)
+    if pm_root is None:
+        where = '; the PM data worktree was not found (%s)' % why if why else ''
+        return '%s%s; %s' % (head, where, opt_in)
+    if named is None:
+        return ('%s; the PM data worktree "%s" names no "backlog".store either, so a write there '
+                'is refused too; %s' % (head, pm_root.replace('\\', '/'), opt_in))
+    return ('%s; write to the live store in the PM data worktree (store %s) with -C "%s", or %s'
+            % (head, named, pm_root.replace('\\', '/'), opt_in))
 
 
 def open_backend(root, cfg, fetch=True, store=None, clean=False):

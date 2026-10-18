@@ -107,6 +107,19 @@ class TheDefaultStoreLine(tp.Fixture):
             HEAD % 1 + IMPLICIT + ", so backlog.py -C on this checkout reads that copy; the live "
             "store's PM data worktree was not found (cannot list the worktrees: boom)"])
 
+    def test_an_unreadable_pm_data_kit_json_is_named_and_not_offered(self):
+        self.seed('A')
+        wt = self.pm_worktree()
+        with open(os.path.join(wt, '.kit.json'), 'w', encoding='utf-8') as fh:
+            fh.write('{not json')
+        got = defaultstore.lines(self.root, load_config(self.root), 'T')
+        self.assertEqual(len(got), 1, got)
+        self.assertTrue(got[0].startswith(
+            HEAD % 1 + IMPLICIT + ", so backlog.py -C on this checkout reads that copy; the live "
+            "store's PM data worktree was not found (cannot read the .kit.json of the PM data "
+            'worktree %s: ' % wt.replace('\\', '/')), got)
+        self.assertNotIn('-C "%s"' % wt.replace('\\', '/'), got[0])
+
     def test_the_warn_naming_the_pm_data_worktree_costs_four_git_processes(self):
         """for-each-ref of the ref, ls-tree of its records, rev-parse for the common git dir that
         holds the PM data record, worktree list; the PM worktree's .kit.json is a file read."""

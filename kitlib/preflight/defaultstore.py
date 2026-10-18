@@ -5,17 +5,19 @@ The ref is the live store only when `.kit.json` names `"backlog": {"store": "ref
 store, the ref is a stale copy. Named none, it is read-only (kitlib/backlog/store.py
 `default_store_refusal`) and `backlog.py -C <this checkout>` reads it, so a worker sees stale
 records (a pull NOT FOUND, a wrong `next`). Either way one WARN line names the ref, its record
-count and the command that reads the live store.
+count and the command that reads the live store. With no store named, the live store is the PM
+data worktree's (store.pm_data_live_store): one naming `ref` makes this ref live (refs are shared
+by every worktree), so no line; one naming no store reads this same copy, so it is not offered,
+and neither is this checkout when it is that worktree.
 
 Cheap, because preflight runs at every agent start: nothing when the ref is named; else
 refs.ref_commit (one `for-each-ref`, and a second of refs/ to confirm "no ref" when it is absent),
 one `ls-tree` when the ref exists (store.record_entries, no
-blob read) and, only on the warn path with no store named, the PM data lookup
-(at_landing.pm_data_root). The local ref is read as it stands, never fetched. Never red, never
-raises: a failure is a `not checked` WARN line, and the exit code is preflight's own.
+blob read) and, only on the warn path with no store named, the PM data lookup (a `rev-parse` for
+the common git directory, a `worktree list`, and a file read of that worktree's `.kit.json`).
+The local ref is read as it stands, never fetched. Never red, never raises: a failure is a
+`not checked` WARN line, and the exit code is preflight's own.
 """
-import os
-
 from kitlib.backlog import store as smod
 from kitlib.git import refs
 from kitlib.preflight import nextblock
@@ -53,11 +55,10 @@ def _lines(top, cfg, tools):
         return [head + ', but .kit.json names "backlog".store "%s"; read the configured store: '
                 '%s -C "%s" list' % (named, command, _slash(top))]
     head += ' and .kit.json names no "backlog".store'
-    from kitlib.backlog import at_landing        # only on the warn path: it loads the config code
-    pm_root, why = at_landing.pm_data_root(top)
-    if pm_root is not None and _same(pm_root, top):
-        pm_root, why = None, None
-    if pm_root is not None:
+    pm_root, pm_named, why = smod.pm_data_live_store(top)
+    if pm_named == 'ref':
+        return []                        # refs are shared: the ref the PM worktree names is this one
+    if pm_root is not None and pm_named is not None:
         return [head + ', so backlog.py -C on this checkout reads that copy; the live store: '
                 '%s -C "%s" list' % (command, _slash(pm_root))]
     if why:
@@ -69,7 +70,3 @@ def _lines(top, cfg, tools):
 
 def _slash(path):
     return path.replace('\\', '/')
-
-
-def _same(a, b):
-    return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
