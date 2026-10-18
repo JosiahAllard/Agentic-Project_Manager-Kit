@@ -1782,8 +1782,9 @@ def inline_code(cmd, inv, tool_run=None):
     (a heredoc, a here-string, the command piped in), as texts; [] for a script run or another
     program. The command line's texts are every argument (a path the code is given counts).
     With code on the command line, the command piped in is left out when `tool_run(it)` is true:
-    the hub tool run in the one shape the guard reads in full (hub_shape), whose output the code
-    parses. Its heredocs and here-strings still count, and standard input run as code (`-` or no
+    the hub tool run in the one shape the guard reads in full (hub_shape), any verb it allows.
+    What the code does with that input is not read: code that execs it passes as a script file
+    would. Its heredocs and here-strings still count, and standard input run as code (`-` or no
     script) always counts the command piped in."""
     if inv is None:
         return []

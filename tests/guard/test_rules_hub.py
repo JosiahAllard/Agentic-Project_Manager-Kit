@@ -152,6 +152,16 @@ class SecretShell(Hub):
         self.allowed(lambda sub: bash('python -m tools.hub todos --json | python -c "import json,sys; '
                                       'print(len(json.load(sys.stdin)))"', self.w.wt, sub))
 
+    def test_what_the_skip_lets_through_by_design(self):
+        # deliberate (review of KIT-GUARD-HUB-SECRETS-PIPE-FP): the skip is not a read check. Code
+        # given with -c that names nothing of the hub passes even when it runs what is piped in as
+        # code, since no text test tells exec(...) from json.load(...) in code the guard cannot
+        # run; and the command piped in may be any verb the shape allows, an agent write too.
+        self.allowed(lambda sub: bash('python "%s" questions --json | python -c "import sys; '
+                                      'exec(sys.stdin.read())"' % self.hub, self.w.wt, sub))
+        self.allowed(lambda sub: bash('python "%s" questions add --title x | python -c "import sys; '
+                                      'print(sys.stdin.read())"' % self.hub, self.w.wt, sub))
+
     def test_the_alternative_runs_the_hub_tool_of_the_kit_the_hook_runs_from(self):
         # the kit whose kitlib the guard loaded (ctx.kit, kitlib.kitroot.root), not a copy elsewhere
         d = decide(bash('cat "%s/owner.token"' % W.fwd(self.secrets), self.w.wt, True), self.ctx(OWNER))
