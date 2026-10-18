@@ -15,8 +15,8 @@ survey() reads the key from either file (the local one first) and gives one of f
   OTHER    the key names another absolute folder (a drive path, a UNC path or ~/...): kept, never
            replaced; the owner chose it
   MISSING  neither file has the key: apply() adds it to the local file
-  BAD      what this cannot edit: not JSON, not an object, the key not an absolute path string, a
-           symbolic or hard link, or a checkout git cannot place: apply() refuses it
+  BAD      what this cannot edit, in either file: not JSON, not an object, the key not an absolute path
+           string, a symbolic or hard link, or a checkout git cannot place: apply() refuses it
 apply() writes only in the MISSING state, and only the local file. A missing file is created holding the key alone (a .tmp
 renamed onto the path, which refuses a file made since the survey); an existing file is re-read and
 refused when it changed since the survey, then written with the key added and nothing else changed:
@@ -157,8 +157,11 @@ def survey(checkout, override=None, main_top=None):
     raw, layout, data, why = _load(local)
     if why:
         return bad(why, raw=raw)
-    for path, (r, lay, dat) in ((local, (raw, layout, data)),
-                                (settings_path(checkout), _load(settings_path(checkout))[:3])):
+    shared = settings_path(checkout)
+    s_raw, s_layout, s_data, s_why = _load(shared)
+    if s_why:
+        return bad(s_why, shared, s_raw)
+    for path, (r, lay, dat) in ((local, (raw, layout, data)), (shared, (s_raw, s_layout, s_data))):
         if not isinstance(dat, dict) or KEY not in dat:
             continue
         value = dat[KEY]
