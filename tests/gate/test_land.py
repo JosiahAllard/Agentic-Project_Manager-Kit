@@ -188,14 +188,25 @@ class PushCase(LandCase):
 class PushRejected(PushCase):
     """Moved out of PushVerified for the real-git tier."""
 
-    def test_a_push_the_remote_rejects_is_stuck(self):
+    def test_a_push_the_remote_rejects_is_not_landed(self):
+        # git exits 1 and the remote's main is still the base: nothing was published, so the
+        # landing is NOT LANDED and the lock released, as on a red merged gate
         _, tip = self.branch('feature', {'a.py': 'x = 1\n'})
         hook = os.path.join(self.repo.remote, 'hooks', 'pre-receive')
         with open(hook, 'w', newline='\n') as f:
             f.write('#!/bin/sh\necho rejected by test >&2\nexit 1\n')
         out = self.lander(BRANCH, self.main, tip).run()
-        self.assert_stuck(out, tip)
-        self.assertIn('failed', out.lines[0])
+        self.assertEqual(out.code, G.FAILED, out.lines)
+        self.assertTrue(out.lines[-1].startswith('NOT LANDED: '), out.lines)
+        self.assertIn('still the base %s' % self.main[:10], out.lines[-1])
+        self.assertFalse([l for l in out.lines if l.startswith('STUCK')], out.lines)
+        self.assertTrue(out.merge)
+        self.assertIsNone(self.lock().read())
+        self.assertEqual(self.main_now(), self.main)
+        self.assertEqual(self.remote_main(), self.main)
+        os.remove(hook)                                 # the next landing is not BUSY: it lands
+        nxt = self.lander(BRANCH, self.main, tip).run()
+        self.assertEqual(nxt.code, G.OK, nxt.lines)
 
 
 class PushVerified(PushCase):
