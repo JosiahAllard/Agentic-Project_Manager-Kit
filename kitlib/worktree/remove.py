@@ -9,7 +9,7 @@ lines). Nothing here prints. The checks, in order, are the PM tool's:
 - the target: under `"repo".worktrees_dir` or another registered host's worktree folder
   (kitlib.worktree.hostdirs; homes_of: a folder reached through a junction is not one), not
   `"worktree_remove".exempt`, present, registered (a stump is named and never deleted), and on
-  `branch_template`'s branch when one is set; or, named by its PATH, a registered DETACHED tree
+  one of `branch_template`'s branches when one is set; or, named by its PATH, a registered DETACHED tree
   outside those folders (`outside_target`: not the main checkout nor in it, no link on the way,
   not locked, holding no other registered tree). A slug never names an outside tree: one that
   only matches such a tree is refused with its path-form command (`slug_redirect`);
@@ -168,6 +168,13 @@ def host_folders(cfg):
         return (os.path.normpath(cfg.repo['worktrees_dir']),)
 
 
+def templates(value):
+    """`branch_template` as a list of {slug} templates (the schema allows one string or a list)."""
+    if not value:
+        return []
+    return [value] if isinstance(value, str) else list(value)
+
+
 def settings(main, cfg):
     """This repository's values (the schema has already checked their shapes)."""
     wr = cfg.section(TOOL)
@@ -186,7 +193,7 @@ def settings(main, cfg):
         'build_dirs': dirs, 'build_dirs_error': dirs_error,
         'keepers': list(KEEPERS) + list(wr.get('keepers') or []),
         'archive_next_free': bool(wr.get('archive_next_free')),
-        'branch_template': wr.get('branch_template'),
+        'branch_template': templates(wr.get('branch_template')),
     }
 
 
@@ -687,14 +694,14 @@ def registered_target(ctx, argument):
         ctx.say('           git cannot remove it (`not a working tree`) and neither will this tool.',
                 '           Clearing it is a human decision; this tool never deletes a leftover.')
         return REFUSED
-    template = s['branch_template']
-    if template:
+    if s['branch_template']:
         registered_path, branch = known[canon(path)]
-        want = template.replace('{slug}', os.path.basename(os.path.normpath(registered_path)))
-        if branch != want:
+        slug = os.path.basename(os.path.normpath(registered_path))
+        wants = [t.replace('{slug}', slug) for t in s['branch_template']]
+        if branch not in wants:
             ctx.say('refused   %s is on %s, not %s: this repository removes only worktrees on'
                     ' their own %s branch (.kit.json worktree_remove.branch_template); nothing was'
-                    ' removed' % (path, branch, want, template))
+                    ' removed' % (path, branch, ' or '.join(wants), ' or '.join(s['branch_template'])))
             return REFUSED
     return path, known
 
@@ -1238,8 +1245,7 @@ def _abandon(ctx, argument, why, keep_branch, today):
 def branch_slug(ctx, branch):
     """The tag name's tail: `branch` with `branch_template`'s prefix and suffix cut off when it
     fits the template, else the whole branch name."""
-    template = ctx.s['branch_template']
-    if template and '{slug}' in template:
+    for template in ctx.s['branch_template']:
         pre, post = template.split('{slug}', 1)
         if (branch.startswith(pre) and branch.endswith(post)
                 and len(branch) > len(pre) + len(post)):

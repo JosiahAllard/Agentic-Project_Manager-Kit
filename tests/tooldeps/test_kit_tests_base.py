@@ -263,6 +263,7 @@ class HomeFenceEnvironment(unittest.TestCase):
                 mock.patch.object(cli.selftree, 'all_test_modules', return_value=MODULES), \
                 no_change(), \
                 mock.patch.object(cli.giveback, 'drainer', return_value=lambda n: None), \
+                mock.patch.object(cli.selfrun, 'count_units', return_value=({}, {})), \
                 mock.patch.object(cli.selfrun, 'run', side_effect=run):
             os.environ.pop(self.MARK, None)
             rc = cli.main(['--full', '--jobs', '2', '--both-tiers'], out=out)
@@ -274,8 +275,9 @@ MODULES = ['tests.a.test_m', 'tests.git.test_g', 'tests.gate.test_land_x', 'test
 
 
 class BothTiers(unittest.TestCase):
-    """--both-tiers: the pool runs twice, KIT_FAKE_GIT 1 then 0; only the last pass may give cpu
-    slots back and only the fake pass records unit times; exit 0 only when both pass."""
+    """--both-tiers: the pool runs twice, KIT_FAKE_GIT 1 then 0; both passes give cpu slots back
+    (the fake pass down to what the real pass can use, tests/tooldeps/test_kit_tests_passes.py)
+    and only the fake pass records unit times; exit 0 only when both pass."""
 
     def run_both(self, rcs, extra=()):
         calls, out = [], io.StringIO()
@@ -294,6 +296,7 @@ class BothTiers(unittest.TestCase):
                 mock.patch.object(cli.selftree, 'all_test_modules', return_value=MODULES), \
                 no_change(), \
                 mock.patch.object(cli.giveback, 'drainer', return_value=lambda n: None), \
+                mock.patch.object(cli.selfrun, 'count_units', return_value=({}, {})), \
                 mock.patch.object(cli.selfrun, 'run', side_effect=run):
             rc = cli.main(['--full', '--jobs', '2', '--both-tiers'] + list(extra), out=out)
         return rc, calls, out.getvalue()
@@ -303,7 +306,7 @@ class BothTiers(unittest.TestCase):
         self.assertEqual(rc, 0, text)
         # Both passes read the recorded times (ordering, splitting); only the fake pass records.
         times = os.path.join(os.path.abspath('.'), cli.selfrun.TIMES_FILE)
-        self.assertEqual(calls, [('1', False, times, True), ('0', True, times, False)])
+        self.assertEqual(calls, [('1', True, times, True), ('0', True, times, False)])
         lines = text.splitlines()
         self.assertEqual(lines[-1], 'kit_tests: OK, both tiers green (fake git, real git)')
         self.assertEqual([ln for ln in lines if ln.startswith('kit_tests: OK')], lines[-1:])
@@ -378,6 +381,7 @@ class ChangedTestsOnRealGit(unittest.TestCase):
                 mock.patch.object(cli, 'default_base', return_value=('main', None)), \
                 mock.patch.object(cli, 'plan', return_value=SELECTED), \
                 mock.patch.object(cli.giveback, 'drainer', return_value=lambda n: None), \
+                mock.patch.object(cli.selfrun, 'count_units', return_value=({}, {})), \
                 mock.patch.object(cli.unit_runner, 'PidHoldRun', Hold), \
                 mock.patch.object(cli.selfrun, 'run', side_effect=run):
             rc = cli.main(['--jobs', '2'] + list(argv), out=out)
@@ -390,7 +394,7 @@ class ChangedTestsOnRealGit(unittest.TestCase):
         rc, calls, bases, text = self.run_main(
             ['--select', '--changed', 'tests/a/test_m.py', 'kitlib/x.py'])
         self.assertEqual(rc, 0, text)
-        self.assertEqual(calls, [('1', SELECTED, False, True, False),
+        self.assertEqual(calls, [('1', SELECTED, True, True, False),
                                  ('0', ['tests.a.test_m'], True, False, False)], text)
         self.assertEqual(bases, [])                 # --changed: git is not asked
         self.assertIn('kit_tests: real-git pass: 1 added or changed test module(s): '
@@ -402,7 +406,7 @@ class ChangedTestsOnRealGit(unittest.TestCase):
         rc, calls, bases, text = self.run_main(
             ['--full'], changed=(['tests/gate/test_other.py', 'docs/x.md'], None))
         self.assertEqual((rc, bases), (0, ['main']), text)
-        self.assertEqual(calls, [('1', MODULES, False, True, False),
+        self.assertEqual(calls, [('1', MODULES, True, True, False),
                                  ('0', ['tests.gate.test_other'], True, False, False)], text)
         self.assertEqual(self.oks(text), [OK_BOTH], text)
 

@@ -5,8 +5,13 @@ module (changed_test_modules): its real-git pass runs those modules.
 
 `run_tiers(run_one, out, label)` calls `run_one(fake, tier_out, last)` once per tier in TIERS order:
 `fake` is the KIT_FAKE_GIT value the units get, `tier_out` the stream that pass writes to, and
-`last` is true only for the last pass (only it may give cpu slots back to the lock: an earlier
-pass that gave slots back would leave the next one running on slots the run no longer holds).
+`last` is true only for the last pass.
+
+Giving cpu slots back (kitlib.lock.giveback.drainer) is one-way: a slot given back is never taken
+again, so the next pass runs on what the earlier one kept. The earlier pass therefore gives back
+through keep_for_next: never below the threads the next pass can use at once (unit_bound, at most
+the jobs), so its drain tail hands the rest to a queued run instead of holding every slot to the
+end of the real-git pass. The last pass gives back all it does not use.
 
 Each pass's own `kit_tests: ` lines are written as `kit_tests [<tier>]: ` (TierOut), so a pass
 verdict such as `kit_tests [fake git]: OK in ...` never reads as the run's `kit_tests: OK`. After
@@ -89,6 +94,22 @@ def changed_test_modules(changed, modules):
         if path.endswith('.py'):
             wanted.add(path[:-len('.py')].replace('/', '.'))
     return [m for m in modules if m in wanted]
+
+
+def unit_bound(modules, classes):
+    """The most units kitlib.tooldeps.selfrun.run can make of `modules`: one per test class of a
+    module that has two or more in `classes` ({module: [classes]}, selfrun.count_units' answer),
+    else one. selfrun splits only such a module, by class, so its pool never runs more units at
+    once than this, whatever the recorded times."""
+    return sum(max(1, len(classes.get(m) or ())) for m in modules)
+
+
+def keep_for_next(give_back, threads):
+    """A give back for an earlier pass: `give_back(max(units still running, threads))`, so the
+    pass never hands back the cpu slots the next pass needs to run `threads` units at once."""
+    def give(running):
+        return give_back(max(running, threads))
+    return give
 
 
 def run_tiers(run_one, out, label='--both-tiers'):

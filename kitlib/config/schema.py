@@ -29,6 +29,7 @@ MODULE_RE = r'[A-Za-z_][A-Za-z0-9_]*'
 STAGES = ('first', 'main', 'last')
 
 Strs = ListOf(Str())
+BRANCH_TEMPLATE = Str(pattern=r'[^{}]*\{slug\}[^{}]*', what='a branch name holding {slug} once')
 Paths = ListOf(RelPath())
 Argv = ListOf(Str(), nonempty=True)
 Regexes = Either(Regex(), ListOf(Regex()))
@@ -307,7 +308,7 @@ SECTIONS = {
         'build_output': Field(ListOf(Either(Str(), Obj({'piece': Field(Str(), None, 'piece id'), 'path': Field(Str(), None, 'folder in the piece')}, required=('piece', 'path'), what='{piece, path}'))), [], 'build output path globs, or {piece, path} folders resolved through the pieces table'),
         'keepers': Field(Strs, [], 'file globs that refuse a removal, added to the kit list'),
         'archive_next_free': Field(Bool(), False, 'archive under the next free name'),
-        'branch_template': Field(Str(pattern=r'[^{}]*\{slug\}[^{}]*', what='a branch name holding {slug} once'), None, 'branch name for a slug'),
+        'branch_template': Field(Either(BRANCH_TEMPLATE, ListOf(BRANCH_TEMPLATE, nonempty=True)), None, 'branch name for a slug, or a list of them (a worktree on any one is removable)'),
     },
 }
 
