@@ -46,8 +46,9 @@ or after an unpair or a session that ran out) is told so on the page and to run
 - **Docs.** The agents' documents (a plan, research, a visual choice), newest first, from the
   store's `pages/` and `page_html/` ("pages/<id> and page_html/<id>" below). Read here reads the
   document's body from the server and opens it in a full-screen reader; Close shuts it, and so does
-  Esc while the focus is outside the document. A ref on any card that names a listed document is a
-  button that opens it the same way. Delete (pressed twice) removes a document; the page writes
+  Esc while the focus is outside the document. A ref on any card (a question, a to-do, a note or
+  a document) that names a listed document is a button that opens it the same way
+  (`test_a_page_id_in_a_question_or_a_to_do_opens_the_reader`). Delete (pressed twice) removes a document; the page writes
   none, agents publish them.
 - **Info.** Usage (each account's plan usage) and Agents (each agent's model and effort).
 

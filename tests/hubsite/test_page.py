@@ -1866,6 +1866,32 @@ class DocsTest(unittest.TestCase):
         self.assertEqual(got["open"], {"title": "The <b>plan</b>", "srcdoc": [DOC_CSP + DIAGRAM]})
         self.assertTrue(got["back"])
 
+    def test_a_page_id_in_a_question_or_a_to_do_opens_the_reader(self):
+        snap = docs_snap()
+        snap["collections"]["questions"] = {"Q-1": {
+            "status": "open", "title": "which", "context": "as asked", "version": 1, "asked_at": NOW,
+            "options": [{"label": "one"}, {"label": "two"}], "refs": ["plan-1", "Q-9"]}}
+        snap["collections"]["todos"] = {"T-1": {
+            "status": "open", "title": "read it", "from": "pm", "version": 1, "added_at": NOW,
+            "refs": ["research-2", "T-9"]}}
+        for hash_, card, title, body in (("", "#q-Q-1", "The <b>plan</b>", DIAGRAM),
+                                         ("#todo", "#todo-T-1", "Research notes", "<p>notes</p>")):
+            with self.subTest(card=card):
+                got = dom(READS + """
+                    await start();
+                    const refs = $("%s .refs");
+                    const btns = refs.querySelectorAll("button").map(b => text(b));
+                    const ref = refs.querySelector("button");
+                    await click(ref);
+                    const open = { title: text($("#reader-title")), srcdoc: all().filter(e => e.tag === "iframe").map(e => e.srcdoc) };
+                    await click($("#reader-close"));
+                    return { btns, open, reads: calls.filter(c => c.method === "GET" && c.path.startsWith("/pages/")).map(c => c.path), back: document.activeElement === ref };
+                """ % card, snap, hash=hash_)
+                self.assertEqual(len(got["btns"]), 1)                       # the other ref is no document: text
+                self.assertEqual(got["open"], {"title": title, "srcdoc": [DOC_CSP + body]})
+                self.assertEqual(len(got["reads"]), 1)
+                self.assertTrue(got["back"])
+
     def test_delete_asks_twice_and_is_pinned_to_the_cards_version(self):
         got = dom("""
             await start();
