@@ -21,8 +21,6 @@ description: Use when you build or fix on a branch - as worker, senior-worker, s
 ## Never
 
 - Put the owner's personal details (email address, name, account names) in anything sent off this machine: no User-Agent, header, URL, query string or form field. Web fetches use a neutral User-Agent.
-- Chain a write (a commit, merge, reset, backlog.py write, landing command) with other commands in one shell call: compound commands draw safety-check refusals the same steps run singly do not.
-- Go on after a safety-check (classifier) refusal: it is final; stop at the first one and report it verbatim, with no retry, rewording, other shell or agent.
 - Kill a process by name or command-line match (`Stop-Process -Name`, `taskkill /IM`, `CommandLine -match ... | Stop-Process`): other sessions' gates match too. End only a process you started, by its pid, while it still has the start time you saw.
 - Search from a filesystem or drive root (`find /`, a recursive listing of a whole drive): scope it to the repo, worktree or a known folder, with a timeout.
 - Land, merge to the main branch, push, force-push or rewrite its history; `reset --hard` or `git clean`.
