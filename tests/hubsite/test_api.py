@@ -683,15 +683,168 @@ class ReadTest(ApiCase):
         self.assertEqual(obj['unavailable'], dict.fromkeys(('repos', 'usage', 'agents'),
                                                            'unavailable'))
 
-    def test_snapshot_carries_pages_and_their_bodies(self):
-        """The page's Docs section reads both from the snapshot: a change that trims either must change this."""
+    def test_snapshot_carries_the_cards_but_not_the_bodies(self):
+        """The Docs tab lists the cards from the snapshot and reads a body with GET pages/{id}
+        when it is opened ("Pages"): a body is up to half a MiB, and the page reloads the
+        snapshot on every change."""
         body = '<h1>Plan</h1><svg viewBox="0 0 1 1"></svg>'
         self.store.put('pages', 'plan-1', {'title': 'The plan', 'repo': 'kit', 'at': '2026-10-15T00:00:00Z'})
         self.store.put('page_html', 'plan-1', {'html': body})
         for role in (OWNER, AGENT):
             cols = self.ok('GET', '/snapshot', role)['collections']
             self.assertEqual(cols['pages']['plan-1']['title'], 'The plan', role)
-            self.assertEqual(cols['page_html']['plan-1']['html'], body, role)
+            self.assertNotIn('page_html', cols, role)
+            self.assertEqual(self.ok('GET', '/pages/plan-1', role)['html'], body, role)
+        self.assertEqual(self.store.get('page_html', 'plan-1')['html'], body, 'the store keeps it')
+
+
+PAGE = '<h1>Plan</h1><svg viewBox="0 0 1 1"><rect width="1" height="1"/></svg>'
+
+
+class PagesTest(ApiCase):
+    def publish(self, doc_id='plan-1', html=PAGE, **kw):
+        body = {'id': doc_id, 'title': 'The plan', 'html': html}
+        body.update(kw)
+        return self.call('POST', '/pages', AGENT, body)
+
+    def test_publish_writes_the_card_and_the_body(self):
+        status, obj = self.publish(repo='kit', summary='s', refs=['Q-001'], **{'from': 'planner'})
+        self.assertEqual((status, obj['id'], obj['version'], obj['bytes']), (200, 'plan-1', 1,
+                                                                             len(PAGE)))
+        card = self.store.get('pages', 'plan-1')
+        self.assertEqual({k: card[k] for k in ('title', 'repo', 'summary', 'refs', 'from', 'at',
+                                               'bytes', 'via')},
+                         {'title': 'The plan', 'repo': 'kit', 'summary': 's', 'refs': ['Q-001'],
+                          'from': 'planner', 'at': NOW, 'bytes': len(PAGE), 'via': 'api'})
+        self.assertEqual(self.store.get('page_html', 'plan-1')['html'], PAGE)
+        self.assertNotIn('html', card)
+        got = self.ok('GET', '/pages/plan-1', OWNER)
+        self.assertEqual((got['id'], got['html'], got['version']), ('plan-1', PAGE, 1))
+        self.assertEqual([d['id'] for d in self.ok('GET', '/pages', AGENT)['items']], ['plan-1'])
+
+    def test_the_bytes_are_utf8(self):
+        html = '<p>é\U0001f600</p>'
+        self.assertEqual(self.publish(html=html)[1]['bytes'], len(html.encode('utf-8')))
+
+    def test_the_size_cap_at_its_edge(self):
+        pad = '<p>' + 'x' * (api.PAGE_HTML_MAX - 7) + '</p>'
+        self.assertEqual(len(pad.encode('utf-8')), api.PAGE_HTML_MAX)
+        self.assertEqual(self.publish('edge', pad)[0], 200)
+        over = '<p>' + 'x' * (api.PAGE_HTML_MAX - 6) + '</p>'
+        obj = self.refused('invalid', 'html', 'POST', '/pages', AGENT,
+                           {'id': 'over', 'title': 't', 'html': over})
+        self.assertIn(str(api.PAGE_HTML_MAX), obj['error']['message'])
+        # the cap counts bytes, not characters: a two-byte character is two
+        wide = '<p>' + 'é' * ((api.PAGE_HTML_MAX - 6) // 2) + 'xx</p>'
+        self.assertLess(len(wide), api.PAGE_HTML_MAX)
+        self.assertGreater(len(wide.encode('utf-8')), api.PAGE_HTML_MAX)
+        self.refused('invalid', 'html', 'POST', '/pages', AGENT,
+                     {'id': 'wide', 'title': 't', 'html': wide})
+        self.assertIsNone(self.store.get('pages', 'over'))
+
+    def test_a_page_the_check_refuses_writes_nothing(self):
+        for html in ('<script>x</script>', '<a href="https://example.com">x</a>',
+                     '<div class="mermaid">graph TD; A-->B</div>', '<img src="http://x/y.png">'):
+            with self.subTest(html=html):
+                self.refused('invalid', 'html', 'POST', '/pages', AGENT,
+                             {'id': 'bad', 'title': 't', 'html': html})
+
+    def test_ids_shaped_like_items_or_rulings_are_refused(self):
+        for doc_id in ('Q-1', 'q-001', 'M-2', 'T-3', 'P-4', 'S-5', 'A-6', 'R-2160'):
+            with self.subTest(id=doc_id):
+                self.refused('invalid', 'id', 'POST', '/pages', AGENT,
+                             {'id': doc_id, 'title': 't', 'html': PAGE})
+        for doc_id in ('../x', 'con', 'a b', ''):
+            with self.subTest(id=doc_id):
+                self.refused('invalid', 'id', 'POST', '/pages', AGENT,
+                             {'id': doc_id, 'title': 't', 'html': PAGE})
+        self.assertEqual(self.publish('R-2160-plan')[0], 200)
+
+    def test_refused_fields(self):
+        for name in ('at', 'bytes', 'via', 'status', 'version'):
+            with self.subTest(name=name):
+                self.refused('invalid', name, 'POST', '/pages', AGENT,
+                             {'id': 'p', 'title': 't', 'html': PAGE, name: 'x'})
+        self.refused('invalid', 'title', 'POST', '/pages', AGENT, {'id': 'p', 'html': PAGE})
+        self.refused('invalid', 'html', 'POST', '/pages', AGENT, {'id': 'p', 'title': 't'})
+        self.refused('invalid', 'refs', 'POST', '/pages', AGENT,
+                     {'id': 'p', 'title': 't', 'html': PAGE, 'refs': [1]})
+        self.refused('invalid', 'from', 'POST', '/pages', AGENT,
+                     {'id': 'p', 'title': 't', 'html': PAGE, 'from': 'you'})
+
+    def test_publishing_over_a_page_takes_its_version(self):
+        self.publish()
+        self.refused('conflict', 'if_version', 'POST', '/pages', AGENT,
+                     {'id': 'plan-1', 'title': 't', 'html': '<p>2</p>'})
+        self.refused('conflict', 'if_version', 'POST', '/pages', AGENT,
+                     {'id': 'plan-1', 'title': 't', 'html': '<p>2</p>', 'if_version': 2})
+        status, obj = self.publish(html='<p>2</p>', if_version=1)
+        self.assertEqual((status, obj['version'], obj['html_version']), (200, 2, 2))
+        self.assertEqual(self.store.get('page_html', 'plan-1')['html'], '<p>2</p>')
+        self.assertNotIn('summary', self.store.get('pages', 'plan-1'))
+        self.refused('conflict', 'if_version', 'POST', '/pages', AGENT,
+                     {'id': 'new', 'title': 't', 'html': PAGE, 'if_version': 1})
+        self.assertEqual(self.publish('new', if_version=0)[0], 200)
+
+    def test_two_publishers_with_one_pin_the_second_stops_at_the_body(self):
+        self.publish()
+        real = self.store.get
+        raced = []
+
+        def get(coll, doc_id):
+            got = real(coll, doc_id)
+            if coll == 'page_html' and not raced:       # another publisher lands in between
+                raced.append(None)
+                raced[0] = self.publish(html='<p>first</p>', if_version=1)
+            return got
+        self.store.get = get
+        status, obj = self.publish(html='<p>second</p>', if_version=1)
+        self.assertEqual(raced[0][0], 200)
+        self.assertEqual((status, obj['error']['code']), (409, 'conflict'))
+        self.assertEqual(self.store.get('page_html', 'plan-1')['html'], '<p>first</p>')
+        self.assertEqual(real('pages', 'plan-1')['version'], 2)
+
+    def test_the_body_is_written_before_the_card(self):
+        order = []
+        real = self.store.put
+
+        def put(coll, doc_id, fields, if_version=None):
+            order.append(coll)
+            if coll == 'pages':
+                raise HubError('store', 'the disk is full', 'pages')
+            return real(coll, doc_id, fields, if_version)
+        self.store.put = put
+        status, obj = self.publish()
+        self.assertEqual(order, ['page_html', 'pages'])
+        self.assertEqual(obj['error']['code'], 'store')
+        # the card write failed: an orphan body (hubvalidate warns of it), never a card with none
+        self.assertIsNone(self.store.get('pages', 'plan-1'))
+        self.assertEqual(self.store.get('page_html', 'plan-1')['html'], PAGE)
+        self.store.put = real
+        self.assertEqual(self.publish()[0], 200, 'the next publish writes over the orphan')
+
+    def test_get_of_a_page_with_no_body_is_not_found(self):
+        self.store.put('pages', 'card-only', {'title': 't'})
+        self.refused('not_found', 'id', 'GET', '/pages/card-only', AGENT)
+        self.refused('not_found', 'id', 'GET', '/pages/none', OWNER)
+
+    def test_the_owner_deletes_the_card_then_the_body(self):
+        self.publish()
+        order = []
+        real = self.store.delete
+
+        def delete(coll, doc_id, if_version=None):
+            order.append(coll)
+            return real(coll, doc_id, if_version)
+        self.store.delete = delete
+        self.refused('conflict', 'if_version', 'POST', '/pages/plan-1/delete', OWNER,
+                     {'if_version': 4})
+        self.refused('forbidden', 'role', 'POST', '/pages/plan-1/delete', AGENT)
+        obj = self.ok('POST', '/pages/plan-1/delete', OWNER, {'if_version': 1})
+        self.assertEqual((obj['deleted'], order), (True, ['pages', 'page_html']))
+        self.assertIsNone(self.store.get('pages', 'plan-1'))
+        self.assertIsNone(self.store.get('page_html', 'plan-1'))
+        self.refused('not_found', 'id', 'POST', '/pages/plan-1/delete', OWNER)
 
     def test_health(self):
         obj = self.ok('GET', '/health', OWNER)
