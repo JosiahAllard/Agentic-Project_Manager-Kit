@@ -2,7 +2,9 @@
 base"): origin/main when it resolves, a line when the local main differs, and an explicit --base
 kept. The change list is mocked; the refs are a throwaway repository's (tests/gitfixture.py).
 Also the git tier (KIT_FAKE_GIT) and the home fence's marker (KIT_HOME_FENCE) the units are given,
-and --jobs 1's pid hold (docs/test-tools.md "The pid shield")."""
+and --jobs 1's pid hold (docs/test-tools.md "The pid shield"), and the second pass on real git of
+the test modules a change adds or changes."""
+import contextlib
 import importlib.util
 import io
 import os
@@ -18,6 +20,14 @@ _spec = importlib.util.spec_from_file_location('kit_tests_entry_for_base_tests',
                                                os.path.join(KIT, 'tools', 'kit_tests.py'))
 cli = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(cli)
+
+
+@contextlib.contextmanager
+def no_change():
+    """The change adds or changes no test module: --full's diff for the real-git pass is empty."""
+    with mock.patch.object(cli.selftree, 'changed_paths', return_value=([], None)), \
+            mock.patch.object(cli, 'default_base', return_value=('main', None)):
+        yield
 
 
 class SelectBase(unittest.TestCase):
@@ -93,7 +103,15 @@ class PidHoldOptIn(unittest.TestCase):
             seen['more'] = kw
             return 0
         here = os.path.abspath('.')
-        with mock.patch.dict(os.environ, {}),                 mock.patch.object(cli.unit_runner, 'PidHoldRun', Hold),                 mock.patch.object(cli.gitrepo, 'toplevel', return_value=(here, None)),                 mock.patch.object(cli.gitrepo, 'common_dir', return_value=(None, 'no git')),                 mock.patch.object(cli.selftree, 'config', return_value={'serial': []}),                 mock.patch.object(cli.selftree, 'all_test_modules', return_value=['tests.a.test_m']),                 mock.patch.object(cli.selfrun, 'run', side_effect=run),                 mock.patch.object(cli.subprocess, 'call', side_effect=call):
+        with mock.patch.dict(os.environ, {}), \
+                mock.patch.object(cli.unit_runner, 'PidHoldRun', Hold), \
+                mock.patch.object(cli.gitrepo, 'toplevel', return_value=(here, None)), \
+                mock.patch.object(cli.gitrepo, 'common_dir', return_value=(None, 'no git')), \
+                mock.patch.object(cli.selftree, 'config', return_value={'serial': []}), \
+                mock.patch.object(cli.selftree, 'all_test_modules', return_value=['tests.a.test_m']), \
+                no_change(), \
+                mock.patch.object(cli.selfrun, 'run', side_effect=run), \
+                mock.patch.object(cli.subprocess, 'call', side_effect=call):
             os.environ.pop('KIT_PID_HOLD', None)
             rc = cli.main(['--full', '--jobs', str(jobs)] + list(extra), out=out)
         return rc, order, seen, out.getvalue()
@@ -153,6 +171,7 @@ class GitTierEnvironment(unittest.TestCase):
                 mock.patch.object(cli.gitrepo, 'common_dir', return_value=(None, 'no git')), \
                 mock.patch.object(cli.selftree, 'config', return_value={'serial': []}), \
                 mock.patch.object(cli.selftree, 'all_test_modules', return_value=['tests.a.test_m']), \
+                no_change(), \
                 mock.patch.object(cli.selfrun, 'run', side_effect=run), \
                 mock.patch.object(cli.subprocess, 'call', side_effect=call):
             os.environ.pop('KIT_FAKE_GIT', None)
@@ -201,6 +220,7 @@ class HomeFenceEnvironment(unittest.TestCase):
                 mock.patch.object(cli.gitrepo, 'common_dir', return_value=(None, 'no git')), \
                 mock.patch.object(cli.selftree, 'config', return_value={'serial': []}), \
                 mock.patch.object(cli.selftree, 'all_test_modules', return_value=['tests.a.test_m']), \
+                no_change(), \
                 mock.patch.object(cli.selfrun, 'run', side_effect=run), \
                 mock.patch.object(cli.selflist, 'collect', side_effect=collect), \
                 mock.patch.object(cli.selflist, 'render', return_value=[]), \
@@ -241,6 +261,7 @@ class HomeFenceEnvironment(unittest.TestCase):
                 mock.patch.object(cli.gitrepo, 'common_dir', return_value=(here, None)), \
                 mock.patch.object(cli.selftree, 'config', return_value={'serial': []}), \
                 mock.patch.object(cli.selftree, 'all_test_modules', return_value=MODULES), \
+                no_change(), \
                 mock.patch.object(cli.giveback, 'drainer', return_value=lambda n: None), \
                 mock.patch.object(cli.selfrun, 'run', side_effect=run):
             os.environ.pop(self.MARK, None)
@@ -271,6 +292,7 @@ class BothTiers(unittest.TestCase):
                 mock.patch.object(cli.gitrepo, 'common_dir', return_value=(here, None)), \
                 mock.patch.object(cli.selftree, 'config', return_value={'serial': []}), \
                 mock.patch.object(cli.selftree, 'all_test_modules', return_value=MODULES), \
+                no_change(), \
                 mock.patch.object(cli.giveback, 'drainer', return_value=lambda n: None), \
                 mock.patch.object(cli.selfrun, 'run', side_effect=run):
             rc = cli.main(['--full', '--jobs', '2', '--both-tiers'] + list(extra), out=out)
@@ -313,6 +335,134 @@ class BothTiers(unittest.TestCase):
                     mock.patch('sys.stderr', io.StringIO()):
                 cli.main(['--full', '--both-tiers'] + extra, out=io.StringIO())
             self.assertEqual(cm.exception.code, cli.USAGE, extra)
+
+
+SELECTED = ['tests.a.test_m', 'tests.gate.test_other']
+OK_BOTH = 'kit_tests: OK, both tiers green (fake git, real git)'
+NONE_CHANGED = 'kit_tests: real-git pass: no added or changed test module'
+
+
+class ChangedTestsOnRealGit(unittest.TestCase):
+    """The default --select and --full (no flag; the gate's cmd and full_cmd): the run on the fake
+    git, then a second pass on real git of the test modules the change adds or changes; none, one
+    pass and a line that says so. --full refuses when git cannot list the change."""
+
+    def run_main(self, argv, rcs=(0, 0), changed=([], None), outer='1'):
+        calls, bases, out = [], [], io.StringIO()
+
+        class Hold(object):
+            def start(self):
+                return 'pid hold: on'
+
+            def end(self):
+                return 'pid hold: held to the end of the run'
+
+        def run(modules, root, jobs, **kw):
+            calls.append((kw['environ'].get('KIT_FAKE_GIT'), list(modules),
+                          kw['give_back'] is not None, kw.get('record_times', True),
+                          kw['hold'] is not None))
+            rc = rcs[len(calls) - 1]
+            kw['out'].write('kit_tests: %s in 1s\n' % ('OK' if rc == 0 else 'FAILED, exit 1'))
+            return rc, ''
+
+        def paths(base, top):
+            bases.append(base)
+            return changed
+        here = os.path.abspath('.')
+        with mock.patch.dict(os.environ, {'KIT_FAKE_GIT': outer}), \
+                mock.patch.object(cli.gitrepo, 'toplevel', return_value=(here, None)), \
+                mock.patch.object(cli.gitrepo, 'common_dir', return_value=(here, None)), \
+                mock.patch.object(cli.selftree, 'config', return_value={'serial': []}), \
+                mock.patch.object(cli.selftree, 'all_test_modules', return_value=MODULES), \
+                mock.patch.object(cli.selftree, 'changed_paths', side_effect=paths), \
+                mock.patch.object(cli, 'default_base', return_value=('main', None)), \
+                mock.patch.object(cli, 'plan', return_value=SELECTED), \
+                mock.patch.object(cli.giveback, 'drainer', return_value=lambda n: None), \
+                mock.patch.object(cli.unit_runner, 'PidHoldRun', Hold), \
+                mock.patch.object(cli.selfrun, 'run', side_effect=run):
+            rc = cli.main(['--jobs', '2'] + list(argv), out=out)
+        return rc, calls, bases, out.getvalue()
+
+    def oks(self, text):
+        return [ln for ln in text.splitlines() if ln.startswith('kit_tests: OK')]
+
+    def test_the_default_select_runs_the_changed_test_modules_on_real_git_too(self):
+        rc, calls, bases, text = self.run_main(
+            ['--select', '--changed', 'tests/a/test_m.py', 'kitlib/x.py'])
+        self.assertEqual(rc, 0, text)
+        self.assertEqual(calls, [('1', SELECTED, False, True, False),
+                                 ('0', ['tests.a.test_m'], True, False, False)], text)
+        self.assertEqual(bases, [])                 # --changed: git is not asked
+        self.assertIn('kit_tests: real-git pass: 1 added or changed test module(s): '
+                      'tests.a.test_m\n', text)
+        self.assertEqual(self.oks(text), [OK_BOTH], text)
+        self.assertEqual(text.splitlines()[-1], OK_BOTH)
+
+    def test_the_default_full_diffs_against_the_default_base(self):
+        rc, calls, bases, text = self.run_main(
+            ['--full'], changed=(['tests/gate/test_other.py', 'docs/x.md'], None))
+        self.assertEqual((rc, bases), (0, ['main']), text)
+        self.assertEqual(calls, [('1', MODULES, False, True, False),
+                                 ('0', ['tests.gate.test_other'], True, False, False)], text)
+        self.assertEqual(self.oks(text), [OK_BOTH], text)
+
+    def test_no_changed_test_module_is_one_pass_and_a_line_that_is_no_verdict(self):
+        for argv, changed in ((['--select', '--changed', 'kitlib/x.py'], ([], None)),
+                              (['--full'], (['kitlib/x.py', 'tests/gate/fixtures.py'], None))):
+            rc, calls, bases, text = self.run_main(argv, changed=changed)
+            self.assertEqual(rc, 0, text)
+            self.assertEqual(calls, [('1', SELECTED if '--select' in argv else MODULES,
+                                      True, True, False)], text)
+            self.assertIn(NONE_CHANGED + '\n', text)
+            self.assertEqual(self.oks(text), ['kit_tests: OK in 1s'], text)
+
+    def test_full_refuses_when_git_cannot_list_the_change(self):
+        rc, calls, bases, text = self.run_main(['--full'], changed=(None, 'git: broken'))
+        self.assertEqual((rc, calls), (cli.USAGE, []), text)
+        self.assertRegex(text, r'(?m)^kit_tests: refused: .*git: broken.* - no test ran')
+        self.assertEqual(self.oks(text), [], text)
+
+    def test_a_red_real_git_pass_fails_the_run(self):
+        rc, calls, bases, text = self.run_main(['--select', '--changed', 'tests/a/test_m.py'],
+                                               rcs=(0, 1))
+        self.assertEqual((rc, len(calls)), (1, 2), text)
+        self.assertNotRegex(text, r'(?m)^kit_tests: OK')
+        self.assertIn('red tier(s): real git\n', text)
+
+    def test_real_git_already_runs_every_test_on_real_git(self):
+        for argv in (['--full', '--real-git'],
+                     ['--select', '--real-git', '--changed', 'tests/a/test_m.py']):
+            rc, calls, bases, text = self.run_main(argv, changed=(['tests/a/test_m.py'], None))
+            self.assertEqual((rc, bases, len(calls), calls[0][0]), (0, [], 1, '0'), text)
+            self.assertNotIn('real-git pass', text)
+
+    def test_an_outer_real_git_tier_is_one_pass(self):
+        rc, calls, bases, text = self.run_main(['--full'], changed=(['tests/a/test_m.py'], None),
+                                               outer='0')
+        self.assertEqual((rc, bases, [c[0] for c in calls]), (0, [], ['0']), text)
+
+    def test_both_tiers_real_pass_takes_the_changed_modules_too(self):
+        rc, calls, bases, text = self.run_main(['--full', '--both-tiers'],
+                                               changed=(['tests/a/test_m.py'], None))
+        self.assertEqual(rc, 0, text)
+        self.assertEqual([c[:2] for c in calls],
+                         [('1', MODULES),
+                          ('0', ['tests.a.test_m', 'tests.git.test_g', 'tests.gate.test_land_x'])])
+        self.assertEqual(self.oks(text), [OK_BOTH], text)
+
+    def test_plan_names_the_real_git_modules_and_runs_nothing(self):
+        rc, calls, bases, text = self.run_main(
+            ['--select', '--plan', '--changed', 'tests/a/test_m.py'])
+        self.assertEqual((rc, calls), (0, []), text)
+        self.assertIn('kit_tests: real-git pass: 1 added or changed test module(s): '
+                      'tests.a.test_m\n', text)
+
+    def test_the_pid_hold_holds_only_the_fake_pass(self):
+        rc, calls, bases, text = self.run_main(
+            ['--select', '--pid-hold', '--changed', 'tests/a/test_m.py'])
+        self.assertEqual(rc, 0, text)
+        self.assertEqual([c[4] for c in calls], [True, False], text)
+        self.assertIn('without the pid hold', text)
 
 
 if __name__ == '__main__':

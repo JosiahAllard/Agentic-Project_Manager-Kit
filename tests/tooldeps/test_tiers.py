@@ -1,4 +1,5 @@
-"""kitlib.tooldeps.tiers: kit_tests --both-tiers' pass loop and its verdict lines."""
+"""kitlib.tooldeps.tiers: kit_tests' two-tier pass loop and its verdict lines, and the modules the
+real-git pass runs (the added or changed test modules, and --both-tiers' REAL_GIT_MODULES)."""
 import io
 import threading
 import time
@@ -82,6 +83,44 @@ class RunTiersTest(unittest.TestCase):
         rc, calls, text = self.run_with([tiers.INTERRUPTED, 0])
         self.assertEqual((rc, len(calls)), (tiers.INTERRUPTED, 1), text)
         self.assertNotRegex(text, r'(?m)^kit_tests: OK')
+
+    def test_the_header_names_what_runs_the_tiers(self):
+        out = io.StringIO()
+        tiers.run_tiers(lambda fake, stream, last: 0, out, label='changed test modules')
+        self.assertIn('kit_tests: changed test modules: tier fake git (KIT_FAKE_GIT=1)\n',
+                      out.getvalue())
+        rc, calls, text = self.run_with([0, 0])
+        self.assertIn('kit_tests: --both-tiers: tier real git (KIT_FAKE_GIT=0)\n', text)
+
+
+MODULES = ['tests.gate.test_land_x', 'tests.gate.test_other', 'tests.git.test_g',
+           'tests.test_top']
+
+
+class ChangedTestModules(unittest.TestCase):
+    """The test modules a change adds or changes: the second pass on real git runs these."""
+
+    def test_an_added_or_changed_test_module_is_named_in_the_modules_order(self):
+        got = tiers.changed_test_modules(
+            ['tests/git/test_g.py', 'tests\\gate\\test_other.py', 'tests/test_top.py'], MODULES)
+        self.assertEqual(got, ['tests.gate.test_other', 'tests.git.test_g', 'tests.test_top'])
+
+    def test_what_is_not_a_test_module_of_the_tree_is_left_out(self):
+        changed = ['tests/gate/test_gone.py',        # deleted: the tree holds no such module
+                   'tests/gate/fixtures.py',         # a helper
+                   'tests/selection.json', 'kitlib/gate/land.py', 'docs/gate.md',
+                   'tests/gate/test_other.txt', 'tools/test_like.py']
+        self.assertEqual(tiers.changed_test_modules(changed, MODULES), [])
+        self.assertEqual(tiers.changed_test_modules([], MODULES), [])
+
+    def test_the_real_git_modules_take_the_changed_ones_too(self):
+        self.assertEqual(tiers.real_git_modules(MODULES), ['tests.gate.test_land_x',
+                                                           'tests.git.test_g'])
+        self.assertEqual(tiers.real_git_modules(MODULES, also=['tests.test_top', 'tests.git.test_g']),
+                         ['tests.gate.test_land_x', 'tests.git.test_g', 'tests.test_top'])
+        # a changed module the list does not hold still runs
+        self.assertEqual(tiers.real_git_modules(['tests.a.test_a'], also=['tests.b.test_b']),
+                         ['tests.b.test_b'])
 
 
 if __name__ == '__main__':
