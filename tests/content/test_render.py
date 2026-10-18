@@ -377,7 +377,9 @@ class TempTreeTest(unittest.TestCase):
         self.assertEqual(json.loads(read(self.path('.claude-plugin', 'plugin.json')))['version'], '9.8.7')
 
     def test_an_installed_plugin_export_is_never_written(self):
-        # KIT-RENDER-REFUSE-INSTALLED-PLUGIN: --write once rewrote an installed export's plugin.json
+        # --write run from an installed export once rewrote its plugin.json
+        from kitlib import pluginsource
+        self.assertEqual(content.EXPORT_MARKER, pluginsource.MARKER)
         write(self.path('kit.json'), b'{"name": "pm-kit", "version": "9.8.7"}\n')
         write(self.path('.pm-kit-export'), b'Z:/somewhere\n')
         before = read(self.path('.claude-plugin', 'plugin.json'))

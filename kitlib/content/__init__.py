@@ -40,6 +40,9 @@ SKILLS_REL = 'content/skills'
 KIT_REL = 'kit.json'
 ROSTER_REL = 'docs/ROSTER.md'
 SKIP_DIRS = ('__pycache__',)
+# kitlib.pluginsource.MARKER, in every installed plugin export; spelled here, not imported, so the
+# lock tool, which reaches this module, does not reach pluginsource (tests/lock/test_release.py)
+EXPORT_MARKER = '.pm-kit-export'
 # a role's old name -> its name now, for one release (docs/ROSTER.md; the launcher's AGENT_ALIASES)
 ALIASES = {'opus-worker': 'senior-worker'}
 _ROLES = {}
@@ -262,13 +265,12 @@ def write(root, renderers, content=None, tiers=None):
     """Write every differing or missing rendered file and remove every stale one, then each folder
     above a removed file that is left empty (a retired folder goes, as git removes it); the paths
     touched, sorted. A root in an installed plugin export (the root or a folder above it holds
-    kitlib.pluginsource's marker) is a ContentError: nothing is written there."""
-    from kitlib.pluginsource import MARKER
+    EXPORT_MARKER) is a ContentError: nothing is written there."""
     here = os.path.abspath(root)
     while True:
-        if os.path.isfile(os.path.join(here, MARKER)):
+        if os.path.isfile(os.path.join(here, EXPORT_MARKER)):
             raise ContentError('%s is in an installed plugin export (%s in %s); not written: render '
-                               'into a kit checkout with -C <checkout>' % (root, MARKER, here))
+                               'into a kit checkout with -C <checkout>' % (root, EXPORT_MARKER, here))
         up = os.path.dirname(here)
         if up == here:
             break
