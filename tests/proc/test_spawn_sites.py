@@ -64,6 +64,8 @@ STANDALONE = ('a standalone optional tool that imports nothing of the kit: it st
 
 STUB = 'kitlib/stubs/__init__.py TEMPLATE'      # the name the stub's text is read under
 STUB_TOOL = 'gate'                              # any name: the template's start is the same
+STUB_KIT = r'C:\kit'                            # a fixed kit path: the checkout's own folder name
+                                                # (a worktree slug like guard-start-process-args) is no start
 
 EXEMPT = {
     ('kitlib/proc/spawn.py', 'run', 'subprocess.run'): (1, HELPER),
@@ -127,6 +129,8 @@ HAZARD_EXEMPT = {
     ('kitlib/guard/commands.py', '_ps_env_unsafe', 'Start-Process'): (1, GUARD_READS),
     ('kitlib/guard/commands.py', '_start_process', 'Start-Process'): (1, GUARD_READS),
     ('kitlib/guard/commands.py', 'invocation', 'Start-Process'): (2, GUARD_READS),
+    ('kitlib/guard/commands.py', '_nested_text', 'Start-Process'): (1, GUARD_READS),
+    ('kitlib/guard/commands.py', '_sp_shell_text', 'Start-Process'): (3, GUARD_READS),
     ('kitlib/guard/rules.py', '_python', 'Start-Process'): (1, GUARD_READS),
     ('kitlib/guard/rules.py', 'plain_run', 'Start-Process'): (1, GUARD_READS),
     ('kitlib/guard/rules.py', 'runs_reserve_ui', 'Start-Process'): (1, GUARD_READS),
@@ -177,7 +181,7 @@ HAZARD_EXEMPT = {
      'StartupTests.test_task_uses_current_interactive_user_and_hidden_explicit_python_launcher',
      '-WindowStyle Hidden'): (2, BRIDGE_TEXT),
     ('tests/guard/extra_rows.py', '<module>', 'Start-Process'): (4, GUARD_TEST),
-    ('tests/guard/shell_rows.py', '<module>', 'Start-Process'): (6, GUARD_TEST),
+    ('tests/guard/shell_rows.py', '<module>', 'Start-Process'): (24, GUARD_TEST),
     ('tests/guard/shell_rows.py', '<module>', 'cmd /c start'): (2, GUARD_TEST),
     ('tests/guard/test_jail.py', 'UnplacedGit.test_each_env_changer_held_for_every_jailed_role',
      'Start-Process'): (1, GUARD_TEST),
@@ -262,7 +266,7 @@ def scan_tree(root):
 
 def scan_stub():
     """The findings in the text of a stub, under the name STUB."""
-    return scan_source(stubs.stub_text(STUB_TOOL, kit=ROOT), STUB)
+    return scan_source(stubs.stub_text(STUB_TOOL, kit=STUB_KIT), STUB)
 
 
 def check(found, exempt):
@@ -304,7 +308,7 @@ def scan_hazards(root, stub=True):
         else:
             found.extend(windowscan.scan_python(text, rel))
     if stub:
-        found.extend(windowscan.scan_python(stubs.stub_text(STUB_TOOL, kit=ROOT), STUB))
+        found.extend(windowscan.scan_python(stubs.stub_text(STUB_TOOL, kit=STUB_KIT), STUB))
     return [f for f in found if RULE_HOMES.get(f[2]) != f[0]]
 
 
@@ -395,7 +399,7 @@ class Scanner(unittest.TestCase):
     def test_the_stub_text_is_read(self):
         """The start a stub makes is in a string in kitlib/stubs: it is read from the stub's text."""
         self.assertEqual([f[:3] for f in scan_stub()], [(STUB, 'main', 'subprocess.call')])
-        self.assertIn(stubs.MARK, stubs.stub_text(STUB_TOOL, kit=ROOT))
+        self.assertIn(stubs.MARK, stubs.stub_text(STUB_TOOL, kit=STUB_KIT))
 
     def test_the_hooks_with_no_extension_are_read(self):
         files = python_files(ROOT)
