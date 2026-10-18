@@ -565,7 +565,7 @@ class LockVerbs(Base):
                     self.assertEqual((d.verdict, d.rule), ('deny', 'role-lock'), d.reason)
 
     def test_the_module_name_inside_a_regex_alternation_is_not_a_lock_call(self):
-        """KIT-GUARD-ROLELOCK-BARE-TEXT: a read-only env listing filtered on a regex naming
+        """A read-only env listing filtered on a regex naming
         MACHINE_LOCK among others (a Where-Object block's comparison has no program) names no lock
         CLI: next to `|` the module name is a regex alternative, never a module python runs. The
         same words as a whole module name, an array a splat hands on, or the CLI's file name stay
