@@ -351,8 +351,8 @@ python <kit>/tools/kit_stubs.py memory [-C DIR] [--apply]
 
 `memory` is not about stubs: it prints the `autoMemoryDirectory` that `.claude/settings.local.json`
 (git-ignored; the value is a machine path) would get (dry run), and with `--apply` adds it when
-neither that file nor `.claude/settings.json` has the key; exit 1 when the local file
-cannot be edited (`kitlib/stubs/memory.py`; tests: `tests/stubs/test_memory.py`; docs/pm-start.md
+neither that file nor `.claude/settings.json` has the key; exit 1 when either file
+cannot be read as a JSON object (`kitlib/stubs/memory.py`; tests: `tests/stubs/test_memory.py`; docs/pm-start.md
 "Memory folder (`memory`)").
 
 Opt-in, for a repository that wants committed stubs (the old setup; decision 21 made the default

@@ -231,6 +231,37 @@ class Files(unittest.TestCase):
         self.assertIn('settings.local.json', line)
         self.assertNotIn('commits', line)
 
+    def test_a_tracked_file_that_is_not_a_json_object_is_bad_and_nothing_is_written(self):
+        for raw in (b'[1]', b'{"a": '):
+            self.put_shared(raw)
+            m = self.survey()
+            self.assertEqual(m.state, memory.BAD, raw)
+            self.assertIn(self.shared, m.why)
+            with self.assertRaises(memory.Refused):
+                memory.apply(m)
+            self.assertFalse(os.path.exists(self.path), raw)
+            got = memory.run(self.root, apply=True, main_top=fake_top(self.TOP), kit='K', unignored=lambda c: None)
+            self.assertEqual(got.code, 1, got.lines)
+            self.assertFalse(os.path.exists(self.path), raw)
+            line = memory.problem_line(self.root, main_top=fake_top(self.TOP))
+            self.assertTrue(line.startswith('could not check memory ('), line)
+
+    def test_a_bad_tracked_file_is_bad_even_with_a_valid_local_key(self):
+        self.put(json.dumps({'autoMemoryDirectory': self.WANT}).encode('utf-8'))
+        self.put_shared(b'[1]')
+        self.assertEqual(self.survey().state, memory.BAD)
+
+    def test_a_linked_tracked_file_is_not_bad(self):
+        # The shared file is only read, so a link guard (which protects writing) does not make it BAD.
+        os.makedirs(os.path.dirname(self.shared), exist_ok=True)
+        twin = self.shared + '.twin'
+        with open(twin, 'wb') as fh:
+            fh.write(b'{"model": "x"}\n')
+        os.link(twin, self.shared)
+        m = self.survey()
+        self.assertEqual(m.state, memory.MISSING, m.why)
+        self.assertEqual(m.path, self.path)
+
     def test_run_on_a_bad_file_exits_1(self):
         self.put(b'[1]')
         got = memory.run(self.root, apply=True, main_top=fake_top(self.TOP), kit='K', unignored=lambda c: None)
