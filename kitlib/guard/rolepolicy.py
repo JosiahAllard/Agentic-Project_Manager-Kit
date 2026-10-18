@@ -54,7 +54,8 @@ The owner's own session (nothing marks it) is never held, and its calls read no 
                   xargs, python -, runpy, a python given to a shell as $0 or $1: HANDED_ON; so is
                   the name glued to other text in a launcher's line the guard does not read:
                   _hidden_launch), and a command with no program the guard can name (an
-                  assignment alone, `$c=gc ...`) whose words name it is NO_PROGRAM; both are
+                  assignment alone, `$c=gc ...`) whose words name it (the module's name next to
+                  a `|` is a regex alternative, not it: LOCK_MODULE_TEXT_RE) is NO_PROGRAM; both are
                   refused in every mode. Not read (_lock_words): an environment assignment's
                   value, a glob, a name built from pieces, an 8.3 short name. A lock MCP
                   tool (lock_mcp_tool) whose verb (MCP_VERBS) is outside the mode's verbs, or that
@@ -501,6 +502,11 @@ LOCK_MODULE = 'machine_lock'
 # inside a longer name (`tests.lock.test_machine_lock`):
 LOCK_MODULE_WORD_RE = re.compile(r'(?:\w+\.)*%s' % LOCK_MODULE, re.I)
 LOCK_MODULE_CODE_RE = re.compile(r'(?<!\w)%s(?!\w)' % LOCK_MODULE, re.I)
+# the module's name in a word of a command with no program (lock_verb's NO_PROGRAM), where it is
+# quoted text: next to a `|` it is a regex alternative (`-match 'MACHINE_LOCK|KIT'`), never a
+# module python runs, since python -m and runpy take the dotted name whole. Shell code a heredoc
+# or here-string feeds keeps LOCK_MODULE_CODE_RE: there `|` is a pipe.
+LOCK_MODULE_TEXT_RE = re.compile(r'(?<![\w|])%s(?![\w|])' % LOCK_MODULE, re.I)
 
 
 def _lock_names(t):
@@ -1074,7 +1080,10 @@ def lock_verb(parsed, m, kit=None, kit_checkout=None):
     A command with no invocation (an assignment alone, `$c=gc tools/machine_lock.py`, which
     PowerShell reads as one word with no program the guard can name; `$a = 'tools/...','stop'`
     for splatting) whose words or redirects name machine_lock.py is refused as NO_PROGRAM, in any
-    mode: fail-closed, since its value may reach a program later on the line. Fail-closed too, a
+    mode: fail-closed, since its value may reach a program later on the line. Its words name it
+    too with the module's name standing alone, but not next to a `|` (LOCK_MODULE_TEXT_RE: `-match
+    'MACHINE_LOCK|KIT'` in a Where-Object block is a regex); its redirects' text is read as code
+    (_lock_code). Fail-closed too, a
     command whose words, heredoc body, here-string or redirect name it (_lock_seq) passes only
     when its program only reads or prints it with its output staying (_lock_path_only), or runs
     it (_run_words, _launched: then judged by its verb); any other program - cp, Copy-Item, ln,
@@ -1086,7 +1095,8 @@ def lock_verb(parsed, m, kit=None, kit_checkout=None):
     for cmd in parsed.commands:
         inv = cm.invocation(cmd)
         if inv is None:
-            if any(_lock_code(t) for t in [w.text for w in cmd.words] + _fed(cmd)):
+            if any(_lock_names(t) or LOCK_MODULE_TEXT_RE.search(t) for t in [w.text for w in cmd.words]) or any(
+                    _lock_code(t) for t in _fed(cmd)):
                 return NO_PROGRAM, allowed
             continue
         words = _lock_words(inv, parsed.commands, kit, kit_checkout)

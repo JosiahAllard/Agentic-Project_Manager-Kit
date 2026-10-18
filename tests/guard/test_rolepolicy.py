@@ -564,6 +564,38 @@ class LockVerbs(Base):
                     self.assertIsNotNone(d, text)
                     self.assertEqual((d.verdict, d.rule), ('deny', 'role-lock'), d.reason)
 
+    def test_the_module_name_inside_a_regex_alternation_is_not_a_lock_call(self):
+        """KIT-GUARD-ROLELOCK-BARE-TEXT: a read-only env listing filtered on a regex naming
+        MACHINE_LOCK among others (a Where-Object block's comparison has no program) names no lock
+        CLI: next to `|` the module name is a regex alternative, never a module python runs. The
+        same words as a whole module name, an array a splat hands on, or the CLI's file name stay
+        refused, and a real call with a verb the mode lacks is still denied."""
+        wt = self.w.wt.replace('\\', '/')
+        passing = ("Get-ChildItem env: | Where-Object { $_.Name -match 'MACHINE_LOCK|KIT|GATE' } | "
+                   "Format-Table Name, Value; git -C %s status; git -C %s log -1" % (wt, wt),
+                   "gci env: | ? { $_.Name -match 'KIT|machine_lock' }")
+        from kitlib.guard import commands as cm, shell as sh
+        for text in passing:
+            for role in ('reviewer', 'senior-worker', 'pm'):
+                with self.subTest(role=role, text=text):
+                    parsed = cm.read(text, sh.PS, self.w.wt)
+                    self.assertIsNone(rolepolicy.lock_verb(parsed, 'read', self.w.kit_dir))
+                    self.assertIsNone(rolepolicy.check(self.shell(text, role), self.w.ctx()))
+                    self.allowed(self.shell(text, role))        # the whole guard, not the policy alone
+        refused = ("$m = 'tools.machine_lock'; python -m $m stop 42",
+                   "$m = 'machine_lock'; python -m $m stop 42",
+                   "$a = 'MACHINE_LOCK','stop'; python -m @a",
+                   "$c = \"import runpy; runpy.run_module('tools.machine_lock')\"; python -c $c stop 42",
+                   "$p = 'x|tools/machine_lock.py'; python $p.Split('|')[1] stop 42",
+                   "Get-ChildItem env: | Where-Object { $_.Name -match 'MACHINE_LOCK|KIT' }; "
+                   "python tools/machine_lock.py hold create x")
+        for text in refused:
+            for role in ('reviewer', 'senior-worker', 'pm'):
+                with self.subTest(role=role, text=text):
+                    d = rolepolicy.check(self.shell(text, role), self.w.ctx())
+                    self.assertIsNotNone(d, text)
+                    self.assertEqual((d.verdict, d.rule), ('deny', 'role-lock'), d.reason)
+
     def test_psdefaultparametervalues_on_the_line_catches_a_reader(self):
         """It can give every later command an -OutVariable (rolepolicy._output_stays)."""
         lock = 'tools/machine_lock.py'
