@@ -111,6 +111,7 @@ How they were found: `backlog.py -C Z:/GitHub/project-manager list` (the kit's s
 | KIT-GUARD-BACKLOG-ROLES | parked p1 (Q-945) | close | A new text-matching guard rule over backlog calls, the kind this design cuts. The role check belongs inside `backlog.py` (it knows its verb and caller). KIT-BACKLOG-UNCITE-REST names it as a must-land-first; that line moves to an in-tool role check record if the owner wants one. |
 | KIT-GUARD-JAIL-R5-LEFTOVERS | blocked p2 | close | Temp-index `GIT_INDEX_FILE` and `set --`/`declare -p GIT_DIR` false positives go with the environment cut. |
 | KIT-GUARD-SUBAGENT-CWD-TAR | open p3 | close | (a) `tar -xO` is the "keep, fix" row above; (b) the archive advice is rewritten with the git read table. |
+| KIT-GUARD-INSTEAD-WORKTREE-ADD-IN-WORKTREE | open, unpriced | close | The main-checkout Instead text tells a worker already in a worktree to run `git worktree add`; the right advice is `cd "<worktree>"` or a literal path in it. A sibling of KIT-GUARD-SUBAGENT-CWD-TAR (b). Rewritten with the main-checkout advice in the python-proving step (step 4). |
 | KIT-GUARD-READONLY-GIT-WRITEJAIL | pulled p3 | keep | In flight; small; the same fix the git read table makes. Land it now; the table keeps its rows. |
 | KIT-GUARD-WRAPPED-GATE-HELP-FALSE-POSITIVE | pulled p3 | keep | In flight; it is step 1 of "Kit tools may be piped". |
 | KIT-GUARD-KNOWN-LIMITS | open p4 | close | Alias-to-checkout and dot-sourced Get-Command are evasion forms this design stops chasing; v2's docs/guard.md lists its limits. |
