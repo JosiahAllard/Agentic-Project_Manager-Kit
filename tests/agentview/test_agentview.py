@@ -309,7 +309,9 @@ class GuardRules(Base):
             self.assertIn(p, owner)
 
     def test_a_role_file_writes_list_is_named(self):
-        role = next(r for r in content.load(KIT).roles if r.writes)
+        role = next((r for r in content.load(KIT).roles if r.writes), None)
+        if role is None:
+            self.skipTest('no role file names a `writes` path now (the consultant notes are in agent temp)')
         text = self.text(self.view(role.name, brief=True), 'Guard rules')
         for w in role.writes:
             self.assertIn(w, text)
