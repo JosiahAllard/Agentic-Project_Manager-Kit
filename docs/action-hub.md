@@ -277,7 +277,9 @@ It is not the store's git push (the `push` setting).
   acknowledges by picking the item up (`pending --for` or `wait --pending --for` hands it over,
   "Who handles a pending item"), or by `todos ack`; the PM by `todos ack` for a to-do and by
   `questions log` for a question. An item withdrawn, reopened or answered again replaces or
-  ends its push. Retries come 2, 5, 15, 30 and 60 minutes after a try, then hourly, and stop a
+  ends its push. A session that picked up a first answer or done mark before the worker saw it
+  is not sent it. One message lists at most 20 items (`push.MAX_ITEMS`) and a `+N more` line;
+  the rest wait for the next slot. Retries come 2, 5, 15, 30 and 60 minutes after a try, then hourly, and stop a
   day after the first try with one `gave-up` line (`push.SCHEDULE_S`, `push.GIVE_UP_S`). A write
   whose end is unknown waits for the next slot like any other outcome.
 - How it is sent on Claude Code: one message is two JSON lines written once to the live
@@ -292,9 +294,10 @@ It is not the store's git push (the `push` setting).
   `written` means the bytes reached the pipe, not that the session read them. Two live sessions
   of one name: the one `pipes.json` names, else the newest, logged `ambiguous`. Whether a desktop
   session wakes on a push is unproven; the PM's own `wait --pending --for pm` stays its path.
-- Files, in `launcher.state_dir`: `push-outbox.json` (what is still to send, read again at
-  start: an entry whose item changed while the server was down fires afresh, one whose item is
-  gone is dropped) and `push-undelivered.jsonl` (one line per try not written, per `ambiguous`
+- Files, in `launcher.state_dir`: `push-outbox.json` (what is still to send, rewritten after each
+  round that changed it, so a server ended without a clean close loses at most that round; read
+  again at start: an entry whose item changed while the server was down fires afresh, one whose
+  item is gone is dropped) and `push-undelivered.jsonl` (one line per try not written, per `ambiguous`
   pick and per give-up; never a token or any item text; rotated once to `.1` past 1 MiB,
   `push.LOG_MAX`).
 - Stopping: `Hub.close` tells the worker to begin no further send before the store closes and

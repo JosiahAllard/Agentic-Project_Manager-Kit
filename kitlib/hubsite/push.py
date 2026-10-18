@@ -28,13 +28,14 @@ Each recipient is sent each item until it is acknowledged:
   PM, question             the question is no longer answered (logged)
   PM, to-do                pm_ack, or no longer done (an owner-added one: pm_ack)
   either                   the item is withdrawn, or a newer fingerprint replaces the push
-A recipient that already held the item when it fired (a re-answer, or a re-done to-do read
-before todos_done forgot the old hand-over) is acknowledged by the first written try, never by
-handed_to, which cannot tell the old hand-over from a new one.
+A recipient that already held the item when a first answer or done mark fired picked that one
+up before the worker saw it, and is not sent it. One that held it when a re-answer or a re-done
+to-do fired (read before todos_done forgot the old hand-over) is sent it once: acknowledged by
+the first written try, never by handed_to, which cannot tell the old hand-over from a new one.
 
 Retries: one message per recipient per round lists every item due for it (MAX_ITEMS, then a
-"+N more" line). After a try the item is due again SCHEDULE_S later (2, 5, 15, 30, 60 min), then
-hourly, until GIVE_UP_S after its first try: then one gave-up line and it is dropped. Every
+"+N more" line; those it did not list are due again at the next slot, not in the next round).
+After a try the item is due again SCHEDULE_S later (2, 5, 15, 30, 60 min), then hourly, until GIVE_UP_S after its first try: then one gave-up line and it is dropped. Every
 outcome waits for the next slot; UNCERTAIN is never re-sent at once. A deliver that raises
 counts as UNCERTAIN.
 
@@ -190,6 +191,7 @@ class PushWorker(object):
                     if self._stop.is_set():
                         break
                     self._round(changes)
+                    self._save()                    # each round: an unclean exit loses no more
                 except HubError as e:
                     if e.code == 'store':
                         break                       # the store closed under us: the hub is closing
@@ -255,9 +257,12 @@ class PushWorker(object):
         if event != 'added' and sender and sender not in (PM_KEY, OWNER_FROM) and not self._is_pm(sender):
             keys.insert(0, sender)
         now = self.clock()
+        first = old is None or old[0] != doc.get('status')     # not a re-answer or a re-done
         recipients = {}
         for r in keys:
             held = r != PM_KEY and self._handed(kind, doc_id) == r
+            if held and first and event in ('answered', 'done'):
+                continue                # it picked this answer or done mark up already
             recipients[r] = {'attempt': 0, 'next_at': now, 'last': None,
                              'once': event == 'reopened' or held}
         self._outbox[key] = {'kind': kind, 'id': doc_id, 'event': event,
@@ -365,6 +370,9 @@ class PushWorker(object):
                 del entry['recipients'][recipient]
             if not entry['recipients']:
                 self._drop(key)
+        for key in rest:                # the "+N more" line told of them: due at the next slot
+            st = self._outbox[key]['recipients'][recipient]
+            st['next_at'] = now + schedule(st['attempt'] + 1)
         self._dirty = True
 
     # ------------------------------------------------------------------ files

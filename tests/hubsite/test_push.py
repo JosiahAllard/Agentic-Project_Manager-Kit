@@ -7,6 +7,7 @@ import os
 import shutil
 import tempfile
 import threading
+import time
 import unittest
 from unittest import mock
 
@@ -183,6 +184,21 @@ class FiresTest(PushCase):
                          'a session that held it before is acknowledged by the written push')
         self.assertEqual(self.attempts('pm'), [1, 1, 2])
 
+    def test_a_session_that_picked_up_a_first_answer_or_done_before_the_worker_saw_it_hears_nothing(self):
+        # red proof: PushWorker._fire without its `held and first` skip sends both once
+        qid = self.ask(**{'from': 'kit'})
+        tid = self.todo(**{'from': 'kit'})
+        self.worker.poll()
+        self.answer(qid)
+        self.done(tid)
+        self.pick_up('kit')
+        self.worker.poll()
+        self.assertEqual([r for r, _ in self.push.calls], ['pm'])
+        self.assertIn('question %s answered' % qid, self.push.calls[0][1])
+        self.assertIn('todo %s done' % tid, self.push.calls[0][1])
+        self.later(3 * 3600)
+        self.assertEqual(self.push.to('kit'), [])
+
     def test_a_reanswer_in_the_same_second_pushes_again(self):
         # red proof: fingerprint() without the answer's digest sees the same status and time
         qid = self.ask(**{'from': 'kit'})
@@ -314,8 +330,14 @@ class CombineTest(PushCase):
             for _ in range(3):
                 self.done(self.todo())
             self.worker.poll()
+            self.worker.poll()
+            # red proof: PushWorker._send leaving the unlisted items due sends them in the next
+            # round as a second message
+            self.assertEqual(len(self.push.calls), 1, 'the items past MAX_ITEMS went out at once')
+            self.later(push.SCHEDULE_S[0])
         self.assertTrue(self.push.calls[0][1].endswith('+1 more: hub pending --for pm'))
-        self.assertEqual(self.attempts('pm'), [1, 1])
+        self.assertEqual(len(self.push.calls), 2, 'one message per recipient per slot')
+        self.assertEqual(self.attempts('pm'), [1, 1, 2, 2])
 
 
 class UndeliveredTest(PushCase):
@@ -389,6 +411,35 @@ class RestartTest(PushCase):
         self.worker = self.make()
         self.worker.poll()
         self.assertEqual(self.attempts('kit'), [1, 1])
+
+    def test_a_running_worker_saves_each_round_so_an_unclean_exit_loses_nothing(self):
+        # red proof: PushWorker._run saving only in its `finally` leaves no outbox here, so the
+        # restarted worker owes nothing (logoff or a closed console never reaches that finally)
+        self.worker.start()
+        self.addCleanup(self.worker.stop, push.STOP_S)
+        qid = self.ask(**{'from': 'kit'})
+        self.answer(qid)
+        path = os.path.join(self.folder, push.OUTBOX)
+
+        def owed():
+            try:
+                with open(path, encoding='utf-8') as f:
+                    entry = json.load(f).get('question:%s' % qid, {})
+            except (OSError, ValueError):
+                return None
+            return {r: st['attempt'] for r, st in entry.get('recipients', {}).items()}
+        deadline = time.monotonic() + 10
+        while owed() != {'kit': 1, 'pm': 1} and time.monotonic() < deadline:
+            threading.Event().wait(0.05)
+        self.assertEqual(owed(), {'kit': 1, 'pm': 1}, 'the running worker did not save its round')
+        self.worker._save = lambda: None        # the process dies: no save on the way out
+        self.assertTrue(self.worker.stop(push.STOP_S))
+        self.assertEqual(len(self.push.calls), 2)
+        self.worker = self.make()
+        self.worker.poll()
+        self.assertEqual(len(self.push.calls), 2, 'the restart sent again at once')
+        self.later(push.SCHEDULE_S[0])
+        self.assertEqual((self.attempts('kit'), self.attempts('pm')), ([1, 2], [1, 2]))
 
     def test_a_broken_outbox_is_read_as_empty(self):
         with open(os.path.join(self.folder, push.OUTBOX), 'w', encoding='utf-8') as f:
