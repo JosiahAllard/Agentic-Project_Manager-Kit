@@ -7,8 +7,8 @@ and docs/ROSTER.md's tables from content/roles and every host's tier map (docs/c
                                 docs/ROSTER.md is always checked or written, with every host's tiers
 
 A thin entry point (ARCHITECTURE.md, Layers): it picks the host renderers, calls kitlib.content,
-prints and exits. Exit codes: 0 agree / written, 1 drift, 2 USAGE or a content file of the wrong
-shape.
+prints and exits. Exit codes: 0 agree / written, 1 drift, 2 USAGE, a content file of the wrong
+shape, or --write into an installed plugin export (its .pm-kit-export marker; name -C <checkout>).
 """
 import argparse
 import os
