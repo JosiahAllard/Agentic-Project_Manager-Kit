@@ -52,14 +52,18 @@ a pending `hub_wait` returns at once on such an item. `tests/hubmcp/test_server.
 
 ## Agent write tools
 
-Each calls a route the agent's token may call (`kitlib.hubsite.api.ROUTES`, role AGENT); `tests/hubmcp/test_server.py` `Routes.test_every_shipped_tool_maps_to_a_route_that_is_not_the_owners` checks every shipped tool against `api.match`.
+Each calls a route the agent's token may call (`kitlib.hubsite.api.ROUTES`, role AGENT, or ANY for the two delete routes); `tests/hubmcp/test_server.py` `Routes.test_every_shipped_tool_maps_to_a_route_that_is_not_the_owners` checks every shipped tool against `api.match`.
 
 | tool | arguments (required first) | endpoint |
 |---|---|---|
 | `hub_ask` | `title`; `context`, `options`, `recommended`, `repo`, `from`, `refs`, `urgent`, `story` | `POST /questions` |
 | `hub_question_log` | `id`, `ruling`, `if_version` | `POST /questions/<id>/log` |
+| `hub_question_edit` | `id`, `from`, `if_version`; `title`, `context`, `options`, `recommended`, `refs`, `urgent` | `POST /questions/<id>/edit` |
+| `hub_question_withdraw` | `id`, `from`, `if_version` | `POST /questions/<id>/delete` |
 | `hub_todo_add` | `title`; `detail`, `commands`, `steps` ("To-do steps"), `repo`, `refs`, `urgent`, `from` | `POST /todos` |
 | `hub_todo_ack` | `id`; `if_version` | `POST /todos/<id>/ack` |
+| `hub_todo_edit` | `id`, `from`, `if_version`; `title`, `detail`, `commands`, `repo`, `refs`, `urgent` | `POST /todos/<id>/edit` |
+| `hub_todo_withdraw` | `id`, `from`, `if_version` | `POST /todos/<id>/delete` |
 | `hub_story_set` | `id`, `status` (`api.AGENT_STORY_STATUSES`), `if_version`; `reviewer`, `review_note`, `backlog_id`, `closed_note` | `POST /stories/<id>` |
 | `hub_to_pm_reply` | `id`; `reply`, `ruling`, `if_version` | `POST /to_pm/<id>/reply` |
 | `hub_inbox_post` | `text`; `title`, `ref`, `asked`, `repo`, `from`, `refs` | `POST /inbox` |
@@ -69,6 +73,11 @@ the default when it is absent or blank. The hub refuses any other value, a free-
 included (`invalid`, field `from`, status 400: `kitlib/hubsite/api.py` `questions_add`;
 `LiveKeys.test_a_question_comes_from_a_session_key_or_pm_only`). The `from` of `hub_todo_add`
 and `hub_inbox_post` is a name in printable ASCII (`api._agent_from`).
+
+The four edit and withdraw tools change only an open item the caller added: `from` must be the
+item's own (`pm` for one with none), checked as a claim because all agents share one token
+(docs/action-hub.md "questions/Q-NNN"). `hub_todo_edit` takes no `steps` and judges the changed
+text as `hub_todo_add` does before it calls the hub (`kitlib/hubmcp/server.py` `Server._t_hub_todo_edit`).
 
 ## To-do steps
 

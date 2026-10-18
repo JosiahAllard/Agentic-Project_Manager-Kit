@@ -160,7 +160,9 @@ coordinator restarts its wait with `--except` and every id it has acted on (`wai
 <its key> --except Q-7 T-3`), which leaves those ids out and ends only on another item. Every verb takes `--port N` and
 `--json` (the server's answer as one JSON line). The server alone decides what a role may do: the
 owner's verbs (answer, todos done, stories add and withdraw, to-pm add and send, inbox read) are
-refused to the agent.
+refused to the agent. The creator of an open question or to-do changes it with `edit` and removes
+it with `withdraw`, naming the `from` it was added with and the version it read; the owner never
+edits an agent's item and only removes one ("questions/Q-NNN" and "todos/T-NNN" below).
 
 Verbs (`tools/hub.py` docstring is the source), with the line each prints:
 
@@ -169,11 +171,15 @@ Verbs (`tools/hub.py` docstring is the source), with the line each prints:
 | `questions [--status S] [--repo R]` | `Q-1 v2 open [repo] title` |
 | `questions add --title T [--repo R] [--context-file F] [--option "label::description" ...] [--recommended N] [--refs ID ...] [--urgent] [--story S-n] [--from KEY]` | `ASKED Q-2`, then any warning lines |
 | `questions log Q-1 <ruling id> --if-version V` | `LOGGED Q-1 <ruling id>` |
+| `questions edit Q-1 --from KEY --if-version V [--title T] [--context-file F] [--option "label::description" ...] [--recommended N] [--refs ID ...] [--urgent \| --no-urgent]` | `EDITED Q-1` |
+| `questions withdraw Q-1 --from KEY --if-version V` | `WITHDRAWN Q-1` |
 | `answer Q-1 --choice N\|other [--note TEXT] [--if-version V]` (owner) | `ANSWERED Q-1 <label>` |
 | `todos [--status S] [--repo R]` | `T-1 open [repo] title` |
 | `todos add --title T [--detail D] [--command C ...] [--steps F] [--repo R] [--refs ID ...] [--urgent] [--from NAME \| --owner]` | `ADDED T-2` |
 | `todos done T-1 [--undo] [--if-version V]` (owner) | `DONE T-1` or `REOPENED T-1` |
 | `todos ack T-1` | `ACKED T-1` |
+| `todos edit T-1 --from NAME --if-version V [--title T] [--detail D] [--command C ...] [--repo R] [--refs ID ...] [--urgent \| --no-urgent]` | `EDITED T-1` |
+| `todos withdraw T-1 --from NAME --if-version V` | `WITHDRAWN T-1` |
 | `stories [--status S] [--repo R]` | `S-1 v2 submitted [repo] title` |
 | `stories add --repo R --title T --story-file F [--urgent]` (owner) | `SUBMITTED S-2` |
 | `stories set S-1 --status review\|questions\|added\|declined [--reviewer NAME] [--review-note TEXT] [--backlog-id ID] [--closed-note TEXT] --if-version V` | `SET S-1 <status>` |
@@ -191,9 +197,9 @@ Verbs (`tools/hub.py` docstring is the source), with the line each prints:
 | `serve [--port N] [--store PATH]`, `status [--port N]`, `setup`, `open [--port N] [--print]`, `migrate` | see "Serving it" and "Data from the old hub" |
 
 Notes on the table:
-- `todos` lines carry no version.
-- `questions add --story` is the story a follow-up belongs to; `stories set` and `questions log`
-  require `--if-version`.
+- `todos` lines carry no version; `todos --json` gives each to-do's `version`.
+- `questions add --story` is the story a follow-up belongs to; `stories set`, `questions log` and
+  every `edit` and `withdraw` require `--if-version`.
 - `hub.py pending` lists the owner input not yet handled: questions answered and not logged,
   stories submitted, To PM items sent, and to-dos done or added by the owner without `pm_ack`
   (`kitlib.hubsite.store.pending_items`). Each item carries `from`, the session key it is for, and
@@ -255,6 +261,19 @@ the PM otherwise, so the PM is the fallback for a creator that is gone (`route`,
 
 The PM files each answer, then logs it (`questions log`), pinning `--if-version`; an answer to a
 coordinator's question too, which the coordinator has already acted on.
+
+While a question is open its asker may change it (`POST /api/v1/questions/{id}/edit`, agent only:
+`hub.py questions edit`, the MCP tool `hub_question_edit`) or withdraw it (`POST
+/api/v1/questions/{id}/delete`: `questions withdraw`, `hub_question_withdraw`), which removes the
+document. Both take `from` and `if_version`, both required, and are refused `forbidden` unless
+`from` is the question's own (`pm` for a question with none), and `conflict` once it is answered or
+logged (`kitlib.hubsite.api` `questions_edit`, `questions_delete`). An edit's fields replace the old
+ones; `options` replaces the whole list. The owner withdraws an open question with the card's
+Withdraw button (the same delete route, owner token, version optional) and never edits one. All
+agents share one token, so `from` is a claim checked against the item: the check stops honest
+mistakes, not a hostile agent, and any agent claiming `pm` can change the PM's items. An answer
+sent without `--if-version` (`hub.py answer`) after the asker changed the options is taken against
+the options as they are now; the page always sends the version it shows.
 
 ## inbox/M-NNN
 The owner's inbox: the PM's answer to every question the owner asks in a note (on a question, a
@@ -321,6 +340,14 @@ a UTF-8 JSON file. The server refuses, as `invalid` naming the field: a bad step
 `commands` entry holding a lone surrogate (U+D800 to U+DFFF, `commands`), and, on an agent's to-do,
 text the owner's to-do rules forbid (`todosteps.check`: plain Notepad, a hand edit described in
 prose, coordinator work). The owner's own to-dos are not judged by those rules.
+
+While a to-do is open its creator may change it (`POST /api/v1/todos/{id}/edit` with the agent's
+token: `hub.py todos edit`, the MCP tool `hub_todo_edit`) or withdraw it (`POST
+/api/v1/todos/{id}/delete`: `todos withdraw`, `hub_todo_withdraw`), with the same `from` and
+`if_version` rules and refusals as a question ("questions/Q-NNN" above). An agent's edit takes no
+`steps`, its changed text is judged by the to-do rules above, and it clears `pm_ack`. The owner
+edits and deletes only their own to-dos (`from: you`) at any status, and deletes an agent's to-do
+(never edits it) while it is open (`kitlib.hubsite.api` `todos_edit`, `todos_delete`).
 
 ## stories/S-NNN
 The owner writes a story and picks the backlog it belongs in. It reaches the backlog only through
