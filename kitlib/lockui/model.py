@@ -10,6 +10,8 @@ slots, _x the end it was expected to have; late when it took longer).
 """
 import datetime as dt
 
+from kitlib.lock import status as st
+
 COLOURS = {"whole": "#d9534f", "half": "#f0ad4e", "slots": "#e5c07b", "game": "#c678dd",
            "sel": "#5b9bd5", "now": "#4caf50", "agent": "#7f8fa6", "booked": "#9b7fd4",
            "ran": "#3fa796", "late": "#e06c75", "expect": "#e8e8e8", "warn": "#f0ad4e"}
@@ -369,13 +371,41 @@ def _cores(snap, runs, holds):
     return {"head": head, "cpu": cpu, "gpu": gpu}
 
 
+_LAYOUT_WAITS = {
+    st.IDLE: "a new division waits until nothing runs or queues",
+    st.UNWRITTEN: "layout.json is missing or not valid to this kit; it is written once nothing "
+                  "runs or queues",
+    st.FAILED_LOOK: "a look at the hardware failed (the hardware lines say what): the layout in "
+                    "force stays until a look succeeds",
+    st.PROVISIONAL: "the layout in force is provisional: it came from a look at the hardware that "
+                    "failed (the hardware lines say what), and the first look that succeeds "
+                    "replaces it once nothing runs or queues"}
+
+
+def layout_wait(lay):
+    """What the window says about the snapshot layout `lay`'s hardware_change, or None: its
+    `reason` (from an older snapshot without one, kitlib.lock.status.pending_reason of its pending
+    text), as a sentence here or else the pending text itself; the idle wait when only `changed`
+    is set."""
+    hc = lay.get("hardware_change") or {}
+    reason = hc["reason"] if "reason" in hc else st.pending_reason(hc.get("pending"))
+    if reason in _LAYOUT_WAITS:
+        return _LAYOUT_WAITS[reason]
+    if reason and hc.get("pending"):
+        return hc["pending"]
+    if hc.get("pending") or hc.get("changed"):
+        return _LAYOUT_WAITS[st.IDLE]
+    return None
+
+
 def _warnings(snap):
     out = []
     lay = snap.get("layout") or {}
     if lay.get("warning"):
         out.append(lay["warning"])
-    if (lay.get("hardware_change") or {}).get("pending") or (lay.get("hardware_change") or {}).get("changed"):
-        out.append("a new division waits until nothing runs or queues")
+    wait = layout_wait(lay)
+    if wait:
+        out.append(wait)
     if (snap.get("queue") or {}).get("error"):
         out.append(snap["queue"]["error"])
     for k in ("holds_error", "kinds_error"):
