@@ -179,11 +179,26 @@ def canon_param(text, names, aliases=None):
 
 
 def _start_process(cmd, words, i):
-    """Start-Process [-FilePath] prog [[-ArgumentList] args] with its switches anywhere."""
+    """Start-Process [-FilePath] prog [[-ArgumentList] args] with its switches anywhere.
+
+    The words carry no commas, so an array (`'/c','echo x'`) is several words. -ArgumentList, in
+    its space or colon form, takes every word up to the next parameter: a FilePath given by
+    position after it is the last of them. With no -ArgumentList, every positional word after the
+    program is the list (PowerShell binds the whole array). Each reading is exact for a line
+    PowerShell runs; a line it refuses is read as more text, never less."""
     rest = words[i + 1:]
     names = SP_SWITCHES + SP_VALUES
-    prog, args, writes, positional, listed, workdir = None, [], [], [], [], None
+    prog, writes, positional, listed, workdir = None, [], [], [], None
     k = 0
+
+    def list_words(j):
+        # the words from rest[j] up to the next parameter
+        e = j
+        while e < len(rest) and (quoted(cmd, rest[e]) or rest[e].dyn or
+                                 canon_param(rest[e].text, names, SP_ALIASES) is None):
+            e += 1
+        return rest[j:e], e
+
     while k < len(rest):
         w = rest[k]
         p = None if quoted(cmd, w) or w.dyn else canon_param(w.text, names, SP_ALIASES)
@@ -196,31 +211,29 @@ def _start_process(cmd, words, i):
             continue
         if ':' in w.text:
             vals, k = [sh.Word(w.text.split(':', 1)[1], w.dyn, w.start, w.end)], k + 1
+            if p == '-argumentlist':
+                more, k = list_words(k)             # -ArgumentList:'/c','echo x'
+                vals += more
         elif p == '-argumentlist':
-            j = k + 1
-            while j < len(rest) and (quoted(cmd, rest[j]) or rest[j].dyn or
-                                     canon_param(rest[j].text, names, SP_ALIASES) is None):
-                j += 1
-            vals, k = rest[k + 1:j], j
+            vals, k = list_words(k + 1)
         else:
             vals, k = rest[k + 1:k + 2], k + 2
         if p == '-filepath' and vals:
             prog = vals[0]
         elif p == '-argumentlist':
             listed.extend(vals)
-            for v in vals:
-                args.extend(_split_list(v))
         elif p in ('-redirectstandardoutput', '-redirectstandarderror'):
             writes.extend(vals)
         elif p == '-workingdirectory' and vals:
             workdir = vals[0]
     if prog is None and positional:
         prog = positional.pop(0)
-    if not args and positional:
-        listed = positional[:1]
-        args = _split_list(positional[0])
+    if prog is None and len(listed) > 1:
+        prog = listed.pop()                         # -ArgumentList '/c ...' cmd: FilePath by position
+    listed = positional + listed
     if prog is None:
         return None
+    args = [x for v in listed for x in _split_list(v)]
     return Invocation(base_name(prog.text), prog.text, args, cmd, prog.dyn, i, via='start-process',
                       writes=writes, word=prog, listed=listed, workdir=workdir)
 

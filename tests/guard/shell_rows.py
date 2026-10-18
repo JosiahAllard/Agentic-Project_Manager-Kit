@@ -195,6 +195,22 @@ ROWS = [
     ('start cmd /c redirect into main', lambda w: ps(
         "start cmd -ArgumentList '/c echo x > %s'" % win(w.main, 'f.txt'), w.wt, sub=True),
      'deny', 'main-checkout', None),
+    # the words carry no commas: an array is several words, every one of them in the list, and a
+    # program given by position after -ArgumentList is the last word it took
+    ('Start-Process cmd with a positional array into main', lambda w: ps(
+        "Start-Process cmd '/c','echo x > %s'" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process cmd -ArgumentList: with an array into main', lambda w: ps(
+        "Start-Process cmd -ArgumentList:'/c','echo x > %s'" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process with cmd after its list into main', lambda w: ps(
+        "Start-Process -ArgumentList '/c echo x > %s' cmd" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process with cmd after an array into main', lambda w: ps(
+        "Start-Process -ArgumentList '/c','echo x > %s' cmd" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process with cmd after its list in its worktree stays allowed', lambda w: ps(
+        "Start-Process -ArgumentList '/c echo x > f.txt' cmd", w.wt, sub=True), None, None, None),
     ('cmd start with a quoted title', lambda w: ps('cmd /c start "Godot" godot.exe --headless', w.wt), 'deny', 'heavy',
      heavy('wt', 'godot.exe --headless')),
     ('cmd start /b /wait', lambda w: ps('cmd /c start /b /wait godot.exe --headless', w.wt), 'deny', 'heavy',
