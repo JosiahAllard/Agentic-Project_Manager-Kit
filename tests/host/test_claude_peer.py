@@ -102,7 +102,7 @@ class Packet(unittest.TestCase):
 
     def test_canonical_pipe_agrees_with_the_bridge(self):
         from optional.bridge.hosts.claude.sessions import NativeSessionError, canonical_pipe
-        for value in (r'\\.\pipe\LOCAL\cc-msg-ABC_1', r'\\.\pipe\cc-msg-x', r'\\.\PIPE\local\CC-MSG-Q'):
+        for value in (r'\\.\pipe\LOCAL\cc-msg-ABC_1', r'\\.\pipe\cc-msg-x', r'\\.\PIPE\local\Cc-Msg-q'):
             self.assertEqual(peer.canonical_pipe(value), canonical_pipe(value))
         for value in (None, r'\\.\pipe\other', r'\\.\pipe\LOCAL\cc-msg-a\b', 'cc-msg-x'):
             with self.assertRaises(ValueError):

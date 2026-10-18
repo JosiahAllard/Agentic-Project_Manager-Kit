@@ -251,7 +251,7 @@ the PM otherwise, so the PM is the fallback for a creator that is gone (`route`,
 ### Push notifications
 
 When the owner answers a question or marks a to-do done, the server tells the session that asked
-and the PM, so neither has to be waiting (`kitlib/hubsite/push.py` docstring is the source; KIT-HUB-PUSH-NOTIFY).
+and the PM, so neither has to be waiting (`kitlib/hubsite/push.py` docstring is the source).
 It is not the store's git push (the `push` setting).
 
 - Who runs it: `hub.py serve` on the live store asks the host adapter for its delivery

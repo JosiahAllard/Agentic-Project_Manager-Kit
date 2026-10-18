@@ -5,7 +5,7 @@ session publishes a registry record, <config folder>/sessions/<pid>.json (kitlib
 and listens on a named pipe for cross-session messages. A message is two JSON lines written to
 that pipe: an auth frame carrying the session's peer token, then a user frame whose content is
 wrapped in <cross-session-message from-mode="prompting">. The session takes it as its next
-prompt. Step 1 of KIT-HUB-PUSH-NOTIFY proved this with no sender endpoint, so the hub publishes no
+prompt. A live probe proved this with no sender endpoint, so the hub publishes no
 registry entry of its own and gets no receipt back: `written` means the bytes reached the pipe.
 
   HubPush(settings)     ClaudeAdapter.push()'s object; settings is kitlib.launcher.settings
