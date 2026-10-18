@@ -179,11 +179,19 @@ def gpu_entries(adapters, source):
 def detect():
     """This machine, as a JSON-ready dict (thread ids, never masks: a mask past 53 bits does not
     survive a JavaScript reader). Never raises: what cannot be read is in `problems`, and `failed`
-    names the parts read as a stand-in rather than from Windows ("cores": each thread counted as
-    one; "gpus": neither DXGI nor CIM answered, so no card). A layout from such a look never
-    replaces a layout.json from a good look, and is otherwise written provisional (in_force). CIM answering for DXGI is not a failed look."""
+    names the parts read as a stand-in rather than from Windows ("groups": the processor groups
+    were not listed (cpu.listed_groups), so groups() stands in group 0 alone and the threads are
+    that group's; "cores": each thread counted as one; "gpus": neither DXGI nor CIM answered, so
+    no card). A layout from such a look never replaces a layout.json from a good look, and is
+    otherwise written provisional (in_force). CIM answering for DXGI is not a failed look. One
+    listing of the groups gives both `groups` and `threads`, so the two never disagree."""
     problems, failed = [], []
-    ids = cpu.threads()
+    listed = cpu.listed_groups()
+    if listed is None:
+        problems.append("Windows did not list the processor groups; group 0 alone stands in")
+        failed.append("groups")
+    grps = listed or cpu.groups()
+    ids = [cpu.gid(g, i) for g, m in grps for i in range(cpu.GROUP_BITS) if m >> i & 1]
     cores = cpu.cores()
     if cores is None:
         problems.append("Windows did not list the physical cores; each thread counts as one")
@@ -202,7 +210,7 @@ def detect():
     mem = process.memory_mb() or {}
     return {"threads": ids,
             "groups": [{"group": g, "threads": [cpu.gid(g, i) for i in range(64) if m >> i & 1]}
-                       for g, m in cpu.groups()],
+                       for g, m in grps],
             "cores": [{"threads": sorted(c["threads"]), "smt": bool(c["smt"]),
                        "efficiency": c["efficiency"]} for c in cores],
             "l3": [cpu.bits(m) for m in cpu.l3_domains()], "cpu_sets": cpu.cpu_sets(),
@@ -439,7 +447,8 @@ def in_force(store, adopt=True):
     failed = list(hw.get("failed") or [])
     why = None
     if failed:
-        why = "the %s could not be read (%s)" % (" and ".join(failed),
+        parts = ", ".join(failed[:-1]) + " and " + failed[-1] if len(failed) > 1 else failed[0]
+        why = "the %s could not be read (%s)" % (parts,
                                                  "; ".join(hw.get("problems") or ()) or "no detail")
     provisional = why and "%s; the layout in use came from such a look and is provisional: the " \
         "first look that succeeds replaces it while no run is live or queued" % why

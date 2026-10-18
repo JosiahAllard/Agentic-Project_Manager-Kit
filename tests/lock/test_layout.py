@@ -464,6 +464,53 @@ class DetectFailed(unittest.TestCase):
     def test_fake_hardware_is_a_good_look(self):
         self.assertEqual(lay.fake_hardware()["failed"], [])
 
+    def test_unlisted_groups_are_a_failed_look(self):
+        # groups() then stands in group 0 alone (kitlib.proc.cpu.listed_groups).
+        with mock.patch.object(lay.cpu, "listed_groups", return_value=None), \
+                mock.patch.object(lay, "dxgi_adapters", return_value=[]):
+            hw = lay.detect()
+        self.assertIn("groups", hw["failed"])
+        self.assertTrue(any("processor groups" in p for p in hw["problems"]), hw["problems"])
+        self.assertEqual(hw["threads"], [t for g in hw["groups"] for t in g["threads"]])
+
+    def test_listed_groups_are_not(self):
+        with mock.patch.object(lay, "dxgi_adapters", return_value=[]):
+            hw = lay.detect()
+        self.assertNotIn("groups", hw["failed"])
+        self.assertEqual(hw["threads"], [t for g in hw["groups"] for t in g["threads"]])
+
+
+@unittest.skipUnless(os.name == "nt", "the lock is Windows only")
+class GroupsStandIn(StoreCase):
+    """A look whose processor groups Windows would not list never replaces a layout.json from a
+    good look: on a machine past 64 logical processors group 0's stand-in drops every other
+    group's threads, which would renumber every slot. Here the stand-in's system mask is cut to
+    half the threads, as group 0 alone is of a two-group machine."""
+
+    def on(self, hw):
+        self.hw = hw
+        self.store = self.make_store()
+
+    def test_a_group_0_stand_in_does_not_replace_a_good_layout(self):
+        from kitlib.proc import process
+        with mock.patch.object(lay, "dxgi_adapters", return_value=[]):
+            real = lay.detect()
+        if len(real["threads"]) < 2 or real["failed"]:
+            self.skipTest("this machine's own look is not a good one of two threads or more")
+        half = (1 << (len(real["threads"]) // 2)) - 1
+        with mock.patch.object(lay.cpu, "listed_groups", return_value=None), \
+                mock.patch.object(process, "system_mask", return_value=half), \
+                mock.patch.object(lay, "dxgi_adapters", return_value=[]):
+            standin = lay.detect()
+        self.assertEqual(len(standin["threads"]), len(real["threads"]) // 2)
+        self.on(real)
+        good = self.layout()
+        self.on(standin)
+        got = lay.in_force(self.store)                  # idle: only the failed look holds it back
+        self.assertEqual(got["layout"]["key"], good["key"])
+        self.assertEqual(self.store.read("layout.json")["key"], good["key"])
+        self.assertTrue(got["pending"].startswith("the groups could not be read ("), got["pending"])
+
 
 if __name__ == "__main__":
     unittest.main()

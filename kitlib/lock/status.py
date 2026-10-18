@@ -60,13 +60,46 @@ def hold_line(h):
         h.get("start_local"), h.get("end_local"), ": " + h["note"] if h.get("note") else "", extra)
 
 
+# Why layout.in_force's `pending` is set (pending_reason): its text says the same in words.
+IDLE = "idle"                   # a changed layout waits until no run is live or queued
+UNWRITTEN = "unwritten"         # layout.json missing or invalid: written once no run is live or queued
+FAILED_LOOK = "failed_look"     # a failed look at the hardware: the layout from a good look stays
+PROVISIONAL = "provisional"     # the layout in use came from a failed look: a good look replaces it
+UNCHECKED = "unchecked"         # the layout could not be checked (the queue or store unreadable)
+OTHER = "other"                 # a text none of the above: a newer or older kit's
+REASONS = (IDLE, UNWRITTEN, FAILED_LOOK, PROVISIONAL, UNCHECKED, OTHER)
+
+# (reason, how in_force's text for it starts or ends), first match wins. The tests drive every
+# branch of in_force through pending_reason (tests/lock/test_status_reason.py), so a text changed
+# there without its line here fails them.
+_TEXTS = ((UNCHECKED, "start", "the layout could not be checked"),
+          (FAILED_LOOK, "end", "; no layout is adopted from that look until one succeeds"),
+          (PROVISIONAL, "end", "; the layout in use came from such a look and is provisional: the "
+                               "first look that succeeds replaces it while no run is live or queued"),
+          (UNWRITTEN, "start", "layout.json is missing, unreadable or not valid to this kit version"),
+          (IDLE, "start", "the machine or division changed"))
+
+
+def pending_reason(pending):
+    """The reason, one of REASONS, for layout.in_force's `pending` (as the snapshot's
+    layout.hardware_change.pending and set_division's result carry it): None when nothing is
+    pending, OTHER for a text this kit does not give. Callers state the reason from this, not
+    from the words of the text."""
+    if not isinstance(pending, str) or not pending:
+        return None
+    for reason, where, text in _TEXTS:
+        if pending.startswith(text) if where == "start" else pending.endswith(text):
+            return reason
+    return OTHER
+
+
 def waits_for_idle(pending):
     """Whether layout.in_force's pending text is a change that is adopted once no run is live or
-    queued. Only those texts say "once no run is live or queued"; any other (a look at the
+    queued (IDLE, or UNWRITTEN: a layout.json written then). Any other reason (a look at the
     hardware that failed, kept out or in use as provisional, or a layout that could not be
     checked) is not settled by an idle machine alone, so its own reason is shown in place of the
     line that the new layout applies then."""
-    return "once no run is live or queued" in (pending or "")
+    return pending_reason(pending) in (IDLE, UNWRITTEN)
 
 
 def render(snap):
