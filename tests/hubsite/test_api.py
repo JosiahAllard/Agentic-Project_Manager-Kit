@@ -5,10 +5,12 @@ import datetime
 import inspect
 import json
 import os
+import re
 import shutil
 import tempfile
 import threading
 import unittest
+from unittest import mock
 
 from kitlib import hubvalidate
 from kitlib.hubsite import api, approvals, todosteps
@@ -86,6 +88,15 @@ class ModuleTest(unittest.TestCase):
         for word in ('import socket', 'import http', 'import threading', 'import argparse',
                      'print(', 'sys.exit', 'import urllib', 'import subprocess'):
             self.assertNotIn(word, src)
+
+    def test_the_one_name_from_threading_is_lock(self):
+        # _PAGES_LOCK guards a publish's reads and writes; the module still starts no thread.
+        src = inspect.getsource(api)
+        self.assertEqual(re.findall(r'^from threading import .*$', src, re.M),
+                         ['from threading import Lock      # the one name taken from threading: '
+                          'this module starts no thread'])
+        self.assertNotIn('threading.', src)
+        self.assertNotIn('Thread(', src)
 
     def test_routes_is_plain_data_another_module_can_walk(self):
         self.assertIsInstance(api.ROUTES, tuple)
@@ -799,23 +810,67 @@ class PagesTest(ApiCase):
                      {'id': 'new', 'title': 't', 'html': PAGE, 'if_version': 1})
         self.assertEqual(self.publish('new', if_version=0)[0], 200)
 
-    def test_two_publishers_with_one_pin_the_second_stops_at_the_body(self):
+    def test_two_publishers_with_one_pin_the_second_writes_nothing(self):
+        """B arrives after A has written its body and before A writes its card. Without
+        api._PAGES_LOCK, B reads card 1 and body 2, writes its body over A's, and A's card then
+        names B's body. With it, B waits for A's two writes, reads card 2 and is refused."""
         self.publish()
-        real = self.store.get
-        raced = []
+        real_put, real_get, lock = self.store.put, self.store.get, threading.Lock()
+        b_there, b_thread = threading.Event(), []     # B has read, or waits on the lock
+
+        class Watched(object):
+            def __enter__(self):
+                if threading.current_thread() in b_thread:
+                    b_there.set()
+                return lock.__enter__()
+
+            def __exit__(self, *exc):
+                return lock.__exit__(*exc)
 
         def get(coll, doc_id):
-            got = real(coll, doc_id)
-            if coll == 'page_html' and not raced:       # another publisher lands in between
-                raced.append(None)
-                raced[0] = self.publish(html='<p>first</p>', if_version=1)
+            got = real_get(coll, doc_id)
+            if coll == 'page_html' and threading.current_thread() in b_thread:
+                b_there.set()
             return got
-        self.store.get = get
-        status, obj = self.publish(html='<p>second</p>', if_version=1)
-        self.assertEqual(raced[0][0], 200)
-        self.assertEqual((status, obj['error']['code']), (409, 'conflict'))
-        self.assertEqual(self.store.get('page_html', 'plan-1')['html'], '<p>first</p>')
-        self.assertEqual(real('pages', 'plan-1')['version'], 2)
+
+        def put(coll, doc_id, fields, if_version=None):
+            r = real_put(coll, doc_id, fields, if_version)
+            if coll == 'page_html' and fields['html'] == '<p>A</p>':
+                b = threading.Thread(target=lambda: answers.append(
+                    self.publish(html='<p>B</p>', title='B', if_version=1)))
+                b_thread.append(b)
+                b.start()
+                self.assertTrue(b_there.wait(10), 'B neither read nor waited')
+            return r
+        answers = []
+        self.store.get, self.store.put = get, put
+        with mock.patch.object(api, '_PAGES_LOCK', Watched()):
+            a = self.publish(html='<p>A</p>', title='A', if_version=1)
+            b_thread[0].join(10)
+        self.store.get, self.store.put = real_get, real_put
+        self.assertEqual(a[0], 200, a)
+        self.assertEqual((answers[0][0], answers[0][1]['error']['code'],
+                          answers[0][1]['error']['field']), (409, 'conflict', 'if_version'))
+        card, body = self.store.get('pages', 'plan-1'), self.store.get('page_html', 'plan-1')
+        self.assertEqual((card['title'], card['version'], body['html'], body['version']),
+                         ('A', 2, '<p>A</p>', 2))
+
+    def test_a_body_delete_that_fails_leaves_the_card_deleted_and_an_orphan_body(self):
+        self.publish()
+        real = self.store.delete
+
+        def delete(coll, doc_id, if_version=None):
+            if coll == 'page_html':
+                raise HubError('store', 'the disk is full', 'page_html')
+            return real(coll, doc_id, if_version)
+        self.store.delete = delete
+        status, obj = self.call('POST', '/pages/plan-1/delete', OWNER, {'if_version': 1})
+        self.store.delete = real
+        self.assertEqual((status, obj['error']['code']), (api.STATUS['store'], 'store'))
+        self.assertIsNone(self.store.get('pages', 'plan-1'))
+        self.assertEqual(self.store.get('page_html', 'plan-1')['html'], PAGE)
+        self.assertEqual(self.publish()[0], 200, 'the next publish writes over the orphan')
+        self.assertEqual(self.store.get('page_html', 'plan-1')['version'], 2)
 
     def test_the_body_is_written_before_the_card(self):
         order = []

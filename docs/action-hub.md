@@ -420,11 +420,16 @@ An agent publishes with `hub.py pages publish ID --title T --html-file F` or the
 `hub.py pages show ID [--out F]` or `hub_page`. Both run `kitlib.hubsite.pagecheck.check` on the
 file before sending, so a body the server would refuse is never sent. Publishing over an existing
 page needs the card's version as `if_version` (`--if-version`); without it the write is
-`conflict`. The body is put first and the card second, each pinned to the version read before
-either, so a card never names a missing body and of two publishers the second stops at the body
+`conflict`. One lock in the hub process (`_PAGES_LOCK` in `kitlib/hubsite/api.py`) is held from a
+publish's reads to its last write, and over a delete, so of two publishers with the same pin the
+second reads only after the first has written body and card, and is `conflict` with nothing
+written. The body is put first and the card second, so a card never names a missing body
 (`test_the_body_is_written_before_the_card` and
-`test_two_publishers_with_one_pin_the_second_stops_at_the_body` in `tests/hubsite/test_api.py`).
-Deleting is the owner's alone: the Docs tab's Delete, with no CLI verb and no MCP tool.
+`test_two_publishers_with_one_pin_the_second_writes_nothing` in `tests/hubsite/test_api.py`).
+Deleting is the owner's alone: the Docs tab's Delete, with no CLI verb and no MCP tool. It
+deletes the card, then the body; when the body's delete fails the card stays deleted and the body
+is an orphan, which `kitlib.hubvalidate` warns of and the next publish of that id writes over
+(`test_a_body_delete_that_fails_leaves_the_card_deleted_and_an_orphan_body`).
 
 What a body may hold (`kitlib/hubsite/pagecheck.py`, its docstring has the full list): at most
 512 KiB of UTF-8 (`MAX_BYTES`); no `script`, `iframe`, `object`, `embed`, `form`, `link`, `meta`,

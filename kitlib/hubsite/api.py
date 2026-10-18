@@ -44,18 +44,22 @@ shows Approve and Deny as usable; the decide route checks the role itself all th
 
 Pages. POST pages (AGENT) publishes a page: the card `pages/<id>` and its body `page_html/<id>`.
 The body is {id, title, html, repo?, from?, summary?, refs?, if_version?}. The id is the
-caller's (a document id, never one shaped like a hub item or a ruling, `[QMTPSAR]-<digits>`, so
-a ref that names a page is never read as an item); html is judged by kitlib.hubsite.pagecheck
-(at most PAGE_HTML_MAX bytes of UTF-8, no script, no outside link or load, no unrendered
-Mermaid), and a refusal is `invalid`, field html, with nothing written. Publishing over a page
-takes the card's `if_version`; without it, or with another, it is `conflict`. The body is put
-first and the card second, each pinned to the version read before either (0: not there yet), so
-a card never names a missing body and of two publishers the second stops at the body; a card
-write that fails after its body leaves an orphan body, which kitlib.hubvalidate warns of and the
-next publish overwrites. The card carries title, repo, summary, refs, from (an agent's name, as
-a to-do's), `at` and `bytes`. GET pages lists the cards; GET pages/{id} gives {ok, id, html,
+caller's (a document id that holds no hub item's or ruling's id, `[QMTPSAR]-<digits>` with no
+letter or digit either side, anywhere, so a ref that names a page is never read as an item);
+html is judged by kitlib.hubsite.pagecheck (at most PAGE_HTML_MAX bytes of UTF-8, no script, no
+outside link or load, no unrendered Mermaid), and a refusal is `invalid`, field html, with
+nothing written. Publishing over a page takes the card's `if_version`; without it, or with
+another, it is `conflict`. _PAGES_LOCK is held from the reads to the last write of a publish or a
+delete, so a second publisher reads only after the first has written both, and with the same pin
+it is `conflict` with nothing written. The body is put first and the card second, each pinned to
+the version read (0: not there yet), so a card never names a missing body; a card write that
+fails after its body leaves an orphan body, which kitlib.hubvalidate warns of and the next
+publish overwrites. The card carries title, repo, summary, refs, from (an agent's name, as a
+to-do's), `at` and `bytes`. GET pages lists the cards; GET pages/{id} gives {ok, id, html,
 version} of the body. GET snapshot leaves `page_html` out: the Docs tab reads a body when it is
-opened. POST pages/{id}/delete (OWNER, if_version optional) deletes the card, then the body.
+opened. POST pages/{id}/delete (OWNER, if_version optional) deletes the card, then the body; a
+body delete that fails leaves the card deleted and the body an orphan, as above. One process
+lock is enough: Store.open lets one process write a store (`_store.lock`).
 
 Fields. A write route names the body fields it takes; any other field is refused (`invalid`, the
 field named), so a body cannot carry a field another role owns (an agent posting a question
@@ -168,6 +172,7 @@ import json
 import math
 import re
 import time
+from threading import Lock      # the one name taken from threading: this module starts no thread
 
 from kitlib import hubvalidate
 
@@ -211,6 +216,10 @@ _SURROGATE = re.compile('[\ud800-\udfff]')     # a lone one: half a character
 # A and R, searched, so neither `plan-Q-1` nor `Q-1.v2` holds a ref a reader would follow.
 _REF_SHAPED = re.compile(r'(?<![A-Za-z0-9])[QMTPSAR]-\d+(?![A-Za-z0-9])', re.I)
 PAGE_HTML_MAX = pagecheck.MAX_BYTES
+# Held across the reads, checks and both writes of one publish or delete: a page is two documents,
+# and without it a second publisher could read between the first's body and card writes, write
+# its body over the first's and leave the first's card naming it ("Pages").
+_PAGES_LOCK = Lock()
 
 
 def error_body(code, message, field=''):
@@ -1367,6 +1376,12 @@ def pages_publish(api, req):
     why = pagecheck.check(b['html'])
     if why:
         raise _invalid(why, 'html')
+    with _PAGES_LOCK:
+        return _pages_write(api, req, b, doc_id, pin)
+
+
+def _pages_write(api, req, b, doc_id, pin):
+    """pages_publish from the reads on, called with _PAGES_LOCK held."""
     card, body = api.store.get('pages', doc_id), api.store.get('page_html', doc_id)
     if card is not None and pin is None:
         raise HubError('conflict', 'pages/%s is at version %d: give it as if_version to publish '
@@ -1381,8 +1396,8 @@ def pages_publish(api, req):
     fields = {k: b[k] for k in ('title', 'repo', 'summary', 'refs') if k in b}
     fields.update({'from': _agent_from(b.get('from') or ''), 'at': api.clock(), 'bytes': size,
                    'via': _via(req)})
-    # the body first, each write pinned to what was read: a card never names a body that is not
-    # there, and of two publishers the second stops at the body ("Pages")
+    # the body first, each write pinned to what was read under the lock: a card never names a
+    # body that is not there, and a second publisher reads only after both writes ("Pages")
     wrote = api.store.put('page_html', doc_id, {'html': b['html'], 'via': _via(req)},
                           if_version=_version(body) if body is not None else 0)
     r = api.store.put('pages', doc_id, fields, if_version=_version(card) if card is not None else 0)
@@ -1399,11 +1414,16 @@ def pages_delete(api, req):
     b = _fields(req, ('if_version',))
     _pin(b)
     doc_id = req.params['id']
-    d = api.doc('pages', doc_id, b)
-    r = api.store.delete('pages', doc_id, if_version=_version(d))
-    body = api.store.get('page_html', doc_id)       # the card first: it never names no body
-    if body is not None:
-        r = api.store.delete('page_html', doc_id, if_version=_version(body))
+    with _PAGES_LOCK:       # no publish runs between the reads and the two deletes
+        d = api.doc('pages', doc_id, b)
+        r = api.store.delete('pages', doc_id, if_version=_version(d))
+        body = api.store.get('page_html', doc_id)   # the card first: it never names no body
+        if body is not None:
+            # A body delete that fails (the store's own error: under the lock no publish can
+            # move its version) leaves an orphan body with no card. The card stays deleted:
+            # hubvalidate warns of the orphan, no card offers it, and the next publish of
+            # this id writes over it ("Pages").
+            r = api.store.delete('page_html', doc_id, if_version=_version(body))
     return {'ok': True, 'id': doc_id, 'deleted': True, 'revision': r.revision}
 
 
