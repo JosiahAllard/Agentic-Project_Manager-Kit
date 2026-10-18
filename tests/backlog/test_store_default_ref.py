@@ -117,6 +117,19 @@ class DefaultRef(unittest.TestCase):
         self.assertIn('write to the live store in the PM data worktree (store ref) with -C "%s"'
                       % wt.replace('\\', '/'), str(caught.exception))
 
+    def test_an_unreadable_pm_data_kit_json_is_named_and_not_offered(self):
+        pmdata.write(self.repo.common_dir(), 'pmdata', 'private', self.repo.head())
+        wt = self.repo.worktree('pm', branch='pmdata')
+        with open(os.path.join(wt, '.kit.json'), 'w', encoding='utf-8') as f:
+            f.write('{not json')
+        with self.assertRaises(Refusal) as caught:
+            self.publish(self.backend(), priced('FOO'))
+        text = str(caught.exception)
+        self.assertNotIn('write to the live store', text)
+        self.assertIn('the PM data worktree was not found (cannot read the .kit.json of the PM data '
+                      'worktree %s: ' % wt.replace('\\', '/'), text)
+        self.assertEqual(self.ref_tip(), ('', ''))
+
     def test_the_refusal_in_the_pm_data_worktree_itself_never_points_at_itself(self):
         pmdata.write(self.repo.common_dir(), 'pmdata', 'private', self.repo.head())
         wt = self.repo.worktree('pm', branch='pmdata')
