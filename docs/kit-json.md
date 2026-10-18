@@ -171,6 +171,7 @@ Each kit copy on the machine reads this one file with its own key list, so a key
 - `ledger_path` (absolute path): the one-file rulings ledger (R-nnnn ids); set here only; once `ledger_dir` is set it is frozen: read, never written; removed one release after the split
 - `pending_path` (absolute path): the owner's pending-steps file tools/pending.py edits (docs/pending.md)
 - `standing_delegation` (a ruling id R-nnnn): the ledger entry that delegates in general; the backlog refuses it as the ruling behind any one change. Unset: no id is refused for that
+- `daily_red_ruling` (a ruling id R-nnnn): the ruling the daily full run's bisect files its red record under: priority 1, priority_by pm (docs/daily-full.md "Bisect"); unset: priority 2, priority_by agent, and the run's result.json says so; older kit copies reject the key; set it only after every folder runs a kit that knows it
 - `scrub_patterns` (list of regex): case-insensitive patterns for the install's own names (repositories, owner, accounts) that the shipped-text tests and tests/scrub/test_generic.py also refuse
 - `guard_mcp_prefix` (string): the lock MCP tool-name prefix the guard denies owner-only tools under; unset: the kit default (docs/guard.md "Lock MCP")
 - `guard_mcp_tools` (list of string): more full tool names the guard treats as the lock MCP's owner-only tools, as a PreToolUse payload names them (docs/guard.md "Lock MCP")

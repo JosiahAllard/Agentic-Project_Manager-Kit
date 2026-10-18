@@ -9,6 +9,10 @@ lock (kitlib.fs.treelock) is held from before the fetch until the result is writ
 Opt-in: nothing runs unless `"daily_full".enabled` is true in the main checkout's `.kit.json`. The
 kit never schedules it; a repository that wants it daily registers that itself.
 
+With "daily_full".bisect set, a red run (red steps, not `infra`) is bisected for the commit that
+turned it red, inside the same tree lock, and the red it reproduced is filed as a backlog record
+(kitlib.dailyfull.bisect, kitlib.dailyfull.file; docs/daily-full.md "Bisect").
+
 Output goes through `say(line)`; nothing here prints or exits.
 """
 import datetime
@@ -18,6 +22,8 @@ import os
 from kitlib import gate as G
 from kitlib.config import load as load_config
 from kitlib.config.types import ConfigError
+from kitlib.dailyfull import bisect as B
+from kitlib.dailyfull import file as filing
 from kitlib.fs.treelock import TreeBusy, TreeLock, TreeLockError, describe, lock_name
 from kitlib.gate import detect
 from kitlib.gate import runner
@@ -252,8 +258,8 @@ def _run_held(main, cfg, s, out, stamp, say, book_kw, git, lock, lock_why, force
     say('daily: %s at %s, %d step(s), logs in %s' % (s['ref'], sha[:10], len(chosen), log_dir))
     kw = dict(book_kw or {})
     kw.setdefault('wait_s', s['max_wait'])
-    results, refused = runner.gated(tested, s['worktree'], sha, [], chosen, s['kind'],
-                                    runner.repo_name(cfg, main), SLUG, log_dir, say, kw)
+    ran, refused = runner.gated(tested, s['worktree'], sha, [], chosen, s['kind'],
+                                runner.repo_name(cfg, main), SLUG, log_dir, say, kw)
     if refused is not None:
         cause = SKIP_CAUSES.get(refused.code)
         if cause is None:
@@ -264,14 +270,44 @@ def _run_held(main, cfg, s, out, stamp, say, book_kw, git, lock, lock_why, force
         return G.Outcome(G.OK, ['daily: SKIPPED (%s) - %s' % (cause, reason), 'logs: %s' % log_dir],
                          log_dir=log_dir, skipped=cause)
     steps = [{'name': r['name'], 'status': r['status'], 'reasons': r['reasons'],
-              'seconds': r['seconds'], 'log': r['log']} for r in results]
+              'seconds': r['seconds'], 'log': r['log']} for r in ran]
+    earlier = results(out)
     result = write_result(log_dir, sha, started, steps)
     line = ('daily: RED %s' % ', '.join(result['red']) if result['red'] else
             'daily: GREEN at %s' % sha[:10])
     if result['error']:
         line += ' - %s' % result['error']
-    return G.Outcome(G.FAILED if result['red'] else G.OK, [line, 'logs: %s' % log_dir],
+    lines = [line] + _bisect(main, cfg, s, result, earlier, log_dir, say, kw, git)
+    return G.Outcome(G.FAILED if result['red'] else G.OK, lines + ['logs: %s' % log_dir],
                      log_dir=log_dir, result=result)
+
+
+def _bisect(main, cfg, s, result, earlier, log_dir, say, kw, git):
+    """After a red `result` with "daily_full".bisect set: bisect (kitlib.dailyfull.bisect), the
+    result rewritten with its `bisect`, and the record filed (kitlib.dailyfull.file). The lines to
+    add to the outcome; none when there is nothing to bisect."""
+    conf = s.get('bisect') or {}
+    probes = conf.get('max_probes', B.DEFAULT_PROBES)
+    red = B.bisectable(result)
+    if not conf or probes < 1 or not red:
+        return []
+    prober = B.Prober(s['worktree'], red, s['kind'], runner.repo_name(cfg, main), SLUG, log_dir,
+                      say, kw, git, plan)
+    found = B.bisect(result, [r for r in earlier if r.get('dir') != log_dir], prober,
+                     s['worktree'], git, probes)
+    lines = ['daily: bisect: %s (%d probe(s))' % (found['verdict'], len(found['probes']))]
+    if found.get('back'):
+        lines.append('daily: bisect: %s' % found['back'])
+    if any(p['verdict'] == B.RED for p in found['probes']):      # reproduced: worth a record
+        rid, said, note = filing.file(main, conf, found, red, git)
+        lines += said
+        if rid:
+            found['filed'] = rid
+        if note:
+            found['note'] = note
+    result['bisect'] = found
+    _write(log_dir, result)
+    return lines
 
 
 # ---------------------------------------------------------------- reading results
