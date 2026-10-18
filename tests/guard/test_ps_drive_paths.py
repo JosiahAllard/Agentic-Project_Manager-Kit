@@ -467,6 +467,10 @@ class DynamicTargets(Base):
                      r'Export-Alias -Description d {main}\x.ps1'):
             with self.subTest(text):
                 self.denied(self.run_ps(text), 'main-checkout')
+        for text in (r'Export-Alias -As Script x.ps1', r'Export-Alias -Name a x.ps1',
+                     r'Export-Clixml -Depth 2 x.xml', r'Export-Alias -Encoding utf8 x.ps1'):
+            with self.subTest(text):
+                self.allowed(self.run_ps(text))
 
     def test_the_built_in_export_aliases_are_the_cmdlets(self):
         # rules.PS_ALIASES: epal is Export-Alias, epsn is Export-PSSession
@@ -477,10 +481,6 @@ class DynamicTargets(Base):
             with self.subTest(text):
                 self.refused_for_both(text)
         self.allowed(self.run_ps(r'epal x.ps1'))
-        for text in (r'Export-Alias -As Script x.ps1', r'Export-Alias -Name a x.ps1',
-                     r'Export-Clixml -Depth 2 x.xml', r'Export-Alias -Encoding utf8 x.ps1'):
-            with self.subTest(text):
-                self.allowed(self.run_ps(text))
 
     def test_a_typographic_dash_names_a_parameter(self):
         # shell.PS_DASHES: PowerShell reads an en dash, an em dash and a horizontal bar as '-'
@@ -509,8 +509,7 @@ class DynamicTargets(Base):
                      'powershell "-x; Remove-Item {main}\\x.txt" -c "Write-Output hi"',
                      'pwsh -Zork -c "Remove-Item {main}\\x.txt"',
                      'pwsh -ConfigurationFile c.json -c "Remove-Item {main}\\x.txt"',
-                     # -o Text is -OutputFormat and its value; -i is -InputFormat with a value
-                     # to powershell.exe, -Interactive without one to pwsh: both readings judged
+                     # -o Text is -OutputFormat and its value
                      'powershell -o Text -c "Remove-Item {main}\\x.txt"',
                      'powershell -i Text -c "Remove-Item {main}\\x.txt"'):
             with self.subTest(text):
@@ -522,6 +521,34 @@ class DynamicTargets(Base):
                      'pwsh -nop -noni -NoProfileLoadTime -c "Write-Output hi"', 'pwsh -Zork -c "Write-Output hi"'):
             with self.subTest(text):
                 self.allowed(self.run_ps(text))
+
+    def test_a_switch_the_shells_read_with_and_without_a_value_is_judged_both_ways(self):
+        # commands.PS_VALUE_EITHER: -i and -in are -InputFormat with a value to powershell.exe and
+        # -Interactive without one to pwsh; an -EncodedArguments prefix takes a value. The word
+        # after the switch is read both as that value and as the start of the command, and the
+        # scan goes on from each reading
+        for text in ('powershell -i Text "Remove-Item {main}\\x.txt"',
+                     'powershell -in Text "Remove-Item {main}\\x.txt"',
+                     'powershell -i Text -nop "Remove-Item {main}\\x.txt"',
+                     'powershell -encodeda x "Remove-Item {main}\\x.txt"',
+                     'powershell -EncodedArguments x "Remove-Item {main}\\x.txt"',
+                     'powershell -ea x "Remove-Item {main}\\x.txt"'):
+            with self.subTest(text):
+                self.denied(self.run_ps(text), 'main-checkout')
+        for text in ('powershell -i Text "Write-Output hi"', 'pwsh -i -nop -c "Write-Output hi"'):
+            with self.subTest(text):
+                self.allowed(self.run_ps(text))
+        # commands.PS_FORKS_MAX: past that many such switches the line is not read
+        self.denied(self.run_ps('powershell %s"Write-Output hi"' % ('-i ' * 40)), 'unreadable')
+
+    def test_a_double_dash_switch_is_read_as_pwsh_reads_it(self):
+        # pwsh reads --c and --command as -Command; powershell.exe runs the unknown --c and what
+        # follows as the command: both readings are judged
+        for text in ('pwsh --c "Remove-Item {main}\\x.txt"', 'pwsh --command "Remove-Item {main}\\x.txt"',
+                     'powershell --c "Remove-Item {main}\\x.txt"'):
+            with self.subTest(text):
+                self.denied(self.run_ps(text), 'main-checkout')
+        self.allowed(self.run_ps('pwsh --command "Write-Output hi"'))
 
     def test_a_value_switch_powershell_exe_does_not_know_is_no_value(self):
         # commands.PS51_SWITCHES: value switches powershell.exe 5.1 does not know, which it runs,

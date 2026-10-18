@@ -444,8 +444,13 @@ LINE_CD_RE = re.compile(r'(?i)(?<![\w.-])(?:%s)(?![\w.-])' % '|'.join(
 BASH_VALUE_OPTS = {'-o', '+o', '-O', '+O', '--rcfile', '--init-file'}
 PS_VALUE_PARAMS = ('executionpolicy', 'windowstyle', 'workingdirectory', 'configurationname',
                    'outputformat', 'inputformat', 'version', 'psconsolefile', 'settingsfile',
-                   'custompipename', 'configurationfile')
+                   'custompipename', 'configurationfile', 'encodedarguments')
 PS_VALUE_ALIASES = {'ep', 'ex', 'w', 'wd', 'of', 'o', 'if', 'v', 'ea'}
+# switches whose next word is read both as their value and as the start of the command: -i and
+# -in are -InputFormat with a value to powershell.exe and -Interactive without one to pwsh; an
+# -EncodedArguments prefix is judged both ways too
+PS_VALUE_EITHER = {'i', 'in', 'ea'}
+PS_FORKS_MAX = 16               # such switches in one line _nested_text follows before it flags the line
 # the switches powershell.exe 5.1 knows, each (name, shortest prefix it takes), and its aliases
 # (observed on 5.1 for every prefix). It runs any other switch, and every word after it, as the
 # command. The server modes are left out: they read no command line, so treating them as
@@ -470,6 +475,11 @@ def _ps_takes_value(t):
     if body in PS_VALUE_ALIASES:
         return True
     return len(body) >= 2 and body not in ('in', 'i') and any(p.startswith(body) for p in PS_VALUE_PARAMS)
+
+
+def _ps_value_either(t):
+    body = t[1:]
+    return body in PS_VALUE_EITHER or (body.startswith('encodeda') and 'encodedarguments'.startswith(body))
 
 
 def _ps_switch(w):
@@ -540,8 +550,8 @@ def _nested_text(inv, parsed):
             return None                         # bash script.sh: a file, not text
         return STDIN, sh.BASH
     if name in PS_SHELLS:
-        k, unknown = 0, None
         lit = 'a nested powershell command whose text is not literal'
+        seen = {}
 
         def nested(why, *readings):
             # every way the shells may read the words is judged
@@ -550,45 +560,70 @@ def _nested_text(inv, parsed):
                 parsed.flag(why)
                 return None
             return '\n'.join(' '.join(w.text for w in words) for words in texts), sh.PS
-        while k < len(a):
-            t = _ps_switch(a[k])
-            if t.startswith('-e') and 'encodedcommand'.startswith(t[1:]) or t in ('-ec', '-enc'):
-                parsed.flag('an encoded PowerShell command')
+
+        def joined(*found):
+            # the texts of several readings, standard input read once when any of them reads it
+            texts = [f[0] for f in found if f and f[0] is not STDIN]
+            if any(f and f[0] is STDIN for f in found):
+                if not texts:
+                    return STDIN, sh.PS
+                piped = _stdin_text(inv.cmd, parsed)
+                texts += [piped] if piped else []
+            return ('\n'.join(texts), sh.PS) if texts else None
+
+        def scan(k, unknown, forks=0):
+            if forks > PS_FORKS_MAX:
+                parsed.flag('a powershell switch line with too many readings')
                 return None
-            # powershell.exe runs a switch it does not know, and every word after it, as the
-            # command (unknown); pwsh refuses it, or reads it as a switch, and goes on
-            first = a[unknown:] if unknown is not None else []
-            if _ps_command_switch(t):
-                rest = a[k + 1:]
-                if [w.text for w in rest] == ['-']:
-                    if unknown is None:
-                        return STDIN, sh.PS
+            if (k, unknown) not in seen:
+                seen[(k, unknown)] = read_from(k, unknown, forks)
+            return seen[(k, unknown)]
+
+        def read_from(k, unknown, forks):
+            while k < len(a):
+                t = _ps_switch(a[k])
+                if t.startswith('-e') and 'encodedcommand'.startswith(t[1:]) or t in ('-ec', '-enc'):
+                    parsed.flag('an encoded PowerShell command')
+                    return None
+                # powershell.exe runs a switch it does not know, and every word after it, as the
+                # command (unknown); pwsh refuses it, or reads it as a switch, and goes on
+                first = a[unknown:] if unknown is not None else []
+                if _ps_command_switch(t):
+                    rest = a[k + 1:]
+                    if [w.text for w in rest] == ['-']:
+                        if unknown is None:
+                            return STDIN, sh.PS
+                        parsed.flag(lit)
+                        return None
+                    return nested('a nested powershell -Command whose text is not literal', first, rest)
+                if unknown is None and t.startswith('-') and t != '-' and not _ps51_known(t):
+                    # a value switch included: powershell.exe never takes its value
+                    unknown = k
+                if t.startswith('-') and len(t) > 1 and 'file'.startswith(t[1:]):
+                    return nested(lit, first) if first else None
+                if t.startswith('-') and _ps_value_either(t) and k + 1 < len(a):
+                    # the next word as the switch's value, and as the start of the command
+                    return joined(scan(k + 1, unknown, forks + 1), scan(k + 2, unknown, forks + 1))
+                if t.startswith('-'):
+                    k += 2 if _ps_takes_value(t) else 1      # as pwsh reads it
+                    continue
+                # a word that is no switch starts the command: pwsh's, and powershell.exe's when no
+                # unknown switch started it before (pwsh reads `--c x` as `-c x`, powershell.exe
+                # runs `--c x`); a shell that took it as the value of a switch before it reads a
+                # later -Command
+                later = next((j for j in range(k + 1, len(a)) if _ps_command_switch(_ps_switch(a[j]))), None)
+                then = a[later + 1:] if later is not None else []
+                if [w.text for w in then] == ['-']:
                     parsed.flag(lit)
                     return None
-                return nested('a nested powershell -Command whose text is not literal', first, rest)
-            if unknown is None and t.startswith('-') and t != '-' and not _ps51_known(t):
-                # a value switch included: powershell.exe never takes its value
-                unknown = k
-            if t.startswith('-') and len(t) > 1 and 'file'.startswith(t[1:]):
-                return nested(lit, first) if first else None
-            if t.startswith('-'):
-                k += 2 if _ps_takes_value(t) else 1      # as pwsh reads it
-                continue
-            # a word that is no switch starts the command; a shell that took it as the value of a
-            # switch before it reads a later -Command
-            later = next((j for j in range(k + 1, len(a)) if _ps_command_switch(_ps_switch(a[j]))), None)
-            then = a[later + 1:] if later is not None else []
-            if [w.text for w in then] == ['-']:
-                parsed.flag(lit)
-                return None
-            return nested(lit, first or a[k:], then)
-        if unknown is not None:
-            # powershell.exe runs the words from the unknown switch on; pwsh, when it knows the
-            # switch, reads standard input
-            found = nested(lit, a[unknown:])
-            piped = _stdin_text(inv.cmd, parsed) if found else None
-            return found and ((found[0] + '\n' + piped) if piped else found[0], sh.PS)
-        return STDIN, sh.PS
+                return nested(lit, first, a[k:], then)
+            if unknown is not None:
+                # powershell.exe runs the words from the unknown switch on; pwsh, when it knows
+                # the switch, reads standard input
+                found = nested(lit, a[unknown:])
+                return found and joined(found, (STDIN, sh.PS))
+            return STDIN, sh.PS
+        return scan(0, None)
     if name == 'cmd':
         for k, w in enumerate(a):
             if w.text.lower() in ('/c', '/k', '/r', '//c', '//k', '//r'):
