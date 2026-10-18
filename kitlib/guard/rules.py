@@ -2093,7 +2093,9 @@ def edit_target(event, ctx, target, cwd, role, what, unknown_why=None, rewrite=N
 
 
 def main_checkout(event, ctx, target, cwd, role, what, unknown_why=None, rewrite=None, run=None):
-    cfg = ctx.config(target) if target else None
+    # a target it cannot place is judged by the roles of the repository the call runs in: the
+    # kit defaults would let a role that repository keeps out of its main checkout write anywhere
+    cfg = ctx.config(target) if target else ctx.config(cwd) if cwd else None
     perms = kconfig.permissions(event, kconfig.roles(cfg))
     if perms.get('edit_main_checkout'):
         return None

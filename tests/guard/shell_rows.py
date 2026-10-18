@@ -240,6 +240,44 @@ ROWS = [
     ('Start-Process cmd -WorkingDirectory: then its worktree stays allowed', lambda w: ps(
         "Start-Process cmd -WorkingDirectory: %s -ArgumentList '/c echo x > f.txt'" % w.wt, w.wt, sub=True),
      None, None, None),
+    # a -WorkingDirectory is a directory only when its text names one place exactly: a bare drive
+    # (that drive's current location), a wildcard (Start-Process resolves the text as a pattern) or
+    # a drive-relative C:x leaves the nested line with no directory, so a write there is refused
+    # (commands.sp_workdir_unplaceable). A subagent's write jail refused these before, judged at the
+    # wrong place; tests/guard/test_start_process_workdir.py holds the roles the jail does not cover
+    ('Start-Process cmd in a bare drive from main', lambda w: ps(
+        "Start-Process cmd -WorkingDirectory %s -ArgumentList '/c','echo x > f.txt'" % w.main[:2], w.main, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process cmd -WorkingDirectory: a bare drive from main', lambda w: ps(
+        "Start-Process cmd -WorkingDirectory:%s '/c','echo x > f.txt'" % w.main[:2], w.main, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process cmd in a ? wildcard directory from main', lambda w: ps(
+        "Start-Process cmd -WorkingDirectory '%s?' -ArgumentList '/c echo x > f.txt'" % w.main[:-1], w.main, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process cmd in a * wildcard directory from main', lambda w: ps(
+        "Start-Process cmd -WorkingDirectory '%s*' -ArgumentList '/c echo x > f.txt'" % w.main[:-1], w.main, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process cmd in a [ wildcard directory from main', lambda w: ps(
+        "Start-Process cmd -WorkingDirectory '%s[r]epo' -ArgumentList '/c echo x > f.txt'" % w.main[:-4], w.main,
+        sub=True), 'deny', 'main-checkout', None),
+    ('Start-Process powershell in a ? wildcard directory from main', lambda w: ps(
+        "Start-Process powershell -WorkingDirectory '%s?' -ArgumentList '-Command', 'echo x > f.txt'" % w.main[:-1],
+        w.main, sub=True), 'deny', 'main-checkout', None),
+    ('Start-Process cmd in a drive-relative directory from main', lambda w: ps(
+        "Start-Process cmd -WorkingDirectory %srepo -ArgumentList '/c echo x > f.txt'" % w.main[:2], w.main, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process cmd in a relative wildcard directory from main', lambda w: ps(
+        "Start-Process cmd -WorkingDirectory '..%srep?' -ArgumentList '/c echo x > f.txt'" % BS, w.main, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process cmd in a relative directory that is main', lambda w: ps(
+        "Start-Process cmd -WorkingDirectory %s -ArgumentList '/c echo x > f.txt'" % win('..', 'repo'), w.main, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process cmd in a relative directory from main into its worktree stays allowed', lambda w: ps(
+        "Start-Process cmd -WorkingDirectory %s -ArgumentList '/c echo x > f.txt'" % win('.claude', 'worktrees', 'wt'),
+        w.main, sub=True), None, None, None),
+    ('Start-Process cmd in its worktree from main stays allowed', lambda w: ps(
+        "Start-Process cmd -WorkingDirectory '%s' -ArgumentList '/c echo x > f.txt'" % w.wt, w.main, sub=True),
+     None, None, None),
     ('Start-Process with an unknown parameter', lambda w: ps(
         "Start-Process cmd -Bogus -ArgumentList '/c echo hi'", w.wt, sub=True), 'deny', 'unreadable', None),
     ('Start-Process with an unknown parameter and no program', lambda w: ps(

@@ -272,7 +272,8 @@ def _start_process(cmd, words, i):
             k += 1
             continue
         raw = cmd.source[w.start:w.end] if 0 <= w.start < w.end <= len(cmd.source) else w.text
-        bare = ':' in w.text and raw.endswith(':')     # -Name: value, its value the next word
+        # -Name: value, its value the next word; -Name:C: is its value C:, never bare
+        bare = ':' in w.text and ':' in raw and raw.split(':', 1)[1] == ''
         if p in switches:
             if bare:
                 unread = unread or 'a Start-Process switch given a value after a space (%s)' % w.text
@@ -621,12 +622,38 @@ def _nested_text(inv, parsed):
     return _shell_text(inv, parsed)
 
 
+# the characters PowerShell reads in a -WorkingDirectory as a wildcard pattern (Start-Process
+# resolves the text as a pattern, so 'C:\repo?' finds C:\repo1) and its pattern escape
+SP_WORKDIR_WILD = frozenset('*?[`')
+SP_WORKDIR_DEVICE = ('\\\\.\\', '\\\\?\\')
+
+
+def sp_workdir_unplaceable(text):
+    """True when the literal -WorkingDirectory `text` of a Start-Process call names no one folder
+    the guard can place exactly: empty; a wildcard character (SP_WORKDIR_WILD); a bare drive C:
+    or a drive-relative C:x (PowerShell reads both from that drive's current location, which the
+    text does not tell); a colon past the drive (another PowerShell drive or provider, a stream);
+    a device path \\\\.\\ or \\\\?\\; a Git Bash /c/x spelling (shell.msys_to_win), which PowerShell
+    reads as a folder on the current drive. An absolute path, a share, a FileSystem::<abs> path,
+    ~ and a plain relative path are placed (shell.resolve_path)."""
+    p = sh.ps_filesystem_path(text) or text
+    if not p or any(c in SP_WORKDIR_WILD for c in p):
+        return True
+    if re.match(r'^[A-Za-z]:(?![\\/])', p) or ':' in p[2:]:
+        return True
+    if p[:4].replace('/', '\\') in SP_WORKDIR_DEVICE:
+        return True
+    return sh.msys_to_win(p) != p
+
+
 def _sp_shell_text(inv, parsed):
     """_nested_text for a shell Start-Process starts. Start-Process hands the program one command
     line, its -ArgumentList elements joined with spaces; a computed element, or a computed
-    -WorkingDirectory, makes the text unreadable. cmd runs the rest of that line after its /c (/k,
-    /r), read with its outer quotes kept and dropped (cmd keeps or drops them by what lies between);
-    bash and powershell read the words _split_list made of each element."""
+    -WorkingDirectory, makes the text unreadable. A literal -WorkingDirectory the guard cannot
+    place exactly (sp_workdir_unplaceable) gives the nested line no directory (None), so a write
+    there is refused as one whose directory is unknown. cmd runs the rest of that line after its
+    /c (/k, /r), read with its outer quotes kept and dropped (cmd keeps or drops them by what lies
+    between); bash and powershell read the words _split_list made of each element."""
     if any(w.dyn for w in inv.listed):
         parsed.flag('a shell Start-Process starts with an argument list that is not literal (%s)' % inv.path)
         return None
@@ -635,7 +662,9 @@ def _sp_shell_text(inv, parsed):
         if inv.workdir.dyn:
             parsed.flag('a shell Start-Process starts in a working directory that is not literal (%s)' % inv.path)
             return None
-        where = (sh.resolve_path(inv.workdir.text, inv.cmd.cwd, shell=sh.PS, home=parsed.home),)
+        text = inv.workdir.text
+        where = (None if sp_workdir_unplaceable(text) else
+                 sh.resolve_path(text, inv.cmd.cwd, shell=sh.PS, home=parsed.home),)
     if inv.name != 'cmd':
         found = _shell_text(inv, parsed)
         return found and found[:2] + where
