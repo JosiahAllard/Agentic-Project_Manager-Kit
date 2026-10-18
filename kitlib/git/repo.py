@@ -179,7 +179,7 @@ def same_repository(a, b):
 def not_a_directory(path):
     """`'<path> is not a directory'`, with a hint added when `path` looks like a Windows path
     whose separators were stripped (a drive letter, then text with no `\\` or `/`): Git Bash
-    drops the backslashes of an unquoted `-C Z:\\GitHub\\x`."""
+    drops the backslashes of an unquoted `-C <drive>:\\dir\\sub`."""
     msg = '%s is not a directory' % path
     if re.match(r'^[A-Za-z]:[^\\/]+$', path):
         msg += ('; an unquoted backslash path in Git Bash loses its backslashes; quote the path'
