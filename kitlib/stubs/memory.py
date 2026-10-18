@@ -159,7 +159,7 @@ def survey(checkout, override=None, main_top=None):
         return bad(why, raw=raw)
     shared = settings_path(checkout)
     s_raw, s_layout, s_data, s_why = _load(shared)
-    if s_why:
+    if s_why and s_raw is not None:         # not JSON / not an object; a link or non-file (raw None) is only skipped
         return bad(s_why, shared, s_raw)
     for path, (r, lay, dat) in ((local, (raw, layout, data)), (shared, (s_raw, s_layout, s_data))):
         if not isinstance(dat, dict) or KEY not in dat:
