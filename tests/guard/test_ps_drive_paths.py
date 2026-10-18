@@ -5,6 +5,7 @@ ASCII letter (New-PSDrive Main FileSystem <main>, 1:, _:) or another provider, o
 such a place, is refused, never read as a file in the worktree. Bash and cmd words, one-letter
 drives and relative paths are read as before."""
 import os
+import time
 import unittest
 
 from kitlib.guard import commands as cm
@@ -546,6 +547,28 @@ class DynamicTargets(Base):
                 text = '%s %s-c "Remove-Item {main}\\x.txt"' % (shell, '-i ' * n)
                 with self.subTest(text):
                     self.denied(self.run_ps(text), 'main-checkout')
+        # past the cap -i is read with no value, so Text starts the command and Remove-Item is its
+        # argument; the reading that takes Text as the value (Remove-Item the command) is not
+        # followed, so the line is flagged
+        text = 'pwsh %sText "Remove-Item {main}\\x.txt"' % ('-i ' * 40)
+        self.denied(self.run_ps(text), 'unreadable')
+        self.assertIn('a powershell switch line with too many readings',
+                      cm.read(text.format(main=self.w.main), sh.PS, self.w.wt).unclean)
+
+    def test_readings_that_fork_again_at_each_level_are_bounded(self):
+        # commands.MAX_NESTS: each reading of `pwsh -i pwsh -i pwsh ...` is a pwsh line that forks
+        # again, some 17 readings per level down to shell.MAX_DEPTH (17^6 parses: over 20000 and
+        # 25 s before the cap, r11 probe). The line's nested parses stop at the cap and it is flagged
+        text = 'pwsh' + ' -i pwsh' * 110 + '; Remove-Item {main}\\x.txt'
+        parsed = cm.read(text.format(main=self.w.main), sh.PS, self.w.wt)
+        self.assertLessEqual(parsed.nests, cm.MAX_NESTS)
+        self.assertIn('more than %d nested shell texts' % cm.MAX_NESTS, parsed.unclean)
+        start = time.monotonic()
+        d = self.run_ps(text)
+        self.assertLess(time.monotonic() - start, 5.0)
+        self.assertIsNotNone(d, 'allowed')
+        self.assertEqual(d.verdict, 'deny', d.reason)
+        self.assertIn(d.rule, ('main-checkout', 'unreadable'), d.reason)
 
     def test_each_reading_of_a_powershell_line_is_parsed_on_its_own(self):
         # commands._nested_text gives each reading as a text of its own and commands.expand parses
