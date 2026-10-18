@@ -153,7 +153,7 @@ class SecretShell(Hub):
                                       'print(len(json.load(sys.stdin)))"', self.w.wt, sub))
 
     def test_what_the_skip_lets_through_by_design(self):
-        # deliberate (review of KIT-GUARD-HUB-SECRETS-PIPE-FP): the skip is not a read check. Code
+        # deliberate (from the review of the hub-pipe false positive): the skip is not a read check. Code
         # given with -c that names nothing of the hub passes even when it runs what is piped in as
         # code, since no text test tells exec(...) from json.load(...) in code the guard cannot
         # run; and the command piped in may be any verb the shape allows, an agent write too.
