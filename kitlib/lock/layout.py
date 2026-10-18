@@ -22,7 +22,9 @@ The division is the owner's (machine.json); any key missing takes its default:
 
 Every process must count slots the same way, so the layout in force is the store's layout.json.
 A changed machine or division is adopted only while nothing is live or queued (in_force), under
-the queue mutex; until then the old layout stays and the change is reported as pending.
+the queue mutex; until then the old layout stays and the change is reported as pending. A
+layout.json that is missing or invalid is rewritten under the same rule, and a look at the
+hardware that failed (detect's `failed`) is never adopted.
 """
 import ctypes
 import hashlib
@@ -175,12 +177,16 @@ def gpu_entries(adapters, source):
 # ------------------------------------------------------------------ hardware
 def detect():
     """This machine, as a JSON-ready dict (thread ids, never masks: a mask past 53 bits does not
-    survive a JavaScript reader). Never raises: what cannot be read is in `problems`."""
-    problems = []
+    survive a JavaScript reader). Never raises: what cannot be read is in `problems`, and `failed`
+    names the parts read as a stand-in rather than from Windows ("cores": each thread counted as
+    one; "gpus": neither DXGI nor CIM answered, so no card). A layout from such a look is never
+    adopted (in_force). CIM answering for DXGI is not a failed look."""
+    problems, failed = [], []
     ids = cpu.threads()
     cores = cpu.cores()
     if cores is None:
         problems.append("Windows did not list the physical cores; each thread counts as one")
+        failed.append("cores")
         cores = [{"threads": [i], "smt": False, "efficiency": 0} for i in ids]
     try:
         gpus, gsrc = gpu_entries(dxgi_adapters(), "dxgi"), "dxgi"
@@ -190,6 +196,7 @@ def detect():
             gpus, gsrc = gpu_entries(cim_adapters(), "cim"), "cim"
         except OSError as e2:
             problems.append(str(e2))
+            failed.append("gpus")
             gpus, gsrc = [], "none"
     mem = process.memory_mb() or {}
     return {"threads": ids,
@@ -199,7 +206,7 @@ def detect():
                        "efficiency": c["efficiency"]} for c in cores],
             "l3": [cpu.bits(m) for m in cpu.l3_domains()], "cpu_sets": cpu.cpu_sets(),
             "memory_mb": mem.get("total_mb"), "gpus": gpus,
-            "source": {"cpu": "windows", "gpu": gsrc}, "problems": problems}
+            "source": {"cpu": "windows", "gpu": gsrc}, "problems": problems, "failed": failed}
 
 
 def fake_hardware(threads=24, smt=2, l3=1, gpus=1, vram_mb=12288, group_size=64,
@@ -236,7 +243,7 @@ def fake_hardware(threads=24, smt=2, l3=1, gpus=1, vram_mb=12288, group_size=64,
     return {"threads": ids, "groups": [{"group": g, "threads": ts} for g, ts in sorted(groups.items())],
             "cores": cores, "l3": l3s, "cpu_sets": sets, "memory_mb": memory_mb,
             "gpus": gpu_entries(adapters, "fake"), "source": {"cpu": "fake", "gpu": "fake"},
-            "problems": []}
+            "problems": [], "failed": []}
 
 
 def hardware(store):
@@ -417,11 +424,24 @@ def in_force(store, adopt=True):
     layout.json) and the one this machine and division ask for. A different wanted layout is
     adopted only while no run is live or queued (never under live runs), under the queue
     mutex, so a run in the queue never sees its slots renumbered; until then `pending` says why
-    it waits. adopt False: never write (a read-only look)."""
-    want, source, warning = wanted(store)
+    it waits. A layout.json that is missing, unreadable or invalid to this version waits the same
+    way: the runs live now count their slots from it, so it is rewritten only once none is, and
+    until then the wanted layout is used without being written. A wanted layout from a failed
+    look at the hardware (detect's `failed`) is never adopted: the valid layout.json stays in
+    force (the wanted one, unwritten, when there is none) until a look succeeds. adopt False:
+    never write (a read-only look)."""
+    hw = hardware(store)
+    want, source, warning = wanted(store, hw)
     cur = store.read("layout.json")
     out = {"layout": want, "wanted": want, "source": source, "warning": warning, "pending": None}
     if valid_layout(cur) and cur["key"] == want["key"]:
+        return out
+    failed = hw.get("failed") or []
+    if failed:
+        out.update(layout=cur if valid_layout(cur) else want,
+                   pending="the %s could not be read (%s); no layout is adopted from that look "
+                           "until one succeeds" % (" and ".join(failed),
+                                                   "; ".join(hw.get("problems") or ()) or "no detail"))
         return out
     if not adopt:
         if valid_layout(cur):
@@ -441,10 +461,15 @@ def in_force(store, adopt=True):
                            "is used once no run is live or queued (%d now)" % (
                                cur["key"], want["key"], len(busy)))
                 return out
+            if busy:
+                out.update(pending="layout.json is missing, unreadable or not valid to this kit "
+                                   "version; %s is written once no run is live or queued (%d now)"
+                                   % (want["key"], len(busy)))
+                return out
             store.write("layout.json", dict(want, adopted_at=time.time()))
     except (OSError, q_mod.QueueUnreadable) as e:
-        if valid_layout(cur):
-            out.update(layout=cur, pending="the layout could not be checked (%s)" % e)
+        out.update(layout=cur if valid_layout(cur) else want,
+                   pending="the layout could not be checked (%s)" % e)
     return out
 
 

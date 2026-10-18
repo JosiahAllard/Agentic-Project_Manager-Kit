@@ -3,6 +3,7 @@ any gpu vendor, the owner's division, a change adopted only with nothing live) a
 kitlib.lock.game.domain_slots (the preferred L3 domain, or half the cores with one L3)."""
 import os
 import unittest
+from unittest import mock
 
 from .helpers import StoreCase
 
@@ -261,6 +262,122 @@ class InForce(StoreCase):
         self.assertEqual(got["source"], "default")
         self.assertIn("is not used", got["warning"])
         self.assertEqual(got["layout"]["cpu_slots"], 12)
+
+
+def no_gpu_answer(hw):
+    """hw as detect() gives it when neither DXGI nor CIM answered: no cards, gpu source none."""
+    return dict(hw, gpus=[], source=dict(hw["source"], gpu="none"), failed=["gpus"],
+                problems=["DXGI: CreateDXGIFactory1: 0x887A0004; CIM used",
+                          "Win32_VideoController: exit 1"])
+
+
+def no_cores_answer(hw):
+    """hw as detect() gives it when Windows did not list the physical cores."""
+    return dict(hw, cores=[{"threads": [t], "smt": False, "efficiency": 0} for t in hw["threads"]],
+                failed=["cores"],
+                problems=["Windows did not list the physical cores; each thread counts as one"])
+
+
+class FailedDetection(StoreCase):
+    """A detection that could not read the gpus or the cores is never adopted: it would renumber
+    the gpu (or cpu) slots of every session on the machine until the next good look."""
+
+    def on(self, hw):
+        self.hw = hw
+        self.store = self.make_store()
+
+    def test_an_idle_store_keeps_its_layout_when_no_gpu_source_answers(self):
+        good = self.layout()
+        self.assertEqual(good["gpu_slots"], 2)
+        real = self.hw
+        self.on(no_gpu_answer(real))
+        got = lay.in_force(self.store)
+        self.assertEqual(got["layout"]["key"], good["key"])
+        self.assertEqual(got["layout"]["gpu_slots"], 2)
+        self.assertEqual(got["wanted"]["gpu_slots"], 1)        # the placeholder slot
+        self.assertIn("could not be read", got["pending"])
+        self.assertIn("Win32_VideoController", got["pending"])
+        self.assertEqual(self.store.read("layout.json")["key"], good["key"])
+        self.on(real)
+        got = lay.in_force(self.store)
+        self.assertIsNone(got["pending"])
+        self.assertEqual(got["layout"]["key"], good["key"])
+
+    def test_a_fresh_store_writes_no_layout_from_a_failed_look(self):
+        real = self.hw
+        self.on(no_gpu_answer(real))
+        got = lay.in_force(self.store)
+        self.assertEqual(got["layout"]["gpu_slots"], 1)        # all there is to count with
+        self.assertIn("could not be read", got["pending"])
+        self.assertIsNone(self.store.read("layout.json"))
+        self.on(real)
+        got = lay.in_force(self.store)
+        self.assertIsNone(got["pending"])
+        self.assertEqual(self.store.read("layout.json")["gpu_slots"], 2)
+
+    def test_unlisted_cores_are_not_adopted_either(self):
+        good = self.layout()
+        self.on(no_cores_answer(self.hw))
+        got = lay.in_force(self.store)
+        self.assertEqual(got["wanted"]["cpu_slots"], 24)
+        self.assertEqual(got["layout"]["cpu_slots"], 12)
+        self.assertIn("physical cores", got["pending"])
+        self.assertEqual(self.store.read("layout.json")["key"], good["key"])
+
+    def test_a_read_only_look_says_why_too(self):
+        good = self.layout()
+        self.on(no_gpu_answer(self.hw))
+        got = lay.in_force(self.store, adopt=False)
+        self.assertEqual(got["layout"]["key"], good["key"])
+        self.assertIn("could not be read", got["pending"])
+
+    def test_a_failed_look_that_matches_the_layout_is_no_change(self):
+        # A machine with no shared card loses nothing when its gpus cannot be read.
+        self.on(lay.fake_hardware(threads=24, smt=2, gpus=0))
+        good = self.layout()
+        self.on(no_gpu_answer(self.hw))
+        got = lay.in_force(self.store)
+        self.assertEqual(got["layout"]["key"], good["key"])
+        self.assertIsNone(got["pending"])
+
+
+@unittest.skipUnless(os.name == "nt", "the lock is Windows only")
+class DetectFailed(unittest.TestCase):
+    """detect() names what it could not read in `failed`, which in_force will not adopt."""
+
+    def test_no_gpu_source_answering_is_a_failed_look(self):
+        with mock.patch.object(lay, "dxgi_adapters", side_effect=OSError("dxgi: gone")), \
+                mock.patch.object(lay, "cim_adapters",
+                                  side_effect=OSError("Win32_VideoController: exit 1")):
+            hw = lay.detect()
+        self.assertEqual(hw["gpus"], [])
+        self.assertEqual(hw["source"]["gpu"], "none")
+        self.assertIn("gpus", hw["failed"])
+
+    def test_cim_answering_for_dxgi_is_not(self):
+        card = {"name": "Card", "vendor_id": 0x10DE, "device_id": 1, "vram_mb": 4095,
+                "shared_mb": 0, "luid": None, "software": False}
+        with mock.patch.object(lay, "dxgi_adapters", side_effect=OSError("dxgi: gone")), \
+                mock.patch.object(lay, "cim_adapters", return_value=[card]):
+            hw = lay.detect()
+        self.assertEqual(hw["source"]["gpu"], "cim")
+        self.assertNotIn("gpus", hw["failed"])
+
+    def test_dxgi_listing_no_card_is_not(self):
+        with mock.patch.object(lay, "dxgi_adapters", return_value=[]):
+            hw = lay.detect()
+        self.assertEqual(hw["gpus"], [])
+        self.assertNotIn("gpus", hw["failed"])
+
+    def test_unlisted_cores_are_a_failed_look(self):
+        with mock.patch.object(lay.cpu, "cores", return_value=None), \
+                mock.patch.object(lay, "dxgi_adapters", return_value=[]):
+            hw = lay.detect()
+        self.assertEqual(hw["failed"], ["cores"])
+        self.assertTrue(all(len(c["threads"]) == 1 for c in hw["cores"]))
+
+    def test_fake_hardware_is_a_good_look(self):
+        self.assertEqual(lay.fake_hardware()["failed"], [])
 
 
 if __name__ == "__main__":
