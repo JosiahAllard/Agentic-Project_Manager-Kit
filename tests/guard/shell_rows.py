@@ -118,6 +118,35 @@ ROWS = [
      'deny', 'heavy', heavy('wt', 'blender -b x.blend', 'render')),
     ('Start-Process redirect into main', lambda w: ps('Start-Process python -ArgumentList x.py -RedirectStandardOutput %s' % win(w.main, 'o.txt'), w.wt, sub=True),
      'deny', 'main-checkout', None),
+    # a shell Start-Process starts runs its -ArgumentList as a nested line: the elements joined with
+    # spaces, as Start-Process passes them (commands._sp_shell_text)
+    ('Start-Process cmd /c redirect into main, double-quoted list', lambda w: ps(
+        'Start-Process cmd -ArgumentList "/c echo x > %s"' % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'main-checkout', None),
+    ('saps cmd /c redirect into main, list as an array', lambda w: ps(
+        "saps cmd -ArgumentList '/c','echo','x','>','%s'" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process -FilePath cmd.exe /c redirect into main, split list', lambda w: ps(
+        "Start-Process -FilePath cmd.exe -ArgumentList '/c', 'echo x > %s' -Wait" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process cmd /c redirect into main, single-quoted list', lambda w: ps(
+        "Start-Process cmd -ArgumentList '/c echo x > %s'" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process cmd /c quoted command redirecting into main', lambda w: ps(
+        "Start-Process cmd -ArgumentList '/c \"echo x > %s\"'" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process cmd in main as its working directory', lambda w: ps(
+        "Start-Process cmd -WorkingDirectory %s -ArgumentList '/c echo x > f.txt'" % w.main, w.wt, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process cmd with a computed argument list', lambda w: ps('Start-Process cmd -ArgumentList $a', w.wt, sub=True),
+     'deny', 'unreadable', None),
+    ('Start-Process cmd with a /c the guard cannot read', lambda w: ps(
+        "Start-Process cmd -ArgumentList '/q/c echo x > %s'" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'unreadable', None),
+    ('Start-Process cmd /c echo stays allowed', lambda w: ps("Start-Process cmd -ArgumentList '/c echo hi'", w.wt, sub=True),
+     None, None, None),
+    ('Start-Process cmd /c redirect in its worktree stays allowed', lambda w: ps(
+        "Start-Process cmd -ArgumentList '/d', '/c', 'echo hi > out.txt' -Wait", w.wt, sub=True), None, None, None),
     ('cmd start with a quoted title', lambda w: ps('cmd /c start "Godot" godot.exe --headless', w.wt), 'deny', 'heavy',
      heavy('wt', 'godot.exe --headless')),
     ('cmd start /b /wait', lambda w: ps('cmd /c start /b /wait godot.exe --headless', w.wt), 'deny', 'heavy',

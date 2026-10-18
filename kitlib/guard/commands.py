@@ -54,13 +54,17 @@ class Invocation(object):
     words); `cmd` the Command; `dyn` the program word is not literal; `index` the program word's
     place in cmd.words; `via` 'start-process' when Start-Process runs it, 'xargs' when xargs
     feeds it its arguments; `writes` the files Start-Process redirects into; `word` the program
-    Word."""
-    __slots__ = ('name', 'path', 'args', 'cmd', 'dyn', 'index', 'via', 'writes', 'word')
+    Word. Start-Process only: `listed` the -ArgumentList elements as written, before any split
+    (the program's command line is their texts joined with spaces), `workdir` the
+    -WorkingDirectory Word or None."""
+    __slots__ = ('name', 'path', 'args', 'cmd', 'dyn', 'index', 'via', 'writes', 'word', 'listed', 'workdir')
 
-    def __init__(self, name, path, args, cmd, dyn, index, via=None, writes=(), word=None):
+    def __init__(self, name, path, args, cmd, dyn, index, via=None, writes=(), word=None, listed=(),
+                 workdir=None):
         self.name, self.path, self.args, self.cmd, self.dyn, self.index = (
             name, path, args, cmd, dyn, index)
         self.via, self.writes, self.word = via, list(writes), word
+        self.listed, self.workdir = list(listed), workdir
 
     @property
     def argv(self):
@@ -178,7 +182,7 @@ def _start_process(cmd, words, i):
     """Start-Process [-FilePath] prog [[-ArgumentList] args] with its switches anywhere."""
     rest = words[i + 1:]
     names = SP_SWITCHES + SP_VALUES
-    prog, args, writes, positional = None, [], [], []
+    prog, args, writes, positional, listed, workdir = None, [], [], [], [], None
     k = 0
     while k < len(rest):
         w = rest[k]
@@ -203,18 +207,22 @@ def _start_process(cmd, words, i):
         if p == '-filepath' and vals:
             prog = vals[0]
         elif p == '-argumentlist':
+            listed.extend(vals)
             for v in vals:
                 args.extend(_split_list(v))
         elif p in ('-redirectstandardoutput', '-redirectstandarderror'):
             writes.extend(vals)
+        elif p == '-workingdirectory' and vals:
+            workdir = vals[0]
     if prog is None and positional:
         prog = positional.pop(0)
     if not args and positional:
+        listed = positional[:1]
         args = _split_list(positional[0])
     if prog is None:
         return None
     return Invocation(base_name(prog.text), prog.text, args, cmd, prog.dyn, i, via='start-process',
-                      writes=writes, word=prog)
+                      writes=writes, word=prog, listed=listed, workdir=workdir)
 
 
 def _split_list(w):
@@ -505,10 +513,60 @@ def span_text(cmd, words):
     return ' '.join(x.text for x in words)
 
 
+SP_SHELLS = BASH_SHELLS | PS_SHELLS | {'cmd'}
+CMD_RUN_SWITCHES = ('/c', '/k', '/r', '//c', '//k', '//r')
+# /cecho, /q/c, "/c": a word that may hold a run switch cmd reads, not on its own
+CMD_RUN_HIDDEN_RE = re.compile(r'(?i)^"?/(.*/)?[ckr]')
+
+
 def _nested_text(inv, parsed):
     """(text, shell) a nested shell or eval runs, (text, shell, cwd) when it runs elsewhere
-    (env -C), (STDIN, shell) when the shell reads its commands from standard input, or None. For
-    powershell and pwsh the text is a tuple of readings, each a text or STDIN, once each."""
+    (env -C, Start-Process -WorkingDirectory), (STDIN, shell) when the shell reads its commands
+    from standard input, or None. For powershell and pwsh, and cmd started by Start-Process, the
+    text is a tuple of readings, each a text or STDIN, once each."""
+    if inv.via == 'start-process' and inv.name in SP_SHELLS:
+        return _sp_shell_text(inv, parsed)
+    return _shell_text(inv, parsed)
+
+
+def _sp_shell_text(inv, parsed):
+    """_nested_text for a shell Start-Process starts. Start-Process hands the program one command
+    line, its -ArgumentList elements joined with spaces; a computed element, or a computed
+    -WorkingDirectory, makes the text unreadable. cmd runs the rest of that line after its /c (/k,
+    /r), read with its outer quotes kept and dropped (cmd keeps or drops them by what lies between);
+    bash and powershell read the words _split_list made of each element."""
+    if any(w.dyn for w in inv.listed):
+        parsed.flag('a shell Start-Process starts with an argument list that is not literal (%s)' % inv.path)
+        return None
+    where = ()
+    if inv.workdir is not None:
+        if inv.workdir.dyn:
+            parsed.flag('a shell Start-Process starts in a working directory that is not literal (%s)' % inv.path)
+            return None
+        where = (sh.resolve_path(inv.workdir.text, inv.cmd.cwd, shell=sh.PS, home=parsed.home),)
+    if inv.name != 'cmd':
+        found = _shell_text(inv, parsed)
+        return found and found[:2] + where
+    line = ' '.join(w.text for w in inv.listed)
+    for m in re.finditer(r'\S+', line):
+        t = m.group(0).lower()
+        if t in CMD_RUN_SWITCHES:
+            rest = line[m.end():].strip()
+            if not rest:
+                return None
+            readings = (rest,)
+            if rest.startswith('"'):
+                k = rest.rfind('"')
+                readings += ((rest[1:k] + rest[k + 1:]) if k > 0 else rest[1:],)
+            return (readings, sh.CMD) + where
+        if CMD_RUN_HIDDEN_RE.match(t):
+            parsed.flag('a cmd switch Start-Process passes that the guard cannot read (%s)' % m.group(0))
+            return None
+    return None
+
+
+def _shell_text(inv, parsed):
+    """_nested_text for every program but a shell Start-Process starts."""
     name, a = inv.name, inv.args
     if name == 'env':
         found = env_nested(inv.cmd.words, inv.index, inv.cmd)

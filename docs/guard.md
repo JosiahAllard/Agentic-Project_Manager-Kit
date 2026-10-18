@@ -37,6 +37,7 @@ The guard judges a neutral `kitlib.host.Action` and answers a `kitlib.host.Decis
   - the command after find `-exec`, `-execdir`, `-ok` or `-okdir` (up to `;` or `+`) is a nested command at find's working directory (`-execdir`/`-okdir`: at an unknown one), its words that hold `{}` computed;
   - a `trap` handler is a nested command at the trap's working directory, or at an unknown one when the line holds `cd`, `pushd`, `popd` or `Set-Location` anywhere (`commands.LINE_CD_RE`); a `mapfile`/`readarray -C` callback is a nested command;
   - `env -S <string>` is a nested command;
+  - a shell (`cmd`, `bash` and the other `commands.BASH_SHELLS`, `powershell`, `pwsh`) that `Start-Process` (`saps`, `start`) starts runs its `-ArgumentList` as a nested command, at the `-WorkingDirectory` when one is given (`commands._sp_shell_text`): Start-Process hands it one command line, the elements joined with spaces, so for `cmd` the rest of that line after `/c` (`/k`, `/r`) is the text, read once with its outer quotes and once without; `bash` and `powershell` read their usual `-c`/`-Command` text from the words each element splits into (`commands._split_list`);
   - `cd`, `Set-Location`, `pushd` and `env -C <dir>` move the working directory for the commands after them.
 - **Wrappers:** `env`, `command`, `exec`, `nohup`, `nice`, `time`, `timeout <n>`, `stdbuf`, `sudo` and `xargs` are skipped with their options (`time -p`, `nice -n 5`, `stdbuf -oL` and so on). The program after them is read. After `xargs -I`, `-i` or `--replace` (`commands.xargs_opts`), every later word that holds the replace string is computed (`commands.fill_words`): the program word and `sh -c` or `env -S` text too. The first `git` word in its tail is the program.
 - **Redirects:** recorded per command with their targets.
@@ -56,6 +57,7 @@ The guard judges a neutral `kitlib.host.Action` and answers a `kitlib.host.Decis
   - `iex`/`Invoke-Expression` of a computed value (`iex ("git " + "stash")`, or `"git $s" | iex`);
   - a shell or `source` reading a process substitution (`bash <(...)`, `source <(...)`);
   - a non-literal `bash -c`, `powershell -Command`, `cmd /c`, `eval` or `env -S` text, `trap` handler or `mapfile -C` callback;
+  - a shell `Start-Process` starts with a computed `-ArgumentList` element (an `@(...)` array included) or `-WorkingDirectory`, or with a `cmd` switch word that may hold `/c` but is not it alone (`/cecho`, `/q/c`, `"/c"`; `commands.CMD_RUN_HIDDEN_RE`);
   - a program named by a variable or a substitution;
   - a git subcommand or read option that is not literal;
   - a brace expansion, ANSI-C escape or backslash in a program name;
