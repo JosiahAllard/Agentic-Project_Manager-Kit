@@ -495,24 +495,26 @@ class Resubmit(SubmitCase):
         with the submitter's pid over it."""
         _, tip = self.branch('feature', {'a.py': 'a\n'})
         for code in (G.OK, None):           # G.OK: the landing finished it; None: it claimed it
-            rr = result.Run(self.repo.root, 'land', BRANCH, tip, base=self.main)
-            rr.pid, rr.ctime = None, None   # as submit writes it: not claimed yet
-            rr.start(log='out.txt')
+            with self.subTest(code=code):
+                rr = result.Run(self.repo.root, 'land', BRANCH, tip, base=self.main)
+                rr.pid, rr.ctime = None, None   # as submit writes it: not claimed yet
+                rr.start(log='out.txt')
 
-            def landing_moves(pid, ctime):  # between claim's read and its timeout write
-                done = result.Run(self.repo.root, 'land', BRANCH, tip, base=self.main)
-                done.run_id, done.started_at = rr.run_id, rr.started_at
-                if code is None:
-                    done.start(log='out.txt')
-                else:
-                    done.finish(G.Outcome(code, ['LANDED kit/feature']))
-                return True
-            self.assertIsNone(submit.claim(self.repo.root, [rr], 4242, 'out.txt', wait_s=0,
-                                           clock=lambda: 0.0, sleep=lambda s: None,
-                                           alive=landing_moves))
-            rec = self.record(BRANCH)
-            self.assertEqual((rec['verdict'], rec['run_id'], rec['pid']),
-                             ('running' if code is None else 'pass', rr.run_id, os.getpid()))
+                def landing_moves(pid, ctime):  # between claim's read and its timeout write
+                    done = result.Run(self.repo.root, 'land', BRANCH, tip, base=self.main)
+                    done.run_id, done.started_at = rr.run_id, rr.started_at
+                    if code is None:
+                        done.start(log='out.txt')
+                    else:
+                        done.finish(G.Outcome(code, ['LANDED kit/feature']))
+                    return True
+                self.assertIsNone(submit.claim(self.repo.root, [rr], 4242, 'out.txt', wait_s=0,
+                                               clock=lambda: 0.0, sleep=lambda s: None,
+                                               alive=landing_moves))
+                rec = self.record(BRANCH)
+                self.assertEqual((rec['verdict'], rec['run_id'], rec['pid']),
+                                 ('running' if code is None else 'pass', rr.run_id,
+                                  os.getpid()))
 
     def test_the_claim_watches_and_records_the_landing_not_its_carrier(self):
         """A carrier that is gone (killed) while the landing it started runs: the claim neither
