@@ -118,11 +118,19 @@ def cores():
     return (parse_cores(raw) or None) if raw else None
 
 
-def groups():
-    """[(group, active mask)] of every active processor group; [(0, system mask)] when Windows
-    will not say."""
+def listed_groups():
+    """[(group, active mask)] of every active processor group as Windows lists them (parse_groups);
+    None when Windows will not say. groups() then stands in group 0 alone, which on a machine past
+    64 logical processors misses every other group: a caller that records the topology (the
+    machine lock's detect) counts None here as a failed look."""
     raw = _query(RELATION_GROUP)
-    out = parse_groups(raw) if raw else []
+    return (parse_groups(raw) or None) if raw else None
+
+
+def groups():
+    """[(group, active mask)] of every active processor group; [(0, system mask)], a stand-in,
+    when Windows will not say (listed_groups is None then)."""
+    out = listed_groups()
     if not out:
         from .process import system_mask
         out = [(0, system_mask())]

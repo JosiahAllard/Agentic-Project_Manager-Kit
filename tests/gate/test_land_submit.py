@@ -105,14 +105,16 @@ class TheLine(SubmitCase):
         self.assertEqual((env['KEEP'], env['PYTHONIOENCODING']), ('me', 'utf-8'))
         self.assertEqual(self.book_calls, [])       # the submitter books nothing
 
-    def test_a_batch_names_every_branch_and_waits_on_the_first(self):
+    def test_a_batch_names_every_branch_and_waits_on_the_last(self):
+        """The last branch's record is the batch's last written (TheDetachedLanding
+        test_a_batch_finishes_the_record_its_wait_names_last)."""
         _, t1 = self.branch('one', {'one.py': '1\n'})
         _, t2 = self.branch('two', {'two.py': '2\n'})
         out, _ = self.submit(['kit/one', 'kit/two'], [t1, t2], kit=r'C:\the kit')
         self.assertEqual(out.lines, ['SUBMITTED kit/one+kit/two tip %s,%s wait: python "%s" '
-                                     'wait-result kit/one --tip %s --kind land -C %s' % (
+                                     'wait-result kit/two --tip %s --kind land -C %s' % (
                                          t1, t2, os.path.join(r'C:\the kit', 'tools', 'gate.py'),
-                                         t1, self.main_top())])
+                                         t2, self.main_top())])
         self.assertEqual([self.record(b)['verdict'] for b in ('kit/one', 'kit/two')],
                          ['running', 'running'])
         self.assertIsNone(self.record('kit/one')['base'])   # no --expect-main: none yet
@@ -279,6 +281,30 @@ class TheDetachedLanding(SubmitCase):
         rec = self.assert_finished(BRANCH, running[BRANCH], 'pass', G.OK)
         self.assertTrue(rec['summary'].startswith('LANDED kit/feature'), rec)
         self.assertEqual(rec['base'], self.main)
+
+    def test_a_batch_finishes_the_record_its_wait_names_last(self):
+        """A batch has one outcome, written into each branch's record in the batch's order: the
+        record the SUBMITTED line waits on is final only once every branch's record is, so the
+        wait it prints ends after the whole batch's."""
+        branches = ['kit/one', 'kit/two']
+        _, t1 = self.branch('one', {'one.py': '1\n'})
+        _, t2 = self.branch('two', {'two.py': '2\n'})
+        line = submit.wait_line(branches, [t1, t2], self.repo.root, kit=r'C:\kit')
+        waited = line.split(' wait-result ', 1)[1].split()[0]
+        lander, running = self.detached(branches, [t1, t2])
+        write, seen = result.write, []
+
+        def spy(root, rec):
+            path = write(root, rec)
+            if rec['branch'] == waited and rec['verdict'] != result.RUNNING:
+                seen.append([self.record(b)['verdict'] for b in branches])
+            return path
+        with mock.patch.object(result, 'write', spy):
+            out = lander.run()
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertEqual(seen, [['pass', 'pass']])
+        for b in branches:
+            self.assert_finished(b, running[b], 'pass', G.OK)
 
     def test_the_machine_locks_refusal_finishes_not_run(self):
         _, tip = self.branch('feature', {'a.py': 'a\n'})
@@ -463,6 +489,33 @@ class Resubmit(SubmitCase):
         self.assertEqual((rec['verdict'], rec['summary']), (
             'error', 'the landing process died: pid %d ended without finishing its record' % pid))
 
+    def test_a_record_finished_or_claimed_before_the_timeout_write_is_kept(self):
+        """claim() reads the records, then checks the landing is alive, then times out: a landing
+        that finished its record (or claimed it) in that window keeps it, not `running` again
+        with the submitter's pid over it."""
+        _, tip = self.branch('feature', {'a.py': 'a\n'})
+        for code in (G.OK, None):           # G.OK: the landing finished it; None: it claimed it
+            with self.subTest(code=code):
+                rr = result.Run(self.repo.root, 'land', BRANCH, tip, base=self.main)
+                rr.pid, rr.ctime = None, None   # as submit writes it: not claimed yet
+                rr.start(log='out.txt')
+
+                def landing_moves(pid, ctime):  # between claim's read and its timeout write
+                    done = result.Run(self.repo.root, 'land', BRANCH, tip, base=self.main)
+                    done.run_id, done.started_at = rr.run_id, rr.started_at
+                    if code is None:
+                        done.start(log='out.txt')
+                    else:
+                        done.finish(G.Outcome(code, ['LANDED kit/feature']))
+                    return True
+                self.assertIsNone(submit.claim(self.repo.root, [rr], 4242, 'out.txt', wait_s=0,
+                                               clock=lambda: 0.0, sleep=lambda s: None,
+                                               alive=landing_moves))
+                rec = self.record(BRANCH)
+                self.assertEqual((rec['verdict'], rec['run_id'], rec['pid']),
+                                 ('running' if code is None else 'pass', rr.run_id,
+                                  os.getpid()))
+
     def test_the_claim_watches_and_records_the_landing_not_its_carrier(self):
         """A carrier that is gone (killed) while the landing it started runs: the claim neither
         finishes the records `error` nor records the carrier's pid, but the landing's."""
@@ -574,6 +627,96 @@ class Resubmit(SubmitCase):
             rec = self.record(BRANCH)
             self.assertEqual((rec['verdict'], rec['run_id']),
                              ('refused', submit.run_id_of(out.facts['payload'])))
+
+
+class Prune(SubmitCase):
+    """submit.prune, run by each submission: a payload and log older than KEEP_S whose run no
+    land record still has running (queued or landing) are deleted; nothing else is."""
+
+    def finished(self, branch='feature'):
+        """A submission whose landing died before it recorded itself: its records are final."""
+        _, tip = self.branch(branch, {'%s.py' % branch: '1\n'})
+        out, _ = self.submit(['kit/%s' % branch], [tip], detach=Detach(pid=self.dead_pid()))
+        self.assertEqual(out.code, G.REFUSED, out.lines)
+        return out.facts['payload'], out.facts['output']
+
+    def age(self, *paths, by=None):
+        """Set the files' modified time `by` seconds back (default: an hour past KEEP_S)."""
+        then = time.time() - (submit.KEEP_S + 3600 if by is None else by)
+        for p in paths:
+            os.utime(p, (then, then))
+
+    def test_old_files_of_a_finished_landing_go_and_young_ones_stay(self):
+        old = self.finished('one')
+        young = self.finished('two')
+        self.age(*old)
+        self.age(*young, by=submit.KEEP_S - 3600)
+        self.assertEqual(sorted(submit.prune(self.repo.root)), sorted(old))
+        self.assertEqual([os.path.exists(p) for p in old + young], [False, False, True, True])
+
+    def test_a_landing_still_running_keeps_its_files_however_old(self):
+        _, tip = self.branch('feature', {'a.py': 'a\n'})
+        out, _ = self.submit([BRANCH], [tip])       # its landing is this process: running
+        self.assertEqual(out.code, G.OK, out.lines)
+        files = (out.facts['payload'], out.facts['output'])
+        self.age(*files)
+        self.assertEqual(submit.prune(self.repo.root), [])
+        self.assertTrue(all(os.path.exists(p) for p in files))
+
+    def test_a_batch_running_under_another_branchs_record_keeps_its_files(self):
+        """The files are named by the batch's first branch; the run is running while any of its
+        branches' records is."""
+        _, t1 = self.branch('one', {'one.py': '1\n'})
+        _, t2 = self.branch('two', {'two.py': '2\n'})
+        out, _ = self.submit(['kit/one', 'kit/two'], [t1, t2])
+        self.assertEqual(out.code, G.OK, out.lines)
+        first = self.record('kit/one')
+        result.Run(self.repo.root, 'land', 'kit/one', t1).finish(
+            G.Outcome(G.FAILED, ['NOT LANDED: red']))      # kit/one's record: another run's
+        self.assertNotEqual(self.record('kit/one')['run_id'], first['run_id'])
+        files = (out.facts['payload'], out.facts['output'])
+        self.age(*files)
+        self.assertEqual(submit.prune(self.repo.root), [])
+        self.assertTrue(all(os.path.exists(p) for p in files))
+
+    def test_a_record_that_cannot_be_read_prunes_nothing(self):
+        old = self.finished()
+        self.age(*old)
+        with open(result.result_path(self.repo.root, 'kit/other', 'land'), 'w',
+                  encoding='utf-8') as f:
+            f.write('not json')
+        self.assertEqual(submit.prune(self.repo.root), [])
+        self.assertTrue(all(os.path.exists(p) for p in old))
+
+    def test_a_file_in_use_is_left_and_the_rest_go(self):
+        payload, output = self.finished()
+        self.age(payload, output)
+        with open(output, encoding='utf-8'):        # open: Windows refuses its delete
+            self.assertEqual(submit.prune(self.repo.root), [payload])
+        self.assertEqual((os.path.exists(payload), os.path.exists(output)), (False, True))
+
+    def test_only_the_submissions_files_are_pruned(self):
+        payload, output = self.finished()
+        folder = os.path.dirname(payload)
+        others = [os.path.join(folder, n) for n in (
+            'notes.land.log', 'x.%s.land.json' % ('a' * 16), 'x.%s.gate.log' % ('a' * 16))]
+        for p in others:
+            with open(p, 'w', encoding='utf-8') as f:
+                f.write('{}')
+        keep = others + [result.result_path(self.repo.root, 'kit/feature', 'land')]
+        self.age(payload, output, *keep)
+        self.assertEqual(sorted(submit.prune(self.repo.root)), sorted([payload, output]))
+        self.assertTrue(all(os.path.exists(p) for p in keep))
+
+    def test_a_submission_prunes_old_finished_files(self):
+        old = self.finished('one')
+        self.age(*old)
+        _, tip = self.branch('two', {'two.py': '2\n'})
+        out, _ = self.submit(['kit/two'], [tip])
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertEqual([os.path.exists(p) for p in old], [False, False])
+        self.assertTrue(os.path.exists(out.facts['payload']))
+        self.assertTrue(os.path.exists(out.facts['output']))
 
 
 class LeaseChild(unittest.TestCase):

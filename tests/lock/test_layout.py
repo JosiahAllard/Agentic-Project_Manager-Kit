@@ -3,6 +3,7 @@ any gpu vendor, the owner's division, a change adopted only with nothing live) a
 kitlib.lock.game.domain_slots (the preferred L3 domain, or half the cores with one L3)."""
 import os
 import unittest
+from unittest import mock
 
 from .helpers import StoreCase
 
@@ -261,6 +262,268 @@ class InForce(StoreCase):
         self.assertEqual(got["source"], "default")
         self.assertIn("is not used", got["warning"])
         self.assertEqual(got["layout"]["cpu_slots"], 12)
+
+
+def no_gpu_answer(hw):
+    """hw as detect() gives it when neither DXGI nor CIM answered: no cards, gpu source none."""
+    return dict(hw, gpus=[], source=dict(hw["source"], gpu="none"), failed=["gpus"],
+                problems=["DXGI: CreateDXGIFactory1: 0x887A0004; CIM used",
+                          "Win32_VideoController: exit 1"])
+
+
+def no_cores_answer(hw):
+    """hw as detect() gives it when Windows did not list the physical cores."""
+    return dict(hw, cores=[{"threads": [t], "smt": False, "efficiency": 0} for t in hw["threads"]],
+                failed=["cores"],
+                problems=["Windows did not list the physical cores; each thread counts as one"])
+
+
+class FailedDetection(StoreCase):
+    """A detection that could not read the gpus or the cores never replaces a layout.json from a
+    good look: it would renumber the gpu (or cpu) slots of every session on the machine until the
+    next good look. With no valid layout.json it is written provisional, and replaced only under
+    the idle rule."""
+
+    def on(self, hw):
+        self.hw = hw
+        self.store = self.make_store()
+
+    def test_an_idle_store_keeps_its_layout_when_no_gpu_source_answers(self):
+        good = self.layout()
+        self.assertEqual(good["gpu_slots"], 2)
+        real = self.hw
+        self.on(no_gpu_answer(real))
+        got = lay.in_force(self.store)
+        self.assertEqual(got["layout"]["key"], good["key"])
+        self.assertEqual(got["layout"]["gpu_slots"], 2)
+        self.assertEqual(got["wanted"]["gpu_slots"], 1)        # the placeholder slot
+        self.assertIn("could not be read", got["pending"])
+        self.assertIn("Win32_VideoController", got["pending"])
+        self.assertEqual(self.store.read("layout.json")["key"], good["key"])
+        self.on(real)
+        got = lay.in_force(self.store)
+        self.assertIsNone(got["pending"])
+        self.assertEqual(got["layout"]["key"], good["key"])
+
+    def test_a_fresh_store_writes_a_provisional_layout_from_a_failed_look(self):
+        # Runs booked now count their slots from it, so it is written; a good look replaces it.
+        real = self.hw
+        self.on(no_gpu_answer(real))
+        got = lay.in_force(self.store)
+        self.assertEqual(got["layout"]["gpu_slots"], 1)        # all there is to count with
+        self.assertIn("could not be read", got["pending"])
+        self.assertIn("provisional", got["pending"])
+        written = self.store.read("layout.json")
+        self.assertEqual(written["key"], got["layout"]["key"])
+        self.assertTrue(written["provisional"])
+        self.on(real)
+        got = lay.in_force(self.store)
+        self.assertIsNone(got["pending"])
+        written = self.store.read("layout.json")
+        self.assertEqual(written["gpu_slots"], 2)
+        self.assertFalse(written.get("provisional"))
+
+    def test_a_good_look_waits_for_idle_before_replacing_a_provisional_layout(self):
+        # A run booked on the failed look's numbering keeps it: the good look waits for idle.
+        real = self.hw
+        self.on(no_cores_answer(real))
+        first = self.layout()
+        self.assertEqual(first["cpu_slots"], 24)
+        self.live_record("r-20261017T120000Z-0000a1", cores=[0])
+        self.on(real)
+        got = lay.in_force(self.store)
+        self.assertEqual(got["layout"]["key"], first["key"])
+        self.assertEqual(got["wanted"]["cpu_slots"], 12)
+        self.assertIn("no run is live or queued (1 now)", got["pending"])
+        self.assertEqual(self.store.read("layout.json")["key"], first["key"])
+        self.store.drop("active/r-20261017T120000Z-0000a1.json")
+        got = lay.in_force(self.store)
+        self.assertIsNone(got["pending"])
+        self.assertEqual(got["layout"]["cpu_slots"], 12)
+
+    def test_a_machine_whose_look_always_fails_changes_division_only_when_idle(self):
+        self.on(no_gpu_answer(self.hw))
+        first = self.layout()
+        self.assertEqual(first["cpu_slots"], 12)
+        self.live_record("r-20261017T120000Z-0000b1", cores=[0])
+        self.store.write("machine.json", {"cpu_slots": 6})
+        got = lay.in_force(self.store)
+        self.assertEqual(got["layout"]["key"], first["key"])
+        self.assertEqual(got["wanted"]["cpu_slots"], 6)
+        self.assertIn("no run is live or queued (1 now)", got["pending"])
+        self.store.drop("active/r-20261017T120000Z-0000b1.json")
+        got = lay.in_force(self.store)                  # idle: adopted, still provisional
+        self.assertEqual(got["layout"]["cpu_slots"], 6)
+        self.assertIn("provisional", got["pending"])
+        self.assertTrue(self.store.read("layout.json")["provisional"])
+
+    def test_a_good_look_that_confirms_a_provisional_layout_makes_it_final(self):
+        # One thread per core: the look that cannot list the cores gives the same layout. Once a
+        # good look confirms it, a later failed look may not replace it.
+        real = lay.fake_hardware(threads=24, smt=1, l3=2)
+        self.on(no_cores_answer(real))
+        first = self.layout()
+        self.assertTrue(self.store.read("layout.json")["provisional"])
+        self.on(real)
+        got = lay.in_force(self.store)
+        self.assertEqual(got["layout"]["key"], first["key"])
+        self.assertIsNone(got["pending"])
+        self.assertFalse(self.store.read("layout.json").get("provisional"))
+        self.on(no_gpu_answer(real))
+        got = lay.in_force(self.store)
+        self.assertEqual(got["layout"]["key"], first["key"])
+        self.assertEqual(got["layout"]["gpu_slots"], 2)
+        self.assertIn("no layout is adopted from that look", got["pending"])
+
+    def test_a_confirming_good_look_makes_a_provisional_layout_final_under_a_live_run(self):
+        # Same key: nothing is renumbered, so the live run does not hold the mark back.
+        real = lay.fake_hardware(threads=24, smt=1, l3=2)
+        self.on(no_cores_answer(real))
+        first = self.layout()
+        self.live_record("r-20261017T120000Z-0000c1", cores=[0])
+        self.on(real)
+        got = lay.in_force(self.store)
+        self.assertEqual(got["layout"]["key"], first["key"])
+        self.assertIsNone(got["pending"])
+        self.assertFalse(self.store.read("layout.json").get("provisional"))
+
+    def test_a_confirming_good_look_makes_a_provisional_layout_final_with_an_unreadable_queue(self):
+        # Same key: the queue is not read, so a queue that cannot be read does not hold it back.
+        real = lay.fake_hardware(threads=24, smt=1, l3=2)
+        self.on(no_cores_answer(real))
+        first = self.layout()
+        with open(self.store.path("queue.json"), "w", encoding="utf-8") as f:
+            f.write("not a queue")
+        self.on(real)
+        got = lay.in_force(self.store)
+        self.assertEqual(got["layout"]["key"], first["key"])
+        self.assertIsNone(got["pending"])
+        self.assertFalse(self.store.read("layout.json").get("provisional"))
+
+    def test_unlisted_cores_are_not_adopted_either(self):
+        good = self.layout()
+        self.on(no_cores_answer(self.hw))
+        got = lay.in_force(self.store)
+        self.assertEqual(got["wanted"]["cpu_slots"], 24)
+        self.assertEqual(got["layout"]["cpu_slots"], 12)
+        self.assertIn("physical cores", got["pending"])
+        self.assertEqual(self.store.read("layout.json")["key"], good["key"])
+
+    def test_a_read_only_look_says_why_too(self):
+        good = self.layout()
+        self.on(no_gpu_answer(self.hw))
+        got = lay.in_force(self.store, adopt=False)
+        self.assertEqual(got["layout"]["key"], good["key"])
+        self.assertIn("could not be read", got["pending"])
+
+    def test_a_failed_look_that_matches_the_layout_is_no_change(self):
+        # A machine with no shared card loses nothing when its gpus cannot be read.
+        self.on(lay.fake_hardware(threads=24, smt=2, gpus=0))
+        good = self.layout()
+        self.on(no_gpu_answer(self.hw))
+        got = lay.in_force(self.store)
+        self.assertEqual(got["layout"]["key"], good["key"])
+        self.assertIsNone(got["pending"])
+
+
+@unittest.skipUnless(os.name == "nt", "the lock is Windows only")
+class DetectFailed(unittest.TestCase):
+    """detect() names what it could not read in `failed`, which in_force will not adopt."""
+
+    def test_no_gpu_source_answering_is_a_failed_look(self):
+        with mock.patch.object(lay, "dxgi_adapters", side_effect=OSError("dxgi: gone")), \
+                mock.patch.object(lay, "cim_adapters",
+                                  side_effect=OSError("Win32_VideoController: exit 1")):
+            hw = lay.detect()
+        self.assertEqual(hw["gpus"], [])
+        self.assertEqual(hw["source"]["gpu"], "none")
+        self.assertIn("gpus", hw["failed"])
+
+    def test_cim_answering_for_dxgi_is_not(self):
+        card = {"name": "Card", "vendor_id": 0x10DE, "device_id": 1, "vram_mb": 4095,
+                "shared_mb": 0, "luid": None, "software": False}
+        with mock.patch.object(lay, "dxgi_adapters", side_effect=OSError("dxgi: gone")), \
+                mock.patch.object(lay, "cim_adapters", return_value=[card]):
+            hw = lay.detect()
+        self.assertEqual(hw["source"]["gpu"], "cim")
+        self.assertNotIn("gpus", hw["failed"])
+
+    def test_dxgi_listing_no_card_is_not(self):
+        with mock.patch.object(lay, "dxgi_adapters", return_value=[]):
+            hw = lay.detect()
+        self.assertEqual(hw["gpus"], [])
+        self.assertNotIn("gpus", hw["failed"])
+
+    def test_unlisted_cores_are_a_failed_look(self):
+        with mock.patch.object(lay.cpu, "cores", return_value=None), \
+                mock.patch.object(lay, "dxgi_adapters", return_value=[]):
+            hw = lay.detect()
+        self.assertEqual(hw["failed"], ["cores"])
+        self.assertTrue(all(len(c["threads"]) == 1 for c in hw["cores"]))
+
+    def test_fake_hardware_is_a_good_look(self):
+        self.assertEqual(lay.fake_hardware()["failed"], [])
+
+    def test_unlisted_groups_are_a_failed_look(self):
+        # groups() then stands in group 0 alone (kitlib.proc.cpu.listed_groups).
+        with mock.patch.object(lay.cpu, "listed_groups", return_value=None), \
+                mock.patch.object(lay, "dxgi_adapters", return_value=[]):
+            hw = lay.detect()
+        self.assertIn("groups", hw["failed"])
+        self.assertTrue(any("processor groups" in p for p in hw["problems"]), hw["problems"])
+        self.assertEqual(hw["threads"], [t for g in hw["groups"] for t in g["threads"]])
+
+    def test_unlisted_groups_use_the_group_0_stand_in_not_a_second_listing(self):
+        # Windows lists the groups only when asked again: the failed look must still be group 0's
+        # stand-in, never every group under a "groups" failure.
+        from kitlib.proc import process
+        answers = iter([None])
+        with mock.patch.object(lay.cpu, "listed_groups",
+                               side_effect=lambda: next(answers, [(0, 0b1111), (1, 0b1)])), \
+                mock.patch.object(process, "system_mask", return_value=0b11), \
+                mock.patch.object(lay, "dxgi_adapters", return_value=[]):
+            hw = lay.detect()
+        self.assertIn("groups", hw["failed"])
+        self.assertEqual(hw["groups"], [{"group": 0, "threads": [0, 1]}])
+        self.assertEqual(hw["threads"], [0, 1])
+
+    def test_listed_groups_are_not(self):
+        with mock.patch.object(lay, "dxgi_adapters", return_value=[]):
+            hw = lay.detect()
+        self.assertNotIn("groups", hw["failed"])
+        self.assertEqual(hw["threads"], [t for g in hw["groups"] for t in g["threads"]])
+
+
+@unittest.skipUnless(os.name == "nt", "the lock is Windows only")
+class GroupsStandIn(StoreCase):
+    """A look whose processor groups Windows would not list never replaces a layout.json from a
+    good look: on a machine past 64 logical processors group 0's stand-in drops every other
+    group's threads, which would renumber every slot. Here the stand-in's system mask is cut to
+    half the threads, as group 0 alone is of a two-group machine."""
+
+    def on(self, hw):
+        self.hw = hw
+        self.store = self.make_store()
+
+    def test_a_group_0_stand_in_does_not_replace_a_good_layout(self):
+        from kitlib.proc import process
+        with mock.patch.object(lay, "dxgi_adapters", return_value=[]):
+            real = lay.detect()
+        if len(real["threads"]) < 2 or real["failed"]:
+            self.skipTest("this machine's own look is not a good one of two threads or more")
+        half = (1 << (len(real["threads"]) // 2)) - 1
+        with mock.patch.object(lay.cpu, "listed_groups", return_value=None), \
+                mock.patch.object(process, "system_mask", return_value=half), \
+                mock.patch.object(lay, "dxgi_adapters", return_value=[]):
+            standin = lay.detect()
+        self.assertEqual(len(standin["threads"]), len(real["threads"]) // 2)
+        self.on(real)
+        good = self.layout()
+        self.on(standin)
+        got = lay.in_force(self.store)                  # idle: only the failed look holds it back
+        self.assertEqual(got["layout"]["key"], good["key"])
+        self.assertEqual(self.store.read("layout.json")["key"], good["key"])
+        self.assertTrue(got["pending"].startswith("the groups could not be read ("), got["pending"])
 
 
 if __name__ == "__main__":

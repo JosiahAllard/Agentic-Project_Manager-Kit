@@ -4,6 +4,7 @@ are proven only here), and the live machine's answer."""
 import os
 import struct
 import unittest
+from unittest import mock
 
 if os.name == "nt":
     from kitlib.proc import cpu
@@ -114,7 +115,40 @@ class Synthetic(unittest.TestCase):
 
 
 @unittest.skipUnless(os.name == "nt", "Windows only")
+class GroupFallback(unittest.TestCase):
+    """groups() stands in group 0 alone when Windows will not list the groups; listed_groups()
+    says so (None), so a caller can tell the stand-in from Windows' answer."""
+
+    def look(self, raw):
+        from kitlib.proc import process
+        with mock.patch.object(cpu, "_query", return_value=raw), \
+                mock.patch.object(process, "system_mask", return_value=0xF) as sm:
+            return cpu.listed_groups(), cpu.groups(), sm.called
+
+    def test_no_answer_from_windows_is_reported_and_group_zero_stands_in(self):
+        listed, got, stood_in = self.look(None)
+        self.assertIsNone(listed)
+        self.assertEqual(got, [(0, 0xF)])
+        self.assertTrue(stood_in)
+
+    def test_an_answer_with_no_group_record_is_reported(self):
+        listed, got, _ = self.look(core_record([(0, 0b11)]))
+        self.assertIsNone(listed)
+        self.assertEqual(got, [(0, 0xF)])
+
+    def test_listed_groups_are_windows_own_and_groups_uses_them(self):
+        listed, got, stood_in = self.look(group_record([(1 << 64) - 1, 0xFF]))
+        self.assertEqual(listed, [(0, (1 << 64) - 1), (1, 0xFF)])
+        self.assertEqual(got, listed)
+        self.assertFalse(stood_in)
+
+
+@unittest.skipUnless(os.name == "nt", "Windows only")
 class Live(unittest.TestCase):
+    def test_windows_lists_this_machines_groups(self):
+        self.assertIsNotNone(cpu.listed_groups())
+        self.assertEqual(cpu.listed_groups(), cpu.groups())
+
     def test_every_logical_processor_is_named_once(self):
         ids = cpu.threads()
         self.assertEqual(len(ids), len(set(ids)))

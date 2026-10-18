@@ -6,10 +6,12 @@ them; every time here is reckoned from them, never from a number of its own."""
 import datetime
 import unittest
 
+from kitlib import hubvalidate
 from kitlib.hubsite import approvals as ap
 from kitlib.hubsite import serve
 from kitlib.hubsite.api import AGENT
 from kitlib.hubsite.client import Refused
+from tests.gitfixture import TempRepo
 
 KEY = 'k' * 64
 OTHER_KEY = 'q' * 64
@@ -193,7 +195,7 @@ class ExpiryTest(unittest.TestCase):
         self.assertEqual(ap.expires_at(doc), T0 + APPROVED_LIFE)
         self.assertEqual(ap.status_at(doc, T0 + APPROVED_LIFE - SECOND), ap.APPROVED)
         self.assertEqual(ap.status_at(doc, T0 + APPROVED_LIFE), ap.EXPIRED)
-        doc.update(ap.consume_fields(doc, COMMIT, T0 + SECOND))
+        doc.update(ap.consume_fields(KEY, 'A-1', doc, COMMIT, T0 + SECOND))
         self.assertEqual(ap.expires_at(doc), T0 + APPROVED_LIFE)
         self.assertEqual(ap.status_at(doc, T0 + APPROVED_LIFE - SECOND), ap.CONSUMED)
         self.assertEqual(ap.status_at(doc, T0 + APPROVED_LIFE), ap.EXPIRED)
@@ -209,34 +211,90 @@ class ExpiryTest(unittest.TestCase):
         self.assertIsNone(ap.status_at({'status': 'odd'}, T0))
         self.assertIsNone(ap.status_at(None, T0))
 
+    def test_a_naive_now_is_expired_never_an_error(self):
+        naive = T0.replace(tzinfo=None) + SECOND
+        self.assertEqual(ap.status_at(pending(), naive), ap.EXPIRED)
+        self.assertEqual(ap.status_at(approved(), naive), ap.EXPIRED)
+        doc = approved()
+        self.assertEqual(ap.check(KEY, 'A-1', doc, URL, HEAD, blobs(doc), naive),
+                         (False, ap.WHY_STATUS % ap.EXPIRED))
+        with self.assertRaises(ap.ApprovalError) as cm:
+            ap.decide_fields(KEY, 'A-1', pending(), ap.APPROVE, naive)
+        self.assertEqual(cm.exception.code, 'conflict')
+
+    def test_a_decision_dated_after_now_is_expired(self):
+        doc = approved(at=T0 + APPROVED_LIFE / 2)           # signed, its decided_at ahead of T0
+        self.assertEqual(ap.status_at(doc, T0), ap.EXPIRED)
+        self.assertEqual(ap.check(KEY, 'A-1', doc, URL, HEAD, blobs(doc), T0),
+                         (False, ap.WHY_STATUS % ap.EXPIRED))
+        doc['status'] = ap.CONSUMED
+        self.assertEqual(ap.status_at(doc, T0), ap.EXPIRED)
+        self.assertEqual(ap.check(KEY, 'A-1', doc, URL, HEAD, blobs(doc), T0),
+                         (False, ap.WHY_STATUS % ap.EXPIRED))
+
 
 class ConsumeTest(unittest.TestCase):
 
     def test_an_approval_is_consumed_once(self):
         doc = approved()
-        fields = ap.consume_fields(doc, COMMIT, T0 + SECOND)
+        fields = ap.consume_fields(KEY, 'A-1', doc, COMMIT, T0 + SECOND)
         self.assertEqual(fields, {'status': ap.CONSUMED, 'commit': COMMIT,
                                   'consumed_at': (T0 + SECOND).isoformat(timespec='seconds')})
         doc.update(fields)
         with self.assertRaises(ap.ApprovalError) as cm:
-            ap.consume_fields(doc, COMMIT, T0 + SECOND)
+            ap.consume_fields(KEY, 'A-1', doc, COMMIT, T0 + SECOND)
         self.assertEqual(cm.exception.code, 'conflict')
 
     def test_only_a_live_approval_is_consumed(self):
         for doc, at in ((pending(), T0), (approved(), T0 + APPROVED_LIFE)):
             with self.assertRaises(ap.ApprovalError) as cm:
-                ap.consume_fields(doc, COMMIT, at)
+                ap.consume_fields(KEY, 'A-1', doc, COMMIT, at)
             self.assertEqual(cm.exception.code, 'conflict')
         with self.assertRaises(ap.ApprovalError) as cm:
-            ap.consume_fields(approved(), 'HEAD', T0)
+            ap.consume_fields(KEY, 'A-1', approved(), 'HEAD', T0)
         self.assertEqual(cm.exception.field, 'commit')
+
+    def test_only_a_signed_approval_never_consumed_is_consumed(self):
+        unsigned = pending()
+        unsigned['status'] = ap.APPROVED                # approved by an edit of the store
+        unsigned['decided_at'] = T0.isoformat(timespec='seconds')
+        reopened = approved()                           # consumed, then edited back to approved
+        reopened.update(ap.consume_fields(KEY, 'A-1', reopened, COMMIT, T0 + SECOND))
+        reopened['status'] = ap.APPROVED
+        for name, key, doc in (('unsigned', KEY, unsigned), ('reopened', KEY, reopened),
+                               ('another key', OTHER_KEY, approved()), ('no key', '', approved()),
+                               ('another id', KEY, approved())):
+            doc_id = 'A-2' if name == 'another id' else 'A-1'
+            with self.assertRaises(ap.ApprovalError, msg=name) as cm:
+                ap.consume_fields(key, doc_id, doc, COMMIT, T0 + SECOND)
+            self.assertEqual(cm.exception.code, 'conflict', name)
 
 
 class CheckTest(unittest.TestCase):
 
-    def check(self, doc, key=KEY, repo=URL, head=HEAD, given=None, now=T0 + SECOND):
+    def check(self, doc, key=KEY, repo=URL, head=HEAD, given=None, now=T0 + SECOND, **kw):
         return ap.check(key, 'A-1', doc, repo, head, blobs(doc) if given is None else given,
-                        now)
+                        now, **kw)
+
+    def consumed(self, commit=COMMIT):
+        doc = approved()
+        doc.update(ap.consume_fields(KEY, 'A-1', doc, commit, T0 + SECOND))
+        return doc
+
+    def test_with_a_commit_the_approval_it_consumed_verifies(self):
+        self.assertEqual(self.check(self.consumed(), commit=COMMIT), (True, ''))
+
+    def test_with_a_commit_an_approval_not_consumed_does_not_verify(self):
+        self.assertEqual(self.check(approved(), commit=COMMIT), (False, ap.WHY_COMMIT))
+
+    def test_with_a_commit_an_approval_consumed_by_another_does_not_verify(self):
+        self.assertEqual(self.check(self.consumed('d' * 40), commit=COMMIT),
+                         (False, ap.WHY_COMMIT))
+
+    def test_without_a_commit_approved_and_consumed_both_verify(self):
+        self.assertEqual(self.check(approved()), (True, ''))
+        self.assertEqual(self.check(self.consumed('d' * 40)), (True, ''))
+        self.assertEqual(self.check(approved(), commit=None), (True, ''))
 
     def test_the_approved_change_verifies_by_any_form_of_its_remote(self):
         doc = approved()
@@ -246,7 +304,7 @@ class CheckTest(unittest.TestCase):
 
     def test_a_consumed_approval_verifies_until_it_expires(self):
         doc = approved()
-        doc.update(ap.consume_fields(doc, COMMIT, T0 + SECOND))
+        doc.update(ap.consume_fields(KEY, 'A-1', doc, COMMIT, T0 + SECOND))
         self.assertEqual(self.check(doc, now=T0 + APPROVED_LIFE - SECOND), (True, ''))
         self.assertEqual(self.check(doc, now=T0 + APPROVED_LIFE),
                          (False, ap.WHY_STATUS % ap.EXPIRED))
@@ -312,6 +370,19 @@ class CheckTest(unittest.TestCase):
         self.assertEqual(ap.check(KEY, 'A-1', doc, URL, HEAD, {}, T0), (False, ap.WHY_BAD))
         self.assertEqual(ap.check(KEY, 'A-1', None, URL, HEAD, {}, T0), (False, ap.WHY_UNKNOWN))
 
+    def test_a_path_named_twice_is_malformed_never_an_error(self):
+        twice = {'path': 'AGENTS.md', 'base_blob': None, 'blob': ap.blob_id('x'), 'content': 'x'}
+        doc = approved()
+        doc['files'].append(dict(twice))                # base_blob None beside a blob id
+        self.assertEqual(self.check(doc, given={}), (False, ap.WHY_BAD))
+        doc = pending()
+        doc['files'].append(dict(twice))
+        with self.assertRaises(ap.ApprovalError) as cm:
+            ap.decide_fields(KEY, 'A-1', doc, ap.APPROVE, T0)
+        self.assertEqual(cm.exception.code, 'conflict')
+        with self.assertRaises(ValueError):
+            ap.canonical('A-1', doc)
+
     def test_a_signed_approval_whose_status_was_edited_follows_the_status(self):
         doc = approved()
         doc['status'] = ap.DENIED
@@ -336,23 +407,42 @@ class GitTest(unittest.TestCase):
         self.assertIsNone(got)
         self.assertNotIn('hunter2', why)
 
-    def test_a_base_is_read_by_its_blob_and_checked(self):
-        base = ap.blob_id(OLD)
+    def test_a_base_is_the_file_at_head_and_its_blob(self):
+        base, spec, commit = ap.blob_id(OLD), HEAD + ':AGENTS.md', HEAD + '^{commit}'
         seen = []
 
-        def run(args, cwd):
-            seen.append(args)
-            return OLD.encode('utf-8'), None
-        self.assertEqual(ap.read_base('C:/w', base, run=run), (OLD, None))
-        self.assertEqual(seen, [['cat-file', 'blob', base]])
-        self.assertEqual(ap.read_base('C:/w', 'b' * 40, run=run)[0], None)     # other bytes
-        self.assertEqual(ap.read_base('C:/w', '--all', run=run), (None, 'not a blob id'))
-        self.assertEqual(len(seen), 2)
-        raw = b'\xff\xfe'
-        self.assertEqual(ap.read_base('C:/w', ap.blob_id(raw), run=lambda a, c: (raw, None)),
-                         (None, 'the base is not text'))
-        self.assertEqual(ap.read_base('C:/w', base, run=lambda a, c: (None, 'gone')),
-                         (None, 'gone'))
+        def cat(obj):
+            def answer(specs, cwd):
+                seen.append((specs, cwd))
+                got = {commit: ('commit', b'tree x\n'), spec: obj}
+                return {s: got.get(s) for s in specs}, None
+            return answer
+        self.assertEqual(ap.read_base('C:/w', HEAD, 'AGENTS.md', base,
+                                      cat=cat(('blob', OLD.encode('utf-8')))), (OLD, None))
+        self.assertEqual(seen, [([commit, spec], 'C:/w')])
+        cases = [
+            (('blob', b'other\n'), base, 'the base differs from the file at head'),
+            (('tree', OLD.encode('utf-8')), base, 'the base differs from the file at head'),
+            (None, base, 'the file is not at head'),
+            (('blob', OLD.encode('utf-8')), None, 'the file exists at head'),
+            (('blob', b'\xff\xfe'), ap.blob_id(b'\xff\xfe'), 'the base is not text'),
+        ]
+        for obj, blob, why in cases:
+            self.assertEqual(ap.read_base('C:/w', HEAD, 'AGENTS.md', blob, cat=cat(obj)),
+                             (None, why), why)
+        self.assertEqual(ap.read_base('C:/w', HEAD, 'AGENTS.md', None, cat=cat(None)),
+                         (None, None))                  # a new file: absent at head
+        self.assertEqual(ap.read_base('C:/w', HEAD, 'AGENTS.md', base,
+                                      cat=lambda s, c: ({s[0]: None, s[1]: None}, None)),
+                         (None, 'head is not a commit in the checkout'))
+        self.assertEqual(ap.read_base('C:/w', HEAD, 'AGENTS.md', base,
+                                      cat=lambda s, c: (None, 'gone')), (None, 'gone'))
+        seen[:] = []
+        for head, path, blob, why in (('HEAD', 'AGENTS.md', base, 'not a commit id'),
+                                      (HEAD, '../x', base, 'not a path that can be approved'),
+                                      (HEAD, 'AGENTS.md', '--all', 'not a blob id')):
+            self.assertEqual(ap.read_base('C:/w', head, path, blob, cat=cat(None)), (None, why))
+        self.assertEqual(seen, [])                      # refused before git is asked
 
     def test_the_diff_names_both_sides(self):
         lines = ap.diff('AGENTS.md', OLD, NEW)
@@ -362,6 +452,33 @@ class GitTest(unittest.TestCase):
         self.assertEqual(ap.diff('n.md', None, 'x\n')[:2], ['--- /dev/null\n', '+++ b/n.md\n'])
         self.assertEqual(ap.diff('d.md', 'x\n', None)[:2], ['--- a/d.md\n', '+++ /dev/null\n'])
         self.assertEqual(ap.diff('same.md', OLD, OLD), [])
+
+
+class RealTreeTest(unittest.TestCase):
+    """read_base against a real repository: TempRepo's one commit holds README.md "hello\\n"."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.repo = TempRepo()
+        cls.addClassCleanup(cls.repo.cleanup)
+
+    def test_the_base_is_read_from_the_commit(self):
+        root, head = self.repo.root, self.repo.initial
+        self.assertEqual(ap.read_base(root, head, 'README.md', ap.blob_id('hello\n')),
+                         ('hello\n', None))
+        self.assertEqual(ap.read_base(root, head, 'README.md', ap.blob_id('else\n')),
+                         (None, 'the base differs from the file at head'))
+        self.assertEqual(ap.read_base(root, head, 'docs/new.md', None), (None, None))
+        self.assertEqual(ap.read_base(root, head, 'README.md', None),
+                         (None, 'the file exists at head'))
+        self.assertEqual(ap.read_base(root, 'b' * 40, 'README.md', ap.blob_id('hello\n')),
+                         (None, 'head is not a commit in the checkout'))
+
+
+class SourceTest(unittest.TestCase):
+
+    def test_the_statuses_are_hubvalidates(self):
+        self.assertEqual(ap.STATUSES, hubvalidate.STATUSES['approvals'])
 
 
 class FakeClient(object):
@@ -390,6 +507,19 @@ class VerifierTest(unittest.TestCase):
         self.assertEqual(client.calls, [('GET', '/approvals/A-1%2Fx/verify', AGENT,
                                          {'repo': URL, 'head': HEAD,
                                           'files': '{"a.md":null,"b.md":"%s"}' % ('f' * 40)})])
+
+    def test_a_commit_is_asked_for_in_the_query(self):
+        client = FakeClient({'ok': True, 'valid': True, 'why': ''})
+        self.assertEqual(ap.Verifier(client).verify('A-1', URL, HEAD, {}, commit=COMMIT),
+                         (True, ''))
+        self.assertEqual(client.calls[0][3], {'repo': URL, 'head': HEAD, 'files': '{}',
+                                              'commit': COMMIT})
+
+    def test_an_empty_commit_is_refused_without_asking_the_server(self):
+        client = FakeClient({'ok': True, 'valid': True, 'why': ''})
+        self.assertEqual(ap.Verifier(client).verify('A-1', URL, HEAD, {}, commit=''),
+                         (False, ap.WHY_COMMIT))
+        self.assertEqual(client.calls, [])
 
     def test_any_other_answer_fails_closed(self):
         for answer in ({'ok': True, 'valid': False, 'why': ap.WHY_FILES},

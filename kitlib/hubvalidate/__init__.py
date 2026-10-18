@@ -28,15 +28,19 @@ Finding = collections.namedtuple('Finding', 'level rel field code message')
 
 ERROR, WARN, NOTE = 'error', 'warn', 'note'
 
-# status values per collection (docs/action-hub.md: questions, stories, todos, to_pm)
+# status values per collection (docs/action-hub.md: questions, stories, todos, to_pm; approvals:
+# kitlib.hubsite.approvals)
 STATUSES = {
     'questions': ('open', 'answered', 'logged'),
     'stories': ('submitted', 'review', 'questions', 'added', 'declined', 'withdrawn'),
     'todos': ('open', 'done'),
     'to_pm': ('queued', 'sent', 'done'),
+    'approvals': ('pending', 'approved', 'denied', 'consumed', 'expired'),
 }
-# the collection a Q-/M-/T-/P-/S- id names, and the fields that carry such ids
-REF_COLLECTIONS = {'Q': 'questions', 'M': 'inbox', 'T': 'todos', 'P': 'to_pm', 'S': 'stories'}
+# the collection a Q-/M-/T-/P-/S-/A- id names (the store's id prefixes), and the fields that carry
+# such ids (an A- id is never a ref)
+REF_COLLECTIONS = {'Q': 'questions', 'M': 'inbox', 'T': 'todos', 'P': 'to_pm', 'S': 'stories',
+                   'A': 'approvals'}
 REF_FIELDS = {'questions': ('refs',), 'inbox': ('ref', 'refs'), 'parked': ('q',),
               'todos': ('refs',), 'to_pm': ('refs',)}
 REPO_COLLECTIONS = ('questions', 'inbox', 'todos', 'to_pm', 'stories', 'parked')

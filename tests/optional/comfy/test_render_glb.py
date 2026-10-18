@@ -97,6 +97,11 @@ class Names(unittest.TestCase):
         self.assertEqual(R.label('m/sword.glb', '3/4', 12345), 'sword.glb 3/4 12k tris')
 
 
+def prints(path, code=0):
+    """A stand-in for subprocess.run: the candidate python prints `path` as its sys.executable."""
+    return mock.Mock(return_value=mock.Mock(returncode=code, stdout=(path or "") + "\n"))
+
+
 class MachineLockRerun(unittest.TestCase):
     """A render re-runs Blender under the machine lock (kind render); only its own re-run skips."""
 
@@ -121,6 +126,7 @@ class MachineLockRerun(unittest.TestCase):
         with mock.patch.dict(os.environ, dict(clean, **env), clear=True), \
                 mock.patch.object(R, "MACHINE_LOCK_TOOL", tool), \
                 mock.patch.object(R.shutil, "which", return_value=python or self.python), \
+                mock.patch.object(R.subprocess, "run", prints(python or self.python)), \
                 mock.patch.object(R.subprocess, "call", return_value=0) as call, \
                 mock.patch.object(R.sys, "exit") as exit_:
             R.machine_lock_rerun(opts, self.ARGV, binary)
@@ -132,6 +138,7 @@ class MachineLockRerun(unittest.TestCase):
         tool = self.fake_file("tool", "machine_lock.py")
         with mock.patch.object(R, "MACHINE_LOCK_TOOL", tool), \
                 mock.patch.object(R.shutil, "which", return_value=python), \
+                mock.patch.object(R.subprocess, "run", prints(python)), \
                 mock.patch.object(R.subprocess, "call") as call, \
                 mock.patch("sys.stderr", new_callable=io.StringIO) as err:
             with self.assertRaises(SystemExit) as e:
@@ -148,6 +155,25 @@ class MachineLockRerun(unittest.TestCase):
 
     def test_blender_as_the_python_refuses(self):
         self.refused(self.python, binary=self.python)
+
+    def test_an_alias_runs_the_python_it_resolves_to(self):
+        alias = self.fake_file("Microsoft", "WindowsApps", "python.exe")
+        with mock.patch.object(R.subprocess, "run", prints(self.python)) as run:
+            self.assertEqual(R.usable_python(alias, "blender.exe"), self.python)
+        self.assertEqual(run.call_args[0][0], [alias, "-c", "import sys;print(sys.executable)"])
+        self.assertIn("timeout", run.call_args[1])
+
+    def test_a_stub_that_fails_is_rejected(self):
+        stub = self.fake_file("Microsoft", "WindowsApps", "python.exe")
+        for run in (prints("", code=9009), prints(""), mock.Mock(side_effect=OSError("stub")),
+                    mock.Mock(side_effect=R.subprocess.TimeoutExpired("python", 10))):
+            with mock.patch.object(R.subprocess, "run", run):
+                self.assertIsNone(R.usable_python(stub, "blender.exe"))
+
+    def test_an_alias_that_resolves_to_blender_is_rejected(self):
+        blender = self.fake_file("Blender", "blender.exe")
+        with mock.patch.object(R.subprocess, "run", prints(blender)):
+            self.assertIsNone(R.usable_python(self.python, blender))
 
     def test_a_real_python_is_used_to_run_the_tool(self):
         call, _, _ = self.rerun({})

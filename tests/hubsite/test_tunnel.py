@@ -40,7 +40,8 @@ NOT_MADE = 'off: the tunnel listener could not be made: the server console says 
 # git's words for a failed pass, as a sync gives them: a remote and a folder, both made up
 GIT_BRANCH = 'made-up-branch'
 GIT_WHY = "fatal: unable to access 'https://git.example.invalid/team/data.git/' from X:\\made-up"
-# a route of the tests' own for the strong owner: no route of api.ROUTES names api.APPROVER yet
+# a route of the tests' own for the strong owner, so the gate is tested apart from what the one
+# APPROVER route of api.ROUTES (approvals/{id}/decide) does with a request
 DECIDE = api.BASE + '/decide-test'
 
 

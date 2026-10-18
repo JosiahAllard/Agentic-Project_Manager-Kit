@@ -182,14 +182,20 @@ class OwnerClaimsNeedTheOwnersAuthorship(unittest.TestCase):
 class ParseLog(unittest.TestCase):
     def test_a_record_splits_into_its_fields(self):
         rec = '\x1f'.join(('h' * 40, 'p1 p2', '123', 'A@x', 'C <noreply@anthropic.com>\n', '',
-                           'yes\n', 'subject \x1f with a separator')) + '\x1e\n'
+                           'yes\n', 'hub:A-2\n', 'subject \x1f with a separator')) + '\x1e\n'
         [c] = trailers.parse_log(rec)
         self.assertEqual(c, trailers.BranchCommit('h' * 40, True, 'subject \x1f with a separator',
                                                   ['C <noreply@anthropic.com>'], [], 123, ['yes'],
-                                                  'A@x'))
+                                                  'A@x', approval=['hub:A-2']))
+
+    def test_an_owner_approval_is_not_an_owner_claim(self):
+        c = trailers.BranchCommit('h', False, 's', [], [], 2 ** 40, [], OWNER,
+                                  approval=['hub:A-2'])
+        self.assertFalse(trailers.claims_owner(c))
+        self.assertEqual(trailers.classify(c, Rules(owner_email=OWNER)), trailers.MISSING)
 
     def test_an_unreadable_date_is_none(self):
-        rec = '\x1f'.join(('h', 'p', 'x', 'a', '', '', '', 's')) + '\x1e'
+        rec = '\x1f'.join(('h', 'p', 'x', 'a', '', '', '', '', 's')) + '\x1e'
         self.assertIsNone(trailers.parse_log(rec)[0].committed)
 
 

@@ -9,7 +9,8 @@ import sys
 from kitlib import verdict
 from kitlib.docs import callers as doc_callers
 from kitlib.git import cmd, refs, repo, stray
-from kitlib.preflight import configline, hooks, leftovers, lockline, machine, nextblock, settings as st
+from kitlib.preflight import (configline, defaultstore, hooks, leftovers, lockline, machine,
+                              nextblock, settings as st)
 
 MAX_LISTED = 12
 LIST_INDENT = ' ' * 12
@@ -76,6 +77,7 @@ def report(top, cfg, kit_root, base=None, fetch=False, lock_reader=lockline.read
     # The kit's own tools folder: a repository holds no copy of the kit's tools (decision 21 in
     # docs/multi-host-plan.md section 7), so every command printed runs them from the kit, with -C.
     tools = kit_root.replace('\\', '/').rstrip('/') + '/tools'
+    out.extend(defaultstore.lines(top, cfg, tools))
     here = '"%s"' % top.replace('\\', '/')
     in_main = repo.classify(top).kind == repo.MAIN
     if in_main:

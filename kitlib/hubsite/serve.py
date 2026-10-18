@@ -34,8 +34,10 @@ text is for the owner's console (it may name a folder):
      (gitsync.Refused: the folder is no work tree, the wrong branch, ...) does not stop the
      server: the reason goes to `Hub.notes` for the console, the server serves with sync off,
      and GET health says so in a fixed phrase (the reason itself names folders).
-  4. the Api over the store and a SiteViews, then the local listener on settings.port with
-     httpd.local_hosts, httpd.local_gate, httpd.pair_routes over an auth.Credentials made for
+  4. the Api over the store and a SiteViews (with approval_key reading the approval key from
+     the token folder on each use, and checkout matching a repo_id to the backlog's configured
+     repositories by their origin remote: _checkout), then the local listener on
+     settings.port with httpd.local_hosts, httpd.local_gate, httpd.pair_routes over an auth.Credentials made for
      the port that was really bound, httpd.stop_route (it sets Hub.stopping and answers this
      process's pid and creation time; the tunnel listener never has it) and health_route. The
      Credentials keep the browser
@@ -215,7 +217,7 @@ from kitlib.config.types import ConfigError
 from kitlib.proc import process
 
 from . import api as _api
-from . import access, auth, backlog, derived, gitsync, httpd, tunnel
+from . import access, auth, backlog, derived, gitsync, httpd, recordwrite, tunnel
 from .store import HubError, Store, StoreBusy
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'web')
@@ -472,7 +474,8 @@ def _record_call(fn, *args):
 
 class SiteViews(object):
     """The Api's `views` (module docstring, "Views"). A view is bound only where its source
-    exists: `backlog_views` for backlog, completed, record and record_template, sources.repos and .agents for theirs.
+    exists: `backlog_views` for backlog, completed, record, record_template and the record
+    writes (record_add, record_edit, record_delete), sources.repos and .agents for theirs.
     notices, usage and health are always there (kitlib.hubsite.derived answers a missing notice
     folder with no notices and a missing usage source with its own phrase). `sync` is the git
     sync or None, `sync_off` the fixed phrase health gives when there is none. `log(level,
@@ -495,6 +498,9 @@ class SiteViews(object):
             self.completed = self._completed
             self.record = self._record
             self.record_template = self._record_template
+            self.record_add = self._record_add
+            self.record_edit = self._record_edit
+            self.record_delete = self._record_delete
         if sources.repos is not None:
             self.repos = self._repos
         if sources.agents:
@@ -573,6 +579,33 @@ class SiteViews(object):
 
     def _record_template(self, repo):
         return _record_call(self._backlog.record_template, repo)
+
+    # The owner's record writes (kitlib.hubsite.recordwrite) to the store of the configured
+    # repository `repo` names; the root never comes from the caller. After a write the backlog
+    # source reads that repository again (Views.reread), so the snapshot the page reads shows
+    # it; add and edit also answer the record as read after the write.
+    def _record_root(self, repo, rid):
+        _record_call(backlog.check_id, rid)
+        # Views._named, the record reads' own lookup: its one caller outside backlog.Views
+        return _record_call(self._backlog._named, repo)
+
+    def _record_add(self, repo, id, summary, scopes, effort, ref):
+        name, root = self._record_root(repo, id)
+        out = recordwrite.add(root, id, summary, scopes, effort, ref)
+        self._backlog.reread(name, root)
+        return dict(out, record=self._record(name, id))
+
+    def _record_edit(self, repo, id, version, changes, unset, body, ruling):
+        name, root = self._record_root(repo, id)
+        out = recordwrite.edit(root, id, version, changes, unset, body, ruling)
+        self._backlog.reread(name, root)
+        return dict(out, record=self._record(name, id))
+
+    def _record_delete(self, repo, id, why, ruling):
+        name, root = self._record_root(repo, id)
+        out = recordwrite.delete(root, id, why, ruling)
+        self._backlog.reread(name, root)
+        return out
 
     def _notices(self):
         return derived.notices(self._sources.notices)
@@ -788,6 +821,24 @@ def _follow_rounds(backlog_views, views):
     backlog_views.wait = pause
 
 
+def _checkout(backlog_views):
+    """Api's checkout(repo_id) (kitlib.hubsite.api, "Approvals"): the root of the configured
+    repository (backlog_views.repos(), its (name, root) pairs) whose origin remote is that
+    repo_id (approvals.remote_id), read with git on each call; None when none is, when there is
+    no backlog, or when the repositories cannot be listed, so a request fails closed."""
+    def checkout(repo_id):
+        from . import approvals     # it imports kitlib.hubsite.client, which imports this module
+        try:
+            pairs = backlog_views.repos() if backlog_views is not None else []
+        except Exception:           # noqa: BLE001 - no list, no checkout: the request is refused
+            return None
+        for _name, root in pairs:
+            if approvals.remote_id(root)[0] == repo_id:
+                return root
+        return None
+    return checkout
+
+
 def build(settings, sources, log=None):
     """The Hub for `settings` (kitlib.hubsite.settings.Settings) from `sources` (a Sources):
     module docstring, "Start-up". Nothing is started; close() the Hub to release the store.
@@ -820,7 +871,9 @@ def build(settings, sources, log=None):
         views = SiteViews(store, sources, views_b, sync, sync_off, log=log)
         if views_b is not None:
             _follow_rounds(views_b, views)
-        api = _api.Api(store, views)
+        api = _api.Api(store, views,
+                       approval_key=functools.partial(auth.read_approval_key, sources.tokens),
+                       checkout=_checkout(views_b))
         try:
             local = httpd.Listener((httpd.LOOPBACK, settings.port), api, None,
                                    static_dir=sources.static_dir, host_rule=httpd.local_hosts,

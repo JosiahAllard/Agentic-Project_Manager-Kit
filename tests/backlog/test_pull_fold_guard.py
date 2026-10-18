@@ -1,8 +1,9 @@
 """The fold-in guard on `pull` (docs/backlog.md, "The fold-in guard"): a pull whose scope overlaps
 a path another live pull's branch changed since its merge base with the code main belongs on that
 branch, so it is refused unless `--reason` and `--ruling R-nnnn` override it, the same route as a
-collision with a live pull's scope. The caller's own branch never counts. End to end through
-Store.write on a ref store with a bare remote."""
+collision with a live pull's scope. The caller's own branch never counts. `next` runs the same
+guard and passes such a record over (NextFold). End to end through Store.write on a ref store
+with a bare remote."""
 import unittest
 from unittest import mock
 
@@ -214,6 +215,115 @@ class PullFold(_Branches):
         self.failing('cmd', run=lambda args, root, **kw: (None, 'git broke')
                      if args[:2] == ['diff', '--no-renames'] else real(args, root, **kw))
         self.assert_git_failure()
+
+
+class NextFold(_Branches):
+    """`next` runs the fold-in guard `pull` runs (plan.offer_for, `_offer_folds`): a record whose
+    scope folds into another live pull's branch is passed over, not offered, so `next` never
+    offers what `pull` then refuses. A branch git cannot diff passes the candidate over with a
+    "cannot tell" note: `next` never fails on it, `pull` still does."""
+
+    def setUp(self):
+        super().setUp()
+        self.branch_with(HOLDER, 'kitlib/x/a.py')
+        self.seed(held('HOLD', HOLDER, 'docs/held.md'))
+
+    def offer(self):
+        offers, passed, _holding, _own = pmod.offer_for(self.store.load(), self.ctx)
+        return [o.rec.id for o in offers], {p.rec.id: p.why for p in passed}
+
+    def test_a_folding_record_is_passed_over_and_the_next_one_offered(self):
+        self.seed(priced('FOO', priority='1', scope='kitlib/x/**'),
+                  priced('BAR', priority='2', scope='kitlib/other/**'))
+        offers, passed = self.offer()
+        self.assertEqual(offers, ['BAR'])
+        self.assertIn('scope overlaps the work of kit/holder (kitlib/x/** vs kitlib/x/a.py '
+                      '(changed on kit/holder)); fold it into kit/holder, or pull it after '
+                      'kit/holder lands', passed['FOO'])
+
+    def test_its_pull_names_the_fold_not_the_offer(self):
+        # Passed over by `next`, so the fold refusal must come before "not in next's offer":
+        # that one would hide the reason and the `--ruling` override.
+        self.seed(priced('FOO', scope='kitlib/x/**'))
+        with self.assertRaises(Refusal) as cm:
+            self.verb('pull', 'FOO')
+        self.assertIn(FOLD, str(cm.exception))
+        self.assertNotIn("not in `next`'s offer", str(cm.exception))
+
+    def test_a_pull_onto_the_branch_takes_what_the_main_checkouts_next_offers(self):
+        # R1 folds only into kit/holder's work, so the main checkout's `next` passes it over and
+        # offers R2; as kit/holder, R1 is offered and R2 collides with it. `pull R2` onto
+        # kit/holder must take it (current_offer's `also` is the main checkout's offer).
+        self.seed(priced('R1', priority='1', scope='kitlib/x/**'),
+                  priced('R2', priority='2', scope='kitlib/x/b.py'))
+        snap = self.store.load()
+        main, passed, _h, _o = pmod.offer_for(snap, self.ctx, branch='main')
+        self.assertEqual([o.rec.id for o in main], ['R2'])
+        self.assertIn(FOLD, {p.rec.id: p.why for p in passed}['R1'])
+        mine, passed, _h, _o = pmod.offer_for(snap, self.ctx, branch=HOLDER)
+        self.assertEqual([o.rec.id for o in mine], ['R1'])
+        self.assertIn('R2', {p.rec.id for p in passed})
+        self.ctx = pmod.Context(self.store, self.repo.root, branch=HOLDER, today=TODAY)
+        self.verb('pull', 'R2')
+        self.assertEqual((self.get('R2').get('state'), self.get('R2').get('pulled_by')),
+                         ('pulled', HOLDER))
+
+    def test_the_two_offers_a_pull_checks_read_the_diffs_once(self):
+        self.seed(priced('R1', scope='kitlib/x/**'), priced('R2', scope='kitlib/y/**'))
+        self.ctx = pmod.Context(self.store, self.repo.root, branch=HOLDER, today=TODAY)
+        real, reads = pmod._live_changes, []
+
+        def live_changes(*args):
+            reads.append(args[2])
+            return real(*args)
+        with mock.patch.object(pmod, '_live_changes', live_changes):
+            _offers, _passed, _holding, also, _notes = pmod.current_offer(self.store.load(),
+                                                                          self.ctx)
+        self.assertEqual([r.id for r in also], ['R2'])
+        self.assertEqual(reads, [None])
+
+    def test_the_callers_own_branch_diff_never_passes_over(self):
+        self.branch_with(BRANCH, 'kitlib/own/b.py', existing=True)
+        self.seed(held('MINE', BRANCH, 'docs/mine.md'), priced('FOO', scope='kitlib/own/**'))
+        offers, passed = self.offer()
+        self.assertEqual(offers, ['FOO'], passed)
+
+    def test_each_live_branch_is_diffed_once_per_offer(self):
+        self.seed(priced('FOO', scope='kitlib/a/**'), priced('BAR', scope='kitlib/b/**'))
+        real, diffs = cmd.run, []
+
+        def run(args, root, **kw):
+            if args[:2] == ['diff', '--no-renames']:
+                diffs.append(args)
+            return real(args, root, **kw)
+        self.failing('cmd', run=run)
+        offers, _passed = self.offer()
+        self.assertEqual(sorted(offers), ['BAR', 'FOO'])
+        self.assertEqual(len(diffs), 1)
+
+    def test_a_branch_git_cannot_diff_passes_over_and_never_fails_next(self):
+        self.seed(priced('FOO', scope='docs/y.md'))
+        self.failing('refs', merge_base=lambda a, b, root: (None, 'git broke'))
+        offers, passed = self.offer()
+        self.assertEqual(offers, [])
+        self.assertIn("cannot tell whether FOO folds into kit/holder's work; pull after "
+                      "kit/holder lands or check git", passed['FOO'])
+        self.assertIn('git broke', passed['FOO'])
+        # `pull` keeps failing on it: "cannot tell" is never "no overlap".
+        with self.assertRaises(Failure) as cm:
+            self.verb('pull', 'FOO')
+        self.assertIn('git broke', str(cm.exception))
+        self.assertEqual(self.get('FOO').get('state'), 'open')
+
+    def test_a_code_main_git_cannot_read_passes_over_too(self):
+        real = refs.resolve
+        base = refs.default_base(self.repo.root, 'origin', 'main')[0]
+        self.failing('refs', resolve=lambda ref, root, **kw: (None, 'git broke')
+                     if ref == base else real(ref, root, **kw))
+        self.seed(priced('FOO', scope='docs/y.md'))
+        offers, passed = self.offer()
+        self.assertEqual(offers, [])
+        self.assertIn("cannot tell whether FOO folds into kit/holder's work", passed['FOO'])
 
 
 class SetScopeFold(_Branches):

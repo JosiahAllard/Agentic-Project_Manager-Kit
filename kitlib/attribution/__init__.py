@@ -8,6 +8,7 @@ Provider identity is never inferred from a model name.
   providers(path)                  {name: Attribution}: every registered host's
   model_environment(provider)      the model fallback variable, or None
   requires_model_id(provider)      whether --model must be an explicit id (no fallback)
+  display_name(model, provider)    a lower-case model id as its display name, else as given
   coauthor(model, provider, families)   the Co-Authored-By line; ValueError when it cannot be one
   session_trailer(env, provider)   the host's session line (`Claude-Session: <url>`), or None
   session_keys(path)               every host's session trailer key
@@ -42,8 +43,22 @@ def requires_model_id(provider=None, path=None):
     return _of(provider, path).model_pattern is not None
 
 
+def display_name(model, provider=None, path=None):
+    """`<name>-opus-5-5` -> `Opus 5.5` (<name>: the provider's attribution name, lower case, from
+    hosts.json); any other value as given. Only a lower-case id of that exact shape is mapped, so
+    a display name or a longer id (a date suffix) is never reworded."""
+    if not isinstance(model, str):
+        return model
+    found = re.match(r'%s-(opus|sonnet|haiku)-(\d{1,2}(?:-\d{1,2})?)\Z'
+                     % re.escape(_of(provider, path).name.lower()), model.strip())
+    if found is None:
+        return model
+    return '%s %s' % (found.group(1).capitalize(), found.group(2).replace('-', '.'))
+
+
 def coauthor(model, provider=None, families=(), path=None):
     a = _of(provider, path)
+    model = display_name(model, provider, path)
     if a.model_pattern is not None:
         if not isinstance(model, str) or not re.fullmatch(a.model_pattern, model):
             raise ValueError('%s requires an explicit active --model id' % a.name)

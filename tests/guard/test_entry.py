@@ -219,6 +219,8 @@ class GuardError(unittest.TestCase):
             r = subprocess.run([sys.executable, entry] + ARGS, input=ev, capture_output=True, text=True,
                                encoding='utf-8', env=env, cwd=base, timeout=60)
             self.assertEqual((r.returncode, r.stdout), (want, ''), tool)
+            if want == 2:                              # the block's own reason, not a crash that also exits 2
+                self.assertIn('kit hook: ModuleNotFoundError: No module named', r.stderr, tool)
 
     def test_an_unguarded_call_loads_no_kit_module(self):
         """The fast path: a TodoWrite decides on hosts.json alone, so the hook loads no kit module but

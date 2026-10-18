@@ -80,7 +80,8 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   the owner for work.
 - **Follow-ups.** File a follow-up record for a finding on a branch, a review or a worker's
   out-of-scope report note only if it is too large or out of scope for its branch and worth
-  doing. Say in its summary that it is a follow-up, and of which branch or review. Leave it
+  doing. File only for an observed failure (a run, a probe, a log line); a reviewer's
+  hypothetical stays in the review report. Say in its summary that it is a follow-up, and of which branch or review. Leave it
   unpriced. `next` never offers an unpriced record; its banner counts it under
   `unprioritised+open`, not under `held` (`held` = blocked). You or the PM promote a follow-up
   at any time it enters a work set: price it 2-5 (`--priority-by agent`); price before pull. A

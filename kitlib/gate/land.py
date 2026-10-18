@@ -64,7 +64,9 @@ tools/land.py).
                  lock released: FAILED, the verdict line `CONFLICT <branch> with main <base>:
                  the author merges main`. Main is never moved
   7  gate        the landing tree gated in the slot of step 3 (kitlib.gate.runner.merged_gate,
-                 tree=, slot=) with the config of the base; a step that passed in the branch gate
+                 tree=, slot=) with the config of the base: every step that is not manual, as
+                 gate.py --full selects them, whatever paths the merge changes; a step that
+                 passed in the branch gate
                  of exactly this tree may count without running (kitlib.gate.reuse; never with
                  --fresh, --full or a batch). Red, or a gate where nothing ran: NOT LANDED, the
                  merge dropped (it is only in the landing tree; the landing never moves main),
@@ -410,6 +412,10 @@ class Lander(object):
         # from its start (the submission wrote them running)
         self.result_runs = list(sub.get('runs') or [])
         self.own_runs = set(rr.run_id for rr in self.result_runs)
+        # a direct landing's result.Run per branch, made when it joins the landing queue (_run,
+        # before book_turn) so started_at says so, as a submitted landing's does; started, and
+        # moved into result_runs, only once the locked checks passed (_locked)
+        self.queued_runs = []
         self.output_log = sub.get('output')
         self.replaced = [r for r in (sub.get('replaced') or []) if isinstance(r, dict)]
         self.keep_branch = keep_branch  # True: no branch cleanup after the landing
@@ -684,7 +690,7 @@ class Lander(object):
         whether the gate was --full, and a record of any other commit do not count; an --only run
         writes none. None, or the first miss: why, and what gates that tip whole
         (full_gate_advice; REFUSED, nothing merged). It only adds to the merged gate, which runs
-        as before. A base gate with no step that is not manual refuses first (manual_only).
+        as before. A base gate that --full selects no step from refuses first (no_full_step).
 
         The record's `gate_config` is not compared with any config: the branch gate writes a
         record only for a clean tree, with `config_rev` the tip, so the hash is of the tip's own
@@ -692,7 +698,7 @@ class Lander(object):
         schema, which refuse honest records whenever the two kits differ (a kit branch that
         changes the gate's defaults or adds a config key); and the config that decides what
         lands is the base's, which the merged gate reads."""
-        why = self.manual_only()
+        why = self.no_full_step()
         if why:
             return why
         for b, t in self.pairs:
@@ -702,32 +708,35 @@ class Lander(object):
                     b, t[:10], why, self.full_gate_advice(b, t))
         return None
 
-    def manual_only(self):
+    def no_full_step(self):
         """Why no tip can be gated whole, or None: the base's `.kit.json` has a "gate" section
-        (detect.configured) and none of its steps is runnable outside --only (every one is
-        `manual`, or there is none). `gate.py --full` and the merged gate select no step then
-        (steps.select) and both refuse, so the tip check's command could never be met."""
+        (detect.configured) from which --full selects no step (steps.select with full and no
+        changed path): every step is `manual`, there is none, or each is dropped by another
+        selected step's skip_if_selected. `gate.py --full` and the merged gate select the same
+        steps, so both would refuse and the tip check's command could never be met."""
         if not detect.configured(self.cfg):
             return None
-        specs = self.cfg.section('gate').get('steps') or []
-        if any(not (isinstance(s, dict) and s.get('manual')) for s in specs):
+        _, picked = S.select(self.cfg.section('gate'), [], [], full=True)
+        if picked:
             return None
-        return ('the "gate" section of .kit.json at %s has no step that is not manual, so '
+        return ('the "gate" section of .kit.json at %s leaves no step for --full to select (every '
+                'step is manual, or is dropped by another selected step\'s skip_if_selected), so '
                 'neither `gate.py --full` nor the merged gate would run anything (both refuse: '
-                'no gate step selected); no branch can land until %s gives the gate a step '
-                'without "manual"' % (self.expect_main[:10], self.cfg.main_branch))
+                'no gate step selected); no branch can land until %s gives the gate a step that '
+                'is not manual and that no other step\'s skip_if_selected names'
+                % (self.expect_main[:10], self.cfg.main_branch))
 
     def full_gate_advice(self, branch, tip):
         """What gates `branch`'s tip whole: `gate that tip whole first: <full_gate_command>`. When
         the kit lands itself (oncommit.is_kit) the command runs the branch's own gate.py, and one
-        from before records said `full` never writes it; so a tip that does not contain the base
-        (or whose ancestry git cannot tell) is told to merge <remote>/<main> in first, then gate
-        and land the merge. Any other repository's command runs the running kit's gate.py, which
-        writes it whatever the branch holds."""
+        from before records said `full` never writes it: a tip whose record lacks the key (the
+        record gate_ok.verify takes, without `full`) is told to merge <remote>/<main> in first,
+        then gate and land the merge. Any other repository's command runs the running kit's
+        gate.py, which writes it whatever the branch holds."""
         command = self.full_gate_command(branch)
         if oncommit.is_kit(self.root):
-            inside, _ = refs.is_ancestor(self.expect_main, tip, self.root)
-            if inside is not True:
+            rec, _ = gate_ok.verify(self.root, tip)
+            if rec is not None and 'full' not in rec:
                 return ('merge %s/%s (%s) into %s first (a branch\'s own gate.py from before '
                         'records said `full` never writes it), then gate the merge whole and land '
                         'that tip: %s' % (self.cfg.remote, self.cfg.main_branch,
@@ -1557,10 +1566,12 @@ class Lander(object):
         """_run(), and the landing's result records (kitlib.gate.result, kind "land"), one per
         branch at its --expect-tip: `running` once the locked checks pass, just before the merge
         (_locked), then the outcome's, or `error` when an exception or Ctrl+C escapes _run (raised
-        again, unchanged). A landing that ends before that (USAGE, REFUSED before the merge, BUSY,
-        the machine lock's refusal: a retry or a duplicate) writes no record, so it never replaces
-        a real result; a submitted landing's records were written running before it started, so
-        every outcome finishes them. The record lines are said as progress: the verdict stays the
+        again, unchanged). Their started_at is when the landing joined the landing queue: a direct
+        landing's just before book_turn, a submitted one's at the submission. A landing that ends
+        before the locked checks pass (USAGE, REFUSED before the merge, BUSY, the machine lock's
+        refusal: a retry or a duplicate) writes no record, so it never replaces a real result; a
+        submitted landing's records were written running before it started, so every outcome
+        finishes them. The record lines are said as progress: the verdict stays the
         outcome's last line. The machine-lock slot is released however _run ends.
         facts['result_record']: the path (one branch), the list of paths (a batch), or None."""
         try:
@@ -1601,6 +1612,9 @@ class Lander(object):
             if why.startswith('USAGE: '):
                 return G.Outcome(G.USAGE, [why])
             return G.Outcome(G.REFUSED, ['REFUSED: %s; nothing was changed' % why])
+        if not self.submitted:      # joins the queue now: its records' started_at
+            runs = (result.Run.maybe(self.root, 'land', b, t) for b, t in self.pairs)
+            self.queued_runs = [rr for rr in runs if rr is not None]
         try:
             self.book_turn()
         except (landing.LockError, ConfigError) as e:
@@ -1771,12 +1785,11 @@ class Lander(object):
             for rr in self.result_runs:
                 rr.base = self.expect_main
                 self.say(rr.start(log=self.output_log)[1])
-        else:
-            for b, t in self.pairs:
-                rr = result.Run.maybe(self.root, 'land', b, t, self.expect_main)
-                if rr is not None:
-                    self.result_runs.append(rr)
-                    self.say(rr.start()[1])
+        else:                       # made when the landing joined the queue (_run)
+            for rr in self.queued_runs:
+                rr.base = self.expect_main
+                self.result_runs.append(rr)
+                self.say(rr.start()[1])
         started = gate_ok.utc()
         failed = self.do_merge()
         if failed is not None:
@@ -2059,7 +2072,8 @@ class Lander(object):
         the main checkout to the remote's main (fetch, switch back, a fast-forward), leave
         anything only the checkout has to a person, and say how a merge that reached the remote
         without a passing merged gate is taken back (a revert by hand, never run here). Commits
-        on the remote's main on top of the landing are named, with the full gate to run."""
+        on the remote's main on top of the landing are named, with the full gate to run in a new
+        worktree (tools/new_worktree.py), never in the main checkout."""
         main_b, remote = self.cfg.main_branch, self.cfg.remote
         g = 'git -C "%s"' % self.root
         upstream = '%s/%s' % (remote, main_b)
@@ -2083,13 +2097,22 @@ class Lander(object):
         on_top = ([l for l in (out or '').splitlines() if l.strip()] if out is not None
                   else left['extra'])
         if on_top:
+            # A full gate runs in a worktree, never the main checkout (AGENTS.md); in the kit,
+            # with the worktree's own gate.py, as full_gate_command names it.
+            wt = '<worktree>'
+            gate_py = os.path.join(wt if oncommit.is_kit(self.root) else S.kit_live(), 'tools',
+                                   'gate.py')
             steps.append(('%s has %d commit(s) on top of the merge that no merged gate saw: %s. '
-                          'Once the lock is broken, gate %s whole: `python "%s" -C "%s" --full`' % (
+                          'Once the lock is broken, gate %s whole in a worktree, never in the main '
+                          'checkout: make one on a new branch from %s with `python "%s" -C "%s" '
+                          '<area>/<slug>`, then gate it: `python "%s" -C "%s" --full`' % (
                               upstream, len(on_top),
                               '; '.join(l[:10] + l[40:] for l in on_top[:10]) + (
                                   '; and %d more' % (len(on_top) - 10) if len(on_top) > 10
                                   else ''),
-                              main_b, os.path.join(S.kit_live(), 'tools', 'gate.py'), self.root),
+                              main_b, upstream,
+                              os.path.join(S.kit_live(), 'tools', 'new_worktree.py'), self.root,
+                              gate_py, wt),
                           []))
         if left['current'] != main_b:
             steps.append(('HEAD is on %s, not %s: switch back to %s first%s' % (

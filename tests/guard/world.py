@@ -116,7 +116,7 @@ class World(object):
 
 
 # test_prefix_parity.py sets this to a function that renames every subagent's agent_type, so the
-# whole guard suite runs again with the plugin-prefixed names; None leaves agent_type as given.
+# tests it names run again with the plugin-prefixed names; None leaves agent_type as given.
 AGENT_TYPE = None
 
 

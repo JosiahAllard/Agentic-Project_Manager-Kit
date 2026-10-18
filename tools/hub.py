@@ -136,6 +136,12 @@ the server alone decides what a role may do.
   hub.py inbox add --text T [--title T] [--repo R] [--ref ID] [--asked TEXT] [--refs ID ...]
         [--from NAME]                                `POSTED M-2`
   hub.py inbox read M-1 [--undo] [--if-version V]   (owner) `READ M-1`, `UNREAD M-1`
+  hub.py approvals [--status S] [--repo R]          `A-1 pending [repo] title` for each request
+                                                     for the owner's approval, its status read
+                                                     now (an expired one says expired;
+                                                     kitlib.hubsite.approvals status_at)
+  hub.py approvals show A-1                         its status, repo, head, title and reason,
+                                                     then `<path> <base_blob> -> <blob>` per file
   hub.py pending [--for KEY]                        `<kind> <id> [repo] to=R from=K title` for
                                                      each item of owner input not yet handled: R
                                                      is the session key to handle it now (pm
@@ -173,6 +179,7 @@ started nothing; 4 `wait --timeout` ran out with nothing to say, or `stop` or `r
 of time (nothing was killed).
 """
 import argparse
+import datetime
 import json
 import os
 import sys
@@ -184,6 +191,7 @@ from kitlib import hubvalidate                                     # noqa: E402
 from kitlib.config import copies, user                             # noqa: E402
 from kitlib.config.types import ConfigError                        # noqa: E402
 from kitlib.hubsite import access, api, auth, client, httpd, serve, settings, tunnel   # noqa: E402
+from kitlib.hubsite import approvals                               # noqa: E402
 from kitlib.hubsite import autostart as hub_autostart              # noqa: E402
 from kitlib.hubsite import control                                 # noqa: E402
 from kitlib.hubsite import migrate as hub_migrate                  # noqa: E402
@@ -193,8 +201,8 @@ OPEN = 'python "%s" open' % os.path.abspath(__file__)
 HEALTH = api.BASE + '/health'
 # every verb, in the order the usage error names them
 VERB_NAMES = ('serve', 'status', 'setup', 'open', 'unpair', 'stop', 'restart', 'migrate',
-              'questions', 'answer', 'todos', 'stories', 'to-pm', 'inbox', 'pending', 'wait',
-              'validate')
+              'questions', 'answer', 'todos', 'stories', 'to-pm', 'inbox', 'approvals', 'pending',
+              'wait', 'validate')
 NO_VERB = 'give a verb: %s or %s' % (', '.join(VERB_NAMES[:-1]), VERB_NAMES[-1])
 
 
@@ -395,6 +403,10 @@ def _client_verbs(sub):
     x.add_argument('id')
     x.add_argument('--undo', action='store_true')
     _pins(x)
+
+    x = _listed(sub, 'approvals', "list the requests for the owner's approval; show",
+                S['approvals'])
+    _leaf(x, 'show', 'one request and its files').add_argument('id')
 
     x = _asks(sub.add_parser('pending', help='the owner input the PM has not handled'))
     x.add_argument('--for', dest='for_key', metavar='KEY',
@@ -948,6 +960,30 @@ def _inbox(a, stop):
                  [_item(d, 'read' if d.get('read') else 'unread') for d in items])
 
 
+def _approvals(a, stop):
+    """The requests from GET /snapshot (the api has no route that lists approvals), each with
+    its status read now: approvals.status_at applies the expiry, `malformed` for a bad document."""
+    docs = (_hub(a).get('/snapshot').get('collections') or {}).get('approvals') or {}
+    now = datetime.datetime.now(datetime.timezone.utc)
+    items = [dict(docs[k], id=k, status=approvals.status_at(docs[k], now) or 'malformed')
+             if isinstance(docs[k], dict) else {'id': k, 'status': 'malformed'}
+             for k in sorted(docs, key=api._natural)]
+    if a.sub == 'show':
+        d = next((d for d in items if d['id'] == a.id), None)
+        if d is None:
+            raise serve.ServeError('no approval %s' % a.id)
+        lines = [_item(d), 'head %s' % d.get('head')] + (
+            ['reason %s' % d['reason']] if d.get('reason') else [])
+        lines += ['%s %s -> %s' % (f.get('path'), f.get('base_blob') or 'new',
+                                   f.get('blob') or 'deleted')
+                  for f in d.get('files') or [] if isinstance(f, dict)]
+        return _show(a, d, lines)
+    status, repo = getattr(a, 'status', 'all'), getattr(a, 'repo', '').strip().lower()
+    items = [d for d in items if status in ('all', d['status'])
+             and (not repo or str(d.get('repo') or '').strip().lower() == repo)]
+    return _show(a, {'items': items}, [_item(d) for d in items])
+
+
 def _routed(p):
     """`to=<route> from=<from>` of pending item p: the session key that is to handle it now and
     the key it is for (docs/action-hub.md "Who handles a pending item"); `-` for one not given."""
@@ -982,7 +1018,8 @@ def _wait(a, stop):
 VERBS = {'serve': _serve, 'status': _status, 'setup': _setup, 'open': _open,
          'unpair': _unpair, 'stop': _stop, 'restart': _restart, 'migrate': _migrate,
          'questions': _questions, 'answer': _answer, 'todos': _todos,
-         'stories': _stories, 'to-pm': _to_pm, 'inbox': _inbox, 'pending': _pending,
+         'stories': _stories, 'to-pm': _to_pm, 'inbox': _inbox, 'approvals': _approvals,
+         'pending': _pending,
          'wait': _wait, 'validate': _validate}
 
 
