@@ -154,7 +154,7 @@ class LandsAloneFullFresh(StrictCase):
 
 
 class ReviewerTierByAuthor(StrictCase):
-    """Owner rulings R-1717 and R-2220 (land.REVIEWER_MODELS_BY_AUTHOR): a haiku review counts
+    """The owner's reviewer-tier rule (land.REVIEWER_MODELS_BY_AUTHOR): a haiku review counts
     for a strict branch built by worker or weak-worker only; every other build needs opus."""
     GATE = LandsAloneFullFresh.GATE
 
@@ -359,7 +359,7 @@ class Pure(unittest.TestCase):
         self.assertIsNone(land.strong_alias('account-default', {'opus', 'account-default'},
                                             {'account-default'}))
 
-    def test_the_reviewer_tier_table_is_r1717_and_r2220(self):
+    def test_the_reviewer_tier_table_is_the_owners_rule(self):
         self.assertEqual(land.REVIEWER_MODELS_BY_AUTHOR, {
             'worker': ('haiku',), 'weak-worker': ('haiku',), 'opus-worker': (),
             'strong-worker': (), 'deep-worker': (), 'senior-worker': ()})

@@ -344,15 +344,17 @@ def strong_alias(model, strong, weak):
 
 
 # The models below the strong tier that a strict branch's reviewer may run on, by the agent type
-# that built the branch (owner rulings R-1717 and R-2220). A type not here needs the strong tier
-# (strong_alias), as does a type mapped to (); moving a type between tiers is its one entry.
+# that built the branch. The owner's reviewer-tier rule: a build by a sonnet or haiku worker
+# (worker, weak-worker) may be reviewed by haiku at high effort; a build by an opus worker
+# (opus-worker, strong-worker, senior-worker, deep-worker) needs opus. A type not here needs the
+# strong tier (strong_alias), as does a type mapped to (); moving a type is its one entry.
 REVIEWER_MODELS_BY_AUTHOR = {
-    'worker': ('haiku',),           # R-1717
-    'weak-worker': ('haiku',),      # R-1717
-    'opus-worker': (),              # R-1717
-    'strong-worker': (),            # R-1717
-    'deep-worker': (),              # R-1717
-    'senior-worker': (),            # R-2220
+    'worker': ('haiku',),
+    'weak-worker': ('haiku',),
+    'opus-worker': (),
+    'strong-worker': (),
+    'deep-worker': (),
+    'senior-worker': (),
 }
 
 
@@ -915,7 +917,8 @@ class Lander(object):
         model = entry['reviewer_model']
         if strong_alias(model, strong, weak) is None and light_alias(entry, strong, weak) is None:
             return ('the reviewer ran on %s, not a strong-tier model (%s, or a full model id '
-                    'naming it; hosts.json "tiers"); %s (R-1717, R-2220), and its author is %s'
+                    'naming it; hosts.json "tiers"); %s (land.REVIEWER_MODELS_BY_AUTHOR), and '
+                    'its author is %s'
                     % (model, ', '.join(sorted(strong - weak)) or 'none', light_rule(),
                        entry['author']))
         if is_author(entry):
