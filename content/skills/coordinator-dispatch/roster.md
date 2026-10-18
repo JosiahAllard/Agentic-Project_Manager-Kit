@@ -54,7 +54,7 @@ coordinator profile lists the roles it actually has; use only those. Roles are n
 - **Reviewer model** (this is the rule's one home). The reviewer is pinned to the light tier
   at high effort; its model follows the tier of the role that built the branch.
   The first row that fits:
-  1. Built by strong-worker or deep-worker -> raise to strong.
+  1. Built by strong-worker, senior-worker or deep-worker -> raise to strong.
   2. Built by worker or weak-worker -> no override: light as pinned. You may raise to strong for a
      risk you name in status, never must.
 

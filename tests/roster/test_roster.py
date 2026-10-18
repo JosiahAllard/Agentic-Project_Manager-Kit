@@ -195,7 +195,7 @@ class ReviewerRuleTest(unittest.TestCase):
         roles = {r.name: r for r in content.load_roles(KIT_ROOT)}
         self.assertEqual(roles['reviewer'].tier, 'light')
         self.assertIn('light tier', rule)
-        for builder in ('strong-worker', 'deep-worker', 'worker', 'weak-worker'):
+        for builder in ('strong-worker', 'senior-worker', 'deep-worker', 'worker', 'weak-worker'):
             self.assertIn(builder, roles)
             self.assertIn(builder, rule)
 
