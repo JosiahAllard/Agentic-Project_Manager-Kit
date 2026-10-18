@@ -4,7 +4,6 @@ from content/roles and each host's tier -> model map (decision 17, docs/multi-ho
 The check runs on the real tree; the edits run on a temp copy and must leave every byte outside the
 rendered regions alone.
 """
-import importlib
 import io
 import os
 import re
@@ -179,8 +178,8 @@ def _content(root):
 
 class ReviewerRuleTest(unittest.TestCase):
     """The "Reviewer model" rule in the dispatch skill's roster.md is prose a coordinator follows by
-    matching strings: the builder roles it names and the name of the strict-path tuple. Each one
-    it names must still be what the code prints or defines."""
+    matching strings: the builder roles it names. Each one it
+    names must still be a role."""
 
     RULE_FILE = os.path.join(KIT_ROOT, 'content', 'skills', 'coordinator-dispatch', 'roster.md')
 
@@ -196,16 +195,9 @@ class ReviewerRuleTest(unittest.TestCase):
         roles = {r.name: r for r in content.load_roles(KIT_ROOT)}
         self.assertEqual(roles['reviewer'].tier, 'light')
         self.assertIn('light tier', rule)
-        for builder in ('strong-worker', 'senior-worker', 'deep-worker', 'worker', 'weak-worker'):
+        for builder in ('strong-worker', 'deep-worker', 'worker', 'weak-worker'):
             self.assertIn(builder, roles)
             self.assertIn(builder, rule)
-        # the strict landing paths: a name in a module, both as the rule spells them
-        m = re.search(r'`(\w+)` in `<kit>/(kitlib/[\w/]+)\.py`', rule)     # a skill writes the kit's root <kit>
-        self.assertIsNotNone(m, 'the rule names no strict-path tuple')
-        self.assertEqual(m.group(1), 'STRICT_DEFAULTS')
-        module = importlib.import_module(m.group(2).replace('/', '.'))
-        self.assertTrue(getattr(module, m.group(1), None), '%s.%s' % (module.__name__, m.group(1)))
-        self.assertIn('hosts/*/shell/agents/**', getattr(module, m.group(1)))
 
 
 if __name__ == '__main__':

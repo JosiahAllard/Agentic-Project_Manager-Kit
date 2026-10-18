@@ -54,12 +54,8 @@ coordinator profile lists the roles it actually has; use only those. Roles are n
 - **Reviewer model** (this is the rule's one home). The reviewer is pinned to the light tier
   at high effort; its model follows the tier of the role that built the branch.
   The first row that fits:
-  1. A changed path matches a strict landing path (`STRICT_DEFAULTS` in
-     `<kit>/kitlib/gate/strict_defaults.py`: guard, lock, gate, proc and hook code, agent
-     definitions, role and skill content) -> raise to strong, whoever built it: landing refuses a
-     strict branch whose reviewer ran on a weaker model (`<kit>/docs/gate.md` "Strict paths").
-  2. Built by strong-worker, senior-worker or deep-worker -> raise to strong.
-  3. Built by worker or weak-worker -> no override: light as pinned. You may raise to strong for a
+  1. Built by strong-worker or deep-worker -> raise to strong.
+  2. Built by worker or weak-worker -> no override: light as pinned. You may raise to strong for a
      risk you name in status, never must.
 
   A light reviewer's "blocking" claim is verified before it holds a landing: read the cited code
