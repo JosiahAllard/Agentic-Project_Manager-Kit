@@ -233,6 +233,27 @@ class Cli(StoreCase):
         self.assertEqual(shown["wanted_division"]["medium_cores"], 1)
         self.assertEqual(self.call("division", "--default", owner=True)[0], 0)
 
+    def test_division_on_a_failed_look_says_why_it_is_not_in_force(self):
+        """A look that could not read the gpus is never adopted, idle or not: `division --set`
+        gives that reason, not that the division applies once nothing is live or queued."""
+        self.layout()
+        with open(self.hw_path, "w", encoding="utf-8") as f:
+            json.dump(dict(self.hw, gpus=[], source=dict(self.hw["source"], gpu="none"),
+                           failed=["gpus"], problems=["Win32_VideoController: exit 1"]), f)
+        code, out, _ = self.call("division", "--set", '{"cpu_slots": 6}', owner=True)
+        self.assertEqual(code, 0)
+        first = out.splitlines()[0]
+        self.assertIn("the gpus could not be read (Win32_VideoController: exit 1)", first)
+        self.assertNotIn("applies once nothing is live", out)
+
+    def test_division_under_a_live_run_applies_once_idle(self):
+        self.layout()
+        self.live_record("r-20261006T120000Z-abcdef")
+        code, out, _ = self.call("division", "--set", '{"cpu_slots": 6}', owner=True)
+        self.assertEqual(code, 0)
+        self.assertIn("division written; it applies once nothing is live or queued",
+                      out.splitlines()[0])
+
     def test_top_is_the_owners(self):
         rid = "r-20261006T120000Z-abcdef"
         code, _, err = self.call("top", rid, agent=True)

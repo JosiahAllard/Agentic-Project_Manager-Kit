@@ -60,6 +60,14 @@ def hold_line(h):
         h.get("start_local"), h.get("end_local"), ": " + h["note"] if h.get("note") else "", extra)
 
 
+def waits_for_idle(pending):
+    """Whether layout.in_force's pending text is a change that is adopted once no run is live or
+    queued. Only those texts say "once no run is live or queued"; any other (a look at the
+    hardware that failed) is not adopted when the machine is idle either, so its own reason is
+    shown in place of the line that the new layout applies then."""
+    return "once no run is live or queued" in (pending or "")
+
+
 def render(snap):
     """The `status` text for snapshot snap."""
     out = []
@@ -73,11 +81,7 @@ def render(snap):
                    L["gpus"], L["gpu_slots"], L["agent_cap"], L["half"]["cpu"], L["half"]["gpu"],
                    "; WARNING: " + L["warning"] if L.get("warning") else ""))
     why = L["hardware_change"]["pending"]
-    # layout.in_force's pending text says why the wanted layout is not in force. Only a change
-    # that waits for an idle machine says "once no run is live or queued"; any other (a look at
-    # the hardware that failed) is not adopted when the machine is idle either, so its reason is
-    # shown in place of the line that the new layout applies then.
-    if why and "once no run is live or queued" not in why:
+    if why and not waits_for_idle(why):
         out.append("layout not adopted: %s" % why)
     elif L["hardware_change"]["changed"]:
         out.append("hardware or division changed: the new layout applies once nothing is live or "

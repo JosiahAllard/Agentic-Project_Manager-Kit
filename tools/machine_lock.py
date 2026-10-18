@@ -420,6 +420,8 @@ def cmd_division(a, store):
         r = api.set_division(actor(a, store), None if a.default else a.set, store)
         code = api_result(r, lambda res: "division written; %s" % (
             "in force now" if res["applied"] else
+            "not in force: %s" % res["pending"]
+            if res["pending"] and not st.waits_for_idle(res["pending"]) else
             "it applies once nothing is live or queued"))
         if code:
             return code
