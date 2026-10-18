@@ -207,7 +207,9 @@ _FALSE = ('', '0', 'false', 'no', 'off')
 _ID_SPLIT = re.compile(r'([0-9]+)')
 _NAME = re.compile(r'[\x21-\x7e]+(?: [\x21-\x7e]+)*')
 _SURROGATE = re.compile('[\ud800-\udfff]')     # a lone one: half a character
-_REF_SHAPED = re.compile(r'[QMTPSAR]-\d+\Z', re.I)   # a hub item's id or a ruling's ("Pages")
+# A hub item's id or a ruling's anywhere in a page id ("Pages"): hubvalidate._REF's pattern, plus
+# A and R, searched, so neither `plan-Q-1` nor `Q-1.v2` holds a ref a reader would follow.
+_REF_SHAPED = re.compile(r'(?<![A-Za-z0-9])[QMTPSAR]-\d+(?![A-Za-z0-9])', re.I)
 PAGE_HTML_MAX = pagecheck.MAX_BYTES
 
 
@@ -1355,9 +1357,10 @@ def pages_publish(api, req):
     why = schema.check_id(doc_id)
     if why:
         raise _invalid(why, 'id')
-    if _REF_SHAPED.match(doc_id):
-        raise _invalid('a page id cannot be shaped like a hub item or a ruling (%s): a ref that '
-                       'names it would be read as that item' % doc_id, 'id')
+    shaped = _REF_SHAPED.search(doc_id)
+    if shaped:
+        raise _invalid('a page id cannot hold a hub item\'s or a ruling\'s id (%s holds %s): a ref '
+                       'that names it would be read as that item' % (doc_id, shaped.group()), 'id')
     refs = _typed(b, 'refs', (list,), 'a list of strings')
     if refs is not None and not all(isinstance(r, str) for r in refs):
         raise _invalid('refs must be a list of strings', 'refs')

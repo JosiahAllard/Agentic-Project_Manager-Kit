@@ -10,6 +10,7 @@ import tempfile
 import threading
 import unittest
 
+from kitlib import hubvalidate
 from kitlib.hubsite import api, approvals, todosteps
 from kitlib.hubsite.api import AGENT, BASE, OWNER
 from kitlib.hubsite.store import HubError, Store
@@ -750,15 +751,27 @@ class PagesTest(ApiCase):
                              {'id': 'bad', 'title': 't', 'html': html})
 
     def test_ids_shaped_like_items_or_rulings_are_refused(self):
-        for doc_id in ('Q-1', 'q-001', 'M-2', 'T-3', 'P-4', 'S-5', 'A-6', 'R-21'):
+        for doc_id in ('Q-1', 'q-001', 'M-2', 'T-3', 'P-4', 'S-5', 'A-6', 'R-21',
+                       'plan-Q-1', 'Q-1.v2', 'R-21-plan', 'x_T-3', 'notes.M-12.draft'):
             with self.subTest(id=doc_id):
-                self.refused('invalid', 'id', 'POST', '/pages', AGENT,
-                             {'id': doc_id, 'title': 't', 'html': PAGE})
+                obj = self.refused('invalid', 'id', 'POST', '/pages', AGENT,
+                                   {'id': doc_id, 'title': 't', 'html': PAGE})
+                self.assertIn('holds', obj['error']['message'])
         for doc_id in ('../x', 'con', 'a b', ''):
             with self.subTest(id=doc_id):
                 self.refused('invalid', 'id', 'POST', '/pages', AGENT,
                              {'id': doc_id, 'title': 't', 'html': PAGE})
-        self.assertEqual(self.publish('R-21-plan')[0], 200)
+        # a letter and digits glued to more letters or digits is no ref (hubvalidate._REF)
+        for doc_id in ('plan-1', 'XQ-1', 'Q-1x', 'v2-plan', 'q1-notes'):
+            with self.subTest(id=doc_id):
+                self.assertEqual(self.publish(doc_id)[0], 200)
+
+    def test_every_ref_the_validator_finds_in_an_id_is_refused(self):
+        for doc_id in ('plan-Q-1', 'Q-1.v2', 'a.P-7', 'S-9_b'):
+            with self.subTest(id=doc_id):
+                self.assertTrue(hubvalidate._REF.search(doc_id))
+                self.refused('invalid', 'id', 'POST', '/pages', AGENT,
+                             {'id': doc_id, 'title': 't', 'html': PAGE})
 
     def test_refused_fields(self):
         for name in ('at', 'bytes', 'via', 'status', 'version'):

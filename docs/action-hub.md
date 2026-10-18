@@ -402,8 +402,9 @@ An agent's document: `pages/<id>` is its card, `page_html/<id>` = {html} its bod
 `summary`, `refs` (a list of ids), `at` and the store's own `updated_at`, each as text, and orders
 the list by `updated_at`, else `at`, newest first (`pageRows` in `kitlib/hubsite/web/index.html`).
 The ids have no prefix: the store assigns none (`Store.add` refuses `pages`); the publisher names
-one, and an id shaped like a hub item or a ruling (`Q-12`, `R-3`) is refused, so a ref that names
-a page is never read as an item.
+one, and an id that holds a hub item's or a ruling's id anywhere, as `kitlib.hubvalidate`'s ref
+pattern finds one (`Q-12`, `R-3`, `plan-Q-1`, `Q-1.v2`), is refused (`_REF_SHAPED` in
+`kitlib/hubsite/api.py`), so a ref that names a page is never read as an item.
 
 The routes ("Pages" in the `kitlib/hubsite/api.py` docstring):
 
