@@ -1352,6 +1352,54 @@ class WriteCase(VerbCase):
         self.assertIn('cannot read the steps file', err)
         self.assertEqual(len(self.direct('/todos')['items']), 1)
 
+    def test_a_question_is_edited_and_withdrawn_by_its_asker(self):
+        self.ok('questions', 'add', '--title', 'which way', '--from', 'pm', '--urgent',
+                '--option', 'left::go left')
+        context = self.file('context.md', 'new context\n')
+        self.assertEqual(self.ok('questions', 'edit', 'Q-1000', '--from', 'pm', '--if-version',
+                                 '1', '--title', 'which road', '--context-file', context,
+                                 '--option', 'up::go up', '--option', 'down::go down',
+                                 '--recommended', '1', '--refs', 'B-3', '--no-urgent'),
+                         ['EDITED Q-1000'])
+        doc = self.direct('/questions')['items'][0]
+        self.assertEqual((doc['title'], doc['context'], [o['label'] for o in doc['options']],
+                          doc['recommended'], doc['refs'], doc['urgent'], doc['version']),
+                         ('which road', 'new context\n', ['up', 'down'], 1, ['B-3'], False, 2))
+        err = self.refused('questions', 'edit', 'Q-1000', '--from', 'someone', '--if-version',
+                           '2', '--title', 'x')
+        self.assertTrue(err.startswith('REFUSED forbidden: '), err)
+        err = self.refused('questions', 'withdraw', 'Q-1000', '--from', 'pm', '--if-version', '1')
+        self.assertTrue(err.startswith('REFUSED conflict: '), err)
+        self.assertEqual(self.ok('questions', 'withdraw', 'Q-1000', '--from', 'pm',
+                                 '--if-version', '2'), ['WITHDRAWN Q-1000'])
+        self.assertEqual(self.direct('/questions?status=all')['items'], [])
+
+    def test_a_todo_is_edited_and_withdrawn_by_its_creator(self):
+        self.ok('todos', 'add', '--title', 'rotate', '--command', 'tool one', '--from', 'coord')
+        self.assertEqual(self.ok('todos', 'edit', 'T-001', '--from', 'coord', '--if-version', '1',
+                                 '--title', 'rotate the key', '--detail', 'soon', '--command',
+                                 'tool two', '--repo', 'kit', '--refs', 'B-1', '--urgent'),
+                         ['EDITED T-001'])
+        doc = self.direct('/todos')['items'][0]
+        self.assertEqual((doc['title'], doc['detail'], doc['commands'], doc['repo'], doc['refs'],
+                          doc['urgent']),
+                         ('rotate the key', 'soon', ['tool two'], 'kit', ['B-1'], True))
+        err = self.refused('todos', 'withdraw', 'T-001', '--from', 'pm', '--if-version', '2')
+        self.assertTrue(err.startswith('REFUSED forbidden: '), err)
+        self.assertEqual(self.ok('todos', 'withdraw', 'T-001', '--from', 'coord',
+                                 '--if-version', '2'), ['WITHDRAWN T-001'])
+        self.assertEqual(self.direct('/todos?status=all')['items'], [])
+
+    def test_edit_and_withdraw_need_from_and_a_version(self):
+        for argv in (('questions', 'edit', 'Q-1000', '--if-version', '1', '--title', 't'),
+                     ('questions', 'edit', 'Q-1000', '--from', 'pm', '--title', 't'),
+                     ('questions', 'withdraw', 'Q-1000', '--from', 'pm'),
+                     ('questions', 'withdraw', 'Q-1000', '--if-version', '1'),
+                     ('todos', 'edit', 'T-001', '--from', 'pm', '--title', 't'),
+                     ('todos', 'withdraw', 'T-001', '--if-version', '1')):
+            code, out, err = self.run_cli(*(argv + ('--port', self.port)))
+            self.assertEqual((code, out), (2, ''), argv)
+
     def test_stories_are_submitted_set_and_withdrawn(self):
         story = self.file('story.md', 'As the owner I want it.\n')
         self.assertEqual(self.ok('stories', 'add', '--repo', 'kit', '--title', 'a verb',

@@ -58,6 +58,9 @@ _ASK_FROM = {"type": "string", "description": "The session the answer goes back 
 _FOR = {"type": "string", "description": "Only the pending items for this session key: your own "
                                          "launcher session key, or pm (the PM's items and every "
                                          "answered question). Absent: every pending item."}
+_CREATOR = {"type": "string", "description": "The from the item was added with (pm when it was "
+                                             "added without one). All agents share one token, "
+                                             "so this is a check against mistakes."}
 _REFS = {"type": "array", "items": {"type": "string"},
          "description": "Ids of other hub documents this one names."}
 _URGENT = {"type": "boolean"}
@@ -72,8 +75,9 @@ def _one_of(values, what):
     return {"type": "string", "enum": list(values), "description": what}
 
 
-# name -> (description, input schema, HTTP method, path below hubapi.BASE, the route's role in
-# hubapi.ROUTES). AgentClient carries the agent's token whatever the role says.
+# name -> (description, input schema, HTTP method, path below hubapi.BASE, the role the tool
+# calls as: ANY for a read, AGENT for a write, the route's role in hubapi.ROUTES being AGENT or
+# ANY). AgentClient carries the agent's token whatever the role says.
 # A `{name}` in the path is filled from the argument of that name; every other argument is the
 # query of a GET or the body of a POST.
 TOOLS = {
@@ -147,6 +151,38 @@ TOOLS = {
     "hub_todo_ack": (
         "Marks an owner's to-do as read by the PM (POST /todos/<id>/ack).",
         _obj({"id": _ID, "if_version": _PIN}, ["id"]), "POST", "/todos/{id}/ack", AGENT),
+    "hub_question_edit": (
+        "Changes an open question you asked (POST /questions/<id>/edit): the fields given "
+        "replace the old ones (options as a whole list). Refused (forbidden) unless from is the "
+        "question's own (pm when it has none); refused (conflict) once it is answered.",
+        _obj({"id": _ID, "from": _CREATOR, "if_version": _PIN, "title": {"type": "string"},
+              "context": {"type": "string"},
+              "options": {"type": "array", "items": {"type": "object"},
+                          "description": "The choices: [{label, description}]."},
+              "recommended": {"type": "integer", "description": "The index of the option you "
+                                                                "recommend."},
+              "refs": _REFS, "urgent": _URGENT}, ["id", "from", "if_version"]),
+        "POST", "/questions/{id}/edit", AGENT),
+    "hub_question_withdraw": (
+        "Removes an open question you asked (POST /questions/<id>/delete): it leaves the Action "
+        "Hub and the store. Refused as hub_question_edit is.",
+        _obj({"id": _ID, "from": _CREATOR, "if_version": _PIN}, ["id", "from", "if_version"]),
+        "POST", "/questions/{id}/delete", AGENT),
+    "hub_todo_edit": (
+        "Changes an open to-do you added (POST /todos/<id>/edit): the fields given replace the "
+        "old ones (commands as a whole list) and are judged by hub_todo_add's rules. Refused "
+        "(forbidden) unless from is the to-do's own (pm when it has none); refused (conflict) "
+        "once it is done.",
+        _obj({"id": _ID, "from": _CREATOR, "if_version": _PIN, "title": {"type": "string"},
+              "detail": {"type": "string"}, "commands": {"type": "array",
+                                                         "items": {"type": "string"}},
+              "repo": _REPO, "refs": _REFS, "urgent": _URGENT}, ["id", "from", "if_version"]),
+        "POST", "/todos/{id}/edit", AGENT),
+    "hub_todo_withdraw": (
+        "Removes an open to-do you added (POST /todos/<id>/delete): it leaves the Action Hub and "
+        "the store. Refused as hub_todo_edit is.",
+        _obj({"id": _ID, "from": _CREATOR, "if_version": _PIN}, ["id", "from", "if_version"]),
+        "POST", "/todos/{id}/delete", AGENT),
     "hub_story_set": (
         "Moves an owner's story on (POST /stories/<id>): status review, questions, added or "
         "declined, with the reviewer, a note, the backlog id or a closing note.",
@@ -326,6 +362,16 @@ class Server:
         except hubapi.HubError as e:
             raise ToolError(e.code, e.message, e.field)
         return self._route("hub_todo_add", a)
+
+    def _t_hub_todo_edit(self, a):
+        """The changed text is judged here first as the hub judges it (api.todos_edit), so an
+        edit it refuses never reaches the hub."""
+        try:
+            hubapi.todo_steps({k: v for k, v in a.items()
+                               if k not in ("id", "from", "if_version")}, judge=True)
+        except hubapi.HubError as e:
+            raise ToolError(e.code, e.message, e.field)
+        return self._route("hub_todo_edit", a)
 
     # ---------------------------------------------------------------- JSON-RPC
     def handle(self, msg):

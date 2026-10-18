@@ -111,6 +111,13 @@ the server alone decides what a role may do.
                                                      (default pm), refused when the hub does
                                                      not know it
   hub.py questions log Q-1 <ruling id> --if-version V        `LOGGED Q-1 <ruling id>`
+  hub.py questions edit Q-1 --from KEY --if-version V [--title T] [--context-file F]
+        [--option "label::description" ...] [--recommended N] [--refs ID ...]
+        [--urgent | --no-urgent]                     `EDITED Q-1`; an --option list replaces
+                                                     the old one
+  hub.py questions withdraw Q-1 --from KEY --if-version V    `WITHDRAWN Q-1`
+                                                     edit and withdraw: an open question whose
+                                                     from is KEY (pm when it has none)
   hub.py answer Q-1 --choice N|other [--note TEXT] [--if-version V]     (owner)
                                                      `ANSWERED Q-1 <label>`
   hub.py todos [--status S] [--repo R]              `T-1 open [repo] title` for each
@@ -122,6 +129,11 @@ the server alone decides what a role may do.
                                                      (docs/hub-mcp.md "To-do steps")
   hub.py todos done T-1 [--undo] [--if-version V]   (owner) `DONE T-1`, `REOPENED T-1`
   hub.py todos ack T-1                              `ACKED T-1`
+  hub.py todos edit T-1 --from NAME --if-version V [--title T] [--detail D] [--command C ...]
+        [--repo R] [--refs ID ...] [--urgent | --no-urgent]     `EDITED T-1`
+  hub.py todos withdraw T-1 --from NAME --if-version V      `WITHDRAWN T-1`
+                                                     edit and withdraw: an open to-do whose
+                                                     from is NAME (pm when it has none)
   hub.py stories [--status S] [--repo R]            `S-1 v2 submitted [repo] title` for each
   hub.py stories add --repo R --title T --story-file F [--urgent]       (owner) `SUBMITTED S-2`
   hub.py stories set S-1 --status review|questions|added|declined [--reviewer NAME]
@@ -165,9 +177,9 @@ the server alone decides what a role may do.
       a finding is an error.
 
 `--choice N` and `--recommended N` are the option's place in the question's list, counted from
-0 as the api counts it. `questions log` and `stories set` need --if-version V: the version of the
-document the caller read and decided on, which the `questions` and `stories` lines show as `v2`
-and --json as `version`. Without it the verb is a usage error and asks nothing; with a version
+0 as the api counts it. `questions log`, `stories set` and each `edit` and `withdraw` need
+--if-version V: the version of the document the caller read and decided on, which the `questions`
+and `stories` lines show as `v2` and --json (`todos --json` too) as `version`. Without it the verb is a usage error and asks nothing; with a version
 the document no longer has, the server refuses the write (`REFUSED conflict`).
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.hubsite, prints and exits.
@@ -287,6 +299,15 @@ def _pins(p, required=False):
                    required=required, help='refuse unless the document has this version')
 
 
+def _creator(p, metavar):
+    """The id, --from and --if-version of a creator's edit or withdraw: the hub checks --from
+    against the item's own (kitlib.hubsite.api _creator)."""
+    p.add_argument('id')
+    p.add_argument('--from', dest='who', required=True, metavar=metavar,
+                   help='the from the item was added with (pm when it was added without one)')
+    _pins(p, required=True)
+
+
 def _repo(p):
     """--repo of an `add` whose verb lists by --repo too. No default is set, as in _asks: the
     sub-verb's own would put None over a --repo given before `add`. Read it with getattr."""
@@ -310,8 +331,8 @@ def _leaf(subs, name, what):
 
 def _client_verbs(sub):
     S = hubvalidate.STATUSES
-    q = _listed(sub, 'questions', 'list the questions; add: ask one; log: record its ruling',
-                S['questions'])
+    q = _listed(sub, 'questions', 'list the questions; add: ask one; log: record its ruling; '
+                'edit, withdraw: change or remove one you asked', S['questions'])
     x = _leaf(q, 'add', 'ask the owner a question')
     x.add_argument('--title', required=True)
     _repo(x)
@@ -330,6 +351,19 @@ def _client_verbs(sub):
     x.add_argument('id')
     x.add_argument('ruling', metavar='ruling-id')
     _pins(x, required=True)
+    x = _leaf(q, 'edit', 'change an open question you asked')
+    _creator(x, 'KEY')
+    x.add_argument('--title')
+    x.add_argument('--context-file', dest='context_file', metavar='F',
+                   help='a UTF-8 file with the new context')
+    x.add_argument('--option', dest='options', action='append', type=_option, default=[],
+                   metavar='"label::description"',
+                   help='an answer to choose (repeatable; the list given replaces the old one)')
+    x.add_argument('--recommended', type=_count, metavar='N',
+                   help='the place of the recommended option (counts from 0)')
+    x.add_argument('--refs', nargs='+', metavar='ID')
+    x.add_argument('--urgent', action=argparse.BooleanOptionalAction, default=None)
+    _creator(_leaf(q, 'withdraw', 'remove an open question you asked'), 'KEY')
 
     x = _asks(sub.add_parser('answer', help='answer a question (the owner)'))
     x.add_argument('id')
@@ -339,7 +373,7 @@ def _client_verbs(sub):
     x.add_argument('--note')
     _pins(x)
 
-    t = _listed(sub, 'todos', 'list the to-dos; add, done, ack', S['todos'])
+    t = _listed(sub, 'todos', 'list the to-dos; add, done, ack, edit, withdraw', S['todos'])
     x = _leaf(t, 'add', 'add a to-do')
     x.add_argument('--title', required=True)
     x.add_argument('--detail')
@@ -359,6 +393,17 @@ def _client_verbs(sub):
     x.add_argument('--undo', action='store_true')
     _pins(x)
     _leaf(t, 'ack', 'say that the PM has seen a to-do').add_argument('id')
+    x = _leaf(t, 'edit', 'change an open to-do you added')
+    _creator(x, 'NAME')
+    x.add_argument('--title')
+    x.add_argument('--detail')
+    x.add_argument('--command', dest='commands', action='append', metavar='C',
+                   help='a command the to-do names (repeatable; the list given replaces the old '
+                        'one)')
+    x.add_argument('--repo', dest='edit_repo', metavar='R')
+    x.add_argument('--refs', nargs='+', metavar='ID')
+    x.add_argument('--urgent', action=argparse.BooleanOptionalAction, default=None)
+    _creator(_leaf(t, 'withdraw', 'remove an open to-do you added'), 'NAME')
 
     s = _listed(sub, 'stories', 'list the stories; add, set, withdraw', S['stories'])
     x = _leaf(s, 'add', 'submit a story (the owner)')
@@ -876,7 +921,25 @@ def _questions(a, stop):
         got = hub.post(_one('questions', a) + '/log', client.AGENT,
                        {'ruling': a.ruling, 'if_version': a.if_version})
         return _wrote(a, got, 'LOGGED %s %s' % (got.get('id'), a.ruling))
+    if a.sub == 'edit':
+        context = _text_of(a.context_file, 'context') if a.context_file else None
+        got = hub.post(_one('questions', a) + '/edit', client.AGENT, _edits(a, _body(
+            title=a.title, context=context, options=a.options, recommended=a.recommended,
+            refs=a.refs)))
+        return _wrote(a, got, 'EDITED %s' % got.get('id'))
+    if a.sub == 'withdraw':
+        got = hub.post(_one('questions', a) + '/delete', client.AGENT, _edits(a, {}))
+        return _wrote(a, got, 'WITHDRAWN %s' % got.get('id'))
     return _list(a, 'questions', version=True)
+
+
+def _edits(a, body):
+    """The body of a creator's edit or withdraw: its fields, --from and --if-version, and
+    --urgent or --no-urgent when one was given (_body leaves a False out)."""
+    body.update({'from': a.who, 'if_version': a.if_version})
+    if getattr(a, 'urgent', None) is not None:
+        body['urgent'] = a.urgent
+    return body
 
 
 def _answer(a, stop):
@@ -905,6 +968,13 @@ def _todos(a, stop):
     if a.sub == 'ack':
         got = hub.post(_one('todos', a) + '/ack', client.AGENT)
         return _wrote(a, got, 'ACKED %s' % got.get('id'))
+    if a.sub == 'edit':
+        got = hub.post(_one('todos', a) + '/edit', client.AGENT, _edits(a, _body(
+            title=a.title, detail=a.detail, commands=a.commands, repo=a.edit_repo, refs=a.refs)))
+        return _wrote(a, got, 'EDITED %s' % got.get('id'))
+    if a.sub == 'withdraw':
+        got = hub.post(_one('todos', a) + '/delete', client.AGENT, _edits(a, {}))
+        return _wrote(a, got, 'WITHDRAWN %s' % got.get('id'))
     return _list(a, 'todos')
 
 

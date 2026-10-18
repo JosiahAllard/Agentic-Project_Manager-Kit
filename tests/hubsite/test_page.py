@@ -1003,6 +1003,43 @@ class DomTest(unittest.TestCase):
         self.assertEqual(got["refused"], "Not saved: not submitted.")
         self.assertEqual(got["sent"], ["POST /stories/S-1/withdraw"] * 2)
 
+    def test_an_open_question_is_withdrawn_and_an_agents_open_to_do_deleted_but_never_edited(self):
+        lists = dict(LISTS, todos=dict(LISTS["todos"], **{
+            "T-3": {"status": "done", "title": "finished", "from": "pm", "version": 2, "added_at": NOW}}),
+            questions=dict(LISTS["questions"], **{
+                "Q-2": {"status": "answered", "title": "said", "version": 2, "asked_at": NOW,
+                        "options": [{"label": "one"}], "answer": {"choice": 0, "label": "one", "at": NOW}}}))
+        got = dom("""
+            await start();
+            await click($("#tabs [data-f=answered]"));
+            const out = { answered: !!$("#q-Q-2") && !button($("#q-Q-2"), "Withdraw") };
+            await click($("#tabs [data-f=open]"));
+            server.route = c => c.path === "/questions/Q-1/delete" ? { status: 409, body: { ok: false, error: { code: "conflict", message: "changed", field: "status" } } } : undefined;
+            const w = button($("#q-Q-1"), "Withdraw");
+            await click(w);
+            out.armed = text(w);
+            await click(w);
+            out.refused = text($("#q-Q-1 .act .status"));
+            server.route = null;
+            await click(button($("#q-Q-1"), "Withdraw")); await click(button($("#q-Q-1"), "Confirm withdraw"));
+            await click($("#sections [data-s=todo]"));
+            out.theirs = { del: !!button($("#todo-T-2"), "Delete"), edit: !!button($("#todo-T-2"), "Edit") };
+            out.mine = { del: !!button($("#todo-T-1"), "Delete"), edit: !!button($("#todo-T-1"), "Edit") };
+            await click(button($("#todo-T-2"), "Delete")); await click(button($("#todo-T-2"), "Confirm delete"));
+            await click($("#ttabs [data-tf=done]"));
+            out.done = { del: !!button($("#todo-T-3"), "Delete"), edit: !!button($("#todo-T-3"), "Edit") };
+            out.sent = calls.filter(c => c.path.endsWith("/delete")).map(c => c.method + " " + c.path + " " + JSON.stringify(c.body));
+            return out;
+        """, snapshot(collections=lists))
+        self.assertTrue(got["answered"])                                   # an answered question is not withdrawn
+        self.assertEqual((got["armed"], got["refused"]), ("Confirm withdraw", "Not withdrawn: changed."))
+        self.assertEqual(got["theirs"], {"del": True, "edit": False})      # an agent's to-do: the owner deletes, never edits
+        self.assertEqual(got["mine"], {"del": True, "edit": True})
+        self.assertEqual(got["done"], {"del": False, "edit": False})       # an agent's done to-do is the owner's record
+        # pinned to the version each card shows, so an item changed since it was drawn is refused
+        self.assertEqual(got["sent"], ['POST /questions/Q-1/delete {"if_version":1}'] * 2
+                         + ['POST /todos/T-2/delete {"if_version":1}'])
+
     def test_a_follow_up_question_and_its_story_jump_to_each_other(self):
         lists = {"stories": {"S-1": {"status": "questions", "title": "mine", "story": "x", "repo": "alpha", "version": 1}},
                  "questions": {"Q-1": dict(LISTS["questions"]["Q-1"], story="S-1")}}

@@ -23,8 +23,9 @@ ENTRY = os.path.join(REPO, "mcp", "hub_server.py")
 PINNED = ("hub_answer", "hub_todo_done", "hub_story_submit", "hub_to_pm_send")
 READS = {"hub_pending", "hub_wait", "hub_list", "hub_inbox", "hub_backlog", "hub_completed",
          "hub_view", "hub_health"}
+CREATOR = {"hub_question_edit", "hub_question_withdraw", "hub_todo_edit", "hub_todo_withdraw"}
 WRITES = {"hub_ask", "hub_question_log", "hub_todo_add", "hub_todo_ack", "hub_story_set",
-          "hub_to_pm_reply", "hub_inbox_post"}
+          "hub_to_pm_reply", "hub_inbox_post"} | CREATOR
 
 
 class Settings(object):
@@ -93,7 +94,8 @@ class Pinned(Case):
 
     def test_destructive_hint_is_only_on_tools_that_change_an_existing_document(self):
         additive = {"hub_ask", "hub_todo_add", "hub_inbox_post"}
-        changes = {"hub_question_log", "hub_todo_ack", "hub_story_set", "hub_to_pm_reply"}
+        changes = {"hub_question_log", "hub_todo_ack", "hub_story_set",
+                   "hub_to_pm_reply"} | CREATOR
         self.assertEqual(additive | changes, WRITES)
         for t in self.server().tool_list():
             ann = t["annotations"]
@@ -293,6 +295,50 @@ class TodoSteps(Case):
         self.assertEqual(self.ask.calls[-1]["body"], {"title": "t", "commands": ["x"]})
 
 
+class Creator(Case):
+    """The creator's edit and withdraw tools: from and if_version are required, the to-do edit is
+    judged before any call, and each posts to its route."""
+
+    def test_from_and_if_version_are_required(self):
+        for name in sorted(CREATOR):
+            for args, field in (({"id": "X-1", "if_version": 1}, "from"),
+                                ({"id": "X-1", "from": "pm"}, "if_version")):
+                with self.subTest(name=name, field=field):
+                    payload, is_error = self.rpc(self.server(), name, args)
+                    self.assertTrue(is_error)
+                    self.assertEqual((payload["error"]["code"], payload["error"]["field"]),
+                                     ("invalid", field))
+        self.assertEqual(self.ask.calls, [])
+
+    def test_each_posts_its_route_with_the_agent_token(self):
+        for name, path in (("hub_question_edit", "/questions/Q-1/edit"),
+                           ("hub_question_withdraw", "/questions/Q-1/delete"),
+                           ("hub_todo_edit", "/todos/Q-1/edit"),
+                           ("hub_todo_withdraw", "/todos/Q-1/delete")):
+            with self.subTest(name=name):
+                args = {"id": "Q-1", "from": "pm", "if_version": 2}
+                if name.endswith("edit"):
+                    args["title"] = "t"
+                payload, is_error = self.rpc(self.server(), name, args)
+                self.assertFalse(is_error, payload)
+                call = self.ask.calls[-1]
+                self.assertEqual((call["method"], call["path"], call["token"]),
+                                 ("POST", api.BASE + path, self.agent))
+                self.assertEqual(call["body"], {k: v for k, v in args.items() if k != "id"})
+
+    def test_a_to_do_edit_the_hub_would_refuse_never_reaches_it(self):
+        for args, field in (({"commands": ["git worktree add x"]}, "commands"),
+                            ({"detail": "Open it and apply the change."}, "detail")):
+            with self.subTest(args=args):
+                payload, is_error = self.rpc(self.server(), "hub_todo_edit",
+                                             dict(args, id="T-1", **{"from": "pm",
+                                                                     "if_version": 1}))
+                self.assertTrue(is_error)
+                self.assertEqual((payload["error"]["code"], payload["error"]["field"]),
+                                 ("invalid", field))
+        self.assertEqual(self.ask.calls, [])
+
+
 class Errors(Case):
     def test_a_refusal_comes_back_as_the_hubs_error(self):
         self.ask.answer = (409, api.error_body("conflict", "Q-1 changed", "if_version"))
@@ -430,6 +476,36 @@ class Live(httpfix.ListenerCase):
         self.assertEqual(doc["commands"], ["first"] + todosteps.render(steps))
         self.assertEqual(doc["detail"], "open C:\\w\\a.txt at line 3 in Notepad++")
         self.assertNotIn("steps", doc)
+        self.assertEqual(self.errors(), [])
+
+    def test_the_creator_edits_and_withdraws_through_the_listener(self):
+        payload, is_error = self.mcp.call("hub_ask", {"title": "which?",
+                                                      "options": httpfix.OPTIONS})
+        self.assertFalse(is_error, payload)
+        qid = payload["id"]
+        payload, is_error = self.mcp.call("hub_question_edit", {"id": qid, "from": "someone",
+                                                                "if_version": 1, "title": "x"})
+        self.assertTrue(is_error)
+        self.assertEqual((payload["status"], payload["error"]["code"]), (403, "forbidden"))
+        payload, is_error = self.mcp.call("hub_question_edit", {"id": qid, "from": "pm",
+                                                                "if_version": 1, "title": "x"})
+        self.assertFalse(is_error, payload)
+        self.assertEqual(self.store.docs("questions")[qid]["title"], "x")
+        payload, is_error = self.mcp.call("hub_question_withdraw",
+                                          {"id": qid, "from": "pm", "if_version": 2})
+        self.assertFalse(is_error, payload)
+        self.assertNotIn(qid, self.store.docs("questions"))
+        payload, is_error = self.mcp.call("hub_todo_add", {"title": "t", "commands": ["dir"],
+                                                           "from": "coord"})
+        tid = payload["id"]
+        payload, is_error = self.mcp.call("hub_todo_edit", {"id": tid, "from": "coord",
+                                                            "if_version": 1, "commands": ["ver"]})
+        self.assertFalse(is_error, payload)
+        self.assertEqual(self.store.docs("todos")[tid]["commands"], ["ver"])
+        payload, is_error = self.mcp.call("hub_todo_withdraw",
+                                          {"id": tid, "from": "coord", "if_version": 2})
+        self.assertFalse(is_error, payload)
+        self.assertNotIn(tid, self.store.docs("todos"))
         self.assertEqual(self.errors(), [])
 
     def test_inbox_and_health_read_through_the_listener(self):
