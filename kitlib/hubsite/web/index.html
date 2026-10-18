@@ -746,15 +746,15 @@ button.danger{color:var(--warn)}
     ed.theirs.replaceChildren(el("div", {class:"ans"}, el("b", {text: "The hub server now holds:"}), theirs(cur))); ed.theirs.hidden = false;
     return "Not saved: this item changed on the hub server while you were editing. Your text is kept; press Save again to put it in place of what the server holds now.";
   }
-  // A delete asks twice: the first press arms the button, the second sends.
-  function delButton(path, st){
-    const del = el("button", {class:"link danger", type:"button", text:"Delete"});
+  // A delete asks twice: the first press arms the button, the second sends. `label` names it (Withdraw for a question).
+  function delButton(path, st, label = "Delete", done = "deleted"){
+    const del = el("button", {class:"link danger", type:"button", text: label});
     let armed = false;
     del.addEventListener("click", async () => {
-      if (!armed) { armed = true; del.textContent = "Confirm delete"; return; }
+      if (!armed) { armed = true; del.textContent = "Confirm " + label.toLowerCase(); return; }
       del.disabled = true;
       try { await write(path, {}); }
-      catch (err) { del.disabled = false; armed = false; del.textContent = "Delete"; st.className = "status err"; st.textContent = "Not deleted: " + why(err) + "."; }
+      catch (err) { del.disabled = false; armed = false; del.textContent = label; st.className = "status err"; st.textContent = "Not " + done + ": " + why(err) + "."; }
     });
     return del;
   }
@@ -832,7 +832,8 @@ button.danger{color:var(--warn)}
     show([], lost, rows.map(t => drawn(todoCard, t)));
   }
 
-  // A to-do the owner wrote (from "you") is the owner's to mark urgent, edit and delete; anyone's can be ticked.
+  // A to-do the owner wrote (from "you") is the owner's to mark urgent, edit and delete; an agent's open one the owner
+  // can delete, never edit; anyone's can be ticked.
   function todoCard(t){
     const isDone = t.status === "done", mine = t.from === "you";
     const ed = mine ? state.todoEdit.get(t.id) : null;
@@ -870,6 +871,8 @@ button.danger{color:var(--warn)}
         catch (e) { urg.disabled = false; status.className = "status err"; status.textContent = "Not saved: " + why(e) + "."; }
       });
       body.append(el("div", {class:"act"}, urg, el("button", {class:"link", type:"button", text:"Edit", onclick: () => { state.todoEdit.set(t.id, { version: t.version }); render(); }}), delButton("/todos/" + seg(t.id) + "/delete", status)));
+    } else if (t.status === "open") {
+      body.append(el("div", {class:"act"}, delButton("/todos/" + seg(t.id) + "/delete", status)));
     }
     body.append(status);
     return el("article", {class: "t" + (isDone ? " done" : "") + (t.urgent ? " urgent" : ""), id: "todo-" + t.id}, box, body);
@@ -1312,6 +1315,8 @@ button.danger{color:var(--warn)}
       });
       const acts = el("div", {class:"act"}, btn, status);
       if (d.status === "answered") acts.append(el("button", {class:"link", type:"button", text:"Cancel", onclick: () => { state.editing.delete(d.id); clearDraft(d.id); said.delete(d.id); unread.delete(d.id); render(); }}));
+      // An open question the owner does not mean to answer is withdrawn: it leaves the hub.
+      else acts.append(delButton("/questions/" + seg(d.id) + "/delete", status, "Withdraw", "withdrawn"));
       parts.push(fs, note, acts);
     } else if (sent.has(d.id)) {
       parts.push(el("p", {class:"gone", role:"status", text: SENT_UNREAD}));
