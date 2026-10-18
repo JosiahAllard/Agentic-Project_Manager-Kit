@@ -4081,6 +4081,20 @@ SLEEP_WAIT_WHY = ('is a sleep-wait: it only pauses, and a pause in the foregroun
 SLEEP_WAIT_INSTEAD = 'until <condition>; do sleep 5; done'
 
 
+def py_unread(cmd, inv, w):
+    """Why python's stand-in write `w` (_python's here()) is one, or None for any other write: the
+    guard does not read its program as read-only, which is the reason a refusal gives (not a file
+    it names). The verdict is unchanged."""
+    if inv is None or not cm.PYTHON_RE.match(inv.name or '') or w.text != '.' or \
+            cmd.source[w.start:w.end] == '.':
+        return None
+    if inv.via == 'start-process':
+        return 'Start-Process hands python a command line the guard does not read'
+    if not inv.dyn and py_program(inv.name, inv.args)[0] == 'code':
+        return 'the guard does not read the code of that python -c as read-only'
+    return 'the guard does not read the program python is given'
+
+
 def sleep_refusal(d, cmd, role):
     """The main-checkout Decision `d` for a sleep-wait (sleep_wait), its reason saying so: same
     verdict and rule, the background wait as its alternative."""
@@ -4121,7 +4135,10 @@ def shell_writes(event, ctx, cmd, inv, cwd, role):
                 ctx.place(runs_in).kind not in (repo.MAIN, repo.UNKNOWN):
             continue                            # a target it cannot place, from a worktree or elsewhere
         sleep = sleep_wait(cmd, inv, w)
-        what = '`%s` writes %s' % (cmd.text, w.text if w.text != '.' else 'files in the directory it runs in')
+        unread = py_unread(cmd, inv, w)
+        what = '`%s` writes %s' % (cmd.text, w.text if w.text != '.' else 'files in the directory it runs in') \
+            if unread is None else \
+            'the directory `%s` runs in (counted as written: %s)' % (cmd.text, unread)
         # here() or ps_unread(): no word to aim
         stand_in = (w.text == '.' and cmd.source[w.start:w.end] != '.') or w.start == w.end
         part = any((x.start, x.end) == (w.start, w.end) and x.text != w.text for x in cmd.words)
