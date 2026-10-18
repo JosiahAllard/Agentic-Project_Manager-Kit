@@ -52,7 +52,7 @@ coordinator profile lists the roles it actually has; use only those. Roles are n
   explorer's or planner's answer that reads thin is asked once more raised to strong; say so in
   status.
 - **Reviewer model** (this is the rule's one home). The reviewer is pinned to the light tier
-  (Haiku on Claude) at high effort; its model follows the tier of the role that built the branch.
+  at high effort; its model follows the tier of the role that built the branch.
   The first row that fits:
   1. A changed path matches a strict landing path (`STRICT_DEFAULTS` in
      `<kit>/kitlib/gate/strict_defaults.py`: guard, lock, gate, proc and hook code, agent
