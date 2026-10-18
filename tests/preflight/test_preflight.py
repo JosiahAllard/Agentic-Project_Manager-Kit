@@ -364,8 +364,15 @@ class TheLinesAfterTheWorktrees(Fixture):
         wt = self.repo.worktree('y', 'x/y')
         self.assertNotIn('NOTE:', self.run_preflight(where=wt)[1])
 
-    def test_the_default_traps_line(self):
+    def test_the_default_traps_line_names_a_file_the_checkout_has(self):
+        os.makedirs(os.path.join(self.root, 'docs', 'ops'))
+        with open(os.path.join(self.root, 'docs', 'ops', 'gotchas.md'), 'w', encoding='utf-8') as fh:
+            fh.write('# Gotchas\n')
         self.assertEqual(self.line(self.run_preflight()[1], 'traps '), 'traps     ' + st.DEFAULT_TRAPS)
+
+    def test_no_default_traps_line_when_the_checkout_has_no_such_file(self):
+        """The kit itself has no docs/ops/gotchas.md: preflight must not send agents to read it."""
+        self.assertNotIn('\ntraps ', self.run_preflight()[1])
 
     def test_the_traps_line_comes_from_config(self):
         self.config(preflight={'traps': 'grep GOTCHA: in the files you change'})
@@ -433,7 +440,7 @@ class TheLinesAfterTheWorktrees(Fixture):
                          'config    WARN both ~/%s/%s (read) and ~/%s/%s (ignored) exist, DIFFERENT (keys: '
                          'ledger_repos) - retire the old folder (docs/kit-json.md "Moving the machine '
                          'config folder")' % (user.DIR_NAME, user.FILE_NAME, migration.OLD_DIR_NAME, user.FILE_NAME))
-        self.assertLess(out.index('\nconfig '), out.index('\ntraps '))
+        self.assertLess(out.index('\nconfig '), out.index('\nindex '))
 
 
 class TheLeftoversLine(Fixture):
@@ -699,7 +706,7 @@ class TheReportHooks(Fixture):
         code, out = self.run_preflight()
         self.assertEqual(code, 0, out)
         self.assertIn('NOT CHECKED - nope:lines: FileNotFoundError', self.line(out, 'hook '))
-        self.assertIn('traps ', out)                  # and preflight went on
+        self.assertIn('\nindex ', out)                # and preflight went on
 
     def test_a_raising_hook_is_one_not_checked_line(self):
         self.module('bad', 'def lines():\n    raise ValueError("simulated")\n')
