@@ -38,8 +38,8 @@ The units also get the home fence's marker (docs/test-tools.md "Home fence"): KI
 home folder this process resolves, unless the environment already carries one. The tools a test
 starts inherit it and refuse that home.
 No test child gets the session's kit binding: PM_KIT_ROOT, PM_KIT_RELEASE_ID, KIT_LIVE_ROOT and
-KIT_PINNED are dropped from its environment (KIT_SESSION_ENV), so a session's env cannot steer
-the suite.
+KIT_PINNED, PM_KIT_ROLE and PM_KIT_HOST are dropped from its environment (KIT_SESSION_ENV), so a
+session's env cannot steer the suite.
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls the library, prints, runs, exits.
 Exit codes: the unittest run's (0 passed or nothing selected, 1 failed); 2 USAGE or a refusal
 (git could not list the change - for --full too, unless --real-git - or --select with a
@@ -70,7 +70,8 @@ FULL = ['-m', 'unittest', 'discover', '-s', 'tests', '-t', '.']
 # kitlib.gate.pin KIT_PINNED (run live, never pin) and kitlib.pluginsource.live_root
 # KIT_LIVE_ROOT (the checkout a printed command names). Inherited, they would steer the code
 # under test toward the session's kit; a test that wants one sets it itself.
-KIT_SESSION_ENV = ('PM_KIT_ROOT', 'PM_KIT_RELEASE_ID', 'KIT_LIVE_ROOT', 'KIT_PINNED')
+KIT_SESSION_ENV = ('PM_KIT_ROOT', 'PM_KIT_RELEASE_ID', 'KIT_LIVE_ROOT', 'KIT_PINNED',
+                   'PM_KIT_ROLE', 'PM_KIT_HOST')
 
 
 class Parser(argparse.ArgumentParser):

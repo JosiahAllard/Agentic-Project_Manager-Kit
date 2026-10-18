@@ -276,11 +276,12 @@ MODULES = ['tests.a.test_m', 'tests.git.test_g', 'tests.gate.test_land_x', 'test
 
 class KitSessionEnvironment(unittest.TestCase):
     """No test child gets the session's kit binding (kit_tests KIT_SESSION_ENV): PM_KIT_ROOT,
-    PM_KIT_RELEASE_ID, KIT_LIVE_ROOT and KIT_PINNED are dropped from the pooled units', the --jobs
+    PM_KIT_RELEASE_ID, KIT_LIVE_ROOT, KIT_PINNED, PM_KIT_ROLE and PM_KIT_HOST are dropped from the pooled units', the --jobs
     1 process's, the real-git count child's and --list's loader's environment, while another
     variable passes and kit_tests' own process keeps them all."""
     SESSION = {'PM_KIT_ROOT': r'C:\session\kit', 'PM_KIT_RELEASE_ID': 'session-pin',
-               'KIT_LIVE_ROOT': r'C:\session\main', 'KIT_PINNED': 'live'}
+               'KIT_LIVE_ROOT': r'C:\session\main', 'KIT_PINNED': 'live',
+               'PM_KIT_ROLE': 'worker', 'PM_KIT_HOST': 'claude'}
     OTHER = 'KIT_TESTS_UNRELATED_MARK'
 
     def test_the_session_kit_binding_reaches_no_test_child(self):
