@@ -509,7 +509,9 @@ def gated(cfg, root, base, changed, chosen, kind, name, slug, log_dir, say, book
     first, so nothing the gate started runs on into the push or an undo.
     After the steps it says the run's console-window report (window_results), in a held `slot`
     too (its monitor stops there, before its daemons and tree are ended); `seen`, a dict when
-    given, gets `windows`: the windows as dicts, None when nothing was watched."""
+    given, gets `windows`: the windows as dicts, None when nothing was watched.
+    The lock run records the tree it tests (tested_tree; book's `tree`, Slot.note_tree for a held
+    slot): a branch's HEAD tree, a landing's merge tree, the daily full run's commit's tree."""
     checks, options = {}, {}
     if any(s.check for s in chosen):
         try:
@@ -525,8 +527,10 @@ def gated(cfg, root, base, changed, chosen, kind, name, slug, log_dir, say, book
                 'nothing ran' % (e.code,)])
     ctx = {'root': root, 'base': base, 'merged': merged, 'changed': list(changed),
            'options': options}
+    tree = tested_tree(root)
     if slot is not None:
         say('the gate runs in the slot the landing holds (run %s)' % slot.id)
+        slot.note_tree(tree)
         try:
             results = run_steps(slot.launcher, chosen, gate or cfg.section('gate'), ctx, log_dir,
                                 say, checks)
@@ -545,7 +549,7 @@ def gated(cfg, root, base, changed, chosen, kind, name, slug, log_dir, say, book
         slot.end_tree()
         return results, None
     try:
-        slot = lockrun.book(kind, name, slug, **dict(book_kw or {}, gate=True))
+        slot = lockrun.book(kind, name, slug, **dict(book_kw or {}, gate=True, tree=tree))
     except LockError as e:
         return None, lock_refusal(e)
     with slot:
@@ -555,6 +559,17 @@ def gated(cfg, root, base, changed, chosen, kind, name, slug, log_dir, say, book
         results += window_results(slot, say, seen)
         slot.release(0 if verdict(results)[0] and not nothing_ran(results) else 1, 'done')
     return results, None
+
+
+def tested_tree(root):
+    """The git tree hash of HEAD in `root` when its work tree is clean (no uncommitted or
+    untracked path), else None: a gate of uncommitted files tests no commit's tree. None too
+    when git cannot answer; the tree is a note on the lock run, never a reason to refuse."""
+    entries, _ = gitstatus.status(root)
+    if entries != []:
+        return None
+    tree, _ = refs.tree_of('HEAD', root)
+    return tree or None
 
 
 def window_results(slot, say, seen=None):
