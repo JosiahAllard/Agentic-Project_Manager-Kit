@@ -12,8 +12,7 @@ packet. The result is one JSON line on stdout, content-free:
                                                  proof the session read it)
   {"state": "uncertain"}                         a write was tried and did not plainly finish
 
-It mirrors optional/bridge/win/worker.py pipe_write with its own JSON-line parsing, so the hub
-never imports optional/.
+The hub's push and the optional bridge's Claude half both write through it (peer.write_once).
 """
 import ctypes
 from ctypes import wintypes as w

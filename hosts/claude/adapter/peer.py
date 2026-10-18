@@ -14,9 +14,14 @@ registry entry of its own and gets no receipt back: `written` means the bytes re
     is_pm(recipient)    the recipient is the PM's session (push sends the PM one message)
     resolve(recipient)  Target(folder, record, name, ambiguous), or None
   canonical_pipe(value) the lower-case pipe name the key file's name hashes; ValueError
-  build_packet(token, source_pipe, text)   the two frames, as bytes
+  sender_address(pipe)  the `from` address of a sender's pipe
+  message_frames(token, sender, text, msg_id, mode)   the two frames, as objects (unchecked)
+  build_packet(token, source_pipe, text)   the two frames, checked, as bytes
   write_once(pipe, pid, creation, packet, timeout)   one write by the hidden helper
                         (peer_worker.py) in a kill-on-close job; the state
+
+The wire format and the write are here once: optional/bridge/hosts/claude (peer.py, sessions.py)
+imports canonical_pipe, sender_address, message_frames and write_once from this module.
 
 Resolution: a launcher key is its sessions.json name; `pm` is coordinators.json's pm_session_id
 matched against the record's sessionId, then the names PM_NAME and pm-session; anything else is
@@ -84,6 +89,22 @@ def source_pipe():
     return SOURCE_PREFIX + secrets.token_hex(8)
 
 
+def sender_address(pipe):
+    """The `from` address a frame names for a sender's pipe."""
+    return 'uds:' + quote(pipe, safe=':_/.-')
+
+
+def message_frames(token, sender, text, msg_id, mode='prompting'):
+    """The wire format, as two objects: the auth frame, then the user frame carrying text as a
+    cross-session message from `sender` (sender_address) in `mode`. Unchecked: the caller
+    validates and encodes (build_packet here, the optional bridge's Claude half)."""
+    frame = {'msgV': 1, 'msg_id': msg_id, 'uuid': msg_id, 'type': 'user', 'priority': 'next',
+             'from': sender, 'message': {'role': 'user', 'content':
+             '<cross-session-message from="' + sender + '" from-mode="' + mode + '">\n' + text
+             + '\n</cross-session-message>'}}
+    return {'type': 'auth', 'token': token}, frame
+
+
 def build_packet(token, source, text):
     """The auth frame, then the user frame carrying text as a cross-session message from
     `source` (a pipe name) in prompting mode. Text holding < or > is a ValueError, so it cannot
@@ -92,13 +113,8 @@ def build_packet(token, source, text):
         raise ValueError('no usable peer token')
     if type(text) is not str or '<' in text or '>' in text:
         raise ValueError('push text must not hold < or >')
-    sender = 'uds:' + quote(source, safe=':_/.-')
-    msg_id = str(uuid.uuid4())
-    frame = {'msgV': 1, 'msg_id': msg_id, 'uuid': msg_id, 'type': 'user', 'priority': 'next',
-             'from': sender, 'message': {'role': 'user', 'content':
-             '<cross-session-message from="' + sender + '" from-mode="prompting">\n' + text
-             + '\n</cross-session-message>'}}
-    return encode_frame({'type': 'auth', 'token': token}) + encode_frame(frame)
+    return b''.join(encode_frame(f) for f in
+                    message_frames(token, sender_address(source), text, str(uuid.uuid4())))
 
 
 def key_path(folder, rec):

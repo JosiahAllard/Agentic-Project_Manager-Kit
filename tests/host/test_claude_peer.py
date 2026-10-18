@@ -9,6 +9,7 @@ import shutil
 import tempfile
 import threading
 import unittest
+from unittest import mock
 import uuid
 
 from hosts.claude.adapter import peer
@@ -100,15 +101,23 @@ class Packet(unittest.TestCase):
             with self.assertRaises(ValueError):
                 peer.build_packet(token, src, 'fine')
 
-    def test_canonical_pipe_agrees_with_the_bridge(self):
-        from optional.bridge.hosts.claude.sessions import NativeSessionError, canonical_pipe
-        for value in (r'\\.\pipe\LOCAL\cc-msg-ABC_1', r'\\.\pipe\cc-msg-x', r'\\.\PIPE\local\Cc-Msg-q'):
-            self.assertEqual(peer.canonical_pipe(value), canonical_pipe(value))
+    def test_the_bridge_names_pipes_and_senders_through_this_module(self):
+        # One copy of the wire format: the optional bridge's Claude half calls these functions.
+        # A copy of its own there never sees the patch, and this fails.
+        from optional.bridge.hosts.claude import peer as bridge_peer, sessions
+        pipe = r'\\.\pipe\LOCAL\cc-msg-ABC_1'
+        with mock.patch.object(peer, 'canonical_pipe', return_value='canon') as canon:
+            self.assertEqual(sessions.canonical_pipe(pipe), 'canon')
+        canon.assert_called_once_with(pipe)
+        with mock.patch.object(peer, 'sender_address', return_value='uds:x') as sender:
+            self.assertEqual(bridge_peer.peer_address(pipe), 'uds:x')
+        sender.assert_called_once_with(pipe)
+        self.assertEqual(sessions.canonical_pipe(r'\\.\PIPE\local\Cc-Msg-q'), r'\\.\pipe\local\cc-msg-q')
         for value in (None, r'\\.\pipe\other', r'\\.\pipe\LOCAL\cc-msg-a\b', 'cc-msg-x'):
             with self.assertRaises(ValueError):
                 peer.canonical_pipe(value)
-            with self.assertRaises(NativeSessionError):
-                canonical_pipe(value)
+            with self.assertRaises(sessions.NativeSessionError):    # the bridge's own refusal type
+                sessions.canonical_pipe(value)
 
     def test_the_repr_names_no_token(self):
         m = Machine(self)
