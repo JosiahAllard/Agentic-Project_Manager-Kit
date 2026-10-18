@@ -564,6 +564,72 @@ class LockVerbs(Base):
                     self.assertIsNotNone(d, text)
                     self.assertEqual((d.verdict, d.rule), ('deny', 'role-lock'), d.reason)
 
+    def test_the_module_name_inside_a_regex_alternation_is_not_a_lock_call(self):
+        """A read-only env listing filtered on a regex naming
+        MACHINE_LOCK among others (a Where-Object block's comparison has no program) names no lock
+        CLI: next to `|` the module name is a regex alternative, never a module python runs. The
+        same words as a whole module name, an array a splat hands on, or the CLI's file name stay
+        refused, and a real call with a verb the mode lacks is still denied."""
+        wt = self.w.wt.replace('\\', '/')
+        passing = ("Get-ChildItem env: | Where-Object { $_.Name -match 'MACHINE_LOCK|KIT|GATE' } | "
+                   "Format-Table Name, Value; git -C %s status; git -C %s log -1" % (wt, wt),
+                   "gci env: | ? { $_.Name -match 'KIT|machine_lock' }")
+        from kitlib.guard import commands as cm, shell as sh
+        for text in passing:
+            for role in ('reviewer', 'senior-worker', 'pm'):
+                with self.subTest(role=role, text=text):
+                    parsed = cm.read(text, sh.PS, self.w.wt)
+                    self.assertIsNone(rolepolicy.lock_verb(parsed, 'read', self.w.kit_dir))
+                    self.assertIsNone(rolepolicy.check(self.shell(text, role), self.w.ctx()))
+                    self.allowed(self.shell(text, role))        # the whole guard, not the policy alone
+        refused = ("$m = 'tools.machine_lock'; python -m $m stop 42",
+                   "$m = 'machine_lock'; python -m $m stop 42",
+                   "$a = 'MACHINE_LOCK','stop'; python -m @a",
+                   "$c = \"import runpy; runpy.run_module('tools.machine_lock')\"; python -c $c stop 42",
+                   "$p = 'x|tools/machine_lock.py'; python $p.Split('|')[1] stop 42",
+                   "Get-ChildItem env: | Where-Object { $_.Name -match 'MACHINE_LOCK|KIT' }; "
+                   "python tools/machine_lock.py hold create x")
+        for text in refused:
+            for role in ('reviewer', 'senior-worker', 'pm'):
+                with self.subTest(role=role, text=text):
+                    d = rolepolicy.check(self.shell(text, role), self.w.ctx())
+                    self.assertIsNotNone(d, text)
+                    self.assertEqual((d.verdict, d.rule), ('deny', 'role-lock'), d.reason)
+
+    def test_the_module_name_next_to_a_pipe_split_apart_is_a_lock_call(self):
+        """A `|` beside the module's name proves nothing outside a pattern only compared
+        (rolepolicy._pattern_only): PowerShell splits the word before python sees it, so
+        `-split '\\|'` or `.Split('|')` hands python `tools.machine_lock` (owner-lock matches only
+        the file's name, so owner-only `hold create` would run). A Where-Object pattern on a line
+        that may run something, or compared other than by a match operator, is refused too."""
+        rows = ("$a = 'tools.machine_lock|hold|create|x' -split '\\|'; python -m @a",
+                "$m = 'tools.machine_lock|x'; python -m $m.Split('|')[0] stop 42",
+                "$a = 'tools.machine_lock|stop|42' -csplit '\\|'; python -m @a",
+                "$a = [regex]::Split('tools.machine_lock|stop|42', '\\|'); python -m @a",
+                "$m = 'x|machine_lock'.Split('|')[1]; python -m $m stop 42",
+                # a Where-Object pattern, but the line runs a python, another program, or git
+                # with a config option, or the pattern is split, built or not under Where-Object:
+                "gci env: | ? { $_.Name -match 'tools.machine_lock|x' }; python -m $Matches[0] stop 42",
+                "gci env: | ? { $_.Name -match 'machine_lock|x' } | % { python -m $_.Name stop 42 }",
+                "gci env: | ? { $_.Name -match 'MACHINE_LOCK|KIT' }; notepad x",
+                "gci env: | ? { $_.Name -match 'MACHINE_LOCK|KIT' }; git -c core.pager=cat log -1",
+                "gci env: | ? { $_.Name -split 'tools.machine_lock|x' }",
+                "gci env: | ? { $_.Name -match 'machine_lock|x' -split '\\|' }",
+                "gci env: | ? { $_.Name -match \"MACHINE_LOCK|$x\" }",
+                "gci env: | Select-Object { $_.Name -match 'MACHINE_LOCK|KIT' }",
+                "gci env: | Where-Object -OutVariable c { $_.Name -match 'MACHINE_LOCK|KIT' }",
+                "'a' -match 'machine_lock|x'")
+        from kitlib.guard import commands as cm, shell as sh
+        for text in rows:
+            with self.subTest(text=text):
+                parsed = cm.read(text, sh.PS, self.w.wt)
+                self.assertEqual(rolepolicy.lock_verb(parsed, 'write', self.w.kit_dir)[0], rolepolicy.NO_PROGRAM)
+            for role in ('reviewer', 'senior-worker', 'pm'):
+                with self.subTest(role=role, text=text):
+                    d = rolepolicy.check(self.shell(text, role), self.w.ctx())
+                    self.assertIsNotNone(d, text)
+                    self.assertEqual((d.verdict, d.rule), ('deny', 'role-lock'), d.reason)
+
     def test_psdefaultparametervalues_on_the_line_catches_a_reader(self):
         """It can give every later command an -OutVariable (rolepolicy._output_stays)."""
         lock = 'tools/machine_lock.py'
