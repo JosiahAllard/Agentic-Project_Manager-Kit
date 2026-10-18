@@ -3,7 +3,7 @@ base"): origin/main when it resolves, a line when the local main differs, and an
 kept. The change list is mocked; the refs are a throwaway repository's (tests/gitfixture.py).
 Also the git tier (KIT_FAKE_GIT) and the home fence's marker (KIT_HOME_FENCE) the units are given,
 and --jobs 1's pid hold (docs/test-tools.md "The pid shield"), and the second pass on real git of
-the test modules a change adds or changes."""
+the test modules a change adds or changes, and the session's kit binding no test child gets."""
 import contextlib
 import importlib.util
 import io
@@ -272,6 +272,64 @@ class HomeFenceEnvironment(unittest.TestCase):
 
 
 MODULES = ['tests.a.test_m', 'tests.git.test_g', 'tests.gate.test_land_x', 'tests.gate.test_other']
+
+
+class KitSessionEnvironment(unittest.TestCase):
+    """No test child gets the session's kit binding (kit_tests KIT_SESSION_ENV): PM_KIT_ROOT,
+    PM_KIT_RELEASE_ID, KIT_LIVE_ROOT and KIT_PINNED are dropped from the pooled units', the --jobs
+    1 process's, the real-git count child's and --list's loader's environment, while another
+    variable passes and kit_tests' own process keeps them all."""
+    SESSION = {'PM_KIT_ROOT': r'C:\session\kit', 'PM_KIT_RELEASE_ID': 'session-pin',
+               'KIT_LIVE_ROOT': r'C:\session\main', 'KIT_PINNED': 'live'}
+    OTHER = 'KIT_TESTS_UNRELATED_MARK'
+
+    def test_the_session_kit_binding_reaches_no_test_child(self):
+        temp_home(self)
+        seen, out = {}, io.StringIO()
+
+        def keep(who, env):
+            seen.setdefault(who, []).append(dict(env))
+
+        def run(modules, root, jobs, **kw):
+            keep('pooled', kw['environ'])
+            kw['out'].write('kit_tests: OK in 1s (full)\n')
+            return 0, ''
+
+        def count(top, modules, environ=None):
+            keep('count', environ)
+            return {}, {}
+
+        def call(cmd, cwd=None, env=None, **kw):
+            keep('one', env)
+            return 0
+
+        def collect(top, modules, environ=None):
+            keep('list', environ)
+            return []
+        here = os.path.abspath('.')
+        with mock.patch.dict(os.environ, dict(self.SESSION, **{self.OTHER: 'kept'})), \
+                mock.patch.object(cli.gitrepo, 'toplevel', return_value=(here, None)), \
+                mock.patch.object(cli.gitrepo, 'common_dir', return_value=(None, 'no git')), \
+                mock.patch.object(cli.selftree, 'config', return_value={'serial': []}), \
+                mock.patch.object(cli.selftree, 'all_test_modules', return_value=MODULES), \
+                no_change(), \
+                mock.patch.object(cli.giveback, 'drainer', return_value=lambda n: None), \
+                mock.patch.object(cli.selfrun, 'count_units', side_effect=count), \
+                mock.patch.object(cli.selfrun, 'run', side_effect=run), \
+                mock.patch.object(cli.selflist, 'collect', side_effect=collect), \
+                mock.patch.object(cli.selflist, 'render', return_value=[]), \
+                mock.patch.object(cli.subprocess, 'call', side_effect=call):
+            for argv in (['--full', '--jobs', '2'], ['--full', '--jobs', '1'], ['--list'],
+                         ['--full', '--jobs', '2', '--both-tiers']):
+                self.assertEqual(cli.main(argv, out=out), 0, out.getvalue())
+            own = {k: os.environ.get(k) for k in self.SESSION}
+        self.assertEqual(own, self.SESSION)
+        self.assertEqual(sorted(seen), ['count', 'list', 'one', 'pooled'])
+        self.assertEqual(len(seen['pooled']), 3)          # --jobs 2, then both tiers' two passes
+        for who, envs in seen.items():
+            for env in envs:
+                self.assertEqual([k for k in self.SESSION if k in env], [], who)
+                self.assertEqual(env.get(self.OTHER), 'kept', who)
 
 
 class BothTiers(unittest.TestCase):
