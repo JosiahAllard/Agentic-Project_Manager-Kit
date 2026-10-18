@@ -88,7 +88,7 @@ class SharedRules(unittest.TestCase):
         cmd = forms(self.w, 'gate', True, '--full 2>&1 | tail -5', self.w.wt)[1]
         d = claude_decide(bash(cmd, self.w.wt), self.w.ctx())
         self.assertEqual(d.rule, 'wrapped-gate', d.reason)
-        # bare: no redirection after it (KIT-GUARD-WRAPPED-GATE-ADVICE)
+        # bare: no redirection after it, run in the background
         self.assertEqual(d.instead, 'python "%s/tools/gate.py" -C "%s" --full' % (W.fwd(self.w.kit_dir), W.fwd(self.w.wt)))
         self.assertIn('in the background', d.reason)
 

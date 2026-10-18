@@ -45,8 +45,8 @@ class RunDir(unittest.TestCase):
 
 
 class StartProcessWorkdir(unittest.TestCase):
-    """KIT-GUARD-START-PROCESS-WORKDIR: git and python started by Start-Process -WorkingDirectory
-    <main checkout> from a worktree were judged from the worktree, so they passed."""
+    """git and python started by Start-Process -WorkingDirectory <main checkout> from a worktree
+    are judged in the main checkout they run in, not in the worktree the command is typed in."""
 
     def setUp(self):
         self.w = W.World()
@@ -98,7 +98,7 @@ class StartProcessWorkdir(unittest.TestCase):
 
 
 class WrappedGateBare(unittest.TestCase):
-    """KIT-GUARD-WRAPPED-GATE-ADVICE: the alternative is the gate by absolute path with -C, run
+    """A wrapped gate's alternative is the gate by absolute path with -C, run
     bare in the background; no redirection, no cd chain."""
 
     def setUp(self):
@@ -133,7 +133,7 @@ class WrappedGateBare(unittest.TestCase):
 
 
 class AdviceKit(unittest.TestCase):
-    """KIT-GUARD-INSTEAD-KIT-PATH: advice names the export the machine's plugin marketplace names
+    """Advice names the export the machine's plugin marketplace names
     when that export was made from the kit checkout the guard runs from."""
 
     def setUp(self):
@@ -178,7 +178,7 @@ class AdviceKit(unittest.TestCase):
 
 
 class SleepWait(unittest.TestCase):
-    """KIT-GUARD-INSTEAD-KIT-PATH: a python -c that only sleeps, refused in a main checkout, is
+    """A python -c that only sleeps, refused in a main checkout, is
     named as a sleep-wait, not as writing files."""
 
     def setUp(self):
