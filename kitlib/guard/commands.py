@@ -646,6 +646,21 @@ def sp_workdir_unplaceable(text):
     return sh.msys_to_win(p) != p
 
 
+def run_dir(inv):
+    """The directory the program of `inv` runs in: its Command's (Command.cwd), or for a
+    Start-Process call with a -WorkingDirectory the folder that names (shell.resolve_path from the
+    Command's directory), None when the text is computed or names no one folder exactly
+    (sp_workdir_unplaceable). PowerShell itself still places what Start-Process redirects into
+    (-RedirectStandardOutput, -RedirectStandardError) from its own location, the Command's
+    directory: only what the program reads relative to its directory moves."""
+    if inv.via != 'start-process' or inv.workdir is None:
+        return inv.cmd.cwd
+    w = inv.workdir
+    if w.dyn or sp_workdir_unplaceable(w.text):
+        return None
+    return sh.resolve_path(w.text, inv.cmd.cwd, shell=sh.PS, home=inv.cmd.home)
+
+
 def _sp_shell_text(inv, parsed):
     """_nested_text for a shell Start-Process starts. Start-Process hands the program one command
     line, its -ArgumentList elements joined with spaces; a computed element, or a computed
@@ -662,9 +677,7 @@ def _sp_shell_text(inv, parsed):
         if inv.workdir.dyn:
             parsed.flag('a shell Start-Process starts in a working directory that is not literal (%s)' % inv.path)
             return None
-        text = inv.workdir.text
-        where = (None if sp_workdir_unplaceable(text) else
-                 sh.resolve_path(text, inv.cmd.cwd, shell=sh.PS, home=parsed.home),)
+        where = (run_dir(inv),)
     if inv.name != 'cmd':
         found = _shell_text(inv, parsed)
         return found and found[:2] + where
@@ -1932,8 +1945,9 @@ def _git_word(w):
 
 
 class GitCall(object):
-    """A git invocation: `dir` the directory it acts on (git -C applied to the command's cwd;
-    None when the text cannot tell), `sub` its subcommand, `rest` the Words after it, `alias`
+    """A git invocation: `dir` the directory it acts on (git -C applied to the directory git
+    starts in, run_dir: the command's cwd, or a Start-Process -WorkingDirectory; None when the
+    text cannot tell), `sub` its subcommand, `rest` the Words after it, `alias`
     (name, value) when the line defines a git alias (-c alias.name=value). Every word is the
     text the shell passes (a backslash bash drops is dropped); `sub_dyn` the subcommand is not
     literal; `blind` what points git at a place the text does not show, which a -C cannot undo (a
@@ -1956,7 +1970,7 @@ def git_call(inv):
     appends may hold --git-dir and the subcommand."""
     if inv is None or inv.name != 'git':
         return None
-    d = inv.cmd.cwd
+    d = run_dir(inv)                            # Start-Process -WorkingDirectory: git starts there
     git_env = inv.cmd.git_env
     unknown = d is None or bool(git_env)
     # what sets a git dir or work tree the text cannot place: -C never undoes it
