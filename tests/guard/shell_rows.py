@@ -211,6 +211,54 @@ ROWS = [
      'deny', 'main-checkout', None),
     ('Start-Process with cmd after its list in its worktree stays allowed', lambda w: ps(
         "Start-Process -ArgumentList '/c echo x > f.txt' cmd", w.wt, sub=True), None, None, None),
+    # the common parameters (-Verbose, -ErrorAction/-ea ...) and -PSPath are parameters too: a list
+    # ends at them and none is the program; any other parameter word makes the call unreadable
+    ('Start-Process with cmd after its list then -Verbose into main', lambda w: ps(
+        "Start-Process -ArgumentList '/c echo x > %s' cmd -Verbose" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process with cmd after its list then -ErrorAction into main', lambda w: ps(
+        "Start-Process -ArgumentList '/c echo x > %s' cmd -ErrorAction Stop" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process -ErrorAction before cmd into main', lambda w: ps(
+        "Start-Process -ErrorAction Stop cmd '/c echo x > %s'" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process -Verbose before cmd into main', lambda w: ps(
+        "Start-Process -Verbose cmd -ArgumentList '/c echo x > %s'" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'main-checkout', None),
+    ('saps -ea before cmd with an array into main', lambda w: ps(
+        "saps -ea 0 cmd '/c','echo x > %s'" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process -PSPath cmd into main', lambda w: ps(
+        "Start-Process -PSPath cmd -ArgumentList '/c echo x > %s'" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process -FilePath: then cmd into main', lambda w: ps(
+        "Start-Process -FilePath: cmd -ArgumentList '/c echo x > %s'" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process cmd -WorkingDirectory: then main', lambda w: ps(
+        "Start-Process cmd -WorkingDirectory: %s -ArgumentList '/c echo x > f.txt'" % w.main, w.wt, sub=True),
+     'deny', 'main-checkout', None),
+    ('Start-Process cmd -WorkingDirectory: then its worktree stays allowed', lambda w: ps(
+        "Start-Process cmd -WorkingDirectory: %s -ArgumentList '/c echo x > f.txt'" % w.wt, w.wt, sub=True),
+     None, None, None),
+    ('Start-Process with an unknown parameter', lambda w: ps(
+        "Start-Process cmd -Bogus -ArgumentList '/c echo hi'", w.wt, sub=True), 'deny', 'unreadable', None),
+    ('Start-Process with an unknown parameter and no program', lambda w: ps(
+        "Start-Process -ArgumentList '/c echo hi' -Bogus", w.wt, sub=True), 'deny', 'unreadable', None),
+    ('Start-Process with an ambiguous parameter prefix', lambda w: ps(
+        "Start-Process cmd -e x '/c echo hi'", w.wt, sub=True), 'deny', 'unreadable', None),
+    ('Start-Process switch given its value after a space', lambda w: ps(
+        "Start-Process -Wait: $true cmd '/c echo hi'", w.wt, sub=True), 'deny', 'unreadable', None),
+    ('Start-Process -ErrorAction Stop in its worktree stays allowed', lambda w: ps(
+        "Start-Process cmd -ArgumentList '/c echo x > f.txt' -ErrorAction Stop", w.wt, sub=True), None, None, None),
+    ('Start-Process -Wait in its worktree stays allowed', lambda w: ps(
+        "Start-Process -Wait -NoNewWindow -PassThru cmd -ArgumentList '/c echo x > f.txt'", w.wt, sub=True),
+     None, None, None),
+    ('Start-Process with its own parameters in its worktree stays allowed', lambda w: ps(
+        "Start-Process cmd -ArgumentList '/c echo hi' -Verb Open -WindowStyle Minimized -LoadUserProfile "
+        "-UseNewEnvironment -RedirectStandardInput in.txt -RedirectStandardOutput out.txt "
+        "-RedirectStandardError err.txt -Credential $c", w.wt, sub=True), None, None, None),
+    ('Start-Process pwsh with a dashed list stays allowed', lambda w: ps(
+        "Start-Process pwsh -ArgumentList '-NoProfile','-File','x.ps1'", w.wt, sub=True), None, None, None),
     ('cmd start with a quoted title', lambda w: ps('cmd /c start "Godot" godot.exe --headless', w.wt), 'deny', 'heavy',
      heavy('wt', 'godot.exe --headless')),
     ('cmd start /b /wait', lambda w: ps('cmd /c start /b /wait godot.exe --headless', w.wt), 'deny', 'heavy',
