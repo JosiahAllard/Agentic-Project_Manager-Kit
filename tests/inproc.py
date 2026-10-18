@@ -6,7 +6,10 @@ library behaviour calls kitlib instead, and a test that needs the process bounda
 Each call sees what a child process would: os.environ is exactly `env`, the working directory is
 `cwd`, and stdout and stderr are fresh buffers. All three are restored after the call, however it
 ends. SystemExit gives its code, as the interpreter would; any other exception gives 1 and its
-traceback on stderr, as an uncaught exception in a child does."""
+traceback on stderr, as an uncaught exception in a child does.
+`env` is the one the same test passes to its real children (gitfixture.fixture_env, built from this
+process's environment): tools/kit_tests.py has already dropped the session's variables from it
+(child_env), so an in-process call is fenced exactly as a child is and adds no variable of its own."""
 import contextlib
 import importlib.util
 import io

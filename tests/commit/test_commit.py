@@ -19,7 +19,7 @@ from kitlib import commit as C
 from kitlib.config import owner as ownermod
 from kitlib.git import cmd
 from kitlib.guard import ownercommits
-from tests import gitfixture
+from tests import gitfixture, inproc
 from tests.gitfixture import TempRepo
 from tests.home import TempHomeCase, machine_config, no_machine_owner
 from tests.realgit import real_git
@@ -322,10 +322,15 @@ class LinkedCase(TempHomeCase):
 
     def setUp(self):
         super().setUp()
-        self.t = TempRepo(prepare=_seed, prepare_key='test_commit.LinkedCase')
+        prepare, key = self.template()
+        self.t = TempRepo(prepare=prepare, prepare_key=key)
         self.addCleanup(self.t.cleanup)
         self.wt = self.t.worktree('wt')
         self.configure(owner={'email': OWNER, 'agent_emails': [AGENT]})
+
+    def template(self):
+        """(prepare, prepare_key) of this test's repository: the seed commit."""
+        return _seed, 'test_commit.LinkedCase'
 
     def configure(self, **sections):
         """An untracked .kit.json in the worktree (kitlib.config.load reads the work tree)."""
@@ -1573,6 +1578,15 @@ class MergeInProgress(MergeCase):
 KEEP = object()        # main leaves the owner-only file as the base has it
 
 
+def _owner_base(t):
+    """_seed, then MergeCarriesAnOwnerChange.merge's base commit on main: work.txt and the
+    owner-only file. Built once per process; the copy's kit/wt branch starts at it. Its id."""
+    _seed(t)
+    t.write('work.txt', 'base\n')
+    t.write(MergeCarriesAnOwnerChange.F, 'owner base\n')
+    return t.commit('base', 'work.txt', MergeCarriesAnOwnerChange.F)
+
+
 @real_git('modify/delete conflicts, checkout --theirs and update-index --chmod: the fake has '
           'none; and the index and tree entries the rule compares are git\'s own')
 class MergeCarriesAnOwnerChange(MergeCase):
@@ -1582,6 +1596,14 @@ class MergeCarriesAnOwnerChange(MergeCase):
     changes it; anything else under that path stays refused."""
 
     F = 'CLAUDE.md'
+    # These build their own base; every other test starts from _owner_base's copy.
+    OWN_BASE = ('test_an_owner_deletion_under_a_locked_directory_is_committed',
+                'test_outside_a_merge_a_staged_owner_file_is_still_refused')
+
+    def template(self):
+        if self._testMethodName in self.OWN_BASE:
+            return LinkedCase.template(self)
+        return _owner_base, 'test_commit.MergeCarriesAnOwnerChange'
 
     def merge(self, main_side, branch_side=None, path=None, main_author=OWNER,
               main_message='owner moves main'):
@@ -1592,10 +1614,14 @@ class MergeCarriesAnOwnerChange(MergeCase):
         tip, main tip)."""
         f = path or self.F
         self.assertTrue(C.kconfig.load(self.wt).owner_rules().is_locked(f), f)
-        self.t.write('work.txt', 'base\n')
-        self.t.write(f, 'owner base\n')
-        self.t.commit('base', 'work.txt', f)
-        self.git('merge', '-q', '--ff-only', 'main')
+        if self._testMethodName in self.OWN_BASE:
+            self.t.write('work.txt', 'base\n')
+            self.t.write(f, 'owner base\n')
+            self.t.commit('base', 'work.txt', f)
+            self.git('merge', '-q', '--ff-only', 'main')
+        else:                       # the template's base, which the branch was made at
+            self.assertEqual(f, self.F)
+            self.assertEqual(self.head(), self.t.prepared)
         self.t.write('work.txt', 'main\n')
         if main_side is None:
             self.t.git('rm', '-q', '--', f)
@@ -1786,6 +1812,17 @@ class MergeCarriesAnOwnerChange(MergeCase):
 # ---------------------------------------------------------------------------------- the command
 
 class TheCommandLine(LinkedCase):
+    """commit.py's arguments, output and exit codes. The tests that commit run it as a real child
+    process; the usage errors and the refusal run its main(argv) in this process
+    (tests/inproc.py), with the env and cwd a child would get."""
+
+    def in_process(self, *args, cwd=None):
+        tool = getattr(TheCommandLine, 'tool', None)
+        if tool is None:
+            tool = TheCommandLine.tool = inproc.load_tool('commit')
+        code, out, err = inproc.run_main(tool.main, args, gitfixture.fixture_env({C.MODEL_ENV: ''}),
+                                         cwd or self.wt)
+        return code, out + err
 
     def cli(self, *args, cwd=None):
         r = subprocess.run([sys.executable, TOOL] + list(args), cwd=cwd or self.wt,
@@ -1807,19 +1844,19 @@ class TheCommandLine(LinkedCase):
         self.assertEqual(code, 0, out)
 
     def test_outside_a_repository_is_a_usage_error(self):
-        code, out = self.cli('-C', self.t.base, '-m', 's', '--model', 'M', 'a.py')
+        code, out = self.in_process('-C', self.t.base, '-m', 's', '--model', 'M', 'a.py')
         self.assertEqual(code, 2, out)
         self.assertIn('USAGE:', out)
 
     def test_no_flag_is_accepted_abbreviated(self):
         self.put('a.py', 'x\n')
         for flag in ('--owner-auth', '--owner-appr=x', '--mod=M', '--body-f=x', '--lander'):
-            code, out = self.cli('-m', 's', flag, 'a.py')
+            code, out = self.in_process('-m', 's', flag, 'a.py')
             self.assertEqual(code, 2, (flag, out))
             self.assertIn('USAGE:', out)
 
     def test_body_and_body_file_together_are_refused(self):
-        code, out = self.cli('-m', 's', '-b', 'x', '--body-file', 'y', 'a.py')
+        code, out = self.in_process('-m', 's', '-b', 'x', '--body-file', 'y', 'a.py')
         self.assertEqual(code, 2, out)
         self.assertIn('not allowed with', out)
 
@@ -1832,14 +1869,14 @@ class TheCommandLine(LinkedCase):
     def test_a_second_minus_m_is_a_usage_error_and_commits_nothing(self):
         self.put('a.py', 'x\n')
         before = self.git('rev-parse', 'HEAD')
-        code, out = self.cli('-m', 'subject', '-m', 'body', '--model', 'M', 'a.py')
+        code, out = self.in_process('-m', 'subject', '-m', 'body', '--model', 'M', 'a.py')
         self.assertEqual(code, 2, out)
         self.assertIn('USAGE:', out)
         self.assertIn('-b or --body-file', out)
         self.assertEqual(self.git('rev-parse', 'HEAD'), before)
 
     def test_a_refusal_exits_1(self):
-        code, out = self.cli('-m', 's', '--model', 'M', 'missing.txt')
+        code, out = self.in_process('-m', 's', '--model', 'M', 'missing.txt')
         self.assertEqual(code, 1, out)
         self.assertIn('git add failed', out)
 
