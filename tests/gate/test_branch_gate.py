@@ -265,6 +265,34 @@ class BranchGate(fixtures.GateRepoCase):
                          os.listdir(os.path.join(wt, 'tools')))
 
 
+class GateConfigHash(unittest.TestCase):
+    """runner.gate_config leaves out a HASH_IF_SET key that is unset, so a record an older kit
+    wrote, before the key existed, still verifies against the config it was made with."""
+
+    class Cfg:
+        def __init__(self, gate):
+            self.gate = gate
+
+        def section(self, name):
+            return dict(self.gate)
+
+    def test_unset_new_keys_are_left_out_and_set_ones_are_hashed(self):
+        older = {'steps': [], 'kind': 'engine-test', 'fail': None}
+        now = dict(older, smoke_steps=None, docs_only=None)
+        self.assertEqual(runner.gate_config(self.Cfg(now)), older)
+        self.assertEqual(gate_ok.config_hash(runner.gate_config(self.Cfg(now))),
+                         gate_ok.config_hash(older))
+        smoke = dict(now, smoke_steps=['unit'])
+        self.assertEqual(runner.gate_config(self.Cfg(smoke)), dict(older, smoke_steps=['unit']))
+        self.assertIsNone(runner.gate_config(self.Cfg(now))['fail'])   # an older key stays, unset
+
+    def test_every_key_left_out_is_a_gate_key_unset_by_default(self):
+        from kitlib.config import schema
+        defaults = schema.defaults('gate')
+        self.assertEqual({k: defaults[k] for k in runner.HASH_IF_SET},
+                         dict.fromkeys(runner.HASH_IF_SET))
+
+
 def mode_step(word):
     return ['{python}', '-c', 'print("mode %s")' % word]
 

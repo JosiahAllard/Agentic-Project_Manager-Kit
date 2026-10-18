@@ -69,6 +69,7 @@ Off with no file, each switched on by its key: `repo.push_block` (a push to main
 - `daily_full.kind` (a kind name, default "daily-full"): the kinds-table kind the run books
 - `daily_full.max_wait` (int >= 0, default 7200): seconds it waits for its lock slot before it skips
 - `daily_full.stale_hours` (int >= 1, default 36): hours after which --summary calls the last result stale
+- `daily_full.bisect` ({max_probes, prefix, session}): after a red run, bisect the first-parent commits since the last green run for the commit that turned the red steps red (docs/daily-full.md "Bisect"); unset: no bisect
 - `doc_budget.default` (int >= 0): byte cap for a capped doc with no budget
 - `doc_budget.budgets` (map path -> int >= 0 or null, default {}): doc path or glob -> byte cap; null: uncapped
 - `doc_budget.uncapped_dirs` (list of repo path, default []): folders never capped
@@ -97,6 +98,8 @@ Off with no file, each switched on by its key: `repo.push_block` (a push to main
 - `gate.zero_tests` (regex or list of regex): log patterns meaning no test ran
 - `gate.errors` ({match, excuse, expect}): error-line policy
 - `gate.kind` (a kind name, default "engine-test"): the kinds-table kind a gate run books (gate.py and gate.py land)
+- `gate.smoke_steps` (list of a step name): steps a default (not --full) branch gate runs whatever changed; a landing takes such a gate's record for a tip once these steps passed in it (docs/gate.md "Landing"); unset: a landing needs a --full record
+- `gate.docs_only` ({globs, exclude, steps}): a change whose every path is docs: the branch gate runs only its steps, and a landing takes that record (docs/gate.md "Docs-only changes"); unset: no change is docs-only
 - `guard.data_roots` (list of {path, mode, why}, default []): folders besides their checkout and temp that agent sessions may write, each with its mode; read from the main checkout only (docs/guard.md "Write jail")
 - `guard.role_policy` (bool, default false): hold roles to their role policy mode (docs/guard.md "Role policy"); off: no role is held, whatever its mode; read from the main checkout only
 - `landing.lock_file` (string): legacy landing lock: git:<name>, a file in the git common dir; any other value refuses

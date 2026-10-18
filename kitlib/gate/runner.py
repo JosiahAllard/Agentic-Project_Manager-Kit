@@ -86,8 +86,15 @@ def gate_config(cfg):
     The kit guard and the pre-push hook verify a record with this same value. An auto-detected gate
     (kitlib.gate.detect) hashes this too, not its detected steps: they are a function of the
     commit's tree (which the record names), its base's tree (`base`) and the kit (its `kit`), so
-    the hash still names what decides the steps."""
-    return cfg.section('gate')
+    the hash still names what decides the steps. A key of HASH_IF_SET that is unset is left out,
+    so a config that sets none of them hashes as it did before the key existed: a record a kit
+    without the key wrote still verifies."""
+    gate = cfg.section('gate')
+    return {k: v for k, v in gate.items() if not (k in HASH_IF_SET and v is None)}
+
+
+# "gate" keys added after records were first written; unset, they are not in gate_config().
+HASH_IF_SET = ('smoke_steps', 'docs_only')
 
 
 def gate_config_at(root, rev):
