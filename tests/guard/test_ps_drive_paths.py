@@ -479,7 +479,7 @@ class DynamicTargets(Base):
                      'Out-File ―FilePath $p', 'Remove-Item —LiteralPath $p'):
             with self.subTest(text):
                 self.refused_for_both(text)
-        for text in ('Copy-Item a.txt —Destination {main}\\x', 'Start-Process python –RedirectStandardOutput {main}\\x.txt',
+        for text in ('Copy-Item a.txt —Destination {main}\\x', 'saps python –RedirectStandardOutput {main}\\x.txt',
                      'powershell –Command "Remove-Item {main}\\x.txt"', 'powershell /c "Remove-Item {main}\\x.txt"',
                      'Invoke-Expression –Command "Remove-Item {main}\\x.txt"',
                      'Invoke-Expression –Verbose "Remove-Item {main}\\x.txt"'):
