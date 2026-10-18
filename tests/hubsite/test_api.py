@@ -750,7 +750,7 @@ class PagesTest(ApiCase):
                              {'id': 'bad', 'title': 't', 'html': html})
 
     def test_ids_shaped_like_items_or_rulings_are_refused(self):
-        for doc_id in ('Q-1', 'q-001', 'M-2', 'T-3', 'P-4', 'S-5', 'A-6', 'R-2160'):
+        for doc_id in ('Q-1', 'q-001', 'M-2', 'T-3', 'P-4', 'S-5', 'A-6', 'R-21'):
             with self.subTest(id=doc_id):
                 self.refused('invalid', 'id', 'POST', '/pages', AGENT,
                              {'id': doc_id, 'title': 't', 'html': PAGE})
@@ -758,7 +758,7 @@ class PagesTest(ApiCase):
             with self.subTest(id=doc_id):
                 self.refused('invalid', 'id', 'POST', '/pages', AGENT,
                              {'id': doc_id, 'title': 't', 'html': PAGE})
-        self.assertEqual(self.publish('R-2160-plan')[0], 200)
+        self.assertEqual(self.publish('R-21-plan')[0], 200)
 
     def test_refused_fields(self):
         for name in ('at', 'bytes', 'via', 'status', 'version'):

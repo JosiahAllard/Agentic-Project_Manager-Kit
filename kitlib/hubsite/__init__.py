@@ -7,6 +7,7 @@
   access   the Cloudflare Access token check for the tunnel listener: verify, KeyCache
   approvals the approvals a request waits on: asked, decided, verified
   api      the site's JSON API: routes, roles, and the writes behind them
+  pagecheck what a published page's HTML may hold: one check, refused whole, never stripped
   derived  views read from files other tools write (notices, repos, usage, agents), never stored
   backlog  the backlog views the site shows
   recordwrite the owner's add, edit and delete from the record page, through the backlog store

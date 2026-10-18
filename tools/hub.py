@@ -1057,7 +1057,7 @@ def _inbox(a, stop):
 
 
 def _pages(a, stop):
-    """No delete: deleting a page is the owner's, on the hub page only (R-2160)."""
+    """No delete: deleting a page is the owner's, on the hub page only."""
     hub = _hub(a)
     if a.sub == 'publish':
         html = _text_of(a.html_file, 'html')
