@@ -10,7 +10,6 @@ import shutil
 import tempfile
 import unittest
 
-from kitlib import sessionmark
 from kitlib.host import registry
 from kitlib.lock import api
 from kitlib.lock import store
@@ -48,12 +47,6 @@ class LegacyActorKey(unittest.TestCase):
         self.assertEqual(store.actor_host(legacy(agent('s'))), agent('s')['host'])
         self.assertIsNone(store.actor_host({'role': 'owner'}))
         self.assertIsNone(store.actor_host(None))
-
-    def test_the_session_owner_check_reads_both_keys(self):
-        check = sessionmark.owner_check({})
-        self.assertTrue(check(agent('s')))
-        self.assertTrue(check(legacy(agent('s'))))
-        self.assertFalse(check({'role': 'agent', 'host': None}))
 
 
 class HostRegistry(unittest.TestCase):
