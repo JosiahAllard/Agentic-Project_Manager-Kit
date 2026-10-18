@@ -52,14 +52,18 @@ a pending `hub_wait` returns at once on such an item. `tests/hubmcp/test_server.
 
 ## Agent write tools
 
-Each calls a route the agent's token may call (`kitlib.hubsite.api.ROUTES`, role AGENT); `tests/hubmcp/test_server.py` `Routes.test_every_shipped_tool_maps_to_a_route_that_is_not_the_owners` checks every shipped tool against `api.match`.
+Each calls a route the agent's token may call (`kitlib.hubsite.api.ROUTES`, role AGENT, or ANY for the routes the owner shares: `todos/{id}/edit` and both delete routes); `tests/hubmcp/test_server.py` `Routes.test_every_shipped_tool_maps_to_a_route_that_is_not_the_owners` checks every shipped tool against `api.match`.
 
 | tool | arguments (required first) | endpoint |
 |---|---|---|
 | `hub_ask` | `title`; `context`, `options`, `recommended`, `repo`, `from`, `refs`, `urgent`, `story` | `POST /questions` |
 | `hub_question_log` | `id`, `ruling`, `if_version` | `POST /questions/<id>/log` |
+| `hub_question_edit` | `id`, `from`, `if_version`; `title`, `context`, `options`, `recommended`, `refs`, `urgent` | `POST /questions/<id>/edit` |
+| `hub_question_withdraw` | `id`, `from`, `if_version` | `POST /questions/<id>/delete` |
 | `hub_todo_add` | `title`; `detail`, `commands`, `steps` ("To-do steps"), `repo`, `refs`, `urgent`, `from` | `POST /todos` |
 | `hub_todo_ack` | `id`; `if_version` | `POST /todos/<id>/ack` |
+| `hub_todo_edit` | `id`, `from`, `if_version`; `title`, `detail`, `commands`, `repo`, `refs`, `urgent` | `POST /todos/<id>/edit` |
+| `hub_todo_withdraw` | `id`, `from`, `if_version` | `POST /todos/<id>/delete` |
 | `hub_story_set` | `id`, `status` (`api.AGENT_STORY_STATUSES`), `if_version`; `reviewer`, `review_note`, `backlog_id`, `closed_note` | `POST /stories/<id>` |
 | `hub_to_pm_reply` | `id`; `reply`, `ruling`, `if_version` | `POST /to_pm/<id>/reply` |
 | `hub_inbox_post` | `text`; `title`, `ref`, `asked`, `repo`, `from`, `refs` | `POST /inbox` |
@@ -69,6 +73,11 @@ the default when it is absent or blank. The hub refuses any other value, a free-
 included (`invalid`, field `from`, status 400: `kitlib/hubsite/api.py` `questions_add`;
 `LiveKeys.test_a_question_comes_from_a_session_key_or_pm_only`). The `from` of `hub_todo_add`
 and `hub_inbox_post` is a name in printable ASCII (`api._agent_from`).
+
+The four edit and withdraw tools change only an open item the caller added: `from` must be the
+item's own (`pm` for one with none), checked as a claim because all agents share one token
+(docs/action-hub.md "questions/Q-NNN"). `hub_todo_edit` takes no `steps` and judges the changed
+text as `hub_todo_add` does before it calls the hub (`kitlib/hubmcp/server.py` `Server._t_hub_todo_edit`).
 
 ## To-do steps
 
@@ -88,13 +97,13 @@ The edit command is one Windows PowerShell 5.1 `& { ... }` block (`todosteps` mo
 - The file is read as bytes: a UTF-8 or UTF-16 BOM, or none, and then it must be valid UTF-8 (an ANSI file is a `MISS`). It is written back with the same BOM and encoding.
 - `old` must occur exactly once (an ordinal count, overlapping matches included); any other count, or any error, is a `MISS` and nothing is written.
 
-`todosteps.check` refuses an agent's to-do whose own text (title, detail, `commands`, `run` steps; never edit text) does any of these, as `invalid` naming the field:
+`todosteps.check` refuses an agent's to-do whose own text (title, detail, `commands`, `run` steps; never an `edit` step's `old` or `new`), on an agent's add and edit and never on the owner's text, does any of these, as `invalid` naming the field:
 
 - a command runs plain Notepad (Notepad++ is not matched): give an `open` step;
 - the text asks the owner to open a file and change it by hand ("open X and apply the edits", "make the following changes"): give `edit` steps;
 - a command is coordinator work, judged per segment between `&&`, `||`, `;`, `|` and newlines: `git worktree add`/`remove`/`move`/`prune`, `gate.py`, `land.py`, `new_worktree.py`, `worktree_remove.py`, `sync_base.py`, a branch or tag delete, `update-ref -d` or `--stdin`, and a push that deletes, forces, mirrors or prunes.
 
-The rules match words, so they can refuse a to-do that only mentions one of these in a command; `git merge` and a plain push are not refused. The hub's `POST /todos` applies them to every agent's to-do (`api.todo_steps`; the owner's own text is not judged), and refuses a lone surrogate in any `commands` entry for either role, as `invalid` field `commands`. `hub_todo_add` runs the same check before it calls the hub, so a refused to-do never reaches it, and posts `steps` as given for the hub to render (`kitlib.hubmcp.server` `_t_hub_todo_add`).
+The rules match words, so they can refuse a to-do that only mentions one of these in a command; `git merge` and a plain push are not refused. The hub's `POST /todos` and `POST /todos/<id>/edit` apply them to every agent's to-do (`api.todo_steps`, from `todos_add` and `todos_edit`; the owner's own text is not judged), and refuses a lone surrogate in any `commands` entry for either role, as `invalid` field `commands`. `hub_todo_add` runs the same check before it calls the hub, so a refused to-do never reaches it, and posts `steps` as given for the hub to render (`kitlib.hubmcp.server` `_t_hub_todo_add`); `hub_todo_edit` checks its changed text the same way (`_t_hub_todo_edit`).
 
 The hub server loads this code when it starts, and the MCP server when its client starts it, so after a change to it lands restart both together (`hub.py restart`, docs/action-hub.md "Serving it"): a new MCP server with an older hub is refused with "this route takes no 'steps' field", and an older MCP server with a newer hub posts already-rendered commands, which the hub's check can refuse when an edit's text holds a word the rules match.
 

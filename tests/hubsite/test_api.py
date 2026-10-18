@@ -1097,7 +1097,8 @@ class SecondFixTest(ApiCase):
 
     def test_a_stored_from_that_only_looks_like_you_is_not_the_owners(self):
         self.store.close()
-        doc = {'status': 'open', 'title': 't', 'commands': ['dir']}
+        # done: the owner deletes an agent's to-do only while it is open, their own at any status
+        doc = {'status': 'done', 'title': 't', 'commands': ['dir']}
         self.store = seeded(self, {'todos/T-1.json': dict(doc, **{'from': 'Y o u'}),
                                    'todos/T-2.json': dict(doc, **{'from': 'you\u200b'}),
                                    'todos/T-3.json': dict(doc, **{'from': 'you'})})
@@ -1106,8 +1107,9 @@ class SecondFixTest(ApiCase):
             with self.subTest(id=tid):
                 self.refused('forbidden', 'from', 'POST', '/todos/%s/edit' % tid, OWNER,
                              {'title': 'x'})
-                self.refused('forbidden', 'from', 'POST', '/todos/%s/delete' % tid, OWNER)
+                self.refused('conflict', 'status', 'POST', '/todos/%s/delete' % tid, OWNER)
         self.ok('POST', '/todos/T-3/edit', OWNER, {'title': 'x'})
+        self.ok('POST', '/todos/T-3/delete', OWNER)
 
     # ---- the revision a write answers
     def test_send_answers_the_revision_after_its_last_note(self):
@@ -1128,7 +1130,16 @@ class SecondFixTest(ApiCase):
         pid, edited, dropped = self.note(), self.note(), self.note()
         tid = self.ok('POST', '/todos', OWNER, {'title': 't'})['id']
         mid = self.ok('POST', '/inbox', AGENT, {'text': 'x'})['id']
+        asked, theirs = self.question(), self.question()
+        made = self.ok('POST', '/todos', AGENT, {'title': 't', 'commands': ['dir']})['id']
         for method, path, role, body in (
+                ('POST', '/questions/%s/edit' % asked, AGENT,
+                 {'from': 'pm', 'if_version': 1, 'title': 'u'}),
+                ('POST', '/questions/%s/delete' % asked, AGENT, {'from': 'pm', 'if_version': 2}),
+                ('POST', '/questions/%s/delete' % theirs, OWNER, None),
+                ('POST', '/todos/%s/edit' % made, AGENT,
+                 {'from': 'pm', 'if_version': 1, 'title': 'u'}),
+                ('POST', '/todos/%s/delete' % made, AGENT, {'from': 'pm', 'if_version': 2}),
                 ('POST', '/questions', AGENT, {'title': 't', 'options': OPTIONS}),
                 ('POST', '/questions/%s/answer' % qid, OWNER, {'choice': 0}),
                 ('POST', '/questions/%s/log' % qid, AGENT, {'ruling': 'decision-7',
@@ -1386,8 +1397,9 @@ class SecondFixTest(ApiCase):
 
 
 class OwnTodoTest(ApiCase):
-    """The owner's own to-dos: urgent, edit, delete. A to-do an agent gave is not theirs to change
-    (docs/action-hub.md, todos: "the owner can set it on their own items")."""
+    """The owner's own to-dos: urgent, edit, delete. A to-do an agent gave is not theirs to edit,
+    only to delete while it is open (docs/action-hub.md, todos: "the owner can set it on their
+    own items")."""
 
     def mine(self, **kw):
         body = {'title': 't', 'detail': 'd'}
@@ -1438,33 +1450,229 @@ class OwnTodoTest(ApiCase):
         self.assertIsNone(self.store.get('todos', tid))
         self.assertEqual([d['id'] for d in self.ok('GET', '/todos', OWNER)['items']], [keep])
 
-    def test_an_agent_cannot_edit_or_delete_a_to_do(self):
-        for tid in (self.mine(), self.theirs()):
-            self.refused('forbidden', 'role', 'POST', '/todos/%s/edit' % tid, AGENT,
-                         {'title': 'x'})
-            self.refused('forbidden', 'role', 'POST', '/todos/%s/delete' % tid, AGENT)
+    def test_an_agent_cannot_edit_or_withdraw_the_owners_to_do(self):
+        tid = self.mine()
+        for name in ('you', 'pm', ''):
+            with self.subTest(claimed=name):
+                self.refused('invalid' if not name else 'forbidden', 'from', 'POST',
+                             '/todos/%s/edit' % tid, AGENT,
+                             {'title': 'x', 'from': name, 'if_version': 1})
+                self.refused('invalid' if not name else 'forbidden', 'from', 'POST',
+                             '/todos/%s/delete' % tid, AGENT, {'from': name, 'if_version': 1})
 
-    def test_a_to_do_an_agent_gave_is_not_the_owners_to_edit_or_delete(self):
+    def test_a_to_do_an_agent_gave_is_not_the_owners_to_edit_but_is_to_delete_while_open(self):
         tid = self.theirs()
         for body in ({'title': 'x'}, {'urgent': True}):
             self.refused('forbidden', 'from', 'POST', '/todos/%s/edit' % tid, OWNER, body)
-        self.refused('forbidden', 'from', 'POST', '/todos/%s/delete' % tid, OWNER)
         self.assertEqual(self.store.get('todos', tid)['title'], 't')
         self.ok('POST', '/todos/%s/done' % tid, OWNER)      # ticking it stays the owner's
+        self.refused('conflict', 'status', 'POST', '/todos/%s/delete' % tid, OWNER)
+        self.assertEqual(self.store.get('todos', tid)['status'], 'done')
+        other = self.theirs()
+        self.ok('POST', '/todos/%s/delete' % other, OWNER)
+        self.assertIsNone(self.store.get('todos', other))
 
-    def test_a_to_do_with_no_readable_from_is_nobodys_to_edit_or_delete(self):
-        self.store = seeded(self, {'todos/T-1.json': {'status': 'open', 'title': 't'},
-                                   'todos/T-2.json': {'status': 'open', 'title': 't',
+    def test_a_to_do_with_no_readable_from_is_not_the_owners_to_edit(self):
+        self.store = seeded(self, {'todos/T-1.json': {'status': 'done', 'title': 't'},
+                                   'todos/T-2.json': {'status': 'done', 'title': 't',
                                                       'from': ['you']}})
         self.api = api.Api(self.store, clock=CLOCK)
         for tid in ('T-1', 'T-2'):
             self.refused('forbidden', 'from', 'POST', '/todos/%s/edit' % tid, OWNER,
                          {'title': 'x'})
-            self.refused('forbidden', 'from', 'POST', '/todos/%s/delete' % tid, OWNER)
+            self.refused('conflict', 'status', 'POST', '/todos/%s/delete' % tid, OWNER)
+        # a list is no agent's name either
+        self.refused('forbidden', 'from', 'POST', '/todos/T-2/edit', AGENT,
+                     {'title': 'x', 'from': 'you', 'if_version': 0})
 
     def test_edit_or_delete_of_a_to_do_that_is_not_there(self):
         self.refused('not_found', 'id', 'POST', '/todos/T-404/edit', OWNER, {'title': 'x'})
         self.refused('not_found', 'id', 'POST', '/todos/T-404/delete', OWNER)
+
+
+class CreatorTest(ApiCase):
+    """An agent edits or withdraws an open question or to-do it added, giving the item's `from`
+    and the version it read; the owner withdraws any open one (kitlib.hubsite.api "Creators")."""
+
+    def agent_todo(self, who='worker 3', **kw):
+        body = {'title': 't', 'detail': 'd', 'commands': ['dir'], 'from': who}
+        body.update(kw)
+        return self.ok('POST', '/todos', AGENT, body)['id']
+
+    def unchanged(self, coll, doc_id, before):
+        self.assertEqual(self.store.get(coll, doc_id), before)
+
+    # ---- questions
+    def test_the_asker_edits_its_open_question(self):
+        qid = self.question()
+        obj = self.ok('POST', '/questions/%s/edit' % qid, AGENT,
+                      {'from': 'pm', 'if_version': 1, 'title': 'new', 'context': 'why',
+                       'options': [{'label': 'only', 'description': 'd'}], 'recommended': 0,
+                       'refs': ['B-1'], 'urgent': True}, via='cli')
+        self.assertEqual((obj['id'], obj['version'], obj['status']), (qid, 2, 'open'))
+        d = self.store.get('questions', qid)
+        self.assertEqual((d['title'], d['context'], d['options'], d['recommended'], d['refs'],
+                          d['urgent'], d['status'], d['from'], d['via']),
+                         ('new', 'why', [{'label': 'only', 'description': 'd'}], 0, ['B-1'],
+                          True, 'open', 'pm', 'cli'))
+
+    def test_a_question_edit_takes_only_its_fields_and_a_pin(self):
+        qid = self.question()
+        path = '/questions/%s/edit' % qid
+        for body, field in (({'from': 'pm', 'if_version': 1}, 'body'),
+                            ({'title': 'x', 'if_version': 1}, 'from'),
+                            ({'from': 'pm', 'title': 'x'}, 'if_version'),
+                            ({'from': 'pm', 'if_version': 1, 'title': ' '}, 'title'),
+                            ({'from': 'pm', 'if_version': 1, 'options': 'a'}, 'options'),
+                            ({'from': 'pm', 'if_version': 1, 'urgent': 'yes'}, 'urgent'),
+                            ({'from': 'pm', 'if_version': 1, 'status': 'answered'}, 'status'),
+                            ({'from': 'pm', 'if_version': 1, 'answer': {}}, 'answer'),
+                            ({'from': 'pm', 'if_version': 1, 'repo': 'x'}, 'repo'),
+                            ({'from': 'pm', 'if_version': 1, 'story': 'S-1'}, 'story')):
+            with self.subTest(body=body):
+                self.refused('invalid', field, 'POST', path, AGENT, body)
+        self.refused('forbidden', 'role', 'POST', path, OWNER,
+                     {'from': 'pm', 'if_version': 1, 'title': 'x'})
+
+    def test_only_the_asker_edits_or_withdraws_a_question(self):
+        self.api = api.Api(self.store, clock=CLOCK, session_keys=lambda: ['kit-1', 'kit-2'])
+        qid = self.question(**{'from': 'kit-1'})
+        before = self.store.get('questions', qid)
+        for name in ('kit-2', 'pm', 'Kit-1', 'you'):
+            with self.subTest(claimed=name):
+                obj = self.refused('forbidden', 'from', 'POST', '/questions/%s/edit' % qid,
+                                   AGENT, {'from': name, 'if_version': 1, 'title': 'x'})
+                self.assertIn('kit-1', obj['error']['message'])
+                self.refused('forbidden', 'from', 'POST', '/questions/%s/delete' % qid, AGENT,
+                             {'from': name, 'if_version': 1})
+        self.unchanged('questions', qid, before)
+        self.ok('POST', '/questions/%s/edit' % qid, AGENT,
+                {'from': ' kit-1 ', 'if_version': 1, 'title': 'x'})
+
+    def test_a_question_with_no_from_is_the_pms(self):
+        self.store = seeded(self, {'questions/Q-1.json': {'status': 'open', 'title': 't',
+                                                          'options': OPTIONS}})
+        self.api = api.Api(self.store, clock=CLOCK)
+        self.refused('forbidden', 'from', 'POST', '/questions/Q-1/edit', AGENT,
+                     {'from': 'kit-1', 'if_version': 0, 'title': 'x'})
+        self.ok('POST', '/questions/Q-1/edit', AGENT, {'from': 'pm', 'if_version': 0,
+                                                       'title': 'x'})
+
+    def test_the_asker_withdraws_its_open_question_and_it_is_gone(self):
+        qid, keep = self.question(), self.question()
+        self.refused('invalid', 'if_version', 'POST', '/questions/%s/delete' % qid, AGENT,
+                     {'from': 'pm'})
+        self.refused('invalid', 'from', 'POST', '/questions/%s/delete' % qid, AGENT,
+                     {'if_version': 1})
+        self.refused('invalid', 'title', 'POST', '/questions/%s/delete' % qid, AGENT,
+                     {'from': 'pm', 'if_version': 1, 'title': 'x'})
+        obj = self.ok('POST', '/questions/%s/delete' % qid, AGENT, {'from': 'pm', 'if_version': 1})
+        self.assertEqual((obj['id'], obj['deleted']), (qid, True))
+        self.assertIsNone(self.store.get('questions', qid))
+        self.assertEqual([d['id'] for d in self.ok('GET', '/questions', OWNER)['items']], [keep])
+        self.assertEqual([p['id'] for p in self.ok('GET', '/pending', AGENT)['items']], [])
+        self.refused('not_found', 'id', 'POST', '/questions/%s/delete' % qid, AGENT,
+                     {'from': 'pm', 'if_version': 1})
+
+    def test_the_owner_withdraws_an_open_question_and_never_edits_one(self):
+        qid = self.question()
+        self.refused('invalid', 'from', 'POST', '/questions/%s/delete' % qid, OWNER,
+                     {'from': 'pm'})
+        self.refused('conflict', 'if_version', 'POST', '/questions/%s/delete' % qid, OWNER,
+                     {'if_version': 3})
+        self.ok('POST', '/questions/%s/delete' % qid, OWNER, via='web')
+        self.assertIsNone(self.store.get('questions', qid))
+
+    def test_an_answered_or_logged_question_is_not_changed(self):
+        answered = self.question()
+        self.ok('POST', '/questions/%s/answer' % answered, OWNER, {'choice': 0})
+        logged = self.question()
+        self.ok('POST', '/questions/%s/answer' % logged, OWNER, {'choice': 1})
+        self.ok('POST', '/questions/%s/log' % logged, AGENT, {'ruling': 'R-1', 'if_version': 2})
+        for qid, version in ((answered, 2), (logged, 3)):
+            before = self.store.get('questions', qid)
+            with self.subTest(id=qid):
+                self.refused('conflict', 'status', 'POST', '/questions/%s/edit' % qid, AGENT,
+                             {'from': 'pm', 'if_version': version, 'title': 'x'})
+                self.refused('conflict', 'status', 'POST', '/questions/%s/delete' % qid, AGENT,
+                             {'from': 'pm', 'if_version': version})
+                self.refused('conflict', 'status', 'POST', '/questions/%s/delete' % qid, OWNER)
+                self.unchanged('questions', qid, before)
+
+    def test_a_stale_version_changes_nothing(self):
+        qid = self.question()
+        self.ok('POST', '/questions/%s/edit' % qid, AGENT,
+                {'from': 'pm', 'if_version': 1, 'title': 'second'})
+        tid = self.agent_todo()
+        self.ok('POST', '/todos/%s/edit' % tid, AGENT,
+                {'from': 'worker 3', 'if_version': 1, 'title': 'second'})
+        for coll, path, body in (
+                ('questions', '/questions/%s/edit' % qid, {'title': 'third'}),
+                ('questions', '/questions/%s/delete' % qid, {}),
+                ('todos', '/todos/%s/edit' % tid, {'title': 'third'}),
+                ('todos', '/todos/%s/delete' % tid, {})):
+            doc_id = qid if coll == 'questions' else tid
+            who = 'pm' if coll == 'questions' else 'worker 3'
+            before = self.store.get(coll, doc_id)
+            with self.subTest(path=path):
+                self.refused('conflict', 'if_version', 'POST', path, AGENT,
+                             dict(body, **{'from': who, 'if_version': 1}))
+                self.unchanged(coll, doc_id, before)
+                self.assertEqual(before['title'], 'second')
+
+    # ---- to-dos
+    def test_the_creator_edits_its_open_to_do(self):
+        tid = self.agent_todo()
+        self.ok('POST', '/todos/%s/ack' % tid, AGENT)
+        obj = self.ok('POST', '/todos/%s/edit' % tid, AGENT,
+                      {'from': 'worker 3', 'if_version': 2, 'title': 'new', 'detail': None,
+                       'commands': ['dir /b'], 'repo': 'kit', 'refs': ['B-1'], 'urgent': True})
+        self.assertEqual((obj['version'], obj['status']), (3, 'open'))
+        d = self.store.get('todos', tid)
+        self.assertEqual((d['title'], d['detail'], d['commands'], d['repo'], d['refs'],
+                          d['urgent'], d['from'], d['pm_ack']),
+                         ('new', '', ['dir /b'], 'kit', ['B-1'], True, 'worker 3', False))
+
+    def test_an_agent_to_do_edit_is_judged_by_the_to_do_rules(self):
+        tid = self.agent_todo()
+        before = self.store.get('todos', tid)
+        for body, field in (({'commands': ['git worktree add x']}, 'commands'),
+                            ({'commands': ['notepad C:\\a.txt']}, 'commands'),
+                            ({'detail': 'Open it and apply the change.'}, 'detail'),
+                            ({'commands': ['echo a\ud800b']}, 'commands'),
+                            ({'commands': 'dir'}, 'commands'),
+                            ({'steps': [{'run': 'dir'}]}, 'steps'),
+                            ({'commands': []}, None)):
+            with self.subTest(body=body):
+                self.refused('invalid', field, 'POST', '/todos/%s/edit' % tid, AGENT,
+                             dict(body, **{'from': 'worker 3', 'if_version': 1}))
+                self.unchanged('todos', tid, before)
+
+    def test_only_the_creator_edits_or_withdraws_a_to_do(self):
+        tid = self.agent_todo()
+        pm = self.agent_todo('')            # stored as from: pm
+        before = self.store.get('todos', tid)
+        for name in ('worker 4', 'pm', 'Worker 3', 'you'):
+            with self.subTest(claimed=name):
+                self.refused('forbidden', 'from', 'POST', '/todos/%s/edit' % tid, AGENT,
+                             {'from': name, 'if_version': 1, 'title': 'x'})
+                self.refused('forbidden', 'from', 'POST', '/todos/%s/delete' % tid, AGENT,
+                             {'from': name, 'if_version': 1})
+        self.unchanged('todos', tid, before)
+        self.ok('POST', '/todos/%s/delete' % pm, AGENT, {'from': 'pm', 'if_version': 1})
+        self.ok('POST', '/todos/%s/delete' % tid, AGENT, {'from': 'worker 3', 'if_version': 1})
+        self.assertEqual(self.store.docs('todos'), {})
+
+    def test_a_done_to_do_is_not_changed_by_its_creator(self):
+        tid = self.agent_todo()
+        self.ok('POST', '/todos/%s/done' % tid, OWNER)
+        before = self.store.get('todos', tid)
+        self.refused('conflict', 'status', 'POST', '/todos/%s/edit' % tid, AGENT,
+                     {'from': 'worker 3', 'if_version': 2, 'title': 'x'})
+        self.refused('conflict', 'status', 'POST', '/todos/%s/delete' % tid, AGENT,
+                     {'from': 'worker 3', 'if_version': 2})
+        self.refused('conflict', 'status', 'POST', '/todos/%s/delete' % tid, OWNER)
+        self.unchanged('todos', tid, before)
 
 
 class PmSeenTest(ApiCase):

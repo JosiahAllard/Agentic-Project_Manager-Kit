@@ -591,6 +591,31 @@ class ShellForms(Base):
         self.allowed(self.run_bash('cp -t out -- "%s/a.txt"' % d))
         self.allowed(self.run_bash('cp -- out/new.bin "%s/"' % W.fwd(self.w.add)))   # `--` is no option
 
+    def test_find_exec_writer_is_judged_where_find_searches(self):
+        # {} under -exec, -execdir, -ok or -okdir is a path find found under its start paths, so a
+        # writer given it (or a target the line computes, or one -execdir places in a found
+        # file's folder) writes there, as -delete does
+        d, sq = W.fwd(self.w.plain), "';'"
+        for text in ('find "%s" -name "*.tmp" -exec rm {} +' % d, 'find "%s" -ok rm {} %s' % (d, sq),
+                     'find "%s" -execdir rm {} %s' % (d, sq), 'find "%s" -okdir rm -f {} %s' % (d, sq),
+                     'find "%s" -exec cp a.txt {}/x %s' % (d, sq), 'find "%s" -exec touch "$X" %s' % (d, sq),
+                     "find \"%s\" -exec sh -c 'rm \"$1\"' _ {} %s" % (d, sq),
+                     'find -L "%s" . -exec rm {} +' % d, 'find . "%s" -exec rm {} +' % d,
+                     'find "%s" -delete' % d):
+            with self.subTest(text):
+                self.jailed(self.run_bash(text))
+        # a find nested in find's sh -c is refused before it is placed: its text is not literal
+        self.jailed(self.run_bash("find \"%s\" -exec sh -c 'find \"$1\" -exec rm {} +' _ {} %s" % (d, sq)), 'unreadable')
+        for text in ('find . -name "*.tmp" -exec rm {} +', 'find "%s" -exec rm {} +' % W.fwd(self.w.temp),
+                     'find "%s" -exec rm {} +' % W.fwd(self.w.wt), 'find "%s" -exec grep -l x {} +' % d,
+                     'find "%s" -exec wc -l {} %s' % (d, sq), 'find "%s" -exec cp {} . %s' % (d, sq)):
+            with self.subTest(text):
+                self.allowed(self.run_bash(text))
+
+    def test_find_exec_writer_alternative_searches_the_worktree(self):
+        d = self.jailed(self.run_bash('find "%s" -name "*.tmp" -exec rm {} +' % W.fwd(self.w.plain)))
+        self.assertIn('Instead: find "%s/plain" -name "*.tmp" -exec rm {} +' % W.fwd(self.w.wt), d.reason)
+
     def test_powershell_writers(self):
         for text in ('Remove-Item -Recurse -Force "%s"' % self.out('d'), 'Set-Content -Path "%s" -Value x' % self.out(),
                      '"x" | Out-File "%s"' % self.out(), 'Copy-Item a.txt "%s"' % self.out()):

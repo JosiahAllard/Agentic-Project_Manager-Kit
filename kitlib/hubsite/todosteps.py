@@ -297,7 +297,8 @@ def _texts(fields):
 
 def check(fields):
     """Refused for the first agent-written text the owner's to-do rules forbid (module
-    docstring). Fields of another type are left to the schema; edit text is never judged."""
+    docstring). Fields of another type are left to the schema; the owner's text is never
+    judged (kitlib.hubsite.api judges an agent's add and an agent's edit)."""
     for field, where, text, is_command in _texts(fields):
         if is_command and _NOTEPAD_RE.search(text):
             raise Refused('%s runs plain Notepad: open a file with an {open: <file>} step, which '

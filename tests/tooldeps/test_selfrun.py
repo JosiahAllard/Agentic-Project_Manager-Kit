@@ -601,7 +601,9 @@ class T(unittest.TestCase):
             fh.write('%d %s' % (os.getpid(), os.environ['TEMP']))
 '''
 
-SLEEP_AFTER = '''        time.sleep(4)
+HOLD_UNTIL_GO = '''        deadline = time.time() + 90         # the test makes PROBE_GO; 90 s only if it never does
+        while not os.path.exists(os.environ['PROBE_GO']) and time.time() < deadline:
+            time.sleep(0.02)
 '''
 
 CASES = '''import unittest
@@ -766,32 +768,48 @@ class RealUnits(TempHomeCase):
 
     def test_ctrl_c_waits_for_the_running_units_then_ends_every_worker(self):
         from kitlib.proc import process
-        mods, env = self.pid_units(4, extra=SLEEP_AFTER)
+        mods, env = self.pid_units(4, extra=HOLD_UNTIL_GO)
+        go = os.path.join(self.root, 'go')
+        env['PROBE_GO'] = go
         out = io.StringIO()
         probe_out = env['PROBE_OUT']
         stop = threading.Event()
+        cancelled = threading.Event()
         self.addCleanup(stop.set)
         failed = []
 
-        def interrupt_once_two_units_run():
-            # Ctrl+C, as the console, once both running units have written their probe (each then
-            # sleeps 4 s): a fixed delay fires before any unit started when the machine is loaded.
+        class Pool(selfrun.ThreadPoolExecutor):
+            def shutdown(self, *args, **kwargs):
+                super().shutdown(*args, **kwargs)
+                if kwargs.get('cancel_futures'):
+                    cancelled.set()             # the queued units are cancelled: none can start
+
+        def wait_for(ready, what):
             deadline = time.time() + 60
             while not stop.is_set():
-                if len(os.listdir(probe_out)) >= 2:
-                    _thread.interrupt_main()
+                if ready():
                     return
                 if time.time() > deadline:
-                    failed.append('fewer than 2 units wrote a probe within 60 s: %s'
-                                  % os.listdir(probe_out))
-                    _thread.interrupt_main()      # so the run ends; the check below then fails
+                    failed.append('%s within 60 s: %s' % (what, os.listdir(probe_out)))
                     return
                 stop.wait(0.02)
 
-        poller = threading.Thread(target=interrupt_once_two_units_run, daemon=True)
+        def interrupt_then_let_the_units_end():
+            # Ctrl+C, as the console, once both running units have written their probe. They hold
+            # until `go` exists, made only once the run has cancelled its queued units, so no delay
+            # decides whether a third unit starts: a fixed one misses on a loaded machine.
+            try:
+                wait_for(lambda: len(os.listdir(probe_out)) >= 2, 'fewer than 2 units wrote a probe')
+                _thread.interrupt_main()        # even after a miss, so the run ends; checks fail
+                wait_for(cancelled.is_set, 'the run did not cancel its queued units after Ctrl+C')
+            finally:
+                open(go, 'w').close()
+
+        poller = threading.Thread(target=interrupt_then_let_the_units_end, daemon=True)
         poller.start()
         t = time.time()
-        rc, summary = selfrun.run(mods, self.root, 2, out=out, environ=env, timeout=120)
+        with mock.patch.object(selfrun, 'ThreadPoolExecutor', Pool):
+            rc, summary = selfrun.run(mods, self.root, 2, out=out, environ=env, timeout=120)
         stop.set()
         poller.join(5)
         self.assertEqual(failed, [])
