@@ -773,7 +773,7 @@ class PagesTest(ApiCase):
                 self.refused('invalid', 'id', 'POST', '/pages', AGENT,
                              {'id': doc_id, 'title': 't', 'html': PAGE})
         # a letter and digits glued to more letters or digits is no ref (hubvalidate._REF)
-        for doc_id in ('plan-1', 'XQ-1', 'Q-1x', 'v2-plan', 'q1-notes'):
+        for doc_id in ('plan-1', 'xq-1', 'Q-1x', 'v2-plan', 'q1-notes'):
             with self.subTest(id=doc_id):
                 self.assertEqual(self.publish(doc_id)[0], 200)
 
