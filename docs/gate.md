@@ -419,6 +419,8 @@ The one documented way to gate a worktree from another directory is that worktre
 python <worktree>/tools/gate.py -C <worktree> --full
 ```
 
+A targeted run of a few test modules, with the output in a log (no gate-OK record; it never replaces the `--full` gate): `python -m unittest discover -s <worktree>/tests/<pkg> -t <worktree> -p test_<module>.py > <log> 2>&1`, one command per module, absolute paths, then read the log. For every package a change can reach, `python <worktree>/tools/kit_tests.py -C <worktree> --select [--changed PATH ...]` (docs/test-tools.md "kit_tests"; `--changed` picks packages, not single modules). No `cmd /c` loop.
+
 Running the worktree's own gate.py matters in the kit's repository: the gate records the identity of the kit that ran it (the gate-OK record's `kit.commit`, `runner.kit_identity`), and the code under test is the code that gates.
 
 Landings, `wait-result` and `--measure` apply neither rule. Tests: tests/gate/test_caller_checkout.py (`Refusal` and `ThroughAStub` for the stub rule; `OwnCopy`, `LogDir` and `RunByPath` for the no-stub rule and `--log-dir`).

@@ -327,10 +327,6 @@ def pm_data_store(root, configured):
     return pm_root, pm_cfg, backend, None
 
 
-# The old private name, kept until kitlib/gate/land.py calls pm_data_store.
-_pm_data_store = pm_data_store
-
-
 class _Seen(object):
     """What the stores close_landed reads say about the ids the trailers name: `held`, the
     Closes ids some store holds; `part_held`, the Part-of ids the landed branch holds pulled in

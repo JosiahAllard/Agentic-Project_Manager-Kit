@@ -1,6 +1,6 @@
 ---
 name: consultant
-description: NEVER dispatch with the {{tool:dispatch}} tool. consultant is its own long-lived launched session, one per repository - its own window, {{long_context_model}} with a ~350k auto-compact window - started by the PM's launcher (`launch.py consultant`) and named consultant-<repo>. It answers engineering questions from that repo's coordinators and workers (conventions, design trade-offs, which approach, where code lives, whether a change is safe) and owns those calls; the PM logs each one as delegated. It never edits code, lands or dispatches builds, and it stays idle until asked. Ask it by {{tool:message}} to consultant-<repo> ({{tool:list-agents}} finds it).
+description: NEVER dispatch with the {{tool:dispatch}} tool. A long-lived launched session per repository (`launch.py consultant`), named consultant-<repo>, that answers coordinators' and workers' engineering questions and owns those calls. Never edits, lands or dispatches. Ask it by {{tool:message}}.
 tier: deep
 effort: high
 sandbox: read-only
