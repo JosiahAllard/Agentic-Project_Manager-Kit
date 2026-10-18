@@ -142,7 +142,8 @@ def settings(cfg):
 def coauthor(model, families=(), provider=None):
     """The co-author trailer for `model`: `Claude <model>`, never a bare model name - unless the
     name is one of `families` or starts with one followed by a space, '.' or '-' (`Codex GPT-5`,
-    `Codex-mini`, `Codex.2`; never `Codexer`): that name is kept as given."""
+    `Codex-mini`, `Codex.2`; never `Codexer`): that name is kept as given. A lower-case Claude
+    model id is written as its display name (attribution.display_name)."""
     return attribution.coauthor(model, provider, families)
 
 
