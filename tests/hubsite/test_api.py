@@ -1538,7 +1538,7 @@ class CreatorTest(ApiCase):
         self.api = api.Api(self.store, clock=CLOCK, session_keys=lambda: ['kit-1', 'kit-2'])
         qid = self.question(**{'from': 'kit-1'})
         before = self.store.get('questions', qid)
-        for name in ('kit-2', 'pm', 'KIT-1', 'you'):
+        for name in ('kit-2', 'pm', 'Kit-1', 'you'):
             with self.subTest(claimed=name):
                 obj = self.refused('forbidden', 'from', 'POST', '/questions/%s/edit' % qid,
                                    AGENT, {'from': name, 'if_version': 1, 'title': 'x'})
