@@ -20,8 +20,19 @@ if os.name == "nt":
 LAUNCHER = os.path.join(REPO, "tests", "lockmcp", "scratch_server.py")
 ENTRY = os.path.join(REPO, "mcp", "lock_server.py")
 READS = {"lock_snapshot", "lock_wait_change", "lock_stats", "lock_run", "lock_hold"}
-WRITES = {"lock_hold_create", "lock_hold_edit", "lock_hold_end", "lock_set_game_mode",
-          "lock_set_games", "lock_set_division", "lock_end_run"}
+# The owner writes the server served until the owner made it read-only (docs/lock-mcp.md).
+RETIRED = {"lock_hold_create", "lock_hold_edit", "lock_hold_end", "lock_set_game_mode",
+           "lock_set_games", "lock_set_division", "lock_end_run"}
+# A good argument set for each retired write: refused as an unknown tool, not as bad input.
+RETIRED_ARGS = {
+    "lock_hold_create": {"spec": {"owner": "owner", "scope": "half", "for_s": 3600}},
+    "lock_hold_edit": {"id": "h-20261006T120000Z-abcd", "changes": {"note": "x"}},
+    "lock_hold_end": {"id": "h-20261006T120000Z-abcd"},
+    "lock_set_game_mode": {"enabled": True},
+    "lock_set_games": {"games": [{"exe": "game.exe"}]},
+    "lock_set_division": {"division": None},
+    "lock_end_run": {"id": "r-20261006T120000Z-abcdef"},
+}
 
 
 class Client:
@@ -119,13 +130,26 @@ class McpCase(StoreCase):
 class Tools(McpCase):
     def test_list_tools(self):
         tools = {t["name"]: t for t in self.c.request("tools/list")["result"]["tools"]}
-        self.assertEqual(set(tools), READS | WRITES)
-        self.assertEqual(set(srv.OWNER_ONLY), WRITES)
+        self.assertEqual(set(tools), READS)
         for name, t in tools.items():
-            owner = t["description"].startswith("OWNER-ONLY")
-            self.assertEqual(owner, name in WRITES, name)
-            self.assertEqual(t["annotations"]["readOnlyHint"], name in READS, name)
+            self.assertNotIn("OWNER-ONLY", t["description"], name)
+            self.assertEqual(t["annotations"], {"readOnlyHint": True, "destructiveHint": False},
+                             name)
             self.assertEqual(t["inputSchema"]["type"], "object")
+
+    def test_a_retired_owner_write_is_an_unknown_tool_and_writes_nothing(self):
+        # The launcher's actor is the owner, so on the old server each of these wrote.
+        before = api.snapshot(self.store)
+        for name, arguments in RETIRED_ARGS.items():
+            with self.subTest(name):
+                r = self.c.request("tools/call", {"name": name, "arguments": arguments})
+                self.assertNotIn("result", r)
+                self.assertEqual(r["error"]["code"], -32602)
+        after = api.snapshot(self.store)
+        self.assertEqual(after["holds"], [])
+        self.assertFalse(after["game"]["enabled"])
+        self.assertEqual(after["revision"], before["revision"])
+        self.alive()
 
     def test_read_tools(self):
         s = self.ok("lock_snapshot")
@@ -174,39 +198,12 @@ class Tools(McpCase):
         self.err("lock_run", {"id": "..\\..\\x"}, "invalid", "id")
         self.err("lock_hold", {"id": "r-20261006T120000Z-abcd"}, "invalid", "id")
 
-    def test_a_write_with_good_input(self):
-        res = self.ok("lock_hold_create", {"spec": {"owner": "owner", "scope": "half",
-                                                    "for_s": 3600, "note": "mcp"}})
-        self.assertTrue(res["ok"])
-        self.assertNotIn("snapshot", res)
-        hid = res["result"]["hold"]["id"]
-        self.assertEqual(res["revision"], api.snapshot(self.store)["revision"])
-        # The write reached the store through the api: the in-process api reads it.
-        self.assertEqual([h["id"] for h in api.snapshot(self.store)["holds"]], [hid])
-        got = self.ok("lock_hold", {"id": hid})
-        self.assertTrue(got["found"])
-        self.assertTrue(got["hold"]["live_record"])
-        self.assertEqual(self.ok("lock_hold_edit", {"id": hid, "changes": {"note": "x"}})[
-            "result"]["hold"]["note"], "x")
-        self.ok("lock_hold_end", {"id": hid})
-        self.assertEqual(api.snapshot(self.store)["holds"], [])
-        self.assertTrue(self.ok("lock_set_game_mode", {"enabled": True})["result"]["enabled"])
-        self.assertTrue(api.snapshot(self.store)["game"]["enabled"])
-
-    def test_a_write_with_bad_input(self):
-        # The api's validation: no end and no for_s.
-        self.err("lock_hold_create", {"spec": {"owner": "owner", "scope": "half"}}, "invalid", "end")
-        self.err("lock_hold_create", {"spec": {"owner": "owner", "scope": "half",
-                                               "for_s": 60, "start": "noon"}}, "invalid", "start")
+    def test_a_read_with_bad_input(self):
         # The schema check: wrong type, missing, unknown argument.
-        self.err("lock_set_game_mode", {"enabled": "yes"}, "invalid", "enabled")
-        self.err("lock_set_game_mode", {}, "invalid", "enabled")
-        self.err("lock_hold_end", {"id": "h-20261006T120000Z-abcd", "force": True}, "invalid",
+        self.err("lock_wait_change", {"revision": "1"}, "invalid", "revision")
+        self.err("lock_wait_change", {}, "invalid", "revision")
+        self.err("lock_hold", {"id": "h-20261006T120000Z-abcd", "force": True}, "invalid",
                  "force")
-        self.err("lock_hold_end", {"id": "h-20261006T120000Z-abcd"}, "not_found", "id")
-        self.err("lock_set_division", {"division": {"no_such_key": 1}}, "invalid", "division")
-        self.assertEqual(api.snapshot(self.store)["holds"], [])
-        self.assertFalse(api.snapshot(self.store)["game"]["enabled"])
         # An unknown tool is a JSON-RPC error, as MCP has it.
         r = self.c.request("tools/call", {"name": "lock_nope", "arguments": {}})
         self.assertEqual(r["error"]["code"], -32602)
@@ -223,9 +220,6 @@ class Tools(McpCase):
         self.assertIn("holds unreadable", s["holds_error"])
         e = self.err("lock_hold", {"id": "h-20261006T120000Z-abcd"}, "store")
         self.assertIn("holds unreadable", e["message"])
-        e = self.err("lock_hold_create", {"spec": {"owner": "owner", "scope": "half",
-                                                   "for_s": 60}}, "store")
-        self.assertIn("holds unreadable", e["message"])
         self.alive()
 
     def test_a_line_that_is_not_json_gets_a_parse_error(self):
@@ -234,16 +228,32 @@ class Tools(McpCase):
         self.alive()
 
 
-class AgentActor(McpCase):
-    """The api decides who may (authorize): an agent's owner write is refused as a tool error."""
-    WHO = "agent"
+@unittest.skipUnless(os.name == "nt", "the lock is Windows only")
+class ReadOnly(unittest.TestCase):
+    """The server in process: the retired names are pinned in kitlib.lockmcp, never served."""
 
-    def test_an_agents_owner_write_is_forbidden(self):
-        self.err("lock_set_game_mode", {"enabled": True}, "forbidden")
-        self.err("lock_hold_create", {"spec": {"owner": "owner", "scope": "half", "for_s": 60}},
-                 "forbidden")
-        self.assertFalse(api.snapshot(self.store)["game"]["enabled"])
-        self.alive()
+    def test_the_retired_names_are_pinned_and_not_served(self):
+        from kitlib import lockmcp
+        self.assertEqual(set(lockmcp.OWNER_ONLY), RETIRED)
+        self.assertEqual(set(srv.TOOLS), READS)
+        self.assertFalse(set(srv.TOOLS) & set(lockmcp.OWNER_ONLY))
+        self.assertFalse([n for n in dir(srv.Server) if n[3:] in RETIRED])   # no _t_ handler
+
+    def test_a_retired_call_never_reaches_the_api(self):
+        writes = ("hold_create", "hold_edit", "hold_end", "set_game_mode", "set_games",
+                  "set_division", "end_run")
+        server = srv.Server()
+        for name, arguments in RETIRED_ARGS.items():
+            with self.subTest(name):
+                r = server.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                                   "params": {"name": name, "arguments": arguments}})
+                self.assertEqual(r["error"]["code"], -32602)
+                payload, is_error = server.call(name, arguments)
+                self.assertTrue(is_error)
+        with open(srv.__file__, encoding="utf-8") as f:
+            source = f.read()
+        for w in writes:              # nothing in the server module calls an api write
+            self.assertNotIn("api.%s(" % w, source)
 
 
 @unittest.skipUnless(os.name == "nt", "the lock is Windows only")
@@ -256,7 +266,7 @@ class EntryPoint(unittest.TestCase):
         self.assertEqual(r["serverInfo"]["name"], "machine-lock")
         self.assertEqual(r["capabilities"], {"tools": {"listChanged": False}})
         names = {t["name"] for t in c.request("tools/list")["result"]["tools"]}
-        self.assertEqual(names, READS | WRITES)
+        self.assertEqual(names, READS)
 
 
 @unittest.skipUnless(os.name == "nt", "the lock is Windows only")
