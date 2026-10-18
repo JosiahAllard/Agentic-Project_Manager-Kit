@@ -37,6 +37,14 @@ class ReadOnlyGitElsewhere(Base):
         self.assertEqual(self.run_bash('git -C "%s" apply --check $X a.patch' % d).verdict, 'deny')
         self.assertEqual(self.run_ps('git -C "%s" apply --check @a a.patch' % d).verdict, 'deny')
 
+    def test_apply_check_after_double_dash_is_refused(self):
+        # git reads no option after --: `-- --check` applies a.patch, and a file named --check
+        d = W.fwd(self.w.plain)
+        for text in ('git -C "%s" apply a.patch -- --check' % d, 'git -C "%s" apply -- --check' % d):
+            with self.subTest(text):
+                self.jailed(self.run_bash(text))
+        self.allowed(self.run_bash('git -C "%s" apply --check -- a.patch' % d))
+
 
 class LockRunHelpPiped(unittest.TestCase):
     """A piped run --help was refused as a wrapped gate (observed); it prints usage and runs nothing."""

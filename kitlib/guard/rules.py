@@ -5281,7 +5281,8 @@ def git_reads(gc, strict=False):
 
 
 def apply_checks(gc):
-    """True when git apply `gc` only checks its patch: --check among its words and every option one
+    """True when git apply `gc` only checks its patch: --check among its options (the words before
+    the first --; after it git reads every word as a patch file, `--check` too) and every option one
     APPLY_CHECK_OPTS names (or -p<n>), read as the shell hands it to git (archive_words), and no
     word the guard cannot read (computed, a PowerShell splat, or one PowerShell or cmd may split:
     native_unsure). Any other apply writes the checkout."""
@@ -5290,7 +5291,10 @@ def apply_checks(gc):
     words = archive_words(gc)
     if any(w.dyn or ps_splat(gc, w) or native_unsure(gc.inv.cmd, w) for w in words):
         return False
-    opts = [w.text for w in words if w.text.startswith('-') and w.text != '-']
+    texts = [w.text for w in words]
+    if '--' in texts:                           # git reads no option after --: those words are patches
+        texts = texts[:texts.index('--')]
+    opts = [t for t in texts if t.startswith('-') and t != '-']
     return '--check' in opts and all(t in APPLY_CHECK_OPTS or APPLY_STRIP_RE.match(t) for t in opts)
 
 
