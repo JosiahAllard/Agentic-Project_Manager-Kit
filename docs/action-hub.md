@@ -248,6 +248,64 @@ the PM otherwise, so the PM is the fallback for a creator that is gone (`route`,
 - This state lives in the server's memory only: after a restart every item is the PM's until
   its creator waits again. Older to-dos whose `from` is a free-text name are the PM's.
 
+### Push notifications
+
+When the owner answers a question or marks a to-do done, the server tells the session that asked
+and the PM, so neither has to be waiting (`kitlib/hubsite/push.py` docstring is the source; KIT-HUB-PUSH-NOTIFY).
+It is not the store's git push (the `push` setting).
+
+- Who runs it: `hub.py serve` on the live store asks the host adapter for its delivery
+  (`push(settings)`; on Claude Code `hosts/claude/adapter/peer.py` `HubPush`) and the launcher's
+  `state_dir` (`tools/hub.py` `_push_delivery`). One `PushWorker` thread per server
+  (`kitlib/hubsite/serve.py` `build`) then watches the store's events. A scratch store
+  (`serve --store`), a host with no delivery or an unset `launcher.state_dir` serves without it,
+  with one note line: `push notifications off: <why>`. A worker that fails to start leaves the
+  server serving (`push notifications did not start: ...`).
+- What fires: a question answered (or answered again), a to-do done (or done again), a done to-do
+  reopened, and a to-do the owner added (to the PM only). Each item has a fingerprint (a
+  question's status, `answer.at` and a digest of the answer; a to-do's status and `done_at`), and
+  only a changed fingerprint fires, so `pm_ack` alone never does.
+- Who hears: the item's `from`, unless that is the PM's own (`pm`, the owner, empty), and the
+  PM, once. A launcher key is resolved through sessions.json; `pm` through coordinators.json's
+  `pm_session_id`, then the names `Project Manager` and `pm-session`.
+- What it says: a fixed header, `[hub push] <kind> <id> <status> repo:<repo> from:<from>
+  route:<recipient> attempt:<k>`, and one line of what to do; never a title, a note or an
+  answer, since the session takes the message as a prompt. A to-do's line is `A done mark is not
+  proof: verify each step on disk, then: hub todo ack <id>`: the owner marks a to-do done even
+  when a step inside it failed, so the id is there to check against the disk.
+- Until when: each recipient is sent each item until it is acknowledged. The asking session
+  acknowledges by picking the item up (`pending --for` or `wait --pending --for` hands it over,
+  "Who handles a pending item"), or by `todos ack`; the PM by `todos ack` for a to-do and by
+  `questions log` for a question. An item withdrawn, reopened or answered again replaces or
+  ends its push. Retries come 2, 5, 15, 30 and 60 minutes after a try, then hourly, and stop a
+  day after the first try with one `gave-up` line (`push.SCHEDULE_S`, `push.GIVE_UP_S`). A write
+  whose end is unknown waits for the next slot like any other outcome.
+- How it is sent on Claude Code: one message is two JSON lines written once to the live
+  session's peer pipe (an auth frame with that session's peer token, then a user frame wrapped as
+  a cross-session message in prompting mode), by a hidden helper in a kill-on-close job
+  (`hosts/claude/adapter/peer_worker.py`), so a blocked write never blocks the server. The pipe,
+  pid and creation time come from the session's registry record at send time
+  (docs/launcher.md "Pipe addresses"); only a record whose pid still runs with that creation time
+  counts, because `launch.py stop` leaves records behind. The token is read from the key file
+  beside the record only when sending, checked against the record's creation time, and never
+  logged or stored. The hub publishes no registry record of its own and gets no receipt:
+  `written` means the bytes reached the pipe, not that the session read them. Two live sessions
+  of one name: the one `pipes.json` names, else the newest, logged `ambiguous`. Whether a desktop
+  session wakes on a push is unproven; the PM's own `wait --pending --for pm` stays its path.
+- Files, in `launcher.state_dir`: `push-outbox.json` (what is still to send, read again at
+  start: an entry whose item changed while the server was down fires afresh, one whose item is
+  gone is dropped) and `push-undelivered.jsonl` (one line per try not written, per `ambiguous`
+  pick and per give-up; never a token or any item text; rotated once to `.1` past 1 MiB,
+  `push.LOG_MAX`).
+- Stopping: `Hub.close` tells the worker to begin no further send before the store closes and
+  joins it after (`push.STOP_S`, 5 s).
+- Known limit: an answer made in the moments before the server closes that the worker had not
+  yet seen is not pushed after a restart: the outbox holds only what the worker saw. The PM's
+  wait still shows it.
+
+Tests: tests/hubsite/test_push.py, tests/host/test_claude_peer.py, tests/launcher/test_pipes.py,
+tests/hubsite/test_hub_cli.py `PushCase`.
+
 ## questions/Q-NNN
 | Field | Written by | Meaning |
 |---|---|---|

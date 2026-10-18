@@ -69,6 +69,7 @@ The kit ships as one release with a thin plugin per host, which the owner instal
 
 ## Action Hub
 - A local website served by `tools/hub.py serve` (formerly the Owner Inbox) holds the owner's questions, to-do list and story intake, and later the reservations. It has an HTTP API and a CLI (`tools/hub.py`), and is reachable remotely only through the Cloudflare Access tunnel listener. Stories go to the chosen repo's coordinator for review before they reach its backlog. The PM posts and reads them through the CLI; nothing waits on an answer.
+- Push notifications: when the owner answers a question or marks a to-do done, the server tells the session that asked and the PM through the host's delivery (`kitlib/hubsite/push.py` decides what and when; the host adapter's `push()` sends, on Claude Code to the session's peer pipe; the launcher records each session's pipe as a hint, `kitlib/launcher/pipes.py`). Without a delivery the hub serves as before (docs/action-hub.md "Push notifications").
 - The store schema and the PM's steps are in docs/action-hub.md. The action-hub skill wraps them in the plugin.
 
 ## PM session start
