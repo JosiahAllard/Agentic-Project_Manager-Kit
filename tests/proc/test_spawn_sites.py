@@ -127,7 +127,8 @@ OPEN = ' OPEN (reported, not fixed here): '
 
 HAZARD_EXEMPT = {
     ('kitlib/guard/commands.py', '_ps_env_unsafe', 'Start-Process'): (1, GUARD_READS),
-    ('kitlib/guard/commands.py', '_start_process', 'Start-Process'): (4, GUARD_READS),
+    ('kitlib/guard/commands.py', '_start_process', 'Start-Process'): (3, GUARD_READS),
+    ('kitlib/guard/commands.py', '_sp_unreadable', 'Start-Process'): (4, GUARD_READS),
     ('kitlib/guard/commands.py', 'invocation', 'Start-Process'): (2, GUARD_READS),
     ('kitlib/guard/commands.py', '_nested_text', 'Start-Process'): (1, GUARD_READS),
     ('kitlib/guard/commands.py', '_sp_shell_text', 'Start-Process'): (3, GUARD_READS),
@@ -181,7 +182,7 @@ HAZARD_EXEMPT = {
      'StartupTests.test_task_uses_current_interactive_user_and_hidden_explicit_python_launcher',
      '-WindowStyle Hidden'): (2, BRIDGE_TEXT),
     ('tests/guard/extra_rows.py', '<module>', 'Start-Process'): (4, GUARD_TEST),
-    ('tests/guard/shell_rows.py', '<module>', 'Start-Process'): (84, GUARD_TEST),
+    ('tests/guard/shell_rows.py', '<module>', 'Start-Process'): (98, GUARD_TEST),
     ('tests/guard/shell_rows.py', '<module>', 'cmd /c start'): (2, GUARD_TEST),
     ('tests/guard/test_jail.py', 'UnplacedGit.test_each_env_changer_held_for_every_jailed_role',
      'Start-Process'): (1, GUARD_TEST),
@@ -198,6 +199,9 @@ HAZARD_EXEMPT = {
      'Start-Process'): (1, GUARD_TEST),
     ('tests/guard/test_rolepolicy.py',
      'LockVerbs.test_a_read_or_a_lock_call_whose_output_stays_still_passes',
+     'Start-Process'): (1, GUARD_TEST),
+    ('tests/guard/test_rolepolicy.py',
+     'LockVerbs.test_a_start_process_with_no_program_and_an_unread_parameter_names_no_program',
      'Start-Process'): (1, GUARD_TEST),
     ('tests/guard/test_rules.py', '<module>', 'Start-Process'): (2, GUARD_TEST),
     ('tests/guard/test_rules_hub.py', 'OwnerVerbs.test_launchers', 'Start-Process'): (2, GUARD_TEST),

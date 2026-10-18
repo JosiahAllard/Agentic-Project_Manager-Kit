@@ -200,6 +200,41 @@ def _ps_param_word(cmd, w):
     return len(t) > 1 and t[0] == '-' and (t[1].isalpha() or t[1] in '_?')
 
 
+class Unread(object):
+    """A Start-Process call with no program the guard can name and a parameter it cannot read:
+    `why`. invocation gives it only to expand (which flags it); every other caller gets None, as
+    for any call with no program, so rolepolicy.lock_verb still reads its words (NO_PROGRAM)."""
+    __slots__ = ('why',)
+
+    def __init__(self, why):
+        self.why = why
+
+
+# PowerShell's stop-parsing token between two words (the scanner keeps no word for it)
+PS_STOP_PARSING_RE = re.compile('[%s]{2}%%' % ''.join(sh.PS_DASHES))
+
+
+def _sp_unreadable(cmd, words, i):
+    """Why a Start-Process call's binding cannot be read from its words, or None: an unquoted `--`
+    (every later word positional), a splat (`@p`: its parameters are in the hashtable) or `--%`
+    (the rest of the line passed as written). The guard refuses these rather than read them."""
+    for w in words[i + 1:]:
+        if quoted(cmd, w):
+            continue
+        if PS_SPLAT_RE.match(w.text):
+            return 'a splatted Start-Process argument (%s)' % w.text
+        t = w.text
+        if len(t) >= 2 and t[0] in sh.PS_DASHES and t[1] in sh.PS_DASHES and (len(t) == 2 or t[2] == '%'):
+            return 'a Start-Process %s (end of parameters or stop-parsing)' % t
+    src = cmd.source or ''
+    for a, b in zip(words[i:], words[i + 1:]):
+        if a.end is None or b.start is None or not 0 <= a.end <= b.start <= len(src):
+            return 'a Start-Process call whose words the guard cannot place in its line'
+        if PS_STOP_PARSING_RE.search(src[a.end:b.start]):
+            return 'a Start-Process --% (stop-parsing)'
+    return None
+
+
 def _start_process(cmd, words, i):
     """Start-Process [-FilePath] prog [[-ArgumentList] args] with its switches anywhere.
 
@@ -214,7 +249,8 @@ def _start_process(cmd, words, i):
     rest = words[i + 1:]
     names = SP_SWITCHES + SP_VALUES + PS_COMMON_SWITCHES + PS_COMMON_VALUES
     switches = SP_SWITCHES + PS_COMMON_SWITCHES
-    prog, writes, positional, listed, workdir, unread = None, [], [], [], None, None
+    prog, writes, positional, listed, workdir = None, [], [], [], None
+    unread = _sp_unreadable(cmd, words, i)
     k = 0
 
     def list_words(j):
@@ -265,10 +301,8 @@ def _start_process(cmd, words, i):
         prog = listed.pop()                         # -ArgumentList '/c ...' cmd: FilePath by position
     listed = positional + listed
     if prog is None:
-        if unread is None:
-            return None
-        # no program the guard can name, and a parameter it cannot read: still refused
-        return Invocation('', '', [], cmd, False, i, via='start-process', writes=writes, unread=unread)
+        # no program the guard can name: None as for any such call, an Unread for expand to refuse
+        return None if unread is None else Unread(unread)
     args = [x for v in listed for x in _split_list(v)]
     return Invocation(base_name(prog.text), prog.text, args, cmd, prog.dyn, i, via='start-process',
                       writes=writes, word=prog, listed=listed, workdir=workdir, unread=unread)
@@ -307,9 +341,10 @@ def passed(cmd, w):
     return w.text
 
 
-def invocation(cmd):
+def invocation(cmd, unread=False):
     """The Invocation `cmd` runs, or None (an assignment only, an empty command, a keyword that
-    runs no program, a PowerShell expression)."""
+    runs no program, a PowerShell expression). With `unread` (expand only), a Start-Process call
+    with no program and a parameter the guard cannot read gives an Unread instead of None."""
     words = cmd.words
     i = 0
     called = False
@@ -376,7 +411,8 @@ def invocation(cmd):
                                       word=words[g])
             continue
         if cmd.shell == sh.PS and name in ('start-process', 'saps', 'start'):
-            return _start_process(cmd, words, i)
+            sp = _start_process(cmd, words, i)
+            return sp if unread or not isinstance(sp, Unread) else None
         if cmd.shell == sh.CMD and name == 'start':
             i += 1
             if i < len(words) and quoted(cmd, words[i]):
@@ -1747,7 +1783,10 @@ def expand(parsed):
             parsed.flag('a cmd if statement')
         if cmd.shell == sh.CMD and first == 'for':
             parsed.flag('a cmd for loop')
-        inv = invocation(cmd)
+        inv = invocation(cmd, unread=True)
+        if isinstance(inv, Unread):
+            parsed.flag(inv.why)                # Start-Process, no program and a parameter unread
+            continue
         if inv is None:
             continue
         if inv.unread:

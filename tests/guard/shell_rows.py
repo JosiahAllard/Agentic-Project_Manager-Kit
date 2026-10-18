@@ -259,6 +259,25 @@ ROWS = [
         "-RedirectStandardError err.txt -Credential $c", w.wt, sub=True), None, None, None),
     ('Start-Process pwsh with a dashed list stays allowed', lambda w: ps(
         "Start-Process pwsh -ArgumentList '-NoProfile','-File','x.ps1'", w.wt, sub=True), None, None, None),
+    # `--` (every later word positional), a splat (`@p`) and `--%` (the rest passed as written): the
+    # guard does not read what PowerShell binds, so the call is refused
+    ('Start-Process -- before cmd into main', lambda w: ps(
+        "Start-Process -- cmd '/c echo x > %s'" % win(w.main, 'f.txt'), w.wt, sub=True), 'deny', 'unreadable', None),
+    ('Start-Process of a splat into main', lambda w: ps(
+        "$p = @{FilePath='cmd'; ArgumentList='/c echo x > %s'}; Start-Process @p" % win(w.main, 'f.txt'), w.wt,
+        sub=True), 'deny', 'unreadable', None),
+    ('Start-Process cmd with a splat into main', lambda w: ps(
+        "$p = @{ArgumentList='/c echo x > %s'}; Start-Process cmd @p" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'unreadable', None),
+    ('Start-Process cmd --% into main', lambda w: ps(
+        "Start-Process cmd --%% /c echo -ea > %s" % win(w.main, 'f.txt'), w.wt, sub=True), 'deny', 'unreadable', None),
+    ('Start-Process with en dash parameters into main', lambda w: ps(
+        "Start-Process \u2013ArgumentList '/c echo x > %s' cmd \u2013Verbose" % win(w.main, 'f.txt'), w.wt, sub=True),
+     'deny', 'main-checkout', None),
+    ('main-role Start-Process with an unknown parameter in main', lambda w: ps(
+        "Start-Process cmd -Bogus -ArgumentList '/c echo hi'", w.main), 'deny', 'unreadable', None),
+    ('Start-Process with a quoted -- in its worktree stays allowed', lambda w: ps(
+        "Start-Process cmd '--','/c echo x > f.txt'", w.wt, sub=True), None, None, None),
     ('cmd start with a quoted title', lambda w: ps('cmd /c start "Godot" godot.exe --headless', w.wt), 'deny', 'heavy',
      heavy('wt', 'godot.exe --headless')),
     ('cmd start /b /wait', lambda w: ps('cmd /c start /b /wait godot.exe --headless', w.wt), 'deny', 'heavy',
