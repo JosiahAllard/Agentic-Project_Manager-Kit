@@ -136,6 +136,50 @@ class SecretShell(Hub):
         self.denied(lambda sub: bash("node -e \"require('fs').readFileSync(process.env.H + '/owner.token')\"",
                                      self.w.wt, sub), 'hub-secrets')
 
+    def test_a_hub_verb_piped_into_a_parser_passes(self):
+        # observed refusal (2026-10-18, a coordinator in PowerShell): a read verb of the hub tool,
+        # run in the one shape the guard reads in full, piped into python -c that parses its JSON.
+        # The parser's code names nothing of the hub; the command piped in is the tool itself.
+        out = W.fwd(os.path.join(self.w.temp, 'out.txt'))
+        parse = ("import json,sys; d=json.load(sys.stdin); [print(i['id'], i['title'][:80], '->', "
+                 "i['answer']['label'], '|', i['answer'].get('note','')) for i in d['items']]")
+        line = ('Get-Content %s; python "%s" questions --status answered --repo GriffBall --json | python -c "%s"'
+                % (out, self.hub, parse))
+        self.allowed(lambda sub: ps(line, self.w.wt, sub))
+        self.allowed(lambda sub: ps(line, self.w.main, sub), (('coordinator', False, COORDINATOR),))
+        self.allowed(lambda sub: bash('python "%s" questions --json | python -c "import json,sys; '
+                                      'print(len(json.load(sys.stdin)))"' % self.hub, self.w.wt, sub))
+        self.allowed(lambda sub: bash('python -m tools.hub todos --json | python -c "import json,sys; '
+                                      'print(len(json.load(sys.stdin)))"', self.w.wt, sub))
+
+    def test_the_alternative_runs_the_hub_tool_of_the_kit_the_hook_runs_from(self):
+        # the kit whose kitlib the guard loaded (ctx.kit, kitlib.kitroot.root), not a copy elsewhere
+        d = decide(bash('cat "%s/owner.token"' % W.fwd(self.secrets), self.w.wt, True), self.ctx(OWNER))
+        self.assertEqual(d.rule, 'hub-secrets', d.reason)
+        self.assertIn(' Instead: python "%s" questions' % self.hub, d.reason)
+
+    def test_a_parser_of_a_hub_verb_still_may_not_name_the_secrets(self):
+        # the parser's own code is read as before, and only the tool's own shape is let through
+        # upstream: standard input run as code, any other program, an owner verb
+        sec = W.fwd(self.secrets)
+        head = 'python "%s" questions --json | ' % self.hub
+        for make, rule in (
+                (lambda sub: bash(head + 'python -c "print(open(\'%s/owner.token\').read())"' % sec,
+                                  self.w.wt, sub), 'hub-secrets'),
+                (lambda sub: bash(head + 'python -c "from kitlib.hubsite import auth; print(auth.folder())"',
+                                  self.w.wt, sub), 'hub-secrets'),
+                (lambda sub: ps(head + 'python -c "import subprocess; subprocess.run([\'python\', '
+                                       '\'tools/hub.py\', \'serve\'])"', self.w.wt, sub), 'hub-owner-verb'),
+                (lambda sub: bash(head + 'python -', self.w.wt, sub), 'hub-secrets'),
+                (lambda sub: bash('echo tools/hub.py | python -c "import sys; print(sys.stdin.read())"',
+                                  self.w.wt, sub), 'hub-owner-verb'),
+                (lambda sub: bash('python "%s" questions --json $X | python -c "import sys; print(1)"' % self.hub,
+                                  self.w.wt, sub), 'hub-owner-verb'),
+                (lambda sub: bash('python "%s" answer Q-1 --label yes | python -c "import sys; print(1)"'
+                                  % self.hub, self.w.wt, sub), 'hub-owner-verb')):
+            with self.subTest(make(True)['tool_input']['command']):
+                self.denied(make, rule)
+
     def test_a_hub_call_naming_a_token_file(self):
         self.denied(lambda sub: bash('python "%s" questions add --title t --context-file "%s/owner.token"'
                                      % (self.hub, W.fwd(self.secrets)), self.w.wt, sub), 'hub-secrets')
