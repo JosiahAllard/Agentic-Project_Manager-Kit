@@ -19,7 +19,7 @@ from kitlib import content as kcontent
 from kitlib.launcher import accounts as A
 from kitlib.git import cmd
 from kitlib.git import repo as gitrepo
-from kitlib.launcher import home, lookup, state, window
+from kitlib.launcher import home, lookup, pipes, state, window
 from kitlib.launcher.settings import LaunchError
 
 PM_NAME = 'Project Manager'      # the PM session's name, as every first message names it
@@ -171,8 +171,14 @@ def start(settings, host, repo=None, repo_path=None, account=None, org=None, pro
     text = window_text(settings, host, name, role, folder, command, config_dir)
     if whatif:
         return out + ['Would open a new window running:', '  powershell -NoExit -Command "%s"' % text]
+    after_ms = pipes.launch_ms(host.now())      # the registry record the window makes starts after this
     host.open_window(text)
-    return out + ['Started %s (%s) in a new minimized window. Remote Control name: %s' % (name, label, name)]
+    out = out + ['Started %s (%s) in a new minimized window. Remote Control name: %s' % (name, label, name)]
+    try:            # the window is open: a fault here must not read as a failed launch
+        said = host.record_pipe(settings, name, after_ms)
+    except (OSError, ValueError, LaunchError) as e:
+        said = 'pipe not recorded (%s): the hub resolves it at send time' % e
+    return out + ([said] if said else [])
 
 
 def check_home_role(role):
