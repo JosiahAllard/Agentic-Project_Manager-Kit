@@ -29,6 +29,17 @@ MAX_DEPTH = 6
 # PowerShell splits words on every whitespace character it knows; bash only on space and tab.
 PS_SPACE = (' \t\f\v\u00a0\u0085\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008'
             '\u2009\u200a\u2028\u2029\u202f\u205f\u3000')
+# PowerShell reads an en dash, an em dash and a horizontal bar as '-' before a parameter name (a tuple:
+# `'' in` a str is True)
+PS_DASHES = ('-', '–', '—', '―')
+
+
+def ps_dashed(text):
+    """`text` with a leading PowerShell dash written as '-', so a parameter test reads -Path,
+    –Path and —Path alike."""
+    return '-' + text[1:] if text[:1] in PS_DASHES else text
+
+
 BASH_ESC = ' \t"\'\\$`&|;<>(){}#*?[]!~'
 CD_VERBS = {'cd', 'chdir', 'set-location', 'sl', 'push-location', 'pushd'}
 CD_UNKNOWN = {'popd', 'pop-location'}

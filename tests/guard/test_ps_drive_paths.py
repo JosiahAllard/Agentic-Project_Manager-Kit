@@ -456,6 +456,78 @@ class DynamicTargets(Base):
             with self.subTest(text):
                 self.allowed(self.run_ps(text))
 
+    def test_an_export_cmdlet_judges_every_argument_that_could_be_its_path(self):
+        # rules.ps_export_targets: an Export-* cmdlet the guard has no spec for binds an unknown
+        # param's value and a positional it cannot place as the path, not as Export-Clixml would
+        for text in (r'Export-Alias -As Script $p', r'Export-Alias -Name a $p', r'Export-Alias -As:Script $p',
+                     r'Export-Counter -FileFormat csv $p', r'Export-Alias -Name a -Path:x.ps1 -Description $p'):
+            with self.subTest(text):
+                self.refused_for_both(text)
+        for text in (r'Export-Alias -As Script {main}\x.ps1', r'Export-Alias -Name a -Path {main}\x.ps1',
+                     r'Export-Alias -Description d {main}\x.ps1'):
+            with self.subTest(text):
+                self.denied(self.run_ps(text), 'main-checkout')
+        for text in (r'Export-Alias -As Script x.ps1', r'Export-Alias -Name a x.ps1',
+                     r'Export-Clixml -Depth 2 x.xml', r'Export-Alias -Encoding utf8 x.ps1'):
+            with self.subTest(text):
+                self.allowed(self.run_ps(text))
+
+    def test_a_typographic_dash_names_a_parameter(self):
+        # shell.PS_DASHES: PowerShell reads an en dash, an em dash and a horizontal bar as '-'
+        # (rules.ps_params, rules.ps_unread, commands.canon_param, the powershell -Command scan)
+        for text in ('Copy-Item a.txt –Destination $p', 'Set-Content –Value hi –Path $p',
+                     'Out-File ―FilePath $p', 'Remove-Item —LiteralPath $p'):
+            with self.subTest(text):
+                self.refused_for_both(text)
+        for text in ('Copy-Item a.txt —Destination {main}\\x', 'Start-Process python –RedirectStandardOutput {main}\\x.txt',
+                     'powershell –Command "Remove-Item {main}\\x.txt"', 'powershell /c "Remove-Item {main}\\x.txt"',
+                     'Invoke-Expression –Command "Remove-Item {main}\\x.txt"',
+                     'Invoke-Expression –Verbose "Remove-Item {main}\\x.txt"'):
+            with self.subTest(text):
+                self.denied(self.run_ps(text), 'main-checkout')
+        self.denied(self.run_ps('Stop-Process –Name python'), 'kill-by-name')
+        for text in ('Copy-Item a.txt –Destination b.txt', 'Set-Content –Path x.txt –Value $s',
+                     'Invoke-Expression –Verbose "Write-Output hi"'):
+            with self.subTest(text):
+                self.allowed(self.run_ps(text))
+
+    def test_an_unknown_powershell_switch_is_judged_both_ways(self):
+        # commands._nested_text: powershell.exe runs a switch it does not know, and every word after
+        # it, as the command; pwsh reads the later -Command; both readings are judged
+        for text in ('powershell "-x; Remove-Item {main}\\x.txt"', 'powershell "–x; Remove-Item {main}\\x.txt"',
+                     'powershell "/x; Remove-Item {main}\\x.txt"',
+                     'powershell "-x; Remove-Item {main}\\x.txt" -c "Write-Output hi"',
+                     'pwsh -Zork -c "Remove-Item {main}\\x.txt"',
+                     'pwsh -ConfigurationFile c.json -c "Remove-Item {main}\\x.txt"',
+                     # a one-letter switch with a value (-o Text, -i Text) before -Command
+                     'powershell -o Text -c "Remove-Item {main}\\x.txt"',
+                     'powershell -i Text -c "Remove-Item {main}\\x.txt"'):
+            with self.subTest(text):
+                self.denied(self.run_ps(text), 'main-checkout')
+        for text in ('powershell -Zork -c $s', 'powershell -Zork -c -'):
+            with self.subTest(text):
+                self.denied(self.run_ps(text), 'unreadable')
+        for text in ('powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Write-Output hi"',
+                     'pwsh -nop -noni -NoProfileLoadTime -c "Write-Output hi"', 'pwsh -Zork -c "Write-Output hi"'):
+            with self.subTest(text):
+                self.allowed(self.run_ps(text))
+
+    def test_a_literal_here_string_value_passes(self):
+        # rules._ps_value_end: a -Value here-string with no substitution is one value
+        for q in ("'", '"'):
+            with self.subTest(q):
+                self.allowed(self.run_ps('Set-Content -Path x.txt -Value @%s\nline one\r\nline two\n%s@' % (q, q)))
+
+    def test_a_computed_value_or_a_positional_group_stays_refused(self):
+        # rules.ps_unread: $( ) runs code, a positional ( ) could be the path, and a here-string line
+        # PowerShell closes on (a typographic quote) the scanner does not read as its end
+        for text in (r'Set-Content x.txt -Value "Generated $(Get-Date)"', r'Set-Content x.txt -Value $(Get-Date)',
+                     r"Set-Content x.txt ($a -join ',')", 'Set-Content -Path x.txt -Value @"\n$(Get-Date)\n"@',
+                     "Set-Content -Path x.txt -Value @'\n’@; Set-Content {main}\\x.txt hi\n'@",
+                     "Set-Content x.txt @'\nline one\n'@"):
+            with self.subTest(text):
+                self.refused_for_both(text)
+
     def test_cd_inside_a_subexpression_makes_the_location_unknown(self):
         # $( ) and ( ) run in the caller's scope: the cd moves the location for what follows
         for text in (r'echo $(cd {main}) ; New-Item x.txt', r'echo (cd {main}) ; New-Item x.txt'):

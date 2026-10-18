@@ -697,7 +697,7 @@ HUB_LINE_DRIVES = ('alias:', 'function:', 'variable:', 'psvariable', 'psdefault'
 HUB_LINE_PS_VARS = ('-outvariable', '-pipelinevariable', '-errorvariable', '-warningvariable',
                     '-informationvariable')
 HUB_LINE_PS_ALIASES = ('-ov', '-pv', '-ev', '-wv', '-iv')
-HUB_LINE_PS_DASHES = ('-', '–', '—', '―')
+HUB_LINE_PS_DASHES = sh.PS_DASHES
 # what one command's text, value or history reaches another by: bash's $_ and ${_} (the last
 # word), $! and ${!...}, BASH_ variables, history expansion (!!, !$, !*, !^); PowerShell's $$, $^,
 # ${$}, ${^}, $_, and the automatic variables holding a command's text or errors
@@ -1700,7 +1700,7 @@ def _hub_sls_patterns(args):
     named, positional, k = [], None, 0
     while k < len(args):
         w = args[k]
-        t = w.text
+        t = sh.ps_dashed(w.text)
         if w.dyn:
             return []
         if t.startswith('-') and len(t) > 1:
@@ -2349,6 +2349,17 @@ WIN_OPT_RE = re.compile(r'^/[A-Za-z]+(?::\S*)?$')
 PS_NAMED_DYN_RE = re.compile(r'^-[A-Za-z_]\w*:')    # -Name: and a computed value, in one word
 
 
+def ps_param_word(cmd, w):
+    """The text of `w` with its dash as '-' when PowerShell reads it as a parameter name (-Path,
+    –Path, -Path:$p), else None. `-Destination:$p`: a literal name and a colon bind the
+    computed rest to that parameter. A quoted word or a negative number is never a parameter."""
+    t = sh.ps_dashed(w.text)
+    if t.startswith('-') and len(t) > 1 and (not w.dyn or PS_NAMED_DYN_RE.match(t)) and \
+            not cm.quoted(cmd, w) and not re.match(r'^-\d', t):
+        return t
+    return None
+
+
 def ps_params(cmd, words, spec):
     """({canonical param: [value Word]}, [positional Word]) of a cmdlet's arguments, by `spec`.
     A parameter is matched as PowerShell does: exactly, by an alias, or by the one name it is a
@@ -2359,10 +2370,8 @@ def ps_params(cmd, words, spec):
     k = 0
     while k < len(words):
         w = words[k]
-        t = w.text
-        # `-Destination:$p`: a literal name and a colon bind the computed rest to that parameter
-        if t.startswith('-') and len(t) > 1 and (not w.dyn or PS_NAMED_DYN_RE.match(t)) and \
-                not cm.quoted(cmd, w) and not re.match(r'^-\d', t):
+        t = ps_param_word(cmd, w)
+        if t is not None:
             body, colon, val = t[1:].partition(':')
             body = body.lower()
             if body in names:
@@ -2387,6 +2396,34 @@ def ps_params(cmd, words, spec):
         pos.extend(_split_commas(w))
         k += 1
     return named, pos
+
+
+# an Export-* cmdlet's parameters that never name the file it writes (ps_export_targets)
+PS_EXPORT_NO_PATH = ('inputobject', 'depth', 'encoding') + PS_COMMON_VALUES
+
+
+def ps_export_targets(cmd, words):
+    """[Word]: every argument of an Export-* cmdlet with no spec in PS_CMDLETS that could name the
+    file it writes. Its parameters are unknown, so a positional, the next word after any parameter
+    and a colon value are each a target; only the value of a parameter named exactly in
+    PS_EXPORT_NO_PATH is not (`Export-Alias -As Script $p` judges Script and $p)."""
+    out, k = [], 0
+    while k < len(words):
+        w = words[k]
+        t = ps_param_word(cmd, w)
+        k += 1
+        if t is None:
+            out.extend(_split_commas(w))
+            continue
+        body, colon, val = t[1:].partition(':')
+        body = body.lower()
+        no_path = PS_COMMON_ALIASES.get(body, body) in PS_EXPORT_NO_PATH
+        if colon and val:
+            if not no_path:
+                out.append(sh.Word(val, w.dyn, w.start, w.end))
+        elif no_path and k < len(words) and ps_param_word(cmd, words[k]) is None:
+            k += 1                              # its value
+    return out
 
 
 def ps_bound(spec, named, pos):
@@ -2433,7 +2470,7 @@ class NetWrite(object):
 
 
 NET_QUOTES = '‘’‚‛“”„'     # PowerShell reads these as quotes too
-NET_DASHES = '-–—―'              # and these as the dash an operator starts with
+NET_DASHES = ''.join(sh.PS_DASHES)  # and these as the dash an operator starts with
 NET_UNARY = frozenset(('not', 'bnot', 'join', 'split', 'csplit', 'isplit'))   # -op operand
 
 
@@ -3438,6 +3475,8 @@ _PS_CALL_ARG = r"\s*(?:%s|%s|-?\d+)\s*" % (_PS_SQ, _PS_VAR)
 _PS_CHAIN = re.compile(r'(?:\.[A-Za-z_]\w*(?:\((?:%s(?:,%s)*)?\))?)*' % (_PS_CALL_ARG, _PS_CALL_ARG))
 _PS_VALUE_ATOM = re.compile(r'%s|%s|%s|%s' % (_PS_VAR, _PS_SQ, _PS_DQ, _PS_BARE))
 _PS_VALUE_END = re.compile(_PS_END)
+# a here-string body line PowerShell may end it on: any quote of its kind then @, indented or not
+_PS_HERE_CLOSE = {"'": re.compile("(?m)^\\s*['‘’‚‛]@"), '"': re.compile('(?m)^\\s*["“”„]@')}
 
 
 def _ps_group_end(src, k):
@@ -3476,6 +3515,18 @@ def _ps_value_end(cmd, p):
         e = _ps_group_end(src, p)
         if e is None or not any(w.start <= p and w.end == e for w in cmd.words if w.start is not None):
             return None
+    elif src.startswith(("@'", '@"'), p):
+        q = src[p + 1]
+        w = next((w for w in cmd.words if w.start == p and w.end is not None and
+                  src[w.end - 2:w.end] == q + '@' and src[p + 2:p + 4].lstrip('\r')[:1] == '\n'), None)
+        if w is None:
+            return None
+        body = src[p + 2:w.end - 2]
+        # a $( ) runs a command; a line PowerShell would close on (a typographic quote) is not
+        # the end the scanner read
+        if (q == '"' and '$(' in body) or _PS_HERE_CLOSE[q].search(body):
+            return None
+        e = w.end
     else:
         m = _PS_VALUE_ATOM.match(src, p)
         if not m:
@@ -3501,9 +3552,10 @@ def ps_unread(cmd, args, spec=None):
     spans = []                          # [start, end) of the values passed over
     if spec is not None:
         for k, w in enumerate(args):
-            if w.start is None or cm.quoted(cmd, w) or not w.text.startswith('-') or len(w.text) < 2:
+            t = sh.ps_dashed(w.text)
+            if w.start is None or cm.quoted(cmd, w) or not t.startswith('-') or len(t) < 2:
                 continue
-            body, colon, val = w.text[1:].partition(':')
+            body, colon, val = t[1:].partition(':')
             body = body.lower()
             names = spec.names()
             cands = [body] if body in names else [spec.aliases[body]] if body in spec.aliases \
@@ -3535,7 +3587,7 @@ def ps_unread(cmd, args, spec=None):
         prev = w
         if any(s <= w.start and w.end <= e for s, e in spans):
             continue
-        if w.text.startswith('-') and not cm.quoted(cmd, w) and spec is not None and \
+        if sh.ps_dashed(w.text).startswith('-') and not cm.quoted(cmd, w) and spec is not None and \
                 any(s == src.find(':', w.start) + 1 and w.start < s and w.end <= e for s, e in spans):
             continue                    # -Value:$v: the value passed over
         m = arg_re.match(src, w.start)
@@ -3612,9 +3664,7 @@ def write_targets(cmd, inv):
             if name not in ('curl', 'wget'):
                 return out
         elif cmdlet.startswith('export-') and cmdlet not in PS_CMDLETS:
-            bound = ps_bound(PS_CMDLETS['export-clixml'], *ps_params(cmd, args, PS_CMDLETS['export-clixml']))
-            return out + bound.get('path', []) + bound.get('literalpath', []) + \
-                ps_unread(cmd, args, PS_CMDLETS['export-clixml'])
+            return out + ps_export_targets(cmd, args) + ps_unread(cmd, args, PS_CMDLETS['export-clixml'])
     if cmd.shell == sh.CMD and name in CMD_WRITERS:
         pos = [w for w in args if not w.text.startswith('/')]
         if name == 'type':
@@ -6773,7 +6823,7 @@ def ps_proc_params(cmd, args):
     k = 0
     while k < len(args):
         w = args[k]
-        t = w.text
+        t = sh.ps_dashed(w.text)
         if t.startswith('-') and len(t) > 1 and not w.dyn and not cm.quoted(cmd, w):
             p = cm.canon_param(t, names, PS_PROC_ALIASES) or t.lower()
             k += 1
@@ -6785,7 +6835,7 @@ def ps_proc_params(cmd, args):
             else:
                 named[p] = ''
             continue
-        pos.append(t)
+        pos.append(w.text)
         k += 1
     return named, pos
 

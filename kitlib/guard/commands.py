@@ -145,7 +145,7 @@ def _param(words, names):
     """Index of the value of a PowerShell parameter (any unambiguous prefix of `names`, or
     -Name:value), or None."""
     for k, w in enumerate(words):
-        t = w.text.lower()
+        t = sh.ps_dashed(w.text.lower())
         if not t.startswith('-') or len(t) < 2:
             continue
         name, colon, _v = t.partition(':')
@@ -161,8 +161,9 @@ def quoted(cmd, w):
 
 def canon_param(text, names, aliases=None):
     """A PowerShell parameter word (-Name, -Name:value) as the canonical name it selects among
-    `names` (exact, an alias, or the one name it is a prefix of), or None."""
-    t = text.lower().split(':', 1)[0]
+    `names` (exact, an alias, or the one name it is a prefix of), or None. Its dash may be any of
+    shell.PS_DASHES."""
+    t = sh.ps_dashed(text.lower().split(':', 1)[0])
     if not t.startswith('-') or len(t) < 2:
         return None
     if t in names:
@@ -443,8 +444,12 @@ LINE_CD_RE = re.compile(r'(?i)(?<![\w.-])(?:%s)(?![\w.-])' % '|'.join(
 BASH_VALUE_OPTS = {'-o', '+o', '-O', '+O', '--rcfile', '--init-file'}
 PS_VALUE_PARAMS = ('executionpolicy', 'windowstyle', 'workingdirectory', 'configurationname',
                    'outputformat', 'inputformat', 'version', 'psconsolefile', 'settingsfile',
-                   'custompipename')
-PS_VALUE_ALIASES = {'ep', 'ex', 'w', 'wd', 'of', 'if', 'v', 'ea'}
+                   'custompipename', 'configurationfile')
+PS_VALUE_ALIASES = {'ep', 'ex', 'w', 'wd', 'of', 'o', 'if', 'v', 'ea'}
+# powershell.exe and pwsh switches without a value (by any prefix)
+PS_SWITCHES = ('nologo', 'noexit', 'sta', 'mta', 'noprofile', 'noninteractive', 'help', '?', 'login',
+               'interactive', 'namedpipeservermode', 'servermode', 'socketservermode', 'sshservermode',
+               'noprofileloadtime')
 
 
 def _ps_takes_value(t):
@@ -452,6 +457,18 @@ def _ps_takes_value(t):
     if body in PS_VALUE_ALIASES:
         return True
     return len(body) >= 2 and body not in ('in', 'i') and any(p.startswith(body) for p in PS_VALUE_PARAMS)
+
+
+def _ps_switch(w):
+    """A powershell.exe or pwsh switch word as '-name' in lower case (it reads /Command and
+    –Command as -Command), or its text in lower case."""
+    t = w.text.lower()
+    return '-' + t[1:] if t[:1] == '/' else sh.ps_dashed(t)
+
+
+def _ps_command_switch(t):
+    return t.startswith('-') and len(t) > 1 and ('command'.startswith(t[1:]) or t == '-cwa' or
+                                                 'commandwithargs'.startswith(t[1:]))
 
 
 def span_text(cmd, words):
@@ -510,33 +527,52 @@ def _nested_text(inv, parsed):
             return None                         # bash script.sh: a file, not text
         return STDIN, sh.BASH
     if name in PS_SHELLS:
-        k = 0
+        k, unknown = 0, None
+        lit = 'a nested powershell command whose text is not literal'
+
+        def nested(why, *readings):
+            # every way the shells may read the words is judged
+            texts = [words for words in readings if words]
+            if any(w.dyn for words in texts for w in words):
+                parsed.flag(why)
+                return None
+            return '\n'.join(' '.join(w.text for w in words) for words in texts), sh.PS
         while k < len(a):
-            t = a[k].text.lower()
+            t = _ps_switch(a[k])
             if t.startswith('-e') and 'encodedcommand'.startswith(t[1:]) or t in ('-ec', '-enc'):
                 parsed.flag('an encoded PowerShell command')
                 return None
-            if t.startswith('-') and len(t) > 1 and 'command'.startswith(t[1:]):
+            # powershell.exe runs a switch it does not know, and every word after it, as the
+            # command (unknown); pwsh refuses it, or reads it as a switch, and goes on
+            first = a[unknown:] if unknown is not None else []
+            if _ps_command_switch(t):
                 rest = a[k + 1:]
                 if [w.text for w in rest] == ['-']:
-                    return STDIN, sh.PS
-                if any(w.dyn for w in rest):
-                    parsed.flag('a nested powershell -Command whose text is not literal')
+                    if unknown is None:
+                        return STDIN, sh.PS
+                    parsed.flag(lit)
                     return None
-                return ' '.join(w.text for w in rest), sh.PS
+                return nested('a nested powershell -Command whose text is not literal', first, rest)
             if t.startswith('-') and len(t) > 1 and 'file'.startswith(t[1:]):
-                return None
+                return nested(lit, first) if first else None
             if t.startswith('-') and _ps_takes_value(t):
                 k += 2
                 continue
             if t.startswith('-'):
+                if unknown is None and t != '-' and not any(s.startswith(t[1:]) for s in PS_SWITCHES):
+                    unknown = k
                 k += 1
                 continue
-            rest = a[k:]
-            if any(w.dyn for w in rest):
-                parsed.flag('a nested powershell command whose text is not literal')
+            # a word that is no switch starts the command; a shell that took it as the value of a
+            # switch before it reads a later -Command
+            later = next((j for j in range(k + 1, len(a)) if _ps_command_switch(_ps_switch(a[j]))), None)
+            then = a[later + 1:] if later is not None else []
+            if [w.text for w in then] == ['-']:
+                parsed.flag(lit)
                 return None
-            return ' '.join(w.text for w in rest), sh.PS
+            return nested(lit, first or a[k:], then)
+        if unknown is not None:
+            return nested(lit, a[unknown:])
         return STDIN, sh.PS
     if name == 'cmd':
         for k, w in enumerate(a):
@@ -559,7 +595,7 @@ def _nested_text(inv, parsed):
         if p:
             how, k = p
             words = [sh.Word(a[k].text.split(':', 1)[1], a[k].dyn, 0, 0)] if how == 'colon' else a[k:k + 1]
-        words = [w for w in words if not w.text.startswith('-')][:1]
+        words = [w for w in words if not sh.ps_dashed(w.text).startswith('-')][:1]
         if not words:
             if inv.cmd.piped_in:
                 return STDIN, sh.PS
