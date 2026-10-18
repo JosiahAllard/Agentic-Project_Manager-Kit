@@ -2072,7 +2072,8 @@ class Lander(object):
         the main checkout to the remote's main (fetch, switch back, a fast-forward), leave
         anything only the checkout has to a person, and say how a merge that reached the remote
         without a passing merged gate is taken back (a revert by hand, never run here). Commits
-        on the remote's main on top of the landing are named, with the full gate to run."""
+        on the remote's main on top of the landing are named, with the full gate to run in a new
+        worktree (tools/new_worktree.py), never in the main checkout."""
         main_b, remote = self.cfg.main_branch, self.cfg.remote
         g = 'git -C "%s"' % self.root
         upstream = '%s/%s' % (remote, main_b)
@@ -2096,13 +2097,22 @@ class Lander(object):
         on_top = ([l for l in (out or '').splitlines() if l.strip()] if out is not None
                   else left['extra'])
         if on_top:
+            # A full gate runs in a worktree, never the main checkout (AGENTS.md); in the kit,
+            # with the worktree's own gate.py, as full_gate_command names it.
+            wt = '<worktree>'
+            gate_py = os.path.join(wt if oncommit.is_kit(self.root) else S.kit_live(), 'tools',
+                                   'gate.py')
             steps.append(('%s has %d commit(s) on top of the merge that no merged gate saw: %s. '
-                          'Once the lock is broken, gate %s whole: `python "%s" -C "%s" --full`' % (
+                          'Once the lock is broken, gate %s whole in a worktree, never in the main '
+                          'checkout: make one on a new branch from %s with `python "%s" -C "%s" '
+                          '<area>/<slug>`, then gate it: `python "%s" -C "%s" --full`' % (
                               upstream, len(on_top),
                               '; '.join(l[:10] + l[40:] for l in on_top[:10]) + (
                                   '; and %d more' % (len(on_top) - 10) if len(on_top) > 10
                                   else ''),
-                              main_b, os.path.join(S.kit_live(), 'tools', 'gate.py'), self.root),
+                              main_b, upstream,
+                              os.path.join(S.kit_live(), 'tools', 'new_worktree.py'), self.root,
+                              gate_py, wt),
                           []))
         if left['current'] != main_b:
             steps.append(('HEAD is on %s, not %s: switch back to %s first%s' % (
