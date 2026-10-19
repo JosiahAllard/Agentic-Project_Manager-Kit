@@ -79,15 +79,20 @@ def note(kit, payload, agent=None, event=None, now=None):
 
 
 class _Ctx(object):
-    """What kitlib.guard.rules.advice_kit reads: kit, environ, user()."""
+    """What kitlib.guard.rules.advice_kit reads: kit, environ, user(). The machine config is read
+    from the home the hook's own environment names (USERPROFILE, else HOME), never looked up: an
+    environment with neither (a test's) reads no config, so advice_kit names `kit`."""
 
     def __init__(self, kit, environ):
         self.kit, self.environ = kit, dict(environ or {})
 
     def user(self):
+        home = self.environ.get('USERPROFILE') or self.environ.get('HOME')
+        if not home:
+            return {'error': 'no home in the hook environment'}
         from kitlib.config import user
         try:
-            return user.user_config()
+            return user.user_config(home)
         except Exception as e:
             return {'error': str(e)}
 

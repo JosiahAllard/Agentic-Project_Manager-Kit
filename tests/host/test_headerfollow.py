@@ -83,6 +83,12 @@ class Follow(unittest.TestCase):
         ctx = advice.call_args[0][0]
         self.assertEqual((ctx.kit, ctx.environ), ('C:/kit', {'X': '1'}))
 
+    def test_the_machine_config_comes_from_the_hook_environments_home_only(self):
+        self.assertIn('error', headerfollow._Ctx('C:/kit', {}).user())
+        with mock.patch('kitlib.config.user.user_config', return_value={'plugin': None}) as cfg:
+            self.assertEqual(headerfollow._Ctx('C:/kit', {'USERPROFILE': self.root}).user(), {'plugin': None})
+        cfg.assert_called_once_with(self.root)
+
 
 if __name__ == '__main__':
     unittest.main()
