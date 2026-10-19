@@ -8,7 +8,8 @@ hands it to kitlib.host.hookmain.dispatch.
   parse(event_name, payload)   hosts.codex.adapter.events.parse (a tuple for apply_patch)
   agent(payload)               None: Codex's hooks carry no subagent identity
   screen(action, environ)      hosts.codex.adapter.policy.screen, Codex's own policy
-  render(event_name, decision) (stdout, exit code): nothing for an allow; for a deny Codex's
+  render(event_name, decision) (stdout, exit code): nothing for an allow, a warned one too (a
+                       warn-mode rule's warning, kitlib.guard.modes, is not shown); for a deny Codex's
                        permission JSON, {"hookSpecificOutput": {"hookEventName",
                        "permissionDecision": "deny", "permissionDecisionReason"}} and a newline,
                        exit 0. Codex has no ask: hookmain lowers one before render, and render

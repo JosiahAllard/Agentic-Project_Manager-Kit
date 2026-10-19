@@ -102,6 +102,7 @@ from . import context
 from . import generated
 from . import hub as hubg
 from . import jail
+from . import modes
 from . import paths
 from . import shell as sh
 
@@ -117,8 +118,16 @@ def tag(rule, role):
 
 
 def refuse(rule, role, what, instead, kind=DENY):
-    return Decision(kind, rule, '%s Instead: %s %s' % (what.rstrip(), instead.strip(), tag(rule, role)),
-                    instead.strip())
+    """The refusal `rule` makes, or None when its mode (kitlib.guard.modes) is warn, which keeps the
+    reason as the call's warning, or off."""
+    reason = '%s Instead: %s %s' % (what.rstrip(), instead.strip(), tag(rule, role))
+    m = modes.mode(rule)
+    if m == modes.OFF:
+        return None
+    if m == modes.WARN:
+        modes.note(reason)
+        return None
+    return Decision(kind, rule, reason, instead.strip())
 
 
 def reworded(d, reason):
@@ -211,16 +220,27 @@ def decide(event, ctx=None, environ=None, profile=None):
     HostProfile or a callable returning one) is built here, so its reads fail inside decide.
     The shared rules judge first, so a call they refuse is refused as it always was; a call they
     allow then meets the role policy (kitlib.guard.rolepolicy), which is off for a role whose
-    .kit.json entry names no mode, and, when it adds write-jail roots, the shared rules again."""
+    .kit.json entry names no mode, and, when it adds write-jail roots, the shared rules again.
+    Each refusal meets its rule's mode (kitlib.guard.modes): an allow that a warn-mode rule
+    refused carries the warnings (rule WARNED, reason WARNING plus each refusal's reason)."""
     from . import rolepolicy
     ctx = ctx or context.Ctx(environ=environ, profile=profile)
-    d = judge(event, ctx)
-    if d:
-        return d
-    d, held = rolepolicy.screen(event, ctx)
-    if d is None and held is not ctx:
-        d = judge(event, held)
-    return d or Decision(ALLOW)
+    with modes.judging(ctx) as warnings:
+        d = judge(event, ctx)
+        if d:
+            return d
+        d, held = rolepolicy.screen(event, ctx)
+        if d is None and held is not ctx:
+            d = judge(event, held)
+        if d:
+            return d
+        if warnings:
+            return Decision(ALLOW, WARNED, WARNING + ' '.join(warnings))
+    return Decision(ALLOW)
+
+
+WARNED = 'warn'
+WARNING = '[kit guard warning] '
 
 
 def judge(event, ctx):

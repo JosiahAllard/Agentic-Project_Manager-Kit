@@ -10,8 +10,11 @@ kitlib.host.hookmain.dispatch.
   agent(payload)               hosts.claude.adapter.events.agent
   render(event_name, decision) (stdout, exit code): nothing for an allow; for a deny or an ask
                        Claude Code's hook JSON, {"hookSpecificOutput": {"hookEventName",
-                       "permissionDecision", "permissionDecisionReason"}} and a newline. Always
-                       exit 0: the verdict is in the JSON (docs/guard.md "Output").
+                       "permissionDecision", "permissionDecisionReason"}} and a newline. An
+                       allow with a reason (a warn-mode rule's warning, kitlib.guard.modes) is
+                       {"hookSpecificOutput": {"hookEventName", "additionalContext"}}, with no
+                       permissionDecision, while WARN_CONTEXT is on; off, it renders as nothing.
+                       Always exit 0: the verdict is in the JSON (docs/guard.md "Output").
   context(event_name, text)    (stdout, 0): text a session or subagent start hook adds to the
                        agent's context, {"hookSpecificOutput": {"hookEventName",
                        "additionalContext"}} and a newline; nothing for no text. Only the
@@ -48,6 +51,9 @@ from hosts.claude.adapter import events
 MATCHER = 'Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit|Read|Grep|Glob|mcp__.*'
 CONTEXT_EVENTS = ('SessionStart', 'SubagentStart')
 PARTS = ('coordinator', 'pm')
+# A warned allow's reason as PreToolUse additionalContext (render). False: a warned allow renders
+# as nothing, as any allow did before rule modes (docs/guard.md "Rule modes").
+WARN_CONTEXT = True
 
 
 class ClaudeAdapter(object):
@@ -82,7 +88,12 @@ class ClaudeAdapter(object):
     @staticmethod
     def render(event_name, decision):
         if decision.verdict == 'allow':
-            return '', 0
+            if not (WARN_CONTEXT and decision.reason):
+                return '', 0
+            # a warned allow: the warning as context, and no permissionDecision, so Claude Code's
+            # own permission flow decides the call as it would with no hook output
+            return json.dumps({'hookSpecificOutput': {'hookEventName': event_name,
+                                                      'additionalContext': decision.reason}}) + '\n', 0
         return json.dumps({'hookSpecificOutput': {'hookEventName': event_name,
                                                   'permissionDecision': decision.verdict,
                                                   'permissionDecisionReason': decision.reason}}) + '\n', 0
