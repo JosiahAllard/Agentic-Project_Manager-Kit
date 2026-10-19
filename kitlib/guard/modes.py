@@ -29,8 +29,8 @@ CONFIG_KEY = 'guard_rules'
 # The kit's own modes. A rule not named here is deny. owner-only, the hub's owner verbs on a parsed
 # hub tool run (hub-owner-verb), the hub's secrets, machine config, ledger, PM data,
 # lock state, .kit.json, generated files, gate results, destructive git in a main checkout, branch -D,
-# forcing or deleting main, core.hooksPath, owner identity, kill-by-name and file-tool edits of a
-# main checkout stay deny (docs/guard.md "Rule modes").
+# forcing or deleting main, core.hooksPath, owner identity, kill-by-name, a shell alias on the
+# command line (git-alias-shell) and file-tool edits of a main checkout stay deny (docs/guard.md "Rule modes").
 DEFAULTS = {
     'unplaced': WARN,           # a write the guard cannot place (kitlib.guard.rules.UNPLACED)
     # dropped as blocks: the owner can turn each back on
@@ -40,6 +40,7 @@ DEFAULTS = {
     # dropped as blocks, kept as warnings: what the guard cannot read it cannot place (item 1)
     'unreadable': WARN,         # a line the parser cannot read: the kept rules still judge its text
     'git-alias': WARN,          # an alias on the command line: the command it runs is judged
+                                # (a shell alias, !..., is git-alias-shell: deny)
     # turned into warnings
     'heavy': WARN,              # lock etiquette: a heavy program run with no machine lock held
     'heredoc-winpath': WARN,

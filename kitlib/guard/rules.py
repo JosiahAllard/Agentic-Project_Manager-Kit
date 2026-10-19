@@ -85,6 +85,7 @@ Rules, in the order they are checked:
                    Windows path in a string
   busy-wait        (off by default) a foreground sleep loop with no counter, clock or timeout bounding it
   git-alias        (a warning by default) a git alias defined on the command line (-c alias.<name>=...)
+  git-alias-shell  git running a shell alias the command line defines (-c alias.<name>=!...)
 A rule's mode (deny, warn or off) is kitlib.guard.modes'; a rule it does not name is deny.
 A command line the parser cannot read cleanly also goes through kitlib.guard.fallback (its rule,
 unreadable, is a warning by default).
@@ -4800,31 +4801,55 @@ def git_alias(cmd, gc, role):
                   'the command git runs. %s' % (bare(cmd), name, val, how), instead)
 
 
-def inline_alias(gc):
-    """`gc` as git runs it when its subcommand names an alias the line itself defines (-c
-    alias.<name>=<value>, not a shell alias !...): the value's words are the subcommand and its
-    first arguments, as _alias_judged expands an alias from config, so the rules judge the command
-    git runs. A builtin name (git ignores an alias that would hide one), --config-env (its value
-    is in the environment), a computed setting, a value that starts with an option or cannot be
-    split, and a chain deeper than ALIAS_DEPTH leave the call as it stands (git_alias warns)."""
+def _inline_expand(gc):
+    """(gc, shell): `gc` as git runs it when its subcommand names an alias the line itself defines
+    (-c alias.<name>=<value>): the value's words are the subcommand and its first arguments, as
+    _alias_judged expands an alias from config, so the rules judge the command git runs; and
+    (name, value) when the alias git runs is a shell alias (!...), else None. A builtin name (git
+    ignores an alias that would hide one), --config-env (its value is in the environment), a
+    computed setting and a value that starts with an option or cannot be split end the expansion
+    where it is (git_alias warns). A chain is followed at most ALIAS_DEPTH steps: the call is then
+    judged as the last expansion reached."""
     if gc is None or gc.inv is None or not gc.alias or gc.sub_dyn:
-        return gc
+        return gc, None
     inline = {}
     for key, val, first, last in git_prefix_configs(gc):
         if key.startswith('alias.') and not cm.passed(gc.inv.cmd, first).startswith('--') and \
                 not first.dyn and not last.dyn:
-            inline[key[len('alias.'):]] = val   # the last setting of a name wins, as in git
+            inline[key[len('alias.'):].lower()] = val   # the last setting of a name wins, as in git
     for _depth in range(ALIAS_DEPTH):
         val = inline.get(gc.sub.lower())
-        if val is None or gc.sub in GIT_BUILTINS or val.startswith('!'):
-            return gc
+        if val is None or gc.sub in GIT_BUILTINS:
+            return gc, None
+        if val.startswith('!'):
+            return gc, (gc.sub, val)
         words = split_alias(val)
         if not words or words[0].startswith('-'):
-            return gc
+            return gc, None
         rest = [sh.Word(t, False, None, None) for t in words[1:]] + list(gc.rest)
         gc = cm.GitCall(gc.dir, words[0], rest, gc.inv, gc.unknown, gc.alias, False, gc.blind,
                         len(words) - 1 + gc.synth)
-    return gc
+    return gc, None
+
+
+def inline_alias(gc):
+    """`gc` as git runs it, an alias the line defines expanded (_inline_expand)."""
+    return _inline_expand(gc)[0]
+
+
+def git_alias_shell(cmd, gc, role):
+    """git-alias-shell (deny by default): git runs a shell alias (-c alias.<name>=!<command>) the
+    line itself defines, at the end of any chain of them (_inline_expand). The command it runs is
+    shell text the guard does not read, so a push, branch -D or core.hooksPath change could hide
+    in it."""
+    run, shell = _inline_expand(gc)
+    if shell is None:
+        return None
+    name, val = shell
+    rest = ' '.join(w.text for w in run.rest)
+    return refuse('git-alias-shell', role, '`%s` runs a shell command through a git alias it defines (alias.%s=%s), '
+                  'which the guard does not read. Run the command itself:' % (bare(cmd), name, val),
+                  ('%s %s' % (val[1:], rest)).strip())
 
 
 def git_call_judged(inv):
@@ -4843,6 +4868,9 @@ def git_rules(event, ctx, cmd, inv, cwd, role):
         d = git_alias(cmd, gc, role)
         if d:
             return d                            # a warning by default: the command git runs is judged below
+        d = git_alias_shell(cmd, gc, role)
+        if d:
+            return d
         gc = inline_alias(gc)
     if gc.sub_dyn or (gc.sub == '' and gc.inv is not None and gc.inv.via == 'xargs'):
         d = git_push_pmdata(event, ctx, gc, role)       # a computed subcommand may be push
@@ -5204,7 +5232,10 @@ def archive_filter_set(gc):
 def tail_word(w, value):
     """The Word for `value`, the end of the word `w` after an option attached to it (--output=x,
     -ox, -Cdir): its span covers only the value when `w` is spelt as its text (unquoted), so a
-    rewrite (retarget) keeps the option; else the whole word's."""
+    rewrite (retarget) keeps the option; else the whole word's. A word with no span in the line
+    (one an alias's value gave, inline_alias) gives a value with none either."""
+    if w.start is None or w.end is None:
+        return sh.Word(value, w.dyn, None, None)
     start = w.end - len(value) if w.end - w.start == len(w.text) else w.start
     return sh.Word(value, w.dyn, start, w.end)
 
@@ -5535,8 +5566,9 @@ def git_jail(event, ctx, cmd, inv, cwd, role):
         verdict, root = jail.judge(target, rs)
         if verdict is not None and not (verdict == jail.OUTSIDE and jail.sibling(ctx, target, cwd)):
             what = '`%s` makes %s' % (bare(cmd), w.text)
+            # a word an inline alias gave has no span in the line to aim (inline_alias)
             return jail_refusal(role, rs, verdict, root, what, target,
-                                rewrite=lambda path, w=w: retarget(cmd, w, path))
+                                rewrite=None if w.start is None else (lambda path, w=w: retarget(cmd, w, path)))
     if git_reads(gc):
         return None
     landed, why = lander_check(event, ctx, cmd, inv, gc)
@@ -5555,7 +5587,7 @@ def git_jail(event, ctx, cmd, inv, cwd, role):
     dest = jail.destination(rs)
     if verdict != jail.OUTSIDE or dest is None:
         return jail_refusal(role, rs, verdict, root, what, gc.dir)
-    rest = cmd.source[gc.rest[0].start:gc.rest[-1].end] if gc.rest else ''
+    rest = git_rest_text(cmd, gc)
     return refuse('write-jail', role, '%s: it is outside the folders an agent session may write: %s. %s The same command '
                   'in %s:' % (what, jail.describe(rs), JAIL_ASK, fwd(dest.path)),
                   ('git -C %s %s %s' % (quote(dest.path), gc.sub, rest)).rstrip())
@@ -5567,7 +5599,7 @@ def git_in_worktree(ctx, cmd, gc, main_top, cwd):
     is in the text."""
     if gc.blind:
         return git_unplaced(ctx, cmd, gc, cwd)
-    rest = cmd.source[gc.rest[0].start:gc.rest[-1].end] if gc.rest else ''
+    rest = git_rest_text(cmd, gc)
     mine = own_worktree(ctx, cwd, main_top)
     if mine:
         return 'Run it in your worktree:', ('git -C %s %s %s' % (quote(mine), gc.sub, rest)).rstrip()
@@ -5847,11 +5879,36 @@ def git_shared_ref(event, ctx, cmd, gc, cwd, role):
         text, 'deletes' if delete else 'moves', name, why, shared, allowed), 'git -C %s show-ref %s' % (quote(at), name))
 
 
+SAFE_WORD_RE = re.compile(r'^[\w@%+=:,./-]+$')
+
+
+def spelt(text):
+    """`text` as one shell word: bare when it needs no quoting, else single-quoted (double-quoted,
+    with bash's escapes, when it holds a single quote)."""
+    if SAFE_WORD_RE.match(text):
+        return text
+    if "'" not in text:
+        return "'%s'" % text
+    return '"%s"' % re.sub(r'(["\\$`])', r'\\\1', text)
+
+
+def git_rest_text(cmd, gc):
+    """The text of `gc.rest` for a hint: the words an alias the line defines gave (gc.synth, no
+    span in the line) spelt as git split them, then the line's own words as written."""
+    words = [spelt(w.text) for w in gc.rest[:gc.synth]]
+    own = gc.rest[gc.synth:]
+    if own and own[0].start is not None and own[-1].end is not None:
+        words.append(cmd.source[own[0].start:own[-1].end])
+    elif own:
+        words.extend(spelt(w.text) for w in own)
+    return ' '.join(words)
+
+
 def git_unplaced(ctx, cmd, gc, cwd):
     """(sentence, command) for git whose place `gc.blind` hides (GIT_DIR and the like, --git-dir,
     --work-tree, core.worktree, --config-env, a computed -c): drop it and run the same git
     command in the session's own worktree, or where it runs when it is in none."""
-    rest = cmd.source[gc.rest[0].start:gc.rest[-1].end] if gc.rest else ''
+    rest = git_rest_text(cmd, gc)
     mine = own_worktree(ctx, cwd)
     git = 'git -C %s' % quote(mine) if mine else 'git'
     return 'Drop %s and run it in your worktree:' % gc.blind, ('%s %s %s' % (git, gc.sub, rest)).rstrip()

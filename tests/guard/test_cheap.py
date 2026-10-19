@@ -9,7 +9,7 @@ from hosts.claude.adapter import host as claude_host
 from hosts.codex.adapter.host import ADAPTER as CODEX
 from kitlib import config, pmdata
 from kitlib.config import schema, user
-from kitlib.guard import modes, rules
+from kitlib.guard import context, modes, rules
 from kitlib.host import Action, Decision, hookmain
 
 from . import world as W
@@ -310,6 +310,54 @@ class InlineAliasJudged(unittest.TestCase):
         d = self.decide("git -c alias.status='push --force origin main' status")
         self.assertEqual((d.verdict, d.rule), ('allow', rules.WARNED), d.reason)
         self.assertIn('rule=git-alias', d.reason)
+        d = self.decide("git -c 'alias.status=!git push --force origin main' status")
+        self.assertEqual((d.verdict, d.rule), ('allow', rules.WARNED), d.reason)
+
+    SHELL_ROWS = (
+        ("git -c 'alias.x=!git push --force origin main' x", 'git push --force origin main'),
+        ("git -c 'alias.x=!git branch -D main' x", 'git branch -D main'),
+        ("git -c 'alias.x=!git config core.hooksPath x' x", 'git config core.hooksPath x'),
+        ("git -c 'alias.y=!git branch -D main' -c alias.x=y x", 'git branch -D main'),
+        ("git -c 'alias.X=!git push --force origin main' x --tags", 'git push --force origin main --tags'),
+    )
+
+    def test_a_shell_alias_the_line_defines_is_denied(self):
+        # git-alias only warns; the shell command a ! alias runs is text the guard does not read
+        self.assertEqual(modes.mode('git-alias-shell'), modes.DENY)
+        for text, instead in self.SHELL_ROWS:
+            with self.subTest(text):
+                d = self.decide(text)
+                self.assertEqual((d.verdict, d.rule), ('deny', 'git-alias-shell'), d.reason)
+                self.assertEqual(d.instead, instead)
+
+    def test_an_archive_output_an_alias_gives_is_judged(self):
+        # the --output word has no span in the line: no crash, the verdict of the plain command
+        main = W.fwd(os.path.join(self.w.main, 'x.zip'))
+        self.assertEqual(self.decide('git archive --output=%s HEAD' % main).verdict, 'deny')
+        for out in ('x.zip', main):
+            with self.subTest(out):
+                plain = self.decide('git archive --output=%s HEAD' % out)
+                d = self.decide("git -c alias.a='archive --output=%s' a HEAD" % out)
+                self.assertEqual(d.verdict, plain.verdict, d.reason)
+                if plain.verdict == 'deny':
+                    self.assertEqual(d.rule, plain.rule, d.reason)
+
+    def test_a_hint_writes_the_command_the_alias_runs(self):
+        # git -C <main checkout> from the worktree: the same command in the worktree, built from
+        # the expanded words, never the whole line again
+        main = W.fwd(self.w.main)
+        for text, cmd in (("git -C %s -c alias.x='commit -m \"a b\"' x --allow-empty" % main,
+                           "commit -m 'a b' --allow-empty"),
+                          ("git -C %s -c alias.x='commit -m y' x" % main, 'commit -m y')):
+            with self.subTest(text):
+                d = self.decide(text)
+                self.assertEqual(d.verdict, 'deny', d.reason)
+                self.assertNotIn('alias.', d.instead)
+                self.assertEqual(d.instead, 'git -C "%s" %s' % (W.fwd(self.w.wt), cmd))
+        # a git the text cannot place (--git-dir): drop it, the same command in the worktree
+        d = self.decide("git --git-dir=../x -c alias.x='commit -m y' x")
+        self.assertEqual(d.verdict, 'deny', d.reason)
+        self.assertEqual(d.instead, 'git -C "%s" commit -m y' % W.fwd(self.w.wt))
 
 
 class HubKept(World):
@@ -345,6 +393,25 @@ class HubKept(World):
 
     def test_code_that_imports_the_hub_site_is_denied(self):
         self.denied('python -c "from kitlib.hubsite import client"', 'hub-secrets')
+
+    def test_an_owner_verb_on_a_line_the_parser_cannot_read_is_denied(self):
+        # unreadable only warns: the fallback reads the part holding the hub tool again
+        for line in ("echo 'x ; python \"%s\" answer Q-1 --choice 1" % self.hub,
+                     "echo 'x ; python -m tools.hub todos done T-1",
+                     "echo 'x\npython \"%s\" approvals approve A-1" % self.hub):
+            with self.subTest(line):
+                self.denied(line, 'hub-owner-verb')
+                d = self.decide(W.bash(line, self.w.wt), environ={context.ROLE_ENV: 'coordinator'})
+                self.assertEqual((d.verdict, d.rule), ('deny', 'hub-owner-verb'), d.reason)
+
+    def test_an_agent_verb_on_such_a_line_only_warns(self):
+        d = self.decide(W.bash("echo 'x ; python \"%s\" questions" % self.hub, self.w.wt, sub=True))
+        self.assertEqual((d.verdict, d.rule), ('allow', rules.WARNED), d.reason)
+        self.assertIn('rule=unreadable', d.reason)
+
+    def test_the_owner_runs_an_owner_verb_on_such_a_line(self):
+        d = self.decide(W.bash("echo 'x ; python \"%s\" answer Q-1 --choice 1" % self.hub, self.w.wt))
+        self.assertEqual(d.verdict, 'allow', d.reason)
 
 
 class Warned(World):
