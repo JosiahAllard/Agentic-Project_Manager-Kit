@@ -184,10 +184,12 @@ class Check(Fixture):
         out = self.r.git('merge', '--no-ff', 'area/w', check=False)
         self.assertTrue(os.path.isfile(os.path.join(self.main, '.git', 'MERGE_HEAD')), out)
 
-    def test_a_merge_in_progress_passes_only_under_the_flag_from_main(self):
+    def test_a_merge_in_progress_in_main_fails_even_under_the_flag(self):
+        # The lander merges in the _landing worktree, so the flag exempts no tracked change.
         self.conflicted_merge_in_main()
         code, out = self.check(self.main, allow_tracked=True)
-        self.assertEqual(code, 0, out)
+        self.assertEqual(code, 1, out)
+        self.assertIn(RECORD, out)
 
     def test_merge_head_in_main_does_not_hide_a_tracked_change_from_a_worktree(self):
         self.conflicted_merge_in_main()
@@ -205,9 +207,11 @@ class Check(Fixture):
         self.assertEqual(code, 1, out)
         self.assertIn('.gitignore', out)
 
-    def test_a_tracked_change_in_main_passes_from_main_with_the_flag(self):
-        self.append('.gitignore', '# lander edit\n')
-        self.assertEqual(self.check(self.main, allow_tracked=True)[0], 0)
+    def test_the_flag_does_not_exempt_a_tracked_change_from_main(self):
+        self.append('.gitignore', '# stray edit\n')
+        code, out = self.check(self.main, allow_tracked=True)
+        self.assertEqual(code, 1, out)
+        self.assertIn('.gitignore', out)
 
     def test_the_flag_does_not_exempt_a_tracked_change_from_a_worktree(self):
         self.append('.gitignore', '# stray edit\n')
@@ -319,9 +323,10 @@ class TheCommandLine(Fixture):
         self.assertEqual(cm.exception.code, 2)
 
     def test_main_stray_passes_the_flag_through(self):
-        self.append('.gitignore', '# lander edit\n')
-        self.assertEqual(self.run_cli('--main-stray', self.main)[0], 1)
-        self.assertEqual(self.run_cli('--main-stray', '--allow-tracked', self.main)[0], 0)
+        self.assertEqual(self.run_cli('--main-stray', self.outside)[0], 0)
+        code, out = self.run_cli('--main-stray', '--allow-tracked', self.outside)
+        self.assertEqual(code, 1, out)
+        self.assertTrue(out.startswith('[FAIL] could not check'), out)
 
     def test_main_stray_defaults_to_the_current_directory(self):
         self.stray('x', name='oops.txt')
