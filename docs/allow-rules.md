@@ -44,12 +44,12 @@ The lane lines limit only a trailing `--lane <lane>`, the one after `--submit`. 
 the first `*` takes any value. That is safe because `land.py` itself refuses a lane that is not
 `full` or in `.kit.json` (`config_refusal` in `kitlib/gate/land.py`), not because of the rules.
 
-Each line comes in two shells (`Bash(...)`, `PowerShell(...)`) and two script spellings:
-`K/tools/land.py` and `"K/tools/land.py"`. So the lines are:
+Each line comes in two script spellings, `K/tools/land.py` and `"K/tools/land.py"`. The allows
+are `PowerShell(...)` only; the denies come in both `Bash(...)` and `PowerShell(...)`. So the lines are:
 
-- **Allow:** `python <script> -C R * --expect-tip * --submit`, plus one line per lane that adds
-  ` --lane <lane>`. There is never a `--lane *`: a `*` at the end would carry `> file`.
-  With no extra lanes this is 8 lines.
+- **Allow:** `PowerShell(python <script> -C R * --expect-tip * --submit)`, plus one line per lane
+  that adds ` --lane <lane>`. There is never a `--lane *`: a `*` at the end would carry `> file`.
+  With no extra lanes this is 4 lines.
 - **Deny:** 18 lines per shell and spelling, 72 in all:
   - `python <script> * -C*`: a second `-C` after a space, or a glued one;
   - `python <script> -C R *-C*`: the text `-C` anywhere after the fixed `-C R` prefix;
@@ -59,8 +59,13 @@ Each line comes in two shells (`Bash(...)`, `PowerShell(...)`) and two script sp
 argparse keeps the last `-C`, so a second one would move the landing to another checkout. The
 `-C` denies close it however it is spelled: `'-C'`, `"-C"`, `\-C`, `{-C,...}`, a tab before it, or
 `,-C`. They also deny legitimate text that holds `-C`. In PowerShell that includes `-c`, since
-PowerShell matches case-insensitively, so a branch such as `kit/x-check` is denied there. Those
-submits get the normal prompt, or can be run from Bash.
+PowerShell matches case-insensitively, so a branch such as `kit/x-check` is denied there.
+
+There is no Bash allow, because Bash globs. `-[C]`, `-?` or `-*` becomes `-C` when a file named `-C`
+is in Bash's directory, and `--l[o]g-dir` becomes `--log-dir` the same way. A deny cannot name a
+literal `*`, so no deny set closes a second `-C` there. PowerShell and Python do not glob arguments
+on Windows. The Bash denies stay; they cost nothing. A Bash submit gets the normal prompt, and so
+does a PowerShell submit whose text holds `-c` (a branch such as `kit/x-check`).
 
 The metacharacter denies close what an allow's inner `*` would otherwise carry:
 - a redirect;
@@ -106,8 +111,15 @@ permissions, permission-modes and settings pages, read 2026-10-19:
 argparse takes any unique prefix of a long option. A rule that names a flag can be stepped around
 with a prefix of it, unless the tool sets `allow_abbrev=False`.
 
-- **`land.py`:** a prefix inside the first `*` is no hole. Every option it can resolve to (`--sweep-landed`, `--submitted`, `--queue`, `--apply`) is one `land.py` refuses beside `--submit` (exit 2). `test_abbreviation_matches_the_rule_and_land_refuses_it` pins this.
+- **`land.py`:** a prefix inside the first `*` is no hole.
+  - `--sweep-landed`, `--submitted`, `--queue` and `--apply`, and every prefix of them, are options `land.py` refuses beside `--submit` (exit 2). `test_abbreviation_matches_the_rule_and_land_refuses_it` pins this.
+  - `--log-dir` and its prefixes (`--lo`, `--log`, ...) would let a submit write the gate's logs anywhere. The `*--lo*` deny closes them (`test_log_dir_denied`).
 - **`tools/launch.py` and `tools/ledger.py`:** these set `allow_abbrev=False` on the parser and every subparser, so their rules can be written later without this gap (`tests/launcher/test_no_abbrev.py`, `tests/ledger/test_no_abbrev.py`).
+
+## Known limits
+
+- `--` before `--submit` makes `--submit` a branch name, so `land.py` would land without submitting. The allows match it, and `land.py` refuses it as a bad revision (`bad_rev`), not the rules.
+- PowerShell splatting (`@var`) is not denied: `@` alone is no metacharacter here. A splat needs a variable set earlier in the same shell, which the allow does not carry.
 
 ## Open note
 

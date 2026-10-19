@@ -1,6 +1,6 @@
 """The text of the land permission rules, and a reference matcher for them (docs/allow-rules.md).
 
-  allow_lines(kit, repo, lanes)  one allow per shell, script spelling and lane (plus the plain one)
+  allow_lines(kit, repo, lanes)  one PowerShell allow per script spelling and lane (plus the plain one)
   deny_lines(kit, repo)          a second -C, --log-dir, and each shell metacharacter, after the script
   decide(lines, shell, command)  'allow', 'deny' or None under the matching model in the doc
 
@@ -11,6 +11,10 @@ undocumented (runs of spaces, quotes, case in Bash) the doc marks the model's re
 import re
 
 SHELLS = ('Bash', 'PowerShell')
+# The shells that get allow lines. Not Bash: it globs (`-[C]` or `-?` becomes a file named -C), and a
+# deny cannot name a literal `*`, so no deny set closes a second -C there. PowerShell and Python do
+# not glob arguments on Windows. Both shells get the deny lines.
+ALLOW_SHELLS = ('PowerShell',)
 SCRIPT = 'tools/land.py'
 # Shell metacharacters that redirect, chain, substitute, expand, quote or escape: any of them in a
 # land command is denied, so no `*` of an allow can carry one (`$` and `(` stand for `$(`, `@(` and
@@ -34,9 +38,9 @@ def scripts(kit):
 
 
 def allow_lines(kit, repo, lanes):
-    """The allow rules: for each shell and spelling, the plain submit and one per lane, in order."""
+    """The allow rules: for each allowed shell and spelling, the plain submit and one per lane."""
     out = []
-    for shell in SHELLS:
+    for shell in ALLOW_SHELLS:
         for script in scripts(kit):
             base = 'python %s -C %s * --expect-tip * --submit' % (script, repo)
             out.append('%s(%s)' % (shell, base))

@@ -27,30 +27,42 @@ Q = 'python "%s/tools/land.py"' % K
 LINES = {'allow': rules.allow_lines(K, R, ('full',)), 'deny': rules.deny_lines(K, R)}
 ALLOW_ONLY = {'allow': LINES['allow'], 'deny': []}
 SHELLS = ('Bash', 'PowerShell')
+# What the allows alone give a matching command: Bash gets no allow line (rules.ALLOW_SHELLS).
+ALLOWED = {'Bash': None, 'PowerShell': 'allow'}
 
 
 def submit(script=P, middle='kit/a', tail=''):
     return '%s -C %s %s --expect-tip abc123 --submit%s' % (script, R, middle, tail)
 
 
-def decide(command, shell='Bash', lines=None):
+def decide(command, shell='PowerShell', lines=None):
     return rules.decide(LINES if lines is None else lines, shell, command)
 
 
 class RuleTextTest(unittest.TestCase):
     def test_allow_lines_exact(self):
         want = []
-        for shell in SHELLS:
-            for script in ('%s/tools/land.py' % K, '"%s/tools/land.py"' % K):
-                want += ['%s(python %s -C Y:/repo * --expect-tip * --submit)' % (shell, script),
-                         '%s(python %s -C Y:/repo * --expect-tip * --submit --lane full)' % (shell, script)]
+        for script in ('%s/tools/land.py' % K, '"%s/tools/land.py"' % K):
+            want += ['PowerShell(python %s -C Y:/repo * --expect-tip * --submit)' % script,
+                     'PowerShell(python %s -C Y:/repo * --expect-tip * --submit --lane full)' % script]
         self.assertEqual(LINES['allow'], want)
-        self.assertEqual(LINES['allow'][0],
-                         'Bash(python X:/fake-export/0123456789ab/tools/land.py -C Y:/repo * --expect-tip * --submit)')
+        self.assertEqual(LINES['allow'][0], 'PowerShell(python X:/fake-export/0123456789ab/tools/land.py'
+                                            ' -C Y:/repo * --expect-tip * --submit)')
+
+    def test_no_bash_allow_line(self):
+        """Bash globs (`-[C]`, `-?` expand to a file named -C), and a deny cannot name a literal `*`, so
+        no Bash command is allowed; the Bash denies stay."""
+        for lanes in (('full',), ('full', 'quick')):
+            got = rules.allow_lines(K, R, lanes)
+            self.assertTrue(got)
+            self.assertFalse([l for l in got if l.startswith('Bash(')])
+        self.assertTrue([l for l in LINES['deny'] if l.startswith('Bash(')])
+        for cmd in (submit(), submit(middle='kit/a -[C] Z:/other'), submit(middle='kit/a -? Z:/other')):
+            self.assertIsNone(decide(cmd, 'Bash', ALLOW_ONLY))
 
     def test_one_allow_per_lane_full_first_never_a_lane_star(self):
         got = rules.allow_lines(K, R, ('full', 'quick', 'docs'))
-        self.assertEqual(len(got), 2 * 2 * 4)
+        self.assertEqual(len(got), 2 * 4)
         self.assertEqual([l.rsplit(' ', 1)[-1] for l in got[:4]], ['--submit)', 'full)', 'quick)', 'docs)'])
         self.assertFalse([l for l in got if '--lane *' in l])
 
@@ -70,7 +82,7 @@ class RuleTextTest(unittest.TestCase):
 class AllowedTest(unittest.TestCase):
     def test_plain_submit_allowed(self):
         for shell in SHELLS:
-            self.assertEqual(decide(submit(), shell), 'allow')
+            self.assertEqual(decide(submit(), shell), ALLOWED[shell])
 
     def test_lane_allowed(self):
         self.assertEqual(decide(submit(tail=' --lane full')), 'allow')
@@ -88,7 +100,7 @@ class AllowedTest(unittest.TestCase):
 
     def test_quoted_kit_allowed(self):
         for shell in SHELLS:
-            self.assertEqual(decide(submit(Q), shell), 'allow')
+            self.assertEqual(decide(submit(Q), shell), ALLOWED[shell])
 
     def test_powershell_case_insensitive(self):
         loud = submit().upper()
@@ -111,7 +123,7 @@ class DeniedTest(unittest.TestCase):
             for script in (P, Q):
                 cmd = submit(script, middle=middle)
                 with self.subTest(shell=shell, cmd=cmd):
-                    self.assertEqual(decide(cmd, shell, ALLOW_ONLY), 'allow')
+                    self.assertEqual(decide(cmd, shell, ALLOW_ONLY), ALLOWED[shell])
                     self.assertEqual(decide(cmd, shell), 'deny')
 
     def test_single_quoted_second_C_denied(self):
@@ -140,7 +152,7 @@ class DeniedTest(unittest.TestCase):
         for shell in SHELLS:
             cmd = submit(middle=middle)
             with self.subTest(shell=shell, cmd=cmd):
-                self.assertEqual(decide(cmd, shell, ALLOW_ONLY), 'allow')
+                self.assertEqual(decide(cmd, shell, ALLOW_ONLY), ALLOWED[shell])
                 self.assertEqual(decide(cmd, shell), 'deny')
 
     def test_backslash_escaped_submit_denied(self):
@@ -149,7 +161,7 @@ class DeniedTest(unittest.TestCase):
         for shell in SHELLS:
             cmd = '%s -C %s kit/a --expect-tip abc\\ --submit' % (P, R)
             with self.subTest(shell=shell):
-                self.assertEqual(decide(cmd, shell, ALLOW_ONLY), 'allow')
+                self.assertEqual(decide(cmd, shell, ALLOW_ONLY), ALLOWED[shell])
                 self.assertEqual(decide(cmd, shell), 'deny')
 
     def test_glued_C_denied(self):
@@ -185,7 +197,7 @@ class DeniedTest(unittest.TestCase):
             for shell in SHELLS:
                 with self.subTest(cmd=cmd, shell=shell):
                     self.assertEqual(decide(cmd, shell), 'deny')
-                    self.assertEqual(decide(cmd, shell, ALLOW_ONLY), 'allow')   # the hole the deny closes
+                    self.assertEqual(decide(cmd, shell, ALLOW_ONLY), ALLOWED[shell])   # the hole the deny closes
 
     def test_every_metachar_in_an_allowed_command_is_denied(self):
         bases = [submit(), submit(Q), submit(tail=' --lane full')]
