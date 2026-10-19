@@ -270,10 +270,11 @@ a route your company allows or ask IT to allow the names. They do not get round 
 control, and no step weakens, shares or bypasses Access or pairing: those stay yours alone. Never
 open a public port on the PC for this.
 
-What the hub uses (from the code): the laptop talks HTTPS on port 443 only, to `<hostname>` and to
-`<team>.cloudflareaccess.com` (the Access login). The hub uses no WebSocket and no other port. The
-page loads one snapshot, then repeats one long-poll (`GET /wait`, held open up to 55 s,
-`kitlib.hubsite.api.WAIT_MAX_S`).
+What the code shows: the hub uses no WebSocket. The page loads one snapshot, then repeats one
+long-poll (`GET /wait`, held open up to 55 s, `kitlib.hubsite.api.WAIT_MAX_S`), and the tunnel
+listener is on loopback only. Per Cloudflare's setup (INFERENCE from the repo, not shown by it): the
+laptop talks HTTPS on port 443 to `<hostname>` and to `<team>.cloudflareaccess.com` (the Access
+login), plus your identity provider's sign-in host if step 6.4 uses one.
 
 First rule out the hub: on the PC, `python tools/hub.py status` says `tunnel: on` (step 9), and the
 page opens on a network that is not the company's.
@@ -281,19 +282,25 @@ page opens on a network that is not the company's.
 Diagnosis, run on the laptop. Every command only reads: none changes DNS or proxy settings, and
 nothing is installed.
 
+`Test-NetConnection` and `curl.exe` ignore the browser's system proxy, and `nslookup` may not
+resolve outside names on a proxy-only network, so steps 1 to 3 can fail for every outside site.
+Whether the browser itself reaches `<hostname>` is what tells a proxy from a category block.
+
 | Step | Run | You see | It points to |
 | --- | --- | --- | --- |
+| 0 | the commands of steps 1 to 3 against a site you know is allowed | they fail the same way | the network is proxy-only: steps 1 to 3 say nothing about the hub |
 | 1 | `nslookup <hostname>`, then `nslookup <team>.cloudflareaccess.com` | no answer, or an address that is clearly internal | the domain is blocked or categorised (DNS filter) |
 | 2 | `Test-NetConnection <hostname> -Port 443` | `TcpTestSucceeded : False` | a firewall or proxy drops 443 to that name |
 | 3 | `curl.exe -sS -I https://<hostname>` | a company block or category page, or a certificate issued by your company | the domain is categorised or inspected by a proxy |
-| 3 | (same) | a redirect to `<team>.cloudflareaccess.com` | the laptop reached Cloudflare: the network is not the cause |
+| 3 | (same) | a redirect to `<team>.cloudflareaccess.com` | the laptop reached Cloudflare: the network is not the cause for `<hostname>` (the login host or the long-poll can still fail) |
 | 4 | open `https://<team>.cloudflareaccess.com` in the browser | blocked, while `<hostname>` is not | the login name has its own category |
 | 5 | use the page in the browser | it opens and you sign in, but data never updates, or only after about a minute | a response held open is cut or buffered (INFERENCE: from the 55 s long-poll; the repo says nothing of any company proxy) |
 
-A page that loads but shows a refusal in the server's words (step 9.4) reached the hub: that is an
-Access or pairing matter, not the network. A WebSocket or other-port filter cannot be the cause:
-the hub uses neither (INFERENCE only about what a company proxy does with 443; the code is the
-fact).
+The Access message of step 9.4, shown in the server's words, means the hub was reached: that is an
+Access matter, not the network. A proxy 403 shows the page's generic failure text instead. A
+WebSocket filter cannot be the cause: the hub
+uses none (the code is the fact). That no other port is needed is INFERENCE, as is what a company
+proxy does with 443.
 
 Routes you can use, each only if company policy allows it:
 
@@ -301,9 +308,11 @@ Routes you can use, each only if company policy allows it:
   policy first).
 - The phone's hotspot, only if your company's policy allows the work laptop to join another
   network; if unsure, ask IT first.
-- Ask IT to allow `<hostname>` and `<team>.cloudflareaccess.com` on 443. Give them those two
-  names and the results above. The route is already 443-only TLS: Cloudflare answers on 443 and
-  `cloudflared` dials out, so the PC opens no inbound port and nothing more is needed.
+- Ask IT to allow `<hostname>` and `<team>.cloudflareaccess.com` on 443, plus your identity
+  provider's sign-in host, if step 6.4 uses one (INFERENCE). Give them those names and the results
+  above. Per Cloudflare's setup (INFERENCE from the repo), the route is already 443-only TLS:
+  Cloudflare answers on 443 and `cloudflared` dials out, so the PC opens no inbound port and
+  nothing more is needed.
 
 ## What the hub does and does not trust
 
