@@ -14,9 +14,9 @@ asserts `checkout  NOT CHECKED`. It reaches `kitlib.agentstart.text` through the
 output was `NOT CHECKED - the rest: over the 1.0 s budget` and a full gate went red. The test
 holds no time token at all: the wall-clock budget is a production default it cannot see.
 
-## Survey of tests/ (at 766c4424)
+## Survey of tests/
 
-Pattern counts from a search of `tests/**`; a match is not a defect, only a place to look.
+Pattern counts from a search of `tests/**` on the main branch of 2026-10-19; a match is not a defect, only a place to look.
 
 | Class | Count | Sample | Fenced today |
 |---|---|---|---|
