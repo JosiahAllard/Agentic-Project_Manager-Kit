@@ -34,6 +34,13 @@ HOME_HELP = ("deep-worker and consultant sessions only: one whose folder is a ma
 
 
 class Parser(argparse.ArgumentParser):
+    """No abbreviated options, here and in every subparser (parser_class): a permission rule naming
+    a flag cannot be stepped around with a prefix of it (docs/allow-rules.md "Abbreviations")."""
+
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault('allow_abbrev', False)
+        super().__init__(*args, **kwargs)
+
     def error(self, message):
         self.print_usage(sys.stderr)
         sys.stderr.write('USAGE: %s\n' % message)
