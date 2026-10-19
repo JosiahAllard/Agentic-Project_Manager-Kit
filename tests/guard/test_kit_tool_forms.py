@@ -130,6 +130,8 @@ class LookalikeWrappers(unittest.TestCase):
         self.w = W.World(kit={'repo': {'name': 'demo'},
                               'heavy': {'programs': [{'program': 'python*', 'kind': 'build', 'why': 'test'}]}})
         self.addCleanup(self.w.cleanup)
+        W.deny_softened()                       # the cases pin heavy, a warning by default (test_cheap.py)
+        self.addCleanup(W.allow_unplaced)
 
     def judge(self, text):
         return verdict(claude_decide(bash(text, self.w.wt), self.w.ctx()))

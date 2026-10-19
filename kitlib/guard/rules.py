@@ -59,7 +59,8 @@ Rules, in the order they are checked:
                    git that writes a checkout outside them
   wrapped-gate     (off by default) gate.py or `machine_lock.py run` piped into another command (P16)
   root-search      a recursive search from a drive or filesystem root
-  heavy            a heavy program run with no lock held (MACHINE_LOCK_RUN verified by nest_check)
+  heavy            (a warning by default) a heavy program run with no lock held (MACHINE_LOCK_RUN
+                   verified by nest_check)
   git-*            damaging git in a main checkout; branch -D anywhere; a push that deletes or
                    force-pushes main, in every repository (with no .kit.json too); a push to main
                    with no gate-OK record when the repo sets repo.push_block; push --no-verify, send-pack,
@@ -75,7 +76,8 @@ Rules, in the order they are checked:
                    any session
   owner-identity   the owner's email given to a commit, in any session but the owner's own
   kill-by-name     an agent session ending processes by name (taskkill /IM, Stop-Process -Name)
-  heredoc-winpath  python reading a bash heredoc with a single-backslash Windows path in a string
+  heredoc-winpath  (a warning by default) python reading a bash heredoc with a single-backslash
+                   Windows path in a string
   busy-wait        (off by default) a foreground sleep loop with no counter, clock or timeout bounding it
   git-alias        (a warning by default) a git alias defined on the command line (-c alias.<name>=...)
 A rule's mode (deny, warn or off) is kitlib.guard.modes'; a rule it does not name is deny.

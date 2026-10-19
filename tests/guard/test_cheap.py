@@ -7,7 +7,7 @@ from unittest import mock
 
 from hosts.claude.adapter import host as claude_host
 from hosts.codex.adapter.host import ADAPTER as CODEX
-from kitlib import config
+from kitlib import config, pmdata
 from kitlib.config import schema, user
 from kitlib.guard import modes, rules
 from kitlib.host import Action, Decision, hookmain
@@ -272,6 +272,51 @@ class Dropped(World):
             with self.subTest(name):
                 d = self.decide(make())
                 self.assertEqual((d.verdict, d.rule), ('deny', name), d.reason)
+
+
+class Warned(World):
+    """Item 3: heavy (lock etiquette) and heredoc-winpath warn; the owner's machine config makes
+    each deny again; a warned heavy line the fallback reads is still judged by the kept rules."""
+
+    def heavy(self):
+        return W.bash('godot --headless --path .', self.w.wt, sub=True)
+
+    def heredoc(self):
+        bs = '\\'                               # a Windows path, written so no machine path is spelled here
+        return W.bash("python - <<'EOF'\nopen('C:%sUsers%sx.txt')\nEOF" % (bs, bs), self.w.wt, sub=True)
+
+    def test_the_kit_defaults(self):
+        self.assertEqual(modes.DEFAULTS.get('heavy'), modes.WARN)
+        self.assertEqual(modes.DEFAULTS.get('heredoc-winpath'), modes.WARN)
+
+    def test_each_warns_by_default(self):
+        for name, make in (('heavy', self.heavy), ('heredoc-winpath', self.heredoc)):
+            with self.subTest(name):
+                d = self.decide(make())
+                self.assertEqual((d.verdict, d.rule), ('allow', rules.WARNED), d.reason)
+                self.assertIn('rule=%s' % name, d.reason)
+
+    def test_the_owner_can_make_each_deny(self):
+        self.w.user_config({'guard_rules': {'heavy': 'deny', 'heredoc-winpath': 'deny'}})
+        for name, make in (('heavy', self.heavy), ('heredoc-winpath', self.heredoc)):
+            with self.subTest(name):
+                d = self.decide(make())
+                self.assertEqual((d.verdict, d.rule), ('deny', name), d.reason)
+
+    def test_a_heavy_program_behind_a_variable_is_still_judged_by_the_kept_rules(self):
+        # the fallback's heavy check warns and goes on: the git checkout in main is still refused
+        d = self.decide(W.bash('echo godot; "$X" --headless; git checkout main', self.w.main))
+        self.assertEqual((d.verdict, d.rule), ('deny', 'git-checkout'), d.reason)
+        # and a hidden run in a repository with a PM data record, a check after the heavy one
+        common = os.path.join(self.w.main, '.git')
+        os.makedirs(common, exist_ok=True)
+        pmdata.write(common, 'pmdata', 'private', 'a' * 40)
+        d = self.decide(W.bash('echo godot; "$X" --headless; eval "$Y"', self.w.main, sub=True))
+        self.assertEqual((d.verdict, d.rule), ('deny', 'git-push-pmdata'), d.reason)
+
+    def test_a_held_lock_says_nothing(self):
+        self.w.held = True
+        self.assertEqual(self.decide(self.heavy()), Decision('allow'))
 
 
 class NetArgumentIndex(World):

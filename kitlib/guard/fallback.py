@@ -272,10 +272,13 @@ def check(event, ctx, text, cwd, role, parsed):
         dyn = _dyn_commands(parsed)
         if dyn:
             c, inv = dyn[0]
-            return rules.refuse('heavy', role, '%s Its text names %s, a heavy program (kind %s), and this session '
-                                'holds no machine lock.%s' % (why, entry['program'], entry['kind'],
-                                                              rules.run_from(c, cwd)),
-                                rules.lock_alternative(ctx, c, entry, cwd, named_run(c, inv)))
+            d = rules.refuse('heavy', role, '%s Its text names %s, a heavy program (kind %s), and this session '
+                             'holds no machine lock.%s' % (why, entry['program'], entry['kind'],
+                                                           rules.run_from(c, cwd)),
+                             rules.lock_alternative(ctx, c, entry, cwd, named_run(c, inv)))
+            if d:
+                return d
+            continue                            # heavy warns by default: the checks below still run
         d = reread(m.start(), cwd_at(parsed, m.start(), cwd) or cwd)
         if d is not None:
             return answer(d, 'heavy')

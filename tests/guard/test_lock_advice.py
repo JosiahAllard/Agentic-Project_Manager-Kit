@@ -45,6 +45,8 @@ class AdvisedLockLine(unittest.TestCase):
     def setUp(self):
         self.w = W.World()
         self.addCleanup(self.w.cleanup)
+        W.deny_softened()                       # the advice is heavy's, a warning by default (test_cheap.py)
+        self.addCleanup(W.allow_unplaced)
 
     def advice(self, d, rule, role='main'):
         """The command after "Instead: " of deny `d`, without the guard's tag."""

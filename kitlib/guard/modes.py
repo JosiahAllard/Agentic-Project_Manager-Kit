@@ -39,6 +39,9 @@ DEFAULTS = {
     # dropped as blocks, kept as warnings: what the guard cannot read it cannot place (item 1)
     'unreadable': WARN,         # a line the parser cannot read: the kept rules still judge its text
     'git-alias': WARN,          # an alias on the command line: the call is judged as written
+    # turned into warnings (KIT-GUARD-CHEAP item 3)
+    'heavy': WARN,              # lock etiquette: a heavy program run with no machine lock held
+    'heredoc-winpath': WARN,
 }
 
 _STATE = contextvars.ContextVar('kit_guard_modes', default=None)
