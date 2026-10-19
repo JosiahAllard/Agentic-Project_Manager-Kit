@@ -496,7 +496,7 @@ def plan_lines(chosen, why, all_steps, base_text, changed):
 
 
 def gated(cfg, root, base, changed, chosen, kind, name, slug, log_dir, say, book_kw, merged=False,
-          checks_rev=None, gate=None, slot=None, seen=None):
+          checks_rev=None, gate=None, slot=None, seen=None, capped=False):
     """Runs `chosen` in a slot of `kind`: `(results, None)`, or `(None, Outcome)` when the hook
     module or the booking refuses. The hook module's checks come from the work tree, or from
     commit `checks_rev` when given (a landing: --expect-main). `chosen` is never empty. The slot
@@ -512,7 +512,9 @@ def gated(cfg, root, base, changed, chosen, kind, name, slug, log_dir, say, book
     too (its monitor stops there, before its daemons and tree are ended); `seen`, a dict when
     given, gets `windows`: the windows as dicts, None when nothing was watched.
     The lock run records the tree it tests (tested_tree; book's `tree`, Slot.note_tree for a held
-    slot): a branch's HEAD tree, a landing's merge tree, the daily full run's commit's tree."""
+    slot): a branch's HEAD tree, a landing's merge tree, the daily full run's commit's tree.
+    `capped`: a branch gate's booking first waits for the session gate cap (kitlib.gate.gatecap,
+    in the store it books in); a landing and the daily full run leave it False and never wait."""
     checks, options = {}, {}
     if any(s.check for s in chosen):
         try:
@@ -549,6 +551,8 @@ def gated(cfg, root, base, changed, chosen, kind, name, slug, log_dir, say, book
         slot.stop_daemons()
         slot.end_tree()
         return results, None
+    if capped:
+        gatecap.wait_turn((book_kw or {}).get('store') or Store(), name, say)
     try:
         slot = lockrun.book(kind, name, slug, **dict(book_kw or {}, gate=True, tree=tree))
     except LockError as e:
@@ -752,12 +756,11 @@ def _gate_checkout(top, cfg, seen, base=None, full=False, only=None, plan=False,
     run = _to_run(chosen, reused)
     results, watched = [], {}
     if run:
-        # The session gate cap (kitlib.gate.gatecap): a branch gate only; a landing and the
-        # daily full run book through gated() without it.
-        gatecap.wait_turn((book_kw or {}).get('store') or Store(), name, say)
+        # capped: the session gate cap (kitlib.gate.gatecap) is a branch gate's only; a landing
+        # and the daily full run book through gated() without it.
         results, refused = gated(cfg, top, mb, changed, run, gate['kind'], name,
                                  slug or slug_of(branch or head[:10]), logs, say, book_kw,
-                                 gate=gate, seen=watched)
+                                 gate=gate, seen=watched, capped=True)
         if refused is not None:
             return refused
     results = _with_reused(results, chosen, reused)

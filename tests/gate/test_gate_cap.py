@@ -48,7 +48,7 @@ class TempHome(unittest.TestCase):
 
 class Configured(TempHome):
     """The cap from "coordinator_start".gate_cap; unset, 0 and null mean no cap."""
-    REPO = 'Agentic-Project_Manager-Kit'
+    REPO = 'Some-Repo'
 
     def cap(self, data):
         return gatecap.configured(self.REPO, home=self.home(data))
@@ -62,9 +62,6 @@ class Configured(TempHome):
         self.assertEqual(self.cap({'coordinator_start': {'gate_cap': {self.REPO: 4}}}), (4, None))
         self.assertEqual(self.cap({'coordinator_start': {'gate_cap': {self.REPO.lower(): 3}}}),
                          (3, None))
-
-    def test_the_older_section_name_is_read(self):
-        self.assertEqual(self.cap({'conductor_start': {'gate_cap': {self.REPO: 2}}}), (2, None))
 
     def test_off_by_default_and_for_zero_and_null(self):
         for data in ({}, {'coordinator_start': {}}, {'coordinator_start': {'gate_cap': None}},

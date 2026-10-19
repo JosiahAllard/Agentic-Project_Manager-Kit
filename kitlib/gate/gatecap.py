@@ -6,10 +6,9 @@ A run is the session's when its recorded ancestors hold the session's nearest ag
 (kitlib.lock.store.owns): a coordinator and its in-process subagents share one host. The owner's
 own runs (no agent host above the caller) are never counted and never wait. A landing's runs
 (priority "land") are not counted; a landing and the daily full run never call wait_turn
-(kitlib.gate.runner `_gate_checkout` is the one caller).
+(kitlib.gate.runner `gated`, with capped=True from `_gate_checkout` only, is the one caller).
 
-The cap is the machine config's "coordinator_start".gate_cap {repo name: int}, read under the
-older "conductor_start" too. Unset, 0 or null: no cap. A value the cap cannot use, or a machine
+The cap is the machine config's "coordinator_start".gate_cap {repo name: int}. Unset, 0 or null: no cap. A value the cap cannot use, or a machine
 config that cannot be read, is said once as a WARNING and nothing is capped.
 """
 import time
@@ -19,7 +18,6 @@ from kitlib.config.types import ConfigError
 from kitlib.lock import store as lockstore
 
 KEY = 'coordinator_start'
-LEGACY_KEY = 'conductor_start'
 CAP_KEY = 'gate_cap'
 POLL_S = 5.0        # how often a waiting gate counts again; never below the lock's queue_poll_s
 
@@ -31,8 +29,6 @@ def configured(repo, home=None):
     except ConfigError as e:
         return None, 'WARNING: the session gate cap is not applied: %s' % e
     section = data.get(KEY)
-    if not isinstance(section, dict):
-        section = data.get(LEGACY_KEY)
     if not isinstance(section, dict):
         return None, None
     caps = section.get(CAP_KEY)
