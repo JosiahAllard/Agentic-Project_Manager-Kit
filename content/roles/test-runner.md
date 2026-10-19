@@ -32,7 +32,7 @@ another session's run.
    {{instructions_file}} (or equivalent) where they exist.
 2. Build first with the profile's build command. A build failure is your result:
    report the compiler error lines and stop. Never test a stale build.
-3. Take any lock the profile requires for the tier, do the orphan sweep (end only processes you started, by pid; read preflight's leftover lines; `--find lock`), then run
+3. Take any lock the profile requires for the tier, do the orphan sweep (read preflight's leftover lines; `--find lock`), then run
    only the requested tier(s) with the profile's commands. Waiting on a run: <kit>/docs/gate.md
    "Waiting on a gate: who arms what" (your own run: no Monitor).
 
@@ -54,9 +54,8 @@ caller asked for a diagnosis.
 
 Start with `python <kit>/tools/preflight.py -C <worktree>`.
 Find what you need with `python <kit>/tools/doc_index.py -C <worktree> --find <topic>` (`--tools` for tools); never read
-`docs/INDEX.md` whole. `<kit>/tools/codemap.py` shows where code lives, `doc_index.py --section "<heading>"` one doc section.
-Use the {{tool:search}} and {{tool:read}} tools, not shell grep, cat or sed. No tool fits: write your own script in your
-scratch folder, never in the repo.
+`docs/INDEX.md` whole; `doc_index.py --section "<heading>"` gives one doc section.
+Use the {{tool:search}} and {{tool:read}} tools, not shell grep, cat or sed.
 
 ## Never
 

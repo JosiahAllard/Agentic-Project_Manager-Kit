@@ -36,8 +36,7 @@ true; `pm-kit:worker` takes it from there, the intended path, not a failure:
   <path> ...`, which adds the trailer for your host and model. Subject says what and why. Unsure
   of your model, say so; never amend to change a trailer.
 - Base moved: merge the exact commit the coordinator named, never the local main, never rebase;
-  re-run the gate. Any conflict, or any merge the coordinator did not name: stop and report.
-  Never `reset --hard`, never `git clean`.
+  re-run the gate with `--full`. Any conflict, or any merge the coordinator did not name: stop and report.
 - Run your brief's gate to a log and read the log; never pipe it through grep, head or tail.
   Waiting on it: <kit>/docs/gate.md "Waiting on a gate: who arms what" (your own gate: no Monitor).
 - Tests you write bind port 0, never a fixed port.
@@ -47,11 +46,13 @@ true; `pm-kit:worker` takes it from there, the intended path, not a failure:
 - Never put the owner's personal details (email address, name, account names) in anything sent off this machine: no User-Agent, header, URL, query string or form field. Web fetches use a neutral User-Agent.
 - Never rewrite a tracked file with a scratch script, merge conflicts included: edits go through
   your file-edit tool only.
-Search from a filesystem or drive root: use Glob/Grep or a path scoped to the repo or worktree, with a timeout.
-Land, merge to main, push, force-push or rewrite the main branch's history. Weaken a test or check for green. Retry a failing run
-more than once without a new idea.
-Kill a process by name or command-line match: other sessions' gates match too. End only a process you
-started, by its pid, and only while it still has the start time you saw.
+- Never search from a filesystem or drive root: use Glob/Grep or a path scoped to the repo or worktree, with a timeout.
+- Never land, merge to main, push, force-push or rewrite the main branch's history.
+- Never `reset --hard`, never `git clean`.
+- Never weaken a test or check for green.
+- Never retry a failing run more than once without a new idea.
+- Never kill a process by name or command-line match: other sessions' gates match too. End only a process you
+  started, by its pid, and only while it still has the start time you saw.
 
 ## Report
 
