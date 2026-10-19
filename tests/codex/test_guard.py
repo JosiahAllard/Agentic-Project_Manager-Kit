@@ -101,7 +101,8 @@ class NoEditModes(Base):
 
     def test_write_roles_the_writes_list_and_temp_stay_open(self):
         self.allowed(self.event('Write', {'file_path': os.path.join(self.w.wt, 'a.py'), 'content': 'x'}), role='worker')
-        notes = os.path.join(self.w.wt, 'docs', 'ops', 'consultant-notes.local.md')
+        # the consultant's notes file is in agent temp (no role file names a `writes` path now)
+        notes = os.path.join(self.w.temp, 'repo-consultant', 'notes.md')
         self.allowed(self.event('Write', {'file_path': notes, 'content': 'x'}), role='consultant')
         self.allowed(self.event('Write', {'file_path': os.path.join(self.w.temp, 'a.py'), 'content': 'x'}),
                      role='test-runner')

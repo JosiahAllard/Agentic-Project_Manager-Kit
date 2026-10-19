@@ -95,6 +95,23 @@ STEP = Obj({
     'reuse': Field(Either(Bool(), Str(pattern=NAME_RE, what='a group name')), None, 'a branch gate rerun or a landing does not run the step again while the gate cache holds a pass of its key (its input files, command, gate config and kit files); a group name: its group is reused together or not at all'),
 }, required=('name',), what='step object')
 
+# gate.docs_only (kitlib.gate.steps.docs_only): which changes are docs, and the steps they run.
+DOCS_ONLY = Obj({
+    'globs': Field(ListOf(Str(), nonempty=True), None, 'every changed path matches one of these'),
+    'exclude': Field(Strs, None, 'and none matches one of these'),
+    'steps': Field(ListOf(Str(pattern=NAME_RE, what='a step name'), nonempty=True), None,
+                   'the steps a docs-only change runs (a scrub check, say)'),
+}, required=('globs', 'steps'), what='{globs, exclude, steps}')
+
+# daily_full.bisect (kitlib.dailyfull, docs/daily-full.md "Bisect").
+BISECT = Obj({
+    'max_probes': Field(Int(0, 50), 5, 'most commits one bisect runs the red steps at; 0: no bisect'),
+    'prefix': Field(Str(pattern=r'[A-Z][A-Z0-9-]*', what='a record id prefix'), None,
+                    'files <prefix>-DAILY-RED-<commit> for the culprit found; unset: nothing is filed'),
+    'session': Field(Str(pattern=r'[a-z][a-z0-9-]*', what='a session name'), None,
+                     'the session the filed record carries'),
+}, what='{max_probes, prefix, session}')
+
 # A folder outside git an agent session may write, and how (kitlib/guard/jail.py, docs/guard.md "Write jail").
 DATA_ROOT = Obj({
     'path': Field(Str(pattern=r'(?:[A-Za-z]:[\\/]|\\\\|//).+', what='an absolute folder path'), None, 'the folder, absolute'),
@@ -174,6 +191,7 @@ SECTIONS = {
         'kind': Field(Str(pattern=NAME_RE, what='a kind name'), 'daily-full', 'the kinds-table kind the run books'),
         'max_wait': Field(Int(0), 7200, 'seconds it waits for its lock slot before it skips'),
         'stale_hours': Field(Int(1), 36, 'hours after which --summary calls the last result stale'),
+        'bisect': Field(BISECT, None, 'after a red run, bisect the first-parent commits since the last green run for the commit that turned the red steps red (docs/daily-full.md "Bisect"); unset: no bisect'),
     },
     'doc_budget': {
         'default': Field(Int(0), None, 'byte cap for a capped doc with no budget'),
@@ -212,6 +230,8 @@ SECTIONS = {
                             required=('match',), what='{match, excuse, expect}'),
                         None, 'error-line policy'),
         'kind': Field(Str(pattern=NAME_RE, what='a kind name'), 'engine-test', 'the kinds-table kind a gate run books (gate.py and gate.py land)'),
+        'smoke_steps': Field(ListOf(Str(pattern=NAME_RE, what='a step name')), None, 'steps a default (not --full) branch gate runs whatever changed; a landing takes such a gate\'s record for a tip once these steps passed in it (docs/gate.md "Landing"); unset: a landing needs a --full record'),
+        'docs_only': Field(DOCS_ONLY, None, 'a change whose every path is docs: the branch gate runs only its steps, and a landing takes that record (docs/gate.md "Docs-only changes"); unset: no change is docs-only'),
     },
     'guard': {
         'data_roots': Field(ListOf(DATA_ROOT), [], 'folders besides their checkout and temp that agent sessions may write, each with its mode; read from the main checkout only (docs/guard.md "Write jail")'),

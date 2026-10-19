@@ -99,8 +99,10 @@ AGENT_LOCK = {'status': None, 'run': None, 'background': None, 'stop': None,
 LOCK_VERBS = {'controller': AGENT_LOCK, 'write': AGENT_LOCK, 'test': AGENT_LOCK,
               'lander': {'status': None, 'run': None},
               'read': {'status': None}}
-# The lock MCP's tools (kitlib.lockmcp.server.TOOLS) as the lock CLI's verbs they match, held to
-# LOCK_VERBS the same way. A tool under the lock's prefix that is not here is refused.
+# The lock MCP's tools (kitlib.lockmcp.server.TOOLS, all reads) and its retired owner writes
+# (kitlib.lockmcp.OWNER_ONLY, still served by a server started from an older release) as the lock
+# CLI's verbs they match, held to LOCK_VERBS the same way. A tool under the lock's prefix that is
+# not here is refused.
 MCP_VERBS = {'lock_snapshot': ('status',), 'lock_wait_change': ('status',), 'lock_stats': ('status',),
              'lock_run': ('status',), 'lock_hold': ('status',), 'lock_hold_create': ('hold', 'create'),
              'lock_hold_edit': ('hold', 'edit'), 'lock_hold_end': ('hold', 'end'),
