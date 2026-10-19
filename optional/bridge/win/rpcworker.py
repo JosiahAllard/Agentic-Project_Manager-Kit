@@ -6,7 +6,7 @@ import time
 from optional.bridge.core.jsonwire import JsonLineDecoder,encode_frame
 from kitlib.proc.errors import ProcError
 from kitlib.proc.pipe import K,bind,connect,write
-from .rpc import MAX_BYTES,encode,read_frame
+from .rpc import MAX_BUSY_WAIT_MS,MAX_BYTES,encode,read_frame
 from .transport import PipeTarget
 
 wait_pipe=bind(K,'WaitNamedPipeW',[w.LPCWSTR,w.DWORD],w.BOOL)
@@ -39,19 +39,21 @@ def exchange(input_stream,output_stream):
         decoder=JsonLineDecoder(max_frame_bytes=2048)
         frames=decoder.feed(input_stream.readline(2049))
         decoder.finish()
-        if len(frames)!=1 or set(frames[0])!={'pipe','pid','creation','length'}:
+        if len(frames)!=1 or set(frames[0])!={'pipe','pid','creation','length','wait'}:
             raise ValueError('bad private request')
         meta=frames[0]
         target=PipeTarget(meta['pipe'],meta['pid'],meta['creation'])
-        size=meta['length']
+        size,wait=meta['length'],meta['wait']
         if type(size) is not int or not 0<size<=MAX_BYTES: raise ValueError('bad packet size')
+        if type(wait) is not int or not 0<=wait<=MAX_BUSY_WAIT_MS: raise ValueError('bad busy wait')
         data=bytearray()
         while len(data)<size:
             part=input_stream.read(size-len(data))
             if not part: raise ValueError('truncated input')
             data.extend(part)
-        # The owning request() bounds the whole exchange; this bound only backs it up.
-        pipe=_connect(target,time.monotonic()+10)
+        # request() sets wait inside its own budget, so a pipe still busy at the end is
+        # reported not-written before the caller gives up on an uncertain outcome.
+        pipe=_connect(target,time.monotonic()+wait/1000)
         started=True
         count=w.DWORD()
         payload=bytes(data)

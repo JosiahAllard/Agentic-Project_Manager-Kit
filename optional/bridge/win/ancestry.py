@@ -6,26 +6,41 @@ so on a busy machine those listings were most of the service's work and outlaste
 hook's request budget; the hook then exits with nothing published. The walk here asks
 each process for its own recorded parent, so its cost follows the hops walked, not the
 machine's process count.
+
+Each pid is opened once, and its creation time, running state and recorded parent are
+all read from that one handle. Reopening a pid to ask a second question could reach a
+newer process that reused it, whose parent is not in this lineage; one handle cannot.
 """
 from kitlib.proc import process
 from kitlib.proc.win32 import K32
 
 
-class _RunningParents:
-    """parents.get(pid) as a snapshot answers it: the recorded parent pid of a running
-    process, else None."""
+def _read(pid):
+    """(creation, parent pid) of the running process pid, from one handle; else None.
 
-    def get(self,pid):
-        handle=process.open_process(pid,process.PROCESS_QUERY_LIMITED_INFORMATION|process.SYNCHRONIZE)
-        if not handle: return None
-        try:
-            # A snapshot lists running processes only. An exited one stays openable while
-            # any handle to it is open, so the walk must not pass through it here either.
-            if K32.WaitForSingleObject(handle,0)!=process.WAIT_TIMEOUT: return None
-            return process.parent_pid(handle)
-        finally: process.close(handle)
+    A snapshot lists running processes only. An exited one stays openable while any
+    handle to it is open, so it ends the walk here too.
+    """
+    handle=process.open_process(pid,process.PROCESS_QUERY_LIMITED_INFORMATION|process.SYNCHRONIZE)
+    if not handle: return None
+    try:
+        creation=process.handle_ctime(handle)
+        if creation is None or K32.WaitForSingleObject(handle,0)!=process.WAIT_TIMEOUT: return None
+        return creation,process.parent_pid(handle)
+    finally: process.close(handle)
 
 
 def ancestors_of(pid,creation, *, limit):
-    """kitlib's ancestors_of with each parent read from that process alone."""
-    return process.ancestors_of(pid,creation,parents=_RunningParents(),limit=limit)
+    """[(pid, creation)] of a process's running ancestors, nearest first, as kitlib's
+    ancestors_of returns them. The walk stops at a process that is gone, is not the one
+    recorded (creation differs), or was created after its child (its pid was reused)."""
+    found=_read(pid)
+    if found is None or (creation is not None and found[0]!=creation): return []
+    out,current,current_creation,parent=[],int(pid),found[0],found[1]
+    for _ in range(limit):
+        if not parent or parent==current: break
+        found=_read(parent)
+        if found is None or found[0]>current_creation: break
+        out.append((parent,found[0]))
+        current,current_creation,parent=parent,found[0],found[1]
+    return out

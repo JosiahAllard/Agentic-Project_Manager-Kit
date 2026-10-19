@@ -19,6 +19,14 @@ from .leader import ServiceLeader
 from .transport import PipeTarget,run_worker
 
 MAX_BYTES=1024*1024
+MAX_BUSY_WAIT_MS=5000
+
+
+def busy_wait(timeout):
+    """Milliseconds the helper may wait for a busy pipe within a request of timeout seconds.
+    0 (one open, no wait) for a timeout run_worker will refuse anyway."""
+    try: return max(0,min(MAX_BUSY_WAIT_MS,int(timeout*500)))
+    except Exception: return 0
 
 
 def encode(value):
@@ -51,8 +59,10 @@ def request(target,message, *, timeout=5):
     target.__post_init__()
     try: packet=encode(message)
     except Exception: raise BeforeWriteError('invalid-private-request') from None
+    # The helper may wait for the busy pipe for half the budget at most, leaving the rest
+    # for its start and the exchange: a pipe still busy then is reported not-written.
     header=encode_frame({'pipe':target.name,'pid':target.pid,'creation':target.creation,
-        'length':len(packet)},max_frame_bytes=2048)
+        'length':len(packet),'wait':busy_wait(timeout)},max_frame_bytes=2048)
     data=run_worker('bridge_rpc_worker.py',header+packet,limit=MAX_BYTES+2048,timeout=timeout)
     try:
         first,separator,body=data.partition(b'\n')

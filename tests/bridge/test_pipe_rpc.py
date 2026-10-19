@@ -79,7 +79,7 @@ class PipeRpcTests(unittest.TestCase):
         self.leader.listener.accept(timeout=3)  # the one instance now serves another client
         packet=encode({'id':'queued'})
         header=encode_frame({'pipe':self.target.name,'pid':self.target.pid,'creation':self.target.creation,
-            'length':len(packet)},max_frame_bytes=2048)
+            'length':len(packet),'wait':4000},max_frame_bytes=2048)
         output=io.BytesIO()
         worker=threading.Thread(target=exchange,args=(io.BytesIO(header+packet),output))
         self.threads.append(worker)
@@ -93,6 +93,18 @@ class PipeRpcTests(unittest.TestCase):
         status,_,body=output.getvalue().partition(b'\n')
         self.assertEqual(json.loads(status)['state'],'reply')
         self.assertEqual(json.loads(body),{'id':'queued','served':True})
+
+    def test_a_pipe_busy_for_the_whole_budget_is_reported_not_written(self):
+        # The helper waited 10 s for a busy pipe, past every caller's budget, so the caller
+        # killed it and reported an uncertain outcome although nothing had been written.
+        holder=connect(self.leader.endpoint,os.getpid(),own_ctime())
+        self.addCleanup(holder.close)
+        self.leader.listener.accept(timeout=3)  # the one instance serves another client throughout
+        start=time.monotonic()
+        with self.assertRaises(BeforeWriteError) as caught:
+            request(self.target,{'id':'busy'},timeout=4)
+        self.assertEqual(caught.exception.code,'native-peer-unavailable-before-write')
+        self.assertLess(time.monotonic()-start,4)
 
     def test_bad_handler_is_content_free_and_next_connection_still_works(self):
         def fail(peer,message): raise RuntimeError('private message must not enter logs')
