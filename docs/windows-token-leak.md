@@ -15,15 +15,9 @@ CPU per process launch up from 1.3 ms to 6.2 ms.
 While the foreground lock is armed, win32kfull's foreground-launch check
 (`CForegroundLaunch::_CheckAllowForeground`) takes a reference to the parent process's token and
 never releases it. The leaked tokens fill a kernel table that every process creation walks, so
-each launch costs more than the last. An independent write-up of the same leak:
-github.com/bentoner/windows-token-leak.
+each launch costs more than the last.
 
-After each logon the live `ForegroundLockTimeout` system parameter reads 0x7FFFFFFF. The component
-that sets it is not identified. On the measuring machine the HKCU registry value
-(`HKCU:\Control Panel\Desktop`, `ForegroundLockTimeout`) also read 2147483647, so the logon value
-may simply be loaded from the registry (inference, untested; the optional step 3 below tests it).
-The live value is what counts, not the registry value: the registry was seen reading 2147483647
-while the live value was 0.
+After each logon the live `ForegroundLockTimeout` system parameter reads 0x7FFFFFFF. The live value is what counts, not the HKCU registry value.
 
 ## Check
 
@@ -36,20 +30,10 @@ $t = Add-Type -Name FltCheck -Namespace W -PassThru -MemberDefinition '[DllImpor
 ## Fix
 
 After each logon, call `SystemParametersInfo(SPI_SETFOREGROUNDLOCKTIMEOUT = 0x2001, 0, (PVOID)0, 0)`
-and confirm with `SPI_GETFOREGROUNDLOCKTIMEOUT = 0x2000`. With the fix live, 300 launches made
-144,412 token allocations and left 15 outstanding: near zero. The cost: any
-application may take focus at any time (the write-up above).
+and confirm with `SPI_GETFOREGROUNDLOCKTIMEOUT = 0x2000`. The cost: any application may take focus
+at any time.
 
-The set has a restriction the get does not. The Microsoft SystemParametersInfo documentation says
-for `SPI_SETFOREGROUNDLOCKTIMEOUT`: "The calling thread must be able to change the foreground
-window, otherwise the call fails." The SetForegroundWindow documentation lists when a process may
-change the foreground window; at least one must hold: the foreground lock timeout has expired, the
-caller is the foreground process, the caller was started by the foreground process, there is no
-foreground window, the caller received the last input event, or the caller or the foreground
-process is being debugged. So a set from a background process, such as a scheduled task started by
-the Schedule service about 20 s after logon, is likely refused (inference from the documentation,
-not yet shown with a set from a task). The set works from the owner's own foreground PowerShell
-window. The outcome of the task-path probe (step 6) is not yet recorded here.
+The set is refused unless the calling thread may change the foreground window (SystemParametersInfo documentation), so a set from a background process, such as a scheduled task, is likely refused. The set works from the owner's own foreground PowerShell window.
 
 Tokens already leaked stay until a full Restart. Shut down with Fast Startup keeps them.
 
@@ -59,13 +43,7 @@ Not covered: a second, smaller leak from the console default-terminal handoff an
 
 ### Why the first task failed
 
-The first version ran a hidden PowerShell from a scheduled task. It ended with LastTaskResult
-0xC000013A (STATUS_CONTROL_C_EXIT, the exit status of a console process that received CTRL_C or
-CTRL_CLOSE) and never wrote a log line. No PowerShell host start event (PowerShell/Operational
-40961) exists for it, so `powershell.exe` died before its host initialised. The default terminal
-was "Let Windows decide", so the task's console was handed to Windows Terminal while the logon was
-still initialising, and that window closed (strongest hypothesis, inference). `-WindowStyle Hidden`
-hides the window only after PowerShell has started, which is too late.
+A hidden PowerShell started from a scheduled task died before its host initialised (LastTaskResult 0xC000013A, no log line): its console was handed to Windows Terminal while the logon was still initialising, and that window closed (inference). `-WindowStyle Hidden` acts only after PowerShell has started, which is too late.
 
 ### Design
 

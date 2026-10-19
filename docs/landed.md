@@ -1,8 +1,6 @@
 # landed
 
-Held for the joint review: no repository runs it yet.
-
-`tools/landed.py` answers whether a branch has landed. It takes one read-only look and never waits, fetches or writes. Logic: `kitlib/landed/__init__.py`; tests: `tests/landed/test_landed.py`. Ported from the PM kit's `tools/landed.py`.
+`tools/landed.py` answers whether a branch has landed. It takes one read-only look and never waits, fetches or writes. Logic: `kitlib/landed/__init__.py`; tests: `tests/landed/test_landed.py`.
 
 ```
 python tools/landed.py [-C DIR] <branch or commit>
@@ -14,7 +12,7 @@ Exit 0 `LANDED`; 1 `NOT YET`; 2 `FAILED`, `CANNOT ANSWER` (the ref does not reso
 
 LANDED means the tip is an ancestor of `<remote>/<main_branch>`, read with `git ls-remote`.
 
-- No remote at all (`git remote get-url` exits 2 and `git remote` lists none): the local main branch decides. The remote missing while others exist is a misnamed `"repo".remote`, and that is `CANNOT ANSWER` naming the remotes there are (the rule of kitlib/backlog/store.py `find_remote`; `test_a_misnamed_remote_cannot_answer_and_names_the_remotes_there_are`). Any other failure of that lookup, a git ended from outside included, is `CANNOT ANSWER` (tests/landed/test_landed.py `test_a_killed_remote_lookup_cannot_answer_never_lets_the_local_main_decide`). A local main git gives no answer for is `local ... (UNKNOWN: <why>)` and `contained  UNKNOWN`, never "no such branch here" (`refs.resolve(known=True)`; tests/landed/test_landed.py `test_a_killed_read_of_the_local_main_is_unknown_not_no_such_branch`).
+- No remote at all (`git remote get-url` exits 2 and `git remote` lists none): the local main branch decides. The remote missing while others exist (a misnamed `"repo".remote`), or any other failure of that lookup, is `CANNOT ANSWER`. A local main git gives no answer for is `contained  UNKNOWN`.
 - The remote is unreachable: the last fetched `refs/remotes/<remote>/<main>` decides, and the output says so.
 - The remote's sha is not in this clone: `contained  UNKNOWN`, with the fetch to run first. An ancestry read git gives no answer for is `contained  UNKNOWN` with the why, never `no`.
 
@@ -29,7 +27,7 @@ When the branch has not landed, it prints three more lines:
 Each log base is `kitlib.gate.runner.log_base`:
 
 - with `"landing".log_dir` set, that folder under the checkout;
-- otherwise `<kit temp>/<repo name>-gate`, where the kit temp is `kitlib.config.user.work_temp` of the checkout and the repo name is `"repo".name`, else the checkout folder's name. Then `runner.fallback_log_base` (`<shared temp>/<repo name>-gate`) is read as well: a gate that could not make the default base writes there, and so did every gate before the kit temp moved. A machine config that cannot be read leaves only that base, with a `note` line.
+- otherwise `<kit temp>/<repo name>-gate`, where the kit temp is `kitlib.config.user.work_temp` of the checkout and the repo name is `"repo".name`, else the checkout folder's name. Then `runner.fallback_log_base` (`<shared temp>/<repo name>-gate`) is read as well: a gate that could not make the default base writes there. A machine config that cannot be read leaves only that base, with a `note` line.
 
 The checkouts read are the one `-C` names, its main checkout, and every worktree that has the branch checked out.
 
@@ -51,9 +49,5 @@ The kit gate prints these lines to stdout and writes none of them into its step 
 
 ## Not ported
 
-- The `"landing".verdict_pattern` key, and its tests (a configured pattern, its `failed` group, its compile check). The kit's verdict lines are fixed, so `kitlib.config` now refuses the key as unknown.
+- The `"landing".verdict_pattern` key: the kit's verdict lines are fixed, so `kitlib.config` refuses the key as unknown.
 - `--root`: `-C` replaces it.
-- The source tests dropped with retired mechanisms:
-  - an absolute `lock_file` and a relative one under the shared temp: the lock is always `git:<name>` in the common dir;
-  - an absolute `log_dir`: `log_dir` is repo-relative (RelPath);
-  - the flat-folder slash rule (`feat/x` -> `feat_x`): the kit's `log_folder` gives `feat-x`.

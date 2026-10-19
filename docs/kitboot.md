@@ -2,14 +2,13 @@
 
 Every host entry runs `boot/kitboot.py` before it imports kitlib (ARCHITECTURE.md "Packaging";
 docs/multi-host-plan.md section 2.5). It is standard library only and imports nothing from the
-kit: it decides which kit may be imported. It was lifted from the Codex plugin's `profile.py` and
-`release_binding.py`.
+kit: it decides which kit may be imported.
 
 ## Which kit runs
 
 | Environment | Kit |
 |---|---|
-| neither variable set | the source checkout `boot/` is in (today's behaviour) |
+| neither variable set | the source checkout `boot/` is in |
 | `PM_KIT_ROOT` only | that folder; it must be absolute and must not be a release (a folder with `.kit-package.json`) |
 | `PM_KIT_ROOT` and `PM_KIT_RELEASE_ID` | the release at `PM_KIT_ROOT`, verified against the pin first |
 | `PM_KIT_RELEASE_ID` only | refused |

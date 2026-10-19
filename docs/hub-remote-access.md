@@ -22,8 +22,7 @@ Names in angle brackets below are yours:
 - `<owner email>`: the email you sign in with.
 
 Cloudflare renames its dashboard menus from time to time. Where a name below does not match, take
-the nearest one. Which steps the Cloudflare pages confirmed: "Checked against Cloudflare's
-documentation" at the end.
+the nearest one.
 
 ## Before you start
 
@@ -47,9 +46,8 @@ It writes nothing. It prints one line per kit copy (the plugin export folders, t
 account folder's install): `knows every key`, or `would refuse hub` (and any other key it does not
 know), or `cannot tell: ` and why; an account whose install folder is gone says `the folder is
 missing: refresh that account` and names the refresh command above. It ends with `READY: ...` (exit 0) or `NOT READY: ...` (exit 1). Do steps 1 to 6 at any
-time, but step 7 only once it says `READY`. A NOTE about export folders not in use counts old
-copies a session started before the last refresh may still run: close such sessions before step 7.
-The check reads top-level keys only (`kitlib.config.copies`).
+time, but step 7 only once it says `READY`. A NOTE about export folders not in use means sessions started before the last refresh may still
+run old copies: close them before step 7.
 
 ## 1. Account and domain
 
@@ -67,8 +65,7 @@ The check reads top-level keys only (`kitlib.config.copies`).
 
 ## 3. Install cloudflared
 
-Cloudflare's downloads page lists no winget id; it gives a direct installer (the MSI) and the
-executable. This downloads the 64-bit MSI to the Downloads folder:
+This downloads the 64-bit MSI to the Downloads folder:
 
 ```powershell
 Invoke-WebRequest -Uri https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.msi -OutFile "$env:USERPROFILE\Downloads\cloudflared-windows-amd64.msi"
@@ -105,14 +102,9 @@ In the Cloudflare dashboard:
 3. Leave every setting under Additional application settings, HTTP Settings, at its default. The
    HTTP Host Header setting must stay EMPTY. Select Add route (or Save).
 
-Why step 5.3 matters: the tunnel listener has no Host rule, but a write (a POST) must carry an
-`https` Origin whose host equals the Host header the hub receives (`kitlib.hubsite.httpd`). With
-the HTTP Host Header set, the Host becomes that value, and every write from the phone is refused
-while reads work. The hub's console then says so, at most once a minute, naming the two host names
-and no token: "the tunnel listener refused a write: its Origin host <hostname> is not the Host
-127.0.0.1:8791 it arrived with; leave the tunnel route's HTTP Host Header setting empty"
-(`kitlib.hubsite.tunnel.HOST_LINE`). Cloudflare's origin-parameter page does not say that
-cloudflared passes the public host name on by default; the hub's code assumes it does.
+Why step 5.3 matters: a write (a POST) must carry an `https` Origin whose host equals the Host
+header the hub receives (`kitlib.hubsite.httpd`). With the HTTP Host Header set, every write from
+the phone is refused while reads work, and the hub's console says so.
 
 ## 6. Protect it with Access
 
@@ -179,11 +171,9 @@ The server reads the `hub` key at its start only.
   python tools/hub.py restart
   ```
 
-  It asks the server to close cleanly, as Ctrl+C does, waits until it has closed and its process
-  has ended, starts the scheduled task again and waits until the new server answers: `RESTARTED:
-  ...`, exit 0. A `TIMED OUT: ...` line (exit 4, after 300 s; `--timeout S` changes that) names
-  what it waited for and says that nothing was killed: the server goes on closing
-  (`kitlib.hubsite.control`).
+  It closes the server cleanly, starts the scheduled task again and waits until the new server
+  answers: `RESTARTED: ...`, exit 0; `TIMED OUT: ...` is exit 4 (300 s, `--timeout S`), with
+  nothing killed.
 - Started by hand: press Ctrl+C in its window, or run `python tools/hub.py stop`; then start it
   again:
 
@@ -198,17 +188,9 @@ The server reads the `hub` key at its start only.
   for the new one on the new port. A paired browser pairs again after a port change; on the same
   port it stays paired across the restart.
 
-Only the owner's token can stop the server, never a browser session, and only on the local
-port: through the tunnel the stop route answers 404 (`kitlib.hubsite.serve.build` adds it to the
-local listener alone), and a request there with no valid Access token gets the 403 `access`
-refusal first, as every request on the tunnel port does.
-
-`stop` and `restart` say `nothing to stop: nothing answers on port N` when nothing answers on the
-port. A server stopped a moment ago may still be running then: it frees its port first and then
-makes its last git pass and closes the store, which can take some minutes (each git fetch and push
-may take up to 120 s, `kitlib.hubsite.gitsync.NET_TIMEOUT`). A `serve` started in that time is
-refused while that server still holds the store. `--timeout S` is approximate: a request in flight
-may run past it (`kitlib.hubsite.control`).
+Only the owner's token can stop the server, and only on the local port. A server stopped a
+moment ago may take some minutes to finish its last git pass; a `serve` started meanwhile is
+refused while it still holds the store.
 
 The start-up notes say that the tunnel listener is on, or why it is off.
 
@@ -228,28 +210,17 @@ The start-up notes say that the tunnel listener is on, or why it is off.
      the hub fetches the keys when the first request with a token arrives. A reason in brackets,
      such as `(keys-fetch)`, means the last fetch failed (the PC cannot reach
      `<team>.cloudflareaccess.com`).
-   - `tunnel: off: <why>`: no listener. The reasons are fixed phrases: no Access settings, no team
-     name, no audience tag, no allowed email, a team that is not one DNS label, emails that are not
-     a list, the tunnel port could not be bound (another program holds it), or the listener could
-     not be made. The start-up notes of the server have the detail: a server you started with
-     `hub.py serve` shows them in its console, but one the scheduled task started (`setup
-     --autostart`) has no console, so they are not shown. For that one, stop it (`python
-     tools/hub.py stop`) and run `python tools/hub.py serve` in a console to see them. Mend the
+   - `tunnel: off: <why>`: no listener. The server's start-up notes have the detail; a server
+     the scheduled task started has no console, so stop it and run `python tools/hub.py serve`
+     in a console to see them. Mend the
      field step 7 names and do step 8 again.
 
 2. On the phone, open `https://<hostname>` and sign in as `<owner email>`. The page loads, and
    `status` shows `tunnel: on` once it did.
 3. Make a write from the phone (for example add a to-do). If reads work but every write is refused
    with an Origin message, see step 5.3: the console names the two hosts.
-4. Optional: open the address in a private window and sign in with another email. Cloudflare's
-   block page appears. If a request somehow passed Cloudflare, the hub answers `403` in the API's
-   JSON error shape (code `forbidden`, field `access`, the message "this listener needs a valid
-   Cloudflare Access token"; the hub answers every refusal the same way and says nothing of why;
-   its console logs the reason, at most once a minute per reason, never the token). The page shows
-   that refusal in the server's words ("The hub server refused the read (this listener needs a
-   valid Cloudflare Access token)") and tries again; it never tells you to pair, since pairing
-   cannot mend an Access refusal (`kitlib/hubsite/web/index.html`, the transport's `unpaired`
-   rule).
+4. Optional: open the address in a private window and sign in with another email. Cloudflare's block page appears. A request that somehow passed Cloudflare gets the hub's `403`
+   (field `access`).
 
 If the phone reaches the page but the hub says it is not paired or is read-only, remember that the
 tunnel listener pairs nothing for itself: a valid Access token makes you the owner there (its one
@@ -286,29 +257,10 @@ The PC's browser can be made strong from the Access login (the owner's choice):
   (`kitlib/hubsite/auth.py`). The PC's browser that opens it holds a strong session: the local
   gate marks its requests strong. Anyone but the strong owner gets 403, field `role`, and no
   code is made.
-- A strong session is kept on disk with the other browser sessions (the owner's choice) and
-  lasts `SESSION_TTL_S`, as they do. It is held under a key derived from the owner token and the
-  approval key, so the owner token alone cannot make one, and replacing either file ends every
-  strong session. `hub.py unpair` ends them too.
-- `approval.key` sits beside `owner.token` and `agent.token` in the token folder (the owner's
-  choice). The server makes it at start (`kitlib.hubsite.auth.ensure_approval_key`) and never
-  replaces it; a key that cannot be read stops the start and names the file. Without a usable
-  key a strong link pairs nothing. The key is meant to sign the owner's approvals
-  (`kitlib/hubsite/approvals.py`).
+- A strong session lasts `SESSION_TTL_S` and is held under a key derived from the owner token
+  and `approval.key` (beside `owner.token` in the token folder), so replacing either file, or
+  `hub.py unpair`, ends every strong session.
 
-The one route of role `approver` is POST `/api/v1/approvals/{id}/decide`
-(`kitlib.hubsite.api.ROUTES`): the owner's Approve or Deny of a pending approval, which the server
-signs with the approval key on an approve. The page's Approvals card
-(`kitlib/hubsite/web/index.html`, `approvalCard`) enables its Approve and Deny only when GET
-`/api/v1/snapshot` says `strong: true`, which it says only to the strong owner; a refusal is shown
-in the server's words (docs/action-hub.md "approvals/A-NNN").
-
-## Checked against Cloudflare's documentation
-
-Steps 3 to 6 follow developers.cloudflare.com (downloads, create a remotely-managed tunnel,
-published application route, self-hosted application, Access policies, validating the Access
-JWT). The pages did not confirm: a winget id for cloudflared (none documented), where the team
-name sits in the dashboard (the setup page says Settings), and whether cloudflared forwards the
-public Host header by default. Steps 1 and 2 (adding a domain, the first Zero Trust visit, the
-plan and its payment method) and the One-time PIN login method in step 6.4 are general knowledge
-of Cloudflare, not checked against its pages for this guide.
+The one route of role `approver` is POST `/api/v1/approvals/{id}/decide`: the owner's Approve or
+Deny of a pending approval, which the server signs with the approval key on an approve
+(docs/action-hub.md "approvals/A-NNN").

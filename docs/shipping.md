@@ -26,12 +26,9 @@ the install's own names stay with `tests/scrub/test_generic.py` and `scrub_patte
   other folder name. The machine config's `machine_path_folders` are added by the caller:
   `tests/scrub/test_builtin.py` passes them to `scrub.classes`, and tests/shipped.py
   `machine_patterns` refuses them as "machine path" with the base patterns; the package itself
-  reads no config. It reads tests/
-  too; other drive paths there are invented fixtures, and `tests/scrub/test_generic.py` refuses every drive path
-  outside tests/.
+  reads no config.
 - `name`: a salted digest in NAME_STORE, hashed the way `kitlib/forbidden` hashes (docs/repo-checks.md,
-  "forbidden"), so the names are never written down. The shipped store is empty; filling it is the
-  owner's call.
+  "forbidden"), so the names are never written down.
 
 Every class matches the whole file, so a phrase that a markdown wrap splits over two lines is
 still found, at the line it starts on.
@@ -75,17 +72,14 @@ than the baseline fails, a file with no baseline fails on its first hit, and few
   with `"gate": "tools/gate.json"`) and `.github/workflows/{quick,full}.yml`. Some also carry a
   stack runner under `tools/`: `dotnet_each.py` (dotnet), `godot.cmd` (godot), `js_tests.py` (python). Godot also carries
   `.claude/skills/godot-render-check/SKILL.md` (its `{kit_root}` is filled in at install).
-- The Java dependency-pin check is a hook-module check, not a gate key (the schema has none).
 
 ## Optional machine-wide tools (`optional/`, tests in `tests/optional`)
 
 - `comfy`: a ComfyUI image-generation client. Its lock tool defaults to the plugin's
   `tools/machine_lock.py`; env `KIT_MACHINE_LOCK` names another. No connection to the generator
   exits 2 with `GENERATOR UNAVAILABLE` and stops the run; an HTTP error from ComfyUI exits 1.
-  `render_glb.py` renders GLB contact sheets in Blender (`--grid COLS`: one view of many
-  models). `compare_sheet.py` writes a labelled HTML page of images; it refuses a non-image
-  input, and an output that is not .html/.htm, is one of the images, or is an existing non-HTML
-  file.
+  `render_glb.py` renders GLB contact sheets in Blender; `compare_sheet.py` writes a labelled
+  HTML page of images.
 - `procwatch`: a process watcher. It spares ComfyUI; add patterns with env `PROCWATCH_PROTECT`
   (`;`-separated regexes). It labels a process by its nearest known ancestor; add ancestor apps
   (exe names) with env `PROCWATCH_ORIGINS` (`;`-separated).
@@ -110,5 +104,3 @@ sessions in its own `docs/ops/assets.md`, and lessons that hold up go into BEST_
   the general case.
 - `godot-render-check` is not a plugin skill: it ships, made generic, in the Godot stack template
   (repository values come from its docs), keeping the plugin's skills generic.
-- `jobrun.py`/`jobrun.sh`: not shipped. The shell-prefix wrapper they were part of was dropped by the owner's ruling, and nothing in the kit wraps an agent's Bash calls; `kitlib/proc` covers a process the kit starts itself, and the machine lock covers heavy runs.
-- The source's `docs/` and `.claude/` profiles under the common template were not ported.

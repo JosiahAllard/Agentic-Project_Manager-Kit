@@ -5,7 +5,7 @@
 - **Transport:** JSON-RPC 2.0, one message per line on stdin and stdout, on the standard library, in the shape of the lock MCP server (docs/lock-mcp.md). It answers `initialize` (protocol 2025-06-18, 2025-03-26 or 2024-11-05), `ping`, `tools/list` and `tools/call`.
 - **Plugin:** `.claude-plugin/plugin.json` names it `hub` (`kitlib.hubmcp.SERVER_NAME`), rendered from `hosts/claude/adapter/content.py` `MCP_SERVERS`. A client shows its tools as `mcp__plugin_pm-kit_hub__<tool>`. Codex's plugin carries it as server `hub` (`hosts/codex/shell/mcp/hub_server.py`); `hosts/codex/adapter/policy.py` refuses its tools to a marked Codex session.
 - **Port:** read from the machine's hub settings (`kitlib.hubsite.settings.load().port`: `hub.port`, docs/action-hub.md "Serving it") at each call, so a hub started later or on another port is found. A setting that cannot be read is the `config` tool error.
-- **Tokens:** the token files of `kitlib.hubsite.auth.folder()`. Every tool carries the agent's token, reads included (`server.AgentClient`; unlike the CLI's `Client.token`, it never falls back to the owner's for an `ANY` route). With no usable agent token a tool answers `no_agent_token`, and no tool ever opens the owner's token file (`tests/hubmcp/test_server.py`, `Pinned.test_no_tool_reads_the_owner_token` and `Errors.test_a_read_never_falls_back_to_the_owner_token`).
+- **Tokens:** the token files of `kitlib.hubsite.auth.folder()`. Every tool carries the agent's token, reads included (`server.AgentClient`; unlike the CLI's `Client.token`, it never falls back to the owner's for an `ANY` route). With no usable agent token a tool answers `no_agent_token`, and no tool ever opens the owner's token file.
 - **Source:** every write names itself `mcp` (`kitlib.hubsite.serve.VIA_MCP`, the `X-Hub-Via` header), so the hub records `via: mcp` on what it writes; `tools/hub.py` writes `cli`.
 - **Session mark:** `mcp/hub_server.py` reads the session's mark once at start (`kitlib.sessionmark.mark`, docs/guard.md "Session mark").
 
@@ -47,13 +47,11 @@ pending item"). A session key's `for` that returns one of that key's items hands
 CLI's does; `for: pm` hands nothing over (`api.Api.handed`). The
 hub refuses `for` on a wait without `pending` (`invalid`, field `for`). Without `for` they see
 every pending item, including a coordinator's to-do routed to that coordinator and not yet acked:
-a pending `hub_wait` returns at once on such an item. `tests/hubmcp/test_server.py`
-`Routes.test_pending_and_wait_pass_for_through_as_the_query` and
-`LiveKeys.test_for_reaches_the_hub_on_pending_and_wait` check it.
+a pending `hub_wait` returns at once on such an item.
 
 ## Agent write tools
 
-Each calls a route the agent's token may call (`kitlib.hubsite.api.ROUTES`, role AGENT, or ANY for the routes the owner shares: `todos/{id}/edit` and both delete routes); `tests/hubmcp/test_server.py` `Routes.test_every_shipped_tool_maps_to_a_route_that_is_not_the_owners` checks every shipped tool against `api.match`.
+Each calls a route the agent's token may call (`kitlib.hubsite.api.ROUTES`, role AGENT, or ANY for the routes the owner shares: `todos/{id}/edit` and both delete routes).
 
 | tool | arguments (required first) | endpoint |
 |---|---|---|
@@ -78,22 +76,20 @@ in one of `server.PAGE_SUFFIXES` (`.html`, `.htm`), and it must not lie in the h
 its store, so no token can be posted as a page and read back with `hub_page`. Such a file, a
 relative path, a file that cannot be read or is not UTF-8 is `invalid`, field `html_file`, before
 the file is opened or any call is made; a body `kitlib.hubsite.pagecheck.check` refuses is
-`invalid`, field `html`, also before any call (`Server._t_hub_page_publish`;
-`tests/hubmcp/test_server.py` `Pages`). Publishing over a page needs
+`invalid`, field `html`, also before any call. Publishing over a page needs
 its card's version as `if_version`. What a body may hold, and why Mermaid must be drawn as svg
 first, is docs/action-hub.md "pages/<id> and page_html/<id>". No tool deletes a page: that is the
 owner's, in the Docs tab.
 
 The `from` of `hub_ask` is the session the answer goes back to: a launcher session key or `pm`,
 the default when it is absent or blank. The hub refuses any other value, a free-text name
-included (`invalid`, field `from`, status 400: `kitlib/hubsite/api.py` `questions_add`;
-`LiveKeys.test_a_question_comes_from_a_session_key_or_pm_only`). The `from` of `hub_todo_add`
+included (`invalid`, field `from`). The `from` of `hub_todo_add`
 and `hub_inbox_post` is a name in printable ASCII (`api._agent_from`).
 
 The four edit and withdraw tools change only an open item the caller added: `from` must be the
 item's own (`pm` for one with none), checked as a claim because all agents share one token
 (docs/action-hub.md "questions/Q-NNN"). `hub_todo_edit` takes no `steps` and judges the changed
-text as `hub_todo_add` does before it calls the hub (`kitlib/hubmcp/server.py` `Server._t_hub_todo_edit`).
+text as `hub_todo_add` does before it calls the hub.
 
 ## To-do steps
 
@@ -107,11 +103,11 @@ The hub's `POST /todos` takes `steps` (`kitlib/hubsite/api.py` `todo_steps`), fr
 
 The edit command is one Windows PowerShell 5.1 `& { ... }` block (`todosteps` module docstring):
 
-- `old` and `new` go in as readable single-quoted literals. A text holding a single quote (U+0027 or U+2018 to U+201B, which PowerShell reads as one), a control character other than a newline (C0, DEL and C1, U+0080 to U+009F), a tab (pasted into a console, it can start completion), the line and paragraph separators U+2028 and U+2029, a bidi control or invisible character (U+202A to U+202E, U+2066 to U+2069, U+200B to U+200F, U+FEFF, and the no-break space U+00A0) or a character outside the Basic Multilingual Plane goes in as base64 of its UTF-8 bytes instead, with a readable preview, control and invisible characters escaped, in a `<# #>` comment. The preview shows only the first 60 characters (`todosteps.PREVIEW`); the rest of the text is in the base64 alone. A file, text or run command holding a lone surrogate (U+D800 to U+DFFF) is refused as a bad step.
+- `old` and `new` go in as readable single-quoted literals. A text holding a quote, a control, tab, separator, bidi or invisible character, or a character outside the Basic Multilingual Plane goes in as base64 of its UTF-8 bytes instead, with a readable preview in a `<# #>` comment. A lone surrogate is refused as a bad step.
 - A block whose texts hold no newline is one line. A text with a newline makes the block span lines, and the owner pastes the whole block as one unit.
 - Newlines reach the script as LF and take the file's own ending: CRLF when the file has one, LF otherwise. A file with both is a `MISS` when `old` or `new` holds a newline.
 - The file is read as bytes: a UTF-8 or UTF-16 BOM, or none, and then it must be valid UTF-8 (an ANSI file is a `MISS`). It is written back with the same BOM and encoding.
-- `old` must occur exactly once (an ordinal count, overlapping matches included); any other count, or any error, is a `MISS` and nothing is written.
+- `old` must occur exactly once; any other count, or any error, is a `MISS` and nothing is written.
 
 `todosteps.check` refuses an agent's to-do whose own text (title, detail, `commands`, `run` steps; never an `edit` step's `old` or `new`), on an agent's add and edit and never on the owner's text, does any of these, as `invalid` naming the field:
 
@@ -119,7 +115,7 @@ The edit command is one Windows PowerShell 5.1 `& { ... }` block (`todosteps` mo
 - the text asks the owner to open a file and change it by hand ("open X and apply the edits", "make the following changes"): give `edit` steps;
 - a command is coordinator work, judged per segment between `&&`, `||`, `;`, `|` and newlines: `git worktree add`/`remove`/`move`/`prune`, `gate.py`, `land.py`, `new_worktree.py`, `worktree_remove.py`, `sync_base.py`, a branch or tag delete, `update-ref -d` or `--stdin`, and a push that deletes, forces, mirrors or prunes.
 
-The rules match words, so they can refuse a to-do that only mentions one of these in a command; `git merge` and a plain push are not refused. The hub's `POST /todos` and `POST /todos/<id>/edit` apply them to every agent's to-do (`api.todo_steps`, from `todos_add` and `todos_edit`; the owner's own text is not judged), and refuses a lone surrogate in any `commands` entry for either role, as `invalid` field `commands`. `hub_todo_add` runs the same check before it calls the hub, so a refused to-do never reaches it, and posts `steps` as given for the hub to render (`kitlib.hubmcp.server` `_t_hub_todo_add`); `hub_todo_edit` checks its changed text the same way (`_t_hub_todo_edit`).
+The rules match words, so they can refuse a to-do that only mentions one of these in a command; `git merge` and a plain push are not refused. The hub applies them to every agent's to-do, and `hub_todo_add` and `hub_todo_edit` run the same check before they call the hub.
 
 The hub server loads this code when it starts, and the MCP server when its client starts it, so after a change to it lands restart both together (`hub.py restart`, docs/action-hub.md "Serving it"): a new MCP server with an older hub is refused with "this route takes no 'steps' field", and an older MCP server with a newer hub posts already-rendered commands, which the hub's check can refuse when an edit's text holds a word the rules match.
 
@@ -135,5 +131,4 @@ The hub server loads this code when it starts, and the MCP server when its clien
 | `hub_to_pm_send` | `POST /to_pm/send` |
 
 - None ships yet. `tools/list` leaves them out, and `tools/call` refuses them without reading the owner's token: `forbidden` in a session a launcher marked, `not_available` (saying that the guard already denies them and the tools are not shipped yet, `server.GUARD_WAIT`) otherwise.
-- The guard already denies them, by these names, to every session but the owner's own: its `hub-mcp` rule (`kitlib/guard/rules.py` `hub_mcp`) reads `kitlib/guard/hub.py` `OWNER_MCP_TOOLS`, which is this `OWNER_ONLY` imported (docs/guard.md "Hub secrets"). Shipping the tools themselves is still to come, and `server.GUARD_WAIT` and the `not_available` text say so.
-- `tests/hubmcp/test_server.py` `Pinned` pins the four names, checks each maps to an OWNER route of `api.ROUTES`, and checks none is listed or ever reaches the hub.
+- The guard already denies them, by these names, to every session but the owner's own: its `hub-mcp` rule (`kitlib/guard/rules.py` `hub_mcp`) reads `kitlib/guard/hub.py` `OWNER_MCP_TOOLS`, which is this `OWNER_ONLY` imported (docs/guard.md "Hub secrets").

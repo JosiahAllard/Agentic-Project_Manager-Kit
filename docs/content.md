@@ -1,7 +1,7 @@
 # Content and render_content
 
 Every role and skill is written once, in `content/`, and rendered into each host's own files
-(ARCHITECTURE.md "Content"; docs/multi-host-plan.md section 2.3). The rendered files are committed;
+(ARCHITECTURE.md "Content"). The rendered files are committed;
 a test fails when they differ from what the renderer writes now (tests/content/test_render.py,
 `RealContentTest`).
 
@@ -46,11 +46,9 @@ renderer).
 | `run` | optional: `session`, a role started only as its own launched session, never dispatched as a subagent (pm, coordinator, deep-worker, consultant). The backlog policy holds such a role only from a launcher session mark (`SESSION_ONLY`); pm, which the policy names for its owner-level rows, is held so whatever its file says. Role files are not owner paths, so a `mode`, `group` or `run` change moves a role between backlog groups once it lands. Not rendered |
 | `summary` | optional: one line, the role's "use for" cell in docs/ROSTER.md (its description when absent). Not in any host's file |
 
-A role file keeps its own line endings; the host file gets the same ones.
-
 ## The roster
 
-The role list lives only in `content/roles/` (docs/multi-host-plan.md section 7, decision 17).
+The role list lives only in `content/roles/`.
 `kitlib.content.roster(kit)` reads it: name, mode, tier, group and run per role file, through the
 same cached read as the guard's `role_modes`. The launcher's `KIT_AGENTS` and the backlog
 policy's groups are read from it, never written by hand. `docs/ROSTER.md` is prose with two
@@ -66,13 +64,13 @@ code that names no role file.
 ## Skills
 
 A skill is not rendered, so it has no tokens and says nothing only one host understands
-(docs/multi-host-plan.md section 5, form C): a numbered checklist, one line per step with its
+: a numbered checklist, one line per step with its
 command, a "Never" list, then "Details:" pointers. It names a role bare (the reviewer role), the
 kit's folder as `<kit>` (`<kit>/docs/gate.md`), and an edit as "your file-edit tool"; commits go
 through `python <kit>/tools/commit.py -C <worktree>`, which takes the host from `PM_KIT_HOST`. The
 coordinator, PM and worker role files say what a bare role name and `<kit>` are on their host.
 
-A repository holds no stubs of the kit's tools (decision 21): every command a skill, role or the
+A repository holds no stubs of the kit's tools: every command a skill, role or the
 default profile shows is `python <kit>/tools/<name>.py`, with `-C <worktree>` (or `<repo>`,
 `<main checkout>`) when the tool takes `-C`. The tools that take no `-C` act on the machine, not a
 checkout (`machine_lock.py`, `launch.py`, `ledger.py`, `pm_watch.py` and the like), or name their
@@ -117,8 +115,8 @@ when YAML needs it), `tools` (the capabilities as Claude tool names; none for `a
 one tier map),
 `effort` when set, and for `cache: long` the `experimental` map with `cacheTtl: 1h`; the front matter
 opens with the generated-file line as a YAML comment. It owns that folder. It copies no skill: the
-plugin manifest's `skills` is `./content/skills/` (decision 29 in docs/multi-host-plan.md section 7),
-and `hosts/claude/shell/skills/`, the copy it wrote before, is a retired folder: a file there is stale.
+plugin manifest's `skills` is `./content/skills/`, and `hosts/claude/shell/skills/` is a retired
+folder: a file there is stale.
 
 An agent body gets no `${CLAUDE_PLUGIN_ROOT}` substitution, so a role names the kit's folder
 `<kit>`, as a skill does, and the kit header says what it is (tests/content
@@ -169,8 +167,7 @@ A version bump is one edit to `kit.json`, then `--write`. tests/content `Manifes
 
 ## Generated files
 
-Every rendered file a comment can go in opens with one line (`kitlib.host.content.banner`, decision 19
-in docs/multi-host-plan.md section 7): `Generated from <source>: edit that, then run python
+Every rendered file a comment can go in opens with one line (`kitlib.host.content.banner`): `Generated from <source>: edit that, then run python
 tools/render_content.py --write. Never edit this file by hand.` A Claude agent file carries it as a
 YAML comment on the front matter's first line, so the front matter stays the file's first thing; a
 Codex agent file as its first `#` line. JSON holds no comment, and the manifests keep to the keys
@@ -189,17 +186,14 @@ source and the render command (rule `generated-file`, docs/guard.md "Generated f
 `tools/render_content.py`): it runs that work tree's own `tools/render_content.py -C <work tree>
 --write` first, and stages every file the render wrote or removed into the same commit, listed on a
 `rendered` line (`kitlib.content.oncommit`). A render that fails refuses the commit and names the
-command to run. A rendered file written earlier by hand with `--write`, which this render then does
-not change, is not added: name it.
+command to run. A rendered file written earlier by hand with `--write` is not added: name it.
 
 The opt-in pre-commit hook (`githooks/pre-commit`, docs/ledger.md "Pre-commit check") does the same
 for a plain `git commit` in a kit checkout, through `kitlib.githooks.render`: its shell front end
 starts python only when the kit's layout is there and a render source is staged (one `git diff
 --cached` read), renders, and stages what changed into the commit's index; when it cannot, it
 refuses the commit with the command to run. A commit of named paths (`git commit <paths>`) that
-the render changes is refused too, naming the files to stage: git builds it from a temporary
-index and keeps its own index with only the named paths, so a rendered file staged into the
-commit would stay old in the index and the next commit would undo it. The gate's drift check
+the render changes is refused too, naming the files to stage. The gate's drift check
 stays the backstop.
 
 ## Kit header
@@ -210,18 +204,14 @@ kit (docs/kitboot.md) and adds
 `kitlib.host.header.text(<kit folder>)` to the agent's context (`additionalContext`, rendered by the
 Claude adapter's `context`). The text names the kit's absolute folder, says that `<kit>` in skills
 and role files means that folder (with a worked command), that the kit's tools run from it and
-never from a copy in the repository, a tool that acts on a checkout named with `-C` (decision 21 in
-docs/multi-host-plan.md section 7), and that `<worktree>`, `<repo>`, `<slug>` and the like are
+never from a copy in the repository, a tool that acts on a checkout named with `-C`, and that `<worktree>`, `<repo>`, `<slug>` and the like are
 placeholders. A kit that does not load is said in plain text instead.
 
 The coordinator's SessionStart hook stays a separate entry: hooks.json runs both, and Claude Code
 joins their context. Keeping it apart keeps its path, which settings re-pointed by machine setup
 still name (docs/machine-setup.md "Settings"), and its role check.
 
-A plugin's SubagentStart reaches the subagent: on 2026-10-16 a subagent dispatched on the owner's
-machine with the plugin enabled opened with "SubagentStart hook additional context: PM kit header"
-and the plugin's kit folder, from the plugin's hooks.json entry (hosts/claude/adapter/content.py
-HOOKS). So a dispatched agent gets the header without its brief naming the kit folder.
+A plugin's SubagentStart reaches the subagent, so a dispatched agent gets the header without its brief naming the kit folder.
 
 At SubagentStart a dispatched kit role also gets the agent-start block after the header
 (kitlib.agentstart; docs/preflight.md "Agent start block"): `start_text` adds it when the payload's
@@ -234,48 +224,13 @@ so the "At start" section shows the block. On Codex every child gets it after th
 ## Agent view
 
 `python <kit>/tools/agent_view.py <role> [--host <name>] [-C <repo>] [--brief]` shows everything
-one role is given and held to on one host (docs/multi-host-plan.md section 7, decision 18). The
+one role is given and held to on one host. The
 host is `--host`, else `PM_KIT_HOST`, else the hosts.json default; `-C` is the repository the role
 works in (default: here); `--brief` prints paths only and runs no start check. Exit 0 shown; 2 a
 usage error, a role no role file defines (the line names every role) or an unknown host. An old
 name (`kitlib.content.ALIASES`) shows its new role.
 
-It is built from the code that renders and enforces, so it cannot drift from it. The host's side
-comes only through the host contract (docs/new-host.md), which the conformance suite pins to what
-the host writes: the ContentRenderer's `role_path`, `settings`, `tokens` and `tools`, and the
-adapter's optional `start_text` and `start_parts`. File text is indented under its label.
-
-Sections 1-7, what the agent is given, in the order it gets it:
-1. **Role file**: `renderer.role_path(role)`, the file the host loads, with its text as `render`
-   writes it, and a note when the committed copy differs.
-2. **Repository instructions**: the `instructions_file` token in the repository, and each file it
-   imports with a `@<path>` line.
-3. **User instructions**: that file name in the host's per-user folder (the `user_folder` token,
-   or the folder `config_dir_env` names). The kit never reads it.
-4. **Kit header**: `kitlib.host.header.text`, at SubagentStart for a dispatched role and at
-   SessionStart for a `run: session` one.
-5. **At start**: what the start hooks add past the header for a session marked with the role
-   (`PM_KIT_ROLE`) in the repository: the adapter's `start_text` for each part `start_parts` says
-   the role runs (the plain hook, then each named part, labelled), the same call `boot/hook.py`
-   makes, so the view is what the hooks write. For the PM and the coordinator that runs their start
-   checks. A host without `start_text` is shown as not known, never guessed.
-6. **Skills**: `content/skills`, where the host has skills, and a note when the role's tool list
-   leaves out the host's skill tool.
-7. **Repo profile**: the `profile_path` token (and `coordinator_profile_path` when the role's body
-   names it) if the repository has it, else none; for `profile_path`, none names the kit's
-   `content/default-profile.md`, the profile in use then (docs/agent-profile.md).
-
-Sections 8-11, what it is held to:
-8. **Model, tools and mode**: the role file's tier, effort and sandbox; what the host's file sets
-   (`renderer.settings`: its model, effort, sandbox or tool list as that file writes them); each
-   capability as the host's tool (`renderer.tools()`); `mode`, `writes`, group and run.
-9. **Guard rules**: the `kitlib/guard/rolepolicy.py` `RULES` rows for its mode (`rules_for`), with
-   its `LOCK_VERBS`; tests/guard/test_rolepolicy.py pins each row to the guard's answers.
-10. **.kit.json switches**: what the guard reads from the main checkout's `.kit.json`
-    (`guard.role_policy`, the role's `roles` entry, the mode `rolepolicy.mode` gives it,
-    `edit_main_checkout`, `guard.data_roots`).
-11. **Backlog rights**: every `kitlib/backlog/roles.py` `ACTIONS` row, grouped by the answer
-    (`role_of`, `allows`, and the fact a grant needs).
+It is built from the code that renders and enforces, so it cannot drift from it; the host's side comes only through the host contract (docs/new-host.md). Sections 1-7 are what the agent is given, in order: role file, repository instructions, user instructions, kit header, at start (what the start hooks add for a session marked with the role), skills and repo profile. Sections 8-11 are what it is held to: model, tools and mode; guard rules for its mode; the `.kit.json` switches the guard reads; backlog rights.
 
 Code: `kitlib/agentview`; tests `tests/agentview`. `content/README.md` maps each thing shown to
 the file that changes it.

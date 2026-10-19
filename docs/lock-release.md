@@ -2,7 +2,7 @@
 
 Held for the joint review: nothing runs it yet.
 
-`tools/lock_release_check.py` says whether the kit's release checkout may take a commit now. It refuses while the release would change the lock tool and any run in the machine's lock store is live. Logic: `kitlib/lock/release.py`; tests: `tests/lock/test_release.py`. It is the kitlib/lock counterpart of the PM kit's `owner/machine_lock_install.py` pre-check, which reads the queue as `machine_lock.py` `queue_live()` does.
+`tools/lock_release_check.py` says whether the kit's release checkout may take a commit now. It refuses while the release would change the lock tool and any run in the machine's lock store is live. Logic: `kitlib/lock/release.py`; tests: `tests/lock/test_release.py`.
 
 ```
 python tools/lock_release_check.py [-C KIT] <commit>
@@ -25,7 +25,7 @@ python tools/lock_release_check.py [-C KIT] <commit>
 - A live run: a record in the store's `active/` or an entry in `queue.json` whose process (pid and creation time) is not surely gone. A record that cannot be read, or that names no process, counts as live. So do an unlistable `active/` and an unreadable `queue.json`. Runs that are gone are listed as ignored.
 - The caller's own run counts as live. Swapping the lock code under it is the same hazard. When a live run's process is the caller's own process or one of its ancestors, the `STOP` says so: `this check runs inside a lock run (your own process or one of its ancestors)`.
 - A missing store folder is a `STOP`, not "no run is live". The check cannot tell whether a run is live.
-- Live means the owning process is alive. It does not use `Store.run_dead`'s mutex test, so a run whose wrapper is alive counts as live even when its mutex is gone. This is stricter than `run_dead` and errs on the safe side (review finding 4, left as is).
+- Live means the owning process is alive. It does not use `Store.run_dead`'s mutex test, so a run whose wrapper is alive counts as live even when its mutex is gone.
 - Git cannot say what changes: `STOP`.
 
 ## What it does not do

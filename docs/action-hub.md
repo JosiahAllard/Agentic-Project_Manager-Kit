@@ -11,18 +11,10 @@ server (docs/hub-mcp.md), which carries the agent's token and none of the owner'
 
 Start the server with `python tools/hub.py serve`, then `python tools/hub.py open`: it opens the
 page signed in as you (a one-time pairing link sets the browser's session cookie; `--print` prints
-the link instead). `serve` prints the full `open` command on its start line. A paired browser stays
-paired when the server restarts: the server keeps each session, as a keyed hash and never the
-cookie itself, in a `browser-sessions-<port>.json` file beside the token files
-(`kitlib/hubsite/auth.py`, "Sessions"). `serve --port 0` binds a new port each run, so it keeps
-no such file and its browsers are paired again after a restart (`kitlib/hubsite/serve.py`,
-`build`). A session lasts 30 days (`auth.SESSION_TTL_S`) and is
-renewed to a full 30 days when the browser uses it with less than half of that left, so a browser
-you use at least every two weeks never needs pairing again. `python tools/hub.py unpair` ends
-every browser's session (the owner's token only; with no server running it empties that file
-itself), and a new `owner.token` ends them all too. A browser that is not paired (a first visit,
-or after an unpair or a session that ran out) is told so on the page and to run
-`python tools/hub.py open` in the kit folder and open the link it prints. The server's health is
+the link instead). `serve` prints the full `open` command on its start line. A paired browser stays paired across server restarts; a session
+lasts 30 days (`auth.SESSION_TTL_S`) and renews itself with use. `python tools/hub.py unpair`
+ends every browser's session, and a new `owner.token` ends them all too. A browser that is not
+paired is told to run `python tools/hub.py open` and open the link it prints. The server's health is
 `GET /api/v1/health`.
 
 - **Inbox.** Two tabs. Questions: what the PM and the coordinators ask you, each with its context,
@@ -41,14 +33,11 @@ or after an unpair or a session that ran out) is told so on the page and to run
   stories: those in progress above the table, those filed or closed below it, with Withdraw while
   a story is still submitted; the Backlog button counts the stories in progress (highlighted when
   one has questions for you). A row's id in any of the three tabs opens its record page, and the
-  New story button opens a blank one ("The record page" below). The New story tab and its form
-  are gone; `stories add` still files a story.
+  New story button opens a blank one ("The record page" below). 
 - **Docs.** The agents' documents (a plan, research, a visual choice), newest first, from the
   store's `pages/` and `page_html/` ("pages/<id> and page_html/<id>" below). Read here reads the
   document's body from the server and opens it in a full-screen reader; Close shuts it, and so does
-  Esc while the focus is outside the document. A ref on any card (a question, a to-do, a note or
-  a document) that names a listed document is a button that opens it the same way
-  (`test_a_page_id_in_a_question_or_a_to_do_opens_the_reader`). Delete (pressed twice) removes a document; the page writes
+  Esc while the focus is outside the document.  A ref on any card that names a listed document opens it the same way. Delete (pressed twice) removes a document; the page writes
   none, agents publish them.
 - **Info.** Usage (each account's plan usage) and Agents (each agent's model and effort).
 
@@ -71,59 +60,30 @@ repository; Questions, To do and Docs also by id or title.
   and releases the store lock.
   The port is `hub.port` of the machine config (default 8790); the store is `hub.store`, else
   `hub/` in the PM data worktree (docs/pm-data-branch.md). `--store PATH` serves a scratch copy
-  with git sync off. The server needs no `hub` key: without one every default holds. A trial
-  run with `--store` (and `migrate --store`) therefore never writes the `hub` key; the owner
-  writes that key only for the live store (docs/go-live.md "Switches").
-- The PM session-start checklist (docs/pm-start.md) runs its site checks whether or not the `hub`
-  key is written: it uses the key's settings, or the defaults (port 8790) when there is none.
-  Writing the key does not switch the checklist.
+  with git sync off. The server needs no `hub` key: without one every default holds.
+
 - `hub.py status` prints the running server's health, one line each: `revision N`, `store ...`,
   `git: ...` (`running, branch B, nothing pending`, or what is pending, a pass that failed, or
   `git sync is off on this server`), `backlog <repo>: fetched X ago`, the tunnel line, and
-  `unavailable: ...` for a view the server could not read. The tunnel line is `tunnel: on` (the
-  Access keys were fetched), `tunnel: bound, keys not fetched` (shown until the first request
-  with a token; a failed fetch adds ` (reason)`, such as `keys-fetch`) or `tunnel: off: <why>`.
-  `on` does not say that a tunnel program reaches the listener.
-- Remote access is only through the tunnel listener: with `hub.access` set (an Access `team`,
-  the application's audience tag `aud` and the allowed `emails`; all three), the server also
-  listens on `hub.tunnel_port` (default 8791, loopback too) for a Cloudflare tunnel, and every
-  request there needs a Cloudflare Access token in the header `Cf-Access-Jwt-Assertion`
-  (`kitlib.hubsite.tunnel`). The tool never runs the tunnel program. Both listeners bind the
-  loopback address only, and `hub.port` and `hub.tunnel_port` must differ. If `hub.access` is
-  incomplete the tunnel stays off and the local listener keeps serving; `status` says why. The
-  owner's step-by-step guide to reach the hub from a phone: docs/hub-remote-access.md. A valid
-  Access token also makes the caller the strong owner, the only caller a route of role
-  `approver` (`kitlib.hubsite.api.APPROVER`) answers; from it the tunnel's
-  `/api/v1/pair/strong` makes a one-time link that pairs the PC's browser as the strong owner on
-  the local listener, a session kept on disk under a key derived from the owner token and
-  `approval.key`, which the server makes beside the tokens at start (docs/hub-remote-access.md
-  "The strong owner"). The
-  health answer through the tunnel holds fixed words only: `ok`, `version`, `store` (`ok`),
-  `git` (`ok`, `failed`, `off` or `unknown`) and `tunnel` (`on` or `bound, keys not fetched`);
-  no folder, branch, reason or revision. A health answer the server cannot give leaves as its
-  status and error code with the message `health could not be answered`.
+  `unavailable: ...` for a view the server could not read.  The tunnel line's forms are in docs/hub-remote-access.md "9. Check".
+- Remote access is only through the tunnel listener: with `hub.access` set (`team`, `aud` and
+  `emails`, all three), the server also listens on `hub.tunnel_port` (default 8791, loopback
+  too) for a Cloudflare tunnel, and every request there needs a Cloudflare Access token
+  (`kitlib.hubsite.tunnel`). The tool never runs the tunnel program. A valid Access token also
+  makes the caller the strong owner. The owner's guide: docs/hub-remote-access.md.
 - Autostart (opt-in): `python tools/hub.py setup --autostart` registers a scheduled task that
   runs `hub serve` at logon; `--whatif` shows what it would do and changes nothing. Without the
   flag nothing is registered. It is refused, with nothing registered, when no store folder is
   set. The server then runs windowless, so Ctrl+C does not apply: `hub.py restart` stops it
   cleanly and starts the task again, and `hub.py stop` stops it (docs/hub-remote-access.md
-  "8. Restart the hub"). A server that was cut off without a clean close leaves its store lock,
-  which the next start takes over with a note.
+  "8. Restart the hub"). 
 - `hub.py stop [--port N] [--timeout S]` and `hub.py restart [--port N] [--timeout S]`
-  (`kitlib.hubsite.control`) post `POST /api/v1/stop` (`kitlib.hubsite.httpd.STOP_ROUTE`) with
-  the owner's Bearer token. The route takes that token only, never a browser session (403
-  `forbidden` otherwise), and only on the local listener: through the tunnel it answers 404 (403
-  `access` first without a valid Access token). It answers `ok`, `stopping`, and the server's
-  `pid` and `ctime`, then the server closes as on Ctrl+C. `stop` waits until the port is free and
-  that process has ended: `STOPPED: ...`, or `nothing to stop: ...` (exit 0) when nothing answers
-  on the port. A server stopped a moment ago may still be closing then: it frees its port before
-  its last git pass and the store's close (`kitlib.hubsite.control`). `restart` reads the
-  scheduled task's state first and starts the task again only when the task ran the server it
-  stopped (the task is `Running` or `Queued`), or when nothing ran and the task is ready; then it
-  waits until the new server answers on `hub.port` (`RESTARTED: ...`). A task that cannot be read
-  or started after the stop prints the `STOPPED` line, why, and the start command (exit 1).
-  Neither ever kills a process: past `--timeout` (default 300 s, approximate: one request in
-  flight may run past it) they print `TIMED OUT: ...` and exit 4.
+  (`kitlib.hubsite.control`) ask the server to close with the owner's token, on the local
+  listener only. `stop` waits until the port is free (`STOPPED: ...`, or `nothing to stop: ...`,
+  exit 0). `restart` starts the scheduled task again only when the task ran the server it
+  stopped, or nothing ran and the task is ready, then waits for the new server
+  (`RESTARTED: ...`). Neither ever kills a process: past `--timeout` (default 300 s) they print
+  `TIMED OUT: ...` and exit 4.
 - `python tools/hub.py setup --check` writes nothing: it says whether `hub.access` is unset, set
   or cannot serve, fetches the Access keys once when it can serve (`access keys: ...`), and lists
   each kit copy on the machine that would refuse the `hub` key (`kitlib.config.copies`). It ends
@@ -277,36 +237,18 @@ It is not the store's git push (the `push` setting).
   acknowledges by picking the item up (`pending --for` or `wait --pending --for` hands it over,
   "Who handles a pending item"), or by `todos ack`; the PM by `todos ack` for a to-do and by
   `questions log` for a question. An item withdrawn, reopened or answered again replaces or
-  ends its push. A session that picked up a first answer or done mark before the worker saw it
-  is not sent it. One message lists at most 20 items (`push.MAX_ITEMS`) and a `+N more` line;
-  the rest wait for the next slot. Retries come 2, 5, 15, 30 and 60 minutes after a try, then hourly, and stop a
-  day after the first try with one `gave-up` line (`push.SCHEDULE_S`, `push.GIVE_UP_S`). A write
-  whose end is unknown waits for the next slot like any other outcome.
-- How it is sent on Claude Code: one message is two JSON lines written once to the live
-  session's peer pipe (an auth frame with that session's peer token, then a user frame wrapped as
-  a cross-session message in prompting mode), by a hidden helper in a kill-on-close job
-  (`hosts/claude/adapter/peer_worker.py`), so a blocked write never blocks the server. The pipe,
-  pid and creation time come from the session's registry record at send time
-  (docs/launcher.md "Pipe addresses"); only a record whose pid still runs with that creation time
-  counts, because `launch.py stop` leaves records behind. The token is read from the key file
-  beside the record only when sending, checked against the record's creation time, and never
-  logged or stored. The hub publishes no registry record of its own and gets no receipt:
-  `written` means the bytes reached the pipe, not that the session read them. Two live sessions
-  of one name: the one `pipes.json` names, else the newest, logged `ambiguous`. Whether a desktop
-  session wakes on a push is unproven; the PM's own `wait --pending --for pm` stays its path.
-- Files, in `launcher.state_dir`: `push-outbox.json` (what is still to send, rewritten after each
-  round that changed it, so a server ended without a clean close loses at most that round; read
-  again at start: an entry whose item changed while the server was down fires afresh, one whose
-  item is gone is dropped) and `push-undelivered.jsonl` (one line per try not written, per `ambiguous`
-  pick and per give-up; never a token or any item text; rotated once to `.1` past 1 MiB,
-  `push.LOG_MAX`).
-- Stopping: `Hub.close` tells the worker to begin no further send before the store closes and
-  joins it after, for at least `push.STOP_S` (15 s), longer than a host's delivery can take
-  (Claude: `peer.WRITE_TIMEOUT_S` plus the helper's reap and pump joins), so the last outbox
-  write is not cut off.
-- Known limit: an answer made in the moments before the server closes that the worker had not
-  yet seen is not pushed after a restart: the outbox holds only what the worker saw. The PM's
-  wait still shows it.
+  ends its push. Retries come 2, 5, 15, 30 and 60 minutes after a try, then hourly, and stop a
+  day after the first try with one `gave-up` line (`push.SCHEDULE_S`, `push.GIVE_UP_S`). 
+- How it is sent on Claude Code: one message written to the live session's peer pipe by a
+  hidden helper (`hosts/claude/adapter/peer_worker.py`), so a blocked write never blocks the
+  server; `written` means the bytes reached the pipe, not that the session read them. Whether a
+  desktop session wakes on a push is unproven; the PM's own `wait --pending --for pm` stays its
+  path.
+- Files, in `launcher.state_dir`: `push-outbox.json` (what is still to send) and
+  `push-undelivered.jsonl` (one line per try not written and per give-up; never a token or item
+  text).
+- Known limit: an answer made just before the server closes that the worker had not yet seen is
+  not pushed after a restart. The PM's wait still shows it.
 
 Tests: tests/hubsite/test_push.py, tests/host/test_claude_peer.py, tests/launcher/test_pipes.py,
 tests/hubsite/test_hub_cli.py `PushCase`.
@@ -335,11 +277,8 @@ document. Both take `from` and `if_version`, both required, and are refused `for
 `from` is the question's own (`pm` for a question with none), and `conflict` once it is answered or
 logged (`kitlib.hubsite.api` `questions_edit`, `questions_delete`). An edit's fields replace the old
 ones; `options` replaces the whole list. The owner withdraws an open question with the card's
-Withdraw button (the same delete route, owner token, version optional) and never edits one. All
-agents share one token, so `from` is a claim checked against the item: the check stops honest
-mistakes, not a hostile agent, and any agent claiming `pm` can change the PM's items. An answer
-sent without `--if-version` (`hub.py answer`) after the asker changed the options is taken against
-the options as they are now; the page always sends the version it shows.
+Withdraw button (the same delete route, owner token, version optional) and never edits one.  All agents share one token, so `from` is a claim: the check stops honest
+mistakes, not a hostile agent.
 
 ## inbox/M-NNN
 The owner's inbox: the PM's answer to every question the owner asks in a note (on a question, a
@@ -402,20 +341,15 @@ A new to-do (`POST /todos`, so `hub.py todos add` and the MCP tool `hub_todo_add
 carry `steps`, which is not stored: `kitlib.hubsite.api.todo_steps` turns each step into a command
 appended after `commands` and adds one summary line per step at the end of `detail` (the steps and
 their commands: docs/hub-mcp.md "To-do steps"). `hub.py todos add --steps F` reads the list from F,
-a UTF-8 JSON file. The server refuses, as `invalid` naming the field: a bad step (`steps`), a
-`commands` entry holding a lone surrogate (U+D800 to U+DFFF, `commands`), and, on an agent's to-do,
-text the owner's to-do rules forbid (`todosteps.check`: plain Notepad, a hand edit described in
-prose, coordinator work). The owner's own to-dos are not judged by those rules.
+a UTF-8 JSON file.  The server refuses, as `invalid` naming the field, a bad step and, on an agent's
+to-do, text the owner's to-do rules forbid (`todosteps.check`: plain Notepad, a hand edit
+described in prose, coordinator work). The owner's own to-dos are not judged by those rules.
 
 While a to-do is open its creator may change it (`POST /api/v1/todos/{id}/edit` with the agent's
 token: `hub.py todos edit`, the MCP tool `hub_todo_edit`) or withdraw it (`POST
 /api/v1/todos/{id}/delete`: `todos withdraw`, `hub_todo_withdraw`), with the same `from` and
 `if_version` rules and refusals as a question ("questions/Q-NNN" above). An agent's edit takes no
-`steps`, its changed text is judged by the to-do rules above, and it clears `pm_ack`. `todos edit`
-replaces `commands` only with the `--command` values it is given, so it cannot clear them. Only
-the owner's own to-do can have its commands cleared (an empty list to the route); an agent's open
-to-do needs at least one, and the hub refuses an agent's edit that empties them (`invalid`:
-`tests/hubsite/test_api.py` `test_an_agent_to_do_edit_is_judged_by_the_to_do_rules`). The owner
+`steps`, its changed text is judged by the to-do rules above, and it clears `pm_ack`.  An agent's open to-do needs at least one command. The owner
 edits and deletes only their own to-dos (`from: you`) at any status, and deletes an agent's to-do
 (never edits it) while it is open (`kitlib.hubsite.api` `todos_edit`, `todos_delete`).
 
@@ -433,9 +367,7 @@ that repo's coordinator.
 | backlog_id, added_at | PM | the record the coordinator filed |
 | closed_note, closed_at | PM, owner | why it was not added, or when it was withdrawn |
 
-Follow-up questions are ordinary questions with `story` set; the page links them both ways. The
-page has no story form: the owner writes new work on the record page instead ("The record page"
-below), and `stories add` still files a story.
+Follow-up questions are ordinary questions with `story` set; the page links them both ways. 
 
 PM steps:
 1. On a `submitted` story, send it verbatim to that repo's coordinator (coordinators stay in
@@ -483,61 +415,29 @@ An agent publishes with `hub.py pages publish ID --title T --html-file F` or the
 `hub.py pages show ID [--out F]` or `hub_page`. Both run `kitlib.hubsite.pagecheck.check` on the
 file before sending, so a body the server would refuse is never sent. Publishing over an existing
 page needs the card's version as `if_version` (`--if-version`); without it the write is
-`conflict`. One lock in the hub process (`PAGES_LOCK` in `kitlib/hubsite/store.py`, which
-`api.py` takes) is held from a publish's reads to its last write, and over a delete, so of two publishers with the same pin the
-second reads only after the first has written body and card, and is `conflict` with nothing
-written. The body is put first and the card second, so a card never names a missing body
-(`test_the_body_is_written_before_the_card` and
-`test_two_publishers_with_one_pin_the_second_writes_nothing` in `tests/hubsite/test_api.py`).
-Deleting is the owner's alone: the Docs tab's Delete, with no CLI verb and no MCP tool. It
-deletes the card, then the body; when the body's delete fails the card stays deleted and the body
-is an orphan, which `kitlib.hubvalidate` warns of and the next publish of that id writes over
-(`test_a_body_delete_that_fails_leaves_the_card_deleted_and_an_orphan_body`).
+`conflict`. Publishes and deletes are serialised (`PAGES_LOCK` in `kitlib/hubsite/store.py`), and the body
+is written before the card, so a card never names a missing body.
+Deleting is the owner's alone: the Docs tab's Delete, with no CLI verb and no MCP tool.
 
 What a body may hold (`kitlib/hubsite/pagecheck.py`, its docstring has the full list): at most
 512 KiB of UTF-8 (`MAX_BYTES`); no `script`, `iframe`, `object`, `embed`, `form`, `link`, `meta`,
 `base` or other element of `TAGS`; no `on*` attribute; no `href` that is not a `#fragment` (a
 `data:` image on an svg `image` is the one exception); `src` and CSS `url()` only as `data:`; no
 `@import`, CSS backslash escape or function of `CSS_FUNCTIONS` (`image-set()`, `image()`,
-`src()`). Markup that the check's parser and a browser
-could read differently is refused too: `<` or `&` in a style element's text, a self-closing
-`<style/>`, and the words of `RAW` anywhere in the text: `<title`, `<textarea`, `<xmp`,
-`<noembed`, `<noframes`, `<plaintext`, and the comment and CDATA endings the two may place
-differently (`DIFFERENTIAL` and `RAW_ONLY` in
-`tests/hubsite/test_pagecheck.py`). A body that breaks a rule is refused whole, never stripped
-(`invalid`, field `html`, nothing written). Mermaid is not rendered by the kit: a body with `class="mermaid"` or a
-` ```mermaid ` fence is refused with "render it to svg first", and the publisher draws the
-diagram as inline `<svg>`. The listener refuses any request body over 1 MiB (`MAX_BODY` in
-`kitlib/hubsite/httpd.py`) with 413 before the check runs, so a body near the 512 KiB cap whose
-JSON encoding about doubles it (mostly quotes, backslashes or escaped non-ASCII) is refused there
-(`test_a_body_the_check_lets_through_can_still_be_over_the_listeners_limit` in
-`tests/hubsite/test_page.py`: 512 KiB of `"` is 1048618 bytes as JSON).
+`src()`). Markup that the check's parser and a browser could read differently is refused too. A body
+that breaks a rule is refused whole, never stripped (`invalid`, field `html`). Mermaid is not
+rendered: draw the diagram as inline `<svg>`. The listener refuses any request body over 1 MiB
+(`MAX_BODY` in `kitlib/hubsite/httpd.py`), so a body near the cap that JSON encoding about
+doubles is refused there.
 
-`GET /api/v1/snapshot` carries the cards and leaves every body out
-(`test_snapshot_carries_the_cards_but_not_the_bodies` in `tests/hubsite/test_api.py`). Every card
-has a live Read here: the reader asks `GET /api/v1/pages/<id>` when it opens and says "This
-document has no body on the hub server." on a 404 (`DocsTest` in `tests/hubsite/test_page.py`).
+`GET /api/v1/snapshot` carries the cards and leaves every body out; the reader asks
+`GET /api/v1/pages/<id>` when it opens.
 
-The body is agent-written html. The page draws it nowhere but in the reader's one frame, made in
-script with a `sandbox` attribute that grants nothing (no scripts, forms, same-origin, popups or
-navigation of the hub page) and given the body through `srcdoc` behind a meta policy,
-`default-src 'none'; style-src 'unsafe-inline'; img-src data:; form-action 'none'; base-uri 'none'`
-(`DOC_CSP` in `kitlib/hubsite/web/index.html`; `DocsTest` and
-`PageTextTest.test_the_reader_is_one_locked_frame` in `tests/hubsite/test_page.py`). The policy
-blocks what the body loads by itself: images other than `data:`, CSS files, fonts, scripts, frames
-and form posts. A diagram therefore shows only as an inline `<svg>` or a `data:` image. Links are
-not blocked. A link clicked inside the reader moves the frame itself to that address, and the
-policy no longer applies there; the sandbox still blocks scripts and forms on that page. Some
-browsers may also look up the host names of links in advance (DNS prefetch). The page check
-refuses such a link, `<meta>` and `<link>` at publish, along with any markup where a browser
-could build one the check's parser never saw (the paragraph above), so a body published through
-the check has none. A body placed in the store by hand or copied in by `migrate` is not checked.
-
-Esc closes the reader only while the focus is outside the frame: keys typed inside the sandboxed
-document never reach the hub page. The Close button always works and gives the focus back to the
-button that opened the reader. An open reader keeps the body it was opened with until it is closed,
-even when a later read of the snapshot changes or removes the page; a body that arrives after its
-reader was closed is dropped.
+The body is agent-written html. The page draws it only in the reader's one frame, sandboxed
+with nothing granted and behind a content policy that blocks everything the body loads by itself
+but `data:` images (`DOC_CSP` in `kitlib/hubsite/web/index.html`). Links are not blocked; the
+page check refuses them at publish. A body placed in the store by hand or copied in by `migrate`
+is not checked.
 
 `python tools/hub.py validate` (`_check_pages` in `kitlib/hubvalidate/__init__.py`) warns when a
 page's title is missing or empty, when a `page_html` has no string `html`, and when a `page_html`
@@ -582,29 +482,19 @@ commit and verifies it with the commit; `gate land` and the pre-push hook verify
 (`kitlib.guard.ownercommits`). An approval verifies for 24 hours after the decision, consumed or
 not (`approvals.APPROVED_TTL_S`).
 
-`GET /api/v1/snapshot` carries the collection whole, and `strong`: true only on the strong owner's
-call (`test_the_snapshot_says_strong_to_the_strong_owner_alone` in `tests/hubsite/test_api.py`).
-The page draws each pending request above the open questions in Inbox (`approvalCard` in
-`kitlib/hubsite/web/index.html`), counted in the Inbox and Questions badges: its title, repo, head,
-reason and the stored diff as text. Approve and Deny post the decide route with the version the page
-read; they are disabled unless the snapshot says `strong`, and a refusal (a 403 included) is shown
-on the card in the server's words (`DomTest` in `tests/hubsite/test_page.py`).
+`GET /api/v1/snapshot` carries the collection whole, and `strong`: true only on the strong
+owner's call. The page draws each pending request above the open questions in Inbox; Approve and
+Deny are disabled unless the snapshot says `strong`.
 
 ## Views read live
 Never stored; read from their sources (`kitlib.hubsite.derived`, `kitlib.hubsite.backlog`):
 - backlog and completed: each repository's backlog store (`.kit.json` backlog.store), every open
   record and every record closed in the last 90 days, fetched every `hub.backlog_refresh_s`.
   Parked is the backlog items whose state is parked. A repository's folder is
-  `pm_start.repo_paths[name]`, else the PM repository's sibling. While that timer runs,
-  `GET /api/v1/snapshot` (the page's load) answers these two from what the timer's reads left,
-  however old (one round per `backlog_refresh_s`; inferred: older if a round is slow), and starts no git. A
-  repository the first round has not reached shows with error "not read yet"; before any read
-  the snapshot lists the view in `unavailable` as `NotReadYet`, which the page shows as "The
-  backlog view is unavailable: NotReadYet" (the page text is inferred from `unavailable` being
-  shown as `gone`). `GET /api/v1/backlog?fresh=1` runs a fetch round and reads live. With no
-  timer (`backlog_refresh_s` unset) the snapshot reads as the routes do.
+  `pm_start.repo_paths[name]`, else the PM repository's sibling. While that timer runs, the snapshot answers these from the timer's last reads and starts no
+git; `GET /api/v1/backlog?fresh=1` runs a fetch round and reads live.
 - usage: `launch.py usage` (docs/launcher.md "Usage").
-- agents: the agent definitions in `claude/agents`.
+- agents: the kit's agent definitions.
 
 ## The record page
 One backlog record, read live and never part of the snapshot (`kitlib/hubsite/api.py` `record`,
@@ -634,55 +524,22 @@ comes from the caller.
   store cannot be written from the hub's checkout (a folder store outside a linked worktree), is
   `store`: the owner sees the store's text, an agent or the tunnel the fixed phrase.
 
-On the page (the record page block in `kitlib/hubsite/web/index.html`, `RecordPageTest` in
-`tests/hubsite/test_page.py`), a row's id in Current backlog, Parked or Completed opens the record, and
-Back to the backlog returns. The record shows its id, repository and where it is (`open` or
-`completed`), then four sections:
-- Fields: every header field except the hold keys, one `key: value` line per value.
-- Blocker or hold: each `blocked_on` (with a button that opens the record it names), `owner_ask`,
-  `hold_ruling` and `q`, or "Not blocked or held."
-- Body: the record's text.
-- Branch: the branch, its tip, date, worktree and how far it is ahead of and behind main. Read
-  only.
-
-On an open record, Fields, Blocker or hold and Body each have an Edit button that opens the
-section as text. In the two field sections a key left out is unset, a changed key is sent with all
-its values, and a line that is not `key: value` is refused on the page. Save sends only what
-changed, at the version the page read, and draws the record the answer carries; a refusal shows
-as "Not saved: " and the store's text. A Ruling id box appears only after a refusal that names a
-ruling, and a ruling typed there is sent with the next save.
-
-Delete… (open records only) opens a panel with a reason and a box to type the id again; the
-Delete button stays disabled until both are filled and the typed id matches. After the delete the
-page reads the record again, which now shows as removed and has no Edit or Delete. A record the
-store cannot read ("A header line of this record is not key: value") says so above its sections.
-
-The New story button (Backlog, beside the backlog menu) opens a blank record for the backlog that
-menu picks, else the first repository: a backlog menu, then id, summary, scope (one path per line)
-and effort, defaulting to the first effort in the template. Create is enabled once id, summary and
-scope are filled; it adds the record and opens it. "Not added: " shows the store's text, such as a
-repository whose `.kit.json` names no backlog store (this kit's repository, on the implicit
-store, is one).
+On the page, a row's id in Current backlog, Parked or Completed opens the record: its fields,
+blocker or hold, body and branch (read only). On an open record the first three sections each
+have an Edit button; Save sends only what changed, at the version the page read, and a refusal
+shows the store's text. Delete… needs a reason and the id typed again. The New story button
+(Backlog) opens a blank record for the chosen repository.
 
 ## Data from the old hub
-The hub was once a claude.ai artifact page, one copy per Claude account; it is retired. What the
-owner and the PM wrote on it was mirrored in git as `hub/<collection>/<doc_id>.json` in the PM
-data worktree, else in the absolute folder `pm_start.hub_mirror` (`kitlib.hubmirror`,
+Documents mirrored from the retired artifact hub sit in git as `hub/<collection>/<doc_id>.json`
+in the PM data worktree, else in the absolute folder `pm_start.hub_mirror` (`kitlib.hubmirror`,
 `tools/hub_mirror.py`). `python tools/hub.py migrate --from DIR [--from DIR ...] [--store PATH] [--dry-run]` copies
 those documents into the hub site's store (`kitlib.hubsite.migrate`). Use a new store folder.
 It only copies in, never replaces a document the store holds, and is refused while a server
 holds the store. A second run prints `nothing changed`.
 
-- A store document with a `version` that differs from the source is kept (the newer truth) and
-  does not fail the run. One without a `version` that differs is a conflict, and the run exits 1.
-- Two sources that differ, with nothing in the store, write neither side: a conflict.
-- A file that is no document, or has a bad or mismatched id, is skipped, and the run exits 1.
-- A source folder the store has no collection for is left alone. A question's text
-  `recommended` is written as a number.
-- `--dry-run` writes nothing, and takes the store lock only if the lock file already exists.
-- The report has `hub store: ...`, `source: ...`, per-collection counts, `NOT COMPLETE: ...` when
-  it stopped short and `imported N; no source was changed` (a dry run ends `dry run: ... nothing
-  was written`).
+A document the store holds with a differing `version` is kept; any other difference is a
+conflict, and the run exits 1. `--dry-run` writes nothing.
 
 `tools/hub_mirror.py save` refuses a mirror
 folder that is a live hub store (`kitlib.hubsite.store.META_NAME`): the server is the only

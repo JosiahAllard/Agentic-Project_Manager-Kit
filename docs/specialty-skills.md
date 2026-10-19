@@ -1,50 +1,13 @@
 # Specialty skills: task specialties as skills, not agent types
 
-Status: decided (ready to build); the owner accepted all eight recommendations ("Decisions"). Built: the seven `content/skills/specialty-*` skills (branch A); the types and the cutover (branch B) are not. The roster it assumes is the current one:
-senior-worker on opus/high with strong-worker on opus/medium (content/roles/senior-worker.md and strong-worker.md), and a
-weak-worker on haiku 5.5 (content/roles/weak-worker.md).
+Status: decided. Built: the seven `content/skills/specialty-*` skills (branch A). Owed: the types and the cutover (branch B).
 
 ## Owner ruling
 
 The owner's ruling, as relayed by the PM: "specialties become skills instead of agent types; written as a spec
 first". Goal: more task specialties without more agent types. A specialty is a skill a generic agent
 loads because its brief names it. The agent type sets model, effort and permissions; the skill sets
-know-how. Every inference is marked "inference"; the rest is read from the code.
-
-## Findings (code against the brief)
-
-1. `kitlib/backlog/roles.py` needs no code edit. Its groups are read from the role files
-   (`_ROSTER = _content.roster(KIT)`, `BUILDERS`, `DOCS`, `READ_ONLY` by `group`/`mode`), so retiring
-   or merging a role file moves it. Only the module docstring ("records and spec-writer: docs")
-   goes stale: one owner-path text edit.
-2. The landing right is keyed on the type NAME: `kitlib/guard/rules.py` `LANDER = 'lander'` and
-   `lander_check` (`event.agent_role != LANDER`, then `.kit.json` `roles.lander.edit_main_checkout`).
-3. `docs/ROSTER.md` and `content/skills/coordinator-dispatch/roster.md` ("Choosing") say "Effort is
-   not settable per dispatch: pick the role for it". The owner's "effort set per dispatch" for the
-   docs type contradicts that. Effort is a role front-matter key (`kitlib/host/content.py`
-   `OPTIONAL`, `EFFORTS`), rendered per file. I found no per-dispatch effort input in the kit;
-   whether a host's dispatch call accepts one is unverified.
-4. Capabilities are a union. `content/roles/reviewer.md`: `[read, search, find, bash]`;
-   `researcher.md`: `[read, search, find, web-search, web-fetch, write]`. A merged read type carries
-   both; a skill cannot take a tool away, so review gains web tools and research gains `bash`.
-   Neither list has `skill`, which a type needs to load one (`CAPABILITIES`; docs/content.md "Agent
-   view" step 6). The docs types lack it too.
-5. The three creative types have bounded lists (no `skill`, no web). Worker types are
-   `capabilities: all`, so creative work runs with a wider tool set (inference: least privilege
-   shrinks; the skill text must say what the brief allows, e.g. paid generation needs the owner).
-6. A skill has no tokens (docs/content.md "Skills"); the creative role bodies use `{{profile_path}}`,
-   `{{user_folder}}`, `{{instructions_file}}` (19 token uses, by grep) and need host-neutral
-   rewording. The bodies are 10.5, 9.8 and 10.5 KB; a skill is a short checklist plus companion
-   files (as `coordinator-dispatch/roster.md`).
-7. The tier change alters the creative mapping: asset-smith and tech-artist are strong/high today, and
-   strong-worker becomes opus/medium, so their equivalent is senior-worker (opus/high).
-8. `kitlib/gate/land.py` `is_author` compares reviewer and author agent types as free text; no
-   landing code names `reviewer`. Review must stay on a read type: a worker type reviewing a
-   worker's branch would match.
-9. `kitlib/content/__init__.py` `ALIASES` maps one old name to one new name; it cannot say "dispatch
-   a worker and load skill X", and the plugin lists each agent file (`.claude-plugin/plugin.json`).
-10. Codex skill loading from outside its plugin folder is unverified (docs/content.md "Codex");
-    specialty skills inherit that open item.
+know-how.
 
 ## Target roster
 
@@ -103,25 +66,9 @@ to `capabilities`.
 
 Effort (decided): records is low, spec-writer high; a role file takes one value. The role file says
 `effort: medium`; a spec is raised, by model (the existing upward override). "Set per dispatch" needs
-a host input the kit does not carry (Finding 3). After the build, check whether a host's dispatch
+a host input the kit does not carry . After the build, check whether a host's dispatch
 call can carry an effort at all; if it can, the roster rule "Effort is not settable per dispatch"
 is rewritten and the brief states effort.
-
-## Lander and test-runner stay separate (confirmed)
-
-`kitlib/guard/rolepolicy.py`, by mode:
-
-| | lander | test |
-|---|---|---|
-| edit in own checkout | refused (`NO_EDIT`) | refused (`NO_EDIT`) |
-| shell write to own checkout | allowed (not in `READ_ONLY_CHECKOUT`) | refused (`READ_ONLY_CHECKOUT`) |
-| lock verbs (`LOCK_VERBS`) | `status`, `run` only | `AGENT_LOCK`: also `background`, `stop`, `hold`, `division`, `game` |
-| `git fetch` / `git merge --ff-only` in main | allowed by name: `rules.lander_check`, needs `.kit.json` `roles.lander.edit_main_checkout` | not allowed by it |
-
-The modes are opposites (landing rights and a writable checkout against more lock verbs and a
-read-only checkout). A skill is text; mode, tools and the name test in `lander_check` belong to the
-type. Merging would force the union (landing rights plus test lock verbs on a light-tier agent), a
-widening of a strict path. Keep both.
 
 ## Dispatch skill changes
 
@@ -153,32 +100,13 @@ specialty (inference: that is what the owner wants).
 
 ## Migration inventory
 
-Grep counts on main at the spec's base: retired names (`asset-smith|tech-artist|sound-smith|
-spec-writer|researcher`) 105 hits in 41 files; qualified reviewer/records forms (`agent:`,
-`pm-kit:`, `kit-`, "role"/"agent") 31 hits in 18 files.
-
-| area (hits / files) | retired names | reviewer, records forms |
-|---|---|---|
-| content/roles | 9 / 6 (incl. `coordinator.md`, `{{agent:reviewer}}` example) | 2 / 1 |
-| content/skills | 10 / 3 | 1 / 1 (`branch-review`) |
-| rendered Claude agents; `.claude-plugin/plugin.json` | 14 / 6; 5 / 1 | 2 / 1 |
-| rendered Codex agents `kit-*.toml`; skills copy | 14 / 6; 10 / 3 | 4 / 3 |
-| kit docs (agent-review 12, ROSTER 6, guard 2, go-live 2, content 1) | 23 / 5 | 2 / 2 |
-| kit code | `kitlib/backlog/roles.py` docstring 1 | `hosts/codex/adapter/command_canary.py` 4; `kitlib/gate/land.py` 1 (prose) |
-| kit templates | 0 | `templates/common/AGENTS.md` 1 (`pm-kit:records`) |
-| kit tests | 17 / 8 (`test_agents`, `test_render`, `test_roles`, fakehost fixtures) | 13 / 6 (`test_start`, codex, `test_land_strict`) |
-| downstream repo with an art pipeline (a) | 15 lines / 4 files: agent profile, coordinator runbook 5, assets doc 2, `.kit.json` `doc_index.roles` 7 keys | |
-| downstream repo (b) | 7 lines / 5 files: agent and coordinator profiles, REPO.md 2, brief template 2, conventions digest | |
-| other repos | 0 live (audit notes and refusal logs are history) | |
-
 Not names to change: "reviewer" as a function word in `docs/agent-profile.md`, `strict_defaults.py`,
 risk maps and templates. `doc_index.py --role <name>` exits 2 on an unknown role, so a repo's per-role
 topic map (a's `.kit.json`; b's brief template via `roles_doc`) carries the new names, and
 per-specialty topics move into the brief. `tests/content/test_role_names.py` fails on a leftover name.
 
 Deprecation (decided): a hard cutover in one landing. Nothing that dispatches the old type names may
-be running when it lands. Shims for seven agent files would keep the list this ruling shrinks, and
-`ALIASES` cannot carry a skill (Finding 9). A stale dispatch of a removed type fails loudly in the
+be running when it lands. A stale dispatch of a removed type fails loudly in the
 host.
 
 ### Owner to-do (owner-only paths, literal)
@@ -190,8 +118,6 @@ host.
 3. Agent-profile and coordinator-profile lines naming `records`, `spec-writer`, `tech-artist`,
    `asset-smith`, `sound-smith` in repos (a) and (b): new names. The PM's report lists the lines.
    A repo with no art or audio states "specialty skills not used" in its coordinator profile.
-4. The kit's own `docs/agent-profile.md`, `AGENTS.md`, `.kit.json`, `tools/gate.json`,
-   `.github/workflows/`: no retired name found; nothing to edit.
 
 ## Decisions
 
@@ -205,22 +131,20 @@ The owner accepted all eight recommendations.
    lands ("Migration inventory").
 5. Minimum tiers as in the skills table, with no weak-worker on creative work ("Specialty skills").
 6. The wider tools: the read type has `bash` and web; creative work gets a worker's full tool set,
-   limits in skill text (Findings 4 and 5).
+   limits in skill text.
 7. Skills are named `specialty-*`.
 8. Repos with no art or audio say "specialty skills not used" in their coordinator profile (an owner
    edit, not a kit change; to-do 3).
 
 ## Build split
 
-Order: A, then B (after the tier and weak-worker changes land: `docs/ROSTER.md` and `roster.md` conflicts), then C, D.
+Order: B, then D. A is built; C (guard) is not needed.
 
 | branch | files | risk | size | waits for |
 |---|---|---|---|---|
-| A skills | `content/skills/specialty-*/` (7), rendered `hosts/codex/shell/skills/`; tests/skills, tests/content | strict `content/skills/**`; High | L | nothing |
-| B types and dispatch (atomic hard cut) | delete 7 `content/roles/*.md`, add 2; `coordinator-dispatch`, `subagent-dispatch`, `branch-review`, `coordinator.md`; rendered `hosts/*/shell/agents/**`, `plugin.json`; ROSTER, guard, content, go-live docs; `templates/common/AGENTS.md`; tests; `command_canary.py` | strict `content/roles/**`, `content/skills/**`, `hosts/*/shell/agents/**`, `hosts/*/adapter/**`; High | L | A, the tier changes |
-| C guard | none (research returns text plus a scratch file, no `writes`): not built | | | |
+| B types and dispatch (atomic hard cut) | delete 7 `content/roles/*.md`, add 2; `coordinator-dispatch`, `subagent-dispatch`, `branch-review`, `coordinator.md`; rendered `hosts/*/shell/agents/**`, `plugin.json`; ROSTER, guard, content, go-live docs; `templates/common/AGENTS.md`; tests; `command_canary.py` | strict `content/roles/**`, `content/skills/**`, `hosts/*/shell/agents/**`, `hosts/*/adapter/**`; High | L | the tier changes |
 | D repo migration | to-do 1 to 3 (owner paths); non-owner docs in repos (a) and (b) | docs Low; owner paths owner-only | S | B landed |
 
-Gates: A and B reach the full gate (`python tools/gate.py --full`; strict landing needs a fresh
+Gates: B reaches the full gate (`python tools/gate.py --full`; strict landing needs a fresh
 strong reviewer, `kitlib/gate/strict_defaults.py`); `tools/render_content.py --check` clean. No
 lock, landing or guard code is touched.

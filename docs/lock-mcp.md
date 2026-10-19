@@ -2,9 +2,9 @@
 
 `mcp/lock_server.py` serves the machine lock as a stdio MCP server, the adapter named in ARCHITECTURE.md "Scheduler UI". Its tools are thin wrappers over `kitlib.lock.api` (docs/lock-api.md) and call nothing else. The logic is `kitlib/lockmcp/server.py`; the stdio JSON-RPC loop and response shapes (`ok`, `err`, `serve`) are `kitlib/mcpwire`, shared with the hub server.
 
-- **Transport:** JSON-RPC 2.0, one message per line on stdin and stdout. It is written on the standard library, because the `mcp` SDK is not installed and the kit uses no packages (CLAUDE.md). It answers `initialize` (protocol 2025-06-18, 2025-03-26 or 2024-11-05), `ping`, `tools/list` and `tools/call`.
+- **Transport:** JSON-RPC 2.0, one message per line on stdin and stdout. It is written on the standard library. It answers `initialize` (protocol 2025-06-18, 2025-03-26 or 2024-11-05), `ping`, `tools/list` and `tools/call`.
 - **Plugin:** `.claude-plugin/plugin.json` names it `machine-lock`. That manifest holds this server, the skills (`content/skills/`), the agents (`hosts/claude/shell/agents/`) and the hooks of ARCHITECTURE.md "Packaging".
-- **Live through the plugin:** a Claude session with the `pm-kit` plugin enabled starts it from that manifest; no settings entry or `.mcp.json` names it. Observed 2026-10-14: a session's tools include `mcp__plugin_pm-kit_machine-lock__lock_snapshot` and the other tools below.
+- **Live through the plugin:** a Claude session with the `pm-kit` plugin enabled starts it from that manifest; no settings entry or `.mcp.json` names it. A session's tools are named `mcp__plugin_pm-kit_machine-lock__<tool>`.
 
 ## Results
 
@@ -42,9 +42,9 @@ Each description starts with `OWNER-ONLY`, and each returns `{ok, result | error
 
 ## What guard.py must deny agents
 
-guard.py denies agents these seven tools, matched on the tool name's suffix. How it tells the owner's session from an agent's is still open: the `agent_id` field (ARCHITECTURE.md "Contracts", Roles) marks only subagents.
+guard.py denies agents these seven tools, matched on the tool name's suffix.
 
 `lock_hold_create`, `lock_hold_edit`, `lock_hold_end`, `lock_set_game_mode`, `lock_set_games`, `lock_set_division`, `lock_end_run`
 
 - The list in code is `kitlib.lockmcp.server.OWNER_ONLY`, and `tests/lockmcp/test_server.py` pins it.
-- Inferred, not yet seen: once the plugin is installed, Claude Code names these with the Claude plugin's MCP prefix, `kitlib.lockmcp.tool_prefix()` + `<tool>` (the host's hosts.json `mcp_tool_format`, which the guard reads too). Check the name against a real PreToolUse payload before the guard matches on it.
+- The full name is the Claude plugin's MCP prefix, `kitlib.lockmcp.tool_prefix()` + `<tool>` (the host's hosts.json `mcp_tool_format`, which the guard reads too).
