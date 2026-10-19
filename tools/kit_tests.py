@@ -326,15 +326,22 @@ def main(argv=None, out=None):
             give = drainer(lambda line: (stream['out'].write(line + '\n'), stream['out'].flush()))
         counted = None
         first_give = give
-        if give is not None and real:
-            # Giving back is one-way, so the fake pass keeps what the real pass can use at once.
-            # The count child gets no offer, as the pool's own count child gets none.
-            env0 = {k: v for k, v in units_env('0').items() if k != giveback.GIVE_ENV}
+        if jobs != 1:
+            # One count child for both passes, not one each: the fake pass's modules and the
+            # real-git pass's, counted on the fake tier as the fake pass's own child counted them
+            # (a module's tests and classes do not depend on the tier: the loader only loads it).
+            # It gets no offer, as the pool's own count child gets none.
+            fake_set = selftree.all_test_modules(top) if args is FULL else args
+            seen = set(fake_set)
+            both = list(fake_set) + [m for m in real if m not in seen]
+            env1 = {k: v for k, v in units_env('1').items() if k != giveback.GIVE_ENV}
             try:
-                counted = selfrun.count_units(top, real, environ=env0)
+                counted = selfrun.count_units(top, both, environ=env1)
             except KeyboardInterrupt:
                 say('kit_tests: INTERRUPTED, exit %d before the first pass' % tiers.INTERRUPTED)
                 return tiers.INTERRUPTED
+        if give is not None and real:
+            # Giving back is one-way, so the fake pass keeps what the real pass can use at once.
             bound = tiers.unit_bound(real, counted[1])
             need = min(jobs, bound)
             first_give = tiers.keep_for_next(give, need)
@@ -348,7 +355,8 @@ def main(argv=None, out=None):
                 tier_out.write('kit_tests: no real-git module in the selection\n')
                 return 0
             if fake == '1':
-                return run_pass(use, top, cfg, jobs, fake, tier_out, hold, give_back=first_give)
+                return run_pass(use, top, cfg, jobs, fake, tier_out, hold, give_back=first_give,
+                                counted=counted)
             # Counted before the fake pass, so the units it plans are the ones the fake pass kept
             # threads for.
             return run_pass(use, top, cfg, jobs, fake, tier_out, None, give_back=give,

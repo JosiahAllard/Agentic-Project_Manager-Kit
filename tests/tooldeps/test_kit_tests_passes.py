@@ -117,19 +117,21 @@ class GiveBackBetweenPasses(unittest.TestCase):
         real = h.runs[1]
         self.assertEqual(real['modules'], SELECTED)
         self.assertEqual((real['counts'], real['classes']), h.counted)
-        self.assertEqual((h.runs[0]['counts'], h.runs[0]['classes']), (None, None))
+        # and so does the fake pass: one count child for both, not one more in its pool
+        self.assertEqual((h.runs[0]['counts'], h.runs[0]['classes']), h.counted)
+        self.assertEqual(len(h.counts), 1, text)
         # the drainer's lines are tagged with the pass that runs
         self.assertIn('kit_tests [fake git]: give back: keeps 4\n', text)
         self.assertIn('kit_tests [real git]: give back: keeps 1\n', text)
 
-    def test_the_count_is_asked_once_on_real_git_without_the_offer(self):
+    def test_the_count_is_asked_once_for_both_passes_on_the_fake_tier_without_the_offer(self):
         h = Harness()
         rc, text = h.main(TWO_CHANGED + ['--jobs', '4'])
         self.assertEqual(rc, 0, text)
         self.assertEqual(len(h.counts), 1, text)
         modules, env = h.counts[0]
         self.assertEqual(modules, SELECTED)
-        self.assertEqual(env.get('KIT_FAKE_GIT'), '0')
+        self.assertEqual(env.get('KIT_FAKE_GIT'), '1')       # as the fake pass's own child had it
         self.assertNotIn(GIVE_ENV, env)
         self.assertTrue(h.runs[0]['give_env'], 'the units env still carries it; selfrun drops it')
 
@@ -150,14 +152,25 @@ class GiveBackBetweenPasses(unittest.TestCase):
         h = Harness(changed=([], None))
         rc, text = h.main(['--full', '--both-tiers', '--jobs', '8'])
         self.assertEqual(rc, 0, text)
-        self.assertEqual(h.counts[0][0], ['tests.git.test_g', 'tests.gate.test_land_x'])
+        self.assertEqual(h.counts, [(MODULES, h.counts[0][1])], text)   # the real ones among them
+        self.assertEqual(h.runs[1]['modules'], ['tests.git.test_g', 'tests.gate.test_land_x'])
         self.assertEqual(h.given, [2, 1], text)
 
-    def test_no_offer_asks_no_count_and_says_so_once(self):
+    def test_one_count_holds_a_real_git_module_the_fake_pass_does_not_run(self):
+        # plan (faked) selects SELECTED; the changed test module it leaves out runs on real git only
+        h = Harness(changed=([], None))
+        rc, text = h.main(['--select', '--changed', 'tests/git/test_g.py', '--jobs', '4'])
+        self.assertEqual(rc, 0, text)
+        self.assertEqual([r['modules'] for r in h.runs], [SELECTED, ['tests.git.test_g']], text)
+        self.assertEqual([m for m, _env in h.counts], [SELECTED + ['tests.git.test_g']], text)
+        self.assertEqual([(r['counts'], r['classes']) for r in h.runs], [h.counted] * 2)
+
+    def test_no_offer_still_asks_one_count_for_both_passes_and_says_so_once(self):
         h = Harness(offer=False)
         rc, text = h.main(TWO_CHANGED + ['--jobs', '4'])
         self.assertEqual(rc, 0, text)
-        self.assertEqual((len(h.drainers), h.counts), (1, []), text)
+        self.assertEqual((len(h.drainers), len(h.counts)), (1, 1), text)
+        self.assertEqual([(r['counts'], r['classes']) for r in h.runs], [h.counted] * 2)
         self.assertEqual([r['give_back'] for r in h.runs], [None, None])
         self.assertEqual(text.count(NO_OFFER), 1, text)
         self.assertNotIn('for the real-git pass', text)
