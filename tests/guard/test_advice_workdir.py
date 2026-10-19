@@ -259,7 +259,7 @@ class UnreadPython(unittest.TestCase):
                                  self.w.ctx()))
 
 
-setUpModule = W.deny_unplaced           # these pin what the guard cannot place (world.deny_unplaced)
+setUpModule = W.deny_softened           # these pin what the guard cannot place and the dropped rules (world.deny_softened)
 tearDownModule = W.allow_unplaced
 
 

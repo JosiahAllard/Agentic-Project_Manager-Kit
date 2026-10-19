@@ -421,6 +421,8 @@ class SharedRefFallback(SharedRefBase):
         self.refused(self.session(text, tj.COORDINATOR))
 
     def test_an_unclean_update_ref_in_main_for_the_owner(self):
+        W.deny_softened()                       # unreadable is a warning by default (test_cheap.py)
+        self.addCleanup(W.allow_unplaced)
         d = self.session("echo 'x ; git update-ref refs/heads/main HEAD", {}, self.w.main)
         self.assertIsNotNone(d, 'allowed')
         self.assertEqual((d.verdict, d.rule), ('deny', 'unreadable'), d.reason)

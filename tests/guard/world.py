@@ -129,8 +129,19 @@ def deny_unplaced():
     _UNPLACED_DENY.append(p)
 
 
+def deny_softened():
+    """Hold every rule the kit's modes soften (modes.DEFAULTS: unplaced, and the rules dropped as
+    blocks) at deny, until allow_unplaced(): for a module of tests that pin those rules' refusals
+    from before KIT-GUARD-CHEAP. Their defaults are pinned in test_cheap.py."""
+    from unittest import mock
+    from kitlib.guard import modes
+    p = mock.patch.dict(modes.DEFAULTS, dict.fromkeys(list(modes.DEFAULTS), modes.DENY))
+    p.start()
+    _UNPLACED_DENY.append(p)
+
+
 def allow_unplaced():
-    """Undo deny_unplaced() (tearDownModule)."""
+    """Undo deny_unplaced() or deny_softened() (tearDownModule)."""
     _UNPLACED_DENY.pop().stop()
 
 

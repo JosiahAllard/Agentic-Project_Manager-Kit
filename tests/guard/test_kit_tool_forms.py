@@ -63,6 +63,8 @@ class SharedRules(unittest.TestCase):
     def setUp(self):
         self.w = W.World()
         self.addCleanup(self.w.cleanup)
+        W.deny_softened()                       # the rows pin wrapped-gate, off by default (test_cheap.py)
+        self.addCleanup(W.allow_unplaced)
 
     def test_each_kit_form_is_judged_as_the_stub_form(self):
         for name, tool, takes_c, args, shell, where, sub in SHARED:

@@ -1653,7 +1653,7 @@ class KitJson(Base):
         self.allowed(self.write(os.path.join(self.w.temp, 'fixture', '.kit.json')))
 
 
-setUpModule = W.deny_unplaced           # these pin what the guard cannot place (world.deny_unplaced)
+setUpModule = W.deny_softened           # these pin what the guard cannot place and the dropped rules (world.deny_softened)
 tearDownModule = W.allow_unplaced
 
 

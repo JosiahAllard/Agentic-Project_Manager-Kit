@@ -30,6 +30,11 @@ unreadable line is never a way around a rule, and a plain line is never denied b
     unclean for another reason: that PM data check, and in any repository an agent session is
     denied, as here (`unreadable` for a subagent, `write-jail` for another jailed session).
 
+The `unreadable` rule is a warning by default (kitlib.guard.modes, KIT-GUARD-CHEAP): where it would
+deny, the warning is kept and the check goes on to the next pattern and the checks after it, so
+only a kept rule's own deny (a re-read one, git-push-pmdata) stops the line. A pattern whose rule
+is off (wrapped-gate by default) is not looked for. The owner can set each back to deny.
+
 Where a pattern matches, the directory is the one the command holding the match runs in (a
 literal cd before it is followed), not only the call's.
 
@@ -44,6 +49,7 @@ from kitlib import config as kconfig
 from kitlib.git import repo
 
 from . import commands as cm
+from . import modes
 from . import rules
 from . import shell as sh
 
@@ -225,6 +231,8 @@ def check(event, ctx, text, cwd, role, parsed):
 
     main_rules = set(r for r, _p in MAIN_ONLY + SUBAGENT_MAIN)
     for rule, pat in list(ANYWHERE) + list(MAIN_ONLY) + list(SUBAGENT_MAIN):
+        if modes.mode(rule) == modes.OFF:
+            continue                            # an off rule: its text is no reason to warn either
         ungated = False
         if rule == 'git-push-main':
             cfg = ctx.config(cwd) if cwd else None
@@ -248,7 +256,9 @@ def check(event, ctx, text, cwd, role, parsed):
         d = reread(m.start(), where or cwd)
         if ungated and d is None:
             continue                            # no push_block: only a delete or a forced push of main is refused
-        return answer(d, rule)
+        d = answer(d, rule)
+        if d:
+            return d                            # unreadable warns by default: the patterns after it still run
     held = None
     cfg = ctx.config(cwd) if cwd else None
     for entry, pat in heavy_patterns(cfg):
@@ -271,7 +281,9 @@ def check(event, ctx, text, cwd, role, parsed):
             return answer(d, 'heavy')
     last, alt = plainly(ctx, parsed, text, cwd)
     if role == 'subagent':
-        return rules.refuse('unreadable', role, why + last, alt)
+        d = rules.refuse('unreadable', role, why + last, alt)
+        if d:
+            return d                            # warned by default: judged below as a jailed session is
     if GIT_WORD_RE.search(text) and rules.agent_session(event, ctx):
         d = rules.refuse(rules.UNPLACED, role, '%s git on a line the guard cannot read may write a checkout it '
                          'cannot place; run the git in its own call.%s' % (why, last), alt)
@@ -290,8 +302,10 @@ def check(event, ctx, text, cwd, role, parsed):
                 return rules.reworded(d, '%s %s' % (why, d.reason))
             continue
         if main_like(ctx, c.cwd):
-            return rules.refuse('unreadable', role, '%s It runs %s in a main checkout or a place git cannot '
-                                'tell.%s' % (why, hidden, last), alt)
+            d = rules.refuse('unreadable', role, '%s It runs %s in a main checkout or a place git cannot '
+                             'tell.%s' % (why, hidden, last), alt)
+            if d:
+                return d                        # warned by default: the PM data check below still runs
         if not owner and rules.pmdata_recorded(ctx, c.cwd):
             return rules.refuse('git-push-pmdata', role, '%s It runs %s in a repository with a PM data record (%s): '
                                 'it may be git push --no-verify, which skips the pre-push hook that keeps PM data '

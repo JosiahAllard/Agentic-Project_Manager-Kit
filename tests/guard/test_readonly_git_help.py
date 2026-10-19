@@ -66,6 +66,8 @@ class LockRunHelpPiped(unittest.TestCase):
         self.assertIsNone(d, d and d.reason)
 
     def test_help_with_more_words_or_a_real_run_is_refused(self):
+        W.deny_softened()                       # wrapped-gate is off by default (test_cheap.py)
+        self.addCleanup(W.allow_unplaced)
         for text in ('python tools/machine_lock.py run --help -- python x.py | head',
                      'python tools/machine_lock.py run --kind build --help | head',
                      'python tools/machine_lock.py run --kind build -- python x.py --help | head',

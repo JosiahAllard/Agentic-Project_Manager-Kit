@@ -214,9 +214,9 @@ class DynamicTargets(Base):
                      r'Set-Content -Value "$(sv PWD {main})" -Path "$PWD\x.txt"'):
             with self.subTest(text):
                 self.refused_for_both(text)
-        # & and a computed program is refused before any write is read (rule unreadable)
+        # & and a computed program is refused before any write is read (rules.call_subexpr_pmdata: unplaced)
         self.denied(self.run_ps(r"& ([scriptblock]::Create('sv PWD {main}')); Set-Content " + r'"$PWD\x.txt" x'),
-                    'unreadable')
+                    'unplaced')
         # a line that writes to a literal target is not judged by this rule
         for text in ('Write-Output "a`nb"; Set-Content x.txt "c`nd"', 'sv a 1; Set-Content x.txt $a'):
             with self.subTest(text):
@@ -744,7 +744,7 @@ class ResolvePath(unittest.TestCase):
                 self.assertFalse(sh.ps_unplaceable(text))
 
 
-setUpModule = W.deny_unplaced           # these pin what the guard cannot place (world.deny_unplaced)
+setUpModule = W.deny_softened           # these pin what the guard cannot place and the dropped rules (world.deny_softened)
 tearDownModule = W.allow_unplaced
 
 

@@ -200,7 +200,7 @@ PROSE_WORDS = ('run', 'work', 'make', 'read', 'write', 'commit', 'merge', 'name'
                'as', 'from', 'reproduce', 'approve', 'stage', 'search', 'use')
 
 
-setUpModule = W.deny_unplaced           # these pin what the guard cannot place (world.deny_unplaced)
+setUpModule = W.deny_softened           # these pin what the guard cannot place and the dropped rules (world.deny_softened)
 tearDownModule = W.allow_unplaced
 
 

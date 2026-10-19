@@ -1,8 +1,8 @@
 """Second-review fixes to the PM data routes (docs/guard.md "Rules" and "Fallback"):
 
-  - `& (<expr>)` is denied for an agent session in any repository, as the fallback denies an
-    unreadable line: a computed program skips the rules that need a literal one (heavy, the
-    write jail, the git rules); only the owner and `plain` read it as any other line;
+  - `& (<expr>)` is refused as unplaced for an agent session in any repository (a warning by
+    default, KIT-GUARD-CHEAP): a computed program skips the rules that need a literal one (heavy,
+    the write jail, the git rules); only the owner and `plain` read it as any other line;
   - HOME set by an arithmetic assignment (let, (( )), $(( )), for (( ))) or by select counts;
   - git-remote-rewrite counts a directory the text cannot tell as git_alias_config does: only
     when the machine config names pm_data or the command's own directory has a record;
@@ -10,8 +10,9 @@
 import os
 import unittest
 
-from kitlib import pmdata
+from kitlib import guard, pmdata
 
+from . import claudehost
 from . import world as W
 from .test_pmdata_gaps import COORD, PLAIN, PM, ROOT, Base
 from .world import ps
@@ -33,13 +34,21 @@ class CallSubexpressionAgents(Base):
                 "& (Join-Path $r x.exe) a; echo 'x")      # unclean for another reason too
 
     def test_an_agent_session_is_denied(self):
+        W.deny_unplaced()                       # unplaced is warn by default (test_by_default_...)
+        self.addCleanup(W.allow_unplaced)
         for text in self.lines():
-            with self.subTest(text=text, session='subagent'):
-                self.assert_denied(self.decide(text, sub=True, shell=ps), 'unreadable')
-            for label, env in (('pm', PM), ('coordinator', COORD)):
+            for label, sub, env in self.sessions():
                 with self.subTest(text=text, session=label):
-                    d = self.decide(text, environ=env, shell=ps)
-                    self.assert_denied(d, 'write-jail')
+                    d = self.decide(text, sub=sub, environ=env, shell=ps)
+                    self.assert_denied(d, 'unplaced')
+                    self.assertIn('Name the program literally', d.reason)
+
+    def test_by_default_an_agent_session_is_warned(self):
+        for text in self.lines():
+            for label, sub, env in self.sessions():
+                with self.subTest(text=text, session=label):
+                    d = guard.decide(claudehost.action(ps(text, self.w.wt, sub=sub)), self.ctx(env))
+                    self.assertEqual((d.verdict, d.rule), ('allow', 'warn'), d.reason)
                     self.assertIn('Name the program literally', d.reason)
 
     def test_the_owner_and_plain_pass(self):

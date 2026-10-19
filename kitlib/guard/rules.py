@@ -30,7 +30,7 @@ Rules, in the order they are checked:
                    read of the token folder or a file in it, or a search that can read or list
                    one (the store stays readable); in any session but the owner's own
                    (kitlib.guard.hub)
-  hub-owner-verb   fail-closed: a shell line whose text names the hub tool as a module or
+  hub-owner-verb   (off by default, modes.DEFAULTS) fail-closed: a shell line whose text names the hub tool as a module or
                    a script (tools/hub.py, tools.hub, an import of hub, python -m hub, a standalone
                    hub on a line that runs python and holds import) anywhere outside the one shape
                    the guard reads
@@ -57,7 +57,7 @@ Rules, in the order they are checked:
   write-jail       an agent session's write outside its own checkout, its repository's other
                    worktrees, the temp folder and the .kit.json data roots (kitlib.guard.jail);
                    git that writes a checkout outside them
-  wrapped-gate     gate.py or `machine_lock.py run` piped into another command (P16)
+  wrapped-gate     (off by default) gate.py or `machine_lock.py run` piped into another command (P16)
   root-search      a recursive search from a drive or filesystem root
   heavy            a heavy program run with no lock held (MACHINE_LOCK_RUN verified by nest_check)
   git-*            damaging git in a main checkout; branch -D anywhere; a push that deletes or
@@ -76,8 +76,11 @@ Rules, in the order they are checked:
   owner-identity   the owner's email given to a commit, in any session but the owner's own
   kill-by-name     an agent session ending processes by name (taskkill /IM, Stop-Process -Name)
   heredoc-winpath  python reading a bash heredoc with a single-backslash Windows path in a string
-  busy-wait        a foreground sleep loop with no counter, clock or timeout bounding it
-A command line the parser cannot read cleanly also goes through kitlib.guard.fallback.
+  busy-wait        (off by default) a foreground sleep loop with no counter, clock or timeout bounding it
+  git-alias        (a warning by default) a git alias defined on the command line (-c alias.<name>=...)
+A rule's mode (deny, warn or off) is kitlib.guard.modes'; a rule it does not name is deny.
+A command line the parser cannot read cleanly also goes through kitlib.guard.fallback (its rule,
+unreadable, is a warning by default).
 "Agent session" and "the owner's own" are the session mark's (docs/guard.md "Session mark").
 """
 import ast
@@ -4885,7 +4888,9 @@ def git_rules(event, ctx, cmd, inv, cwd, role):
     if gc is None:
         return None
     if gc.alias:
-        return git_alias(cmd, gc, role)
+        d = git_alias(cmd, gc, role)
+        if d:
+            return d                            # a warning by default: the call is judged as written below
     if gc.sub_dyn or (gc.sub == '' and gc.inv is not None and gc.inv.via == 'xargs'):
         d = git_push_pmdata(event, ctx, gc, role)       # a computed subcommand may be push
         if d:
@@ -5982,10 +5987,9 @@ def call_subexpr_pmdata(event, ctx, cmd, inv, cwd, role):
     commands.call_subexpr), in every session but the owner's own: the program is what the ( )
     computes, so the rules that need a literal program (heavy, the write jail, the git rules)
     cannot read it. In a repository with a PM data record it is denied as git-push-pmdata (it may
-    be git push --no-verify); elsewhere an agent session (agent_session) is denied as the
-    fallback denies an unreadable line, a subagent `unreadable` and another jailed session
-    `write-jail` (it may be git writing a checkout the jail cannot place). Only the owner and a
-    session the jail does not hold (`plain`) read the line as any other."""
+    be git push --no-verify); elsewhere an agent session (agent_session) is refused as unplaced
+    (it may be git writing a checkout the jail cannot place; warn by default). Only the owner and
+    a session the jail does not hold (`plain`) read the line as any other."""
     if not cm.call_subexpr(inv) or is_owner_session(event, ctx):
         return None
     instead = ('& <program> %s' % ' '.join(w.text for w in inv.args)).rstrip()
@@ -5997,8 +6001,7 @@ def call_subexpr_pmdata(event, ctx, cmd, inv, cwd, role):
                       % (inv.path, pmdata.FILE_NAME), instead)
     if not agent_session(event, ctx):
         return None
-    rule = 'unreadable' if role == 'subagent' else 'write-jail'
-    return refuse(rule, role, '`& %s` runs the program a PowerShell subexpression computes, which the guard cannot '
+    return refuse(UNPLACED, role, '`& %s` runs the program a PowerShell subexpression computes, which the guard cannot '
                   'name: it may be git writing a checkout the write jail cannot place, or a heavy program run '
                   'without the machine lock. Name the program literally:' % inv.path, instead)
 

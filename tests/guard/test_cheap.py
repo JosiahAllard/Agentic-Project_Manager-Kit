@@ -212,6 +212,68 @@ class StrictGitReads(World):
         self.assertEqual(self.git('log "HEAD~$n"', W.ps), Decision('allow'))
 
 
+class Dropped(World):
+    """Item 2: hub-owner-verb, wrapped-gate and busy-wait are off; unreadable and git-alias only
+    warn; the kept rules still judge such a line; the owner's machine config turns each back on."""
+
+    def hub_verb(self):
+        hub = W.fwd(os.path.join(self.w.kit_dir, 'tools', 'hub.py'))
+        return W.bash('python "%s" answer Q-1 --choice 1' % hub, self.w.wt, sub=True)
+
+    def wrapped_gate(self):
+        return W.bash('python tools/gate.py --full 2>&1 | tail -5', self.w.wt, sub=True)
+
+    def busy_wait(self):
+        return W.bash('while ! test -f done.txt; do sleep 5; done', self.w.wt, sub=True)
+
+    def unreadable(self):
+        return W.bash("echo 'x ; git merge kit/wt", self.w.main)
+
+    def alias(self):
+        return W.bash('git -c alias.co=checkout co main', self.w.wt, sub=True)
+
+    def test_the_kit_defaults(self):
+        for rule, m in (('hub-owner-verb', modes.OFF), ('wrapped-gate', modes.OFF), ('busy-wait', modes.OFF),
+                        ('unreadable', modes.WARN), ('git-alias', modes.WARN)):
+            with self.subTest(rule):
+                self.assertEqual(modes.DEFAULTS.get(rule), m)
+
+    def test_an_off_rule_lets_the_call_run_and_says_nothing(self):
+        self.w.git.ancestors.add((W.SHA_WT, 'main'))
+        for name, make in (('hub-owner-verb', self.hub_verb), ('wrapped-gate', self.wrapped_gate),
+                           ('busy-wait', self.busy_wait)):
+            with self.subTest(name):
+                self.assertEqual(self.decide(make()), Decision('allow'))
+
+    def test_a_warned_rule_lets_the_call_run_with_its_warning(self):
+        for name, make in (('unreadable', self.unreadable), ('git-alias', self.alias)):
+            with self.subTest(name):
+                d = self.decide(make())
+                self.assertEqual((d.verdict, d.rule), ('allow', rules.WARNED), d.reason)
+                self.assertIn('rule=%s' % name, d.reason)
+
+    def test_the_kept_rules_still_judge_the_line(self):
+        # an unreadable line: the fallback reads the matching part again (git-checkout in main)
+        d = self.decide(W.bash("echo 'x ; git checkout main", self.w.main))
+        self.assertEqual((d.verdict, d.rule), ('deny', 'git-checkout'), d.reason)
+        # a git alias: the call is judged as written (branch -D, with an alias beside it)
+        d = self.decide(W.bash('git -c alias.x=status branch -D kit/old', self.w.wt, sub=True))
+        self.assertEqual((d.verdict, d.rule), ('deny', 'git-branch-force-delete'), d.reason)
+        # a wrapped gate whose text names a kept rule's program is still judged by that rule
+        d = self.decide(W.bash('python tools/gate.py --full | tail -5; git checkout main', self.w.main))
+        self.assertEqual((d.verdict, d.rule), ('deny', 'git-checkout'), d.reason)
+
+    def test_the_owner_can_turn_each_back_on(self):
+        self.w.git.ancestors.add((W.SHA_WT, 'main'))
+        self.w.user_config({'guard_rules': dict.fromkeys(
+            ('hub-owner-verb', 'wrapped-gate', 'busy-wait', 'unreadable', 'git-alias'), 'deny')})
+        for name, make in (('hub-owner-verb', self.hub_verb), ('wrapped-gate', self.wrapped_gate),
+                           ('busy-wait', self.busy_wait), ('unreadable', self.unreadable), ('git-alias', self.alias)):
+            with self.subTest(name):
+                d = self.decide(make())
+                self.assertEqual((d.verdict, d.rule), ('deny', name), d.reason)
+
+
 class NetArgumentIndex(World):
     """_net_written's per-method argument index: Copy writes its destination, Move both paths,
     Replace all three; a literal main-checkout path in a written place is denied from a worktree."""

@@ -1682,5 +1682,9 @@ class CrtWords(unittest.TestCase):
                 self.assertEqual(hub_crt_words(text), words)
 
 
+setUpModule = W.deny_softened           # these pin hub-owner-verb, off by default (test_cheap.py)
+tearDownModule = W.allow_unplaced
+
+
 if __name__ == '__main__':
     unittest.main()

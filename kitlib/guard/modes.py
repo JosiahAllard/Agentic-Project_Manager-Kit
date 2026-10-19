@@ -32,6 +32,13 @@ CONFIG_KEY = 'guard_rules'
 # main checkout stay deny (docs/guard.md "Rule modes").
 DEFAULTS = {
     'unplaced': WARN,           # a write the guard cannot place (kitlib.guard.rules.UNPLACED)
+    # dropped as blocks (KIT-GUARD-CHEAP item 2): the owner can turn each back on
+    'hub-owner-verb': OFF,      # the hub's own token check is the real protection
+    'wrapped-gate': OFF,
+    'busy-wait': OFF,
+    # dropped as blocks, kept as warnings: what the guard cannot read it cannot place (item 1)
+    'unreadable': WARN,         # a line the parser cannot read: the kept rules still judge its text
+    'git-alias': WARN,          # an alias on the command line: the call is judged as written
 }
 
 _STATE = contextvars.ContextVar('kit_guard_modes', default=None)
