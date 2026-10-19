@@ -69,7 +69,6 @@ Rules, in the order they are checked:
                    Windows path in a string
   busy-wait        (off by default) a foreground sleep loop with no counter, clock or timeout bounding it
   git-alias        (a warning by default) a git alias defined on the command line (-c alias.<name>=...)
-  git-alias-shell  git running a shell alias the command line defines (-c alias.<name>=!...)
 A rule's mode (deny, warn or off) is kitlib.guard.modes'; a rule it does not name is deny.
 A command line the parser cannot read cleanly also goes through kitlib.guard.fallback (its rule,
 unreadable, is a warning by default).
@@ -3802,17 +3801,16 @@ def git_alias(cmd, gc, role):
                   'the command git runs. %s' % (bare(cmd), name, val, how), instead)
 
 
-def _inline_expand(gc):
-    """(gc, shell): `gc` as git runs it when its subcommand names an alias the line itself defines
-    (-c alias.<name>=<value>): the value's words are the subcommand and its first arguments, as
-    _alias_judged expands an alias from config, so the rules judge the command git runs; and
-    (name, value) when the alias git runs is a shell alias (!...), else None. A builtin name (git
-    ignores an alias that would hide one), --config-env (its value is in the environment), a
-    computed setting and a value that starts with an option or cannot be split end the expansion
-    where it is (git_alias warns). A chain is followed at most ALIAS_DEPTH steps: the call is then
-    judged as the last expansion reached."""
+def inline_alias(gc):
+    """`gc` as git runs it when its subcommand names an alias the line itself defines (-c
+    alias.<name>=<value>): the value's words are the subcommand and its first arguments, so the
+    rules judge the command git runs. A builtin name (git ignores an alias that would hide one),
+    --config-env (its value is in the environment), a computed setting, a shell alias (!...) and
+    a value that starts with an option or cannot be split end the expansion where it is
+    (git_alias warns). A chain is followed at most ALIAS_DEPTH steps: the call is then judged as
+    the last expansion reached."""
     if gc is None or gc.inv is None or not gc.alias or gc.sub_dyn:
-        return gc, None
+        return gc
     inline = {}
     for key, val, first, last in git_prefix_configs(gc):
         if key.startswith('alias.') and not cm.passed(gc.inv.cmd, first).startswith('--') and \
@@ -3820,37 +3818,15 @@ def _inline_expand(gc):
             inline[key[len('alias.'):].lower()] = val   # the last setting of a name wins, as in git
     for _depth in range(ALIAS_DEPTH):
         val = inline.get(gc.sub.lower())
-        if val is None or gc.sub in GIT_BUILTINS:
-            return gc, None
-        if val.startswith('!'):
-            return gc, (gc.sub, val)
+        if val is None or gc.sub in GIT_BUILTINS or val.startswith('!'):
+            return gc
         words = split_alias(val)
         if not words or words[0].startswith('-'):
-            return gc, None
+            return gc
         rest = [sh.Word(t, False, None, None) for t in words[1:]] + list(gc.rest)
         gc = cm.GitCall(gc.dir, words[0], rest, gc.inv, gc.unknown, gc.alias, False, gc.blind,
                         len(words) - 1 + gc.synth)
-    return gc, None
-
-
-def inline_alias(gc):
-    """`gc` as git runs it, an alias the line defines expanded (_inline_expand)."""
-    return _inline_expand(gc)[0]
-
-
-def git_alias_shell(cmd, gc, role):
-    """git-alias-shell (deny by default): git runs a shell alias (-c alias.<name>=!<command>) the
-    line itself defines, at the end of any chain of them (_inline_expand). The command it runs is
-    shell text the guard does not read, so a push, branch -D or core.hooksPath change could hide
-    in it."""
-    run, shell = _inline_expand(gc)
-    if shell is None:
-        return None
-    name, val = shell
-    rest = ' '.join(w.text for w in run.rest)
-    return refuse('git-alias-shell', role, '`%s` runs a shell command through a git alias it defines (alias.%s=%s), '
-                  'which the guard does not read. Run the command itself:' % (bare(cmd), name, val),
-                  ('%s %s' % (val[1:], rest)).strip())
+    return gc
 
 
 def git_call_judged(inv):
@@ -3869,15 +3845,12 @@ def git_rules(event, ctx, cmd, inv, cwd, role):
         d = git_alias(cmd, gc, role)
         if d:
             return d                            # a warning by default: the command git runs is judged below
-        d = git_alias_shell(cmd, gc, role)
-        if d:
-            return d
         gc = inline_alias(gc)
     if gc.sub_dyn or (gc.sub == '' and gc.inv is not None and gc.inv.via == 'xargs'):
         d = git_push_pmdata(event, ctx, gc, role)       # a computed subcommand may be push
         if d:
             return d
-    d = git_alias_config(event, ctx, gc, role) or git_remote_rewrite(event, ctx, gc, role)
+    d = git_remote_rewrite(event, ctx, gc, role)
     if d:
         return d
     sub, args = gc.sub, gc.rest
@@ -4195,9 +4168,8 @@ def archive_words(gc):
 def archive_filter_set(gc):
     """True when the line may give git archive `gc` a program to run that the checkout's own config
     does not, or the guard cannot tell: a git the text cannot place (gc.blind: --git-dir,
-    --work-tree, --config-env, a GIT_DIR-like variable), any GIT_* variable outside
-    commands.GIT_SAFE_NAMES or an environment change the guard cannot read (commands.mark_git_env),
-    a user config moved (HOME and the like, Command.home_env), PATH changed (Command.path_env), and
+    --work-tree, --config-env, a GIT_DIR-like variable), a commands.GIT_ENV_NAMES variable the
+    line sets (commands.mark_git_env), a user config moved (HOME and the like, Command.home_env), PATH changed (Command.path_env), and
     before the subcommand --exec-path (it and PATH say where git finds a filter's bare program
     name, as Git for Windows' filter.lfs.process = git-lfs), a word the guard cannot read
     (computed, or one PowerShell or cmd may split: native_unsure) or a -c whose key, read as the
@@ -4524,8 +4496,7 @@ def lander_refusal(ctx, cmd, gc, rule, role, why):
 
 def git_jail_unknown(ctx, cmd, gc, cwd, role):
     """An agent session's git that writes a checkout the text cannot place (GIT_DIR and the rest
-    of commands.GIT_ENV_NAMES set, an environment change the guard cannot read
-    (commands.git_env_unsafe), --git-dir, --work-tree, -c core.worktree, --config-env, a
+    of commands.GIT_ENV_NAMES set, --git-dir, --work-tree, -c core.worktree, --config-env, a
     computed -C; a -C after any of them does not place it), by any role: it may be a main
     checkout, and the main-checkout git rules judge only history writes there, so a symbolic-ref
     or branch -m that re-points main's HEAD would pass them. Only a plain read passes
@@ -5125,14 +5096,12 @@ def hookless_refusal(event, ctx, sub, where, args, role):
 
 
 def data_copy(event, ctx, where, role, what):
-    """A push or send-pack (`what`) from a repository without a PM data record of its own that
-    holds the root commit the machine's record names (a clone or a fetch of the data branch), or
-    is shallow (it may hold data commits without their root), when the machine config names
-    pm_data, in every session but the owner's own: no pre-push leak stage judges it, as the
-    record is not there and core.hooksPath is set per repository (docs/pm-data-branch.md
-    "Failure modes"). A check git cannot answer denies too (fail closed), and so does a machine
-    record the guard cannot read: while the data worktree folder is deleted, every such push is
-    denied until pm_data.py init --adopt re-adds it."""
+    """A push or send-pack (`what`) from a repository without a PM data record of its own, when
+    the machine config names pm_data but the guard cannot read the machine's record, in every
+    session but the owner's own: it fails closed, so while the data worktree folder is deleted
+    every such push is denied until pm_data.py init --adopt re-adds it (docs/pm-data-branch.md
+    "Failure modes"). Whether the repository holds a copy of the data (its root commit, a shallow
+    clone) is not read: the guard catches honest mistakes, not evasion (R-2271)."""
     if is_owner_session(event, ctx) or not where:
         return None
     if ctx.place(where).kind not in (repo.MAIN, repo.LINKED):
@@ -5148,25 +5117,10 @@ def data_copy(event, ctx, where, role, what):
                       '--adopt re-adds it:' % (what, fwd(where), pmdata.FILE_NAME, why),
                       'python %s init --adopt --path %s' % (kit_tool(ctx, 'pm_data'),
                                                             quote(path) if path else '"<pm_data.path>"'))
-    found = None
-    held, why = ctx.gitread.has_commit(where, root)
-    if why is None and held:
-        found = 'holds the PM data root commit %s' % root[:12]
-    if why is None and found is None:
-        shallow, why = ctx.gitread.is_shallow(where)
-        if why is None and shallow:
-            found = 'is a shallow clone, which may hold PM data commits without their root'
-    if why is not None:
-        found = 'may hold PM data, and the guard cannot check it (%s)' % why
-    if found is None:
-        return None
-    return refuse('git-push-pmdata', role, '%s: the repository %s has no %s of its own but %s, so no pre-push leak '
-                  'stage would judge what it sends. PM data is pushed only from the repository that holds the '
-                  'record, to its private remote. To see where this repository fetches from:'
-                  % (what, fwd(where), pmdata.FILE_NAME, found), 'git -C %s remote -v' % quote(where))
+    return None
 
 
-# ---------------------------------------------------------------- git aliases from config
+# ---------------------------------------------------------------- git aliases
 
 # git's builtin commands (git --list-cmds=builtins, git 2.55): git ignores an alias that would hide one
 GIT_BUILTINS = frozenset((
@@ -5231,34 +5185,6 @@ def split_alias(text):
     return words
 
 
-def git_alias_config(event, ctx, gc, role):
-    """A git subcommand that is not a git builtin, in a repository with a PM data record, or in
-    any repository when the machine config names pm_data (a copy of the data has no record: its
-    push is judged by data_copy), in every session but the owner's own: git runs the alias its
-    config gives the name (alias.<name>), so the expansion is judged as the command it runs (a
-    push, a hook-skipping transport, a remote rewrite, a core.hooksPath change, another alias).
-    The guard reads the alias with its own environment, so a line that sets a HOME_ENV_NAMES
-    variable, or a call with -c or --config-env (include.path may add any alias), is not
-    judged by that read. Those, a shell alias (!...), one that starts with an option or cannot be
-    split, a chain deeper than ALIAS_DEPTH, a config git cannot read, and a directory the text
-    cannot tell are denied (git-push-pmdata): the guard cannot judge them. In a repository
-    without a record, those count only when data_copy would deny its push. A directory the text
-    cannot tell counts only when the machine config names pm_data or the call's own directory
-    has a record. A name with no alias is left to git (its own error, or a git-<name> program)."""
-    if gc.sub_dyn or not gc.sub or gc.sub in GIT_BUILTINS or hookless_sub(gc.sub) or is_owner_session(event, ctx):
-        return None
-    where = None if gc.unknown else gc.dir
-    if where is None:
-        if not _unknown_dir_counts(ctx, gc):
-            return None
-    elif not (pmdata_recorded(ctx, where) or ctx.pm_data_named()):
-        return None
-    moved = _alias_config_moved(gc)
-    if moved:
-        return _alias_unjudged(event, ctx, gc, role, where, [], moved)
-    return _alias_judged(event, ctx, gc, role, where, [])
-
-
 def _unknown_dir_counts(ctx, gc):
     """For a git call whose directory the text cannot tell: True when the machine config names
     pm_data (or cannot be read), or the directory the command itself runs in has a PM data record
@@ -5268,70 +5194,6 @@ def _unknown_dir_counts(ctx, gc):
         return bool(ctx.pm_data_named())
     heres = [d for d in (gc.inv.cmd.cwd, cm.run_dir(gc.inv)) if d]
     return bool(ctx.pm_data_named() or any(pmdata_recorded(ctx, d) for d in heres))
-
-
-def _alias_config_moved(gc):
-    """Why git may read alias.<gc.sub> from config the guard's own read does not see, or None."""
-    home = gc.inv.cmd.home_env if gc.inv is not None else False
-    if home:
-        return 'the line sets %s, so git reads the user config of another folder, which the guard does not' % home
-    configs = git_prefix_configs(gc) if gc.inv is not None else []
-    if configs:
-        return ('the call passes -c or --config-env (%s), which can add config (include.path) the guard does not '
-                'read' % ', '.join(k for k, _v, _f, _l in configs))
-    return None
-
-
-def _alias_refusal(gc, role, where, chain, why):
-    shown = ' -> '.join(chain) or 'alias.%s' % gc.sub
-    return refuse('git-push-pmdata', role, '`git %s` in a repository with a PM data record runs a git alias (%s) the '
-                  'guard cannot judge: %s. Write the git command itself:' % (gc.sub, shown, why),
-                  'git -C %s <subcommand> <arguments>' % (quote(where) if where else '"<checkout>"'))
-
-
-def _alias_unjudged(event, ctx, gc, role, where, chain, why):
-    """An alias the guard cannot judge: denied in a repository with a PM data record (or one the
-    text cannot tell); in one without, only when data_copy would deny its push."""
-    if where is not None and not pmdata_recorded(ctx, where):
-        return data_copy(event, ctx, where, role, '`git %s` runs a git alias the guard cannot judge (%s)' % (gc.sub, why))
-    return _alias_refusal(gc, role, where, chain, why)
-
-
-def _alias_judged(event, ctx, gc, role, where, chain):
-    if where is None:
-        return _alias_unjudged(event, ctx, gc, role, where, chain,
-                               'the guard cannot tell the repository whose config holds it')
-    val, why = ctx.gitread.alias(where, gc.sub)
-    if why:
-        return _alias_unjudged(event, ctx, gc, role, where, chain, 'its config cannot be read (%s)' % why)
-    if val is None:
-        return None                             # no alias: git's own error, or a git-<name> program
-    chain = chain + ['alias.%s=%s' % (gc.sub, val)]
-    if len(chain) > ALIAS_DEPTH:
-        return _alias_unjudged(event, ctx, gc, role, where, chain[:2], 'the aliases nest deeper than %d' % ALIAS_DEPTH)
-    if val.startswith('!'):
-        return _alias_unjudged(event, ctx, gc, role, where, chain, 'it runs a shell command')
-    words = split_alias(val)
-    if not words or words[0].startswith('-'):
-        return _alias_unjudged(event, ctx, gc, role, where, chain, 'it starts with an option or cannot be split'
-                               if words else 'it cannot be split')
-    rest = [sh.Word(t, False, None, None) for t in words[1:]] + list(gc.rest)
-    sub = cm.GitCall(gc.dir, words[0], rest, gc.inv, gc.unknown, None, False, gc.blind, len(words) - 1 + gc.synth)
-    if hookless_sub(sub.sub):
-        d = hookless_refusal(event, ctx, sub.sub, where, sub.argv, role)
-    elif sub.sub == 'push':
-        d = git_push(event, ctx, sub, role)
-    elif sub.sub in ('remote', 'config'):
-        d = git_remote_rewrite(event, ctx, sub, role)
-        if d is None and sub.sub == 'config':
-            d = hooks_config_write(ctx, sub, role, 'git config %s' % ' '.join(sub.argv))
-    elif sub.sub not in GIT_BUILTINS:
-        d = _alias_judged(event, ctx, sub, role, where, chain)
-    else:
-        d = None
-    if d is None or len(chain) > 1:
-        return d
-    return reworded(d, '`git %s` runs the git alias %s. %s' % (gc.sub, chain[0], d.reason))
 
 
 # ---------------------------------------------------------------- remotes repointed
@@ -5423,8 +5285,8 @@ def git_remote_rewrite(event, ctx, gc, role):
     remote.*, url.*, include.* or includeIf.* (any spelling: --add, --unset, set, unset, the
     section verbs) and `git config --edit`, in a repository with a PM data record (or one git
     cannot place), in every session but the owner's own. A directory the text cannot tell counts
-    as git_alias_config counts it (_unknown_dir_counts: the machine config names pm_data, or the
-    command's own directory has a record). A --global or --system write, or one to
+    when _unknown_dir_counts says so (the machine config names pm_data, or the command's own
+    directory has a record). A --global or --system write, or one to
     a user or system config file, counts when the machine config names pm_data; a --file git
     does not read is left alone. The pre-push leak stage tells the private remote by its
     configured URLs, so a remote pointed elsewhere would make a public one look private
@@ -6128,22 +5990,6 @@ def _without(cmd, first, last):
             cmd.source[last.end:cmd.words[-1].end].lstrip()).strip()
 
 
-def _git_without(cmd, gc, first, last):
-    """_without, or, when first or last is a word an alias the line defines gave (no span in the
-    line: inline_alias), the command git runs written out (git -C <dir> <sub> <rest>,
-    git_rest_text) with the words first..last of gc.rest cut out."""
-    if first.start is not None and last.end is not None:
-        return _without(cmd, first, last)
-    i = next((k for k, w in enumerate(gc.rest) if w is first), None)
-    j = next((k for k, w in enumerate(gc.rest) if w is last), None)
-    if i is None or j is None:                  # not words of gc.rest: cut nothing
-        i, j = len(gc.rest), len(gc.rest) - 1
-    cut = cm.GitCall(gc.dir, gc.sub, gc.rest[:i] + gc.rest[j + 1:], gc.inv, gc.unknown, gc.alias, gc.sub_dyn,
-                     gc.blind, gc.synth - len([k for k in range(i, j + 1) if k < gc.synth]))
-    git = 'git -C %s' % quote(gc.dir) if gc.dir else 'git'
-    return ('%s %s %s' % (git, gc.sub, git_rest_text(cmd, cut))).rstrip()
-
-
 def _under_temp(ctx, d):
     if not d:
         return False
@@ -6197,8 +6043,8 @@ def git_hooks_path(event, ctx, cmd, inv, cwd, role):
     git -c, git --config-env, git clone -c; GIT_CONFIG_PARAMETERS or GIT_CONFIG_KEY_<n>), in any
     session: it switches the repository's hooks off or elsewhere. Setting it to the kit's own
     githooks (the install step), and repositories under the temp folder (not --global or
-    --system), are left alone. A git alias that runs `config` is judged the same way where
-    git_alias_config expands it (hooks_config_write), and where the line defines it (inline_alias)."""
+    --system), are left alone. A git alias the line defines that runs `config` is judged the same
+    way (inline_alias)."""
     why = HOOKS_WHY
     for name, val in env_assignments(cmd, HOOKS_ENV):
         if HOOKS_KEY in val.lower():
@@ -6216,7 +6062,7 @@ def git_hooks_path(event, ctx, cmd, inv, cwd, role):
         if key == HOOKS_KEY and not _is_kit_hooks(val, gc.dir, getattr(ctx, 'home', None)):
             return refuse('git-hooks-path', role, '`%s` runs git with core.hooksPath=%s, which replaces the '
                           'repository\'s hooks. %s Run it without the setting:' %
-                          (bare(cmd), val, why), _git_without(cmd, gc, first, last))
+                          (bare(cmd), val, why), _without(cmd, first, last))
     if gc.sub != 'config':
         return None
     return hooks_config_write(ctx, gc, role, bare(cmd))

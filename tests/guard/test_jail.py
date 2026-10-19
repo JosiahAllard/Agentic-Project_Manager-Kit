@@ -1116,87 +1116,76 @@ class UnplacedGit(MainGit):
                             'export GIT_D\\IR; %s' % g,
                             'env GIT_D\\IR="%s/.git" %s' % (m, g), 'env GIT_D\\IR=%s/.git %s' % (m, g)])
 
-    def test_allexport_makes_every_assignment_of_the_line_a_git_environment(self):
+    def test_allexport_and_a_read_are_not_read_as_a_git_environment(self):
+        # set -a with read, printf -v or for sets GIT_DIR by no NAME=value the text shows: the
+        # guard does not read it (R-2271), and the git is judged where -C places it
         m, wt = self.main, W.fwd(self.w.wt)
         g = 'git -C "%s" branch -m main old' % wt
-        self.worker_denied(['set -a; read GIT_DIR <<< "%s/.git"; %s' % (m, g),
-                            'set -a; printf -v GIT_DIR "%%s" "%s/.git"; %s' % (m, g),
-                            'set -a; for GIT_DIR in "%s/.git"; do %s; done' % (m, g),
-                            'set -o allexport; read GIT_DIR <<< "%s/.git"; %s' % (m, g),
-                            'set -ea; read GIT_DIR <<< "%s/.git"; %s' % (m, g),
-                            'set -eo allexport; read GIT_DIR <<< "%s/.git"; %s' % (m, g),
-                            '%s; set -a' % g])
-        for text in ('set -e; read X <<< y; %s' % g, 'set -euo pipefail; %s' % g, 'set +a; %s' % g):
-            with self.subTest(text):
-                self.allowed(self.git(text, 'worker'))
+        self.judged_as_written(['set -a; read GIT_DIR <<< "%s/.git"; %s' % (m, g),
+                                'set -a; printf -v GIT_DIR "%%s" "%s/.git"; %s' % (m, g),
+                                'set -a; for GIT_DIR in "%s/.git"; do %s; done' % (m, g),
+                                'set -o allexport; read GIT_DIR <<< "%s/.git"; %s' % (m, g),
+                                '%s; set -a' % g,
+                                'set -e; read X <<< y; %s' % g, 'set -euo pipefail; %s' % g, 'set +a; %s' % g])
 
-    def test_a_computed_variable_name_leaves_git_unplaceable(self):
-        # the name may be GIT_DIR: the line's git cannot be placed, so a subagent's git write is
-        # refused wherever it runs; the parse stays clean, and the main role is not refused by it
+    def test_a_computed_variable_name_is_not_read(self):
+        # the name may be GIT_DIR, but the guard reads only a name the text spells (R-2271): the
+        # git is judged where -C places it, for a worker and the coordinator's mark alike
         m, wt = self.main, W.fwd(self.w.wt)
         g = 'git -C "%s" branch -m main old' % wt
-        cases = [('Bash', 'V=GIT_DIR; export $V="%s/.git"; %s' % (m, g)),
-                 ('Bash', 'V=GIT_DIR; declare -x "$V=%s/.git"; %s' % (m, g)),
-                 ('Bash', 'V=GIT_DIR; export "$V"; %s' % g),
-                 ('PowerShell', "$n='GIT_DIR'; Set-Item \"env:$n\" x; %s" % g),
-                 ('PowerShell', "$n='GIT_DIR'; New-Item -Path env: -Name $n -Value x; %s" % g),
-                 ('PowerShell', "[Environment]::SetEnvironmentVariable($n, 'x'); %s" % g),
-                 ('PowerShell', "[Environment]::SetEnvironmentVariable(\"GIT_$n\", 'x'); %s" % g)]
-        for tool, text in cases:
-            for where in (self.w.wt, self.w.main):
-                with self.subTest(text, where=where):
-                    p = cm.read(text, sh.BASH if tool == 'Bash' else sh.PS, W.fwd(where))
-                    self.assertTrue(p.clean, text)
-                    d = decide(event(tool, {'command': text, 'description': 'test'}, where, True, 'worker'),
-                               self.w.ctx(environ={}))
-                    # the guard cannot pin New-Item's item (env: on a line that is not plain, joined
-                    # with $n) to the env: drive and refuses it first as unplaced, from the main
-                    # checkout and from a worktree alike
-                    self.jailed(d, 'unplaced' if 'New-Item' in text else 'write-jail')
-            with self.subTest(text, role='main'):
-                self.allowed(decide(event(tool, {'command': text, 'description': 'test'}, self.w.wt),
-                                    self.w.ctx(environ={})))
-        # a computed value under a literal name is read
-        for tool, text in (('Bash', 'export FOO=$x; %s' % g), ('Bash', 'set -- "$@"; %s' % g)):
-            with self.subTest(text):
-                self.assertTrue(cm.read(text, sh.BASH if tool == 'Bash' else sh.PS, W.fwd(self.w.wt)).clean, text)
-                self.allowed(self.git(text, 'worker', tool=tool))
-        # [Environment]:: is read only as a literal-name GetEnvironmentVariable, and Set-Content
-        # writes env: items too, so a computed item path may be one
-        self.fail_closed(["[Environment]::SetEnvironmentVariable('FOO', $v); %s" % g,
-                          "[Environment]::SetEnvironmentVariable('FOO', 'x'); %s" % g], tool='PowerShell')
-        self.unplaced_behind_a_computed_target(['Set-Content $f x; %s' % g])
+        self.judged_as_written(['V=GIT_DIR; export $V="%s/.git"; %s' % (m, g),
+                                'V=GIT_DIR; declare -x "$V=%s/.git"; %s' % (m, g),
+                                'V=GIT_DIR; export "$V"; %s' % g,
+                                'export FOO=$x; %s' % g, 'set -- "$@"; %s' % g])
+        self.judged_as_written(["$n='GIT_DIR'; Set-Item \"env:$n\" x; %s" % g,
+                                "[Environment]::SetEnvironmentVariable($n, 'x'); %s" % g,
+                                "[Environment]::SetEnvironmentVariable(\"GIT_$n\", 'x'); %s" % g,
+                                "[Environment]::SetEnvironmentVariable('FOO', $v); %s" % g,
+                                "[Environment]::SetEnvironmentVariable('FOO', 'x'); %s" % g], tool='PowerShell')
+        # a computed write target is still refused before the git is judged: New-Item's item (env:
+        # joined with $n) as a provider item the guard cannot place, the others as not literal
+        text = "$n='GIT_DIR'; New-Item -Path env: -Name $n -Value x; %s" % g
+        self.jailed(self.git(text, 'worker', tool='PowerShell'), 'unplaced')
+        self.jailed(self.marked(text, COORDINATOR, 'PowerShell'), 'unplaced')
+        self.unplaced_behind_a_computed_target(['Set-Content $f x; %s' % g,
+                                                "New-Item -Path $p -Name GIT_DIR -Value '%s/.git'; %s" % (m, g)])
 
     def unplaced_behind_a_computed_target(self, texts):
-        """Each PowerShell line writes to a computed item path that may be an env: item: the parse
-        leaves its git unplaceable, and the target, not literal, is refused before the git is judged
-        (unplaced, for a worker and the coordinator's mark alike)."""
+        """Each PowerShell line writes to a computed item path: the target, not literal, is refused
+        before the git is judged (unplaced, for a worker and the coordinator's mark alike)."""
         for text in texts:
             with self.subTest(text):
-                p = cm.read(text, sh.PS, W.fwd(self.w.wt))
-                self.assertTrue(p.clean, text)
-                self.assertTrue(p.commands[-1].git_env, text)
+                self.assertTrue(cm.read(text, sh.PS, W.fwd(self.w.wt)).clean, text)
                 self.assertIn('not literal', self.jailed(self.git(text, 'worker', tool='PowerShell'),
                                                          'unplaced').reason)
                 self.assertIn('not literal', self.jailed(self.marked(text, COORDINATOR, 'PowerShell'),
                                                          'unplaced').reason)
 
-    def fail_closed(self, texts, tool='Bash'):
-        """Each line runs a git write after something that may change the environment unread:
-        its git is unplaceable (write-jail for a worker) though the line parses clean."""
+    def git_env_jailed(self, texts, tool='Bash'):
+        """Each line sets a git variable by name (commands.git_env_set) before a git write: its
+        git is unplaceable (write-jail for a worker) though the line parses clean."""
         for text in texts:
             with self.subTest(text):
                 self.assertTrue(cm.read(text, sh.BASH if tool == 'Bash' else sh.PS, W.fwd(self.w.wt)).clean, text)
                 self.jailed(self.git(text, 'worker', tool=tool))
 
-    def test_bash_env_changers_the_guard_cannot_read_leave_git_unplaceable(self):
+    def judged_as_written(self, texts, tool='Bash'):
+        """Each line may change the environment in a way the guard does not read (a computed name,
+        a sourced file, a nested shell's options, an alias, a script-text call, a variable outside
+        the git place names): the guard catches honest mistakes, not evasion (R-2271), so the line's
+        git write in the session's own worktree passes for a worker and the coordinator's mark."""
+        for text in texts:
+            with self.subTest(text):
+                self.assertTrue(cm.read(text, sh.BASH if tool == 'Bash' else sh.PS, W.fwd(self.w.wt)).clean, text)
+                self.allowed(self.git(text, 'worker', tool=tool))
+                self.allowed(self.marked(text, COORDINATOR, tool))
+
+    def test_bash_env_changers_the_guard_does_not_read_pass(self):
         m, wt = self.main, W.fwd(self.w.wt)
         g = 'git -C "%s" branch -m main old' % wt
-        self.fail_closed([
-            # a leading backslash: bash hands export and env GIT_DIR=...
+        self.judged_as_written([
             'export \\GIT_DIR="%s/.git"; %s' % (m, g),
             'env \\GIT_DIR="%s/.git" %s' % (m, g),
-            # allexport in a nested shell, in any place of set, through shopt and SHELLOPTS
             "bash -a -c 'read GIT_DIR <<< \"%s/.git\"; %s'" % (m, g),
             "bash -ac 'read GIT_DIR <<< \"%s/.git\"; %s'" % (m, g),
             "bash -o allexport -c 'read GIT_DIR <<< \"%s/.git\"; %s'" % (m, g),
@@ -1204,37 +1193,35 @@ class UnplacedGit(MainGit):
             'shopt -so allexport; read GIT_DIR <<< "%s/.git"; %s' % (m, g),
             "env SHELLOPTS=allexport bash -c 'read GIT_DIR <<< \"%s/.git\"; %s'" % (m, g),
             'export SHELLOPTS; %s' % g,
-            # a name reference and a computed name under -x
             'declare -n r=GIT_DIR; export r="%s/.git"; %s' % (m, g),
             'f() { local -x $1="%s/.git"; %s; }; f GIT_DIR' % (m, g),
-            # a GIT_* name outside the identity names, a sourced file, an alias
             'export GIT_EXEC_PATH=/x; %s' % g,
             '. ./.env; %s' % g,
             'source ./.env; %s' % g,
             'set -a; . ./.env; set +a; %s' % g,
             'export $(cat .env | xargs); %s' % g])
-        # cmd's set with a name it expands
-        self.fail_closed(['cmd /c "set %%V%%=%s/.git & %s"' % (m, g), 'cmd /c "set !V!=%s/.git & %s"' % (m, g)],
-                         tool='PowerShell')
+        self.judged_as_written(['cmd /c "set %%V%%=%s/.git & %s"' % (m, g), 'cmd /c "set !V!=%s/.git & %s"' % (m, g)],
+                               tool='PowerShell')
 
-    def test_powershell_env_changers_the_guard_cannot_read_leave_git_unplaceable(self):
+    def test_powershell_env_changers_the_guard_does_not_read_pass(self):
         m, wt = self.main, W.fwd(self.w.wt)
         g = 'git -C "%s" branch -m main old' % wt
-        self.fail_closed([
+        self.judged_as_written([
             "$p='env:GIT_DIR'; Set-Item -Path $p '%s/.git'; %s" % (m, g),
             "Set-Item \"${e}:GIT_DIR\" '%s/.git'; %s" % (m, g),
             "Set-Item -Path (\"env:GIT_\"+\"DIR\") '%s/.git'; %s" % (m, g),
             "Set-Location env:; Set-Item GIT_DIR '%s/.git'; %s" % (m, g),
             "[Environment]::$m('GIT_DIR', '%s/.git'); %s" % (m, g),
-            # assignments the one-target reading missed
-            "$env:A, $env:GIT_DIR = 1, '%s/.git'; %s" % (m, g),
-            "$a = $env:GIT_DIR = '%s/.git'; %s" % (m, g),
-            # $env:TEMP in a path is a read only while the line leaves TEMP alone
             "$env:TEMP = 'env:'; Set-Item \"$env:TEMP\\GIT_DIR\" '%s/.git'; %s" % (m, g),
-            # an item from a pipe, a script run in this process
             "'env:GIT_DIR' | Set-Item -Value '%s/.git'; %s" % (m, g),
             '. .\\setenv.ps1; %s' % g], tool='PowerShell')
-        self.unplaced_behind_a_computed_target(["New-Item -Path $p -Name GIT_DIR -Value '%s/.git'; %s" % (m, g)])
+
+    def test_a_git_variable_assigned_by_name_in_powershell_is_read(self):
+        # one target among several, and a chained assignment, are still a git variable set by name
+        m, wt = self.main, W.fwd(self.w.wt)
+        g = 'git -C "%s" branch -m main old' % wt
+        self.held_everywhere(["$env:A, $env:GIT_DIR = 1, '%s/.git'; %s" % (m, g),
+                              "$a = $env:GIT_DIR = '%s/.git'; %s" % (m, g)], tool='PowerShell')
 
     def test_an_env_read_in_a_path_is_not_an_env_write(self):
         g = 'git -C "%s" branch -m main old' % W.fwd(self.w.wt)
@@ -1321,8 +1308,8 @@ class UnplacedGit(MainGit):
         return decide(event(tool, {'command': text, 'description': 'test'}, self.w.wt), self.w.ctx(environ=environ))
 
     def held_everywhere(self, texts, tool='Bash'):
-        """fail_closed for a worker, and write-jail for the coordinator's mark and its old name."""
-        self.fail_closed(texts, tool)
+        """git_env_jailed for a worker, and write-jail for the coordinator's mark and its old name."""
+        self.git_env_jailed(texts, tool)
         for text in texts:
             for environ in (COORDINATOR, OLD_MARK):
                 with self.subTest(text, mark=environ[context.ROLE_ENV]):
@@ -1355,59 +1342,61 @@ class UnplacedGit(MainGit):
             with self.subTest(text):
                 self.allowed(self.marked(text, COORDINATOR))
 
-    def test_a_trap_or_mapfile_callback_that_runs_before_git_leaves_it_unplaceable(self):
+    def test_a_trap_or_mapfile_callback_that_sets_a_git_variable_leaves_git_unplaceable(self):
         m, wt = self.main, W.fwd(self.w.wt)
         g = 'git -C "%s" branch -m main old' % wt
         self.held_everywhere(["trap 'export GIT_DIR=%s/.git' DEBUG; %s" % (m, g),
                               "trap 'export GIT_DIR=%s/.git' ERR; %s" % (m, g),
                               "trap 'export GIT_DIR=%s/.git' RETURN; %s" % (m, g),
                               "trap 'export GIT_DIR=%s/.git' SIGDEBUG; %s" % (m, g),
-                              "trap x $s; %s" % g,
-                              "mapfile -C 'export GIT_DIR=%s/.git #' -c 1 a < f; %s" % (m, g),
-                              "readarray -C f -c 1 a < f; %s" % g,
-                              "mapfile -tC f a < f; %s" % g])
+                              "mapfile -C 'export GIT_DIR=%s/.git #' -c 1 a < f; %s" % (m, g)])
+        # a handler or callback the text names but does not spell is not read (R-2271)
+        self.judged_as_written(["trap x $s; %s" % g, "readarray -C f -c 1 a < f; %s" % g,
+                                "mapfile -tC f a < f; %s" % g])
         for text in ('trap - DEBUG; %s' % g, "trap '' ERR; %s" % g, "trap 'rm -f x' EXIT; %s" % g,
                      'trap -p DEBUG; %s' % g, 'mapfile -t a < f; %s' % g):
             with self.subTest(text):
                 self.allowed(self.git(text, 'worker'))
                 self.allowed(self.marked(text, COORDINATOR))
 
-    def test_xargs_that_fills_in_words_or_git_options_leaves_git_unplaceable(self):
+    def test_xargs_that_fills_in_git_words_leaves_git_unplaceable(self):
         m, wt = self.main, W.fwd(self.w.wt)
         g = 'git -C "%s" branch -m main old' % wt
-        self.held_everywhere(['echo GIT_DIR=%s/.git | xargs -I{} env {} %s' % (m, g),
-                              'echo GIT_DIR=x | xargs -I {} env {} %s' % g,
-                              'echo x | xargs -i env {} %s' % g,
-                              'echo x | xargs -0 -iQ env Q %s' % g,
-                              'echo x | xargs --replace=Q env Q %s' % g,
-                              'echo x | xargs --rep env {} %s' % g,
-                              # with no subcommand, the input may hold --git-dir before it
-                              'echo branch -m main old | xargs git -C "%s"' % wt])
-        # the input in a branch option reads as a computed word, so the line is unclean; held all the same
+        # with no subcommand, the input may hold --git-dir before it
+        self.held_everywhere(['echo branch -m main old | xargs git -C "%s"' % wt])
+        # an environment xargs fills in for env is not read (R-2271)
+        self.judged_as_written(['echo GIT_DIR=%s/.git | xargs -I{} env {} %s' % (m, g),
+                                'echo GIT_DIR=x | xargs -I {} env {} %s' % g,
+                                'echo x | xargs -i env {} %s' % g,
+                                'echo x | xargs -0 -iQ env Q %s' % g,
+                                'echo x | xargs --replace=Q env Q %s' % g,
+                                'echo x | xargs --rep env {} %s' % g])
+        # the input in a branch option reads as a computed word, so the line is unclean: refused
         text = 'echo old | xargs -I{} git -C "%s" branch -m main {}' % wt
         self.assertFalse(cm.read(text, sh.BASH, wt).clean, text)
-        self.jailed(self.git(text, 'worker'))
-        self.jailed(self.marked(text, COORDINATOR))
+        self.denied(self.git(text, 'worker'))
+        self.denied(self.marked(text, COORDINATOR))
         for text in ('echo x | xargs -n1 echo; %s' % g, 'ls | xargs git -C "%s" add' % wt,
                      'echo x | xargs -I{} git -C "%s" status' % wt):
             with self.subTest(text):
                 self.allowed(self.git(text, 'worker'))
                 self.allowed(self.marked(text, COORDINATOR))
 
-    def test_powershell_splats_script_text_and_renamed_env_items_leave_git_unplaceable(self):
+    def test_powershell_splats_script_text_and_renamed_env_items(self):
         m, wt = self.main, W.fwd(self.w.wt)
         g = 'git -C "%s" branch -m main old' % wt
-        self.held_everywhere([
+        # a git place variable set by name, = at the start of the value's word, is read
+        self.held_everywhere(['$env:GIT_DIR +="x"; %s' % g], tool='PowerShell')
+        # a splat, script text and a variable outside the git place names are not read (R-2271)
+        self.judged_as_written([
             "$h=@{Path='env:GIT_DIR';Value='%s/.git'}; Set-Item @h; %s" % (m, g),
             "$h=@{Path='env:'}; Set-Location @h; %s" % g,
             "$ExecutionContext.InvokeCommand.InvokeScript('$env:GIT_DIR=1'); %s" % g,
             "$ExecutionContext.InvokeCommand.NewScriptBlock($s).Invoke(); %s" % g,
             "[scriptblock]::Create($s).Invoke(); %s" % g,
             "[System.Management.Automation.ScriptBlock]::Create($s).Invoke(); %s" % g,
-            # = at the start of the value's word
             '$env:GIT_EXEC_PATH ="x"; %s' % g,
-            '$env:BASH_ENV ="x"; %s' % g,
-            '$env:GIT_DIR +="x"; %s' % g], tool='PowerShell')
+            '$env:BASH_ENV ="x"; %s' % g], tool='PowerShell')
         # a name an env: item is renamed, copied or moved to may then hold env:. The line is not
         # plain (Set-Item), so the env: item is judged as a path the guard cannot place: refused as
         # unplaced, naming the provider item, for a worker and the coordinator's mark alike
@@ -1446,39 +1435,30 @@ class UnplacedGit(MainGit):
                 for environ in (COORDINATOR, OLD_MARK):
                     with self.subTest(text, mark=environ[context.ROLE_ENV]):
                         self.allowed(self.marked(text, environ, 'PowerShell'))
-        # a git variable set beside the string, a static call outside a string or inside $( ),
-        # and an env write of the string's value still leave the git unplaceable
+        # a git variable set beside the string and an env write of the string's value still leave
+        # the git unplaceable
         self.held_everywhere([
             '$env:GIT_DIR += "%s/.git"; %s' % (m, g),
             '$env:GIT_DIR += "$b :: $f"; %s' % g,
             '$hits += "$b :: $f"; $env:GIT_DIR = "%s/.git"; %s' % (m, g),
-            '$hits += $t::$n("GIT_DIR", "$b :: $f"); %s' % g,
-            'Write-Output "$($t::$n(\'GIT_DIR\', \'x\'))"; %s' % g,
-            '$hits += "$b :: $($t::$n(\'GIT_DIR\', \'x\'))"; %s' % g,
             'Set-Item env:GIT_DIR "$b :: $f"; %s' % g,
             '[Environment]::SetEnvironmentVariable(\'GIT_DIR\', "$b :: $f"); %s' % g], tool='PowerShell')
+        # a static call on a computed type, outside a string or inside $( ), is not read (R-2271)
+        self.judged_as_written([
+            '$hits += $t::$n("GIT_DIR", "$b :: $f"); %s' % g,
+            'Write-Output "$($t::$n(\'GIT_DIR\', \'x\'))"; %s' % g,
+            '$hits += "$b :: $($t::$n(\'GIT_DIR\', \'x\'))"; %s' % g], tool='PowerShell')
         # a string piped to Invoke-Expression is code, and a $ in it expands before it runs: the
-        # line is unreadable, with or without a :: (a worker's static call there reads as a git
-        # variable set unseen: write-jail, as the held rows above)
-        for text, rule in (('"$t::$n(\'GIT_DIR\', \'x\')" | iex; %s' % g, 'write-jail'),
-                           ('"a :: $b" | Invoke-Expression; %s' % g, 'unreadable'),
-                           ('"x $b" | iex; %s' % g, 'unreadable')):
+        # line is unreadable, with or without a ::, and so is a shell reading such a string from a
+        # pipe (unreadable for a worker; for a mark, a git the guard cannot place: unplaced)
+        for text in ('"$t::$n(\'GIT_DIR\', \'x\')" | iex; %s' % g, '"a :: $b" | Invoke-Expression; %s' % g,
+                     '"x $b" | iex; %s' % g, '"git $b" | powershell -Command -'):
             with self.subTest(text):
                 self.assertFalse(cm.read(text, sh.PS, wt).clean, text)
-                self.jailed(self.git(text, 'worker', tool='PowerShell'), rule)
-                # a mark: the static call re-points git (write-jail); an unreadable line's git is
-                # one the guard cannot place (unplaced)
+                self.jailed(self.git(text, 'worker', tool='PowerShell'), 'unreadable')
                 for environ in (COORDINATOR, OLD_MARK):
                     with self.subTest(text, mark=environ[context.ROLE_ENV]):
-                        self.jailed(self.marked(text, environ, 'PowerShell'),
-                                    'write-jail' if rule == 'write-jail' else 'unplaced')
-        # a shell reading such a string from a pipe is unreadable the same way
-        text = '"git $b" | powershell -Command -'
-        self.assertFalse(cm.read(text, sh.PS, wt).clean, text)
-        self.jailed(self.git(text, 'worker', tool='PowerShell'), 'unreadable')
-        for environ in (COORDINATOR, OLD_MARK):
-            with self.subTest(text, mark=environ[context.ROLE_ENV]):
-                self.jailed(self.marked(text, environ, 'PowerShell'), 'unplaced')
+                        self.jailed(self.marked(text, environ, 'PowerShell'), 'unplaced')
         # a single-quoted string and a backtick-escaped $ do not expand: iex runs the text as
         # written (x $b), and the git after it stays placed
         for text in ("'x $b' | iex; %s" % g, '"x `$b" | iex; %s' % g):
@@ -1503,9 +1483,10 @@ class UnplacedGit(MainGit):
         text = 'Set-ItemProperty -Path "Environment::$n" -Name GIT_DIR -Value x; %s' % g
         self.assertIn('not literal', self.jailed(self.git(text, 'worker', tool='PowerShell'), 'unplaced').reason)
         self.assertIn('not literal', self.jailed(self.marked(text, COORDINATOR, 'PowerShell'), 'unplaced').reason)
-        # a curly double quote may end the string where the guard reads on: it stays a static call
-        self.held_everywhere(['$hits += "$b :: “ x"; %s' % g, '$hits += "$b :: ” x"; %s' % g],
-                             tool='PowerShell')
+        # a curly double quote may end the string where the guard reads on: the static call on a
+        # computed type it would leave is not read either
+        self.judged_as_written(['$hits += "$b :: “ x"; %s' % g, '$hits += "$b :: ” x"; %s' % g],
+                               tool='PowerShell')
 
     def test_text_piped_into_set_content_or_add_content_is_its_value(self):
         wt = W.fwd(self.w.wt)
@@ -1515,31 +1496,33 @@ class UnplacedGit(MainGit):
             with self.subTest(text):
                 self.allowed(self.git(text, 'worker', tool='PowerShell'))
                 self.allowed(self.marked(text, COORDINATOR, 'PowerShell'))
-        # with no path in the text, the piped object may name the item
-        self.held_everywhere(["$o | Set-Content -Value x; %s" % g, "'env:GIT_DIR' | Set-Item -Value x; %s" % g],
-                             tool='PowerShell')
+        # with no path in the text, the piped object may name the item: not read (R-2271)
+        self.judged_as_written(["$o | Set-Content -Value x; %s" % g, "'env:GIT_DIR' | Set-Item -Value x; %s" % g],
+                               tool='PowerShell')
 
-    def test_each_env_changer_held_for_every_jailed_role(self):
-        """Branches the rows above reach only together: each on its own, for every jailed role."""
+    def test_each_env_changer_unread_passes_for_every_jailed_role(self):
+        """Branches the rows above reach only together, each on its own: an alias, a startup file,
+        a computed name, a module, an output variable, a process environment or a batch file is not
+        read (R-2271); a literal setx of a git place name still is."""
         m, wt = self.main, W.fwd(self.w.wt)
         g = 'git -C "%s" branch -m main old' % wt
-        self.held_everywhere(['alias git="git --git-dir=%s/.git"; %s' % (m, g),
-                              'export BASH_ENV=./x.sh; bash -c \'%s\'' % g,
-                              'BASH_ENV=./x.sh %s' % g,
-                              'export BASHOPTS=x; %s' % g,
-                              'ENV=./x.sh %s' % g,
-                              'env "$n"=x %s' % g])
-        self.held_everywhere(['Set-Alias git x; %s' % g,
-                              'New-Alias g x; %s' % g,
-                              'New-PSDrive -Name Q -PSProvider Environment -Root \\; %s' % g,
-                              'Import-Module x; %s' % g,
-                              'Get-Item x -OutVariable env:GIT_DIR; %s' % g,
-                              'Get-Item x -ov:env:GIT_DIR; %s' % g,
-                              "Start-Process git -Environment @{GIT_DIR='%s/.git'} "
-                              "-ArgumentList '-C','%s','branch','-m','main','old'" % (m, wt),
-                              'cmd /c "call x.bat & %s"' % g,
-                              'cmd /c "x.bat & %s"' % g,
-                              'cmd /c "setx GIT_DIR x & %s"' % g], tool='PowerShell')
+        self.judged_as_written(['alias git="git --git-dir=%s/.git"; %s' % (m, g),
+                                'export BASH_ENV=./x.sh; bash -c \'%s\'' % g,
+                                'BASH_ENV=./x.sh %s' % g,
+                                'export BASHOPTS=x; %s' % g,
+                                'ENV=./x.sh %s' % g,
+                                'env "$n"=x %s' % g])
+        self.judged_as_written(['Set-Alias git x; %s' % g,
+                                'New-Alias g x; %s' % g,
+                                'New-PSDrive -Name Q -PSProvider Environment -Root \\; %s' % g,
+                                'Import-Module x; %s' % g,
+                                'Get-Item x -OutVariable env:GIT_DIR; %s' % g,
+                                'Get-Item x -ov:env:GIT_DIR; %s' % g,
+                                "Start-Process git -Environment @{GIT_DIR='%s/.git'} "
+                                "-ArgumentList '-C','%s','branch','-m','main','old'" % (m, wt),
+                                'cmd /c "call x.bat & %s"' % g,
+                                'cmd /c "x.bat & %s"' % g], tool='PowerShell')
+        self.held_everywhere(['cmd /c "setx GIT_DIR x & %s"' % g], tool='PowerShell')
 
     def denied_for_every_jailed_role(self, texts, tool='Bash'):
         """Each line is refused for a worker and for the coordinator's mark and its old name, by
@@ -1572,8 +1555,9 @@ class UnplacedGit(MainGit):
         self.held_everywhere(["trap 'export GIT_DIR=%s/.git' USR1; kill -USR1 $$; %s" % (m, g),
                               "trap 'export GIT_DIR=%s/.git' CHLD; sleep 0 & %s" % (m, g),
                               "trap 'export GIT_DIR=%s/.git' SIGINT; %s" % (m, g),
-                              "trap 'export GIT_DIR=%s/.git' EXIT USR1; %s" % (m, g),
-                              "trap 1 USR1; %s" % g])
+                              "trap 'export GIT_DIR=%s/.git' EXIT USR1; %s" % (m, g)])
+        # a handler the text names but does not spell is not read (R-2271)
+        self.judged_as_written(["trap 1 USR1; %s" % g])
         for text in ("trap 'rm -f x' EXIT; %s" % g, "trap 'rm -f x' 0; %s" % g, "trap 'rm -f x' EXIT 0; %s" % g,
                      'trap - USR1; %s' % g, "trap '' USR1; %s" % g, 'trap USR1; %s' % g):
             with self.subTest(text):
@@ -1594,10 +1578,12 @@ class UnplacedGit(MainGit):
         self.denied_for_every_jailed_role(['trap "$h" EXIT; git status',
                                            'trap -- "$h" DEBUG; git -C "%s" branch -m main old' % wt])
 
-    def test_powershell_script_text_in_every_spelling_leaves_git_unplaceable(self):
+    def test_powershell_script_text_in_every_spelling_is_not_read(self):
+        # script text the line builds may set anything; the guard reads only what the text
+        # spells (R-2271), so the git is judged where -C places it
         wt = W.fwd(self.w.wt)
         g = 'git -C "%s" branch -m main old' % wt
-        self.held_everywhere([
+        self.judged_as_written([
             "[Management.Automation.ScriptBlock]::Create($s).Invoke(); %s" % g,
             "[ScriptBlock]::Create($s).Invoke(); %s" % g,
             "([type]'scriptblock')::Create($s).Invoke(); %s" % g,
@@ -1614,10 +1600,10 @@ class UnplacedGit(MainGit):
             with self.subTest(text):
                 self.allowed(self.git(text, 'worker', tool='PowerShell'))
                 self.allowed(self.marked(text, COORDINATOR, 'PowerShell'))
-        # a string that runs a subexpression still counts
+        # a string that runs a subexpression is code, but script text it builds is not read either
+        # (R-2271): the git after it is judged where -C places it
         text = 'git -C "%s" commit -m "$([scriptblock]::Create($s).Invoke())"; git -C "%s" branch -m main old' % (wt, wt)
-        self.assertTrue(cm.read(text, sh.PS, wt).commands[0].git_env, text)
-        self.denied_for_every_jailed_role([text], tool='PowerShell')
+        self.judged_as_written([text], tool='PowerShell')
 
     def test_find_execdir_and_a_filled_in_exec_word_leave_git_unplaceable(self):
         # -execdir runs in each found file's folder; {} under -exec is the found path

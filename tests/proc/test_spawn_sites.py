@@ -126,7 +126,6 @@ BRIDGE_TEXT = ('a bridge startup test reads the launcher text startup.render wri
 OPEN = ' OPEN (reported, not fixed here): '
 
 HAZARD_EXEMPT = {
-    ('kitlib/guard/commands.py', '_ps_env_unsafe', 'Start-Process'): (1, GUARD_READS),
     ('kitlib/guard/commands.py', '_start_process', 'Start-Process'): (3, GUARD_READS),
     ('kitlib/guard/commands.py', '_sp_unreadable', 'Start-Process'): (4, GUARD_READS),
     ('kitlib/guard/commands.py', 'invocation', 'Start-Process'): (2, GUARD_READS),
@@ -189,7 +188,7 @@ HAZARD_EXEMPT = {
     ('tests/guard/extra_rows.py', '<module>', 'Start-Process'): (4, GUARD_TEST),
     ('tests/guard/shell_rows.py', '<module>', 'Start-Process'): (120, GUARD_TEST),
     ('tests/guard/shell_rows.py', '<module>', 'cmd /c start'): (2, GUARD_TEST),
-    ('tests/guard/test_jail.py', 'UnplacedGit.test_each_env_changer_held_for_every_jailed_role',
+    ('tests/guard/test_jail.py', 'UnplacedGit.test_each_env_changer_unread_passes_for_every_jailed_role',
      'Start-Process'): (1, GUARD_TEST),
     ('tests/guard/test_provider_paths.py', 'NativePrograms.test_native_writers_in_the_main_checkout',
      'Start-Process'): (1, GUARD_TEST),

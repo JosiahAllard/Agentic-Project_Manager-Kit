@@ -934,14 +934,13 @@ class ComputedCheckoutReads(Base):
                    ('bash', 'git -C "$p" log --format="$(cat f)"'),
                    ('bash', 'git -C "$p" log --format="$w" --output=x.txt'),
                    ('powershell', 'git -C $p log $f'),                      # an array is many arguments
+                   ('powershell', 'git -C $p log @f'),                      # a splat is a computed word too
                    ('powershell', 'git -C $p log -1 --format="$w" --outp=x.txt'),
                    # status, describe and branch are not loosened: they may write (an index refresh, a ref)
                    ('bash', 'git -C "$p" status "$f"'),
                    ('bash', 'git -C "$p" describe "$x"'),
                    ('bash', 'git -C "$p" branch --list "$pat"')],
                   lambda a, **kw: self.denied(a, 'unplaced', **kw))
-        # a splat may hold --git-dir or --work-tree, which re-point git on purpose: the jail's refusal
-        self.each([('powershell', 'git -C $p log @f')], lambda a, **kw: self.denied(a, 'write-jail', **kw))
 
     def test_a_powershell_word_that_runs_on_after_its_closing_quote_is_refused(self):
         # PowerShell ends an argument that opens with a quote at its closing quote: what follows is

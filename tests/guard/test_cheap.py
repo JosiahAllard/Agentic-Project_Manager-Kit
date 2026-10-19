@@ -199,9 +199,11 @@ class StrictGitReads(World):
             self.assertEqual((d.verdict, d.rule), ('allow', rules.WARNED), rest)
             self.assertIn('rule=unplaced', d.reason)
 
-    def test_a_powershell_splat_stays_denied(self):
+    def test_a_powershell_splat_is_a_computed_word(self):
+        # the splat may hold any option, as $f may: by default it warns as unplaced
         d = self.git('log @f', W.ps)
-        self.assertEqual((d.verdict, d.rule), ('deny', 'write-jail'))
+        self.assertEqual((d.verdict, d.rule), ('allow', rules.WARNED))
+        self.assertIn('rule=unplaced', d.reason)
         self.assertEqual(self.git("log '@f'", W.ps), Decision('allow'))    # quoted: plain text
 
     def test_a_plain_read_is_let_through(self):
@@ -310,21 +312,19 @@ class InlineAliasJudged(unittest.TestCase):
         self.assertEqual((d.verdict, d.rule), ('allow', rules.WARNED), d.reason)
 
     SHELL_ROWS = (
-        ("git -c 'alias.x=!git push --force origin main' x", 'git push --force origin main'),
-        ("git -c 'alias.x=!git branch -D main' x", 'git branch -D main'),
-        ("git -c 'alias.x=!git config core.hooksPath x' x", 'git config core.hooksPath x'),
-        ("git -c 'alias.y=!git branch -D main' -c alias.x=y x", 'git branch -D main'),
-        ("git -c 'alias.X=!git push --force origin main' x --tags", 'git push --force origin main --tags'),
+        "git -c 'alias.x=!git push --force origin main' x",
+        "git -c 'alias.x=!git branch -D main' x",
+        "git -c 'alias.y=!git branch -D main' -c alias.x=y x",
     )
 
-    def test_a_shell_alias_the_line_defines_is_denied(self):
-        # git-alias only warns; the shell command a ! alias runs is text the guard does not read
-        self.assertEqual(modes.mode('git-alias-shell'), modes.DENY)
-        for text, instead in self.SHELL_ROWS:
+    def test_a_shell_alias_the_line_defines_only_warns(self):
+        # git-alias-shell was cut (R-2271): a ! alias is written on purpose, no honest mistake;
+        # git-alias warns and names the command it runs
+        for text in self.SHELL_ROWS:
             with self.subTest(text):
                 d = self.decide(text)
-                self.assertEqual((d.verdict, d.rule), ('deny', 'git-alias-shell'), d.reason)
-                self.assertEqual(d.instead, instead)
+                self.assertEqual((d.verdict, d.rule), ('allow', rules.WARNED), d.reason)
+                self.assertIn('rule=git-alias', d.reason)
 
     def test_an_archive_output_an_alias_gives_is_judged(self):
         # the --output word has no span in the line: no crash, the verdict of the plain command
@@ -355,16 +355,15 @@ class InlineAliasJudged(unittest.TestCase):
         self.assertEqual(d.verdict, 'deny', d.reason)
         self.assertEqual(d.instead, 'git -C "%s" commit -m y' % W.fwd(self.w.wt))
 
-    def test_a_hooks_path_hint_writes_the_command_the_alias_runs(self):
-        # the setting is cut from the words the alias gives, never the whole line repeated
-        wt = W.fwd(self.w.wt)
+    def test_a_hooks_path_setting_an_alias_gives_is_denied(self):
+        # the alias is expanded, so git-hooks-path judges the clone it runs (the hint written out
+        # from the alias's words was cut, R-2271)
         for text in ("git -c alias.cl='clone -c core.hooksPath=x' cl https://example.invalid/r.git",
                      "git -c alias.cl='clone -c' cl core.hooksPath=x https://example.invalid/r.git",
                      "git -c alias.cl='clone --config=core.hooksPath=x' cl https://example.invalid/r.git"):
             with self.subTest(text):
                 d = self.decide(text)
                 self.assertEqual((d.verdict, d.rule), ('deny', 'git-hooks-path'), d.reason)
-                self.assertEqual(d.instead, 'git -C "%s" clone https://example.invalid/r.git' % wt)
         # the line's own words keep the line's own hint
         d = self.decide('git clone -c core.hooksPath=x https://example.invalid/r.git')
         self.assertEqual(d.instead, 'git clone https://example.invalid/r.git')
