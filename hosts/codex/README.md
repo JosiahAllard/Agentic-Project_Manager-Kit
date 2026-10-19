@@ -1,7 +1,6 @@
 # Codex host
 
-Codex's slot in the multi-host kit (docs/multi-host-plan.md step 9; docs/new-host.md). It carries the
-Codex companion plugin's behaviour onto the host contract. **Nothing here is installed or activated
+Codex's slot in the multi-host kit (docs/new-host.md). **Nothing here is installed or activated
 on any machine, and live parity with the default host is not verified.** The package passes the
 conformance suite on payloads in the branch's recorded shapes; no installed Codex client has run it.
 Every rendered agent file says so in its header comment.
@@ -24,7 +23,7 @@ Every rendered agent file says so in its header comment.
 
 The plugin root is `shell/`, so its hooks cannot name the kit's `boot/hook.py`: a plugin cache holds
 the plugin folder alone. That is why the plugin ships its own copy of the kit's boot folder and of its
-`hosts.json` entry (plan step 14 kept them for this reason). In a kit checkout its entries boot that
+`hosts.json` entry. In a kit checkout its entries boot that
 kit; copied out of it (a plugin cache), they bind `PM_KIT_ROOT` and a pinned release
 `PM_KIT_RELEASE_ID`, verified by the plugin's own boot check (docs/kitboot.md).
 
@@ -35,14 +34,13 @@ inherits the parent's `PM_KIT_ROLE`. So the kit holds every edit, shell and MCP 
 session as an agent of its mark's role (`kitlib.host.hookmain`, agent `unidentified`): the
 main-checkout rule and the write jail apply to it as to a subagent on any host, and the role policy
 by its mode. A Codex PM or coordinator therefore cannot edit the main checkout or land from it:
-stricter than the default host, where a launched lead's main session may, and looser than the
-branch, which denied every marked call outright. The owner's **unmarked** session is judged by the
-shared rules alone, as on every host; the branch's hooks did nothing there. The runtime broker binds
+stricter than the default host, where a launched lead's main session may. The owner's **unmarked**
+session is judged by the shared rules alone, as on every host. The runtime broker binds
 a role from native metadata, not the mark (`adapter/runtime.py`).
 
 Codex agent files carry no tool list, so the hook policy holds a read, test or lander role (its role
 file's `mode`) to no edits in its own checkout (`host-role-edit`) whatever the repository's
-`guard.role_policy` says, as the branch's guard adapter did. Files its role file's `writes` names,
+`guard.role_policy` says. Files its role file's `writes` names,
 and temp and scratch folders under the write jail, stay open to it.
 
 What the owner's session leaves unjudged (a trade-off: the owner keeps an interactive shell):
@@ -59,7 +57,7 @@ What the owner's session leaves unjudged (a trade-off: the owner keeps an intera
 
 ## Not verified
 
-- **Hook payloads.** The shapes come from the Codex hooks documentation and the branch's tests. No
+- **Hook payloads.** The shapes come from the Codex hooks documentation. No
   payload from an installed client was captured; the MCP tool-name format (`mcp__<server>__<tool>`),
   the session variable (`CODEX_THREAD_ID`) and the tool names the rendered roles show
   (`adapter/content.py` `TOOLS`) are inferred. Agent spawning and messaging are refused in a marked
@@ -68,13 +66,12 @@ What the owner's session leaves unjudged (a trade-off: the owner keeps an intera
 - **Plugin loading.** The tested binary (0.162.0-alpha.17.2) found portable skills but not portable
   hooks or MCP. Hook trust, cached paths and client refresh are untested.
 - **Skills from outside the plugin folder.** The default host's plugin loads its skills from the kit's
-  `content/skills/` itself; Codex keeps its byte copy in `shell/skills/` (decision 29 in
-  docs/multi-host-plan.md section 7) until a live install shows that a Codex plugin can name a
+  `content/skills/` itself; Codex keeps its byte copy in `shell/skills/` until a live install shows that a Codex plugin can name a
   skills folder outside its plugin root (here `../../../content/skills/`) and that a plugin cache
   copied out of the kit still carries it. The check: install the plugin with `plugin.json` naming
   that folder, start a session, and list its skills; then do the same from a plugin cache. Until
   both pass, `adapter/content.py` copies the skills and owns `shell/skills/`.
-- **Runtime.** The branch's canaries passed on that binary against fixtures; the native local Git
+- **Runtime.** The canaries passed on that binary against fixtures; the native local Git
   preparation stayed refused (`workflow_canary` reports `complete=false`). Rerun them for any new
   binary. Live controller, store and lock contention, and landing are not accepted. A read or lander
   role never gets a writable sandbox on Codex, whatever its role file says for another host.
@@ -94,7 +91,7 @@ What the owner's session leaves unjudged (a trade-off: the owner keeps an intera
 
 ## Not ported, with no replacement
 
-From the branch's `codex/` tree. Each is open work before activation.
+Each is open work before activation.
 
 - `pmkit_codex/diagnostics.py` and `scripts/check.py`: the package and readiness checks (`--ready`
   activation blockers). The conformance suite and `render_content --check` cover the package shape

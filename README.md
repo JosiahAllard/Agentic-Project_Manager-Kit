@@ -52,9 +52,7 @@ PC. It needs Windows, Python 3 (standard library only), git and Claude Code.
 
 ## Status
 
-Early. Most of the kit is built and tested but held for review before it goes live, and machine
-setup has not yet been run on a real machine. docs/go-live.md lists what
-is still to switch on.
+docs/go-live.md lists what is still to switch on.
 
 ## What you get
 
@@ -73,11 +71,8 @@ is still to switch on.
 ## Install
 
 1. **Start on a Dev Drive** (optional, recommended; Windows only). Many agents and test suites
-   make a flood of small file writes (worktrees, test temp files, gate logs, git objects), and
-   Microsoft Defender's real-time scan of each one can eat a large share of the CPU; on the
-   machine the kit was built on, it did. A Dev Drive is a ReFS volume where Defender runs in
-   performance mode, scanning after a file opens instead of in the way of it, and moving there
-   cut that load. Put the kit, your repositories and their worktrees on one. docs/install.md
+   make a flood of small file writes, and Defender's real-time scan of each can eat a large
+   share of the CPU; on a Dev Drive Defender runs in performance mode. Put the kit, your repositories and their worktrees on one. docs/install.md
    step 0 has the requirements and setup.
 2. **Set the machine up, once.** From the kit checkout, in a terminal:
    `powershell -NoProfile -File installer\machine-setup.ps1 -OwnerEmail <your commit email>`
@@ -111,12 +106,9 @@ Kit tools run from the kit checkout, in any repository: `python <kit>/tools/<nam
 
 ## Slow process launches on Windows
 
-While its foreground lock is armed, Windows leaks kernel token references as it launches
-processes, so each launch grows slower the longer the machine stays up; a kit that launches
-thousands of git and Python processes per test suite feels it first. Setting the live
-`ForegroundLockTimeout` to 0 after each logon stops the leak, and a full Restart clears what has
-already built up. docs/windows-token-leak.md has the check, the fix and a logon task that keeps
-it in place.
+Windows leaks kernel token references as it launches processes while its foreground lock is
+armed, so launches slow the longer the machine stays up. docs/windows-token-leak.md has the
+check and the fix.
 
 ## Read more
 

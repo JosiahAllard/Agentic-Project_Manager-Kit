@@ -1,7 +1,7 @@
 # Agent profile: the kit (moved)
 
 This repo's agent profile is `docs/agent-profile.md`, the host-neutral path (ARCHITECTURE.md
-"Packaging"). This file stays while Claude's agents still name `.claude/agent-profile.md`. Each
+"Packaging"). Each
 heading below is answered under the same heading there.
 
 ## Branches and worktrees

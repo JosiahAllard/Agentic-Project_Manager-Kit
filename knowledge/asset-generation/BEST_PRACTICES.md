@@ -21,7 +21,6 @@ Rules of thumb that have held up. Add a rule only once a lesson has repeated in 
   between seeds.
 - **For variants use `edit`, not a new prompt.** "Change X to Y. Keep everything else exactly
   the same." keeps the design identical. It is the right tool for team colours and skins.
- 
 
 ## Image to 3D
 
@@ -51,7 +50,6 @@ Rules of thumb that have held up. Add a rule only once a lesson has repeated in 
 
 - **Tags, not sentences:** genre, mood, instruments, BPM, and "instrumental, loopable, video
   game soundtrack". Lyrics `[Instrumental]`. Keep `--bpm` consistent with the tags.
- 
 - **Short first:** 30 s to judge a direction, then generate the full length.
 - **Nobody here can hear.** Measure the file (length, loudness, clipping) and hand the owner
   a playable page. The owner is the ear.
@@ -60,8 +58,7 @@ Rules of thumb that have held up. Add a rule only once a lesson has repeated in 
 
 - **ACE-Step is music only.** One-shot effects come from procedural synthesis or a CC0 library.
 - **Measure a candidate against the set it joins.** Compare crest factor and RMS with the clip
-  it replaces: a procedural explosion whose crest factor needed a peak above 0 dBFS to match
-  the set's level failed on measurement, which justified a library import instead.
+  it replaces.
 - **Decode library previews with Blender's bundled `aud` module** (`blender --background
   --python`) rather than installing a decoder.
 - **Do not judge brightness or band motion from a saturating spectrogram colormap.** Measure a
@@ -74,5 +71,4 @@ Rules of thumb that have held up. Add a rule only once a lesson has repeated in 
 
 - Each command is one GPU slice. Run heavy jobs (`edit`, `music`, `to3d`) one at a time.
 - Batch generation into a quiet window agreed with the coordinator instead of interleaving it
-  with engine or network test runs. On 2026-09-18, heavy generation during tests slowed an
-  e2e suite from 117 s to 204 s.
+  with engine or network test runs: heavy generation slows test suites badly.

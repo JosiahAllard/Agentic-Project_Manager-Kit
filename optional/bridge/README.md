@@ -8,15 +8,11 @@ works today, per host and direction, is in `optional/bridge/STATUS.md`. Read it 
 any of this: no message has yet been delivered end to end between live chats.
 
 **Claude and Codex are both served.** The bridge serves a host only when `hosts.json` registers
-it (`registry.py`), and `hosts.json` registers both (plan step 9). A profile for a host that is not
+it (`registry.py`), and `hosts.json` registers both. A profile for a host that is not
 registered is refused with `native-provider-unavailable`. The refusal happens while the
 configuration is checked, before that half's `bridge-profile.json` is read. Being served does not
 make a direction work: STATUS.md has the per-direction limits. Claude to Codex is not deliverable,
 and the Codex terminal adapter is dead.
-
-This is the bridge from `codex/robust-bridge-plan`, ported as plan step 10
-(docs/multi-host-plan.md section 2.4). Its design history, the Phase 0 evidence and the
-24 bridge docs it replaces are in git history (that branch, up to its tip when this port was made).
 
 ## Layout
 
@@ -43,8 +39,7 @@ Layer rules:
 
 ## The port (`port.py`)
 
-The seam that the scaffold's `ports.py` only sketched, declared from what the service actually
-calls. A half's package exports `HOST`, a `BridgeHost`:
+Declared from what the service actually calls. A half's package exports `HOST`, a `BridgeHost`:
 
 | Field | Called | Must |
 |---|---|---|
@@ -180,11 +175,8 @@ shells).
    Add `--connections` to open the owner window. `bridge_connections.py --marker <marker>` reopens
    it later.
 
-Step 2 is deliberately manual. The source kept registration disabled until live acceptance, and
-nothing has passed it (STATUS.md). Writing the entries into settings automatically, the way
-machine setup adds the guard, is a small step once the owner accepts a live canary: the halves
-already render the exact entries. A relocated kit needs a new preparation, because every path is
-absolute.
+Step 2 is deliberately manual until a live canary passes (STATUS.md). A relocated kit needs a new
+preparation, because every path is absolute.
 
 ## Adding a host half
 
@@ -204,17 +196,8 @@ The suite checks:
 
 ## What was deleted, and what moved
 
-The Phase 0 experiments and the never-wired scaffold were deleted once nothing imported them:
-- `kitlib/bridgeprobe/`: AppContainer, enrollment, handle hand-off, leadership, worker broker,
-  workspace and the probe runtime
-- `claude/bridge_phase0.py`
-- `tools/bridge_live_probe.py`, `tools/bridge_schema_probe.py` and `tools/bridge.py`
-- `kitlib/bridge/{bootstrap,journal,pipeline,restart,delegation,schema_probe,ports,disabled,status,errors}.py`
-- the tests of all of the above
-
-tests/bridge/test_port.py keeps them deleted.
-
-Four helpers were load-bearing and moved instead:
+The Phase 0 probe and scaffold modules are deleted; tests/bridge/test_port.py keeps them deleted.
+Four helpers moved:
 
 | Was | Now |
 |---|---|
@@ -224,14 +207,10 @@ Four helpers were load-bearing and moved instead:
 | `claude/bridge_phase0.read_record` | `hosts/claude/records.py` |
 
 `codex/pmkit_codex/bridge_client.py` is now `hosts/codex/client.py`, and the bridge owns it. It is
-the Codex plugin's client of this frontend. The Codex host (`hosts/codex/`, plan step 9) keeps no copy of
-it. If its diagnostics ever probe the bridge, they import `optional.bridge.hosts.codex.client`
-lazily and optionally. The legacy `session_delivery.py` helper was not ported, since nothing in
-the bridge uses it.
+the Codex plugin's client of this frontend. The Codex host (`hosts/codex/`) keeps no copy of it.
 
 ## Tests
 
 `tests/bridge/` covers the core, the service, both halves and the port. `tests/proc/test_pipe.py`
 covers the promoted pipe helpers, and `tests/ident/` covers `kitlib.ident`. Most of these tests use
-real named pipes, job objects and process tokens, so they run on Windows only (STATUS.md
-"Verification").
+real named pipes, job objects and process tokens, so they run on Windows only.

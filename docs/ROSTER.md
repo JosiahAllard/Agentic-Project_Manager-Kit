@@ -1,7 +1,7 @@
 # Agent roster
 
 The kit's plugin ships these agent definitions in `hosts/claude/shell/agents/`, rendered from `content/roles/`
-(docs/content.md). Each is a generic copy of the live definition; repo specifics live in the repo's `.claude/agent-profile.md` (every agent) and
+(docs/content.md). Repo specifics live in the repo's `.claude/agent-profile.md` (every agent) and
 `.claude/coordinator-profile.md` (coordinator only). The plugin registers each one under its prefix:
 dispatch a row as `pm-kit:<row>` (`subagent_type`, `--agent`). A repo's own `.claude/agents/<row>.md`
 is a separate agent named `<row>`; it does not replace `pm-kit:<row>`. A repo that ships its own
@@ -12,7 +12,7 @@ qualifies every bare kit agent name, so it always starts the kit's version, and 
 launched row (coordinator, consultant, deep-worker) cannot be started by the launcher under that name
 (docs/launcher.md "The window").
 
-The role list lives only in `content/roles/` (docs/multi-host-plan.md section 7, decision 17): a
+The role list lives only in `content/roles/`: a
 role is added or removed with one file and a render. The tables between the `rendered` markers
 below are written by `python tools/render_content.py --write` from the role files and each host's
 tier map; never edit them by hand. To change a role's tier, effort or "use for" line, edit its
@@ -63,8 +63,7 @@ host (`model.<host>:`, docs/content.md); none does.
 | deep | opus | account-default |
 <!-- end rendered -->
 
-`account-default` writes no `model` line: the role runs on the model the Codex account is set to, as
-the Codex branch's roles had it. On Codex a tier differs by reasoning effort: a role's `effort`, else
+`account-default` writes no `model` line: the role runs on the model the Codex account is set to. On Codex a tier differs by reasoning effort: a role's `effort`, else
 light `low`, standard `medium`, strong `high`, deep `xhigh` (hosts/codex/adapter/content.py
 `TIER_EFFORT`). The owner names Codex models per tier in hosts.json when they are chosen, and the table follows on the next render.
 With no light-tier model mapped for Codex, weak-worker there runs the account default at its own effort, high
@@ -89,23 +88,6 @@ experimental:
 - Limits, same source: client 2.1.248 or later; ignored while the subscription draws on usage
   credits; read only from subagent files. That a plugin's agent file is read like a project's is
   inferred, not stated there.
-- Only this row has it (tests/agents/test_agents.py,
-  `test_only_strong_worker_asks_for_the_one_hour_prompt_cache`). Why this row: the untested pricing
-  computation in docs/agent-review.md, "Context and cache findings", made for the opus/medium default
-  coder, which was senior-worker (opus-worker before it) until the two roles swapped charters on
-  2026-10-15; the setting moved with the charter.
+- Only this row has it (tests/agents/test_agents.py).
 - Check it took: in one strong-worker run's usage block, the cache-creation split counts tokens
-  in the one-hour field and none in the five-minute field. Not yet observed for this file.
-
-## Changes versus the live files
-
-Source: the files in the project manager's `kit/agents/` at the time of the copy. Every other file is byte-identical to its live file. Behaviour is unchanged in all cases.
-
-The live files held no ruling id, no repo name and no owner path, so the scrub changed only two files.
-
-- **coordinator.md**, startup step 3 (check in with the project manager): the id of the newest ruling in the state note was replaced by plain words, and later the step stopped asking for an id at all: it asks for "owner decisions since your last check-in". Reason: the ids were the project manager's own numbering.
-- **researcher.md**, end of "Repo tools": removed one line, a research exclusion for a single repository. Reason: it named a repo, and is a repo-specific research exclusion. It belongs in that repo's `.claude/agent-profile.md`; the agent already reads the profile. Until a repo's profile carries it, an agent could research those topics.
-
-Left as is, on purpose:
-- Role words "PM" and "project manager" and the launcher commands `launch.py deep` (coordinator, deep-worker) and `launch.py consultant` (consultant; `launcher\start-*.ps1` paths before the launcher moved into the kit, docs/launcher.md): the kit's own roles and launcher, not owner-specific.
-- The host's per-user folder (`{{user_folder}}`, `~/.claude` on Claude): home-relative, no user name. The comfy tools and the knowledge folder are named in the kit since (`<kit>/optional/comfy`, `<kit>/knowledge/asset-generation`; machine setup links the old `~/.claude` paths to them).
+  in the one-hour field and none in the five-minute field.

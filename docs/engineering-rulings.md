@@ -1,6 +1,6 @@
 # Engineering rulings
 
-Engineering questions go from coordinators and workers to the repository's consultant (`consultant-<repo>`, agents/consultant.md). The consultant decides them unless they fall in an owner-only class, or the owner has asked to review that design; those go to the PM. A repository with no consultant running sends its engineering questions to the PM, who decides them the same way.
+Engineering questions go from coordinators and workers to the repository's consultant (`consultant-<repo>`, content/roles/consultant.md). The consultant decides them unless they fall in an owner-only class, or the owner has asked to review that design; those go to the PM. A repository with no consultant running sends its engineering questions to the PM, who decides them the same way.
 
 ## What stays owner-only
 - Anything that changes or supersedes one of the owner's own rulings.
@@ -27,7 +27,7 @@ The asker keeps working: an engineering question never parks an item for long.
 - **Review flags:** the owner names an item, area or record prefix ("review designs: EX-API-*"). The PM keeps the list in config `eng_review`. Matching questions go to the hub instead of being decided, by the consultant or the PM.
 - **Daily digest:** a hub inbox note listing the day's delegated rulings, one line each, with no ids. The owner can overturn any of them; an overturn is a new ruling by the owner that supersedes it.
 
-## Kit pieces (built on kit/eng-rulings; live after the joint review)
-- **Coordinator standing line:** `kitlib.coordinatorstart.ENG_LINE` carries the filing format, the consultant as recipient, and the owner-only list. `context` adds it after the config standing lines only when `coordinator_start.eng_filing` is `true` in the machine config; absent or any other value adds nothing, so merging changes no live session.
-- **`eng_review`:** a list of strings (items, areas or record prefixes) under `pm_start` in the machine config. `kitlib.pmstart.eng_review` is a checklist line at every PM start: the flags when set; no line at all while the key is absent or the list is empty (so merging changes nothing for the PM); "could not check eng_review" when the value is anything but a list of non-empty strings.
-- **Digest feed:** `python tools/ledger.py list --prov delegated --since YYYY-MM-DD` (logic in `kitlib.ledger`) prints one `<id> | date | Decides` line per live ruling of that provenance dated on or after the day (`--since` compares with the UTC date in the entry header), in ledger order; a header with an unknown provenance is skipped; tombstones are skipped, and an entry with no Decides line prints `(no Decides)`. The ledger file is `ledger_path` in the machine config (no flag sets it). Exit 0 ok, 1 no ledger configured or unreadable, 2 usage. The same tool's `add` writes the ledger (docs/ledger.md).
+## Kit pieces
+- **Coordinator standing line:** `kitlib.coordinatorstart.ENG_LINE` carries the filing format, the consultant as recipient, and the owner-only list. `context` adds it only when `coordinator_start.eng_filing` is `true` in the machine config.
+- **`eng_review`:** a list of strings (items, areas or record prefixes) under `pm_start` in the machine config. `kitlib.pmstart.eng_review` prints the flags as a PM start checklist line when set.
+- **Digest feed:** `python tools/ledger.py list --prov delegated --since YYYY-MM-DD` (logic in `kitlib.ledger`) prints one `<id> | date | Decides` line per live ruling of that provenance dated on or after the day (docs/ledger.md).
