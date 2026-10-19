@@ -373,6 +373,20 @@ class Job:
         return ((acc.TotalUserTime + acc.TotalKernelTime) / 1e7, int(ext.PeakJobMemoryUsed),
                 max(own, self.tree_working_set()))
 
+    def processes(self):
+        """The processes ever started in the job, ended ones included (its basic accounting's
+        TotalProcesses), or None (ended, or Windows will not say). One query, no pid list.
+        Measured 2026-10-19: a process started in a job nested in this one counts here too, and
+        so does the conhost a child started with CREATE_NO_WINDOW gets; a child that shares its
+        parent's console adds itself only."""
+        if self.h is None:
+            return None
+        acc = win32.JOB_ACCOUNTING()
+        if not K32.QueryInformationJobObject(self.h, win32.JOB_ACCOUNTING_INFO, ctypes.byref(acc),
+                                             ctypes.sizeof(acc), None):
+            return None
+        return int(acc.TotalProcesses)
+
     def tree_working_set(self):
         """Bytes: the working sets of the job's processes now, summed; a process
         that has gone or cannot be opened counts 0."""
