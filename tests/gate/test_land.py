@@ -33,6 +33,7 @@ class LandCase(fixtures.GateRepoCase):
     # lander() gives each tip the full-gate OK record a landing requires (fixtures.gate_full);
     # a test of that check itself sets it False and gates its tips (test_land_tip_gated)
     GATE_TIPS = True
+    REVIEW_TIPS = True      # fixtures.queue_review: each branch without an entry gets a verdict
 
     def lander(self, branch, expect_main, expect_tip, **kw):
         kw.setdefault('git_env', self.env)
@@ -40,6 +41,8 @@ class LandCase(fixtures.GateRepoCase):
         kw.setdefault('log_dir', self.logs)
         if self.GATE_TIPS:
             self.gate_tips(expect_tip)
+        if self.REVIEW_TIPS:
+            fixtures.queue_review(self.repo.root, branch, expect_tip)
         return land.Lander(self.repo.root, branch, expect_main, expect_tip, **kw)
 
     def gate_tips(self, *tips):

@@ -47,6 +47,7 @@ class CleanupCase(fixtures.GateRepoCase):
         kw.setdefault('log_dir', self.logs)
         fixtures.gate_full(self.repo.root, *(expect_tip if isinstance(expect_tip, list)
                                              else [expect_tip]))
+        fixtures.queue_review(self.repo.root, branch, expect_tip)
         return land.Lander(self.repo.root, branch, expect_main, expect_tip, **kw)
 
     def pushed(self, name, files):
