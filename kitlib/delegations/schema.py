@@ -149,14 +149,146 @@ def _norm(token):
 
 # --- Hard exclusions -------------------------------------------------------------------------
 
+# Each is matched against a normalised token (_norm) and its executable name (_base). A prefix
+# entry (name, n) refuses any option `-x` that is a prefix of `name` at least n characters long,
+# because PowerShell accepts any unambiguous prefix of a parameter name.
+WHY = {
+    'E1': 'elevation',
+    'E2': 'a settings, rules or kit control file',
+    'E3': "the machine lock's owner controls",
+    'E4': 'opaque code',
+    'E5': 'a launcher option the owner keeps',
+}
+E1_WORDS = {'runas', 'sudo', 'gsudo', 'psexec', 'psexec64', 'schtasks', 'register-scheduledtask',
+            'new-scheduledtaskprincipal', 'set-scheduledtask', 'set-executionpolicy', '/rl'}
+E1_PARAMS = (('-verb', 5), ('-runlevel', 4), ('-credential', 3))
+# Matched as a substring of the token with a `/` added, so a folder name matches with or
+# without its trailing separator.
+E2_FRAGMENTS = ('settings.json', 'settings.local.json', '.claude.json', '.claude/', '.codex/',
+                '.pm-kit/', '.claude-pm-kit/', 'claude.md', 'agents.md', 'owner-delegations',
+                '.kit.json', 'content/roles', 'content/skills', '.git/hooks', '.git/config',
+                'hookspath', 'machine_setup', 'render_content')
+E3_FRAGMENTS = ('machine_lock', 'machine-lock', 'lock_ui', 'lockmcp', 'lock_server', 'lock_set_',
+                'lock_hold')
+E4_WORDS = {'iex', 'invoke-expression', 'invoke-command', 'cmd', 'wsl'}
+POWERSHELL = {'powershell', 'pwsh'}
+PS_CODE = ('command', 'encodedcommand', 'ec')
+# PowerShell options that take the next token as their value; any other bare token before -File
+# is a command PowerShell would run.
+PS_VALUE = ('executionpolicy', 'windowstyle', 'version', 'workingdirectory', 'wd', 'inputformat',
+            'outputformat', 'configurationname', 'psconsolefile', 'settingsfile', 'custompipename')
+PYTHON = re.compile(r'python[0-9.]*w?|py|pyw')
+SHELLS_C = {'bash', 'sh', 'zsh', 'dash'}
+E5_OPTIONS = ('--no-agent', '--prompt', '--force', '--replace', '--pid')
+E5_WORDS = {'install-autostart', 'homes'}
+
+
+def _base(n):
+    b = n.rsplit('/', 1)[-1]
+    return b[:-4] if b.endswith('.exe') else b
+
+
+def _option_prefix(n, name, least):
+    return len(n) >= least and name.startswith(n)
+
+
+def _powershell_code(rest):
+    """Why the arguments `rest` of powershell/pwsh run code that is not a -File script, or None."""
+    i = 0
+    while i < len(rest):
+        n = _norm(rest[i])
+        if n[:1] in '-/' and len(n) >= 2:
+            opt = n[1:].split(':', 1)[0]
+            if 'file'.startswith(opt):
+                return None
+            if any(c.startswith(opt) for c in PS_CODE[:2]) or opt == PS_CODE[2]:
+                return 'powershell %s' % rest[i]
+            if any(v.startswith(opt) for v in PS_VALUE):
+                i += 1
+            i += 1
+            continue
+        return 'powershell with the command %s' % rest[i]
+    return 'powershell without -File'
+
+
+def _python_code(rest):
+    """Why `python ...` runs code from an option (-c, -m), or None."""
+    i = 0
+    while i < len(rest):
+        t = rest[i].strip('"\'')
+        if t == '--' or not t.startswith('-') or t == '-':
+            return None
+        if t.startswith('--'):
+            i += 1
+            continue
+        for j, c in enumerate(t[1:], 1):
+            if c in 'cm':
+                return 'python %s' % rest[i]
+            if c in 'XW':
+                if j == len(t) - 1:
+                    i += 1
+                break
+        i += 1
+    return None
+
+
+def _shell_code(rest):
+    for t in rest:
+        t = t.strip('"\'')
+        if t == '--' or not t.startswith('-'):
+            return None
+        if not t.startswith('--') and 'c' in t[1:]:
+            return 'a shell %s' % t
+    return None
+
+
 def exclusion_hits(tokens):
-    """[(exclusion id, token, why)] for the tokens that hit a hard exclusion."""
-    return []
+    """[(exclusion id, token, why)] for the tokens that hit a hard exclusion. A runner must call
+    this again on the filled-in argv: check_arg covers one value, not the line it lands in."""
+    hits = []
+    for i, tok in enumerate(tokens):
+        n = _norm(tok)
+        if not n:
+            continue
+        b = _base(n)
+        param = n.split(':', 1)[0]                                   # -Verb:RunAs
+        if n in E1_WORDS or b in E1_WORDS or any(_option_prefix(param, p, k) for p, k in E1_PARAMS):
+            hits.append(('E1', tok, WHY['E1']))
+        if any(f in n + '/' for f in E2_FRAGMENTS):
+            hits.append(('E2', tok, WHY['E2']))
+        if any(f in n for f in E3_FRAGMENTS):
+            hits.append(('E3', tok, WHY['E3']))
+        code = None
+        if n == '.' or b in E4_WORDS:
+            code = tok
+        elif b in POWERSHELL:
+            code = _powershell_code(tokens[i + 1:])
+        elif PYTHON.fullmatch(b):
+            code = _python_code(tokens[i + 1:])
+        elif b in SHELLS_C:
+            code = _shell_code(tokens[i + 1:])
+        if code:
+            hits.append(('E4', tok, '%s (%s)' % (WHY['E4'], code)))
+        opt = n.split('=', 1)[0]
+        if (opt.startswith('--') and len(opt) > 2 and any(o.startswith(opt) for o in E5_OPTIONS)) \
+                or n in E5_WORDS:
+            hits.append(('E5', tok, WHY['E5']))
+    return hits
 
 
 def operation_exclusions(op, where):
     """The problems of one operation object `op` (already type-checked) that are hard exclusions."""
-    return []
+    out = []
+    if op['elevated']:
+        out.append('%s.elevated: true is %s (E1, never delegable)' % (where, WHY['E1']))
+    fields = [('command', op['command'])]
+    for j, pre in enumerate(op['preconditions']):
+        for s in _strings({k: x for k, x in pre.items() if k != 'kind'}):
+            fields.append(('preconditions[%d]' % j, s))
+    for name, text in fields:
+        for eid, tok, why in exclusion_hits(text.split()):
+            out.append('%s.%s: %r is %s (%s, never delegable)' % (where, name, tok, why, eid))
+    return out
 
 
 # --- Commands and arguments ------------------------------------------------------------------

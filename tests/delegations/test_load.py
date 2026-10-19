@@ -326,6 +326,7 @@ class Exclusions(Home):
                     'Register-ScheduledTask -TaskName a', 'New-ScheduledTaskPrincipal -UserId a',
                     'Set-ScheduledTask -TaskName a', 'Set-ExecutionPolicy Unrestricted',
                     'Start-Process pwsh -Verb RunAs', 'Start-Process pwsh -VERB x',
+                    'Start-Process pwsh -Verb:RunAs',
                     'New-Thing -RunLevel Highest', 'New-Thing -RunL Highest',
                     'Start-Process a -Credential admin', 'Start-Process a -Cred admin', 'tool /RL HIGHEST'):
             with self.subTest(cmd=cmd):
@@ -428,6 +429,15 @@ class HappyPath(Home):
         self.assertEqual(d3.trigger, ('standing:pm-start-checklist',))
         self.assertEqual(got.operations[1].preconditions[0],
                          (('branch', '{branch}'), ('kind', 'branch-landed'), ('repo_path', 'Q:/srv/app')))
+
+    def test_plain_commands_pass_the_exclusions(self):
+        for cmd in ('powershell -NoProfile -ExecutionPolicy Bypass -File Q:/srv/a.ps1 -Name x',
+                    'pwsh -File Q:/srv/a.ps1', 'python -u Q:/srv/a.py --check', 'python -X utf8 Q:/srv/a.py',
+                    'py -3 Q:/srv/a.py', 'bash Q:/srv/a.sh', 'git -C Q:/srv/app pull --ff-only',
+                    'python <kit>/tools/launch.py start --repo app --account 2'):
+            with self.subTest(cmd=cmd):
+                self.write({'schema': 1, 'operations': [base_op(command=cmd)]})
+                self.assertEqual(self.load().operations[0].command, cmd)
 
     def test_no_operations_is_a_list_that_delegates_nothing(self):
         self.write({'schema': 1, 'operations': []})
