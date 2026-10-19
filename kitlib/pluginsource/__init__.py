@@ -387,6 +387,19 @@ def export_checkout(folder):
     return checkout
 
 
+def default_kit(folder):
+    """(kit checkout, None) or (None, why): tools/plugin_refresh.py's --kit default for a tool in
+    `folder`. A checkout is its own kit. An export (it holds MARKER and has no .git) defaults to
+    the main checkout its marker records (export_checkout); with none, it is refused, since the
+    export cannot read the remote's main."""
+    if not os.path.isfile(os.path.join(folder, MARKER)):
+        return folder, None
+    checkout = export_checkout(folder)
+    if checkout:
+        return checkout, None
+    return None, '%s: this is an export; pass --kit <kit checkout>' % folder
+
+
 # ---------------------------------------------------------------- the marketplace and state
 
 def _write_json(path, data):

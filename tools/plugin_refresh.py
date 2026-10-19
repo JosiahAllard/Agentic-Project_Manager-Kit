@@ -16,7 +16,8 @@ account folder's install from it (docs/plugin-source.md).
                                         one, the newest, one replaced in the last day or one a
                                         running process or scheduled task names
   options: --folder DIR (repeatable: only the account folders named; any other DIR is refused)
-           --kit DIR (default: the checkout this file is in)   --home DIR (default: the user's home)
+           --kit DIR (default: the checkout this file is in; run from an export, the checkout its
+                      marker records, else refused)   --home DIR (default: the user's home)
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.pluginsource.refresh, prints
 and exits. Exit codes: 0 done, or nothing to do; 1 refused, or a folder's claude command failed; 2 usage.
@@ -37,7 +38,7 @@ EXIT_USAGE = 2
 def main(argv=None):
     p = argparse.ArgumentParser(prog='plugin_refresh.py', description=__doc__.split('\n')[0],
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('--kit', default=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    p.add_argument('--kit', default=None)
     p.add_argument('--home', default=None)
     p.add_argument('--apply', action='store_true')
     p.add_argument('--migrate', action='store_true')
@@ -55,6 +56,11 @@ def main(argv=None):
     def out(line):
         print(line, flush=True)
 
+    if a.kit is None:
+        a.kit, why = pluginsource.default_kit(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        if why:
+            out('REFUSED: %s' % why)
+            return 1
     try:
         s = pluginsource.load(a.home, kit=os.path.abspath(a.kit))
     except (ConfigError, pluginsource.RefreshError) as e:
