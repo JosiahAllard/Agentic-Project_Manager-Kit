@@ -160,7 +160,12 @@ class Start(Base):
 
     def test_a_dispatched_role_on_claude_shows_the_agent_start_block(self):
         from hosts.claude.adapter.host import ADAPTER
-        got = self.text(self.view('worker', start_text=ADAPTER.start_text), 'At start')
+        from kitlib import agentstart
+        real = agentstart.text      # its 1.0 s default budget is wall time; a loaded machine trips it
+        patched = mock.Mock(side_effect=lambda cwd, kit, role=None: real(cwd, kit, role, budget=60.0))
+        with mock.patch.object(agentstart, 'text', patched):
+            got = self.text(self.view('worker', start_text=ADAPTER.start_text), 'At start')
+        patched.assert_called_once()
         self.assertIn('Agent start (worker):', got)
         self.assertIn('checkout  NOT CHECKED', got)      # the temp repo is in no git work tree
 
