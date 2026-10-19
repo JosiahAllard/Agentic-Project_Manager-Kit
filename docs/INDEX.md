@@ -28,6 +28,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `docs/daily-full.md` | daily_full | the nightly full run | kw: daily-full, nightly
 - `docs/doc-tools.md` | doc_budget, doc_index, codemap | finding or checking docs | kw: doc-tools, doc_index, doc_budget, codemap, find, section, stale
 - `docs/engineering-rulings.md` | engineering rulings | before a design choice | kw: rulings, engineering
+- `docs/flaky-tests.md` | flaky tests: the time fence design (not built), survey of nondeterminism in tests/ | a test fails under load, adding a time budget | kw: flaky, flake, time-fence, clock, budget
 - `docs/gate.md` | gate.py | running the gate | kw: gate, test, stash
 - `docs/go-live.md` | go-live list | switching a repo to the kit | kw: go-live
 - `docs/guard.md` | shell guard and git hooks | a command is refused | kw: guard, hooks, refusal, hub secrets
