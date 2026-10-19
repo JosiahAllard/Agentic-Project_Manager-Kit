@@ -3,6 +3,7 @@
 
   MAX_BYTES     the largest body, in bytes of UTF-8
   MERMAID_SAYS  the words every refusal of unrendered Mermaid carries
+  TITLE_SAYS    the words every refusal of a title carries
   check(html)   why html cannot be published, as one sentence, or None when it can
 
 A page is static HTML the Docs tab shows in an iframe with sandbox="" and a Content-Security-
@@ -14,7 +15,13 @@ the markup differently, and a refusal adds no markup.
 Refused:
   - a body that is not a string, holds a lone surrogate, or is over MAX_BYTES as UTF-8;
   - the elements of TAGS (script, iframe, frame, frameset, object, embed, applet, portal, link,
-    meta, base, form);
+    base, form);
+  - a meta that is not exactly <meta charset="utf-8"> or <meta name=N content=C> with N of
+    META_NAMES, each attribute once (http-equiv can refresh or set a policy, referrer changes
+    what a link sends);
+  - a title that is not exactly <title>text</title>: an attribute, a `<` in its text (a
+    browser reads markup there inside svg, which this parser may read as text), no
+    `</title>`, or one title inside another (TITLE_SAYS);
   - an on* event attribute, and ping or formaction;
   - href or xlink:href that is not a #fragment, except a data: one on svg image or feImage;
   - src, poster, background or action that is not data:, and srcset at all (src with a data:
@@ -30,29 +37,32 @@ Refused:
     parser reads as text;
   - unrendered Mermaid: class mermaid or language-mermaid on any element, or a ```mermaid fence.
     The kit renders nothing: the publisher draws the diagram as inline svg (MERMAID_SAYS);
-  - anywhere in the text, whatever the parser made of it, each of RAW: `<script`, `javascript:`,
-    `http-equiv`, the raw-text and escapable elements this parser and a browser may end in
-    different places (`<title`, `<textarea`, `<xmp`, `<noembed`, `<noframes`, `<plaintext`), and
-    the markup whose end the two may find in different places (`<![cdata[`, `<!-->`, `<!--->`,
-    `--!>`).
-So the parser sees every tag and attribute a browser would build from the body. Kept: inline svg
-(not its title element) with its style and foreignObject, style elements and attributes, data:
-images. Nothing here prints, parses arguments or exits.
+  - anywhere in the text (a kept title's text included), whatever the parser made of it, each of
+    RAW: `<script`, `javascript:`, `http-equiv`, the raw-text and escapable elements this parser
+    and a browser may end in different places (`<textarea`, `<xmp`, `<noembed`, `<noframes`,
+    `<plaintext`), and the markup whose end the two may find in different places (`<![cdata[`,
+    `<!-->`, `<!--->`, `--!>`).
+So the parser sees every tag and attribute a browser would build from the body. Kept: a whole
+document (doctype, html, head, body), the metas and titles above, inline svg with its style and
+foreignObject, style elements and attributes, data: images. Nothing here prints, parses
+arguments or exits.
 """
 import html.parser
 import re
 
 MAX_BYTES = 512 * 1024
 MERMAID_SAYS = 'render it to svg first'
+TITLE_SAYS = 'a title is <title>plain text</title>: no attribute, no < in its text'
 TAGS = ('script', 'iframe', 'frame', 'frameset', 'object', 'embed', 'applet', 'portal', 'link',
-        'meta', 'base', 'form')
+        'base', 'form')
+META_NAMES = ('viewport', 'color-scheme', 'description', 'author', 'generator')
 DATA_ONLY = ('src', 'poster', 'background', 'action')
 NEVER = ('srcset', 'ping', 'formaction')
 LINKS = ('href', 'xlink:href')
 LINK_DATA_TAGS = ('image', 'feimage')       # svg elements whose href may be a data: image
 ANIMATES = ('animate', 'set')
-RAW = ('<script', 'javascript:', 'http-equiv', '<title', '<textarea', '<xmp', '<noembed',
-       '<noframes', '<plaintext', '<![cdata[', '<!-->', '<!--->', '--!>')
+RAW = ('<script', 'javascript:', 'http-equiv', '<textarea', '<xmp', '<noembed', '<noframes',
+       '<plaintext', '<![cdata[', '<!-->', '<!--->', '--!>')
 CSS_FUNCTIONS = ('image-set(', '-webkit-image-set(', 'image(', 'src(')  # each can load by url
 TEXT_ATTRS = ('title', 'alt')               # read only as text; so are aria-* (_text_attr)
 STYLE_NEVER = ('<', '&')                    # in a style element's text (module docstring)
@@ -61,6 +71,7 @@ _SURROGATE = re.compile('[\ud800-\udfff]')
 _URL = re.compile(r'url\(\s*([\'"]?)(.*?)\1\s*\)', re.I | re.S)
 _SPACE = re.compile(r'[\x00-\x20]+')        # what a browser drops from a URL before it reads it
 _MERMAID_CLASS = ('mermaid', 'language-mermaid')
+_TITLE = re.compile(r'<title>([^<]*)</title>')   # on the lowered body: the one title kept
 
 
 class Refused(Exception):
@@ -73,6 +84,25 @@ def _url(value):
 
 def _text_attr(name):
     return name in TEXT_ATTRS or name.startswith('aria-')
+
+
+def _meta(attrs):
+    """Refused unless the meta is exactly <meta charset="utf-8"> or <meta name=N content=C> with N
+    of META_NAMES: any other meta can refresh, set a policy or change what a link sends."""
+    names = [name for name, _ in attrs]
+    if len(set(names)) != len(names):
+        raise Refused('a <meta> names an attribute twice: a browser and this check could keep '
+                      'different ones')
+    named = {name: (value or '') for name, value in attrs}
+    if names == ['charset'] and named['charset'].lower() == 'utf-8':
+        return
+    if sorted(names) == ['content', 'name']:
+        if named['name'].lower() in META_NAMES:
+            return
+        raise Refused('a <meta name="%s"> is not allowed: a meta names one of %s'
+                      % (named['name'][:80], ', '.join(META_NAMES)))
+    raise Refused('the page has a <meta> element that is not <meta charset="utf-8"> or '
+                  '<meta name content> (name one of %s)' % ', '.join(META_NAMES))
 
 
 def _css(text, where, plain=False):
@@ -138,6 +168,8 @@ class _Parser(html.parser.HTMLParser):
         if tag in TAGS:
             raise Refused('the page has a <%s> element: a page is static HTML that loads and '
                           'runs nothing' % tag)
+        if tag == 'meta':
+            _meta(attrs)
         named = {}
         for name, value in attrs:
             value = value or ''
@@ -188,7 +220,10 @@ def check(html):
         parser.end_style()                      # a style element the body never closed
     except Refused as e:
         return str(e)
+    scan = _TITLE.sub(lambda m: ' %s ' % m.group(1), low)   # a kept title's text is still scanned
+    if '<title' in scan:
+        return 'the page has a <title> that is not plain text: %s' % TITLE_SAYS
     for word in RAW:
-        if word in low:
+        if word in scan:
             return 'the page holds %r: a page is static HTML that runs nothing' % word
     return None
