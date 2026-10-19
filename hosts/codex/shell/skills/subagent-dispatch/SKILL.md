@@ -14,7 +14,7 @@ description: Use as a coordinator or any agent about to dispatch a subagent (a k
 
 ## Never
 
-- Route a tool refusal or permission denial through another tool, agent, shell or session: it is stop-and-report (your role file's Never section).
+- Route a classifier refusal or permission denial through another tool, agent, shell or session: it is stop-and-report. A kit-guard (hook) refusal: follow its `Instead:` line and retry.
 - Assume one host's built-in agents, tools or file names exist on another.
 
 Details: skill coordinator-dispatch (briefs, roles, tiers).
