@@ -20,11 +20,11 @@ Pattern counts from a search of `tests/**` on the main branch of 2026-10-19; a m
 
 | Class | Count | Sample | Fenced today |
 |---|---|---|---|
-| Wall budget whose expiry changes output, reached by a default | 2 known: agentstart `BUDGET`, the hook `deadline` (kitlib/host/hookmain.py) | tests/agentview/test_agentview.py:161 | no |
+| Wall budget whose expiry changes output, reached by a default | 1 degrade: agentstart `BUDGET`. Also the Codex hook's `DEADLINE = 7` (hosts/codex/adapter/host.py; kitlib/host/hookmain.py takes it as `deadline`, the Claude adapter sets none), whose expiry is a fail-closed `deny guard-timeout`, not a degrade | tests/agentview/test_agentview.py:161 | no |
 | Upper bound on real elapsed time | 75 in 36 files | tests/tooldeps/test_selfrun.py:326 (`< 4.5` s), tests/bridge/test_codex_delivery.py:254 (`< 4` s) | no |
 | `time.sleep` / polling | 166 in 55 files | tests/pytests/test_pytests.py (14), tests/proc/test_job.py (7) | no |
 | `timeout=` / `deadline` literals | 443 in 144 files | mostly ceilings that only end a hang | by the unit timeout (300 s) |
-| Real subprocess | 290 calls in 117 files | tests/proc/test_spawn_sites.py (34) | git yes: fake git and its audit hook; 67 tier markers (`@real_git`, own-process) in 43 files |
+| Real subprocess | 290 calls in 117 files | tests/proc/test_spawn_sites.py | git yes: fake git and its audit hook; 67 tier markers (`@real_git`, own-process) in 43 files |
 | Ports | 9 binds, all port 0 | tests/proc/test_tcp.py:71 | yes, by convention |
 | Directory / dict order | 234 listings in 92 files, many unsorted | tests/lock/test_run.py:166 | in effect: NTFS lists names sorted, dicts keep insertion order |
 | Env and temp leakage | 54 raw `os.environ` writes in 24 files (137 `patch.dict`); 235 `mkdtemp` | tests/optional/usage/test_usage_watch.py:138 | yes: the pool worker restores the environment, each unit gets its own TEMP (docs/test-tools.md "kit_tests") |
@@ -39,10 +39,10 @@ something hangs or the machine is many times slower than expected.
 | | A. Virtual clock everywhere | B. Time fence on budgets | C. Ratchet lint |
 |---|---|---|---|
 | What | `kitlib.clock` with `monotonic`/`sleep`; every caller routed; tests advance a fake clock | `kitlib.clock.budget(seconds)`; fenced in tests it returns a ceiling past the unit timeout | a test counts sleeps and elapsed asserts per test file against a baseline that may only fall; new ones need `@real_time('<why>')` |
-| Cost | ~60 lib lines, then about 87 existing ad-hoc `clock=`/`now=` seams in 45 kitlib files, 166 sleeps, 75 asserts | ~25 lib lines, ~3 lines of wiring, ~3 lines per degrade budget (2 today), ~30 test lines | ~60 lines and a baseline of ~90 file entries |
+| Cost | ~60 lib lines, then about 87 existing ad-hoc `clock=`/`now=` seams in 45 kitlib files, 166 sleeps, 75 asserts | ~25 lib lines, ~3 lines of wiring, ~3 lines per degrade budget (1 today), ~30 test lines | ~60 lines and a baseline of ~90 file entries |
 | Catches | sleeps, polls, budgets in-process; not `Thread.join`, `Popen.wait` or a child process | every degrade budget reached by a default, the case above included | new sleeps and elapsed asserts written into a test |
 | Misses | anything across a process or a thread wait | sleeps and elapsed ceilings in tests | the case above (no time token in the test) |
-| Migration | large, file by file | the 2 budgets; nothing else changes | none up front |
+| Migration | large, file by file | the 1 budget; nothing else changes | none up front |
 
 ## Recommendation: B, the time fence
 
@@ -54,10 +54,19 @@ something hangs or the machine is many times slower than expected.
    time. A test of the over-budget path passes an explicit budget and blocks the work on an
    Event, as tests/agentstart/test_agentstart.py `test_the_budget_cuts_what_is_left` already
    does; an explicit budget is never fenced.
+4. Not fenced, as with the home fence (docs/test-tools.md "Home fence"): a child whose
+   environment a test built without `KIT_TIME_FENCE`, and a child that is not the kit's
+   Python code. Such a child runs on the real budget.
 
-Under the fence a slow machine makes a test slower, never different. A real hang still ends,
-as a unit TIMEOUT. The rule it gives reviewers: a budget whose expiry is a normal output goes
-through `clock.budget`; a ceiling does not.
+Under the fence a slow machine makes a fenced test slower, not different; a child left
+unfenced as in step 4 keeps the old risk. A real hang still ends, as a unit TIMEOUT. The
+rule it gives reviewers: a budget whose expiry is a normal output goes through
+`clock.budget`; a ceiling does not.
+
+Open question, not part of this recommendation: the Codex hook's `DEADLINE` is a fail-closed
+safety timeout (kitlib/host/hookmain.py: still deciding at the deadline is a `deny
+guard-timeout`). Fencing it would change what a test sees of a safety check, so it is a
+separate decision for the owner.
 
 Not now: A costs most and still misses thread and process waits. C is the follow-up if a
 sleep or an elapsed assert flakes for a second time (the builder rule: a one-off flake gets
@@ -67,8 +76,9 @@ nothing until it fails twice); `test_selfrun.py:326` (`< 4.5` s) is the likelies
 
 - Gate: no new step. The fence lives in the test process, as the fake git does; a
   `tests/clock` test proves a fenced process gets the ceiling and an explicit budget passes
-  through. A file directly in `kitlib/` is a `full` glob in tests/selection.json, so the
-  build branch runs the whole suite; later changes there do too.
+  through, and that a child started with the test's environment is fenced while one built
+  without the marker is not. A file directly in `kitlib/` is a `full` glob in
+  tests/selection.json, so the build branch runs the whole suite; later changes there do too.
 - Redfirst: the first build's test is the case itself, made to fail at will: the agentview
   start test with a git stub that takes 1.2 s. At the base it reads `over the 1.0 s budget`
   (RED); with the fence it reads `NOT CHECKED` (GREEN), whatever the machine's load.
@@ -83,5 +93,4 @@ nothing until it fails twice); `test_selfrun.py:326` (`< 4.5` s) is the likelies
 
 One branch: `kitlib/clock.py` (`budget`, `CEILING`, `fenced`), the two lines of wiring,
 `kitlib.agentstart` routed through it, its `tests/clock` test, and the 1.2 s agentview
-redfirst test above. The hook `deadline` follows in the same branch only if it fits in one
-small commit.
+redfirst test above. The Codex hook `DEADLINE` stays out of it (the open question above).
