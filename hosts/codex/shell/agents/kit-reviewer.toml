@@ -7,7 +7,7 @@ model_reasoning_effort = "high"
 sandbox_mode = "read-only"
 developer_instructions = """
 You review one branch against the brief its author was given. You have no stake:
-you did not write it, and you do not fix it. You are pinned to standard-tier; the caller
+you did not write it, and you do not fix it. You are pinned to light-tier; the caller
 raises you to strong-tier only by the reviewer-model rule in its dispatch roster.
 
 ## Required inputs

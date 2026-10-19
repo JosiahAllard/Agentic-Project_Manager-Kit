@@ -4425,7 +4425,7 @@ def bare_wrapper(ctx, cmd, inv, cwd):
 
 def wrapped_gate(event, ctx, cmd, inv, cwd, role):
     kind = cm.wrapper(inv)
-    if not kind or not cmd.piped_out:
+    if not kind or not cmd.piped_out or kind == 'lock-run' and lock_run_help(inv):
         return None
     instead, from_dir = bare_wrapper(ctx, cmd, inv, cwd)
     read = 'read the log gate.py names' if kind == 'gate' else 'read its output'
@@ -4435,6 +4435,16 @@ def wrapped_gate(event, ctx, cmd, inv, cwd, role):
            'redirection), and when its completion notice comes, %s:' % (where, read))
     return refuse('wrapped-gate', role, '%s is piped into another command; a wrapped gate reads to the '
                   'classifier as something else and is refused (refusal pattern P16). %s' % (bare(cmd), how), instead)
+
+
+def lock_run_help(inv):
+    """True when `machine_lock.py run` `inv` has exactly one word after run, a literal --help or -h:
+    it prints its usage and runs nothing, so a pipe changes nothing the lock sees."""
+    found = cm.python_script(inv) if inv.name != 'machine_lock.py' else (-1, None)
+    if not found:
+        return False
+    rest = inv.args[found[0] + 2:]
+    return len(rest) == 1 and not rest[0].dyn and rest[0].text in ('--help', '-h')
 
 
 def same_dir(a, b):
@@ -4886,7 +4896,12 @@ GIT_READS = {'status', 'log', 'diff', 'show', 'rev-parse', 'ls-files', 'ls-tree'
              'annotate', 'grep', 'describe', 'shortlog', 'rev-list', 'merge-base', 'for-each-ref', 'show-ref',
              'name-rev', 'help', 'version', 'check-ignore', 'check-attr', 'check-ref-format', 'var', 'count-objects',
              'diff-tree', 'diff-files', 'diff-index', 'cherry', 'range-diff', 'whatchanged', 'verify-commit',
-             'verify-tag', 'show-branch', 'fsck'}
+             'verify-tag', 'show-branch', 'fsck', 'patch-id'}
+# git apply --check applies nothing (with --stat and the like it only reports); these are the only
+# options such an apply may carry, spelt in full: git expands a unique prefix (--app is --apply,
+# which applies after all), so any other option fails closed (apply_checks)
+APPLY_CHECK_OPTS = {'--check', '--stat', '--numstat', '--summary', '-v', '--verbose', '-R', '--reverse', '--'}
+APPLY_STRIP_RE = re.compile(r'-p\d+$')
 # subcommands that only read when their first word is one of these (None: when they have no word)
 GIT_READ_VERBS = {'stash': ('list', 'show'), 'worktree': ('list',), 'remote': (None, 'show', 'get-url'),
                   'reflog': (None, 'show', 'exists'), 'notes': (None, 'list', 'show'),
@@ -5260,7 +5275,27 @@ def git_reads(gc, strict=False):
         return not writes and (not pos or bool(flags & GIT_LIST_FLAGS))
     if sub == 'config':
         return any(t in CONFIG_READ_OPTS or t in ('-l', '--list') for t in words)
+    if sub == 'apply':
+        return apply_checks(gc)
     return False
+
+
+def apply_checks(gc):
+    """True when git apply `gc` only checks its patch: --check among its options (the words before
+    the first --; after it git reads every word as a patch file, `--check` too) and every option one
+    APPLY_CHECK_OPTS names (or -p<n>), read as the shell hands it to git (archive_words), and no
+    word the guard cannot read (computed, a PowerShell splat, or one PowerShell or cmd may split:
+    native_unsure). Any other apply writes the checkout."""
+    if gc.inv is None:
+        return False
+    words = archive_words(gc)
+    if any(w.dyn or ps_splat(gc, w) or native_unsure(gc.inv.cmd, w) for w in words):
+        return False
+    texts = [w.text for w in words]
+    if '--' in texts:                           # git reads no option after --: those words are patches
+        texts = texts[:texts.index('--')]
+    opts = [t for t in texts if t.startswith('-') and t != '-']
+    return '--check' in opts and all(t in APPLY_CHECK_OPTS or APPLY_STRIP_RE.match(t) for t in opts)
 
 
 def git_targets(gc):

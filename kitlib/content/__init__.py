@@ -5,7 +5,8 @@ skill folder (`content/skills/<name>/`, its files as bytes). `render(root, rende
 host's ContentRenderer for its files. `drift` compares them with the committed files: a file that
 differs, one that is missing, and one in a folder a renderer owns that it no longer writes, or in a
 folder it has retired (`retired()`, optional), is stale.
-`write` makes the committed files what the renderers say, and removes the stale ones.
+`write` makes the committed files what the renderers say, and removes the stale ones; it refuses
+a root that is an installed plugin export (its `.pm-kit-export` marker).
 
 `load_kit(root)` reads `kit.json`, the kit's one name and version (ARCHITECTURE.md "Packaging"). A
 renderer that also has `manifests(kit, content)` (a host's plugin manifests, which carry that
@@ -39,6 +40,9 @@ SKILLS_REL = 'content/skills'
 KIT_REL = 'kit.json'
 ROSTER_REL = 'docs/ROSTER.md'
 SKIP_DIRS = ('__pycache__',)
+# kitlib.pluginsource.MARKER, in every installed plugin export; spelled here, not imported, so the
+# lock tool, which reaches this module, does not reach pluginsource (tests/lock/test_release.py)
+EXPORT_MARKER = '.pm-kit-export'
 # a role's old name -> its name now, for one release (docs/ROSTER.md; the launcher's AGENT_ALIASES)
 ALIASES = {'opus-worker': 'senior-worker'}
 _ROLES = {}
@@ -260,7 +264,17 @@ def drift(root, renderers, content=None, tiers=None):
 def write(root, renderers, content=None, tiers=None):
     """Write every differing or missing rendered file and remove every stale one, then each folder
     above a removed file that is left empty (a retired folder goes, as git removes it); the paths
-    touched, sorted."""
+    touched, sorted. A root in an installed plugin export (the root or a folder above it holds
+    EXPORT_MARKER) is a ContentError: nothing is written there."""
+    here = os.path.abspath(root)
+    while True:
+        if os.path.isfile(os.path.join(here, EXPORT_MARKER)):
+            raise ContentError('%s is in an installed plugin export (%s in %s); not written: render '
+                               'into a kit checkout with -C <checkout>' % (root, EXPORT_MARKER, here))
+        up = os.path.dirname(here)
+        if up == here:
+            break
+        here = up
     changed, stale = diff(root, renderers, content, tiers)
     for p, data in changed.items():
         path = _join(root, p)

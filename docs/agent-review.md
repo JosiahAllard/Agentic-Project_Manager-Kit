@@ -6,7 +6,7 @@ Status: findings only. Nothing here changed a definition. Every recommendation i
 
 Applied since, 2026-10-12 (everything else on this page is as the status line says). None of it has been measured after the change; the savings rows below are still pricing computations.
 - The one-hour prompt cache, on the opus-worker type only: the `experimental` map in the frontmatter of hosts/claude/shell/agents/strong-worker.md (the type was named opus-worker until 2026-10-13, then senior-worker; the cache moved to strong-worker.md on 2026-10-15 with the opus/medium default charter, on the owner's ruling that swapped senior and strong; the data below keeps the old name) (docs/ROSTER.md, "The one-hour prompt cache"). No other type and no all-subagents setting.
-- Four rows of the savings table as dispatch rules in content/skills/coordinator-dispatch/roster.md, "Choosing": "general-purpose off opus" and "Explore and Plan off opus" (built-in types go out on `model: sonnet`), "Lander to haiku" (the lander is never overridden), and "Reviewer to sonnet, 25% of reviews" as a rule, not a quota: the rows are in that file's "Reviewer model" rule, their one home. What share of reviews that rule covers is not measured; the row's 25% is its pricing assumption.
+- Four rows of the savings table as dispatch rules in content/skills/coordinator-dispatch/roster.md, "Choosing": "general-purpose off opus" and "Explore and Plan off opus" (built-in types go out on `model: sonnet`), "Lander to haiku" (the lander is never overridden). The "Reviewer to sonnet" row is superseded by the owner's reviewer split, built 2026-10-18: the reviewer is pinned light and raised by the tier of the role that built the branch, in that file's "Reviewer model" rule, its one home.
 - Already in the coordinator-dispatch skill's SKILL.md (content/skills/coordinator-dispatch/) before that date: continue an agent within 5 minutes or start fresh ("While agents run") and read file ranges, not whole large files ("The brief").
 
 Evidence labels:
@@ -192,7 +192,7 @@ Dropped on check: the definitions review said the state note is not git-ignored 
 |---|---|---|---|
 | C1 | Decide where tier overrides come from before editing any tier line. Either record a reason per dispatch, or list the owner's decided default in the tier table and treat overrides as exceptions the coordinator says aloud | M for counts; source I | Owner decision |
 | C2 | Lander: keep haiku, medium. No definition change; the gap is in dispatch. Even a full switch saves little (1.7% of wu) | M, computed | None needed |
-| C3 | Reviewer: reviewer.md says Sonnet default and the caller may raise to Opus (I, not reopened). The owner's split (decided 2026-10-10; see model-ab.md) is not in the file or roster. Do not edit the tier text until the split is built. Since 2026-10-12 that sentence in reviewer.md points at the "Reviewer model" rule in the dispatch skill's roster file (sonnet or opus per branch); the split with a Haiku reviewer is still not built | Computed: Opus reviews 44M of 705M wu (6.2%) | Owner decision when built |
+| C3 | Reviewer: reviewer.md says Sonnet default and the caller may raise to Opus (I, not reopened). The owner's split (decided 2026-10-10; see model-ab.md) was built 2026-10-18: reviewer.md is pinned light and the "Reviewer model" rule in the dispatch skill's roster file raises it by the builder's tier | Computed: Opus reviews 44M of 705M wu (6.2%) | Owner decision when built |
 | C4 | Plan-shaped work on the Opus coders: fix the wording first (D1, D2); any tier move for plans should be a trial, not a switch | M, upper bound (see above) | Owner for any tier move |
 | C5 | Trim unused tools: AskUserQuestion and Artifact on the coordinator (C: AskUserQuestion appears only on the tools line), Agent and EnterWorktree on the art trio and test-runner, Write without a path limit on the researcher | C for coordinator; I for the rest | Owner decision |
 | C6 | Deep-worker auto-compact window: definition says 500k, the earlier review saw about 366k. Deep-worker has no subagent runs now | I, not re-checked | Owner decision |
@@ -227,7 +227,7 @@ Known-gap verdicts: the three art agents have no GPU-free text (confirmed; code 
 | opus-worker.md | opus, medium | opus 128, haiku 7 of 135 | Routing text against worker and strong-worker; missing A1 to A3, A8 | D1, D2, A1 to A3, A8 |
 | records.md | sonnet, low | sonnet 91, haiku 8 of 99 | backlog.py not named as allowed; 12 of 99 runs hit a block | A5 (owner), A1 |
 | researcher.md | sonnet, high | sonnet 6, opus 1 of 7 | Write without a path limit (I) | Owner: add "scratch folder only" or drop Write |
-| reviewer.md | sonnet, high | sonnet 150, opus 137, haiku 8 of 295 | No checkout ban; tier text will go stale when the split lands | A4; C3 (owner) |
+| reviewer.md | sonnet, high | sonnet 150, opus 137, haiku 8 of 295 | No checkout ban; tier text updated when the split was built (2026-10-18) | A4; C3 (owner) |
 | sound-smith.md | sonnet, medium | 0 runs | Largest file (168 lines); duplicated blocks; unused tools | B7, C5, one GPU-free line |
 | spec-writer.md | sonnet, high | sonnet 1, opus 1 of 2 | Duplicated doc-writing block; no literal-path rule | B9, A1 |
 | strong-worker.md | opus, high | opus 92, haiku 3 of 95 | "plans" wording; missing A1 to A3, A8 | D2, A1 to A3, A8 |
@@ -274,4 +274,4 @@ What a firmer test would cost (estimate from the per-run figures in model-ab.md;
 
 ## Open A/B work
 
-Not started: reviewer split build and the one-month re-check (owner decision, 2026-10-10: the item is held until go-live and is the first after it; read on 2026-10-11 from the project manager's backlog store, it is still held, and the kit's own store has no such record), the Haiku helper cost measure, a live coordinator pilot (the owner has not decided), an opus-worker trial for plan and sync first dispatches (I). Sync on Haiku: decision open.
+Not started: the reviewer split's one-month re-check (the split was built 2026-10-18; earlier history: owner decision, 2026-10-10: the item is held until go-live and is the first after it; read on 2026-10-11 from the project manager's backlog store, it is still held, and the kit's own store has no such record), the Haiku helper cost measure, a live coordinator pilot (the owner has not decided), an opus-worker trial for plan and sync first dispatches (I). Sync on Haiku: decision open.

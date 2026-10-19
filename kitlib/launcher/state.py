@@ -8,6 +8,12 @@
                    repo's main coordinator is on, and the PM session reboot resumes. Its old
                    name present and the new one absent is a refusal that names the rename, never
                    read in its place.
+  pipes.json       {name: {pid, session_id, pipe, proc_start, entrypoint, recorded_at}}: the peer
+                   pipe each launched session was seen on (kitlib.launcher.pipes); a hint, never
+                   a token.
+  push-outbox.json, push-undelivered.jsonl
+                   the hub's push worker: what it still owes each recipient, and one line per
+                   push that was not written (kitlib.hubsite.push).
   *.log            stop.log and after-reboot.log, one line per action.
 JSON is read with or without a BOM and written UTF-8 without one.
 """

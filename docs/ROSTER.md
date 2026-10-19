@@ -37,7 +37,7 @@ standard tier (Claude: `model: sonnet`).
 | pm | strong | high | The project manager: the owner's one main session (the after-reboot resume starts it so), never a subagent. Keeps every repository's coordinator running and briefed, records owner decisions in the ledger, schedules the machine, runs the Action Hub. Builds and lands nothing itself. |
 | records | standard | low | Writes settled facts into docs only: decisions, landing notes, plan ticks. |
 | researcher | standard | high | Read-only ideas and prior art; proposes concepts for the owner to choose from, builds nothing. |
-| reviewer | standard | high | Read-only review of one branch against its brief; reports defects, scope creep and untested changes. Raised to the strong tier per dispatch only by the "Reviewer model" rule in the dispatch skill's roster file. |
+| reviewer | light | high | Read-only review of one branch against its brief; reports defects, scope creep and untested changes. Raised to the strong tier per dispatch only by the "Reviewer model" rule in the dispatch skill's roster file. |
 | senior-worker | strong | high | High-risk changes: networking, concurrency, simulation or ordering, landing, gate or lock tools, build-cache and codegen design, migrations, CI config, known-area crash fixes. |
 | sound-smith | standard | medium | Sound effects from synthesis, free libraries, text-to-speech and local music generation; measures clips, the owner judges. Mechanical work at this tier; design dispatches override to the strong tier at high effort (upward only). |
 | spec-writer | standard | high | Extends a named design or spec document from the owner's answers. Docs only. |

@@ -376,6 +376,36 @@ class TempTreeTest(unittest.TestCase):
         content.write(self.root, self.rs)
         self.assertEqual(json.loads(read(self.path('.claude-plugin', 'plugin.json')))['version'], '9.8.7')
 
+    def test_an_installed_plugin_export_is_never_written(self):
+        # --write run from an installed export once rewrote its plugin.json
+        from kitlib import pluginsource
+        self.assertEqual(content.EXPORT_MARKER, pluginsource.MARKER)
+        write(self.path('kit.json'), b'{"name": "pm-kit", "version": "9.8.7"}\n')
+        write(self.path('.pm-kit-export'), b'Z:/somewhere\n')
+        before = read(self.path('.claude-plugin', 'plugin.json'))
+        with self.assertRaises(hc.ContentError):
+            content.write(self.root, self.rs)
+        out = io.StringIO()
+        self.assertEqual(cli.main(['--write', '-C', self.root], out), 2)
+        self.assertEqual(len(out.getvalue().splitlines()), 1)
+        self.assertIn('-C <checkout>', out.getvalue())
+        self.assertEqual(read(self.path('.claude-plugin', 'plugin.json')), before)
+        self.assertEqual(cli.main(['--check', '-C', self.root], io.StringIO()), 1)   # --check still reads it
+
+    def test_a_folder_inside_an_installed_plugin_export_is_never_written(self):
+        write(self.path('kit.json'), b'{"name": "pm-kit", "version": "9.8.7"}\n')
+        export = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, export, True)
+        write(os.path.join(export, '.pm-kit-export'), b'Z:/somewhere\n')
+        sub = os.path.join(export, 'nested', 'kit')               # a renderable tree two folders down
+        shutil.copytree(self.root, sub)
+        manifest = os.path.join(sub, '.claude-plugin', 'plugin.json')
+        before = read(manifest)
+        with self.assertRaises(hc.ContentError):
+            content.write(sub, self.rs)
+        self.assertEqual(cli.main(['--write', '-C', sub], io.StringIO()), 2)
+        self.assertEqual(read(manifest), before)
+
     def test_a_bad_kit_json_is_usage(self):
         write(self.path('kit.json'), b'{"version": "1"}\n')
         out = io.StringIO()
