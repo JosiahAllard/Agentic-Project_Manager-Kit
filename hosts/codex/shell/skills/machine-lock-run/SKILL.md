@@ -5,7 +5,7 @@ description: Use before any heavy work on the shared machine - builds beyond the
 
 # Machine lock
 
-One machine is shared by every repo, every host's sessions, the local generators and training. Heavy work runs inside the lock; light work (unit tiers) needs no lock; `gate.py` books its own slot (step 2). One queue, first come first served; sizes are whole cores plus gpu slots from the machine's layout; an agent run takes at most the agent cap of cores.
+One machine is shared by every repo, every host's sessions, the local generators and training. Heavy work runs inside the lock; light work (ordinary gates, unit tiers) never locks. One queue, first come first served; sizes are whole cores plus gpu slots from the machine's layout; an agent run takes at most the agent cap of cores.
 
 1. Look first: `python <kit>/tools/machine_lock.py status` (each waiting run's position and expected start).
 2. A tool that takes the lock itself needs no wrapper and runs straight through inside a locked run: `python <kit>/tools/gate.py -C <worktree>`, `<kit>/optional/comfy/comfy_gen.py`, the repo's own e2e or daily runners. The profile names others: `python <kit>/tools/doc_index.py -C <worktree> --find lock`.
