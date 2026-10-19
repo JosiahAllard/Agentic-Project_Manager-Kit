@@ -450,6 +450,56 @@ class Abandon(RemoveCase):
         self.assertIn('is also checked out at', out)
 
 
+@real_git('clean: the fake lacks git clean (and a throwaway GIT_INDEX_FILE)')
+class AbandonLandedDirty(RemoveCase):
+    """--abandon on a landed tree that holds uncommitted work (KIT-WTREMOVE-MERGED-DIRTY-LOOP):
+    the plain verb refuses the work and --abandon found nothing to abandon, each naming the other."""
+
+    TODAY = Abandon.TODAY
+
+    def abandon(self, slug, why='superseded', **kw):
+        return self.run_verb('abandon', slug, why, today=self.TODAY, **kw)
+
+    def landed_dirty(self, slug):
+        """A landed worktree with a modified tracked file, a staged new file and an untracked
+        file in a new folder (KIT-WTREMOVE-MERGED-DIRTY-LOOP)."""
+        path = self.workstream(slug)
+        self.land('kit/' + slug)
+        self.fx.write('%s-0.txt' % slug, 'changed\n', root=path)
+        self.fx.write('staged.txt', 'staged\n', root=path)
+        self.git('add', 'staged.txt', cwd=path)
+        self.fx.write(os.path.join('new', 'wip.txt'), 'wip\n', root=path)
+        return path
+
+    def test_landed_but_dirty_saves_the_work_under_the_tag_then_removes(self):
+        path = self.landed_dirty('ld')
+        tip = self.git('rev-parse', 'kit/ld')
+        rc, out = self.abandon('ld')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('saved     uncommitted work (3)', out)
+        self.assertIn('archive/ld', out)
+        self.assertFalse(os.path.exists(path))
+        self.assertNotIn('kit/ld', self.branches())
+        self.assertEqual(self.git('rev-parse', 'archive/ld^{commit}^'), tip)
+        self.assertEqual(self.git('show', 'archive/ld:ld-0.txt'), 'changed')
+        self.assertEqual(self.git('show', 'archive/ld:staged.txt'), 'staged')
+        self.assertEqual(self.git('show', 'archive/ld:new/wip.txt'), 'wip')
+        message = self.git('cat-file', 'tag', 'archive/ld')
+        self.assertIn('abandoned: superseded\n\nuncommitted work on branch kit/ld at %s\n' % tip,
+                      message)
+
+    def test_landed_but_dirty_with_a_clashing_tag_touches_nothing(self):
+        path = self.landed_dirty('lc')
+        self.git('tag', 'archive/lc', 'main~1')
+        rc, out = self.abandon('lc')
+        self.assertEqual(rc, 1, out)
+        self.assertIn('tag archive/lc already exists on', out)
+        with open(os.path.join(path, 'lc-0.txt'), encoding='utf-8') as f:
+            self.assertEqual(f.read(), 'changed\n')
+        self.assertTrue(os.path.exists(os.path.join(path, 'new', 'wip.txt')))
+        self.assertIn('kit/lc', self.branches())
+
+
 class NoAncestryAnswer(RemoveCase):
     """kitlib.git.refs.is_ancestor gives no answer (None) for a git ended from outside,
     where `merge-base --is-ancestor` gave exit 1, a NO. Every verb
