@@ -16,11 +16,16 @@ SHELLS = ('Bash', 'PowerShell')
 # not glob arguments on Windows. Both shells get the deny lines.
 ALLOW_SHELLS = ('PowerShell',)
 SCRIPT = 'tools/land.py'
-# Shell metacharacters that redirect, chain, substitute, expand, quote or escape: any of them in a
-# land command is denied, so no `*` of an allow can carry one (`$` and `(` stand for `$(`, `@(` and
-# PowerShell's `(expr)`; quotes, the backslash, braces and the tab hide a second -C or glue a flag
-# into a value, as in `abc\ --submit`).
-METACHARS = ('>', '<', '|', ';', '&', '$', '(', '`', '%', "'", '"', '\\', '{', '}', '\t')
+# Shell metacharacters that redirect, chain, substitute, expand, quote, escape or cut the command
+# short: any of them in a land command is denied, so no `*` of an allow can carry one (`$` and `(`
+# stand for `$(`, `@(` and PowerShell's `(expr)`; quotes, the backslash, braces and the tab hide a
+# second -C or glue a flag into a value, as in `abc\ --submit`). `#` (a comment), CR (PowerShell
+# ends a statement there) and NUL (a native command line ends there) drop the trailing --submit.
+# PowerShell also takes U+2018-U+201B and U+201C-U+201E as quotes, and U+2013-U+2015 as dashes.
+METACHARS = ('>', '<', '|', ';', '&', '$', '(', '`', '%', "'", '"', '\\', '{', '}', '#',
+             '\t', '\r', '\n', '\0',
+             '‘', '’', '‚', '‛', '“', '”', '„',
+             '–', '—', '―')
 # The prefix of land.py's --log-dir that no other option shares (land.py takes abbreviations).
 LOG_DIR = '--lo'
 # The operators a command is split on before each part is matched (newlines too).

@@ -23,8 +23,10 @@ CURRENT, GONE, NOT_CURRENT = 'current', 'gone', 'not current'
 FULL = 'full'                         # kitlib.records.landing.FULL: the lane every repository has
 _FOLDER = re.compile(r'^[0-9a-f]{12}$')
 _LANE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.-]*$')
-# A path a rule cannot spell bare: a space, a quote, a rule or glob wildcard, a shell operator.
-_UNSAFE = frozenset(' \t\r\n"\'()*?[];&|$`%<>')
+# A path a rule cannot spell bare: a space, a quote, a rule or glob wildcard, a shell operator, a
+# control character, or any character a deny line names (that deny would refuse every submit).
+_UNSAFE = (frozenset(' "\'()*?[];&|$`%<>') | frozenset(rules.METACHARS)
+           | frozenset(chr(i) for i in range(32)) | frozenset('\x7f'))
 _KEYS = ('allow', 'deny', 'ask')
 
 

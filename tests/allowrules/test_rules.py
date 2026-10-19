@@ -74,9 +74,12 @@ class RuleTextTest(unittest.TestCase):
                 want.append('%s(python %s -C Y:/repo *-C*)' % (shell, script))
                 want.append('%s(python %s *--lo*)' % (shell, script))
                 want += ['%s(python %s *%s*)' % (shell, script, c)
-                         for c in ('>', '<', '|', ';', '&', '$', '(', '`', '%', "'", '"', '\\', '{', '}', '\t')]
+                         for c in ('>', '<', '|', ';', '&', '$', '(', '`', '%', "'", '"', '\\', '{', '}', '#',
+                                   '\t', '\r', '\n', '\0',
+                                   '‘', '’', '‚', '‛', '“', '”', '„',
+                                   '–', '—', '―')]
         self.assertEqual(LINES['deny'], want)
-        self.assertEqual(len(want), 72)
+        self.assertEqual(len(want), 128)
 
 
 class AllowedTest(unittest.TestCase):
@@ -163,6 +166,47 @@ class DeniedTest(unittest.TestCase):
             with self.subTest(shell=shell):
                 self.assertEqual(decide(cmd, shell, ALLOW_ONLY), ALLOWED[shell])
                 self.assertEqual(decide(cmd, shell), 'deny')
+
+    def submit_dropped(self, cut):
+        """`cut` before the trailing --submit hides it from land.py in PowerShell (5.1, probed): the
+        line then runs a foreground landing from an agent-written --submitted payload. The allow alone
+        matches it; a deny must close it."""
+        cmd = '%s -C %s kit/a --submitted Z:/p.json --expect-tip abc%s --submit' % (P, R, cut)
+        for shell in SHELLS:
+            with self.subTest(shell=shell, cut=repr(cut)):
+                self.assertEqual(decide(cmd, shell), 'deny')
+        return cmd
+
+    def test_comment_hides_submit_denied(self):
+        cmd = self.submit_dropped(' #')
+        self.assertEqual(cmd, 'python X:/fake-export/0123456789ab/tools/land.py -C Y:/repo kit/a'
+                              ' --submitted Z:/p.json --expect-tip abc # --submit')
+        self.assertEqual(decide(cmd, lines=ALLOW_ONLY), 'allow')
+
+    def test_carriage_return_hides_submit_denied(self):
+        """PowerShell ends a statement at a bare CR; the matcher does not split on it."""
+        self.assertEqual(decide(self.submit_dropped('\r'), lines=ALLOW_ONLY), 'allow')
+
+    def test_line_feed_denied(self):
+        self.submit_dropped('\n')
+
+    def test_nul_hides_submit_denied(self):
+        """A native command line ends at NUL: python gets no argument after it."""
+        self.assertEqual(decide(self.submit_dropped('\0'), lines=ALLOW_ONLY), 'allow')
+
+    def test_typographic_quotes_split_C_and_log_dir_denied(self):
+        """PowerShell takes U+2018-U+201B as single and U+201C-U+201E as double quotes and strips
+        them from a native argument (probed): `-‘C’` reaches land.py as -C, `--l‘o’g-dir` as --log-dir."""
+        for q in '\u2018\u2019\u201a\u201b\u201c\u201d\u201e':
+            self.second_C('kit/a -%sC%s Z:/other' % (q, q))
+            self.only_the_deny_closes('kit/a --l%so%sg-dir Z:/x' % (q, q))
+
+    def test_typographic_dashes_denied(self):
+        """PowerShell takes U+2013-U+2015 as parameter dashes. Probed 5.1 passes them to python as
+        written, so `–C` is no -C there; denied anyway, as no submit needs one."""
+        for d in '\u2013\u2014\u2015':
+            self.second_C('kit/a %sC Z:/other' % d)
+            self.only_the_deny_closes('kit/a %s%slog-dir Z:/x' % (d, d))
 
     def test_glued_C_denied(self):
         self.assertEqual(decide(submit(middle='kit/a -CZ:/other')), 'deny')
@@ -321,6 +365,23 @@ class DeriveTest(unittest.TestCase):
     def test_refuses_metachar_path(self):
         make_export(self.root, SHA)
         for c in ' \t"\'()*?[];&|$`%<>':
+            with self.subTest(c=repr(c)):
+                with self.assertRaisesRegex(allowrules.AllowRulesError, 'main checkout'):
+                    self.derive(top=lambda p: 'Y:/re%spo' % c)
+
+    def test_refuses_control_character_path(self):
+        make_export(self.root, SHA)
+        for c in [chr(i) for i in range(32)] + ['\x7f']:
+            with self.subTest(c=repr(c)):
+                with self.assertRaisesRegex(allowrules.AllowRulesError, 'main checkout'):
+                    self.derive(top=lambda p: 'Y:/re%spo' % c)
+
+    def test_refuses_path_a_deny_names(self):
+        """A path holding a character a deny line names would be denied by that line on every submit."""
+        make_export(self.root, SHA)
+        for c in rules.METACHARS:
+            if c == '\\':
+                continue                    # a backslash becomes `/` in the path the rules name
             with self.subTest(c=repr(c)):
                 with self.assertRaisesRegex(allowrules.AllowRulesError, 'main checkout'):
                     self.derive(top=lambda p: 'Y:/re%spo' % c)
