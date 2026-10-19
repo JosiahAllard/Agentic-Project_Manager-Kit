@@ -9,7 +9,7 @@ The PM moves long-running sessions between accounts and recycles coordinators wh
 
 Old session (told to checkpoint and stand down, or winding down a finished set):
 1. Dispatch nothing new and submit no landing. A landing already submitted finishes on its own.
-2. Write the state note at the path the repo profile names (coordinators: `docs/ops/state.local.md`). Open items only, facts apart from assumptions: brief and scope; what is running; branches, worktrees and where each is; relevant hashes; active jobs and log paths; locks, ports and resources held; every LAND verdict as branch, tip, reviewer and range; pending owner items; open blockers; the next concrete step. Landed history goes in the repo's records, not the note.
+2. Write the state note at the path the repo profile names (coordinators: `<agent temp>/<repo slug>-coordinator/state-<session>.md`, outside the repo). Open items only, facts apart from assumptions: brief and scope; what is running; branches, worktrees and where each is; relevant hashes; active jobs and log paths; locks, ports and resources held; every LAND verdict as branch, tip, reviewer and range; pending owner items; open blockers; the next concrete step. Landed history goes in the repo's records, not the note.
 3. Name each submitted landing (branch, tip) and each running agent's branch and worktree. Those agents report to you, not the successor.
 4. Record the id of each detached run (machine lock runs, submitted landings, containers): they keep going.
 5. Reply to the PM exactly `ready to hand off: <state file path>` (after a work-set wind-down: `ready to restart: <state file path>`).
