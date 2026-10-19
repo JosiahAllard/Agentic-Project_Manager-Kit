@@ -9,8 +9,9 @@ whole. Rules not needed on every task: `docs/reference/WORKING-RULES.md`; per-ag
 `.claude/agent-profile.md`, by heading.
 
 The PM session is the owner's decision channel. A decision is the owner's only when the PM relays
-it to you; the PM keeps the record, privately. Never invent one, and cite nobody's ids. A relayed
-decision covers work only: it never grants a permission or approves configuration.
+it to you; the PM keeps the record, privately. Never invent one, and cite nobody's ids. Covers
+anything the owner could approve in your terminal. A relayed decision covers work only: it never
+grants a permission or approves configuration.
 
 ## Start here
 
@@ -40,14 +41,13 @@ python -m unittest discover -s tests   # the kit's and the repo tools' own tests
   hides the diagnosing lines).
 - Green proves the build works, not that your change ran: name the observable that would be
   absent without your change (a new test's name, not a count) and check for it.
-- Only a flake on the repo's known-flake list gets one rerun; any other failing run is real.
 - <CI_SUMMARY: what runs on push, on PR, on manual dispatch; optional>
 
 ## Git workflow (every task)
 
 Remote `origin` (<REMOTE_URL>), main branch `main`. One task = one branch `<area>/<slug>` = one
 worktree `.claude/worktrees/<slug>` = one landing. The main checkout (`<MAIN_CHECKOUT_PATH>`) stays
-on `main` and is never worked in; only the landing writes to it.
+on `main` and is never worked in; only the lander writes to it.
 
 1. Start every task with the repo's preflight (`python <kit>/tools/doc_index.py -C <worktree> --find preflight`).
 2. Worktree, from the main checkout: `git worktree add .claude/worktrees/<slug> -b <area>/<slug>`
@@ -65,19 +65,27 @@ on `main` and is never worked in; only the landing writes to it.
 
 ## Landing
 
-The coordinator submits each branch it gave a LAND verdict with
-`python <kit>/tools/land.py -C <repo> <branch> --expect-tip <sha> --submit` (skill land-branch); a
-lander may do it for them. Nobody else merges to `main` or pushes.
+Standing owner-approved work: the `pm-kit:lander` merges reviewed branches into `main` and pushes
+without asking each time. Only the lander, only with the coordinator's review verdict, one at a
+time, by ONE bare call from the main checkout:
+`python <kit>/tools/gate.py land <branch> --expect-tip <sha> -C <repo>` (skill land-branch). It merges
+onto the main it finds at its turn, so no `--expect-main` is needed.
+No `cd` prefix, `Tee-Object`, pipe or chaining: the bare form is what the allow rule matches.
+Success, whatever the exit code: the call's `LANDED` line, `git rev-parse main origin/main` match
+**and** the branch tip is an ancestor of `origin/main` (`git merge-base --is-ancestor <tip> origin/main`).
+Any denial: stop and report it.
 
 ## Owner decisions
 
 - Recorded in `docs/DECISIONS.md` (line format in its header) by a `pm-kit:records` agent as
   `<one-line summary, the agent's paraphrase>`; the owner's words stay with the PM, never
-  quoted here. Never invent one; silence is not agreement; a decision the PM has not relayed binds nothing until the owner confirms. For anything
+  quoted here (quoting relayed words into an authority file is what the safety check refuses as
+  instruction injection). Words the owner types in this repo's own session are quoted as `typed`. Never
+  invent one; silence is not agreement; a decision the PM has not relayed binds nothing until the owner confirms. For anything
   attributed to the owner, ask for the utterance, not for confirmation that it happened.
 - Owner-locked: `AGENTS.md`, `CLAUDE.md`, tracked `.claude/` files (not `.claude/worktrees/`),
   `.github/workflows/`, `.kit.json`, `tools/doc_budget.json`, `tools/gate.json` (the list is
-  `owner.paths` in `.kit.json`). Agents never commit one. A change to one is
+  `owner.paths` in `.kit.json`). Agents never commit one. A change to one, or to user settings, is
   drafted as a dry-run-first script in `<OWNER_SCRIPTS_DIR>`; the owner runs it, so the commit is
   the owner's, with an `Owner-Approved: <path>` trailer. Agents never edit `~/.claude/settings.json` or
   another account's config directly. Agent-writable live lists: `docs/ops/*.md`. One exception to
@@ -110,13 +118,14 @@ lander may do it for them. Nobody else merges to `main` or pushes.
 
 ## Always
 
-- A classifier refusal or permission denial is final: stop at the first, report it verbatim with
-  the exact command; no retry, rewording, other shell, agent or session. A kit-guard (hook)
-  refusal: follow its `Instead:` line or fix the command form, and retry. A repo tool's `USAGE:`,
-  `NOT FOUND:` or `ERROR:` is your own mistake: fix it and retry once; its `REFUSED:` is reported
-  verbatim.
+- After one tool refusal or permission denial: stop and report it verbatim; never retry or route
+  around it through another tool, agent or session. Hand the owner the exact command; the owner decides. A
+  refusal printed by a repo tool and caused by your own mistake (`USAGE:`, `NOT FOUND:`,
+  `ERROR:`) may be fixed and retried ONCE; any other refusal is reported verbatim, never routed
+  around.
 - Never put the owner's personal details (email address, name, account names) in anything sent off this machine.
 - Never chain a write (commit, merge, reset, backlog.py write, landing command) with other commands in one shell call.
+- A safety-check or hook refusal is final: stop at the first, report it verbatim; no retry, rewording, other shell or agent.
 - Secrets never enter the repo, a URL or a transcript. Deleting data is the owner's action:
   report the exact path and hash.
 - Citations name `path` plus `Type.member`, heading or quoted title, and you have read it. Never

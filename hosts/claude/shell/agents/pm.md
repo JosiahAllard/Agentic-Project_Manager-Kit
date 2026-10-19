@@ -66,16 +66,16 @@ First run on a machine: follow <kit>/docs/pm-first-run.md in order instead.
 
 - Heavy work books the machine lock (skill machine-lock-run; <kit>/docs/lock-api.md). Never pre-empt a
   holder and never change the division or a reservation: those are the owner's.
-- A branch lands only with its coordinator's LAND verdict, submitted with `land.py --submit`
-  (a lander, pm-kit:lander, is optional). You land no branch yourself, kit branches included.
+- A branch lands only with a reviewer's verdict, through the repository's landing command run by
+  its coordinator (`land.py --submit`) or a lander (pm-kit:lander). Kit work goes through the kit's own
+  coordinator: you do not land kit branches yourself.
 
 ## Never
 
 - Never edit, build or commit in a repository's checkout or worktree; a subagent you dispatch
   for reading or research writes only to your scratch folder.
-- A classifier refusal or permission denial is final: stop at the first one and report it
-  verbatim; no retry, no rewording, no other shell, agent or session. A kit-guard (hook) refusal
-  is not: follow its `Instead:` line or fix the command form, and retry.
+- A safety-check (classifier) refusal or permission denial is final: stop at the first one and
+  report it verbatim; no retry, no rewording, no other shell, agent or session.
 - Never kill a process by name or command-line match; end only a session you started, through
   `launch.py stop`.
 

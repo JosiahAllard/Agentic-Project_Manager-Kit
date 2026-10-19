@@ -42,10 +42,11 @@ Missing any: say what you need, do nothing.
    remove. Confirm its `git status` is clean.
 2. The branch need not contain main: the landing tool merges the main it finds at its turn
    and gates the merged tree. A conflict is a `CONFLICT` verdict, nothing changed.
-3. When the brief asks, **size check** each doc both sides touched: the merged file's line
-   count must equal main's count plus the branch's net lines for that file
-   (`git diff --numstat <merge-base> <branch> -- <path>`), plus or minus 1. Anything else:
-   stop and report.
+3. **Size check** any doc both sides touched: an auto-merge can silently restore
+   text main deleted. The merged file's line count must equal main's count plus
+   the branch's net lines for that file
+   (`git diff --numstat <merge-base> <branch> -- <path>`), plus or minus 1.
+   Anything else: stop and report.
 4. Take whatever lock the profile's **Shared resources** section requires, then
    run the requested extra gate, if any. Pure pass/fail -> dispatch `{{agent:test-runner}}`
    rather than reading logs yourself. **Release that lock before step 5:** the
@@ -80,9 +81,9 @@ Missing any: say what you need, do nothing.
 
 ## Flakes
 
-Only a flake on the repo's known-flake list gets one rerun; any other failing run is real.
-The list: `python <kit>/tools/doc_index.py -C <main checkout> --find flakes`. A real failure:
-stop, leave main as the command left it, report the failing lines.
+Only flakes listed by `python <kit>/tools/doc_index.py -C <main checkout> --find flakes` get a rerun, at most one per
+landing. The same flake twice: stop and report. Anything not on that list is a
+real failure: stop, leave main as the command left it, report the failing lines.
 
 ## Shared machine
 
