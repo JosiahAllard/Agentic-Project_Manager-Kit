@@ -19,7 +19,7 @@ holds it (docs/worktree-remove.md).
   worktree_remove.py [-C DIR] --check                           leftovers; exit 1 if any
   worktree_remove.py [-C DIR] --sweep-merged                     DRY RUN of the nightly sweep
   worktree_remove.py [-C DIR] --sweep-merged --apply             the nightly sweep
-  worktree_remove.py [-C DIR] --classify [--json]               READ-ONLY: every worktree's class
+  worktree_remove.py [-C DIR] --classify [--json]               read-only: every worktree's class
                                                                  (A landed, B finished, C half-done,
                                                                  E evidence, L live or kept)
 

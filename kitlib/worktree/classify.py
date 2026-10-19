@@ -1,5 +1,5 @@
 """`worktree_remove.py --classify [--json]`: sort every registered worktree but the main checkout
-into one class, READ-ONLY (docs/worktree-remove.md "Classify"). Nothing here deletes, moves,
+into one class, read-only (docs/worktree-remove.md "Classify"). Nothing here deletes, moves,
 fetches or writes: every git call is a read (the status with `--no-optional-locks`), the base is
 read as it stands, never fetched, and the backlog store is opened with `fetch=False`.
 
