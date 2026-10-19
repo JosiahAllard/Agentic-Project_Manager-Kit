@@ -119,7 +119,7 @@ class PrivateFrontendTests(unittest.TestCase):
         from optional.bridge.win.transport import run_worker
         for packet in (b'{\n',b'[]\n',b'\xff\n',b'{"x":1,"x":2}\n'):
             header=encode_frame({'pipe':self.leader.endpoint,'pid':os.getpid(),
-                'creation':own_ctime(),'length':len(packet)},max_frame_bytes=2048)
+                'creation':own_ctime(),'length':len(packet),'wait':2500},max_frame_bytes=2048)
             run_worker('bridge_rpc_worker.py',header+packet,limit=1024*1024+2048,timeout=5)
             self.assertTrue(self.thread.is_alive())
         self.initialize()

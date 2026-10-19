@@ -61,8 +61,9 @@ class Cli(unittest.TestCase):
         self.assertTrue(out.startswith('BACKLOG '), out)
         self.assertIn('pulled_by:  tools/wk', self.ok('pull', 'FOO'))
         rc, out = self.run_tool('landable', 'tools/wk')
-        self.assertEqual(rc, 2, out)
-        self.assertIn('NOT LANDABLE', out)
+        self.assertEqual(rc, 0, out)         # its landing closes FOO in the ref store
+        self.assertIn('  closes FOO, which it holds pulled (a slice branch needs a '
+                      '`Part-of: FOO` line)', out)
         self.ok('close', 'FOO', '--reason', 'the work is finished')
         rc, out = self.run_tool('landable', 'tools/wk')
         self.assertEqual(rc, 0, out)

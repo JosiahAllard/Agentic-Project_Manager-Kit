@@ -1836,6 +1836,30 @@ class DocsTest(unittest.TestCase):
         self.assertEqual(got["esc"], {"hidden": True, "focus": "dr-research-2", "stopped": True})
         self.assertEqual(got["sinks"], [])
 
+    def test_a_whole_document_is_framed_with_the_policy_still_first(self):
+        """A body that is a whole document (its own doctype, head, metas and title, which the page check
+        accepts) is framed like any other: the policy meta comes before its doctype and its <head>. That a
+        browser then applies the policy (an iframe srcdoc document is no-quirks, and a meta before the doctype
+        opens the head, so the body's own <head> is ignored) is the owner's real-browser check."""
+        whole = ('<!doctype html>\n<html lang="en"><head><meta charset="utf-8">\n'
+                 '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
+                 '<title>Theme sheet</title><style>body{color:#333}</style></head>'
+                 '<body><h1>Theme</h1></body></html>')
+        self.assertIsNone(pagecheck.check(whole))                           # publishable as it is
+        got = dom("""
+            server.route = c => (c.method === "GET" && c.path === "/pages/plan-1")
+              ? { status: 200, body: { ok: true, id: "plan-1", html: %s, version: 1 } } : undefined;
+            await start();
+            await click($("#dr-plan-1"));
+            const frames = all().filter(e => e.tag === "iframe");
+            return { frames: frames.length, attrs: frames[0].attrs, srcdoc: frames[0].srcdoc, sinks };
+        """ % json.dumps(whole), docs_snap(), hash="#docs")
+        self.assertEqual(got["frames"], 1)
+        self.assertEqual(got["attrs"]["sandbox"], "")
+        self.assertEqual(got["srcdoc"], DOC_CSP + whole)                     # the policy, then the body unchanged
+        self.assertLess(got["srcdoc"].index(DOC_CSP), got["srcdoc"].index("<!doctype"))
+        self.assertEqual(got["sinks"], [])
+
     def test_a_page_with_no_body_or_a_failed_read_says_so_and_frames_nothing(self):
         got = dom(READS + """
             await start();
