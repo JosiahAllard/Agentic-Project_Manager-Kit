@@ -721,8 +721,9 @@ def end_sparing(store, rid, job, rec):
     are not said and rec is not given this judgement's results, so a pid judged again keeps its
     earlier one there.
 
-    Raises nothing but what is not an Exception (a KeyboardInterrupt goes up wherever it lands,
-    the job then partly ended; the caller ends the whole job, or judges it again)."""
+    Each step catches Exception, so what can go up is a BaseException that is not an Exception,
+    such as the KeyboardInterrupt of a second Ctrl+C. It goes up wherever it lands, the job then
+    partly ended; the caller ends the whole job, or judges it again."""
     if job is None or job.h is None:
         return False
     try:
@@ -1172,9 +1173,10 @@ class Slot:
         A second end_tree (the release's, after a Ctrl+C) adds its results to the record's
         `daemons` (tell_daemons), so what the first one stopped stays listed.
 
-        Raises nothing but what is not an Exception: a KeyboardInterrupt (a second Ctrl+C) goes
-        up with tree_ended and spared cleared, so the release that follows ends the tree again,
-        and a release whose own end_tree it interrupts ends the whole job."""
+        Catches BaseException, so a KeyboardInterrupt (a second Ctrl+C) or any other BaseException
+        that is not an Exception is caught, tree_ended and spared are cleared, and it is raised
+        again. The release that follows then ends the tree again, and a release whose own
+        end_tree it interrupts ends the whole job."""
         try:
             self._end_tree()
         except BaseException:               # a second Ctrl+C: release ends the tree again
