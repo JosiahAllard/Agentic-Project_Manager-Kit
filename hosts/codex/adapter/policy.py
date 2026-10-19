@@ -70,9 +70,10 @@ def role_edit(action, mark):
 
 
 def lock_read_tools():
-    """The lock MCP server's read tools (kitlib.lockmcp.server: every tool not marked a write)."""
+    """The lock MCP server's read tools: every tool it serves (kitlib.lockmcp.server is read-only,
+    docs/lock-mcp.md "No write tools")."""
     from kitlib.lockmcp import server
-    return frozenset(name for name, spec in server.TOOLS.items() if not spec[2])
+    return frozenset(server.TOOLS)
 
 
 def lock_read_call(tool):

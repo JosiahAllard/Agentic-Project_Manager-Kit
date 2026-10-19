@@ -293,23 +293,11 @@ def do_check(args, ctx, snap):
 
 
 def do_landable(args, ctx, snap, backend):
-    worst = 0
-    for v in landmod.check(backend, snap, ctx.root, args.branches):
-        if v.verdict == landmod.LANDABLE:
-            say('LANDABLE %s: no record is pulled by it (%s)' % (v.branch, v.detail))
-        elif v.verdict == landmod.CANNOT_TELL:
-            say('CANNOT TELL %s: %s' % (v.branch, v.detail))
-            worst = max(worst, 1)
-        else:
-            worst = 2
-            for rid in v.held:
-                say('NOT LANDABLE %s: %s is still pulled by it; landing deletes the branch and '
-                    'would leave the pull dead.' % (v.branch, rid))
-                say('  Done:     %s -C <worktree> close %s --reason "<what was done>"'
-                    % (kitroot.command('backlog'), rid))
-                say('  Not done: %s -C <worktree> --as %s release %s --reason "<why>"'
-                    % (kitroot.command('backlog'), v.branch, rid))
-    return worst
+    verdicts = landmod.check(backend, snap, ctx.root, args.branches, base=landmod.code_base(ctx))
+    for v in verdicts:
+        for line in landmod.lines(v, kitroot.command('backlog')):
+            say(line)
+    return landmod.exit_code(verdicts)
 
 
 # --- writes ---------------------------------------------------------------------------------------

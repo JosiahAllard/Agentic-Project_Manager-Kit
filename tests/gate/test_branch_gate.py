@@ -265,6 +265,34 @@ class BranchGate(fixtures.GateRepoCase):
                          os.listdir(os.path.join(wt, 'tools')))
 
 
+class GateConfigHash(unittest.TestCase):
+    """runner.gate_config leaves out a HASH_IF_SET key that is unset, so a record an older kit
+    wrote, before the key existed, still verifies against the config it was made with."""
+
+    class Cfg:
+        def __init__(self, gate):
+            self.gate = gate
+
+        def section(self, name):
+            return dict(self.gate)
+
+    def test_unset_new_keys_are_left_out_and_set_ones_are_hashed(self):
+        older = {'steps': [], 'kind': 'engine-test', 'fail': None}
+        now = dict(older, smoke_steps=None, docs_only=None)
+        self.assertEqual(runner.gate_config(self.Cfg(now)), older)
+        self.assertEqual(gate_ok.config_hash(runner.gate_config(self.Cfg(now))),
+                         gate_ok.config_hash(older))
+        smoke = dict(now, smoke_steps=['unit'])
+        self.assertEqual(runner.gate_config(self.Cfg(smoke)), dict(older, smoke_steps=['unit']))
+        self.assertIsNone(runner.gate_config(self.Cfg(now))['fail'])   # an older key stays, unset
+
+    def test_every_key_left_out_is_a_gate_key_unset_by_default(self):
+        from kitlib.config import schema
+        defaults = schema.defaults('gate')
+        self.assertEqual({k: defaults[k] for k in runner.HASH_IF_SET},
+                         dict.fromkeys(runner.HASH_IF_SET))
+
+
 def mode_step(word):
     return ['{python}', '-c', 'print("mode %s")' % word]
 
@@ -297,6 +325,49 @@ class FullCmd(fixtures.GateRepoCase):
                                       book_kw=self.book_kw, **kw)
         self.assertEqual(self.ran(gate()), 'mode select')
         self.assertEqual(self.ran(gate(full=True)), 'mode full')
+
+
+class DocsOnlyAndSmoke(fixtures.GateRepoCase):
+    """A docs-only change (the branch's "gate".docs_only) runs only the docs_only steps and writes
+    a gate-OK record of mode `docs`; any other change runs what it selects plus the smoke steps
+    and writes mode `select`; --full writes `full` (docs/gate.md "Docs-only changes")."""
+    GATE = {'smoke_steps': ['boot'],
+            'docs_only': {'globs': ['docs/*.md'], 'steps': ['scrub']},
+            'steps': [{'name': 'suite', 'always': True, 'cmd': mode_step('suite'), 'pass': '^mode '},
+                      {'name': 'boot', 'manual': True, 'cmd': mode_step('boot'), 'pass': '^mode '},
+                      {'name': 'scrub', 'globs': ['*.md'], 'cmd': mode_step('scrub'),
+                       'pass': '^mode '}]}
+
+    def gate(self, wt, **kw):
+        return runner.branch_gate(wt, book_kw=self.book_kw, log_dir=self.logs, **kw)
+
+    def record(self, wt, out):
+        self.assertEqual(out.code, G.OK, out.lines)
+        rec, why = gate_ok.verify(wt, out.head, runner.gate_config(kconfig.load(wt)))
+        self.assertIsNone(why, out.lines)
+        return [s['name'] for s in rec['steps']], gate_ok.mode_of(rec)
+
+    def test_a_docs_only_change_runs_only_the_docs_steps_and_writes_mode_docs(self):
+        wt, _ = self.branch('docs', {'docs/a.md': 'words\n'})
+        self.assertEqual(self.record(wt, self.gate(wt)), (['scrub'], 'docs'))
+
+    def test_any_other_change_runs_its_steps_and_the_smoke_steps_and_writes_mode_select(self):
+        wt, _ = self.branch('code', {'docs/a.md': 'words\n', 'a.py': 'x = 1\n'})
+        names, mode = self.record(wt, self.gate(wt))
+        self.assertEqual((sorted(names), mode), (['boot', 'scrub', 'suite'], 'select'))
+
+    def test_full_and_only_never_take_the_docs_only_path(self):
+        wt, _ = self.branch('docs', {'docs/a.md': 'words\n'})
+        names, mode = self.record(wt, self.gate(wt, full=True))
+        self.assertEqual((sorted(names), mode), (['scrub', 'suite'], 'full'))
+        out = self.gate(wt, only=['suite'])
+        self.assertEqual([r['name'] for r in out.results], ['suite'])
+
+    def test_a_docs_path_under_a_strict_path_is_not_docs_only(self):
+        wt, _ = self.branch('strict', {'docs/a.md': 'words\n'})
+        with mock.patch('kitlib.gate.reuse.STRICT_DEFAULTS', ('docs/*',)):
+            names, mode = self.record(wt, self.gate(wt))
+        self.assertEqual((sorted(names), mode), (['boot', 'scrub', 'suite'], 'select'))
 
 
 class DefaultBaseNote(fixtures.GateRepoCase):

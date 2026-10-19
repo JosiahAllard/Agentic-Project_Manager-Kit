@@ -10,7 +10,13 @@ Selection (`select`):
   full     every step that is not `manual`; build(full=True) gives each its `full_cmd` when set,
            and build(daily=True) (the daily full run) its `daily_cmd` before that.
   only     exactly the named steps (manual ones included); an unknown name is a GateConfigError.
+  docs     exactly the `docs_only`.steps (a docs-only change, docs_only(); docs/gate.md
+           "Docs-only changes").
   In diff and full, a step is then dropped when a step its `skip_if_selected` names is selected.
+  Diff mode then adds every `smoke_steps` step not already selected (reason `smoke`, manual ones
+  included, never dropped), so a landing can take its record (docs/gate.md "Landing"). A
+  `smoke_steps` or `docs_only`.steps name no step has, or a `docs_only` with no steps, is a
+  GateConfigError (build).
 Order: `stage` first, main (the default), last; `defer` steps after all of them; config order
 within each.
 
@@ -35,7 +41,7 @@ import os
 import re
 import sys
 
-from kitlib.config.load import PLACEHOLDERS
+from kitlib.config.load import CONFIG_NAME, PLACEHOLDERS
 
 STAGES = ('first', 'main', 'last')
 # setup is the configured "setup" argv; gate.log is the console's; windows is the window
@@ -92,6 +98,45 @@ def unsupported(gate):
     return out
 
 
+def docs_steps(gate):
+    """The `docs_only`.steps of `gate`: [] when docs_only is unset."""
+    return list((gate.get('docs_only') or {}).get('steps') or [])
+
+
+def unknown_names(gate):
+    """What `smoke_steps` and `docs_only`.steps name that no configured step is, and a set
+    `docs_only` whose steps are empty or missing (its docs-only gate would run nothing yet write
+    a record: a docs-only change skips the tests but keeps the scrub)."""
+    names = {s.get('name') for s in gate.get('steps') or []}
+    out = []
+    if gate.get('docs_only') is not None and not docs_steps(gate):
+        out.append('"docs_only".steps is empty: list the repo\'s scrub step in docs_only.steps')
+    for key, listed in (('"smoke_steps"', gate.get('smoke_steps') or []),
+                        ('"docs_only".steps', docs_steps(gate))):
+        missing = [n for n in listed if n not in names]
+        if missing:
+            out.append('%s names no step: %s' % (key, ', '.join(missing)))
+    return out
+
+
+def docs_only(gate, changed, barred=()):
+    """True when the change `changed` is docs-only under `gate` (its `docs_only` set): it changes
+    something, and every path matches docs_only.globs and none of its exclude, is not
+    `.kit.json`, and is not in `barred` (the caller's paths no docs-only change may touch:
+    kitlib.gate.reuse.docs_only_change bars reuse's never and strict paths)."""
+    spec = gate.get('docs_only')
+    if not spec or not changed:
+        return False
+    barred = {p.replace('\\', '/').lower() for p in barred}
+    for p in changed:
+        q = p.replace('\\', '/').lower()
+        if q == CONFIG_NAME.lower() or q in barred:
+            return False
+        if not _match(p, spec.get('globs')) or _match(p, spec.get('exclude')):
+            return False
+    return True
+
+
 def mapping(root, base, tools_dir):
     """The placeholder values (kitlib.config.load.PLACEHOLDERS)."""
     m = {'python': sys.executable, 'root': root, 'base': base or '', 'here': KIT_TOOLS,
@@ -128,6 +173,10 @@ def build(gate, root, base, tools_dir, merged=False, extra=None, full=False, dai
     appended (the landing's merged-tree gate), then `extra` (a landing lane's merged_args),
     substituted alike."""
     bad = unsupported(gate)
+    unknown = unknown_names(gate)
+    if unknown:
+        raise GateConfigError('%s (steps: %s)' % ('; '.join(unknown), ', '.join(
+            s['name'] for s in gate.get('steps') or []) or 'none'))
     if PID_HOLD_FLAG in (extra or []):
         bad.append('a landing lane\'s merged_args %s (%s)' % (PID_HOLD_FLAG, PID_HOLD_WHY))
     if bad:
@@ -196,8 +245,9 @@ def selects(spec, changed, read):
     return None
 
 
-def select(gate, steps, changed, full=False, only=None, read=None):
-    """`(the steps to run in order, {name: why})`. GateConfigError for an --only name no step has."""
+def select(gate, steps, changed, full=False, only=None, read=None, docs=False):
+    """`(the steps to run in order, {name: why})`. GateConfigError for an --only name no step has.
+    `docs`: a docs-only change (docs_only()): exactly the docs_only.steps, plus `setup`."""
     specs = {s['name']: s for s in gate.get('steps') or []}
     by_name = {s.name: s for s in steps}
     why = {}
@@ -207,6 +257,13 @@ def select(gate, steps, changed, full=False, only=None, read=None):
             raise UnknownStep('no step named %s (steps: %s)' % (
                 ', '.join(unknown), ', '.join(by_name) or 'none'))
         why = {n: 'named' for n in only}
+    elif docs:
+        unknown = [n for n in docs_steps(gate) if n not in by_name]
+        if unknown:
+            raise GateConfigError('"docs_only".steps names no step: %s' % ', '.join(unknown))
+        why = {n: 'docs-only' for n in docs_steps(gate)}
+        if 'setup' in by_name and why:
+            why['setup'] = 'setup'
     else:
         for name, spec in specs.items():
             if full:
@@ -219,6 +276,11 @@ def select(gate, steps, changed, full=False, only=None, read=None):
         dropped = [n for n in why if any(o in why for o in specs[n].get('skip_if_selected') or ())]
         for n in dropped:
             del why[n]
+        if not full:
+            for n in gate.get('smoke_steps') or []:
+                if n not in by_name:
+                    raise GateConfigError('"smoke_steps" names no step: %s' % n)
+                why.setdefault(n, 'smoke')
         if 'setup' in by_name and why:
             why['setup'] = 'setup'
 

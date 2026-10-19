@@ -7,7 +7,7 @@ description: Use when your brief says to load it - art that is code (shaders, ma
 
 Dispatch: senior-worker at least, never weak-worker; reads the repo profile's **Branches and worktrees**, **Build and test**, **Shared resources** and **Art**.
 
-Read `creative.md` beside this file first: the brief block, options first, generation, the limits you keep yourself, delivery and the critique. You work inside the art direction where one exists; where it is silent you propose, you do not stall. You never change a look the owner approved, and never edit the direction document.
+Read `creative.md` beside this file first. You work inside the art direction where one exists; where it is silent you propose, you do not stall. You never change a look the owner approved, and never edit the direction document.
 
 1. Inputs: the art direction by document and section, the FEEL block, what you own (scenes, shaders, resources, scripts) and what belongs to someone else, and a lock and port if you will render. An open direction is a question for the owner, asked by showing answers.
 2. Propose mode: dispatched to propose looks because no direction exists, you propose strongly different options and choose none yourself; this overrides the direction input above.
@@ -17,19 +17,14 @@ Read `creative.md` beside this file first: the brief block, options first, gener
 6. Keep art data in resources, not code, where the project does: a palette, theme or material editable without a rebuild beats a constant in a script.
 7. Shaders are code: uniforms named for what they mean, per-pixel work kept off anything the whole screen draws, a comment on any non-obvious term. Mind the budgets the direction names (overdraw, transparency, viewports, lights); say what your change costs when you cannot measure it.
 8. Headless and server paths must still work: anything that exists only with a window needs a guard; the project's headless runs are the check.
-9. Look at what you made: render a frame the way the project allows, under the profile's lock, after the orphan sweep (end only processes you started, by pid). `<kit>/optional/comfy/render_glb.py` takes its own render slot. Read the image back; say what you see (colour, contrast, edges, whether it reads at its real size); compare with the direction's words and with a before image. For anything animated, describe its first, peak and last frames.
+9. Look at what you made: render a frame the way the project allows, under the profile's lock, after the orphan sweep. `<kit>/optional/comfy/render_glb.py` takes its own render slot. Read the image back; say what you see (colour, contrast, edges, whether it reads at its real size); compare with the direction's words and with a before image. For anything animated, describe its first, peak and last frames.
 10. Cannot render: say so plainly and mark every visual claim unverified. Never describe a result you have not seen.
-11. Critique (`creative.md`), deliver the page (options side by side, or before and after for a fix, with the cost), commit by explicit path: `python <kit>/tools/commit.py -C <worktree> -m "<subject>" <path> ...`.
+11. Critique (`creative.md`), deliver the page (options side by side, or before and after for a fix, with the cost), commit (skill builder).
 
 ## Never
 
-- Change a look the owner approved, or edit the art direction.
 - Claim an asset exists that you have not seen on disk.
-- Commit a binary asset without its licence recorded where the project records them.
-- Land, merge to the main branch or push.
 
 ## Report
 
 The page path or URL first. Then the frame you rendered and what you saw, in your own words; your pick and why (an options page); the critique's three weaknesses; what you built, with the files; what you could not verify; the performance cost and how you know it; any asset the work still needs, described so it can be sourced; anything outside your scope.
-
-Details: `creative.md` beside this file; `<kit>/knowledge/asset-generation/README.md`; the repo profile's **Art** section.

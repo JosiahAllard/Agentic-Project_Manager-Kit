@@ -19,6 +19,14 @@ from .leader import ServiceLeader
 from .transport import PipeTarget,run_worker
 
 MAX_BYTES=1024*1024
+MAX_BUSY_WAIT_MS=5000
+
+
+def busy_wait(timeout):
+    """Milliseconds the helper may wait for a busy pipe within a request of timeout seconds.
+    0 (one open, no wait) for a timeout run_worker will refuse anyway."""
+    try: return max(0,min(MAX_BUSY_WAIT_MS,int(timeout*500)))
+    except Exception: return 0
 
 
 def encode(value):
@@ -47,13 +55,21 @@ def decode(data):
 
 
 def request(target,message, *, timeout=5):
+    # The helper may wait for the busy pipe until half the budget at most, counted from
+    # here, leaving the rest for the exchange: a pipe still busy then is reported
+    # not-written. The time spent starting the helper comes out of that half.
+    busy_deadline=time.monotonic()+busy_wait(timeout)/1000
     if type(target) is not PipeTarget: raise BeforeWriteError('invalid-native-pipe-target')
     target.__post_init__()
     try: packet=encode(message)
     except Exception: raise BeforeWriteError('invalid-private-request') from None
-    header=encode_frame({'pipe':target.name,'pid':target.pid,'creation':target.creation,
-        'length':len(packet)},max_frame_bytes=2048)
-    data=run_worker('bridge_rpc_worker.py',header+packet,limit=MAX_BYTES+2048,timeout=timeout)
+    def header():
+        # Called once the helper has started, before anything is written to it.
+        wait=int((busy_deadline-time.monotonic())*1000)
+        if wait<=0: raise BeforeWriteError('native-peer-unavailable-before-write')
+        return encode_frame({'pipe':target.name,'pid':target.pid,'creation':target.creation,
+            'length':len(packet),'wait':min(MAX_BUSY_WAIT_MS,wait)},max_frame_bytes=2048)
+    data=run_worker('bridge_rpc_worker.py',packet,limit=MAX_BYTES+2048,timeout=timeout,prefix=header)
     try:
         first,separator,body=data.partition(b'\n')
         decoder=JsonLineDecoder(max_frame_bytes=2048)
