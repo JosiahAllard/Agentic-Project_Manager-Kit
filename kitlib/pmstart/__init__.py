@@ -610,6 +610,54 @@ def memory(cfg, repos=None, check=None, pm_repo=None, folder=None):
     return lines
 
 
+def allow_rules(cfg, repos=None, pm_repo=None, settings=None):
+    """Permission rules naming a plugin export other than the current one (kitlib.allowrules;
+    docs/pm-start.md "Allow rules"): for each repository in launcher.repos and the PM's own, one
+    line per settings file (.claude/settings.local.json, .claude/settings.json) and state (gone,
+    not current), with the command that prints the lines to paste. None when every rule names the
+    current export. Nothing is read when there is no repository; a loader (`settings`, default
+    plugin_settings) that gives None checks nothing."""
+    from kitlib import allowrules, kitroot, pluginsource
+    from kitlib.stubs import memory as kmemory
+    repos = launcher_repos() if repos is None else repos
+    targets = [(name, repos[name]) for name in sorted(repos)]
+    top = (pm_repo or pm_memory_repo)(cfg)
+    if top and not any(_same_folder(top, p) for p in repos.values()):
+        targets.append(("PM repo", top))
+    if not targets:
+        return []
+    s = plugin_settings() if settings is None else settings
+    if s is None:
+        return []
+    root = s.export_dir
+    current = pluginsource.current_folder(root)
+    lines = []
+    for label, path in targets:
+        if not os.path.isdir(path):
+            lines.append("could not check allow_rules (%s): no repository folder %s" % (label, path))
+            continue
+        for rel, f in ((kmemory.local_rel(), kmemory.local_path(path)),
+                       (kmemory.settings_rel(), kmemory.settings_path(path))):
+            try:
+                found = allowrules.named_exports(f, root) or {}
+            except (OSError, ValueError) as e:
+                lines.append("could not check allow_rules (%s): %s: %s" % (label, rel, e))
+                continue
+            by_state = {}
+            for folder in sorted(found):
+                state = allowrules.export_state(root, folder, current)
+                if state != allowrules.CURRENT:
+                    by_state.setdefault(state, []).append(folder)
+            for state in (allowrules.GONE, allowrules.NOT_CURRENT):
+                if state in by_state:
+                    folders = by_state[state]
+                    lines.append("allow rules (%s): %s names plugin export %s (%s) in %d rule(s); the current "
+                                 "export is %s: %s prints the lines to paste (owner)"
+                                 % (label, rel, ", ".join(folders), state, sum(found[x] for x in folders),
+                                    current or "none", kitroot.command("allow_rules", path)))
+    return lines
+
+
 def repo_prep(repos=None, prep=None):
     """The first-use repo prep (kitlib.git.prep.run; docs/new-worktree.md "First-use prep") of each
     repository in launcher.repos, the repositories the kit's workers make worktrees in: its lines,
@@ -737,6 +785,8 @@ def checklist(cfg, now=None, procs=None, **fakes):
         # A stubs fake's repos stand for launcher.repos here too.
         ("memory", lambda: memory(cfg, **fakes.get("memory", {k: v for k, v in fakes.get("stubs", {}).items()
                                                               if k == "repos"}))),
+        ("allow_rules", lambda: allow_rules(cfg, **fakes.get("allow_rules", {k: v for k, v in fakes.get(
+            "stubs", {}).items() if k == "repos"}))),
         ("repo_prep", lambda: repo_prep(**fakes.get("repo_prep", {}))),
         ("agent_temp", lambda: agent_temp_lines(**fakes.get("agent_temp", {}))),
         ("console_tasks", lambda: consoletasks.check(cfg, **fakes.get("console_tasks", {}))),
