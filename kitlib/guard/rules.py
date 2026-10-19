@@ -2145,12 +2145,64 @@ def edit_target(event, ctx, target, cwd, role, what, unknown_why=None, rewrite=N
     worktree when it writes into the directory it runs in."""
     d = ledger_rule(ctx, target, role, what) or pm_data_unknown(ctx, target, cwd, role, what) or \
         lock_state(event, ctx, target, role, what) or hub_secret_edit(event, ctx, target, role, what) or \
-        kit_json(event, ctx, target, role, what) or \
+        kit_json(event, ctx, target, role, what) or gate_result(event, ctx, target, role, what) or \
         generated_file(ctx, target, role, what)
     if d:
         return d
     return main_checkout(event, ctx, target, cwd, role, what, unknown_why, rewrite, run) or \
         write_jail(event, ctx, target, cwd, role, what, rewrite, run)
+
+
+# A write the guard cannot place: a computed or unread target, code given on the line (python -c,
+# node -e), a git or .NET call whose directory or path the text does not tell, a place git cannot
+# tell. Its default mode is warn (kitlib.guard.modes): only a write that resolves literally into a
+# main checkout or outside an agent session's folders is denied (docs/guard.md "Rule modes").
+UNPLACED = 'unplaced'
+# the rules a write the guard cannot place would otherwise be refused under (unplaced())
+PLACE_RULES = frozenset(['main-checkout', 'write-jail', 'git-main-history', 'git-restore', 'git-checkout',
+                         'git-reset-hard', 'git-clean', 'git-stash', 'git-bulk-add', 'git-commit-all'])
+
+
+def unplaced(d, role):
+    """The refusal `d` of a write the guard cannot place, made again under the rule unplaced (same
+    reason, alternative and verdict): None when that rule's mode is warn or off. A Decision of
+    any rule outside PLACE_RULES (a protected file, the PM data) is returned as it is."""
+    if d is None or d.rule not in PLACE_RULES:
+        return d
+    tail = ' Instead: %s %s' % (d.instead, tag(d.rule, role))
+    what = d.reason[:-len(tail)] if d.reason.endswith(tail) else d.reason
+    return refuse(UNPLACED, role, what, d.instead, kind=d.verdict)
+
+
+def in_git_dir(target):
+    """True when `target`, or a folder it is in, is named .git."""
+    return '.git' in paths.norm(target).replace('/', '\\').split('\\')
+
+
+GATE_RESULT = 'kit-gate-result'                 # kitlib.gate.result.DIR_NAME
+
+
+def gate_result(event, ctx, target, role, what):
+    """An agent session's literal write into a repository's gate result folder
+    (`<git common dir>/kit-gate-result/`, kitlib.gate.result): the records there tell a waiting
+    session how a gate or a landing ended, and only the gate writes them. The folder is matched by
+    name under a git directory (a folder named .git, or one holding HEAD and objects)."""
+    if not target or not agent_session(event, ctx):
+        return None
+    for p in (target, jail.real(target)):
+        parts = paths.norm(p, fold=False).replace('/', '\\').split('\\')
+        for k in range(1, len(parts)):
+            if parts[k].lower() != GATE_RESULT:
+                continue
+            gitdir = '\\'.join(parts[:k])
+            if parts[k - 1].lower() == '.git' or (os.path.isfile(os.path.join(gitdir, 'HEAD')) and
+                                                  os.path.isdir(os.path.join(gitdir, 'objects'))):
+                return refuse('gate-result', role, '%s: %s is in the gate result folder %s, which only the '
+                              'gate writes (kitlib.gate.result); a record written by hand would tell a waiting '
+                              'session a gate or a landing ended as it did not. To wait for a result:'
+                              % (what, fwd(target), fwd(os.path.join(gitdir, parts[k]))),
+                              'python %s wait-result <branch> --tip <sha>' % kit_tool(ctx, 'gate'))
+    return None
 
 
 def main_checkout(event, ctx, target, cwd, role, what, unknown_why=None, rewrite=None, run=None):
@@ -2168,7 +2220,7 @@ def main_checkout(event, ctx, target, cwd, role, what, unknown_why=None, rewrite
     if target is None:
         mine = own_worktree(ctx, cwd)
         instead = rewrite(fwd(mine) + '/<file>') if mine and rewrite is not None else new_wt
-        return refuse('main-checkout', role, '%s: the guard cannot tell where it writes (%s). Name a literal path '
+        return refuse(UNPLACED, role, '%s: the guard cannot tell where it writes (%s). Name a literal path '
                       'inside your worktree (the Edit or Write tool for a file).' %
                       (what, unknown_why or 'unknown path'), instead)
     place = ctx.place(target)
@@ -2178,7 +2230,10 @@ def main_checkout(event, ctx, target, cwd, role, what, unknown_why=None, rewrite
         mine = own_worktree(ctx, cwd)
         instead = rewrite(fwd(os.path.join(mine, os.path.basename(target)))) if mine and rewrite is not None \
             else new_wt
-        return refuse('main-checkout', role, '%s: git cannot tell whether %s is in a main checkout (%s); '
+        # a git directory is placed by its name: git answers no work tree there, and its config,
+        # hooks and refs are the repository's own
+        rule = 'main-checkout' if in_git_dir(target) else UNPLACED
+        return refuse(rule, role, '%s: git cannot tell whether %s is in a main checkout (%s); '
                       'this role may not edit one. Write inside a path git reports as a linked worktree.' %
                       (what, target, place.detail), instead)
     what2, instead = worktree_alternative(ctx, target, place.top, cwd, rewrite, run)
@@ -4115,6 +4170,20 @@ def py_unread(cmd, inv, w):
     return 'the guard does not read the program python is given'
 
 
+def unread_write(cmd, inv, w):
+    """True when the write `w` stands for the directory a program runs in (here()) because the
+    guard does not read what the program writes: python's code (py_unread), node -e, ruby -e or
+    perl -e code, the names xargs reads, a .NET call's path. Such a write is unplaced(); a stand-in
+    for a program that does write there (tar -x, curl -O, ln) is not."""
+    if w.text != '.' or cmd.source[w.start:w.end] == '.':
+        return False
+    if py_unread(cmd, inv, w) is not None:
+        return True
+    if inv is not None and (inv.name in EVALS or inv.name == 'perl' or inv.via == 'xargs'):
+        return True
+    return net_mentioned(cmd) and bool(cmd.words) and (w.start, w.end) == (cmd.words[0].start, cmd.words[0].end)
+
+
 def sleep_refusal(d, cmd, role):
     """The main-checkout Decision `d` for a sleep-wait (sleep_wait), its reason saying so: same
     verdict and rule, the background wait as its alternative."""
@@ -4182,10 +4251,15 @@ def _write_from(event, ctx, cmd, inv, cwd, role, w, base, net, into, searched):
     if stand_in and base is not OUTER and base is not None:
         # the folder it runs in is the -WorkingDirectory value: aim that word instead
         rewrite = lambda path, x=inv.workdir: retarget(cmd, x, paths.norm(path, fold=False))
+    placed = target is not None and not unread_write(cmd, inv, w)
     for t in into_folder(target, w, into, runs_in, getattr(ctx, 'home', None)) if target else [target]:
         d = edit_target(event, ctx, t, cwd, role, what, why, rewrite=rewrite, run=bare(cmd))
+        if d and sleep and d.rule == 'main-checkout':
+            d = sleep_refusal(d, cmd, role)     # named before unplaced(), so a warning says it too
+        if not placed:
+            d = unplaced(d, role)
         if d:
-            return (sleep_refusal(d, cmd, role) if sleep and d.rule == 'main-checkout' else d), searched
+            return d, searched
     if ps_drive:
         d = ps_drive_jail(event, ctx, cwd, role, what, why, rewrite)
         if d:
@@ -4265,6 +4339,8 @@ def find_exec_writes(event, ctx, cmd, cwd, role):
             part = any((x.start, x.end) == (w.start, w.end) and x.text != w.text for x in f.words)
             rewrite = None if stand_in or part else (lambda path, w=w, f=f: retarget(f, w, path))
             d = edit_target(event, ctx, target, cwd, role, what, why, rewrite=rewrite, run=bare(f))
+            if target is None:
+                d = unplaced(d, role)
             if d:
                 return d
     return None
@@ -4300,11 +4376,8 @@ def dotnet_unplaced(event, ctx, cmd, cwd, role):
             if d:
                 return d
         cfg = ctx.config(fixed or cmd.cwd) if fixed or cmd.cwd else None
-        if not kconfig.permissions(event, kconfig.roles(cfg)).get('edit_main_checkout'):
-            rule = 'main-checkout'
-        elif agent_session(event, ctx):
-            rule = 'write-jail'
-        else:
+        if kconfig.permissions(event, kconfig.roles(cfg)).get('edit_main_checkout') and \
+                not agent_session(event, ctx):
             continue
         why = '%s through .NET. %s' % (what, NET_RELATIVE)
         if w.dyn:
@@ -4312,11 +4385,14 @@ def dotnet_unplaced(event, ctx, cmd, cwd, role):
         elif re.match(r'^[\\/]{2}', w.text):
             why += ' The guard cannot tell which folder a share path names.'
         if fixed:
-            return refuse(rule, role, why + ' The same write on the absolute path:', rewrite(fixed))
-        base = own_worktree(ctx, cwd) or cmd.cwd
-        if base:
-            return refuse(rule, role, why + ' Give it a literal absolute path:', rewrite(fwd(base) + '/<file>'))
-        return refuse(rule, role, why + ' Give it a literal absolute path; to see where this session runs:', 'pwd')
+            d = refuse(UNPLACED, role, why + ' The same write on the absolute path:', rewrite(fixed))
+        else:
+            base = own_worktree(ctx, cwd) or cmd.cwd
+            d = refuse(UNPLACED, role, why + ' Give it a literal absolute path:', rewrite(fwd(base) + '/<file>')) \
+                if base else \
+                refuse(UNPLACED, role, why + ' Give it a literal absolute path; to see where this session runs:', 'pwd')
+        if d:
+            return d
     return None
 
 
@@ -4352,10 +4428,11 @@ def dotnet_process_dir(event, ctx, cmd, cwd, role):
             else None
         if place is not None and place.kind == repo.MAIN and not ctx.is_pm_data(place.top):
             # the session runs outside a worktree: a worktree it makes does not move where its process starts
-            return refuse('main-checkout', role, '%s is in the main checkout %s; this role may not edit a main '
-                          'checkout. A new worktree does not move the directory this PowerShell process '
-                          'started in, so call each .NET method directly with literal absolute paths inside '
-                          'a worktree. To see where this session runs:' % (what, place.top), 'pwd')
+            res = refuse(UNPLACED, role, '%s is in the main checkout %s; this role may not edit a main '
+                         'checkout. A new worktree does not move the directory this PowerShell process '
+                         'started in, so call each .NET method directly with literal absolute paths inside '
+                         'a worktree. To see where this session runs:' % (what, place.top), 'pwd')
+        res = unplaced(res, role)               # a .NET path it does not read, or cannot place
         if res:
             return res
     return None
@@ -4372,9 +4449,9 @@ def ps_drive_jail(event, ctx, cwd, role, what, why, rewrite):
     head = '%s: the guard cannot tell where it writes (%s). Write to a literal path inside the folders an ' \
            'agent session may write.' % (what, why)
     if dest is not None and rewrite is not None:
-        return refuse('write-jail', role, head + ' The same write in %s:' % fwd(dest.path),
+        return refuse(UNPLACED, role, head + ' The same write in %s:' % fwd(dest.path),
                       rewrite(fwd(dest.path) + '/<file>'))
-    return refuse('write-jail', role, head + ' To see where this session runs:', 'pwd')
+    return refuse(UNPLACED, role, head + ' To see where this session runs:', 'pwd')
 
 
 DUPS_RE = re.compile(r'(?:[ \t]*[0-9]*[<>]&[0-9-]+)+')
@@ -4830,10 +4907,24 @@ def git_rules(event, ctx, cmd, inv, cwd, role):
         d = git_shared_ref(event, ctx, cmd, gc, cwd, role)    # from any place: every worktree shares refs
         if d:
             return d
-    place = ctx.place(gc.dir) if gc.dir and not gc.unknown else \
+    placed = gc.dir and not gc.unknown
+    place = ctx.place(gc.dir) if placed else \
         repo.Place(repo.UNKNOWN, None, 'the directory git runs in is unknown', None, None)
     if place.kind not in (repo.MAIN, repo.UNKNOWN):
         return None
+    d = git_main_rules(event, ctx, cmd, inv, gc, cwd, role, place)
+    if place.kind == repo.UNKNOWN and not gc.blind and not (placed and in_git_dir(gc.dir)):
+        return unplaced(d, role)                # a computed -C, or a folder git cannot tell
+    # gc.blind (GIT_DIR and the like, --git-dir, --work-tree, core.worktree) re-points git on
+    # purpose, at a place the line nearly always names literally: its refusal stands
+    return d
+
+
+def git_main_rules(event, ctx, cmd, inv, gc, cwd, role, place):
+    """git_rules' checks of git that changes a main checkout, or a checkout git cannot tell
+    (`place`: kitlib.git.repo.Place of the directory git runs in)."""
+    sub, args = gc.sub, gc.rest
+    text = bare(cmd)
     where = 'the main checkout %s' % place.top if place.kind == repo.MAIN else \
         'a checkout git cannot place (%s)' % place.detail
     top = place.top or '<main checkout>'
@@ -5450,15 +5541,16 @@ def git_jail_unknown(ctx, cmd, gc, cwd, role):
     checkout, and the main-checkout git rules judge only history writes there, so a symbolic-ref
     or branch -m that re-points main's HEAD would pass them. Only a plain read passes
     (git_reads strict; a computed word only as strict_dyn_read allows). The hint names what hides the place (git_unplaced): drop it, or name a
-    computed -C literally."""
+    computed -C literally. A computed -C is refused under UNPLACED (warn by default); the
+    re-pointing forms (gc.blind) stay write-jail."""
     if git_reads(gc, strict=True):
         return None
-    if gc.blind:
+    if gc.blind:                                # a deliberate re-pointing: denied, not unplaced
         how, instead = git_unplaced(ctx, cmd, gc, cwd)
         return refuse('write-jail', role, '`%s` writes a checkout the guard cannot place: %s can point git at a '
                       'git directory, work tree, index or config the text does not show, and a -C does not undo '
                       'it. %s' % (bare(cmd), gc.blind, how), instead)
-    return refuse('write-jail', role, '`%s` writes a checkout the guard cannot place (a computed -C, or a '
+    return refuse(UNPLACED, role, '`%s` writes a checkout the guard cannot place (a computed -C, or a '
                   'folder it cannot tell). Name the checkout literally:' % bare(cmd),
                   ('git -C "<checkout>" %s %s' % (gc.sub, ' '.join(w.text for w in gc.rest))).rstrip())
 

@@ -97,10 +97,10 @@ ROWS = [
     ('commit -am in main', lambda w: bash('git commit -am "x"', w.main), 'deny', 'git-commit-all',
      'git -C "{main}" add -- <each path you changed>'),
     ('commit whose message starts -a', lambda w: bash('git commit -m "-a note"', w.main), None, None, None),
-    ('git in a place git cannot tell', lambda w: bash('git checkout x', w.unknown), 'deny', 'git-checkout', None),
-    ('git after a cd it cannot follow', lambda w: bash('cd "$WT" && git stash', w.wt), 'deny', 'git-stash', None),
-    ('restore after a cd it cannot follow', lambda w: bash('cd "$WT" && git restore a.py', w.wt), 'deny', 'git-restore', None),
-    ('subagent commit after a cd it cannot follow', lambda w: bash('cd "$WT" && git commit -m x', w.wt, sub=True), 'deny', 'git-main-history', None),
+    ('git in a place git cannot tell', lambda w: bash('git checkout x', w.unknown), 'deny', 'unplaced', None),
+    ('git after a cd it cannot follow', lambda w: bash('cd "$WT" && git stash', w.wt), 'deny', 'unplaced', None),
+    ('restore after a cd it cannot follow', lambda w: bash('cd "$WT" && git restore a.py', w.wt), 'deny', 'unplaced', None),
+    ('subagent commit after a cd it cannot follow', lambda w: bash('cd "$WT" && git commit -m x', w.wt, sub=True), 'deny', 'unplaced', None),
     ('main-role commit after a cd it cannot follow', lambda w: bash('cd "$WT" && git commit -m x', w.wt), None, None, None),
     ('git in no checkout', lambda w: bash('git checkout x', w.plain), None, None, None),
     ('branch -D anywhere', lambda w: bash('git branch -D kit/old', w.wt), 'deny', 'git-branch-force-delete',
@@ -153,7 +153,7 @@ ROWS = [
     ('subagent Edit in its worktree', lambda w: event('Edit', {'file_path': os.path.join(w.wt, 'a.py'), 'old_string': 'a', 'new_string': 'b'}, w.wt, sub=True),
      None, None, None),
     ('subagent Edit where git cannot tell', lambda w: event('Edit', {'file_path': os.path.join(w.unknown, 'a.py'), 'old_string': 'a', 'new_string': 'b'}, w.wt, sub=True),
-     'deny', 'main-checkout', None),
+     'deny', 'unplaced', None),
     ('subagent Edit outside any repo, run from there', lambda w: event('Write', {'file_path': os.path.join(w.plain, 'a.txt'), 'content': ''}, w.plain, sub=True),
      None, None, None),
     ('subagent Edit outside any repo, run from its worktree', lambda w: event('Write', {'file_path': os.path.join(w.plain, 'a.txt'), 'content': ''}, w.wt, sub=True),
@@ -170,7 +170,7 @@ ROWS = [
     ('subagent rm in main', lambda w: bash('rm -f %s/stale.txt' % W.fwd(w.main), w.wt, sub=True), 'deny', 'main-checkout', None),
     ('subagent Remove-Item in main', lambda w: ps('Remove-Item %s\\stale.txt -Force' % w.main, w.wt, sub=True), 'deny', 'main-checkout', None),
     # a PowerShell target that is not literal can name the main checkout: refused from a worktree too
-    ('subagent write to a variable path', lambda w: ps('"x" > $env:OUT', w.wt, sub=True), 'deny', 'main-checkout',
+    ('subagent write to a variable path', lambda w: ps('"x" > $env:OUT', w.wt, sub=True), 'deny', 'unplaced',
      '"x" > "{wt}/<file>"'),
     ('subagent bash write to a variable path', lambda w: bash('echo x > "$OUT"', w.wt, sub=True), None, None, None),
     ('subagent redirect in its worktree', lambda w: bash('echo hi > notes.txt', w.wt, sub=True), None, None, None),
@@ -198,6 +198,10 @@ ROWS = [
 # (docs/guard.md "Rules"). The prose goes in its own sentence before "Instead:".
 PROSE_WORDS = ('run', 'work', 'make', 'read', 'write', 'commit', 'merge', 'name', 'nothing', 'fix', 'ask', 'the',
                'as', 'from', 'reproduce', 'approve', 'stage', 'search', 'use')
+
+
+setUpModule = W.deny_unplaced           # these pin what the guard cannot place (world.deny_unplaced)
+tearDownModule = W.allow_unplaced
 
 
 class RuleTable(unittest.TestCase):
@@ -1172,7 +1176,7 @@ class MainCwdHint(unittest.TestCase):
         for ev in (bash("python - <<'EOF'\nprint(1)\nEOF", w.main, sub=True),
                    ps('python -c "print(1)"', w.main, sub=True)):
             d = decide(ev, w.ctx())
-            self.assertEqual(d and d.rule, 'main-checkout', d and d.reason)
+            self.assertEqual(d and d.rule, 'unplaced', d and d.reason)
             self.assertIn(rules.MAIN_CWD_HINT, d.reason)
             self.assertIn('cd into your worktree first', d.reason)
             self.assertNotIn('Make the change in a worktree of it', d.reason)
@@ -1188,12 +1192,12 @@ class MainCwdHint(unittest.TestCase):
         for ev in (ps('python -c "print(1)"', w.main, sub=True), bash("python3 -Bc 'print(1)'", w.main, sub=True),
                    ps('& "C:\\Py\\python.exe" -c "print(1)"', w.main, sub=True)):
             d = decide(ev, w.ctx())
-            self.assertEqual(d and d.rule, 'main-checkout', d and d.reason)
+            self.assertEqual(d and d.rule, 'unplaced', d and d.reason)
             self.assertIn('python -I -c', d.reason)
             self.assertIn(rules.MAIN_CWD_HINT, d.reason)
         self.assertIsNone(decide(ps('python -I -c "print(1)"', w.main, sub=True), w.ctx()))
         d = decide(bash("python - <<'EOF'\nprint(1)\nEOF", w.main, sub=True), w.ctx())
-        self.assertEqual(d and d.rule, 'main-checkout', d and d.reason)
+        self.assertEqual(d and d.rule, 'unplaced', d and d.reason)
         self.assertNotIn('python -I -c', d.reason)
 
 

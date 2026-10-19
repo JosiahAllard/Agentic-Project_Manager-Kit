@@ -37,32 +37,32 @@ class Relative(Base):
     call on the absolute path the PowerShell location gives. Allowed from a worktree before."""
 
     def test_write_all_text_from_worktree(self):
-        d = self.denied(self.run_ps("[IO.File]::WriteAllText('x.txt', 'y')"), 'main-checkout')
+        d = self.denied(self.run_ps("[IO.File]::WriteAllText('x.txt', 'y')"), 'unplaced')
         self.assertIn('[Environment]::CurrentDirectory', d.reason)
         self.assertEqual(d.instead, '[IO.File]::WriteAllText("%s/x.txt", \'y\')' % W.fwd(self.w.wt))
         self.allowed(self.run_ps(d.instead))
 
     def test_after_set_location(self):
-        d = self.denied(self.run_ps("Set-Location sub; [IO.File]::AppendAllText('x.txt', 'y')"), 'main-checkout')
+        d = self.denied(self.run_ps("Set-Location sub; [IO.File]::AppendAllText('x.txt', 'y')"), 'unplaced')
         self.assertEqual(d.instead, '[IO.File]::AppendAllText("%s/sub/x.txt", \'y\')' % W.fwd(self.w.wt))
 
     def test_directory_and_system_namespace_and_cast(self):
-        self.denied(self.run_ps("[IO.Directory]::CreateDirectory('d')"), 'main-checkout')
-        self.denied(self.run_ps("[void][System.IO.File]::WriteAllBytes('x.bin', $b)"), 'main-checkout')
-        self.denied(self.run_ps("$r = [System.IO.Directory]::Delete('d', $true)"), 'main-checkout')
+        self.denied(self.run_ps("[IO.Directory]::CreateDirectory('d')"), 'unplaced')
+        self.denied(self.run_ps("[void][System.IO.File]::WriteAllBytes('x.bin', $b)"), 'unplaced')
+        self.denied(self.run_ps("$r = [System.IO.Directory]::Delete('d', $true)"), 'unplaced')
 
     def test_a_rooted_path_with_no_drive(self):
-        self.denied(self.run_ps(r"[IO.File]::WriteAllText('\x.txt', 'y')"), 'main-checkout')
+        self.denied(self.run_ps(r"[IO.File]::WriteAllText('\x.txt', 'y')"), 'unplaced')
 
     def test_a_computed_path(self):
-        d = self.denied(self.run_ps("$p = 'x.txt'; [IO.File]::WriteAllText($p, 'y')"), 'main-checkout')
+        d = self.denied(self.run_ps("$p = 'x.txt'; [IO.File]::WriteAllText($p, 'y')"), 'unplaced')
         self.assertIn('$p', d.reason)
         d = self.denied(self.run_ps(r"[IO.File]::WriteAllText([IO.Path]::Combine('a', 'x.txt'), 'y')"),
-                        'main-checkout')
+                        'unplaced')
         self.assertIn('[IO.Path]::Combine', d.reason)
 
     def test_a_jailed_main_session(self):
-        self.denied(self.run_ps("[IO.File]::WriteAllText('x.txt', 'y')", env=COORDINATOR, sub=False), 'write-jail')
+        self.denied(self.run_ps("[IO.File]::WriteAllText('x.txt', 'y')", env=COORDINATOR, sub=False), 'unplaced')
 
     def test_the_owners_own_session_is_not_judged(self):
         self.allowed(self.run_ps("[IO.File]::WriteAllText('x.txt', 'y')", sub=False))
@@ -87,7 +87,7 @@ class Absolute(Base):
     def test_copy_writes_its_destination_only(self):
         self.allowed(self.run_ps(r"[IO.File]::Copy('{main}\a.txt', '{wt}\b.txt', $true)"))
         self.denied(self.run_ps(r"[IO.File]::Copy('{wt}\a.txt', '{main}\b.txt')"), 'main-checkout')
-        self.denied(self.run_ps(r"[IO.File]::Copy('{wt}\a.txt', 'b.txt')"), 'main-checkout')
+        self.denied(self.run_ps(r"[IO.File]::Copy('{wt}\a.txt', 'b.txt')"), 'unplaced')
 
     def test_move_writes_both(self):
         self.denied(self.run_ps(r"[IO.File]::Move('{main}\a.txt', '{wt}\b.txt')"), 'main-checkout')
@@ -128,7 +128,7 @@ class Unread(Base):
     def test_from_the_main_checkout(self):
         for text in self.NOT_CALLED_HERE + self.MISSED:
             with self.subTest(text=text):
-                d = self.denied(self.run_ps(text, cwd=self.w.main), 'main-checkout')
+                d = self.denied(self.run_ps(text, cwd=self.w.main), 'unplaced')
                 self.assertIn('is in the main checkout', d.reason)
 
     def test_called_later_from_a_worktree(self):
@@ -139,7 +139,7 @@ class Unread(Base):
         away = 'Set-Location "%s"; ' % W.fwd(self.w.home)
         for text in self.NOT_CALLED_HERE + self.MISSED:
             with self.subTest(text=text):
-                self.denied(self.run_ps(away + text, env=COORDINATOR, sub=False), 'write-jail')
+                self.denied(self.run_ps(away + text, env=COORDINATOR, sub=False), 'unplaced')
 
 
 class MoreWriters(Base):
@@ -149,7 +149,7 @@ class MoreWriters(Base):
         for text in ("[IO.File]::OpenWrite('x.txt')", "[IO.File]::Open('x.txt', 'Create')",
                      r"[IO.File]::Move('{wt}\a.txt', 'b.txt')"):
             with self.subTest(text=text):
-                self.denied(self.run_ps(text), 'main-checkout')
+                self.denied(self.run_ps(text), 'unplaced')
 
 
 # Calls whose arguments the guard's parse loses its place in, so it would read a decoy literal
@@ -166,7 +166,7 @@ class LostPlace(Base):
     def test_a_subagent_in_the_main_checkout(self):
         for text in DESYNC:
             with self.subTest(text=text):
-                self.denied(self.run_ps(text, cwd=self.w.main), 'main-checkout')
+                self.denied(self.run_ps(text, cwd=self.w.main), 'unplaced')
 
     def test_a_comment_and_a_braced_variable(self):
         for text in ('[IO.File]::Copy(\'{wt}\\s.txt\' <#, \'{wt}\\ok\'\n, #> \'{main}\\x\')',
@@ -175,7 +175,7 @@ class LostPlace(Base):
                      # to '{main}\x'; a ' inside them opens a string to the parse
                      "[IO.File]::Copy(${{a'}}, '{main}\\x' + ${{b'}}, '{wt}\\ok')"):
             with self.subTest(text=text):
-                self.denied(self.run_ps(text, cwd=self.w.main), 'main-checkout')
+                self.denied(self.run_ps(text, cwd=self.w.main), 'unplaced')
 
 
 class ParseEdges(Base):
@@ -186,7 +186,7 @@ class ParseEdges(Base):
     def test_a_braced_variable_in_a_single_quoted_string(self):
         self.denied(self.run_ps("[IO.File]::Copy('{wt}\\s${{a', '{main}\\x')"), 'main-checkout')
         self.allowed(self.run_ps("[IO.File]::Copy('{wt}\\s${{a', '{wt}\\x')"))
-        self.denied(self.run_ps("[IO.File]::Copy('{wt}\\s${{a', '{wt}\\x')", cwd=self.w.main), 'main-checkout')
+        self.denied(self.run_ps("[IO.File]::Copy('{wt}\\s${{a', '{wt}\\x')", cwd=self.w.main), 'unplaced')
 
     def test_a_braced_variable_after_a_backtick(self):
         self.denied(self.run_ps("[IO.File]::Copy(\"{wt}\\s`${{a\", '{main}\\x')"), 'main-checkout')
@@ -204,7 +204,7 @@ class StartDirectory(Base):
     def test_set_location_from_the_main_checkout(self):
         for text in Unread.NOT_CALLED_HERE + Unread.MISSED:
             with self.subTest(text=text):
-                d = self.denied(self.run_ps("Set-Location '{wt}'; " + text, cwd=self.w.main), 'main-checkout')
+                d = self.denied(self.run_ps("Set-Location '{wt}'; " + text, cwd=self.w.main), 'unplaced')
                 self.assertIn('the directory its process started in', d.reason)
 
     def test_a_placed_write_is_judged_where_it_points(self):
@@ -214,7 +214,7 @@ class StartDirectory(Base):
     def test_a_nested_shell_judges_each_start(self):
         nested = "pwsh -NoProfile -Command \"[IO.File]::WriteAllText.Invoke('x.txt', 'y')\""
         self.allowed(self.run_ps(nested))
-        self.denied(self.run_ps("Set-Location '{wt}'; " + nested, cwd=self.w.main), 'main-checkout')
+        self.denied(self.run_ps("Set-Location '{wt}'; " + nested, cwd=self.w.main), 'unplaced')
 
     def test_the_owners_own_session_is_not_judged(self):
         self.allowed(self.run_ps("Set-Location '{wt}'; [IO.File]::WriteAllText.Invoke('x.txt', 'y')",
@@ -223,7 +223,7 @@ class StartDirectory(Base):
     def test_a_session_in_the_main_checkout_is_not_offered_a_new_worktree(self):
         # its commands start in the main checkout whatever worktree it makes; offered a new one before
         d = self.denied(self.run_ps("Set-Location '{wt}'; [IO.File]::WriteAllText.Invoke('x.txt', 'y')",
-                                    cwd=self.w.main), 'main-checkout')
+                                    cwd=self.w.main), 'unplaced')
         self.assertNotIn('worktree add', d.instead)
         self.assertIn('literal absolute paths', d.reason.split('this role may not edit a main checkout.')[1])
         self.assertEqual(d.instead, 'pwd')
@@ -236,7 +236,7 @@ class StartDirectory(Base):
                      "cmd /c \"cd /d {main} && powershell -Command Set-Location '{wt}'; "
                      "[IO.File]::WriteAllText.Invoke('x.txt', 'y')\""):
             with self.subTest(text=text):
-                d = self.denied(self.run_ps(text, cwd=self.w.plain), 'main-checkout')
+                d = self.denied(self.run_ps(text, cwd=self.w.plain), 'unplaced')
                 self.assertNotIn('runs there', d.reason)
                 self.assertIn('literal absolute paths', d.reason.split('this role may not edit a main checkout.')[1])
                 self.assertEqual(d.instead, 'pwd')
@@ -245,7 +245,7 @@ class StartDirectory(Base):
         # the nested shell starts in the main checkout, where the outer Set-Location put it; the event
         # and the call's own location are the worktree
         self.denied(self.run_ps("Set-Location '{main}'; pwsh -NoProfile -Command \"Set-Location '{wt}'; "
-                                "[IO.File]::WriteAllText.Invoke('x.txt', 'y')\""), 'main-checkout')
+                                "[IO.File]::WriteAllText.Invoke('x.txt', 'y')\""), 'unplaced')
         self.allowed(self.run_ps("pwsh -NoProfile -Command \"Set-Location '{wt}'; "
                                  "[IO.File]::WriteAllText.Invoke('x.txt', 'y')\""))
 
@@ -270,10 +270,10 @@ class DevicePaths(Base):
 
     def test_a_share(self):
         text = "[IO.File]::WriteAllText('%s\\x.txt', 'y')" % self.share(self.w.main)
-        d = self.denied(self.run_ps(text), 'main-checkout')
+        d = self.denied(self.run_ps(text), 'unplaced')
         self.assertIn('share path', d.reason)
         self.denied(self.run_ps(r"[IO.File]::WriteAllText('\\?\UNC\localhost\share\x.txt', 'y')"),
-                    'main-checkout')
+                    'unplaced')
 
     def test_other_device_spellings(self):
         # a volume, a GUID volume, the NT object path and a drive-relative device path name no folder
@@ -283,7 +283,7 @@ class DevicePaths(Base):
                      r"[IO.File]::WriteAllText('\??\{main}\x.txt', 'y')",
                      r"[IO.File]::WriteAllText('\\?\%s:x.txt', 'y')" % self.w.main[0]):
             with self.subTest(text=text):
-                self.denied(self.run_ps(text), 'main-checkout')
+                self.denied(self.run_ps(text), 'unplaced')
 
 
 class Constructors(Base):
@@ -321,7 +321,7 @@ class Constructors(Base):
         for text in ("$s = [IO.StreamWriter]::new('x.txt')", '$s = New-Object IO.StreamWriter x.txt',
                      "$f = [IO.FileStream]::new($p, 'Open')"):
             with self.subTest(text=text):
-                self.denied(self.run_ps(text), 'main-checkout')
+                self.denied(self.run_ps(text), 'unplaced')
 
     def test_a_cast_of_anything_but_a_plain_string(self):
         # PowerShell converts the operand, whatever it is, by the StreamWriter(string) constructor;
@@ -334,7 +334,7 @@ class Constructors(Base):
                      "$s = [IO.StreamWriter]'{wt}\\x.txt'[0]",
                      "$s = [IO.StreamWriter]‘x.txt’", "$s = [IO.StreamWriter]('{wt}\\a', '{wt}\\b')"):
             with self.subTest(text=text):
-                d = self.denied(self.run_ps(text), 'main-checkout')
+                d = self.denied(self.run_ps(text), 'unplaced')
                 self.assertIn('a path the line computes', d.reason)
         self.allowed(self.run_ps(r"$s = [IO.StreamWriter]'{wt}\x.txt' + 'y'"))     # the cast binds first
 
@@ -352,7 +352,7 @@ class Constructors(Base):
                      "$s = [IO.StreamWriter] `\n-join ('{main}\\x', '.txt')",
                      '$s = [IO.StreamWriter]{{$p}}'):
             with self.subTest(text=text):
-                d = self.denied(self.run_ps(text), 'main-checkout')
+                d = self.denied(self.run_ps(text), 'unplaced')
                 self.assertIn('a path the line computes', d.reason)
         for text in (r"$s = [IO.StreamWriter]<#c#>'{main}\x.txt'",
                      "$s = [IO.StreamWriter] <# a\ncomment #> '{main}\\x.txt'",
@@ -375,7 +375,7 @@ class Constructors(Base):
                      '$l = [Collections.Generic.List[IO.StreamWriter]]::new()'):
             with self.subTest(text=text):
                 self.allowed(self.run_ps(text))
-                self.denied(self.run_ps(text, cwd=self.w.main), 'main-checkout')
+                self.denied(self.run_ps(text, cwd=self.w.main), 'unplaced')
 
     def test_a_new_object_call_the_guard_does_not_read(self):
         # an unknown parameter, a third positional argument, an expression after the list:
@@ -384,7 +384,7 @@ class Constructors(Base):
                      r"$s = New-Object IO.StreamWriter '{wt}\x.txt' 'y' 'z'",
                      r"$s = New-Object IO.StreamWriter ('{wt}\ok') + 'x'"):
             with self.subTest(text=text):
-                self.denied(self.run_ps(text, cwd=self.w.main), 'main-checkout')
+                self.denied(self.run_ps(text, cwd=self.w.main), 'unplaced')
 
     def test_a_stream_or_a_read(self):
         for text in ('$s = [IO.StreamWriter]::new($fs)', '$s = New-Object IO.StreamWriter($fs)',
@@ -409,24 +409,29 @@ class LockedMain(Base):
 
     def test_a_computed_path(self):
         self.denied(self.run_ps("$p='x'; [IO.File]::WriteAllText($p,'y')", cwd=self.w.main, sub=False),
-                    'main-checkout')
+                    'unplaced')
 
     def test_a_lost_place(self):
         for text in DESYNC:
             with self.subTest(text=text):
-                self.denied(self.run_ps(text, cwd=self.w.main, sub=False), 'main-checkout')
+                self.denied(self.run_ps(text, cwd=self.w.main, sub=False), 'unplaced')
 
     def test_set_location_into_a_worktree(self):
         self.denied(self.run_ps("Set-Location '{wt}'; [IO.File]::WriteAllText.Invoke('x.txt', 'y')",
-                                cwd=self.w.main, sub=False), 'main-checkout')
+                                cwd=self.w.main, sub=False), 'unplaced')
 
     def test_a_device_path_or_a_share(self):
         share = '\\\\localhost\\%s$%s' % (self.w.main[0], self.w.main[2:])
-        for text in (r"[IO.File]::WriteAllText('\\?\{main}\x.txt', 'y')",
-                     "[IO.File]::WriteAllText('%s\\x.txt', 'y')" % share):
+        # a device path names the main checkout; a share is a path the guard cannot place
+        for text, rule in ((r"[IO.File]::WriteAllText('\\?\{main}\x.txt', 'y')", 'main-checkout'),
+                           ("[IO.File]::WriteAllText('%s\\x.txt', 'y')" % share, 'unplaced')):
             for cwd in (self.w.main, self.w.wt):
                 with self.subTest(text=text, cwd=cwd):
-                    self.denied(self.run_ps(text, cwd=cwd, sub=False), 'main-checkout')
+                    self.denied(self.run_ps(text, cwd=cwd, sub=False), rule)
+
+
+setUpModule = W.deny_unplaced           # these pin what the guard cannot place (world.deny_unplaced)
+tearDownModule = W.allow_unplaced
 
 
 if __name__ == '__main__':

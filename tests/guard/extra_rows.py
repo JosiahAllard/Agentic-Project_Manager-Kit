@@ -271,96 +271,96 @@ ROWS = [
         'py -3 -Ic "from os.path import exists; print(exists(\'x\'))"', w.main, sub=True), None, None, None),
     ('main-checkout: python -c without -I may import from the directory', lambda w: bash(
         'python -c "import json,sys; print(json.load(open(sys.argv[1])))" x.json', w.main, sub=True),
-     'deny', 'main-checkout', None),
+     'deny', 'unplaced', None),
     ('main-checkout: python -I -c opening to write', lambda w: bash(
-        'python -I -c "open(\'x\', \'w\').write(\'y\')"', w.main, sub=True), 'deny', 'main-checkout', None),
+        'python -I -c "open(\'x\', \'w\').write(\'y\')"', w.main, sub=True), 'deny', 'unplaced', None),
     ('main-checkout: python -I -c importing os', lambda w: bash(
-        'python -I -c "import os; os.remove(\'x\')"', w.main, sub=True), 'deny', 'main-checkout', None),
+        'python -I -c "import os; os.remove(\'x\')"', w.main, sub=True), 'deny', 'unplaced', None),
     ('main-checkout: python -I -c reaching a module through sys', lambda w: bash(
-        'python -I -c "import sys; sys.modules[\'os\'].remove(\'x\')"', w.main, sub=True), 'deny', 'main-checkout', None),
+        'python -I -c "import sys; sys.modules[\'os\'].remove(\'x\')"', w.main, sub=True), 'deny', 'unplaced', None),
     ('main-checkout: python -I -c with text the shell fills in', lambda w: bash(
-        'python -I -c "$CODE"', w.main, sub=True), 'deny', 'main-checkout', None),
+        'python -I -c "$CODE"', w.main, sub=True), 'deny', 'unplaced', None),
     ('main-checkout: python -I -cCODE in one word', lambda w: bash(
-        'python -I -c"open(\'x\',\'w\').write(\'y\')"', w.main, sub=True), 'deny', 'main-checkout', None),
+        'python -I -c"open(\'x\',\'w\').write(\'y\')"', w.main, sub=True), 'deny', 'unplaced', None),
     ('main-checkout: python -I - reads its code from a pipe', lambda w: bash(
-        'echo "print(1)" | python -I -', w.main, sub=True), 'deny', 'main-checkout', None),
+        'echo "print(1)" | python -I -', w.main, sub=True), 'deny', 'unplaced', None),
     # Windows PowerShell 5.1 may hand python other text when the code holds a double quote
     ('main-checkout: python -I -c with a double quote, PowerShell', lambda w: ps(
-        'python -I -c \'print("x")\'', w.main, sub=True), 'deny', 'main-checkout', None),
+        'python -I -c \'print("x")\'', w.main, sub=True), 'deny', 'unplaced', None),
     ('main-checkout: python -I -c with a double quote, bash -c from PowerShell', lambda w: ps(
-        'bash -c \'python -I -c "print(\\"x\\")"\'', w.main, sub=True), 'deny', 'main-checkout', None),
+        'bash -c \'python -I -c "print(\\"x\\")"\'', w.main, sub=True), 'deny', 'unplaced', None),
     ('main-checkout: python -I -c with a double quote, bash', lambda w: bash(
         'python -I -c \'print("x")\'', w.main, sub=True), None, None, None),
     ('main-checkout: python -I -c naming type', lambda w: bash(
-        'python -I -c "print(type(1))"', w.main, sub=True), 'deny', 'main-checkout', None),
+        'python -I -c "print(type(1))"', w.main, sub=True), 'deny', 'unplaced', None),
     # PowerShell 5.1 wraps an argument with a space in quotes without doubling a trailing
     # backslash: through it, code with a backslash is not proved either. Through cmd.exe no code
     # is: cmd ends a quoted part at a quote python reads as text, and keeps print(...) one word
     ('main-checkout: python -I -c ending in a backslash, PowerShell', lambda w: ps(
-        "python -I -c 'print(1) #%s'" % BS, w.main, sub=True), 'deny', 'main-checkout', None),
+        "python -I -c 'print(1) #%s'" % BS, w.main, sub=True), 'deny', 'unplaced', None),
     ('main-checkout: python -I -c with a backslash, bash -c from PowerShell', lambda w: ps(
-        "bash -c 'python -I -c \"print(1) #%s%s\"'" % (BS, BS), w.main, sub=True), 'deny', 'main-checkout', None),
+        "bash -c 'python -I -c \"print(1) #%s%s\"'" % (BS, BS), w.main, sub=True), 'deny', 'unplaced', None),
     ('main-checkout: python -I -c with no quote or backslash, PowerShell', lambda w: ps(
         "python -I -c 'print(1)'", w.main, sub=True), None, None, None),
     ('main-checkout: python -I -c ending in a backslash, bash', lambda w: bash(
         "python -I -c 'print(1) #%s'" % BS, w.main, sub=True), None, None, None),
     ('main-checkout: python -I -c with a backslash, cmd', lambda w: bash(
-        "cmd /c \"python -I -c print('a%sb')\"" % BS, w.main, sub=True), 'deny', 'main-checkout', None),
+        "cmd /c \"python -I -c print('a%sb')\"" % BS, w.main, sub=True), 'deny', 'unplaced', None),
     ('main-checkout: python -I -c with an escaped double quote, cmd', lambda w: bash(
         "cmd /c 'python -I -c \"print(len(%s\"a b%s\"))\"'" % (BS, BS), w.main, sub=True),
-     'deny', 'main-checkout', None),
+     'deny', 'unplaced', None),
     ('main-checkout: python -I -c opening to write inside one cmd word', lambda w: bash(
         "cmd /c \"python -I -c print(open('x','w').write('y'))\"", w.main, sub=True),
-     'deny', 'main-checkout', None),
+     'deny', 'unplaced', None),
     ('main-checkout: python -I -c opening to write inside one cmd word, PowerShell', lambda w: ps(
         "cmd /c \"python -I -c print(open('x','w').write('y'))\"", w.main, sub=True),
-     'deny', 'main-checkout', None),
+     'deny', 'unplaced', None),
     # unquoted, PowerShell passes `print` and then runs the ( ) itself (shell._Scan.ps_paren_arg):
     # the text cmd gets is computed
     ('unreadable: a ( ) touching a word in a PowerShell cmd /c', lambda w: ps(
         "cmd /c python -I -c print(open('x','w').write('y'))", w.main, sub=True),
      'deny', 'unreadable', None),
     ('main-checkout: python -I -c in double quotes, cmd', lambda w: bash(
-        "cmd /c 'python -I -c \"print(1)\"'", w.main, sub=True), 'deny', 'main-checkout', None),
+        "cmd /c 'python -I -c \"print(1)\"'", w.main, sub=True), 'deny', 'unplaced', None),
     ('main-checkout: python -I -c through cmd, in a worktree', lambda w: bash(
         "cmd /c \"python -I -c print(open('x','w').write('y'))\"", w.wt, sub=True), None, None, None),
     ('main-checkout: python -I -c through cmd and then bash', lambda w: bash(
-        "cmd /c 'bash -c \"python -I -c print(1)\"'", w.main, sub=True), 'deny', 'main-checkout', None),
+        "cmd /c 'bash -c \"python -I -c print(1)\"'", w.main, sub=True), 'deny', 'unplaced', None),
     # PowerShell 5.1 drops an empty argument, so python takes the next word as its code
     ('main-checkout: python -I -c with empty code, PowerShell', lambda w: ps(
-        "python -I -c '' \"open('f','w').write('y')\"", w.main, sub=True), 'deny', 'main-checkout', None),
+        "python -I -c '' \"open('f','w').write('y')\"", w.main, sub=True), 'deny', 'unplaced', None),
     ('main-checkout: python -I -c with blank code, PowerShell', lambda w: ps(
-        "python -I -c ' ' \"open('f','w').write('y')\"", w.main, sub=True), 'deny', 'main-checkout', None),
+        "python -I -c ' ' \"open('f','w').write('y')\"", w.main, sub=True), 'deny', 'unplaced', None),
     ('main-checkout: python -I -c with empty code, bash', lambda w: bash(
-        "python -I -c '' x", w.main, sub=True), 'deny', 'main-checkout', None),
+        "python -I -c '' x", w.main, sub=True), 'deny', 'unplaced', None),
     # Start-Process re-splits -ArgumentList with its quotes taken out: python reads other code
     ('main-checkout: python -I -c through Start-Process', lambda w: ps(
         "Start-Process python -ArgumentList '-I -c \"print(1)\";open(''f'',''w'').write(''y'')'",
-        w.main, sub=True), 'deny', 'main-checkout', None),
+        w.main, sub=True), 'deny', 'unplaced', None),
     ('main-checkout: python -I -c through the start alias', lambda w: ps(
         "start python -ArgumentList '-I -c \"print(1)\";open(''f'',''w'').write(''y'')'",
-        w.main, sub=True), 'deny', 'main-checkout', None),
+        w.main, sub=True), 'deny', 'unplaced', None),
     ('main-checkout: python -I -c through Start-Process, read-only code', lambda w: ps(
         "Start-Process python -ArgumentList '-I','-c','print(1)'", w.main, sub=True),
-     'deny', 'main-checkout', None),
+     'deny', 'unplaced', None),
     ('main-checkout: python -I -c through the saps alias, read-only code', lambda w: ps(
         "saps python -ArgumentList '-I','-c','print(1)'", w.main, sub=True),
-     'deny', 'main-checkout', None),
+     'deny', 'unplaced', None),
     # any word of a PowerShell command on the way to python that PowerShell 5.1 may hand on as
     # other than one argument: empty (dropped), or a blank and a backslash at its end
     ('main-checkout: python -I -c in a bash -c beside an empty word, PowerShell', lambda w: ps(
-        "bash -c 'python -I -c print(1)' ''", w.main, sub=True), 'deny', 'main-checkout', None),
+        "bash -c 'python -I -c print(1)' ''", w.main, sub=True), 'deny', 'unplaced', None),
     ('main-checkout: python -I -c in a bash -c beside a word ending in a backslash, PowerShell',
      lambda w: ps("bash -c 'python -I -c print(1)' 'a b%s'" % BS, w.main, sub=True),
-     'deny', 'main-checkout', None),
+     'deny', 'unplaced', None),
     ('main-checkout: python -I -c beside a word ending in a backslash, PowerShell', lambda w: ps(
-        "python -I -c 'print(1)' 'a b%s'" % BS, w.main, sub=True), 'deny', 'main-checkout', None),
+        "python -I -c 'print(1)' 'a b%s'" % BS, w.main, sub=True), 'deny', 'unplaced', None),
     ('main-checkout: python script beside an empty word, PowerShell', lambda w: ps(
-        "python '' -c \"open('f','w').write('y')\"", w.main, sub=True), 'deny', 'main-checkout', None),
+        "python '' -c \"open('f','w').write('y')\"", w.main, sub=True), 'deny', 'unplaced', None),
     # a bash -c text with a double quote reaches bash split differently through PowerShell 5.1
     ('main-checkout: python -I -c in a bash -c text with a double quote, PowerShell', lambda w: ps(
         "bash -c 'python -I -c \"print(1)\" \"x;touch f\"'", w.main, sub=True),
-     'deny', 'main-checkout', None),
+     'deny', 'unplaced', None),
     ('main-checkout: python -I -c in a bash -c text, PowerShell', lambda w: ps(
         "bash -c 'python -I -c print(1)'", w.main, sub=True), None, None, None),
 ]

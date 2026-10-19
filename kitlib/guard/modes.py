@@ -31,6 +31,7 @@ CONFIG_KEY = 'guard_rules'
 # forcing or deleting main, core.hooksPath, owner identity, kill-by-name and file-tool edits of a
 # main checkout stay deny (docs/guard.md "Rule modes").
 DEFAULTS = {
+    'unplaced': WARN,           # a write the guard cannot place (kitlib.guard.rules.UNPLACED)
 }
 
 _STATE = contextvars.ContextVar('kit_guard_modes', default=None)

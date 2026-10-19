@@ -88,6 +88,8 @@ class SharedRefsFromAWorktree(SharedRefBase):
                            'git update-ref -- refs/heads/main HEAD', 'git update-ref -d -- refs/heads/main'])
 
     def test_a_subcommand_the_text_does_not_name_is_refused(self):
+        W.deny_unplaced()                   # a git line the guard cannot read is unplaced (warn by default)
+        self.addCleanup(W.allow_unplaced)
         for env in (None, tj.COORDINATOR):
             with self.subTest(env=env):
                 text = 'git $X -d refs/heads/main'

@@ -273,8 +273,10 @@ def check(event, ctx, text, cwd, role, parsed):
     if role == 'subagent':
         return rules.refuse('unreadable', role, why + last, alt)
     if GIT_WORD_RE.search(text) and rules.agent_session(event, ctx):
-        return rules.refuse('write-jail', role, '%s git on a line the guard cannot read may write a checkout it '
-                            'cannot place; run the git in its own call.%s' % (why, last), alt)
+        d = rules.refuse(rules.UNPLACED, role, '%s git on a line the guard cannot read may write a checkout it '
+                         'cannot place; run the git in its own call.%s' % (why, last), alt)
+        if d:
+            return d                            # warned: the PM data and main-checkout checks below still run
     owner = rules.is_owner_session(event, ctx)
     for c in parsed.commands:
         inv = cm.invocation(c)

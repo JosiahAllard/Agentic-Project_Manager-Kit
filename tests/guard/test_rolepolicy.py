@@ -203,7 +203,7 @@ class ReadOnlyCheckout(Base):
         so it judges the folder: the checkout is refused, and the alternative names temp."""
         for text in ('python3 -c "print(1)"', "python3 - <<'EOF'\nprint(1)\nEOF"):
             with self.subTest(text):
-                d = self.denied(self.shell(text, 'reviewer', shell='bash'), 'write-jail')
+                d = self.denied(self.shell(text, 'reviewer', shell='bash'), 'unplaced')
                 self.assertIn('Run it with "%s" as the working directory' % W.fwd(self.w.temp), d.reason)
                 self.allowed(self.shell(text, 'reviewer', shell='bash', cwd=self.w.temp))
 
@@ -212,7 +212,7 @@ class ReadOnlyCheckout(Base):
         run in the read-only checkout; the same code without -I is still refused."""
         code = "import json,sys; print(json.load(open(sys.argv[1]))['a'])"
         self.allowed(self.shell('python3 -I -c "%s" x.json' % code, 'reviewer', shell='bash'))
-        self.denied(self.shell('python3 -c "%s" x.json' % code, 'reviewer', shell='bash'), 'write-jail')
+        self.denied(self.shell('python3 -c "%s" x.json' % code, 'reviewer', shell='bash'), 'unplaced')
 
 
 class Workdir(Base):
@@ -1450,20 +1450,21 @@ class ComputedCheckoutReads(Base):
                    ('bash', 'git -C "$p" log --format="$(cat f)"'),
                    ('bash', 'git -C "$p" log --format="$w" --output=x.txt'),
                    ('powershell', 'git -C $p log $f'),                      # an array is many arguments
-                   ('powershell', 'git -C $p log @f'),
                    ('powershell', 'git -C $p log -1 --format="$w" --outp=x.txt'),
                    # status, describe and branch are not loosened: they may write (an index refresh, a ref)
                    ('bash', 'git -C "$p" status "$f"'),
                    ('bash', 'git -C "$p" describe "$x"'),
                    ('bash', 'git -C "$p" branch --list "$pat"')],
-                  lambda a, **kw: self.denied(a, 'write-jail', **kw))
+                  lambda a, **kw: self.denied(a, 'unplaced', **kw))
+        # a splat may hold --git-dir or --work-tree, which re-point git on purpose: the jail's refusal
+        self.each([('powershell', 'git -C $p log @f')], lambda a, **kw: self.denied(a, 'write-jail', **kw))
 
     def test_a_powershell_word_that_runs_on_after_its_closing_quote_is_refused(self):
         # PowerShell ends an argument that opens with a quote at its closing quote: what follows is
         # another argument, which may be --output=<file> (rules.dyn_head)
         self.each([('powershell', 'git -C $p log \'HEAD\'"$f"'), ('powershell', 'git -C $p log "HEAD~"$f'),
                    ('powershell', 'git -C $p show "x$n"\'y\''), ('powershell', 'git -C $p diff "origin/$b""$f"')],
-                  lambda a, **kw: self.denied(a, 'write-jail', **kw))
+                  lambda a, **kw: self.denied(a, 'unplaced', **kw))
         # a word that opens with bare text runs on through its quotes as one argument
         self.each([('powershell', 'git -C $p log HEAD~"$n"'), ('powershell', 'git -C $p show "HEAD~$n"')],
                   lambda a, **kw: self.allowed(a, **kw))
@@ -1472,7 +1473,11 @@ class ComputedCheckoutReads(Base):
         self.each([('bash', 'git -C "$p" tag "v$n"'), ('bash', 'git -C "$p" symbolic-ref HEAD refs/heads/x'),
                    ('bash', 'git -C "$p" branch -m main old'), ('powershell', 'git -C $p branch -m main "$b"'),
                    ('bash', 'git -C "$p" config user.name "$n"')],
-                  lambda a, **kw: self.denied(a, 'write-jail', **kw))
+                  lambda a, **kw: self.denied(a, 'unplaced', **kw))
+
+
+setUpModule = W.deny_unplaced           # these pin what the guard cannot place (world.deny_unplaced)
+tearDownModule = W.allow_unplaced
 
 
 if __name__ == '__main__':

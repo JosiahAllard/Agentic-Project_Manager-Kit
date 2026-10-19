@@ -924,10 +924,12 @@ class LanderMainCheckout(MainGit):
         # the main-checkout history rule refuses the commit first; the jail refuses the rest
         self.each_denied(['git -C "$M" commit -m x', 'git -C "$(git rev-parse --show-toplevel)" commit -m x'])
         self.each_denied(['git -C "$M" commit -m x'], tool='PowerShell')
-        for text in ('git -C "$M" symbolic-ref HEAD refs/heads/x', 'git -C "$M" branch -m main old',
-                     'GIT_DIR="%s/.git" git tag v9' % self.main):
+        # a computed -C is a checkout the guard cannot place (unplaced); GIT_DIR re-points git on purpose
+        for text, rule in (('git -C "$M" symbolic-ref HEAD refs/heads/x', 'unplaced'),
+                           ('git -C "$M" branch -m main old', 'unplaced'),
+                           ('GIT_DIR="%s/.git" git tag v9' % self.main, 'write-jail')):
             with self.subTest(text):
-                self.jailed(self.git(text))
+                self.jailed(self.git(text), rule)
 
 
 class RefDeleteHint(MainGit):
@@ -1006,10 +1008,10 @@ class UnplacedGit(MainGit):
                      'git --git-dir="%s/.git" --work-tree="%s" update-index --assume-unchanged a.py' % (m, m),
                      'git --git-dir="%s/.git" --work-tree="%s" add a.py' % (m, m), 'git --git-dir="%s/.git" gc' % m,
                      'git --git-dir="%s/.git" fetch origin x:refs/heads/y' % m,
-                     'GIT_WORK_TREE="%s" git add a.py' % m, 'git -c core.worktree="%s" add a.py' % m,
-                     'git -C "$M" tag v9'):
+                     'GIT_WORK_TREE="%s" git add a.py' % m, 'git -c core.worktree="%s" add a.py' % m):
             with self.subTest(text):
                 self.jailed(self.git(text, 'worker'))
+        self.jailed(self.git('git -C "$M" tag v9', 'worker'), 'unplaced')     # a computed -C
 
     def worker_denied(self, texts, rule='write-jail', tool='Bash'):
         for text in texts:
@@ -1147,10 +1149,10 @@ class UnplacedGit(MainGit):
                     self.assertTrue(p.clean, text)
                     d = decide(event(tool, {'command': text, 'description': 'test'}, where, True, 'worker'),
                                self.w.ctx(environ={}))
-                    # the main-checkout rule cannot pin New-Item's item (env: on a line that is not
-                    # plain, joined with $n) to the env: drive and refuses first, from the main
+                    # the guard cannot pin New-Item's item (env: on a line that is not plain, joined
+                    # with $n) to the env: drive and refuses it first as unplaced, from the main
                     # checkout and from a worktree alike
-                    self.jailed(d, 'main-checkout' if 'New-Item' in text else 'write-jail')
+                    self.jailed(d, 'unplaced' if 'New-Item' in text else 'write-jail')
             with self.subTest(text, role='main'):
                 self.allowed(decide(event(tool, {'command': text, 'description': 'test'}, self.w.wt),
                                     self.w.ctx(environ={})))
@@ -1168,15 +1170,16 @@ class UnplacedGit(MainGit):
     def unplaced_behind_a_computed_target(self, texts):
         """Each PowerShell line writes to a computed item path that may be an env: item: the parse
         leaves its git unplaceable, and the target, not literal, is refused before the git is judged
-        (main-checkout for a worker, write-jail for the coordinator's mark)."""
+        (unplaced, for a worker and the coordinator's mark alike)."""
         for text in texts:
             with self.subTest(text):
                 p = cm.read(text, sh.PS, W.fwd(self.w.wt))
                 self.assertTrue(p.clean, text)
                 self.assertTrue(p.commands[-1].git_env, text)
                 self.assertIn('not literal', self.jailed(self.git(text, 'worker', tool='PowerShell'),
-                                                         'main-checkout').reason)
-                self.assertIn('not literal', self.jailed(self.marked(text, COORDINATOR, 'PowerShell')).reason)
+                                                         'unplaced').reason)
+                self.assertIn('not literal', self.jailed(self.marked(text, COORDINATOR, 'PowerShell'),
+                                                         'unplaced').reason)
 
     def fail_closed(self, texts, tool='Bash'):
         """Each line runs a git write after something that may change the environment unread:
@@ -1264,7 +1267,7 @@ class UnplacedGit(MainGit):
                 ('git --config-env=user.name=V add a.py', '--config-env', 'git -C "%s" add a.py' % wt),
                 ('git -C "$M" tag v9', 'computed -C', 'git -C "<checkout>" tag v9')):
             with self.subTest(text):
-                d = self.jailed(self.git(text, 'worker'))
+                d = self.jailed(self.git(text, 'worker'), 'unplaced' if '$M' in text else 'write-jail')
                 self.assertIn(cause, d.reason)
                 self.assertIn('Instead: %s [' % instead, d.reason)
         for text, cause in (('GIT_DIR="%s/.git" git commit -m x' % m, 'GIT_DIR'),
@@ -1341,7 +1344,7 @@ class UnplacedGit(MainGit):
                 self.jailed(self.git(text, 'worker', tool=tool), 'unreadable')
             for environ in (COORDINATOR, OLD_MARK, PM, DEEP, CONSULTANT):
                 with self.subTest(text, mark=environ[context.ROLE_ENV]):
-                    d = self.jailed(self.marked(text, environ, tool))
+                    d = self.jailed(self.marked(text, environ, tool), 'unplaced')
                     self.assertIn('run the git in its own call', d.reason)
             # the owner's session and the marks the jail does not hold keep the line in a worktree
             for environ in ({}, PLAIN):
@@ -1406,19 +1409,18 @@ class UnplacedGit(MainGit):
             '$env:BASH_ENV ="x"; %s' % g,
             '$env:GIT_DIR +="x"; %s' % g], tool='PowerShell')
         # a name an env: item is renamed, copied or moved to may then hold env:. The line is not
-        # plain (Set-Item), so the env: item is judged as a path the guard cannot place: the
-        # main-checkout rule refuses a worker first, naming the provider item; the coordinator's
-        # mark meets the write jail
+        # plain (Set-Item), so the env: item is judged as a path the guard cannot place: refused as
+        # unplaced, naming the provider item, for a worker and the coordinator's mark alike
         for text in ("Rename-Item env:FOO TEMP; Set-Item \"$env:TEMP\\GIT_DIR\" '%s/.git'; %s" % (m, g),
                      "Rename-Item env:FOO -NewName TEMP; Set-Item \"$env:TEMP\\GIT_DIR\" '%s/.git'; %s" % (m, g),
                      "Copy-Item env:FOO env:TEMP; Set-Item \"$env:TEMP\\GIT_DIR\" '%s/.git'; %s" % (m, g),
                      "Move-Item env:FOO -Destination env:TEMP; Set-Item \"$env:TEMP\\GIT_DIR\" '%s/.git'; %s" % (m, g)):
             with self.subTest(text):
                 self.assertTrue(cm.read(text, sh.PS, W.fwd(self.w.wt)).clean, text)
-                d = self.jailed(self.git(text, 'worker', tool='PowerShell'), 'main-checkout')
+                d = self.jailed(self.git(text, 'worker', tool='PowerShell'), 'unplaced')
                 self.assertIn('PowerShell provider item (env:', d.reason)
                 for environ in (COORDINATOR, OLD_MARK):
-                    self.jailed(self.marked(text, environ, 'PowerShell'))
+                    self.jailed(self.marked(text, environ, 'PowerShell'), 'unplaced')
         for text in ('$env:FOO ="x"; %s' % g, "Rename-Item env:FOO BAR; Get-Content \"$env:TEMP\\x.txt\"; %s" % g):
             with self.subTest(text):
                 self.allowed(self.git(text, 'worker', tool='PowerShell'))
@@ -1464,16 +1466,19 @@ class UnplacedGit(MainGit):
             with self.subTest(text):
                 self.assertFalse(cm.read(text, sh.PS, wt).clean, text)
                 self.jailed(self.git(text, 'worker', tool='PowerShell'), rule)
+                # a mark: the static call re-points git (write-jail); an unreadable line's git is
+                # one the guard cannot place (unplaced)
                 for environ in (COORDINATOR, OLD_MARK):
                     with self.subTest(text, mark=environ[context.ROLE_ENV]):
-                        self.jailed(self.marked(text, environ, 'PowerShell'))
+                        self.jailed(self.marked(text, environ, 'PowerShell'),
+                                    'write-jail' if rule == 'write-jail' else 'unplaced')
         # a shell reading such a string from a pipe is unreadable the same way
         text = '"git $b" | powershell -Command -'
         self.assertFalse(cm.read(text, sh.PS, wt).clean, text)
         self.jailed(self.git(text, 'worker', tool='PowerShell'), 'unreadable')
         for environ in (COORDINATOR, OLD_MARK):
             with self.subTest(text, mark=environ[context.ROLE_ENV]):
-                self.jailed(self.marked(text, environ, 'PowerShell'))
+                self.jailed(self.marked(text, environ, 'PowerShell'), 'unplaced')
         # a single-quoted string and a backtick-escaped $ do not expand: iex runs the text as
         # written (x $b), and the git after it stays placed
         for text in ("'x $b' | iex; %s" % g, '"x `$b" | iex; %s' % g):
@@ -1493,11 +1498,11 @@ class UnplacedGit(MainGit):
                 self.denied(self.git(text, 'worker', tool='PowerShell'))
                 self.denied(self.marked(text, COORDINATOR, 'PowerShell'))
         # a property cmdlet on a computed Environment:: path is refused: its -Path is a write
-        # target that is not literal ($n), so the guard cannot tell where it writes (the main-checkout
-        # rule for a worker, the write jail for the coordinator's mark), before its git is judged
+        # target that is not literal ($n), so the guard cannot tell where it writes (unplaced, for a
+        # worker and the coordinator's mark alike), before its git is judged
         text = 'Set-ItemProperty -Path "Environment::$n" -Name GIT_DIR -Value x; %s' % g
-        self.assertIn('not literal', self.jailed(self.git(text, 'worker', tool='PowerShell'), 'main-checkout').reason)
-        self.assertIn('not literal', self.jailed(self.marked(text, COORDINATOR, 'PowerShell')).reason)
+        self.assertIn('not literal', self.jailed(self.git(text, 'worker', tool='PowerShell'), 'unplaced').reason)
+        self.assertIn('not literal', self.jailed(self.marked(text, COORDINATOR, 'PowerShell'), 'unplaced').reason)
         # a curly double quote may end the string where the guard reads on: it stays a static call
         self.held_everywhere(['$hits += "$b :: “ x"; %s' % g, '$hits += "$b :: ” x"; %s' % g],
                              tool='PowerShell')
@@ -1646,6 +1651,10 @@ class KitJson(Base):
 
     def test_outside_a_checkout_it_is_only_a_file(self):
         self.allowed(self.write(os.path.join(self.w.temp, 'fixture', '.kit.json')))
+
+
+setUpModule = W.deny_unplaced           # these pin what the guard cannot place (world.deny_unplaced)
+tearDownModule = W.allow_unplaced
 
 
 if __name__ == '__main__':

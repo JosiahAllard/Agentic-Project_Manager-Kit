@@ -60,8 +60,9 @@ class StartProcessWorkdir(unittest.TestCase):
         for text, rule in (
                 ("Start-Process git -ArgumentList 'commit','-m','x' -WorkingDirectory %s" % main, 'git-main-history'),
                 ("Start-Process git -ArgumentList 'checkout','main' -WorkingDirectory %s" % main, 'git-checkout'),
-                ("Start-Process git -ArgumentList 'commit','-m','x' -WorkingDirectory $d", 'git-main-history'),
-                ("Start-Process git -ArgumentList 'commit','-m','x' -WorkingDirectory Z:", 'git-main-history')):
+                # a workdir the guard cannot place: unplaced
+                ("Start-Process git -ArgumentList 'commit','-m','x' -WorkingDirectory $d", 'unplaced'),
+                ("Start-Process git -ArgumentList 'commit','-m','x' -WorkingDirectory Z:", 'unplaced')):
             with self.subTest(text):
                 self.assertEqual(verdict(self.judge(text, self.w.wt)), ('deny', rule))
 
@@ -75,22 +76,23 @@ class StartProcessWorkdir(unittest.TestCase):
 
     def test_python_writes_the_main_checkout_it_starts_in(self):
         main = self.w.main
-        for text in ("Start-Process python -ArgumentList '-c','print(1)' -WorkingDirectory %s" % main,
-                     "Start-Process python -ArgumentList 'x.py' -WorkingDirectory %s" % main,
-                     "Start-Process python -ArgumentList 'x.py' -WorkingDirectory $d",
-                     "Start-Process cp -ArgumentList 'a','b' -WorkingDirectory %s" % main):
+        # a python whose writes the guard does not read is unplaced; cp's literal target is placed
+        for text, rule in (("Start-Process python -ArgumentList '-c','print(1)' -WorkingDirectory %s" % main, 'unplaced'),
+                           ("Start-Process python -ArgumentList 'x.py' -WorkingDirectory %s" % main, 'unplaced'),
+                           ("Start-Process python -ArgumentList 'x.py' -WorkingDirectory $d", 'unplaced'),
+                           ("Start-Process cp -ArgumentList 'a','b' -WorkingDirectory %s" % main, 'main-checkout')):
             with self.subTest(text):
-                self.assertEqual(verdict(self.judge(text, self.w.wt)), ('deny', 'main-checkout'))
+                self.assertEqual(verdict(self.judge(text, self.w.wt)), ('deny', rule))
         self.assertIsNone(self.judge("Start-Process python -ArgumentList 'x.py' -WorkingDirectory %s" % self.w.wt,
                                      self.w.wt))
 
     def test_a_worktree_workdir_does_not_free_a_writer_in_the_main_checkout(self):
         # only git is placed from the workdir alone; any other program is judged from both folders
         wt = self.w.wt
-        for text in ("Start-Process python -ArgumentList 'x.py' -WorkingDirectory %s" % wt,
-                     "Start-Process cp -ArgumentList 'a','b' -WorkingDirectory %s" % wt):
+        for text, rule in (("Start-Process python -ArgumentList 'x.py' -WorkingDirectory %s" % wt, 'unplaced'),
+                           ("Start-Process cp -ArgumentList 'a','b' -WorkingDirectory %s" % wt, 'main-checkout')):
             with self.subTest(text):
-                self.assertEqual(verdict(self.judge(text, self.w.main)), ('deny', 'main-checkout'))
+                self.assertEqual(verdict(self.judge(text, self.w.main)), ('deny', rule))
         self.assertIsNone(self.judge("Start-Process git -ArgumentList 'commit','-m','x' -WorkingDirectory %s" % wt,
                                      self.w.main))
 
@@ -207,7 +209,7 @@ class SleepWait(unittest.TestCase):
         for code in ('import time;time.sleep(110)', 'from time import sleep; sleep(5.5)'):
             with self.subTest(code):
                 d = decide(ps('python -c "%s"' % code, self.w.main, sub=True), self.w.ctx())
-                self.assertEqual(verdict(d), ('deny', 'main-checkout'))
+                self.assertEqual(verdict(d), ('deny', 'unplaced'))
                 self.assertIn('is a sleep-wait', d.reason)
                 self.assertNotIn('writes files in the directory it runs in', d.reason)
                 self.assertNotIn('worktree add', d.instead)
@@ -219,7 +221,7 @@ class SleepWait(unittest.TestCase):
         for code in ('import time;time.sleep(1);open(\'x\',\'w\')', 'import os;os.remove(\'x\')'):
             with self.subTest(code):
                 d = decide(ps('python -c "%s"' % code, self.w.main, sub=True), self.w.ctx())
-                self.assertEqual(verdict(d), ('deny', 'main-checkout'))
+                self.assertEqual(verdict(d), ('deny', 'unplaced'))
                 self.assertNotIn('sleep-wait', d.reason)
 
 
@@ -240,7 +242,7 @@ class UnreadPython(unittest.TestCase):
                 (ps, "Start-Process python -ArgumentList '-c','print(1)'", 'Start-Process hands python')):
             with self.subTest(text):
                 d = decide(shell(text, self.w.main, sub=True), self.w.ctx())
-                self.assertEqual(verdict(d), ('deny', 'main-checkout'))
+                self.assertEqual(verdict(d), ('deny', 'unplaced'))
                 self.assertTrue(d.reason.startswith('the directory `'), d.reason)
                 self.assertIn('(counted as written: ', d.reason)
                 self.assertIn(why, d.reason)
@@ -255,6 +257,10 @@ class UnreadPython(unittest.TestCase):
     def test_an_unread_program_in_a_worktree_still_passes(self):
         self.assertIsNone(decide(ps('python -c "import sys; print(sys.argv)" a b', self.w.wt, sub=True),
                                  self.w.ctx()))
+
+
+setUpModule = W.deny_unplaced           # these pin what the guard cannot place (world.deny_unplaced)
+tearDownModule = W.allow_unplaced
 
 
 if __name__ == '__main__':

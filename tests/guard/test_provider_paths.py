@@ -76,10 +76,10 @@ class FileWritesStillJudged(unittest.TestCase):
         self.w = W.World()
         self.addCleanup(self.w.cleanup)
 
-    def refused(self, text, cwd):
+    def refused(self, text, cwd, rule='main-checkout'):
         d = decide(ps(text, cwd, sub=True), self.w.ctx())
         self.assertIsNotNone(d, 'allowed: %s' % text)
-        self.assertEqual(d.rule, 'main-checkout', d.reason)
+        self.assertEqual(d.rule, rule, d.reason)
 
     def test_file_paths(self):
         m = self.w.main
@@ -88,13 +88,14 @@ class FileWritesStillJudged(unittest.TestCase):
                           ('New-Item -Path %s -Name x.txt' % m, self.w.wt),
                           ('Set-Content -Path %s\\x.txt -Value 1' % m, self.w.wt),
                           ('New-Item -Path x.txt', self.w.main),
-                          ('New-Item -Path .\\env\\x.txt', self.w.main),
-                          ('New-Item -Path envx:\\x.txt', self.w.main),
-                          ('New-Item -Path C:x.txt', self.w.main),
-                          ('New-Item -Path Temp:\\x.txt', self.w.main),
-                          ('New-Item -Path FileSystem::x.txt', self.w.main)):
+                          ('New-Item -Path .\\env\\x.txt', self.w.main)):
             with self.subTest(text, cwd=cwd):
                 self.refused(text, cwd)
+        # a drive or provider the guard cannot place: unplaced
+        for text in ('New-Item -Path envx:\\x.txt', 'New-Item -Path C:x.txt', 'New-Item -Path Temp:\\x.txt',
+                     'New-Item -Path FileSystem::x.txt'):
+            with self.subTest(text):
+                self.refused(text, self.w.main, 'unplaced')
 
     def test_items_the_guard_cannot_pin_to_a_non_file_drive(self):
         for text in ('New-Item -Path "env:$n" -Value x',
@@ -111,7 +112,7 @@ class FileWritesStillJudged(unittest.TestCase):
                      'Import-Module .\\m.psm1; New-Item -Path env:\\x.txt',
                      '. .\\setup.ps1; New-Item -Path env:\\x.txt'):
             with self.subTest(text):
-                self.refused(text, self.w.main)
+                self.refused(text, self.w.main, 'unplaced')
 
 
 class NativePrograms(unittest.TestCase):
@@ -135,14 +136,14 @@ class NativePrograms(unittest.TestCase):
             with self.subTest(text):
                 d = self.decide(text, self.w.main)
                 self.assertIsNotNone(d, 'allowed: %s' % text)
-                self.assertEqual(d.rule, 'main-checkout', d.reason)
+                self.assertEqual(d.rule, 'unplaced', d.reason)
 
     def test_native_writer_outside_the_roots(self):
         text = 'cd "%s"; xcopy a env:FOO' % W.fwd(self.w.plain)
         d = self.decide(text, self.w.wt)
         self.assertIsNotNone(d, 'allowed: %s' % text)
-        # write-jail today; main-checkout once every other provider or long-drive word is refused
-        self.assertIn(d.rule, ('write-jail', 'main-checkout'), d.reason)
+        # a provider word the guard cannot place: unplaced (held at deny in this module)
+        self.assertEqual(d.rule, 'unplaced', d.reason)
 
 
 class NarrowSkip(unittest.TestCase):
@@ -168,7 +169,7 @@ class NarrowSkip(unittest.TestCase):
             with self.subTest(text):
                 d = decide(ps(text, self.w.main, sub=True), self.w.ctx())
                 self.assertIsNotNone(d, 'allowed: %s' % text)
-                self.assertEqual(d.rule, 'main-checkout', d.reason)
+                self.assertEqual(d.rule, 'unplaced', d.reason)
 
     def test_lines_that_are_not_plain_calls_stay_judged(self):
         item = 'New-Item env:\\x.txt'
@@ -193,7 +194,7 @@ class NarrowSkip(unittest.TestCase):
                 with self.subTest(text):
                     d = decide(ps(text, self.w.main, sub=True), self.w.ctx())
                     self.assertIsNotNone(d, 'allowed: %s' % text)
-                    self.assertIn(d.rule, ('main-checkout', 'unreadable'), d.reason)
+                    self.assertIn(d.rule, ('unplaced', 'main-checkout', 'unreadable'), d.reason)
 
 
 class RemapForms(unittest.TestCase):
@@ -217,13 +218,17 @@ class RemapForms(unittest.TestCase):
             with self.subTest(text):
                 d = decide(ps(text, self.w.main, sub=True), self.w.ctx())
                 self.assertIsNotNone(d, 'allowed: %s' % text)
-                self.assertIn(d.rule, ('main-checkout', 'unreadable'), d.reason)
+                self.assertIn(d.rule, ('unplaced', 'main-checkout', 'unreadable'), d.reason)
             # after the item: the line check alone keeps env:\x.txt judged as a file
             text = '%s\n%s' % (item, pre)
             with self.subTest(text):
                 d = decide(ps(text, self.w.main, sub=True), self.w.ctx())
                 self.assertIsNotNone(d, 'allowed: %s' % text)
-                self.assertEqual(d.rule, 'main-checkout', d.reason)
+                self.assertEqual(d.rule, 'unplaced', d.reason)
+
+
+setUpModule = W.deny_unplaced           # these pin what the guard cannot place (world.deny_unplaced)
+tearDownModule = W.allow_unplaced
 
 
 if __name__ == '__main__':
