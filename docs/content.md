@@ -16,7 +16,8 @@ a test fails when they differ from what the renderer writes now (tests/content/t
   it has retired: `retired()`, Claude's old `hosts/claude/shell/skills/`). Exit 1 if any.
 - `python tools/render_content.py --write` writes them and removes the stale ones. `--host <name>`
   limits either to one host. Exit 2: usage, or a content file of the wrong shape (the line names
-  the file and the problem).
+  the file and the problem), or `--write` into an installed plugin export, a folder with the
+  `.pm-kit-export` marker in it or above it (kitlib.content.write refuses it; name the checkout with `-C <checkout>`).
 
 The renderer also writes each host's plugin manifests from `kit.json` (the kit's one name and
 version, ARCHITECTURE.md "Packaging"; see "Manifests" below), and the two tables in

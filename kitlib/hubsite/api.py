@@ -665,6 +665,13 @@ class Api(object):
                 if got[0] == key and now < got[1] + self.ack_window_s:
                     d['route'] = key
 
+    def handed_to(self, kind, doc_id):
+        """The session key item (kind, doc_id) was first handed over to by handed(), or None.
+        Read-only, one dict read: kitlib.hubsite.push calls it from its own thread to tell that
+        the session a push went to picked the item up."""
+        got = self._handed.get((kind, doc_id))
+        return got[0] if got is not None else None
+
     def seen(self, req, what, opened=None, closed=None):
         """Note that an agent (a PM session) just waited or pulled (`what`). `opened` is a key
         for a wait that now blocks, `closed` the key of one that ended. The owner's calls are

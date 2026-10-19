@@ -25,7 +25,7 @@ coordinator profile lists the roles it actually has; use only those. Roles are n
 
 - Cheap tier: landings, records, doc ticks, moves, routine coding. Strong: concurrency,
   networking, migration, security, crash and measurement work, design, specs that read code, any
-  change nobody here can observe. Never the lightest where a failure must be judged.
+  change nobody here can observe. Never the lightest where a failure must be judged (the reviewer, by its rule below, excepted).
 - Plan-only and sync/prep work (merge main into a branch, rebase, conflict-free sync,
   preparation) goes to the worker (standard tier), whatever the branch's risk.
 - The worker = default coding, low/medium risk (`--find risk`): additive content, UI, pure logic
@@ -40,7 +40,7 @@ coordinator profile lists the roles it actually has; use only those. Roles are n
   senior-worker failed at or plainly cannot do). weak-worker not installed -> the worker.
   strong-worker not installed -> the worker raised to strong. Never the host's general-purpose
   agent for code. An escalation = reassign upward with its findings, not a failure. A
-  weak-worker's branch is reviewed like a worker's: the reviewer as pinned, by the rule below.
+  weak-worker's branch is reviewed like a worker's: the reviewer by the rule below.
 - Tier and effort per role are pinned in each role's front matter (`<kit>/docs/ROSTER.md` is rendered from it).
   A kit role is dispatched with no model of its own choosing. Override only upward for risk, and
   say so in status; never the lander (light as pinned, whatever is being landed), and the reviewer
@@ -51,18 +51,16 @@ coordinator profile lists the roles it actually has; use only those. Roles are n
   strong tier is coding or design work: it goes to a role on the ladder above. A built-in
   explorer's or planner's answer that reads thin is asked once more raised to strong; say so in
   status.
-- **Reviewer model** (this is the rule's one home). Read the groups printed under the `files` line
-  of `python <kit>/tools/review_pack.py -C <worktree> <branch>`: `High (N)`, `unlisted (= High) (N)`, `Medium (N)`,
-  `Low (N)`; a group with no file is not printed. The first row that fits:
-  1. A `High` group is printed, or a changed path matches a strict landing path
-     (`STRICT_DEFAULTS` in `<kit>/kitlib/gate/strict_defaults.py`: guard, lock,
-     gate, proc and hook code, agent definitions, role and skill content) whatever group it is
-     printed in -> raise to strong.
-  2. Only a `Low` group is printed -> no override: standard as pinned, never raised.
-  3. Otherwise (a `Medium` or `unlisted (= High)` group, no `High` group) -> no override; you may
-     raise to strong for a risk you name in status, never must.
+- **Reviewer model** (this is the rule's one home). The reviewer is pinned to the light tier
+  at high effort; its model follows the tier of the role that built the branch.
+  The first row that fits:
+  1. Built by strong-worker, senior-worker or deep-worker -> raise to strong.
+  2. Built by worker or weak-worker -> no override: light as pinned.
+  3. Otherwise -> raise to strong.
 
-  No review pack in the repo -> the same rows on the risk level the brief states.
+  A light reviewer's "blocking" claim is verified before it holds a landing: read the cited code
+  path yourself or ask a strong-tier review. Haiku overstated severity twice in the reviewer A/B
+  (`<kit>/docs/model-ab.md`, "Reviewer A/B on planted bugs").
 - Effort is not settable per dispatch: pick the role for it. High risk -> strong-worker, or
   senior-worker for the kinds the ladder names. Only when senior-worker has been defeated, or
   plainly will be, on a race or crash root-cause or subtle concurrency (never a build or a
