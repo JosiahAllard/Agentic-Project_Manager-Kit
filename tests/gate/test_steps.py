@@ -315,6 +315,15 @@ class ZeroCountPasses(unittest.TestCase):
         self.assertEqual(self.warned('kit_tests: OK'), [])
         self.assertEqual(self.warned('^OK$', zero_tests=r'^OK 0$'), [])
 
+    def test_the_ran_zero_tests_line_alone_warns(self):
+        # no zero_tests, and no count of its own: only the built-in Ran 0 tests line matches
+        (line,) = self.warned(r'(?m)^Ran .+ in ')
+        self.assertIn("'Ran 0 tests in 0.000s'", line)
+
+    def test_a_malformed_regex_gives_no_line_and_never_raises(self):
+        self.assertEqual(self.warned('('), [])                            # as a pass pattern
+        self.assertEqual(self.warned('UNIT TESTS OK', zero_tests='('), [])  # as a zero_tests one
+
     def test_a_pattern_it_cannot_read_gives_no_line(self):
         self.assertEqual(self.warned(r'(?P<a>x)(?(a)y|z) OK'), [])
         self.assertEqual(S.zero_count_passes({}), [])
