@@ -121,7 +121,10 @@ repository; Questions, To do and Docs also by id or title.
   scheduled task's state first and starts the task again only when the task ran the server it
   stopped (the task is `Running` or `Queued`), or when nothing ran and the task is ready; then it
   waits until the new server answers on `hub.port` (`RESTARTED: ...`). A task that cannot be read
-  or started after the stop prints the `STOPPED` line, why, and the start command (exit 1).
+  or started after the stop prints the `STOPPED` line, why, and how to start the task (exit 1).
+  A `restart` that starts nothing, like a failed start, points at the task (`setup --autostart`,
+  `Enable-ScheduledTask`, `Start-ScheduledTask`), never at `hub.py serve`: a server started in a
+  console ends with that shell, the task's does not.
   Neither ever kills a process: past `--timeout` (default 300 s, approximate: one request in
   flight may run past it) they print `TIMED OUT: ...` and exit 4.
 - `python tools/hub.py setup --check` writes nothing: it says whether `hub.access` is unset, set

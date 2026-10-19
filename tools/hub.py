@@ -720,10 +720,12 @@ def _setup(a, stop):
     else:
         print('NOTE: no store folder is set: set hub.store or pm_data in the machine config '
               '(this tool does not write it), or start with --store PATH')
-    print('start the server with: %s' % START)
     if a.autostart:
+        print('start the server detached, once the task is registered: %s' % _START_TASK)
         for line in hub_autostart.install(os.path.abspath(__file__)):
             print(line)
+    else:
+        print('start the server with: %s' % START)
     return 0
 
 
@@ -785,6 +787,22 @@ NOT_STARTED = {
     control.HAND_STARTED: "the server was started by hand, not by the scheduled task '%s', so "
                           "nothing was started" % hub_autostart.TASK_NAME,
 }
+_TASK = "-TaskName '%s'" % hub_autostart.TASK_NAME
+_START_TASK = 'Start-ScheduledTask %s' % _TASK
+
+
+def task_advice(outcome):
+    """The last line when a restart started nothing, by control's outcome (None: the task could
+    not be started). `serve` is not it: a server started in a console ends with that shell; the
+    scheduled task runs it detached and windowless."""
+    if outcome == control.NO_TASK:
+        return 'register the task, then start it: python "%s" setup --autostart; %s' % (
+            os.path.abspath(__file__), _START_TASK)
+    if outcome == control.DISABLED:
+        return 'enable the task, then start it: Enable-ScheduledTask %s; %s' % (_TASK, _START_TASK)
+    return 'start it with: %s' % _START_TASK
+
+
 # a server the task starts has no console: what it says at start-up goes nowhere
 NO_CONSOLE = ('a server the scheduled task starts has no console, so its start-up lines are not '
               'shown: run hub.py serve in a console to see why it does not answer: %s' % START)
@@ -835,7 +853,7 @@ def _restart(a, stop):
         _stopped(port, e.stopped)
         print(serve.scrub('the scheduled task could not be started: %s' % e.reason),
               file=sys.stderr)
-        print('start it with: %s' % START, file=sys.stderr)
+        print(task_advice(None), file=sys.stderr)
         return 1
     except control.TimedOut as e:
         print(serve.scrub('TIMED OUT: %s' % e), file=sys.stderr)
@@ -846,7 +864,7 @@ def _restart(a, stop):
     _stopped(port, got.stopped)
     if got.outcome != control.RESTARTED:
         print(NOT_STARTED[got.outcome])
-        print('start it with: %s' % START)
+        print(task_advice(got.outcome))
         return client.NOT_RUNNING
     print("RESTARTED: the hub server answers on port %d (the scheduled task '%s' started it)"
           % (got.port, hub_autostart.TASK_NAME))
