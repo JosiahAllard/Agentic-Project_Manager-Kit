@@ -59,7 +59,9 @@ CONFIG_KEY = 'plugin'
 _SHA12 = re.compile(r'^[0-9a-f]{12}$')
 _TMP = re.compile(r'^([0-9a-f]{12})\.tmp$')
 _CLAIMED = re.compile(r'^.+\.pruning-\d+$')
-_NAMED = re.compile(r'(?:^|(?<=[\\/"\'\s=>]))([0-9a-f]{12})(?=[\\/"\'\s<]|$)')
+_ENDS = r'(?=[\\/"\'\s<;,)&]|$)'      # what may follow a named path part: a separator, a quote,
+                                       # a PYTHONPATH-style list, a closing paren, a cmd && chain
+_NAMED = re.compile(r'(?:^|(?<=[\\/"\'\s=>]))([0-9a-f]{12})' + _ENDS)
 _RESERVED = frozenset(['CON', 'PRN', 'AUX', 'NUL'] + ['COM%d' % i for i in range(1, 10)]
                       + ['LPT%d' % i for i in range(1, 10)])
 _VERSION = re.compile(rb'("version"\s*:\s*")([^"\\]*)(")')
@@ -515,11 +517,16 @@ def _leases(root):
 def read_in_use(root, procs=None, tasks=None):
     """InUse: the command line and program of every running process (one Win32_Process read,
     kitlib.pmstart.list_processes), the definition of every scheduled task (`_tasks`) and the
-    pin leases under `root`. A read that fails adds its error and the others still run. procs
-    and tasks: the tests' stand-ins for the two reads."""
+    pin leases under `root`. A read that fails adds its error and the others still run. An empty
+    process list (None or []) is a failed read: a real one always holds the reader itself, and
+    kitlib.pmstart.list_processes answers [] when PowerShell printed nothing. procs and tasks:
+    the tests' stand-ins for the two reads."""
     texts, named, errors = [], set(), []
     try:
-        for p in (procs or _processes)() or ():
+        listed = (procs or _processes)()
+        if not listed:
+            raise RuntimeError('it came back empty')
+        for p in listed:
             for key in ('CommandLine', 'ExecutablePath'):
                 v = p.get(key)
                 if v:
@@ -547,8 +554,7 @@ def in_use_sha12s(u):
 
 def _version_named(u, version):
     """True when a text of `u` names <...>\\pm-kit\\pm-kit\\<version> (a plugins cache folder)."""
-    pat = re.compile(r'[\\/]%s[\\/]%s[\\/]%s(?=[\\/"\'\s<]|$)'
-                     % (NAME, NAME, re.escape(version.lower())))
+    pat = re.compile(r'[\\/]%s[\\/]%s[\\/]%s' % (NAME, NAME, re.escape(version.lower())) + _ENDS)
     return any(pat.search(t) for t in u.texts)
 
 
@@ -688,7 +694,7 @@ def prune_caches(folders, in_use, apply=False, now=None):
                 os.path.dirname(cache), cache]
         linked = any(_is_link(h) for h in hops)
         installed = _host().installed_path(f)
-        vers = []
+        vers, claims = [], []
         for n in names:
             p = os.path.join(cache, n)
             if _is_link(p):
@@ -696,15 +702,19 @@ def prune_caches(folders, in_use, apply=False, now=None):
                 continue
             if not os.path.isdir(p):
                 continue
+            if _CLAIMED.match(n):
+                claims.append(n)        # a claim a stopped run left: never dates a version
+                continue
             try:
                 t = datetime.datetime.fromtimestamp(os.stat(p).st_mtime)
             except (OSError, ValueError, OverflowError):
                 t = None
             vers.append((t, n))
         vers.sort(key=lambda w: (w[0] is None, w[0] or datetime.datetime.min, w[1]), reverse=True)
-        for i, (t, n) in enumerate(vers):
+        todo = [(t, n, vers[i - 1][0] if i else None) for i, (t, n) in enumerate(vers)]
+        todo += [(None, n, None) for n in claims]
+        for t, n, replaced in todo:
             p = os.path.join(cache, n)
-            replaced = vers[i - 1][0] if i else None
             if unread:
                 why = 'what is in use could not be read whole (%s)' % unread
             elif linked:

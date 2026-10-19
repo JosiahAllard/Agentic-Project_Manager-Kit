@@ -41,7 +41,9 @@ Before it removes anything, `tools/plugin_refresh.py --apply` reads what is in u
 - every scheduled task's definition (`schtasks /Query /XML ONE`: program, arguments and working folder). A task that runs from an export folder breaks when the folder is removed. A non-elevated read works: verified 2026-10-19 with `schtasks /Query /XML /TN` on the hub and procwatch tasks, which returned the full XML with `<Arguments>` and exit 0;
 - the pin leases, `<root>\pins\leases\<sha12>-<pid>.json`, by file name, live or not (pluginsource imports nothing from `kitlib.gate`).
 
-A `<sha12>` is in use when one of these names it as a whole path part (`in_use_sha12s`). A read that fails is printed (`prune: what is in use could not be read whole (...)`), and the others still count.
+A `<sha12>` is in use when one of these names it as a whole path part (`in_use_sha12s`), followed by a separator, a quote, `;`, `,`, `)` or `&`. A read that fails is printed (`prune: what is in use could not be read whole (...)`), and the others still count. An empty process list counts as a failed read, since a real one always holds the reader itself.
+
+Known limit: a non-elevated `Win32_Process` read returns a null `CommandLine` for elevated processes and for other users' processes, so such a process does not protect the export it runs from. The rename claim covers it only while the process holds a file there open.
 
 Never removed (`kitlib.pluginsource` `prune`, `KEEP`):
 
