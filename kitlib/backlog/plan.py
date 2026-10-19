@@ -979,7 +979,7 @@ def plan_set_status(snap, ctx, rid, status, q=None):
         was = was or 'no recorded question'
         return Change({rid: _text(pairs, rec.body)},
                       'backlog: re-park %s on %s (was %s)' % (rid, q, was),
-                      ['RE-PARKED %s on %s (was %s)' % (rid, q, was)])
+                      ['PARKED %s on %s, re-pointed (was %s)' % (rid, q, was)])
     if state not in ('open', 'pulled'):
         raise Refusal('`%s` is `state: %s`; only an open or pulled record is parked. %s first'
                       % (rid, state, 'Unblock it' if state == 'blocked' else 'Open it'))
