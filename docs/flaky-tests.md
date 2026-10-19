@@ -16,8 +16,8 @@ holds no time token at all: the wall-clock budget is a production default it can
 
 Evidence from other runs (facts as reported; the pattern is one: a fixed short timeout measures machine load, not correctness):
 
-- retribution TASKQUEUE-DISPOSAL-LOAD-FAIL: a 10 s wait on a Blazor disposal failed under gate load; starving the thread pool just before release reproduced it in every caught sample; the disposal arrived within 17 ms of the pool freeing, 0 lost in 330 capped samples; the fix waits to the shared ceiling, with a load report on timeout.
-- retribution LOCALNODE-STARTUP-HASH-BLOCKED-TIMING: load, not a real block; the hash read is never awaited; the old 10 s bound timed node launch plus thread-pool dispatch.
+- Another repository's task-queue disposal test waited a fixed 10 s and failed under machine load; a pool-starvation repro showed disposal finishing within 17 ms of the pool freeing, 0 of 330 lost, so the fix waits up to a shared ceiling and reports the load.
+- A startup-timing test in the same repository bounded launch plus dispatch at 10 s and failed on load, not on a block.
 - kit tests.host.test_header: the agent-start check missed its 1.0 s budget at 1122 ms in one landing gate; an idle rerun gave median 312 ms on the branch and 344 ms on main (10 runs each); not reproduced.
 
 ## Survey of tests/
