@@ -1,11 +1,13 @@
 """Read-only git the write jail lets run in another checkout (patch-id, apply --check: rules.git_reads,
 rules.apply_checks), and a piped `machine_lock.py run --help` the wrapped-gate rule (P16) lets pass
-(rules.lock_run_help), as does a piped gate.py --help, --plan or --measure (rules.gate_runs_nothing)."""
+(rules.lock_run_help), as does a piped gate.py --help, --plan or --measure (rules.gate_runs_nothing).
+git symbolic-ref with one ref, grep -O and archive --remote/--exec read (rules.git_reads,
+SYMREF_READ_OPTS)."""
 import unittest
 
 from . import world as W
 from .claudehost import decide
-from .test_jail import Base
+from .test_jail import Base, COORDINATOR
 from .world import bash, ps
 
 
@@ -44,6 +46,52 @@ class ReadOnlyGitElsewhere(Base):
             with self.subTest(text):
                 self.jailed(self.run_bash(text))
         self.allowed(self.run_bash('git -C "%s" apply --check -- a.patch' % d))
+
+
+class SymbolicRefAndProgramReads(Base):
+    """`git -C <root>/$r symbolic-ref --short refs/remotes/origin/HEAD` (a coordinator's loop over
+    its repositories) was refused as unplaced: symbolic-ref with one ref only prints where it
+    points. grep -O and archive --remote/--exec were refused as running a program; only an
+    attacker hides a write in one (R-2271), so they read like any grep or archive."""
+
+    def setUp(self):
+        Base.setUp(self)
+        W.deny_softened()
+        self.addCleanup(W.allow_unplaced)
+
+    def each_cwd_and_role(self, text, run):
+        for cwd in (self.w.wt, self.w.main):
+            for env, sub in (({}, True), (COORDINATOR, False)):
+                with self.subTest(text, cwd=cwd, env=env):
+                    yield run(text, cwd=cwd, sub=sub, env=env)
+
+    def test_symbolic_ref_reads_with_a_computed_checkout(self):
+        root = W.fwd(self.w.temp)
+        for text in ('git -C %s/$r symbolic-ref --short refs/remotes/origin/HEAD' % root,
+                     'git -C "%s/$r" symbolic-ref --short refs/remotes/origin/HEAD' % root,
+                     'for r in a b; do git -C %s/$r symbolic-ref --short refs/remotes/origin/HEAD; done' % root,
+                     'git -C $p symbolic-ref -q HEAD', 'git -C $p symbolic-ref --quiet --short HEAD'):
+            for d in self.each_cwd_and_role(text, self.run_bash):
+                self.allowed(d)
+        text = 'foreach ($r in "a", "b") { git -C "%s/$r" symbolic-ref --short refs/remotes/origin/HEAD }' % root
+        for d in self.each_cwd_and_role(text, self.run_ps):
+            self.allowed(d)
+
+    def test_symbolic_ref_writes_stay_unplaced(self):
+        for text in ('git -C $p symbolic-ref HEAD refs/heads/x', 'git -C $p symbolic-ref -d HEAD',
+                     'git -C $p symbolic-ref --delete HEAD', 'git -C $p symbolic-ref -m why HEAD refs/heads/x',
+                     'git -C $p symbolic-ref --d HEAD', 'git -C $p symbolic-ref'):
+            with self.subTest(text):
+                self.jailed(self.run_bash(text), 'unplaced')
+
+    def test_grep_o_and_archive_remote_read(self):
+        self.allowed(self.run_bash('git -C $p grep -O foo'))
+        self.allowed(self.run_bash('git -C $p grep --open-files-in-pager=less foo'))
+        d = W.fwd(self.w.plain)
+        for text in ('git -C "%s" archive --remote=x HEAD' % d, 'git -C "%s" archive --exec=x --remote=y HEAD' % d,
+                     'git -C "%s" grep -nO foo' % d):
+            with self.subTest(text):
+                self.allowed(self.run_bash(text))
 
 
 class LockRunHelpPiped(unittest.TestCase):

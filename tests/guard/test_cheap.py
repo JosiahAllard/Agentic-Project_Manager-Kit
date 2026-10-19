@@ -169,16 +169,18 @@ class StrictGitReads(World):
     """Where the checkout cannot be placed (git -C $x), git_reads(strict) keeps each form below a
     non-read exactly as before the cheap guard: it is refused, under unplaced (held at deny here;
     its default warns) where it was write-jail, and a PowerShell splat stays write-jail. A plain
-    read, and a computed word strict_dyn_read allows, is let through as before."""
+    read, and a computed word strict_dyn_read allows, is let through as before. grep -O is a read
+    and symbolic-ref with one ref is one (R-2271: only an attacker runs a program through -O;
+    archive --remote/--exec: test_readonly_git_help)."""
 
     NON_READS = (
         'log $f', 'show "$f"', 'diff $a $b',                     # computed words strict_dyn_read refuses
         'log --output=f', 'show --outp=f', 'diff --output f',    # writes_output_file
-        'grep -O foo', 'grep -nO foo', 'grep --open foo',        # opens_pager
-        'archive --remote=x HEAD', 'archive --exec=x HEAD',      # ARCHIVE_RUNS
         'branch --list --unset-up', 'tag -l --del', 'config --get --repl a.b c')   # strict_read_opts
     READS = ('log', 'show HEAD', 'diff', 'grep -n foo', 'branch -vv', 'tag -l', 'config --get a.b',
              'config -f x.cfg --get a.b',
+             'grep -O foo', 'grep -nO foo', 'grep --open foo',
+             'symbolic-ref --short refs/remotes/origin/HEAD',
              'log "HEAD~$n"', 'log --format="$f"', 'rev-parse $f')   # dyn_head / strict_dyn_read
 
     def git(self, rest, shell=W.bash):

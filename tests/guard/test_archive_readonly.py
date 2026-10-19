@@ -107,9 +107,13 @@ class ArchiveReadOnly(ArchiveWorld):
                 d = self.sub(bash('git -C %s archive %s HEAD' % (self.wt, out), self.w.wt, sub=True))
                 self.assertIsNotNone(d, out)
 
-    def test_archive_exec_runs_a_program_and_is_no_read(self):
-        text = 'git -C %s archive --remote=. --exec=/tmp/x.sh HEAD' % self.main
-        self.assertIsNotNone(self.pm(bash(text, self.w.plain)))
+    def test_archive_remote_and_exec_read(self):
+        # --remote/--exec run git-upload-archive or the program --exec names; only an attacker
+        # hides a write there (R-2271), so they read like any archive (docs/guard-v2.md)
+        for opt in ('--remote=. --exec=/tmp/x.sh', '--remote=origin', '--rem=origin', '--e=/tmp/x.sh'):
+            text = 'git -C %s archive %s HEAD' % (self.main, opt)
+            with self.subTest(text):
+                self.assertIsNone(self.pm(bash(text, self.w.plain)))
 
     def test_an_o_after_a_double_dash_is_a_pathspec(self):
         # git reads every word after `--` as a pathspec (git 2.55: "'<f>' is outside repository")
@@ -448,8 +452,7 @@ class ArchiveHoles(ArchiveWorld):
         self.assertIsNone(self.pm(bash('tar -x -C %s -C sub' % self.scratch, self.w.plain)))
 
     def test_archive_forms_the_guard_cannot_read_are_no_read(self):
-        for opt in ('$X', '--bogus', '--add=x', '--no-worktree-attributes', '--remote=origin', '--rem=origin',
-                    '--e=/tmp/x.sh', '-q', '-o $X', '-- $X'):
+        for opt in ('$X', '--bogus', '--add=x', '--no-worktree-attributes', '-q', '-o $X', '-- $X'):
             text = 'git -C %s archive %s HEAD' % (self.main, opt)
             with self.subTest(text):
                 d = self.pm(bash(text, self.w.plain))

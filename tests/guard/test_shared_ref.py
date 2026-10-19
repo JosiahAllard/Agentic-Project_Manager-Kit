@@ -174,17 +174,19 @@ class SharedRefsFromAWorktree(SharedRefBase):
         self.each_allowed(['git update-ref --no-deref HEAD HEAD~1'])
         self.each_refused(['git update-ref refs/heads/kit/wt HEAD~1'])
 
-    def test_a_symbolic_ref_is_judged_by_where_it_points(self):
+    def test_a_ref_other_than_head_is_judged_by_its_name(self):
+        # a symbolic ref is not followed (docs/guard-v2.md B6, cut: only an attacker plants a
+        # scratch ref that points at main); HEAD is still judged by the branch it is on
         put(os.path.join(self.common, 'refs', 'tmp', 'link'), 'ref: refs/heads/main\n')
         put(os.path.join(self.wt_git, 'ORIG_HEAD'), 'ref: refs/heads/kit/sib\n')
-        self.each_refused(['git update-ref refs/tmp/link HEAD', 'git update-ref -d refs/tmp/link',
-                           'git update-ref ORIG_HEAD HEAD'])
-        # --no-deref writes the symbolic ref itself, which is the session's own scratch ref
-        self.each_allowed(['git update-ref --no-deref refs/tmp/link HEAD', 'git update-ref --no-d refs/tmp/link HEAD'])
+        self.each_allowed(['git update-ref refs/tmp/link HEAD', 'git update-ref -d refs/tmp/link',
+                           'git update-ref ORIG_HEAD HEAD',
+                           'git update-ref --no-deref refs/tmp/link HEAD', 'git update-ref --no-d refs/tmp/link HEAD'])
         put(os.path.join(self.common, 'refs', 'tmp', 'mine'), 'ref: refs/heads/kit/wt\n')
         self.each_allowed(['git update-ref refs/tmp/mine HEAD'])
 
-    def test_a_link_inside_the_ref_store_is_refused(self):
+    def test_a_link_inside_the_ref_store_is_not_followed(self):
+        # docs/guard-v2.md B18, cut: a junction in refs/ is no honest mistake
         heads = os.path.join(self.common, 'refs', 'heads')
         os.makedirs(heads)
         try:
@@ -192,11 +194,14 @@ class SharedRefsFromAWorktree(SharedRefBase):
             _winapi.CreateJunction(heads, os.path.join(self.common, 'refs', 'tmp'))
         except (ImportError, AttributeError, OSError) as e:
             self.skipTest('no junction: %s' % e)
-        self.each_refused(['git update-ref refs/tmp/main HEAD', 'git update-ref -d refs/tmp/main'])
+        self.each_allowed(['git update-ref refs/tmp/main HEAD', 'git update-ref -d refs/tmp/main'])
 
-    def test_a_reftable_repository_is_refused(self):
+    def test_a_reftable_repository_is_judged_by_name_and_head(self):
+        # docs/guard-v2.md B19, cut: a reftable repository is not refused as one; the names are
+        # judged as anywhere, and HEAD by the HEAD file git still writes
         os.makedirs(os.path.join(self.common, 'reftable'))
-        self.each_refused(['git update-ref refs/tmp/x HEAD', 'git update-ref HEAD HEAD~1'])
+        self.each_allowed(['git update-ref refs/tmp/x HEAD', 'git update-ref HEAD HEAD~1'])
+        self.each_refused(['git update-ref refs/heads/main HEAD~1'])
 
     def test_a_sibling_worktree_head_is_its_own(self):
         # git run in the sibling moves the branch checked out there, as a commit there would

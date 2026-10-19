@@ -3894,6 +3894,9 @@ GIT_READ_VERBS = {'stash': ('list', 'show'), 'worktree': ('list',), 'remote': (N
                   'submodule': (None, 'status', 'summary')}
 GIT_LIST_FLAGS = {'-l', '--list', '--show-current', '--merged', '--no-merged', '--contains', '--no-contains',
                   '--points-at'}
+# git symbolic-ref <name> with only these options, spelt in full, prints where <name> points (a
+# second name, -d/--delete or -m writes it)
+SYMREF_READ_OPTS = {'-q', '--quiet', '--short', '--recurse', '--no-recurse'}
 GIT_REF_WRITE_FLAGS = {'-d', '-D', '-m', '-M', '-c', '-C', '-f', '-u', '-a', '-s', '-e', '--delete', '--move',
                        '--copy', '--force', '--set-upstream-to', '--unset-upstream', '--edit-description',
                        '--annotate', '--sign'}
@@ -3919,15 +3922,6 @@ DYN_VAR_RE = re.compile(r'\$(?:\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Za-z_][A-Za-z0-9_]*
 DYN_PS_VAR_RE = re.compile(r'(?i)\$(?:\{[A-Za-z_][A-Za-z0-9_:]*\}|(?:env:|script:|global:|local:)?[A-Za-z_][A-Za-z0-9_]*)')
 
 
-def opens_pager(t):
-    """True for grep's -O[<cmd>] (alone or in a cluster: -nO) and --open-files-in-pager, spelt in
-    full or abbreviated (--open): it runs a program of the caller's choosing."""
-    if t.startswith('--'):
-        name = t.split('=', 1)[0]
-        return len(name) >= 4 and '--open-files-in-pager'.startswith(name)
-    return t.startswith('-') and 'O' in t[1:]
-
-
 def writes_output_file(t):
     """True for log/show/diff's --output[=<file>], spelt in full or abbreviated (--outp=x)."""
     name = t.split('=', 1)[0]
@@ -3940,8 +3934,6 @@ ARCHIVE_LONGS = ('format', 'prefix', 'add-file', 'add-virtual-file', 'output', '
                  'list', 'mtime', 'remote', 'exec')
 ARCHIVE_VALUES = {'format', 'prefix', 'add-file', 'add-virtual-file', 'output', 'mtime', 'remote', 'exec'}
 ARCHIVE_FLAGS = set('vl0123456789')
-# --remote runs git-upload-archive (a program --exec names) instead of reading this repository
-ARCHIVE_RUNS = {'remote', 'exec'}
 # the -c keys (lower-case) an archive may carry and stay a read: none names a program, a filter or
 # another file to read config or attributes from. Any other key may make archive run a program in
 # the checkout it reads (tar.<format>.command; filter.<driver>.smudge or .process with
@@ -4170,8 +4162,7 @@ def archive_outputs(gc):
     """(outputs, read) for git archive `gc`: the Words its -o/--output name, those git's first pass
     opens (archive_opened) and, failing closed, those the later pass would read (-vo <f>, an -o
     after `--prefix`'s value), and True when the archive only reads the repository it runs in: no
-    --remote or --exec (they run a program), no option the guard does not know (a --no-* among
-    them) and no word that is not literal (an unquoted $X may hold -o) or that PowerShell or cmd
+    option the guard does not know (a --no-* among them) and no word that is not literal (an unquoted $X may hold -o) or that PowerShell or cmd
     may split (native_unsure). An unknown option does not end the scan, so an -o after it is still
     an output. Every word is read as the shell hands it to git (archive_words)."""
     words = archive_words(gc)
@@ -4187,7 +4178,7 @@ def archive_outputs(gc):
         if t.startswith('--'):
             name, eq, value = t[2:].partition('=')
             opt = archive_long(name)
-            if opt is None or opt in ARCHIVE_RUNS:
+            if opt is None:
                 read = False
             if opt in ARCHIVE_VALUES and not eq:
                 k += 1
@@ -4232,15 +4223,14 @@ def strict_read_opts(sub, words):
 def git_reads(gc, strict=False):
     """True when git `gc` changes nothing in the checkout it runs in. `strict` (a checkout the text
     cannot place) counts only what is plainly a read: no computed word but those strict_dyn_read
-    allows, no PowerShell splat (ps_splat), no --output file, no grep -O (opens_pager), and
-    branch, tag and config only with options it names in full (strict_read_opts)."""
+    allows, no PowerShell splat (ps_splat), no --output file, and branch, tag and config only with
+    options it names in full (strict_read_opts). symbolic-ref reads with one ref and only
+    SYMREF_READ_OPTS."""
     sub = gc.sub
     words = [w.text for w in gc.rest]
     if strict and (any(ps_splat(gc, w) for w in gc.rest) or any(writes_output_file(t) for t in words)):
         return False
     if strict and any(w.dyn for w in gc.rest) and not strict_dyn_read(gc):
-        return False
-    if strict and sub == 'grep' and any(opens_pager(t) for t in words):
         return False
     if sub == 'archive':
         # its -o file is a write: git_targets hands it to git_jail, which judges it first; where
@@ -4264,6 +4254,8 @@ def git_reads(gc, strict=False):
         return any(t in CONFIG_READ_OPTS or t in ('-l', '--list') for t in words)
     if sub == 'apply':
         return apply_checks(gc)
+    if sub == 'symbolic-ref':
+        return len(pos) == 1 and all(t in SYMREF_READ_OPTS for t in words if t.startswith('-'))
     return False
 
 
@@ -4528,7 +4520,6 @@ UPDATE_REF_SHORTS = set('mdz')
 PER_WORKTREE_REFS = ('refs/bisect/', 'refs/worktree/', 'refs/rewritten/')
 PSEUDOREF_RE = re.compile(r'^[A-Z][A-Z0-9_]*_HEAD$')
 REF_NAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._/-]*$')
-REF_CHAIN_MAX = 5           # symbolic refs followed before the guard stops reading
 SCRATCH_WALK_MAX = 4096     # entries of a temp repository's git directory read for a link, at most
 REPARSE_POINT = 0x400       # FILE_ATTRIBUTE_REPARSE_POINT: a symlink, a junction or another link
 
@@ -4567,19 +4558,6 @@ def main_names(ctx, where):
 def shared_ref_held(event, ctx):
     """True for a session git_shared_ref holds: an agent session (agent_session) but the PM's."""
     return agent_session(event, ctx) and str(session_mark(event, ctx) or '').lower() != 'pm'
-
-
-def _ref_file(place, name):
-    """(path of the loose file of `name`, None) under the git directory that holds it, or
-    (None, why) when a link inside it carries the path elsewhere."""
-    base = place.git_dir if per_worktree_ref(name) else place.common
-    if not base:
-        return None, 'git gave no git directory for %s' % name
-    path = os.path.join(base, *name.split('/'))
-    want = paths.norm(os.path.join(jail.real(base), *name.split('/')))
-    if jail.real(path) != want:
-        return None, 'a link in the git directory carries %s to %s' % (name, fwd(jail.real(path)))
-    return path, None
 
 
 def _in_temp(ctx, path):
@@ -4631,30 +4609,15 @@ def _read_ref(path):
         return None, 'its file cannot be read (%s)' % e
 
 
-def _ref_chain(place, name, deref):
-    """([name, the refs it points to...], None), the refs a write of `name` reaches, or (None,
-    why). Without --no-deref git writes where a symbolic ref points, so each is read in turn."""
-    chain = [name]
-    for _ in range(REF_CHAIN_MAX + 1):
-        path, why = _ref_file(place, chain[-1])
-        if why:
-            return None, why
-        if not deref:
-            return chain, None
-        text, why = _read_ref(path)
-        if text is None:
-            return None, '%s: %s' % (chain[-1], why)
-        if not text:
-            if chain[-1] == 'HEAD':
-                return None, 'the worktree\'s HEAD file %s is missing' % fwd(path)
-            return chain, None
-        if not text.startswith('ref:'):
-            return chain, None
-        target = text[4:].strip()
-        if not ref_name_ok(target):
-            return None, '%s points at %r, a name the guard does not read' % (chain[-1], target)
-        chain.append(target)
-    return None, '%s is a chain of more than %d symbolic refs' % (name, REF_CHAIN_MAX)
+def _head_ref(place):
+    """The ref the HEAD file of `place`'s git directory names, '' when HEAD is detached, None when
+    there is no such file or it cannot be read."""
+    if not place.git_dir:
+        return None
+    text, _ = _read_ref(os.path.join(place.git_dir, 'HEAD'))
+    if not text:
+        return None
+    return text[4:].strip() if text.startswith('ref:') else ''
 
 
 def _own_branch(ctx, place, at):
@@ -4662,12 +4625,8 @@ def _own_branch(ctx, place, at):
     detached or unreadable HEAD, a guarded main, the PM data worktree or one the guard cannot tell."""
     if place.kind != repo.LINKED or not place.git_dir or ctx.is_pm_data(at) or ctx.pm_data_error(at):
         return None
-    path, why = _ref_file(place, 'HEAD')
-    text, why = _read_ref(path) if path else (None, why)
-    if not text or not text.startswith('ref:'):
-        return None
-    own = text[4:].strip()
-    if not own.startswith('refs/heads/') or not ref_name_ok(own):
+    own = _head_ref(place)
+    if not own or not own.startswith('refs/heads/') or not ref_name_ok(own):
         return None
     if own[len('refs/heads/'):].lower() in main_names(ctx, at):
         return None
@@ -4710,8 +4669,9 @@ def git_shared_ref(event, ctx, cmd, gc, cwd, role):
     """`git update-ref` by a held session (shared_ref_held), from any checkout: every worktree of a
     repository shares its refs, so a worktree reaches main as surely as the main checkout. It may
     write scratch_ref names, and in a linked worktree its HEAD and the branch checked out there
-    (never a guarded main); it deletes only scratch_ref names. A symbolic ref is judged by every
-    ref it points to (unless --no-deref). A scratch repository (_scratch_repo: in a temp root, no
+    (never a guarded main); it deletes only scratch_ref names. A ref is judged by its name; HEAD
+    (unless --no-deref) by the branch it is on too, so a worktree on a guarded main does not move
+    it. A scratch repository (_scratch_repo: in a temp root, no
     link out of its git directory) is not judged. Neither the PM data worktree nor, while the
     guard cannot tell it (ctx.pm_data_error), any linked worktree gets the HEAD allowance."""
     if not shared_ref_held(event, ctx):
@@ -4732,8 +4692,6 @@ def git_shared_ref(event, ctx, cmd, gc, cwd, role):
         return None
     if not unread and place.kind not in (repo.MAIN, repo.LINKED):
         unread = 'git cannot place %s (%s)' % (fwd(gc.dir), place.detail or place.kind)
-    if not unread and place.common and os.path.isdir(os.path.join(place.common, 'reftable')):
-        unread = 'the repository keeps its refs in a reftable, which the guard does not read'
     top = (ctx.main_top(gc.dir) if gc.dir and not gc.unknown else None) or (place.top if place else None)
     at = own_worktree(ctx, cwd, top) if top else own_worktree(ctx, cwd)
     at = at or top or (ctx.main_top(cwd) if cwd else None) or cwd
@@ -4752,7 +4710,13 @@ def git_shared_ref(event, ctx, cmd, gc, cwd, role):
     # the PM data worktree answers as MAIN; while the guard cannot tell it, any linked worktree may be it
     linked = place.kind == repo.LINKED and not ctx.pm_data_error(gc.dir)
     own = _own_branch(ctx, place, gc.dir)
-    chain, why = _ref_chain(place, name, 'no-deref' not in longs)
+    chain, why = [name], None
+    if name == 'HEAD' and 'no-deref' not in longs:
+        head = _head_ref(place)
+        if head is None:
+            chain, why = None, 'the HEAD file of %s cannot be read' % fwd(gc.dir)
+        elif head:
+            chain.append(head)
     if chain is not None:
         bad = [r for r in chain if not _ref_ok(r, delete, linked, own)]
         if not bad:
