@@ -85,10 +85,48 @@ class InUseKeepTest(Root):
     def test_a_reader_that_fails_is_an_error_not_an_empty_list(self):
         def boom():
             raise RuntimeError('schtasks /Query /XML exit 1: access denied')
-        u = P.read_in_use(self.root, procs=lambda: [], tasks=boom)
+        u = P.read_in_use(self.root, procs=lambda: [{'CommandLine': 'python x.py'}], tasks=boom)
         self.assertEqual(len(u.errors), 1)
         self.assertIn('access denied', u.errors[0])
         self.assertIn('scheduled tasks', u.errors[0])
+
+    def test_an_empty_process_list_is_a_failed_read(self):
+        # a real list always holds the reader itself: [] or None means the read did not work
+        for empty in ([], None):
+            u = P.read_in_use(self.root, procs=lambda: empty, tasks=lambda: [])
+            self.assertEqual(len(u.errors), 1, (empty, u.errors))
+            self.assertIn('process list', u.errors[0])
+
+    def test_an_empty_process_list_keeps_the_seven_day_rule(self):
+        self.old_six()
+        lines = []
+        reader = lambda: P.read_in_use(self.root, procs=lambda: [], tasks=lambda: [])
+        P.prune(self.root, now=NOW, in_use=reader, out=lines.append)
+        self.assertTrue(any('process list' in ln and '7 days' in ln for ln in lines), lines)
+
+    def test_a_path_list_or_a_cmd_chain_names_an_export(self):
+        lines = [r'set PYTHONPATH=C:\p\plugin\%s;C:\other' % NAMES[0],
+                 r'cmd /c "cd /d C:\p\plugin\%s&&python x.py"' % NAMES[1],
+                 r'tool --dirs=C:\p\%s,C:\q' % NAMES[2],
+                 r'(C:\p\plugin\%s)' % NAMES[3]]
+        self.assertEqual(P.in_use_sha12s(P.InUse(lines, set(), [])), set(NAMES[:4]))
+
+    def test_tasks_reads_utf16_xml_with_a_bom(self):
+        from unittest import mock
+        import subprocess
+        xml = ('<?xml version="1.0" encoding="UTF-16"?>\r\n<Tasks>\r\n<!-- \\PM kit hub server -->\r\n'
+               '<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">'
+               '<Actions Context="Author"><Exec><Command>C:\\Python\\pythonw.exe</Command>'
+               '<Arguments>C:\\p\\plugin\\%s\\tools\\no_window.py hub</Arguments>'
+               '<WorkingDirectory>C:\\p</WorkingDirectory></Exec></Actions></Task>\r\n</Tasks>\r\n'
+               % NAMES[5])
+        raw = b'\xff\xfe' + xml.encode('utf-16-le')
+        done = subprocess.CompletedProcess(['schtasks'], 0, raw, b'')
+        with mock.patch('kitlib.proc.spawn.run', return_value=done):
+            texts = P._tasks()
+        u = P.InUse([t.lower() for t in texts], set(), [])
+        self.assertEqual(P.in_use_sha12s(u), {NAMES[5]})
+        self.assertIn('no_window.py hub', texts[0])
 
 
 class YoungRuleTest(Root):
@@ -222,6 +260,26 @@ class CachePruneTest(unittest.TestCase):
         rows = P.prune_caches([a], reads(), now=self.now)
         self.assertEqual(self.acts(rows), {'0.1.0-main.1': 'would', '0.1.0-main.2': 'kept',
                                            '0.1.0-main.3': 'kept'})
+
+    def test_a_left_claim_never_counts_as_the_newest_version(self):
+        a = self.account('.claude-1', ['0.1.0-main.1', '0.1.0-main.2', '0.1.0-main.3'],
+                         installed='0.1.0-main.1')
+        claim = os.path.join(P.cache_dir(a), '0.1.0-main.0' + P.CLAIM + '9')
+        os.makedirs(claim)
+        later = self.old + 3600         # newer than every version, still weeks old
+        os.utime(claim, (later, later))
+        rows = P.prune_caches([a], reads(), now=self.now)
+        self.assertEqual(self.acts(rows), {'0.1.0-main.1': 'kept', '0.1.0-main.2': 'would',
+                                           '0.1.0-main.3': 'kept',
+                                           os.path.basename(claim): 'would'})
+
+    def test_a_cache_path_followed_by_a_list_separator_is_named(self):
+        a = self.account('.claude-1', ['0.1.0-main.1', '0.1.0-main.2', '0.1.0-main.3'],
+                         installed='0.1.0-main.3')
+        named = r'set P=C:\h\.claude-1\plugins\cache\pm-kit\pm-kit\0.1.0-main.1;C:\x'
+        rows = P.prune_caches([a], reads([named]), now=self.now)
+        self.assertEqual(self.acts(rows)['0.1.0-main.1'], 'kept')
+        self.assertEqual(self.acts(rows)['0.1.0-main.2'], 'would')
 
     def test_a_junction_in_the_cache_is_never_followed(self):
         import _winapi
