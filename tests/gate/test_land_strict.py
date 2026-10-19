@@ -23,6 +23,8 @@ REVIEWER = {'verdict': 'LAND', 'risk': 'High', 'reviewer': 'pm-kit:reviewer',
 
 
 class StrictCase(test_land.LandCase):
+    REVIEW_TIPS = False     # every verdict here is queued (or not) by the test itself
+
     def common(self):
         common, why = repomod.common_dir(self.repo.root)
         self.assertIsNotNone(common, why)
@@ -137,8 +139,9 @@ class LandsAloneFullFresh(StrictCase):
                       'claude-opus-5-5 (agent-r1); the merged gate runs --full --fresh'
                       % (BRANCH, STRICT), said)
 
-    def test_a_plain_branch_needs_no_verdict_and_is_not_escalated(self):
+    def test_a_reviewed_plain_branch_is_not_escalated(self):
         _, tip = self.branch('feature', {'src/a.py': 'a\n'})
+        self.queue(BRANCH, tip)
         lander, out, said = self.land_it(BRANCH, tip)
         self.assertEqual(out.code, G.OK, out.lines)
         self.assertFalse(lander.full or lander.fresh)
@@ -282,6 +285,7 @@ class ReadFromTheBase(StrictCase):
     def test_a_plain_branch_lands_beside_the_bases_list(self):
         self.on_main({LIST_FILE: self.LIST})
         _, tip = self.branch('feature', {'a.py': 'a\n'})
+        self.queue(BRANCH, tip)
         _, out, _ = self.land_it(BRANCH, tip)
         self.assertEqual(out.code, G.OK, out.lines)
 
