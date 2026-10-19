@@ -6,6 +6,7 @@ import threading
 import time
 import unittest
 import uuid
+from unittest.mock import patch
 
 from optional.bridge.core.jsonwire import encode_frame
 from optional.bridge.core.messages import BeforeWriteError,DeliveryError
@@ -105,6 +106,40 @@ class PipeRpcTests(unittest.TestCase):
             request(self.target,{'id':'busy'},timeout=4)
         self.assertEqual(caught.exception.code,'native-peer-unavailable-before-write')
         self.assertLess(time.monotonic()-start,4)
+
+    def busy_request_with_slow_helper_start(self,start_seconds):
+        """request() at timeout=4 against a pipe that stays busy, where starting the helper
+        takes start_seconds on a fake clock. Returns (outcome, clock when the helper gives up
+        or None if it never waits). The fake helper waits exactly the 'wait' it is sent, and is
+        killed (uncertain) if that runs past the caller's timeout, as run_worker would."""
+        class Clock:
+            now=100.0
+            def monotonic(self): return self.now
+        clock=Clock()
+        start,timeout,gave_up=clock.now,4,[]
+        def run_worker(name,data,*,limit,timeout,prefix=None):
+            clock.now+=start_seconds  # the helper process starting
+            if prefix is not None: data=prefix()+data
+            meta=json.loads(data.partition(b'\n')[0])
+            clock.now+=meta['wait']/1000  # waited for the busy pipe, then gave up
+            gave_up.append(clock.now)
+            if clock.now>start+timeout: raise DeliveryError('native-write-uncertain')
+            return encode_frame({'state':'not-written'},max_frame_bytes=2048)
+        with patch('optional.bridge.win.rpc.time',clock),patch('optional.bridge.win.rpc.run_worker',run_worker):
+            try: request(self.target,{'id':'busy'},timeout=timeout)
+            except DeliveryError as error: outcome=error
+        return outcome,(gave_up[0]-start if gave_up else None)
+
+    def test_busy_wait_is_measured_from_the_start_of_the_request(self):
+        # The helper's busy wait was half the timeout from its own start, so a slow start
+        # pushed its give-up past half the caller's budget, and past all of it at 2.5 s.
+        outcome,gave_up=self.busy_request_with_slow_helper_start(1.5)
+        self.assertIsInstance(outcome,BeforeWriteError)
+        self.assertEqual(outcome.code,'native-peer-unavailable-before-write')
+        self.assertLessEqual(gave_up,2.0)
+        outcome,gave_up=self.busy_request_with_slow_helper_start(2.5)
+        self.assertIsInstance(outcome,BeforeWriteError)
+        self.assertIsNone(gave_up)  # the budget was spent starting it: nothing sent
 
     def test_bad_handler_is_content_free_and_next_connection_still_works(self):
         def fail(peer,message): raise RuntimeError('private message must not enter logs')
