@@ -162,8 +162,10 @@ class Start(Base):
         from hosts.claude.adapter.host import ADAPTER
         from kitlib import agentstart
         real = agentstart.text      # its 1.0 s default budget is wall time; a loaded machine trips it
-        with mock.patch.object(agentstart, 'text', lambda cwd, kit, role=None: real(cwd, kit, role, budget=60.0)):
+        patched = mock.Mock(side_effect=lambda cwd, kit, role=None: real(cwd, kit, role, budget=60.0))
+        with mock.patch.object(agentstart, 'text', patched):
             got = self.text(self.view('worker', start_text=ADAPTER.start_text), 'At start')
+        patched.assert_called_once()
         self.assertIn('Agent start (worker):', got)
         self.assertIn('checkout  NOT CHECKED', got)      # the temp repo is in no git work tree
 
