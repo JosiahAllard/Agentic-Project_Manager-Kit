@@ -150,7 +150,11 @@ def do_land(argv):
     submitted = None
     if a.submitted:
         try:
-            submitted = submitmod.restore(root, a.submitted)
+            submitted = submitmod.restore(root, a.submitted, [a.branch], [a.expect_tip],
+                                          expect_main=a.expect_main)
+        except submitmod.Untrusted as e:       # no record written; the line also in its log
+            sys.stderr.write(submitmod.untrusted_refusal(a.submitted, e) + '\n')
+            return G.REFUSED
         except submitmod.SubmitError as e:     # its records are finished, never left running
             return emit(submitmod.abandon(root, a.submitted, str(e)))
         if submitted.get('output'):

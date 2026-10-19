@@ -381,6 +381,65 @@ class Attribute(unittest.TestCase):
         out = winwatch.attribute([t], [winwatch.Pseudo(3, self.PY, False, mono=10.0)])
         self.assertEqual((out[0].pid, out[0].ours), (3, False))              # by exe
 
+    def test_a_host_twin_is_reported_once_as_the_program(self):
+        oc = r"C:\Term\OpenConsole.exe"
+        real = W(winwatch.CONSOLE, "window", "a", 10.0, pid=5, exe=self.PY, ours=True)
+        twin = W(winwatch.CONSOLE, "window", "a", 10.1, pid=6, exe=oc, ours=False)
+        far = W(winwatch.CONSOLE, "window", "b", 30.0, pid=7, exe=oc, ours=False)
+        out = winwatch.attribute([twin, real, far], [])
+        self.assertEqual([w.pid for w in out], [5, 7])      # the lone host window stays
+        lines = winwatch.report_lines(out)
+        self.assertTrue(lines[0].startswith("windows opened: 1 "), lines)
+        self.assertEqual(len([x for x in lines if "[not this run]" in x]), 1, lines)
+
+    OC = r"C:\Term\OpenConsole.exe"
+
+    def test_another_runs_window_does_not_hide_a_counted_host_window(self):
+        other = W(winwatch.CONSOLE, "window", "a", 10.0, pid=5, exe=self.PY, ours=False)
+        host = W(winwatch.CONSOLE, "window", "b", 10.1, pid=6, exe=self.OC, ours=True)
+        out = winwatch.attribute([other, host], [])
+        self.assertEqual([w.pid for w in out], [5, 6])
+        self.assertTrue(winwatch.report_lines(out)[0].startswith("windows opened: 1 "))
+
+    def test_a_window_with_no_exe_absorbs_nothing(self):
+        bare = W(winwatch.CONSOLE, "window", "a", 10.0, pid=5, exe=None, ours=True)
+        host = W(winwatch.CONSOLE, "window", "b", 10.1, pid=6, exe=self.OC, ours=True)
+        out = winwatch.attribute([bare, host], [])
+        self.assertEqual([w.pid for w in out], [5, 6])
+
+    def test_one_real_window_drops_only_the_nearest_host_window(self):
+        far = W(winwatch.CONSOLE, "window", "a", 9.0, pid=6, exe=self.OC, ours=True)
+        real = W(winwatch.CONSOLE, "window", "b", 10.0, pid=5, exe=self.PY, ours=True)
+        near = W(winwatch.CONSOLE, "window", "c", 10.1, pid=7, exe=self.OC, ours=True)
+        out = winwatch.attribute([far, real, near], [])
+        self.assertEqual([w.pid for w in out], [6, 5])
+
+    def test_the_host_pid_mate_wins_over_a_same_ours_mate(self):
+        # h1 is real's own host (host_pid) and not counted; h2 is a separate counted window
+        # of another host, nearer in time and with real's ours. h1 is the twin, so h2 stays.
+        real = W(winwatch.CONSOLE, "window", "a", 10.0, pid=5, exe=self.PY, ours=True, host_pid=6)
+        h1 = W(winwatch.CONSOLE, "window", "a", 10.3, pid=6, exe=self.OC, ours=False)
+        h2 = W(winwatch.CONSOLE, "window", "b", 10.1, pid=8, exe=self.OC, ours=True)
+        out = winwatch.attribute([real, h1, h2], [])
+        self.assertEqual([w.pid for w in out], [5, 8])
+        self.assertTrue(winwatch.report_lines(out)[0].startswith("windows opened: 2 "))
+
+    def test_a_same_ours_mate_wins_when_host_pid_does_not_decide(self):
+        # Neither host is real's host_pid; h1 (not counted) is nearer, h2 has real's ours.
+        real = W(winwatch.CONSOLE, "window", "a", 10.0, pid=5, exe=self.PY, ours=True)
+        h1 = W(winwatch.CONSOLE, "window", "b", 10.1, pid=6, exe=self.OC, ours=False)
+        h2 = W(winwatch.CONSOLE, "window", "a", 10.3, pid=8, exe=self.OC, ours=True)
+        out = winwatch.attribute([real, h1, h2], [])
+        self.assertEqual([w.pid for w in out], [5, 6])
+        self.assertTrue(winwatch.report_lines(out)[0].startswith("windows opened: 1 "))
+
+    def test_a_conhost_twin_is_dropped(self):
+        real = W(winwatch.CONSOLE, "window", "a", 10.0, pid=5, exe=self.PY, ours=True)
+        twin = W(winwatch.CONSOLE, "window", "a", 10.2, pid=6,
+                 exe=r"C:\Windows\System32\conhost.exe", ours=True)
+        out = winwatch.attribute([real, twin], [])
+        self.assertEqual([w.pid for w in out], [5])
+
     def test_a_console_window_keeps_its_pid(self):
         w = W(winwatch.CONSOLE, "window", "x", 10.0, pid=9, ours=True)
         out = winwatch.attribute([w], [winwatch.Pseudo(1, self.PY, True, mono=10.0)])
