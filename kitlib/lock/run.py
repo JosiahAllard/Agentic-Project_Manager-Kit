@@ -926,6 +926,16 @@ class Slot:
             cores_text(self.job.effective) if self.own["cpu"] else
             "the cores of run %s" % self.parent["id"], "; " + self.job.note if self.job.note else "")
 
+    def note_tree(self, tree):
+        """Records `tree`, the git tree hash this held run now tests (book's `tree`; a landing's
+        merge, run in the slot the landing holds), on its record and so its history line. A
+        nested slot has no record of its own and records nothing; nor does an empty tree. A
+        failed write is ignored: the record is a note, never what holds the slots."""
+        if self.nested or not tree:
+            return
+        with contextlib.suppress(OSError):
+            self.run.save(tree=tree)
+
     def start(self, cmd, give_back=False, **kw):
         """Popen(cmd) in the run's job; OSError when it cannot start. give_back: cmd may give back
         cpu slots it no longer needs while it runs (kitlib.lock.giveback); only a run that holds
@@ -1289,7 +1299,7 @@ def within_of(L, within, kind, need, own, parent, machine):
 def book(kind, repo, slug, cores=None, hold=None, gpu_share=None, wait_s=None, no_wait=False,
          expect_s=None, note=None, on_release_cmd=None, cmd=None, store=None, kinds_table=None,
          env=None, rid=None, detached=False, log=None, gate=False, resource=None, priority=None,
-         within=None):
+         within=None, tree=None):
     """Waits for a run of kind `kind` for repo/slug to hold its slots and returns its Slot.
     Raises LockError (the CLI's exit code) when it does not. cores: fewer cpu slots than the
     kind's size, 1..that size, never more; the kind's size is its whole number of cores
@@ -1309,7 +1319,10 @@ def book(kind, repo, slug, cores=None, hold=None, gpu_share=None, wait_s=None, n
     CLI or the MCP server. within: the threads the run must stay inside (the CLI's --within: a
     Linux cpuset list such as '8-15', or global thread ids), e.g. a container's cpuset; it takes
     only cpu slots whose threads all lie inside (within_of), and waits for those while others are
-    free. The record carries `within` (the list) and `within_slots`; its queue entry `within`."""
+    free. The record carries `within` (the list) and `within_slots`; its queue entry `within`.
+    tree: the git tree hash the run tests (a gate's: kitlib.gate.runner.gated), recorded as `tree`
+    and kept in its history line, so a gate's run is matched to the exact tree it tested;
+    Slot.note_tree records it on a run already held."""
     store = store or Store()
     env = dict(os.environ if env is None else env)
     try:
@@ -1397,6 +1410,7 @@ def book(kind, repo, slug, cores=None, hold=None, gpu_share=None, wait_s=None, n
                        need=own, has={p: n for p, n in has.items() if n}, hold=hold,
                        parent=parent["id"] if parent else None, gpu_share=gpu_share,
                        **({"gate": True} if gate else {}),
+                       **({"tree": tree} if tree else {}),
                        **({"resource": resource} if resource else {}),
                        **({"priority": priority} if priority else {}),
                        **({"within": wtext, "within_slots": {"cpu": wslots}} if wtext else {}))

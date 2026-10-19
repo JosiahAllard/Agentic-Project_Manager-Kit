@@ -23,7 +23,7 @@ from kitlib.backlog import roles as broles
 from kitlib.git import repo as gitrepo
 from kitlib.guard import rolepolicy
 from kitlib.guard.context import Ctx
-from kitlib.host import header, registry
+from kitlib.host import content as hcontent, header, registry
 
 from hosts.claude.adapter import content as claude_content
 from tests.home import TempHomeCase
@@ -160,7 +160,12 @@ class Start(Base):
 
     def test_a_dispatched_role_on_claude_shows_the_agent_start_block(self):
         from hosts.claude.adapter.host import ADAPTER
-        got = self.text(self.view('worker', start_text=ADAPTER.start_text), 'At start')
+        from kitlib import agentstart
+        real = agentstart.text      # its 1.0 s default budget is wall time; a loaded machine trips it
+        patched = mock.Mock(side_effect=lambda cwd, kit, role=None: real(cwd, kit, role, budget=60.0))
+        with mock.patch.object(agentstart, 'text', patched):
+            got = self.text(self.view('worker', start_text=ADAPTER.start_text), 'At start')
+        patched.assert_called_once()
         self.assertIn('Agent start (worker):', got)
         self.assertIn('checkout  NOT CHECKED', got)      # the temp repo is in no git work tree
 
@@ -309,10 +314,17 @@ class GuardRules(Base):
             self.assertIn(p, owner)
 
     def test_a_role_file_writes_list_is_named(self):
-        role = next(r for r in content.load(KIT).roles if r.writes)
-        text = self.text(self.view(role.name, brief=True), 'Guard rules')
+        """No kit role names a `writes` path now, so the role is a synthetic role file in a temp folder."""
+        path = os.path.join(self.repo, 'roles', 'scribe.md')
+        write(path, '---\nname: scribe\ndescription: Notes.\ntier: standard\nsandbox: read-only\n'
+                    'mode: read\nwrites: [docs/ops/notes.local.md, notes/*.txt]\ncapabilities: all\n---\nbody\n')
+        with open(path, 'rb') as f:
+            role = hcontent.parse_role(f.read(), path)
+        self.assertEqual(role.writes, ('docs/ops/notes.local.md', 'notes/*.txt'))
+        text = '\n'.join(agentview.guard_rules(role).lines)
         for w in role.writes:
             self.assertIn(w, text)
+        self.assertIn('(its writes: docs/ops/notes.local.md, notes/*.txt)', text)
 
 
 class Cli(TempHomeCase):
