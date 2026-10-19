@@ -42,7 +42,8 @@ Regexes = Either(Regex(), ListOf(Regex()))
 OWNER_PATHS = list(dict.fromkeys(
     ['AGENTS.md'] + list(registry.union('owner_paths'))
     + ['docs/agent-profile.md', '.github/workflows/', '.kit.json', 'tools/gate.json',
-       'kitlib/gate/strict_defaults.py', 'kitlib/backlog/roles.py']))
+       'kitlib/gate/strict_defaults.py', 'kitlib/backlog/roles.py',
+       'hosts/claude/managed-settings.json']))
 OWNER_PATHS_EXCEPT = [w + '/' for w in registry.union('worktrees_directory')]
 
 # The heavy-program entry shape: kit defaults (policy.HEAVY_DEFAULTS) and `.kit.json` "heavy".programs.
