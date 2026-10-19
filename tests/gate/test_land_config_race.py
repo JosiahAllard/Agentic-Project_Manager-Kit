@@ -110,6 +110,7 @@ class Landing(fixtures.GateRepoCase):
                 return real_checks(lander)
             finally:
                 state['checks'] = False
+        fixtures.queue_review(self.repo.root, BRANCH, tip)
         lander = land.Lander(self.repo.root, BRANCH, self.main, tip, git_env=self.env,
                              book_kw=self.book_kw, log_dir=self.logs, keep_branch=True)
         with mock.patch.object(cmd, '_run', side_effect=run), \
