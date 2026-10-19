@@ -25,7 +25,7 @@ Rules, in the order they are checked:
                    any session but the owner's own: it writes the owner's email
   hub-secrets      a shell command naming the hub's token folder or a token file (owner.token,
                    agent.token, approval.key) or a literal path into the token folder (a wildcard,
-                   the word hub and the store are not read: KIT-GUARD-CHEAP), or python or node
+                   the word hub and the store are not read), or python or node
                    code that names them; an edit of a file in the token folder or the store; a read tool's
                    read of the token folder or a file in it, or a search that can read or list
                    one (the store stays readable); in any session but the owner's own
@@ -1709,7 +1709,7 @@ def hub_secret_shell(ctx, cmd, inv, places, parsed=None):
     token folder or a token file (hub_name; a search's or git's literal words are its patterns
     and messages, so only their words that are not literal count), a literal path in the token
     folder, and python or node code that names them (kitlib.guard.hub.INLINE_RE). A wildcard
-    path, the store and the word hub are not read (KIT-GUARD-CHEAP: the guard blocks only what
+    path, the store and the word hub are not read (the guard blocks only what
     it can place; an edit tool's write into the store is still hub_secret_edit's).
     A path may start with the home folder as `~` or a home variable ($HOME, $env:USERPROFILE,
     %USERPROFILE%, $env:HOMEDRIVE$env:HOMEPATH: shell.home_text, read as ctx.home), and a
@@ -2169,7 +2169,7 @@ def jail_refusal(role, rs, verdict, root, what, target, rewrite=None, run=None):
 def worktree_alternative(ctx, target, main_top, cwd, rewrite=None, run=None, redirect=False):
     """(sentence, command): the same edit in the session's own worktree of this main checkout, or
     a new worktree to make it in; a redirect's output with no worktree of the session's own, the
-    same redirect into the temp folder (KIT-GUARD-CHEAP item 8)."""
+    same redirect into the temp folder."""
     rel = os.path.relpath(target, main_top)
     mine = own_worktree(ctx, cwd, main_top)
     if mine:
@@ -5775,7 +5775,7 @@ def git_worktree_remove(ctx, gc, role, text):
                       'by a literal path:' % text,
                       'git -C %s worktree remove "<worktree path>"' % (quote(main_top) if main_top else '"<main checkout>"'))
     if _in_temp(ctx, target):
-        return None                             # a scratch worktree under a temp root (KIT-GUARD-CHEAP)
+        return None                             # a scratch worktree under a temp root
     cfg = ctx.config(gc.dir)
     main = cfg.main_branch if cfg is not None else 'main'
     clean, why = ctx.git.is_clean(target)
@@ -6326,7 +6326,7 @@ def git_push(event, ctx, gc, role):
     dyn = [w for w in pos if w.dyn]
     # A computed remote or refspec with a flag or a literal `+` or `:` that forces, deletes or
     # skips the hook is refused. Without one it is a push the guard cannot place: a warning by
-    # default (KIT-GUARD-CHEAP item 4: a computed source or destination is left to the pre-push
+    # default (a computed source or destination is left to the pre-push
     # hook), and the literal refspecs are judged below.
     marked = any(w.text.lstrip('"\'').startswith(('+', ':')) for w in dyn)
     if dyn and (gated or delete or force or no_verify or any(w.dyn for w in pos[1:])):

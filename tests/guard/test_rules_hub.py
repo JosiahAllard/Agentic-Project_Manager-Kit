@@ -117,7 +117,7 @@ class SecretShell(Hub):
         self.denied(lambda sub: bash('rm "%s/approval.key"' % sec, self.w.wt, sub), 'hub-secrets')
 
     def test_the_store(self):
-        # KIT-GUARD-CHEAP item 4: a shell command reading the store passes; a write into it is
+        # a shell command reading the store passes; a write into it is
         # still refused (the write's target, as an edit's)
         st = W.fwd(self.store)
         self.allowed(lambda sub: bash('ls "%s"' % st, self.w.wt, sub))
@@ -194,7 +194,6 @@ class SecretShell(Hub):
             with self.subTest(make(True)['tool_input']['command']):
                 self.denied(make, rule)
         # the tool's output run as code names no token file: the hub tool by name is not read
-        # (KIT-GUARD-CHEAP item 4)
         self.allowed(lambda sub: bash(head + 'python -', self.w.wt, sub))
 
     def test_a_hub_call_naming_a_token_file(self):
@@ -250,7 +249,7 @@ class HomeAndWildcards(Hub):
             with self.subTest(line=line):
                 self.allowed(lambda sub, shell=shell, line=line: shell(line, self.w.wt, sub))
 
-    # KIT-GUARD-CHEAP item 4: a wildcard path is not read, so each wildcard row below passes and
+    # a wildcard path is not read, so each wildcard row below passes and
     # the same place spelled literally is still refused. A literal relative path after a cd into
     # the home's .pm-kit folder (`hub\\x`) names neither the folder nor a token file by itself:
     # those rows show the cd is followed.
@@ -382,7 +381,7 @@ class HomeAndWildcards(Hub):
         ))
 
     def test_absolute_wildcards_are_not_read(self):
-        # KIT-GUARD-CHEAP item 4: a wildcard that can name the folders passes; the literal folder
+        # a wildcard that can name the folders passes; the literal folder
         # is still refused
         home, data = W.fwd(self.w.home), W.fwd(self.w.data)
         self.rows_allowed((
@@ -436,7 +435,7 @@ class HomeAndWildcards(Hub):
 
 class BareWordsInTheDataFolder(Hub):
     """Run from the PM data folder, where a bare `hub` is the default store's own name. The shell
-    rule does not read the store (KIT-GUARD-CHEAP item 4), so a word naming it passes, whatever
+    rule does not read the store, so a word naming it passes, whatever
     the program does with it; a write whose target is in the store is still refused."""
 
     def rows(self, rows, deny):

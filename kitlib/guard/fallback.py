@@ -30,7 +30,7 @@ unreadable line is never a way around a rule, and a plain line is never denied b
     unclean for another reason: that PM data check, and in any repository an agent session is
     denied, as here (`unreadable` for a subagent, `write-jail` for another jailed session).
 
-The `unreadable` rule is a warning by default (kitlib.guard.modes, KIT-GUARD-CHEAP): where it would
+The `unreadable` rule is a warning by default (kitlib.guard.modes): where it would
 deny, the warning is kept and the check goes on to the next pattern and the checks after it, so
 only a kept rule's own deny (a re-read one, git-push-pmdata) stops the line. A pattern whose rule
 is off (wrapped-gate by default) is not looked for. The owner can set each back to deny.

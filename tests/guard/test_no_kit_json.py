@@ -61,7 +61,7 @@ class NoKitJson(unittest.TestCase):
                 self.assertIn('not literal', d.reason)
 
     def test_a_computed_refspec_without_force_is_unplaced(self):
-        # KIT-GUARD-CHEAP item 4: a warning by default, a refusal when the owner turns it on
+        # a warning by default, a refusal when the owner turns it on
         for cmd in ('git push origin $BRANCH', 'git push origin "HEAD:$B"'):
             with self.subTest(cmd):
                 self.assertIsNone(self.decide(cmd), cmd)

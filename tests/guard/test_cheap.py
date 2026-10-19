@@ -1,4 +1,4 @@
-"""The cheap guard (KIT-GUARD-CHEAP): rule modes (kitlib.guard.modes) and how a warned call reaches
+"""The cheap guard: rule modes (kitlib.guard.modes) and how a warned call reaches
 the agent, the rules that now warn or stop, and the denies it keeps."""
 import json
 import os

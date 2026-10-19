@@ -65,7 +65,7 @@ HUB_SERVER = 'hub'
 # quotes between (`.pm-kit/hub`, `'.pm-kit', 'hub'`); hub.json beside it is not it
 FOLDER_RE = re.compile(r'(?i)\.pm-kit\W{1,8}hub(?![\w.-])')
 # code that reads a token: a token file's or the token folder's name, or kitlib.hubsite.auth's
-# names for them. The hub site and the hub tool by name are not read (KIT-GUARD-CHEAP).
+# names for them. The hub site and the hub tool by name are not read (the guard blocks only what it can place).
 INLINE_RE = re.compile(r'(?i)owner\.token|agent\.token|approval\.key|'
                        r'\.pm-kit\W{1,8}hub(?![\w.-])|'
                        r'\b(?:OWNER_FILE|AGENT_FILE|TOKEN_FILES|APPROVAL_FILE|read_token|ensure_tokens)\b')

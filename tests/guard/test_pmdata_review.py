@@ -1,7 +1,7 @@
 """Second-review fixes to the PM data routes (docs/guard.md "Rules" and "Fallback"):
 
   - `& (<expr>)` is refused as unplaced for an agent session in any repository (a warning by
-    default, KIT-GUARD-CHEAP): a computed program skips the rules that need a literal one (heavy,
+    default): a computed program skips the rules that need a literal one (heavy,
     the write jail, the git rules); only the owner and `plain` read it as any other line;
   - HOME set by an arithmetic assignment (let, (( )), $(( )), for (( ))) or by select counts;
   - git-remote-rewrite counts a directory the text cannot tell as git_alias_config does: only

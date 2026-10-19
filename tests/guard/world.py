@@ -132,7 +132,7 @@ def deny_unplaced():
 def deny_softened():
     """Hold every rule the kit's modes soften (modes.DEFAULTS: unplaced, and the rules dropped as
     blocks) at deny, until allow_unplaced(): for a module of tests that pin those rules' refusals
-    from before KIT-GUARD-CHEAP. Their defaults are pinned in test_cheap.py."""
+    from before the cheap guard. Their defaults are pinned in test_cheap.py."""
     from unittest import mock
     from kitlib.guard import modes
     p = mock.patch.dict(modes.DEFAULTS, dict.fromkeys(list(modes.DEFAULTS), modes.DENY))
