@@ -26,6 +26,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `docs/commit.md` | commit.py and machine_paths.py | committing | kw: commit, machine_paths
 - `docs/content.md` | content/ and render_content: roles and skills written once, rendered per host with the plugin manifests (kit.json's version) and the kit header | editing an agent or a skill | kw: content, render_content, roles, render, kit.json, manifest, header
 - `docs/daily-full.md` | daily_full | the nightly full run | kw: daily-full, nightly
+- `docs/delegations.md` | the owner's delegation list: location, schema 1, the hard exclusions E1-E5 | reading or changing what the PM may run for the owner | kw: delegations, owner-delegations, exclusions, delegated
 - `docs/doc-tools.md` | doc_budget, doc_index, codemap | finding or checking docs | kw: doc-tools, doc_index, doc_budget, codemap, find, section, stale
 - `docs/engineering-rulings.md` | engineering rulings | before a design choice | kw: rulings, engineering
 - `docs/gate.md` | gate.py | running the gate | kw: gate, test, stash
