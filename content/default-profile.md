@@ -37,7 +37,7 @@ area only. Red-first: make the new test fail on the old code before the fix, and
 report. Docs gate: the same gate; the repository has no separate one unless its README names it.
 
 ### Known flakes
-None recorded. A failure is real until the same tip passes a rerun; report both runs.
+None recorded. Only a flake on this list gets one rerun; any other failing run is real.
 
 ## Test runner
 The tiers are the gate's steps: the whole gate, or one step by name with `--only <step>`. Pass is

@@ -78,9 +78,9 @@ Missing any: say what you need, do nothing.
 
 ## Flakes
 
-Only flakes listed by `python <kit>/tools/doc_index.py -C <main checkout> --find flakes` get a rerun, at most one per
-landing. The same flake twice: stop and report. Anything not on that list is a
-real failure: stop, leave main as the command left it, report the failing lines.
+Only a flake on the repo's known-flake list gets one rerun; any other failing run is real.
+The list: `python <kit>/tools/doc_index.py -C <main checkout> --find flakes`. A real failure:
+stop, leave main as the command left it, report the failing lines.
 
 ## Shared machine
 
