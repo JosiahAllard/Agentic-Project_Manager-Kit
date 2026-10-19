@@ -7127,6 +7127,22 @@ def _without(cmd, first, last):
             cmd.source[last.end:cmd.words[-1].end].lstrip()).strip()
 
 
+def _git_without(cmd, gc, first, last):
+    """_without, or, when first or last is a word an alias the line defines gave (no span in the
+    line: inline_alias), the command git runs written out (git -C <dir> <sub> <rest>,
+    git_rest_text) with the words first..last of gc.rest cut out."""
+    if first.start is not None and last.end is not None:
+        return _without(cmd, first, last)
+    i = next((k for k, w in enumerate(gc.rest) if w is first), None)
+    j = next((k for k, w in enumerate(gc.rest) if w is last), None)
+    if i is None or j is None:                  # not words of gc.rest: cut nothing
+        i, j = len(gc.rest), len(gc.rest) - 1
+    cut = cm.GitCall(gc.dir, gc.sub, gc.rest[:i] + gc.rest[j + 1:], gc.inv, gc.unknown, gc.alias, gc.sub_dyn,
+                     gc.blind, gc.synth - len([k for k in range(i, j + 1) if k < gc.synth]))
+    git = 'git -C %s' % quote(gc.dir) if gc.dir else 'git'
+    return ('%s %s %s' % (git, gc.sub, git_rest_text(cmd, cut))).rstrip()
+
+
 def _under_temp(ctx, d):
     if not d:
         return False
@@ -7199,7 +7215,7 @@ def git_hooks_path(event, ctx, cmd, inv, cwd, role):
         if key == HOOKS_KEY and not _is_kit_hooks(val, gc.dir, getattr(ctx, 'home', None)):
             return refuse('git-hooks-path', role, '`%s` runs git with core.hooksPath=%s, which replaces the '
                           'repository\'s hooks. %s Run it without the setting:' %
-                          (bare(cmd), val, why), _without(cmd, first, last))
+                          (bare(cmd), val, why), _git_without(cmd, gc, first, last))
     if gc.sub != 'config':
         return None
     return hooks_config_write(ctx, gc, role, bare(cmd))

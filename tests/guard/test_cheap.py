@@ -359,6 +359,20 @@ class InlineAliasJudged(unittest.TestCase):
         self.assertEqual(d.verdict, 'deny', d.reason)
         self.assertEqual(d.instead, 'git -C "%s" commit -m y' % W.fwd(self.w.wt))
 
+    def test_a_hooks_path_hint_writes_the_command_the_alias_runs(self):
+        # the setting is cut from the words the alias gives, never the whole line repeated
+        wt = W.fwd(self.w.wt)
+        for text in ("git -c alias.cl='clone -c core.hooksPath=x' cl https://example.invalid/r.git",
+                     "git -c alias.cl='clone -c' cl core.hooksPath=x https://example.invalid/r.git",
+                     "git -c alias.cl='clone --config=core.hooksPath=x' cl https://example.invalid/r.git"):
+            with self.subTest(text):
+                d = self.decide(text)
+                self.assertEqual((d.verdict, d.rule), ('deny', 'git-hooks-path'), d.reason)
+                self.assertEqual(d.instead, 'git -C "%s" clone https://example.invalid/r.git' % wt)
+        # the line's own words keep the line's own hint
+        d = self.decide('git clone -c core.hooksPath=x https://example.invalid/r.git')
+        self.assertEqual(d.instead, 'git clone https://example.invalid/r.git')
+
 
 class HubKept(World):
     """Item 5 keeps the owner-only hub tools: with the kit's default modes, a parsed run of the hub
