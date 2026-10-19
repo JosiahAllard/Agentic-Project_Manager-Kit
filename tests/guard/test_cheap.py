@@ -276,6 +276,42 @@ class Dropped(World):
                 self.assertEqual((d.verdict, d.rule), ('deny', name), d.reason)
 
 
+class InlineAliasJudged(unittest.TestCase):
+    """git-alias only warns, so a -c alias.<name>=<value> the line defines is judged as the
+    command git runs: the value's words are the subcommand, as an alias from config is. Each row
+    is denied with the kit's default modes and no machine config, as the command it hides is."""
+
+    ROWS = (
+        ("git -c alias.p='push --force origin main' p", 'git push --force origin main', 'git-push-main'),
+        ("git -c alias.x='branch -D' x kit/y", 'git branch -D kit/y', 'git-branch-force-delete'),
+        ("git -c alias.h='config core.hooksPath x' h", 'git config core.hooksPath x', 'git-hooks-path'),
+        ('git -c alias.c=\'commit --author="A U Thor <a@example.invalid>"\' c -m x',
+         'git commit --author="A U Thor <a@example.invalid>" -m x', 'owner-identity'),
+    )
+
+    def setUp(self):
+        self.w = W.World(kit={'repo': {'name': 'demo'}, 'owner': {'email': 'a@example.invalid'}})
+        self.addCleanup(self.w.cleanup)
+
+    def decide(self, text):
+        return guard.decide(action(W.bash(text, self.w.wt, sub=True)), self.w.ctx())
+
+    def test_the_command_an_inline_alias_runs_is_judged(self):
+        self.assertFalse(os.path.exists(os.path.join(user.config_dir(self.w.home), 'config.json')))
+        for text, plain, rule in self.ROWS:
+            with self.subTest(text):
+                d = self.decide(plain)
+                self.assertEqual((d.verdict, d.rule), ('deny', rule), d.reason)
+                d = self.decide(text)
+                self.assertEqual((d.verdict, d.rule), ('deny', rule), d.reason)
+
+    def test_an_alias_of_a_builtin_name_is_judged_as_written(self):
+        # git ignores an alias that would hide a builtin: this runs `git status`
+        d = self.decide("git -c alias.status='push --force origin main' status")
+        self.assertEqual((d.verdict, d.rule), ('allow', rules.WARNED), d.reason)
+        self.assertIn('rule=git-alias', d.reason)
+
+
 class HubKept(World):
     """Item 5 keeps the owner-only hub tools: with the kit's default modes, a parsed run of the hub
     tool's owner verb is denied to any session but the owner's, and code that names the hub site or

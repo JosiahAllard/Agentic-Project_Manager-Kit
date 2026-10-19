@@ -1952,16 +1952,29 @@ class GitCall(object):
     text the shell passes (a backslash bash drops is dropped); `sub_dyn` the subcommand is not
     literal; `blind` what points git at a place the text does not show, which a -C cannot undo (a
     GIT_ENV_NAMES variable, --git-dir, --work-tree, -c core.worktree, --config-env, a computed
-    -c), else None."""
-    __slots__ = ('dir', 'sub', 'rest', 'inv', 'unknown', 'alias', 'sub_dyn', 'blind')
+    -c), else None. `synth`: how many Words at the start of `rest` a git alias's value gave (the
+    guard's expansion of one), not words of the line."""
+    __slots__ = ('dir', 'sub', 'rest', 'inv', 'unknown', 'alias', 'sub_dyn', 'blind', 'synth')
 
-    def __init__(self, dir_, sub, rest, inv, unknown, alias=None, sub_dyn=False, blind=None):
+    def __init__(self, dir_, sub, rest, inv, unknown, alias=None, sub_dyn=False, blind=None, synth=0):
         self.dir, self.sub, self.rest, self.inv, self.unknown = dir_, sub, rest, inv, unknown
-        self.alias, self.sub_dyn, self.blind = alias, sub_dyn, blind
+        self.alias, self.sub_dyn, self.blind, self.synth = alias, sub_dyn, blind, synth
 
     @property
     def argv(self):
         return [w.text for w in self.rest]
+
+    def before(self):
+        """The invocation's Words before the word that names the subcommand (git's own options)."""
+        a = list(self.inv.args)
+        return a[:len(a) - (len(self.rest) - self.synth) - 1]
+
+    def after(self):
+        """The invocation's Words after the word that names the subcommand (`rest` without the
+        words an alias's value gave)."""
+        a = list(self.inv.args)
+        n = len(self.rest) - self.synth
+        return a[len(a) - n:] if n else []
 
 
 def git_call(inv):

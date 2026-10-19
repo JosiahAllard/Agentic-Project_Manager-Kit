@@ -4800,6 +4800,38 @@ def git_alias(cmd, gc, role):
                   'the command git runs. %s' % (bare(cmd), name, val, how), instead)
 
 
+def inline_alias(gc):
+    """`gc` as git runs it when its subcommand names an alias the line itself defines (-c
+    alias.<name>=<value>, not a shell alias !...): the value's words are the subcommand and its
+    first arguments, as _alias_judged expands an alias from config, so the rules judge the command
+    git runs. A builtin name (git ignores an alias that would hide one), --config-env (its value
+    is in the environment), a computed setting, a value that starts with an option or cannot be
+    split, and a chain deeper than ALIAS_DEPTH leave the call as it stands (git_alias warns)."""
+    if gc is None or gc.inv is None or not gc.alias or gc.sub_dyn:
+        return gc
+    inline = {}
+    for key, val, first, last in git_prefix_configs(gc):
+        if key.startswith('alias.') and not cm.passed(gc.inv.cmd, first).startswith('--') and \
+                not first.dyn and not last.dyn:
+            inline[key[len('alias.'):]] = val   # the last setting of a name wins, as in git
+    for _depth in range(ALIAS_DEPTH):
+        val = inline.get(gc.sub.lower())
+        if val is None or gc.sub in GIT_BUILTINS or val.startswith('!'):
+            return gc
+        words = split_alias(val)
+        if not words or words[0].startswith('-'):
+            return gc
+        rest = [sh.Word(t, False, None, None) for t in words[1:]] + list(gc.rest)
+        gc = cm.GitCall(gc.dir, words[0], rest, gc.inv, gc.unknown, gc.alias, False, gc.blind,
+                        len(words) - 1 + gc.synth)
+    return gc
+
+
+def git_call_judged(inv):
+    """commands.git_call, with an alias the line defines expanded (inline_alias)."""
+    return inline_alias(cm.git_call(inv))
+
+
 def git_rules(event, ctx, cmd, inv, cwd, role):
     d = git_send_pack_pmdata(event, ctx, inv, role) or call_subexpr_pmdata(event, ctx, cmd, inv, cwd, role)
     if d:
@@ -4810,7 +4842,8 @@ def git_rules(event, ctx, cmd, inv, cwd, role):
     if gc.alias:
         d = git_alias(cmd, gc, role)
         if d:
-            return d                            # a warning by default: the call is judged as written below
+            return d                            # a warning by default: the command git runs is judged below
+        gc = inline_alias(gc)
     if gc.sub_dyn or (gc.sub == '' and gc.inv is not None and gc.inv.via == 'xargs'):
         d = git_push_pmdata(event, ctx, gc, role)       # a computed subcommand may be push
         if d:
@@ -5126,8 +5159,8 @@ def archive_words(gc):
     """The Words after git archive `gc`'s subcommand as the shell hands them to git (bash drops
     every backslash it would, a leading one too: `\\-o` is -o; commands.passed)."""
     cmd = gc.inv.cmd
-    return [sh.Word(cm.passed(cmd, w), w.dyn, w.start, w.end, w.synth) for w in gc.inv.args[len(gc.inv.args) -
-                                                                                          len(gc.rest):]]
+    return list(gc.rest[:gc.synth]) + [sh.Word(cm.passed(cmd, w), w.dyn, w.start, w.end, w.synth)
+                                       for w in gc.after()]
 
 
 def archive_filter_set(gc):
@@ -5143,8 +5176,7 @@ def archive_filter_set(gc):
     cmd = gc.inv.cmd
     if gc.blind or cmd.git_env or cmd.home_env or cmd.path_env:
         return True
-    args = gc.inv.args
-    pre = args[:len(args) - len(gc.rest) - 1]
+    pre = gc.before()
     k = 0
     while k < len(pre):
         if any(w.dyn or native_unsure(cmd, w) for w in pre[k:k + 2]):
@@ -5429,7 +5461,7 @@ def lander_check(event, ctx, cmd, inv, gc):
         return False, LANDER_NO_ROLE
     if not lander_alone(event, cmd, gc, getattr(ctx, 'home', None)):
         return False, LANDER_NOT_ALONE
-    pre = inv.args[:len(inv.args) - len(gc.rest) - 1]
+    pre = gc.before()
     if inv.via is not None or inv.dyn or [w.text for w in cmd.words[:inv.index]] not in ([], ['&']) or \
             [w.text for w in pre[:1]] not in ([], ['-C']) or len(pre) not in (0, 2) or \
             any(w.dyn for w in pre) or any(w.dyn for w in gc.rest):
@@ -5485,7 +5517,7 @@ def git_jail(event, ctx, cmd, inv, cwd, role):
     (kitlib.guard.jail): git -C <elsewhere> commit, a cd chain into another checkout, worktree
     add or clone to a folder outside them. Its repository's other worktrees (jail.sibling) are
     not elsewhere."""
-    gc = cm.git_call(inv)
+    gc = git_call_judged(inv)
     if gc is None or not agent_session(event, ctx):
         return None
     if not gc.dir:                              # commands.git_call: no place the text can tell
@@ -6014,7 +6046,7 @@ def git_send_pack_pmdata(event, ctx, inv, role):
     if inv.name.startswith('git-') and hookless_sub(inv.name[len('git-'):]):
         sub, where, args = inv.name[len('git-'):], cm.run_dir(inv), [w.text for w in inv.args]
     else:
-        gc = cm.git_call(inv)
+        gc = git_call_judged(inv)
         if gc is None or not hookless_sub(gc.sub):
             return None
         sub, where, args = gc.sub, (None if gc.unknown else gc.dir), gc.argv
@@ -6226,7 +6258,7 @@ def _alias_judged(event, ctx, gc, role, where, chain):
         return _alias_unjudged(event, ctx, gc, role, where, chain, 'it starts with an option or cannot be split'
                                if words else 'it cannot be split')
     rest = [sh.Word(t, False, None, None) for t in words[1:]] + list(gc.rest)
-    sub = cm.GitCall(gc.dir, words[0], rest, gc.inv, gc.unknown, None, False, gc.blind)
+    sub = cm.GitCall(gc.dir, words[0], rest, gc.inv, gc.unknown, None, False, gc.blind, len(words) - 1 + gc.synth)
     if hookless_sub(sub.sub):
         d = hookless_refusal(event, ctx, sub.sub, where, sub.argv, role)
     elif sub.sub == 'push':
@@ -7010,8 +7042,7 @@ def git_prefix_configs(gc):
     """[(key, value text, first Word, last Word)] of the -c and --config-env settings before the
     git subcommand (key lower-case), each word read as the shell hands it to git (commands.passed:
     bash's `-\\c core.hooksPat\\h=x` is -c core.hooksPath=x)."""
-    a = list(gc.inv.args)
-    a = a[:len(a) - len(gc.rest) - 1]
+    a = gc.before()
     out, k = [], 0
     while k < len(a):
         t = cm.passed(gc.inv.cmd, a[k])
@@ -7093,7 +7124,7 @@ def git_hooks_path(event, ctx, cmd, inv, cwd, role):
     session: it switches the repository's hooks off or elsewhere. Setting it to the kit's own
     githooks (the install step), and repositories under the temp folder (not --global or
     --system), are left alone. A git alias that runs `config` is judged the same way where
-    git_alias_config expands it (hooks_config_write)."""
+    git_alias_config expands it (hooks_config_write), and where the line defines it (inline_alias)."""
     why = HOOKS_WHY
     for name, val in env_assignments(cmd, HOOKS_ENV):
         if HOOKS_KEY in val.lower():
@@ -7101,7 +7132,7 @@ def git_hooks_path(event, ctx, cmd, inv, cwd, role):
             return refuse('git-hooks-path', role, '`%s` sets %s to change core.hooksPath for the git commands that '
                           'read it. %s Ask the owner (through the PM) when it needs to change. To see it:' %
                           (bare(cmd), name, why), 'git -C %s config --get core.hooksPath' % where)
-    gc = cm.git_call(inv)
+    gc = git_call_judged(inv)
     if gc is None:
         return None
     if _under_temp(ctx, gc.dir) and not _config_scope_all(gc):
@@ -7314,7 +7345,7 @@ def owner_identity(event, ctx, cmd, inv, cwd, role):
     email = cfg.owner_rules().owner_email if cfg is not None else ''
     if not email:
         return None
-    gc = cm.git_call(inv)
+    gc = git_call_judged(inv)
     found = _owner_identity_use(cmd, gc, email)
     if found is None:
         return None
