@@ -255,8 +255,8 @@ class Judge(unittest.TestCase):
         self.assertEqual(S.judge(self.step(), 'No test is available\n', 0, g)[0], 'FAIL')
 
     def test_zero_tests_fails_a_step_whose_bare_pass_pattern_matched(self):
-        # KIT-GATE-PASS-ZERO-COUNT: a bare pass string also matches the zero-count line, so the
-        # gate's zero_tests rule is what keeps that run from passing
+        # a bare pass string also matches the zero-count line, so the gate's zero_tests rule is
+        # what keeps that run from passing
         st = self.step(**{'pass': 'UNIT TESTS OK'})
         g = {'zero_tests': [r'\bUNIT TESTS OK 0\b']}
         status, why = S.judge(st, 'UNIT TESTS OK 0\n', 0, g)
@@ -286,7 +286,7 @@ class Judge(unittest.TestCase):
 
 
 class ZeroCountPasses(unittest.TestCase):
-    """KIT-GATE-PASS-ZERO-COUNT: the pass patterns that would also match a zero-test run."""
+    """zero_count_passes: the pass patterns that would also match a zero-test run."""
 
     def warned(self, passes, **top):
         return S.zero_count_passes(gate_of(cmd('t', **{'pass': passes}), **top))
@@ -308,7 +308,7 @@ class ZeroCountPasses(unittest.TestCase):
 
     def test_a_literal_zero_or_a_class_that_takes_letters_is_no_count(self):
         self.assertEqual(self.warned(r'\b0 failed\b'), [])
-        self.assertEqual(self.warned(r'(?m)^engine_run: dir=\S'), [])     # a GriffBall step
+        self.assertEqual(self.warned(r'(?m)^engine_run: dir=\S'), [])     # a game repo's step
         self.assertEqual(self.warned(r'done: .+'), [])
 
     def test_a_bare_pass_string_with_no_zero_line_it_matches_does_not_warn(self):
