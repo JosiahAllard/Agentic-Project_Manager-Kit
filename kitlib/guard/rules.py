@@ -299,16 +299,18 @@ def mcp_prefix(ctx):
 def mcp_owner_tool(ctx, tool, kind='mcp'):
     """The owner-only lock MCP tool `tool` names, or None: under the configured prefix, under any
     other server name (the tail after the host's separator, `mcp__<server>__<tool>`), or listed in
-    full in guard_mcp_tools. Only an MCP call (Action kind 'mcp') names one."""
+    full in guard_mcp_tools. Only an MCP call (Action kind 'mcp') names one. The names are the
+    retired owner writes pinned in kitlib.lockmcp.OWNER_ONLY: the server no longer serves them,
+    but one started from an older release still does until it restarts."""
     if kind != 'mcp' or not tool:
         return None
-    from kitlib.lockmcp import server as lockmcp   # here, not at the top: only MCP calls pay its import
+    owner_only = lockmcp_names.OWNER_ONLY
     prefix = mcp_prefix(ctx)
-    if tool.startswith(prefix) and tool[len(prefix):] in lockmcp.OWNER_ONLY:
+    if tool.startswith(prefix) and tool[len(prefix):] in owner_only:
         return tool[len(prefix):]
     sep = host_mcp_separator(ctx.host_profile())
     tail = tool.rsplit(sep, 1)[-1] if sep else tool
-    if tail in lockmcp.OWNER_ONLY:
+    if tail in owner_only:
         return tail                             # the same tool under another server name
     if tool in (ctx.user().get('guard_mcp_tools') or ()):
         return tool

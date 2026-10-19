@@ -55,7 +55,7 @@ The kit ships as one release with a thin plugin per host, which the owner instal
 - **API:** kitlib/lock exposes one versioned, transport-neutral API, made of read snapshots, a revision number for changes, and validated owner writes. Every UI uses only this API.
 - **Adapters:** these are thin layers over the API, built after the lock lands.
   - A Reservations section of the Action Hub page, migrated once the lock API is ready. How it reaches the lock is an open owner question; the planned 127.0.0.1 web page waits on that answer.
-  - A lock MCP server in the plugin. Read tools are open to all. guard.py denies agents the write tools, and in the owner's own session each write asks for their approval.
+  - A lock MCP server in the plugin, with read tools only, open to all. Asked "Drop the lock MCP's owner-only write tools so the lock never trusts a session mark, keeping the read tools?", the owner answered "yes i want that", and decided: "The lock MCP ships read-only; owner lock writes stay on reserve_ui.pyw and the outside-terminal CLI." guard.py still denies agents the retired write tools' names (docs/lock-mcp.md).
 - **The schedule window** stays: `reserve_ui.pyw` (kit root) (logic in `kitlib/lockui/`) is a tkinter adapter over the same API, next to the hub section.
 
 ## What comes from ~/.claude

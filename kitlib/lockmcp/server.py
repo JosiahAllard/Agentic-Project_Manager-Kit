@@ -2,12 +2,14 @@
 wrappers over kitlib.lock.api, and nothing else. JSON-RPC 2.0 over stdio, one message per
 line, written here on the standard library (the kit uses no packages, CLAUDE.md).
 
-Read tools are open to all. Write tools call the api's validated writes and are the owner's:
-their descriptions say so, and guard.py is to deny agents the names in OWNER_ONLY. A lock error
-(HoldsUnreadable among them) comes back as a tool result with isError true, never as a crashed
-server or a JSON-RPC error.
+Read tools only, open to all (the owner's decision, docs/lock-mcp.md "No write tools"): the server has no write tool, so no session mark
+and no process tree decides who may write through it. The owner changes the lock outside any agent
+session (docs/lock-mcp.md). The retired write names are pinned in kitlib.lockmcp.OWNER_ONLY:
+tools/list never lists one, tools/call answers it as an unknown tool, and the guard still denies
+them. A lock error (HoldsUnreadable among them) comes back as a tool result with isError true,
+never as a crashed server or a JSON-RPC error.
 
-Server(store, actor).handle(message) -> the response (or None for a notification);
+Server(store).handle(message) -> the response (or None for a notification);
 serve(server, rfile, wfile) runs it over two binary streams until rfile ends.
 """
 import json
@@ -16,14 +18,11 @@ import traceback
 from kitlib.lock import api
 from kitlib.lock.store import ID_RE
 from kitlib import mcpwire
-from kitlib.lockmcp import SERVER_NAME
+from kitlib.lockmcp import OWNER_ONLY, SERVER_NAME
 
 SERVER_VERSION = "0.1.0"
 PROTOCOLS = ("2025-06-18", "2025-03-26", "2024-11-05")    # newest first
 WAIT_MAX_S = 60.0
-
-OWNER_NOTE = ("OWNER-ONLY: the machine owner's write. Agents must not call it (the kit guard denies "
-              "it); in the owner's session each call asks for approval. ")
 
 _ISO = {"type": "string", "description": "An ISO time with its offset, like 2026-10-06T14:00:00Z."}
 _RUN_ID = {"type": "string", "description": "A run id, like r-20261006T120000Z-abcdef."}
@@ -35,59 +34,51 @@ def _obj(props, required=()):
             "additionalProperties": False}
 
 
-# name -> (description, input schema, owner-only)
+# name -> (description, input schema); every tool reads
 TOOLS = {
     "lock_snapshot": (
         "The machine lock now (kitlib.lock.api.snapshot, docs/lock-api.md Snapshot): "
         "schema_version, revision, hardware, layout, slots, runs, queue, holds (and holds_error), "
         "game, kinds and stats. Large; prefer lock_run or lock_hold for one record.",
         _obj({"history_days": {"type": "number", "description": "Stats range in days (default 7)."},
-              "since": _ISO, "until": _ISO}), False),
+              "since": _ISO, "until": _ISO})),
     "lock_wait_change": (
         "The snapshot once the lock's revision moves past `revision`, or after timeout_s "
         "(default 30, at most 60); the same revision back means nothing was written.",
         _obj({"revision": {"type": "integer"},
               "timeout_s": {"type": "number", "description": "Seconds to wait, at most 60."}},
-             ["revision"]), False),
+             ["revision"])),
     "lock_stats": (
         "Run history per kind and repo (the snapshot's stats): runs, done, failed, interrupted, "
         "held_s, wait_s, cpu_s, peaks.",
-        _obj({"days": {"type": "number"}, "since": _ISO, "until": _ISO}), False),
+        _obj({"days": {"type": "number"}, "since": _ISO, "until": _ISO})),
     "lock_run": (
         "One run's record, live (live: true) or ended; found: false when there is none.",
-        _obj({"id": _RUN_ID}, ["id"]), False),
+        _obj({"id": _RUN_ID}, ["id"])),
     "lock_hold": (
         "One hold's record, live (live_record: true, as the snapshot shows it) or ended; "
         "found: false when there is none.",
-        _obj({"id": _HOLD_ID}, ["id"]), False),
-    "lock_hold_create": (
-        OWNER_NOTE + "Makes a hold (api.hold_create). spec: owner (owner|agent), scope "
-        "(owner: whole|half|slots), start (ISO, default now), end (ISO) or for_s, note, job; "
-        "slots adds slots {cpu, gpu}; agent adds repo, slug, kind, gpu_share.",
-        _obj({"spec": {"type": "object"}}, ["spec"]), True),
-    "lock_hold_edit": (
-        OWNER_NOTE + "Changes a live hold (api.hold_edit): owner holds start (before it "
-        "starts), end, note; agent and game holds end, note.",
-        _obj({"id": _HOLD_ID, "changes": {"type": "object"}}, ["id", "changes"]), True),
-    "lock_hold_end": (
-        OWNER_NOTE + "Ends a live hold now (api.hold_end). A game hold comes back while the "
-        "game runs; switch game mode off instead.",
-        _obj({"id": _HOLD_ID}, ["id"]), True),
-    "lock_set_game_mode": (
-        OWNER_NOTE + "Game mode on or off (api.set_game_mode); off ends a live game hold.",
-        _obj({"enabled": {"type": "boolean"}}, ["enabled"]), True),
-    "lock_set_games": (
-        OWNER_NOTE + "Replaces the games list (api.set_games): [{exe, pin?, name?}].",
-        _obj({"games": {"type": "array", "items": {"type": "object"}}}, ["games"]), True),
-    "lock_set_division": (
-        OWNER_NOTE + "The owner's division of this machine (api.set_division): an object of "
-        "layout.DIVISION_KEYS, or null for every default.",
-        _obj({"division": {"type": ["object", "null"]}}, ["division"]), True),
-    "lock_end_run": (
-        OWNER_NOTE + "Asks a live run to end (api.end_run); it does not wait.",
-        _obj({"id": _RUN_ID}, ["id"]), True),
+        _obj({"id": _HOLD_ID}, ["id"])),
 }
-OWNER_ONLY = tuple(n for n, t in TOOLS.items() if t[2])
+
+
+def check_read_only(tools, owner_only):
+    """Raises RuntimeError when `tools` names a retired owner write: a real check, not an assert,
+    so `python -O` keeps it. Run once at import, on TOOLS and OWNER_ONLY."""
+    served = sorted(set(tools) & set(owner_only))
+    if served:
+        raise RuntimeError("the lock MCP server must not serve a retired owner write: %s"
+                           % ", ".join(served))
+
+
+check_read_only(TOOLS, OWNER_ONLY)
+
+UNKNOWN_TOOL = "unknown_tool"
+
+
+def _unknown(name):
+    """True when `name` is no tool this server serves (a retired write among them)."""
+    return not (isinstance(name, str) and name in TOOLS)
 
 
 class ToolError(Exception):
@@ -141,22 +132,24 @@ def _failed(rec):
     return isinstance(rec, dict) and rec.get("ok") is False
 
 class Server:
-    """The tools over one store. actor is what the writes pass to the api: on the machine's store
-    only its name is used (api.who reads who is asking from this process's tree); a scratch store
-    (tests) takes it as given."""
+    """The read tools over one store (None: the machine's). actor is ignored: no tool writes, so no
+    tool asks who is calling (tests/lockmcp/scratch_server.py still passes one)."""
 
     def __init__(self, store=None, actor=None):
         self.store = store
-        self.actor = actor if actor is not None else {"name": "lock-mcp"}
 
     # ---------------------------------------------------------------- tools
     def tool_list(self):
         return [{"name": n, "description": d, "inputSchema": s,
-                 "annotations": {"readOnlyHint": not w, "destructiveHint": w}}
-                for n, (d, s, w) in TOOLS.items()]
+                 "annotations": {"readOnlyHint": True, "destructiveHint": False}}
+                for n, (d, s) in TOOLS.items()]
 
     def call(self, name, args):
-        """(payload, is_error) for one tool call. Never raises."""
+        """(payload, is_error) for one tool call. Never raises. A name this server does not serve
+        is refused as handle refuses it over JSON-RPC (unknown tool), before any argument check."""
+        if _unknown(name):
+            return {"ok": False, "error": {"code": UNKNOWN_TOOL, "message": "unknown tool %s" % (name,),
+                                           "field": "name"}}, True
         try:
             a = _args(name, args if args is not None else {})
             return getattr(self, "_t_" + name)(a)
@@ -173,9 +166,9 @@ class Server:
                 type(e).__name__, e), "field": None,
                 "trace": traceback.format_exc(limit=5)}}, True
 
-    def _write(self, res):
-        """An api write's {ok, result | error, snapshot} without the snapshot (lock_snapshot gives
-        it), keeping its revision."""
+    def _failure(self, res):
+        """The api's error result ({ok: false, error, snapshot}) without the snapshot
+        (lock_snapshot gives it), keeping its revision."""
         snap = res.get("snapshot")
         out = {k: v for k, v in res.items() if k != "snapshot"}
         out["revision"] = snap.get("revision") if isinstance(snap, dict) else None
@@ -196,35 +189,14 @@ class Server:
     def _t_lock_run(self, a):
         rec = api.run_record(_id(a["id"], "r"), self.store)
         if _failed(rec):
-            return self._write(rec)
+            return self._failure(rec)
         return {"found": rec is not None, "run": rec}, False
 
     def _t_lock_hold(self, a):
         rec = api.hold_record(_id(a["id"], "h"), self.store)
         if _failed(rec):              # holds unreadable: the api's store error result
-            return self._write(rec)
+            return self._failure(rec)
         return {"found": rec is not None, "hold": rec}, False
-
-    def _t_lock_hold_create(self, a):
-        return self._write(api.hold_create(self.actor, a["spec"], self.store))
-
-    def _t_lock_hold_edit(self, a):
-        return self._write(api.hold_edit(self.actor, _id(a["id"], "h"), a["changes"], self.store))
-
-    def _t_lock_hold_end(self, a):
-        return self._write(api.hold_end(self.actor, _id(a["id"], "h"), self.store))
-
-    def _t_lock_set_game_mode(self, a):
-        return self._write(api.set_game_mode(self.actor, a["enabled"], self.store))
-
-    def _t_lock_set_games(self, a):
-        return self._write(api.set_games(self.actor, a["games"], self.store))
-
-    def _t_lock_set_division(self, a):
-        return self._write(api.set_division(self.actor, a["division"], self.store))
-
-    def _t_lock_end_run(self, a):
-        return self._write(api.end_run(self.actor, _id(a["id"], "r"), self.store))
 
     # ---------------------------------------------------------------- JSON-RPC
     def handle(self, msg):
@@ -247,17 +219,17 @@ class Server:
             return _ok(mid, {"protocolVersion": want if want in PROTOCOLS else PROTOCOLS[0],
                              "capabilities": {"tools": {"listChanged": False}},
                              "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
-                             "instructions": "The machine lock (kitlib.lock.api). Read tools are "
-                                             "open to all; tools marked OWNER-ONLY are the "
-                                             "owner's and agents must not call them."})
+                             "instructions": "The machine lock (kitlib.lock.api): read tools "
+                                             "only, open to all. The owner changes the lock "
+                                             "outside any agent session."})
         if method == "ping":
             return _ok(mid, {})
         if method == "tools/list":
             return _ok(mid, {"tools": self.tool_list()})
         if method == "tools/call":
             name = params.get("name")
-            if name not in TOOLS:
-                return _err(mid, -32602, "unknown tool %s" % name)
+            if _unknown(name):
+                return _err(mid, -32602, "unknown tool %s" % (name,))
             payload, is_error = self.call(name, params.get("arguments"))
             text = json.dumps(payload, ensure_ascii=False, default=str)
             res = {"content": [{"type": "text", "text": text}], "isError": is_error}
