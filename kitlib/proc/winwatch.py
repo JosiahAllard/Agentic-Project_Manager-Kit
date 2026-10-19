@@ -284,6 +284,24 @@ def attribute(windows, pseudos, within=CORRELATE_S):
         i, p = pick[0]
         used.add(i)
         out.append(w.copy(pid=p.pid, exe=p.exe, ours=p.ours))
+    return _drop_twins(out, within)
+
+
+def _drop_twins(windows, within):
+    """One window per twin pair: a window whose program is a console host (openconsole.exe,
+    conhost.exe) beside a window of a real program shown within `within` seconds is the host's twin
+    of that program's window, so it is dropped and the program's window stays (with its own
+    ours). Each real window drops at most one host window; a host window with no such partner stays."""
+    real = [w for w in windows if base(w.exe) not in HOSTS]
+    taken, out = set(), []
+    for w in windows:
+        if base(w.exe) in HOSTS:
+            mate = next((i for i, r in enumerate(real) if i not in taken
+                         and abs(r.mono - w.mono) <= within), None)
+            if mate is not None:
+                taken.add(mate)
+                continue
+        out.append(w)
     return out
 
 

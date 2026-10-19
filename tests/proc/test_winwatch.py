@@ -381,6 +381,17 @@ class Attribute(unittest.TestCase):
         out = winwatch.attribute([t], [winwatch.Pseudo(3, self.PY, False, mono=10.0)])
         self.assertEqual((out[0].pid, out[0].ours), (3, False))              # by exe
 
+    def test_a_host_twin_is_reported_once_as_the_program(self):
+        oc = r"C:\Term\OpenConsole.exe"
+        real = W(winwatch.CONSOLE, "window", "a", 10.0, pid=5, exe=self.PY, ours=True)
+        twin = W(winwatch.CONSOLE, "window", "a", 10.1, pid=6, exe=oc, ours=False)
+        far = W(winwatch.CONSOLE, "window", "b", 30.0, pid=7, exe=oc, ours=False)
+        out = winwatch.attribute([twin, real, far], [])
+        self.assertEqual([w.pid for w in out], [5, 7])      # the lone host window stays
+        lines = winwatch.report_lines(out)
+        self.assertTrue(lines[0].startswith("windows opened: 1 "), lines)
+        self.assertEqual(len([x for x in lines if "[not this run]" in x]), 1, lines)
+
     def test_a_console_window_keeps_its_pid(self):
         w = W(winwatch.CONSOLE, "window", "x", 10.0, pid=9, ours=True)
         out = winwatch.attribute([w], [winwatch.Pseudo(1, self.PY, True, mono=10.0)])
