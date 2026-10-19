@@ -12,10 +12,10 @@ declared `{name}` arguments filled in (check_arg). The hard exclusions (exclusio
 operation_exclusions) are fixed here; the file cannot widen or disable them.
 """
 import collections
+import os
 import re
 
 from kitlib.config import user
-from kitlib.config.migration import OLD_DIR_NAME
 from kitlib.config.types import (ConfigError, Bool, Enum, Field, Int, ListOf, Obj, Str, T,
                                  is_note)
 from kitlib.host import registry
@@ -168,11 +168,16 @@ E1_PARAMS = (('-verb', 5), ('-runlevel', 4), ('-credential', 3))
 # Matched as a substring of the token with a `/` added, so a folder name matches with or
 # without its trailing separator. Every host's own paths (hosts.json profile owner_paths: its
 # rules file and settings folder) and its home config file (state_directory + .json) are named
-# from the host registry, and the machine config folder, old and new, from kitlib.config.
+# from the host registry. The machine config folders, current and retired, are the ones
+# kitlib.config.user.locate names: _CONFIG_DIRS asks it about a home that does not exist, so it
+# reads nothing real, and the retired name stays spelled in the config package alone.
+_CONFIG_DIRS = tuple(os.path.basename(os.path.dirname(p)) + '/' for p in (
+    lambda loc: (loc.new, loc.old))(user.locate(os.path.join(os.sep, 'no-such-home'))))
 E2_FRAGMENTS = tuple(dict.fromkeys(f.lower() for f in (
-    ('settings.json', 'settings.local.json', user.DIR_NAME + '/', OLD_DIR_NAME + '/', 'agents.md',
+    ('settings.json', 'settings.local.json', user.DIR_NAME + '/', 'agents.md',
      'owner-delegations', '.kit.json', 'content/roles', 'content/skills', '.git/hooks',
      '.git/config', 'hookspath', 'machine_setup', 'render_content')
+    + _CONFIG_DIRS
     + tuple(registry.union('owner_paths'))
     + tuple(d.rstrip('/') + '.json' for d in registry.union('state_directory')))))
 E3_FRAGMENTS = ('machine_lock', 'machine-lock', 'lock_ui', 'lockmcp', 'lock_server', 'lock_set_',
