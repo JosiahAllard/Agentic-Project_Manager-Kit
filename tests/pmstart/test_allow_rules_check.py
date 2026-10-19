@@ -60,7 +60,8 @@ class AllowRulesCheckTest(unittest.TestCase):
                                     'ask': [self.rule(GONE).upper().replace(GONE.upper(), GONE)]}})
         got = self.check()
         self.assertEqual(got, ['allow rules (alpha): %s names plugin export %s (gone) in 3 rule(s); '
-                               'the current export is %s: %s prints the lines to paste (owner)'
+                               'the current export is %s: %s prints the land lines to paste; any other rule '
+                               'naming the old export needs its hash changed by hand (owner)'
                                % (kmemory.local_rel(), GONE, CUR, kitroot.command('allow_rules', self.repo))])
 
     def test_not_current_hash_is_a_line(self):

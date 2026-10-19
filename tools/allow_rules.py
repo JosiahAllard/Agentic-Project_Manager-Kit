@@ -68,7 +68,7 @@ def main(argv=None, derive=None):
     try:
         target = derive(os.getcwd() if a.root is None else a.root)
     except allowrules.AllowRulesError as e:
-        print('REFUSED: %s' % e)
+        print('REFUSED: %s' % e, file=sys.stderr)
         return 2
     print(json.dumps({'permissions': allowrules.lines(target)}, indent=2))
     for line in notes(target):

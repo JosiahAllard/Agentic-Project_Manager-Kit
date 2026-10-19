@@ -24,7 +24,7 @@ K = 'X:/fake-export/' + SHA
 R = 'Y:/repo'
 P = 'python %s/tools/land.py' % K
 Q = 'python "%s/tools/land.py"' % K
-LINES = {'allow': rules.allow_lines(K, R, ('full',)), 'deny': rules.deny_lines(K)}
+LINES = {'allow': rules.allow_lines(K, R, ('full',)), 'deny': rules.deny_lines(K, R)}
 ALLOW_ONLY = {'allow': LINES['allow'], 'deny': []}
 SHELLS = ('Bash', 'PowerShell')
 
@@ -59,10 +59,12 @@ class RuleTextTest(unittest.TestCase):
         for shell in SHELLS:
             for script in ('%s/tools/land.py' % K, '"%s/tools/land.py"' % K):
                 want.append('%s(python %s * -C*)' % (shell, script))
+                want.append('%s(python %s -C Y:/repo *-C*)' % (shell, script))
+                want.append('%s(python %s *--lo*)' % (shell, script))
                 want += ['%s(python %s *%s*)' % (shell, script, c)
-                         for c in ('>', '<', '|', ';', '&', '$', '(', '`', '%')]
+                         for c in ('>', '<', '|', ';', '&', '$', '(', '`', '%', "'", '"', '\\', '{', '}', '\t')]
         self.assertEqual(LINES['deny'], want)
-        self.assertEqual(len(want), 40)
+        self.assertEqual(len(want), 72)
 
 
 class AllowedTest(unittest.TestCase):
@@ -77,8 +79,12 @@ class AllowedTest(unittest.TestCase):
         self.assertEqual(decide(submit(tail=' --lane quick'), lines=lanes), 'allow')
 
     def test_batch_two_branches_allowed(self):
-        self.assertEqual(decide('%s -C %s kit/a kit/b --expect-tip a1 --expect-tip b2 --summary "x y" --submit'
+        self.assertEqual(decide('%s -C %s kit/a kit/b --expect-tip a1 --expect-tip b2 --summary x-and-y --submit'
                                 % (P, R)), 'allow')
+
+    def test_quoted_summary_denied(self):
+        # A quote is a metacharacter: a summary with spaces is a prompt, not an allow (docs/allow-rules.md).
+        self.assertEqual(decide(submit(middle='kit/a --summary "x y"')), 'deny')
 
     def test_quoted_kit_allowed(self):
         for shell in SHELLS:
@@ -97,6 +103,54 @@ class DeniedTest(unittest.TestCase):
                         submit(tail=' --lane full -C Z:/other'), submit(Q, middle='-C Z:/other kit/a')):
                 with self.subTest(shell=shell, cmd=cmd):
                     self.assertEqual(decide(cmd, shell), 'deny')
+
+    def second_C(self, middle):
+        """`middle` carries a second -C past the fixed prefix: denied in both shells and both script
+        spellings, though the allow alone would match it (argparse keeps the last -C)."""
+        for shell in SHELLS:
+            for script in (P, Q):
+                cmd = submit(script, middle=middle)
+                with self.subTest(shell=shell, cmd=cmd):
+                    self.assertEqual(decide(cmd, shell, ALLOW_ONLY), 'allow')
+                    self.assertEqual(decide(cmd, shell), 'deny')
+
+    def test_single_quoted_second_C_denied(self):
+        self.second_C("kit/a '-C' Z:/other")
+
+    def test_double_quoted_second_C_denied(self):
+        self.second_C('kit/a "-C" Z:/other')
+
+    def test_backslash_second_C_denied(self):
+        self.second_C('kit/a \\-C Z:/other')
+
+    def test_braced_second_C_denied(self):
+        self.second_C('kit/a {-C,Z:/other}')
+
+    def test_tab_second_C_denied(self):
+        self.second_C('kit/a\t-C Z:/other')
+
+    def test_any_later_C_text_denied(self):
+        self.second_C('kit/a,-CZ:/other')
+
+    def test_log_dir_denied(self):
+        for middle in ('kit/a --log-dir Z:/x', 'kit/a --log-dir=Z:/x', 'kit/a --lo Z:/x', 'kit/a --log Z:/x'):
+            self.only_the_deny_closes(middle)
+
+    def only_the_deny_closes(self, middle):
+        for shell in SHELLS:
+            cmd = submit(middle=middle)
+            with self.subTest(shell=shell, cmd=cmd):
+                self.assertEqual(decide(cmd, shell, ALLOW_ONLY), 'allow')
+                self.assertEqual(decide(cmd, shell), 'deny')
+
+    def test_backslash_escaped_submit_denied(self):
+        """`abc\\ --submit` is one word in Bash: --expect-tip takes "abc --submit" and land.py runs
+        without --submit, so the allow must not carry it."""
+        for shell in SHELLS:
+            cmd = '%s -C %s kit/a --expect-tip abc\\ --submit' % (P, R)
+            with self.subTest(shell=shell):
+                self.assertEqual(decide(cmd, shell, ALLOW_ONLY), 'allow')
+                self.assertEqual(decide(cmd, shell), 'deny')
 
     def test_glued_C_denied(self):
         self.assertEqual(decide(submit(middle='kit/a -CZ:/other')), 'deny')
@@ -181,8 +235,9 @@ class NoMatchTest(unittest.TestCase):
                     self.assertNotEqual(decide(submit(tail=tail), shell, ALLOW_ONLY), 'allow')
 
     def test_quoted_or_backslash_R_no_match(self):
-        self.assertIsNone(decide(submit().replace('-C Y:/repo ', '-C "Y:/repo" ')))
-        self.assertIsNone(decide(submit().replace('-C Y:/repo ', '-C Y:\\repo ')))
+        for cmd in (submit().replace('-C Y:/repo ', '-C "Y:/repo" '), submit().replace('-C Y:/repo ', '-C Y:\\repo ')):
+            self.assertIsNone(decide(cmd, lines=ALLOW_ONLY))
+            self.assertEqual(decide(cmd), 'deny')               # the quote and backslash denies
 
     def test_other_shell_rules_ignored(self):
         self.assertIsNone(decide(submit(), 'Read'))
@@ -223,7 +278,7 @@ class DeriveTest(unittest.TestCase):
         self.assertEqual(self.seen, ['Y:/repo/.claude/worktrees/w'])
         got = allowrules.lines(t)
         self.assertEqual(got, {'allow': rules.allow_lines(t.kit, 'Y:/repo', ('full', 'quick')),
-                               'deny': rules.deny_lines(t.kit)})
+                               'deny': rules.deny_lines(t.kit, 'Y:/repo')})
 
     def test_no_hard_coded_hash(self):
         other = os.path.join(os.path.dirname(self.root), 'export2')
@@ -314,8 +369,8 @@ class CliTest(unittest.TestCase):
             raise allowrules.AllowRulesError('no current plugin export under X:/fake-export (none)')
         code, out, err = self.run_cli([], fake)
         self.assertEqual(code, 2)
-        self.assertIn('REFUSED: no current plugin export under X:/fake-export (none)', out + err)
-        self.assertNotIn('{', out)
+        self.assertIn('REFUSED: no current plugin export under X:/fake-export (none)', err)
+        self.assertEqual(out, '')
 
     def test_cli_bad_argument_exit_2(self):
         with contextlib.redirect_stderr(io.StringIO()):

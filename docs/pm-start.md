@@ -118,7 +118,11 @@ whose path names a folder under the plugin export root (`plugin.export_dir`, any
 other than the current export. Each file and state gets one line:
 
 `allow rules (<repo>): <file> names plugin export <folder> (gone|not current) in <n> rule(s); the
-current export is <folder>: python "<kit>/tools/allow_rules.py" -C "<repo>" prints the lines to paste (owner)`
+current export is <folder>: python "<kit>/tools/allow_rules.py" -C "<repo>" prints the land lines to paste; any other rule naming the old export needs its hash
+changed by hand (owner)`
+
+`allow_rules.py` prints only the land lines. The check flags any rule that names an old export, so
+the owner edits the folder name in the others (a rule for another kit tool, say) by hand.
 
 - `gone`: the folder holds no export marker.
 - `not current`: an older export that is still there, so the allow runs an old `land.py`.

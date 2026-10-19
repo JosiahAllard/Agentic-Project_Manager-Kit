@@ -21,7 +21,7 @@ python <kit>/tools/allow_rules.py -C <any checkout of the repository>
   - `export:`, the export folder the lines name;
   - a `stale:` line for each rule in the repository's settings that names another export;
   - a `note:` when the kit running the tool is not the current export.
-- **Exit codes:** 0 when the lines are printed. 2 with `REFUSED: <reason>` (nothing on stdout) or on a usage error.
+- **Exit codes:** 0 when the lines are printed. 2 with `REFUSED: <reason>` on stderr (nothing on stdout) or on a usage error.
 
 The lines name:
 - **K**: the current plugin export folder, `<plugin.export_dir>/<folder>`, where `<folder>` comes from the export root's marketplace.json and must hold the export marker (docs/plugin-source.md). No export hash is spelled in the code.
@@ -40,23 +40,38 @@ The tool refuses when:
 The lanes are `full` plus the `"landing".lanes` of the main checkout's `.kit.json` at HEAD, which is
 the set `kitlib/gate/land.py` checks `--lane` against. `land.py`'s own `--lane` is free text.
 
+The lane lines limit only a trailing `--lane <lane>`, the one after `--submit`. A `--lane` inside
+the first `*` takes any value. That is safe because `land.py` itself refuses a lane that is not
+`full` or in `.kit.json` (`config_refusal` in `kitlib/gate/land.py`), not because of the rules.
+
 Each line comes in two shells (`Bash(...)`, `PowerShell(...)`) and two script spellings:
 `K/tools/land.py` and `"K/tools/land.py"`. So the lines are:
 
 - **Allow:** `python <script> -C R * --expect-tip * --submit`, plus one line per lane that adds
   ` --lane <lane>`. There is never a `--lane *`: a `*` at the end would carry `> file`.
   With no extra lanes this is 8 lines.
-- **Deny:** `python <script> * -C*` (a second or glued `-C`), plus `python <script> *X*` for each
-  X in `> < | ; & $ ( %` and the backtick. That is 40 lines.
+- **Deny:** 18 lines per shell and spelling, 72 in all:
+  - `python <script> * -C*`: a second `-C` after a space, or a glued one;
+  - `python <script> -C R *-C*`: the text `-C` anywhere after the fixed `-C R` prefix;
+  - `python <script> *--lo*`: `--log-dir` or any prefix of it, so an allowed submit cannot send the gate's logs anywhere (`land.py` takes abbreviations);
+  - `python <script> *X*` for each X in `> < | ; & $ ( % ' " \ { }`, the backtick and the tab.
+
+argparse keeps the last `-C`, so a second one would move the landing to another checkout. The
+`-C` denies close it however it is spelled: `'-C'`, `"-C"`, `\-C`, `{-C,...}`, a tab before it, or
+`,-C`. They also deny legitimate text that holds `-C`. In PowerShell that includes `-c`, since
+PowerShell matches case-insensitively, so a branch such as `kit/x-check` is denied there. Those
+submits get the normal prompt, or can be run from Bash.
 
 The metacharacter denies close what an allow's inner `*` would otherwise carry:
 - a redirect;
 - a chain;
 - `$(...)`, backticks and `$var`;
 - PowerShell's `(expr)` and `@(...)`;
-- `%VAR%`.
+- `%VAR%`;
+- brace expansion;
+- a quote, backslash or tab that hides a second `-C`, or glues a flag into a value. In Bash, `--expect-tip abc\ --submit` is one word, so `land.py` would run without `--submit`.
 
-A legitimate submit holds none of them. A summary with `;`, `&`, `%`, `$`, `(` or `|` in it is denied as well; reword it.
+A legitimate submit holds none of them. A summary with spaces needs quotes, so it is denied. So is a summary with `;`, `&`, `%`, `$`, `(`, `|` or a brace. Use a one-word summary or leave it out.
 
 ## Matching
 
@@ -82,6 +97,7 @@ permissions, permission-modes and settings pages, read 2026-10-19:
   - Bash matches case-sensitively.
   - Runs of spaces are not collapsed. The reference denies `land.py  -C R ...` (two spaces), a harmless false positive, but Claude Code's handling is unknown.
   - Quotes are compared as literal text, not stripped. This is why both script spellings are emitted, and why `-C "R"` or `-C R` with backslashes does not match.
+  - A `\` or a tab in a rule is literal text, not an escape.
   - A deny is also checked against the whole, unsplit command.
   - The kit guard (a PreToolUse hook) still runs before these rules and can refuse.
 

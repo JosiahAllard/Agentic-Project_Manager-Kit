@@ -95,7 +95,7 @@ def derive(checkout, settings=None, toplevel=None, lanes_of=None):
 def lines(target):
     """The allow and deny lines for `target`, in a fixed order."""
     return {'allow': rules.allow_lines(target.kit, target.repo, target.lanes),
-            'deny': rules.deny_lines(target.kit)}
+            'deny': rules.deny_lines(target.kit, target.repo)}
 
 
 def _root_pattern(root):

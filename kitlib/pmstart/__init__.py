@@ -614,7 +614,8 @@ def allow_rules(cfg, repos=None, pm_repo=None, settings=None):
     """Permission rules naming a plugin export other than the current one (kitlib.allowrules;
     docs/pm-start.md "Allow rules"): for each repository in launcher.repos and the PM's own, one
     line per settings file (.claude/settings.local.json, .claude/settings.json) and state (gone,
-    not current), with the command that prints the lines to paste. None when every rule names the
+    not current), with the command that prints the land lines to paste (any other rule's hash the
+    owner changes by hand). None when every rule names the
     current export. Nothing is read when there is no repository; a loader (`settings`, default
     plugin_settings) that gives None checks nothing."""
     from kitlib import allowrules, kitroot, pluginsource
@@ -652,7 +653,8 @@ def allow_rules(cfg, repos=None, pm_repo=None, settings=None):
                 if state in by_state:
                     folders = by_state[state]
                     lines.append("allow rules (%s): %s names plugin export %s (%s) in %d rule(s); the current "
-                                 "export is %s: %s prints the lines to paste (owner)"
+                                 "export is %s: %s prints the land lines to paste; any other rule naming the "
+                                 "old export needs its hash changed by hand (owner)"
                                  % (label, rel, ", ".join(folders), state, sum(found[x] for x in folders),
                                     current or "none", kitroot.command("allow_rules", path)))
     return lines

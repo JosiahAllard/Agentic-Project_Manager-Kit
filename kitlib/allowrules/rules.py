@@ -1,7 +1,7 @@
 """The text of the land permission rules, and a reference matcher for them (docs/allow-rules.md).
 
   allow_lines(kit, repo, lanes)  one allow per shell, script spelling and lane (plus the plain one)
-  deny_lines(kit)                a second -C, and each shell metacharacter, anywhere after the script
+  deny_lines(kit, repo)          a second -C, --log-dir, and each shell metacharacter, after the script
   decide(lines, shell, command)  'allow', 'deny' or None under the matching model in the doc
 
 `decide` is a model of Claude Code's documented rule matching, written so the tests can pin what
@@ -12,9 +12,13 @@ import re
 
 SHELLS = ('Bash', 'PowerShell')
 SCRIPT = 'tools/land.py'
-# Shell metacharacters that redirect, chain, substitute or expand: any of them in a land command is
-# denied, so no `*` of an allow can carry one (`$` and `(` stand for `$(`, `@(` and PowerShell's `(expr)`).
-METACHARS = ('>', '<', '|', ';', '&', '$', '(', '`', '%')
+# Shell metacharacters that redirect, chain, substitute, expand, quote or escape: any of them in a
+# land command is denied, so no `*` of an allow can carry one (`$` and `(` stand for `$(`, `@(` and
+# PowerShell's `(expr)`; quotes, the backslash, braces and the tab hide a second -C or glue a flag
+# into a value, as in `abc\ --submit`).
+METACHARS = ('>', '<', '|', ';', '&', '$', '(', '`', '%', "'", '"', '\\', '{', '}', '\t')
+# The prefix of land.py's --log-dir that no other option shares (land.py takes abbreviations).
+LOG_DIR = '--lo'
 # The operators a command is split on before each part is matched (newlines too).
 _SPLIT = {
     'Bash': re.compile(r'\|&|&&|\|\||[;|&\n]'),
@@ -40,12 +44,15 @@ def allow_lines(kit, repo, lanes):
     return out
 
 
-def deny_lines(kit):
-    """The deny rules: a -C after the first, and each metacharacter, for each shell and spelling."""
+def deny_lines(kit, repo):
+    """The deny rules, for each shell and spelling: a -C after the first (spaced, or any text -C past
+    the fixed `-C <repo>` prefix), --log-dir by its shortest prefix, and each metacharacter."""
     out = []
     for shell in SHELLS:
         for script in scripts(kit):
             out.append('%s(python %s * -C*)' % (shell, script))
+            out.append('%s(python %s -C %s *-C*)' % (shell, script, repo))
+            out.append('%s(python %s *%s*)' % (shell, script, LOG_DIR))
             out += ['%s(python %s *%s*)' % (shell, script, c) for c in METACHARS]
     return out
 
