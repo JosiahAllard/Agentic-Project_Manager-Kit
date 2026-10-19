@@ -25,6 +25,12 @@ setup left under a config folder, with the command that removes the link only, a
 step re-points a path through `<config>/tools/<link>` to the kit's own file
 (settings.repoint_links).
 
+Claude Code's machine-wide managed settings file (kitlib.machinesetup.managed) is read in both
+modes and written in neither: when it carries this kit's guard entry or turns the kit plugin on, no
+account settings.json gains its own, and the default mode notes whether the file is in sync with the
+kit's template. Writing it is `--managed-settings` (run_managed), a mode of its own that needs an
+elevated terminal.
+
 The committed repo setup is kitlib.machinesetup.repo (`--repo PATH`, run_repo), a mode of its own.
 run_agent_temp() does the agents' temp folder steps alone (tools/agent_temp_init.py).
 Nothing here prints or exits; run() gives the exit code and the lines.
@@ -35,7 +41,7 @@ import os
 from kitlib.config import user
 from kitlib.config.migration import OLD_DIR_NAME
 
-from . import agenttemp, extras, links, owner, plugin, settings
+from . import agenttemp, extras, links, managed, owner, plugin, settings
 from .common import Change, Plan, Report, kit_file
 
 EXIT_OK, EXIT_REFUSED, EXIT_USAGE = 0, 1, 2
@@ -77,6 +83,8 @@ class Context(object):
         self.desktop = desktop
         self.host = host or extras.Host()
         self.today = today or datetime.date.today().strftime('%Y%m%d')
+        self.managed_file = None                                     # managed.survey_live sets both
+        self.managed_data = None
 
 
 def default_config_dirs(home):
@@ -138,8 +146,12 @@ def survey(ctx):
                            'runs in; name the ones to edit with --config-dir to leave any other out')
     for d in ctx.config_dirs:
         links.survey(plan, d, ctx)                                   # notes only: no link is made
+    managed.survey_live(plan, ctx)                                   # the guard, the plugin: from there?
+    if plan.refusals:
+        return plan
     for d in ctx.config_dirs:
         settings.survey(plan, d, ctx)
+    managed.note_sync(plan, ctx)                                     # never written in this mode
     if ctx.fresh:
         settings.survey_pm(plan, ctx)
         plugin.survey_hosts(plan, ctx)
@@ -210,6 +222,29 @@ def run_repo(ctx, apply=False, out=None):
     return repo.run(ctx, apply=apply, out=out)
 
 
+ManagedContext = managed.ManagedContext
+
+
+def run_managed(ctx, apply=False, out=None):
+    """(exit code, lines) of the --managed-settings mode (kitlib.machinesetup.managed.survey; ctx a
+    ManagedContext): the managed settings file made from the kit's template, as run()."""
+    lines = []
+
+    def emit(*ls):
+        for l in ls:
+            lines.append(l)
+            if out:
+                out(l)
+
+    emit('managed-settings: %s' % ('APPLY' if apply else 'DRY RUN (nothing changed; add --apply to act)'),
+         '  kit:            %s' % ctx.kit,
+         '  template:       %s' % kit_file(ctx.kit, managed.SOURCE),
+         '  overlay:        %s%s' % (managed.overlay_path(ctx.home),
+                                     '' if os.path.lexists(managed.overlay_path(ctx.home)) else ' (none)'),
+         '  managed file:   %s' % ctx.host.managed_path())
+    return _carry_out('managed-settings', managed.survey(ctx, apply=apply), apply, emit, lines)
+
+
 class AgentTempContext(object):
     """What the agent temp init alone (tools/agent_temp_init.py) reads: the subset of Context that
     kitlib.machinesetup.agenttemp and the folder's ACL step use."""
@@ -252,5 +287,6 @@ def run_agent_temp(ctx, apply=False, out=None):
     return _carry_out('agent-temp-init', survey_agent_temp(ctx), apply, emit, lines)
 
 
-__all__ = ['AgentTempContext', 'Change', 'Context', 'Plan', 'account_dirs', 'dedupe', 'default_config_dirs',
-           'run', 'run_agent_temp', 'run_repo', 'survey', 'survey_agent_temp']
+__all__ = ['AgentTempContext', 'Change', 'Context', 'ManagedContext', 'Plan', 'account_dirs', 'dedupe',
+           'default_config_dirs', 'run', 'run_agent_temp', 'run_managed', 'run_repo', 'survey',
+           'survey_agent_temp']

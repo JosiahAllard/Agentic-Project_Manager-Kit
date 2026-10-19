@@ -122,8 +122,7 @@ def survey(plan, d, ctx):
     if isinstance(sl, dict) and isinstance(sl.get('command'), str):
         sl['command'] = ed.rewrite(sl['command'], 'statusLine.command', removable=False)[0]
     _note_plugin_twins(plan, path, data, ctx)
-    guard = norm(os.path.join(ctx.kit, *GUARD.split('/')))
-    if not any(norm(p) == guard for p in _hook_paths(data, 'PreToolUse', ctx.home)):
+    if _wants_guard(plan, path, data, ctx):
         try:
             entry = ed.guard_entry()
         except (OSError, RuntimeError, ValueError) as e:
@@ -137,6 +136,21 @@ def survey(plan, d, ctx):
     if not ed.did:
         return
     _plan_write(plan, ctx, path, raw, layout, data, ed.did)
+
+
+def _wants_guard(plan, path, data, ctx):
+    """True when the settings.json at `path` (`data`) should gain the guard's entry: it has none,
+    and the managed settings file (ctx.managed_data, read by managed.survey_live) runs no kit's
+    guard. One that has it while the managed file does too is noted: the guard runs twice."""
+    from . import managed
+    guard = norm(os.path.join(ctx.kit, *GUARD.split('/')))
+    here = any(norm(p) == guard for p in _hook_paths(data, 'PreToolUse', ctx.home))
+    data_m = getattr(ctx, 'managed_data', None)
+    where = managed.guard_where(data_m, ctx.kit, ctx.home) if data_m is not None else []
+    if here and where == 'kit':
+        plan.note('settings', '%s: the guard\'s entry is also in the managed settings file %s, so it '
+                              'runs twice; remove it from this file by hand' % (path, ctx.managed_file))
+    return not here and not where
 
 
 def _note_plugin_twins(plan, path, data, ctx):
@@ -199,8 +213,7 @@ def _survey_fresh(plan, path, ctx):
         plan.refuse('%s: %s' % (path, e))
         return
     _note_plugin_twins(plan, path, data, ctx)
-    guard = norm(os.path.join(ctx.kit, *GUARD.split('/')))
-    if not any(norm(p) == guard for p in _hook_paths(data, 'PreToolUse', ctx.home)):
+    if _wants_guard(plan, path, data, ctx):
         try:
             entry = ctx.host.guard_entry(ctx.kit)
         except (OSError, RuntimeError, ValueError) as e:
