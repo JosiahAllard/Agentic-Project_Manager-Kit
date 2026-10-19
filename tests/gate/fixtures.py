@@ -41,6 +41,37 @@ def gate_full(root, *tips):
     return made
 
 
+REVIEW = {'verdict': 'LAND', 'risk': 'Low', 'reviewer': 'pm-kit:reviewer',
+          'reviewer_model': 'sonnet', 'reviewer_id': 'fixture-reviewer',
+          'author': 'Kit Test / worker', 'session': 'fixture', 'records': []}
+
+
+def queue_review(root, branches, tips):
+    """A LAND verdict (REVIEW, by a reviewer who is not the author) queued for each branch of
+    `branches` at its tip of `tips` (one each, or lists, as a batch's --expect-tip): every landing
+    needs one (docs/gate.md "Landing" step 4). Only for a branch with no entry at all and whose head
+    is that tip: an entry a test wrote is never replaced, and a tip that is not the branch's head
+    (a landing the test means to refuse earlier) gets none. The branches queued."""
+    from kitlib.gate import verdicts
+    from kitlib.git import repo as repomod
+    branches = branches if isinstance(branches, (list, tuple)) else [branches]
+    tips = tips if isinstance(tips, (list, tuple)) else [tips]
+    common, _ = repomod.common_dir(root)
+    queued = []
+    if not common:
+        return queued
+    for b, t in zip(branches, tips):
+        try:
+            if (not isinstance(t, str) or os.path.exists(verdicts.entry_path(common, b))
+                    or verdicts.head_of(common, b) != t):
+                continue
+            verdicts.add(common, dict(REVIEW, branch=b, tip=t, range='main..%s' % t))
+        except verdicts.VerdictError:
+            continue            # not a branch the queue takes: the landing refuses it as before
+        queued.append(b)
+    return queued
+
+
 def test_env():
     """The fixture's git environment without the Claude Code and machine lock variables: what the
     gate's steps and git writes get in a test. KIT_PINNED is `live`: a tools/gate.py or land.py a
