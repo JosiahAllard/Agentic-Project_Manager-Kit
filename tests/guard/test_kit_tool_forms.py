@@ -84,7 +84,7 @@ class SharedRules(unittest.TestCase):
             make = bash if shell == 'bash' else ps
             seen.add(verdict(claude_decide(make(forms(self.w, tool, takes_c, args, cwd)[1], cwd, sub=sub),
                                            self.w.ctx())))
-        self.assertTrue({('deny', 'wrapped-gate'), ('deny', 'owner-lock'), ('allow', None)} <= seen, seen)
+        self.assertTrue({('deny', 'wrapped-gate'), ('deny', 'owner-tool'), ('allow', None)} <= seen, seen)
 
     def test_a_wrapped_kit_gate_keeps_its_own_path_in_the_alternative(self):
         cmd = forms(self.w, 'gate', True, '--full 2>&1 | tail -5', self.w.wt)[1]

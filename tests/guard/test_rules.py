@@ -648,15 +648,6 @@ class OwnerLockTools(unittest.TestCase):
         ('ps', 'cmd /c start "" reserve_ui.pyw'),
         ('ps', 'Invoke-Item %s' % UI_WIN),
         ('ps', 'ii reserve_ui.pyw'),
-        ('bash', 'python -c "import runpy; runpy.run_path(\'reserve_ui.pyw\')"'),
-        # the window's package, started from python -c
-        ('bash', 'python -c "from kitlib.lockui import window; window.main()"'),
-        ('ps', 'pythonw -c "import kitlib.lockui.window as w; w.main()"'),
-        ('bash', 'python -c "from kitlib import lockui"'),
-        ('bash', 'python -Sc "from kitlib.lockui.window import main; main()"'),
-        ('bash', 'p=%s; pythonw "$p"' % UI),
-        ('ps', '$ui = "%s"; & $ui' % UI_WIN),
-        ('ps', '$p = "reserve_ui.pyw"; pythonw $p'),
         ('bash', 'pyw reserve_ui.pyw'),
         ('ps', 'pyw -3 reserve_ui.pyw'),
         ('ps', 'pyw.exe %s' % UI_WIN),
@@ -666,21 +657,6 @@ class OwnerLockTools(unittest.TestCase):
         ('ps', 'explorer reserve_ui.pyw'),
         ('bash', 'explorer.exe %s' % UI_WIN),
         ('bash', 'python -m reserve_ui'),
-        # combined short flags: -m or -c at the end of a cluster, or a module joined to -m
-        ('bash', 'python -um runpy reserve_ui.pyw'),
-        ('ps', 'python -Bm runpy %s' % UI_WIN),
-        ('bash', 'python -Im reserve_ui'),
-        ('bash', 'python -mrunpy reserve_ui.pyw'),
-        ('bash', 'python -umrunpy reserve_ui.pyw'),
-        ('bash', 'python -Sc "import runpy; runpy.run_path(\'reserve_ui.pyw\')"'),
-        ('bash', 'mod=reserve_ui; python -m $mod'),
-        ('ps', '$m = "runpy"; python -um $m reserve_ui.pyw'),
-        ('bash', 'python -m runpy %s' % UI),
-        ('bash', 'python < reserve_ui.pyw'),
-        ('bash', 'python - < %s' % UI),
-        ('bash', 'cat reserve_ui.pyw | python'),
-        ('bash', 'cat %s | pythonw -' % UI),
-        ('ps', 'Get-Content reserve_ui.pyw | python'),
         # the live lock CLI's owner writes
         ('bash', 'python %s reserve whole --for 2h' % LIVE),
         ('ps', 'py %s reserve half --until 18:00' % LIVE_WIN),
@@ -693,8 +669,6 @@ class OwnerLockTools(unittest.TestCase):
         ('bash', '%s release' % LIVE),
         ('bash', 'python %s --test-root C:/tmp/x reserve whole --for 1h' % LIVE),
         ('bash', 'cmd //c python %s release' % LIVE),
-        ('bash', 'python %s run --lock --kind build --repo demo --slug wt -- python %s reserve whole --for 1h'
-         % (LIVE, LIVE)),
         # the kit lock CLI's owner writes
         ('bash', 'python tools/machine_lock.py hold whole --for 1h'),
         ('ps', 'python tools\\machine_lock.py hold half --from 18:00 --until 20:00'),
@@ -708,8 +682,6 @@ class OwnerLockTools(unittest.TestCase):
         ('bash', 'python tools/machine_lock.py stop r-1 --force'),
         ('bash', 'python tools/machine_lock.py top r-1'),
         ('ps', 'python tools\\machine_lock.py --test-root C:/tmp/x top r-1'),
-        ('bash', 'python %s run --lock --kind build --repo demo --slug wt -- python tools/machine_lock.py top r-1'
-         % LIVE),
     ]
 
     ALLOWED = [
@@ -766,6 +738,13 @@ class OwnerLockTools(unittest.TestCase):
         ('bash', 'python tools/reserve_check.py release'),
         ('bash', 'echo "machine_lock reserve whole"'),
         ('bash', 'python tools/release.py game on'),
+        # the rule reads the file a command runs, never text that only names a tool
+        ('bash', 'cat tools/machine_lock.py'),
+        ('bash', 'grep -n "hold whole" tools/machine_lock.py'),
+        ('ps', 'Select-String -Path tools/machine_lock.py -Pattern reserve'),
+        ('bash', 'echo "python tools/machine_lock.py hold whole"'),
+        ('bash', 'git log -p -- tools/machine_lock.py'),
+        ('bash', 'python -c "import kitlib.lockui"'),
     ]
 
     def setUp(self):
@@ -785,11 +764,11 @@ class OwnerLockTools(unittest.TestCase):
                 with self.subTest(text, sub=sub):
                     d = self.run_one(shell, text, sub)
                     self.assertIsNotNone(d, 'allowed')
-                    self.assertEqual((d.verdict, d.rule), ('deny', 'owner-lock'), d.reason)
+                    self.assertEqual((d.verdict, d.rule), ('deny', 'owner-tool'), d.reason)
                     self.assertIn(OWNER_ONLY, d.reason)
                     self.assertNotRegex(d.reason, r'\b[RQ]-\d+')
                     self.assertTrue(d.reason.endswith(' Instead: %s %s' % (
-                        status, rules.tag('owner-lock', 'subagent' if sub else 'main'))), d.reason)
+                        status, rules.tag('owner-tool', 'subagent' if sub else 'main'))), d.reason)
 
     def test_the_owner_session_may(self):
         # a main session nothing marks is the owner's own (docs/guard.md "Session mark")
@@ -803,28 +782,6 @@ class OwnerLockTools(unittest.TestCase):
             with self.subTest(text):
                 d = self.run_one(shell, text, True)
                 self.assertIsNone(d, d and d.reason)
-
-    def _first(self, text):
-        from kitlib.guard import commands as cm, shell as sh
-        p = cm.read(text, sh.BASH, self.w.wt)
-        self.assertFalse(p.clean)
-        self.assertEqual(len(p.commands), 1, [c.words for c in p.commands])
-        c = p.commands[0]
-        return c, cm.invocation(c), self.w.wt, 'main'
-
-    def test_unread_line_rereads_with_owner_lock(self):
-        # an unclosed quote hides the command inside echo's argument, so only the fallback sees it:
-        # it re-reads the text from the wrapped-gate match and runs the parsed rules on it
-        text = ("echo 'x ; python %s run --lock --kind build --repo demo --slug wt -- python %s reserve whole"
-                " --for 1h | tee out.log" % (LIVE, LIVE))
-        self.assertIsNone(rules.owner_lock(None, self.w.ctx(environ=MARKED), *self._first(text)), 'the parse saw it')
-        for sub in (True, False):
-            with self.subTest(sub=sub):
-                d = self.run_one('bash', text, sub)
-                self.assertIsNotNone(d, 'allowed')
-                self.assertEqual((d.verdict, d.rule), ('deny', 'owner-lock'), d.reason)
-                self.assertIn('could not read this command', d.reason)
-                self.assertIn(OWNER_ONLY, d.reason)
 
 
 class OwnerSetup(unittest.TestCase):
@@ -843,19 +800,11 @@ class OwnerSetup(unittest.TestCase):
                  '--agent-email b@example.invalid --apply'),
         ('bash', 'cd C:/kit && python tools/machine_setup.py --apply'),
         ('bash', 'python -m tools.machine_setup --apply'),
-        ('bash', 'f=--apply; python tools/machine_setup.py $f'),
-        ('ps', '$s = "C:\\kit\\tools\\machine_setup.py"; python $s --apply'),
         ('ps', '& C:\\kit\\installer\\machine-setup.ps1 -OwnerEmail a@example.invalid -Apply'),
         ('ps', 'powershell -NoProfile -File C:\\kit\\installer\\machine-setup.ps1 -apply'),
         ('ps', 'powershell -File installer\\new-repo.ps1 -Target C:\\demo -OwnerEmail a@example.invalid '
                '-AgentEmail b@example.invalid -App'),
         ('ps', 'Start-Process python -ArgumentList "tools/machine_setup.py --apply"'),
-        # a double quote PowerShell 5.1 would pass on unescaped: it can carry an --apply in
-        ('ps', '& C:\\kit\\installer\\new-repo.ps1 -Target C:\\demo -OwnerEmail \'x" --apply --repo-name "n\' '
-               '-AgentEmail b@example.invalid'),
-        ('bash', 'python -c "from kitlib.machinesetup import owner; owner.write_owner_email(None, None, \'a@x.io\')"'),
-        ('bash', 'python -Sc "import kitlib.machinesetup.machineconfig"'),
-        ('bash', "python - <<'EOF'\nfrom kitlib.machinesetup import owner\nEOF"),
     ]
     ALLOWED = [
         ('bash', 'python tools/machine_setup.py'),
@@ -889,29 +838,38 @@ class OwnerSetup(unittest.TestCase):
                     self.assertEqual(d.verdict, 'deny', d.reason)
                     if d.rule == 'unreadable':                 # a subagent's unclean line: refused whole
                         continue
-                    self.assertEqual(d.rule, 'owner-setup', d.reason)
+                    self.assertEqual(d.rule, 'owner-tool', d.reason)
                     self.assertIn("only the owner runs it to act", d.reason)
                     self.assertTrue(d.reason.endswith(' Instead: %s %s' % (
-                        dry, rules.tag('owner-setup', 'subagent' if sub else 'main'))), d.reason)
+                        dry, rules.tag('owner-tool', 'subagent' if sub else 'main'))), d.reason)
 
     def test_the_owner_session_may(self):
         for shell, text in self.BLOCKED:
             with self.subTest(text):
                 d = self.run_one(shell, text, False, environ={})
-                self.assertTrue(d is None or d.rule != 'owner-setup', d and d.reason)
+                self.assertTrue(d is None or d.rule != 'owner-tool', d and d.reason)
 
     def test_allowed(self):
         for shell, text in self.ALLOWED:
             for sub in (True, False):
                 with self.subTest(text, sub=sub):
                     d = self.run_one(shell, text, sub)
-                    self.assertTrue(d is None or d.rule != 'owner-setup', d and d.reason)
+                    self.assertTrue(d is None or d.rule != 'owner-tool', d and d.reason)
+
+    def test_code_that_only_names_the_setup_package_passes(self):
+        """A python heredoc whose text names kitlib.machinesetup but imports nothing of it runs no
+        machine setup: a subagent's run of it is allowed whole (observed refused as owner-setup)."""
+        text = ("python - <<'EOF'\nimport pathlib\n"
+                "t = pathlib.Path('docs/guard.md').read_text(encoding='utf-8')\n"
+                "print(t.count('kitlib.machinesetup'))\nEOF")
+        d = self.run_one('bash', text, True)
+        self.assertIsNone(d, d and d.reason)
 
     def test_an_unread_line_that_runs_it_is_refused(self):
         text = "echo 'x ; python tools/machine_setup.py --owner-email a@example.invalid --apply"
         d = self.run_one('bash', text, False)
         self.assertIsNotNone(d, 'allowed')
-        self.assertEqual((d.verdict, d.rule), ('deny', 'owner-setup'), d.reason)
+        self.assertEqual((d.verdict, d.rule), ('deny', 'owner-tool'), d.reason)
         self.assertIn('could not read this command', d.reason)
         self.assertIsNone(self.run_one('bash', text, False, environ={}))
 

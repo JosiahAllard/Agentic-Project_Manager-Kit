@@ -1,4 +1,4 @@
-"""The lock command lines the guard advises (docs/guard.md "Rules": heavy, lock-mcp, owner-lock,
+"""The lock command lines the guard advises (docs/guard.md "Rules": heavy, lock-mcp, owner-tool,
 lock-state) are ones the kit's lock tool takes: the words after the script name go to the argument
 parser of tools/machine_lock.py itself, and the script they name is the kit's own, not a link in
 the home folder. The tool is loaded from its file, as tests/lock/test_cli.py does: this is a test
@@ -81,14 +81,14 @@ class AdvisedLockLine(unittest.TestCase):
         return self.advice(d, 'heavy', 'subagent' if sub else 'main')
 
     def status_lines(self, ctx=None):
-        """The status line of each rule that advises one: lock-mcp, owner-lock, lock-state."""
+        """The status line of each rule that advises one: lock-mcp, owner-tool, lock-state."""
         ctx = ctx or self.w.ctx()
         state = os.path.join(self.w.home, '.claude', 'machine-lock', 'state.json')
         return [
             self.advice(decide(event(MCP_PREFIX + 'lock_hold_create', {'id': 'h-1'}, self.w.wt, sub=True),
                                ctx), 'lock-mcp', 'subagent'),
             self.advice(decide(bash('python tools/machine_lock.py hold whole --for 1h', self.w.wt, sub=True),
-                               ctx), 'owner-lock', 'subagent'),
+                               ctx), 'owner-tool', 'subagent'),
             self.advice(decide(event('Write', {'file_path': state, 'content': '{}'}, self.w.wt, sub=True),
                                ctx), 'lock-state', 'subagent'),
         ]

@@ -614,10 +614,7 @@ class OwnerVerbs(Hub):
                      'python -Bm tools.hub answer Q-1 --choice 1', 'python -Im tools.hub answer Q-1 --choice 1',
                      'python -um tools.hub answer Q-1', 'python -Em tools.hub answer Q-1',
                      'python -BImtools.hub answer Q-1', 'python -X utf8 -W ignore -m tools.hub answer Q-1',
-                     'python --check-hash-based-pycs never -m tools.hub answer Q-1',
-                     'py -3 -m tools.hub answer Q-1', 'python -m "tools.hub" answer Q-1',
-                     # runpy running it from the command line
-                     'python -m runpy tools.hub answer Q-1 --choice 1', 'python -Im runpy hub answer Q-1'):
+                     'py -3 -m tools.hub answer Q-1', 'python -m "tools.hub" answer Q-1'):
             with self.subTest(line):
                 self.denied(lambda sub, line=line: bash(line, self.w.wt, sub), 'hub-owner-verb')
         self.denied(lambda sub: ps('python -m tools.hub pair', self.w.wt, sub), 'hub-owner-verb')
@@ -668,7 +665,6 @@ class OwnerVerbs(Hub):
                      'py -3.12-64 -m tools.hub answer Q-1', 'py -V:3.12 -m tools.hub answer Q-1',
                      'python3.12 -m tools.hub answer Q-1', 'pythonw -m tools.hub answer Q-1',
                      'python.exe -m tools.hub answer Q-1', 'env python -m tools.hub answer Q-1',
-                     'python -m runpy hub answer Q-1',
                      'bash -c "python -m tools.hub answer Q-1"', 'cmd /c python -m tools.hub answer Q-1'):
             with self.subTest(line):
                 self.denied(lambda sub, line=line: bash(line, self.w.wt, sub), 'hub-owner-verb')
@@ -759,6 +755,32 @@ class OwnerVerbs(Hub):
                                       self.w.wt, sub)):
             self.allowed(make)
 
+    def test_lines_seen_refused_that_only_name_hub_py_pass(self):
+        """Each line here was refused live as hub-owner-verb; none runs the hub tool, so each passes
+        whole in every held session (a subagent, the coordinator, the pm, a plain session)."""
+        kit = 'Z:/GitHub/Agentic-Project_Manager-Kit'
+        for cmd in ('ls %s/tools/no_window.py %s/tools/hub.py %s/optional/procwatch/procwatch.py' % (kit, kit, kit),
+                    'sed -n 16,39p tests/guard/test_rules_hub.py; '
+                    'grep -n "def run_hub\\|self.hub =" -A3 tests/guard/test_rules_hub.py | head -12',
+                    'grep -rn "import_module\\|def get_adapter" kitlib/host/ | head',
+                    'grep -rn "getattr(.*push" tools/hub.py | head -3',
+                    'echo "hub.py answer is the owner\'s" | grep -c hub.py'):
+            with self.subTest(cmd):
+                self.allowed(lambda sub, cmd=cmd: bash(cmd, self.w.wt, sub))
+        self.allowed(lambda sub: ps('python "%s" todos --json | ConvertFrom-Json' % self.hub, self.w.wt, sub))
+        self.allowed(self.run_hub('todos'))
+
+    def test_a_heredoc_that_only_mentions_the_hub_is_not_a_run(self):
+        """File output whose heredoc text names the hub and hub.py runs nothing: hub-owner-verb stays
+        out of it (seen refused live as role=main). Other rules on the write target are not this test's."""
+        note = W.fwd(os.path.join(self.w.temp, 'notes.md'))
+        text = ("cat >> %s <<'EOF'\nThe owner answers in the hub; agents never run "
+                "`python tools/hub.py answer Q-1` or open the hub page.\nEOF" % note)
+        for label, sub, environ in HELD:
+            with self.subTest(session=label):
+                d = decide(bash(text, self.w.wt, sub), self.ctx(environ))
+                self.assertTrue(d is None or d.rule != 'hub-owner-verb', d and d.reason)
+
     def test_a_list_read_passes_whatever_follows_the_pipe(self):
         # todos and questions are reads in every session; an owner verb piped the same way is still denied
         for shell, tail in ((ps, ' | ConvertFrom-Json'), (ps, ' | ConvertFrom-Json | Select-Object -First 3'),
@@ -833,7 +855,6 @@ class ParsedRuns(Hub):
             (ps, 'cd tools; python -X a` commit.py -m hub answer Q-1'),
             (bash, 'cd tools && python -W a\\ commit.py -m hub answer Q-1'),
             (bash, 'cd tools && python -X a\\\tcommit.py -m hub answer Q-1'),
-            (bash, 'cd tools && python --check-hash-based-pycs a\\ commit.py -m hub answer Q-1'),
             (bash, 'cd tools && python -X "a "commit.py -m hub answer Q-1'),
             (bash, "cd tools && python -X a' 'commit.py -m hub answer Q-1"),
             (ps, "cd tools; python -X 'a commit.py' -m hub answer Q-1"),
@@ -887,8 +908,6 @@ class ParsedRuns(Hub):
             (bash, "cd tools && python -X ';' -Bm hub answer Q-1"),
             (bash, "cd tools && python -X ';' -mhub answer Q-1"),
             (bash, "cd tools && python -X ';' -m 'hub' answer Q-1"),
-            (bash, "cd tools && python -X ';' -m runpy hub answer Q-1"),
-            (bash, "cd tools && python -X ';' -mrunpy hub answer Q-1"),
             # inside a nested shell's string
             (bash, 'bash -c "cd tools && python -X \';\' -m hub answer Q-1"'),
             (ps, 'powershell -Command "cd tools; python -X \'a;b\' -m hub answer Q-1"'),

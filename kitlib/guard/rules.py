@@ -17,12 +17,11 @@ Rules, in the order they are checked:
                    owner's own
   hub-browser      a browser or computer-use MCP call whose input names the hub's own origin (a
                    loopback host on a hub port), in any session but the owner's own
-  owner-lock      a shell command running reserve_ui, or running a lock CLI owner-only write
-                   (reserve, release, hold whole|half|slots, division --set, game on|off|set,
-                   top, stop/unbook --force), in any session but the owner's own
-  owner-setup      a shell command running machine setup to act (tools/machine_setup.py --apply, its
-                   PowerShell front ends with -Apply, python code importing kitlib.machinesetup), in
-                   any session but the owner's own: it writes the owner's email
+  owner-tool       a shell command running one of the owner's tools to act (tool_run reads the file
+                   it runs): reserve_ui; a lock CLI owner-only write (reserve, release, hold
+                   whole|half|slots, division --set, game on|off|set, top, stop/unbook --force);
+                   machine setup with --apply (its PowerShell front ends with -Apply), which
+                   writes the owner's email; in any session but the owner's own
   hub-secrets      a shell command whose literal words name the hub's token folder or a token file
                    (owner.token, agent.token, approval.key) or a literal path into the token folder
                    (a computed word, a wildcard, the word hub and the store are not read), or python
@@ -271,7 +270,7 @@ def shell_command(event, ctx, text, shell, cwd, role):
     hub_rules = HubShell(event, ctx, parsed)
     for cmd in parsed.commands:
         inv = cm.invocation(cmd)
-        for rule in (owner_lock, owner_setup, hub_rules.secrets, hub_rules.owner_verb, wrapped_gate, root_search,
+        for rule in (owner_tool, hub_rules.secrets, hub_rules.owner_verb, wrapped_gate, root_search,
                      heavy, git_rules, git_hooks_path, owner_identity, kill_by_name, heredoc_winpath, shell_writes):
             d = rule(event, ctx, cmd, inv, cwd, role)
             if d:
@@ -364,18 +363,18 @@ def agent_session(event, ctx):
 AGENT_MARKS = ('coordinator', 'conductor', 'deep-worker', 'consultant', 'pm')
 
 
-# ---------------------------------------------------------------- owner lock tools
+# ---------------------------------------------------------------- owner tools
 
 # The lock's own owner check reads process ancestry, which a detached process can forge, so agents do
-# not run the owner's tools. reserve_ui is denied when it is run, never when it is read or handled by git.
-# The window's package, kitlib.lockui, counts too, so python -c cannot import and start it.
-RESERVE_UI_RE = re.compile(r'(?i)(?<![A-Za-z0-9_])(?:reserve_ui(?:\.pyw?)?|kitlib(?:[./\\]|\s+import\s+)lockui)'
-                           r'(?![A-Za-z0-9_])')
+# not run the owner's tools: reserve_ui, the lock CLI's owner-only writes and machine setup to act.
+# The rule reads the file a command runs (tool_run), never text that only names one: a read, git, a
+# name the shell builds at run time and python code that imports the package are not read.
 UI_NAME_RE = re.compile(r'(?i)^reserve_ui(?:\.pyw?)?$')
 OPENERS = ('invoke-item', 'ii', 'explorer')     # open a file through its association: runs a .pyw
-# the interpreters this rule knows: commands.PYTHON_RE plus the pyw launcher
-UI_PYTHON_RE = re.compile(r'^(python|pythonw|py|pyw)(\d+(\.\d+)*)?$')
-UI_RUN_MODULES = ('runpy',)                      # python -m modules that run a file named after them
+# the interpreters the guard knows: commands.PYTHON_RE plus the pyw launcher
+PY_RUN_RE = re.compile(r'^(python|pythonw|py|pyw)(\d+(\.\d+)*)?$')
+# python's -c or -m, alone or ending a cluster of its no-value flags (-Bm), its value maybe joined
+PY_FLAG_RE = re.compile(r'^-[bBdEiIOPqsSuvx]*([cm])(.*)$')
 LOCK_SCRIPT = 'machine_lock.py'
 # options of either lock CLI that take a value, so their value is not read as a subcommand
 LOCK_VALUE_OPTS = {'--test-root', '--test-hardware', '--test-kinds', '--test-actor', '--kind', '--repo',
@@ -386,89 +385,57 @@ OWNER_LOCK_WHY = ('owner-only lock tools are run by the owner, not agents; the l
                   'as a second layer. Ask the owner to make the change. To see the lock state:')
 
 
-def owner_lock_refusal(ctx, role, what):
-    return refuse('owner-lock', role, '%s, the owner\'s: %s' % (what, OWNER_LOCK_WHY),
-                  'python %s status' % lock_tool(ctx))
-
-
-def is_lock_script(text):
-    """True when the path `text` opens the lock CLI on Windows: its base name
-    (commands.base_name, in any case) is LOCK_SCRIPT once a named NTFS stream (`::$DATA`, `:x`)
-    and then the trailing dots and spaces Win32 drops are taken off: `tools/machine_lock.py.`,
-    `"tools/machine_lock.py "`, `tools/machine_lock.py::$DATA` (observed: each opens the file). A
-    colon with no stream name after it (`machine_lock.py:`, as in a commit message
-    `machine_lock.py: fix`) is a name Windows refuses (EINVAL), so not it."""
-    name, colon, stream = cm.base_name(text).partition(':')
-    if colon and not stream.strip(':. '):
-        return False
-    return name.rstrip('. ') == LOCK_SCRIPT
-
-
-def _ui_word(w):
-    return not w.dyn and bool(UI_NAME_RE.match(ntpath.basename(w.text.replace('/', '\\'))))
-
-
-def _reads_stdin(cmd):
-    """True when the command's standard input is a pipe or a `<` redirect."""
-    return bool(cmd.piped_in) or any(r.op == '<' for r in cmd.redirects)
-
-
-def runs_reserve_ui(cmd, inv):
-    """True when `inv` runs reserve_ui: as its program (a direct path, &, Start-Process, cmd
-    start), as the script of python, pythonw, py or pyw (also through start or Start-Process),
-    as python's standard input (`python < reserve_ui.pyw`, `cat reserve_ui.pyw | python`), or
-    opened by Invoke-Item or explorer. A program, script or opened file named by a variable
-    counts when the command's text names reserve_ui (`$p = "reserve_ui.pyw"; pythonw $p`), and
-    so do python -c with reserve_ui or kitlib.lockui in its arguments and python -m reserve_ui
-    or -m runpy.
-    Reads, git and other -m modules are left alone."""
-    if not RESERVE_UI_RE.search(cmd.source or ''):
-        return False
-    name, prog, args = inv.name, inv.word, list(inv.args)
-    if name == 'start' and inv.via != 'start-process':  # Git Bash's start: [/opts] ["title"] prog
-        while args and (args[0].text.startswith('/') or not args[0].text):
+def tool_run(inv):
+    """(name, Words) for the file the invocation `inv` runs, or None: its program's base name
+    (commands.base_name) and arguments; python's script (its first operand) or -m module (as
+    <its last part>.py) and the words after it; PowerShell's .ps1 script; the file an opener
+    (Invoke-Item, explorer, Git Bash's start) opens. python -c, standard input and a program or
+    script the text does not show are None: the guard reads what a line runs, not what it builds."""
+    if inv is None or inv.dyn:
+        return None
+    name, args = inv.name or '', list(inv.args)
+    if name in OPENERS or (name == 'start' and inv.via != 'start-process'):
+        while args and (args[0].text.startswith('/') or not args[0].text):   # start [/opts] ["title"]
             args.pop(0)
-        if not args:
-            return False
-        prog, args = args[0], args[1:]
-        name = cm.base_name(prog.text)
-    if prog is not None and (_ui_word(prog) or prog.dyn):
-        return True
-    if name in OPENERS:
-        return any(_ui_word(a) or a.dyn for a in args)
-    if not UI_PYTHON_RE.match(name):
-        return False
+        if not args or args[0].dyn:
+            return None
+        if name in OPENERS:
+            return cm.base_name(args[0].text), args[1:]
+        name, args = cm.base_name(args[0].text), args[1:]
+    if name in cm.PS_SHELLS:
+        for k, a in enumerate(args):
+            if a.text.lower().endswith('.ps1') and not a.dyn:
+                return cm.base_name(a.text), args[k + 1:]
+        return None
+    if not PY_RUN_RE.match(name):
+        return name, args
     k = 0
     while k < len(args):
         t = args[k].text
-        if t == '-':
-            return _reads_stdin(cmd)
-        if t.startswith('--'):
-            k += 1
-            continue
-        if t.startswith('-'):
-            # a cluster of short flags (`-um`, `-Sc`): python reads it letter by letter, and -c, -m,
-            # -X or -W take the rest of the word, or the next word, as their value
-            for j in range(1, len(t)):
-                ch = t[j]
-                if ch not in 'cmXW':
-                    continue
-                rest = t[j + 1:]
-                nxt = args[k + 1] if k + 1 < len(args) else None
-                if ch == 'c':
-                    return bool(RESERVE_UI_RE.search(rest)) or any(RESERVE_UI_RE.search(a.text) for a in args[k + 1:])
-                if ch == 'm':
-                    if rest:
-                        return args[k].dyn or bool(UI_NAME_RE.match(rest)) or rest.lower() in UI_RUN_MODULES
-                    if nxt is None:
-                        return False
-                    return nxt.dyn or bool(UI_NAME_RE.match(nxt.text)) or nxt.text.lower() in UI_RUN_MODULES
-                k += 0 if rest else 1                  # -X / -W: skip the value word too
-                break
-            k += 1
-            continue
-        return _ui_word(args[k]) or args[k].dyn
-    return _reads_stdin(cmd)
+        flag = PY_FLAG_RE.match(t)
+        if t == '-' or (flag and flag.group(1) == 'c'):
+            return None
+        if flag:                                        # -m, -Bm, -mtools.hub: python's own -m
+            if not flag.group(2):
+                if k + 1 >= len(args) or args[k + 1].dyn:
+                    return None
+                k += 1
+            mod = flag.group(2) or args[k].text
+            return mod.rsplit('.', 1)[-1].lower() + '.py', args[k + 1:]
+        if not t.startswith('-'):
+            break
+        k += 2 if t in cm.PY_VALUE_OPTS else 1
+    if k >= len(args) or args[k].dyn:
+        return None
+    return cm.base_name(args[k].text), args[k + 1:]
+
+
+def tool_words(words):
+    """The texts of tool_run's Words, one holding spaces split (a Start-Process -ArgumentList string)."""
+    out = []
+    for w in words:
+        out.extend(w.text.split() if ' ' in w.text else [w.text])
+    return out
 
 
 def lock_owner_write(words):
@@ -508,38 +475,11 @@ def lock_owner_write(words):
     return None
 
 
-def owner_lock(event, ctx, cmd, inv, cwd, role):
-    """A command that runs machine_lock.py (any launcher: python, pythonw, py, start,
-    Start-Process, a direct path; nested in a `run` too; named in any spelling Windows opens as it,
-    is_lock_script) with an owner-only write. The owner's own session (nothing marks it) is not
-    held to it."""
-    if inv is None or is_owner_session(event, ctx):
-        return None
-    if runs_reserve_ui(cmd, inv):
-        return owner_lock_refusal(ctx, role, '`%s` runs reserve_ui, the owner\'s lock reservation UI' % bare(cmd))
-    seq = [inv.path] + inv.argv
-    for k, t in enumerate(seq):
-        if not is_lock_script(t):
-            continue
-        rest = []
-        for w in seq[k + 1:]:
-            rest.extend(w.split() if ' ' in w else [w])     # a Start-Process "-ArgumentList" string
-        found = lock_owner_write(rest)
-        if found:
-            return owner_lock_refusal(ctx, role, '`%s` runs machine_lock.py %s' % (bare(cmd), found))
-    return None
-
-
-# ---------------------------------------------------------------- owner machine setup
-
 # Machine setup's --apply writes the machine config, the owner's email among them (plan decision 27),
 # and the owner's email is what proves a commit the owner's (owner-only paths, owner-identity). An agent
 # that ran it could make its own address the owner's, so only the owner runs it to act. Its dry run stays
-# open. The entry points: tools/machine_setup.py and its PowerShell front ends; python -c or a script
-# on standard input that imports kitlib.machinesetup counts too.
+# open. The entry points: tools/machine_setup.py and its PowerShell front ends.
 SETUP_SCRIPTS = {'machine_setup.py': 'py', 'machine-setup.ps1': 'ps', 'new-repo.ps1': 'ps'}
-SETUP_RE = re.compile(r'(?i)(?<![A-Za-z0-9_])(?:machine[_-]setup|new-repo|machinesetup)(?![A-Za-z0-9_])')
-SETUP_IMPORT_RE = re.compile(r'(?i)kitlib(?:[./\\]|\s+import\s+)machinesetup')
 # argparse takes a unique prefix of --apply (--ap..); PowerShell a prefix of -Apply, -Apply:$true too
 SETUP_APPLY = {'py': re.compile(r'^--ap(?:p(?:l(?:y)?)?)?(?:=.*)?$'),
                'ps': re.compile(r'(?i)^-a(?:p(?:p(?:l(?:y)?)?)?)?(?::.*)?$')}
@@ -548,56 +488,42 @@ OWNER_SETUP_WHY = ('machine setup writes the machine config, and the owner\'s em
                    'what it would do (the dry run):')
 
 
-def setup_run(cmd, inv):
-    """What `inv` runs of machine setup with its writes on, as text, or None: a setup entry point
-    (SETUP_SCRIPTS: its program, or its script after python, powershell -File, Start-Process) with
-    --apply / -Apply or a word the text does not show; python -c, or python reading a script on
-    standard input, that imports kitlib.machinesetup. Its dry run is None."""
-    source = cmd.source or ''
-    if not SETUP_RE.search(source):
+def owner_tool_run(inv):
+    """What the invocation `inv` runs of the owner's tools (tool_run), as text, or None: reserve_ui;
+    the lock CLI with an owner-only write (lock_owner_write); a machine setup entry point
+    (SETUP_SCRIPTS) with --apply / -Apply before any `--`. Its dry run is None."""
+    run = tool_run(inv)
+    if run is None:
         return None
-    words = ([inv.word] if inv.word is not None else []) + list(inv.args)
-    py = UI_PYTHON_RE.match(inv.name or '') is not None
-    stdin = bool(cmd.piped_in) or any(r.op.startswith('<') for r in cmd.redirects)   # <, a heredoc, <<<
-    if py and (any(w.text == '-c' or re.match(r'^-[A-Za-z]*c', w.text) for w in inv.args) or stdin) \
-            and SETUP_IMPORT_RE.search(source):
-        return 'python code that imports kitlib.machinesetup'
-    for k, w in enumerate(words):
-        name = cm.base_name(w.text)
-        style = SETUP_SCRIPTS.get(name)
-        if style is None and k > 0 and words[k - 1].text == '-m' and w.text.lower().endswith('machine_setup'):
-            style = 'py'
-        if style is None:
-            continue
-        rest = []
-        for a in words[k + 1:]:
-            if a.dyn:
-                return '%s with an argument the text does not show' % name
-            if style == 'ps' and '"' in a.text:
-                # Windows PowerShell 5.1 does not escape it when it passes the value on to python
-                return '%s with a double quote inside an argument, which can split it into more' % name
-            rest.extend(a.text.split() if ' ' in a.text else [a.text])     # a Start-Process "-ArgumentList" string
-        for t in rest:
-            if t == '--':
-                break
-            if SETUP_APPLY[style].match(t):
-                return '%s %s' % (name, t)
-        return None
-    script = cm.python_script(inv) if py else None
-    if inv.dyn or (script is not None and inv.args[script[0]].dyn):
-        return 'a program or script the text does not show, on a line that names machine setup'
+    name, words = run
+    if UI_NAME_RE.match(name):
+        return 'reserve_ui, the owner\'s lock reservation UI'
+    texts = tool_words(words)
+    if name == LOCK_SCRIPT:
+        found = lock_owner_write(texts)
+        return 'machine_lock.py %s' % found if found else None
+    style = SETUP_SCRIPTS.get(name)
+    for t in texts if style else ():
+        if t == '--':
+            break
+        if SETUP_APPLY[style].match(t):
+            return '%s %s' % (name, t)
     return None
 
 
-def owner_setup(event, ctx, cmd, inv, cwd, role):
-    """A command that runs machine setup to act (setup_run), in any session but the owner's own."""
+def owner_tool(event, ctx, cmd, inv, cwd, role):
+    """owner-tool: a command that runs one of the owner's tools to act (owner_tool_run), in any
+    session but the owner's own."""
     if inv is None or is_owner_session(event, ctx):
         return None
-    found = setup_run(cmd, inv)
+    found = owner_tool_run(inv)
     if not found:
         return None
-    return refuse('owner-setup', role, '`%s` runs %s: %s' % (bare(cmd), found, OWNER_SETUP_WHY),
-                  'python %s' % kit_tool(ctx, 'machine_setup'))
+    if found.split()[0] in SETUP_SCRIPTS:
+        return refuse('owner-tool', role, '`%s` runs %s: %s' % (bare(cmd), found, OWNER_SETUP_WHY),
+                      'python %s' % kit_tool(ctx, 'machine_setup'))
+    return refuse('owner-tool', role, '`%s` runs %s, the owner\'s: %s' % (bare(cmd), found, OWNER_LOCK_WHY),
+                  'python %s status' % lock_tool(ctx))
 
 
 # ---------------------------------------------------------------- the Action Hub
@@ -609,11 +535,10 @@ def owner_setup(event, ctx, cmd, inv, cwd, role):
 # command that names them literally is refused (hub-secrets), as are tools/hub.py's owner verbs on
 # a hub tool run the parser reads (hub-owner-verb), the hub MCP server's owner tools (hub-mcp) and
 # a browser or computer-use call aimed at the hub's own page (hub-browser). Every session but the
-# owner's own is held, as owner-lock holds it: each is the owner's power, not a place an agent
+# owner's own is held, as owner-tool holds it: each is the owner's power, not a place an agent
 # works. A name the shell or code builds at run time is not read: the rules catch mistakes, not
 # an adversary.
 HUB_SCRIPT = 'hub.py'
-HUB_MODULE = 'tools.hub'
 NODE_EVAL = ('-e', '--eval', '-p', '--print')
 HUB_SECRETS_WHY = ('the Action Hub\'s token folder holds the owner\'s key to the hub (owner.token answers as the '
                    'owner) and its store is the hub server\'s to write; an agent reaches the hub only through its '
@@ -785,12 +710,6 @@ def hub_secret_names(secret):
     return found
 
 
-def hub_path_word(text):
-    """True when the word `text` is a path to hub.py: no option, and hub.py its last part
-    (tools/hub.py, tools\\hub.py, HEAD:tools/hub.py)."""
-    return not text.startswith('-') and ntpath.basename(text.replace('/', '\\')).lower() == HUB_SCRIPT
-
-
 def hub_name(text):
     """The hub secret a word names by itself, or None: the token folder (`.pm-kit/hub`) or a
     token file's name as its last part."""
@@ -817,7 +736,7 @@ def inline_code(cmd, inv):
     program. The command line's texts are every argument (a path the code is given counts)."""
     if inv is None:
         return []
-    py, node = UI_PYTHON_RE.match(inv.name or '') is not None, inv.name == 'node'
+    py, node = PY_RUN_RE.match(inv.name or '') is not None, inv.name == 'node'
     if not (py or node):
         return []
     args = [w.text for w in inv.args]
@@ -889,55 +808,13 @@ def hub_secret_shell(ctx, cmd, inv, places):
     return None
 
 
-HUB_PY_VALUE_LONG = ('--check-hash-based-pycs',)   # python's long options that take the next word
-
-
 def hub_run_args(inv):
-    """The Words after the hub tool when `inv` runs it, else None: python (UI_PYTHON_RE) with
-    tools/hub.py as its script (hub_path_word), or with -m naming the hub module (tools.hub, or
-    hub from tools/; runpy's own module read as -m's). python's options are read to the operand
-    that ends them: -X and -W take a value (attached or the next word), -c runs code, `-` reads
-    standard input, `--` ends them. A script or module word the guard cannot read is no run."""
-    if inv is None or not UI_PYTHON_RE.match(inv.name or ''):
+    """The Words after the hub tool when `inv` runs it (tool_run: python with tools/hub.py as
+    its script, or -m tools.hub), else None."""
+    run = tool_run(inv)
+    if run is None or run[0] != HUB_SCRIPT or not PY_RUN_RE.match(inv.name or ''):
         return None
-    args = inv.args
-    k = 0
-    while k < len(args):
-        t = args[k].text
-        if t == '--':
-            k += 1
-            break
-        if t == '-' or not t.startswith('-'):
-            break
-        if t.startswith('--'):
-            k += 2 if t.split('=', 1)[0] in HUB_PY_VALUE_LONG and '=' not in t else 1
-            continue
-        for j, ch in enumerate(t[1:], 1):       # a cluster: -Bm, -Wignore, -OO
-            if ch == 'c':
-                return None
-            if ch == 'm':
-                if j + 1 < len(t):
-                    return hub_module_args(t[j + 1:], args[k + 1:])
-                if k + 1 < len(args) and not args[k + 1].dyn:
-                    return hub_module_args(args[k + 1].text, args[k + 2:])
-                return None
-            if ch in 'WX':
-                k += 0 if j + 1 < len(t) else 1
-                break
-        k += 1
-    if k < len(args) and not args[k].dyn and hub_path_word(args[k].text):
-        return args[k + 1:]
-    return None
-
-
-def hub_module_args(module, rest):
-    """`rest` when python's -m module `module` is the hub tool (HUB_MODULE, or hub), runpy's
-    module word first when it is runpy; else None."""
-    if module == 'runpy':
-        if not rest or rest[0].dyn:
-            return None
-        module, rest = rest[0].text, rest[1:]
-    return rest if module in (HUB_MODULE, 'hub') else None
+    return run[1]
 
 
 def hub_owner_run(parsed):
