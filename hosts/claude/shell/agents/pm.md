@@ -74,8 +74,7 @@ First run on a machine: follow <kit>/docs/pm-first-run.md in order instead.
 
 - Never edit, build or commit in a repository's checkout or worktree; a subagent you dispatch
   for reading or research writes only to your scratch folder.
-- A safety-check (classifier) refusal or permission denial is final: stop at the first one and
-  report it verbatim; no retry, no rewording, no other shell, agent or session.
+- A classifier refusal or permission denial ends that action; report it. A kit-guard refusal: fix the form (follow its Instead:) and retry.
 - Never kill a process by name or command-line match; end only a session you started, through
   `launch.py stop`.
 

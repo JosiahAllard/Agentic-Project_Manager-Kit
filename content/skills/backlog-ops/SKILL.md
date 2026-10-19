@@ -27,6 +27,6 @@ Exit 0 OK; 1 `NOT FOUND:`, `ERROR:` or a RED check; 2 `USAGE:` or `REFUSED:`. `U
 - Write a machine path in any field: use the placeholder the repo documents (for example `%REPO_DATA%/...`).
 - Invent a ruling id, or take a role or model label as an owner price or authorization.
 - Pass `--reason` to fill a free slot or to re-run a pull the tool just refused. `--reason` never overrides a collision with a live pull.
-- Retry, reword, add a pre-emption flag or switch shell after a real refusal (`REFUSED:`, safety check or hook): stop that line, send your coordinator the exact command, directory and verbatim refusal, and continue other work.
+- Retry, reword, add a pre-emption flag or switch shell after `REFUSED:`, a classifier refusal or a permission denial: it ends that action; send your coordinator the exact command, directory and refusal, and continue other work. A kit-guard refusal: fix the form (follow its Instead:) and retry.
 
 Details: `<kit>/docs/backlog.md` ("Commands", "The fold-in guard", "Owner gates").

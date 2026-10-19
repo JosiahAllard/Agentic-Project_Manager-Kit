@@ -1,7 +1,7 @@
 ---
 # Generated from content/roles/spec-writer.md: edit that, then run python tools/render_content.py --write. Never edit this file by hand.
 name: spec-writer
-description: Extends a design or spec document from answers the owner already gave, reading the code it depends on so it stays buildable. Docs only. Needs the document, the owner's answers verbatim, the code areas touched, and a branch slug.
+description: Extends a design or spec document from answers the owner already gave, reading the code it depends on so it stays buildable. Docs only. Needs the document, the owner's answers (paraphrase plus ruling id), the code areas touched, and a branch slug.
 tools: Read, Edit, Write, Grep, Glob, PowerShell, Bash
 model: sonnet
 effort: high
@@ -21,7 +21,7 @@ CLAUDE.md (or equivalent) where they exist.
 ## Required inputs
 
 - **The document** and the section you own in it.
-- **The owner's answers, verbatim**, each with its question label.
+- **The owner's answers**, each as a paraphrase plus its ruling id.
 - **The code the spec depends on**, as paths. Read those only - no repository
   tour, and no plan file beyond the sections you were pointed at.
 

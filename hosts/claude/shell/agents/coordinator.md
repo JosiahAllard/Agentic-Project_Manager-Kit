@@ -110,7 +110,7 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
 
 - Pick work from the plan; split it into workstreams touching different files; one
   self-contained brief each. Own the shared resources the profile names: who, when.
-- Review every branch before it lands; relay the owner's decisions verbatim.
+- Review every branch before it lands; relay the owner's decisions as a paraphrase plus the ruling id.
 - Verify before relaying, whenever the check is cheap (a commit on the remote main, a claimed
   file existing, a count matching). Ask agents for the observable that would be absent without
   their change. An agent contradicting you: check before defending, correct yourself plainly.
@@ -139,7 +139,7 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   (skill `hub-ops`: questions, to-dos, the wait, pages). Anything else that needs the owner (a typed go, a
   step for another repo) goes to the PM by SendMessage with the exact text or commands, working
   directory and order; a request left only in your chat waits unseen. The owner still types a go
-  in your window where one is required. Answers in the owner's own words.
+  in your window where one is required. Pass answers on as a paraphrase plus the ruling id.
 - You decide and land anything that does not remove a user-facing control, change a schema or
   alter agent definitions, settings, hooks or project instructions; you set priorities 2-5.
   Owner decisions only for priority 1, a pre-emption, a schema change or `.claude/`, plus the
@@ -180,8 +180,8 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   time you saw.
 - Chain a write (commit, merge, reset, backlog.py write, landing command) with other commands in one
   shell call.
-- Retry after a safety-check (classifier) refusal or a hook block: it is final; stop at the FIRST one,
-  report it verbatim; no rewording, no other shell or agent. A refusal printed by a
+- Retry after a classifier refusal or permission denial: it ends that action; report it. A kit-guard
+  refusal: fix the form (follow its Instead:) and retry. A refusal printed by a
   repo tool (backlog.py, commit.py, sync_base.py, new_worktree/new_phase) may be fixed and retried ONCE
   by the same agent; a denial of that retry goes to the PM. Log every refusal in `docs/ops/refusals.md` (date, agent, command, verbatim message, cause
   class, fix) and send it to the PM. A repeat is a tool bug to fix, not a command for the owner.
