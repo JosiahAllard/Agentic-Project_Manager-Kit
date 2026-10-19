@@ -1,0 +1,128 @@
+"""The kit header after a plugin refresh (docs/plugin-source.md "Layout", `headers/`). A session's
+header (kitlib.host.header) names the kit folder its start hook ran from: on Claude Code, the plugin
+export the marketplace named then. A refresh (kitlib.pluginsource) points the marketplace at a new
+export, and the guard's alternatives name the new one (kitlib.guard.rules.advice_kit), while the
+session's header still names the old one, which a later prune removes. So the start hook records
+which folder a header named, and the tool hook tells the session, once per refresh, which folder
+the kit is now.
+
+  note(kit, payload, agent)      at a start event whose text holds the header: when `kit` is an
+                                 export (it holds pluginsource.MARKER), write the folder to
+                                 <export root>/headers/<key>; at a SessionStart, drop records
+                                 older than MAX_AGE_DAYS first. Nothing for a kit checkout
+  line(kit, payload, agent, environ)   at a tool event: the line naming the kit folder the guard
+                                 names (advice_kit) when this session's or agent's record names
+                                 another folder, and the record then rewritten to it; else None.
+                                 No record (a session started from a checkout, or before this
+                                 existed): None
+
+`key`: the payload's session_id and the agent (`agent`, the adapter's reading of the payload; None
+for the session itself), each a name of letters, digits, `-` and `_`. Both never raise: the line is
+advice, and a failure here must not reach the guard's verdict. Logic only: no printing.
+"""
+import os
+import re
+import time
+
+HEADERS = 'headers'
+MAX_AGE_DAYS = 7
+_NAME = re.compile(r'^[A-Za-z0-9_-]{1,128}$')
+
+
+def key(payload, agent=None):
+    """`<session_id>-<agent or main>`, or None when either is missing or not a plain name."""
+    session = payload.get('session_id') if isinstance(payload, dict) else None
+    who = agent or 'main'
+    if not isinstance(session, str) or not _NAME.match(session) or not isinstance(who, str) \
+            or not _NAME.match(who):
+        return None
+    return '%s-%s' % (session, who)
+
+
+def _norm(path):
+    return os.path.normcase(os.path.normpath(os.path.abspath(path)))
+
+
+def _prune(folder, now):
+    cut = now - MAX_AGE_DAYS * 86400
+    for name in os.listdir(folder):
+        p = os.path.join(folder, name)
+        try:
+            if os.path.isfile(p) and os.path.getmtime(p) < cut:
+                os.remove(p)
+        except OSError:
+            pass
+
+
+def _write(path, text):
+    tmp = '%s.%d.tmp' % (path, os.getpid())
+    with open(tmp, 'w', encoding='utf-8', newline='\n') as fh:
+        fh.write(text)
+    os.replace(tmp, path)
+
+
+def note(kit, payload, agent=None, event=None, now=None):
+    """Record that this session's (or agent's) header named the export `kit`. True when written."""
+    try:
+        from kitlib import pluginsource
+        k = key(payload, agent)
+        if not k or not kit or not os.path.isfile(os.path.join(kit, pluginsource.MARKER)):
+            return False
+        folder = os.path.join(os.path.dirname(os.path.normpath(kit)), HEADERS)
+        os.makedirs(folder, exist_ok=True)
+        if event == 'SessionStart':
+            _prune(folder, time.time() if now is None else now)
+        _write(os.path.join(folder, k), os.path.normpath(kit))
+        return True
+    except Exception:
+        return False
+
+
+class _Ctx(object):
+    """What kitlib.guard.rules.advice_kit reads: kit, environ, user()."""
+
+    def __init__(self, kit, environ):
+        self.kit, self.environ = kit, dict(environ or {})
+
+    def user(self):
+        from kitlib.config import user
+        try:
+            return user.user_config()
+        except Exception as e:
+            return {'error': str(e)}
+
+
+def text(kit):
+    """The line a session whose header named an older kit folder is given."""
+    k = kit.replace('\\', '/').rstrip('/')
+    return ('PM kit header update: the kit plugin was refreshed since your start. The kit folder is now '
+            '%s: from here on `<kit>` means that folder, as in `python "%s/tools/preflight.py" -C '
+            '<worktree>`; the folder your start header named may be removed.' % (k, k))
+
+
+def line(kit, payload, agent=None, environ=None, current=None):
+    """The header-update line for this session or agent, once per refresh, or None. `current`
+    (tests): the folder the guard names, instead of advice_kit's reading."""
+    try:
+        k = key(payload, agent)
+        if not k or not kit:
+            return None
+        if current is None:
+            from kitlib import pluginsource
+            from kitlib.guard import rules
+            current = rules.advice_kit(_Ctx(kit, os.environ if environ is None else environ))
+            if not current or not os.path.isfile(os.path.join(current, pluginsource.MARKER)):
+                return None
+        root = os.path.dirname(os.path.normpath(current))
+        path = os.path.join(root, HEADERS, k)
+        try:
+            with open(path, encoding='utf-8') as fh:
+                named = fh.read().strip()
+        except OSError:
+            return None
+        if not named or _norm(named) == _norm(current):
+            return None
+        _write(path, os.path.normpath(current))
+        return text(current)
+    except Exception:
+        return None
