@@ -392,6 +392,35 @@ class Attribute(unittest.TestCase):
         self.assertTrue(lines[0].startswith("windows opened: 1 "), lines)
         self.assertEqual(len([x for x in lines if "[not this run]" in x]), 1, lines)
 
+    OC = r"C:\Term\OpenConsole.exe"
+
+    def test_another_runs_window_does_not_hide_a_counted_host_window(self):
+        other = W(winwatch.CONSOLE, "window", "a", 10.0, pid=5, exe=self.PY, ours=False)
+        host = W(winwatch.CONSOLE, "window", "b", 10.1, pid=6, exe=self.OC, ours=True)
+        out = winwatch.attribute([other, host], [])
+        self.assertEqual([w.pid for w in out], [5, 6])
+        self.assertTrue(winwatch.report_lines(out)[0].startswith("windows opened: 1 "))
+
+    def test_a_window_with_no_exe_absorbs_nothing(self):
+        bare = W(winwatch.CONSOLE, "window", "a", 10.0, pid=5, exe=None, ours=True)
+        host = W(winwatch.CONSOLE, "window", "b", 10.1, pid=6, exe=self.OC, ours=True)
+        out = winwatch.attribute([bare, host], [])
+        self.assertEqual([w.pid for w in out], [5, 6])
+
+    def test_one_real_window_drops_only_the_nearest_host_window(self):
+        far = W(winwatch.CONSOLE, "window", "a", 9.0, pid=6, exe=self.OC, ours=True)
+        real = W(winwatch.CONSOLE, "window", "b", 10.0, pid=5, exe=self.PY, ours=True)
+        near = W(winwatch.CONSOLE, "window", "c", 10.1, pid=7, exe=self.OC, ours=True)
+        out = winwatch.attribute([far, real, near], [])
+        self.assertEqual([w.pid for w in out], [6, 5])
+
+    def test_a_conhost_twin_is_dropped(self):
+        real = W(winwatch.CONSOLE, "window", "a", 10.0, pid=5, exe=self.PY, ours=True)
+        twin = W(winwatch.CONSOLE, "window", "a", 10.2, pid=6,
+                 exe=r"C:\Windows\System32\conhost.exe", ours=True)
+        out = winwatch.attribute([real, twin], [])
+        self.assertEqual([w.pid for w in out], [5])
+
     def test_a_console_window_keeps_its_pid(self):
         w = W(winwatch.CONSOLE, "window", "x", 10.0, pid=9, ours=True)
         out = winwatch.attribute([w], [winwatch.Pseudo(1, self.PY, True, mono=10.0)])
