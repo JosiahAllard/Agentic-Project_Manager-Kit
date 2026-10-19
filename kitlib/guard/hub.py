@@ -25,7 +25,6 @@ accidents and are not an adversary boundary.
 """
 import fnmatch
 import ipaddress
-import ntpath
 import os
 import re
 import urllib.parse
