@@ -335,6 +335,7 @@ def preload(modules=()):
     import kitlib.launcher.usage
     import kitlib.machinesetup.extras
     import kitlib.pluginsource
+    import kitlib.pmstart.consoletasks      # kitlib.pluginsource's in-use reads (_processes, _tasks)
     for name in modules:
         importlib.import_module(name)
 
