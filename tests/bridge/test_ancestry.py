@@ -41,6 +41,14 @@ class _ReusedPidKernel:
             patch.object(ancestry,'K32',running))
 
 
+class _NewerParentKernel(_ReusedPidKernel):
+    """Child 300 records parent 400, but the process now at pid 400 was created after the
+    child: the true parent exited and its pid went to an unrelated process."""
+    def __init__(self):
+        self.table={300:[_Process(300,400)],400:[_Process(500,1)],1:[_Process(10,0)]}
+        self.opens={}
+
+
 class AncestryTests(unittest.TestCase):
     def child(self):
         child=subprocess.Popen([sys.executable,'-I','-c','import sys; sys.stdin.read()'],stdin=subprocess.PIPE,
@@ -81,6 +89,16 @@ class AncestryTests(unittest.TestCase):
         self.assertNotIn((4000,50),walked)
         self.assertEqual(walked,[(2000,200),(3000,100)])
         self.assertTrue(all(count==1 for count in kernel.opens.values()),kernel.opens)
+
+    def test_a_parent_created_after_its_child_ends_the_walk(self):
+        kernel=_NewerParentKernel()
+        patches=kernel.patches()
+        for item in patches: item.start()
+        try: walked=ancestry.ancestors_of(300,300,limit=8)
+        finally:
+            for item in reversed(patches): item.stop()
+        self.assertEqual(walked,[])
+        self.assertNotIn(1,kernel.opens)  # never climbed past the unrelated process
 
 
 if __name__=='__main__':
