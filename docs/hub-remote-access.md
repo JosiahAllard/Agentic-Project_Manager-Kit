@@ -316,9 +316,9 @@ Why (INFERENCE: general web-filter behaviour, not from the code): a domain on a 
 or a newly registered one, often lands in a "high-risk" or similar category. The routes that keep
 to company policy:
 
-- Ask the filter's vendor to recategorise the domain (most have a public site-review form).
+- Ask the filter's vendor to recategorise the domain (ask IT first; most have a public review form).
 - Ask IT to allow `<hostname>`.
-- Meanwhile, use the phone on mobile data.
+- Meanwhile, use the phone on mobile data, if company policy allows it.
 
 Use no route that hides the domain from the filter: no other domain or proxy in front of it, no VPN
 or tunnel around the filter. That would break company policy.
