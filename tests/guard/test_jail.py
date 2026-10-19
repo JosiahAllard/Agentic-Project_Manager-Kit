@@ -1397,19 +1397,18 @@ class UnplacedGit(MainGit):
             "[System.Management.Automation.ScriptBlock]::Create($s).Invoke(); %s" % g,
             '$env:GIT_EXEC_PATH ="x"; %s' % g,
             '$env:BASH_ENV ="x"; %s' % g], tool='PowerShell')
-        # a name an env: item is renamed, copied or moved to may then hold env:. The line is not
-        # plain (Set-Item), so the env: item is judged as a path the guard cannot place: refused as
-        # unplaced, naming the provider item, for a worker and the coordinator's mark alike
+        # a name an env: item is renamed, copied or moved to may then hold env:, a spelling no honest
+        # command uses: the provider item is not read as a write target and the line passes, for a
+        # worker and the coordinator's mark alike (docs/guard-v2.md B16, cut)
         for text in ("Rename-Item env:FOO TEMP; Set-Item \"$env:TEMP\\GIT_DIR\" '%s/.git'; %s" % (m, g),
                      "Rename-Item env:FOO -NewName TEMP; Set-Item \"$env:TEMP\\GIT_DIR\" '%s/.git'; %s" % (m, g),
                      "Copy-Item env:FOO env:TEMP; Set-Item \"$env:TEMP\\GIT_DIR\" '%s/.git'; %s" % (m, g),
                      "Move-Item env:FOO -Destination env:TEMP; Set-Item \"$env:TEMP\\GIT_DIR\" '%s/.git'; %s" % (m, g)):
             with self.subTest(text):
                 self.assertTrue(cm.read(text, sh.PS, W.fwd(self.w.wt)).clean, text)
-                d = self.jailed(self.git(text, 'worker', tool='PowerShell'), 'unplaced')
-                self.assertIn('PowerShell provider item (env:', d.reason)
+                self.allowed(self.git(text, 'worker', tool='PowerShell'))
                 for environ in (COORDINATOR, OLD_MARK):
-                    self.jailed(self.marked(text, environ, 'PowerShell'), 'unplaced')
+                    self.allowed(self.marked(text, environ, 'PowerShell'))
         for text in ('$env:FOO ="x"; %s' % g, "Rename-Item env:FOO BAR; Get-Content \"$env:TEMP\\x.txt\"; %s" % g):
             with self.subTest(text):
                 self.allowed(self.git(text, 'worker', tool='PowerShell'))

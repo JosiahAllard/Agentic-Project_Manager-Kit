@@ -410,22 +410,19 @@ class HubKept(World):
 
 
 class Warned(World):
-    """Item 3: heavy (lock etiquette) and heredoc-winpath warn; the owner's machine config makes
-    each deny again; a warned heavy line the fallback reads is still judged by the kept rules."""
+    """Item 3: heavy (lock etiquette) warns; the owner's machine config makes it deny again
+    (heredoc-winpath is cut: docs/guard-v2.md B8); a warned heavy line the fallback reads is still
+    judged by the kept rules."""
 
     def heavy(self):
         return W.bash('godot --headless --path .', self.w.wt, sub=True)
 
-    def heredoc(self):
-        bs = '\\'                               # a Windows path, written so no machine path is spelled here
-        return W.bash("python - <<'EOF'\nopen('C:%sUsers%sx.txt')\nEOF" % (bs, bs), self.w.wt, sub=True)
-
     def test_the_kit_defaults(self):
         self.assertEqual(modes.DEFAULTS.get('heavy'), modes.WARN)
-        self.assertEqual(modes.DEFAULTS.get('heredoc-winpath'), modes.WARN)
+        self.assertNotIn('heredoc-winpath', modes.DEFAULTS)
 
     def test_each_warns_by_default(self):
-        for name, make in (('heavy', self.heavy), ('heredoc-winpath', self.heredoc)):
+        for name, make in (('heavy', self.heavy),):
             with self.subTest(name):
                 d = self.decide(make())
                 self.assertEqual((d.verdict, d.rule), ('allow', rules.WARNED), d.reason)
@@ -433,7 +430,7 @@ class Warned(World):
 
     def test_the_owner_can_make_each_deny(self):
         self.w.user_config({'guard_rules': {'heavy': 'deny', 'heredoc-winpath': 'deny'}})
-        for name, make in (('heavy', self.heavy), ('heredoc-winpath', self.heredoc)):
+        for name, make in (('heavy', self.heavy),):
             with self.subTest(name):
                 d = self.decide(make())
                 self.assertEqual((d.verdict, d.rule), ('deny', name), d.reason)

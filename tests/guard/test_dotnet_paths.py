@@ -287,8 +287,8 @@ class DevicePaths(Base):
 
 
 class Constructors(Base):
-    """A StreamWriter or FileStream opened on a path ([IO.StreamWriter]::new, New-Object, a cast
-    of a string) is a .NET write as a File call is: unjudged before."""
+    """A StreamWriter or FileStream opened on a path ([IO.StreamWriter]::new, New-Object) is a .NET
+    write as a File call is: unjudged before."""
 
     INTO_MAIN = (r"$s = [IO.StreamWriter]::new('{main}\x.txt')",
                  r"[System.IO.FileStream]::new('{main}\x.txt', 'Create').Close()",
@@ -297,10 +297,6 @@ class Constructors(Base):
                  r"$s = New-Object -TypeName System.IO.FileStream -ArgumentList '{main}\x.txt', 'Create'",
                  r"$s = New-Object -ArgumentList '{main}\x.txt' -TypeName IO.StreamWriter",
                  r"$s = New-Object IO.FileStream -Args @('{main}\x.txt', 'Create')",
-                 r"$s = [System.IO.StreamWriter]'{main}\x.txt'",
-                 # a cast of a parenthesized string: allowed from a worktree before
-                 r"$s = [System.IO.StreamWriter]('{main}\x.txt')",
-                 r"$s = [IO.StreamWriter] ( '{main}\x.txt' )",
                  # a FileStream opened to read that deletes the file when closed (FileOptions): allowed before
                  r"$f = [IO.FileStream]::new('{main}\x.txt', 'Open', 'Read', 'None', 4096, 'DeleteOnClose')",
                  r"$f = New-Object IO.FileStream('{main}\x.txt', [IO.FileMode]::Open, [IO.FileAccess]::Read, "
@@ -323,49 +319,14 @@ class Constructors(Base):
             with self.subTest(text=text):
                 self.denied(self.run_ps(text), 'unplaced')
 
-    def test_a_cast_of_anything_but_a_plain_string(self):
-        # PowerShell converts the operand, whatever it is, by the StreamWriter(string) constructor;
-        # a member access binds before the cast. Allowed from a worktree before.
-        for text in ('$s = [IO.StreamWriter]$p', '$s = [IO.StreamWriter] $p.FullName',
-                     '$s = [IO.StreamWriter]($p)', "$s = [IO.StreamWriter]('a' + $b)",
-                     '$s = [IO.StreamWriter]"$d\\x.txt"', '$s = [IO.StreamWriter][string]$p',
-                     "$s = [IO.StreamWriter]'{wt}\\x.txt'.Replace('wt', 'x')",
-                     "$s = [IO.StreamWriter]('{wt}\\x.txt').Replace('wt', 'x')",
-                     "$s = [IO.StreamWriter]'{wt}\\x.txt'[0]",
-                     "$s = [IO.StreamWriter]‘x.txt’", "$s = [IO.StreamWriter]('{wt}\\a', '{wt}\\b')"):
-            with self.subTest(text=text):
-                d = self.denied(self.run_ps(text), 'unplaced')
-                self.assertIn('a path the line computes', d.reason)
-        self.allowed(self.run_ps(r"$s = [IO.StreamWriter]'{wt}\x.txt' + 'y'"))     # the cast binds first
-
-    def test_a_cast_through_a_unary_operator_a_comment_or_a_continuation(self):
-        # PowerShell reads spaces, <# #> comments and line continuations after the ']' as space, and
-        # a unary operator (-join, -split, -not, -1, +, !) as the start of the operand. Allowed from a
-        # worktree before.
-        for text in ("$s = [IO.StreamWriter]-join ('{main}\\x', '.txt')",
-                     "$s = [IO.StreamWriter] -join ('{main}\\x', '.txt')",
-                     "$s = [IO.StreamWriter]–join ('{main}\\x', '.txt')",
-                     "$s = [IO.StreamWriter] -split $p", '$s = [IO.StreamWriter] -not $p',
-                     '$s = [IO.StreamWriter]-not1', '$s = [IO.StreamWriter] -1', '$s = [IO.StreamWriter] --$i',
-                     '$s = [IO.StreamWriter] +$p', '$s = [IO.StreamWriter] !$p', '$s = [IO.StreamWriter] .5',
-                     "$s = [IO.StreamWriter]<#c#>-join ('{main}\\x', '.txt')",
-                     "$s = [IO.StreamWriter] `\n-join ('{main}\\x', '.txt')",
-                     '$s = [IO.StreamWriter]{{$p}}'):
-            with self.subTest(text=text):
-                d = self.denied(self.run_ps(text), 'unplaced')
-                self.assertIn('a path the line computes', d.reason)
-        for text in (r"$s = [IO.StreamWriter]<#c#>'{main}\x.txt'",
-                     "$s = [IO.StreamWriter] <# a\ncomment #> '{main}\\x.txt'",
-                     "$s = [IO.StreamWriter] `\n'{main}\\x.txt'", "$s = [IO.StreamWriter]`\r\n'{main}\\x.txt'"):
-            with self.subTest(text=text):
-                d = self.denied(self.run_ps(text), 'main-checkout')
-                self.assertIn('is in the main checkout', d.reason)
-                self.allowed(self.run_ps(text.replace('{main}', '{wt}')))
-
-    def test_a_cast_of_a_filestream_or_the_type_as_a_value(self):
-        # nothing a cast opens, judged where the line runs, as before: the expression ends after the
-        # ']' (a line end, a comment, '.Name', ')', ',') or a binary operator takes the type as a value
-        for text in ('$t = [IO.StreamWriter]', '[IO.StreamWriter].Name', 'if ($x -is [IO.StreamWriter]) {{ 1 }}',
+    def test_a_cast_or_the_type_as_a_value(self):
+        # the StreamWriter cast is not read (docs/guard-v2.md B7, an unusual spelling): whatever it
+        # opens is judged where the line runs, as a FileStream cast and the type as a value are
+        for text in (r"$s = [System.IO.StreamWriter]'{main}\x.txt'", r"$s = [System.IO.StreamWriter]('{main}\x.txt')",
+                     r"$s = [IO.StreamWriter] ( '{main}\x.txt' )", '$s = [IO.StreamWriter]$p',
+                     "$s = [IO.StreamWriter]('a' + $b)", "$s = [IO.StreamWriter]-join ('{main}\\x', '.txt')",
+                     r"$s = [IO.StreamWriter]<#c#>'{main}\x.txt'", "$s = [IO.StreamWriter] `\n'{main}\\x.txt'",
+                     '$t = [IO.StreamWriter]', '[IO.StreamWriter].Name', 'if ($x -is [IO.StreamWriter]) {{ 1 }}',
                      '$a = @([IO.StreamWriter], [IO.FileStream])', "[IO.FileStream]'x.txt'",
                      'if ($x -is [IO.StreamWriter] -and $y) {{ 1 }}', '$t = [IO.StreamWriter] \t',
                      "$t = [IO.StreamWriter]\n$u = 'x.txt'", "$t = [IO.StreamWriter]\r\n$u = 'x.txt'",

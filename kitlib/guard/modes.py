@@ -41,7 +41,6 @@ DEFAULTS = {
     'git-alias': WARN,          # an alias on the command line: the command it runs is judged
     # turned into warnings
     'heavy': WARN,              # lock etiquette: a heavy program run with no machine lock held
-    'heredoc-winpath': WARN,
 }
 
 _STATE = contextvars.ContextVar('kit_guard_modes', default=None)

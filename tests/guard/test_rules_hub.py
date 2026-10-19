@@ -758,7 +758,7 @@ class OwnerVerbs(Hub):
     def test_lines_seen_refused_that_only_name_hub_py_pass(self):
         """Each line here was refused live as hub-owner-verb; none runs the hub tool, so each passes
         whole in every held session (a subagent, the coordinator, the pm, a plain session)."""
-        kit = 'Z:/GitHub/Agentic-Project_Manager-Kit'
+        kit = W.fwd(self.w.main)                # a checkout path, as the live line named one
         for cmd in ('ls %s/tools/no_window.py %s/tools/hub.py %s/optional/procwatch/procwatch.py' % (kit, kit, kit),
                     'sed -n 16,39p tests/guard/test_rules_hub.py; '
                     'grep -n "def run_hub\\|self.hub =" -A3 tests/guard/test_rules_hub.py | head -12',

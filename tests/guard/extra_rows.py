@@ -1,5 +1,6 @@
 """Rows for tests/guard/test_rules.py: busy-wait loops (and the unreadable alternative of a
-nested bash -c wait), Windows paths in python heredocs, core.hooksPath changes (git config, -c,
+nested bash -c wait), Windows paths in python heredocs (which pass: heredoc-winpath is cut,
+docs/guard-v2.md B8), core.hooksPath changes (git config, -c,
 clone -c, GIT_CONFIG_*), ending processes by name, the .NET and Gradle heavy defaults, and a
 python -c the guard proves reads only
 (docs/guard.md "Rules"). Same shape as ROWS there; the expected alternative is str.format text, so
@@ -114,12 +115,13 @@ ROWS = [
      'deny', 'busy-wait', None),
 
     # ---------------------------------------------------------------- Windows paths in python heredocs
+    # heredoc-winpath is cut (docs/guard-v2.md B8): a quoting trap, not a hazard. Each row passes.
     ('heredoc-winpath: python - with C:' + BS + 'Users', lambda w: bash(heredoc('python -', "open('C:%sUsers%sx.txt')" % (BS, BS)), w.wt),
-     'deny', 'heredoc-winpath', 'python "{temp}/script.py"'),
+     None, None, None),
     ('heredoc-winpath: python3 with no dash, subagent', lambda w: bash(heredoc('python3', "p = 'D:%snew%sx'" % (BS, BS)), w.wt, sub=True),
-     'deny', 'heredoc-winpath', 'python3 "{temp}/script.py"'),
+     None, None, None),
     ('heredoc-winpath: an f-string is not raw', lambda w: bash(heredoc('python', 'p = f"C:%stmp%s{x}"' % (BS, BS)), w.wt),
-     'deny', 'heredoc-winpath', None),
+     None, None, None),
     ('heredoc-winpath: a raw string', lambda w: bash(heredoc('python -', "open(r'C:%sUsers%sx.txt')" % (BS, BS)), w.wt),
      None, None, None),
     ('heredoc-winpath: forward slashes', lambda w: bash(heredoc('python -', "open('C:/tmp/x.txt')"), w.wt), None, None, None),
@@ -135,9 +137,9 @@ ROWS = [
     ('heredoc-winpath: a label ending in a newline', lambda w: bash(heredoc('python -', 'print("a:%sn")' % BS), w.wt),
      None, None, None),
     ('heredoc-winpath: a drive and a folder', lambda w: bash(heredoc('python -', 'print("d:%sdata")' % BS), w.wt),
-     'deny', 'heredoc-winpath', None),
+     None, None, None),
     ('heredoc-winpath: unquoted <<EOF turns doubled backslashes into one',
-     lambda w: bash(heredoc_unquoted('python -', "open('C:%s%sUsers')" % (BS, BS)), w.wt), 'deny', 'heredoc-winpath', None),
+     lambda w: bash(heredoc_unquoted('python -', "open('C:%s%sUsers')" % (BS, BS)), w.wt), None, None, None),
     ('heredoc-winpath: unquoted <<EOF with four backslashes',
      lambda w: bash(heredoc_unquoted('python -', "open('C:%sUsers')" % (BS * 4)), w.wt), None, None, None),
 

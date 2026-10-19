@@ -1,6 +1,6 @@
 """Read-only git the write jail lets run in another checkout (patch-id, apply --check: rules.git_reads,
 rules.apply_checks), and a piped `machine_lock.py run --help` the wrapped-gate rule (P16) lets pass
-(rules.lock_run_help)."""
+(rules.lock_run_help), as does a piped gate.py --help, --plan or --measure (rules.gate_runs_nothing)."""
 import unittest
 
 from . import world as W
@@ -73,6 +73,46 @@ class LockRunHelpPiped(unittest.TestCase):
                      'python tools/machine_lock.py run --kind build -- python x.py --help | head',
                      'python tools/machine_lock.py run $H | head',
                      'python tools/machine_lock.py run --kind build -- python x.py | tail'):
+            with self.subTest(text):
+                d = self.judge(text)
+                self.assertIsNotNone(d, 'allowed')
+                self.assertEqual((d.verdict, d.rule), ('deny', 'wrapped-gate'), d.reason)
+
+
+class GatePipedRunsNothing(unittest.TestCase):
+    """gate.py --help, --plan or --measure runs no gate step and takes no lock: it may be piped
+    (docs/guard-v2.md B9, rules.gate_runs_nothing). The default steps, --full, --only, land and
+    wait-result stay refused piped."""
+
+    def setUp(self):
+        self.w = W.World()
+        self.addCleanup(self.w.cleanup)
+        W.deny_softened()                       # wrapped-gate is off by default (test_cheap.py)
+        self.addCleanup(W.allow_unplaced)
+
+    def judge(self, text, shell=bash):
+        return decide(shell(text, self.w.wt, sub=True), self.w.ctx())
+
+    def test_runs_nothing_piped_passes(self):
+        for text in ('python tools/gate.py --help | head', 'python tools/gate.py -h 2>&1 | head',
+                     'python tools/gate.py --plan | head', 'python tools/gate.py --full --plan | tail',
+                     'python tools/gate.py -C $WT --plan | head',
+                     'python tools/gate.py --measure --out m.json | tail',
+                     'python tools/backlog.py list | head'):       # not a wrapper at all
+            with self.subTest(text):
+                d = self.judge(text)
+                self.assertIsNone(d, d and d.reason)
+        d = self.judge('python tools/gate.py --plan | Select-Object -First 5', ps)
+        self.assertIsNone(d, d and d.reason)
+
+    def test_a_run_piped_is_still_refused(self):
+        for text in ('python tools/gate.py --full | tail', 'python tools/gate.py | tail',
+                     'python tools/gate.py --only unit | tail',
+                     'python tools/gate.py land b --expect-tip abc1234 | tail',
+                     'python tools/gate.py land --help | tail',
+                     'python tools/gate.py wait-result b --tip abc1234 | tail',
+                     'python tools/gate.py $X --plan | head',
+                     'python tools/gate.py --pla | head'):
             with self.subTest(text):
                 d = self.judge(text)
                 self.assertIsNotNone(d, 'allowed')

@@ -139,11 +139,10 @@ class NativePrograms(unittest.TestCase):
                 self.assertEqual(d.rule, 'unplaced', d.reason)
 
     def test_native_writer_outside_the_roots(self):
+        # a provider word the guard cannot place, run in a folder outside every repository: judged
+        # as a bash target it cannot place there is, so it passes (docs/guard-v2.md B16, cut)
         text = 'cd "%s"; xcopy a env:FOO' % W.fwd(self.w.plain)
-        d = self.decide(text, self.w.wt)
-        self.assertIsNotNone(d, 'allowed: %s' % text)
-        # a provider word the guard cannot place: unplaced (held at deny in this module)
-        self.assertEqual(d.rule, 'unplaced', d.reason)
+        self.assertIsNone(self.decide(text, self.w.wt), text)
 
 
 class NarrowSkip(unittest.TestCase):

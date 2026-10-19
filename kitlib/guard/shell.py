@@ -114,7 +114,7 @@ class Redirect(object):
 class Command(object):
     __slots__ = ('words', 'redirects', 'start', 'end', 'source', 'shell', 'depth', 'cwd',
                  'piped_out', 'piped_in', 'subs', 'groups', 'nested_in', 'prev_op', 'next_op',
-                 'pipe_from', 'git_env', 'home_env', 'path_env', 'cwd_ps_drive', 'cwd_home', 'home', 'subs_cwd',
+                 'pipe_from', 'git_env', 'home_env', 'path_env', 'cwd_home', 'home', 'subs_cwd',
                  'split')
 
     def __init__(self, source, shell, depth, home=None):
@@ -123,7 +123,6 @@ class Command(object):
         self.source, self.shell, self.depth = source, shell, depth
         self.home = home            # the folder `~` names, its Parsed's home (home_folder: None is the user's)
         self.cwd = None
-        self.cwd_ps_drive = False   # cwd None after a PowerShell cd into a place ps_unplaceable names (track)
         self.cwd_home = None        # cwd, with a cd to a home variable ($HOME/x) followed too (track)
         self.subs_cwd = None        # the directory its substitutions start in; cwd unless a cd in one moved it (track)
         self.piped_out = self.piped_in = False
@@ -1135,17 +1134,6 @@ def cd_target(cmd, cwd, home=None, home_vars=False):
     return True, resolve_path(p, cwd, cmd.shell, home)
 
 
-def ps_cd_unplaceable(cmd):
-    """True when `cmd` is a PowerShell cd whose one literal place is one ps_unplaceable names
-    (cd Main:\\, Set-Location -LiteralPath Registry::x)."""
-    if cmd.shell != PS or len(cmd.words) < 2 or cmd.words[0].text.lower() not in CD_VERBS:
-        return False
-    rest = cmd.words[1:]
-    if rest[0].text.lower() in ('-path', '-literalpath', '-lp'):
-        rest = rest[1:]
-    return len(rest) == 1 and not rest[0].dyn and ps_unplaceable(rest[0].text)
-
-
 BASH_PREFIX_WORDS = {'if', 'then', 'else', 'elif', 'do', 'while', 'until', '!', 'time'}
 
 
@@ -1162,40 +1150,37 @@ def _keyword_cd(c):
     return 0 < first and k < len(c.words) and c.words[k].text.lower() in CD_VERBS | CD_UNKNOWN
 
 
-def track(cmds, cwd, ps_drive=False, home=None, cwd_home=None):
+def track(cmds, cwd, home=None, cwd_home=None):
     """Each command's cwd, in order: a cd changes it for the commands after it. A bash ( ) group
     is a subshell: a cd inside it holds to its end, then the directory before it comes back; a
     bash { } group shares the directory. A cd the text cannot tell, one inside a PowerShell or
     cmd group, one behind a keyword, one in a pipeline, in the background or beside || makes the
     directory unknown (None) from there on. Substitutions run in the directory of the command
     that holds them; a cd inside a PowerShell one makes its holder's directory unknown, and every
-    later one's. A command whose cwd is None after a PowerShell cd into a place
-    ps_unplaceable names (cd Main:\\) gets cwd_ps_drive, until a cd reaches a known place. `~` is
-    `home` (home_folder). cwd_home is the directory tracked from `cwd_home` (default `cwd`) with
+    later one's. `~` is `home` (home_folder). cwd_home is the directory tracked from `cwd_home` (default `cwd`) with
     a cd to a home variable read too (cd_target home_vars): only for the rules that deny, since a
     line can set the variable to another folder."""
-    here, drive = cwd, ps_drive
+    here = cwd
     here_h = cwd if cwd_home is None else cwd_home
-    open_ = []                  # (group, the directory before it, its drive flag, its cwd_home)
-    sub_from = {}               # id(command): (cwd, drive flag, cwd_home) its substitutions start in
+    open_ = []                  # (group, the directory before it, its cwd_home)
+    sub_from = {}               # id(command): (cwd, cwd_home) its substitutions start in
     for c in cmds:
         common = 0
         while common < len(open_) and common < len(c.groups) and open_[common][0] == c.groups[common]:
             common += 1
         while len(open_) > common:
-            g, before, before_drive, before_h = open_.pop()
+            g, before, before_h = open_.pop()
             if g[1] == '(' and c.shell == BASH:
-                here, drive, here_h = before, before_drive, before_h
+                here, here_h = before, before_h
         for g in c.groups[common:]:
-            open_.append((g, here, drive, here_h))
-        sub_from[id(c)] = (here, drive, here_h)
+            open_.append((g, here, here_h))
+        sub_from[id(c)] = (here, here_h)
         c.subs_cwd = here
         # PowerShell runs a $( ) or an argument's ( ) in the caller's scope: a cd there moves this
         # command and every one after it (bash's $( ) is a subshell)
         if c.shell == PS and any(cd_target(x, None, home)[0] for x in flatten(c.subs)):
             here = here_h = None
         c.cwd, c.cwd_home = here, here_h
-        c.cwd_ps_drive = drive and here is None
         changed, to = cd_target(c, here, home)
         to_h = cd_target(c, here_h, home, home_vars=True)[1]
         if _keyword_cd(c):
@@ -1205,11 +1190,10 @@ def track(cmds, cwd, ps_drive=False, home=None, cwd_home=None):
                       or (c.groups and c.shell != BASH))
             here = None if unsure else to
             here_h = None if unsure else to_h
-            drive = ps_cd_unplaceable(c) or (drive and here is None)
     for c in cmds:
         if c.subs:
-            at, at_drive, at_h = sub_from[id(c)]
-            track(c.subs, at, at_drive and at is None, home, at_h)
+            at, at_h = sub_from[id(c)]
+            track(c.subs, at, home, at_h)
     return cmds
 
 

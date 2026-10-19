@@ -65,8 +65,6 @@ Rules, in the order they are checked:
                    any session
   owner-identity   the owner's email given to a commit, in any session but the owner's own
   kill-by-name     an agent session ending processes by name (taskkill /IM, Stop-Process -Name)
-  heredoc-winpath  (a warning by default) python reading a bash heredoc with a single-backslash
-                   Windows path in a string
   busy-wait        (off by default) a foreground sleep loop with no counter, clock or timeout bounding it
   git-alias        (a warning by default) a git alias defined on the command line (-c alias.<name>=...)
 A rule's mode (deny, warn or off) is kitlib.guard.modes'; a rule it does not name is deny.
@@ -270,7 +268,7 @@ def shell_command(event, ctx, text, shell, cwd, role):
     for cmd in parsed.commands:
         inv = cm.invocation(cmd)
         for rule in (owner_tool, hub_rules.secrets, hub_rules.owner_verb, wrapped_gate, root_search,
-                     heavy, git_rules, git_hooks_path, owner_identity, kill_by_name, heredoc_winpath, shell_writes):
+                     heavy, git_rules, git_hooks_path, owner_identity, kill_by_name, shell_writes):
             d = rule(event, ctx, cmd, inv, cwd, role)
             if d:
                 return d
@@ -1514,8 +1512,6 @@ class NetWrite(object):
 
 
 NET_QUOTES = '‘’‚‛“”„'     # PowerShell reads these as quotes too
-NET_DASHES = ''.join(sh.PS_DASHES)  # and these as the dash an operator starts with
-NET_UNARY = frozenset(('not', 'bnot', 'join', 'split', 'csplit', 'isplit'))   # -op operand
 
 
 def _net_string_end(src, k):
@@ -1747,97 +1743,15 @@ def _net_ctor(src, kind, args, end, out):
     return False
 
 
-def _net_operand_end(src, k):
-    """The offset just past the operand that starts at src[k]: its strings and brackets whole, up to
-    a space, a comma, a statement end or an unopened closing bracket."""
-    n, depth = len(src), 0
-    while k < n:
-        c = src[k]
-        if c in '\'"':
-            k = _net_string_end(src, k)
-            continue
-        if c == '`':
-            k += 2
-            continue
-        if c in '([{':
-            depth += 1
-        elif c in ')]}':
-            if depth == 0:
-                break
-            depth -= 1
-        elif depth == 0 and c in ' \t\r\n,;|&':
-            break
-        k += 1
-    return min(k, n)
-
-
-def _net_cast_operand(src, k):
-    """The offset of what follows the ']' at src[k - 1], past the spaces, <# #> comments and backtick
-    line continuations PowerShell reads as space there."""
-    n = len(src)
-    while k < n:
-        if src[k] in ' \t':
-            k += 1
-        elif src.startswith('<#', k):
-            close = src.find('#>', k + 2)
-            k = n if close < 0 else close + 2
-        elif src[k] == '`' and src[k + 1:k + 2] == '\n':
-            k += 2
-        elif src[k] == '`' and src[k + 1:k + 3] == '\r\n':
-            k += 3
-        else:
-            break
-    return k
-
-
-def _net_cast(src, k):
-    """The NetWrite of the StreamWriter cast whose type name ends at src[k] (its ']'), or None when
-    no operand follows (the type passed as a value: [IO.StreamWriter], [IO.StreamWriter].Name,
-    $x -is [IO.StreamWriter] -and $y, @([IO.StreamWriter], 1), List[IO.StreamWriter]). What follows
-    the ']' is an operand unless it ends the statement or the expression (a line end, a line comment,
-    . ) ] } ; | , ..) or is
-    a binary operator (-and, -eq, -f); a unary one (-join, -split, -not, -bnot, -1, +, !) opens an
-    operand, as a comment or a line continuation before it does not end one (_net_cast_operand).
-    PowerShell converts the operand by the constructor that takes a string, so a plain string
-    ('x.txt', or ('x.txt')) is the path; any other operand ($p, ('a' + $b), 'x'.Replace(...): a member
-    access or an index binds before the cast) is a path the line computes."""
-    n = len(src)
-    if src[k:k + 1] != ']':
-        return None
-    k = _net_cast_operand(src, k + 1)
-    if k >= n or src[k] in '\r\n#)]};|,':
-        return None                             # ']': a type argument, List[IO.StreamWriter]
-    if src[k] == '.' and not (src[k - 1] != ']' and src[k + 1:k + 2].isdigit()):
-        return None                             # .Name, ..5; but [IO.StreamWriter] .5 is a cast of 0.5
-    if src[k] in NET_DASHES:
-        op = re.compile(r'[A-Za-z]*').match(src, k + 1).group(0).lower()
-        if op and op not in NET_UNARY:
-            return None                         # a binary operator, or one PowerShell rejects
-    end = max(_net_operand_end(src, k), k + 1)
-    lit = None
-    if src[k] in '\'"':
-        close = _net_string_end(src, k)
-        lit = (_net_literal(src[k:close]), k, close) if close == end else None
-    elif src[k] == '(':
-        args, close = _net_args(src, k + 1)
-        if close == end and src[close - 1:close] == ')' and len(args) == 1 and not _net_lost(src[k + 1:close]):
-            lit = args[0]
-    if lit is not None and lit[0] is not None:
-        return NetWrite(sh.Word(lit[0], False, lit[1], lit[2]), end)
-    return NetWrite(sh.Word(src[k:end], True, k, end), end)
-
-
 def net_writes(cmd):
     """([NetWrite], unread): each path the PowerShell command's .NET file calls (IO_FILE_RE) and
-    StreamWriter and FileStream constructors (NET_TYPE_RE: ::new(...), New-Object, or a StreamWriter
-    cast, [IO.StreamWriter]'x.txt', whose operand is a path the line computes unless it is a plain
-    string, _net_cast) write, and True
+    StreamWriter and FileStream constructors (NET_TYPE_RE: ::new(...) or New-Object) write, and True
     when a match is a write the guard does not read the path of, so write_targets judges the
     directory the command runs in, as it did for every such call, and dotnet_process_dir the one
     its process started in: one inside a quoted word, a method named with no '(' after it (called
     later, through .Invoke or a variable), a call with fewer arguments than the ones it writes
     (_net_written), one whose arguments the parse may have lost its place in (_net_lost), a type
-    named any other way (a FileStream cast, [type] as a value) and a New-Object call _net_new_object does
+    named any other way (a cast, [type] as a value) and a New-Object call _net_new_object does
     not read. A $null argument (Replace's backup) writes nothing."""
     if cmd.shell != sh.PS:
         return [], False
@@ -1860,12 +1774,7 @@ def net_writes(cmd):
             unread = True                       # in a string, a type name passed as a value
             continue
         if not call:
-            # [IO.StreamWriter]'x.txt', [IO.StreamWriter]$p: a cast opens its operand (_net_cast)
-            cast = _net_cast(src, after) if m.group(0).lower().endswith('streamwriter') else None
-            if cast is None:
-                unread = True                   # [type] passed as a value, a FileStream cast
-            else:
-                out.append(cast)
+            unread = True                       # [type] passed as a value, a cast
             continue
         if call.group(1).lower() != 'new':
             continue                            # a static member: [IO.StreamWriter]::Null
@@ -3148,15 +3057,16 @@ def _write_from(event, ctx, cmd, inv, cwd, role, w, base, net, into, searched):
     """(Decision or None, searched) for the write target `w` of shell_writes read from `base`
     (OUTER, or the folder a Start-Process -WorkingDirectory names)."""
     runs_in = cmd.cwd if base is OUTER else base
-    target, why, ps_drive = write_place(ctx, cmd, w, base)
+    target, why = write_place(ctx, cmd, w, base)
     if target is None and not searched:
         searched = True                         # find's start paths answer for every such target at once
         d = find_exec_writes(event, ctx, cmd, cwd, role)
         if d:
             return d, searched
-    if target is None and cmd.shell == sh.PS and w.dyn:
-        ps_drive = True                         # PowerShell's, from any location: one $p or (...) can name the main checkout
-    elif target is None and runs_in is not None and not ps_drive and \
+    computed = target is None and cmd.shell == sh.PS and w.dyn
+    if computed:
+        pass                                    # PowerShell's, from any location: one $p or (...) can name the main checkout (B15)
+    elif target is None and runs_in is not None and \
             ctx.place(runs_in).kind not in (repo.MAIN, repo.UNKNOWN):
         return None, searched                   # a target it cannot place, from a worktree or elsewhere
     sleep = sleep_wait(cmd, inv, w)
@@ -3184,7 +3094,7 @@ def _write_from(event, ctx, cmd, inv, cwd, role, w, base, net, into, searched):
             d = unplaced(d, role)
         if d:
             return d, searched
-    if ps_drive:
+    if computed:
         d = ps_drive_jail(event, ctx, cwd, role, what, why, rewrite)
         if d:
             return d, searched
@@ -3195,13 +3105,12 @@ OUTER = object()                                # write_place: the command's own
 
 
 def write_place(ctx, cmd, w, base=OUTER):
-    """(path, why, ps_drive) of the Word `w` the command `cmd` writes, read from cmd's directory
-    and shell: path None when the guard cannot place it (why says why), and ps_drive when that is
-    a PowerShell drive or provider path (ps_drive_jail judges it). `base`, when given, is the
+    """(path, why) of the Word `w` the command `cmd` writes, read from cmd's directory and shell:
+    path None when the guard cannot place it (why says why), a PowerShell drive or provider path
+    shell.resolve_path cannot place among them (docs/guard-v2.md B16). `base`, when given, is the
     folder a relative `w` is read from instead of cmd's directory: the -WorkingDirectory a
     Start-Process program runs in (commands.run_dir), None when the guard cannot place that."""
     here_dir = cmd.cwd if base is OUTER else base
-    ps_drive = False                            # a PowerShell drive or provider it cannot place
     pwd = ps_pwd_path(cmd, w)
     if pwd is not None:
         target, why = sh.resolve_path(pwd, cmd.cwd, cmd.shell, getattr(ctx, 'home', None)), None
@@ -3209,24 +3118,13 @@ def write_place(ctx, cmd, w, base=OUTER):
         target, why = None, 'a target that is not literal: %s' % w.text
     elif cmd.shell == sh.BASH and BASH_TMP_RE.match(w.text):
         target, why = paths.norm(os.path.join(jail.bash_tmp(ctx), w.text[5:]), fold=False), None
-    elif cmd.shell == sh.PS and PS_PROVIDER_ITEM_RE.match(w.text) and sh.ps_unplaceable(w.text):
-        ps_drive = True                         # ps_provider_item did not skip it: the line may remap the drive
-        target, why = None, ('a PowerShell provider item (%s) on a line that is not only plain cmdlet calls, '
-                             'so the drive may be remapped to a folder; run the item write in a call of '
-                             'its own' % w.text)
-    elif cmd.shell == sh.PS and sh.ps_unplaceable(w.text):
-        ps_drive = True
-        target, why = None, 'a PowerShell drive or provider path the guard cannot place: %s' % w.text
     else:
         target = sh.resolve_path(w.text, here_dir, cmd.shell, getattr(ctx, 'home', None))
         why = None if target else 'the directory it runs in is unknown' if here_dir is None \
             else 'a path the text cannot place: %s' % w.text
         if target is None and base is None:
             why = 'the folder its Start-Process -WorkingDirectory names is computed or not one the guard can place'
-        if target is None and base is OUTER and cmd.cwd is None and cmd.cwd_ps_drive:
-            ps_drive = True                     # after cd Main:\ or cd Registry::x
-            why = 'the directory it runs in is a PowerShell drive or provider path the guard cannot place'
-    return target, why, ps_drive
+    return target, why
 
 
 def find_runs(cmd):
@@ -3254,7 +3152,7 @@ def find_exec_writes(event, ctx, cmd, cwd, role):
         for w in _find_paths(inv.args)[0] or [here(inv.word)]:
             if not w.dyn and BASH_DEVICE_RE.match(w.text):
                 continue
-            target, why = write_place(ctx, f, w)[:2]
+            target, why = write_place(ctx, f, w)
             if target is None and f.cwd is not None and ctx.place(f.cwd).kind not in (repo.MAIN, repo.UNKNOWN):
                 continue
             what = '`%s` runs `%s` on what it finds in %s' % (
@@ -3363,10 +3261,9 @@ def dotnet_process_dir(event, ctx, cmd, cwd, role):
 
 
 def ps_drive_jail(event, ctx, cwd, role, what, why, rewrite):
-    """An agent session's PowerShell write to a drive or provider path the guard cannot place
-    (shell.ps_unplaceable: Main:\\x after New-PSDrive, Registry::x), by a role main_checkout lets
-    through (it may edit a main checkout): the jail cannot judge a place it cannot tell, so it
-    refuses, as git_jail_unknown does for git."""
+    """An agent session's PowerShell write to a computed target ($p, a ( ) expression: _write_from),
+    by a role main_checkout lets through (it may edit a main checkout): the jail cannot judge a
+    place it cannot tell, so it refuses, as git_jail_unknown does for git."""
     if not agent_session(event, ctx):
         return None
     dest = jail.destination(jail_roots(event, ctx, cwd))
@@ -3446,7 +3343,8 @@ def bare_wrapper(ctx, cmd, inv, cwd):
 
 def wrapped_gate(event, ctx, cmd, inv, cwd, role):
     kind = cm.wrapper(inv)
-    if not kind or not cmd.piped_out or kind == 'lock-run' and lock_run_help(inv):
+    if not kind or not cmd.piped_out or kind == 'lock-run' and lock_run_help(inv) \
+            or kind == 'gate' and gate_runs_nothing(inv):
         return None
     instead, from_dir = bare_wrapper(ctx, cmd, inv, cwd)
     read = 'read the log gate.py names' if kind == 'gate' else 'read its output'
@@ -3466,6 +3364,23 @@ def lock_run_help(inv):
         return False
     rest = inv.args[found[0] + 2:]
     return len(rest) == 1 and not rest[0].dyn and rest[0].text in ('--help', '-h')
+
+
+GATE_NOTHING = ('-h', '--help', '--plan', '--measure')
+
+
+def gate_runs_nothing(inv):
+    """True when gate.py `inv` names no subcommand (its first word is a literal option: gate.py
+    reads land and wait-result only there) and has a literal -h, --help, --plan or --measure: it
+    runs no gate step and takes no lock, so a pipe changes nothing (docs/guard-v2.md "Kit tools
+    may be piped")."""
+    found = cm.python_script(inv) if inv.name not in ('gate.py', 'gate') else (-1, None)
+    if not found:
+        return False
+    rest = inv.args[found[0] + 1:]
+    if not rest or rest[0].dyn or rest[0].synth or not rest[0].text.startswith('-'):
+        return False
+    return any(not a.dyn and not a.synth and a.text in GATE_NOTHING for a in rest)
 
 
 def same_dir(a, b):
@@ -5720,88 +5635,6 @@ def busy_wait(event, ctx, parsed, cwd, role):
 
 
 # ---------------------------------------------------------------- Windows paths in heredocs
-
-# A drive path with one backslash (<drive>:\Users): in a python string that is not raw, \U, \N and \x
-# stop the script and \n, \t, \a and \b change the path silently. The part after the backslash must
-# look like a folder or file name (two characters or more), and a letter after % is a format
-# (%s:\n), so a label ending in an escape ("x:\t") is not a path.
-WINPATH_RE = re.compile(r'(?<![\w\\%])[A-Za-z]:\\(?!\\)[\w.$~-]{2,}')
-RAW_PREFIX_RE = re.compile(r'(?i)^(?:r|rb|br|rf|fr)$')
-# What bash does to an unquoted heredoc's backslashes before python reads it: \\ \$ \` lose the
-# backslash, and a backslash before a newline joins the lines.
-HEREDOC_UNQUOTE_RE = re.compile(r'\\([\\$`\n])')
-
-
-def _heredoc_as_read(word):
-    """The heredoc body as the program reads it: an unquoted one (<<EOF) after bash's backslash
-    handling, so C:\\\\Users reaches python as C:\\Users."""
-    text = word.text
-    if not word.dyn:
-        return text
-    return HEREDOC_UNQUOTE_RE.sub(lambda m: '' if m.group(1) == '\n' else m.group(1), text)
-
-
-def _python_reads_stdin(inv):
-    """True when python, by its arguments, reads its script from standard input: no script, no
-    -c, no -m, or `-`."""
-    args = inv.args
-    k = 0
-    while k < len(args):
-        t = args[k].text
-        if t == '-':
-            return True
-        if t in ('-X', '-W'):
-            k += 2
-            continue
-        if t.startswith('--'):
-            k += 1
-            continue
-        if t.startswith('-'):
-            if 'c' in t[1:] or 'm' in t[1:]:
-                return False
-            k += 1
-            continue
-        return False                             # a script file
-    return True
-
-
-def _in_plain_string(line, col):
-    """True when line[col] sits in a python string literal that is not raw, judged by the nearest
-    quote before it. A comment, or no quote before it: False."""
-    head = line[:col]
-    quotes = [i for i in (head.find('"'), head.find("'")) if i >= 0]
-    if not quotes or '#' in head[:min(quotes)]:
-        return False
-    q = max(head.rfind('"'), head.rfind("'"))
-    k = q
-    while k > 0 and head[k - 1] == head[q]:
-        k -= 1                                   # a triple quote: its first quote
-    m = re.search(r'([A-Za-z]{1,2})$', head[:k])
-    return not (m and RAW_PREFIX_RE.match(m.group(1)))
-
-
-def heredoc_winpath(event, ctx, cmd, inv, cwd, role):
-    """python reading its script from a bash heredoc that holds a Windows path with single
-    backslashes in a string that is not raw."""
-    if inv is None or inv.dyn or cmd.shell != sh.BASH or not cm.PYTHON_RE.match(inv.name):
-        return None
-    if not _python_reads_stdin(inv):
-        return None
-    for r in cmd.redirects:
-        if r.op not in ('<<', '<<-') or not r.body or r.target is None:
-            continue
-        for line in _heredoc_as_read(r.target).splitlines():
-            for m in WINPATH_RE.finditer(line):
-                if not _in_plain_string(line, m.start()):
-                    continue
-                path = re.split(r'[\'"\s]', line[m.start():])[0]
-                return refuse('heredoc-winpath', role, '`%s` reads its script from a heredoc whose python string '
-                              '%s is a Windows path in a string that is not raw: python reads its backslashes as '
-                              'escapes (\\U stops the script, \\n and \\t change the path). Write the script to a '
-                              'file with the Write tool, with forward slashes or raw strings (r"..."), then run '
-                              'it:' % (bare(cmd), path), '%s "%s"' % (inv.path, fwd(os.path.join(ctx.tempdir, 'script.py'))))
-    return None
-
 
 # ---------------------------------------------------------------- environment assignments
 
