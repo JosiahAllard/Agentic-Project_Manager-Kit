@@ -46,6 +46,7 @@ from kitlib.config import policy
 from kitlib.config import user as kuser
 from kitlib.config.types import ConfigError
 from kitlib.gate import detect
+from kitlib.gate import gatecap
 from kitlib.gate import gitstatus
 from kitlib.gate import hookrev
 from kitlib.gate import result
@@ -53,7 +54,7 @@ from kitlib.gate import stash
 from kitlib.gate import steps as S
 from kitlib.git import cmd, refs, repo
 from kitlib.lock import run as lockrun
-from kitlib.lock.store import EXIT_USAGE, LockError
+from kitlib.lock.store import EXIT_USAGE, LockError, Store
 from kitlib.proc import process, winwatch
 from kitlib.proc.job import JobError
 from kitlib.records import gate_ok
@@ -751,6 +752,9 @@ def _gate_checkout(top, cfg, seen, base=None, full=False, only=None, plan=False,
     run = _to_run(chosen, reused)
     results, watched = [], {}
     if run:
+        # The session gate cap (kitlib.gate.gatecap): a branch gate only; a landing and the
+        # daily full run book through gated() without it.
+        gatecap.wait_turn((book_kw or {}).get('store') or Store(), name, say)
         results, refused = gated(cfg, top, mb, changed, run, gate['kind'], name,
                                  slug or slug_of(branch or head[:10]), logs, say, book_kw,
                                  gate=gate, seen=watched)
