@@ -20,7 +20,7 @@ HOST_WORDS = re.compile(r'claude|codex|anthropic|openai', re.I)
 ALLOWED = {
     'kitlib/commit/__init__.py':           1,    # an example family in an error message
     'kitlib/config/migration.py':          1,    # OLD_DIR_NAME, a retired folder's name on disk
-    'kitlib/config/schema.py':             1,    # a key's help text
+    'kitlib/config/schema.py':             2,    # a key's help text; the owner-guarded managed-settings template
     'kitlib/config/user.py':               1,    # a key's help text
     'kitlib/guard/rules.py':               3,    # the guard refactor
     'kitlib/kitrelease/bootstrap.py':      3,    # release inventory, runs before kitlib
