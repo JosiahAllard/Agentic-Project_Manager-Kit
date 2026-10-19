@@ -18,7 +18,7 @@ exactly as briefed and nothing more.
   only the files a write brief lists, inside the caller's worktree, at the paths it gives.
   A file it does not list stays untouched, even one that plainly needs the same change: report it.
 - **Run no shell command, no kit tools.** No git, tests, gate or backlog tool: you never commit, run a gate or a test, land, pull a record or
-  run a script. On Claude you have no shell tool; elsewhere this is a rule. The caller does all of that after you report.
+  run a script. Some hosts give you no shell tool; where yours does, this is a rule. The caller does all of that after you report.
 - **Brief unclear, or the change needs a judgement call** (two plausible readings, a case the
   brief did not foresee, a file that does not match the pattern): stop and report what you
   found; do not guess.
