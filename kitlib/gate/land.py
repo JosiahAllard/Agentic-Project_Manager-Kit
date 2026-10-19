@@ -49,7 +49,10 @@ tools/land.py).
                  (kitlib.gate.verdicts) by a strong-tier reviewer who is not its author (a
                  verdict carried to the tip, tools/verdict.py carry, counts only when
                  kitlib.gate.carry passes it again here against the base); its
-                 merged gate then runs --full --fresh. Any miss: REFUSED, the lock released, nothing
+                 merged gate then runs --full --fresh. Then the verdict check
+                 (Lander.verdict_check): every other branch, each of a batch, lands only with a
+                 verdict queued for its tip by any reviewer who is not its author, a carried one
+                 checked the same way. Any miss: REFUSED, the lock released, nothing
                  merged. Last, the scope check (Lander.scope_check): every path the branch changes
                  in a scope of a record it holds, in SCOPE_ALWAYS or in a folder store's folder;
                  a miss is a WARNING after the LANDED line while SCOPE_REFUSES is False, else
@@ -748,7 +751,8 @@ class Lander(object):
             why = at_landing.ancestry_refusal(self.root, self.cfg, t, env=self.git_env)
             if why:
                 return why
-        return self.tip_gate_check() or self.strict_check() or self.scope_check()
+        return (self.tip_gate_check() or self.strict_check() or self.verdict_check()
+                or self.scope_check())
 
     # ---------------------------------------------------------------- the tips' full gate
 
@@ -947,9 +951,23 @@ class Lander(object):
             return ('%s: a branch that changes a strict path lands alone, never in a batch'
                     % self.strict_says(b))
         (b, t), = self.pairs
-        why = self.strict_verdict(b, t)
+        why = self.review_refusal(b, t, strict=True)
         if why:
             return '%s: %s' % (self.strict_says(b), why)
+        return None
+
+    def verdict_check(self):
+        """A locked check (docs/gate.md "Landing" step 4), after strict_check: every branch that
+        changes no strict path lands too only with a verdict queued for its tip by a reviewer who
+        is not its author (review_refusal, without the tier rule), each branch of a batch on its
+        own entry. None, or why not for the first branch, in batch order, that misses (REFUSED,
+        nothing merged)."""
+        for b, t in self.pairs:
+            if b in self.strict_hits:       # strict_check passed it, tier rule and all
+                continue
+            why = self.review_refusal(b, t, strict=False)
+            if why:
+                return '%s: %s' % (b, why)
         return None
 
     def strict_says(self, b):
@@ -958,11 +976,14 @@ class Lander(object):
         return '%s changes strict path %s%s' % (
             b, ', '.join(hits[:STRICT_SHOWN]), ' and %d more' % more if more > 0 else '')
 
-    def strict_verdict(self, b, t):
-        """None when the verdict queued for branch `b` lets its tip `t` land on a strict path
-        (self.strict_review set to it); else why not. A carried entry (verdicts.carry) lands only
-        when kitlib.gate.carry.check passes again, from the commit reviewed to `t` against
-        self.expect_main (self.strict_carry set to its facts)."""
+    def review_refusal(self, b, t, strict):
+        """None when the verdict queued for branch `b` lets its tip `t` land; else why not. Every
+        landing: an entry that can be used, queued (not marked failed), at `t`, its reviewer not
+        the author (is_author). A carried entry (verdicts.carry) lands only when
+        kitlib.gate.carry.check passes again, from the commit reviewed to `t` against
+        self.expect_main. `strict` (a branch that changes a strict path) adds the tier rule
+        (strong_alias, light_alias) and sets self.strict_review to the entry and self.strict_carry
+        to the carry's facts, which strict_escalate reports."""
         common, why = repo.common_dir(self.root)
         if not common:
             return 'its verdict queue cannot be found: %s' % (why or 'no git common dir')
@@ -980,6 +1001,7 @@ class Lander(object):
             return ('the verdict was given at %s, and the branch is at %s: review and queue the '
                     'tip, or carry the verdict (tools/verdict.py carry) when a main sync is all '
                     'that changed' % (entry['tip'][:10], t[:10]))
+        facts = None
         if verdicts.CARRIED in entry:
             # Never the stored facts: the carry is checked again here, against the base this
             # landing merges onto (docs/gate.md "Carrying a verdict forward").
@@ -990,22 +1012,24 @@ class Lander(object):
                 return ('the verdict was given at %s and carried to %s, but the carry does not '
                         'hold against %s %s: %s; review and queue the tip'
                         % (reviewed[:10], t[:10], self.cfg.main_branch, self.expect_main[:10], why))
-            self.strict_carry = facts
-        strong, weak, why = tier_models()
-        if strong is None:
-            return 'the strong-tier models cannot be read: %s' % why
-        model = entry['reviewer_model']
-        if strong_alias(model, strong, weak) is None and light_alias(entry, strong, weak) is None:
-            return ('the reviewer ran on %s, not a strong-tier model (%s, or a full model id '
-                    'naming it; hosts.json "tiers"); %s (land.REVIEWER_MODELS_BY_AUTHOR), and '
-                    'its author is %s'
-                    % (model, ', '.join(sorted(strong - weak)) or 'none', light_rule(),
-                       entry['author']))
+        if strict:
+            strong, weak, why = tier_models()
+            if strong is None:
+                return 'the strong-tier models cannot be read: %s' % why
+            model = entry['reviewer_model']
+            if (strong_alias(model, strong, weak) is None
+                    and light_alias(entry, strong, weak) is None):
+                return ('the reviewer ran on %s, not a strong-tier model (%s, or a full model id '
+                        'naming it; hosts.json "tiers"); %s (land.REVIEWER_MODELS_BY_AUTHOR), and '
+                        'its author is %s'
+                        % (model, ', '.join(sorted(strong - weak)) or 'none', light_rule(),
+                           entry['author']))
         if is_author(entry):
             return ('the reviewer %s (%s) is its author (%s): it lands with a review by an agent '
                     'that did not write it' % (entry['reviewer_id'], entry['reviewer'],
                                               entry['author']))
-        self.strict_review = entry
+        if strict:
+            self.strict_review, self.strict_carry = entry, facts
         return None
 
     def strict_escalate(self):
