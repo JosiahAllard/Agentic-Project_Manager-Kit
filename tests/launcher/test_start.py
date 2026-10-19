@@ -383,12 +383,13 @@ class Start(Base):
             self.assertNotRegex(text, old)
         self.assertIn('lands nothing', text)
         self.assertIn('every LAND verdict', text)
+        self.assertIn('cleared for landing', text)
         self.assertIn('never wait on it', text)
         self.assertNotIn('--auto', text)
 
     def test_only_a_coordinators_successor_is_told_to_land(self):
         out = self.go(prompt='go', predecessor='old-a1')
-        self.assertIn('Land every LAND verdict', out)
+        self.assertIn('Queue every LAND verdict', out)
         for kw in ({'agent': 'consultant'}, {'agent': 'deep-worker'}, {'no_agent': True}):
             out = self.go(prompt='go', predecessor='old-a1', **kw)
             self.assertIn('You succeed old-a1', out)

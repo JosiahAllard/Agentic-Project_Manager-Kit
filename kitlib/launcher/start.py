@@ -94,8 +94,9 @@ def predecessor_text(old, coordinator=True):
     sentence is left out for any other role (a consultant, a deep-worker, a plain session)."""
     if not coordinator:
         return "You succeed %s, which has checkpointed and does nothing more; never wait on it. " % old
-    return ("You succeed %s, which has checkpointed and lands nothing more. Land every LAND verdict its state "
-            "note lists at once; never wait on it. " % old)
+    return ("You succeed %s, which has checkpointed and lands nothing more. Queue every LAND verdict its state "
+            "note lists that the owner (or a ledger ruling) has cleared for landing; hold the rest until the "
+            "owner gives the go; never wait on it. " % old)
 
 
 def _check_common(model, effort, autocompact, lo_hi=AUTOCOMPACT):
