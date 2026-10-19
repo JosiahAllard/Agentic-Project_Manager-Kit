@@ -14,6 +14,12 @@ asserts `checkout  NOT CHECKED`. It reaches `kitlib.agentstart.text` through the
 output was `NOT CHECKED - the rest: over the 1.0 s budget` and a full gate went red. The test
 holds no time token at all: the wall-clock budget is a production default it cannot see.
 
+Evidence from other runs (facts as reported; the pattern is one: a fixed short timeout measures machine load, not correctness):
+
+- retribution TASKQUEUE-DISPOSAL-LOAD-FAIL: a 10 s wait on a Blazor disposal failed under gate load; starving the thread pool just before release reproduced it in every caught sample; the disposal arrived within 17 ms of the pool freeing, 0 lost in 330 capped samples; the fix waits to the shared ceiling, with a load report on timeout.
+- retribution LOCALNODE-STARTUP-HASH-BLOCKED-TIMING: load, not a real block; the hash read is never awaited; the old 10 s bound timed node launch plus thread-pool dispatch.
+- kit tests.host.test_header: the agent-start check missed its 1.0 s budget at 1122 ms in one landing gate; an idle rerun gave median 312 ms on the branch and 344 ms on main (10 runs each); not reproduced.
+
 ## Survey of tests/
 
 Pattern counts from a search of `tests/**` on the main branch of 2026-10-19; a match is not a defect, only a place to look.
