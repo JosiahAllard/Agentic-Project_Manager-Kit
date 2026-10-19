@@ -9,6 +9,8 @@ does the session-start check that finds rules naming an old export. Code: `kitli
 
 ## The command
 
+It runs from the kit, not through a repository stub: it is in `KIT_ONLY` in `kitlib/stubs/__init__.py`.
+
 ```
 python <kit>/tools/allow_rules.py -C <any checkout of the repository>
 ```
