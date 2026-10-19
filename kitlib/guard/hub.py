@@ -1,5 +1,5 @@
 """What the guard's hub rules know of the Action Hub (docs/guard.md "Hub secrets"): pure helpers
-for kitlib.guard.rules' hub-secrets, hub-owner-verb, hub-named, hub-mcp and hub-browser.
+for kitlib.guard.rules' hub-secrets, hub-owner-verb, hub-mcp and hub-browser.
 
   secret_folder(config_path)   the hub's token folder beside the machine config file
   stores(hub, pm_data_path)    the folders the hub store may be in
@@ -20,20 +20,9 @@ they are the same. The owner-only MCP tool names are kitlib.hubmcp's own OWNER_O
 that package's __init__ imports nothing. Nothing here reads a file or the environment.
 
 owner_verb judges the arguments of a parsed hub tool run (kitlib.guard.rules.hub_run_args:
-python with tools/hub.py as its script or -m tools.hub; hub-owner-verb). The rest of this
-paragraph is hub-named's, the fail-closed reading of any other text, off by default
-(kitlib.guard.modes): outside the one command shape kitlib.guard.rules.hub_shape reads in full,
-the other text naming the hub tool that passes is the path family (kitlib.guard.rules.hub_path_family,
-from the owner's ruling on reading and committing the hub tool): one simple command of a reader
-(cat, Get-Content, type, grep, rg, Select-String), git's add, diff, log, show, blame, status or
-restore --staged, commit.py or backlog.py, naming hub.py only as a path word, or anyhow in
-commit.py's -m/-b or backlog.py's message options. Inside it the options that run a program are
-denied: git's -c and --exec-path (only -C, --no-pager and -P precede the subcommand), --ext-diff,
---textconv, add's editor and prompts, restore's work-tree writes, and rg's --pre, --pre-glob and
---hostname-bin.
-Any other text naming the hub tool is refused. Known limit: a name built at run time (string
-concatenation, an encoding, an escape a program expands, Unicode compatibility characters Python
-folds to hub, a variable, a script the agent wrote) is not read. The hub rules guard against
+python with tools/hub.py as its script or -m tools.hub; hub-owner-verb). Other text that names
+the hub tool is not read. Known limit: a name built at run time (string concatenation, an
+encoding, a variable, a script the agent wrote) is not read. The hub rules guard against
 accidents and are not an adversary boundary.
 """
 import fnmatch
@@ -67,12 +56,11 @@ HUB_SERVER = 'hub'
 # the token folder named in a command's text: `.pm-kit` then `hub` with only separators and
 # quotes between (`.pm-kit/hub`, `'.pm-kit', 'hub'`); hub.json beside it is not it
 FOLDER_RE = re.compile(r'(?i)\.pm-kit\W{1,8}hub(?![\w.-])')
-# code that reads a token: a file name, kitlib.hubsite.auth's names, the hub site or the hub tool
-INLINE_RE = re.compile(r'(?i)owner\.token|agent\.token|approval\.key|hubsite|(?<![\w-])hub\.py\b|'
-                       r'\.pm-kit\W{1,8}hub(?![\w.-])|'
-                       r'\b(?:OWNER_FILE|AGENT_FILE|TOKEN_FILES|APPROVAL_FILE|read_token|ensure_tokens)\b')
-# programs whose literal words often name the files without touching them: a search pattern, a
-# commit message. Their words that are not literal are still read.
+# python or node code that names a token file or the token folder literally; a name the code
+# builds or reaches through a library is not read
+INLINE_RE = re.compile(r'(?i)owner\.token|agent\.token|approval\.key|\.pm-kit\W{1,8}hub(?![\w.-])')
+# programs whose words often name the files without touching them: a search pattern, a commit
+# message. Their words are not name-read; a literal path of theirs into the folder still is.
 NAME_ONLY_PROGRAMS = frozenset(('grep', 'egrep', 'fgrep', 'rg', 'findstr', 'select-string', 'sls', 'git'))
 
 # the browser and computer-use MCP servers: a page they open or a key they type reaches the hub

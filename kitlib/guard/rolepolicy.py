@@ -692,9 +692,21 @@ PS_ITEM_RE = re.compile(r'(?i)\$\{?(?:_|psitem|input|matches)(?!\w)')
 PS_PLAIN_NAME_RE = re.compile(r'[A-Za-z][\w-]*')
 PS_LAST_NAMES = ('error', 'myinvocation', 'psitem', 'input', 'matches')
 # git's options that run a program or write a file (an external diff, a textconv filter, --output),
-# matched as rules.hub_opt_denied does (any prefix: --ext, --out), and the short -o:
-LOCK_GIT_DENIED = rules.HUB_GIT_DENIED + ('--output',)
-LOCK_GIT_SUB_DENIED = {'commit': rules.HUB_GIT_SUB_DENIED['commit']}
+# matched as _opt_denied does (any prefix: --ext, --out), and the short -o; git commit's own
+# options that open an editor or ask (its -c is --reedit-message)
+LOCK_GIT_DENIED = ('--ext-diff', '--textconv', '--output')
+LOCK_GIT_SUB_DENIED = {'commit': (('--edit', '--interactive', '--patch', '--reedit-message'), 'epc')}
+# the interpreters whose program word runs python (a base name, cm.base_name: case and .exe folded)
+PYTHON_RE = re.compile(r'^(python|pythonw|py|pyw|ipython|pypy)(\d+(\.\d+)*)?$')
+
+
+def _opt_denied(text, longs, shorts=''):
+    """True when the option word `text` is one of `longs` (as written, with =value, or as a unique
+    prefix of one: --ext for --ext-diff), or a cluster of short options holding one of `shorts`."""
+    if text.startswith('--'):
+        name = text.split('=', 1)[0]
+        return len(name) > 2 and any(d.startswith(name) for d in longs)
+    return bool(shorts) and text.startswith('-') and len(text) > 1 and any(c in shorts for c in text[1:])
 
 
 def _last_words(commands, items=False):
@@ -726,8 +738,7 @@ def _ps_names_last(cmd):
 
 def _git_plain(args, g, commands):
     """True when git's words `args` (GitCall `g`) only read: global options only -C <path>,
-    --no-pager and -P (no -c, --config-env, --exec-path, --git-dir: rules.hub_git_family's
-    rule), none of LOCK_GIT_DENIED, -o or the subcommand's LOCK_GIT_SUB_DENIED (git commit's
+    --no-pager and -P (no -c, --config-env, --exec-path, --git-dir), none of LOCK_GIT_DENIED, -o or the subcommand's LOCK_GIT_SUB_DENIED (git commit's
     editor and prompts) before a `--`, no alias or place git cannot be told
     (g.blind), and the line sets no environment variable (commands.line_env_names: GIT_PAGER,
     GIT_EXTERNAL_DIFF, PAGER, PATH; and what git_env or home_env marks): a pager, an external
@@ -747,8 +758,8 @@ def _git_plain(args, g, commands):
             return False
     head = g.argv[:g.argv.index('--')] if '--' in g.argv else g.argv
     longs, shorts = LOCK_GIT_SUB_DENIED.get(g.sub, ((), ''))
-    return not any(t == '-o' or rules.hub_opt_denied(t, LOCK_GIT_DENIED)
-                   or t.startswith('-') and rules.hub_opt_denied(t, longs, shorts) for t in head)
+    return not any(t == '-o' or _opt_denied(t, LOCK_GIT_DENIED)
+                   or t.startswith('-') and _opt_denied(t, longs, shorts) for t in head)
 
 
 def _lock_path_only(inv, commands, kit=None, kit_checkout=None):
@@ -764,7 +775,7 @@ def _lock_path_only(inv, commands, kit=None, kit_checkout=None):
     name, args = inv.name, inv.argv
     if name in LOCK_PATH_SCRIPTS:
         return _kit_tool(inv.path, name, inv.cmd, kit, kit_checkout, program=True)
-    if rules.HUB_CODE_PYTHON_RE.match(name):
+    if PYTHON_RE.match(name):
         k = _python_script(args)
         return k is not None and cm.base_name(args[k]) in LOCK_PATH_SCRIPTS and _kit_tool(
             args[k], cm.base_name(args[k]), inv.cmd, kit, kit_checkout)
@@ -817,7 +828,7 @@ def _lock_module(args):
 
 
 def _python_word(t):
-    return bool(rules.HUB_CODE_PYTHON_RE.match(cm.base_name(t)))
+    return bool(PYTHON_RE.match(cm.base_name(t)))
 
 
 def _fed(cmd):
@@ -910,7 +921,7 @@ def _run_words(inv):
     run) is not; it is _launched's."""
     if rules.is_lock_script(inv.path):
         q = 0
-    elif rules.HUB_CODE_PYTHON_RE.match(inv.name):
+    elif PYTHON_RE.match(inv.name):
         k = _python_script(inv.argv)
         if k is None or not rules.is_lock_script(inv.argv[k]):
             k = _lock_module(inv.argv)

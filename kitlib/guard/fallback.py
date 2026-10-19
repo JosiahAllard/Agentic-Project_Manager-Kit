@@ -5,9 +5,6 @@ unclosed quote, an encoded command, a program named by a variable, a word the sh
 The rules have already run on what it did read; check() then looks at the raw text, so an
 unreadable line is never a way around a rule, and a plain line is never denied by it:
 
-  - the word hub (hub.py, tools.hub): the part of the line holding it (from the last ; | & or
-    newline before it to the next) is read again, and a hub tool run there that runs an owner
-    verb (rules.hub_owner_run) is denied (`hub-owner-verb`), in every session but the owner's own.
   - a git or root-search pattern that matches: the text from the match to the next ; | & or
     newline is read again as a command of its own and the rules run on it. A rule that denies it
     gives the deny, its real alternative included; none: the `unreadable` deny, which shows the
@@ -58,8 +55,6 @@ from . import shell as sh
 
 G = r'\bgit(?:\.exe)?\s+(?:-[Cc]\s+(?:"[^"]*"|\'[^\']*\'|\S+)\s+|--?\S+\s+)*'
 GIT_WORD_RE = re.compile(r'(?i)(?<![\w.-])git(?:\.exe)?(?![\w-])')  # git as a word, not .git or GIT_DIR
-# hub as a word: hub.py, tools/hub.py, tools.hub, -m hub (a run of the hub tool is read again there)
-HUB_WORD_RE = re.compile(r'(?i)(?<![\w-])hub(?![\w-])')
 # programs that run text as commands: on an unclean line their commands may be what it hides
 RUNNERS = cm.BASH_SHELLS | cm.PS_SHELLS | {'cmd', 'eval', 'iex', 'invoke-expression', 'source', '.'}
 
@@ -214,36 +209,9 @@ def runs_hidden(inv):
     return None
 
 
-def hub_owner_text(ctx, text, shell, parsed, cwd):
-    """The owner verb a hub tool run in `text` runs (rules.hub_owner_run), read again from the
-    start of the part of the line (after the last ; | & or newline before it) that holds each
-    HUB_WORD_RE match, or None."""
-    seen = set()
-    for m in HUB_WORD_RE.finditer(text):
-        start = max(text.rfind(c, 0, m.start()) for c in ';|&\n') + 1
-        if start in seen:
-            continue
-        seen.add(start)
-        where = cwd_at(parsed, m.start(), cwd) or cwd
-        verb = rules.hub_owner_run(cm.read(segment(text, start), shell, where, home=getattr(ctx, 'home', None)))
-        if verb:
-            return verb
-    return None
-
-
 def check(event, ctx, text, cwd, role, parsed):
     why = WHY % ('; '.join(parsed.unclean) or 'the parser gave no reason')
     shell = parsed.shell
-
-    if not rules.is_owner_session(event, ctx):
-        verb = hub_owner_text(ctx, text, shell, parsed, cwd)
-        if verb:
-            d = rules.refuse('hub-owner-verb', role, '%s Its text runs the hub tool\'s owner verb (%s): %s This '
-                             'session is %s. Ask the owner through a question:' % (
-                                 why, verb, rules.HUB_OWNER_WHY, rules.hub_session(event, ctx)),
-                             rules.hub_ask_alternative(ctx))
-            if d:
-                return d
 
     def reread(start, where):
         p = cm.read(segment(text, start), shell, where, home=getattr(ctx, 'home', None))

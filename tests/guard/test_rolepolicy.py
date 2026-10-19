@@ -889,7 +889,7 @@ class LockVerbs(Base):
                 self.assertIsNone(rolepolicy.check(self.shell(text, 'reviewer', shell='bash'), self.w.ctx()))
 
     def test_git_that_may_run_a_program_or_write_a_file_hands_the_path_on(self):
-        """rolepolicy._git_plain, as rules.HUB_GIT_DENIED refuses rather than allow-lists: git's
+        """rolepolicy._git_plain, as LOCK_GIT_DENIED refuses rather than allow-lists: git's
         read exemption does not hold with a global option but -C, --no-pager and -P (-c,
         --config-env, --exec-path), an option that runs a program or writes a file (--ext-diff,
         --textconv, --output, -o), or an environment assignment on the line (GIT_PAGER,

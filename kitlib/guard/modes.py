@@ -34,7 +34,6 @@ CONFIG_KEY = 'guard_rules'
 DEFAULTS = {
     'unplaced': WARN,           # a write the guard cannot place (kitlib.guard.rules.UNPLACED)
     # dropped as blocks: the owner can turn each back on
-    'hub-named': OFF,           # the hub tool named in text outside a parsed run (fail-closed reading)
     'wrapped-gate': OFF,
     'busy-wait': OFF,
     # dropped as blocks, kept as warnings: what the guard cannot read it cannot place (item 1)

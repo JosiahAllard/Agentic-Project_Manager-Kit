@@ -9,7 +9,7 @@ from hosts.claude.adapter import host as claude_host
 from hosts.codex.adapter.host import ADAPTER as CODEX
 from kitlib import config, pmdata
 from kitlib.config import schema, user
-from kitlib.guard import context, modes, rules
+from kitlib.guard import modes, rules
 from kitlib.host import Action, Decision, hookmain
 
 from . import world as W
@@ -213,12 +213,9 @@ class StrictGitReads(World):
 
 
 class Dropped(World):
-    """Item 2: hub-named (the hub tool named in text outside a parsed run), wrapped-gate and
-    busy-wait are off; unreadable and git-alias only warn; the kept rules still judge such a line;
-    the owner's machine config turns each back on. hub-owner-verb on a parsed run stays deny."""
-
-    def hub_named(self):
-        return W.bash('grep -rn "import hub" .', self.w.wt, sub=True)
+    """Item 2: wrapped-gate and busy-wait are off; unreadable and git-alias only warn; the kept
+    rules still judge such a line; the owner's machine config turns each back on. hub-owner-verb on
+    a parsed run stays deny."""
 
     def wrapped_gate(self):
         return W.bash('python tools/gate.py --full 2>&1 | tail -5', self.w.wt, sub=True)
@@ -233,7 +230,7 @@ class Dropped(World):
         return W.bash('git -c alias.co=checkout co main', self.w.wt, sub=True)
 
     def test_the_kit_defaults(self):
-        for rule, m in (('hub-named', modes.OFF), ('wrapped-gate', modes.OFF), ('busy-wait', modes.OFF),
+        for rule, m in (('wrapped-gate', modes.OFF), ('busy-wait', modes.OFF),
                         ('unreadable', modes.WARN), ('git-alias', modes.WARN)):
             with self.subTest(rule):
                 self.assertEqual(modes.DEFAULTS.get(rule), m)
@@ -242,8 +239,7 @@ class Dropped(World):
 
     def test_an_off_rule_lets_the_call_run_and_says_nothing(self):
         self.w.git.ancestors.add((W.SHA_WT, 'main'))
-        for name, make in (('hub-named', self.hub_named), ('wrapped-gate', self.wrapped_gate),
-                           ('busy-wait', self.busy_wait)):
+        for name, make in (('wrapped-gate', self.wrapped_gate), ('busy-wait', self.busy_wait)):
             with self.subTest(name):
                 self.assertEqual(self.decide(make()), Decision('allow'))
 
@@ -268,9 +264,9 @@ class Dropped(World):
     def test_the_owner_can_turn_each_back_on(self):
         self.w.git.ancestors.add((W.SHA_WT, 'main'))
         self.w.user_config({'guard_rules': dict.fromkeys(
-            ('hub-named', 'wrapped-gate', 'busy-wait', 'unreadable', 'git-alias'), 'deny')})
-        for name, make in (('hub-named', self.hub_named), ('wrapped-gate', self.wrapped_gate),
-                           ('busy-wait', self.busy_wait), ('unreadable', self.unreadable), ('git-alias', self.alias)):
+            ('wrapped-gate', 'busy-wait', 'unreadable', 'git-alias'), 'deny')})
+        for name, make in (('wrapped-gate', self.wrapped_gate), ('busy-wait', self.busy_wait),
+                           ('unreadable', self.unreadable), ('git-alias', self.alias)):
             with self.subTest(name):
                 d = self.decide(make())
                 self.assertEqual((d.verdict, d.rule), ('deny', name), d.reason)
@@ -376,8 +372,8 @@ class InlineAliasJudged(unittest.TestCase):
 
 class HubKept(World):
     """Item 5 keeps the owner-only hub tools: with the kit's default modes, a parsed run of the hub
-    tool's owner verb is denied to any session but the owner's, and code that names the hub site or
-    pipes the hub tool's output into Python is a hub secret."""
+    tool's owner verb is denied to any session but the owner's; a line the parser cannot read is
+    not run, so its text naming the hub tool only warns as unreadable."""
 
     def setUp(self):
         super().setUp()
@@ -402,26 +398,12 @@ class HubKept(World):
         self.assertEqual(self.decide(W.bash('python "%s" questions' % self.hub, self.w.wt, sub=True)),
                          Decision('allow'))
 
-    def test_the_hub_tool_piped_into_python_is_denied(self):
-        self.denied('python "%s" questions --json | python -' % self.hub, 'hub-secrets')
-
-    def test_code_that_imports_the_hub_site_is_denied(self):
-        self.denied('python -c "from kitlib.hubsite import client"', 'hub-secrets')
-
-    def test_an_owner_verb_on_a_line_the_parser_cannot_read_is_denied(self):
-        # unreadable only warns: the fallback reads the part holding the hub tool again
-        for line in ("echo 'x ; python \"%s\" answer Q-1 --choice 1" % self.hub,
-                     "echo 'x ; python -m tools.hub todos done T-1",
-                     "echo 'x\npython \"%s\" approvals approve A-1" % self.hub):
-            with self.subTest(line):
-                self.denied(line, 'hub-owner-verb')
-                d = self.decide(W.bash(line, self.w.wt), environ={context.ROLE_ENV: 'coordinator'})
-                self.assertEqual((d.verdict, d.rule), ('deny', 'hub-owner-verb'), d.reason)
-
-    def test_an_agent_verb_on_such_a_line_only_warns(self):
-        d = self.decide(W.bash("echo 'x ; python \"%s\" questions" % self.hub, self.w.wt, sub=True))
-        self.assertEqual((d.verdict, d.rule), ('allow', rules.WARNED), d.reason)
-        self.assertIn('rule=unreadable', d.reason)
+    def test_a_verb_on_a_line_the_parser_cannot_read_only_warns(self):
+        for verb in ('questions', 'answer Q-1 --choice 1'):
+            with self.subTest(verb):
+                d = self.decide(W.bash("echo 'x ; python \"%s\" %s" % (self.hub, verb), self.w.wt, sub=True))
+                self.assertEqual((d.verdict, d.rule), ('allow', rules.WARNED), d.reason)
+                self.assertIn('rule=unreadable', d.reason)
 
     def test_the_owner_runs_an_owner_verb_on_such_a_line(self):
         d = self.decide(W.bash("echo 'x ; python \"%s\" answer Q-1 --choice 1" % self.hub, self.w.wt))
@@ -509,11 +491,6 @@ class Simplified(World):
                           ('cat "%s/questions/Q-1.json"' % st, self.w.wt)):
             with self.subTest(line):
                 self.passes(W.bash(line, cwd, sub=True))
-
-    def test_code_that_names_the_hub_site_or_the_hub_tool_is_still_denied(self):
-        for line in ('python -c "import kitlib.hubsite"', 'python -c "open(\'tools/hub.py\').read()"'):
-            with self.subTest(line):
-                self.denied(W.bash(line, self.w.wt, sub=True), 'hub-secrets')
 
     def test_a_write_into_the_store_is_still_denied(self):
         st = W.fwd(self.store)
