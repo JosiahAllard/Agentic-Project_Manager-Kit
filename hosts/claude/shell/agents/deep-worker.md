@@ -30,6 +30,8 @@ self-contained: something it needs is missing -> say so in your report rather th
    as your caller: ask them by `SendMessage` where it says stop and ask.
 4. Report by `SendMessage` to the requester (Report, below).
 
+Bulk menial reads or mechanical bulk writes: the helper role (skill subagent-dispatch, "Bulk work to the helper"); small jobs stay direct.
+
 ## Report
 
 `SendMessage` it to the requester (`ListAgents` finds it; gone -> the session named Project

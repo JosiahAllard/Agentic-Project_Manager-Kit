@@ -7,6 +7,7 @@
     "./hosts/claude/shell/agents/consultant.md",
     "./hosts/claude/shell/agents/coordinator.md",
     "./hosts/claude/shell/agents/deep-worker.md",
+    "./hosts/claude/shell/agents/helper.md",
     "./hosts/claude/shell/agents/lander.md",
     "./hosts/claude/shell/agents/pm.md",
     "./hosts/claude/shell/agents/records.md",
