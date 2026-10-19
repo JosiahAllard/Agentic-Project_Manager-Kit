@@ -108,6 +108,27 @@ class Host(object):
             raise ValueError('boot/hook.py --settings-entry printed no {event: [groups]} object')
         return entry
 
+    def managed_path(self):
+        """The default host's machine-wide managed settings file (kitlib.machinesetup.managed):
+        its adapter's optional managed_settings_path(); None when the adapter has none, or names
+        no file on this machine."""
+        import importlib
+        from kitlib.host import registry
+        try:
+            adapter = importlib.import_module(registry.host(registry.default()).adapter).ADAPTER
+        except (ImportError, AttributeError, OSError, ValueError):     # registry.RegistryError
+            return None
+        get = getattr(adapter, 'managed_settings_path', None)
+        return get() if get is not None else None
+
+    def is_admin(self):
+        """Whether this process runs elevated, so it may write under Program Files."""
+        try:
+            import ctypes
+            return bool(ctypes.windll.shell32.IsUserAnAdmin())
+        except (ImportError, AttributeError, OSError):
+            return False
+
     def git_email(self, kit):
         """`git config user.email` in the kit checkout (the user's global value unless the kit
         checkout sets its own), or None when it is unset or git cannot run."""

@@ -39,9 +39,7 @@ Missing any: say what you need, do nothing.
 1. Work from the main checkout, never inside the worktree you are about to
    remove. Confirm its `git status` is clean.
 2. The branch need not contain main: the landing tool merges the main it finds at its turn
-   and gates the merged tree. Any conflict, docs included, whatever the brief's conflict rules
-   say, is a `CONFLICT` verdict, nothing changed (`land.py` aborts them all): STOP and report;
-   the author merges that main and re-gates with `--full` on the merged tip.
+   and gates the merged tree. A conflict is a `CONFLICT` verdict, nothing changed.
 3. **Size check** any doc both sides touched: an auto-merge can silently restore
    text main deleted. The merged file's line count must equal main's count plus
    the branch's net lines for that file
@@ -127,8 +125,7 @@ yes/no; any line you had to judge. No narrative.
 
 ## Kit tools
 
-Start with `python <kit>/tools/preflight.py -C <main checkout>`. First call on a branch: `python <kit>/tools/review_pack.py -C <main checkout> <branch>`.
-Find what you need with `python <kit>/tools/doc_index.py -C <main checkout> --find <topic>` (`--tools` for tools); never read
-`docs/INDEX.md` whole. `<kit>/tools/codemap.py` shows where code lives, `doc_index.py --section "<heading>"` one doc section.
-Use the Grep and Read tools, not shell grep, cat or sed. No tool fits: write your own script in your
-scratch folder, never in the repo.
+Start with `python <kit>/tools/preflight.py -C <main checkout>`. Find what you need with
+`python <kit>/tools/doc_index.py -C <main checkout> --find <topic>`; never read `docs/INDEX.md` whole.
+Use the Grep and Read tools, not shell grep, cat or sed; a script you need
+goes in your scratch folder, never the repo.

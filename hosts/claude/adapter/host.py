@@ -36,6 +36,11 @@ kitlib.host.hookmain.dispatch.
   push(settings)       the hub's push-notification delivery (hosts.claude.adapter.peer.HubPush:
                        a session's peer pipe; docs/action-hub.md "Push notifications"). Optional:
                        tools/hub.py asks for it with getattr, so a host without it has none
+  managed_settings_path()   Claude Code's machine-wide managed settings file,
+                       %ProgramW6432% (else %ProgramFiles%)\\ClaudeCode\\managed-settings.json, which every
+                       account on the machine loads (docs/machine-setup.md "Managed settings");
+                       None when both are unset. Optional: kitlib.machinesetup.extras.Host.managed_path
+                       asks for it with getattr, so a host without it has no managed file
 
 MATCHER is the PreToolUse matcher: exactly the tools a guard rule can refuse (events.FILE_TOOLS,
 events.SHELL_TOOLS, events.READ_TOOLS, mcp__*), the same list as hosts.json's hook.guarded_tools,
@@ -150,6 +155,12 @@ class ClaudeAdapter(object):
 
     def plugin_installer(self):
         return None
+
+    def managed_settings_path(self, environ=None):
+        import os
+        env = os.environ if environ is None else environ
+        root = env.get('ProgramW6432') or env.get('ProgramFiles')      # the 64-bit folder, even from 32-bit Python
+        return os.path.join(root, 'ClaudeCode', 'managed-settings.json') if root else None
 
     def push(self, settings=None):
         """The hub's push-notification delivery object (kitlib.hubsite.push: deliver, is_pm):

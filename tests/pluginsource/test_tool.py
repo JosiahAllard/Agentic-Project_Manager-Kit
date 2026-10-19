@@ -98,6 +98,11 @@ class ToolTest(unittest.TestCase):
     def test_bad_usage_exits_2(self):
         self.assertEqual(self.run_tool('--nope').returncode, 2)
 
+    def test_prune_caches_with_migrate_exits_2(self):
+        r = self.run_tool('--prune-caches', '--migrate')
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn('--prune-caches and --migrate', r.stderr)
+
 
 if __name__ == '__main__':
     unittest.main()

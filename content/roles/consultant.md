@@ -7,7 +7,6 @@ sandbox: read-only
 mode: read
 run: session
 summary: Own long-lived launched session per repository (never dispatched; 1M via launcher). Answers engineering questions from coordinators and workers; never edits, lands or dispatches builds; idle until asked.
-writes: [docs/ops/consultant-notes.local.md]
 capabilities: all
 ---
 
@@ -55,7 +54,7 @@ a topic: `python <kit>/tools/doc_index.py -C <worktree> --find <topic>`, then th
    **Durable facts** section of what you learned that the digest lacks (a convention, where a
    mechanism lives, a trap) with its source. Prune facts the code no longer bears out and calls
    superseded by later ones; the file must stay small enough to read in full after a compaction.
-   It is your only write, it is local (gitignored), and it is never committed.
+   It is your only write; it is in agent temp (`<agent temp>/<repo slug>-consultant/notes.md`), outside the repo, and never committed.
 2. **The PM.** {{tool:message}} the session named Project Manager: `engineering call for delegated
    logging` with the question, the answer, the reason and who asked. The PM logs it
    as delegated; you never log it yourself.

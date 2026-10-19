@@ -52,7 +52,7 @@ from kitlib.machinesetup import owner as mowner
 from kitlib.machinesetup.common import Plan
 from kitlib.worktree import new as wtnew
 from tests import gitfixture
-from tests.gate.fixtures import test_env
+from tests.gate.fixtures import queue_review, test_env
 from tests.home import temp_home
 from tests.lock.helpers import StoreCase
 from tests.realgit import real_git
@@ -202,7 +202,9 @@ class Cycle(object):
         self.assertEqual(gated.source, 'auto')
         self.assertEqual([(r['name'], r['status']) for r in gated.results], [('python-tests', 'PASS')])
         self.assertEqual(self.status(), '')
-        # 5. the PM lands it: merge, gate the merged tree, push, clean up the branch
+        # 5. the coordinator queues the review's LAND verdict; the PM lands it: merge, gate the
+        #    merged tree, push, clean up the branch
+        self.assertEqual(queue_review(self.clone, 'kit/fix-add', tip), ['kit/fix-add'])
         landed = land.Lander(self.clone, 'kit/fix-add', start, tip, git_env=self.env,
                              book_kw=self.book_kw, log_dir=self.logs).run()
         self.assertEqual(landed.code, G.OK, landed.lines)
@@ -268,6 +270,9 @@ class _Slot(object):
 
     def stop_daemons(self):
         pass
+
+    def note_tree(self, tree):
+        pass                    # no lock record to note the tested tree on
 
     def end_tree(self):
         pass

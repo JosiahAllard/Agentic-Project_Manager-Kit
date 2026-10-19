@@ -144,6 +144,83 @@ class Select(unittest.TestCase):
         self.assertEqual(pick(g, ['x.md'])[0], [])
 
 
+class Smoke(unittest.TestCase):
+    """"gate".smoke_steps: added in the default (diff) mode only, manual ones included."""
+    G = gate_of(cmd('py', globs=['*.py']), cmd('boot', manual=True), cmd('proto', globs=['p/*']),
+                cmd('quick', globs=['*.py'], skip_if_selected=['proto']),
+                smoke_steps=['boot', 'quick'])
+
+    def test_the_default_mode_adds_the_smoke_steps_whatever_changed(self):
+        names, why = pick(self.G, ['readme.md'])
+        self.assertEqual(sorted(names), ['boot', 'quick'])
+        self.assertEqual(why, {'boot': 'smoke', 'quick': 'smoke'})
+        names, why = pick(self.G, ['a.py'])
+        self.assertEqual(sorted(names), ['boot', 'py', 'quick'])
+        self.assertEqual(why['quick'], 'changed a.py')        # selected anyway: its own reason
+
+    def test_a_smoke_step_is_never_dropped_by_skip_if_selected(self):
+        names, why = pick(self.G, ['a.py', 'p/x'])
+        self.assertIn('quick', names)
+        self.assertEqual(why['quick'], 'smoke')
+
+    def test_full_only_and_docs_add_no_smoke(self):
+        self.assertEqual(sorted(pick(self.G, [], full=True)[0]), ['proto', 'py'])
+        self.assertEqual(pick(self.G, [], only=['py'])[0], ['py'])
+        g = dict(self.G, docs_only={'globs': ['*.md'], 'steps': ['proto']})
+        self.assertEqual(pick(g, ['a.md'], docs=True)[0], ['proto'])
+
+    def test_unset_changes_nothing(self):
+        g = dict(self.G)
+        del g['smoke_steps']
+        self.assertEqual(pick(g, ['readme.md'])[0], [])
+
+    def test_an_unknown_smoke_or_docs_step_name_refuses_in_build(self):
+        for top in ({'smoke_steps': ['nosuch']},
+                    {'docs_only': {'globs': ['*.md'], 'steps': ['nosuch']}}):
+            with self.assertRaises(S.GateConfigError, msg=top) as cm:
+                S.build(gate_of(cmd('a'), **top), ROOT, 'b', 't')
+            self.assertIn('nosuch', str(cm.exception))
+            self.assertNotIsInstance(cm.exception, S.UnknownStep)
+
+    def test_a_docs_only_section_with_empty_or_missing_steps_refuses_in_build(self):
+        # a docs-only change skips the tests but keeps the scrub; without this a docs-only
+        # gate would run nothing and still write a record
+        for spec in ({'globs': ['*.md'], 'steps': []}, {'globs': ['*.md']}):
+            with self.assertRaises(S.GateConfigError, msg=spec) as cm:
+                S.build(gate_of(cmd('scrub'), docs_only=spec), ROOT, 'b', 't')
+            self.assertIn('"docs_only".steps is empty', str(cm.exception))
+            self.assertIn('scrub step', str(cm.exception))
+        S.build(gate_of(cmd('scrub'), docs_only={'globs': ['*.md'], 'steps': ['scrub']}),
+                ROOT, 'b', 't')
+
+
+class DocsOnly(unittest.TestCase):
+    G = gate_of(cmd('scrub', globs=['*']), cmd('suite', always=True),
+                docs_only={'globs': ['docs/*.md', '*.txt'], 'exclude': ['docs/ops/*'],
+                           'steps': ['scrub']})
+
+    def test_every_path_must_match_its_globs_and_none_its_exclude(self):
+        self.assertTrue(S.docs_only(self.G, ['docs/a.md', 'DOCS/B.MD', 'x/y.txt']))
+        self.assertFalse(S.docs_only(self.G, ['docs/a.md', 'kitlib/a.py']))
+        self.assertFalse(S.docs_only(self.G, ['docs/ops/a.md']))
+
+    def test_no_change_unset_kit_json_and_barred_paths_are_never_docs_only(self):
+        self.assertFalse(S.docs_only(self.G, []))
+        self.assertFalse(S.docs_only(gate_of(cmd('a')), ['docs/a.md']))
+        g = dict(self.G, docs_only={'globs': ['*'], 'steps': ['scrub']})
+        self.assertTrue(S.docs_only(g, ['docs/a.md']))
+        self.assertFalse(S.docs_only(g, ['docs/a.md', '.kit.json']))
+        self.assertFalse(S.docs_only(g, ['docs/a.md', '.KIT.JSON']))
+        self.assertFalse(S.docs_only(g, ['docs/a.md', 'tools/x.py'], barred=['tools\\x.py']))
+
+    def test_docs_mode_runs_exactly_the_docs_steps_with_setup(self):
+        names, why = pick(self.G, ['docs/a.md'], docs=True)
+        self.assertEqual(names, ['scrub'])
+        self.assertEqual(why, {'scrub': 'docs-only'})
+        g = dict(self.G, setup=['{python}', '-c', 'pass'])
+        self.assertEqual(pick(g, ['docs/a.md'], docs=True)[0], ['setup', 'scrub'])
+
+
 class Judge(unittest.TestCase):
     def step(self, **kw):
         spec = cmd('s', **kw)

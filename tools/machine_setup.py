@@ -18,6 +18,13 @@ It writes nothing into any repository: a repository works with the kit with noth
                                                        docs/INDEX.md (and with --stubs, --stack
                                                        their files) into the repository PATH
                                                        (docs/install.md "Committed setup (--repo)")
+  machine_setup.py --managed-settings [--home DIR] [--kit DIR] [--apply]
+                                                       write Claude Code's machine-wide managed
+                                                       settings file (Program Files/ClaudeCode)
+                                                       from the kit's template and the overlay
+                                                       ~/.pm-kit/managed-settings.json instead;
+                                                       --apply needs an elevated terminal
+                                                       (docs/machine-setup.md "Managed settings")
   machine-wide options: --config-dir DIR (repeatable; default: the plugin's account folders, ~/.claude,
                              every ~/.claude-* folder but the machine config's own and each folder
                              of the launcher's accounts and orgs; with --old-kit, the first two)
@@ -72,6 +79,9 @@ def parser():
     mode.add_argument('--old-kit', help='the older kit clone to switch the config folders from')
     mode.add_argument('--fresh', action='store_true', help='the default mode (its old name)')
     mode.add_argument('--repo', help='the committed repo setup of this repository instead')
+    mode.add_argument('--managed-settings', action='store_true',
+                      help="write the default host's machine-wide managed settings file from the "
+                           "kit's template instead (--apply needs an elevated terminal)")
     p.add_argument('--owner-email', default=None, help="the owner's email (the machine config; with "
                    '--repo, .kit.json "owner".email)')
     p.add_argument('--pm-settings', default=None,
@@ -113,6 +123,15 @@ def main(argv=None):
         return machinesetup.EXIT_USAGE if e.code else 0
     safe_stdout()
     out = lambda line: print(line, flush=True)              # noqa: E731
+    if a.managed_settings:
+        given = [n for n in REPO_ONLY + MACHINE_ONLY + ('owner_email',)
+                 if n != 'home' and getattr(a, n) not in (None, False)]
+        if given:
+            return usage('--%s does not go with --managed-settings (it takes --kit, --home and --apply)'
+                         % given[0].replace('_', '-'))
+        home = a.home if a.home is not None else kuser.home_dir()
+        code, _ = machinesetup.run_managed(machinesetup.ManagedContext(home, a.kit), apply=a.apply, out=out)
+        return code
     if a.repo is not None:
         given = [n for n in MACHINE_ONLY if getattr(a, n) not in (None, False)]
         if given:

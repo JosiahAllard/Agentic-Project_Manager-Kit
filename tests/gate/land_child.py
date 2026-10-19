@@ -12,7 +12,7 @@ from kitlib.gate import land, runner
 from kitlib.lock import layout as lay
 from kitlib.lock import run as lockrun
 from kitlib.lock.store import Settings, Store
-from tests.gate.fixtures import compat_book
+from tests.gate.fixtures import compat_book, queue_review
 from tests.lock.helpers import FAST
 
 
@@ -39,6 +39,7 @@ def main(argv):
                 raise SystemExit('land_child: stdin closed before go')
             return runner.merged_gate(lander.root, lander.cfg, lander.expect_main,
                                       log_dir=a['logs'], book_kw=book_kw, slot=lander.slot)
+    queue_review(a['repo'], a['branch'], a['expect_tip'])     # every landing needs a verdict
     out = land.Lander(a['repo'], a['branch'], a.get('expect_main'), a['expect_tip'],
                       wait_s=a.get('wait', 0), git_env=dict(os.environ), book_kw=book_kw,
                       log_dir=a['logs'], merged_gate=held).run()

@@ -34,6 +34,15 @@ class Park(StoreCase):
         for key in rmod.PULL_KEYS:
             self.assertFalse(r.has(key), key)
 
+    def test_parking_a_parked_record_on_another_question_re_points_it(self):
+        self.seed(priced('FOO', **PARKED))
+        change = self.verb('set_status', 'FOO', 'parked', 'Q-003')
+        r = self.get('FOO')
+        self.assertEqual((r.get('state'), r.get('q'), r.get('parked_at')),
+                         ('parked', 'Q-003', '2026-10-01'))
+        self.assertIn('was Q-001', change.subject)
+        self.assertIn('Q-001', ' '.join(change.lines))
+
     def test_park_refusals(self):
         self.seed(priced('FOO'), rec('BAR', state='blocked', blocked_on='live-client'),
                   priced('BAZ', **PARKED))
@@ -41,7 +50,7 @@ class Park(StoreCase):
                           (('FOO', 'parked', 'q28'), Usage),
                           (('FOO', 'open', 'Q-001'), Usage),
                           (('BAR', 'parked', 'Q-001'), Refusal),
-                          (('BAZ', 'parked', 'Q-003'), Refusal)):
+                          (('BAZ', 'parked', 'Q-001'), Refusal)):     # the same question
             with self.assertRaises(exc, msg=args):
                 self.verb('set_status', *args)
 

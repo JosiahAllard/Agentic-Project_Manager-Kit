@@ -36,7 +36,11 @@ tools/land.py).
                  (Lander.tip_gate_check): a base whose "gate" section has no step that is not
                  manual is refused first (nothing could gate a tip or the merge); then every tip
                  has a gate-OK record of exactly that commit written by a `gate.py --full` pass
-                 (kitlib.records.gate_ok.verify_full); a miss names the `gate.py -C <worktree>
+                 (kitlib.records.gate_ok.verify_full), or by a default-mode or docs-only pass the
+                 base's config takes (Lander.select_refusal: the record's diff covers the
+                 landing's, and either the base's "gate".smoke_steps all passed in it and no gate
+                 config file changes, or the change is docs-only under the base's
+                 "gate".docs_only and its steps all passed); a miss names the `gate.py -C <worktree>
                  --full` command that gates it, and, when the kit lands itself and the tip does
                  not contain the base, says to merge <remote>/<main> into the branch first (its
                  own gate.py may predate the record's `full` key). Then the
@@ -45,7 +49,10 @@ tools/land.py).
                  (kitlib.gate.verdicts) by a strong-tier reviewer who is not its author (a
                  verdict carried to the tip, tools/verdict.py carry, counts only when
                  kitlib.gate.carry passes it again here against the base); its
-                 merged gate then runs --full --fresh. Any miss: REFUSED, the lock released, nothing
+                 merged gate then runs --full --fresh. Then the verdict check
+                 (Lander.verdict_check): every other branch, each of a batch, lands only with a
+                 verdict queued for its tip by any reviewer who is not its author, a carried one
+                 checked the same way. Any miss: REFUSED, the lock released, nothing
                  merged. Last, the scope check (Lander.scope_check): every path the branch changes
                  in a scope of a record it holds, in SCOPE_ALWAYS or in a folder store's folder;
                  a miss is a WARNING after the LANDED line while SCOPE_REFUSES is False, else
@@ -68,7 +75,9 @@ tools/land.py).
                  gate.py --full selects them, whatever paths the merge changes; a step that
                  passed in the branch gate
                  of exactly this tree may count without running (kitlib.gate.reuse; never with
-                 --fresh, --full or a batch). Red, or a gate where nothing ran: NOT LANDED, the
+                 --fresh, --full or a batch). A merge that is docs-only under the base's config
+                 (not --full) runs only the "gate".docs_only steps (docs/gate.md "Docs-only
+                 changes"). Red, or a gate where nothing ran: NOT LANDED, the
                  merge dropped (it is only in the landing tree; the landing never moves main),
                  the lock released: FAILED / REFUSED
   7b unchanged   green: the landing tree's HEAD still the merge, no tracked change, no untracked
@@ -77,7 +86,8 @@ tools/land.py).
                  checkout meanwhile (a commit, an edit, a push) reaches neither the gated tree nor
                  the pushed commit
   8  record      green: the gate-OK record for the merge commit (pre-push reads it), its
-                 config_rev the base, its `full` whether the merged gate ran --full
+                 config_rev the base, its `full` whether the merged gate ran --full, its `mode`
+                 "docs" when it ran only the docs-only steps
   9  push        `git push <remote> <merge>:refs/heads/<main>` from the main checkout, never
                  forced. Someone pushed <remote>/<main> to a commit without the merge while the
                  gate ran: the push is refused, NOT LANDED (FAILED, `nothing landed`), the lock
@@ -741,33 +751,107 @@ class Lander(object):
             why = at_landing.ancestry_refusal(self.root, self.cfg, t, env=self.git_env)
             if why:
                 return why
-        return self.tip_gate_check() or self.strict_check() or self.scope_check()
+        return (self.tip_gate_check() or self.strict_check() or self.verdict_check()
+                or self.scope_check())
 
     # ---------------------------------------------------------------- the tips' full gate
 
     def tip_gate_check(self):
         """A locked check (docs/gate.md "Landing"): every branch tip has a gate-OK record for
-        exactly that commit that git still agrees with and that a `gate.py --full` pass wrote
-        (gate_ok.verify_full). A default-mode run's record, a record from before records said
-        whether the gate was --full, and a record of any other commit do not count; an --only run
-        writes none. None, or the first miss: why, and what gates that tip whole
-        (full_gate_advice; REFUSED, nothing merged). It only adds to the merged gate, which runs
-        as before. A base gate that --full selects no step from refuses first (no_full_step).
+        exactly that commit that git still agrees with (gate_ok.verify), and the record lands it
+        (tip_refusal): a `gate.py --full` pass's (gate_ok.full_of), or a default-mode or docs-only
+        pass's that the base config takes (select_refusal). A record from before records said
+        whether the gate was --full, one whose mode is unknown, and a record of any other commit
+        do not count; an --only run writes none. None, or the first miss: why, and what gates
+        that tip whole (full_gate_advice; REFUSED, nothing merged). It only adds to the merged
+        gate. A base gate that --full selects no step from refuses first (no_full_step).
 
         The record's `gate_config` is not compared with any config: the branch gate writes a
         record only for a clean tree, with `config_rev` the tip, so the hash is of the tip's own
         committed config. Re-reading that config here would use the landing kit's defaults and
         schema, which refuse honest records whenever the two kits differ (a kit branch that
         changes the gate's defaults or adds a config key); and the config that decides what
-        lands is the base's, which the merged gate reads."""
+        lands is the base's, which the merged gate reads, and which alone decides whether a
+        record that is not --full counts (a branch never loosens its own landing)."""
         why = self.no_full_step()
         if why:
             return why
         for b, t in self.pairs:
-            _, why = gate_ok.verify_full(self.root, t)
+            why = self.tip_refusal(t)
             if why:
                 return '%s tip %s has no full-gate OK record: %s; %s' % (
                     b, t[:10], why, self.full_gate_advice(b, t))
+        return None
+
+    def tip_refusal(self, tip):
+        """Why `tip`'s gate-OK record does not land it, or None: verify_full's reason, unless the
+        record is a default-mode ("select") or docs-only ("docs") pass that select_refusal takes."""
+        _, why = gate_ok.verify_full(self.root, tip)
+        if why is None:
+            return None
+        rec, _ = gate_ok.verify(self.root, tip)
+        mode = gate_ok.mode_of(rec) if rec is not None else None
+        if mode not in ('select', 'docs'):
+            return why          # no record, one git disagrees with, or one of no known mode
+        more = self.select_refusal(rec, tip, mode)
+        return None if more is None else '%s, and %s' % (why, more)
+
+    def select_refusal(self, rec, tip, mode):
+        """Why a verified record of `tip` that is not --full (`mode` "select" or "docs") does not
+        land it, or None. Everything is read from the base's config (self.cfg), never the tip's.
+        The landing diff is merge-base(tip, base)..tip. A record counts when the files its own
+        diff (its `base`..tip) changes cover the landing diff (the steps it ran were picked for at
+        least that change), and either
+          docs    the landing diff is docs-only under the base (reuse.docs_only_change: its
+                  "gate".docs_only, never a config, hook or strict path) and every base
+                  docs_only step passed in the record (pass, warn or reused); or
+          smoke   the record is a default-mode pass ("select"), the base sets "gate".smoke_steps,
+                  every one of them passed in the record, and the landing diff changes none of the
+                  gate's config files (reuse.config_hits: `.kit.json`, a section file, the hook
+                  module)."""
+        gate = self.cfg.section('gate')
+        smoke = list(gate.get('smoke_steps') or [])
+        if not smoke and not S.docs_steps(gate):
+            return ('the base %s sets no "gate".smoke_steps or "gate".docs_only, so only a --full '
+                    'record lands' % self.expect_main[:10])
+        mb, why = refs.merge_base(tip, self.expect_main, self.root)
+        if not mb:
+            return 'git cannot find the merge base of the tip and %s: %s' % (
+                self.expect_main[:10], why or 'none')
+        changed, why = runner.changed_between(self.root, mb, tip)
+        if changed is None:
+            return 'git cannot list what the tip changes: %s' % why
+        if not refs.is_sha(rec.get('base') or ''):
+            return 'the record names no base, so what its steps were picked for is unknown'
+        gated, why = runner.changed_between(self.root, rec['base'], tip)
+        if gated is None:
+            return 'git cannot list what the record\'s gate saw: %s' % why
+        seen = set(reuse.changed_list(gated))
+        unseen = [p for p in reuse.changed_list(changed) if p not in seen]
+        if unseen:
+            return ('its gate ran against %s, whose diff to the tip leaves out %s: gate the tip '
+                    'again against %s' % (rec['base'][:10], ', '.join(unseen[:10]),
+                                          self.expect_main[:10]))
+        passed = {s.get('name') for s in rec.get('steps') or []
+                  if isinstance(s, dict) and s.get('result') in ('pass', 'warn', 'reused')}
+        if reuse.docs_only_change(self.cfg, gate, changed):
+            missing = [n for n in S.docs_steps(gate) if n not in passed]
+            if not missing:
+                return None
+            return 'the change is docs-only, and the base\'s docs_only step %s did not pass in it' % (
+                ', '.join(missing))
+        if mode != 'select':
+            return 'its gate ran only the docs-only steps, and the change is not docs-only under the base'
+        if not smoke:
+            return ('the change is not docs-only, and the base %s sets no "gate".smoke_steps'
+                    % self.expect_main[:10])
+        hit = reuse.config_hits(self.cfg, changed)
+        if hit:
+            return 'the tip changes the gate\'s config (%s), which only a --full record lands' % (
+                ', '.join(hit[:5]))
+        missing = [n for n in smoke if n not in passed]
+        if missing:
+            return 'the base\'s smoke step %s did not pass in it' % ', '.join(missing)
         return None
 
     def no_full_step(self):
@@ -867,9 +951,23 @@ class Lander(object):
             return ('%s: a branch that changes a strict path lands alone, never in a batch'
                     % self.strict_says(b))
         (b, t), = self.pairs
-        why = self.strict_verdict(b, t)
+        why = self.review_refusal(b, t, strict=True)
         if why:
             return '%s: %s' % (self.strict_says(b), why)
+        return None
+
+    def verdict_check(self):
+        """A locked check (docs/gate.md "Landing" step 4), after strict_check: every branch that
+        changes no strict path lands too only with a verdict queued for its tip by a reviewer who
+        is not its author (review_refusal, without the tier rule), each branch of a batch on its
+        own entry. None, or why not for the first branch, in batch order, that misses (REFUSED,
+        nothing merged)."""
+        for b, t in self.pairs:
+            if b in self.strict_hits:       # strict_check passed it, tier rule and all
+                continue
+            why = self.review_refusal(b, t, strict=False)
+            if why:
+                return '%s: %s' % (b, why)
         return None
 
     def strict_says(self, b):
@@ -878,11 +976,14 @@ class Lander(object):
         return '%s changes strict path %s%s' % (
             b, ', '.join(hits[:STRICT_SHOWN]), ' and %d more' % more if more > 0 else '')
 
-    def strict_verdict(self, b, t):
-        """None when the verdict queued for branch `b` lets its tip `t` land on a strict path
-        (self.strict_review set to it); else why not. A carried entry (verdicts.carry) lands only
-        when kitlib.gate.carry.check passes again, from the commit reviewed to `t` against
-        self.expect_main (self.strict_carry set to its facts)."""
+    def review_refusal(self, b, t, strict):
+        """None when the verdict queued for branch `b` lets its tip `t` land; else why not. Every
+        landing: an entry that can be used, queued (not marked failed), at `t`, its reviewer not
+        the author (is_author). A carried entry (verdicts.carry) lands only when
+        kitlib.gate.carry.check passes again, from the commit reviewed to `t` against
+        self.expect_main. `strict` (a branch that changes a strict path) adds the tier rule
+        (strong_alias, light_alias) and sets self.strict_review to the entry and self.strict_carry
+        to the carry's facts, which strict_escalate reports."""
         common, why = repo.common_dir(self.root)
         if not common:
             return 'its verdict queue cannot be found: %s' % (why or 'no git common dir')
@@ -900,6 +1001,7 @@ class Lander(object):
             return ('the verdict was given at %s, and the branch is at %s: review and queue the '
                     'tip, or carry the verdict (tools/verdict.py carry) when a main sync is all '
                     'that changed' % (entry['tip'][:10], t[:10]))
+        facts = None
         if verdicts.CARRIED in entry:
             # Never the stored facts: the carry is checked again here, against the base this
             # landing merges onto (docs/gate.md "Carrying a verdict forward").
@@ -910,22 +1012,24 @@ class Lander(object):
                 return ('the verdict was given at %s and carried to %s, but the carry does not '
                         'hold against %s %s: %s; review and queue the tip'
                         % (reviewed[:10], t[:10], self.cfg.main_branch, self.expect_main[:10], why))
-            self.strict_carry = facts
-        strong, weak, why = tier_models()
-        if strong is None:
-            return 'the strong-tier models cannot be read: %s' % why
-        model = entry['reviewer_model']
-        if strong_alias(model, strong, weak) is None and light_alias(entry, strong, weak) is None:
-            return ('the reviewer ran on %s, not a strong-tier model (%s, or a full model id '
-                    'naming it; hosts.json "tiers"); %s (land.REVIEWER_MODELS_BY_AUTHOR), and '
-                    'its author is %s'
-                    % (model, ', '.join(sorted(strong - weak)) or 'none', light_rule(),
-                       entry['author']))
+        if strict:
+            strong, weak, why = tier_models()
+            if strong is None:
+                return 'the strong-tier models cannot be read: %s' % why
+            model = entry['reviewer_model']
+            if (strong_alias(model, strong, weak) is None
+                    and light_alias(entry, strong, weak) is None):
+                return ('the reviewer ran on %s, not a strong-tier model (%s, or a full model id '
+                        'naming it; hosts.json "tiers"); %s (land.REVIEWER_MODELS_BY_AUTHOR), and '
+                        'its author is %s'
+                        % (model, ', '.join(sorted(strong - weak)) or 'none', light_rule(),
+                           entry['author']))
         if is_author(entry):
             return ('the reviewer %s (%s) is its author (%s): it lands with a review by an agent '
                     'that did not write it' % (entry['reviewer_id'], entry['reviewer'],
                                               entry['author']))
-        self.strict_review = entry
+        if strict:
+            self.strict_review, self.strict_carry = entry, facts
         return None
 
     def strict_escalate(self):
@@ -1503,7 +1607,7 @@ class Lander(object):
         out = runner.merged_gate(self.root, self.cfg, self.expect_main, full=self.full,
                                  slug='+'.join(self.branches), log_dir=self.log_dir, say=self.say,
                                  book_kw=self.book_kw, lane_args=lane_args, reuse=plan,
-                                 slot=self.slot, tree=self.tree)
+                                 slot=self.slot, tree=self.tree, docs=True)
         self.gate_logs = out.facts.get('log_dir')
         return out
 
@@ -1513,12 +1617,15 @@ class Lander(object):
 
     def write_record(self, started, results):
         """The gate-OK record for the merge commit (pre-push reads it), its config_rev the
-        base; its path. Raises gate_ok.RecordError."""
+        base, its mode "docs" when the merged gate ran only the docs-only steps; its path. Raises
+        gate_ok.RecordError."""
+        docs = self.gate_out is not None and self.gate_out.facts.get('docs') is True
         path, _ = gate_ok.record_pass(self.root, self.merge, runner.gate_config(self.cfg),
                                       runner.kit_identity(), runner.repo_name(self.cfg, self.root),
                                       started, runner.record_steps(results or []),
                                       base=self.expect_main, config_rev=self.expect_main,
-                                      source=self.source(), full=bool(self.full))
+                                      source=self.source(), full=bool(self.full) and not docs,
+                                      mode='docs' if docs else None)
         return path
 
     def push(self, started, results):

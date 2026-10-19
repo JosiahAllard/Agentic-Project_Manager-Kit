@@ -109,8 +109,9 @@ class Entries(unittest.TestCase):
         first, second, third = [json.loads(line) for line in r.stdout.splitlines()]
         from hosts.codex.adapter.lock import READ_TOOLS
         self.assertEqual({t['name'] for t in second['result']['tools']}, READ_TOOLS)
-        self.assertTrue(third['result']['isError'])
-        self.assertEqual(third['result']['structuredContent']['error']['code'], 'forbidden')
+        # A retired owner write is no tool of the server's at all: an unknown tool.
+        self.assertNotIn('result', third)
+        self.assertEqual(third['error']['code'], -32602)
 
     def test_the_hub_server_lists_its_tools(self):
         requests = [{'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {}},
