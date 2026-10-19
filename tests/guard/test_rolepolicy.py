@@ -1152,8 +1152,9 @@ class LockMcp(Base):
         return Action('mcp', tool=tool, cwd=self.w.wt, agent='a1' if role else None, agent_role=role)
 
     def test_every_lock_tool_has_a_verb(self):
-        from kitlib.lockmcp import server
-        self.assertEqual(set(rolepolicy.MCP_VERBS), set(server.TOOLS))
+        # the served reads, and the retired owner writes a server from an older release still serves
+        from kitlib.lockmcp import OWNER_ONLY, server
+        self.assertEqual(set(rolepolicy.MCP_VERBS), set(server.TOOLS) | set(OWNER_ONLY))
 
     def test_the_read_tools_are_status_for_every_mode(self):
         for name in ('lock_snapshot', 'lock_wait_change', 'lock_stats', 'lock_run', 'lock_hold'):

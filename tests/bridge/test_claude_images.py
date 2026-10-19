@@ -16,6 +16,7 @@ from optional.bridge.hosts.claude.sessions import ClaudeDirectory,NativeSessionE
 from optional.bridge.core.messages import DeliveryError
 from optional.bridge.win.frontend import FrontendInspector,NativeFrontend
 from optional.bridge.win.service import BrokerService
+from kitlib.proc import process
 from kitlib.proc.process import own_ctime,proc_ctime
 
 DIRECTORY_SOURCE='optional/bridge/hosts/claude/sessions.py'
@@ -109,8 +110,13 @@ class ClaudeImagesTests(unittest.TestCase):
             'transcript_path':str(transcript),'permission_mode':'auto','hook_event_name':'PreToolUse',
             'tool_name':'mcp__kit__bridge_connections','tool_input':{},'tool_use_id':'toolu_second_image',
             'mcp_server':{'name':'kit','source':'plugin'}}
-        child.stdin.write(json.dumps(event).encode()+b'\n');child.stdin.flush()
-        self.assertEqual(child.stdout.readline(),b'hook-done\r\n')
+        # The service verifies the hook within the hook's own request budget. A machine-wide
+        # process listing per ancestry walk made that cost follow the machine's load and
+        # process count, and the hook then gave up with nothing enrolled.
+        with patch('kitlib.proc.process.snapshot',wraps=process.snapshot) as listings:
+            child.stdin.write(json.dumps(event).encode()+b'\n');child.stdin.flush()
+            self.assertEqual(child.stdout.readline(),b'hook-done\r\n')
+        self.assertEqual(listings.call_count,0)
         binding=next(item for item in self.controller.pairs.registered() if item.identity.native_session_id==session)
         self.assertEqual(self.sources.resolve(binding).executable,self.pythonw)
         self.assertEqual(self.sources.sender_mode(binding),'prompting')

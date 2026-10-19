@@ -45,12 +45,35 @@
     ["kitlib/hubsite/web/**", ["hubsite"]],
     ["tests/hubsite/**", ["hubsite"]],
     ["tools/hub.py", ["hubsite"]],
-    ["kitlib/**", ["skills"]]
+    ["kitlib/**", ["skills"]],
+    ["kitlib/**", ["host"]],
+    ["docs/*.md", ["content"]],
+    ["content/roles/*", ["launcher"]],
+    ["hosts/*/shell/agents/*", ["launcher"]],
+    ["content/skills/*/SKILL.md", ["docs"]]
   ],
   "by_name": ["hosts/**", "githooks/**", "mcp/**", "installer/**", ".claude-plugin/**"],
   "prose": ["docs/**", "*.md", ".gitignore"],
   "always": ["scrub"],
   "serial": [],
+  "smoke": [
+    "tests.guard.test_rules",
+    "tests.guard.test_entry",
+    "tests.guard.test_rolepolicy",
+    "tests.guard.test_place",
+    "tests.guard.test_shell",
+    "tests.guard.test_selftest",
+    "tests.gate.test_land",
+    "tests.gate.test_land_select",
+    "tests.gate.test_verdicts",
+    "tests.gate.test_detect",
+    "tests.lock.test_api",
+    "tests.lock.test_cli",
+    "tests.lock.test_holds",
+    "tests.lock.test_queue",
+    "tests.commit.test_commit_approval",
+    "tests.commit.test_codex"
+  ],
   "skip_fails": [
     ["tests.lock.test_slot_treekill", "the proof that kill_retry is not needed; its confine() skips when no fake cpu slot fits the gate's affinity, which would silently void it"],
     ["tests.lock.test_release_daemons", "the only proof that the kill path and the release spare a shared build daemon; ReleaseCase.setUp's confine() skips when no fake cpu slot fits the gate's affinity, which would silently void it"]

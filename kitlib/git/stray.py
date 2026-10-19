@@ -9,7 +9,9 @@ the main checkout itself or from any linked worktree of it; `check(path)` turns 
 `[FAIL]` lines tools/checkout_guard.py `--main-stray` prints (exit 1).
 
 "Could not tell" is never "clean": a git failure is a WARNING (code 0) or, under `allow_tracked`
-(the lander's post-merge gate), a `[FAIL]` (code 1). Nothing here prints or exits.
+(a repo's landing gate step, run in the `_landing` linked worktree), a `[FAIL]` (code 1). The
+flag changes nothing else: tracked and untracked strays count the same with or without it.
+Nothing here prints or exits.
 """
 import os
 
@@ -20,16 +22,14 @@ STRAY_FAIL = ('[FAIL] stray in the main checkout: %s (%s) - a write went to the 
 CLEAN = 'main checkout clean: no stray untracked or uncommitted files'
 
 
-def changes(path, allow_tracked=False):
+def changes(path):
     """`([(xy, path)], None)`: the MAIN checkout's changes a branch author could have caused, found
     from `path` (the main checkout or any linked worktree of it); or `([], why)`.
 
     Counted: every untracked, non-ignored file (`--untracked-files=all`, so a stray in a new folder
     is named as the file, not the folder) and every modified, added, deleted or renamed tracked
-    path. Not counted, the tracked entries only, in exactly one case: `allow_tracked` AND `path`
-    is in the main checkout: there the tracked edits, a merge in progress included, are the
-    lander's own. Neither condition alone is enough (an agent shell's default cwd is often the
-    main checkout; an abandoned MERGE_HEAD would hide its changes from every branch's gate)."""
+    path, a merge in progress in the main checkout included. The lander merges in the `_landing`
+    linked worktree, never in the main checkout, so no tracked edit there is the lander's own."""
     place = repo.classify(path)
     top = repo.main_checkout_toplevel(path, place)
     if top is None:
@@ -38,17 +38,16 @@ def changes(path, allow_tracked=False):
     entries, why = refs.status(top, untracked='all')
     if entries is None:
         return [], 'git status failed in the main checkout (%s): %s' % (top, why)
-    if allow_tracked and place.kind == repo.MAIN:
-        entries = [e for e in entries if e[0] == '??']
     return entries, None
 
 
 def check(path, allow_tracked=False):
     """`(code, [line])`: one STRAY_FAIL line per change changes() finds, and code 1; or the CLEAN
     line and 0. A lookup failure is a WARNING and 0 ("could not tell" is not a stray, and a hung
-    git must not fail every gate), but under `allow_tracked` it is a `[FAIL]` and 1: a post-merge gate on the main branch must not pass
-    unchecked."""
-    entries, error = changes(path, allow_tracked)
+    git must not fail every gate), but under `allow_tracked` it is a `[FAIL]` and 1: a landing
+    gate must not pass unchecked. `allow_tracked` changes nothing else (the name is kept for the
+    `merged_args` that repos already pass)."""
+    entries, error = changes(path)
     if error:
         if allow_tracked:
             return 1, ['[FAIL] could not check the main checkout for stray files: %s' % error]
