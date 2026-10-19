@@ -11,7 +11,7 @@ import tempfile
 import unittest
 
 from kitlib import delegations
-from kitlib.config import user
+from kitlib.config import migration, user
 from kitlib.delegations import schema
 
 
@@ -102,7 +102,7 @@ class Location(Home):
         self.assertIsInstance(cm.exception, delegations.DelegationError)
 
     def test_the_old_folder_is_never_read(self):
-        old = os.path.join(self.home, '.claude-pm-kit')
+        old = os.path.join(self.home, migration.OLD_DIR_NAME)
         os.makedirs(old)
         with open(os.path.join(old, delegations.FILE_NAME), 'w', encoding='utf-8') as f:
             json.dump(DRAFT, f)
@@ -306,7 +306,7 @@ class Schema(Home):
 
 
 class Exclusions(Home):
-    """The hard exclusions (E1-E5): fixed in code, refused whatever the file says."""
+    """The hard exclusions (E1 to E5): fixed in code, refused whatever the file says."""
 
     def hit(self, eid, command=None, **kw):
         if command is not None:
@@ -325,10 +325,10 @@ class Exclusions(Home):
                     'psexec -s a', 'schtasks /Create /TN a /TR b', 'schtasks.exe /Run /TN a',
                     'Register-ScheduledTask -TaskName a', 'New-ScheduledTaskPrincipal -UserId a',
                     'Set-ScheduledTask -TaskName a', 'Set-ExecutionPolicy Unrestricted',
-                    'Start-Process pwsh -Verb RunAs', 'Start-Process pwsh -VERB x',
-                    'Start-Process pwsh -Verb:RunAs',
+                    'New-Thing pwsh -Verb RunAs', 'New-Thing pwsh -VERB x',
+                    'New-Thing pwsh -Verb:RunAs',
                     'New-Thing -RunLevel Highest', 'New-Thing -RunL Highest',
-                    'Start-Process a -Credential admin', 'Start-Process a -Cred admin', 'tool /RL HIGHEST'):
+                    'New-Thing a -Credential admin', 'New-Thing a -Cred admin', 'tool /RL HIGHEST'):
             with self.subTest(cmd=cmd):
                 self.hit('E1', cmd)
         self.assertIn("'runas' is elevation (E1", self.hit('E1', 'runas /user:admin a'))
@@ -337,7 +337,8 @@ class Exclusions(Home):
         for cmd in ('Remove-Item Q:/home/.claude/settings.json', 'Remove-Item Q:/srv/settings.local.json',
                     'Remove-Item Q:/home/.claude.json', 'Remove-Item Q:/home/.claude',
                     'Remove-Item Q:/srv/app/.codex/config.toml', 'Remove-Item Q:/home/.pm-kit/config.json',
-                    'Remove-Item Q:\\home\\.claude-pm-kit\\x', 'Remove-Item Q:/srv/app/CLAUDE.md',
+                    'Remove-Item Q:\\home\\%s\\x' % migration.OLD_DIR_NAME, 'Remove-Item Q:/srv/app/CLAUDE.md',
+                    'Remove-Item Q:/home/.codex.json',
                     'Remove-Item Q:/srv/app/AGENTS.md', 'Remove-Item Q:/home/owner-delegations.json',
                     'Remove-Item Q:/srv/app/.kit.json', 'Remove-Item Q:/kit/content/roles/pm.md',
                     'Remove-Item Q:/kit/content/skills/x/SKILL.md', 'Remove-Item Q:/srv/app/.git/hooks/pre-push',

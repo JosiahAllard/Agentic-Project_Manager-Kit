@@ -14,8 +14,11 @@ operation_exclusions) are fixed here; the file cannot widen or disable them.
 import collections
 import re
 
+from kitlib.config import user
+from kitlib.config.migration import OLD_DIR_NAME
 from kitlib.config.types import (ConfigError, Bool, Enum, Field, Int, ListOf, Obj, Str, T,
                                  is_note)
+from kitlib.host import registry
 
 SCHEMA_VERSION = 1
 ID = r'D-[0-9]{3,}'
@@ -163,11 +166,15 @@ E1_WORDS = {'runas', 'sudo', 'gsudo', 'psexec', 'psexec64', 'schtasks', 'registe
             'new-scheduledtaskprincipal', 'set-scheduledtask', 'set-executionpolicy', '/rl'}
 E1_PARAMS = (('-verb', 5), ('-runlevel', 4), ('-credential', 3))
 # Matched as a substring of the token with a `/` added, so a folder name matches with or
-# without its trailing separator.
-E2_FRAGMENTS = ('settings.json', 'settings.local.json', '.claude.json', '.claude/', '.codex/',
-                '.pm-kit/', '.claude-pm-kit/', 'claude.md', 'agents.md', 'owner-delegations',
-                '.kit.json', 'content/roles', 'content/skills', '.git/hooks', '.git/config',
-                'hookspath', 'machine_setup', 'render_content')
+# without its trailing separator. Every host's own paths (hosts.json profile owner_paths: its
+# rules file and settings folder) and its home config file (state_directory + .json) are named
+# from the host registry, and the machine config folder, old and new, from kitlib.config.
+E2_FRAGMENTS = tuple(dict.fromkeys(f.lower() for f in (
+    ('settings.json', 'settings.local.json', user.DIR_NAME + '/', OLD_DIR_NAME + '/', 'agents.md',
+     'owner-delegations', '.kit.json', 'content/roles', 'content/skills', '.git/hooks',
+     '.git/config', 'hookspath', 'machine_setup', 'render_content')
+    + tuple(registry.union('owner_paths'))
+    + tuple(d.rstrip('/') + '.json' for d in registry.union('state_directory')))))
 E3_FRAGMENTS = ('machine_lock', 'machine-lock', 'lock_ui', 'lockmcp', 'lock_server', 'lock_set_',
                 'lock_hold')
 E4_WORDS = {'iex', 'invoke-expression', 'invoke-command', 'cmd', 'wsl'}

@@ -4,7 +4,7 @@
 
 ## Where it is
 
-`~/.pm-kit/owner-delegations.json`, beside the machine config (`kitlib.config.user.DIR_NAME`). Only the owner writes it. Nothing moves it: there is no setting and no environment variable, and the old `~/.claude-pm-kit` folder is never read. Tests pass `home=` with a temp folder.
+`~/.pm-kit/owner-delegations.json`, beside the machine config (`kitlib.config.user.DIR_NAME`). Only the owner writes it. Nothing moves it: there is no setting and no environment variable, and the retired machine config folder (`kitlib.config.migration.OLD_DIR_NAME`) is never read. Tests pass `home=` with a temp folder.
 
 `load(home=None)` returns `Delegations(path, schema, operations)`. It raises these errors:
 
@@ -67,7 +67,7 @@ These are fixed in `kitlib/delegations/schema.py`, and the file cannot lift them
 | Id | What is refused |
 |---|---|
 | E1 elevation | `elevated: true`; `runas`, `sudo`, `gsudo`, `psexec`, `psexec64`, `schtasks`, `Register-ScheduledTask`, `New-ScheduledTaskPrincipal`, `Set-ScheduledTask`, `Set-ExecutionPolicy`, `/RL`; a prefix of `-Verb`, of `-RunLevel` (4 characters or more) or of `-Credential` (3 or more) |
-| E2 settings, rules and kit control files | any token holding one of: `settings.json`, `settings.local.json`, `.claude.json`, `.claude/`, `.codex/`, `.pm-kit/`, `.claude-pm-kit/`, `CLAUDE.md`, `AGENTS.md`, `owner-delegations`, `.kit.json`, `content/roles`, `content/skills`, `.git/hooks`, `.git/config`, `hooksPath`, `machine_setup`, `render_content` |
+| E2 settings, rules and kit control files | any token holding one of: `settings.json`, `settings.local.json`, the machine config folder (old and new name), every host's own paths (hosts.json `owner_paths`: `CLAUDE.md`, `.claude/`, `AGENTS.md`, `.codex/`), every host's home config file (its `state_directory` plus `.json`, as `.claude.json`), `AGENTS.md`, `owner-delegations`, `.kit.json`, `content/roles`, `content/skills`, `.git/hooks`, `.git/config`, `hooksPath`, `machine_setup`, `render_content` |
 | E3 the machine lock's owner controls | any token holding `machine_lock`, `machine-lock`, `lock_ui`, `lockmcp`, `lock_server`, `lock_set_` or `lock_hold` |
 | E4 opaque code | `iex`, `Invoke-Expression`, `Invoke-Command`, `.`, `cmd`, `wsl`; `powershell`/`pwsh` without `-File`, or with `-Command`, `-EncodedCommand`, `-ec` (or a prefix of either) or a bare command before `-File`; `python` (`py`, `pythonw`, `python3`) with an option holding `c` or `m` before the script; `bash`, `sh`, `zsh`, `dash` with an option holding `c` |
 | E5 launcher options the owner keeps | a prefix of `--no-agent`, `--prompt`, `--force`, `--replace` or `--pid` (with or without `=value`), because argparse accepts prefixes; `install-autostart`; `homes` |
