@@ -14,8 +14,7 @@ Go down only when the step above genuinely cannot, and say why.
 3. **Text to speech** - announcer lines only.
 4. **Local music generation** - music only (menu, match and victory themes, stingers over a few
    seconds), never sound effects. ACE-Step via `python <kit>/optional/comfy/comfy_gen.py music`
-   (MIT; `<kit>/knowledge/asset-generation/MODELS.md`). It re-runs itself under the machine lock
-   (kind local-ai) and keeps a private GPU self-lock per run. Short runs while exploring; ask for
+   (MIT; `<kit>/knowledge/asset-generation/MODELS.md`). Short runs while exploring; ask for
    `[Instrumental]`. `check` fails: start and install nothing, say so. Record every session,
    failures included, in the repo's `docs/ops/assets.md`: tags, seconds, seed, what you measured,
    the owner's verdict once you have it.
@@ -35,8 +34,7 @@ Go down only when the step above genuinely cannot, and say why.
 
 Trim silence at both ends; remove DC offset; fade a couple of milliseconds in and out; resample to
 the game's rate; normalise to a peak target leaving headroom (the mixer pitch-shifts and overlaps
-these). Use the project's tool if it has one, and print what changed: a step that silently altered
-a clip looks identical to one that did nothing.
+these). Use the project's tool if it has one, and print what changed.
 
 Add no dependencies: a modelling tool's bundled audio library decodes compressed formats without
 an install.
@@ -50,8 +48,7 @@ last sample, trailing silence, largest jump between neighbouring samples.
 - **Read the largest jump against what the sound should do.** A tone's own slope is
   `2*pi*f/rate` times its amplitude, so a bright note legitimately reads high; far above that,
   landing mid-sustain rather than on an attack, is a real discontinuity.
-- **Compare against the set, not nothing.** Dump every existing sound and put the new one beside
-  them: fine alone and 10 dB louder than its neighbours is a defect, and only the comparison shows
-  it.
+- **Compare against the set, not nothing.** Put the new clip beside every existing sound: 10 dB
+  louder than its neighbours is a defect.
 - **Look at the spectrogram:** a click is a vertical stripe; a truncated tail a hard edge; all
   hiss a wash with no structure.

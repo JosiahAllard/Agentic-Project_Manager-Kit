@@ -26,6 +26,5 @@ description: Use when you build or fix on a branch - as worker, senior-worker, s
 - Land, merge to the main branch, push, force-push or rewrite its history; `reset --hard` or `git clean`.
 - Weaken a test or a check to get green, or retry a failing run more than once without a new idea.
 - Review your own work as if you were independent, or keep going on a theory the evidence has already contradicted.
-- Write the owner's clear-session marker.
 
 Details: skill shell-and-worktree-traps; `<kit>/docs/gate.md`.

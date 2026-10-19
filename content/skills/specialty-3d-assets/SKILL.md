@@ -7,9 +7,9 @@ description: Use when your brief says to load it - building a 3D asset as a Blen
 
 Dispatch: senior-worker at least, never weak-worker; reads the repo profile's **Branches and worktrees**, **Build and test**, **Shared resources** and **Art**.
 
-Read `creative.md` beside this file first: the brief block, options first, generation, the limits you keep yourself, delivery and the critique. A reader of your contact sheet should say what each object is, who would use it and what it feels like, without being told.
+Read `creative.md` beside this file first: the brief block, options first, generation, the limits you keep yourself, delivery and the critique.
 
-1. Inputs: what to build, the art direction it matches, the FEEL block, its real-world size in the project's units and what it sits next to, where it lives (asset path, the scene or material that uses it). Size missing: ask; scale is the classic scripted-asset failure. No art direction in the profile's **Art** section (the default profile has none): stop and say so.
+1. Inputs: what to build, the art direction it matches, the FEEL block, its real-world size in the project's units and what it sits next to, where it lives (asset path, the scene or material that uses it). Size missing: ask. No art direction in the profile's **Art** section (the default profile has none): stop and say so.
 2. Say once, in your first report, which category the brief is: parametric hard-surface (props, housings, frames, panels, barriers, blocky weapons, architecture) is what scripts do well; faces, cloth, creatures and hand-painted detail they do badly. Then make the best version the method allows.
 3. New with a creative choice: options first (`creative.md`); Step 0 is generated images or rough blockouts, published, then stop.
 4. Write the script, not the mesh: named constants at the top for what they control, a comment where a number is load-bearing; build from primitives, explicit vertex sections and modifiers. Changing the shape means changing a number. Nobody edits the mesh by hand, you included.

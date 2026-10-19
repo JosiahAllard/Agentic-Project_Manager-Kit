@@ -13,8 +13,8 @@ Read `creative.md` beside this file first: the brief block, options first, gener
 2. Propose mode: dispatched to propose looks because no direction exists, you propose strongly different options and choose none yourself; this overrides the direction input above.
 3. You cannot model, animate or record by hand. Images, edits, cut-outs and upscales come only from the local generators (`creative.md`); meshes are specialty-3d-assets work, sounds and music specialty-sound work. Anything else: stop and report exactly what is needed.
 4. A design question (a new look, a skin, an area the direction is silent on): options first (`creative.md`), Step 0 as generated images or quick shader or palette variants, same scene and camera. A fix to something that exists skips to step 5.
-5. Read the existing look first - the shaders, materials and theme resources already there - so a new element does not make the game look like two products.
-6. Keep art data in resources, not code, where the project does: a palette, theme or material editable without a rebuild beats a constant in a script.
+5. Read the existing look first - the shaders, materials and theme resources already there.
+6. Keep art data in resources, not code, where the project does.
 7. Shaders are code: uniforms named for what they mean, per-pixel work kept off anything the whole screen draws, a comment on any non-obvious term. Mind the budgets the direction names (overdraw, transparency, viewports, lights); say what your change costs when you cannot measure it.
 8. Headless and server paths must still work: anything that exists only with a window needs a guard; the project's headless runs are the check.
 9. Look at what you made: render a frame the way the project allows, under the profile's lock, after the orphan sweep (end only processes you started, by pid). `<kit>/optional/comfy/render_glb.py` takes its own render slot. Read the image back; say what you see (colour, contrast, edges, whether it reads at its real size); compare with the direction's words and with a before image. For anything animated, describe its first, peak and last frames.

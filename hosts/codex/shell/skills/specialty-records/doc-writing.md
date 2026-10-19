@@ -5,8 +5,7 @@ Shared by the specialty-records and specialty-spec skills; the same bytes in eac
 - **State, not story.** Living docs (`docs/ops/` registries, decision-log shards, open-item lists)
   hold open items only. Closing an item = deleting its line.
 - The backlog store (`docs/backlog/`) is the only progress tracker and is never hand-edited:
-  setting or closing a record is the kit's `backlog.py` tool, not a docs commit. There is no
-  `STATUS.md` or `ROADMAP.md` to also update, and no rename log or per-story changelog to keep.
+  setting or closing a record is the kit's `backlog.py` tool, not a docs commit.
 - Entry format: `ID | status | area | keywords | ref (commit, file:line or doc section)`, 300
   characters at most. Keywords over sentences.
 - No rationale, evidence, dates of progress or "previously / corrected": the commit message is the

@@ -22,7 +22,7 @@ You transcribe and place. A fact that looks wrong or contradicts the file: say s
 
 - Edit a path the profile's **Records** section forbids, or any code, test, tool, CI, configuration or memory file.
 - Invent an owner decision, or a question for the owner.
-- Delete an open item (narrative, rationale and closed items may go: the commit message carries them).
+- Delete an open item.
 - Land, merge to the main branch or push.
 
 ## Report

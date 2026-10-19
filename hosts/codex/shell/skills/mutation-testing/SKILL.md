@@ -5,7 +5,7 @@ description: Use when you write or review a guard/regression test, or build or r
 
 # Guard tests and mutation harnesses
 
-1. Every guard test is shown to fail: mutate the production line it guards, watch the test fail, restore the line. One you cannot make fail is decorative (a class-loader guard was once a tautology).
+1. Every guard test is shown to fail: mutate the production line it guards, watch the test fail, restore the line. One you cannot make fail is decorative.
 2. Mutate in a throwaway worktree at the pre-change commit, never in place in a working checkout, another worker's checkout or the shared kit. Heavy or repeated suites run under the machine lock (skill machine-lock-run).
 3. Test input that can silently substitute for the thing under test is the same failure as a test that stays green when it is deleted: make the substitution impossible, or assert which one ran.
 4. Pair every absence assertion ("X does NOT appear") with a positive case in the same class that really produces X.

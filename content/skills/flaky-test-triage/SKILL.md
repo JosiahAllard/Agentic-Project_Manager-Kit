@@ -10,7 +10,7 @@ description: Use when a load-sensitive or timing-dependent test fails intermitte
 3. Expiry AT the budget means the event never came; satisfied late means the work was slow. Compare the duration to the work's nominal cost: a ~34x margin (20 s budget, 0.58 s work) is a dropped event; ~1.3x (400 ms deadline, ~100 ms of polls after Windows' 15.6 ms timer granularity) is genuine slowness.
 4. Before changing a timeout, compare deadline, nominal work cost, polling cadence and machine load.
 5. Reproduce on the unchanged base too: it tells an existing failure from a new regression. Use an isolated scratch worktree.
-6. Comparing branch and base: interleave and pair the runs in the same window. Sequential runs in different windows measure the machine, not the code (one commit gave 3/3 red in a busy six-minute window and 17/17 green when quiet, the base beside it 13/14).
+6. Comparing branch and base: interleave and pair the runs in the same window. Sequential runs in different windows measure the machine, not the code.
 7. Report the exact failure, the timings and sample counts; label any run on a shared machine "shared machine". Heavy repeat runs go under the machine lock (skill machine-lock-run).
 
 ## Never

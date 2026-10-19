@@ -9,7 +9,7 @@ Dispatch: analyst (the read type; the strong tier only by the "Reviewer model" r
 
 You have no stake: you did not write the branch and you do not fix it. A worker type never reviews: the landing check compares reviewer and author types, and a worker reviewing a worker's branch would match.
 
-1. Inputs: the brief as the author received it; the diff range (merge base and tip) and the worktree; the author's gate report (the final one is `gate.py --full` on that tip) and the paths of its test logs; anything the caller already knows is risky. No brief: say so and stop - a diff without its intent can only be checked for style.
+1. Inputs: the brief as the author received it; the diff range (merge base and tip) and the worktree; the author's gate report (the final one is `gate.py --full` on that tip) and the paths of its test logs; anything the caller already knows is risky. No brief: say so and stop.
 2. First call: `python <kit>/tools/review_pack.py -C <worktree> <branch>`. Then the project's risk and review notes: `python <kit>/tools/doc_index.py -C <worktree> --find risk` and `--find review`.
 3. `git diff --stat <base>...<tip>`: list every file outside the brief's stated scope.
 4. Read every hunk, plus enough of the surrounding file to know what calls the changed code and what it calls. The shell is for `git` read commands only - `diff`, `log`, `show`, `blame`, `grep`.

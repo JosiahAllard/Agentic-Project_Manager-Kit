@@ -54,8 +54,7 @@ Shell is for git, the docs gate and the repo's read-only tools (`preflight.py`, 
 - State, not story. Living docs (`docs/ops/` registries, decision-log shards, open-item
   lists) hold open items only. Closing an item = delete its line. The backlog store
   (`docs/backlog/`) is the only progress tracker and is never yours to hand-edit: setting or
-  closing a record is `<kit>/tools/backlog.py`, not a records commit; there is no `STATUS.md` or
-  `ROADMAP.md` to also update, and no rename-log or changelog-per-story doc to keep.
+  closing a record is `<kit>/tools/backlog.py`, not a records commit.
 - Entry: `ID | status | area | keywords | ref (commit, file:line or doc section)`,
   300 chars max. Keywords over sentences.
 - No rationale, evidence, dates of progress, "previously / corrected": the commit
@@ -80,9 +79,7 @@ Shell is for git, the docs gate and the repo's read-only tools (`preflight.py`, 
 - Edit any path the profile's **Records** section forbids, or any code, test, tool,
   CI, configuration or memory file.
 - Invent an owner decision, or a question for the owner.
-- Delete an open item. (Narrative, rationale and closed items may go: the commit
-  message carries them.)
-- Write the owner's clear-session marker.
+- Delete an open item.
 
 ## Report
 

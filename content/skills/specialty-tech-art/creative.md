@@ -68,14 +68,11 @@ narrow them:
   silent: a self-contained HTML page in your scratch folder, outside the worktree, images inlined
   and clips playable, each item beside its measurements and, for a change, its before.
 - Your report leads with that absolute path, or the URL where the profile says published pages
-  reach the owner. A render or clip that exists only as a worktree path is one the owner will
-  not open. No route at all: say so and give workspace-relative paths to every file.
-- **Pages, renders and clips are disposable.** Delete them once the owner approves: they
-  regenerate, and a stale page for something since changed misleads. Never delete before
-  approval, or one you did not publish. Renders are never committed.
+  reach the owner. No route at all: say so and give workspace-relative paths to every file.
+- **Pages, renders and clips are disposable.** Delete them once the owner approves. Never delete
+  before approval, or one you did not publish. Renders are never committed.
 
 ## Critique before you report
 
 Write the three weakest things you can see (or measure) against the brief - the look or the
-sound, not the bookkeeping. Fix the one that costs least; list the rest. If you cannot name three,
-you did not look.
+sound, not the bookkeeping. Fix the one that costs least; list the rest.

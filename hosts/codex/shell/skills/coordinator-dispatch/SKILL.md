@@ -35,7 +35,7 @@ Dispatch traps (built-in planners that cannot write, output files are no rescue 
 - Holds: role; the owner's words verbatim where they matter; verified facts; **exact files and sections
   to read**; scope + files *not* theirs + their owners; shared resources assigned; test gate (final: `gate.py --full` on the exact tip);
   report wanted; no land, merge or push; for code work the entry files and symbols you know
-  (path:Symbol) - a brief with no paths costs the worker about 35 calls. Brief names doc topics
+  (path:Symbol). Brief names doc topics
   to look up, never a pasted rule. Where the repo has a brief template (`--find brief`), follow it.
 - Every agent starts with `python <kit>/tools/preflight.py -C <worktree>`. Briefs point at `python <kit>/tools/codemap.py -C <worktree>`
   and `python <kit>/tools/doc_index.py -C <worktree> --section "<heading>"` before any search; agents use their search
@@ -75,7 +75,7 @@ each host's tier-to-model map) is `<kit>/docs/ROSTER.md`.
   the pick only. A fix to something the owner already approved skips to the fix.
 - Visual output: as the repo profile says; default a self-contained HTML (images inlined base64)
   in the agent's scratch folder, report leading with its absolute path. Never relay a bare
-  worktree image path; an image nobody opened has not been reviewed.
+  worktree image path.
 
 ## Shared resources and measurements
 
@@ -86,7 +86,7 @@ each host's tier-to-model map) is `<kit>/docs/ROSTER.md`.
   reported with sample size; the rule applied literally; any after-the-fact reading stated
   separately.
 - GPU generation never overlaps an engine, network or render run.
-- Private scratch folder per agent - shared file names get overwritten.
+- Private scratch folder per agent.
 - Before trusting "nothing is running", look at the actual processes.
 
 ## While agents run
@@ -99,7 +99,6 @@ each host's tier-to-model map) is `<kit>/docs/ROSTER.md`.
   it is a reviewer, then start fresh from a short written summary; never park a large-context
   agent to resume later for a small fix.
 - A background run dies with its agent: tell its replacement to check logs first.
-- Few long-running agents: each notification costs a turn over your whole context.
 - **When agents die together** (an API error or usage limit stops every running agent at once):
   check shared resources first - orphaned processes, stale locks, ports, main vs remote - then
   resume each by continuing it with a short state summary: what is running, what died, what to

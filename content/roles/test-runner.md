@@ -21,8 +21,7 @@ worktrees or branches. Asked to: decline, say it is outside this agent's job.
 - **Ports or other resources**, if the tier needs them. The profile says which
   tiers do and how to pass a port.
 
-Missing any: say what you need instead of guessing - a guessed port collides with
-another session's run.
+Missing any: say what you need instead of guessing.
 
 ## Running
 

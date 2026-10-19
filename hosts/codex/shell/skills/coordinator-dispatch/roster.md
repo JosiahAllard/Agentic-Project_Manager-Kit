@@ -30,14 +30,9 @@ coordinator profile lists the roles it actually has; use only those. Roles are n
   preparation) goes to the worker (standard tier), whatever the branch's risk.
 - The worker = default coding, low/medium risk (`--find risk`): additive content, UI, pure logic
   with tests, known-cause fixes, behaviour-preserving moves and renames (brief names **Moves and
-  renames**; its equivalence check is not optional). Coding ladder by need:
-  weak-worker (light/high: Low, small and well-defined, expected under 100k tokens) -> worker
-  (standard/medium: Low, Medium) -> strong-worker (strong/medium: High-risk build and fix work -
-  API changes, live fixes, ordinary tool features, generated-data wiring; never plan-only or
-  sync/prep) -> senior-worker (strong/high: concurrency, networking, simulation or ordering,
-  migrations, CI config, landing/gate/lock tools, build-cache correctness, codegen design; builds
-  and plans) -> deep-worker (deep/xhigh, own session: root cause or concurrency work
-  senior-worker failed at or plainly cannot do). weak-worker not installed -> the worker.
+  renames**; its equivalence check is not optional). Coding ladder by need (roles above):
+  weak-worker -> worker -> strong-worker -> senior-worker -> deep-worker (root cause or
+  concurrency work senior-worker failed at or plainly cannot do). weak-worker not installed -> the worker.
   strong-worker not installed -> the worker raised to strong. Never the host's general-purpose
   agent for code. An escalation = reassign upward with its findings, not a failure. A
   weak-worker's branch is reviewed like a worker's: the reviewer by the rule below.
@@ -51,7 +46,7 @@ coordinator profile lists the roles it actually has; use only those. Roles are n
   strong tier is coding or design work: it goes to a role on the ladder above. A built-in
   explorer's or planner's answer that reads thin is asked once more raised to strong; say so in
   status.
-- **Reviewer model** (this is the rule's one home). The reviewer is pinned to the light tier
+- **Reviewer model**. The reviewer is pinned to the light tier
   at high effort; its model follows the tier of the role that built the branch.
   The first row that fits:
   1. Built by strong-worker, senior-worker or deep-worker -> raise to strong.
@@ -59,22 +54,18 @@ coordinator profile lists the roles it actually has; use only those. Roles are n
   3. Otherwise -> raise to strong.
 
   A light reviewer's "blocking" claim is verified before it holds a landing: read the cited code
-  path yourself or ask a strong-tier review. Haiku overstated severity twice in the reviewer A/B
-  (`<kit>/docs/model-ab.md`, "Reviewer A/B on planted bugs").
+  path yourself or ask a strong-tier review.
 - Effort is not settable per dispatch: pick the role for it. High risk -> strong-worker, or
   senior-worker for the kinds the ladder names. Only when senior-worker has been defeated, or
   plainly will be, on a race or crash root-cause or subtle concurrency (never a build or a
   plan): request a deep-worker session; say in status when and why.
-- The deep-worker is never a subagent dispatch: it is its own session - own window, deep tier,
-  long auto-compact window - for the most difficult issues only. You request it; the PM launches
-  it. Write a self-contained brief file, then message the PM: the brief path, your session name
+- The deep-worker: you request it; the PM launches it. Write a self-contained brief file, then message the PM: the brief path, your session name
   as requester, and a slug. The PM runs `python <kit>/tools/launch.py deep --plan` first. The
   session reports to you by message; review its branch like any other, then tell the PM to stop
   it (`python <kit>/tools/launch.py stop --name deep-<slug>`).
 - The repo has a running consultant session (`consultant-<repo>` in the host's session list):
   message engineering questions there before the PM; owner matters still go to the PM, which logs
   the consultant's calls as delegated.
-- The researcher = ideas, modes, mechanics, prior art; read-only. Output = concepts for the owner
-  to pick; the chosen one -> the spec-writer before any builder sees it.
+- The researcher's chosen concept -> the spec-writer before any builder sees it.
 - Pass/fail checks whose log nobody needs -> the cheapest role the profile lists; none
   listed -> the worker.
