@@ -359,7 +359,7 @@ class LocalAcceptance(fixtures.GateRepoCase):
                                    book_kw=self.book_kw, log_dir=self.logs)
         self.assertEqual(gated.code, 0, gated.lines)
         record, why = gate_ok.verify(self.task.worker, result['tip'],
-                                    gate_config=load(self.task.worker).section('gate'))
+                                    gate_config=runner.gate_config(load(self.task.worker)))
         self.assertIsNone(why)
         self.assertEqual(record['base'], narrower_base)
         self.assertNotEqual(record['base'], self.task.base)

@@ -18,6 +18,20 @@
   As a preflight report hook it is `daily_full:summary_lines`.
 - Exit codes: 0 green or skipped, 1 a step red, 2 usage or off, 4 the tree or its gate could not be readied (recorded red), 5 another run holds the tree (nothing recorded). A lock usage refusal, such as an unknown kind, is exit 2 and recorded red.
 
+## Bisect
+
+With `"daily_full".bisect` set (docs/kit-json.md), a red run looks for the commit that turned its red steps red, still holding the tree's lock (`kitlib/dailyfull/bisect.py`). Its keys: `max_probes` (default 5, at most 50; 0 turns the bisect off), `prefix` (the record id prefix; unset, nothing is filed) and `session` (the session the filed record carries). Unset, nothing is bisected.
+
+- Only a red of steps is bisected: a red `infra`, or a run with an `error`, is not.
+- The search runs over `git rev-list --first-parent G..S`: S is the red run's commit, G the commit of the latest earlier green run that is an ancestor of S. No such green run: `not run: no earlier green run is an ancestor of <sha>`.
+- The first probe is S itself. Green there, the verdict is `did not reproduce: possible flake` and nothing is filed. Red, a binary search finds the first red commit, at most `max_probes` probes in all; a cap reached first names the range the culprit lies in.
+- A probe switches the daily worktree to the commit, plans that commit's own gate and runs only the red steps (and `setup`) through `runner.gated`, in a machine-lock slot of its own, logging to `<log dir>/bisect-<n>-<sha10>`. A commit whose gate lacks a red step counts as green for it. A switch, config or plan failure, a lock refusal, a failed setup or a red step that did not run stops the bisect as `inconclusive: <why>`. The worktree is put back at S afterwards.
+- The run's `result.json` gains `bisect`: `{good, bad, culprit, probes, verdict}` (each probe `{sha, verdict, red}`), plus `filed` (the record id) and `note` when they apply. The run prints `daily: bisect: <verdict> (<n> probe(s))`.
+
+When a probe reproduced the red and `prefix` is set, the red is filed through the backlog library, every store check included, as `<prefix>-DAILY-RED-<SHA10>` (`kitlib/dailyfull/file.py`). SHA10 is the culprit's, or S's when only a range was found. The scope is the paths the culprit changed against its first parent, or `none`. A repository on the implicit default store files in the PM data branch's store. Filing is idempotent: an id already held is not added again, and a priced record is never priced again.
+
+The price comes from the machine config's `daily_red_ruling` (docs/kit-json.md "Machine config keys"), read when the record is filed, so no ruling id sits in a tracked file. Set: priority 1, `priority_by` pm, under that ruling. Unset: priority 2, `priority_by` agent, and the result's `note` says so. Tests: `tests/dailyfull/test_bisect.py`.
+
 ## The schedule
 
 The kit registers no task for it (above); the repository's owner does. A task whose program is `python.exe` is a console program started by a process that has no console, and Windows gives such a program a new console and shows its window (`kitlib/proc/job.py`, "No console window from a parent without a console"); for a task that runs as the signed-in user, that window is on the desktop. For no window, the task's program is `pythonw.exe` and its first argument the carrier, `tools/no_window.py`:

@@ -10,6 +10,9 @@ within "landing".reuse_max_age_h hours. The key is the sha256 of the canonical J
   - the hash of the gate config (gate_ok.config_hash, as the gate-OK record's);
   - the kit's identity: the hash of every file under the kit's kitlib/ and tools/, the
     interpreter's path and version (kit_identity; never the kit's commit);
+  - the change: the sorted paths the gate selects by (a branch gate's changed paths, a
+    landing's base..merge), since a step such as the kit's `kit_tests.py --select` picks its
+    tests by the change without naming {base};
   - its inputs: every file git shows in the work tree (tracked, or untracked and not ignored)
     that matches its `globs` or its `content`.globs, `exclude` NOT subtracted, by sha256.
 A file git ignores is never an input: a step that reads one must not ask for reuse.
@@ -106,22 +109,36 @@ def _group(spec):
     return r if isinstance(r, str) and r else None
 
 
-def never_hits(cfg, changed):
-    """The paths of `changed` reuse never crosses: `.kit.json`, a config section file, the hook
-    module, and "landing".reuse_never."""
-    never = [CONFIG_NAME] + [f for f in (cfg.section_file(n) for n in schema.SECTIONS) if f]
+def config_hits(cfg, changed):
+    """The paths of `changed` that are the gate's own config under `cfg`: `.kit.json`, a config
+    section file and the hook module."""
+    own = [CONFIG_NAME] + [f for f in (cfg.section_file(n) for n in schema.SECTIONS) if f]
     hook = cfg.hook()
     if hook:
-        never.append('%s/%s.py' % (cfg.tools_dir.replace('\\', '/').strip('/'), hook['module']))
-    never = [n.replace('\\', '/').lower() for n in never]
+        own.append('%s/%s.py' % (cfg.tools_dir.replace('\\', '/').strip('/'), hook['module']))
+    own = [n.replace('\\', '/').lower() for n in own]
+    return [p for p in changed if p.replace('\\', '/').lower() in own]
+
+
+def never_hits(cfg, changed):
+    """The paths of `changed` reuse never crosses: the gate's config (config_hits) and
+    "landing".reuse_never."""
+    own = set(config_hits(cfg, changed))
     globs = cfg.section('landing')['reuse_never']
-    return [p for p in changed if p.replace('\\', '/').lower() in never or S._match(p, globs)]
+    return [p for p in changed if p in own or S._match(p, globs)]
 
 
 def strict_hits(cfg, changed):
     """The paths of `changed` that match a strict path: STRICT_DEFAULTS (imported, never
     copied). `cfg` is not read: `.kit.json` has no key that adds a strict path."""
     return [p for p in changed if S._match(p, list(STRICT_DEFAULTS))]
+
+
+def docs_only_change(cfg, gate, changed):
+    """steps.docs_only under `gate` (the config the decision is read from: the branch's in a
+    branch gate, main's in a landing), barring every path reuse never crosses (never_hits: the
+    config files and the hook module) and every strict path (strict_hits)."""
+    return S.docs_only(gate, changed, barred=never_hits(cfg, changed) + strict_hits(cfg, changed))
 
 
 def _change_why(cfg, changed):
@@ -306,10 +323,15 @@ def tools_of(step, subs):
     return out
 
 
-def step_key(root, cfg, spec, step, files, kit):
+def changed_list(changed):
+    """The change as the key holds it: sorted, distinct, posix paths."""
+    return sorted({p.replace('\\', '/') for p in changed})
+
+
+def step_key(root, cfg, spec, step, files, kit, changed=()):
     """`(key, inputs)` of `step` in the work tree at `root` (`files`: list_files; `kit`:
-    kit_identity). NotCacheable when no file is an input: the key would not change with
-    whatever the step really reads."""
+    kit_identity; `changed`: the paths the gate selects by). NotCacheable when no file is an
+    input: the key would not change with whatever the step really reads."""
     subs = _subs(root)
     ins = inputs(root, spec, files)
     if not ins:
@@ -323,6 +345,7 @@ def step_key(root, cfg, spec, step, files, kit):
         'config': gate_ok.config_hash(runner.gate_config(cfg)),
         'kit': kit,
         'inputs': ins,
+        'changed': changed_list(changed),
     }
     key = hashlib.sha256(gate_ok.canonical_json(material).encode('utf-8')).hexdigest()
     return key, ins
@@ -491,8 +514,9 @@ def _none(names, why):
     return Plan({}, [PREFIX + 'NONE %s: %s' % (n, why) for n in names])
 
 
-def plan_steps(root, cfg, chosen, base, now=None, facts=None):
-    """The Plan for `chosen` in the work tree at `root`, the gate-wide checks passed."""
+def plan_steps(root, cfg, chosen, base, changed, now=None, facts=None):
+    """The Plan for `chosen` in the work tree at `root`, the gate-wide checks passed (`changed`:
+    the paths the gate selects by, part of each key)."""
     specs, asking = _asking(cfg, chosen)
     if not asking:
         return NOTHING
@@ -508,7 +532,7 @@ def plan_steps(root, cfg, chosen, base, now=None, facts=None):
             said[s.name] = 'NONE %s: %s' % (s.name, why)
             continue
         try:
-            key, ins = step_key(root, cfg, specs[s.name], s, files, kit)
+            key, ins = step_key(root, cfg, specs[s.name], s, files, kit, changed)
         except NotCacheable as e:
             said[s.name] = 'NONE %s: %s' % (s.name, e)
             continue
@@ -533,11 +557,11 @@ def plan_steps(root, cfg, chosen, base, now=None, facts=None):
                                                                     hit['stored_utc'])
               for n, hit in hits.items()}
     keep = _keeper(root, cfg, specs, [s for s in asking if s.name in keys and s.name not in hits],
-                   keys, folder, facts or {})
+                   keys, folder, facts or {}, changed)
     return Plan(reused, [PREFIX + said[s.name] for s in asking], keep)
 
 
-def _keeper(root, cfg, specs, steps, keys, folder, facts):
+def _keeper(root, cfg, specs, steps, keys, folder, facts, changed):
     """keep(results) -> lines: store each of `steps`' results whose key (`keys`: {name: (key,
     inputs)}, made before the run) is the same after it, then prune. Never raises."""
     def keep(results):
@@ -549,7 +573,7 @@ def _keeper(root, cfg, specs, steps, keys, folder, facts):
             kit = kit_identity() if todo else None
             for s in todo:
                 try:
-                    key, ins = step_key(root, cfg, specs[s.name], s, files, kit)
+                    key, ins = step_key(root, cfg, specs[s.name], s, files, kit, changed)
                     if key != keys[s.name][0]:
                         what = ('its inputs changed while the gate ran' if ins != keys[s.name][1]
                                 else 'its key changed while the gate ran (the kit, a program or '
@@ -594,8 +618,11 @@ def planner(root, cfg, branch, tip, base, merge, prior, fresh=False, full=False,
             why = landing_why(root, cfg, base, merge, prior, fresh, full)
             if why:
                 return _none([s.name for s in asking], why)
+            changed, why = runner.changed_between(root, base, merge)
+            if changed is None:
+                raise RuntimeError('git cannot list the merged paths: %s' % why)
             facts = {'head': merge, 'branch': branch, 'batch': batch}
-            return plan_steps(root, cfg, chosen, base, now=now, facts=facts)
+            return plan_steps(root, cfg, chosen, base, changed, now=now, facts=facts)
         return _guarded(cfg, chosen, make)
     return reuse
 
@@ -611,6 +638,6 @@ def branch_plan(top, cfg, chosen, base, changed, full=False, only=None, head=Non
         why = branch_why(cfg, changed, full, only)
         if why:
             return _none([s.name for s in asking], why)
-        return plan_steps(top, cfg, chosen, base, now=now,
+        return plan_steps(top, cfg, chosen, base, changed, now=now,
                           facts={'head': head, 'branch': branch})
     return _guarded(cfg, chosen, make)
