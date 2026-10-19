@@ -30,6 +30,8 @@ still pulls, with `git branch -d` (never -D).
 `abandon` tags the tip `archive/<slug>` (annotated, `abandoned: <why>`, local), every refusal
 running before the tag, then removes the tree and deletes the branch with `git update-ref -d <ref>
 <tip>` while the tag still holds that tip. Backlog records still pulled by the branch are reported.
+On a LANDED tree holding uncommitted work it saves that work under the tag instead, then removes
+the tree (`_abandon_landed_dirty`); on a landed clean tree it refuses.
 
 Exit codes: OK 0; REFUSED 1 (refused, a leftover exists, git failed, or `git branch -d` refused
 after the removal); CONFIG 2 (the kit configuration was refused).
@@ -40,6 +42,8 @@ import fnmatch
 import json
 import os
 import re
+import shutil
+import tempfile
 
 from kitlib import kitroot
 from kitlib import pieces
@@ -1002,16 +1006,16 @@ def make_tag(main, tag, tip, message):
     return rc, err or out
 
 
-def pick_tag(ctx, slug, tip):
+def pick_tag(ctx, slug, tip, same=None):
     """`(tag, commit it holds or '', None)`: archive/<slug>; with archive_next_free the first of
-    archive/<slug>, -2, -3, ... that is free or already on `tip`. `(tag, None, why)` when git
-    cannot tell what `tag` holds: never taken for a free name."""
+    archive/<slug>, -2, -3, ... that is free or already on `tip` (or on a commit `same` accepts).
+    `(tag, None, why)` when git cannot tell what `tag` holds: never taken for a free name."""
     tag = ARCHIVE + slug
     held, why = tag_tip(ctx.main, tag)
     if held is None or not ctx.s['archive_next_free']:
         return tag, held, why
     n = 1
-    while held and held != tip:
+    while held and held != tip and not (same and same(held)):
         n += 1
         tag = '%s%s-%d' % (ARCHIVE, slug, n)
         held, why = tag_tip(ctx.main, tag)
@@ -1177,6 +1181,10 @@ def _abandon(ctx, argument, why, keep_branch, today):
         return REFUSED
     merged, why_not = refs.is_ancestor(tip, base, main)
     if merged:
+        work = dirty(ctx, path)[0]
+        if work:
+            return _abandon_landed_dirty(ctx, path, registered_path, slug, branch, tip, name,
+                                         len(work), why, keep_branch, today)
         ctx.say('refused   %s: %s is already in %s %s - nothing to abandon. Remove it'
                 ' with `%s %s`; nothing was tagged or removed'
                 % (path, name, up, base[:10], s['tool'], handle(ctx, registered_path)))
@@ -1240,6 +1248,134 @@ def _abandon(ctx, argument, why, keep_branch, today):
     if branch:
         report_pulls(ctx, base, tip, branch)
     return status
+
+
+def snapshot_tree(path):
+    """`(tree, None)`: the tree of the worktree at `path` as it stands (tracked changes, staged or
+    not, and untracked files that are not ignored), written through a throwaway index so neither
+    the files nor the worktree's own index change; `(None, why)` when git fails."""
+    folder = tempfile.mkdtemp(prefix='kit-abandon-')
+    env = dict(git_env(), GIT_INDEX_FILE=os.path.join(folder, 'index'))
+    try:
+        for args in (('read-tree', 'HEAD'), ('add', '-A', '--', '.'), ('write-tree',)):
+            rc, out, err = git(path, *args, env=env)
+            if rc != 0 or (args == ('write-tree',) and not out):
+                return None, failure(args, rc, err)
+        return out, None
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+
+
+def saved_work(main, commit, tree, tip):
+    """True when `commit` is exactly `tree` on the one parent `tip`: a previous run's saved work."""
+    rc, out, _ = git(main, 'log', '-1', '--format=%T %P', commit)
+    return rc == 0 and out == '%s %s' % (tree, tip)
+
+
+def _abandon_landed_dirty(ctx, path, registered_path, slug, branch, tip, name, count, why,
+                          keep_branch, today):
+    """`--abandon` on a LANDED tree that holds uncommitted work (the plain verb refuses the work,
+    and the commits are in the base: each verb used to name the other). Every check of the plain
+    verb runs first; then the work is saved as a commit on `tip` under the annotated tag
+    archive/<slug>, the tree is reset to its HEAD (`reset --hard`, `clean -d`, never -x: build
+    output goes with the tree as in the plain verb) only while it still matches the saved commit,
+    and removed; the branch goes with `git branch -d`. A file written between that last match and
+    the reset is lost: the window is narrowed, not closed."""
+    main, s = ctx.main, ctx.s
+    nothing = 'nothing was tagged or removed'
+    outside = not is_workstream(ctx, path)
+    logged = kept_reflog(ctx, path, tip, False) if outside else None
+    if outside and logged is None:
+        return REFUSED
+    _, _, ignored, why_not = dirty(ctx, path)
+    if ignored is None:
+        ctx.say('refused   %s: its status could not be read (%s); %s' % (path, why_not, nothing))
+        return REFUSED
+    if ignored:
+        ctx.say('refused   %s has %s. %s.' % (path, ignored_reason(ignored, path),
+                                             nothing[0].upper() + nothing[1:]),
+                '  rerun    %s %s --abandon "<why>"%s' % (
+                    s['tool'], handle(ctx, registered_path),
+                    ' --keep-branch' if keep_branch else ''))
+        return REFUSED
+    why_link = holders.link_reason(path)
+    if why_link:
+        ctx.say('refused   %s: %s; %s' % (path, why_link, nothing))
+        return REFUSED
+    held = holders.blockers(path)
+    if held:
+        ctx.say('refused   %s is held; nothing was tagged and git was NOT run' % path)
+        ctx.describe(path, held)
+        return REFUSED
+    if not clear_disposable(ctx, path):
+        return REFUSED
+    tree, why_tree = snapshot_tree(path)
+    if tree is None:
+        ctx.say('refused   %s: its uncommitted work could not be read (%s); %s'
+                % (path, why_tree, nothing))
+        return REFUSED
+
+    def same(commit):
+        return saved_work(main, commit, tree, tip)
+
+    tag, existing, why_tag = pick_tag(ctx, slug, None, same)
+    if existing is None:
+        ctx.say('refused   %s: cannot read tag %s (%s); %s' % (path, tag, why_tag, nothing))
+        return REFUSED
+    if existing and not same(existing):
+        ctx.say('refused   tag %s already exists on %s, not on the uncommitted work of %s; %s'
+                % (tag, existing[:10], name, nothing))
+        return REFUSED
+    if existing:
+        commit = existing
+        ctx.say('reused    tag %s already holds this work (a previous run made it)' % tag)
+    else:
+        message = 'abandoned: %s\n\nuncommitted work on %s at %s\nworktree %s\ndate %s\n' % (
+            why, ('branch ' + branch) if branch else 'detached HEAD', tip,
+            os.path.normpath(registered_path), (today or datetime.date.today()).isoformat())
+        rc, commit, err = git(main, 'commit-tree', tree, '-p', tip, '-F', '-',
+                              stdin=message.encode('utf-8'))
+        if rc != 0 or not commit:
+            ctx.say('refused   %s: could not commit its uncommitted work (%s); %s'
+                    % (path, failure(('commit-tree',), rc, err), nothing))
+            return REFUSED
+        rc, err = make_tag(main, tag, commit, message)
+        if rc != 0:
+            ctx.say('refused   could not create tag %s: git tag exited %s: %s; nothing was removed'
+                    % (tag, rc, err or '?'))
+            return REFUSED
+        got, why_tag = tag_tip(main, tag)
+        if got != commit:
+            ctx.say('refused   tag %s %s after it was made; nothing was removed'
+                    % (tag, 'does not hold %s' % commit[:10] if got is not None else
+                       'could not be read (%s)' % why_tag))
+            return REFUSED
+    ctx.say('saved     uncommitted work (%d) of %s as %s under tag %s (on %s, already in %s);'
+            ' see it: git diff %s %s' % (count, path, commit[:10], tag, tip[:10], s['upstream'],
+                                        tip[:10], tag))
+    kept = ('  kept     tag %s holds the saved work%s. Nothing was forced.'
+            % (tag, ', and branch %s' % branch if branch else ''))
+    if outside and not unmoved(ctx, path, tip, logged):
+        ctx.say(kept)
+        return REFUSED
+    now, why_now = snapshot_tree(path)
+    head = git(path, 'rev-parse', 'HEAD')[1]
+    if now != tree or head != tip:
+        ctx.say('failed    %s changed after its work was saved (%s); it was NOT reset or removed'
+                % (path, why_now or ('HEAD is %s' % head[:10] if head != tip else
+                                     'the files differ')), kept)
+        return REFUSED
+    for args in (('reset', '-q', '--hard', 'HEAD'), ('clean', '-q', '-f', '-d')):
+        rc, _, err = git(path, *args)
+        if rc != 0:
+            ctx.say('failed    %s: %s; git worktree remove was NOT run'
+                    % (path, failure(args, rc, err)), kept)
+            return REFUSED
+    ctx.say('reset     %s to %s (its uncommitted work is under tag %s)' % (path, tip[:10], tag))
+    if not git_remove(ctx, path, registered_path):
+        ctx.say(kept)
+        return REFUSED
+    return delete_branch(ctx, branch, keep_branch)
 
 
 def branch_slug(ctx, branch):
