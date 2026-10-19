@@ -11,7 +11,8 @@ from kitlib.backlog import record
 from kitlib.backlog import roles as R
 from kitlib.config import schema
 
-BUILDERS = ('weak-worker', 'worker', 'senior-worker', 'opus-worker', 'strong-worker', 'tech-artist', 'asset-smith', 'sound-smith')
+BUILDERS = ('weak-worker', 'worker', 'senior-worker', 'opus-worker', 'strong-worker', 'tech-artist', 'asset-smith', 'sound-smith',
+            'helper')
 READ_ONLY = ('reviewer', 'test-runner', 'researcher', 'consultant')
 ROLES = ('owner', 'pm', 'coordinator', 'deep-worker', 'lander', 'records', 'spec-writer') + \
     BUILDERS + READ_ONLY

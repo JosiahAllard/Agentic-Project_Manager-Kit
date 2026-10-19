@@ -31,6 +31,7 @@ commits, the gate, follow-ups, the report, the kit tools and what you never do. 
 - Resolve merge conflicts with your file-edit tool only, never a scratch script that rewrites a
   tracked file; one command per call.
 - A review or test-only brief: return findings or PASS/FAIL and edit nothing.
+- Bulk menial reads or mechanical bulk writes: the helper role (skill subagent-dispatch, \"Bulk work to the helper\"); small jobs stay direct.
 
 ## Moves and renames
 

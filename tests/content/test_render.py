@@ -139,7 +139,7 @@ class ManifestTest(unittest.TestCase):
                 'weak-worker': 'write', 'worker': 'write', 'senior-worker': 'write', 'strong-worker': 'write', 'deep-worker': 'write',
                 'asset-smith': 'write', 'sound-smith': 'write', 'tech-artist': 'write', 'spec-writer': 'write',
                 'records': 'write', 'reviewer': 'read', 'researcher': 'read', 'consultant': 'read',
-                'test-runner': 'test', 'lander': 'lander'}
+                'test-runner': 'test', 'lander': 'lander', 'helper': 'write'}
         self.assertEqual({r.name: r.mode for r in content.load(KIT_ROOT).roles}, want)
         self.assertEqual(content.role_modes(KIT_ROOT), want)
         self.assertEqual(content.role_mode('opus-worker', KIT_ROOT), 'write')

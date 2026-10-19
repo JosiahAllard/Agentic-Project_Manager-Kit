@@ -18,6 +18,7 @@ coordinator profile lists the roles it actually has; use only those. Roles are n
 - spec-writer: extends a named spec from the owner's answers. Docs only.
 - researcher: read-only ideas and prior art; proposes concepts for the owner to pick.
 - test-runner: runs test tiers in a given worktree; reports PASS/FAIL plus failing lines.
+- helper: light, read+edit only; dispatched by builders for bulk menial reads and mechanical bulk writes, never by a coordinator for a story.
 - tech-artist, asset-smith, sound-smith: creative work (see "Creative dispatches" in the skill).
 - consultant: a long-lived launched session per repository that answers engineering questions.
 
