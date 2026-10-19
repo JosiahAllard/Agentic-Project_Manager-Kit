@@ -4,9 +4,32 @@ from ctypes import wintypes as w
 import time
 
 from optional.bridge.core.jsonwire import JsonLineDecoder,encode_frame
-from kitlib.proc.pipe import connect,write
-from .rpc import MAX_BYTES,encode,read_frame
+from kitlib.proc.errors import ProcError
+from kitlib.proc.pipe import K,bind,connect,write
+from .rpc import MAX_BUSY_WAIT_MS,MAX_BYTES,encode,read_frame
 from .transport import PipeTarget
+
+wait_pipe=bind(K,'WaitNamedPipeW',[w.LPCWSTR,w.DWORD],w.BOOL)
+PIPE_BUSY=231
+
+
+def _connect(target,deadline):
+    """Open the service's one pipe instance, waiting while another client holds it.
+
+    The service serves one client at a time on a one-instance pipe, so a second
+    client (a hook beside a frontend call, or two sessions) meets ERROR_PIPE_BUSY
+    until the first is served. Nothing has been written then, so waiting is safe;
+    every other open or identity failure is still refused at once.
+    """
+    while True:
+        try: return connect(target.name,target.pid,target.creation)
+        except ProcError as error:
+            # connect() raises straight after CreateFileW, so this is its error.
+            if error.code!='pipe-connect-failed' or ctypes.get_last_error()!=PIPE_BUSY: raise
+        remaining=deadline-time.monotonic()
+        if remaining<=0: raise ProcError('pipe-busy-timeout')
+        # Returns once an instance listens again (or on timeout); either way retry the open.
+        wait_pipe(target.name,max(1,min(1000,int(remaining*1000))))
 
 
 def exchange(input_stream,output_stream):
@@ -16,18 +39,21 @@ def exchange(input_stream,output_stream):
         decoder=JsonLineDecoder(max_frame_bytes=2048)
         frames=decoder.feed(input_stream.readline(2049))
         decoder.finish()
-        if len(frames)!=1 or set(frames[0])!={'pipe','pid','creation','length'}:
+        if len(frames)!=1 or set(frames[0])!={'pipe','pid','creation','length','wait'}:
             raise ValueError('bad private request')
         meta=frames[0]
         target=PipeTarget(meta['pipe'],meta['pid'],meta['creation'])
-        size=meta['length']
+        size,wait=meta['length'],meta['wait']
         if type(size) is not int or not 0<size<=MAX_BYTES: raise ValueError('bad packet size')
+        if type(wait) is not int or not 0<=wait<=MAX_BUSY_WAIT_MS: raise ValueError('bad busy wait')
         data=bytearray()
         while len(data)<size:
             part=input_stream.read(size-len(data))
             if not part: raise ValueError('truncated input')
             data.extend(part)
-        pipe=connect(target.name,target.pid,target.creation)
+        # request() sets wait inside its own budget, so a pipe still busy at the end is
+        # reported not-written before the caller gives up on an uncertain outcome.
+        pipe=_connect(target,time.monotonic()+wait/1000)
         started=True
         count=w.DWORD()
         payload=bytes(data)

@@ -39,7 +39,9 @@ The table's `serial` list, [module, why] pairs, names the test modules that cann
 others; kitlib.tooldeps.selfrun runs them alone after its parallel phase. Its `long` list names
 the modules selfrun starts first and splits by class while it has no recorded time for them. Its
 `skip_fails` list, [module, why] pairs, names the proof modules: one that skips any test FAILS in
-selfrun (a skip would void the proof); `stale_skip_fails` finds an entry naming no module.
+selfrun (a skip would void the proof); `stale_skip_fails` finds an entry naming no module. Its
+`smoke` list names the test modules kit_tests --smoke adds to a selection unless every changed
+path is prose (`smoke`; the gate's smoke_steps, docs/gate.md).
 """
 import ast
 import json
@@ -60,7 +62,10 @@ DEFAULTS = {
     'serial': [],
     'long': [],
     'skip_fails': [],
+    'smoke': [],
 }
+# The one test package kit_tests --scrub runs (the checks every tracked file must pass).
+SCRUB = 'scrub'
 _KITLIB_REF = re.compile(r'\bkitlib[./\\]+([A-Za-z_]\w*)')
 _TESTS_REF = re.compile(r'\btests\.([A-Za-z_]\w*)')
 # A string that runs kitlib code in a child (`-c "from kitlib.X import ..."`, `-m kitlib.X`);
@@ -122,11 +127,36 @@ def config(root, data=None):
                               'test voids it"]' % (CONFIG_REL, i))
         proof.append((e[0], e[1]))
     out['skip_fails'] = proof
-    v = out['long']
-    if not isinstance(v, list) or not all(isinstance(x, str) and x.startswith('tests.') for x in v):
-        raise ConfigError('%s: long must be a list of "tests.<pkg>.<module>" names' % CONFIG_REL)
-    out['long'] = list(v)
+    for k in ('long', 'smoke'):
+        v = out[k]
+        if not isinstance(v, list) or not all(isinstance(x, str) and x.startswith('tests.')
+                                              for x in v):
+            raise ConfigError('%s: %s must be a list of "tests.<pkg>.<module>" names'
+                              % (CONFIG_REL, k))
+        out[k] = list(v)
     return out
+
+
+def smoke(changed, cfg, selected, modules):
+    """(test modules to add, why) for kit_tests --select --smoke: the table's `smoke` modules
+    that `selected` (the selection's modules; None for none) does not hold already. None are
+    added when the change is empty or every changed path is `prose`: a docs change reaches no
+    smoke area. Raises ConfigError when `smoke` names a module `modules` (every test module of
+    the tree) lacks, since a stale entry would drop a landing check without a word."""
+    stale = [m for m in cfg.get('smoke', ()) if m not in set(modules)]
+    if stale:
+        raise ConfigError('%s: smoke names %s, which is not a test module'
+                          % (CONFIG_REL, ', '.join(stale)))
+    paths = [p.replace('\\', '/') for p in changed]
+    if not paths:
+        return [], 'no changed path'
+    if all(_matches(p, cfg['prose']) for p in paths):
+        return [], 'every changed path is prose'
+    have = set(selected or ())
+    add = [m for m in cfg.get('smoke', ()) if m not in have]
+    if not add:
+        return [], 'the selection already holds every smoke module'
+    return add, '%d smoke module(s) added' % len(add)
 
 
 def _matches(path, globs):

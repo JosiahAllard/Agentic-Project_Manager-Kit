@@ -959,7 +959,8 @@ def plan_unblock(snap, ctx, rid, ruling=None, on=None, reason=None):
 
 def plan_set_status(snap, ctx, rid, status, q=None):
     """Park an open or pulled record on the owner's question `q`. A pull is given up: a parked
-    record holds no scope and takes no place in the offer."""
+    record holds no scope and takes no place in the offer. A record parked on another question
+    is re-pointed to `q`; the same question again refuses."""
     if status != 'parked':
         raise Usage('`set-status` sets `parked` only; `%s` is reached by its own verb (open: '
                     '`unblock`/`release`/`unpark`, blocked: `block`, pulled: `pull`)' % status)
@@ -969,8 +970,16 @@ def plan_set_status(snap, ctx, rid, status, q=None):
     rec = require(snap, rid)
     state = rec.get('state')
     if state == 'parked':
-        raise Refusal('`%s` is already parked on %s'
-                      % (rid, rec.get('q') or 'no recorded question'))
+        was = rec.get('q')
+        if was == q:
+            raise Refusal('`%s` is already parked on %s' % (rid, q))
+        # Re-point: only `q` changes; `parked_at` keeps the day the wait began, and the old
+        # question stays in the store's log through the commit subject.
+        pairs = rmod.apply_changes(rec.pairs(), [('q', [q])])
+        was = was or 'no recorded question'
+        return Change({rid: _text(pairs, rec.body)},
+                      'backlog: re-park %s on %s (was %s)' % (rid, q, was),
+                      ['PARKED %s on %s, re-pointed (was %s)' % (rid, q, was)])
     if state not in ('open', 'pulled'):
         raise Refusal('`%s` is `state: %s`; only an open or pulled record is parked. %s first'
                       % (rid, state, 'Unblock it' if state == 'blocked' else 'Open it'))

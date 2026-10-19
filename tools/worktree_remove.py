@@ -5,7 +5,9 @@ holds it (docs/worktree-remove.md).
   worktree_remove.py [-C DIR] <path or slug> --keep-branch       the same; the branch stays
   worktree_remove.py [-C DIR] <path or slug> --abandon "<why>" [--keep-branch]
                                                                  UNLANDED work: tag archive/<slug>,
-                                                                 then remove
+                                                                 then remove; LANDED but with
+                                                                 uncommitted work: save that work
+                                                                 under archive/<slug>, then remove
   worktree_remove.py [-C DIR] <branch> --branch                  LANDED local branch with NO worktree:
                                                                  `git branch -d` it
   worktree_remove.py [-C DIR] <branch> --branch --abandon "<why>"
