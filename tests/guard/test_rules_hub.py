@@ -1,5 +1,5 @@
-"""The hub rules (docs/guard.md "Hub secrets"): hub-secrets, hub-owner-verb, hub-mcp and
-hub-browser. Each holds every session but the owner's own: a subagent, a launcher-marked
+"""The hub rules (docs/guard.md "Hub secrets"): hub-secrets, hub-owner-verb, hub-named, hub-mcp
+and hub-browser. Each holds every session but the owner's own: a subagent, a launcher-marked
 session (coordinator, pm, plain). The owner's unmarked session is never held. Agents still run
 the agent verbs of tools/hub.py and its validate, serve and status, which read agent.token
 in-process; those pass."""
@@ -180,21 +180,22 @@ class SecretShell(Hub):
         for make, rule in (
                 (lambda sub: bash(head + 'python -c "print(open(\'%s/owner.token\').read())"' % sec,
                                   self.w.wt, sub), 'hub-secrets'),
+                (lambda sub: bash(head + 'python -c "from kitlib.hubsite import auth; print(auth.folder())"',
+                                  self.w.wt, sub), 'hub-secrets'),
                 (lambda sub: bash(head + 'python -c "from kitlib.hubsite import auth; '
                                          'print(auth.read_token(auth.folder(), \'agent\'))"',
                                   self.w.wt, sub), 'hub-secrets'),
                 (lambda sub: ps(head + 'python -c "import subprocess; subprocess.run([\'python\', '
-                                       '\'tools/hub.py\', \'serve\'])"', self.w.wt, sub), 'hub-owner-verb'),
+                                       '\'tools/hub.py\', \'serve\'])"', self.w.wt, sub), 'hub-named'),
+                (lambda sub: bash(head + 'python -', self.w.wt, sub), 'hub-secrets'),
                 (lambda sub: bash('echo tools/hub.py | python -c "import sys; print(sys.stdin.read())"',
-                                  self.w.wt, sub), 'hub-owner-verb'),
+                                  self.w.wt, sub), 'hub-named'),
                 (lambda sub: bash('python "%s" questions --json $X | python -c "import sys; print(1)"' % self.hub,
-                                  self.w.wt, sub), 'hub-owner-verb'),
+                                  self.w.wt, sub), 'hub-named'),
                 (lambda sub: bash('python "%s" answer Q-1 --label yes | python -c "import sys; print(1)"'
                                   % self.hub, self.w.wt, sub), 'hub-owner-verb')):
             with self.subTest(make(True)['tool_input']['command']):
                 self.denied(make, rule)
-        # the tool's output run as code names no token file: the hub tool by name is not read
-        self.allowed(lambda sub: bash(head + 'python -', self.w.wt, sub))
 
     def test_a_hub_call_naming_a_token_file(self):
         self.denied(lambda sub: bash('python "%s" questions add --title t --context-file "%s/owner.token"'
@@ -638,9 +639,12 @@ class OwnerVerbs(Hub):
                      'python -BImtools.hub answer Q-1', 'python -X utf8 -W ignore -m tools.hub answer Q-1',
                      'python --check-hash-based-pycs never -m tools.hub answer Q-1',
                      'py -3 -m tools.hub answer Q-1', 'python -m "tools.hub" answer Q-1',
-                     # runpy running it, from the command line or from code
-                     'python -m runpy tools.hub answer Q-1 --choice 1', 'python -Im runpy hub answer Q-1',
-                     'cd tools && python -c "import hub; hub.main()" answer Q-1 --choice 1',
+                     # runpy running it from the command line
+                     'python -m runpy tools.hub answer Q-1 --choice 1', 'python -Im runpy hub answer Q-1'):
+            with self.subTest(line):
+                self.denied(lambda sub, line=line: bash(line, self.w.wt, sub), 'hub-owner-verb')
+        # code that imports it or runs it is no parsed run: hub-named's fail-closed reading
+        for line in ('cd tools && python -c "import hub; hub.main()" answer Q-1 --choice 1',
                      'python -c "from tools import hub; hub.main()" answer Q-1',
                      'python -c "from tools.hub import main; main()" answer Q-1',
                      'python -c "import os, tools.hub as h; h.main()" answer Q-1',
@@ -648,15 +652,15 @@ class OwnerVerbs(Hub):
                      'runpy.run_module(\'tools.hub\', run_name=\'__main__\')"',
                      'python -c "import importlib; importlib.import_module(\'hub\')"'):
             with self.subTest(line):
-                self.denied(lambda sub, line=line: bash(line, self.w.wt, sub), 'hub-owner-verb')
+                self.denied(lambda sub, line=line: bash(line, self.w.wt, sub), 'hub-named')
         self.denied(lambda sub: ps('python -m tools.hub pair', self.w.wt, sub), 'hub-owner-verb')
         self.denied(lambda sub: ps('python -Bm tools.hub pair', self.w.wt, sub), 'hub-owner-verb')
-        # over-reach, fail-closed rule: an agent verb is allowed only in the one shape the guard reads in
-        # full (`-m tools.hub` as two words after plain options), so these are denied now
+        # over-reach, fail-closed rule (hub-named): an agent verb is allowed only in the one shape the
+        # guard reads in full (`-m tools.hub` as two words after plain options), so these are denied
         for line in ('python -Bm tools.hub questions', 'python -m runpy tools.hub questions',
                      'python -Bc "print(1)" -m tools.hub answer'):
             with self.subTest(line):
-                self.denied(lambda sub, line=line: bash(line, self.w.wt, sub), 'hub-owner-verb')
+                self.denied(lambda sub, line=line: bash(line, self.w.wt, sub), 'hub-named')
         for line in ('python -m tools.hub questions', 'python -m tools.hub todos add --title t',
                      'python -m hubby answer Q-1', 'python -m tools.hubsite answer',
                      'python -m runpy tools.hubby answer Q-1', 'python -c "import hubby" answer Q-1',
@@ -667,9 +671,12 @@ class OwnerVerbs(Hub):
     def test_a_module_after_options_the_guard_cannot_read(self):
         # a word the text does not show, or another module's -m (cProfile, pdb, runpy), is outside
         # the allowed shape: any literal -m (or --module) naming hub on the line counts
-        # (rules.HUB_NAME_RES)
+        # (rules.HUB_NAME_RES), under hub-named (no parsed run of the hub tool)
+        # an option whose value the text does not show still leaves python's own -m: a parsed run
+        for line in ('python -X $v -m tools.hub answer Q-1', 'python -W "$w" -m tools.hub answer Q-1'):
+            with self.subTest(line):
+                self.denied(lambda sub, line=line: bash(line, self.w.wt, sub), 'hub-owner-verb')
         for line in ('python $X -m tools.hub answer Q-1 --choice 1', 'python "$@" -m tools.hub answer Q-1',
-                     'python -X $v -m tools.hub answer Q-1', 'python -W "$w" -m tools.hub answer Q-1',
                      'python $X -Bm tools.hub answer Q-1', 'python $X -mtools.hub answer Q-1',
                      'python $X -m runpy tools.hub answer Q-1',
                      'python -m cProfile -m tools.hub answer Q-1 --choice 1',
@@ -683,9 +690,9 @@ class OwnerVerbs(Hub):
                      # over-reach, fail-closed rule: hub named outside the allowed shape, whatever the verb
                      'python $X -m tools.hub questions', 'python -m cProfile -m tools.hub questions'):
             with self.subTest(line):
-                self.denied(lambda sub, line=line: bash(line, self.w.wt, sub), 'hub-owner-verb')
-        self.denied(lambda sub: ps('python $X -m tools.hub pair', self.w.wt, sub), 'hub-owner-verb')
-        self.denied(lambda sub: ps('python -m cProfile -m tools.hub pair', self.w.wt, sub), 'hub-owner-verb')
+                self.denied(lambda sub, line=line: bash(line, self.w.wt, sub), 'hub-named')
+        self.denied(lambda sub: ps('python $X -m tools.hub pair', self.w.wt, sub), 'hub-named')
+        self.denied(lambda sub: ps('python -m cProfile -m tools.hub pair', self.w.wt, sub), 'hub-named')
         for line in ('python -m cProfile -m unittest tests.guard', 'python -X $v -m unittest',
                      'python -m pdb -m tools.hubsite answer',
                      # known limit: what an unreadable word holds is not read; the text
@@ -721,8 +728,8 @@ class OwnerVerbs(Hub):
                      'python -c "from os import path; from tools import hub"',
                      'python -cimport\\ hub', 'python -Bc "import hub"'):
             with self.subTest(line):
-                self.denied(lambda sub, line=line: bash(line, self.w.wt, sub), 'hub-owner-verb')
-        self.denied(lambda sub: bash('python - <<EOF\nimport hub\nEOF', self.w.wt, sub), 'hub-owner-verb')
+                self.denied(lambda sub, line=line: bash(line, self.w.wt, sub), 'hub-named')
+        self.denied(lambda sub: bash('python - <<EOF\nimport hub\nEOF', self.w.wt, sub), 'hub-named')
 
     def test_review_rows_for_owner_verbs(self):
         # every owner-verb string from the branch's two re-reviews, with its verdict
@@ -732,7 +739,15 @@ class OwnerVerbs(Hub):
                      'python3.12 -m tools.hub answer Q-1', 'pythonw -m tools.hub answer Q-1',
                      'python.exe -m tools.hub answer Q-1', 'env python -m tools.hub answer Q-1',
                      'python -m runpy hub answer Q-1',
-                     'bash -c "python -m tools.hub answer Q-1"', 'cmd /c python -m tools.hub answer Q-1',
+                     'bash -c "python -m tools.hub answer Q-1"', 'cmd /c python -m tools.hub answer Q-1'):
+            with self.subTest(line):
+                self.denied(lambda sub, line=line: bash(line, self.w.wt, sub), 'hub-owner-verb')
+        self.denied(lambda sub: ps('powershell -Command "python -m tools.hub pair"', self.w.wt, sub),
+                    'hub-owner-verb')
+        self.denied(lambda sub: ps('Start-Process python -ArgumentList "-m tools.hub pair"', self.w.wt, sub),
+                    'hub-owner-verb')
+        # no parsed run of the hub tool: hub-named's fail-closed reading
+        for line in (
                      # a program the guard does not unwrap is read closed
                      'uv run python -m tools.hub answer Q-1', 'uv run -m tools.hub answer Q-1',
                      'poetry run python -m tools.hub todos done T-1',
@@ -744,18 +759,14 @@ class OwnerVerbs(Hub):
                      # (docs/guard.md "Hub secrets", Over-reach)
                      'python -c "print(\'import hub\')"', 'python -c "import x  # import hub"'):
             with self.subTest(line):
-                self.denied(lambda sub, line=line: bash(line, self.w.wt, sub), 'hub-owner-verb')
-        self.denied(lambda sub: ps('powershell -Command "python -m tools.hub pair"', self.w.wt, sub),
-                    'hub-owner-verb')
-        self.denied(lambda sub: ps('Start-Process python -ArgumentList "-m tools.hub pair"', self.w.wt, sub),
-                    'hub-owner-verb')
-        # over-reach, fail-closed rule: any text naming hub as a module or script outside the allowed shape
-        # is denied, a search pattern, a message or an agent verb under a wrapper included
+                self.denied(lambda sub, line=line: bash(line, self.w.wt, sub), 'hub-named')
+        # over-reach, fail-closed rule (hub-named): any text naming hub as a module or script outside
+        # the allowed shape is denied, a search pattern, a message or an agent verb under a wrapper included
         for line in ('grep -rn "import hub" .', 'rg "import hub"', 'git log --grep "import hub"',
                      'echo "import hub"', 'python -m unittest -k "import hub"', 'python tools/x.py "import hub"',
                      'uv run python -m tools.hub questions'):
             with self.subTest(line):
-                self.denied(lambda sub, line=line: bash(line, self.w.wt, sub), 'hub-owner-verb')
+                self.denied(lambda sub, line=line: bash(line, self.w.wt, sub), 'hub-named')
         for line in ('py -3.12 tools/x.py', 'uv run python -m unittest', 'python -m $m questions',
                      'python -m pip install hub',
                      # known limit: the module name is in a variable the text does not show
@@ -775,8 +786,9 @@ class OwnerVerbs(Hub):
                     'hub-owner-verb')
         self.denied(lambda sub: bash('python "%s" todos add --title="$t"' % self.hub, self.w.wt, sub),
                     'hub-owner-verb')
+        # no owner verb a word could become (todos add could take --owner): hub-named's reading
         self.denied(lambda sub: bash('python "%s" questions add --title "$T"' % self.hub, self.w.wt, sub),
-                    'hub-owner-verb')
+                    'hub-named')
 
     def test_powershell_variables_after_hub_py_are_denied(self):
         # Windows PowerShell 5.1 passes a value holding a double quote on unescaped, so even a
@@ -819,7 +831,7 @@ class OwnerVerbs(Hub):
             with self.subTest(name):
                 d = decide(make(True), self.ctx(OWNER))
                 self.assertIsNotNone(d, 'allowed')
-                self.assertIn(d.rule, ('hub-owner-verb', 'hub-secrets'), d.reason)
+                self.assertIn(d.rule, ('hub-owner-verb', 'hub-secrets', 'hub-named'), d.reason)
 
     def test_reading_hub_py_is_the_path_family(self):
         # these were denied by the fail-closed rule; the path family (rules.hub_path_family) now
@@ -836,7 +848,7 @@ class OwnerVerbs(Hub):
         # piped on, its output reaches another program: denied
         for cmd in ('cat tools/hub.py | head',):
             with self.subTest(cmd):
-                self.denied(lambda sub, cmd=cmd: bash(cmd, self.w.wt, sub), 'hub-owner-verb')
+                self.denied(lambda sub, cmd=cmd: bash(cmd, self.w.wt, sub), 'hub-named')
 
     def test_the_alternative_names_the_kit_hub_tool(self):
         d = decide(self.run_hub('answer Q-1 --choice 1')(True), self.ctx(OWNER))
@@ -844,10 +856,11 @@ class OwnerVerbs(Hub):
 
 
 class FailClosed(Hub):
-    """Fail-closed: in a held session, any command text naming hub as a module or script is denied
-    unless the parser reads that command in full as the one allowed shape (rules.hub_shape).
-    Names built at run time are out of scope: the rule guards against accidents, not an
-    adversary (docs/guard.md "Hub secrets", Limits)."""
+    """Fail-closed (hub-named, off by default and held at deny here): in a held session, any
+    command text naming hub as a module or script is denied unless the parser reads that command
+    in full as the one allowed shape (rules.hub_shape); a parsed run of an owner verb is
+    hub-owner-verb's, which `deny` names. Names built at run time are out of scope: the rule
+    guards against accidents, not an adversary (docs/guard.md "Hub secrets", Limits)."""
 
     def rows(self, rows, deny):
         for shell, line in rows:
@@ -855,7 +868,7 @@ class FailClosed(Hub):
             with self.subTest(line=line):
                 make = lambda sub, shell=shell, line=line: shell(line, self.w.wt, sub)
                 if deny:
-                    self.denied(make, 'hub-owner-verb')
+                    self.denied(make, deny if isinstance(deny, str) else 'hub-named')
                     self.owner_allowed(make)
                 else:
                     self.allowed(make)
@@ -889,10 +902,13 @@ class FailClosed(Hub):
 
     def test_names_the_shell_puts_together(self):
         # quotes and escapes inside a word, and a wildcard python's script word expands to hub.py
+        # the parse takes the quotes and escapes out: a parsed run (hub-owner-verb)
         self.rows((
             (bash, 'python -m tools.h"u"b answer Q-1'), (bash, "python tools/h'u'b.py answer Q-1"),
-            (bash, 'python tools/h*.py answer Q-1'), (bash, 'python tools/hu?.py answer Q-1'),
             (bash, "cd tools && python -m 'hub' answer Q-1"), (ps, 'python -m tools.h`ub answer Q-1'),
+        ), 'hub-owner-verb')
+        self.rows((
+            (bash, 'python tools/h*.py answer Q-1'), (bash, 'python tools/hu?.py answer Q-1'),
         ), True)
 
     def test_names_built_at_run_time_pass(self):
@@ -939,11 +955,11 @@ class FailClosed(Hub):
             (bash, 'python -W ignore -m tools.hub questions'), (bash, 'python "%s" questions $(echo x)' % hub),
             (bash, 'python "%s" questions "$t"' % hub), (bash, 'PYTHONINSPECT=1 python "%s" questions' % hub),
             (bash, 'bash -c "python %s questions"' % hub), (bash, 'uv run python "%s" questions' % hub),
-            (bash, 'python "%s" questions; python -m tools.hub answer Q-1' % hub),
             (bash, 'python "%s" questions <<EOF\nx\nEOF' % hub), (bash, 'python -m runpy tools.hub questions'),
             (bash, 'python -mtools.hub questions'), (bash, './tools/hub.py questions'),
             (bash, 'python "%s" questions; echo tools.hub' % hub),
         ), True)
+        self.rows(((bash, 'python "%s" questions; python -m tools.hub answer Q-1' % hub),), 'hub-owner-verb')
 
     def test_wildcard_words_leave_the_allowed_shape(self):
         # the shell may expand an unquoted wildcard to a file named like an owner verb or --owner,
@@ -1071,13 +1087,24 @@ class FailClosed(Hub):
             (bash, "source x; cat > gen.py <<'EOF'\nimport json\nhub = 1\nEOF\npython gen.py"),
             (bash, ". x; cat > gen.py <<'EOF'\nimport json\nhub = 1\nEOF\npython gen.py"),
             (bash, "coproc python -; cat > gen.py <<'EOF'\nimport json\nhub = 1\nEOF"),
-            (bash, 'python Z:/k/tools/commit.py -m "$(python -m hub answer Q-1)" x.py'),
             (bash, 'python -- Z:/k/tools/commit.py -m hub'), (bash, 'python -m Z:/k/tools/commit.py -m hub'),
-            (bash, 'cd tools && python -W ignore -m hub answer Q-1'), (bash, 'cd tools && python -Bm hub answer Q-1'),
             (bash, 'cd tools && python C:/Python/Lib/cProfile.py -m hub answer Q-1'),
             (bash, 'cd tools && python "$S" -m hub answer Q-1'), (bash, 'cd tools && python $S -m hub answer Q-1'),
             (bash, 'cd tools && python -m cProfile -m hub answer Q-1'),
             (bash, 'cd tools && python -c "x" Z:/k/tools/commit.py -m hub answer Q-1'),
+            # an unread value before the script word: the text keeps the -m python's
+            (bash, 'cd tools && python -X $v commit.py -m hub answer Q-1'),
+            (bash, 'cd tools && python -X ${v} commit.py -m hub answer Q-1'),
+            (bash, 'cd tools && python -X {a,b} commit.py -m hub answer Q-1'),
+            (bash, 'cd tools && python -X * commit.py -m hub answer Q-1'),
+            (ps, 'cd tools; python -X $v commit.py -m hub answer Q-1'),
+            # a no-break space glued to -X is -X's value; commit.py is the script word
+            (bash, 'cd tools && python -X\xa0a commit.py -m hub answer Q-1'),
+        ), True)
+        # python's own -m the parser reads: a parsed run of an owner verb (hub-owner-verb)
+        self.rows((
+            (bash, 'python Z:/k/tools/commit.py -m "$(python -m hub answer Q-1)" x.py'),
+            (bash, 'cd tools && python -W ignore -m hub answer Q-1'), (bash, 'cd tools && python -Bm hub answer Q-1'),
             (ps, 'cd tools; python -X dev -m hub answer Q-1'),
             # the shell joins what the guard's split parts: an escaped space, a quote, a backtick, a
             # variable or an expansion before the script word may hand it to -X or -W as a value,
@@ -1090,11 +1117,6 @@ class FailClosed(Hub):
             (bash, 'cd tools && python --check-hash-based-pycs a\\ commit.py -m hub answer Q-1'),
             (bash, 'cd tools && python -X "a "commit.py -m hub answer Q-1'),
             (bash, "cd tools && python -X a' 'commit.py -m hub answer Q-1"),
-            (bash, 'cd tools && python -X $v commit.py -m hub answer Q-1'),
-            (bash, 'cd tools && python -X ${v} commit.py -m hub answer Q-1'),
-            (bash, 'cd tools && python -X {a,b} commit.py -m hub answer Q-1'),
-            (bash, 'cd tools && python -X * commit.py -m hub answer Q-1'),
-            (ps, 'cd tools; python -X $v commit.py -m hub answer Q-1'),
             (ps, "cd tools; python -X 'a commit.py' -m hub answer Q-1"),
             # bash splits words on space and tab only: a no-break space, a control or an em space
             # between -X's value and commit.py is part of that value, so the -m is python's
@@ -1104,12 +1126,11 @@ class FailClosed(Hub):
             (bash, 'cd tools && python -X a\fcommit.py -m hub answer Q-1'),
             (bash, 'cd tools && python -X a commit.py -m hub answer Q-1'),
             (bash, 'cd tools && python -Xa commit.py -m hub answer Q-1'),
-            (bash, 'cd tools && python -X a commit.py -m hub answer Q-1'),
             # and inside a nested shell, read by its words as well as the line's text
             (bash, "bash -c 'cd tools && python -X a commit.py -m hub answer Q-1'"),
             (bash, 'bash -c "cd tools && python -X \'a commit.py\' -m hub answer Q-1"'),
             (ps, 'cmd /c "cd tools && python -X a commit.py -m hub answer Q-1"'),
-        ), True)
+        ), 'hub-owner-verb')
 
     def test_hub_in_python_code_from_anywhere_on_the_line(self):
         # a pipe of any length, a module that runs code it reads (code, asyncio, timeit -s,
@@ -1171,8 +1192,8 @@ class FailClosed(Hub):
             (bash, 'git diff tools/hub.py && echo ok'), (bash, 'git commit -m x tools/hub.py'),
         ), False)
         # a program or form outside the list, an outlet beside it, or a wildcard leaves the family
+        self.rows(((bash, 'git diff tools/hub.py; python -m tools.hub answer Q-1'),), 'hub-owner-verb')
         self.rows((
-            (bash, 'git diff tools/hub.py; python -m tools.hub answer Q-1'),
             (bash, 'cat tools/hub.py | python'), (bash, 'cat $(echo tools/hub.py)'), (bash, 'cat tools/hub.py &'),
             (bash, 'cat tools/hub.py # import hub'), (bash, 'GIT_EXTERNAL_DIFF=x git diff tools/hub.py'),
             (bash, 'command cat tools/hub.py'), (bash, 'sudo cat tools/hub.py'), (bash, 'less tools/hub.py'),
@@ -1233,9 +1254,11 @@ class FailClosed(Hub):
             (bash, 'python Z:/k/tools/backlog.py add K-1 --summ "tools.hub" --found-on none --why-not-folded x'),
             (bash, 'python Z:/k/tools/backlog.py add K-1 --summary x --found-on tools.hub --why-not-folded x'),
             (bash, 'echo "tools.hub" | python Z:/k/tools/commit.py -m x a'),
-            (bash, 'python Z:/k/tools/commit.py -m "fix tools.hub" tools/x.py; python -m tools.hub answer Q-1'),
             (bash, 'python -c "import x" Z:/k/tools/commit.py -m "tools.hub" tools/x.py'),
         ), True)
+        self.rows((
+            (bash, 'python Z:/k/tools/commit.py -m "fix tools.hub" tools/x.py; python -m tools.hub answer Q-1'),
+        ), 'hub-owner-verb')
 
     def test_git_commit_message_spellings(self):
         # every spelling of git commit's message is text (rules.hub_git_words): a flag cluster
@@ -1300,6 +1323,8 @@ class FailClosed(Hub):
             (bash, 'D:/Programs/Python312/python.exe -m hub answer Q-1'),
             (ps, '& D:\\Programs\\Python312\\python.exe -m hub answer Q-1'),
             (bash, 'cd tools && C:/Python312/python.exe -X a\\ commit.py -m hub answer Q-1'),
+        ), 'hub-owner-verb')
+        self.rows((
             # a python word before / or \ with no python word after it in that word is the program:
             # cmd ends a command's name at an unquoted /, so `python/x` runs python with /x
             (bash, 'cd tools && python/x -m hub answer Q-1'),
@@ -1340,6 +1365,7 @@ class FailClosed(Hub):
         # before python's -m; python's parsed words are read too (rules.hub_word_module_names),
         # and a line the parser cannot read whole is read past every separator
         # (rules.HUB_PY_MODULE_ANY_RE)
+        # the parser reads python's words whole: a parsed run of an owner verb (hub-owner-verb)
         self.rows((
             (bash, "cd tools && python -X ';' -m hub answer Q-1"),
             (bash, 'cd tools && python -X a\\;b -m hub answer Q-1'),
@@ -1362,11 +1388,21 @@ class FailClosed(Hub):
             (bash, "cd tools && python -X ';' -m 'hub' answer Q-1"),
             (bash, "cd tools && python -X ';' -m runpy hub answer Q-1"),
             (bash, "cd tools && python -X ';' -mrunpy hub answer Q-1"),
-            (bash, "cd tools && python -X ';' -m trace --count --module=hub answer Q-1"),
-            (bash, "cd tools && python -X ';' -m trace --count --module hub answer Q-1"),
             # inside a nested shell's string
             (bash, 'bash -c "cd tools && python -X \';\' -m hub answer Q-1"'),
             (ps, 'powershell -Command "cd tools; python -X \'a;b\' -m hub answer Q-1"'),
+            # a line the parser cannot read whole (an unclosed quote)
+            (bash, "cd tools && python -X ';' -m hub answer Q-1 \""),
+            (ps, "cd tools; python -X 'a;b' -m hub answer Q-1 \""),
+            # a python in a quoted folder with a space in it
+            (ps, 'cd tools; & "C:\\Program Files\\Python312\\python.exe" -X \'a;b\' -m hub answer Q-1'),
+            (bash, 'cd tools && "C:/Program Files/Python312/python.exe" -X \'a;b\' -m hub answer Q-1'),
+        ), 'hub-owner-verb')
+        # what only the line's text shows: another module's --module, or a word the parser does not
+        # split as the program does (hub-named)
+        self.rows((
+            (bash, "cd tools && python -X ';' -m trace --count --module=hub answer Q-1"),
+            (bash, "cd tools && python -X ';' -m trace --count --module hub answer Q-1"),
             # a quoted word before commit.py is not plain, so the -m after it is python's
             (bash, "cd tools && python -X 'a b' commit.py -X ';' -m hub answer Q-1"),
             # Windows PowerShell 5.1 passes a word holding a double quote on unescaped, so python
@@ -1374,12 +1410,6 @@ class FailClosed(Hub):
             (ps, 'cd tools; python -X \'a;" -m hub "b\' answer Q-1'),
             # and the program's C runtime drops a quote inside a word: python gets -Bm
             (ps, 'cd tools; python \'-B"m"\' hub answer Q-1'),
-            # a line the parser cannot read whole (an unclosed quote)
-            (bash, "cd tools && python -X ';' -m hub answer Q-1 \""),
-            (ps, "cd tools; python -X 'a;b' -m hub answer Q-1 \""),
-            # a python in a quoted folder with a space in it
-            (ps, 'cd tools; & "C:\\Program Files\\Python312\\python.exe" -X \'a;b\' -m hub answer Q-1'),
-            (bash, 'cd tools && "C:/Program Files/Python312/python.exe" -X \'a;b\' -m hub answer Q-1'),
         ), True)
         # cmd ends a command at an unquoted |, so b, not python, gets -m hub: the guard reads
         # cmd's string as cmd does and passes it; a | cmd quotes or escapes is python's word
@@ -1390,7 +1420,7 @@ class FailClosed(Hub):
             (ps, 'cmd /c "cd tools && python -X a^|b -m hub answer Q-1"'),
             (ps, 'cmd /c \'cd tools && python -X "a|b" -m hub answer Q-1\''),
             (ps, 'cmd /c "cd tools && python -X a^&b -m hub answer Q-1"'),
-        ), True)
+        ), 'hub-owner-verb')
         # over-reach, fail-closed (round-6 review item 3): a ; glued to a python word is read as cmd
         # reads it, ending only the command's name, so the next python word counts as python's
         # argument and commit.py's -m as python's own
@@ -1424,6 +1454,8 @@ class FailClosed(Hub):
         self.rows((
             (ps, 'cd tools; & "C:\\Program Files\\Python312\\python.exe" -m hub answer Q-1'),
             (bash, 'cd tools && "C:/Program Files/Python312/python.exe" -m hub answer Q-1'),
+        ), 'hub-owner-verb')
+        self.rows((
             (ps, 'cd tools; & "C:\\Program Files\\Python312\\python.exe"" commit.py x" -m hub answer Q-1'),
             (bash, 'cd tools && "C:/Program Files/Python312/python.exe"" commit.py x" -m hub answer Q-1'),
         ), True)
@@ -1447,12 +1479,14 @@ class FailClosed(Hub):
         self.rows((
             (bash, backlog + 'set EX-RETIRE --scope tools.hub'),
             (bash, backlog + 'set EX-RETIRE --scope=tools.hub'),
-            (bash, backlog + 'set EX-RETIRE --scope tools/hub.py; python tools/hub.py answer Q-1'),
             (bash, backlog + 'set EX-RETIRE --scope tools/hub.py && python -c "import tools.hub"'),
-            (bash, 'python tools/hub.py answer Q-1 --scope tools/hub.py'),
             (bash, 'python -c "import tools.hub" Z:/k/tools/backlog.py set EX-RETIRE --scope kitlib/x'),
-            (bash, 'python -m tools.hub answer Q-1'),
         ), True)
+        self.rows((
+            (bash, backlog + 'set EX-RETIRE --scope tools/hub.py; python tools/hub.py answer Q-1'),
+            (bash, 'python tools/hub.py answer Q-1 --scope tools/hub.py'),
+            (bash, 'python -m tools.hub answer Q-1'),
+        ), 'hub-owner-verb')
 
     def test_backlog_show_of_a_hub_path(self):
         # backlog.py show only prints what it is given; a positional path word to hub.py passes
@@ -1495,8 +1529,7 @@ class FailClosed(Hub):
             (ps, 'function cat { python $args }; cat tools/hub.py'),
             (ps, 'Set-Alias cat python; cat tools/hub.py answer Q-1'),
             (bash, 'alias cat=python; cat tools/hub.py answer Q-1'),
-            (bash, 'cd x && python tools/hub.py answer Q-1'),
-            (bash, 'echo x & python tools/hub.py answer Q-1'), (bash, 'cat tools/hub.py & echo x'),
+            (bash, 'cat tools/hub.py & echo x'),
             (bash, 'git commit -m x tools/hub.py; python -c "import tools.hub"'),
             (bash, 'git commit -e -m x tools/hub.py'), (bash, 'git commit --edit -m x tools/hub.py'),
             (bash, 'git commit -p -m x tools/hub.py'),
@@ -1517,6 +1550,9 @@ class FailClosed(Hub):
             (ps, 'Add-Content -Path:env:PATH -Value ;Z:\\x; git diff tools/hub.py'),
             (ps, "Copy-Item Z:\\x\\f.ps1 Microsoft.PowerShell.Core\\Function::cat; Get-Content tools/hub.py"),
         ), True)
+        self.rows((
+            (bash, 'cd x && python tools/hub.py answer Q-1'), (bash, 'echo x & python tools/hub.py answer Q-1'),
+        ), 'hub-owner-verb')
         # a write to a file beside a family command stays plain
         self.rows((
             (ps, 'Get-Content tools/hub.py; Set-Content notes.txt x'),
@@ -1693,7 +1729,7 @@ class CrtWords(unittest.TestCase):
                 self.assertEqual(hub_crt_words(text), words)
 
 
-setUpModule = W.deny_softened           # these pin hub-owner-verb, off by default (test_cheap.py)
+setUpModule = W.deny_softened           # these pin hub-named, off by default (test_cheap.py)
 tearDownModule = W.allow_unplaced
 
 

@@ -26,11 +26,18 @@ Rules, in the order they are checked:
   hub-secrets      a shell command naming the hub's token folder or a token file (owner.token,
                    agent.token, approval.key) or a literal path into the token folder (a wildcard,
                    the word hub and the store are not read), or python or node
-                   code that names them; an edit of a file in the token folder or the store; a read tool's
+                   code that names them, the hub site or the hub tool (kitlib.guard.hub.INLINE_RE);
+                   an edit of a file in the token folder or the store; a read tool's
                    read of the token folder or a file in it, or a search that can read or list
                    one (the store stays readable); in any session but the owner's own
                    (kitlib.guard.hub)
-  hub-owner-verb   (off by default, modes.DEFAULTS) fail-closed: a shell line whose text names the hub tool as a module or
+  hub-owner-verb   a parsed hub tool run (hub_run_args: python, its options, then tools/hub.py or
+                   -m tools.hub, at any depth of the line) whose arguments run an owner verb
+                   (answer, open, pair, unpair, stop, restart, todos done, stories add|withdraw,
+                   to-pm add|send, inbox read, approvals approve|deny, todos add --owner; a word
+                   the guard cannot read where the verb could be counts), in any session but the
+                   owner's own
+  hub-named        (off by default, modes.DEFAULTS) fail-closed: a shell line whose text names the hub tool as a module or
                    a script (tools/hub.py, tools.hub, an import of hub, python -m hub, a standalone
                    hub on a line that runs python and holds import) anywhere outside the one shape
                    the guard reads
@@ -42,9 +49,7 @@ Rules, in the order they are checked:
                    commit, ledger or backlog message; git -c, --exec-path, --ext-diff, --textconv,
                    commit's editor and prompts, and rg --pre, --pre-glob, --hostname-bin denied;
                    hub_family: such commands on a plain line of ;, &&, || or newlines whose other
-                   commands are read as before), and that shape running an owner verb (answer, open, pair, unpair, stop,
-                   restart, todos done, stories add|withdraw, to-pm add|send, inbox read, approvals
-                   approve|deny, todos add --owner), in any session but the owner's own. Known
+                   commands are read as before), in any session but the owner's own. Known
                    limit: a name built at run time (string concatenation, an encoding, a variable,
                    a script the agent wrote) is not read; the rule guards against accidents and is
                    not an adversary boundary
@@ -1750,6 +1755,73 @@ def hub_secret_shell(ctx, cmd, inv, places, parsed=None):
     return None
 
 
+HUB_PY_VALUE_LONG = ('--check-hash-based-pycs',)   # python's long options that take the next word
+
+
+def hub_run_args(inv):
+    """The Words after the hub tool when `inv` runs it, else None: python (UI_PYTHON_RE) with
+    tools/hub.py as its script (hub_path_word), or with -m naming the hub module (tools.hub, or
+    hub from tools/; runpy's own module read as -m's). python's options are read to the operand
+    that ends them: -X and -W take a value (attached or the next word), -c runs code, `-` reads
+    standard input, `--` ends them. A script or module word the guard cannot read is no run."""
+    if inv is None or not UI_PYTHON_RE.match(inv.name or ''):
+        return None
+    args = inv.args
+    k = 0
+    while k < len(args):
+        t = args[k].text
+        if t == '--':
+            k += 1
+            break
+        if t == '-' or not t.startswith('-'):
+            break
+        if t.startswith('--'):
+            k += 2 if t.split('=', 1)[0] in HUB_PY_VALUE_LONG and '=' not in t else 1
+            continue
+        for j, ch in enumerate(t[1:], 1):       # a cluster: -Bm, -Wignore, -OO
+            if ch == 'c':
+                return None
+            if ch == 'm':
+                if j + 1 < len(t):
+                    return hub_module_args(t[j + 1:], args[k + 1:])
+                if k + 1 < len(args) and not args[k + 1].dyn:
+                    return hub_module_args(args[k + 1].text, args[k + 2:])
+                return None
+            if ch in 'WX':
+                k += 0 if j + 1 < len(t) else 1
+                break
+        k += 1
+    if k < len(args) and not args[k].dyn and hub_path_word(args[k].text):
+        return args[k + 1:]
+    return None
+
+
+def hub_module_args(module, rest):
+    """`rest` when python's -m module `module` is the hub tool (HUB_MODULE, or hub), runpy's
+    module word first when it is runpy; else None."""
+    if module == 'runpy':
+        if not rest or rest[0].dyn:
+            return None
+        module, rest = rest[0].text, rest[1:]
+    return rest if module in (HUB_MODULE, 'hub') else None
+
+
+def hub_owner_run(parsed):
+    """The owner verb a parsed hub tool run on the line `parsed` runs (hub_run_args, every
+    command at any depth; kitlib.guard.hub.owner_verb), as text, or None. A word the guard cannot
+    read counts as unreadable there, and so does a PowerShell word holding a double quote, which
+    Windows PowerShell 5.1 passes on unescaped (it can split into --owner)."""
+    for cmd in parsed.commands:
+        args = hub_run_args(cm.invocation(cmd))
+        if args is None:
+            continue
+        ps = cmd.shell == sh.PS
+        verb = hubg.owner_verb([hubg.Word(w.text, w.dyn or (ps and '"' in w.text)) for w in args])
+        if verb:
+            return verb
+    return None
+
+
 def hub_line(text):
     """The line `text` for a refusal: stripped, and cut to its first 200 characters."""
     text = text.strip()
@@ -1773,14 +1845,25 @@ class HubShell(object):
         return self._places
 
     def owner_verb(self, event, ctx, cmd, inv, cwd, role):
-        """hub-owner-verb, read once for the whole line (hub_named): the hub tool named outside
-        the one shape the guard reads in full, or that shape running an owner verb."""
+        """hub-owner-verb and hub-named, read once for the whole line: a parsed hub tool run
+        running an owner verb (hub_owner_run), then the hub tool named outside the one shape the
+        guard reads in full (hub_named, the fail-closed text reading; off by default)."""
         if self.owner or self._named is None:
             return None
-        found, self._named = hub_named(self.parsed), None
+        self._named = None
+        verb = hub_owner_run(self.parsed)
+        if verb:
+            d = refuse('hub-owner-verb', role, '`%s` runs the hub tool\'s owner verb (%s): %s This session is %s. '
+                       'Ask the owner through a question:' % (hub_line(self.parsed.text), verb, HUB_OWNER_WHY,
+                                                              hub_session(event, ctx)), hub_ask_alternative(ctx))
+            if d:
+                return d
+        if modes.mode('hub-named') == modes.OFF:
+            return None
+        found = hub_named(self.parsed)
         if not found:
             return None
-        return refuse('hub-owner-verb', role, '`%s` names the hub tool (%s) outside the one form the guard reads in '
+        return refuse('hub-named', role, '`%s` names the hub tool (%s) outside the one form the guard reads in '
                       'full (%s), or runs an owner verb in it: %s This session is %s. Ask the owner through a '
                       'question:' % (hub_line(self.parsed.text), found, HUB_SHAPE, HUB_OWNER_WHY,
                                      hub_session(event, ctx)), hub_ask_alternative(ctx))

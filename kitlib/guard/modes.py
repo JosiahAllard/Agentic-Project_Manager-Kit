@@ -26,14 +26,15 @@ DENY, WARN, OFF = 'deny', 'warn', 'off'
 MODES = (DENY, WARN, OFF)
 CONFIG_KEY = 'guard_rules'
 
-# The kit's own modes. A rule not named here is deny. owner-only, machine config, ledger, PM data,
+# The kit's own modes. A rule not named here is deny. owner-only, the hub's owner verbs on a parsed
+# hub tool run (hub-owner-verb), the hub's secrets, machine config, ledger, PM data,
 # lock state, .kit.json, generated files, gate results, destructive git in a main checkout, branch -D,
 # forcing or deleting main, core.hooksPath, owner identity, kill-by-name and file-tool edits of a
 # main checkout stay deny (docs/guard.md "Rule modes").
 DEFAULTS = {
     'unplaced': WARN,           # a write the guard cannot place (kitlib.guard.rules.UNPLACED)
     # dropped as blocks: the owner can turn each back on
-    'hub-owner-verb': OFF,      # the hub's own token check is the real protection
+    'hub-named': OFF,           # the hub tool named in text outside a parsed run (fail-closed reading)
     'wrapped-gate': OFF,
     'busy-wait': OFF,
     # dropped as blocks, kept as warnings: what the guard cannot read it cannot place (item 1)

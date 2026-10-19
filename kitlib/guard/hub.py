@@ -1,5 +1,5 @@
 """What the guard's hub rules know of the Action Hub (docs/guard.md "Hub secrets"): pure helpers
-for kitlib.guard.rules' hub-secrets, hub-owner-verb, hub-mcp and hub-browser.
+for kitlib.guard.rules' hub-secrets, hub-owner-verb, hub-named, hub-mcp and hub-browser.
 
   secret_folder(config_path)   the hub's token folder beside the machine config file
   stores(hub, pm_data_path)    the folders the hub store may be in
@@ -19,8 +19,11 @@ every tool call and stays free of the hub site's imports. tests/guard/test_rules
 they are the same. The owner-only MCP tool names are kitlib.hubmcp's own OWNER_ONLY, imported:
 that package's __init__ imports nothing. Nothing here reads a file or the environment.
 
-owner_verb judges only the one command shape kitlib.guard.rules.hub_shape reads in full. The
-other text naming the hub tool that passes is the path family (kitlib.guard.rules.hub_path_family,
+owner_verb judges the arguments of a parsed hub tool run (kitlib.guard.rules.hub_run_args:
+python with tools/hub.py as its script or -m tools.hub; hub-owner-verb). The rest of this
+paragraph is hub-named's, the fail-closed reading of any other text, off by default
+(kitlib.guard.modes): outside the one command shape kitlib.guard.rules.hub_shape reads in full,
+the other text naming the hub tool that passes is the path family (kitlib.guard.rules.hub_path_family,
 from the owner's ruling on reading and committing the hub tool): one simple command of a reader
 (cat, Get-Content, type, grep, rg, Select-String), git's add, diff, log, show, blame, status or
 restore --staged, commit.py or backlog.py, naming hub.py only as a path word, or anyhow in
@@ -64,9 +67,8 @@ HUB_SERVER = 'hub'
 # the token folder named in a command's text: `.pm-kit` then `hub` with only separators and
 # quotes between (`.pm-kit/hub`, `'.pm-kit', 'hub'`); hub.json beside it is not it
 FOLDER_RE = re.compile(r'(?i)\.pm-kit\W{1,8}hub(?![\w.-])')
-# code that reads a token: a token file's or the token folder's name, or kitlib.hubsite.auth's
-# names for them. The hub site and the hub tool by name are not read (the guard blocks only what it can place).
-INLINE_RE = re.compile(r'(?i)owner\.token|agent\.token|approval\.key|'
+# code that reads a token: a file name, kitlib.hubsite.auth's names, the hub site or the hub tool
+INLINE_RE = re.compile(r'(?i)owner\.token|agent\.token|approval\.key|hubsite|(?<![\w-])hub\.py\b|'
                        r'\.pm-kit\W{1,8}hub(?![\w.-])|'
                        r'\b(?:OWNER_FILE|AGENT_FILE|TOKEN_FILES|APPROVAL_FILE|read_token|ensure_tokens)\b')
 # programs whose literal words often name the files without touching them: a search pattern, a
