@@ -1,7 +1,7 @@
 """The machine-wide managed settings file (kitlib.machinesetup.managed; docs/machine-setup.md
 "Managed settings"): the --managed-settings mode that renders the kit's template into it, the
 default mode's note on whether it is in sync, the account guard entry left out when that file
-carries the guard, and the plugin step that takes its enabledPlugins. The managed file, the kit,
+carries the guard. The managed file, the kit,
 its template and the home are all in a temp folder (FakeHost.managed); nothing here reads or writes
 the real managed settings file, and one test proves a run leaves it as it was.
 """
@@ -127,13 +127,13 @@ class ManagedMode(ManagedBase):
         self.assertIn('in sync', out)
 
     def test_a_different_file_is_replaced_in_its_layout_with_a_backup(self):
-        old = {'model': 'opus', 'hooks': {}}
+        old = {'permissions': {'allow': ['Bash']}, 'hooks': {}}
         dump(self.target, old, bom=True, crlf=True)
         with open(self.target, 'rb') as f:
             raw = f.read()
         code, out = self.run_it()
         self.assertEqual(code, M.EXIT_OK, out)
-        self.assertIn('-  "model": "opus"', out.replace('\r', ''))           # the diff
+        self.assertIn('-      "Bash"', out.replace('\r', ''))           # the diff
         code, out = self.run_it(apply=True)
         self.assertEqual(code, M.EXIT_OK, out)
         with open(self.target, 'rb') as f:
@@ -144,6 +144,43 @@ class ManagedMode(ManagedBase):
         bak = '%s.machine-setup-%s.bak' % (self.target, T.TODAY)
         self.assertEqual(T.readb(bak), raw)
         self.assertIn('managed-settings: nothing to do', self.run_it()[1])
+
+    def test_a_file_with_keys_the_template_lacks_is_refused_and_kept(self):
+        dump(self.target, {'model': 'opus', 'env': {'A': 'b'}, 'permissions': {'allow': ['Bash']}})
+        before = T.readb(self.target)
+        code, out = self.run_it(apply=True)
+        self.assertEqual(code, M.EXIT_REFUSED, out)
+        self.assertIn('env, model', out)
+        self.assertIn('add them to the template', out)
+        self.assertEqual(T.readb(self.target), before)
+
+    def test_a_key_the_overlay_holds_is_not_dropped(self):
+        self.overlay({'model': 'opus'})
+        dump(self.target, {'model': 'sonnet'})
+        code, out = self.run_it(apply=True)
+        self.assertEqual(code, M.EXIT_OK, out)
+        self.assertEqual(load(self.target)['model'], 'opus')
+
+    def test_a_file_that_is_no_json_is_refused_and_kept(self):
+        os.makedirs(os.path.dirname(self.target))
+        with open(self.target, 'wb') as f:
+            f.write(b'{nope')
+        code, out = self.run_it(apply=True)
+        self.assertEqual(code, M.EXIT_REFUSED, out)
+        self.assertIn('is not JSON', out)
+        self.assertEqual(T.readb(self.target), b'{nope')
+
+    def test_a_file_that_is_no_object_is_refused(self):
+        dump(self.target, ['a'])
+        code, out = self.run_it(apply=True)
+        self.assertEqual(code, M.EXIT_REFUSED, out)
+        self.assertIn('does not hold a JSON object', out)
+
+    def test_no_overlay_is_a_warning_naming_the_home(self):
+        code, out = self.run_it()
+        self.assertIn('WARNING: no overlay %s found in the home folder %s' % (managed.OVERLAY, self.home), out)
+        self.overlay({})
+        self.assertNotIn('WARNING', self.run_it()[1])
 
     def test_apply_is_refused_unless_elevated(self):
         self.host.admin = False
@@ -156,7 +193,7 @@ class ManagedMode(ManagedBase):
         self.assertFalse(os.path.lexists(self.target))
 
     def test_a_file_changed_since_the_survey_is_not_replaced(self):
-        dump(self.target, {'model': 'opus'})
+        dump(self.target, {'permissions': {'allow': ['Bash']}})
         plan = managed.survey(self.ctx(), apply=True)
         self.assertEqual(plan.refusals, [])
         dump(self.target, {'model': 'sonnet'})
@@ -259,11 +296,20 @@ class RealHost(unittest.TestCase):
 
     def test_the_managed_path_is_under_program_files(self):
         with mock.patch.dict(os.environ, {'ProgramFiles': 'X:\\PF'}):
+            os.environ.pop('ProgramW6432', None)
             self.assertEqual(extras.Host().managed_path(), 'X:\\PF\\ClaudeCode\\managed-settings.json')
+
+    def test_program_w6432_is_read_first(self):
+        from hosts.claude.adapter.host import ClaudeAdapter
+        env = {'ProgramW6432': 'X:\\PF64', 'ProgramFiles': 'X:\\PF32'}
+        self.assertEqual(ClaudeAdapter().managed_settings_path(env), 'X:\\PF64\\ClaudeCode\\managed-settings.json')
+        self.assertEqual(ClaudeAdapter().managed_settings_path({'ProgramFiles': 'X:\\PF32'}),
+                         'X:\\PF32\\ClaudeCode\\managed-settings.json')
 
     def test_no_program_files_is_no_managed_file(self):
         with mock.patch.dict(os.environ):
             os.environ.pop('ProgramFiles', None)
+            os.environ.pop('ProgramW6432', None)
             self.assertIsNone(extras.Host().managed_path())
 
     def test_a_host_adapter_without_the_method_has_no_managed_file(self):
@@ -370,13 +416,6 @@ class FreshGuard(F.FreshBase):
         self.assertEqual(code, M.EXIT_OK, out)
         self.assertIn('names another kit\'s guard', out)
         self.assertFalse(F.guard_in(load(self.s2), self.kit))
-
-    def test_the_plugin_enabled_in_the_managed_file_needs_no_account_install(self):
-        dump(self.host.managed, {'enabledPlugins': {'pm-kit@pm-kit': True}})
-        plan = M.survey(self.ctx())
-        text = '\n'.join(plan.lines())
-        self.assertIn('enabled machine-wide', text)
-        self.assertFalse(any('enable the kit plugin' in c.text for c in plan.changes))
 
 
 class ManagedTool(ManagedBase):

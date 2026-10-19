@@ -26,8 +26,8 @@ step re-points a path through `<config>/tools/<link>` to the kit's own file
 (settings.repoint_links).
 
 Claude Code's machine-wide managed settings file (kitlib.machinesetup.managed) is read in both
-modes and written in neither: when it carries this kit's guard entry or turns the kit plugin on, no
-account settings.json gains its own, and the default mode notes whether the file is in sync with the
+modes and written in neither: when it carries this kit's guard entry, no account settings.json gains
+its own, and the default mode notes whether the file is in sync with the
 kit's template. Writing it is `--managed-settings` (run_managed), a mode of its own that needs an
 elevated terminal.
 
@@ -242,6 +242,10 @@ def run_managed(ctx, apply=False, out=None):
          '  overlay:        %s%s' % (managed.overlay_path(ctx.home),
                                      '' if os.path.lexists(managed.overlay_path(ctx.home)) else ' (none)'),
          '  managed file:   %s' % ctx.host.managed_path())
+    if not os.path.lexists(managed.overlay_path(ctx.home)):
+        emit('WARNING: no overlay %s found in the home folder %s: the file is made from the template '
+             'alone, without your own lines (the agents\' git identity, the auto-mode lines that name '
+             'you)' % (managed.OVERLAY, ctx.home))
     return _carry_out('managed-settings', managed.survey(ctx, apply=apply), apply, emit, lines)
 
 

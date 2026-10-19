@@ -54,7 +54,7 @@ down the longer the machine stays up: docs/windows-token-leak.md.
    (docs/machine-setup.md). Run it yourself: the guard refuses `-Apply` to agent sessions, since
    it stores the owner's email (docs/guard.md "Owner machine setup").
 
-   The settings every account shares (the guard's hook, the status line, the kit plugin) can
+   The settings every account shares (the guard's hook, the status line, the plugin's marketplace) can
    instead live once in Claude Code's machine-wide managed settings file, under
    `%ProgramFiles%\ClaudeCode`. From an elevated terminal:
 
@@ -64,8 +64,10 @@ down the longer the machine stays up: docs/windows-token-leak.md.
 
    It writes that file from the kit's template `hosts/claude/managed-settings.json`, merged with
    your own lines from `~/.pm-kit/managed-settings.json` when that file is there
-   (docs/machine-setup.md "Managed settings"). With it in place the default mode adds neither the
-   guard's entry nor the plugin to any account, and notes when the file is out of date.
+   (docs/machine-setup.md "Managed settings"). A file already there is not merged: it is replaced
+   whole, so the run is refused when it is not JSON or has keys that neither the template nor your
+   overlay holds (they are named; add them to the template). With it in place the default mode adds
+   no guard entry to any account, and notes when the file is out of date.
 2. **A repository** needs nothing installed: any git checkout with an `origin` remote whose
    default branch is pushed (`origin/HEAD` names main) works as it is. `<kit>/tools/new_worktree.py`
    fetches `origin` (it refuses if the fetch fails), and `<kit>/tools/preflight.py` does only with
@@ -300,9 +302,7 @@ pm`) stays in the PM repo's settings.
 Machine setup (`machine-setup.ps1 -Apply`, its default mode) does the same migrate for each account folder
 whose plugin is not enabled from the export: it makes the export, then runs the migrate steps for
 that folder through the same code (docs/machine-setup.md "Default mode"). The CLI also
-rewrites other keys of that `settings.json`, so the step backs the file up first. When the
-managed settings file enables `pm-kit@pm-kit`, no account folder gets its own install: the step
-only makes the export (docs/machine-setup.md "Managed settings").
+rewrites other keys of that `settings.json`, so the step backs the file up first.
 
 ### After the plugin install: remove the per-item junctions
 

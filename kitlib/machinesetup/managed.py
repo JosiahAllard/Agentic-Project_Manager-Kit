@@ -20,12 +20,14 @@ hook or statusLine path through `<config>/tools/<link>` is re-pointed to the kit
 (settings.repoint_links), as in the account settings.
 
 The written file keeps the layout the managed file has (BOM, line ends, indent); a new one is
-written in settings.NEW_LAYOUT. A replaced file is copied to a .bak beside it first, and the write
-is refused when the file changed since the survey or is a link.
+written in settings.NEW_LAYOUT. An existing file is replaced whole, so the run is refused when it
+is not a JSON object or has a top-level key the rendered template lacks (the key is named: add it
+to the template). A replaced file is copied to a .bak beside it first, and the write is refused
+when the file changed since the survey or is a link.
 
 survey_live() reads the managed file as it is, for the default mode and the older-kit switch: when
-it carries this kit's guard entry, no account settings.json gains one (settings), and when its
-enabledPlugins turns the kit plugin on, no account gets its own install (plugin).
+it carries this kit's guard entry, no account settings.json gains one (settings). The plugin step
+does not read it: each account still gets the migrate that records it in the export's state.
 """
 import copy
 import difflib
@@ -174,9 +176,10 @@ def guard_where(data, kit, home):
     return others
 
 
-def _target(plan, path):
+def _target(plan, path, data):
     """(raw, layout) of the managed file at `path`; (None, NEW_LAYOUT) when there is none; None
-    after a refusal."""
+    after a refusal. An existing file is replaced whole, so it is refused when it is no JSON object
+    or holds a top-level key that `data` (the rendered template, overlay included) lacks."""
     if not os.path.lexists(path):
         return None, dict(settings.NEW_LAYOUT)
     if is_link(path) or not os.path.isfile(path):
@@ -189,10 +192,19 @@ def _target(plan, path):
     with open(path, 'rb') as f:
         raw = f.read()
     try:
-        layout, _ = settings.read(raw)
-    except ValueError:
-        layout = dict(settings.NEW_LAYOUT, bom=raw.startswith(b'\xef\xbb\xbf'), crlf=b'\r\n' in raw)
-        plan.note(SECTION, '%s is not JSON; it is replaced whole (its copy is kept)' % path)
+        layout, have = settings.read(raw)
+    except ValueError as e:
+        plan.refuse('%s is not JSON this step can edit: %s' % (path, e))
+        return None
+    if not isinstance(have, dict):
+        plan.refuse('%s does not hold a JSON object' % path)
+        return None
+    extra = sorted(k for k in have if k not in data)
+    if extra:
+        plan.refuse('%s has keys that are neither in the kit template nor in the overlay, and replacing '
+                    'the file would drop them: %s; add them to the template (%s)'
+                    % (path, ', '.join(extra), source()))
+        return None
     return raw, layout
 
 
@@ -237,7 +249,7 @@ def survey(ctx, apply=False):
                         'terminal' % (path, command(ctx.kit)))
             return plan
         plan.note(SECTION, 'not elevated: --apply is refused here; run it from an administrator terminal')
-    got = _target(plan, path)
+    got = _target(plan, path, data)
     if got is None:
         return plan
     raw, layout = got
@@ -317,9 +329,3 @@ def survey_live(plan, ctx):
         plan.note('settings', 'the managed settings file %s names another kit\'s guard (%s): no '
                               'account settings.json gains this kit\'s; %s re-renders it'
                   % (path, ', '.join(where), command(ctx.kit, apply=False)))
-
-
-def plugin_on(ctx, pid):
-    data = getattr(ctx, 'managed_data', None)
-    ep = data.get('enabledPlugins') if isinstance(data, dict) else None
-    return isinstance(ep, dict) and ep.get(pid) is True

@@ -21,10 +21,6 @@ migrate command.
 Only folders in the refresh set (kitlib.pluginsource.claude.account_folders) are installed: a
 --config-dir folder outside it would never be updated by tools/plugin_refresh.py or pm_start, so it
 is a note giving the hand commands, and the export change is still made for them.
-
-When the machine-wide managed settings file (kitlib.machinesetup.managed) sets enabledPlugins
-["pm-kit@pm-kit"] true, the plugin is on for every account from there: no folder is installed, and
-only a missing export is made.
 """
 import json
 import os
@@ -52,11 +48,8 @@ def enabled(path, pid):
 
 def survey(plan, ctx):
     from kitlib import pluginsource as ps
-    from . import managed
+    from kitlib.config import ConfigError
     pid = ps.PLUGIN_ID
-    if managed.plugin_on(ctx, pid):
-        _survey_managed(plan, ctx, pid)
-        return
     candidates = []
     for d in ctx.config_dirs:
         path = os.path.join(d, 'settings.json')
@@ -69,10 +62,12 @@ def survey(plan, ctx):
         candidates.append((d, path, have))
     if not candidates:
         return
-    got = _load(plan, ctx)
-    if got is None:
+    try:
+        s = ps.load(ctx.home, kit=ctx.kit)
+        state = ps.read_state(s.export_dir)
+    except (ps.RefreshError, ps.StateError, ConfigError, OSError) as e:
+        plan.refuse('the plugin export (docs/plugin-source.md): %s' % e)
         return
-    s, state = got
     candidates, outside = _split(candidates, ctx.home)
     for d in outside:
         plan.note('plugin', _outside_note(d, s.export_dir))
@@ -94,7 +89,14 @@ def survey(plan, ctx):
         todo = []
     if not todo and not outside:                 # an outside folder's hand steps need the export
         return
-    _add_export(plan, ctx, s)
+    sha, _why = ps.tracking_main(ctx.kit, s.remote)
+    at = sha[:12] if sha else 'not fetched yet'
+    plan.add('plugin', 'export %s/%s (%s here; the remote is read when it runs) into %s and point its '
+                       'marketplace at it (kitlib.pluginsource.ensure_export; runs no claude; refused when '
+                       'the kit checkout has not fetched that commit)' % (s.remote, ps.MAIN, at, s.export_dir),
+             lambda: ps.ensure_export(ctx.kit, s),
+             undo='nothing to undo by hand: the export folder under %s is what tools/plugin_refresh.py '
+                  'makes and prunes' % s.export_dir)
     for d, path in todo:
         bak = free_name('%s.machine-setup-%s-plugin.bak' % (path, ctx.today))
         env = 'CLAUDE_CONFIG_DIR unset' if _is_default(d, ctx.home) else 'CLAUDE_CONFIG_DIR=%s' % d
@@ -105,44 +107,6 @@ def survey(plan, ctx):
                  lambda d=d, path=path, bak=bak: _install(ctx, s, runner, d, path, pid, bak),
                  undo='copy "%s" over "%s"; to run it again: %s (it removes the marketplace first, its '
                       'failure tolerated)' % (bak, path, ps.migrate_cmd(d)))
-
-
-def _load(plan, ctx):
-    """(the plugin source config, the export's state or None); None after a refusal."""
-    from kitlib import pluginsource as ps
-    from kitlib.config import ConfigError
-    try:
-        s = ps.load(ctx.home, kit=ctx.kit)
-        return s, ps.read_state(s.export_dir)
-    except (ps.RefreshError, ps.StateError, ConfigError, OSError) as e:
-        plan.refuse('the plugin export (docs/plugin-source.md): %s' % e)
-        return None
-
-
-def _add_export(plan, ctx, s):
-    from kitlib import pluginsource as ps
-    sha, _why = ps.tracking_main(ctx.kit, s.remote)
-    at = sha[:12] if sha else 'not fetched yet'
-    plan.add('plugin', 'export %s/%s (%s here; the remote is read when it runs) into %s and point its '
-                       'marketplace at it (kitlib.pluginsource.ensure_export; runs no claude; refused when '
-                       'the kit checkout has not fetched that commit)' % (s.remote, ps.MAIN, at, s.export_dir),
-             lambda: ps.ensure_export(ctx.kit, s),
-             undo='nothing to undo by hand: the export folder under %s is what tools/plugin_refresh.py '
-                  'makes and prunes' % s.export_dir)
-
-
-def _survey_managed(plan, ctx, pid):
-    """The managed settings file turns the plugin on for every account (its enabledPlugins, with
-    extraKnownMarketplaces naming the export): no account gets its own install. The export it names
-    is made when there is none yet; tools/plugin_refresh.py keeps it current."""
-    plan.note('plugin', 'the kit plugin %s is enabled machine-wide in the managed settings file %s: no '
-                        'account folder gets its own install' % (pid, ctx.managed_file))
-    got = _load(plan, ctx)
-    if got is None:
-        return
-    s, state = got
-    if state is None:
-        _add_export(plan, ctx, s)
 
 
 def _split(candidates, home):
