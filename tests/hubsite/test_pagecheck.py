@@ -141,12 +141,12 @@ MERMAID_CLI_SVG = (
 FULL_DOCUMENT = (
     '<!doctype html>\n<html lang="en"><head><meta charset="utf-8">\n'
     '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
-    '<title>GriffBall theme sheet</title>\n'
+    '<title>Example theme sheet</title>\n'
     '<style>\n:root { --bg: #f4f4f2; --fg: #1c1c1c; }\n'
     '@media (prefers-color-scheme: dark) {\n'
     '  :root:not([data-theme="light"]) { --bg: #161616; --fg: #e8e8e6; }\n}\n'
     'body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg); }\n'
-    '</style></head><body>\n<h1>GriffBall theme sheet</h1>\n</body></html>\n')
+    '</style></head><body>\n<h1>Example theme sheet</h1>\n</body></html>\n')
 
 KEPT = (
     FULL_DOCUMENT,
