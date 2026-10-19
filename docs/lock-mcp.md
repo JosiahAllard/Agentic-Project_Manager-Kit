@@ -10,7 +10,7 @@
 
 - A tool returns its payload as JSON text, and the same object as `structuredContent`.
 - A refusal or lock error is a tool result with `isError: true` and the payload `{"ok": false, "error": {code, message, field}}`. The server never crashes on one.
-  - Codes are the api's (docs/lock-api.md "Writes"). A store that cannot be read (`HoldsUnreadable`, `QueueUnreadable`) is `store`. Arguments that fail the tool's schema are `invalid`, with `field` naming the key. A bug in the lock is `internal`, with a short trace.
+  - Codes are the api's (docs/lock-api.md "Writes"). A store that cannot be read (`HoldsUnreadable`, `QueueUnreadable`) is `store`. Arguments that fail the tool's schema are `invalid`, with `field` naming the key. A direct in-process `Server.call` of a name the server does not serve is `unknown_tool`, with `field` `name` (over JSON-RPC that name gets -32602 first). A bug in the lock is `internal`, with a short trace.
 - An unknown tool is JSON-RPC error -32602, and a line that is not JSON is -32700.
 - Run and hold ids must match the lock's id shape (`kitlib.lock.store.ID_RE`, `r-` or `h-`) before they reach the api, which checks them again (`kitlib.lock.api._id`): the id names a store file.
 
@@ -24,27 +24,10 @@
 | `lock_run` | `id` | `{found, run}`: `api.run_record()`, live (`live: true`) or ended. An error result from the api (`invalid`, or `store` for a live record that cannot be read) is the tool error. |
 | `lock_hold` | `id` | `{found, hold}`: `api.hold_record()`, live (`live_record: true`) or ended. Holds that cannot be read are the `store` tool error (`api.hold_record` returns that error result). |
 
-## Write tools (owner-only)
+## No write tools
 
-Each description starts with `OWNER-ONLY`, and each returns `{ok, result | error, revision}`. That is the api's write result with `snapshot` replaced by its `revision`; `lock_snapshot` gives the whole snapshot.
+The server has no write tool, on any host. Asked "Drop the lock MCP's owner-only write tools so the lock never trusts a session mark, keeping the read tools?", the owner answered "yes i want that", and decided that the lock MCP ships read-only. The owner changes the lock outside any agent session: `reserve_ui.pyw`, or the lock CLI run by hand in a terminal no agent host started. The PM no longer places or releases owner holds through MCP; that decision replaces the earlier one that let it. Owner writes confirmed through the hub (O3) are a later follow-up.
 
-| tool | arguments | api call |
-|---|---|---|
-| `lock_hold_create` | `spec` | `hold_create(actor, spec)` |
-| `lock_hold_edit` | `id`, `changes` | `hold_edit(actor, id, changes)` |
-| `lock_hold_end` | `id` | `hold_end(actor, id)` |
-| `lock_set_game_mode` | `enabled` | `set_game_mode(actor, enabled)` |
-| `lock_set_games` | `games` | `set_games(actor, games)` |
-| `lock_set_division` | `division` (object or null) | `set_division(actor, division)` |
-| `lock_end_run` | `id` | `end_run(actor, id)` |
-
-- The actor passed is `{"name": "lock-mcp"}`. On the machine's store, `api.who` reads who is asking from the server's process tree, and `api.authorize` decides.
-
-## What guard.py must deny agents
-
-guard.py denies agents these seven tools, matched on the tool name's suffix. How it tells the owner's session from an agent's is still open: the `agent_id` field (ARCHITECTURE.md "Contracts", Roles) marks only subagents.
-
-`lock_hold_create`, `lock_hold_edit`, `lock_hold_end`, `lock_set_game_mode`, `lock_set_games`, `lock_set_division`, `lock_end_run`
-
-- The list in code is `kitlib.lockmcp.server.OWNER_ONLY`, and `tests/lockmcp/test_server.py` pins it.
-- Inferred, not yet seen: once the plugin is installed, Claude Code names these with the Claude plugin's MCP prefix, `kitlib.lockmcp.tool_prefix()` + `<tool>` (the host's hosts.json `mcp_tool_format`, which the guard reads too). Check the name against a real PreToolUse payload before the guard matches on it.
+- Because no tool writes, the server never asks who is calling: it reads no session mark, and `mcp/lock_server.py` installs no owner check, so `kitlib.lock.api` keeps its default one.
+- Seven write tools were retired: `lock_hold_create`, `lock_hold_edit`, `lock_hold_end`, `lock_set_game_mode`, `lock_set_games`, `lock_set_division` and `lock_end_run`. Their names are pinned in `kitlib.lockmcp.OWNER_ONLY`. `tools/list` never lists one. `tools/call` answers one as an unknown tool (-32602), and a direct in-process `Server.call` refuses it with the error code `unknown_tool`. At import the server checks that it serves none of them (`check_read_only`, which raises RuntimeError: a real check, not an `assert`, so `python -O` keeps it). `tests/lockmcp/test_server.py` pins this.
+- The guard still denies those names (docs/guard.md "Lock MCP"). It matches the host's MCP prefix plus the name; on Claude the prefix is `mcp__plugin_pm-kit_machine-lock__`. This is a second layer: a server process started from an older release keeps serving its old tools until it restarts (docs/lock-release.md).

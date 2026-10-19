@@ -34,6 +34,13 @@ def _with_kit(repo):
     return repo.commit('kit config', '.kit.json')
 
 
+def _with_kit_pushed(repo):
+    """_with_kit, its commit pushed to the remote's main (no hook: a template's own git)."""
+    with_kit = _with_kit(repo)
+    repo.git('push', '-q', 'origin', 'main')
+    return with_kit
+
+
 class PrePushCase(unittest.TestCase):
     def setUp(self):
         self.repo = gitfixture.TempRepo(bare_remote=True, prepare=_with_kit,
@@ -215,8 +222,13 @@ class OwnerTest(PrePushCase):
     branch gate records its own tip, so a gated agent branch could otherwise go straight to main."""
 
     def setUp(self):
-        PrePushCase.setUp(self)
-        self.assertEqual(self.push('origin', 'main')[0], 0)
+        # The remote's main starts at the .kit.json commit, pushed once in the template without
+        # the hook (HookTest's first test pushes that same commit through the hook).
+        self.repo = gitfixture.TempRepo(bare_remote=True, prepare=_with_kit_pushed,
+                                        prepare_key='test_prepush.OwnerTest')
+        self.addCleanup(self.repo.cleanup)
+        self.with_kit = self.repo.prepared
+        self.assertEqual(self.remote_main(), self.with_kit)
 
     def commit_as(self, email, files, message='work'):
         """Commit `files` ({path: text}; None: already written) as `email`: the new HEAD."""
@@ -484,6 +496,22 @@ EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
 SECRET = 'a PM ruling that is never public\n'
 
 
+def _with_pmdata(repo):
+    """_with_kit, then the PM data branch pmdata: a root commit of the empty tree, and on it a
+    commit of ledger.md and .gitkeep, made in a linked worktree that is removed again (a template
+    keeps no absolute path). Built once per process: (with_kit, the data root, the data commit)."""
+    with_kit = _with_kit(repo)
+    root = repo.git('commit-tree', EMPTY_TREE, '-m', 'PM data root')
+    repo.git('branch', 'pmdata', root)
+    wt = os.path.join(repo.base, 'data')
+    repo.git('worktree', 'add', '-q', wt, 'pmdata')
+    repo.write('ledger.md', SECRET, root=wt)
+    repo.write('.gitkeep', '', root=wt)
+    data = repo.commit('a ruling', 'ledger.md', '.gitkeep', cwd=wt)
+    repo.git('worktree', 'remove', wt)
+    return with_kit, root, data
+
+
 @real_git('git push runs the real pre-push hook (core.hooksPath); rev-list --no-object-names')
 class PmDataTest(PrePushCase):
     """The leak stage (docs/guard.md "Pre-push", "PM data branch"): with kit-pm-data.json in the
@@ -491,18 +519,22 @@ class PmDataTest(PrePushCase):
     remote, and that remote gets nothing else. origin is the public remote."""
 
     def setUp(self):
-        PrePushCase.setUp(self)
+        self.repo = gitfixture.TempRepo(bare_remote=True, prepare=_with_pmdata,
+                                        prepare_key='test_prepush.PmDataTest')
+        self.addCleanup(self.repo.cleanup)
+        self.with_kit, self.root, self.data = self.repo.prepared
+        # The private remote and the data worktree are paths outside the copy: made per test.
         self.private = os.path.join(self.repo.base, 'private.git')
-        self.repo.git('init', '-q', '--bare', self.private, cwd=self.repo.base)
+        gitfixture.built_copy(('test_prepush.PmDataTest.private', os.environ.get('KIT_FAKE_GIT')),
+                              self.private, self.bare, repos=())
         self.repo.git('remote', 'add', 'private', self.private)
-        self.root = self.repo.git('commit-tree', EMPTY_TREE, '-m', 'PM data root')
-        self.repo.git('branch', 'pmdata', self.root)
         self.data_wt = os.path.join(self.repo.base, 'data')
         self.repo.git('worktree', 'add', '-q', self.data_wt, 'pmdata')
-        self.repo.write('ledger.md', SECRET, root=self.data_wt)
-        self.repo.write('.gitkeep', '', root=self.data_wt)
-        self.data = self.repo.commit('a ruling', 'ledger.md', '.gitkeep', cwd=self.data_wt)
         self.record()
+
+    def bare(self, folder):
+        """An empty bare repository in `folder`: the private remote, copied for each test."""
+        self.repo.git('init', '-q', '--bare', folder, cwd=self.repo.base)
 
     def record(self, text=None, root=None):
         """kit-pm-data.json as pm_data.py init writes it, or `text` written as is."""

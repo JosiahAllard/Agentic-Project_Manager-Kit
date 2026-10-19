@@ -1,6 +1,6 @@
 # Machine lock API
 
-`kitlib/lock/api.py` is the one way any UI reads or changes the machine lock. Today that means `tools/machine_lock.py` (`status --json` prints `snapshot()`) and the lock MCP server, `mcp/lock_server.py` (docs/lock-mcp.md).
+`kitlib/lock/api.py` is the one way any UI reads or changes the machine lock. Today that means `tools/machine_lock.py` (`status --json` prints `snapshot()`) and, for reads only, the lock MCP server, `mcp/lock_server.py` (docs/lock-mcp.md; it has no write tools, by the owner's decision).
 
 - Calls are plain functions. JSON-ready dicts go in and out, and there is no transport.
 - The schedule window, `reserve_ui.pyw` (kit root) (logic in `kitlib/lockui/`), reads with `snapshot()` and `history()` and makes every change with the write calls below. Owner writes go through only when the owner runs it (Who may, below).
