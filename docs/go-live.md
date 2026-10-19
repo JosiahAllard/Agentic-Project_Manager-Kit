@@ -40,7 +40,6 @@ These keys in the machine config carry the install's names, paths and ledger ids
 ## Fix before or at go-live
 
 - worktree_remove.py and worktree_sweep_task.py (docs/worktree-remove.md): the owner registers the nightly sweep (Ported repo tools).
-- PM docs/machine-lock.md: add the line on docker exec runs that hold no gpu slot (docs/lock-api.md "Runs").
 - Lock MCP tool names (the Claude plugin's MCP prefix, `kitlib.lockmcp.tool_prefix()`): no real PreToolUse payload captured. After the plugin install, read one and set `guard_mcp_prefix` and `guard_mcp_tools` if the names differ (docs/guard.md "Lock MCP").
 - Pre-push non-fast-forward refusal (kitlib/guard/prepush.py; docs/guard.md "Pre-push"): refuses a non-ff push or delete of main wherever the hook is installed. A repo's own pre-push is deleted only once the kit's hook is on there.
 - Owner-only paths (docs/guard.md "Owner-only commits"): the author email can be forged.

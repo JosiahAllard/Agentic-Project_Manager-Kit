@@ -9,56 +9,26 @@ with the exact, case-sensitive `--remote-control` name, as `kitlib/launcher/look
 `launch.py start --session <key> --account <n>` that starts it (docs/launcher.md). `<n>` is the account
 this PM session runs on (`kitlib.pmstart` `current_account`), not the entry's stored one, so the PM
 launches every coordinator, the kit's included, from whatever account it started on; when that
-account cannot be identified the line says `--account auto` (pick-account's choice). Tests:
-`tests/pmstart/test_pmstart.py` `LivenessTest`.
+account cannot be identified the line says `--account auto` (pick-account's choice).
 
-Hub (`kitlib.pmstart` `hub_site`, tests `tests/pmstart/test_hub_site.py`; docs/action-hub.md): the
-lines read the machine config's `hub` key (`kitlib.hubsite.settings`), or every default (port 8790)
-when there is no `hub` key. The check only asks the loopback server on `hub.port`, through
-`kitlib.hubsite.client`; it starts no process and never starts the server, and it imports
-`kitlib.hubsite.serve` only once the settings are read. Each ask (`GET /api/v1/health`,
-then `GET /api/v1/pending?for=pm`) waits at most `HUB_SITE_TIMEOUT_S` (1.5 seconds). The pending
-ask is the PM's items only, the list `hub.py pending --for pm` prints: an item routed to a creator
-that can still be reached is that session's to ack, and a PM ack would hide it from the creator's
-wait. The lines:
-`hub: server up on port <n>, <k> pending for the PM` (`<k>` is 0 when the answer's `items` is not a
-list); when `<k>` is above 0, a line to process the items (`hub.py pending --for pm`); then either
-`hub: wait --pending is running` or a warning, `hub: WARN no PM wait --pending --for pm is
-running, so items routed to the PM go unseen; ...`, telling the PM to start
-`hub.py wait --pending --for pm` in the background and start it again after it ends (docs/action-hub.md
-"Who handles a pending item"). "Running" is matched by
-command text only: any `python` process on the machine whose command line holds `hub.py`, `wait`
-and `--pending`, and no `--for` other than `--for pm`, counts (`_wait_running` in
-`kitlib/pmstart/__init__.py`): a session's `wait --pending --for <key>` waits on its own answers
-and is not the PM's, but another PM session's plain `wait --pending` makes this line say running. Failures,
-each one line:
-- Nothing listens: `hub: hub server down (nothing listens on port <n>): start it with python
-  "<kit>/tools/hub.py" serve`.
-- No token file (neither the agent's nor the owner's can be read): `hub: no hub token file is there
-  to read: run python "<kit>/tools/hub.py" setup`.
-- `GET /api/v1/health` answered, but not ok: `hub: server did not answer as the hub does (health not ok)`.
-- Any other failure of `GET /api/v1/health` (a timeout, a refusal, an answer that is not the hub's): `hub:
-  server did not answer as the hub does (<exception class>)`; the class is all it names.
-- `GET /api/v1/pending?for=pm` fails after `GET /api/v1/health` answered: `hub: server up on port <n>, pending not asked
-  (<exception class>)`.
-- The `hub` key is there and cannot be used (the machine config check refuses it, or the hub
-  settings do): `hub: the hub key of the machine config cannot be used: <the configuration error's
-  own text>`, on one line and cut at `HUB_ERROR_MAX` (400) characters. The text names the key and
-  the rule it broke, never the rejected value (`_without_values` strips the `, not '<value>'`
-  part); the `hub` key holds no token.
-- A machine config that cannot be read at all, or whose check fails with no `hub` key in it: `hub:
-  the machine config could not be read (<exception class>)`.
-No token or server message reaches a line. The test home fence is not caught here
-(`kitlib.config.user` `HomeFenced`). `pm_watch.py` counts as running when its
-heartbeat (docs/pm-watch.md "Stream mode and heartbeat") is at most 5 minutes old
-(`kitlib.pmstart` `BEAT_STALE`) and names the pid of a running `python` process whose command line
-holds `pm_watch.py` and that started at the time the heartbeat records (within 2 seconds,
-`START_SLACK`; skipped when either start time is unknown), so a reused pid does not count.
-Otherwise the line says whether it stopped polling, is an older copy with no heartbeat, or is not
-running, and gives the command to start it under Monitor. A running watcher whose heartbeat says it
-does not stream gets a line to restart it with `--stream`, and a `pm_watch_cmd` without `--stream`
-gets a line too: either watcher exits after one batch of events. Tests:
-`tests/pmstart/test_pmstart.py` `WatcherTest`. The last check, always on and with no config key (after `console_tasks`, below), is the live foreground lock timeout (docs/windows-token-leak.md): a line while it is not 0, with the command the owner runs in their own PowerShell window. Code: `kitlib/pmstart/fglock.py`; tests: `tests/pmstart/test_fglock.py`.
+Hub (`kitlib.pmstart` `hub_site`; docs/action-hub.md): the lines read the machine config's `hub`
+key, or every default (port 8790). The check only asks the loopback server (`GET /api/v1/health`,
+then `GET /api/v1/pending?for=pm`, 1.5 seconds each) and never starts it. The lines:
+`hub: server up on port <n>, <k> pending for the PM`; when `<k>` is above 0, a line to process the
+items (`hub.py pending --for pm`); then either `hub: wait --pending is running` or a warning telling
+the PM to start `hub.py wait --pending --for pm` in the background (docs/action-hub.md "Who handles
+a pending item"). "Running" is matched by command text only. A failure is one line naming the fix:
+the server down (`hub.py serve`), no token file (`hub.py setup`), an answer that is not the hub's, a
+`hub` key that cannot be used (naming the key and the rule, never the value), or a machine config
+that cannot be read. No token or server message reaches a line.
+
+`pm_watch.py` counts as running when its heartbeat (docs/pm-watch.md "Stream mode and heartbeat")
+is at most 5 minutes old and names a running `pm_watch.py` process that started at the recorded
+time. Otherwise the line says whether it stopped polling, has no heartbeat, or is not running, and
+gives the command to start it under Monitor; a watcher or `pm_watch_cmd` without `--stream` gets a
+line too. The last check, always on and with no config key, is the live foreground lock timeout
+(docs/windows-token-leak.md): a line while it is not 0, with the command the owner runs in their
+own PowerShell window (`kitlib/pmstart/fglock.py`).
 
 ## Kit currency (`kit_sync`)
 
@@ -68,12 +38,11 @@ fast-forwards local `main` ("kit updated to <short sha>"). It prints nothing whe
 contains `origin/main`. It leaves the checkout alone, with one "kit not updated: ..." line, when it
 is not on `main`, has a merge, cherry-pick, revert or rebase in progress or uncommitted changes, when the landing lock is held, or
 when the fetch fails (offline, timed out); a diverged `main` is reported, never merged. It changes
-no git config and never rebases, resets or forces. The checks are a point in time (the landing lock is only read); `git merge --ff-only` bounds a race with a landing, since it refuses anything that is not a fast-forward. Code: `kitlib/pmstart` `kit_sync`; tests:
-`tests/pmstart/test_kitsync.py`.
+no git config and never rebases, resets or forces.
 
 ## Plugin export (`plugin_current`)
 
-Right after `kit_sync`, the `plugin_current` check prints one line when the pm-kit plugin export is missing, behind the kit's `refs/remotes/<remote>/main`, or an account folder's last refresh failed, each with `python "<kit>/tools/plugin_refresh.py" --apply`, and when there is no export or an account folder is not migrated, with `python "<kit>/tools/plugin_refresh.py" --migrate --apply` instead (`<kit>` the kit's absolute path, `kitlib.pluginsource` `refresh_cmd`: the PM's session runs in another folder); an unreadable export state is a `could not check the pm-kit plugin` line. It reads the export root only, never an account folder (docs/plugin-source.md "Behind warnings"). Code: `kitlib/pmstart` `plugin_current`, `kitlib.pluginsource` `current_lines`; tests: `tests/pmstart/test_plugin_current.py`.
+Right after `kit_sync`, the `plugin_current` check prints one line when the pm-kit plugin export is missing, behind the kit's `refs/remotes/<remote>/main`, or an account folder's last refresh failed, each with `python "<kit>/tools/plugin_refresh.py" --apply`, and when there is no export or an account folder is not migrated, with `python "<kit>/tools/plugin_refresh.py" --migrate --apply` instead; an unreadable export state is a `could not check the pm-kit plugin` line. It reads the export root only, never an account folder (docs/plugin-source.md "Behind warnings").
 
 ## Stubs (`stubs`)
 
@@ -84,14 +53,9 @@ sets `"stubs".tools`, or it holds at least one) whose stubs are missing or stale
 `stubs (<repo>): N missing/stale: <names>; run python <kit>/tools/kit_stubs.py write -C <folder>`,
 with `(stale ones run the kit at <path>)` added when a stub runs another kit. A repository whose
 stubs are current prints nothing; a folder that is not there, or a check that fails, is that
-repository's own `could not check stubs (<repo>): ...` line. The check runs in the plugin's
-export, so it compares each stub with the main checkout the export's marker names, the folder
-`kit_stubs.py write` would name (`kitlib.stubs.live_kit`); an export whose marker names none gives
-each repository that uses stubs `could not check stubs (<repo>): <export> is an export of the kit
-...` with no write command, and a repository with none still nothing (docs/plugin-source.md
-"Layout"). The coordinator's session start has the
-same check for its own repository (docs/install.md "Tools without a stub"). Code: `kitlib/pmstart`
-`stubs`; tests: `tests/pmstart/test_stubs_check.py`.
+repository's own `could not check stubs (<repo>): ...` line. The check compares each stub with the main checkout the plugin export's marker names
+(docs/plugin-source.md "Layout"). The coordinator's session start has the
+same check for its own repository (docs/install.md "Tools without a stub").
 
 ## Memory folder (`memory`)
 
@@ -106,13 +70,11 @@ writes another repository's main checkout. One it cannot read gives `could not c
 prints nothing. The kit's folder is `<the main checkout's drive>/Agent-memory/<repo folder name>`.
 Then `pm_start.memory_dir` must name the folder the PM repository's settings name (the owner's
 choice when the key names another folder, else the kit's folder; case and slashes
-aside), or one line says what to set it to. Claude Code ignores the key without a word when
-`blockReadsOutsideWorkingDirectories` is set or the workspace is not trusted. Code:
-`kitlib/pmstart` `memory`; tests: `tests/pmstart/test_pmstart.py` `MemoryTest`.
+aside), or one line says what to set it to.
 
 ## Repo prep (`repo_prep`)
 
-After `memory`, the `repo_prep` check runs the first-use repo prep (`kitlib.git.prep.run`; docs/new-worktree.md "First-use prep") on each repository in `launcher.repos`. The prep adds each host's worktree folder to the repository's `info/exclude` and sets the local `core.hooksPath` to the kit's `githooks/` when none is set and `.git/hooks` holds no hook. It prints a `repo prep: <folder>: ...` line only for what it did or could not do, so a repository already prepared prints nothing. A folder that is not there gives a `could not prep <repo>: ...` line. Code: `kitlib/pmstart` `repo_prep`; tests: `tests/pmstart/test_repo_prep.py`.
+After `memory`, the `repo_prep` check runs the first-use repo prep (`kitlib.git.prep.run`; docs/new-worktree.md "First-use prep") on each repository in `launcher.repos`. The prep adds each host's worktree folder to the repository's `info/exclude` and sets the local `core.hooksPath` to the kit's `githooks/` when none is set and `.git/hooks` holds no hook. It prints a `repo prep: <folder>: ...` line only for what it did or could not do, so a repository already prepared prints nothing. A folder that is not there gives a `could not prep <repo>: ...` line.
 
 ## Agent temp (`agent_temp`)
 
@@ -121,38 +83,20 @@ After `memory`, the `agent_temp` check prints one line for each part of the agen
 it)" when neither the process nor the user environment has `AGENT_TEMP`; "agent_temp_sweep is not
 set in the machine config (machine_setup.py plans it)"; and "agent temp sweep task agent-temp-sweep
 is not registered (machine_setup.py --apply registers it, the owner's act)" when
-`schtasks /Query` (4 second limit) says the task does not exist. A query that fails any other way
-(access denied, the time limit, no `schtasks`) is "could not check the agent temp sweep task
-agent-temp-sweep: ...", after the other two lines, never "not registered"
-(`kitlib.machinesetup.agenttemp.task_registered`). It changes nothing. A failing environment or
-config reader is one `could not check agent_temp: ...` line. Code: `kitlib/pmstart` `agent_temp_lines`; tests:
-`tests/pmstart/test_agent_temp_check.py`.
+`schtasks /Query` (4 second limit) says the task does not exist. A query that fails any other way is "could not check the agent temp sweep task
+agent-temp-sweep: ...", never "not registered". It changes nothing. A failing environment or
+config reader is one `could not check agent_temp: ...` line.
 
 ## Console tasks (`console_tasks`)
 
 After `agent_temp` and before the foreground lock check, always on and with no config key, the
-`console_tasks` check reads every registered scheduled task's actions from
-`schtasks /Query /XML ONE` (4 second limit) and prints one line for each action of a kit task whose
-program is a console program (`python.exe`, `py.exe`, `powershell.exe`, `pwsh.exe`, `cmd.exe`,
-`bash.exe`; `kitlib/pmstart/consoletasks.py` `CONSOLE`): "scheduled task <path> starts <program>, a
-console program: a console window opens each time it runs. Its program should be pythonw.exe with
-the carrier tools\no_window.py as its first argument (docs/daily-full.md "The schedule": ...)". Such
-a task opens a window on the desktop each time it runs (docs/daily-full.md "The schedule"). A kit
-task is one with a name the kit registers (the launcher's sign-in task, `agent-temp-sweep`, a name
-ending `-worktree-sweep` or `-daily-full`) or an action with a word (its program, or an argument,
-quoted or not, with a leading `&`, quotes and an option's `-opt:` / `--opt=` taken off, `words`)
-that is an absolute path inside a kit folder (`is_kit`, `kit_roots`): this kit; the
-live checkout an export runs for (`KIT_LIVE_ROOT`); and, when this kit is a plugin export, the
-folder that holds every export. A file named like a kit tool in another folder, another
-repository's `<repo>\tools\gate.py`, is not the kit's. A task that names the kit's checkout while
-the session start runs from the plugin export is matched by its name only. A `pythonw.exe` program
-is never flagged, with or without the carrier. `schtasks` writes bytes: UTF-16 output (a byte order
-mark, or NULs) goes to the XML parser as bytes, which reads the declaration itself; single-byte
-output is read in the OEM code page, its declaration dropped unless it names a single-byte encoding,
-since `schtasks /Query /XML` declares `encoding="UTF-16"` over single-byte text on a pipe and
-`/XML ONE` declares none (`xml_input`). It changes nothing; a failed read (access denied, the time
-limit, no `schtasks`) is one `could not check console_tasks: ...` line. Code:
-`kitlib/pmstart/consoletasks.py`; tests: `tests/pmstart/test_console_tasks.py`.
+`console_tasks` check reads every registered scheduled task's actions (`schtasks /Query /XML ONE`,
+4 second limit) and prints one line for each action of a kit task whose program is a console
+program (`python.exe`, `powershell.exe`, `cmd.exe` and the like): such a task opens a window on the
+desktop each time it runs, and its program should be `pythonw.exe` with the carrier
+`tools\no_window.py` (docs/daily-full.md "The schedule"). A kit task is one with a name the kit
+registers or an action naming a path inside a kit folder. It changes nothing; a failed read is one
+`could not check console_tasks: ...` line (`kitlib/pmstart/consoletasks.py`).
 
 ## Config
 
@@ -175,8 +119,7 @@ The machine config (docs/kit-json.md "Machine config keys"), key `pm_start`; wit
   with `autostart: false` is not checked.
 - `pm_watch_cmd`: the command the watcher line prints, as written (docs/pm-watch.md); without
   `--stream` the checklist adds a line saying so. Unset, it is
-  the kit's own `python -u "<kit>/tools/pm_watch.py" --stream` (`kitlib.pmstart`
-  `PM_WATCH_DEFAULT_CMD`).
+  the kit's own `python -u "<kit>/tools/pm_watch.py" --stream`.
 - `eng_review` (optional, list of strings): the owner's design-review flags
   (docs/engineering-rulings.md), printed each start so the PM sends matching ENG questions (from
   a consultant or a coordinator) to the hub. Empty or absent prints nothing; a value that is not
@@ -189,16 +132,8 @@ The machine config (docs/kit-json.md "Machine config keys"), key `pm_start`; wit
 
 Only in settings the PM session loads; the hook does not check which session runs it. It is not
 in the plugin, which every session loads. Exec form, with `<pythonw>` the interpreter that
-`boot/hook.py claude --settings-entry` prints (docs/guard.md "Go-live"), starts no shell. `pythonw` has no
-console, so each program the checklist starts is started with a console that has no window: git
-(`kitlib.git.cmd`) and the PowerShell that lists processes (`kitlib/pmstart` `list_processes`;
-`tests/pmstart/test_plumbing.py`) through `kitlib.proc.spawn`, `schtasks` with `CREATE_NO_WINDOW`
-in `kitlib.machinesetup.agenttemp.task_registered` (docs/daily-full.md "The schedule"). Put it in the PM
-repo's `.claude/settings.local.json`, which only that checkout loads. `tools/machine_setup.py`
-otherwise reads the account config folders (`~/.claude`, `~/.claude-*`, `default_config_dirs` in
-`kitlib/machinesetup`), never a repository's settings, so this file is edited by hand, except that
-`machine-setup.ps1 -PmSettings <file>` (its default mode) writes the hook to the one file it names and
-refuses an account's `settings.json` (docs/machine-setup.md "Default mode").
+`boot/hook.py claude --settings-entry` prints (docs/guard.md "Go-live"), starts no shell. Put it in the PM
+repo's `.claude/settings.local.json`, which only that checkout loads. It is edited by hand, or `machine-setup.ps1 -PmSettings <file>` writes it (docs/machine-setup.md "Default mode").
 
 ```json
 {"hooks":{"SessionStart":[{"matcher":"startup|resume|compact","hooks":[{"type":"command","command":"<pythonw>","args":["<kit>/boot/hook.py","claude","SessionStart","pm"]}]}]}}
