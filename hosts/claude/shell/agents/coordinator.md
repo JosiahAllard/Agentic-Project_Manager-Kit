@@ -180,8 +180,8 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   time you saw.
 - Chain a write (commit, merge, reset, backlog.py write, landing command) with other commands in one
   shell call.
-- Retry after a classifier refusal or permission denial: it ends that action; report it. A kit-guard
-  refusal: fix the form (follow its Instead:) and retry. A refusal printed by a
+- Retry after a classifier refusal or permission denial: it ends that action: report it verbatim. A kit-guard
+  refusal: fix the form its Instead: line gives, then retry. A refusal printed by a
   repo tool (backlog.py, commit.py, sync_base.py, new_worktree/new_phase) may be fixed and retried ONCE
   by the same agent; a denial of that retry goes to the PM. Log every refusal in `docs/ops/refusals.md` (date, agent, command, verbatim message, cause
   class, fix) and send it to the PM. A repeat is a tool bug to fix, not a command for the owner.
