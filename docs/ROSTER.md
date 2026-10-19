@@ -33,7 +33,7 @@ standard tier (Claude: `model: sonnet`).
 | consultant | deep | high | Own long-lived launched session per repository (never dispatched; 1M via launcher). Answers engineering questions from coordinators and workers; never edits, lands or dispatches builds; idle until asked. |
 | coordinator | strong | medium | Main session, never a subagent. Splits work, dispatches agents, reviews branches, queues every LAND verdict for landing at once, brings decisions to the owner. Writes no code. |
 | deep-worker | deep | xhigh | Own launched session (never dispatched; 1M via launcher). Root cause or concurrency work senior-worker failed at or plainly cannot do; never builds or plans. |
-| helper | light | medium | Bulk menial reads and mechanical bulk writes, dispatched by a builder into its own worktree; read and edit tools only, no shell. Never dispatched by a coordinator for a story. |
+| helper | light | medium | Bulk menial reads and mechanical bulk writes, dispatched by a builder into its own worktree; read and edit work only, runs no shell command. Never dispatched by a coordinator for a story. |
 | lander | light | medium | Optional wrapper: submits one reviewed branch (or a batch) for landing, waits for the result, reports. Never edits code. Dispatched with no model override, and never overridden. |
 | pm | strong | high | The project manager: the owner's one main session (the after-reboot resume starts it so), never a subagent. Keeps every repository's coordinator running and briefed, records owner decisions in the ledger, schedules the machine, runs the Action Hub. Builds and lands nothing itself. |
 | records | standard | low | Writes settled facts into docs only: decisions, landing notes, plan ticks. |
