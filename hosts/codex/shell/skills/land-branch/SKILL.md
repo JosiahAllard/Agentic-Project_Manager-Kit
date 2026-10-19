@@ -31,7 +31,7 @@ Prerequisites, all from the coordinator: the branch, its reviewed tip sha (full)
 - After a main sync of a reviewed branch, run `python <kit>/tools/verdict.py carry -C <main checkout> --branch <branch>` before submitting the new tip: `CARRIED ...` moves the queued verdict to it (only conflict-free main merges since the review, the branch's own diff unchanged); `NOT CARRIED: ...` means review and queue the new tip (`<kit>/docs/gate.md` "Carrying a verdict forward").
 - A branch lands only with your verdict and its `gate.py --full` green on that exact tip (`land.py` refuses a gate-OK record without `"full": true`). `land.py` aborts any conflict, docs too: the author merges main and re-gates with `--full`; the brief carries no conflict rules.
 - A test pinning files outside its module is mapped to them in the gate's selector (`--find gate`), or main goes red at the next landing.
-- Before a record closes, move what must survive (owner decisions, paraphrased and dated, to the decisions log; constraints beside the code or the owning doc); open follow-ups become their own records.
+- Before a record closes, move what must survive (owner decisions, paraphrased, dated, with the ruling id, to the decisions log; constraints beside the code or the owning doc); open follow-ups become their own records.
 - After every landing, tell every open workstream that main moved and what changed in their area.
 - A fresh or successor session reads `land.py --queue` and the land result records first (skill session-handoff), and never resubmits a branch already queued.
 
