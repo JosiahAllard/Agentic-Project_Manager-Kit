@@ -94,7 +94,7 @@ Exit codes are the same as preflight's: 0 for the board, 2 for a usage error or 
 - **1**: any stray.
 - **0**: clean. Also 0 when git could not tell; then a WARNING line is printed.
 
-`--allow-tracked` is for the lander's post-merge gate: it ignores tracked edits, and there "could not tell" fails.
+`--allow-tracked` is for a repo's landing gate step (a step's `merged_args`), which runs in the `_landing` linked worktree: with it, "could not tell" is a `[FAIL]` line and exit 1. It exempts no stray, tracked or untracked; the name is kept for the `merged_args` repos already pass.
 
 ## .kit.json keys read
 
