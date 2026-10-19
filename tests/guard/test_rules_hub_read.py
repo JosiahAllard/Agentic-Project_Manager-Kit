@@ -1,6 +1,7 @@
-"""hub-secrets for the read tools (docs/guard.md "Hub secrets"): Read, Grep and Glob of the hub's
-token folder are refused in every session but the owner's own, and so is a search from a parent
-of it whose terms can reach it; the hub store stays readable."""
+"""hub-secrets for the read tools (docs/guard.md "Hub secrets"): Read and Grep of the hub's token
+folder are refused in every session but the owner's own, and so is a Grep from a parent of it whose
+file filter can reach it; the hub store stays readable. Glob is not hooked (R-2265): a names
+search of the folder passes."""
 import os
 import unittest
 
@@ -64,8 +65,7 @@ class Searches(Hub):
 
     def test_a_search_in_the_folder(self):
         for make in (self.grep(self.secrets), self.grep(os.path.join(self.secrets, 'owner.token')),
-                     self.grep(None, cwd=self.secrets), self.grep(self.secrets, glob='*.py'),
-                     self.glob('*', self.secrets), self.glob('*.py', cwd=self.secrets)):
+                     self.grep(None, cwd=self.secrets), self.grep(self.secrets, glob='*.py')):
             self.denied(make, 'hub-secrets')
             self.owner_allowed(make)
 
@@ -92,27 +92,25 @@ class Searches(Hub):
             with self.subTest(glob=glob):
                 self.allowed(self.grep(self.w.home, glob=glob), SUB)
 
-    def test_a_names_search(self):
+    def test_a_names_search_is_not_hooked(self):
+        # R-2265: Glob is unhooked; a names search lists names and reads no token's text, so even
+        # one in the folder or naming a token file passes (it was hub-secrets' list_reaches)
         parent = os.path.basename(os.path.dirname(self.secrets))
-        for make in (self.glob('**/*', self.w.home), self.glob('**', cwd=self.w.home),
+        for make in (self.glob('*', self.secrets), self.glob('*.py', cwd=self.secrets),
+                     self.glob('**/*', self.w.home), self.glob('**', cwd=self.w.home),
                      self.glob(parent + '/*/*', self.w.home), self.glob(parent + '/{hub,x}/*', self.w.home),
                      self.glob(self.secrets.replace('\\', '/') + '/*', self.w.wt),
                      self.glob(os.path.relpath(self.secrets, self.w.wt).replace('\\', '/') + '/owner.token',
                                self.w.wt), self.glob('', self.w.home),
-                     self.glob(parent + '/*', self.w.home)):        # it names the folder itself
-            self.denied(make, 'hub-secrets')
-        for make in (self.glob('src/*.py', self.w.home), self.glob('*', self.w.home),
-                     self.glob(parent + '/*.json', self.w.home), self.glob('**/*.py', self.w.wt),
-                     self.glob('**/*.py', self.w.home)):         # no name in the folder ends .py
-            self.allowed(make, SUB)
+                     self.glob(parent + '/*', self.w.home), self.glob('src/*.py', self.w.home)):
+            self.allowed(make)
 
-    def test_a_names_search_meets_what_is_in_the_folder(self):
+    def test_a_filter_meets_what_is_in_the_folder(self):
         os.makedirs(os.path.join(self.secrets, 'sessions'))
         with open(os.path.join(self.secrets, 'sessions', 'b.py'), 'w', encoding='utf-8') as f:
             f.write('')
-        self.denied(self.glob('**/*.py', self.w.home), 'hub-secrets', SUB)
         self.denied(self.grep(self.w.home, glob='*.py'), 'hub-secrets', SUB)
-        self.allowed(self.glob('**/*.md', self.w.home), SUB)
+        self.allowed(self.grep(self.w.home, glob='*.md'), SUB)
 
     def test_unrelated_searches_and_the_store_pass(self):
         for make in (self.grep(self.w.wt), self.grep(None), self.grep(self.store), self.grep(self.w.data),
@@ -124,11 +122,13 @@ class Malformed(unittest.TestCase):
     def test_a_field_of_the_wrong_type_raises_so_the_hook_denies(self):
         from hosts.claude.adapter.host import ADAPTER
         for tool, ti in (('Read', {'file_path': ['x']}), ('Grep', {'pattern': 'x', 'path': 5}),
-                         ('Grep', {'pattern': 'x', 'glob': ['*']}), ('Glob', {'pattern': None, 'path': {}}),
-                         ('Glob', {'pattern': 3}), ('Read', ['x'])):
+                         ('Grep', {'pattern': 'x', 'glob': ['*']}), ('Read', ['x'])):
             with self.subTest(tool=tool, ti=ti):
                 with self.assertRaises((ValueError, AttributeError)):
                     ADAPTER.parse('PreToolUse', event(tool, ti, 'C:/r'))
+        # Glob is no read tool (R-2265): its input is not read, so no shape of it raises
+        for ti in ({'pattern': None, 'path': {}}, {'pattern': 3}):
+            self.assertEqual(ADAPTER.parse('PreToolUse', event('Glob', ti, 'C:/r')).kind, 'other')
 
 
 class Helpers(unittest.TestCase):

@@ -85,7 +85,7 @@ class Entry(unittest.TestCase):
         self.assertEqual((code, out), (0, ''), err)
 
     def test_a_subagent_read_of_the_hub_owner_token_is_denied(self):
-        # Read, Grep and Glob reach the guard (host.MATCHER) and
+        # Read and Grep reach the guard (host.MATCHER) and
         # hub-secrets refuses the token folder; the path is built from kitlib's names
         from kitlib.config import user as kuser
         from kitlib.guard import hub as hubg
@@ -97,11 +97,16 @@ class Entry(unittest.TestCase):
         hso = json.loads(out)['hookSpecificOutput']
         self.assertEqual(hso['permissionDecision'], 'deny')
         self.assertIn('[kit guard: rule=hub-secrets role=subagent]', hso['permissionDecisionReason'])
-        # a subagent Glob of the folder is refused too; the owner's own session (unmarked main) reads it
-        ev = json.loads(self.event('Glob', {'pattern': '*', 'path': folder}))
+        # a subagent Grep of the folder is refused too; a Glob is not hooked (R-2265) and passes;
+        # the owner's own session (unmarked main) reads it
+        ev = json.loads(self.event('Grep', {'pattern': 'x', 'path': folder}))
         ev['agent_id'] = 'a1'
         code, out, err = self.run_guard(json.dumps(ev))
         self.assertEqual(json.loads(out)['hookSpecificOutput']['permissionDecision'], 'deny', err)
+        ev = json.loads(self.event('Glob', {'pattern': '*', 'path': folder}))
+        ev['agent_id'] = 'a1'
+        code, out, err = self.run_guard(json.dumps(ev))
+        self.assertEqual((code, out), (0, ''), err)
         code, out, err = self.run_guard(self.event('Read', {'file_path': os.path.join(folder, hubg.SECRET_FILES[0])}))
         self.assertEqual((code, out), (0, ''), err)
 
@@ -271,12 +276,12 @@ class Unguarded(unittest.TestCase):
                          {t[:-1] + '.*' if t.endswith('*') else t for t in self.hook()['guarded_tools']})
 
     def test_only_unguarded_tools_exit_early(self):
-        for tool in ('WebFetch', 'Agent', 'TodoWrite'):
+        for tool in ('WebFetch', 'Agent', 'TodoWrite', 'Glob'):
             self.assertTrue(self.unguarded({'tool_name': tool}), tool)
             self.assertTrue(self.load().skips(self.hook(), {'tool_name': tool}, {'PM_KIT_ROLE': 'worker'}),
                             'a marked session takes the fast path too on this host')
         for ev in ({'tool_name': 'Bash'}, {'tool_name': 'Edit'}, {'tool_name': 'NotebookEdit'},
-                   {'tool_name': 'Read'}, {'tool_name': 'Grep'}, {'tool_name': 'Glob'},
+                   {'tool_name': 'Read'}, {'tool_name': 'Grep'},
                    {'tool_name': 'mcp__x__lock_free'}, {'tool_name': 3}, {}, [], None):
             self.assertFalse(self.unguarded(ev), ev)
 
@@ -295,7 +300,7 @@ class Unguarded(unittest.TestCase):
         for tool in events.READ_TOOLS:
             self.assertTrue(re.fullmatch(host.MATCHER, tool), tool)
             self.assertFalse(mod.skips(self.hook(), {'tool_name': tool}, {}), tool)
-        for tool in ('TodoWrite', 'WebFetch', 'Agent'):
+        for tool in ('TodoWrite', 'WebFetch', 'Agent', 'Glob'):
             self.assertIsNone(re.fullmatch(host.MATCHER, tool), tool)
 
     def test_settings_entry_is_exec_form(self):

@@ -3,8 +3,6 @@ for kitlib.guard.rules' hub-secrets, hub-owner-verb, hub-mcp and hub-browser.
 
   secret_folder(config_path)   the hub's token folder beside the machine config file
   stores(hub, pm_data_path)    the folders the hub store may be in
-  list_reaches(pattern, folder, names)  True when a names search's wildcard can list the folder
-                               or a file in it
   expand_braces(text)          a glob's {a,b} forms written out, or None
   filter_reaches(flt, rel, names)  True when a content search's file filter can take in a file
                                of the token folder below the search's root
@@ -93,34 +91,6 @@ GLOB_CHARS = frozenset('*?[')
 
 def has_glob(text):
     return any(c in GLOB_CHARS for c in text)
-
-
-def _parts(path):
-    drive, rest = ntpath.splitdrive(ntpath.normpath(path.replace('/', '\\')))
-    return [drive.lower()] + [p for p in rest.lower().split('\\') if p]
-
-
-def list_reaches(pattern, folder, names):
-    """True when a names search's absolute wildcard path `pattern` can list the folder `folder` or
-    a file in it, `names` being every name in it (subfolders' too): each of the folder's parts is
-    matched by the pattern's part in its place (fnmatch, case ignored), and a
-    `**` followed by one last part, or a last part just below the folder, has to match one of
-    `names` (`**/*.py` lists nothing there when no name in it ends .py). A `**` that ends the
-    pattern or is followed by more than one part reaches."""
-    pat, fol = _parts(pattern), _parts(folder)
-    names = [n.lower() for n in names]
-    for k, part in enumerate(pat):
-        if part == '**':
-            rest = pat[k + 1:]
-            return len(rest) != 1 or any(fnmatch.fnmatchcase(n, rest[0]) for n in names)
-        if k < len(fol):
-            if not fnmatch.fnmatchcase(fol[k], part):
-                return False
-            continue
-        if k == len(pat) - 1:
-            return any(fnmatch.fnmatchcase(n, part) for n in names)
-        return True                             # a path below a folder in it
-    return len(pat) == len(fol)                 # the folder itself; shorter: a parent
 
 
 BRACE_LIMIT = 256

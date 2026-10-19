@@ -629,13 +629,12 @@ def hub_secret_edit(event, ctx, target, role, what):
 
 def hub_secret_read(event, ctx, cwd, role):
     """hub-secrets for a read tool (Action kind 'read'), in any session but the owner's own: a
-    read of the hub's token folder or a file in it, and a search that can read or list one. The
-    store stays readable. A search starting in the folder is refused; any other is refused unless
-    its terms cannot reach it: a names search whose wildcard can list neither the folder nor a
-    file in it (hub.list_reaches), a contents search from a parent with a file filter that can
-    take in none of its files (hub.filter_reaches). A contents search with no filter is refused at
-    every parent: any of its output modes, counts and file lists too, would answer for a token's
-    text (docs/guard.md "Hub secrets")."""
+    read of the hub's token folder or a file in it, and a contents search that can read one. The
+    store stays readable. A search starting in the folder is refused; one from a parent is refused
+    unless its file filter can take in none of the folder's files (hub.filter_reaches). A search
+    with no filter is refused at every parent: any of its output modes, counts and file lists too,
+    would answer for a token's text. A names search (Glob) is not hooked (R-2265; docs/guard.md
+    "Hub secrets")."""
     if is_owner_session(event, ctx):
         return None
     secret_path = hubg.secret_folder(ctx.config_location().new)
@@ -660,12 +659,6 @@ def hub_secret_read(event, ctx, cwd, role):
     what = '%s from %s' % (tool, fwd(start))
     if jail.inside(root, secret):
         return hub_secrets_refusal(event, ctx, role, '%s is in %s' % (what, label))
-    if params.get('search') == 'names':
-        reach = hub_list_reach(params.get('wildcard'), (root, start), (secret, secret_path),
-                               hub_secret_names(secret))
-        if reach:
-            return hub_secrets_refusal(event, ctx, role, '%s can list %s (%s)' % (what, label, reach))
-        return None
     if not jail.inside(secret, root):
         return None
     flt = params.get('filter')
@@ -674,23 +667,6 @@ def hub_secret_read(event, ctx, cwd, role):
     if flt is None or names is None or hubg.filter_reaches(flt, rel, names):
         how = 'with no file filter' if flt is None else 'with a file filter (%s) that can take in a file in it' % flt
         return hub_secrets_refusal(event, ctx, role, '%s, a parent of %s, %s' % (what, label, how))
-    return None
-
-
-def hub_list_reach(wildcard, roots, folders, names):
-    """The wildcard path, one of `roots` joined to `wildcard` (or `wildcard` itself when absolute),
-    that can list one of `folders` or a file in it (hub.list_reaches over `names`), each {a,b}
-    form apart; or None. No wildcard lists everything; braces expand_braces cannot write out, and
-    names None (too many to read), count as reaching."""
-    text = wildcard if isinstance(wildcard, str) and wildcard.strip() else '**'
-    forms = hubg.expand_braces(text)
-    if forms is None or names is None:
-        return text
-    for form in forms:
-        for root in roots:
-            full = form if ntpath.isabs(form) or ntpath.splitdrive(form)[0] else ntpath.join(root, form)
-            if any(f and hubg.list_reaches(full, f, names) for f in folders):
-                return fwd(full)
     return None
 
 

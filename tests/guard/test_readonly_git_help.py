@@ -59,11 +59,12 @@ class SymbolicRefAndProgramReads(Base):
         W.deny_softened()
         self.addCleanup(W.allow_unplaced)
 
-    def each_cwd_and_role(self, text, run):
+    def allowed_everywhere(self, text, run):
+        """`text` passes for a subagent and a coordinator, from the worktree and the main checkout."""
         for cwd in (self.w.wt, self.w.main):
             for env, sub in (({}, True), (COORDINATOR, False)):
                 with self.subTest(text, cwd=cwd, env=env):
-                    yield run(text, cwd=cwd, sub=sub, env=env)
+                    self.allowed(run(text, cwd=cwd, sub=sub, env=env))
 
     def test_symbolic_ref_reads_with_a_computed_checkout(self):
         root = W.fwd(self.w.temp)
@@ -71,11 +72,9 @@ class SymbolicRefAndProgramReads(Base):
                      'git -C "%s/$r" symbolic-ref --short refs/remotes/origin/HEAD' % root,
                      'for r in a b; do git -C %s/$r symbolic-ref --short refs/remotes/origin/HEAD; done' % root,
                      'git -C $p symbolic-ref -q HEAD', 'git -C $p symbolic-ref --quiet --short HEAD'):
-            for d in self.each_cwd_and_role(text, self.run_bash):
-                self.allowed(d)
+            self.allowed_everywhere(text, self.run_bash)
         text = 'foreach ($r in "a", "b") { git -C "%s/$r" symbolic-ref --short refs/remotes/origin/HEAD }' % root
-        for d in self.each_cwd_and_role(text, self.run_ps):
-            self.allowed(d)
+        self.allowed_everywhere(text, self.run_ps)
 
     def test_symbolic_ref_writes_stay_unplaced(self):
         for text in ('git -C $p symbolic-ref HEAD refs/heads/x', 'git -C $p symbolic-ref -d HEAD',

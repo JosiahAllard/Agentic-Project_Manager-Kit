@@ -48,7 +48,7 @@ import json
 
 from hosts.claude.adapter import events
 
-MATCHER = 'Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit|Read|Grep|Glob|mcp__.*'
+MATCHER = 'Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit|Read|Grep|mcp__.*'
 CONTEXT_EVENTS = ('SessionStart', 'SubagentStart')
 PARTS = ('coordinator', 'pm')
 # A warned allow's reason as PreToolUse additionalContext (render). False: a warned allow renders
