@@ -54,6 +54,13 @@ class SubmitCase(LandCase):
                             environ=dict(environ or {}), detach_fn=detach, kit=kit, **kw)
         return out, detach
 
+    def restored(self, out, detach, branches, tips, expect_main=None):
+        """submit.restore as the detached landing of `out` runs it: with its own arguments and
+        the token the (fake) detached start got in its environment."""
+        token = detach.calls[-1][2].get(submit.TOKEN_ENV)
+        return submit.restore(self.repo.root, out.facts['payload'], branches, tips,
+                              expect_main=expect_main, environ={submit.TOKEN_ENV: token})
+
     def dead_pid(self):
         p = testutil.dead_process()
         self.addCleanup(p.wait)             # holds the Popen, so Windows cannot reuse the pid
@@ -188,13 +195,21 @@ class TheLine(SubmitCase):
                              (None, 'the detached start: %s is not a file: %s' % (what, gone)))
 
     def test_a_payload_that_cannot_be_read_is_a_submit_error(self):
-        bad = os.path.join(self.tmp, 'bad.submit')
-        for text in (None, 'not json', '{"runs": [{"branch": "kit/x"}]}'):
-            if text is not None:
+        """At the path submit names it: elsewhere it is untrusted (test_land_restore_trust).
+        An older kit's schema is one too: abandon finishes its records, and it is resubmitted."""
+        _, tip = self.branch('feature', {'a.py': 'a\n'})
+        out, detach = self.submit([BRANCH], [tip])
+        bad = out.facts['payload']
+        for text in (None, 'not json',
+                     '{"schema": %d, "runs": [{"branch": "kit/x"}]}' % submit.SCHEMA,
+                     '{"schema": 1, "runs": []}'):
+            if text is None:
+                os.remove(bad)
+            else:
                 with open(bad, 'w', encoding='utf-8') as f:
                     f.write(text)
             with self.assertRaises(submit.SubmitError):
-                submit.restore(self.repo.root, bad)
+                self.restored(out, detach, [BRANCH], [tip])
 
 
 class ReviewLines(SubmitCase):
@@ -257,10 +272,10 @@ class TheDetachedLanding(SubmitCase):
     finishes the records the submission wrote running (the same run_id)."""
 
     def detached(self, branches, tips, **kw):
-        out, _ = self.submit(branches, tips, expect_main=self.main)
+        out, detach = self.submit(branches, tips, expect_main=self.main)
         self.assertEqual(out.code, G.OK, out.lines)
         running = {b: self.record(b)['run_id'] for b in branches}
-        sub = submit.restore(self.repo.root, out.facts['payload'])
+        sub = self.restored(out, detach, branches, tips, expect_main=self.main)
         self.assertEqual([rr.run_id for rr in sub['runs']], [running[b] for b in branches])
         lander = self.lander(branches if len(branches) > 1 else branches[0], self.main,
                              tips if len(tips) > 1 else tips[0], submitted=sub, **kw)
@@ -456,17 +471,19 @@ class Resubmit(SubmitCase):
 
     def test_the_submitter_waits_for_the_landing_to_record_itself(self):
         _, tip = self.branch('feature', {'a.py': 'a\n'})
-        now, slept, payload = [0.0], [], []
+        now, slept, started = [0.0], [], []
 
         def detach(argv, cwd, env):
-            payload.append(argv[-1])
+            started.append((argv[-1], env[submit.TOKEN_ENV]))
             return 4242, None
 
         def sleep(s):                       # the detached landing starts: restore claims
             slept.append(s)
             now[0] += s
             if len(slept) == 2:
-                submit.restore(self.repo.root, payload[0])
+                payload, token = started[0]
+                submit.restore(self.repo.root, payload, [BRANCH], [tip],
+                               environ={submit.TOKEN_ENV: token})
         with mock.patch.object(process, 'alive', return_value=True):
             out, _ = self.submit([BRANCH], [tip], detach=detach, claim_wait_s=5,
                                  clock=lambda: now[0], sleep=sleep)
@@ -602,7 +619,8 @@ class Resubmit(SubmitCase):
         out = self.unreadable(['kit/one', 'kit/two'], [t1, t2])
         rid = submit.run_id_of(out.facts['payload'])
         with self.assertRaises(submit.SubmitError) as e:
-            submit.restore(self.repo.root, out.facts['payload'])
+            submit.restore(self.repo.root, out.facts['payload'], ['kit/one', 'kit/two'], [t1, t2],
+                           environ={})
         gave = submit.abandon(self.repo.root, out.facts['payload'], str(e.exception))
         line = 'REFUSED: %s; nothing was changed' % e.exception
         self.assertEqual((gave.code, gave.lines[-1]), (G.REFUSED, line))

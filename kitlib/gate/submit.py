@@ -14,9 +14,11 @@
             land record has running
   restore   the payload, read back by the detached tool: the result.Run of each branch (the same
             run_id and started_at), the output file and the land records those runs replaced,
-            for kitlib.gate.land.Lander(submitted=...); it writes its own pid into the records
-  abandon   the detached tool that cannot read its payload finishes the submission's records
-            `refused`, found by the run_id in the payload's name
+            for kitlib.gate.land.Lander(submitted=...); it writes its own pid into the records.
+            Only the payload submit wrote for this landing, read with the token submit gave the
+            detached tool (else Untrusted, with nothing written: Trust, below)
+  abandon   the detached tool that cannot read its payload (at the path submit names it)
+            finishes the submission's records `refused`, found by the run_id in the payload's name
   redirect_output  the detached tool's stdout and stderr, appended to the output file
 
 The detached tool is started the way `machine_lock.py run --detach` starts its wrapper
@@ -47,7 +49,24 @@ per branch (the record), and, named by the batch's first branch and the run_id,
 <stem>.<run_id>.land.submit (the payload) and <stem>.<run_id>.land.log (the detached tool's
 output, the records' `log` until a merged gate names its own); each submission deletes the old
 ones (prune). Nothing here prints or exits.
+
+Trust: `--submitted <payload>` is a flag any caller can pass, and the landing it runs writes the
+records and the output the payload names, so restore runs only a payload submit itself wrote for
+this landing. submit draws a token (secrets), writes its sha256 into the payload and gives the
+token to the detached tool alone, in its environment (TOKEN_ENV; never on a command line or on
+disk); restore takes it out of this process's environment first, so nothing the landing runs
+inherits it. It then needs the payload at the path files() names for the landing's branches and
+the run_id in the payload's name, and (untrusted_why) the token matching the payload's hash, the
+payload's runs being the landing's own arguments in order (branch, tip, --expect-main as base, the
+run_id of its name), its output files()'s, and each branch's land record still running for that
+run_id, unclaimed or claimed by this process or its parent (the carrier: claim's pid when the
+landing was not found). A payload that fails any of these is Untrusted: nothing is written (no
+record, no output, no abandon) and the tool refuses on stderr (untrusted_line). One at the path
+submit names that cannot be read, or has an older kit's schema, is a SubmitError: abandon
+finishes its records.
 """
+import hashlib
+import hmac
 import json
 import os
 import re
@@ -65,7 +84,10 @@ from kitlib.lock import run as lockrun
 from kitlib.proc import process, spawn
 
 FLAG = '--submitted'
-SCHEMA = 1
+# 2: the token's hash (token_sha256) and restore's checks (Trust, above). A schema-1 payload, an
+# older kit's, is a SubmitError: its records are finished refused, and it is submitted again.
+SCHEMA = 2
+TOKEN_ENV = 'KIT_LAND_SUBMIT_TOKEN'
 START_TIMEOUT_S = 60
 PAYLOAD_EXT = '.land.submit'
 OUTPUT_EXT = '.land.log'
@@ -82,7 +104,21 @@ KEEP_S = 14 * 86400
 
 
 class SubmitError(Exception):
-    """A payload that cannot be read back."""
+    """A payload, at the path submit names it, that cannot be read back."""
+
+
+class Untrusted(Exception):
+    """A payload restore does not run (Trust, in the module docstring): nothing was written. Not
+    a SubmitError, which abandon answers by finishing the records the payload's name points at."""
+
+
+def untrusted_line(payload, why):
+    """The tools' refusal of an Untrusted payload, written to stderr."""
+    return 'REFUSED: %s %s: %s; nothing was changed' % (FLAG, payload, why)
+
+
+def token_digest(token):
+    return hashlib.sha256(token.encode('utf-8')).hexdigest()
 
 
 def files(root, branches, run_id):
@@ -171,11 +207,15 @@ def detach(argv, cwd, env, run=None, timeout=START_TIMEOUT_S):
     return pid, None
 
 
-def child_env(environ=None):
+def child_env(environ=None, token=None):
     """The detached tool's environment: this one, without MACHINE_LOCK_RUN, with this process's
-    ancestry in MACHINE_LOCK_ORIGIN and its output in UTF-8."""
+    ancestry in MACHINE_LOCK_ORIGIN, its output in UTF-8, and the submission's `token` in
+    TOKEN_ENV (never one inherited)."""
     env = dict(os.environ if environ is None else environ)
     env.pop(lockrun.NEST_ENV, None)
+    env.pop(TOKEN_ENV, None)
+    if token is not None:
+        env[TOKEN_ENV] = token
     try:
         env[lockrun.ORIGIN_ENV] = ';'.join('%d:%d' % pc for pc in sorted(process.own_ancestors()))
     except Exception:       # noqa: BLE001 - the slot then has the detached process's own role
@@ -283,8 +323,10 @@ def submit(root, tool_file, child_args, branches, tips, expect_main=None, enviro
         if path is None:
             return _refused(runs, 'the submission: %s' % line)
         runs.append(rr)
+    token = secrets.token_hex(16)
     try:
         _write_json(payload, {'schema': SCHEMA, 'output': output, 'replaced': replaced,
+                              'token_sha256': token_digest(token),
                               'runs': [{'branch': rr.branch, 'tip': rr.tip, 'base': rr.base,
                                         'run_id': rr.run_id, 'started_at': rr.started_at}
                                        for rr in runs]})
@@ -294,7 +336,7 @@ def submit(root, tool_file, child_args, branches, tips, expect_main=None, enviro
     except OSError as e:
         return _refused(runs, 'the submission could not write %s: %s' % (payload, e))
     argv = command(tool_file, list(child_args) + [FLAG, payload])
-    env = child_env(environ)
+    env = child_env(environ, token)
     pid, why = (detach_fn or detach)(argv, root, env)
     if pid is None:
         return _refused(runs, 'the landing could not be started: %s' % why)
@@ -416,14 +458,34 @@ def _note(path, line):
         pass
 
 
-def restore(root, payload):
-    """The `submitted` dict for Lander from the payload file: runs (result.Run with the
-    submission's run_id and started_at, and this process's pid), output, replaced. Each record
-    still running for its run is claimed: written again with this process's pid, so a death from
-    here on is seen (result.wait). SubmitError when the payload cannot be read."""
+def restore(root, payload, branches, tips, expect_main=None, environ=None):
+    """The `submitted` dict for Lander from the payload file of the landing of `branches` at
+    `tips` with `expect_main` (the landing's own arguments): runs (result.Run with the
+    submission's run_id and started_at, and this process's pid), output, replaced. Each record is
+    claimed: written again with this process's pid, so a death from here on is seen
+    (result.wait). The token is taken out of `environ` (default os.environ) first. Untrusted,
+    with nothing written, unless the payload is the one submit wrote for this landing (Trust, in
+    the module docstring); SubmitError when that payload cannot be read or has another schema."""
+    env = os.environ if environ is None else environ
+    token = env.pop(TOKEN_ENV, None)
+    branches, tips = list(branches), list(tips)
+    rid = run_id_of(payload)
+    if rid is None or not branches:
+        raise Untrusted('not a submission\'s payload (<stem>.<run_id>%s)' % PAYLOAD_EXT)
+    try:
+        want, want_output = files(root, branches, rid)
+    except result.ResultError as e:
+        raise Untrusted('no result folder: %s' % e)
+    if not _same_path(payload, want):
+        raise Untrusted('not the payload a submission of %s wrote (%s)' % (
+            '+'.join(branches), want))
     try:
         with open(payload, encoding='utf-8') as f:
             data = json.loads(f.read())
+        if data.get('schema') != SCHEMA:
+            raise SubmitError('the submission %s has schema %r, not %d: another kit version '
+                              'submitted it; submit the landing again' % (
+                                  payload, data.get('schema'), SCHEMA))
         runs = []
         for item in data['runs']:
             rr = result.Run(root, 'land', item['branch'], item['tip'], base=item.get('base'))
@@ -431,14 +493,60 @@ def restore(root, payload):
             runs.append(rr)
         output = data.get('output')
         replaced = [r for r in data.get('replaced') or [] if isinstance(r, dict)]
+        digest = data.get('token_sha256')
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
         raise SubmitError('cannot read the submission %s: %s' % (payload, e))
+    why = untrusted_why(root, runs, output, digest, token, branches, tips, expect_main, rid,
+                        want_output)
+    if why:
+        raise Untrusted(why)
     for rr in runs:
-        rec, _ = result.read(root, rr.branch, 'land')
-        if (isinstance(rec, dict) and rec.get('verdict') == result.RUNNING
-                and rec.get('run_id') == rr.run_id):
-            rr.start(log=output)
+        rr.start(log=output)
     return {'runs': runs, 'output': output, 'replaced': replaced}
+
+
+def untrusted_why(root, runs, output, digest, token, branches, tips, expect_main, rid,
+                  want_output):
+    """Why restore does not run a payload it read at the path submit names (Trust, in the module
+    docstring), or None. Read only."""
+    if not token:
+        return 'no submission token (%s): only the landing a submission started runs its ' \
+               'payload' % TOKEN_ENV
+    if not isinstance(digest, str) or not hmac.compare_digest(
+            token_digest(token).encode('utf-8'), digest.encode('utf-8', 'replace')):
+        return 'the submission token does not match the payload'
+    got = [(rr.branch, rr.tip, rr.base, rr.run_id) for rr in runs]
+    want = [(b, t, expect_main, rid) for b, t in zip(branches, tips)]
+    if len(branches) != len(tips) or got != want:
+        return 'the payload names the landing %s, not this one\'s %s' % (
+            _runs_text(got), _runs_text(want))
+    if not isinstance(output, str) or not _same_path(output, want_output):
+        return 'the payload\'s output %r is not the submission\'s %s' % (output, want_output)
+    mine = (None, os.getpid(), os.getppid())
+    for rr in runs:
+        rec, why = result.read(root, rr.branch, 'land')
+        if not isinstance(rec, dict):
+            return 'the land record of %s cannot be read: %s' % (rr.branch, why)
+        if rec.get('verdict') != result.RUNNING or rec.get('run_id') != rid:
+            return 'the land record of %s is not this submission\'s running one (run %s, %s)' % (
+                rr.branch, rec.get('run_id'), rec.get('verdict'))
+        pid = rec.get('pid')
+        if isinstance(pid, bool) or pid not in mine:
+            return 'the land record of %s is claimed by pid %s, not by this landing' % (
+                rr.branch, pid)
+    return None
+
+
+def _runs_text(runs):
+    return '+'.join('%s at %s base %s run %s' % (b, str(t)[:10], str(base)[:10], r)
+                    for b, t, base, r in runs) or 'none'
+
+
+def _same_path(a, b):
+    try:
+        return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+    except (OSError, TypeError, ValueError):
+        return False
 
 
 def abandon(root, payload, why):
