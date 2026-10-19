@@ -27,6 +27,7 @@ from kitlib.ident import identifier
 from optional.bridge.core.messages import DeliveryError
 from optional.bridge.core.pairing import ChatBinding
 from optional.bridge.core.mcp import TOOLS
+from optional.bridge.win.ancestry import ancestors_of
 from optional.bridge.win.controller import Controller
 from optional.bridge.win.launch import PYTHON_FLAGS
 from optional.bridge.win.evidence import document
@@ -35,7 +36,7 @@ from optional.bridge.win.rpc import PipeClient
 from optional.bridge.port import NativeSource
 from optional.bridge.paths import RPC_WORKER_REL,kit_file
 from kitlib.proc.pipe import process_image,process_sids
-from kitlib.proc.process import ancestors_of,proc_ctime
+from kitlib.proc.process import proc_ctime
 
 
 def hook_descriptor(marker):

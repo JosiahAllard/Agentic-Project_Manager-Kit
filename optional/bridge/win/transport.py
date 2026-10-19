@@ -95,8 +95,12 @@ def _kit():
     return Path(__file__).resolve().parents[3]
 
 
-def run_worker(name, data, *, limit, timeout):
-    """Private owned helper pump; code chooses helper and limits, not RPC arguments."""
+def run_worker(name, data, *, limit, timeout, prefix=None):
+    """Private owned helper pump; code chooses helper and limits, not RPC arguments.
+
+    prefix, when given, is called once the helper has started and before any input is
+    written; its bytes go first. A BeforeWriteError from it ends the run with nothing sent.
+    """
     if (name not in ('bridge_pipe_worker.py','bridge_rpc_worker.py') or type(data) is not bytes
             or len(data)>1024*1024+2048 or type(limit) is not int or not 0<limit<=1024*1024+2048
             or type(timeout) not in (int,float) or not math.isfinite(timeout) or not 0<timeout<=10):
@@ -112,6 +116,10 @@ def run_worker(name, data, *, limit, timeout):
                 bufsize=0,creationflags=subprocess.CREATE_NO_WINDOW)
         except Exception:
             raise BeforeWriteError('native-worker-start-failed') from None
+        if prefix is not None:
+            data=prefix()+data
+            if type(data) is not bytes or len(data)>1024*1024+2048:
+                raise BeforeWriteError('invalid-native-worker-request')
         completed=queue.Queue(maxsize=2)
         threads=[threading.Thread(target=_write_input,args=(process.stdin,data,completed),daemon=True),
             threading.Thread(target=_read_result,args=(process.stdout,completed,limit),daemon=True)]

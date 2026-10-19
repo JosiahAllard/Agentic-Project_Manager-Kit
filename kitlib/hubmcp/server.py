@@ -215,10 +215,12 @@ TOOLS = {
     "hub_page_publish": (
         "Publishes an HTML page to the Action Hub (POST /pages), read from html_file. The page is "
         "checked here first as the hub checks it (kitlib.hubsite.pagecheck): at most %d bytes of "
-        "UTF-8; no script, iframe, object, embed, form, link, meta or base, no on* handler, no "
-        "URL that leaves the page (links are #fragments, images data: URIs, CSS url() data: or "
-        "#); Mermaid must be rendered to inline svg first. Over a page already published, give "
-        "its version as if_version." % pagecheck.MAX_BYTES,
+        "UTF-8; a whole document is fine; no script, iframe, object, embed, form, link or base, "
+        "a meta only charset utf-8 or name (%s) with content, a title only plain text; no on* "
+        "handler, no URL that leaves the page (links are #fragments, images data: URIs, CSS "
+        "url() data: or #); Mermaid must be rendered to inline svg first. Over a page already "
+        "published, give its version as if_version."
+        % (pagecheck.MAX_BYTES, ', '.join(pagecheck.META_NAMES)),
         _obj({"id": {"type": "string", "description": "The page's id: letters, digits, . _ -; "
                                                       "never shaped like a hub item or a ruling "
                                                       "(Q-1, R-12)."},
