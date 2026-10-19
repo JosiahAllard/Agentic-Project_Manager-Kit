@@ -309,6 +309,20 @@ the network. The others can come from a proxy:
 - "The hub server refused the read (the hub server answered 407)", or another status: the
   network answered with that status (407 is a proxy asking for sign-in).
 
+A company filter's own "Web Page Blocked ... in accordance with company policy" page, naming
+`<hostname>` and a category such as "high-risk", is the category-block case of step 3. It is not a
+hub or Access message, and it shows the network reached the filter, which flags the domain itself.
+Why (INFERENCE: general web-filter behaviour, not from the code): a domain on a low-reputation TLD,
+or a newly registered one, often lands in a "high-risk" or similar category. The routes that keep
+to company policy:
+
+- Ask the filter's vendor to recategorise the domain (most have a public site-review form).
+- Ask IT to allow `<hostname>`.
+- Meanwhile, use the phone on mobile data.
+
+Use no route that hides the domain from the filter: no other domain or proxy in front of it, no VPN
+or tunnel around the filter. That would break company policy.
+
 A WebSocket filter cannot be the cause: the hub uses none (the code is the fact). That no other
 port is needed is INFERENCE, as is what a company proxy does with 443.
 
