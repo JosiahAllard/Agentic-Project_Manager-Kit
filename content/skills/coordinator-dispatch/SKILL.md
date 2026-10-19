@@ -112,7 +112,7 @@ each host's tier-to-model map) is `<kit>/docs/ROSTER.md`.
   rewrite or delete each line, in ONE records-role commit. A new `.md`, shard or section adds its
   index line in the same commit, or the doc-budget check refuses the branch.
 - Durable facts -> the repo's docs, landed like any docs change, never in the host's config
-  folder; session state -> `docs/ops/state.local.md`. Worktrees are created and removed as the
+  folder; session state -> your state note (`<agent temp>/<repo slug>-coordinator/state-<session>.md`). Worktrees are created and removed as the
   profile says.
 - **Grow the tool set.** Weekly, run the repetition report on the repo
   (`<kit>/optional/usage/repetition_report.py`): repeated shell shapes, or a scratch script

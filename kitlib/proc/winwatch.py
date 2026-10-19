@@ -27,6 +27,9 @@ the program's; the Terminal window or tab is then retitled to the program's path
 each Terminal window or tab with an unused PseudoConsoleWindow record within CORRELATE_S seconds,
 one whose exe is the one the title names first, then (a window only) the nearest in time. Pseudo
 records themselves are not counted: a program started with no window (CREATE_NO_WINDOW) makes none.
+A window whose program is a console host (conhost, OpenConsole) within CORRELATE_S of a window of a
+known program with the same ours (any ours, when the host window is not counted) is taken for that
+program's twin and dropped (_drop_twins), so another run's window never hides one of this run's.
 
 Whose window. `ours(pid)` (Monitor's argument, called on the monitor thread) says whether a pid is
 the caller's: True, False, or None for unknown. A machine-lock run passes its job's membership
@@ -265,7 +268,8 @@ def attribute(windows, pseudos, within=CORRELATE_S):
     """The windows to report: each Terminal window or tab paired with the program behind it (module
     docstring, "Correlation"). A console window keeps its own pid. A tab no program matches by
     exe, or one whose program is not known to be the caller's, is dropped as a likely tab
-    switch. Pure: the inputs are not changed."""
+    switch. A console host's twin of a program's window is then dropped (_drop_twins).
+    Pure: the inputs are not changed."""
     used, out = set(), []
     for w in sorted(windows, key=lambda w: w.mono):
         if w.cls != TERMINAL:
@@ -284,7 +288,29 @@ def attribute(windows, pseudos, within=CORRELATE_S):
         i, p = pick[0]
         used.add(i)
         out.append(w.copy(pid=p.pid, exe=p.exe, ours=p.ours))
-    return out
+    return _drop_twins(out, within)
+
+
+def _drop_twins(windows, within):
+    """One window per twin pair: a window whose program is a console host (openconsole.exe,
+    conhost.exe) beside a window of a known real program shown within `within` seconds is the
+    host's twin of that program's window, so it is dropped and the program's window stays (with its
+    own ours). The mate has the same ours; a host window already not counted (ours False) may take
+    any mate, so a drop never lowers the count. Pairs are made first where the real window's
+    host_pid is the host window's pid, then where the two have the same ours, then nearest in
+    time. Each real window drops at most one host window; a window with no exe is no mate; a host
+    window with no partner stays."""
+    real = [w for w in windows if w.exe and base(w.exe) not in HOSTS]
+    hosts = [(j, w) for j, w in enumerate(windows) if base(w.exe) in HOSTS]
+    pairs = sorted((r.host_pid != h.pid or not h.pid, r.ours != h.ours, abs(r.mono - h.mono), j, i)
+                   for j, h in hosts for i, r in enumerate(real)
+                   if abs(r.mono - h.mono) <= within and (r.ours == h.ours or h.ours is False))
+    taken, drop = set(), set()
+    for _, _, _, j, i in pairs:
+        if j not in drop and i not in taken:
+            taken.add(i)
+            drop.add(j)
+    return [w for j, w in enumerate(windows) if j not in drop]
 
 
 class Monitor:

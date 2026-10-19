@@ -23,7 +23,8 @@ folder (the kit keeps that folder out of git locally). Commit by explicit path w
 `python <kit>/tools/commit.py -C <worktree> -m "<subject>" <path> ...`, never `git add -A` or
 `commit -a`. Remove only your own worktree, once its work has landed:
 `python <kit>/tools/worktree_remove.py -C <repo> <worktree>`. For a sync (skill branch-sync): no
-untracked generated file may be deleted first; a merge git refuses is reported.
+untracked generated file may be deleted first; a merge git refuses is reported. Started in a home
+worktree (a linked worktree of the repository), write nothing there: your task worktree is where you work.
 
 ## Build and test
 The gate is ONE command: `python <kit>/tools/gate.py -C <worktree>`; the gate before review and landing is `--full` (every step) on the exact tip, which landing requires; `--only <step>` is for interim runs. It
