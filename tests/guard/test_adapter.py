@@ -53,7 +53,7 @@ class Parse(unittest.TestCase):
         self.assertEqual((g.kind, g.path, g.params), ('read', 'C:/r', {'search': 'contents', 'filter': '*.py'}))
         g = ADAPTER.parse('PreToolUse', event('Grep', {'pattern': 'x'}, 'C:/r'))
         self.assertEqual((g.path, g.params), (None, {'search': 'contents', 'filter': None}))
-        # Glob is not hooked (R-2265): a call that still reaches the adapter is 'other'
+        # Glob is not hooked (it reads no token's text): a call that still reaches the adapter is 'other'
         n = ADAPTER.parse('PreToolUse', event('Glob', {'pattern': '**/*.md'}, 'C:/r'))
         self.assertEqual((n.kind, n.tool, n.path, n.params), ('other', 'Glob', None, None))
         self.assertEqual(set(events.READ_TOOLS), {'Read', 'Grep'})

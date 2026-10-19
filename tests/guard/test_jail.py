@@ -1118,7 +1118,7 @@ class UnplacedGit(MainGit):
 
     def test_allexport_and_a_read_are_not_read_as_a_git_environment(self):
         # set -a with read, printf -v or for sets GIT_DIR by no NAME=value the text shows: the
-        # guard does not read it (R-2271), and the git is judged where -C places it
+        # guard does not read it (honest mistakes only), and the git is judged where -C places it
         m, wt = self.main, W.fwd(self.w.wt)
         g = 'git -C "%s" branch -m main old' % wt
         self.judged_as_written(['set -a; read GIT_DIR <<< "%s/.git"; %s' % (m, g),
@@ -1129,7 +1129,7 @@ class UnplacedGit(MainGit):
                                 'set -e; read X <<< y; %s' % g, 'set -euo pipefail; %s' % g, 'set +a; %s' % g])
 
     def test_a_computed_variable_name_is_not_read(self):
-        # the name may be GIT_DIR, but the guard reads only a name the text spells (R-2271): the
+        # the name may be GIT_DIR, but the guard reads only a name the text spells (honest mistakes only): the
         # git is judged where -C places it, for a worker and the coordinator's mark alike
         m, wt = self.main, W.fwd(self.w.wt)
         g = 'git -C "%s" branch -m main old' % wt
@@ -1172,7 +1172,7 @@ class UnplacedGit(MainGit):
     def judged_as_written(self, texts, tool='Bash'):
         """Each line may change the environment in a way the guard does not read (a computed name,
         a sourced file, a nested shell's options, an alias, a script-text call, a variable outside
-        the git place names): the guard catches honest mistakes, not evasion (R-2271), so the line's
+        the git place names): the guard catches honest mistakes, not evasion, so the line's
         git write in the session's own worktree passes for a worker and the coordinator's mark."""
         for text in texts:
             with self.subTest(text):
@@ -1265,7 +1265,7 @@ class UnplacedGit(MainGit):
                 self.assertIn('Instead: git -C "%s" commit -m x [' % wt, d.reason)
 
     def test_an_unplaceable_git_grep_reads_with_or_without_a_pager(self):
-        # grep -O runs the pager it names; only an attacker hides a write there (R-2271)
+        # grep -O runs the pager it names; only an attacker hides a write there (honest mistakes only)
         m = self.main
         for text in ('git --git-dir="%s/.git" grep -O x' % m, 'git --git-dir="%s/.git" grep -Ovim x' % m,
                      'git --git-dir="%s/.git" grep -nO x' % m,
@@ -1349,7 +1349,7 @@ class UnplacedGit(MainGit):
                               "trap 'export GIT_DIR=%s/.git' RETURN; %s" % (m, g),
                               "trap 'export GIT_DIR=%s/.git' SIGDEBUG; %s" % (m, g),
                               "mapfile -C 'export GIT_DIR=%s/.git #' -c 1 a < f; %s" % (m, g)])
-        # a handler or callback the text names but does not spell is not read (R-2271)
+        # a handler or callback the text names but does not spell is not read (honest mistakes only)
         self.judged_as_written(["trap x $s; %s" % g, "readarray -C f -c 1 a < f; %s" % g,
                                 "mapfile -tC f a < f; %s" % g])
         for text in ('trap - DEBUG; %s' % g, "trap '' ERR; %s" % g, "trap 'rm -f x' EXIT; %s" % g,
@@ -1363,7 +1363,7 @@ class UnplacedGit(MainGit):
         g = 'git -C "%s" branch -m main old' % wt
         # with no subcommand, the input may hold --git-dir before it
         self.held_everywhere(['echo branch -m main old | xargs git -C "%s"' % wt])
-        # an environment xargs fills in for env is not read (R-2271)
+        # an environment xargs fills in for env is not read (honest mistakes only)
         self.judged_as_written(['echo GIT_DIR=%s/.git | xargs -I{} env {} %s' % (m, g),
                                 'echo GIT_DIR=x | xargs -I {} env {} %s' % g,
                                 'echo x | xargs -i env {} %s' % g,
@@ -1386,7 +1386,7 @@ class UnplacedGit(MainGit):
         g = 'git -C "%s" branch -m main old' % wt
         # a git place variable set by name, = at the start of the value's word, is read
         self.held_everywhere(['$env:GIT_DIR +="x"; %s' % g], tool='PowerShell')
-        # a splat, script text and a variable outside the git place names are not read (R-2271)
+        # a splat, script text and a variable outside the git place names are not read (honest mistakes only)
         self.judged_as_written([
             "$h=@{Path='env:GIT_DIR';Value='%s/.git'}; Set-Item @h; %s" % (m, g),
             "$h=@{Path='env:'}; Set-Location @h; %s" % g,
@@ -1441,7 +1441,7 @@ class UnplacedGit(MainGit):
             '$hits += "$b :: $f"; $env:GIT_DIR = "%s/.git"; %s' % (m, g),
             'Set-Item env:GIT_DIR "$b :: $f"; %s' % g,
             '[Environment]::SetEnvironmentVariable(\'GIT_DIR\', "$b :: $f"); %s' % g], tool='PowerShell')
-        # a static call on a computed type, outside a string or inside $( ), is not read (R-2271)
+        # a static call on a computed type, outside a string or inside $( ), is not read (honest mistakes only)
         self.judged_as_written([
             '$hits += $t::$n("GIT_DIR", "$b :: $f"); %s' % g,
             'Write-Output "$($t::$n(\'GIT_DIR\', \'x\'))"; %s' % g,
@@ -1494,14 +1494,14 @@ class UnplacedGit(MainGit):
             with self.subTest(text):
                 self.allowed(self.git(text, 'worker', tool='PowerShell'))
                 self.allowed(self.marked(text, COORDINATOR, 'PowerShell'))
-        # with no path in the text, the piped object may name the item: not read (R-2271)
+        # with no path in the text, the piped object may name the item: not read (honest mistakes only)
         self.judged_as_written(["$o | Set-Content -Value x; %s" % g, "'env:GIT_DIR' | Set-Item -Value x; %s" % g],
                                tool='PowerShell')
 
     def test_each_env_changer_unread_passes_for_every_jailed_role(self):
         """Branches the rows above reach only together, each on its own: an alias, a startup file,
         a computed name, a module, an output variable, a process environment or a batch file is not
-        read (R-2271); a literal setx of a git place name still is."""
+        read (honest mistakes only); a literal setx of a git place name still is."""
         m, wt = self.main, W.fwd(self.w.wt)
         g = 'git -C "%s" branch -m main old' % wt
         self.judged_as_written(['alias git="git --git-dir=%s/.git"; %s' % (m, g),
@@ -1554,7 +1554,7 @@ class UnplacedGit(MainGit):
                               "trap 'export GIT_DIR=%s/.git' CHLD; sleep 0 & %s" % (m, g),
                               "trap 'export GIT_DIR=%s/.git' SIGINT; %s" % (m, g),
                               "trap 'export GIT_DIR=%s/.git' EXIT USR1; %s" % (m, g)])
-        # a handler the text names but does not spell is not read (R-2271)
+        # a handler the text names but does not spell is not read (honest mistakes only)
         self.judged_as_written(["trap 1 USR1; %s" % g])
         for text in ("trap 'rm -f x' EXIT; %s" % g, "trap 'rm -f x' 0; %s" % g, "trap 'rm -f x' EXIT 0; %s" % g,
                      'trap - USR1; %s' % g, "trap '' USR1; %s" % g, 'trap USR1; %s' % g):
@@ -1578,7 +1578,7 @@ class UnplacedGit(MainGit):
 
     def test_powershell_script_text_in_every_spelling_is_not_read(self):
         # script text the line builds may set anything; the guard reads only what the text
-        # spells (R-2271), so the git is judged where -C places it
+        # spells (honest mistakes only), so the git is judged where -C places it
         wt = W.fwd(self.w.wt)
         g = 'git -C "%s" branch -m main old' % wt
         self.judged_as_written([
@@ -1599,7 +1599,7 @@ class UnplacedGit(MainGit):
                 self.allowed(self.git(text, 'worker', tool='PowerShell'))
                 self.allowed(self.marked(text, COORDINATOR, 'PowerShell'))
         # a string that runs a subexpression is code, but script text it builds is not read either
-        # (R-2271): the git after it is judged where -C places it
+        # (honest mistakes only): the git after it is judged where -C places it
         text = 'git -C "%s" commit -m "$([scriptblock]::Create($s).Invoke())"; git -C "%s" branch -m main old' % (wt, wt)
         self.judged_as_written([text], tool='PowerShell')
 

@@ -633,7 +633,7 @@ def hub_secret_read(event, ctx, cwd, role):
     store stays readable. A search starting in the folder is refused; one from a parent is refused
     unless its file filter can take in none of the folder's files (hub.filter_reaches). A search
     with no filter is refused at every parent: any of its output modes, counts and file lists too,
-    would answer for a token's text. A names search (Glob) is not hooked (R-2265; docs/guard.md
+    would answer for a token's text. A names search (Glob) is not hooked (it reads no token's text; docs/guard.md
     "Hub secrets")."""
     if is_owner_session(event, ctx):
         return None
@@ -4956,7 +4956,7 @@ def data_copy(event, ctx, where, role, what):
     session but the owner's own: it fails closed, so while the data worktree folder is deleted
     every such push is denied until pm_data.py init --adopt re-adds it (docs/pm-data-branch.md
     "Failure modes"). Whether the repository holds a copy of the data (its root commit, a shallow
-    clone) is not read: the guard catches honest mistakes, not evasion (R-2271)."""
+    clone) is not read: the guard catches honest mistakes, not evasion."""
     if is_owner_session(event, ctx) or not where:
         return None
     if ctx.place(where).kind not in (repo.MAIN, repo.LINKED):

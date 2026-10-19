@@ -14,7 +14,7 @@ owner's own session:
 
 The checks git aliases from config, a copy of the data without a record and HOME set by a
 builtin (read, printf -v, for, ...) once had were cut: the guard catches honest mistakes, not
-evasion (R-2271). Their allowed forms stay pinned."""
+evasion (honest mistakes only). Their allowed forms stay pinned."""
 import os
 import unittest
 
@@ -26,7 +26,7 @@ from .world import bash, ps
 
 
 class AliasConfigCut(Base):
-    """git aliases from config are no longer read (R-2271): a name that is not a git builtin, on
+    """git aliases from config are no longer read (honest mistakes only): a name that is not a git builtin, on
     a line that moves the user config or not, is left to git."""
 
     def test_builtins_and_unknown_names_pass(self):
@@ -87,7 +87,7 @@ class ConfigPrefixes(Base):
 
 class HomeByBuiltin(Base):
     """commands.line_env_names counts HOME only when the line assigns it literally (HOME=,
-    export, $env:); a bash builtin that sets a variable from its arguments is not read (R-2271)."""
+    export, $env:); a bash builtin that sets a variable from its arguments is not read (honest mistakes only)."""
 
     def test_other_names_pass(self):
         for text in ('read X; git push private pmdata', 'printf -v Y %s z; git push private pmdata',
@@ -182,7 +182,7 @@ class CallSubexpression(Base):
 class UnknownDirectory(Base):
     """Finding: a non-builtin subcommand in a directory the text cannot tell was denied in every
     repository, on machines whose config names no pm_data too. Since aliases from config are
-    no longer read (R-2271), it passes with a record or machine pm_data too."""
+    no longer read (honest mistakes only), it passes with a record or machine pm_data too."""
 
     TEXT = 'git -C $D lfs pull'
 

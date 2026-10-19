@@ -97,7 +97,7 @@ class Entry(unittest.TestCase):
         hso = json.loads(out)['hookSpecificOutput']
         self.assertEqual(hso['permissionDecision'], 'deny')
         self.assertIn('[kit guard: rule=hub-secrets role=subagent]', hso['permissionDecisionReason'])
-        # a subagent Grep of the folder is refused too; a Glob is not hooked (R-2265) and passes;
+        # a subagent Grep of the folder is refused too; a Glob is not hooked (it reads no token's text) and passes;
         # the owner's own session (unmarked main) reads it
         ev = json.loads(self.event('Grep', {'pattern': 'x', 'path': folder}))
         ev['agent_id'] = 'a1'

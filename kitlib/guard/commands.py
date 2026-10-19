@@ -1036,7 +1036,7 @@ def git_env_set(c):
     env:GIT_DIR). A word that only names one (echo "GIT_DIR=x", Write-Output $env:GIT_DIR,
     Get-Content env:GIT_DIR) does not. Every word is read as the shell passes it (said: a
     backslash bash drops, dropped). A name the text computes, and any other way to change the
-    environment, is not read: the guard catches honest mistakes, not evasion (R-2271)."""
+    environment, is not read: the guard catches honest mistakes, not evasion."""
     for name, _val in env_assignments(c, GIT_ENV_NAMES):
         return name
     words = c.words
@@ -1165,7 +1165,7 @@ def mark_git_env(parsed):
     of HOME_ENV_NAMES the line sets literally (line_env_names), else False: git then reads
     another user config (rules.home_config judges git with it). c.path_env is True when the line
     sets PATH literally: git then finds a filter's bare program name (git-lfs) elsewhere
-    (rules.archive_filter_set). A name the text computes is not read (R-2271)."""
+    (rules.archive_filter_set). A name the text computes is not read (honest mistakes only)."""
     cmds = parsed.commands
     sets = line_env_names(cmds)
     name = next((n for n in map(git_env_set, cmds) if n), None)

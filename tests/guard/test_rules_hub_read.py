@@ -1,6 +1,6 @@
 """hub-secrets for the read tools (docs/guard.md "Hub secrets"): Read and Grep of the hub's token
 folder are refused in every session but the owner's own, and so is a Grep from a parent of it whose
-file filter can reach it; the hub store stays readable. Glob is not hooked (R-2265): a names
+file filter can reach it; the hub store stays readable. Glob is not hooked (it reads no token's text): a names
 search of the folder passes."""
 import os
 import unittest
@@ -93,7 +93,7 @@ class Searches(Hub):
                 self.allowed(self.grep(self.w.home, glob=glob), SUB)
 
     def test_a_names_search_is_not_hooked(self):
-        # R-2265: Glob is unhooked; a names search lists names and reads no token's text, so even
+        # Glob is unhooked; a names search lists names and reads no token's text, so even
         # one in the folder or naming a token file passes (it was hub-secrets' list_reaches)
         parent = os.path.basename(os.path.dirname(self.secrets))
         for make in (self.glob('*', self.secrets), self.glob('*.py', cwd=self.secrets),
@@ -126,7 +126,7 @@ class Malformed(unittest.TestCase):
             with self.subTest(tool=tool, ti=ti):
                 with self.assertRaises((ValueError, AttributeError)):
                     ADAPTER.parse('PreToolUse', event(tool, ti, 'C:/r'))
-        # Glob is no read tool (R-2265): its input is not read, so no shape of it raises
+        # Glob is no read tool (it reads no token's text): its input is not read, so no shape of it raises
         for ti in ({'pattern': None, 'path': {}}, {'pattern': 3}):
             self.assertEqual(ADAPTER.parse('PreToolUse', event('Glob', ti, 'C:/r')).kind, 'other')
 

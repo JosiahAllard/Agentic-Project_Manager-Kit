@@ -7,7 +7,7 @@
     names pm_data or the command's own directory has a record (rules._unknown_dir_counts).
 
 HOME set by arithmetic or select, and an alias from config on a --config-env call, are no
-longer judged: the guard catches honest mistakes, not evasion (R-2271). Their allowed forms
+longer judged: the guard catches honest mistakes, not evasion. Their allowed forms
 stay pinned."""
 import os
 import unittest
@@ -71,7 +71,7 @@ class CallSubexpressionAgents(Base):
 
 class HomeByArithmetic(Base):
     """HOME is counted only when the line assigns it literally (commands.line_env_names): let,
-    arithmetic and select are not read (R-2271), and a push after them is judged as any push."""
+    arithmetic and select are not read (honest mistakes only), and a push after them is judged as any push."""
 
     def test_reads_and_other_names_pass(self):
         for text in ('let x=1; git push private pmdata',

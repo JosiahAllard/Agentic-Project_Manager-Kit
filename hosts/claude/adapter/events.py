@@ -11,7 +11,7 @@ Every read of a Claude Code hook payload's field names is here, and nowhere in k
       matches it against hosts.json's mcp_tool_format). A read tool (READ_TOOLS: Read, Grep) is
       kind 'read': Read's file_path, or Grep's path (None: cwd) with its glob as the filter of a
       contents search in `params` (Grep's pattern, the text it looks for, is not read). Anything
-      else, Glob included (R-2265: a names search is not hooked), is 'other', which no rule
+      else, Glob included (a names search is not hooked), is 'other', which no rule
       judges. SessionStart and SubagentStart are their own kinds.
       `cwd` is passed as sent (None when absent: the guard then uses its own folder). `agent_id`
       is the subagent identity (absent or empty: the main session); `agent_type` becomes

@@ -11,7 +11,7 @@ own session:
   - hand-driven remote helpers (git remote-https, git http-push, git-remote-*).
 
 git aliases from config and a push from a copy of the data without a record (its root commit, a
-shallow clone) are no longer judged: the guard catches honest mistakes, not evasion (R-2271).
+shallow clone) are no longer judged: the guard catches honest mistakes, not evasion.
 Their allowed forms stay pinned."""
 import os
 import unittest
@@ -181,7 +181,7 @@ class RemoteRewrite(Base):
 
 class ConfigFileEnv(Base):
     """GIT_CONFIG_GLOBAL, GIT_CONFIG_SYSTEM and GIT_CONFIG before a push or send-pack name a config
-    file on purpose: the guard catches honest mistakes, not evasion (R-2271), so the push is judged
+    file on purpose: the guard catches honest mistakes, not evasion, so the push is judged
     as the same push with no variable."""
 
     def same(self, a, b):
@@ -282,7 +282,7 @@ class ComputedProgram(Base):
 
 class AliasAndCopyCut(Base):
     """A git subcommand that is not a builtin is left to git, and a push from a repository
-    without a record of its own is not judged as a copy of the data (R-2271)."""
+    without a record of its own is not judged as a copy of the data (honest mistakes only)."""
 
     def test_builtins_and_unknown_names_pass(self):
         self.assertIsNone(self.decide('git status', environ=PM))

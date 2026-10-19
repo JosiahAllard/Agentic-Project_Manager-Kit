@@ -170,7 +170,7 @@ class StrictGitReads(World):
     non-read exactly as before the cheap guard: it is refused, under unplaced (held at deny here;
     its default warns) where it was write-jail, and a PowerShell splat stays write-jail. A plain
     read, and a computed word strict_dyn_read allows, is let through as before. grep -O is a read
-    and symbolic-ref with one ref is one (R-2271: only an attacker runs a program through -O;
+    and symbolic-ref with one ref is one (only an attacker runs a program through -O;
     archive --remote/--exec: test_readonly_git_help)."""
 
     NON_READS = (
@@ -320,7 +320,7 @@ class InlineAliasJudged(unittest.TestCase):
     )
 
     def test_a_shell_alias_the_line_defines_only_warns(self):
-        # git-alias-shell was cut (R-2271): a ! alias is written on purpose, no honest mistake;
+        # git-alias-shell was cut (honest mistakes only): a ! alias is written on purpose, no honest mistake;
         # git-alias warns and names the command it runs
         for text in self.SHELL_ROWS:
             with self.subTest(text):
@@ -359,7 +359,7 @@ class InlineAliasJudged(unittest.TestCase):
 
     def test_a_hooks_path_setting_an_alias_gives_is_denied(self):
         # the alias is expanded, so git-hooks-path judges the clone it runs (the hint written out
-        # from the alias's words was cut, R-2271)
+        # from the alias's words was cut: the guard catches honest mistakes, not evasion)
         for text in ("git -c alias.cl='clone -c core.hooksPath=x' cl https://example.invalid/r.git",
                      "git -c alias.cl='clone -c' cl core.hooksPath=x https://example.invalid/r.git",
                      "git -c alias.cl='clone --config=core.hooksPath=x' cl https://example.invalid/r.git"):

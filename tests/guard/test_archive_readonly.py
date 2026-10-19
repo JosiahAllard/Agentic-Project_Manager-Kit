@@ -55,7 +55,7 @@ class ArchiveWorld(unittest.TestCase):
 
     def kept_a_read(self, shell, text):
         """The PM's session runs `text` as a read: the line changes git's environment in a way the
-        guard does not read, and it catches honest mistakes, not evasion (R-2271)."""
+        guard does not read, and it catches honest mistakes, not evasion."""
         self.assertIsNone(self.pm(shell(text, self.w.plain)))
 
 
@@ -109,7 +109,7 @@ class ArchiveReadOnly(ArchiveWorld):
 
     def test_archive_remote_and_exec_read(self):
         # --remote/--exec run git-upload-archive or the program --exec names; only an attacker
-        # hides a write there (R-2271), so they read like any archive (docs/guard-v2.md)
+        # hides a write there (honest mistakes only), so they read like any archive (docs/guard-v2.md)
         for opt in ('--remote=. --exec=/tmp/x.sh', '--remote=origin', '--rem=origin', '--e=/tmp/x.sh'):
             text = 'git -C %s archive %s HEAD' % (self.main, opt)
             with self.subTest(text):
@@ -267,7 +267,7 @@ class ArchiveProgramSearch(ArchiveWorld):
             text = text % (self.scratch, archive)
             with self.subTest(text):
                 self.refused(bash, text)
-        # PATH set by read is not read (R-2271)
+        # PATH set by read is not read (honest mistakes only)
         self.kept_a_read(bash, 'read PATH <<< %s; %s' % (self.scratch, archive))
         for text in ('$env:Path = "%s;" + $env:Path; %s', '$env:PATH += ";%s"; %s',
                      "[Environment]::SetEnvironmentVariable('Path', '%s'); %s", 'Set-Item env:Path %s; %s',
@@ -289,7 +289,7 @@ class ArchiveProgramSearch(ArchiveWorld):
 
     def test_cmd_s_path_command_is_not_read(self):
         # cmd's own path command sets PATH (path X, path=X, path;X, and path ; which clears it), but
-        # only on purpose: the guard does not read it (R-2271)
+        # only on purpose: the guard does not read it (honest mistakes only)
         archive = 'git -C %s archive HEAD' % self.main
         for spell in ('path {x};%PATH%', 'PATH {x}', 'Path={x}', 'path ;', 'path;{x}', 'path,{x}',
                       '@path {x}', '(path {x})'):
@@ -357,7 +357,7 @@ class ArchiveProgramSearch(ArchiveWorld):
                 self.archive_refused(ps, text)
         # refused already, with the provider cmdlet named as the writer
         self.refused(ps, 'Set-Content -Path Environment::Path -Value "%s;$env:Path"; %s' % (self.scratch, archive))
-        # clearing or removing PATH, or setting a property on it, is not read (R-2271)
+        # clearing or removing PATH, or setting a property on it, is not read (honest mistakes only)
         for item in ('Clear-Content Environment::Path', 'Clear-Content -Path:env:\\PATH', 'clc Environment::Path',
                      'Clear-Item Environment::Path', 'cli env:Path', 'Remove-Item Environment::Path',
                      'ri Microsoft.PowerShell.Core\\Environment::Path', 'del -Path Environment::Path',
@@ -376,7 +376,7 @@ class ArchiveProgramSearch(ArchiveWorld):
                 text = '%s; %s' % (item, archive)
                 with self.subTest(text):
                     self.archive_refused(ps, text)
-            # clearing or removing one is not read (R-2271)
+            # clearing or removing one is not read (honest mistakes only)
             for item in ('Clear-Content env:%s' % name, 'Clear-Item -Path Environment::%s' % name,
                          'Remove-Item env:%s' % name):
                 text = '%s; %s' % (item, archive)

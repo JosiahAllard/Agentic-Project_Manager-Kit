@@ -52,7 +52,7 @@ class SymbolicRefAndProgramReads(Base):
     """`git -C <root>/$r symbolic-ref --short refs/remotes/origin/HEAD` (a coordinator's loop over
     its repositories) was refused as unplaced: symbolic-ref with one ref only prints where it
     points. grep -O and archive --remote/--exec were refused as running a program; only an
-    attacker hides a write in one (R-2271), so they read like any grep or archive."""
+    attacker hides a write in one (honest mistakes only), so they read like any grep or archive."""
 
     def setUp(self):
         Base.setUp(self)
