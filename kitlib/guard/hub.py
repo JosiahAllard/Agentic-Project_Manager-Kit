@@ -18,7 +18,8 @@ they are the same. The owner-only MCP tool names are kitlib.hubmcp's own OWNER_O
 that package's __init__ imports nothing. Nothing here reads a file or the environment.
 
 owner_verb judges the arguments of a parsed hub tool run (kitlib.guard.rules.hub_run_args:
-python with tools/hub.py as its script or -m tools.hub; hub-owner-verb). Other text that names
+python with tools/hub.py as its script or -m tools.hub, tools/hub.py run as the program, or
+python -m runpy tools.hub; hub-owner-verb). Other text that names
 the hub tool is not read. Known limit: a name built at run time (string concatenation, an
 encoding, a variable, a script the agent wrote) is not read. The hub rules guard against
 accidents and are not an adversary boundary.

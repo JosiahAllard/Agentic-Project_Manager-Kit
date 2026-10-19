@@ -36,7 +36,8 @@ DEFAULTS = {
     # dropped as blocks: the owner can turn each back on
     'wrapped-gate': OFF,
     'busy-wait': OFF,
-    # dropped as blocks, kept as warnings: what the guard cannot read it cannot place (item 1)
+    # dropped as blocks, kept as warnings: what the guard cannot read it cannot place, and
+    # it catches honest mistakes, not evasion
     'unreadable': WARN,         # a line the parser cannot read: the kept rules still judge its text
     'git-alias': WARN,          # an alias on the command line: the command it runs is judged
     # turned into warnings

@@ -27,11 +27,12 @@ Rules, in the order they are checked:
                    (a computed word, a wildcard, the word hub and the store are not read), or python
                    or node code that names a token file or the folder (kitlib.guard.hub.INLINE_RE);
                    an edit of a file in the token folder or the store; a read tool's
-                   read of the token folder or a file in it, or a search that can read or list
-                   one (the store stays readable); in any session but the owner's own
+                   read of the token folder or a file in it, or a Grep that can read one (Glob
+                   is not hooked; the store stays readable); in any session but the owner's own
                    (kitlib.guard.hub)
   hub-owner-verb   a parsed hub tool run (hub_run_args: python, its options, then tools/hub.py or
-                   -m tools.hub, at any depth of the line) whose arguments run an owner verb
+                   -m tools.hub; tools/hub.py run as the program; python -m runpy tools.hub; at
+                   any depth of the line) whose arguments run an owner verb
                    (answer, open, pair, unpair, stop, restart, todos done, stories add|withdraw,
                    to-pm add|send, inbox read, approvals approve|deny, todos add --owner; a word
                    the guard cannot read where the verb could be counts), in any session but the
@@ -785,9 +786,15 @@ def hub_secret_shell(ctx, cmd, inv, places):
 
 def hub_run_args(inv):
     """The Words after the hub tool when `inv` runs it (tool_run: python with tools/hub.py as
-    its script, or -m tools.hub), else None."""
+    its script, or -m tools.hub; tools/hub.py run as the program itself; runpy's module argument,
+    `python -m runpy tools.hub`, read as the script), else None."""
     run = tool_run(inv)
-    if run is None or run[0] != HUB_SCRIPT or not PY_RUN_RE.match(inv.name or ''):
+    if run is not None and run[0] == 'runpy.py':
+        words = run[1]
+        if not words or words[0].dyn:
+            return None
+        run = words[0].text.rsplit('.', 1)[-1].lower() + '.py', words[1:]
+    if run is None or run[0] != HUB_SCRIPT:
         return None
     return run[1]
 

@@ -626,6 +626,33 @@ class OwnerVerbs(Hub):
             with self.subTest(line):
                 self.allowed(lambda sub, line=line: bash(line, self.w.wt, sub))
 
+    def test_hub_run_as_a_program(self):
+        # the hub tool run as the program itself (the .py association, a shebang) is a hub run as
+        # python's script is
+        for line in ('./tools/hub.py answer Q-1 --choice 1', 'tools/hub.py open',
+                     '"%s" todos done T-1' % self.hub.replace('\\', '/')):
+            with self.subTest(line):
+                self.denied(lambda sub, line=line: bash(line, self.w.wt, sub), 'hub-owner-verb')
+        for line in ('.\\tools\\hub.py answer Q-1 --choice 1', '& "%s" pair' % self.hub):
+            with self.subTest(line):
+                self.denied(lambda sub, line=line: ps(line, self.w.wt, sub), 'hub-owner-verb')
+        for line in ('./tools/hub.py questions', './tools/hubby.py answer Q-1'):
+            with self.subTest(line):
+                self.allowed(lambda sub, line=line: bash(line, self.w.wt, sub))
+        self.allowed(lambda sub: ps('.\\tools\\hub.py questions', self.w.wt, sub))
+
+    def test_hub_run_through_runpy(self):
+        # `python -m runpy <module>` runs that module as -m does: runpy's argument is the script
+        for line in ('python -m runpy tools.hub answer Q-1', 'python -m runpy hub todos done T-1',
+                     'python -B -m runpy tools.hub to-pm send'):
+            with self.subTest(line):
+                self.denied(lambda sub, line=line: bash(line, self.w.wt, sub), 'hub-owner-verb')
+        self.denied(lambda sub: ps('python -m runpy tools.hub pair', self.w.wt, sub), 'hub-owner-verb')
+        for line in ('python -m runpy tools.hub questions', 'python -m runpy tools.hubby answer Q-1',
+                     'python -m runpy tools.gate', 'python -m runpy $m answer Q-1'):
+            with self.subTest(line):
+                self.allowed(lambda sub, line=line: bash(line, self.w.wt, sub))
+
     def test_a_module_after_options_the_guard_cannot_read(self):
         # an option whose value the text does not show still leaves python's own -m: a parsed run
         for line in ('python -X $v -m tools.hub answer Q-1', 'python -W "$w" -m tools.hub answer Q-1'):
