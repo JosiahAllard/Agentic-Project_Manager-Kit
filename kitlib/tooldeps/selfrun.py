@@ -20,7 +20,10 @@ created suspended, put in its own kill-on-close job, shielded from kills by pid,
 unit still running after `timeout` seconds is killed with everything it started (for a pooled
 unit, its worker too) and reported TIMEOUT, and a unit that ran no test is a FAIL. End the runner,
 never a unit or a worker, by its pid. The log's `interpreters` line counts the workers started,
-those replaced and why, and the units run in their own process. With kit_tests' opt-in
+those replaced and why, the units run in their own process, and the process starts of the pooled
+units (kitlib.tooldeps.pool `starts`: conhosts and nested jobs included), naming the HEAVIEST
+units by them; a pooled unit's own line says `N process starts` when it started any (an
+own-process unit's are not counted). With kit_tests' opt-in
 `--pid-hold` (never in the gate), the caller starts this process's pid hold before the units'
 environment is copied (kitlib.pytests.runner.PidHoldRun: warmed, published), so no process a test
 starts can be given the pid of a shell a stale taskkill is still aimed at; `run` writes whether
@@ -462,6 +465,7 @@ def run(modules, root, jobs, serial=(), out=None, timeout=None, run_unit=None, e
         finally:
             rmtree_force(folder, ignore_errors=True)
         unit_id, status, ran, secs, text = r
+        starts = workers.starts(module) if workers is not None else None    # pooled units only
         skipped = skipped_of(text)
         why = proof.get(module_of(module))
         if skipped and why and status == 'OK':
@@ -471,9 +475,10 @@ def run(modules, root, jobs, serial=(), out=None, timeout=None, run_unit=None, e
                  'selection.json skip_fails), so a skip FAILS: %s\n' % (module, skipped, why))
         with say_lock:
             done.append(r)
-            out.write('  [%d/%d] %-7s %6.0fs %4d tests%s  %s%s\n' % (
+            out.write('  [%d/%d] %-7s %6.0fs %4d tests%s%s  %s%s\n' % (
                 len(done), total[0], status, secs, ran,
-                ', %d skipped' % skipped if skipped else '', module,
+                ', %d skipped' % skipped if skipped else '',
+                ', %d process starts' % starts if starts else '', module,
                 ' (serial)' if module in serial else ''))
             out.flush()
         return r
@@ -539,7 +544,7 @@ def run(modules, root, jobs, serial=(), out=None, timeout=None, run_unit=None, e
             workers.close()
         rmtree_force(work, ignore_errors=True)
     if workers is not None:
-        say(interpreters_line(workers.stats(), done, own))
+        say(interpreters_line(workers.stats(), done, own, workers.starts()))
         for name, why in workers.why_replaced():
             say('kit_tests: pool worker replaced after %s: %s' % (name, why))
     if hold is not None:
@@ -551,15 +556,27 @@ def run(modules, root, jobs, serial=(), out=None, timeout=None, run_unit=None, e
                   not_run=(total[0] - len(done)) if interrupted else None)
 
 
-def interpreters_line(stats, done, own):
+HEAVIEST = 3        # the units interpreters_line names by their process starts
+
+
+def interpreters_line(stats, done, own, starts=None):
     """The log line saying how many interpreters ran the units: the pool workers started, the
-    ones ended early and why (WorkerPool.stats), and the units that ran in their own process."""
+    ones ended early and why (WorkerPool.stats), and the units that ran in their own process.
+    `starts` {unit: process starts} (WorkerPool.starts): their sum, counted in the pooled units'
+    jobs (conhosts and nested jobs included; the pool workers themselves not), and the HEAVIEST
+    units by it."""
     started, ended = stats
     alone = sum(1 for r in done if module_of(r[0][0]) in own)
     why = ', '.join('%d %s' % (n, w) for w, n in sorted(ended.items()))
-    return ('kit_tests: interpreters: %d pool worker(s) ran %d unit(s)%s; %d unit(s) in their own '
+    line = ('kit_tests: interpreters: %d pool worker(s) ran %d unit(s)%s; %d unit(s) in their own '
             'process' % (started, len(done) - alone,
                          ' (%d replaced: %s)' % (sum(ended.values()), why) if ended else '', alone))
+    if starts:
+        top = sorted(((n, u) for u, n in starts.items() if n), key=lambda x: (-x[0], x[1]))
+        line += '; %d process start(s) in %d pooled unit(s)%s' % (
+            sum(starts.values()), len(starts),
+            ' (most: %s)' % ', '.join('%s %d' % (u, n) for n, u in top[:HEAVIEST]) if top else '')
+    return line
 
 
 def report(results, wall, jobs, n_serial, out, label='selected', not_run=None):
