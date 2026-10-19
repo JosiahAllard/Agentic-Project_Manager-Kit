@@ -254,6 +254,16 @@ class Judge(unittest.TestCase):
         g = {'zero_tests': r'No test is available'}
         self.assertEqual(S.judge(self.step(), 'No test is available\n', 0, g)[0], 'FAIL')
 
+    def test_zero_tests_fails_a_step_whose_bare_pass_pattern_matched(self):
+        # KIT-GATE-PASS-ZERO-COUNT: a bare pass string also matches the zero-count line, so the
+        # gate's zero_tests rule is what keeps that run from passing
+        st = self.step(**{'pass': 'UNIT TESTS OK'})
+        g = {'zero_tests': [r'\bUNIT TESTS OK 0\b']}
+        status, why = S.judge(st, 'UNIT TESTS OK 0\n', 0, g)
+        self.assertEqual(status, 'FAIL')
+        self.assertEqual(why, ["reported zero tests run ('UNIT TESTS OK 0')"])
+        self.assertEqual(S.judge(st, 'UNIT TESTS OK 12\n', 0, g), ('PASS', []))
+
     def test_errors_policy_windows_and_excuses(self):
         g = {'errors': {'match': 'ERROR', 'excuse': 'ERROR expected', 'expect': ['BEGIN', 'END']}}
         st = self.step()
