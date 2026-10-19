@@ -15,7 +15,22 @@ REFUSED = (
     ('<embed src="data:x">', '<embed>'),
     ('<link rel="prefetch" href="https://example.com/x">', '<link>'),
     ('<meta http-equiv="refresh" content="0;url=https://example.com">', '<meta>'),
-    ('<meta charset="utf-8">', '<meta>'),
+    # a meta is <meta charset="utf-8"> or <meta name=N content=C> with N of META_NAMES, exactly
+    ('<meta>', '<meta>'),
+    ('<meta charset="utf-8" name="viewport">', '<meta>'),
+    ('<meta charset="utf-8" content="x">', '<meta>'),
+    ('<meta charset="utf-8" charset="utf-8">', 'twice'),
+    ('<meta charset="iso-8859-1">', '<meta>'),
+    ('<meta charset=" utf-8">', '<meta>'),
+    ('<meta charset>', '<meta>'),
+    ('<meta name="viewport" content="width=device-width" http-equiv="refresh">', '<meta>'),
+    ('<meta name="viewport" content="width=device-width" id="v">', '<meta>'),
+    ('<meta name="viewport" name="referrer" content="unsafe-url">', 'twice'),
+    ('<meta name="viewport">', '<meta>'),
+    ('<meta content="width=device-width">', '<meta>'),
+    ('<meta name="referrer" content="unsafe-url">', 'referrer'),
+    ('<meta name="x-unknown" content="y">', 'x-unknown'),
+    ('<meta property="og:image" content="https://example.com/x.png">', '<meta>'),
     ('<base href="https://example.com/">', '<base>'),
     ('<form action="data:x"><input></form>', '<form>'),
     ('<img src="data:x" onerror="alert(1)">', 'event handler'),
@@ -48,6 +63,16 @@ REFUSED = (
     ('<p>javascript: is a scheme</p>', 'javascript:'),
     ('<p>&lt;script&gt; is text, but <!-- <script --></p>', '<script'),
     ('<p http-equiv="x">x</p>', 'http-equiv'),
+    # a title is <title>text</title> exactly (TITLE_SAYS)
+    ('<title>x', pagecheck.TITLE_SAYS),
+    ('<title id="t">x</title>', pagecheck.TITLE_SAYS),
+    ('<title >x</title>', pagecheck.TITLE_SAYS),
+    ('<title>x<b>y</b></title>', pagecheck.TITLE_SAYS),
+    ('<title><title>x</title></title>', pagecheck.TITLE_SAYS),
+    ('<title>x</title >', pagecheck.TITLE_SAYS),
+    ('<titlex>y</titlex>', pagecheck.TITLE_SAYS),
+    ('<svg><title><a href="#x">x</a></title></svg>', pagecheck.TITLE_SAYS),
+    ('<title>javascript:x</title>', 'javascript:'),
 )
 
 # Markup this parser and a browser could read differently, each refused whole: what a browser
@@ -70,7 +95,8 @@ DIFFERENTIAL = (
     ('<style/><p>x</p>', 'self-closing'),
     ('<style>a{background:url(https://x/a.png)}', 'url('),        # never closed: checked at the end
     # Where a browser ends these, Python 3.14's parser ends them too and refuses the link it
-    # finds (an older parser may not); RAW_ONLY below shows RAW refuses each by itself.
+    # finds (an older parser may not); RAW_ONLY below shows RAW refuses each by itself, and
+    # TITLE_SAYS a title that is not plain text.
     ('<title><b title="</title><a href=https://x>x</a>">', None),
     ('<textarea><b title="</textarea><a href=https://x>x</a>">', None),
     ('<xmp><b title="</xmp><a href=https://x>x</a>">', None),
@@ -84,7 +110,6 @@ DIFFERENTIAL = (
 
 # Each word of RAW in markup that holds nothing else the check refuses.
 RAW_ONLY = (
-    ('<svg><title>x</title></svg>', '<title'),
     ('<textarea>x</textarea>', '<textarea'),
     ('<xmp>x</xmp>', '<xmp'),
     ('<noembed>x</noembed>', '<noembed'),
@@ -111,7 +136,29 @@ MERMAID_CLI_SVG = (
     'style="display: table-cell; white-space: nowrap;"><span class="nodeLabel">A</span></div>'
     '</foreignObject></g></g></svg>')
 
+# A whole document, as optional/comfy/compare_sheet.py writes one: doctype, head, the two metas,
+# a title and a style element.
+FULL_DOCUMENT = (
+    '<!doctype html>\n<html lang="en"><head><meta charset="utf-8">\n'
+    '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
+    '<title>GriffBall theme sheet</title>\n'
+    '<style>\n:root { --bg: #f4f4f2; --fg: #1c1c1c; }\n'
+    '@media (prefers-color-scheme: dark) {\n'
+    '  :root:not([data-theme="light"]) { --bg: #161616; --fg: #e8e8e6; }\n}\n'
+    'body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg); }\n'
+    '</style></head><body>\n<h1>GriffBall theme sheet</h1>\n</body></html>\n')
+
 KEPT = (
+    FULL_DOCUMENT,
+    '<!DOCTYPE html><HTML><HEAD><META CHARSET="UTF-8"><TITLE>x &amp; y</TITLE></HEAD>'
+    '<BODY><p>x</p></BODY></HTML>',
+    '<meta charset="utf-8">',
+    '<meta charset="utf-8"/>',
+    '<meta name="color-scheme" content="light dark">',
+    '<meta name="description" content="The theme, as tokens">',
+    '<meta content="an agent" name="author">',
+    '<meta name="Generator" content="compare_sheet.py">',
+    '<svg viewBox="0 0 10 10"><title>A square</title><rect width="10" height="10"/></svg>',
     '<h1>Plan</h1><p>Plain text &amp; a <a href="#part-2">link inside the page</a>.</p>',
     '<style>h1{color:#333} .x{background:url(data:image/png;base64,AAAA)}</style><h1>x</h1>',
     '<img alt="chart" src="data:image/png;base64,iVBORw0KGgo=">',
@@ -157,6 +204,14 @@ class CheckTest(unittest.TestCase):
         for html in KEPT:
             with self.subTest(html=html[:60]):
                 self.assertIsNone(pagecheck.check(html))
+
+    def test_a_meta_names_only_what_changes_no_load_or_navigation(self):
+        # referrer (what a link sends) and http-equiv (refresh, a policy) stay out
+        self.assertEqual(pagecheck.META_NAMES,
+                         ('viewport', 'color-scheme', 'description', 'author', 'generator'))
+        for name in pagecheck.META_NAMES:
+            with self.subTest(name=name):
+                self.assertIsNone(pagecheck.check('<meta name="%s" content="x">' % name))
 
     def test_mermaid_refusals_say_render_it_to_svg_first(self):
         self.assertEqual(pagecheck.MERMAID_SAYS, 'render it to svg first')
