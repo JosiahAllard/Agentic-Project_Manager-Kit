@@ -414,6 +414,25 @@ class Attribute(unittest.TestCase):
         out = winwatch.attribute([far, real, near], [])
         self.assertEqual([w.pid for w in out], [6, 5])
 
+    def test_the_host_pid_mate_wins_over_a_same_ours_mate(self):
+        # h1 is real's own host (host_pid) and not counted; h2 is a separate counted window
+        # of another host, nearer in time and with real's ours. h1 is the twin, so h2 stays.
+        real = W(winwatch.CONSOLE, "window", "a", 10.0, pid=5, exe=self.PY, ours=True, host_pid=6)
+        h1 = W(winwatch.CONSOLE, "window", "a", 10.3, pid=6, exe=self.OC, ours=False)
+        h2 = W(winwatch.CONSOLE, "window", "b", 10.1, pid=8, exe=self.OC, ours=True)
+        out = winwatch.attribute([real, h1, h2], [])
+        self.assertEqual([w.pid for w in out], [5, 8])
+        self.assertTrue(winwatch.report_lines(out)[0].startswith("windows opened: 2 "))
+
+    def test_a_same_ours_mate_wins_when_host_pid_does_not_decide(self):
+        # Neither host is real's host_pid; h1 (not counted) is nearer, h2 has real's ours.
+        real = W(winwatch.CONSOLE, "window", "a", 10.0, pid=5, exe=self.PY, ours=True)
+        h1 = W(winwatch.CONSOLE, "window", "b", 10.1, pid=6, exe=self.OC, ours=False)
+        h2 = W(winwatch.CONSOLE, "window", "a", 10.3, pid=8, exe=self.OC, ours=True)
+        out = winwatch.attribute([real, h1, h2], [])
+        self.assertEqual([w.pid for w in out], [5, 6])
+        self.assertTrue(winwatch.report_lines(out)[0].startswith("windows opened: 1 "))
+
     def test_a_conhost_twin_is_dropped(self):
         real = W(winwatch.CONSOLE, "window", "a", 10.0, pid=5, exe=self.PY, ours=True)
         twin = W(winwatch.CONSOLE, "window", "a", 10.2, pid=6,
