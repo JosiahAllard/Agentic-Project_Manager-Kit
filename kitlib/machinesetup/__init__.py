@@ -243,9 +243,9 @@ def run_managed(ctx, apply=False, out=None):
                                      '' if os.path.lexists(managed.overlay_path(ctx.home)) else ' (none)'),
          '  managed file:   %s' % ctx.host.managed_path())
     if not os.path.lexists(managed.overlay_path(ctx.home)):
-        emit('WARNING: no overlay %s found in the home folder %s: the file is made from the template '
+        emit('WARNING: no overlay found at %s: the file is made from the template '
              'alone, without your own lines (the agents\' git identity, the auto-mode lines that name '
-             'you)' % (managed.OVERLAY, ctx.home))
+             'you)' % managed.overlay_path(ctx.home))
     return _carry_out('managed-settings', managed.survey(ctx, apply=apply), apply, emit, lines)
 
 

@@ -178,7 +178,7 @@ class ManagedMode(ManagedBase):
 
     def test_no_overlay_is_a_warning_naming_the_home(self):
         code, out = self.run_it()
-        self.assertIn('WARNING: no overlay %s found in the home folder %s' % (managed.OVERLAY, self.home), out)
+        self.assertIn('WARNING: no overlay found at %s:' % managed.overlay_path(self.home), out)
         self.overlay({})
         self.assertNotIn('WARNING', self.run_it()[1])
 
@@ -399,6 +399,14 @@ class FreshGuard(F.FreshBase):
         self.assertEqual(code, M.EXIT_OK, out)
         self.assertFalse(F.guard_in(load(self.s1), self.kit))
         self.assertFalse(F.guard_in(load(self.s2), self.kit))
+
+    def test_the_plugin_enabled_in_the_managed_file_still_installs_per_account(self):
+        dump(self.host.managed, {'enabledPlugins': {F.PID: True}})
+        plan = M.survey(self.ctx())
+        self.assertTrue(any('enable the kit plugin' in c.text for c in plan.changes))
+        code, out = self.run_it(apply=True)
+        self.assertEqual(code, M.EXIT_OK, out)
+        self.assertEqual(sum('enable the kit plugin' in l for l in out.splitlines() if l.startswith('done: ')), 2)
 
     def test_both_carrying_the_guard_is_noted(self):
         dump(self.host.managed, guard_doc(self.kit))
