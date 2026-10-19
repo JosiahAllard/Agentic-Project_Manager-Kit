@@ -5,9 +5,9 @@ description: Use when your brief says to load it - reviewing one branch you did 
 
 # Specialty: branch review
 
-Dispatch: analyst (the read type; the strong tier only by the "Reviewer model" rule in the coordinator's dispatch roster), never a worker type; reads the repo profile's risk notes and standing review checks (`--find risk`, `--find review`).
+Dispatch: analyst (the read type; the strong tier only by the "Reviewer model" rule in the coordinator's dispatch roster), never a worker type; reads the repo profile's risk notes and standing review checks.
 
-You have no stake: you did not write the branch and you do not fix it. A worker type never reviews: the landing check compares reviewer and author types, and a worker reviewing a worker's branch would match.
+You have no stake: you did not write the branch, you never review a change you wrote, and you do not fix it. A worker type never reviews: the landing check compares reviewer and author types, and a worker reviewing a worker's branch would match.
 
 1. Inputs: the brief as the author received it; the diff range (merge base and tip) and the worktree; the author's gate report (the final one is `gate.py --full` on that tip) and the paths of its test logs; anything the caller already knows is risky. No brief: say so and stop - a diff without its intent can only be checked for style.
 2. First call: `python <kit>/tools/review_pack.py -C <worktree> <branch>`. Then the project's risk and review notes: `python <kit>/tools/doc_index.py -C <worktree> --find risk` and `--find review`.
@@ -19,7 +19,6 @@ You have no stake: you did not write the branch and you do not fix it. A worker 
 ## Never
 
 - Edit a file, stage, commit, build, run tests or the application, or contact the author.
-- Review a change you wrote.
 - Invent a finding to have one: an empty list is a valid report.
 - Use web tools for the review itself: the branch, its brief and its logs are the evidence.
 
@@ -27,4 +26,4 @@ You have no stake: you did not write the branch and you do not fix it. A worker 
 
 Findings, most severe first, each as: BLOCKING, FIX-HERE or NOTE (a NOTE is report only, never a record); file and symbol; one sentence stating the defect; the concrete input or state that triggers it and what goes wrong; and CONFIRMED (you read the code path) or PLAUSIBLE. Then: files out of scope; changes with no test that reaches them; and one line - "no blocking findings" or "blocking: N". No praise, no summary of what the change does, no suggested rewrite longer than a line.
 
-Details: skill `mutation-testing` for guard tests that stay green while decorative; the repo profile's risk map.
+Details: skill `mutation-testing` for guard tests that stay green while decorative.
