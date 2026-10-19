@@ -754,6 +754,36 @@ class RealUnits(TempHomeCase):
         self.assertIn('kit_tests: interpreters: 1 pool worker(s) ran 2 unit(s); 1 unit(s) in '
                       'their own process', out.getvalue())
 
+    def test_a_pooled_unit_s_process_starts_are_on_its_line_and_summed_on_the_interpreters_line(
+            self):
+        mods, env = self.pid_units(2)
+        write(self.root, {'tests/p/test_1.py': PID_PROBE + (
+            "\n    def test_starts(self):\n        import subprocess, sys\n"
+            "        for _ in range(2):\n"
+            "            subprocess.run([sys.executable, '-c', 'pass'], check=True)\n")})
+        out = io.StringIO()
+        rc, _summary = selfrun.run(mods, self.root, 1, out=out, environ=env, timeout=120)
+        self.assertEqual(rc, 0, out.getvalue())
+        self.assertIn('2 tests, 2 process starts  tests.p.test_1\n', out.getvalue())
+        self.assertNotIn('process starts  tests.p.test_0', out.getvalue())   # it started none
+        self.assertIn('kit_tests: interpreters: 1 pool worker(s) ran 2 unit(s); 0 unit(s) in '
+                      'their own process; 2 process start(s) in 2 pooled unit(s) (most: '
+                      'tests.p.test_1 2)\n', out.getvalue())
+
+    def test_the_interpreters_line_names_the_heaviest_units_by_process_starts(self):
+        done = [((m, 1, 1), 'OK', 1, 0.0, '') for m in ('t.a', 't.b', 't.c', 't.d', 't.e')]
+        line = selfrun.interpreters_line((2, {}), done, {}, {'t.a': 4, 't.b': 9, 't.c': 0,
+                                                             't.d': 4, 't.e': 1})
+        self.assertEqual(line, 'kit_tests: interpreters: 2 pool worker(s) ran 5 unit(s); 0 unit(s) '
+                               'in their own process; 18 process start(s) in 5 pooled unit(s) '
+                               '(most: t.b 9, t.a 4, t.d 4)')
+        self.assertEqual(selfrun.interpreters_line((1, {}), done[:1], {}, {'t.a': 0}),
+                         'kit_tests: interpreters: 1 pool worker(s) ran 1 unit(s); 0 unit(s) in '
+                         'their own process; 0 process start(s) in 1 pooled unit(s)')
+        self.assertEqual(selfrun.interpreters_line((1, {}), done[:1], {}, {}),
+                         'kit_tests: interpreters: 1 pool worker(s) ran 1 unit(s); 0 unit(s) in '
+                         'their own process')
+
     def test_the_units_packages_are_their_top_level_packages(self):
         self.assertEqual(selfrun.unit_packages(['tests.p.test_0', 'tests.test_x', 'other.a.B',
                                                 'top_level']), ['other', 'tests'])
