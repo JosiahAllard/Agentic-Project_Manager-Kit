@@ -22,8 +22,8 @@ unit, its worker too) and reported TIMEOUT, and a unit that ran no test is a FAI
 never a unit or a worker, by its pid. The log's `interpreters` line counts the workers started,
 those replaced and why, the units run in their own process, and the process starts of the pooled
 units (kitlib.tooldeps.pool `starts`: conhosts and nested jobs included), naming the HEAVIEST
-units by them; a pooled unit's own line says `N process starts` when it started any (an
-own-process unit's are not counted). With kit_tests' opt-in
+units by them; a pooled unit's own line says `, N process starts` after its test count, before
+its module name, when it started any (an own-process unit's are not counted). With kit_tests' opt-in
 `--pid-hold` (never in the gate), the caller starts this process's pid hold before the units'
 environment is copied (kitlib.pytests.runner.PidHoldRun: warmed, published), so no process a test
 starts can be given the pid of a shell a stale taskkill is still aimed at; `run` writes whether
