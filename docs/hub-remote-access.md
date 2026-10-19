@@ -262,6 +262,49 @@ phone stays signed in is Cloudflare Access's own session; the hub's browser sess
 Whenever you want: delete the Access policy or the route, or remove `hub.access` from the machine
 config and restart the hub (step 8).
 
+## Reaching the hub from a restricted (company) network
+
+If the hub opens from a phone on mobile data but not from a work laptop on a company network, the
+hub is fine and something on that network blocks the way. These steps find out what, so you can use
+a route your company allows or ask IT to allow the names. They do not get round any company
+control, and no step weakens, shares or bypasses Access or pairing: those stay yours alone. Never
+open a public port on the PC for this.
+
+What the hub uses (from the code): the laptop talks HTTPS on port 443 only, to `<hostname>` and to
+`<team>.cloudflareaccess.com` (the Access login). The hub uses no WebSocket and no other port. The
+page loads one snapshot, then repeats one long-poll (`GET /wait`, held open up to 55 s,
+`kitlib.hubsite.api.WAIT_MAX_S`).
+
+First rule out the hub: on the PC, `python tools/hub.py status` says `tunnel: on` (step 9), and the
+page opens on a network that is not the company's.
+
+Diagnosis, run on the laptop. Every command only reads: none changes DNS or proxy settings, and
+nothing is installed.
+
+| Step | Run | You see | It points to |
+| --- | --- | --- | --- |
+| 1 | `nslookup <hostname>`, then `nslookup <team>.cloudflareaccess.com` | no answer, or an address that is clearly internal | the domain is blocked or categorised (DNS filter) |
+| 2 | `Test-NetConnection <hostname> -Port 443` | `TcpTestSucceeded : False` | a firewall or proxy drops 443 to that name |
+| 3 | `curl.exe -sS -I https://<hostname>` | a company block or category page, or a certificate issued by your company | the domain is categorised or inspected by a proxy |
+| 3 | (same) | a redirect to `<team>.cloudflareaccess.com` | the laptop reached Cloudflare: the network is not the cause |
+| 4 | open `https://<team>.cloudflareaccess.com` in the browser | blocked, while `<hostname>` is not | the login name has its own category |
+| 5 | use the page in the browser | it opens and you sign in, but data never updates, or only after about a minute | a response held open is cut or buffered (INFERENCE: from the 55 s long-poll; the repo says nothing of any company proxy) |
+
+A page that loads but shows a refusal in the server's words (step 9.4) reached the hub: that is an
+Access or pairing matter, not the network. A WebSocket or other-port filter cannot be the cause:
+the hub uses neither (INFERENCE only about what a company proxy does with 443; the code is the
+fact).
+
+Routes you can use, each only if company policy allows it:
+
+- The phone's own browser on mobile data: the supported path (on a work-managed phone, check its
+  policy first).
+- The phone's hotspot, only if your company's policy allows the work laptop to join another
+  network; if unsure, ask IT first.
+- Ask IT to allow `<hostname>` and `<team>.cloudflareaccess.com` on 443. Give them those two
+  names and the results above. The route is already 443-only TLS: Cloudflare answers on 443 and
+  `cloudflared` dials out, so the PC opens no inbound port and nothing more is needed.
+
 ## What the hub does and does not trust
 
 - A token must be signed by your team's key, carry your AUD tag, be unexpired and name an email on
