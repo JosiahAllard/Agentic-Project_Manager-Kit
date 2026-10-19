@@ -7,8 +7,9 @@ into the main checkout (docs/preflight.md)?
   checkout_guard.py --main-stray [--allow-tracked] [PATH]
       the main checkout's stray untracked or uncommitted files, found from PATH (default: here),
       one [FAIL] line each (kitlib.git.stray). Exit 1 on any; 0 when clean or when git
-      could not tell (a WARNING line). --allow-tracked is the lander's post-merge gate alone:
-      from the main checkout, tracked edits are the lander's own, and "could not tell" fails.
+      could not tell (a WARNING line). --allow-tracked is for a repo's landing gate step (it
+      runs in the _landing linked worktree): there "could not tell" fails (exit 1). It exempts
+      no stray; the name is kept for the merged_args repos already pass.
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.git, prints and exits. The
 write tools' refusal is kitlib.git.checkout.main_refusal.
@@ -41,7 +42,8 @@ def build_parser():
     p.add_argument('--main-stray', action='store_true',
                    help='list stray changes in the main checkout (exit 1 on any)')
     p.add_argument('--allow-tracked', action='store_true',
-                   help='--main-stray from the main checkout: tracked edits are the lander\'s own')
+                   help='with --main-stray, for a landing gate step: fail, not warn, when git '
+                        'could not tell')
     return p
 
 
