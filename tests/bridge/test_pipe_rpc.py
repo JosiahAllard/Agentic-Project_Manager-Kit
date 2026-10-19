@@ -1,14 +1,19 @@
 """Real private Windows request/reply traffic with kernel client identity."""
+import io
+import json
 import os
 import threading
 import time
 import unittest
 import uuid
 
+from optional.bridge.core.jsonwire import encode_frame
 from optional.bridge.core.messages import BeforeWriteError,DeliveryError
 from optional.bridge.win.leader import ServiceLeader
-from optional.bridge.win.rpc import PipeServer,request
+from optional.bridge.win.rpc import PipeServer,encode,request
+from optional.bridge.win.rpcworker import exchange
 from optional.bridge.win.transport import PipeTarget
+from kitlib.proc.pipe import connect
 from kitlib.proc.process import own_ctime
 
 
@@ -66,6 +71,28 @@ class PipeRpcTests(unittest.TestCase):
             request(self.target,{'id':'timeout'},timeout=.5)
         self.assertNotIsInstance(caught.exception,BeforeWriteError)
         self.assertLess(time.monotonic()-start,4)
+
+    def test_client_waits_for_the_busy_one_instance_pipe_instead_of_being_refused(self):
+        # A hook's request meeting a frontend call already being served was refused
+        # 'not-written' (ERROR_PIPE_BUSY), and the hook exits 0 with nothing enrolled.
+        holder=connect(self.leader.endpoint,os.getpid(),own_ctime())
+        self.leader.listener.accept(timeout=3)  # the one instance now serves another client
+        packet=encode({'id':'queued'})
+        header=encode_frame({'pipe':self.target.name,'pid':self.target.pid,'creation':self.target.creation,
+            'length':len(packet)},max_frame_bytes=2048)
+        output=io.BytesIO()
+        worker=threading.Thread(target=exchange,args=(io.BytesIO(header+packet),output))
+        self.threads.append(worker)
+        worker.start()
+        worker.join(timeout=.5)
+        self.assertTrue(worker.is_alive(),output.getvalue())  # still waiting, not refused
+        holder.close()
+        self.leader.listener.reset()
+        PipeServer(self.leader,handler=lambda peer,message:{'id':message['id'],'served':True}).once(timeout=3)
+        worker.join(timeout=4)
+        status,_,body=output.getvalue().partition(b'\n')
+        self.assertEqual(json.loads(status)['state'],'reply')
+        self.assertEqual(json.loads(body),{'id':'queued','served':True})
 
     def test_bad_handler_is_content_free_and_next_connection_still_works(self):
         def fail(peer,message): raise RuntimeError('private message must not enter logs')
