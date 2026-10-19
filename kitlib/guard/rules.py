@@ -1963,18 +1963,19 @@ def own_worktree(ctx, cwd, main_top=None):
     return here_.top
 
 
-def edit_target(event, ctx, target, cwd, role, what, unknown_why=None, rewrite=None, run=None):
+def edit_target(event, ctx, target, cwd, role, what, unknown_why=None, rewrite=None, run=None, redirect=False):
     """Deny an edit of `target` in a main checkout (or a place git cannot tell) by a role that
     may not edit one, and an agent session's write outside its roots (write_jail). `rewrite(path)`
     gives the same edit aimed at `path` (the alternative); `run` the command to rerun from the
-    worktree when it writes into the directory it runs in."""
+    worktree when it writes into the directory it runs in; `redirect`, a shell redirect's target:
+    output, so the alternative with no worktree of the session's own is the temp folder."""
     d = ledger_rule(ctx, target, role, what) or pm_data_unknown(ctx, target, cwd, role, what) or \
         lock_state(event, ctx, target, role, what) or hub_secret_edit(event, ctx, target, role, what) or \
         kit_json(event, ctx, target, role, what) or gate_result(event, ctx, target, role, what) or \
         generated_file(ctx, target, role, what)
     if d:
         return d
-    return main_checkout(event, ctx, target, cwd, role, what, unknown_why, rewrite, run) or \
+    return main_checkout(event, ctx, target, cwd, role, what, unknown_why, rewrite, run, redirect) or \
         write_jail(event, ctx, target, cwd, role, what, rewrite, run)
 
 
@@ -2030,7 +2031,7 @@ def gate_result(event, ctx, target, role, what):
     return None
 
 
-def main_checkout(event, ctx, target, cwd, role, what, unknown_why=None, rewrite=None, run=None):
+def main_checkout(event, ctx, target, cwd, role, what, unknown_why=None, rewrite=None, run=None, redirect=False):
     # a target it cannot place may be in any checkout, so both the kit defaults and the roles of
     # the repository the call runs in must let the role edit one: the defaults alone would let a
     # role that repository keeps out of its main checkout write anywhere, and the repository's
@@ -2044,10 +2045,14 @@ def main_checkout(event, ctx, target, cwd, role, what, unknown_why=None, rewrite
     new_wt = new_worktree(ctx, main_top)[1]
     if target is None:
         mine = own_worktree(ctx, cwd)
-        instead = rewrite(fwd(mine) + '/<file>') if mine and rewrite is not None else new_wt
+        if rewrite is not None and (mine or redirect):
+            instead = rewrite(fwd(mine or ctx.tempdir) + '/<file>')
+        else:
+            instead = new_wt
         return refuse(UNPLACED, role, '%s: the guard cannot tell where it writes (%s). Name a literal path '
-                      'inside your worktree (the Edit or Write tool for a file).' %
-                      (what, unknown_why or 'unknown path'), instead)
+                      'inside your worktree%s (the Edit or Write tool for a file).' %
+                      (what, unknown_why or 'unknown path', ' or, for output, the temp folder' if redirect else ''),
+                      instead)
     place = ctx.place(target)
     if place.kind not in (repo.MAIN, repo.UNKNOWN):
         return None
@@ -2061,7 +2066,7 @@ def main_checkout(event, ctx, target, cwd, role, what, unknown_why=None, rewrite
         return refuse(rule, role, '%s: git cannot tell whether %s is in a main checkout (%s); '
                       'this role may not edit one. Write inside a path git reports as a linked worktree.' %
                       (what, target, place.detail), instead)
-    what2, instead = worktree_alternative(ctx, target, place.top, cwd, rewrite, run)
+    what2, instead = worktree_alternative(ctx, target, place.top, cwd, rewrite, run, redirect)
     return refuse('main-checkout', role, '%s is in the main checkout %s; this role may not edit a main '
                   'checkout. %s' % (what, place.top, what2), instead)
 
@@ -2161,9 +2166,10 @@ def jail_refusal(role, rs, verdict, root, what, target, rewrite=None, run=None):
                   run or 'cd %s' % quote(dest.path))
 
 
-def worktree_alternative(ctx, target, main_top, cwd, rewrite=None, run=None):
+def worktree_alternative(ctx, target, main_top, cwd, rewrite=None, run=None, redirect=False):
     """(sentence, command): the same edit in the session's own worktree of this main checkout, or
-    a new worktree to make it in."""
+    a new worktree to make it in; a redirect's output with no worktree of the session's own, the
+    same redirect into the temp folder (KIT-GUARD-CHEAP item 8)."""
     rel = os.path.relpath(target, main_top)
     mine = own_worktree(ctx, cwd, main_top)
     if mine:
@@ -2174,12 +2180,19 @@ def worktree_alternative(ctx, target, main_top, cwd, rewrite=None, run=None):
     no_wt, instead = new_worktree(ctx, main_top)
     if no_wt:
         return no_wt, instead
+    if redirect and rewrite is not None:
+        name = os.path.basename(target.rstrip('\\/')) or 'out'
+        return REDIRECT_HINT, rewrite(fwd(os.path.join(ctx.tempdir, name)))
     if rewrite is None and run is not None and cwd and paths.norm(target) == paths.norm(cwd):
         py_c = PY_C_HINT if PY_C_RUN_RE.search(run) else ''
         return (py_c + MAIN_CWD_HINT, instead)   # it writes through the main checkout it runs in
     return 'Make the change in a worktree of it (%s there); the lander brings it to main:' % fwd(rel), instead
 
 
+REDIRECT_HINT = ('A redirect writes output: send it to the temp folder (a change to the repository is made in a '
+                 'worktree of it, which the lander brings to main):')
+# commands whose file is the output they are given, like a redirect's (their refusal names the temp folder)
+OUTPUT_WRITERS = ('out-file', 'tee-object', 'tee')
 MAIN_CWD_HINT = ('It writes through its working directory, which is the main checkout: cd into your worktree first, '
                  'in the same call (no tool keeps a cd between calls), or run a script or module by absolute path '
                  '(python <worktree>/tools/x.py -C <worktree>; python -m unittest discover -s <worktree>/tests/<pkg> '
@@ -4077,8 +4090,10 @@ def _write_from(event, ctx, cmd, inv, cwd, role, w, base, net, into, searched):
         # the folder it runs in is the -WorkingDirectory value: aim that word instead
         rewrite = lambda path, x=inv.workdir: retarget(cmd, x, paths.norm(path, fold=False))
     placed = target is not None and not unread_write(cmd, inv, w)
+    output = any(r.writes and r.target is not None and r.target.start is not None and
+                 (r.target.start, r.target.end) == (w.start, w.end) for r in cmd.redirects) or (getattr(inv, 'name', None) or '').lower() in OUTPUT_WRITERS
     for t in into_folder(target, w, into, runs_in, getattr(ctx, 'home', None)) if target else [target]:
-        d = edit_target(event, ctx, t, cwd, role, what, why, rewrite=rewrite, run=bare(cmd))
+        d = edit_target(event, ctx, t, cwd, role, what, why, rewrite=rewrite, run=bare(cmd), redirect=output)
         if d and sleep and d.rule == 'main-checkout':
             d = sleep_refusal(d, cmd, role)     # named before unplaced(), so a warning says it too
         if not placed:

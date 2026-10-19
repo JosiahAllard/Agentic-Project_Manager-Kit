@@ -400,6 +400,49 @@ class Simplified(World):
                 self.denied(W.bash(line, self.w.wt, sub=True), 'git-push-main')
 
 
+class RedirectHint(World):
+    """Item 8: a redirect (or Out-File, Tee-Object, tee) refused in a main checkout names the same
+    command aimed at the temp folder, not `git worktree add`; any other edit keeps the worktree
+    alternative, and a session with its own worktree is still pointed there."""
+
+    def denied(self, payload, rule):
+        d = self.decide(payload)
+        self.assertEqual((d.verdict, d.rule), ('deny', rule), d.reason)
+        return d.reason
+
+    def test_a_literal_redirect_in_main_names_the_temp_folder(self):
+        tmp = W.fwd(self.w.temp)
+        for shell, line, instead in (
+                (W.bash, 'git log > out.txt', 'git log > "%s/out.txt"' % tmp),
+                (W.bash, 'echo x > out.txt', 'echo x > "%s/out.txt"' % tmp),
+                (W.bash, 'python -c "print(1)" > out.txt', 'python -c "print(1)" > "%s/out.txt"' % tmp),
+                (W.ps, 'Get-ChildItem | Out-File out.txt', 'Out-File "%s/out.txt"' % tmp)):
+            with self.subTest(line):
+                reason = self.denied(shell(line, self.w.main, sub=True), 'main-checkout')
+                self.assertIn('Instead: ' + instead, reason)
+                self.assertIn('temp folder', reason)
+                self.assertNotIn('worktree add', reason)
+
+    def test_a_computed_redirect_in_main_names_the_temp_folder(self):
+        W.deny_softened()
+        self.addCleanup(W.allow_unplaced)
+        reason = self.denied(W.bash('echo x > "$OUT"', self.w.main, sub=True), 'unplaced')
+        self.assertIn('Instead: echo x > "%s/<file>"' % W.fwd(self.w.temp), reason)
+        self.assertNotIn('worktree add', reason)
+
+    def test_other_edits_in_main_keep_the_worktree_alternative(self):
+        for payload in (write_ev(os.path.join(self.w.main, 'n.md'), self.w.main),
+                        W.bash('cp a.txt out.txt', self.w.main, sub=True)):
+            with self.subTest(payload):
+                reason = self.denied(payload, 'main-checkout')
+                self.assertIn('worktree add', reason)
+                self.assertNotIn('temp folder', reason)
+
+    def test_a_redirect_from_its_own_worktree_is_aimed_there(self):
+        reason = self.denied(W.bash('echo x > %s/o.txt' % W.fwd(self.w.main), self.w.wt, sub=True), 'main-checkout')
+        self.assertIn('Instead: echo x > "%s/o.txt"' % W.fwd(self.w.wt), reason)
+
+
 class NetArgumentIndex(World):
     """_net_written's per-method argument index: Copy writes its destination, Move both paths,
     Replace all three; a literal main-checkout path in a written place is denied from a worktree."""
