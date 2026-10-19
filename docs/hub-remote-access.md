@@ -271,8 +271,8 @@ control, and no step weakens, shares or bypasses Access or pairing: those stay y
 open a public port on the PC for this.
 
 What the code shows: the hub uses no WebSocket. The page loads one snapshot, then repeats one
-long-poll (`GET /wait`, held open up to 55 s, `kitlib.hubsite.api.WAIT_MAX_S`), and the tunnel
-listener is on loopback only. Per Cloudflare's setup (INFERENCE from the repo, not shown by it): the
+long-poll (`GET /wait`, held open up to 55 s, `kitlib.hubsite.api.WAIT_MAX_S`) and reads the
+snapshot again after each change, and the tunnel listener is on loopback only. Per Cloudflare's setup (INFERENCE from the repo, not shown by it): the
 laptop talks HTTPS on port 443 to `<hostname>` and to `<team>.cloudflareaccess.com` (the Access
 login), plus your identity provider's sign-in host if step 6.4 uses one.
 
@@ -296,11 +296,21 @@ Whether the browser itself reaches `<hostname>` is what tells a proxy from a cat
 | 4 | open `https://<team>.cloudflareaccess.com` in the browser | blocked, while `<hostname>` is not | the login name has its own category |
 | 5 | use the page in the browser | it opens and you sign in, but data never updates, or only after about a minute | a response held open is cut or buffered (INFERENCE: from the 55 s long-poll; the repo says nothing of any company proxy) |
 
-The Access message of step 9.4, shown in the server's words, means the hub was reached: that is an
-Access matter, not the network. A proxy 403 shows the page's generic failure text instead. A
-WebSocket filter cannot be the cause: the hub
-uses none (the code is the fact). That no other port is needed is INFERENCE, as is what a company
-proxy does with 443.
+What the page says tells the causes apart (`kitlib/hubsite/web/index.html`, `hub.call` and
+`watch`). Only the Access message of step 9.4, "The hub server refused the read (this listener
+needs a valid Cloudflare Access token)", means the hub was reached: that is an Access matter, not
+the network. The others can come from a proxy:
+
+- "This browser is not paired with the hub ... run `python tools/hub.py open`" without that Access
+  phrase: a 401 or a 403 whose body is not the hub's Access answer, so possibly a proxy's. On the
+  company network do not pair again: pairing cannot mend it.
+- "Cannot reach the hub server (the hub server did not answer)": nothing came back, or a 200
+  answer whose body is not JSON (a proxy's block page).
+- "The hub server refused the read (the hub server answered 407)", or another status: the
+  network answered with that status (407 is a proxy asking for sign-in).
+
+A WebSocket filter cannot be the cause: the hub uses none (the code is the fact). That no other
+port is needed is INFERENCE, as is what a company proxy does with 443.
 
 Routes you can use, each only if company policy allows it:
 
