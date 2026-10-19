@@ -384,7 +384,8 @@ class Start(Base):
         self.assertIn('lands nothing', text)
         self.assertIn('every LAND verdict', text)
         self.assertIn('cleared for landing', text)
-        self.assertIn('never wait on it', text)
+        self.assertIn('hold the rest until the owner gives the go', text)
+        self.assertIn('never wait on the old session', text)
         self.assertNotIn('--auto', text)
 
     def test_only_a_coordinators_successor_is_told_to_land(self):

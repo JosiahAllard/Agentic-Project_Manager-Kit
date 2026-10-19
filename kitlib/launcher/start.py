@@ -96,7 +96,7 @@ def predecessor_text(old, coordinator=True):
         return "You succeed %s, which has checkpointed and does nothing more; never wait on it. " % old
     return ("You succeed %s, which has checkpointed and lands nothing more. Queue every LAND verdict its state "
             "note lists that the owner (or a ledger ruling) has cleared for landing; hold the rest until the "
-            "owner gives the go; never wait on it. " % old)
+            "owner gives the go; never wait on the old session. " % old)
 
 
 def _check_common(model, effort, autocompact, lo_hi=AUTOCOMPACT):
