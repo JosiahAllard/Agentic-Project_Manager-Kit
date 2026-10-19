@@ -156,6 +156,22 @@ class Pool(unittest.TestCase):
         self.assertEqual(self.pool.stats(), (1, {}))
         self.assertEqual(os.listdir(self.folder), [])         # output files are read and removed
 
+    def test_each_unit_s_process_starts_are_counted_and_the_worker_s_own_are_not(self):
+        # The worker has a console (its own or this process's), so each child shares it: no
+        # conhost, one start each. A child given a console of its own adds its conhost.
+        write(self.root, {'tests/p/test_three.py': unit_body(
+            "        for _ in range(3):\n"
+            "            subprocess.run([sys.executable, '-c', 'pass'], check=True)\n"
+            "        subprocess.run([sys.executable, '-c', 'pass'], check=True,\n"
+            "                       creationflags=subprocess.CREATE_NO_WINDOW)\n",
+            imports='import subprocess')})
+        _u, status, _ran, _s, text = self.unit('tests.p.test_three')
+        self.assertEqual(status, 'OK', text)
+        self.unit('tests.p.test_pid')
+        self.assertEqual(self.pool.stats(), (1, {}))             # one worker ran both
+        self.assertEqual(self.pool.starts(), {'tests.p.test_three': 3 + 2, 'tests.p.test_pid': 0})
+        self.assertEqual(self.pool.starts('tests.p.test_three'), 5)
+
     def test_a_failing_unit_reports_its_output_and_the_worker_is_kept(self):
         write(self.root, {'tests/p/test_fails.py': unit_body("        self.assertEqual(1, 2)\n")})
         _u, status, ran, _s, text = self.unit('tests.p.test_fails')
