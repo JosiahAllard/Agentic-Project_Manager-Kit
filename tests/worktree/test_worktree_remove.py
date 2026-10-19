@@ -452,7 +452,7 @@ class Abandon(RemoveCase):
 
 @real_git('clean: the fake lacks git clean (and a throwaway GIT_INDEX_FILE)')
 class AbandonLandedDirty(RemoveCase):
-    """--abandon on a landed tree that holds uncommitted work (KIT-WTREMOVE-MERGED-DIRTY-LOOP):
+    """--abandon on a landed tree that holds uncommitted work:
     the plain verb refuses the work and --abandon found nothing to abandon, each naming the other."""
 
     TODAY = Abandon.TODAY
@@ -462,7 +462,7 @@ class AbandonLandedDirty(RemoveCase):
 
     def landed_dirty(self, slug):
         """A landed worktree with a modified tracked file, a staged new file and an untracked
-        file in a new folder (KIT-WTREMOVE-MERGED-DIRTY-LOOP)."""
+        file in a new folder."""
         path = self.workstream(slug)
         self.land('kit/' + slug)
         self.fx.write('%s-0.txt' % slug, 'changed\n', root=path)

@@ -1274,8 +1274,8 @@ def saved_work(main, commit, tree, tip):
 
 def _abandon_landed_dirty(ctx, path, registered_path, slug, branch, tip, name, count, why,
                           keep_branch, today):
-    """`--abandon` on a LANDED tree that holds uncommitted work (KIT-WTREMOVE-MERGED-DIRTY-LOOP:
-    the plain verb refuses the work, and the commits are in the base). Every check of the plain
+    """`--abandon` on a LANDED tree that holds uncommitted work (the plain verb refuses the work,
+    and the commits are in the base: each verb used to name the other). Every check of the plain
     verb runs first; then the work is saved as a commit on `tip` under the annotated tag
     archive/<slug>, the tree is reset to its HEAD (`reset --hard`, `clean -d`, never -x: build
     output goes with the tree as in the plain verb) only while it still matches the saved commit,
