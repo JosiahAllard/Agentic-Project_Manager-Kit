@@ -285,5 +285,40 @@ class Judge(unittest.TestCase):
         self.assertEqual(S.judge(st, '', 0, {})[0], 'PASS')
 
 
+class ZeroCountPasses(unittest.TestCase):
+    """KIT-GATE-PASS-ZERO-COUNT: the pass patterns that would also match a zero-test run."""
+
+    def warned(self, passes, **top):
+        return S.zero_count_passes(gate_of(cmd('t', **{'pass': passes}), **top))
+
+    def test_a_bare_pass_string_warns_under_a_zero_tests_pattern_that_extends_it(self):
+        (line,) = self.warned('UNIT TESTS OK', zero_tests=[r'\bUNIT TESTS OK 0\b'])
+        self.assertIn("step t \"pass\" 'UNIT TESTS OK' accepts a zero-test run", line)
+        self.assertIn("'UNIT TESTS OK 0'", line)
+
+    def test_a_floored_count_does_not_warn(self):
+        self.assertEqual(self.warned(r'\bUNIT TESTS OK [1-9]\d*\b',
+                                     zero_tests=r'\bUNIT TESTS OK 0\b'), [])
+        self.assertEqual(self.warned([r'(?m)^Ran [1-9][0-9]* tests? in', r'(?m)^OK\b']), [])
+
+    def test_a_count_that_may_be_zero_warns_without_zero_tests(self):
+        self.assertEqual(len(self.warned(r'(?m)^Ran \d+ tests? in')), 1)    # the Ran 0 tests line
+        (line,) = self.warned(r'Passed: \d+')                                 # its own count
+        self.assertIn("'Passed: 0'", line)
+
+    def test_a_literal_zero_or_a_class_that_takes_letters_is_no_count(self):
+        self.assertEqual(self.warned(r'\b0 failed\b'), [])
+        self.assertEqual(self.warned(r'(?m)^engine_run: dir=\S'), [])     # a GriffBall step
+        self.assertEqual(self.warned(r'done: .+'), [])
+
+    def test_a_bare_pass_string_with_no_zero_line_it_matches_does_not_warn(self):
+        self.assertEqual(self.warned('kit_tests: OK'), [])
+        self.assertEqual(self.warned('^OK$', zero_tests=r'^OK 0$'), [])
+
+    def test_a_pattern_it_cannot_read_gives_no_line(self):
+        self.assertEqual(self.warned(r'(?P<a>x)(?(a)y|z) OK'), [])
+        self.assertEqual(S.zero_count_passes({}), [])
+
+
 if __name__ == '__main__':
     unittest.main()
