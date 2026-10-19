@@ -3,8 +3,9 @@ a landing"): `land.py --submitted <payload>` and `gate.py land --submitted <payl
 only from the payload file submit() named for those branches and that run_id, read with the token
 submit() gave the detached landing in its environment, naming the landing's own branches, tips,
 main, run_id and output, while each branch's land record is still that run's and unclaimed by
-another process. Anything else is REFUSED on stderr, exit 4, with nothing written: no record, no
-output file, no landing. The payloads here are agent-written files; the tools run from a linked
+another process. Anything else is REFUSED on stderr, exit 4, with no record written and no
+landing; the refusal line is appended to the submission's output only when the payload is at the
+path submit named (the detached landing's stderr is a hidden console). The payloads here are agent-written files; the tools run from a linked
 worktree, so a landing that got past restore refuses (not a main checkout) before it books."""
 import hashlib
 import json
@@ -66,14 +67,20 @@ class TrustCase(SubmitCase):
                               capture_output=True, text=True, timeout=HANG_S, env=env,
                               stdin=subprocess.DEVNULL, cwd=KIT_ROOT)
 
-    def assert_refused(self, r, payload, before):
+    def assert_refused(self, r, payload, before, logged=None):
+        """Exit 4 with the one REFUSED line on stderr, and every path in `before` as it was,
+        except `logged` (the submission's output, for a payload at the path submit names): that
+        line appended to it, so a detached landing's reason outlives its hidden console."""
         self.assertEqual(r.returncode, G.REFUSED, (r.stdout, r.stderr))
         self.assertEqual(r.stdout, '', r.stderr)
         lines = r.stderr.splitlines()
         self.assertEqual(len(lines), 1, r.stderr)
         self.assertTrue(lines[0].startswith('REFUSED: %s %s: ' % (submit.FLAG, payload)), lines)
         self.assertTrue(lines[0].endswith('; nothing was changed'), lines)
-        self.assertEqual(self.snapshot(*before), before)
+        want = dict(before)
+        if logged is not None:
+            want[logged] = (before[logged] or b'') + (lines[0] + '\n').encode('utf-8')
+        self.assertEqual(self.snapshot(*before), want)
 
     def forge(self, path, runs, output, token='agent', schema=None):
         """An agent-written payload at `path`, with the hash of a token the agent chose."""
@@ -135,7 +142,8 @@ class AgentWrittenPayloads(TrustCase):
                 before = self.snapshot(self.record_path(), out.facts['output'], payload)
                 r = self.run_tool(tool, wt, [BRANCH], [tip], payload, token=None,
                                   expect_main=self.main)
-                self.assert_refused(r, payload, before)
+                self.assert_refused(r, payload, before, logged=out.facts['output'])
+                self.assertIn('no submission token', r.stderr)
 
     def test_the_genuine_payload_with_a_wrong_token_is_refused(self):
         """4"""
@@ -147,7 +155,7 @@ class AgentWrittenPayloads(TrustCase):
                     before = self.snapshot(self.record_path(), out.facts['output'], payload)
                     r = self.run_tool(tool, wt, [BRANCH], [tip], payload, token=wrong,
                                       expect_main=self.main)
-                    self.assert_refused(r, payload, before)
+                    self.assert_refused(r, payload, before, logged=out.facts['output'])
 
     def test_the_right_token_with_another_landings_arguments_is_refused(self):
         """5: the payload's branches, tips and main are the landing's own arguments."""
@@ -164,7 +172,9 @@ class AgentWrittenPayloads(TrustCase):
                                        out.facts['output'], payload)
                 r = self.run_tool([LAND_PY], wt, branches, tips, payload, token=token,
                                   expect_main=main)
-                self.assert_refused(r, payload, before)
+                # kit/two alone names another payload path: refused before its log is known
+                self.assert_refused(r, payload, before, logged=(
+                    out.facts['output'] if branches[0] == BRANCH else None))
 
     def test_the_genuine_payload_rewritten_is_refused(self):
         """6: the token's hash kept, the output or a run_id changed."""
@@ -182,7 +192,7 @@ class AgentWrittenPayloads(TrustCase):
                                        elsewhere)
                 r = self.run_tool([LAND_PY], wt, [BRANCH], [tip], payload, token=token,
                                   expect_main=self.main)
-                self.assert_refused(r, payload, before)
+                self.assert_refused(r, payload, before, logged=out.facts['output'])
                 self.assertFalse(os.path.exists(elsewhere))
 
     def test_a_record_another_process_claimed_is_refused(self):
@@ -198,7 +208,7 @@ class AgentWrittenPayloads(TrustCase):
         before = self.snapshot(self.record_path(), out.facts['output'], payload)
         r = self.run_tool([LAND_PY], wt, [BRANCH], [tip], payload, token=token,
                           expect_main=self.main)
-        self.assert_refused(r, payload, before)
+        self.assert_refused(r, payload, before, logged=out.facts['output'])
 
     def test_a_record_of_another_run_or_finished_is_refused(self):
         wt, [tip], out, token = self.genuine()
@@ -208,7 +218,38 @@ class AgentWrittenPayloads(TrustCase):
         before = self.snapshot(self.record_path(), out.facts['output'], payload)
         r = self.run_tool([LAND_PY], wt, [BRANCH], [tip], payload, token=token,
                           expect_main=self.main)
-        self.assert_refused(r, payload, before)
+        self.assert_refused(r, payload, before, logged=out.facts['output'])
+
+    def test_no_token_never_reads_the_payload_so_nothing_is_abandoned(self):
+        """Without a token a payload at the submission's own path that is missing, not json or
+        an older kit's schema is untrusted, not a SubmitError: abandon would finish the run's
+        records refused for any caller. The records stay running; only the refusal is logged."""
+        wt, [tip], out, _ = self.genuine()
+        payload = out.facts['payload']
+        with open(payload, encoding='utf-8') as f:
+            data = json.load(f)
+        old = dict(data, schema=1)
+        old.pop('token_sha256')
+        for name, text in (('missing', None), ('not json', 'not json'),
+                           ('schema 1', json.dumps(old))):
+            if text is None:
+                if os.path.exists(payload):
+                    os.remove(payload)
+            else:
+                with open(payload, 'w', encoding='utf-8') as f:
+                    f.write(text)
+            for tool in TOOLS:
+                with self.subTest(payload=name, tool=tool[-1]):
+                    before = self.snapshot(self.record_path(), out.facts['output'], payload)
+                    with self.assertRaises(submit.Untrusted) as e:
+                        submit.restore(self.repo.root, payload, [BRANCH], [tip],
+                                       expect_main=self.main, environ={})
+                    self.assertEqual(e.exception.log, out.facts['output'])
+                    r = self.run_tool(tool, wt, [BRANCH], [tip], payload, token=None,
+                                      expect_main=self.main)
+                    self.assert_refused(r, payload, before, logged=out.facts['output'])
+                    self.assertIn('no submission token', r.stderr)
+                    self.assertEqual(self.record(BRANCH)['verdict'], result.RUNNING)
 
 
 class InProcess(TrustCase):

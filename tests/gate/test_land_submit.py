@@ -607,20 +607,21 @@ class Resubmit(SubmitCase):
                          (sha, os.getpid(), process.own_ctime()))
 
     def unreadable(self, branches, tips):
-        out, _ = self.submit(branches, tips)
+        """A submission whose payload is not json: (its Outcome, the token its landing got)."""
+        out, detach = self.submit(branches, tips)
         self.assertEqual(out.code, G.OK, out.lines)
         with open(out.facts['payload'], 'w', encoding='utf-8') as f:
             f.write('not json')
-        return out
+        return out, detach.calls[-1][2][submit.TOKEN_ENV]
 
     def test_a_landing_that_cannot_read_its_payload_finishes_the_records_refused(self):
         _, t1 = self.branch('one', {'one.py': '1\n'})
         _, t2 = self.branch('two', {'two.py': '2\n'})
-        out = self.unreadable(['kit/one', 'kit/two'], [t1, t2])
+        out, token = self.unreadable(['kit/one', 'kit/two'], [t1, t2])
         rid = submit.run_id_of(out.facts['payload'])
         with self.assertRaises(submit.SubmitError) as e:
             submit.restore(self.repo.root, out.facts['payload'], ['kit/one', 'kit/two'], [t1, t2],
-                           environ={})
+                           environ={submit.TOKEN_ENV: token})
         gave = submit.abandon(self.repo.root, out.facts['payload'], str(e.exception))
         line = 'REFUSED: %s; nothing was changed' % e.exception
         self.assertEqual((gave.code, gave.lines[-1]), (G.REFUSED, line))
@@ -634,11 +635,12 @@ class Resubmit(SubmitCase):
     def test_the_tools_finish_the_records_of_a_payload_they_cannot_read(self):
         _, tip = self.branch('feature', {'a.py': 'a\n'})
         for tool in ([LAND_PY], [GATE_PY, 'land']):
-            out = self.unreadable([BRANCH], [tip])
+            out, token = self.unreadable([BRANCH], [tip])
             r = subprocess.run([sys.executable] + tool + [BRANCH, '-C', self.repo.root,
                                                           '--expect-tip', tip, submit.FLAG,
                                                           out.facts['payload']],
-                               capture_output=True, text=True, timeout=HANG_S, env=self.env,
+                               capture_output=True, text=True, timeout=HANG_S,
+                               env=dict(self.env, **{submit.TOKEN_ENV: token}),
                                stdin=subprocess.DEVNULL, cwd=KIT_ROOT)
             self.assertEqual(r.returncode, G.REFUSED, (r.stdout, r.stderr))
             self.assertIn('REFUSED: cannot read the submission', r.stdout)

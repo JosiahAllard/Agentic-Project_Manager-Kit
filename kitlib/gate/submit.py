@@ -56,14 +56,16 @@ this landing. submit draws a token (secrets), writes its sha256 into the payload
 token to the detached tool alone, in its environment (TOKEN_ENV; never on a command line or on
 disk); restore takes it out of this process's environment first, so nothing the landing runs
 inherits it. It then needs the payload at the path files() names for the landing's branches and
-the run_id in the payload's name, and (untrusted_why) the token matching the payload's hash, the
-payload's runs being the landing's own arguments in order (branch, tip, --expect-main as base, the
-run_id of its name), its output files()'s, and each branch's land record still running for that
-run_id, unclaimed or claimed by this process or its parent (the carrier: claim's pid when the
-landing was not found). A payload that fails any of these is Untrusted: nothing is written (no
-record, no output, no abandon) and the tool refuses on stderr (untrusted_line). One at the path
-submit names that cannot be read, or has an older kit's schema, is a SubmitError: abandon
-finishes its records.
+the run_id in the payload's name, and a token, before it opens the payload; then (untrusted_why)
+the token matching the payload's hash, the payload's runs being the landing's own arguments in
+order (branch, tip, --expect-main as base, the run_id of its name), its output files()'s, and each
+branch's land record still running for that run_id, unclaimed or claimed by this process or its
+parent (the carrier: claim's pid when the landing was not found). A payload that fails any of
+these is Untrusted: no record is written and nothing is abandoned; the tool refuses on stderr
+(untrusted_line), and when the payload is at the path submit names that line is also appended to
+the submission's output (untrusted_refusal), which the records name as their log, so a detached
+landing's reason outlives its hidden console. One at the path submit names, read with a token,
+that cannot be read or has an older kit's schema is a SubmitError: abandon finishes its records.
 """
 import hashlib
 import hmac
@@ -109,12 +111,26 @@ class SubmitError(Exception):
 
 class Untrusted(Exception):
     """A payload restore does not run (Trust, in the module docstring): nothing was written. Not
-    a SubmitError, which abandon answers by finishing the records the payload's name points at."""
+    a SubmitError, which abandon answers by finishing the records the payload's name points at.
+    `log`: the submission's output when the payload is at the path submit names, else None."""
+
+    def __init__(self, why, log=None):
+        super().__init__(why)
+        self.log = log
 
 
 def untrusted_line(payload, why):
     """The tools' refusal of an Untrusted payload, written to stderr."""
     return 'REFUSED: %s %s: %s; nothing was changed' % (FLAG, payload, why)
+
+
+def untrusted_refusal(payload, e):
+    """untrusted_line for the Untrusted `e`, appended to its `log` too when it has one (the
+    detached landing's stderr is a hidden console): the tools write it to stderr."""
+    line = untrusted_line(payload, e)
+    if e.log:
+        _note(e.log, line)
+    return line
 
 
 def token_digest(token):
@@ -465,7 +481,9 @@ def restore(root, payload, branches, tips, expect_main=None, environ=None):
     claimed: written again with this process's pid, so a death from here on is seen
     (result.wait). The token is taken out of `environ` (default os.environ) first. Untrusted,
     with nothing written, unless the payload is the one submit wrote for this landing (Trust, in
-    the module docstring); SubmitError when that payload cannot be read or has another schema."""
+    the module docstring): with no token, before the payload is opened; its `log` is the
+    submission's output once the payload is at the path submit names. SubmitError when that
+    payload, read with a token, cannot be read or has another schema."""
     env = os.environ if environ is None else environ
     token = env.pop(TOKEN_ENV, None)
     branches, tips = list(branches), list(tips)
@@ -479,6 +497,9 @@ def restore(root, payload, branches, tips, expect_main=None, environ=None):
     if not _same_path(payload, want):
         raise Untrusted('not the payload a submission of %s wrote (%s)' % (
             '+'.join(branches), want))
+    if not token:       # before the payload is opened: no SubmitError, so no abandon, without one
+        raise Untrusted('no submission token (%s): only the landing a submission started runs '
+                        'its payload' % TOKEN_ENV, log=want_output)
     try:
         with open(payload, encoding='utf-8') as f:
             data = json.loads(f.read())
@@ -499,7 +520,7 @@ def restore(root, payload, branches, tips, expect_main=None, environ=None):
     why = untrusted_why(root, runs, output, digest, token, branches, tips, expect_main, rid,
                         want_output)
     if why:
-        raise Untrusted(why)
+        raise Untrusted(why, log=want_output)
     for rr in runs:
         rr.start(log=output)
     return {'runs': runs, 'output': output, 'replaced': replaced}

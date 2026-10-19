@@ -125,14 +125,15 @@ def child_args(a, root):
 def restore(root, a):
     """The detached landing's `submitted`, its output now going to the submission's log; None
     when the payload is not the one a submission wrote for this landing (submit.Untrusted: that
-    is said on stderr, and nothing is written) or cannot be read (the submission's records are
+    is said on stderr and, at the submission's own path, in its log; no record is written) or,
+    read with the submission's token, cannot be read (the submission's records are
     then finished refused, submit.abandon, and that is said, on the hidden console)."""
     payload = a.submitted
     try:
         sub = submitmod.restore(root, payload, a.branches, a.expect_tip,
                                 expect_main=a.expect_main)
-    except submitmod.Untrusted as e:
-        sys.stderr.write(submitmod.untrusted_line(payload, e) + '\n')
+    except submitmod.Untrusted as e:    # also in the submission's log: stderr may be hidden
+        sys.stderr.write(submitmod.untrusted_refusal(payload, e) + '\n')
         return None
     except submitmod.SubmitError as e:
         emit(submitmod.abandon(root, payload, str(e)))
