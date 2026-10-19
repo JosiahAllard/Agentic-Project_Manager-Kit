@@ -3,7 +3,6 @@ for kitlib.guard.rules' hub-secrets, hub-owner-verb, hub-mcp and hub-browser.
 
   secret_folder(config_path)   the hub's token folder beside the machine config file
   stores(hub, pm_data_path)    the folders the hub store may be in
-  glob_reaches(pattern, folder) True when a wildcard path can name the folder or a path in it
   list_reaches(pattern, folder, names)  True when a names search's wildcard can list the folder
                                or a file in it
   expand_braces(text)          a glob's {a,b} forms written out, or None
@@ -65,8 +64,9 @@ HUB_SERVER = 'hub'
 # the token folder named in a command's text: `.pm-kit` then `hub` with only separators and
 # quotes between (`.pm-kit/hub`, `'.pm-kit', 'hub'`); hub.json beside it is not it
 FOLDER_RE = re.compile(r'(?i)\.pm-kit\W{1,8}hub(?![\w.-])')
-# code that reads a token: a file name, kitlib.hubsite.auth's names, the hub site or the hub tool
-INLINE_RE = re.compile(r'(?i)owner\.token|agent\.token|approval\.key|hubsite|(?<![\w-])hub\.py\b|'
+# code that reads a token: a token file's or the token folder's name, or kitlib.hubsite.auth's
+# names for them. The hub site and the hub tool by name are not read (KIT-GUARD-CHEAP).
+INLINE_RE = re.compile(r'(?i)owner\.token|agent\.token|approval\.key|'
                        r'\.pm-kit\W{1,8}hub(?![\w.-])|'
                        r'\b(?:OWNER_FILE|AGENT_FILE|TOKEN_FILES|APPROVAL_FILE|read_token|ensure_tokens)\b')
 # programs whose literal words often name the files without touching them: a search pattern, a
@@ -110,25 +110,10 @@ def _parts(path):
     return [drive.lower()] + [p for p in rest.lower().split('\\') if p]
 
 
-def glob_reaches(pattern, folder):
-    """True when the absolute wildcard path `pattern` can name `folder` or a path inside it:
-    each of the folder's parts is matched by the pattern's part in its place (fnmatch, case
-    ignored; `**` matches the rest). A pattern shorter than the folder names a parent, which
-    this does not count (docs/guard.md "Hub secrets": a recursive read of a parent)."""
-    pat, fol = _parts(pattern), _parts(folder)
-    for k, f in enumerate(fol):
-        if k >= len(pat):
-            return False
-        if pat[k] == '**':
-            return True
-        if not fnmatch.fnmatchcase(f, pat[k]):
-            return False
-    return True
-
-
 def list_reaches(pattern, folder, names):
     """True when a names search's absolute wildcard path `pattern` can list the folder `folder` or
-    a file in it, `names` being every name in it (subfolders' too): glob_reaches, except that a
+    a file in it, `names` being every name in it (subfolders' too): each of the folder's parts is
+    matched by the pattern's part in its place (fnmatch, case ignored), and a
     `**` followed by one last part, or a last part just below the folder, has to match one of
     `names` (`**/*.py` lists nothing there when no name in it ends .py). A `**` that ends the
     pattern or is followed by more than one part reaches."""

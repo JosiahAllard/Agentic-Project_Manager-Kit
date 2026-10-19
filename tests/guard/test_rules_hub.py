@@ -117,16 +117,20 @@ class SecretShell(Hub):
         self.denied(lambda sub: bash('rm "%s/approval.key"' % sec, self.w.wt, sub), 'hub-secrets')
 
     def test_the_store(self):
+        # KIT-GUARD-CHEAP item 4: a shell command reading the store passes; a write into it is
+        # still refused (the write's target, as an edit's)
         st = W.fwd(self.store)
-        self.denied(lambda sub: bash('ls "%s"' % st, self.w.wt, sub), 'hub-secrets')
-        self.denied(lambda sub: bash('cat "%s/questions/Q-1.json"' % st, self.w.wt, sub), 'hub-secrets')
-        self.denied(lambda sub: bash('cd "%s" && ls hub' % W.fwd(self.w.data), self.w.wt, sub), 'hub-secrets')
+        self.allowed(lambda sub: bash('ls "%s"' % st, self.w.wt, sub))
+        self.allowed(lambda sub: bash('cat "%s/questions/Q-1.json"' % st, self.w.wt, sub))
+        self.allowed(lambda sub: bash('cd "%s" && ls hub' % W.fwd(self.w.data), self.w.wt, sub))
         self.denied(lambda sub: ps('Remove-Item "%s\\todos\\T-1.json"' % self.store, self.w.wt, sub), 'hub-secrets')
+        self.denied(lambda sub: bash('echo x > "%s/questions/Q-1.json"' % st, self.w.wt, sub), 'hub-secrets')
 
     def test_an_explicit_store(self):
         store = os.path.join(self.w.temp, 'hubstore')
         self.w.user_config({'pm_data': {'path': self.w.data}, 'hub': {'store': store}})
-        self.denied(lambda sub: bash('cat "%s/todos/T-1.json"' % W.fwd(store), self.w.wt, sub), 'hub-secrets')
+        self.allowed(lambda sub: bash('cat "%s/todos/T-1.json"' % W.fwd(store), self.w.wt, sub))
+        self.denied(lambda sub: bash('rm "%s/todos/T-1.json"' % W.fwd(store), self.w.wt, sub), 'hub-secrets')
 
     def test_python_code_that_reads_a_token(self):
         code = "from kitlib.hubsite import auth; print(auth.read_token(auth.folder(), 'owner'))"
@@ -176,11 +180,11 @@ class SecretShell(Hub):
         for make, rule in (
                 (lambda sub: bash(head + 'python -c "print(open(\'%s/owner.token\').read())"' % sec,
                                   self.w.wt, sub), 'hub-secrets'),
-                (lambda sub: bash(head + 'python -c "from kitlib.hubsite import auth; print(auth.folder())"',
+                (lambda sub: bash(head + 'python -c "from kitlib.hubsite import auth; '
+                                         'print(auth.read_token(auth.folder(), \'agent\'))"',
                                   self.w.wt, sub), 'hub-secrets'),
                 (lambda sub: ps(head + 'python -c "import subprocess; subprocess.run([\'python\', '
                                        '\'tools/hub.py\', \'serve\'])"', self.w.wt, sub), 'hub-owner-verb'),
-                (lambda sub: bash(head + 'python -', self.w.wt, sub), 'hub-secrets'),
                 (lambda sub: bash('echo tools/hub.py | python -c "import sys; print(sys.stdin.read())"',
                                   self.w.wt, sub), 'hub-owner-verb'),
                 (lambda sub: bash('python "%s" questions --json $X | python -c "import sys; print(1)"' % self.hub,
@@ -189,6 +193,9 @@ class SecretShell(Hub):
                                   % self.hub, self.w.wt, sub), 'hub-owner-verb')):
             with self.subTest(make(True)['tool_input']['command']):
                 self.denied(make, rule)
+        # the tool's output run as code names no token file: the hub tool by name is not read
+        # (KIT-GUARD-CHEAP item 4)
+        self.allowed(lambda sub: bash(head + 'python -', self.w.wt, sub))
 
     def test_a_hub_call_naming_a_token_file(self):
         self.denied(lambda sub: bash('python "%s" questions add --title t --context-file "%s/owner.token"'
@@ -243,8 +250,25 @@ class HomeAndWildcards(Hub):
             with self.subTest(line=line):
                 self.allowed(lambda sub, shell=shell, line=line: shell(line, self.w.wt, sub))
 
-    def test_home_variables_with_wildcards_are_denied(self):
+    # KIT-GUARD-CHEAP item 4: a wildcard path is not read, so each wildcard row below passes and
+    # the same place spelled literally is still refused. A literal relative path after a cd into
+    # the home's .pm-kit folder (`hub\\x`) names neither the folder nor a token file by itself:
+    # those rows show the cd is followed.
+
+    def test_home_variables(self):
         self.rows_denied((
+            (bash, 'cat $HOME/.pm-kit/hub/x'),
+            (bash, 'cat ${HOME}/.pm-kit/hub/x'),
+            (bash, 'cat "$HOME"/.pm-kit/hub/owner.token'),
+            (bash, 'cat $USERPROFILE/.pm-kit/hub/agent.token'),
+            (ps, 'gc $HOME\\.pm-kit\\hub\\x'),
+            (ps, 'gc "$env:USERPROFILE\\.pm-kit\\hub\\owner.token"'),
+            (ps, 'gc $env:HOME\\.pm-kit\\hub\\x'),
+            (ps, 'gc ${env:USERPROFILE}\\.pm-kit\\hub\\x'),
+            (ps, 'Get-Content -Path:$HOME\\.pm-kit\\hub\\x'),
+            (ps, 'cmd /c "type %USERPROFILE%\\.pm-kit\\hub\\x"'),
+        ))
+        self.rows_allowed((
             (bash, 'cat $HOME/.pm-kit/h*/*'),
             (bash, 'cat ${HOME}/.pm-kit/h*/*'),
             (bash, 'cat "$HOME"/.pm-kit/h*/owner.t*'),
@@ -259,99 +283,87 @@ class HomeAndWildcards(Hub):
 
     def test_the_home_drive_and_path_pair(self):
         self.rows_denied((
-            (ps, 'gc $env:HOMEDRIVE$env:HOMEPATH\\.pm-kit\\h*\\o*'),
-            (ps, 'gc "${env:HOMEDRIVE}${env:HOMEPATH}\\.pm-kit\\h*\\o*"'),
-            (ps, 'cd $env:HOMEDRIVE$env:HOMEPATH; gc .pm-kit\\h*\\o*'),
-            (bash, 'cat $HOMEDRIVE$HOMEPATH/.pm-kit/h*/o*'),
-            (ps, 'cmd /c "type %HOMEDRIVE%%HOMEPATH%\\.pm-kit\\h*\\o*"'),
+            (ps, 'cd $env:HOMEDRIVE$env:HOMEPATH\\.pm-kit; gc hub\\x'),
+            (ps, 'cd "${env:HOMEDRIVE}${env:HOMEPATH}\\.pm-kit"; gc hub\\x'),
+            (bash, 'cd $HOMEDRIVE$HOMEPATH/.pm-kit && cat hub/x'),
         ))
-        self.rows_allowed(((ps, 'gc $env:HOMEDRIVE\\.pm-kit\\h*\\o*'), (ps, 'gc $env:HOMEPATH$x\\h*\\o*')))
+        self.rows_allowed((
+            (ps, 'gc $env:HOMEDRIVE$env:HOMEPATH\\.pm-kit\\h*\\o*'),
+            (ps, 'cd $env:HOMEDRIVE$env:HOMEPATH; gc .pm-kit\\h*\\o*'),
+            (ps, 'cmd /c "type %HOMEDRIVE%%HOMEPATH%\\.pm-kit\\h*\\o*"'),
+            (ps, 'cd $env:HOMEDRIVE\\.pm-kit; gc hub\\x'),
+            (ps, 'cd $env:HOMEPATH$x\\.pm-kit; gc hub\\x'),
+        ))
 
     def test_a_cd_with_no_place_goes_home(self):
         # bash's cd, and PowerShell 7's, go home with no place; cd's own options and -- change nothing
         self.rows_denied((
-            (bash, 'cd && cat .pm-kit/h*/o*'),
-            (bash, 'cd; cat .pm-kit/h*/o*'),
-            (bash, 'cd -- ~ && cat .pm-kit/h*/o*'),
-            (bash, 'cd -P && cat .pm-kit/h*/o*'),
-            (bash, 'cd -L -- $HOME/.pm-kit && cat h*/o*'),
-            (ps, 'cd; gc .pm-kit\\h*\\o*'),
-            (ps, 'Set-Location; gc .pm-kit\\h*\\o*'),
+            (bash, 'cd -L -- $HOME/.pm-kit && cat hub/x'),
         ))
         self.rows_allowed((
             (bash, 'cd && cat .gitconfig'),
-            (bash, 'cd && cd "%s" && cat h*/o*' % W.fwd(self.w.wt)),
+            (bash, 'cd && cd "%s" && cat hub/x' % W.fwd(self.w.wt)),
             (bash, 'cd -; cat .pm-kit/h*/o*'),
+            (bash, 'cd && cat .pm-kit/h*/o*'),
+            (ps, 'Set-Location; gc .pm-kit\\h*\\o*'),
         ))
 
     def test_a_cd_behind_builtin_or_command(self):
-        # bash's `builtin cd` and `command cd` are the cd itself; PowerShell 7's `cd $null` goes
-        # home as a cd with no place does
+        # bash's `builtin cd` and `command cd` are the cd itself
         self.rows_denied((
-            (bash, 'builtin cd ~ && cat .pm-kit/h*/o*'),
-            (bash, 'command cd ~/.pm-kit && cat h*/o*'),
-            (bash, 'builtin cd && cat .pm-kit/h*/o*'),
-            (bash, 'command cd -- $HOME && cat .pm-kit/h*/o*'),
-            (ps, 'cd $null; gc .pm-kit\\h*\\o*'),
-            (ps, 'Set-Location $NULL; gc .pm-kit\\h*\\o*'),
+            (bash, 'command cd ~/.pm-kit && cat hub/x'),
+            (bash, 'builtin cd ~/.pm-kit && cat hub/x'),
         ))
         self.rows_allowed((
-            (bash, 'command -v cd && cat .pm-kit/h*/o*'),
-            (bash, 'builtin cd ~ && cd "%s" && cat h*/o*' % W.fwd(self.w.wt)),
+            (bash, 'command -v cd && cat hub/x'),
+            (bash, 'builtin cd ~/.pm-kit && cd "%s" && cat hub/x' % W.fwd(self.w.wt)),
             (ps, 'cd $null; gc README.md'),
+            (ps, 'cd $null; gc .pm-kit\\h*\\o*'),
         ))
 
     def test_review_rows_for_the_home_folder(self):
-        # every home-folder string from the branch's two re-reviews, with its verdict
+        # the home-folder strings from the branch's two re-reviews, spelled literally
         self.rows_denied((
-            (bash, 'chdir && cat .pm-kit/h*/o*'),
-            (ps, 'chdir; gc .pm-kit\\h*\\o*'),
-            (ps, 'sl; gc .pm-kit\\h*\\o*'),
-            (bash, 'cd -e && cat .pm-kit/h*/o*'),
-            (bash, 'cd -L -P -- && cat .pm-kit/h*/o*'),
-            (bash, '(cd && cat .pm-kit/h*/o*)'),
-            (bash, 'pushd ~ && cat .pm-kit/h*/o*'),
-            (ps, 'gc ${ENV:HomeDrive}$Env:HOMEPATH\\.pm-kit\\h*\\o*'),
+            (bash, 'pushd ~/.pm-kit && cat hub/x'),
+            (bash, '(cd ~/.pm-kit && cat hub/x)'),
         ))
         self.rows_allowed((
-            (bash, "cd '' && cat .pm-kit/h*/o*"),
-            (bash, 'cd "" && cat .pm-kit/h*/o*'),
+            (bash, "cd '' && cat hub/x"),
             (bash, 'pushd && cat .pm-kit/h*/o*'),
-            (ps, 'Push-Location; gc .pm-kit\\h*\\o*'),
+            (ps, 'chdir; gc .pm-kit\\h*\\o*'),
+            (ps, 'gc ${ENV:HomeDrive}$Env:HOMEPATH\\.pm-kit\\h*\\o*'),
         ))
         # a home folder the line computes is not read (docs/guard.md "Hub secrets", Limits):
         # these pass, and a change here means updating that list
         self.rows_allowed((
-            (bash, 'H=$HOME; cat $H/.pm-kit/h*/o*'),
-            (bash, 'cat $(echo ~)/.pm-kit/h*/o*'),
-            (ps, "gc ($HOME + '\\.pm-kit\\h*\\o*')"),
-            (ps, "gc ([Environment]::GetFolderPath('UserProfile') + '\\.pm-kit\\h*\\o*')"),
-            (ps, "gc (Join-Path $HOME '.pm-kit\\h*\\o*')"),
-            (bash, 'cd ~ && cd - && cd - && cat .pm-kit/h*/o*'),
-            (bash, 'pushd ~ && pushd /tmp && popd && cat .pm-kit/h*/o*'),
+            (bash, 'H=$HOME; cd $H/.pm-kit && cat hub/x'),
+            (bash, 'cd $(echo ~)/.pm-kit && cat hub/x'),
+            (bash, 'cd ~/.pm-kit && cd - && cd - && cat hub/x'),
+            (bash, 'pushd ~/.pm-kit && pushd /tmp && popd && cat hub/x'),
         ))
 
     def test_a_cd_into_the_home_folder_is_followed(self):
         self.rows_denied((
-            (bash, 'cd ~/.pm-kit && cat h*/o*'),
-            (bash, 'cd ~ && cat .pm-kit/h*/*'),
-            (bash, 'cd $HOME/.pm-kit && cat h*/o*'),
+            (bash, 'cd ~/.pm-kit && cat hub/x'),
+            (bash, 'cd $HOME/.pm-kit && cat hub/x'),
+            (bash, 'cd ~/.pm-kit && ls hub'),
             (bash, 'cd "$HOME/.pm-kit/hub" && cat *'),
-            (bash, 'cd ~/.pm-kit && bash -c "cat h*/o*"'),
-            (ps, 'Set-Location ~/.pm-kit; gc h*/o*'),
-            (ps, 'sl ~\\.pm-kit; gc h*\\o*'),
-            (ps, 'Push-Location ~\\.pm-kit; gc h*\\*'),
-            (ps, 'Set-Location $env:USERPROFILE\\.pm-kit; gc h*\\o*'),
+            (ps, 'Set-Location ~/.pm-kit; gc hub/x'),
+            (ps, 'sl ~\\.pm-kit; gc hub\\x'),
+            (ps, 'Push-Location ~\\.pm-kit; gc hub\\x'),
+            (ps, 'Set-Location $env:USERPROFILE\\.pm-kit; gc hub\\x'),
+            (ps, 'cmd /c "cd /d %USERPROFILE%\\.pm-kit && type hub\\x"'),
+        ))
+        self.rows_allowed((
+            (bash, 'cd ~/.pm-kit && cat h*/o*'),
             (ps, 'cd $HOME; gc .pm-kit\\h*\\*'),
-            (ps, 'cmd /c "cd /d %USERPROFILE%\\.pm-kit && type h*\\o*"'),
         ))
 
     def test_a_hub_call_with_a_home_variable(self):
         self.rows_denied((
-            (bash, 'python "%s" questions add --title t --context-file "$HOME/.pm-kit/h*/owner.t*"' % self.hub),
-            (bash, 'python "%s" questions add --title t --context-file $HOME/.pm-kit/h*/owner.t*' % self.hub),
-            (bash, 'python "%s" questions add --title t --context-file=$HOME/.pm-kit/h*/owner.t*' % self.hub),
-            (ps, 'python "%s" questions add --title t --context-file $HOME\\.pm-kit\\h*\\owner.t*' % self.hub),
+            (bash, 'python "%s" questions add --title t --context-file "$HOME/.pm-kit/hub/x"' % self.hub),
+            (bash, 'python "%s" questions add --title t --context-file=$HOME/.pm-kit/hub/x' % self.hub),
+            (ps, 'python "%s" questions add --title t --context-file $HOME\\.pm-kit\\hub\\x' % self.hub),
         ))
 
     def test_the_rest_of_the_home_folder_passes(self):
@@ -369,33 +381,39 @@ class HomeAndWildcards(Hub):
             (ps, 'Set-Location $env:USERPROFILE; gc .gitconfig'),
         ))
 
-    def test_absolute_wildcards_that_reach_the_folders(self):
+    def test_absolute_wildcards_are_not_read(self):
+        # KIT-GUARD-CHEAP item 4: a wildcard that can name the folders passes; the literal folder
+        # is still refused
         home, data = W.fwd(self.w.home), W.fwd(self.w.data)
-        self.rows_denied((
+        self.rows_allowed((
             (bash, 'cat %s/.pm-kit/h?b/*' % home),
             (bash, 'ls %s/.pm-kit/*' % home),
             (bash, 'ls %s/**' % home),
             (bash, 'cat %s/*/questions/*.json' % data),
             (bash, 'ls %s/h*' % data),
             (ps, 'gc %s\\.pm-kit\\[h]ub\\o*' % self.w.home),
-        ))
-        self.rows_allowed((
             (bash, 'ls %s/.pm-kit/*.json' % home),
             (bash, 'cat %s/*.json' % data),
+        ))
+        self.rows_denied((
+            (bash, 'ls %s/.pm-kit/hub' % home),
+            (ps, 'gc %s\\.pm-kit\\hub\\x' % self.w.home),
         ))
 
     def test_option_values_are_read_as_paths(self):
         # `--opt=value` and PowerShell's `-Opt:value`: the value is the path (hub_path_texts)
-        sec, st = W.fwd(self.secrets), W.fwd(self.store)
+        sec = W.fwd(self.secrets)
         self.rows_denied((
-            (ps, 'Get-Content -Path:%s\\questions\\Q-1.json' % self.store),
+            (ps, 'Get-Content -LiteralPath:%s\\x' % self.secrets),
+            (bash, 'some-tool --input=%s/x' % sec),
+            (bash, 'python "%s" questions add --title t --context-file=%s/x' % (self.hub, sec)),
+            # the token folder spelled literally, whatever follows it
             (ps, 'Get-Content -LiteralPath:%s\\o*' % self.secrets),
-            (bash, 'some-tool --input=%s/questions/Q-1.json' % st),
-            (bash, 'python "%s" questions add --title t --context-file=%s/a*' % (self.hub, sec)),
         ))
         self.rows_allowed((
             (bash, 'some-tool --input=%s/.kit.json' % W.fwd(self.w.data)),
             (ps, 'Get-Content -Path:README.md'),
+            (ps, 'Get-Content -Path:%s\\questions\\Q-1.json' % self.store),
         ))
 
     def test_an_edit_path_in_the_folder_with_wildcard_characters(self):
@@ -413,13 +431,13 @@ class HomeAndWildcards(Hub):
         store = os.path.join(self.w.temp, 'hubstore')
         self.w.user_config({'pm_data': {'path': self.w.data}, 'hub': {'store': store}, 'no_such_key': 1})
         self.assertTrue(self.ctx(COORDINATOR).user().get('error'), 'the strict read took the config')
-        self.denied(lambda sub: bash('cat "%s/todos/T-1.json"' % W.fwd(store), self.w.wt, sub), 'hub-secrets')
+        self.denied(lambda sub: bash('echo x > "%s/todos/T-1.json"' % W.fwd(store), self.w.wt, sub), 'hub-secrets')
 
 
 class BareWordsInTheDataFolder(Hub):
-    """Run from the PM data folder, where a bare `hub` is the default store's own name. A search
-    pattern and a bare value of a python script's long option are not paths
-    (rules.hub_not_paths); every word a program may open still is."""
+    """Run from the PM data folder, where a bare `hub` is the default store's own name. The shell
+    rule does not read the store (KIT-GUARD-CHEAP item 4), so a word naming it passes, whatever
+    the program does with it; a write whose target is in the store is still refused."""
 
     def rows(self, rows, deny):
         for shell, line in rows:
@@ -451,17 +469,21 @@ class BareWordsInTheDataFolder(Hub):
             (ps, 'python %s handoff --session hub --recycle --what-if' % launch),
         ), deny=False)
 
-    def test_what_a_program_opens_in_the_store_is_still_refused(self):
+    def test_a_write_into_the_store_is_still_refused(self):
+        self.rows((
+            (bash, 'echo x > hub/todos/T-1.json'),
+            (bash, 'rm -rf hub'),
+            (ps, 'Remove-Item -Recurse -Path hub'),
+        ), deny=True)
+
+    def test_what_a_program_opens_in_the_store_passes(self):
         st = W.fwd(self.store)
         self.rows((
             (bash, 'ls hub'),
             (bash, 'cat hub/todos/T-1.json'),
             (bash, 'cat ./hub/questions/Q-1.json'),
-            (bash, 'echo x > hub/todos/T-1.json'),
-            (bash, 'rm -rf hub'),
             (ps, 'Get-Content .\\hub\\questions\\Q-1.json'),
             (ps, 'Get-ChildItem hub'),
-            (ps, 'Remove-Item -Recurse -Path hub'),
             # a search's files, and a pattern the parse cannot place
             (bash, 'grep -rn owner hub'),
             (bash, 'grep -n x hub/todos/T-1.json'),
@@ -487,31 +509,26 @@ class BareWordsInTheDataFolder(Hub):
             (bash, 'python tools/x.py --store ./hub'),
             (bash, 'python tools/x.py --store=hub/todos'),
             (bash, 'python -m http.server --directory hub'),
-        ), deny=True)
+        ), deny=False)
 
     def test_a_search_after_the_end_of_options(self):
         self.rows((
             (bash, 'grep -n -- hub launcher/coordinators.json'),
             (bash, 'rg -i -- hub launcher'),
-        ), deny=False)
-        self.rows((
             (bash, 'grep -n -- x hub'),
             (bash, 'grep -n -- x hub/todos/T-1.json'),
-        ), deny=True)
+        ), deny=False)
 
     def test_findstrs_slash_options_are_skipped(self):
         self.rows((
             (ps, 'findstr /n /a:4 hub launcher\\coordinators.json'),
             (bash, 'findstr /i /s hub launcher/coordinators.json'),
-        ), deny=False)
-        self.rows((
             (ps, 'findstr /a:4 x hub\\todos\\T-1.json'),
             (bash, 'findstr /i x hub/todos/T-1.json'),
-        ), deny=True)
+        ), deny=False)
 
-    def test_only_the_session_options_value_is_exempt(self):
-        # a script's other options may name a folder it opens: `--force hub` puts hub after a
-        # flag, `--dir hub` hands it over; neither is exempt
+    def test_a_scripts_options_naming_the_store_pass(self):
+        # a script's options that name a folder it opens pass too: the store is not read
         self.rows((
             (bash, 'python tools/cleanup.py --force hub'),
             (bash, 'python tools/x.py --dir hub'),
@@ -520,18 +537,13 @@ class BareWordsInTheDataFolder(Hub):
             # a session value shaped as a path is read as one
             (bash, 'python tools/x.py --session ./hub'),
             (bash, 'python tools/x.py --session hub/todos'),
-        ), deny=True)
-
-    def test_a_module_run_through_a_flag_cluster_is_not_a_script(self):
-        # -Bm and -Im run a module, -Ic code: the next word is not a script with options
-        self.rows((
             (bash, 'python -Bm http.server --session hub'),
             (bash, 'python -Im http.server --session hub'),
             (bash, 'python -um tools.x --session hub'),
             (bash, 'python -Ic pass --session hub'),
-        ), deny=True)
+        ), deny=False)
 
-    def test_no_exemption_reaches_the_token_folder(self):
+    def test_the_token_folder_is_still_refused(self):
         # from the home's .pm-kit folder a bare `hub` is the token folder
         pmkit = os.path.join(self.w.home, '.pm-kit')
         os.makedirs(pmkit, exist_ok=True)

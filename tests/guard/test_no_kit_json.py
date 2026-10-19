@@ -51,14 +51,26 @@ class NoKitJson(unittest.TestCase):
                 self.assertIsNone(self.decide(cmd), cmd)
 
     def test_a_refspec_that_may_force_and_is_not_literal_is_refused(self):
-        # a computed refspec may be `+<src>:main` or `:main`; a computed remote with --no-verify
-        # skips the pre-push hook that would judge it
-        for cmd in ('git push --force origin $BRANCH', 'git push origin "+$BRANCH"', 'git push origin $BRANCH',
-                    'git push origin "HEAD:$B"', 'git push --no-verify $REMOTE main'):
+        # a computed refspec with a force or delete flag, a literal `+` or `:`, or a computed
+        # remote with --no-verify that skips the pre-push hook that would judge it
+        for cmd in ('git push --force origin $BRANCH', 'git push origin "+$BRANCH"', 'git push origin ":$B"',
+                    'git push --delete origin $B', 'git push --no-verify $REMOTE main'):
             with self.subTest(cmd):
                 d = self.decide(cmd)
                 self.assertEqual(d and d.rule, 'git-push-main', d and d.reason)
                 self.assertIn('not literal', d.reason)
+
+    def test_a_computed_refspec_without_force_is_unplaced(self):
+        # KIT-GUARD-CHEAP item 4: a warning by default, a refusal when the owner turns it on
+        for cmd in ('git push origin $BRANCH', 'git push origin "HEAD:$B"'):
+            with self.subTest(cmd):
+                self.assertIsNone(self.decide(cmd), cmd)
+                W.deny_softened()
+                try:
+                    d = self.decide(cmd)
+                finally:
+                    W.allow_unplaced()
+                self.assertEqual(d and d.rule, 'unplaced', d and d.reason)
 
     def test_the_main_branch_is_origin_head(self):
         self.head('trunk')

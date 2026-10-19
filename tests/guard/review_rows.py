@@ -89,7 +89,7 @@ ROWS = [
     # ---------------------------------------------------------------- 7: worktree remove from any place
     ('worktree remove of a dirty tree from a worktree', lambda w: bash('git worktree remove %s' % W.fwd(w.wt), w.wt), 'deny',
      'git-worktree-remove', 'git -C "{wt}" status'),
-    ('worktree remove by a variable from a worktree', lambda w: bash('git worktree remove "$WT"', w.wt), 'deny', 'git-worktree-remove',
+    ('worktree remove by a variable from a worktree', lambda w: bash('git worktree remove "$WT"', w.wt), 'deny', 'unplaced',
      'git -C "{main}" worktree remove "<worktree path>"'),
 
     # ---------------------------------------------------------------- 9: more history and file writers in a main checkout
@@ -193,6 +193,6 @@ ROWS = [
     ('git alias running a shell', lambda w: bash("git -c 'alias.x=!echo hi' x", w.wt), 'deny', 'git-alias', 'echo hi'),
     ('push main from an unknown place', lambda w: bash('cd "$X" && git push origin main', w.wt), 'deny', 'git-push-main',
      'git -C "<checkout>" push origin main'),
-    ('push a variable refspec to main', lambda w: bash('git push origin "$REF"', w.wt), 'deny', 'git-push-main',
+    ('push a variable refspec to main', lambda w: bash('git push origin "$REF"', w.wt), 'deny', 'unplaced',
      'git -C "{wt}" push origin <branch>'),
 ]

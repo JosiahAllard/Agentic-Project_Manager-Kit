@@ -319,6 +319,87 @@ class Warned(World):
         self.assertEqual(self.decide(self.heavy()), Decision('allow'))
 
 
+class Simplified(World):
+    """Item 4: hub-secrets reads only the token folder and token files spelled literally;
+    git worktree remove is let through under a temp folder; a computed push refspec warns unless
+    a flag or a literal `+` or `:` forces or deletes."""
+
+    def setUp(self):
+        super().setUp()
+        self.w.user_config({'pm_data': {'path': self.w.data}})
+        self.secrets = os.path.join(self.w.home, '.pm-kit', 'hub')
+        self.store = os.path.join(self.w.data, 'hub')
+
+    def passes(self, payload):
+        d = self.decide(payload)
+        self.assertEqual(d.verdict, 'allow', d.reason)
+        return d
+
+    def denied(self, payload, rule):
+        d = self.decide(payload)
+        self.assertEqual((d.verdict, d.rule), ('deny', rule), d.reason)
+
+    def test_the_token_folder_spelled_literally_is_denied(self):
+        sec = W.fwd(self.secrets)
+        for line in ('cat %s/owner.token' % sec, 'ls %s' % sec, 'cat ~/.pm-kit/hub/agent.token',
+                     'cat %s/x' % sec):
+            with self.subTest(line):
+                self.denied(W.bash(line, self.w.wt, sub=True), 'hub-secrets')
+
+    def test_wildcards_the_word_hub_and_the_store_read_pass(self):
+        home, st = W.fwd(self.w.home), W.fwd(self.store)
+        for line, cwd in (('cat %s/.pm-kit/h?b/*' % home, self.w.wt),
+                          ('ls %s/.pm-kit/h*' % home, self.w.wt),
+                          ('grep -n hub launcher.json', self.w.data),
+                          ('cat hub/todos/T-1.json', self.w.data),
+                          ('cat "%s/questions/Q-1.json"' % st, self.w.wt),
+                          ('python -c "import kitlib.hubsite"', self.w.wt),
+                          ('python -c "open(\'tools/hub.py\').read()"', self.w.wt)):
+            with self.subTest(line):
+                self.passes(W.bash(line, cwd, sub=True))
+
+    def test_a_write_into_the_store_is_still_denied(self):
+        st = W.fwd(self.store)
+        self.denied(W.bash('echo x > "%s/todos/T-1.json"' % st, self.w.wt, sub=True), 'hub-secrets')
+        self.denied(W.bash('rm -rf hub', self.w.data, sub=True), 'hub-secrets')
+
+    def test_a_worktree_under_a_temp_folder_is_removed_dirty_or_unmerged(self):
+        scratch = os.path.join(self.w.temp, 'scratch-wt')
+        os.makedirs(scratch)
+        self.assertEqual(self.decide(W.bash('git worktree remove %s' % W.fwd(scratch), self.w.wt, sub=True)),
+                         Decision('allow'))
+        self.assertEqual(self.decide(W.bash('git worktree remove --force %s' % W.fwd(scratch), self.w.main)),
+                         Decision('allow'))
+
+    def test_a_dirty_worktree_elsewhere_is_still_denied(self):
+        self.denied(W.bash('git worktree remove %s' % W.fwd(self.w.wt), self.w.main, sub=True),
+                    'git-worktree-remove')
+
+    def test_a_computed_worktree_warns(self):
+        d = self.passes(W.bash('git worktree remove "$WT"', self.w.wt, sub=True))
+        self.assertEqual(d.rule, rules.WARNED)
+        self.assertIn('rule=unplaced', d.reason)
+
+    def test_a_computed_refspec_warns(self):
+        for line in ('git push origin $BRANCH', 'git push origin "HEAD:$B"'):
+            with self.subTest(line):
+                d = self.passes(W.bash(line, self.w.wt, sub=True))
+                self.assertEqual(d.rule, rules.WARNED)
+                self.assertIn('rule=unplaced', d.reason)
+
+    def test_a_computed_refspec_that_forces_or_deletes_is_denied(self):
+        for line in ('git push --force origin $BRANCH', 'git push -f origin $B', 'git push origin "+$B"',
+                     'git push origin ":$B"', 'git push --delete origin $B', 'git push --no-verify origin $B'):
+            with self.subTest(line):
+                self.denied(W.bash(line, self.w.wt, sub=True), 'git-push-main')
+
+    def test_a_literal_force_or_delete_of_main_is_denied(self):
+        for line in ('git push --force origin main', 'git push origin +kit/wt:main', 'git push origin :main',
+                     'git push --delete origin main'):
+            with self.subTest(line):
+                self.denied(W.bash(line, self.w.wt, sub=True), 'git-push-main')
+
+
 class NetArgumentIndex(World):
     """_net_written's per-method argument index: Copy writes its destination, Move both paths,
     Replace all three; a literal main-checkout path in a written place is denied from a worktree."""
