@@ -60,6 +60,25 @@ class PullFromTheMainBranch(StoreCase):
         self.pull(ctx, 'FOO')
         self.assertEqual(self.get('FOO').get('pulled_by'), BRANCH)
 
+    def refusal_text(self, *seed_args, **seed_kw):
+        self.seed(priced('FOO', **seed_kw))
+        ctx = pmod.Context(self.store, self.repo.root, main_branch='main', today=TODAY)
+        with self.assertRaises(Refusal) as cm:
+            self.pull(ctx, 'FOO')
+        return str(cm.exception)
+
+    def test_the_hint_names_the_records_own_session(self):
+        self.store.session = 'kit'
+        text = self.refusal_text(session='kit')
+        self.assertIn('backlog.py -C <store> --session kit --as <branch> pull FOO', text)
+
+    def test_the_hint_leaves_out_session_for_a_record_without_one(self):
+        # `--session` narrows `next` to session-owned records: a hint naming it for a record that
+        # has no `session:` would be refused again as not in next's offer.
+        text = self.refusal_text()
+        self.assertIn('backlog.py -C <store> --as <branch> pull FOO', text)
+        self.assertNotIn('--session', text)
+
     def test_the_records_own_refusal_comes_first(self):
         # An unpriced record says why it cannot be pulled at all before where it is pulled from.
         self.seed(rec('FOO'))
@@ -125,6 +144,11 @@ class RefusalText(unittest.TestCase):
         self.assertIn('pulled_by: master',
                       pull_branch.refusal('FOO', 'master', ['pmdata', 'main', 'master']))
         self.assertIsNone(pull_branch.refusal('FOO', BRANCH, ('pmdata', 'main')))
+
+    def test_the_session_form_is_for_a_record_with_a_session(self):
+        self.assertIn('-C <store> --session kit --as <branch> pull FOO',
+                      pull_branch.refusal('FOO', 'main', 'main', 'kit'))
+        self.assertNotIn('--session', pull_branch.refusal('FOO', 'main', 'main'))
 
     def test_the_as_form_comes_first_with_the_session_filled_in(self):
         # A coordinator pulls at dispatch from the main checkout: the `--as` form is the one it
