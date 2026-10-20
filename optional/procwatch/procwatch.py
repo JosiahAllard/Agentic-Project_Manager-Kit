@@ -22,9 +22,9 @@ rule's age floor; idle where the rule says so), it passes its rule's KILL_GATE t
 one, it is not protected, its creation time was read, and that creation time is re-checked
 immediately before TerminateProcess (a pid now held by another process is left alone). It never
 ends a process by name or command-line match alone: other sessions' gates run the same programs.
-KILL_GATE asks that a Git-Bash program was started by agent tooling: Git's ps shows it with no
-terminal (TTY `?`; a program in a terminal window shows pty0/cons1), and for msys-follow its
-command line also names an agent path (a `.claude` folder, `<TEMP>\\claude\\`,
+KILL_GATE checks, for a Git-Bash program: msys-filter and msys-sleep, only that Git's ps shows
+no terminal (TTY `?`; a program in a terminal window shows pty0/cons1); msys-follow, that AND
+its command line names an agent path (a `.claude` folder, `<TEMP>\\claude\\`,
 `<AGENT_TEMP>\\claude\\` or the resolved agent temp folder, in Windows or MSYS form). A suspect
 that fails its gate stays in the report ("reported only") and its log count; never ended.
 Protected (never touched, listed as expected):
@@ -218,7 +218,7 @@ def _agent_follow(p):
 # Kill-allowlisted rules whose match is a common program anyone may run: --kill also needs this
 # proof that agent tooling started it (the docstring). Failing it, the suspect is reported only.
 KILL_GATE = {"msys-follow": _agent_follow, "msys-filter": _no_terminal, "msys-sleep": _no_terminal}
-GATE_NOTE = "reported only: not shown as agent-started (no-terminal TTY and, for tail, an agent path)"
+GATE_NOTE = "reported only: failed its kill gate (needs no terminal TTY; msys-follow also an agent path)"
 
 
 def _gate_ok(p):
