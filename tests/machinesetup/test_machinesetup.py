@@ -885,7 +885,8 @@ class PluginEdit(unittest.TestCase):
             'SessionStart': [
                 {'matcher': 'startup', 'hooks': [exec_hook(self.entry, 'claude', 'SessionStart'),
                                                  {'type': 'command', 'command': 'echo hi'}]},
-                {'hooks': [{'type': 'command', 'command': 'python "%s" claude SessionStart coordinator' % back}]},
+                {'matcher': 'startup|resume|compact',
+                 'hooks': [{'type': 'command', 'command': 'python "%s" claude SessionStart coordinator' % back}]},
                 {'hooks': [exec_hook(self.entry, 'claude', 'SessionStart', 'pm')]},
                 {'hooks': [exec_hook(other_kit, 'claude', 'SessionStart')]},
                 {'hooks': [exec_hook(self.entry, 'claude', 'SessionStart', 'x')]},
@@ -909,6 +910,44 @@ class PluginEdit(unittest.TestCase):
             {'hooks': []},
         ])
         self.assertEqual(new['hooks']['SubagentStart'], data['hooks']['SubagentStart'])
+
+    def coordinator(self, *matcher):
+        g = {'hooks': [exec_hook(self.entry, 'claude', 'SessionStart', 'coordinator')]}
+        if matcher:
+            g['matcher'] = matcher[0]
+        return g
+
+    def test_a_matcher_the_plugins_covers_goes(self):
+        for m in ('startup|compact', 'resume', 'startup|resume|compact', ' compact | startup '):
+            result = self.edit({'hooks': {'SessionStart': [self.coordinator(m)]}})
+            self.assertEqual(result[0]['hooks'], {}, m)
+            self.assertEqual(result[2], ['hook.py claude SessionStart coordinator'], m)
+            self.assertEqual(result[3], [], m)
+
+    def test_a_wider_matcher_is_kept_and_named(self):
+        for m, missing in (('startup|clear', ['clear']), ('clear', ['clear']), ('startup|resume|foo', ['foo']),
+                           ('start.*', None)):
+            data = {'hooks': {'SessionStart': [self.coordinator(m)]}}
+            result = self.edit(data)
+            self.assertEqual(result[0]['hooks'], data['hooks'], m)
+            self.assertEqual(result[2], [], m)
+            self.assertEqual(result[3], [('hook.py claude SessionStart coordinator', m, missing)], m)
+
+    def test_an_empty_or_absent_matcher_is_kept_against_a_narrower_plugin_matcher(self):
+        for g in (self.coordinator(), self.coordinator(''), self.coordinator('*')):
+            data = {'hooks': {'SessionStart': [g]}}
+            result = self.edit(data)
+            self.assertEqual(result[0]['hooks'], data['hooks'], g)
+            self.assertEqual(result[2], [], g)
+            self.assertEqual(result[3], [('hook.py claude SessionStart coordinator', g.get('matcher'),
+                                          ['clear'])], g)
+        for m in (None, '', '*'):                                    # the plugin's matcher covers every source
+            g = {'hooks': [exec_hook(self.entry, 'claude', 'SessionStart')]}
+            if m is not None:
+                g['matcher'] = m
+            result = self.edit({'hooks': {'SessionStart': [g]}})
+            self.assertEqual((result[0]['hooks'], result[2], result[3]),
+                             ({}, ['hook.py claude SessionStart'], []), m)
 
     def test_an_event_this_step_empties_goes_and_hooks_stays(self):
         data = {'hooks': {'SessionStart': [{'hooks': [exec_hook(self.entry, 'claude', 'SessionStart')]}]}}
@@ -964,7 +1003,8 @@ class PluginSettings(unittest.TestCase):
                 'SessionStart': [
                     {'matcher': 'startup', 'hooks': [exec_hook(self.entry, 'claude', 'SessionStart'),
                                                      {'type': 'command', 'command': 'echo hi'}]},
-                    {'hooks': [{'type': 'command',
+                    {'matcher': 'startup|resume|compact',
+                     'hooks': [{'type': 'command',
                                 'command': 'python "%s" claude SessionStart coordinator' % fwd(self.entry)}]},
                     {'hooks': [exec_hook(self.entry, 'claude', 'SessionStart', 'pm')]},
                 ],
@@ -1024,6 +1064,23 @@ class PluginSettings(unittest.TestCase):
         self.assertTrue([l for l in diff if l.startswith('-') and 'SessionStart coordinator' in l], out)
         self.assertNotIn('the SessionStart hook', out)               # the change replaces its twin note
         self.assertIn('the SubagentStart hook hook.py claude SubagentStart is also the kit plugin\'s hook', out)
+
+    def test_dry_run_notes_an_entry_kept_for_its_wider_matcher(self):
+        self.doc['hooks']['SessionStart'][1]['matcher'] = 'startup|resume|clear|compact'
+        self.write(self.fx.s2, self.doc)
+        before = self.fx.snapshot()
+        code, out = self.fx.run_it()
+        self.assertEqual(code, M.EXIT_OK, out)
+        self.assertEqual(self.fx.snapshot(), before)
+        self.assertIn('remove 1 kit SessionStart entries the plugin runs (hook.py claude SessionStart)', out)
+        self.assertIn('%s: the kit SessionStart entry hook.py claude SessionStart coordinator stays: its matcher '
+                      '"startup|resume|clear|compact" also covers clear, which the kit plugin\'s does not'
+                      % self.fx.s2, out)
+        code, out = self.fx.run_it(apply=True)
+        self.assertEqual(code, M.EXIT_OK, out)
+        self.assertEqual(self.load(self.fx.s2)['hooks']['SessionStart'][0:2], [
+            {'matcher': 'startup', 'hooks': [{'type': 'command', 'command': 'echo hi'}]},
+            self.doc['hooks']['SessionStart'][1]])
 
     def test_a_folder_with_the_plugin_off_is_left_alone(self):
         self.doc['enabledPlugins'] = {self.F.PID: False}
