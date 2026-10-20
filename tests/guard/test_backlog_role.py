@@ -348,11 +348,14 @@ class Refs(Base):
     def test_an_unread_update_ref_where_the_store_cannot_be_told(self):
         """store_kind None for a fault is no ground to allow (fail closed): a .kit.json that does not
         load (ctx.config_error), a directory git runs in that the text does not name (gc.unknown,
-        here run from a folder in no checkout), a place git cannot tell about (repo.UNKNOWN). A
+        here run from a folder in no checkout), a place git cannot tell about (repo.UNKNOWN), git
+        re-pointed from a folder in no checkout (gc.blind: --git-dir, GIT_DIR). A
         repository with no .kit.json reads the default ref store, so it is refused as any store."""
         cases = ((None, 'git -C "%s" update-ref --stdin < cmds.txt' % self.wt, 'kit'),
                  (self.w.plain, 'git -C $d update-ref --stdin < cmds.txt', 'plain'),
-                 (self.w.unknown, 'git update-ref --stdin < cmds.txt', 'unknown'))
+                 (self.w.unknown, 'git update-ref --stdin < cmds.txt', 'unknown'),
+                 (self.w.plain, 'git --git-dir=/x/.git update-ref --stdin < cmds.txt', 'blind'),
+                 (self.w.plain, 'GIT_DIR=/x/.git git update-ref --stdin < cmds.txt', 'blind'))
         broken = os.path.join(self.w.main, '.kit.json')
         for cwd, text, name in cases:
             if name == 'kit':
