@@ -63,6 +63,8 @@ class SharedRules(unittest.TestCase):
     def setUp(self):
         self.w = W.World()
         self.addCleanup(self.w.cleanup)
+        W.deny_softened()                       # the rows pin wrapped-gate, off by default (test_cheap.py)
+        self.addCleanup(W.allow_unplaced)
 
     def test_each_kit_form_is_judged_as_the_stub_form(self):
         for name, tool, takes_c, args, shell, where, sub in SHARED:
@@ -82,7 +84,7 @@ class SharedRules(unittest.TestCase):
             make = bash if shell == 'bash' else ps
             seen.add(verdict(claude_decide(make(forms(self.w, tool, takes_c, args, cwd)[1], cwd, sub=sub),
                                            self.w.ctx())))
-        self.assertTrue({('deny', 'wrapped-gate'), ('deny', 'owner-lock'), ('allow', None)} <= seen, seen)
+        self.assertTrue({('deny', 'wrapped-gate'), ('deny', 'owner-tool'), ('allow', None)} <= seen, seen)
 
     def test_a_wrapped_kit_gate_keeps_its_own_path_in_the_alternative(self):
         cmd = forms(self.w, 'gate', True, '--full 2>&1 | tail -5', self.w.wt)[1]
@@ -128,6 +130,8 @@ class LookalikeWrappers(unittest.TestCase):
         self.w = W.World(kit={'repo': {'name': 'demo'},
                               'heavy': {'programs': [{'program': 'python*', 'kind': 'build', 'why': 'test'}]}})
         self.addCleanup(self.w.cleanup)
+        W.deny_softened()                       # the cases pin heavy, a warning by default (test_cheap.py)
+        self.addCleanup(W.allow_unplaced)
 
     def judge(self, text):
         return verdict(claude_decide(bash(text, self.w.wt), self.w.ctx()))

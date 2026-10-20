@@ -62,6 +62,8 @@ class SameDecisions(unittest.TestCase):
     def setUp(self):
         self.w = RealWorld()
         self.addCleanup(lambda: shutil.rmtree(self.w.base, True) if os.path.isdir(self.w.base) else None)
+        W.deny_softened()                       # the rows are test_rules.py's, judged with the softened rules at deny
+        self.addCleanup(W.allow_unplaced)
         self.w.git.ancestors.add((W.SHA_WT, 'main'))
         common = os.path.join(self.w.main, '.git')
         for path, text in ((os.path.join(common, 'config'), self.COMMON),

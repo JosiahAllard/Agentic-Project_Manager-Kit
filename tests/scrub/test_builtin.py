@@ -20,8 +20,6 @@ from tests.scrub.test_scrub import read_text, tracked_files
 # (path glob, class, text the line contains, why): permanent exceptions.
 ALLOWED = (
     ('kitlib/git/fake/wtcmds.py', 'pinned-hash', 'abc1234', 'an invented hash in the fake git'),
-    ('kitlib/guard/rules.py', 'drive', 'handling, so C:', 'a docstring on bash quoting'),
-    ('tests/scrub/test_generic.py', 'drive', "'C:", "an allow entry quoting the docstring above"),
     ('tests/hubvalidate/test_hubvalidate.py', 'record-id', "['repo'] = '",
      "the kit's repo tag upper-cased to prove the alias match folds case"),
     ('tests/launcher/test_current_account.py', 'record-id', "HOME + '\\\\.",

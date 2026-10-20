@@ -30,6 +30,11 @@ unreadable line is never a way around a rule, and a plain line is never denied b
     unclean for another reason: that PM data check, and in any repository an agent session is
     denied, as here (`unreadable` for a subagent, `write-jail` for another jailed session).
 
+The `unreadable` rule is a warning by default (kitlib.guard.modes): where it would
+deny, the warning is kept and the check goes on to the next pattern and the checks after it, so
+only a kept rule's own deny (a re-read one, git-push-pmdata) stops the line. A pattern whose rule
+is off (wrapped-gate by default) is not looked for. The owner can set each back to deny.
+
 Where a pattern matches, the directory is the one the command holding the match runs in (a
 literal cd before it is followed), not only the call's.
 
@@ -44,6 +49,7 @@ from kitlib import config as kconfig
 from kitlib.git import repo
 
 from . import commands as cm
+from . import modes
 from . import rules
 from . import shell as sh
 
@@ -85,9 +91,9 @@ ANYWHERE = (
     # git http-push and the remote helpers, run by hand, talk to a remote without the hook too
     ('git-push-pmdata', G + r'(?:http-push|remote-[\w-]+)\b'),
     ('git-push-pmdata', r'(?i)(?<![\w.-])git-(?:send-pack|http-push|remote-[\w-]+)(?:\.exe)?\b'),
-    # machine setup run to act (rules.owner_setup): any session but the owner's own
-    ('owner-setup', r'(?i)(?<![A-Za-z0-9_])(?:machine[_-]setup(?:\.py|\.ps1)?|new-repo\.ps1)(?![A-Za-z0-9_])'
-                    r'[^|;&\n]*\s-{1,2}a|kitlib(?:[./\\]|\s+import\s+)machinesetup'),
+    # machine setup run to act (rules.owner_tool): any session but the owner's own
+    ('owner-tool', r'(?i)(?<![A-Za-z0-9_])(?:machine[_-]setup(?:\.py|\.ps1)?|new-repo\.ps1)(?![A-Za-z0-9_])'
+                   r'[^|;&\n]*\s-{1,2}a'),
     ('wrapped-gate', r'(?:\bgate\.py|\bmachine_lock\.py\s+run)\b[^;&]*?(?<!\|)\|(?!\|)'),
     ('root-search', r'\bfind\s+(?:-[HLP]\s+)*(?:/|/[a-zA-Z]/?|[A-Za-z]:[\\/]?)(?=\s|$|["\'])'),
     ('root-search', r'(?i)\b(?:get-childitem|gci|ls|dir)\b[^|;&]*\s["\']?[A-Za-z]:[\\/]?["\']?(?=\s|$)[^|;&]*\s-r'),
@@ -95,7 +101,7 @@ ANYWHERE = (
     ('root-search', r'(?i)\bdir\s+(?:/\w+\s+)*["\']?[A-Za-z]:\\?["\']?\s*(?:/\w+\s+)*/s\b'),
     ('root-search', r'(?i)\bdir\b[^|;&]*/s\b[^|;&]*\s["\']?[A-Za-z]:\\?["\']?(?=\s|$)'),
 )
-PARSED_RULES = ('owner_lock', 'owner_setup', 'wrapped_gate', 'root_search', 'heavy', 'git_rules', 'shell_writes')
+PARSED_RULES = ('owner_tool', 'wrapped_gate', 'root_search', 'heavy', 'git_rules', 'shell_writes')
 WHY = 'The guard could not read this command; write the program name literally. Why: %s.'
 PLAIN = ' Write it plainly:'
 # when plain() cannot rewrite the line, the alternative is a script file, never the line again
@@ -225,6 +231,8 @@ def check(event, ctx, text, cwd, role, parsed):
 
     main_rules = set(r for r, _p in MAIN_ONLY + SUBAGENT_MAIN)
     for rule, pat in list(ANYWHERE) + list(MAIN_ONLY) + list(SUBAGENT_MAIN):
+        if modes.mode(rule) == modes.OFF:
+            continue                            # an off rule: its text is no reason to warn either
         ungated = False
         if rule == 'git-push-main':
             cfg = ctx.config(cwd) if cwd else None
@@ -238,7 +246,7 @@ def check(event, ctx, text, cwd, role, parsed):
         where = cwd_at(parsed, m.start(), cwd)
         if rule in main_rules and not main_like(ctx, where):
             continue
-        if rule == 'owner-setup' and rules.is_owner_session(event, ctx):
+        if rule == 'owner-tool' and rules.is_owner_session(event, ctx):
             continue
         if rule == 'git-shared-ref' and not rules.shared_ref_held(event, ctx):
             continue
@@ -248,7 +256,9 @@ def check(event, ctx, text, cwd, role, parsed):
         d = reread(m.start(), where or cwd)
         if ungated and d is None:
             continue                            # no push_block: only a delete or a forced push of main is refused
-        return answer(d, rule)
+        d = answer(d, rule)
+        if d:
+            return d                            # unreadable warns by default: the patterns after it still run
     held = None
     cfg = ctx.config(cwd) if cwd else None
     for entry, pat in heavy_patterns(cfg):
@@ -262,19 +272,26 @@ def check(event, ctx, text, cwd, role, parsed):
         dyn = _dyn_commands(parsed)
         if dyn:
             c, inv = dyn[0]
-            return rules.refuse('heavy', role, '%s Its text names %s, a heavy program (kind %s), and this session '
-                                'holds no machine lock.%s' % (why, entry['program'], entry['kind'],
-                                                              rules.run_from(c, cwd)),
-                                rules.lock_alternative(ctx, c, entry, cwd, named_run(c, inv)))
+            d = rules.refuse('heavy', role, '%s Its text names %s, a heavy program (kind %s), and this session '
+                             'holds no machine lock.%s' % (why, entry['program'], entry['kind'],
+                                                           rules.run_from(c, cwd)),
+                             rules.lock_alternative(ctx, c, entry, cwd, named_run(c, inv)))
+            if d:
+                return d
+            continue                            # heavy warns by default: the checks below still run
         d = reread(m.start(), cwd_at(parsed, m.start(), cwd) or cwd)
         if d is not None:
             return answer(d, 'heavy')
     last, alt = plainly(ctx, parsed, text, cwd)
     if role == 'subagent':
-        return rules.refuse('unreadable', role, why + last, alt)
+        d = rules.refuse('unreadable', role, why + last, alt)
+        if d:
+            return d                            # warned by default: judged below as a jailed session is
     if GIT_WORD_RE.search(text) and rules.agent_session(event, ctx):
-        return rules.refuse('write-jail', role, '%s git on a line the guard cannot read may write a checkout it '
-                            'cannot place; run the git in its own call.%s' % (why, last), alt)
+        d = rules.refuse(rules.UNPLACED, role, '%s git on a line the guard cannot read may write a checkout it '
+                         'cannot place; run the git in its own call.%s' % (why, last), alt)
+        if d:
+            return d                            # warned: the PM data and main-checkout checks below still run
     owner = rules.is_owner_session(event, ctx)
     for c in parsed.commands:
         inv = cm.invocation(c)
@@ -288,8 +305,10 @@ def check(event, ctx, text, cwd, role, parsed):
                 return rules.reworded(d, '%s %s' % (why, d.reason))
             continue
         if main_like(ctx, c.cwd):
-            return rules.refuse('unreadable', role, '%s It runs %s in a main checkout or a place git cannot '
-                                'tell.%s' % (why, hidden, last), alt)
+            d = rules.refuse('unreadable', role, '%s It runs %s in a main checkout or a place git cannot '
+                             'tell.%s' % (why, hidden, last), alt)
+            if d:
+                return d                        # warned by default: the PM data check below still runs
         if not owner and rules.pmdata_recorded(ctx, c.cwd):
             return rules.refuse('git-push-pmdata', role, '%s It runs %s in a repository with a PM data record (%s): '
                                 'it may be git push --no-verify, which skips the pre-push hook that keeps PM data '

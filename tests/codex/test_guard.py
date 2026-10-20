@@ -220,11 +220,14 @@ class Shell(Base):
             with self.subTest(role=role):
                 self.denied(self.event('Bash', {'command': 'find $USERPROFILE -name x', 'shell': 'bash.exe'}),
                             'root-search', role=role)
-                self.denied(self.event('Bash', {'command': 'godot --headless'}), 'heavy', role=role)
+                # heavy is a warning by default (kitlib.guard.modes): the call runs, with the warning
+                d = self.judge(self.event('Bash', {'command': 'godot --headless'}), role=role)
+                self.assertEqual(d.verdict, 'allow', d.reason)
+                self.assertIn('rule=heavy', d.reason)
 
     def test_a_held_lock_allows_a_heavy_run(self):
         self.w.held = True
-        self.allowed(self.event('Bash', {'command': 'godot --headless'}))
+        self.assertEqual(self.judge(self.event('Bash', {'command': 'godot --headless'})), Decision('allow'))
 
     def test_shell_patch_transport_is_refused_in_a_marked_session(self):
         cmd = "apply_patch <<'EOF'\n*** Begin Patch\n*** Delete File: AGENTS.md\n*** End Patch\nEOF"

@@ -3,9 +3,6 @@ for kitlib.guard.rules' hub-secrets, hub-owner-verb, hub-mcp and hub-browser.
 
   secret_folder(config_path)   the hub's token folder beside the machine config file
   stores(hub, pm_data_path)    the folders the hub store may be in
-  glob_reaches(pattern, folder) True when a wildcard path can name the folder or a path in it
-  list_reaches(pattern, folder, names)  True when a names search's wildcard can list the folder
-                               or a file in it
   expand_braces(text)          a glob's {a,b} forms written out, or None
   filter_reaches(flt, rel, names)  True when a content search's file filter can take in a file
                                of the token folder below the search's root
@@ -20,23 +17,15 @@ every tool call and stays free of the hub site's imports. tests/guard/test_rules
 they are the same. The owner-only MCP tool names are kitlib.hubmcp's own OWNER_ONLY, imported:
 that package's __init__ imports nothing. Nothing here reads a file or the environment.
 
-owner_verb judges only the one command shape kitlib.guard.rules.hub_shape reads in full. The
-other text naming the hub tool that passes is the path family (kitlib.guard.rules.hub_path_family,
-from the owner's ruling on reading and committing the hub tool): one simple command of a reader
-(cat, Get-Content, type, grep, rg, Select-String), git's add, diff, log, show, blame, status or
-restore --staged, commit.py or backlog.py, naming hub.py only as a path word, or anyhow in
-commit.py's -m/-b or backlog.py's message options. Inside it the options that run a program are
-denied: git's -c and --exec-path (only -C, --no-pager and -P precede the subcommand), --ext-diff,
---textconv, add's editor and prompts, restore's work-tree writes, and rg's --pre, --pre-glob and
---hostname-bin.
-Any other text naming the hub tool is refused. Known limit: a name built at run time (string
-concatenation, an encoding, an escape a program expands, Unicode compatibility characters Python
-folds to hub, a variable, a script the agent wrote) is not read. The hub rules guard against
+owner_verb judges the arguments of a parsed hub tool run (kitlib.guard.rules.hub_run_args:
+python with tools/hub.py as its script or -m tools.hub, tools/hub.py run as the program, or
+python -m runpy tools.hub; hub-owner-verb). Other text that names
+the hub tool is not read. Known limit: a name built at run time (string concatenation, an
+encoding, a variable, a script the agent wrote) is not read. The hub rules guard against
 accidents and are not an adversary boundary.
 """
 import fnmatch
 import ipaddress
-import ntpath
 import os
 import re
 import urllib.parse
@@ -65,12 +54,11 @@ HUB_SERVER = 'hub'
 # the token folder named in a command's text: `.pm-kit` then `hub` with only separators and
 # quotes between (`.pm-kit/hub`, `'.pm-kit', 'hub'`); hub.json beside it is not it
 FOLDER_RE = re.compile(r'(?i)\.pm-kit\W{1,8}hub(?![\w.-])')
-# code that reads a token: a file name, kitlib.hubsite.auth's names, the hub site or the hub tool
-INLINE_RE = re.compile(r'(?i)owner\.token|agent\.token|approval\.key|hubsite|(?<![\w-])hub\.py\b|'
-                       r'\.pm-kit\W{1,8}hub(?![\w.-])|'
-                       r'\b(?:OWNER_FILE|AGENT_FILE|TOKEN_FILES|APPROVAL_FILE|read_token|ensure_tokens)\b')
-# programs whose literal words often name the files without touching them: a search pattern, a
-# commit message. Their words that are not literal are still read.
+# python or node code that names a token file or the token folder literally; a name the code
+# builds or reaches through a library is not read
+INLINE_RE = re.compile(r'(?i)owner\.token|agent\.token|approval\.key|\.pm-kit\W{1,8}hub(?![\w.-])')
+# programs whose words often name the files without touching them: a search pattern, a commit
+# message. Their words are not name-read; a literal path of theirs into the folder still is.
 NAME_ONLY_PROGRAMS = frozenset(('grep', 'egrep', 'fgrep', 'rg', 'findstr', 'select-string', 'sls', 'git'))
 
 # the browser and computer-use MCP servers: a page they open or a key they type reaches the hub
@@ -103,49 +91,6 @@ GLOB_CHARS = frozenset('*?[')
 
 def has_glob(text):
     return any(c in GLOB_CHARS for c in text)
-
-
-def _parts(path):
-    drive, rest = ntpath.splitdrive(ntpath.normpath(path.replace('/', '\\')))
-    return [drive.lower()] + [p for p in rest.lower().split('\\') if p]
-
-
-def glob_reaches(pattern, folder):
-    """True when the absolute wildcard path `pattern` can name `folder` or a path inside it:
-    each of the folder's parts is matched by the pattern's part in its place (fnmatch, case
-    ignored; `**` matches the rest). A pattern shorter than the folder names a parent, which
-    this does not count (docs/guard.md "Hub secrets": a recursive read of a parent)."""
-    pat, fol = _parts(pattern), _parts(folder)
-    for k, f in enumerate(fol):
-        if k >= len(pat):
-            return False
-        if pat[k] == '**':
-            return True
-        if not fnmatch.fnmatchcase(f, pat[k]):
-            return False
-    return True
-
-
-def list_reaches(pattern, folder, names):
-    """True when a names search's absolute wildcard path `pattern` can list the folder `folder` or
-    a file in it, `names` being every name in it (subfolders' too): glob_reaches, except that a
-    `**` followed by one last part, or a last part just below the folder, has to match one of
-    `names` (`**/*.py` lists nothing there when no name in it ends .py). A `**` that ends the
-    pattern or is followed by more than one part reaches."""
-    pat, fol = _parts(pattern), _parts(folder)
-    names = [n.lower() for n in names]
-    for k, part in enumerate(pat):
-        if part == '**':
-            rest = pat[k + 1:]
-            return len(rest) != 1 or any(fnmatch.fnmatchcase(n, rest[0]) for n in names)
-        if k < len(fol):
-            if not fnmatch.fnmatchcase(fol[k], part):
-                return False
-            continue
-        if k == len(pat) - 1:
-            return any(fnmatch.fnmatchcase(n, part) for n in names)
-        return True                             # a path below a folder in it
-    return len(pat) == len(fol)                 # the folder itself; shorter: a parent
 
 
 BRACE_LIMIT = 256
