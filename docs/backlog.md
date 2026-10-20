@@ -76,7 +76,7 @@ A finding is fixed on the branch that found it unless it cannot be, so `add` nam
 `block ID --on M --reason T` and `release ID --reason T` stop a pull (kitlib/backlog/plan.py `stop_pull`; `tests/backlog/test_block_stopped.py`). Its holder (the caller's branch) may stop it. Anyone may when the pull is dead (no branch or worktree by its `pulled_by`), or when `Context.liveness` finds the worktree on that branch dead: tools/backlog.py's opener passes kitlib/worktree/classify.py `branch_liveness`, `--classify`'s L rule for that one tree (docs/worktree-remove.md "Classify"). Otherwise it is REFUSED, naming why the tree is live; a branch no worktree is on, or one the probe cannot read, counts as live.
 
 - One store commit clears `pulled_by`, `pulled_at` and the pre-emption keys, which frees the scope. `block` sets `state: blocked`, `release` sets `state: open`.
-- While the branch exists, the body line starts `Stopped on branch B at <tip>, branch kept.` and then reads `Blocked on M (date): T` or `Released (date): T`. The output names the branch and tip on a `branch kept:` line. The branch and its worktree are never touched.
+- While the branch exists, a body line `Stopped on branch B at <tip>, branch kept.` goes on its own line, before the `Blocked on M (date): T` or `Released (date): T` line, so a ruling cited in the reason still counts for `check`'s hold citations (`record.hold_citations` reads lines that start `Blocked on`). The output names the branch and tip on a `branch kept:` line. A part landing's release (`at_landing._release_plan`, `kept=False`) writes no Stopped line and reads no branch: the landing's cleanup deletes it. The branch and its worktree are never touched.
 - `block` of a pulled record without `--reason` is USAGE.
 
 ### Retarget

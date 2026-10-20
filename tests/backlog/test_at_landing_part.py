@@ -64,6 +64,8 @@ class PartLanding(StoreLandCase):
         out = self.land(self.branch_with('part one\n\nPart-of: FOO\n%s\n' % TRAILERS))
         self.assertEqual(self.stems(), ['BAZ', 'FOO', 'QUX'])
         self.assert_open('FOO')
+        # The landing's cleanup deletes the branch, so the release names no kept branch.
+        self.assertNotIn('Stopped on branch', self.get('FOO').body or '')
         self.assertEqual(self.get('QUX').get('pulled_by'), 'kit/other')
         # One commit, found by `git log --grep "^releases FOO: "`.
         self.assertEqual(self.subjects()[0], 'releases FOO: %s' % release_reason(out.merge))

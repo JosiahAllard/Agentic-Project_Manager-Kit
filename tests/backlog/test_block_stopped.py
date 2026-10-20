@@ -7,6 +7,7 @@ import time
 import unittest
 from unittest import mock
 
+from kitlib.backlog import check
 from kitlib.backlog import offer as omod
 from kitlib.backlog import opener
 from kitlib.backlog import store as smod
@@ -48,9 +49,19 @@ class Block(StoppedCase):
         r = self.get('FOO')
         self.assertEqual((r.get('state'), r.all('blocked_on')), ('blocked', ['live-client']))
         self.assert_freed('FOO')
-        self.assertIn('Stopped on branch %s at %s, branch kept. Blocked on live-client (%s): %s'
+        self.assertIn('Stopped on branch %s at %s, branch kept.\nBlocked on live-client (%s): %s\n'
                       % (BRANCH, tip[:10], TODAY, WHY), r.body)
         self.assertIn('  was pulled_by: %s' % BRANCH, change.lines)
+
+    def test_a_ruling_cited_in_the_reason_of_a_stopped_pull_keeps_the_hold(self):
+        # The Stopped line is its own body line, so the `Blocked on` line still starts one and
+        # record.hold_citations reads the ruling in it: check finds no void hold.
+        self.seed(priced('FOO', pulled_by=BRANCH, **PULLED))
+        self.verb('block', 'FOO', ['deliberate'], reason='R-1234: until X')
+        snap = self.store.load()
+        self.assertEqual(snap.get('FOO').get('state'), 'blocked')
+        self.assertIn('Stopped on branch %s' % BRANCH, snap.get('FOO').body)
+        self.assertEqual(check.check_hold_citations(snap).warnings, [])
 
     def test_anybody_blocks_a_pull_whose_worktree_the_probe_finds_dead(self):
         self.repo.git('branch', OTHER)
@@ -131,7 +142,7 @@ class Release(StoppedCase):
         self.assertEqual(self.tip(OTHER), tip)
         self.assertEqual(self.get('FOO').get('state'), 'open')
         self.assert_freed('FOO')
-        self.assertIn('Stopped on branch %s at %s, branch kept. Released (%s): %s'
+        self.assertIn('Stopped on branch %s at %s, branch kept.\nReleased (%s): %s'
                       % (OTHER, tip[:10], TODAY, WHY), self.get('FOO').body)
         self.assertIn('  branch kept: %s at %s' % (OTHER, tip[:10]), change.lines)
 

@@ -854,8 +854,8 @@ def plan_block(snap, ctx, rid, members, owner_ask=None, ruling=None, reason=None
     (`Blocked on M (date): T`), so `show` says why the record is held; no header key is written
     for it. A PULLED record is blocked only by whoever may stop its pull (stop_pull), and only
     with a `reason`: the one commit also clears the pull and pre-emption keys, which frees its
-    scope, and the body line starts `Stopped on branch B at <tip>, branch kept.` while that
-    branch exists. The branch is never touched."""
+    scope, and a body line `Stopped on branch B at <tip>, branch kept.` goes before the `Blocked
+    on` line while that branch exists. The branch is never touched."""
     refuse_machine_paths('--owner-ask', owner_ask)
     if reason is not None:
         refuse_machine_paths('--reason', reason)
@@ -1311,13 +1311,16 @@ def branch_name_error(name, root):
     return None
 
 
-def stop_pull(ctx, rid, holder, live):
+def stop_pull(ctx, rid, holder, live, kept=True):
     """Whether the caller may stop `rid`'s pull by `holder` (block or release it): its holder (the
     caller's branch) may; anybody may when the pull is dead (no local branch, remote-tracking
     branch or worktree by that name: offer.live_branches), or when `ctx.liveness` finds the
     holder's worktree dead. Refusal(live(why)) otherwise, `why` None when there is no probe.
-    Returns `(stopped, lines)`: `stopped` is the body line's `Stopped on branch B at <tip>, branch
-    kept. `, '' when there is no local branch B; `lines` say what was found."""
+    Returns `(stopped, lines)`: `stopped` is the body line `Stopped on branch B at <tip>, branch
+    kept.` with its newline (its own line, so the `Blocked on` line after it still starts one:
+    record.hold_citations), '' when there is no local branch B; `lines` say what was found.
+    `kept` False (a landing's release, whose cleanup deletes the branch) reads no branch and
+    gives ''."""
     mine = ctx.branch or refs.current_branch(ctx.root)[0]
     if holder == mine:
         how = ''
@@ -1338,22 +1341,26 @@ def stop_pull(ctx, rid, holder, live):
             if why is not None:
                 raise Refusal(live(why))
             how = ' (its worktree is dead)'
+    lines = ['  was pulled_by: %s%s' % (holder, how)]
+    if not kept:
+        return '', lines
     tip, why = refs.ref_commit('refs/heads/%s' % holder, ctx.root)
     if tip is None:
         raise Failure('cannot read branch `%s` for the body line: %s' % (holder, why))
-    lines = ['  was pulled_by: %s%s' % (holder, how)]
     if not tip:
         return '', lines
     lines.append('  branch kept: %s at %s' % (holder, tip[:10]))
-    return 'Stopped on branch %s at %s, branch kept. ' % (holder, tip[:10]), lines
+    return 'Stopped on branch %s at %s, branch kept.\n' % (holder, tip[:10]), lines
 
 
-def plan_release(snap, ctx, rid, reason):
+def plan_release(snap, ctx, rid, reason, kept=True):
     """Return a pull to `state: open`: the caller's own pull, or one anybody may stop (stop_pull:
     no branch or worktree by its `pulled_by`, or a worktree `ctx.liveness` finds dead). Pre-emption
     lines go with it, or the released record would keep its pre-emption sort. While the branch
-    exists a body line `Stopped on branch B at <tip>, branch kept. Released (date): T` says where
-    the work was left; the branch is never touched."""
+    exists a body line `Stopped on branch B at <tip>, branch kept.` and then `Released (date): T`
+    say where the work was left; the branch is never touched. `kept` False (at_landing's release
+    of a part landed: the landing's cleanup deletes the branch) writes neither line and reads no
+    branch."""
     refuse_machine_paths('--reason', reason)
     bad = reason_error(reason, '--reason')
     if bad:
@@ -1369,7 +1376,7 @@ def plan_release(snap, ctx, rid, reason):
         return ('the pull of `%s` by `%s` is live (a branch or worktree by that name exists)%s. '
                 'Its holder releases it, from that branch'
                 % (rid, holder, '; its tree is live: %s' % why if why else ''))
-    stopped, found = stop_pull(ctx, rid, holder, live)
+    stopped, found = stop_pull(ctx, rid, holder, live, kept)
     changes = [('state', ['open'])] + [(k, []) for k in rmod.PULL_KEYS + rmod.PREEMPT_KEYS]
     pairs = rmod.apply_changes(rec.pairs(), changes)
     text = ' '.join(reason.split())
