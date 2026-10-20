@@ -1076,8 +1076,9 @@ def edit_target(event, ctx, target, cwd, role, what, unknown_why=None, rewrite=N
     output, so the alternative with no worktree of the session's own is the temp folder; `shell`,
     the dialect of the line `run` is on (the cd line of worktree_alternative); `item`, a target the
     guard cannot place that is a provider item on a line of more than plain calls (ps_provider_word);
-    `stand_in`, a target that stands for the folder a program runs in or for what the guard cannot
-    read, which counts as the owner's delegation list only when it is that file (delegfile.edit)."""
+    `stand_in`, a target that stands for what the guard cannot read (the folder python runs in, the
+    pipeline's paths), which counts as the owner's delegation list only when it is that file
+    (delegfile.edit)."""
     d = ledger_rule(ctx, target, role, what) or pm_data_unknown(ctx, target, cwd, role, what) or \
         lock_state(event, ctx, target, role, what) or hub_secret_edit(event, ctx, target, role, what) or \
         delegations_edit(event, ctx, target, role, what, stand_in) or \
@@ -3034,7 +3035,8 @@ def _write_from(event, ctx, cmd, inv, cwd, role, w, base, net, into, searched):
         # call may set what it reads (PROVIDER_ITEM_WHY)
         d = edit_target(event, ctx, t, cwd, role, what, why, rewrite=rewrite,
                         run=whole_line(ctx, cmd) if item else bare(cmd), redirect=output,
-                        shell=outer_shell(cmd), item=item, stand_in=stand_in or unread is not None or piped)
+                        shell=outer_shell(cmd), item=item,
+                        stand_in=piped or w.start == w.end or unread_write(cmd, inv, w))
         if not placed:
             d = unplaced(d, role)
         if d:

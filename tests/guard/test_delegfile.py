@@ -1,4 +1,4 @@
-"""The owner's delegation list (kitlib.guard.delegfile, docs/guard.md "Owner machine setup"): every
+"""The owner's delegation list (kitlib.guard.delegfile, docs/guard.md "Owner delegation list"): every
 session but the owner's own is refused a write, move or delete of either copy, the home one
 (~/.pm-kit/owner-delegations.json) and the PM repository's (<pointer>/.pm-kit/...), by file
 tool, shell or git; reads and copies out stay open."""
@@ -159,6 +159,55 @@ class OwnerDelegations(unittest.TestCase):
                 (bash, 'git -C %s log -- .pm-kit/owner-delegations.json' % W.fwd(self.w.data))):
             self.assert_not_refused(lambda sub, s=shell, t=text: s(t, self.w.wt, sub), text)
 
+    # ------------------------------------------------------------------ wildcards, the pipeline, stand-ins
+
+    def placed_rows(self):
+        """(shell, text, the folder it runs in) that reach the list by a wildcard, by the paths the
+        command before a | gives, or as the folder a program that writes there runs in."""
+        data, wt, home = self.w.data, self.w.wt, self.w.home
+        d = W.fwd(data)
+        pm_kit = os.path.dirname(self.home_copy)
+        return [
+            # a wildcard that can match the list or a folder above it
+            (bash, 'rm ~/.pm-kit/*.json', wt), (bash, 'rm -f ~/.pm-kit/owner-*', wt),
+            (bash, 'rm -rf ~/.pm-*', wt), (bash, 'rm -rf ~/*', wt),
+            (bash, 'rm .pm-kit/owner-delegations.jso?', data), (bash, 'rm [o]wner-delegations.json', pm_kit),
+            (bash, 'mv %s/.pm-kit/* x/' % d, wt), (bash, 'rm -r %s/**/x' % d, wt),
+            (ps, 'Remove-Item .pm-kit\\*', data), (ps, 'Remove-Item "$HOME\\.pm-kit\\*.json"', wt),
+            (ps, 'Remove-Item -Recurse -Force %s\\.pm-k*' % data, wt), (ps, 'del *', pm_kit),
+            # a path fed through the pipeline
+            (ps, 'Get-Item "$HOME\\.pm-kit\\owner-delegations.json" | Remove-Item', wt),
+            (ps, 'Get-ChildItem "%s" | Remove-Item' % pm_kit, wt),
+            (ps, 'Get-ChildItem | Remove-Item', pm_kit), (ps, 'gci -Recurse | ri', data),
+            (bash, 'ls ~/.pm-kit/owner-delegations.json | xargs rm', wt),
+            (bash, 'find %s -name "*.json" | xargs rm' % d, wt),
+            (bash, 'git ls-files | xargs rm', data), (bash, 'git ls-files "*.json" | xargs rm -f', data),
+            # a program that writes in the folder it runs in, run in the list's folder or above it
+            (bash, 'git archive HEAD~3 | tar -x', data), (bash, 'unzip -o x.zip', data),
+            (bash, 'cd ~ && tar -xf backup.tar', wt), (bash, 'curl -O http://example.invalid/y', home),
+            (bash, 'tar -xf backup.tar', pm_kit),
+        ]
+
+    def test_a_wildcard_a_piped_path_or_a_program_writing_where_it_runs_is_refused(self):
+        for shell, text, cwd in self.placed_rows():
+            self.assert_refused(lambda sub, s=shell, t=text, c=cwd: s(t, c, sub), text)
+
+    def test_the_owner_session_may_run_those(self):
+        for shell, text, cwd in self.placed_rows():
+            self.assert_not_refused(lambda sub, s=shell, t=text, c=cwd: s(t, c, sub), text, sessions=(OWNER,))
+
+    def test_a_wildcard_a_piped_path_or_a_program_elsewhere_is_not_this_rule(self):
+        data, wt, home = self.w.data, self.w.wt, self.w.home
+        for shell, text, cwd in (
+                (bash, 'rm ~/.pm-kit/*.log', wt), (bash, 'rm ~/.pm-kit/x/*', wt), (bash, 'rm -rf ~/.cache/*', wt),
+                (bash, 'rm %s/.pm-kit/*.md' % W.fwd(data), wt), (ps, 'Remove-Item .pm-kit\\*.log', data),
+                (ps, 'Get-ChildItem *.log | Remove-Item', home), (ps, 'Get-ChildItem | Remove-Item', wt),
+                (bash, 'ls *.tmp | xargs rm', home), (bash, 'git ls-files | xargs rm', wt),
+                (bash, 'git ls-files docs | xargs rm', wt), (bash, 'find docs -name "*.md" | xargs rm', data),
+                (bash, 'git archive HEAD | tar -x', wt), (bash, 'unzip -o x.zip', wt),
+                (bash, 'tar -xf backup.tar', self.w.temp), (bash, 'curl -O http://example.invalid/y', wt)):
+            self.assert_not_refused(lambda sub, s=shell, t=text, c=cwd: s(t, c, sub), text)
+
     def test_a_program_run_in_the_pm_repository_does_not_write_it(self):
         """The folder a program runs in stands for what it may write: it counts as the list only
         when it is the file, so python and the kit's tools run in the PM repository pass."""
@@ -188,6 +237,8 @@ class OwnerDelegations(unittest.TestCase):
         'reset --hard', 'reset --hard HEAD~1', 'reset --merge', 'reset --keep HEAD~1',
         'clean -fdx', 'clean -f .pm-kit', 'stash', 'stash push', 'stash pop', 'stash drop',
         'read-tree -u -m HEAD',
+        'sparse-checkout set docs', 'sparse-checkout disable', 'sparse-checkout reapply',
+        'bisect start', 'bisect bad HEAD~3', 'bisect reset',
     )
     # the same, run in the list's own folder: paths read from there
     GIT_REFUSED_BELOW = (
@@ -202,7 +253,7 @@ class OwnerDelegations(unittest.TestCase):
         'restore --staged .pm-kit/owner-delegations.json', 'restore docs/x.md',
         'checkout -- docs/x.md', 'checkout-index -f docs/x.md', 'reset', 'reset --soft HEAD~1',
         'reset -- .pm-kit/owner-delegations.json', 'rm ":!.pm-kit" docs',
-        'add .pm-kit/owner-delegations.json', 'read-tree HEAD',
+        'add .pm-kit/owner-delegations.json', 'read-tree HEAD', 'sparse-checkout list', 'bisect log',
     )
 
     def test_git_that_removes_or_overwrites_the_pm_copy_is_refused(self):
