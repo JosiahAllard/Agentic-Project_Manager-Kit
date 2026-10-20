@@ -1131,14 +1131,24 @@ def main_checkout(event, ctx, target, cwd, role, what, unknown_why=None, rewrite
         return None
     if place.kind == repo.UNKNOWN:
         mine = own_worktree(ctx, cwd)
-        instead = rewrite(fwd(os.path.join(mine, os.path.basename(target)))) if mine and rewrite is not None \
-            else new_wt
+        name, only, see = os.path.basename(target), '', ''
+        if mine and rewrite is not None:
+            instead = rewrite(fwd(os.path.join(mine, name)))
+        elif no_wt or not main_top:
+            instead = new_wt
+        else:
+            # a new worktree is never the Instead: from the main checkout only in a clause (only_new)
+            only = '' if mine else only_new(new_wt)
+            if rewrite is not None:
+                instead = rewrite('<worktree>/' + name)
+            else:
+                instead, see = 'git -C %s worktree list' % quote(main_top), ' To see the worktrees:'
         # a git directory is placed by its name: git answers no work tree there, and its config,
         # hooks and refs are the repository's own
         rule = 'main-checkout' if in_git_dir(target) else UNPLACED
         return refuse(rule, role, '%s: git cannot tell whether %s is in a main checkout (%s); '
-                      'this role may not edit one. Write inside a path git reports as a linked worktree.' %
-                      (what, target, place.detail), instead)
+                      'this role may not edit one. Write inside a path git reports as a linked worktree%s.%s' %
+                      (what, target, place.detail, only, see), instead)
     what2, instead = worktree_alternative(ctx, target, place.top, cwd, rewrite, run, redirect, shell)
     return refuse('main-checkout', role, '%s is in the main checkout %s; this role may not edit a main '
                   'checkout. %s' % (what, place.top, what2), instead)
@@ -1265,7 +1275,10 @@ def worktree_alternative(ctx, target, main_top, cwd, rewrite=None, run=None, red
         there = '' if rel == '.' else ' (%s there)' % fwd(rel)
         return ('Make the change in your worktree%s%s; the lander brings it to main:' % (there, only_new(instead)),
                 rewrite('<worktree>' if rel == '.' else '<worktree>/' + fwd(rel)))
-    return 'Make the change in a worktree of it (%s there); the lander brings it to main:' % fwd(rel), instead
+    # no word to aim (cp -t<dir>): the worktrees to make it in; a new one only in a clause (only_new)
+    there = '' if rel == '.' else ' (%s there)' % fwd(rel)
+    return ('Make the change in your worktree%s%s; the lander brings it to main. To see the worktrees:'
+            % (there, '' if mine else only_new(instead)), 'git -C %s worktree list' % quote(main_top))
 
 
 def only_new(new_wt):
