@@ -5,8 +5,10 @@ and no child built without it; and no code outside the test runner sets it."""
 import importlib.util
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -90,28 +92,56 @@ class KitTests(unittest.TestCase):
             self.assertEqual(cli.child_env().get(clock.FENCE_ENV), '0')
 
 
+NAMES = re.compile(r'KIT_TIME_FENCE|clock\.FENCE_ENV|from kitlib\.clock import|kitlib\.clock\.FENCE_ENV')
+SKIP = {'.git', 'tests', '__pycache__'}
+
+
+def naming(root):
+    """(the files under `root` that name the marker, how many text files were read): every file
+    of any extension or none, root files included, outside tests/, .git and a checkout's
+    .claude/worktrees; a file with a NUL byte (binary) is not text."""
+    found, scanned = set(), 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        rel = os.path.relpath(dirpath, root).replace('\\', '/')
+        dirnames[:] = [d for d in dirnames
+                       if d not in SKIP and not (rel == '.claude' and d == 'worktrees')]
+        for name in filenames:
+            path = os.path.join(dirpath, name)
+            with open(path, 'rb') as f:
+                data = f.read()
+            if b'\0' in data:
+                continue
+            scanned += 1
+            if NAMES.search(data.decode('utf-8', errors='replace')):
+                found.add(os.path.relpath(path, root).replace('\\', '/'))
+    return found, scanned
+
+
 class Production(unittest.TestCase):
-    """No code a real run executes sets the marker: only kitlib/clock.py (which defines it) and
-    tools/kit_tests.py (the test runner) name it outside tests/."""
-    FOLDERS = ('boot', 'githooks', 'hosts', 'installer', 'kitlib', 'mcp', 'optional', 'templates', 'tools')
-    ALLOWED = {'kitlib/clock.py', 'tools/kit_tests.py'}
-    NAMES = re.compile(r'KIT_TIME_FENCE|clock\.FENCE_ENV|from kitlib\.clock import|kitlib\.clock\.FENCE_ENV')
+    """No code a real run executes sets the marker: outside tests/, only kitlib/clock.py (which
+    defines it), tools/kit_tests.py (the test runner) and the design doc name it."""
+    ALLOWED = {'kitlib/clock.py', 'tools/kit_tests.py', 'docs/flaky-tests.md'}
 
     def test_only_the_test_runner_names_the_marker(self):
-        found, scanned = set(), 0
-        for folder in self.FOLDERS:
-            for dirpath, dirnames, filenames in os.walk(os.path.join(KIT, folder)):
-                dirnames[:] = [d for d in dirnames if d != '__pycache__']
-                for name in filenames:
-                    if not name.endswith(('.py', '.ps1', '.json')):
-                        continue
-                    path = os.path.join(dirpath, name)
-                    scanned += 1
-                    with open(path, encoding='utf-8', errors='replace') as f:
-                        if self.NAMES.search(f.read()):
-                            found.add(os.path.relpath(path, KIT).replace('\\', '/'))
-        self.assertGreater(scanned, 100)
+        found, scanned = naming(KIT)
+        self.assertGreater(scanned, 500)
         self.assertEqual(found, self.ALLOWED)
+
+    def test_a_marker_in_any_file_kind_is_found(self):
+        root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, root, True)
+        planted = ['hosts/codex/shell/agents/worker.toml', 'githooks/pre-push', 'reserve_ui.pyw',
+                   'templates/ci/build.yml', 'templates/run.cmd']
+        for rel in planted + ['tests/test_x.py', '.git/config', '.claude/worktrees/w/a.py']:
+            path = os.path.join(root, *rel.split('/'))
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write('set KIT_TIME_FENCE=1\n')
+        with open(os.path.join(root, 'blob.bin'), 'wb') as f:
+            f.write(b'\0KIT_TIME_FENCE')
+        found, scanned = naming(root)
+        self.assertEqual(found, set(planted))
+        self.assertEqual(scanned, len(planted))
 
 
 if __name__ == '__main__':

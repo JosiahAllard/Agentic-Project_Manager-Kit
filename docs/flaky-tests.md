@@ -87,9 +87,9 @@ nothing until it fails twice); `test_selfrun.py:326` (`< 4.5` s) is the likelies
 ## Fit with the gate, redfirst and the known-flake list
 
 - Gate: no new step. The fence lives in the test process, as the fake git does; a
-  `tests/clock` test proves a fenced process gets the ceiling and an explicit budget passes
-  through, and that a child started with the test's environment is fenced while one built
-  without the marker is not. A file directly in `kitlib/` is a `full` glob in
+  `tests/clock` test proves a fenced process gets the ceiling, and a child started with the
+  test's environment is fenced while one built without the marker is not; tests/agentstart
+  `test_the_budget_cuts_what_is_left` proves an explicit budget passes through. A file directly in `kitlib/` is a `full` glob in
   tests/selection.json, so the build branch runs the whole suite; later changes there do too.
 - Redfirst: the first build's test is the case itself, made to fail at will: the agentview
   start test with a git stub that takes 1.2 s. At the base it reads `over the 1.0 s budget`
@@ -124,7 +124,7 @@ What it built:
   - a kit child started with the test's environment is fenced, and one built without the
     marker is not;
   - `child_env` marks the units and keeps an outer value;
-  - outside tests/, only kitlib/clock.py and tools/kit_tests.py name the marker.
+  - outside tests/, in a file of any kind, only kitlib/clock.py, tools/kit_tests.py and this doc name the marker.
 - tests/agentview/test_agentview.py `Start`:
   - `test_a_dispatched_role_on_claude_shows_the_agent_start_block` runs the hook's default
     budget with a `repo.classify` stub that takes 1.2 s, and asserts `NOT CHECKED` and no
