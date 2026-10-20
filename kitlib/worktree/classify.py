@@ -10,12 +10,15 @@ The classes, decided first-match in this order:
   lock names its branch, a machine lock record names it, a process has its current directory in
   it, or its last activity is newer than the dead bar (DEAD_AFTER_S, 24 h). A probe that cannot be
   read in full makes the tree L too (`unreadable: ...`), as does a status that cannot be read.
+  When the scan could not read some process, a tree is L unless every folder in it opens for
+  DELETE (holders.held_folder): a process we could not read may hold it.
 - A landed: the tip is in the base AND off its first-parent chain (remove.merged_worktrees's
-  rule) and the tree is clean.
+  rule), the tree is clean, and a branch's reflog shows a commit made on it (own_commit: a
+  branch made at a landed commit and never worked on is C; a reflog that cannot be read, C).
 - E evidence: the folder name matches EVIDENCE_GLOBS, or a detached tree outside every worktree
   folder.
-- B finished: clean, ahead of the base (tip not in it), and the tip has a gate-OK record git still
-  agrees with (kitlib.records.gate_ok.verify).
+- B finished: clean, ahead of the base (tip not in it), and the tip has a gate-OK record from a
+  --full gate that git still agrees with (kitlib.records.gate_ok.verify_full).
 - C half-done: everything else (dirty, no gate-OK record, a record that cannot be read, or no
   commit of its own).
 
@@ -71,17 +74,24 @@ def process_cwds():
     return (found, unreadable, len(seen)), None
 
 
-def _holds(where, target):
-    """True when the directory `where` is `target` or under it (normcase first, then canon for a
-    cwd taken through a junction), as holders.cwd_holders matches."""
-    flat = os.path.normcase(where).rstrip('\\/')
-    if flat == target or flat.startswith(target + os.sep):
-        return True
-    try:
-        flat = canon(where).rstrip('\\/')
-    except (OSError, ValueError):
-        return False
-    return flat == target or flat.startswith(target + os.sep)
+def cwd_forms(cwds):
+    """Each scanned process as (pid, image, its cwd's comparable forms): normcase, and canon for a
+    cwd taken through a junction (holders.cwd_holders matches both). Computed once per run, never
+    once per tree."""
+    out = []
+    for pid, name, where in cwds:
+        forms = {os.path.normcase(where).rstrip('\\/')}
+        try:
+            forms.add(canon(where).rstrip('\\/'))
+        except (OSError, ValueError):
+            pass
+        out.append((pid, name, forms))
+    return out
+
+
+def _holds(forms, target):
+    """True when one of a cwd's `forms` is `target` or under it."""
+    return any(flat == target or flat.startswith(target + os.sep) for flat in forms)
 
 
 def _newest(root, label, skip=()):
@@ -163,18 +173,39 @@ def evidence_name(path):
 
 
 def gate_state(main, head):
-    """'green' (a gate-OK record git agrees with), 'none', or 'unknown: <why>'."""
-    rec, why = gate_ok.verify(main, head)
+    """'green' (a gate-OK record from a --full gate that git agrees with: gate_ok.verify_full),
+    'none', 'not full: <why>' (a record git agrees with, from a gate run without --full), or
+    'unknown: <why>'."""
+    rec, why = gate_ok.verify_full(main, head)
     if rec is not None:
         return 'green'
     if why == 'no gate-OK record for %s' % head:
         return 'none'
+    if gate_ok.verify(main, head)[0] is not None:
+        return 'not full: %s' % why
     return 'unknown: %s' % why
+
+
+def own_commit(main, branch):
+    """`(True, None)` when the branch's reflog shows a commit made on it after the entry that
+    created it, `(False, None)` when it shows none; `(None, why)` when the reflog is missing,
+    expired or cannot be read. A branch made at a landed commit and never committed on has its tip
+    in the base off the first-parent chain, as a landed one does: this tells the two apart."""
+    args = ('reflog', 'show', '--format=%gs', 'refs/heads/%s' % branch, '--')
+    rc, out, err = git(main, *args)
+    if rc != 0:
+        return None, 'its reflog cannot be read (%s)' % failure(args, rc, err)
+    subjects = [line for line in out.splitlines() if line.strip()]
+    if not subjects:
+        return None, 'its reflog is missing or expired'
+    return any(s.startswith(('commit', 'cherry-pick')) for s in subjects[:-1]), None
 
 
 def live_reason(ctx, entry, run_wide, landing, machine, cwds, now, dead_after_s):
     """Why this tree is L (kept, held or unreadable), or None. Also `(when, what)` of its last
-    activity when it was read."""
+    activity when it was read. `cwds` is (cwd_forms, unreadable, total): when any process could
+    not be read, a tree no other probe holds is L unless every folder in it opens for DELETE
+    (holders.held_folder: a process's current directory never does)."""
     path, branch = entry['path'], entry['branch']
     if run_wide:
         return 'unreadable: %s' % run_wide, None
@@ -189,16 +220,18 @@ def live_reason(ctx, entry, run_wide, landing, machine, cwds, now, dead_after_s)
             ': ' + entry['locked'] if entry['locked'] else ''), None
     if not os.path.isdir(path):
         return 'its folder is missing (an orphan: `--check` reports it)', None
-    if not entry['head']:
+    if not entry['head'] or not entry['head'].strip('0'):
+        # git lists an unborn branch's HEAD as forty zeros.
         return 'unreadable: git reported no HEAD for it', None
     if branch and branch in landing:
         return 'the landing lock names %s' % branch, None
     holder = sweep.machine_lock_holder(machine, path, branch or '')
     if holder:
         return 'machine lock: %s' % holder, None
-    target = canon(path).rstrip('\\/')
-    for pid, name, where in cwds[0]:
-        if _holds(where, target):
+    target = entry.get('canon') or canon(path)
+    target = target.rstrip('\\/')
+    for pid, name, forms in cwds[0]:
+        if _holds(forms, target):
             return 'process pid %d %s has its current directory in it' % (pid, name), None
     got, why = activity(ctx.main, path, branch, entry['head'])
     if got is None:
@@ -206,6 +239,18 @@ def live_reason(ctx, entry, run_wide, landing, machine, cwds, now, dead_after_s)
     if now - got[0] < dead_after_s:
         return 'active %.1f h ago (newest: %s), under the %d h dead bar' % (
             max(now - got[0], 0) / 3600.0, got[1], dead_after_s // 3600), got
+    if cwds[1]:
+        held = holders.held_folder(path)
+        if held is not None:
+            where, err = held
+            what = ('was not probed: the open for delete is made on Windows only'
+                    if err == holders.NOT_SEARCHED and not holders.WINDOWS else
+                    'has more than %d entries, so not every folder in it was opened' % WALK_MAX
+                    if err == holders.NOT_SEARCHED else
+                    'cannot be opened for delete (Windows error %d)' % err if err else
+                    'cannot be read in full')
+            return ('unreadable: %d process(es) could not be read and %s %s: a process we could '
+                    'not read may hold it' % (cwds[1], where, what)), got
     return None, got
 
 
@@ -217,13 +262,21 @@ def judge(ctx, entry, base, chain, ancestors):
         return 'L', {'reason': 'unreadable: its status (%s)' % why}
     dirt = len(work) + len(disposable) + len(ignored)
     fields = {'dirty': dirt}
-    if head in ancestors and head not in chain and not dirt:
-        return 'A', fields
+    landed = head in ancestors and head not in chain
+    if landed and not dirt:
+        own, why = (True, None) if not branch else own_commit(ctx.main, branch)
+        if own is None:
+            # Whether it was ever worked on cannot be told: C, the class that never leads to
+            # removal.
+            fields['note'] = 'nothing of its own shown: %s' % why
+            return 'C', fields
+        if own:
+            return 'A', fields
     outside = not remove.is_workstream(ctx, path)
     if evidence_name(path) or (branch is None and outside):
         return 'E', fields
     if head in ancestors:
-        fields['note'] = 'nothing of its own' if head in chain else 'landed, not clean'
+        fields['note'] = 'landed, not clean' if landed and dirt else 'nothing of its own'
         return 'C', fields
     rc, count, err = git(ctx.main, 'rev-list', '--count', '%s..%s' % (base, head))
     fields['ahead'] = int(count) if rc == 0 and count.isdigit() else None
@@ -245,6 +298,61 @@ def classify(top, now=None, machine=sweep.machine_lock_entries, procs=process_cw
     return _classify(ctx, now, machine, procs, dead_after_s)
 
 
+def trees_besides_main(main, listing):
+    """worktree_entries but the main checkout, each with its canon path (one canon per tree)."""
+    home = canon(main)
+    out = []
+    for entry in remove.worktree_entries(listing):
+        entry['canon'] = canon(entry['path'])
+        if entry['canon'] != home:
+            out.append(entry)
+    return out
+
+
+def run_probes(ctx, machine, procs):
+    """The run-wide reads every tree's live_reason takes: `((run_wide, landing, machine entries,
+    (cwd_forms, unreadable, total)), raw process scan or None)`. run_wide names every read that
+    failed ('' when none did), and then every tree is L."""
+    unread = []
+    landing, why = landing_branches(ctx)
+    if landing is None:
+        unread.append(why)
+    held, why = machine()
+    if held is None:
+        unread.append('the machine lock cannot be read (%s)' % why)
+    cwds, why = procs()
+    if cwds is None:
+        unread.append('the process scan failed (%s)' % why)
+    forms = (cwd_forms(cwds[0]), cwds[1], cwds[2]) if cwds is not None else ([], 0, 0)
+    return ('; '.join(unread), landing or set(), held or [], forms), cwds
+
+
+def branch_liveness(top, branch, now=None, machine=sweep.machine_lock_entries,
+                    procs=process_cwds, dead_after_s=DEAD_AFTER_S, cwd=None):
+    """`(why it is live, None)` or `(None, tip)`: whether the worktree on `branch` is dead by
+    `--classify`'s L rule (live_reason), for the backlog's block and release of a stopped pull
+    (kitlib/backlog/opener.py hands it to plan.Context as `liveness`). Anything that cannot be
+    read, and a branch no worktree here is on, is live: only a dead tree's pull may be stopped by
+    anyone but its holder. Read-only."""
+    ctx, refused = remove.open_ctx(top, cwd)
+    if refused:
+        return 'the worktrees cannot be read (%s)' % ' '.join(refused.lines), None
+    try:
+        listing = remove.worktree_listing(ctx.main)
+    except remove.GitReadError as e:
+        return 'the worktrees cannot be read (%s)' % e, None
+    on = [e for e in trees_besides_main(ctx.main, listing) if e['branch'] == branch]
+    if not on:
+        return ('no worktree here is on %s, so whether its work goes on cannot be judged'
+                % branch), None
+    probes, _ = run_probes(ctx, machine, procs)
+    now = time.time() if now is None else now
+    reason, _ = live_reason(ctx, on[0], *probes, now=now, dead_after_s=dead_after_s)
+    if reason:
+        return '%s (%s)' % (reason, os.path.normpath(on[0]['path'])), None
+    return None, on[0]['head']
+
+
 def _fail(ctx, why):
     ctx.say('failed    %s; nothing was classified' % why)
     return Result(REFUSED, list(ctx.out), {'error': why})
@@ -263,34 +371,27 @@ def _classify(ctx, now, machine, procs, dead_after_s):
     if got is None:
         return _fail(ctx, 'git rev-list --parents %s: %s' % (base, why))
     chain, ancestors = got
-    entries = [e for e in remove.worktree_entries(listing) if canon(e['path']) != canon(main)]
+    entries = trees_besides_main(main, listing)
     ctx.say('classify  %d worktree(s) besides the main checkout, base %s %s (as it stands, not'
             ' fetched), dead bar %d h, %s UTC' % (
                 len(entries), s['upstream'], base[:10], dead_after_s // 3600,
                 datetime.datetime.fromtimestamp(now, datetime.timezone.utc).strftime(
                     '%Y-%m-%d %H:%M')))
-    unread = []
-    landing, why = landing_branches(ctx)
-    if landing is None:
-        unread.append(why)
-    held, why = machine()
-    if held is None:
-        unread.append('the machine lock cannot be read (%s)' % why)
-    cwds, why = procs()
-    if cwds is None:
-        unread.append('the process scan failed (%s)' % why)
-    else:
-        ctx.say('processes %d scanned, %d unreadable (not this user, or protected: not searched)'
+    probes, cwds = run_probes(ctx, machine, procs)
+    if cwds is not None:
+        ctx.say('processes %d scanned, %d unreadable (not this user, or protected: not searched;'
+                ' a tree is then L unless every folder in it opens for delete)'
                 % (cwds[2], cwds[1]))
-    run_wide = '; '.join(unread)
+    run_wide = probes[0]
     if run_wide:
         ctx.say('note      %s: every tree is L' % run_wide)
+    claims, claims_why = (remove.pulled_index(ctx, base) if any(e['branch'] for e in entries)
+                          else ({}, None))
     trees = []
     for entry in entries:
         path = os.path.normpath(entry['path'])
         row = {'path': path, 'branch': entry['branch'], 'head': entry['head']}
-        reason, seen = live_reason(ctx, entry, run_wide, landing or set(), held or [],
-                                   cwds or ([], 0, 0), now, dead_after_s)
+        reason, seen = live_reason(ctx, entry, *probes, now=now, dead_after_s=dead_after_s)
         if seen is not None:
             row['idle_s'] = round(max(now - seen[0], 0))
         if reason:
@@ -300,8 +401,8 @@ def _classify(ctx, now, machine, procs, dead_after_s):
             row['class'] = klass
             row.update(fields)
         if entry['branch']:
-            ids, why = remove.pulled_by(ctx, base, entry['branch'])
-            row['claims'] = ids if ids is not None else 'unknown: %s' % why
+            row['claims'] = (claims.get(entry['branch'], []) if claims is not None
+                             else 'unknown: %s' % claims_why)
         trees.append(row)
     counts = {k: sum(1 for t in trees if t['class'] == k) for k in CLASSES}
     for klass in CLASSES:

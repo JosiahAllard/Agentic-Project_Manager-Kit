@@ -265,13 +265,14 @@ def release_reason(merge, branch):
 def _release_plan(ctx, rid, branch, reason):
     """plan_release as `branch` (ctx.branch; its own pull, so no liveness probe), run only while
     `rid` is still pulled by `branch` in the fresh snapshot; its commit subject is `releases
-    <ID>: <reason>`, as a close's is `closes <ID>: <reason>`."""
+    <ID>: <reason>`, as a close's is `closes <ID>: <reason>`. `kept=False`: the landing's cleanup
+    deletes the branch, so no `Stopped on branch ... branch kept.` line, and no branch read."""
     def plan(snap):
         rec = snap.get(rid)
         if rec is None or rec.get('state') != 'pulled' or rec.get('pulled_by') != branch:
             return smod.Change({}, '', ['%s is no longer pulled by %s; left as it is'
                                         % (rid, branch)])
-        change = pmod.plan_release(snap, ctx, rid, reason)
+        change = pmod.plan_release(snap, ctx, rid, reason, kept=False)
         change.subject = 'releases %s: %s' % (rid, ' '.join(reason.split()))
         return change
     return plan
