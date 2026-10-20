@@ -27,8 +27,8 @@ Fail closed. Anything that raises means every step runs. Nothing is read or stor
   - when the change touches `.kit.json`, a config section file, the hook module, a path matching
     "landing".reuse_never, or a strict path (kitlib.gate.strict_defaults.STRICT_DEFAULTS);
   - in a landing: --fresh; a result record that cannot be read; a land record of a tip (it got
-    past its locked checks and did not land); a gate record of a tip that did not pass; a main
-    checkout that is not clean.
+    past its locked checks and did not land); a gate record of a tip that did not pass; a landing
+    tree (kitlib.gate.land.TREE_NAME) that is not clean.
 A step's result is stored only when its key (inputs, kit, program, config) is the same after the
 run as before it: PASS as pass, FAIL or WARN as fail; a skipped or unrun step stores nothing.
 Storing or pruning that fails says one line and never fails the gate.
@@ -176,7 +176,7 @@ def landing_why(root, cfg, base, merge, prior, fresh, full):
         return why
     entries, why = gitstatus.status(root)
     if entries != []:
-        return 'the main checkout is not clean%s' % (': %s' % why if why else '')
+        return 'the landing tree is not clean%s' % (': %s' % why if why else '')
     return None
 
 
@@ -607,7 +607,8 @@ def _guarded(cfg, chosen, make):
 def planner(root, cfg, branch, tip, base, merge, prior, fresh=False, full=False, batch=1,
             now=None):
     """`reuse(chosen) -> Plan` for kitlib.gate.runner.merged_gate: a landing of `merge` (onto
-    `base`, --expect-main) in the main checkout `root`. `branch`, `tip`: the first of the
+    `base`, --expect-main) in the landing tree `root` (kitlib.gate.land, step 5b; the main
+    checkout is never merged into). `branch`, `tip`: the first of the
     landing's; `batch` is the number of branches (a batch reuses per step like one branch).
     Anything that raises means every step runs (the reason is said)."""
     def reuse(chosen):
