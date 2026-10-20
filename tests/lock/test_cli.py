@@ -247,6 +247,21 @@ class Cli(StoreCase):
         self.assertIn("a resource is a non-empty string", err)
         self.assertIsNone(self.store.read("queue.json"))
 
+    def test_a_landing_resource_is_usage_and_books_nothing(self):
+        """landing:<git dir> is land.py's resource (kitlib.gate.land): run --resource refuses
+        it before anything is booked, detached or not."""
+        with mock.patch.object(self.tool, "detach", return_value=0) as det:
+            for extra in ((), ("--detach",)):
+                with self.subTest(extra=extra):
+                    code, _, err = self.run_with("t", "--resource", "landing:z:\\repo\\.git",
+                                                 *extra)
+                    self.assertEqual(code, 2, err)
+                    self.assertIn("usage: --resource landing:z:\\repo\\.git: landing "
+                                  "resources belong to land.py", err)
+        det.assert_not_called()
+        self.assertIsNone(self.store.read("queue.json"))
+        self.assertFalse(os.path.isdir(self.store.path("ended")))
+
     def test_division_is_refused_under_an_agent_host_with_a_stripped_environment(self):
         # The old CLI made any caller without CLAUDE_CODE_SESSION_ID / CLAUDE_PID the
         # owner: this exited 0 there.
