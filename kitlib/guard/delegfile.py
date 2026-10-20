@@ -219,7 +219,8 @@ UP_NAMES_RE = re.compile(r'(?i)owner-delegations|\.pm-kit')
 
 def upstream(ctx, cmd):
     """The copy of the list the paths the commands before `cmd`'s | (xargs's input: `cmd` itself
-    when nothing pipes in) can name: a path-like word of theirs that reaches it (word_reaches); a
+    when nothing pipes in) can name: a word of theirs that reaches it (word_reaches: a bare name,
+    and a computed word through a leading home variable, are read too); a
     command that names the list or .pm-kit (fail closed: a quoted or computed spelling); with no
     path-like literal word, the folder the first of them runs in when the list is in it or below
     it (fail closed: `git ls-files | xargs rm` in the PM repository). A git command's words are
@@ -232,10 +233,10 @@ def upstream(ctx, cmd):
     for c in chain:
         where = c.cwd_home or c.cwd
         for w in c.words[1:]:
-            if w.dyn or w.text.startswith('-') or not PATHISH_RE.search(w.text):
+            if not w.dyn and w.text.startswith('-'):
                 continue
-            pathish = True
-            if is_git(c):                       # a pathspec: its wildcard crosses folders
+            pathish = pathish or (not w.dyn and bool(PATHISH_RE.search(w.text)))
+            if is_git(c) and not w.dyn:         # a pathspec: its wildcard crosses folders
                 f = next((x for x in files(ctx) if covers(ctx, w, where, where, jail.real(x))), None) \
                     if where else None
             else:

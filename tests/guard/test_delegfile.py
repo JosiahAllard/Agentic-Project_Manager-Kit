@@ -182,6 +182,12 @@ class OwnerDelegations(unittest.TestCase):
             (bash, 'ls ~/.pm-kit/owner-delegations.json | xargs rm', wt),
             (bash, 'find %s -name "*.json" | xargs rm' % d, wt),
             (bash, 'git ls-files | xargs rm', data), (bash, 'git ls-files "*.json" | xargs rm -f', data),
+            # a computed word read through a leading home variable, and a bare folder name
+            (ps, 'Get-ChildItem "$HOME\\.pm-k*" | Remove-Item', wt), (bash, 'ls "$HOME"/.pm-k*/* | xargs rm', wt),
+            (ps, 'Get-ChildItem .\\x, %s -Recurse -Filter owner-deleg* | Remove-Item' % os.path.basename(home),
+             os.path.dirname(home)),
+            (ps, 'Get-ChildItem .\\x, %s -Recurse -Filter owner-deleg* | Remove-Item' % os.path.basename(data),
+             os.path.dirname(data)),
             # a program that writes in the folder it runs in, run in the list's folder or above it
             (bash, 'git archive HEAD~3 | tar -x', data), (bash, 'unzip -o x.zip', data),
             (bash, 'cd ~ && tar -xf backup.tar', wt), (bash, 'curl -O http://example.invalid/y', home),
@@ -203,7 +209,8 @@ class OwnerDelegations(unittest.TestCase):
                 (bash, 'rm %s/.pm-kit/*.md' % W.fwd(data), wt), (ps, 'Remove-Item .pm-kit\\*.log', data),
                 (ps, 'Get-ChildItem *.log | Remove-Item', home), (ps, 'Get-ChildItem | Remove-Item', wt),
                 (bash, 'ls *.tmp | xargs rm', home), (bash, 'git ls-files | xargs rm', wt),
-                (bash, 'git ls-files docs | xargs rm', wt), (bash, 'find docs -name "*.md" | xargs rm', data),
+                (bash, 'git ls-files docs | xargs rm', wt), (bash, 'git ls-files "$d" | xargs rm', wt),
+                (ps, 'Get-ChildItem $p | Remove-Item', wt), (ps, 'Get-ChildItem "$HOME\\.cache" | Remove-Item', wt), (bash, 'find docs -name "*.md" | xargs rm', data),
                 (bash, 'git archive HEAD | tar -x', wt), (bash, 'unzip -o x.zip', wt),
                 (bash, 'tar -xf backup.tar', self.w.temp), (bash, 'curl -O http://example.invalid/y', wt)):
             self.assert_not_refused(lambda sub, s=shell, t=text, c=cwd: s(t, c, sub), text)
