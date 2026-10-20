@@ -21,10 +21,12 @@ holds it (docs/worktree-remove.md).
   worktree_remove.py [-C DIR] --sweep-merged --apply             the nightly sweep
   worktree_remove.py [-C DIR] --classify [--json]               read-only: every worktree's class
                                                                  (A landed, B finished, C half-done,
-                                                                 E evidence, L live or kept)
+                                                                 E evidence, L live or kept, O orphan)
   worktree_remove.py [-C DIR] --classify [--json] --apply       the same, then remove each A and E
-                                                                 tree by its own remove path; B, C
-                                                                 and L are never touched
+                                                                 tree by its own remove path and
+                                                                 drop each O tree's stale
+                                                                 registration (its branch kept); B,
+                                                                 C and L are never touched
 
 -C names the repository by any of its work trees (default: here); the worktrees acted on are always
 the MAIN checkout's, and the sweep takes only the main checkout. A relative path argument means
@@ -32,7 +34,8 @@ the caller's directory. A registered DETACHED worktree outside the worktree fold
 its path, never its slug. A thin entry point (ARCHITECTURE.md, Layers): it parses, calls
 kitlib.worktree.remove, .scratch, .sweep or .classify, prints and exits. Exit codes: 0 done (or
 nothing to do); 1 refused, a leftover, git failed, the sweep deferred, --classify found a tree of
-class A, B, C or E, or --classify --apply left a B or C tree or did not remove an A or E one; 2
+class A, B, C, E or O, or --classify --apply left a B or C tree or did not remove an A, E or O
+one; 2
 usage, or the kit configuration was refused; 130 Ctrl+C.
 """
 import json
