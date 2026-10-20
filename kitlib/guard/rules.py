@@ -267,7 +267,8 @@ def shell_command(event, ctx, text, shell, cwd, role):
     for cmd in parsed.commands:
         inv = cm.invocation(cmd)
         for rule in (owner_tool, hub_rules.secrets, hub_rules.owner_verb, wrapped_gate, root_search,
-                     heavy, git_rules, git_hooks_path, owner_identity, kill_by_name, shell_writes):
+                     heavy, git_rules, backlog_shell, git_hooks_path, owner_identity, kill_by_name,
+                     shell_writes):
             d = rule(event, ctx, cmd, inv, cwd, role)
             if d:
                 return d
@@ -278,6 +279,18 @@ def shell_command(event, ctx, text, shell, cwd, role):
         from . import fallback
         return fallback.check(event, ctx, text, cwd, role, parsed)
     return None
+
+
+def backlog_shell(event, ctx, cmd, inv, cwd, role):
+    """The backlog roles' shell rules (kitlib.guard.backlogrole.shell)."""
+    from . import backlogrole
+    return backlogrole.shell(event, ctx, cmd, inv, cwd, role)
+
+
+def backlog_edit(event, ctx, target, role, what):
+    """An edit of a folder store's records (kitlib.guard.backlogrole.raw_edit)."""
+    from . import backlogrole
+    return backlogrole.raw_edit(event, ctx, target, role, what)
 
 
 # ---------------------------------------------------------------- lock MCP
@@ -1038,7 +1051,7 @@ def edit_target(event, ctx, target, cwd, role, what, unknown_why=None, rewrite=N
     d = ledger_rule(ctx, target, role, what) or pm_data_unknown(ctx, target, cwd, role, what) or \
         lock_state(event, ctx, target, role, what) or hub_secret_edit(event, ctx, target, role, what) or \
         kit_json(event, ctx, target, role, what) or gate_result(event, ctx, target, role, what) or \
-        generated_file(ctx, target, role, what)
+        generated_file(ctx, target, role, what) or backlog_edit(event, ctx, target, role, what)
     if d:
         return d
     return main_checkout(event, ctx, target, cwd, role, what, unknown_why, rewrite, run, redirect, shell, item) or \
