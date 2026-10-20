@@ -780,7 +780,8 @@ def worktree_sweep_lines(repos=None, read=None, plugin=None):
     """One line per repository in launcher.repos whose `<repo>-worktree-sweep` task is missing, or
     runs from a removed plugin export (kitlib.machinesetup.worktreesweep, docs/machine-setup.md
     "Extras"); none when every task is current. A task list that cannot be read is one "could not
-    check" line; a repository that cannot be read is its own. `read`: the task list
+    check" line; a repository that cannot be read is its own; repositories that take one task name
+    (machine setup registers it for none) are one line naming each. `read`: the task list
     (consoletasks.read_tasks); `plugin`: the plugin Settings, None or a raising loader checks
     presence only."""
     from kitlib.machinesetup import worktreesweep
@@ -797,15 +798,23 @@ def worktree_sweep_lines(repos=None, read=None, plugin=None):
     except Exception:           # the plugin_current check names a bad plugin config
         s = None
     export = s.export_dir if s is not None else None
-    lines = []
+    lines, resolved = [], []
     for label in sorted(repos):
         try:
             if not os.path.isdir(repos[label]):
                 raise OSError("no repository folder %s" % repos[label])
-            name = task_name(worktreesweep.repo_task(repos[label])[1])
+            main, name = worktreesweep.repo_task(repos[label])
         except Exception as e:
             lines.append("could not check the worktree sweep task (%s): %s: %s"
                          % (label, type(e).__name__, _failure_text(e)))
+            continue
+        resolved.append((label, os.path.normpath(main), name))
+    for (label, _, name), group, shared in worktreesweep.by_task(resolved):
+        name = task_name(name)
+        if shared:
+            lines.append("worktree sweep task %s is shared: %s take that one name, so machine_setup.py "
+                         "registers it for none; give each its own repo.name in .kit.json"
+                         % (name, worktreesweep.sharers(group)))
             continue
         have = worktreesweep.find(tasks, name)
         if have is None:

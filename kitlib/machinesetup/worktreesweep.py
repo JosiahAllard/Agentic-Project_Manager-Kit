@@ -198,25 +198,35 @@ def _resolved(plan, repos):
     return out
 
 
-def _unique(plan, resolved):
-    """`resolved` with one entry per task name. Labels naming one main checkout are one repository
-    (the first label plans it); different checkouts that take one name (the same repo.name, or the
-    same remote's last part) share a task name, so none of them gets a task, and a note names them."""
+def by_task(resolved):
+    """[(first entry, group, shared)] for each task name in `resolved` ([(label, main checkout,
+    name)]), in order: `shared` when different main checkouts take that one name (the same
+    repo.name, or the same remote's last part); labels naming one main checkout are one repository."""
     groups = {}
     for entry in resolved:
         groups.setdefault(task_name(entry[2]).lower(), []).append(entry)
     out = []
     for entry in resolved:
         group = groups[task_name(entry[2]).lower()]
-        if entry is not group[0]:
-            continue
-        mains = sorted(set(os.path.normcase(m) for _, m, _ in group))
-        if len(mains) == 1:
+        if entry is group[0]:
+            out.append((entry, group, len(set(os.path.normcase(m) for _, m, _ in group)) > 1))
+    return out
+
+
+def sharers(group):
+    return ', '.join('%s (%s)' % (l, m) for l, m, _ in group)
+
+
+def _unique(plan, resolved):
+    """`resolved` with one entry per task name; a task name different checkouts share gets no
+    task, and a note names them."""
+    out = []
+    for entry, group, shared in by_task(resolved):
+        if not shared:
             out.append(entry)
             continue
         plan.note('extras', 'worktree sweep task %s skipped: %s take that one name; give each its own '
-                            'repo.name in .kit.json and run again'
-                  % (task_name(entry[2]), ', '.join('%s (%s)' % (l, m) for l, m, _ in group)))
+                            'repo.name in .kit.json and run again' % (task_name(entry[2]), sharers(group)))
     return out
 
 

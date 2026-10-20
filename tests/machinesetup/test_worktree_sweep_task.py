@@ -484,6 +484,24 @@ class PmStartCheck(unittest.TestCase):
         self.assertEqual(len(out), 1, out)
         self.assertTrue(out[0].startswith('could not check the worktree sweep task (demo): '), out)
 
+    def test_repositories_that_take_one_name_are_flagged_together(self):
+        mains = []
+        for _ in range(2):
+            repo = gitfixture.TempRepo()
+            self.addCleanup(repo.cleanup)
+            write_json(os.path.join(repo.root, '.kit.json'), {'repo': {'name': 'same'}})
+            mains.append(os.path.normpath(os.path.realpath(repo.root)))
+        tasks = [sweep_task('same', 'C:\\kit', mains[0])]          # one of them registered it by hand
+        out = self.lines(tasks, repos={'one': mains[0], 'two': mains[1], 'demo': self.repo.root})
+        self.assertEqual(out, [
+            "worktree sweep task %s (demo) is not registered: machine_setup.py --apply registers it "
+            "(the owner's act)" % self.task,
+            "worktree sweep task same-worktree-sweep is shared: one (%s), two (%s) take that one name, so "
+            "machine_setup.py registers it for none; give each its own repo.name in .kit.json" % tuple(mains)])
+        self.assertEqual(self.lines([], repos={'one': mains[0], 'again': mains[0]}), [
+            "worktree sweep task same-worktree-sweep (again) is not registered: machine_setup.py --apply "
+            "registers it (the owner's act)"])
+
     def test_no_repositories_reads_no_tasks(self):
         self.assertEqual(self.lines(AssertionError('read'), repos={}), [])
 
