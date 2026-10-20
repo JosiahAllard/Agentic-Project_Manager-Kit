@@ -186,7 +186,7 @@ class LockCase(Case, StoreCase):
     def nothing_made(self, out):
         self.assertNotIn('tree      ', out)
         self.assertEqual(self.throwaways(), [])
-        self.assertEqual(os.listdir(self.logs), [])
+        self.assertEqual(os.listdir(self.logs), [R.SUMMARY])     # the folder, made first, holds only that
 
 
 class Booking(LockCase):

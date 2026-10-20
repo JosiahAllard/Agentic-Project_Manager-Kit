@@ -369,5 +369,62 @@ class Runs(Case):
         self.fx.git('worktree', 'remove', tw)       # the test's own throwaway, in its temp repo
 
 
+class SummaryFile(Case):
+    """Two runs that redirect into one shared file interleave there (KIT-REDFIRST-CONCURRENT-
+    CROSSTALK): every line a run says is also in its own log folder's summary.txt, and the last
+    line names that file."""
+
+    def run_into(self, logs, *args):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            rc = tool.main(['-C', self.wt, '--log-dir', logs] + list(args), cleanup=self.here)
+        return rc, out.getvalue().splitlines()
+
+    def summary(self, logs):
+        with open(os.path.join(logs, R.SUMMARY), encoding='utf-8') as f:
+            return f.read().splitlines()
+
+    def test_the_summary_holds_every_line_said_and_the_last_line_names_it(self):
+        self.commit({'tests/calc.py': CALC_MUL, 'tests/test_mul.py': TEST_MUL})
+        rc, lines = self.run_into(self.logs, '--tests', 'tests/test_mul.py')
+        self.assertEqual(rc, V.EXIT_RED, lines)
+        path = os.path.join(self.logs, R.SUMMARY)
+        self.assertEqual(lines[-1], 'summary   %s' % path)
+        self.assertEqual(self.summary(self.logs), lines[:-1])
+        self.assertTrue(lines[-2].startswith('REDFIRST OK'), lines)
+        self.assertIn('logs      %s' % self.logs, lines)
+
+    def test_two_runs_with_two_log_folders_write_two_summaries(self):
+        self.commit({'tests/calc.py': CALC_MUL, 'tests/test_mul.py': TEST_MUL,
+                     'src/test_add.py': TEST_ADD})
+        one, two = os.path.join(self.logs, 'one'), os.path.join(self.logs, 'two')
+        rc1, lines1 = self.run_into(one, '--tests', 'tests/test_mul.py')
+        rc2, lines2 = self.run_into(two, '--tests', 'src/test_add.py')
+        self.assertEqual((rc1, rc2), (V.EXIT_RED, V.EXIT_GREEN), (lines1, lines2))
+        self.assertEqual(lines1[-1], 'summary   %s' % os.path.join(one, R.SUMMARY))
+        self.assertEqual(lines2[-1], 'summary   %s' % os.path.join(two, R.SUMMARY))
+        s1, s2 = self.summary(one), self.summary(two)
+        self.assertEqual((s1, s2), (lines1[:-1], lines2[:-1]))
+        self.assertIn('logs      %s' % one, s1)
+        self.assertNotIn('logs      %s' % two, s1)
+        self.assertTrue(any(l.startswith('GREEN  src/test_add.py') for l in s2), s2)
+        self.assertFalse(any('src/test_add.py' in l for l in s1), s1)
+
+    def test_a_failure_after_the_log_folder_still_writes_the_summary(self):
+        self.commit({'tests/calc.py': CALC_MUL, 'tests/test_mul.py': TEST_MUL})
+        with mock.patch.object(R, 'make_tree', return_value=(None, 'no tree today')):
+            rc, lines = self.run_into(self.logs, '--tests', 'tests/test_mul.py')
+        self.assertEqual(rc, V.EXIT_UNDECIDED, lines)
+        self.assertEqual(lines[-1], 'summary   %s' % os.path.join(self.logs, R.SUMMARY))
+        self.assertEqual(self.summary(self.logs), lines[:-1])
+        self.assertIn('failed    no tree today', lines)
+
+    def test_a_refusal_before_the_log_folder_writes_none(self):
+        rc, lines = self.run_into(self.logs, '--tests', 'tests/test_mul.py')
+        self.assertEqual(rc, V.EXIT_USAGE, lines)
+        self.assertFalse(any(l.startswith('summary ') for l in lines), lines)
+        self.assertFalse(os.path.exists(self.logs))
+
+
 if __name__ == '__main__':
     unittest.main()
