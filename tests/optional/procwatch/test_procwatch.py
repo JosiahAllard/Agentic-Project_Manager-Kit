@@ -287,6 +287,21 @@ class LogPath(unittest.TestCase):
     def test_bare_flag_uses_the_logs_folder(self):
         self.assertEqual(PW.log_path(None, home=self.home, here=self.tool), self.default)
 
+    def _faked_agent_temp(self, value):
+        import kitlib.pmstart as PS
+        old = PS.agent_temp_env
+        PS.agent_temp_env = lambda: value
+        self.addCleanup(setattr, PS, "agent_temp_env", old)
+
+    def test_bare_flag_uses_the_agent_temp_folder(self):
+        folder = os.path.join(self.tmp.name, "agenttemp")
+        self._faked_agent_temp(folder)
+        self.assertEqual(PW.log_path(None, home=self.home, here=self.tool), os.path.join(folder, "procwatch.log"))
+
+    def test_bare_flag_falls_back_without_an_agent_temp_folder(self):
+        self._faked_agent_temp(None)
+        self.assertEqual(PW.log_path(None, home=self.home, here=self.tool), self.default)
+
     def test_a_path_in_the_tool_folder_is_moved(self):
         inside = os.path.join(self.tool, "procwatch.log")
         self.assertEqual(PW.log_path(inside, home=self.home, here=self.tool), self.default)
