@@ -163,6 +163,54 @@ class Release(StoppedCase):
         self.assertNotIn('Stopped on branch', self.get('FOO').body or '')
 
 
+class PullResume(StoppedCase):
+    """`pull` of a record whose body carries stop_pull's `Stopped on branch` note names that
+    branch and tip (plan.resume_line), so the puller resumes from it."""
+
+    def note(self, branch, tip):
+        return 'Stopped on branch %s at %s, branch kept.' % (branch, tip)
+
+    def resume(self, change):
+        return [line for line in change.lines if 'resume on' in line]
+
+    def test_a_pull_of_a_record_with_the_note_names_the_branch_and_tip(self):
+        self.seed(priced('FOO', body='Some text.\n\n%s\nReleased (%s): %s'
+                         % (self.note(OTHER, 'abcdef1234'), TODAY, WHY)))
+        change = self.verb('pull', 'FOO')
+        self.assertEqual(self.resume(change),
+                         ['  resume on %s? Work stopped there at abcdef1234, branch kept' % OTHER])
+
+    def test_no_note_prints_nothing(self):
+        self.seed(priced('FOO', body='Some text, no stopped branch.'))
+        self.assertEqual(self.resume(self.verb('pull', 'FOO')), [])
+
+    def test_of_two_notes_the_latest_wins(self):
+        self.seed(priced('FOO', body='%s\nReleased (%s): first\n\n%s\nReleased (%s): second'
+                         % (self.note('kit/first', '1111111111'), TODAY,
+                            self.note('kit/second', '2222222222'), TODAY)))
+        self.assertEqual(self.resume(self.verb('pull', 'FOO')),
+                         ['  resume on kit/second? Work stopped there at 2222222222, branch kept'])
+
+    def test_a_takeover_of_a_dead_pull_names_the_branch_too(self):
+        self.store.session = 'kit'
+        self.seed(priced('FOO', state='pulled', pulled_at=TODAY, pulled_by='kit/gone-branch',
+                         session='kit', body=self.note(OTHER, 'abcdef1234')))
+        change = self.verb('pull', 'FOO')
+        self.assertIn('took over a dead pull from kit/gone-branch', '\n'.join(change.lines))
+        self.assertEqual(self.resume(change),
+                         ['  resume on %s? Work stopped there at abcdef1234, branch kept' % OTHER])
+
+    def test_the_note_block_writes_is_the_note_pull_reads(self):
+        # stop_pull's own text, not a copy of it: block, unblock, then pull.
+        self.seed(priced('FOO', pulled_by=BRANCH, **PULLED))
+        tip = self.tip(BRANCH)
+        self.verb('block', 'FOO', ['live-client'], reason=WHY)
+        self.verb('unblock', 'FOO')
+        self.assertEqual(self.resume(self.verb('pull', 'FOO')),
+                         ['  resume on %s? Work stopped there at %s, branch kept'
+                          % (BRANCH, tip[:10])])
+
+
 class Opener(unittest.TestCase):
 
     def test_the_probe_is_the_classifiers_imported_when_asked(self):
