@@ -127,6 +127,15 @@ class FakeHost(object):
     def git_email(self, kit):
         return self.git_email_value
 
+    managed = None                                                   # the managed settings file: none
+    admin = False                                                    # an elevated process
+
+    def managed_path(self):
+        return self.managed
+
+    def is_admin(self):
+        return self.admin
+
     def guard_entry(self, kit):
         return {'PreToolUse': [{'matcher': 'Bash|PowerShell', 'hooks': [
             {'type': 'command', 'command': PYW,

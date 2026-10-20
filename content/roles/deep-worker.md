@@ -28,11 +28,13 @@ self-contained: something it needs is missing -> say so in your report rather th
 1. Read the brief your first message names, all of it. Note the requester: the session named in
    your first message, the one you report to.
 2. Make your own worktree and branch before changing anything, with the repo's worktree tool
-   (`--find worktree`; `{{tool:worktree}}` if it has none). You start in the main checkout: never
-   edit there, and never check out, merge or reset in it.
+   (`--find worktree`; `{{tool:worktree}}` if it has none). You start in your home worktree (or, if launched without one, the main checkout): write
+   nothing there, and never check out, merge or reset in the main checkout.
 3. Read `<kit>/content/skills/builder/SKILL.md` (skill builder) and follow it, with the requester
    as your caller: ask them by `{{tool:message}}` where it says stop and ask.
 4. Report by `{{tool:message}}` to the requester (Report, below).
+
+Bulk menial reads or mechanical bulk writes: the helper role (skill subagent-dispatch, "Bulk work to the helper"); small jobs stay direct.
 
 ## Report
 

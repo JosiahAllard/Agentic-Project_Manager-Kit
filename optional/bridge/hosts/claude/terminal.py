@@ -30,8 +30,9 @@ from optional.bridge.core.mcp import TOOLS, _args
 from optional.bridge.core.pairing import ChatBinding
 from kitlib.proc.pipe import process_image, process_sids
 from optional.bridge.win.evidence import document, regular, stable_bytes
+from optional.bridge.win.ancestry import ancestors_of
 from optional.bridge.win.launch import PYTHON_FLAGS
-from kitlib.proc.process import ancestors_of, command_line, proc_ctime
+from kitlib.proc.process import command_line, proc_ctime
 
 UUID=re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z',re.I)
 MODES=frozenset(('default','acceptEdits','auto','dontAsk','bypassPermissions'))

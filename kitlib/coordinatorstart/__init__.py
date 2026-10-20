@@ -55,7 +55,7 @@ PRICING_LINE = ("Pricing pass and backlog audit before your first dispatch, foll
                 "branch, a review or a worker's report; a new one says so in its summary) stays unpriced until "
                 "you or the PM promote it. Check "
                 "every other unpriced open record (an owner story, a record from the PM's brief) for duplicates, "
-                "size and fit, then price it 2-5 under the standing valuation rules (`set <ID> --priority <n> "
+                "size and fit, then price it 2-5 (`set <ID> --priority <n> "
                 "--priority-by agent`). Promote a follow-up at any time it enters a work set: price it 2-5; "
                 "price before pull. When `next --all` lists fewer startable records than the set needs, pick the "
                 "follow-ups worth doing now, check each for duplicates, size and fit, and price only those going "

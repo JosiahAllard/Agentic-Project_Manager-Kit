@@ -45,6 +45,14 @@ Retired instead of reused: a unit that ended with KeyboardInterrupt (Ctrl+C) or 
 BaseException out of unittest, one whose threads outlive the grace (a non-daemon one is also
 reported `stuck`), one that added an audit hook (sys.addaudithook; hooks cannot be removed), and a
 reset that raised.
+
+Compiled code is kept (CodeCache). The kit's runs write no bytecode files
+(PYTHONDONTWRITEBYTECODE), so every unit would compile again each kit and test module it imports
+from source. Instead the worker keeps each module's code object, keyed by its path and a hash of
+the source it was compiled from: a later unit that imports the same source reuses it, and a
+changed source (whatever its time stamp and size) is compiled again. A code object is immutable;
+importing runs it in a new module, as a compile would. Only the compile is skipped, and with it
+the compiler's own warnings for that source after its first unit.
 """
 import os
 import sys
@@ -54,7 +62,9 @@ sys.path[0] = ROOT          # as `python -m unittest` has it: the cwd, not this 
 
 import atexit               # noqa: E402
 import gc                   # noqa: E402
+import hashlib              # noqa: E402
 import importlib            # noqa: E402
+from importlib import _bootstrap_external  # noqa: E402
 import json                 # noqa: E402
 import linecache            # noqa: E402
 import random               # noqa: E402
@@ -114,8 +124,54 @@ class Exits:
                 traceback.print_exc()
 
 
+class CodeCache:
+    """The code objects the source loader compiled in this worker, reused by later units:
+    SourceLoader.source_to_code (what imports a module that has no bytecode file) is wrapped to
+    look the source up first. The key is (path, BLAKE2b of the source bytes, the compile
+    options): the same file with other contents is another key. Kept for at most LIMIT bytes of
+    source, the oldest dropped first. `compiled` and `reused` count each path's compiles and
+    reuses (a unit reads them from __main__.CODE)."""
+
+    LIMIT = 64 * 1024 * 1024
+
+    def __init__(self):
+        self.codes = {}         # key -> (code object, source bytes)
+        self.size = 0
+        self.compiled = {}
+        self.reused = {}
+
+    def install(self, loader=_bootstrap_external.SourceLoader):
+        real = loader.source_to_code
+        cache = self
+
+        def source_to_code(self, data, path, **kw):
+            if not isinstance(data, bytes) or not isinstance(path, str):
+                return real(self, data, path, **kw)
+            return cache.code(lambda: real(self, data, path, **kw), data, path, kw)
+        source_to_code.__doc__ = real.__doc__
+        loader.source_to_code = source_to_code
+
+    def code(self, compile_it, data, path, kw):
+        key = (path, hashlib.blake2b(data, digest_size=20).digest(), tuple(sorted(kw.items())))
+        hit = self.codes.get(key)
+        if hit is not None:
+            self.reused[path] = self.reused.get(path, 0) + 1
+            return hit[0]
+        code = compile_it()
+        self.compiled[path] = self.compiled.get(path, 0) + 1
+        self.codes[key] = (code, len(data))
+        self.size += len(data)
+        while self.size > self.LIMIT and len(self.codes) > 1:
+            self.size -= self.codes.pop(next(iter(self.codes)))[1]
+        return code
+
+
+CODE = CodeCache()
+
+
 class Worker:
     def __init__(self):
+        CODE.install()
         self.exits = Exits()
         atexit.register, atexit.unregister = self.exits.register, self.exits.unregister
         self.audit_hooks = 0

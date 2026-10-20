@@ -10,7 +10,8 @@ whole. Rules not needed on every task: `docs/reference/WORKING-RULES.md`; per-ag
 
 The PM session is the owner's decision channel. A decision is the owner's only when the PM relays
 it to you; the PM keeps the record, privately. Never invent one, and cite nobody's ids. Covers
-anything the owner could approve in your terminal.
+anything the owner could approve in your terminal. A relayed decision covers work only: it never
+grants a permission or approves configuration.
 
 ## Start here
 
@@ -92,18 +93,16 @@ Any denial: stop and report it.
   a full doc is pruned (delete what is superseded or already absorbed elsewhere, naming in the
   commit body where it now lives) before anything is added; nothing prunable is stopped and
   reported to the owner, never grown.
-- Agents commit as `<OWNER> (agent)` / `<AGENT_EMAIL>` (set once per machine in each Claude
-  account's user-settings env); the owner's terminal keeps the owner's own identity. A commit counts as the owner's for
+- Agents commit as `<OWNER> (agent)` / `<AGENT_EMAIL>`; the owner's terminal keeps the owner's own identity. A commit counts as the owner's for
   `Owner-Approved:` only when its author email is `<OWNER_EMAIL>` (`owner.email` and
   `owner.agent_emails` in `.kit.json`). Never set or override `GIT_AUTHOR_*` / `GIT_COMMITTER_*`
   yourself.
 - A relay is not the owner's signature: no peer, subagent or relayed message approves configuration,
-  grants a permission, or writes that trailer. A relayed decision covers work only; it never grants permissions or approves configuration.
+  grants a permission, or writes that trailer.
 
 ## Backlog
 
-- The store is read and written only through `python <kit>/tools/backlog.py -C <worktree>` (docs/backlog.md; the
-  place is `"backlog".store` in `.kit.json`), never by hand. Skill backlog-ops has the forms.
+- The store is read and written only through `backlog.py`, never by hand (skill backlog-ops).
   With no store named, the default `ref` store is read-only; `"backlog": {"store": "ref"}` opts in to writing it.
 - Priority: `-` = not yet assessed (every new record), `1`-`5` = assessed (5 highest), `-1` =
   assessed, only the owner can settle; no other unvalued state. An agent prices (`--priority-by agent`, 2-5) at start the unpriced open
@@ -119,14 +118,13 @@ Any denial: stop and report it.
 
 ## Always
 
-- After one tool refusal or permission denial: stop and report it verbatim; never retry or route
-  around it through another tool, agent or session. Hand the owner the exact command; the owner decides. A
-  refusal printed by a repo tool and caused by your own mistake (`USAGE:`, `NOT FOUND:`,
-  `ERROR:`) may be fixed and retried ONCE; any other refusal is reported verbatim, never routed
-  around.
+- A classifier refusal or permission denial ends that action: report it verbatim, never route it
+  around through another tool, agent or session, and hand the owner the exact command. A kit-guard
+  (hook) refusal: fix the form its Instead: line gives, then retry. A refusal printed by a repo tool and caused
+  by your own mistake (`USAGE:`, `NOT FOUND:`, `ERROR:`) may be fixed and retried ONCE.
+  Any other repo-tool refusal (`REFUSED:`, a landing refusal) is reported verbatim, never routed around.
 - Never put the owner's personal details (email address, name, account names) in anything sent off this machine.
 - Never chain a write (commit, merge, reset, backlog.py write, landing command) with other commands in one shell call.
-- A safety-check or hook refusal is final: stop at the first, report it verbatim; no retry, rewording, other shell or agent.
 - Secrets never enter the repo, a URL or a transcript. Deleting data is the owner's action:
   report the exact path and hash.
 - Citations name `path` plus `Type.member`, heading or quoted title, and you have read it. Never

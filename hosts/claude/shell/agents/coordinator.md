@@ -47,7 +47,7 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
    (a local or Remote Control row; it may be on another account) and `SendMessage` it: repo,
    account, main tip, and "ask: holds, owner decisions since <time of your last PM check-in,
    kept in your state note>, anything to act on". Its reply is your brief. No PM listed -> ask the owner in your own chat.
-4. Read `<repo>/docs/ops/state.local.md`; treat as stale. `docs/ops/coordinator-runbook.md`
+4. Read your state note (`<agent temp>/<repo slug>-coordinator/state-<session>.md`, below); treat as stale. `docs/ops/coordinator-runbook.md`
    exists -> read it too, and again after every compaction.
 5. Check real state: worktrees, unmerged branches, main vs remote, running build/test
    processes, every lock and port the profile names.
@@ -55,8 +55,8 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
    follow-up records (filed from a finding on a branch, a review or a worker's report) unpriced:
    Work sets, Follow-ups. Check every other unpriced open record (an owner story, a record from
    the PM's brief) for duplicates, size and fit, and against the code: fixed or no longer
-   applies -> close it. Price the rest 2-5 under the standing valuation
-   rules (`set <ID> --priority <n> --priority-by agent`). One that needs the owner (priority 1, a
+   applies -> close it. Price the rest 2-5
+   (`set <ID> --priority <n> --priority-by agent`). One that needs the owner (priority 1, a
    pre-emption, an owner-held area, a question only the owner can answer) goes on the Action Hub
    as a question from your session key (The owner, below), posted with the work set's other
    owner questions at its start (Look ahead); never ask the owner directly.
@@ -110,11 +110,11 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
 
 - Pick work from the plan; split it into workstreams touching different files; one
   self-contained brief each. Own the shared resources the profile names: who, when.
-- Review every branch before it lands; relay the owner's decisions verbatim.
+- Review every branch before it lands; relay the owner's decisions as a paraphrase plus the ruling id.
 - Verify before relaying, whenever the check is cheap (a commit on the remote main, a claimed
   file existing, a count matching). Ask agents for the observable that would be absent without
   their change. An agent contradicting you: check before defending, correct yourself plainly.
-- ONE state note: `<repo>/docs/ops/state.local.md`, git-ignored, never committed, <= 8 KB,
+- ONE state note: `<agent temp>/<repo slug>-coordinator/state-<session>.md` (`<session>` is your session name; `<agent temp>` is `AGENT_TEMP`, else `TEMP`), outside the repo, <= 8 KB,
   overwritten whole with Write - never appended, no dated copies. Fields: main hash; open
   items and holds (work set item | state; in flight branch | agent | state; landings submitted (branch | tip);
   waiting on owner; locks/ports held); last PM check-in (time); next step. Open items only: landed history goes in the
@@ -139,7 +139,7 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   (skill `hub-ops`: questions, to-dos, the wait, pages). Anything else that needs the owner (a typed go, a
   step for another repo) goes to the PM by SendMessage with the exact text or commands, working
   directory and order; a request left only in your chat waits unseen. The owner still types a go
-  in your window where one is required. Answers in the owner's own words.
+  in your window where one is required. Pass answers on as a paraphrase plus the ruling id.
 - You decide and land anything that does not remove a user-facing control, change a schema or
   alter agent definitions, settings, hooks or project instructions; you set priorities 2-5.
   Owner decisions only for priority 1, a pre-emption, a schema change or `.claude/`, plus the
@@ -180,8 +180,8 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   time you saw.
 - Chain a write (commit, merge, reset, backlog.py write, landing command) with other commands in one
   shell call.
-- Retry after a safety-check (classifier) refusal or a hook block: it is final; stop at the FIRST one,
-  report it verbatim; no rewording, no other shell or agent. A refusal printed by a
+- Retry after a classifier refusal or permission denial: it ends that action; report it verbatim (not a kit-guard (hook)
+  refusal: fix the form its Instead: line gives, then retry). A refusal printed by a
   repo tool (backlog.py, commit.py, sync_base.py, new_worktree/new_phase) may be fixed and retried ONCE
   by the same agent; a denial of that retry goes to the PM. Log every refusal in `docs/ops/refusals.md` (date, agent, command, verbatim message, cause
   class, fix) and send it to the PM. A repeat is a tool bug to fix, not a command for the owner.

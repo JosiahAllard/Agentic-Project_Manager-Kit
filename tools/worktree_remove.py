@@ -5,7 +5,9 @@ holds it (docs/worktree-remove.md).
   worktree_remove.py [-C DIR] <path or slug> --keep-branch       the same; the branch stays
   worktree_remove.py [-C DIR] <path or slug> --abandon "<why>" [--keep-branch]
                                                                  UNLANDED work: tag archive/<slug>,
-                                                                 then remove
+                                                                 then remove; LANDED but with
+                                                                 uncommitted work: save that work
+                                                                 under archive/<slug>, then remove
   worktree_remove.py [-C DIR] <branch> --branch                  LANDED local branch with NO worktree:
                                                                  `git branch -d` it
   worktree_remove.py [-C DIR] <branch> --branch --abandon "<why>"
@@ -17,22 +19,26 @@ holds it (docs/worktree-remove.md).
   worktree_remove.py [-C DIR] --check                           leftovers; exit 1 if any
   worktree_remove.py [-C DIR] --sweep-merged                     DRY RUN of the nightly sweep
   worktree_remove.py [-C DIR] --sweep-merged --apply             the nightly sweep
+  worktree_remove.py [-C DIR] --classify [--json]               read-only: every worktree's class
+                                                                 (A landed, B finished, C half-done,
+                                                                 E evidence, L live or kept)
 
 -C names the repository by any of its work trees (default: here); the worktrees acted on are always
 the MAIN checkout's, and the sweep takes only the main checkout. A relative path argument means
 the caller's directory. A registered DETACHED worktree outside the worktree folders is named by
 its path, never its slug. A thin entry point (ARCHITECTURE.md, Layers): it parses, calls
-kitlib.worktree.remove, .scratch or .sweep, prints and exits. Exit codes: 0 done (or nothing to do); 1
-refused, a leftover, git failed, or the sweep deferred; 2 usage, or the kit configuration was
-refused; 130 Ctrl+C.
+kitlib.worktree.remove, .scratch, .sweep or .classify, prints and exits. Exit codes: 0 done (or
+nothing to do); 1 refused, a leftover, git failed, the sweep deferred, or --classify found a tree of
+class A, B, C or E; 2 usage, or the kit configuration was refused; 130 Ctrl+C.
 """
+import json
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from kitlib.git import repo as gitrepo                              # noqa: E402
-from kitlib.worktree import remove, scratch, sweep                  # noqa: E402
+from kitlib.worktree import classify, remove, scratch, sweep        # noqa: E402
 
 USAGE = 2
 
@@ -64,7 +70,12 @@ def split_root(argv):
 
 def parse(args):
     """`(verb, target, why, keep, apply)` or a usage message (str). Verbs: sweep, check, abandon,
-    abandon-branch, remove-branch, remove, scratch. A why that starts with `--` is a flag typed where the why belongs, never a reason."""
+    abandon-branch, remove-branch, remove, scratch, classify (`apply` then means --json). A why
+    that starts with `--` is a flag typed where the why belongs, never a reason."""
+    if '--classify' in args or '--json' in args:
+        if sorted(args) not in (['--classify'], ['--classify', '--json']):
+            return '--classify takes only --json (and -C); it is read-only and has no --apply'
+        return 'classify', None, None, False, '--json' in args
     if '--sweep-merged' in args or '--apply' in args:
         if sorted(args) not in (['--sweep-merged'], ['--apply', '--sweep-merged']):
             return '--sweep-merged takes only --apply (and -C)'
@@ -123,7 +134,12 @@ def main(argv=None):
     if top is None:
         return usage('-C: %s' % err)
     try:
-        if verb == 'sweep':
+        if verb == 'classify':
+            outcome = classify.classify(top)
+            if apply:
+                print(json.dumps(outcome.data, indent=2, sort_keys=True), flush=True)
+                return outcome.code
+        elif verb == 'sweep':
             outcome = sweep.sweep(top, apply=apply)
         elif verb == 'check':
             outcome = remove.check(top)

@@ -74,6 +74,7 @@ class ReuseCase(fixtures.GateRepoCase):
         kw.setdefault('book_kw', self.book_kw)
         kw.setdefault('log_dir', self.logs)
         fixtures.gate_full(self.repo.root, *(tip if isinstance(tip, list) else [tip]))
+        fixtures.queue_review(self.repo.root, branch, tip)
         lander = land.Lander(self.repo.root, branch, expect_main or self.main, tip,
                              say=self.said.append, **kw)
         return lander, lander.run()
@@ -190,6 +191,18 @@ class BranchRerun(ReuseCase):
         out = self.gate(wt, full=True)
         self.assert_none(out, out.log_dir, '--full')
         self.assertEqual(self.entries(), before)
+
+    def test_a_different_change_list_misses_on_the_same_inputs(self):
+        """A step such as `kit_tests.py --select` picks its tests by the change without naming
+        {base}: another change list on the same inputs is another key."""
+        wt, _ = self.gated_branch()
+        self.commit(wt, {'notes.txt': 'not an input\n'})
+        out = self.gate(wt)
+        self.assertEqual(out.verdict, 'GATE OK', self.said)
+        self.assertEqual(len(self.lines('MISS')), 2, self.said)
+        self.assert_ran(out.log_dir, 'unit', 'merged')
+        again = self.gate(wt)                       # the same change again: reused
+        self.assertEqual(again.verdict, 'GATE OK (reused: unit, merged)', self.said)
 
 
 
@@ -308,8 +321,7 @@ class Warned(ReuseCase):
         self.assertEqual(len(stored), 1, self.said)
         self.assertRegex(stored[0], '^%sSTORED shaky: fail, key [0-9a-f]{12}$'
                          % re.escape(reuse.PREFIX))
-        self.commit(wt, {'notes.txt': 'n\n'})
-        out = self.gate(wt)
+        out = self.gate(wt)         # the same key: the change list is part of it (step_key)
         self.assertEqual(out.verdict, 'GATE OK (warned: shaky)', self.said)
         miss = self.lines('MISS')
         self.assertEqual(len(miss), 1, self.said)
@@ -687,11 +699,18 @@ class Key(ReuseCase):
         return S.Step(name, argv or self.ARGV, None, cwd or self.root, [], [], (0,), False,
                       False, [], False)
 
-    def key(self, step=None, cfg=None, kit=None):
+    def key(self, step=None, cfg=None, kit=None, changed=('src/a.py',)):
         key, ins = reuse.step_key(self.root, cfg or self.cfg, UNIT, step or self.step(),
-                                  self.files, kit or self.kit)
+                                  self.files, kit or self.kit, changed)
         self.assertEqual(sorted(ins), ['src/a.py'])
         return key
+
+    def test_the_change_list_is_in_the_key_sorted_and_spelled_alike(self):
+        first = self.key()
+        self.assertNotEqual(self.key(changed=('src/a.py', 'notes.txt')), first)
+        self.assertNotEqual(self.key(changed=()), first)
+        self.assertEqual(self.key(changed=['notes.txt', 'src/a.py']),
+                         self.key(changed=('src\\a.py', 'notes.txt', 'notes.txt')))
 
     def test_the_same_material_makes_the_same_key(self):
         self.assertRegex(self.key(), '^[0-9a-f]{64}$')

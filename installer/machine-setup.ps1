@@ -8,6 +8,11 @@
 #   powershell -NoProfile -File installer\machine-setup.ps1 -OldKit <old kit clone> [-OwnerEmail <email>]
 #                                [-ConfigDir <folder>,<folder>] [-AgentTemp <folder>]
 #                                [-NoSweepTask] [-Apply]
+#   powershell -NoProfile -File installer\machine-setup.ps1 -ManagedSettings [-Apply]
+#
+# -ManagedSettings writes Claude Code's machine-wide managed settings file (under Program Files)
+# from the kit's template instead, and nothing else; -Apply then needs an elevated terminal. It
+# takes no other parameter but -HomeDir and -Python (docs/machine-setup.md "Managed settings").
 #
 # The default (no -OldKit; -Fresh is its old name and still accepted): the guard's entry in each
 # account's settings.json, the kit plugin through the claude CLI per account, the owner's email in
@@ -36,7 +41,7 @@
 # on PATH.
 #
 # Exit: 0 dry run printed, changes made or nothing to do; 1 refused or stopped; 2 usage (both -OldKit
-# and -Fresh, both -NoSweepTask and -RegisterSweepTask, -PmSettings with -OldKit, -ProcwatchKill without -Procwatch, -Python not a
+# and -Fresh, -ManagedSettings with -OldKit or -Fresh (the tool refuses its other options), both -NoSweepTask and -RegisterSweepTask, -PmSettings with -OldKit, -ProcwatchKill without -Procwatch, -Python not a
 # file, no python on PATH, no tools\machine_setup.py).
 param(
     [string]$OldKit = '',
@@ -53,6 +58,7 @@ param(
     [switch]$Shortcut,
     [switch]$Procwatch,
     [switch]$ProcwatchKill,
+    [switch]$ManagedSettings,
     [switch]$Apply
 )
 
@@ -65,6 +71,9 @@ foreach ($v in @($OldKit, $OwnerEmail, $PmSettings, $AgentTemp, $HomeDir, $Deskt
 }
 if ($OldKit -and $Fresh) {
     Write-Host 'machine-setup: usage - give -OldKit <old kit clone> or -Fresh, not both'; exit 2
+}
+if ($ManagedSettings -and ($OldKit -or $Fresh)) {
+    Write-Host 'machine-setup: usage - -ManagedSettings is a mode of its own: not with -OldKit or -Fresh'; exit 2
 }
 if ($NoSweepTask -and $RegisterSweepTask) { Write-Host 'machine-setup: usage - give -NoSweepTask or -RegisterSweepTask, not both'; exit 2 }
 if ($PmSettings -and $OldKit) { Write-Host 'machine-setup: usage - -PmSettings goes with the default mode only, not -OldKit'; exit 2 }
@@ -82,6 +91,7 @@ if ($Python) {
 }
 
 $argv = @($tool, '--kit', $kit)
+if ($ManagedSettings) { $argv += '--managed-settings' }
 if ($OldKit) { $argv += @('--old-kit', $OldKit) }
 if ($OwnerEmail) { $argv += @('--owner-email', $OwnerEmail) }
 if ($PmSettings) { $argv += @('--pm-settings', $PmSettings) }

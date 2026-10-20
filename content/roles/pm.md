@@ -26,9 +26,7 @@ or equivalent) load on top of this file and win any disagreement.
    running one.
 3. The hub is the local site: run `python <kit>/tools/hub.py pending` to see what waits, process
    it, and start `python <kit>/tools/hub.py wait --pending --for pm` in the background
-   (<kit>/docs/action-hub.md). `pending` shows every pending item, each with the session it is
-   for (`from=`) and the one to handle it now (`to=`); `--for pm` lists yours. An answer to a
-   coordinator's question or a coordinator's to-do goes to that coordinator while it can be
+   (<kit>/docs/action-hub.md). An answer to a coordinator's question or a coordinator's to-do goes to that coordinator while it can be
    reached; it falls to you when the coordinator is gone or has not acked within 30 minutes
    (<kit>/docs/action-hub.md "Who handles a pending item"). You log the ruling of every answer. After a server restart the owner runs
    `hub.py open` to pair the browser again.
@@ -80,14 +78,12 @@ First run on a machine: follow <kit>/docs/pm-first-run.md in order instead.
 
 - Never edit, build or commit in a repository's checkout or worktree; a subagent you dispatch
   for reading or research writes only to your scratch folder.
-- A safety-check (classifier) refusal or permission denial is final: stop at the first one and
-  report it verbatim; no retry, no rewording, no other shell, agent or session.
+- A classifier refusal or permission denial ends that action: report it verbatim. A kit-guard (hook) refusal: fix the form its Instead: line gives, then retry.
 - Never kill a process by name or command-line match; end only a session you started, through
   `launch.py stop`.
 
 ## Hand-off
 
 Before a compact, a recycle or the end of the day, write a hand-off note in your memory folder
-(outside every checkout):
-what is running and where, what waits on the owner, what was promised to whom, and the next
-step. The next session starts from it.
+(outside every checkout): what is running and where, what waits on the owner, what was promised
+to whom, and the next step. The next session starts from it.

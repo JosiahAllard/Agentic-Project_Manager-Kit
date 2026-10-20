@@ -45,7 +45,7 @@ Off with no file, each switched on by its key: `repo.push_block` (a push to main
 - `repo.push_block` (bool, default false): pre-push refuses a push to main without a gate-OK record; a delete or a forced push of main is refused whatever it says
 - `owner.email` (email): author email of the owner's own commits; unset: the machine config's owner_email; neither: no owner commit is provable, so every owner-only change is refused
 - `owner.agent_emails` (list of email, default []): author emails known to be agents', never the owner's
-- `owner.paths` (list of string, default ["AGENTS.md", "CLAUDE.md", ".claude/", ".codex/", "docs/agent-profile.md", ".github/workflows/", ".kit.json", "tools/gate.json", "kitlib/gate/strict_defaults.py", "kitlib/backlog/roles.py"]): owner-only paths; an entry ending / locks a directory; replaces the default
+- `owner.paths` (list of string, default ["AGENTS.md", "CLAUDE.md", ".claude/", ".codex/", "docs/agent-profile.md", ".github/workflows/", ".kit.json", "tools/gate.json", "kitlib/gate/strict_defaults.py", "kitlib/backlog/roles.py", "hosts/claude/managed-settings.json"]): owner-only paths; an entry ending / locks a directory; replaces the default
 - `owner.paths_except` (list of string, default [".claude/worktrees/", ".codex/worktrees/"]): what under a locked directory is not locked
 - `owner.trailer` (a trailer key, default "Owner-Approved"): the trailer key approving an owner-only change
 - `hook.module` (a module name): the one repo hook module, <tools_dir>/<module>.py
@@ -69,6 +69,7 @@ Off with no file, each switched on by its key: `repo.push_block` (a push to main
 - `daily_full.kind` (a kind name, default "daily-full"): the kinds-table kind the run books
 - `daily_full.max_wait` (int >= 0, default 7200): seconds it waits for its lock slot before it skips
 - `daily_full.stale_hours` (int >= 1, default 36): hours after which --summary calls the last result stale
+- `daily_full.bisect` ({max_probes, prefix, session}): after a red run, bisect the first-parent commits since the last green run for the commit that turned the red steps red (docs/daily-full.md "Bisect"); unset: no bisect
 - `doc_budget.default` (int >= 0): byte cap for a capped doc with no budget
 - `doc_budget.budgets` (map path -> int >= 0 or null, default {}): doc path or glob -> byte cap; null: uncapped
 - `doc_budget.uncapped_dirs` (list of repo path, default []): folders never capped
@@ -97,6 +98,8 @@ Off with no file, each switched on by its key: `repo.push_block` (a push to main
 - `gate.zero_tests` (regex or list of regex): log patterns meaning no test ran
 - `gate.errors` ({match, excuse, expect}): error-line policy
 - `gate.kind` (a kind name, default "engine-test"): the kinds-table kind a gate run books (gate.py and gate.py land)
+- `gate.smoke_steps` (list of a step name): steps a default (not --full) branch gate runs whatever changed; a landing takes such a gate's record for a tip once these steps passed in it (docs/gate.md "Landing"); unset: a landing needs a --full record
+- `gate.docs_only` ({globs, exclude, steps}): a change whose every path is docs: the branch gate runs only its steps, and a landing takes that record (docs/gate.md "Docs-only changes"); unset: no change is docs-only
 - `guard.data_roots` (list of {path, mode, why}, default []): folders besides their checkout and temp that agent sessions may write, each with its mode; read from the main checkout only (docs/guard.md "Write jail")
 - `guard.role_policy` (bool, default false): hold roles to their role policy mode (docs/guard.md "Role policy"); off: no role is held, whatever its mode; read from the main checkout only
 - `landing.lock_file` (string): legacy landing lock: git:<name>, a file in the git common dir; any other value refuses
@@ -168,6 +171,7 @@ Each kit copy on the machine reads this one file with its own key list, so a key
 - `ledger_path` (absolute path): the one-file rulings ledger (R-nnnn ids); set here only; once `ledger_dir` is set it is frozen: read, never written; removed one release after the split
 - `pending_path` (absolute path): the owner's pending-steps file tools/pending.py edits (docs/pending.md)
 - `standing_delegation` (a ruling id R-nnnn): the ledger entry that delegates in general; the backlog refuses it as the ruling behind any one change. Unset: no id is refused for that
+- `daily_red_ruling` (a ruling id R-nnnn): the ruling the daily full run's bisect files its red record under: priority 1, priority_by pm (docs/daily-full.md "Bisect"); unset: priority 2, priority_by agent, and the run's result.json says so; older kit copies reject the key; set it only after every folder runs a kit that knows it
 - `scrub_patterns` (list of regex): case-insensitive patterns for the install's own names (repositories, owner, accounts) that the shipped-text tests and tests/scrub/test_generic.py also refuse
 - `guard_mcp_prefix` (string): the lock MCP tool-name prefix the guard denies owner-only tools under; unset: the kit default (docs/guard.md "Lock MCP")
 - `guard_mcp_tools` (list of string): more full tool names the guard treats as the lock MCP's owner-only tools, as a PreToolUse payload names them (docs/guard.md "Lock MCP")

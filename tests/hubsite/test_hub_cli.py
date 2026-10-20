@@ -1024,7 +1024,10 @@ class StopRestartCase(CliCase):
         self.assertEqual((code, err), (3, ''))
         self.assertIn('nothing to stop: nothing answers on port %d' % port, out)
         self.assertIn(HUB.hub_autostart.TASK_NAME, out)
-        self.assertTrue(out.endswith('start it with: %s\n' % HUB.START), out)
+        self.assertTrue(out.endswith(HUB.task_advice(HUB.control.NO_TASK) + '\n'), out)
+        self.assertIn('setup --autostart', out)
+        self.assertIn('Start-ScheduledTask', out)
+        self.assertNotIn(HUB.START, out)
         self.assertEqual(started, [])
 
     def test_restart_of_a_server_started_by_hand_stops_it_and_starts_nothing(self):
@@ -1037,7 +1040,9 @@ class StopRestartCase(CliCase):
         self.assertEqual((code, err), (3, ''))
         self.assertIn('STOPPED: the hub server on port %d' % hub.port, out)
         self.assertIn('started by hand', out)
-        self.assertTrue(out.endswith('start it with: %s\n' % HUB.START), out)
+        self.assertTrue(out.endswith(HUB.task_advice(HUB.control.HAND_STARTED) + '\n'), out)
+        self.assertIn('Start-ScheduledTask', out)
+        self.assertNotIn(HUB.START, out)
         self.assertEqual(started, [])
         runner.join(30)
         self.assertFalse(runner.is_alive())
@@ -1048,6 +1053,9 @@ class StopRestartCase(CliCase):
         code, out, err = self.run_cli('restart', '--port', str(self.dead_port()))
         self.assertEqual((code, err), (3, ''))
         self.assertIn('disabled', out)
+        self.assertTrue(out.endswith(HUB.task_advice(HUB.control.DISABLED) + '\n'), out)
+        self.assertIn('Enable-ScheduledTask', out)
+        self.assertNotIn(HUB.START, out)
         self.assertEqual(started, [])
 
     def test_restart_says_where_the_task_s_server_answers(self):
@@ -1120,7 +1128,9 @@ class StopRestartCase(CliCase):
                                       'its process has ended\n' % port)
                 self.assertNotIn('REFUSED', err)
                 self.assertIn('the scheduled task could not be started: %s' % reason, err)
-                self.assertTrue(err.endswith('start it with: %s\n' % HUB.START), err)
+                self.assertTrue(err.endswith(HUB.task_advice(None) + '\n'), err)
+                self.assertIn('Start-ScheduledTask', err)
+                self.assertNotIn(HUB.START, err)
 
 
 class ClosedConsoleCase(CliCase):

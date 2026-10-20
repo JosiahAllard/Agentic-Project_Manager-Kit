@@ -14,11 +14,11 @@
       Landed: each branch's remote branch, worktree and local branch go, never forced (what main
       does not contain, or work, or a holder, keeps it); --keep-branch keeps all three. --fresh
       runs every step of the merged gate (no gate reuse, docs/gate.md "Gate reuse").
-      A branch that changes a strict path (kitlib/gate/strict_defaults.py, read from main) lands
-      alone, only with a verdict queued for its tip (tools/verdict.py add, or carried to it over
-      main merges by tools/verdict.py carry and checked again here) by a strong-tier reviewer who
-      is not its author, and its merged gate runs --full --fresh whatever was passed (docs/gate.md
-      "Strict paths").
+      Every branch lands only with a verdict queued for its tip (tools/verdict.py add, or carried
+      to it over main merges by tools/verdict.py carry and checked again here) by a reviewer who
+      is not its author (docs/gate.md "Landing" step 4). A branch that changes a strict path
+      (kitlib/gate/strict_defaults.py, read from main) lands alone, its reviewer strong-tier, and
+      its merged gate runs --full --fresh whatever was passed (docs/gate.md "Strict paths").
       --submit: the same landing, started detached and windowless; prints a REVIEW line for each
       branch with a verdict queued at its tip, then the last line, SUBMITTED ... wait: <the
       gate.py wait-result command that waits for its result record>, and exits 0
@@ -122,12 +122,19 @@ def child_args(a, root):
     return args + list(a.branches)
 
 
-def restore(root, payload):
+def restore(root, a):
     """The detached landing's `submitted`, its output now going to the submission's log; None
-    when the payload cannot be read: the submission's records are then finished refused
-    (submit.abandon) and that is said, on the hidden console."""
+    when the payload is not the one a submission wrote for this landing (submit.Untrusted: that
+    is said on stderr and, at the submission's own path, in its log; no record is written) or,
+    read with the submission's token, cannot be read (the submission's records are
+    then finished refused, submit.abandon, and that is said, on the hidden console)."""
+    payload = a.submitted
     try:
-        sub = submitmod.restore(root, payload)
+        sub = submitmod.restore(root, payload, a.branches, a.expect_tip,
+                                expect_main=a.expect_main)
+    except submitmod.Untrusted as e:    # also in the submission's log: stderr may be hidden
+        sys.stderr.write(submitmod.untrusted_refusal(payload, e) + '\n')
+        return None
     except submitmod.SubmitError as e:
         emit(submitmod.abandon(root, payload, str(e)))
         return None
@@ -178,7 +185,7 @@ def main(argv):
                                      a.expect_tip, expect_main=a.expect_main))
     submitted = None
     if a.submitted:
-        submitted = restore(root, a.submitted)
+        submitted = restore(root, a)
         if submitted is None:
             return G.REFUSED
     branch = a.branches[0] if len(a.branches) == 1 else a.branches

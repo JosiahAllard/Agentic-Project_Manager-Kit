@@ -592,5 +592,311 @@ class Cli(Case):
         self.assertNotIn('Traceback', r.stderr)
 
 
+CHANGE = LATER - 5 * S.DAY       # the fake time the user environment (TEMP) was last written
+
+
+def at(t):
+    """A process start time as kitlib.pmstart.list_processes gives it (ISO, local offset, 7 digits)."""
+    import datetime
+    s = datetime.datetime.fromtimestamp(t).astimezone().isoformat(timespec='microseconds')
+    return s[:26] + '0' + s[26:]
+
+
+def started(*pairs):
+    """A fake process lister: (Name, start time) pairs, each with a command line naming no session."""
+    return lambda: [{'Name': n, 'CommandLine': n, 'ProcessId': 100 + i, 'Created': c}
+                    for i, (n, c) in enumerate(pairs)]
+
+
+@unittest.skipUnless(os.name == 'nt', 'the sweep and its tests are Windows only')
+class UserTemp(Case):
+    """The second root: <user temp>/claude, its session units only (agent_temp_sweep.user_temp), and
+    the one-time drain of the Windows default user temp's claude folder (--drain-old-user-temp)."""
+
+    def setUp(self):
+        super().setUp()
+        self.user = os.path.join(self.tmp, 'usertemp')          # the registry's TEMP, outside home
+        self.local = os.path.join(self.home, 'AppData', 'Local', 'Temp')    # %LOCALAPPDATA%\Temp
+        os.makedirs(self.user)
+        os.makedirs(self.local)
+        for name, value in (('registry_user_temp', lambda: self.user),
+                            ('local_temp', lambda: self.local),
+                            ('env_changed_at', lambda: CHANGE)):
+            p = mock.patch.object(S, name, value)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def main(self, *argv, lister=None):
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(sys, 'stderr', err):
+            code = S.main(list(argv), home=self.home, out=out, now=LATER,
+                          lister=lister or started(('claude.exe', at(CHANGE + 60))))
+        return code, out.getvalue() + err.getvalue()
+
+    def session(self, root, project, sid, young=False):
+        f = os.path.join(root, 'claude', project, sid, 'scratchpad', 'a.txt')
+        put(f)
+        if young:
+            self.young(f)
+        return os.path.dirname(os.path.dirname(f))
+
+    # --- the config key ---
+
+    def test_check_takes_user_temp_as_a_boolean(self):
+        good = os.path.abspath(self.dir)
+        self.assertEqual(S.check({'dir': good, 'user_temp': True}), [])
+        self.assertEqual(S.check({'dir': good, 'user_temp': False}), [])
+        for bad in ('yes', 1, None, []):
+            self.assertTrue(any('user_temp' in e for e in S.check({'dir': good, 'user_temp': bad})), bad)
+
+    def test_load_config_reads_user_temp_default_false(self):
+        self.config({S.KEY: {'dir': self.dir}})
+        self.assertFalse(S.load_config(self.home).user_temp)
+        self.config({S.KEY: {'dir': self.dir, 'user_temp': True}})
+        self.assertTrue(S.load_config(self.home).user_temp)
+
+    # --- the claude-only units mode ---
+
+    def test_sessions_only_sweeps_claude_units_and_nothing_else_of_the_folder(self):
+        old = self.session(self.user, 'proj', SID_OLD)
+        new = self.session(self.user, 'proj', SID_NEW, young=True)
+        put(os.path.join(self.user, 'old.log'))
+        put(os.path.join(self.user, 'other', 'a.txt'))
+        got = {e.name: e.action for e in S.sweep(self.user, 3, apply=True, now=LATER, home=self.home,
+                                                  lister=procs(), sessions_only=True)}
+        self.assertEqual(got, {'claude/proj/' + SID_OLD: 'removed', 'claude/proj/' + SID_NEW: 'young'})
+        self.assertFalse(os.path.exists(old))
+        self.assertTrue(os.path.isdir(new))
+        self.assertTrue(os.path.isfile(os.path.join(self.user, 'old.log')))
+        self.assertTrue(os.path.isfile(os.path.join(self.user, 'other', 'a.txt')))
+
+    def test_sessions_only_keeps_the_live_keep_and_fail_closed_rules(self):
+        live = self.session(self.user, 'proj', SID_LIVE)
+        pinned = self.session(self.user, 'proj', 'pinned')
+        got = {e.name: e.action for e in S.sweep(
+            self.user, 3, apply=True, now=LATER, home=self.home, keep=['claude/*/pinned'],
+            lister=procs('claude --resume %s' % SID_LIVE), sessions_only=True)}
+        self.assertEqual(got, {'claude/proj/' + SID_LIVE: 'live', 'claude/proj/pinned': 'kept'})
+        self.assertTrue(os.path.isdir(live) and os.path.isdir(pinned))
+        got = {e.name: e.action for e in S.sweep(self.user, 3, apply=True, now=LATER, home=self.home,
+                                                  lister=unreadable, sessions_only=True)}
+        self.assertEqual(got['claude/proj/' + SID_LIVE], 'live')
+        self.assertTrue(os.path.isdir(live))
+
+    # --- the second root's safety ---
+
+    def test_a_second_root_outside_home_passes(self):
+        os.makedirs(os.path.join(self.user, 'claude'))
+        self.assertIsNone(S.second_root_unsafe(os.path.join(self.user, 'claude'), self.home))
+
+    def test_the_home_exception_is_exactly_localappdata_temp_claude(self):
+        root = os.path.join(self.local, 'claude')
+        os.makedirs(root)
+        self.assertIsNone(S.second_root_unsafe(root, self.home))
+        for other in (os.path.join(self.home, 'AppData', 'Local', 'Temp2', 'claude'),
+                      os.path.join(self.local, 'x', 'claude'),
+                      os.path.join(self.home, 'claude'),
+                      os.path.join(self.local, 'Claude-other')):
+            os.makedirs(other, exist_ok=True)
+            self.assertIn('home folder', S.second_root_unsafe(other, self.home) or '', other)
+        with mock.patch.object(S, 'local_temp', lambda: None):      # no LOCALAPPDATA: no exception
+            self.assertIn('home folder', S.second_root_unsafe(root, self.home) or '')
+
+    def test_a_second_root_in_a_git_checkout_or_the_config_folder_is_refused(self):
+        os.makedirs(os.path.join(self.local, '.git'))
+        os.makedirs(os.path.join(self.local, 'claude'), exist_ok=True)
+        self.assertIn('git', S.second_root_unsafe(os.path.join(self.local, 'claude'), self.home) or '')
+        cfg = os.path.join(kuser.config_dir(self.home), 'claude')
+        os.makedirs(cfg)
+        self.assertIsNotNone(S.second_root_unsafe(cfg, self.home))
+
+    @unittest.skipUnless(hasattr(__import__('_winapi'), 'CreateJunction'), 'a junction needs Windows')
+    def test_a_second_root_that_is_a_link_or_under_one_is_refused(self):
+        import _winapi
+        target = os.path.join(self.tmp, 'target')
+        os.makedirs(os.path.join(target, 'claude'))
+        _winapi.CreateJunction(target, os.path.join(self.tmp, 'via'))
+        self.addCleanup(os.rmdir, os.path.join(self.tmp, 'via'))
+        self.assertIn('link', S.second_root_unsafe(os.path.join(self.tmp, 'via', 'claude'), self.home) or '')
+        _winapi.CreateJunction(target, os.path.join(self.user, 'claude'))
+        self.addCleanup(os.rmdir, os.path.join(self.user, 'claude'))
+        self.assertIn('link', S.second_root_unsafe(os.path.join(self.user, 'claude'), self.home) or '')
+        # home junctioned elsewhere: the real path is Temp, the text is not
+        _winapi.CreateJunction(self.local, os.path.join(self.tmp, 'tempvia'))
+        self.addCleanup(os.rmdir, os.path.join(self.tmp, 'tempvia'))
+        os.makedirs(os.path.join(self.local, 'claude'))
+        self.assertIn('link', S.second_root_unsafe(os.path.join(self.tmp, 'tempvia', 'claude'), self.home)
+                      or '')
+
+    # --- the daily run with user_temp ---
+
+    def test_user_temp_on_sweeps_the_registry_temps_claude_folder(self):
+        self.config({S.KEY: {'dir': self.dir, 'user_temp': True}})
+        old = self.session(self.user, 'proj', SID_OLD)
+        put(os.path.join(self.user, 'old.log'))
+        put(os.path.join(self.dir, 'main.log'))
+        code, text = self.main('--apply')
+        self.assertEqual(code, 0, text)
+        self.assertIn('removed  claude/proj/%s' % SID_OLD, text)
+        self.assertIn('removed  main.log', text)
+        self.assertIn(os.path.join(self.user, 'claude'), text)
+        self.assertFalse(os.path.exists(old))
+        self.assertTrue(os.path.isfile(os.path.join(self.user, 'old.log')))
+        self.assertTrue(os.path.isdir(os.path.join(self.user, 'claude')))     # the root never goes
+
+    def test_user_temp_off_leaves_the_registry_temp_alone(self):
+        self.config({S.KEY: {'dir': self.dir}})
+        old = self.session(self.user, 'proj', SID_OLD)
+        code, text = self.main('--apply')
+        self.assertEqual(code, 0, text)
+        self.assertTrue(os.path.isdir(old))
+        self.assertNotIn(SID_OLD, text)
+
+    def test_user_temp_with_no_registry_value_notes_it_and_sweeps_the_main_root(self):
+        self.config({S.KEY: {'dir': self.dir, 'user_temp': True}})
+        put(os.path.join(self.dir, 'main.log'))
+        with mock.patch.object(S, 'registry_user_temp', lambda: None):
+            code, text = self.main('--apply')
+        self.assertEqual(code, 0, text)
+        self.assertIn('user temp: skipped', text)
+        self.assertIn('removed  main.log', text)
+
+    def test_user_temp_equal_to_or_inside_the_main_root_is_swept_once(self):
+        self.config({S.KEY: {'dir': self.dir, 'user_temp': True}})
+        old = self.session(self.dir, 'proj', SID_OLD)
+        for user in (self.dir, os.path.join(self.dir, 'nested')):
+            os.makedirs(user, exist_ok=True)
+            with mock.patch.object(S, 'registry_user_temp', lambda u=user: u):
+                code, text = self.main()
+            self.assertEqual(code, 0, text)
+            self.assertIn('user temp: skipped', text)
+            self.assertEqual(text.count('would    claude/proj/%s' % SID_OLD), 1, text)
+        self.assertTrue(os.path.isdir(old))
+
+    def test_user_temp_unreadable_process_list_exits_3(self):
+        self.config({S.KEY: {'dir': self.dir, 'user_temp': True}})
+        old = self.session(self.user, 'proj', SID_OLD)
+        code, text = self.main('--apply', lister=unreadable)
+        self.assertEqual(code, S.EXIT_LIST_UNAVAILABLE, text)
+        self.assertTrue(os.path.isdir(old))
+
+    # --- the one-time drain ---
+
+    def test_drain_exit_code_is_4_and_free(self):
+        self.assertEqual(S.EXIT_DRAIN_REFUSED, 4)
+        self.assertNotIn(S.EXIT_DRAIN_REFUSED, (0, 1, 2, S.EXIT_LIST_UNAVAILABLE))
+
+    def test_drain_is_refused_while_a_claude_process_predates_the_change(self):
+        self.config({S.KEY: {'dir': self.dir}})
+        old = self.session(self.local, 'proj', SID_OLD)
+        lister = started(('claude.exe', at(CHANGE + 60)), ('Claude.exe', at(CHANGE - 60)))
+        code, text = self.main('--drain-old-user-temp', '--apply', lister=lister)
+        self.assertEqual(code, S.EXIT_DRAIN_REFUSED, text)
+        self.assertIn('pid 101', text)              # the one that predates the change (case-blind name)
+        self.assertNotIn('pid 100', text)
+        self.assertTrue(os.path.isdir(old))
+        code, text = self.main('--drain-old-user-temp', lister=lister)     # the dry run says so too
+        self.assertEqual(code, S.EXIT_DRAIN_REFUSED, text)
+        self.assertIn('would    claude/proj/%s' % SID_OLD, text)
+        self.assertTrue(os.path.isdir(old))
+
+    def test_drain_removes_old_units_once_every_claude_process_is_newer(self):
+        self.config({S.KEY: {'dir': self.dir}})
+        old = self.session(self.local, 'proj', SID_OLD)
+        new = self.session(self.local, 'proj', SID_NEW, young=True)
+        put(os.path.join(self.local, 'other.tmp'))
+        put(os.path.join(self.dir, 'main.log'))
+        lister = started(('claude.exe', at(CHANGE + 60)), ('node.exe', at(CHANGE - 600)))
+        code, text = self.main('--drain-old-user-temp', lister=lister)       # dry run first
+        self.assertEqual(code, 0, text)
+        self.assertIn('would    claude/proj/%s' % SID_OLD, text)
+        self.assertTrue(os.path.isdir(old))
+        code, text = self.main('--drain-old-user-temp', '--apply', lister=lister)
+        self.assertEqual(code, 0, text)
+        self.assertIn('removed  claude/proj/%s' % SID_OLD, text)
+        self.assertFalse(os.path.exists(old))
+        self.assertTrue(os.path.isdir(new))
+        self.assertTrue(os.path.isfile(os.path.join(self.local, 'other.tmp')))
+        self.assertTrue(os.path.isfile(os.path.join(self.dir, 'main.log')))  # the drain sweeps only its root
+
+    def test_drain_is_refused_when_the_process_list_or_the_change_time_cannot_be_read(self):
+        self.config({S.KEY: {'dir': self.dir}})
+        old = self.session(self.local, 'proj', SID_OLD)
+        code, text = self.main('--drain-old-user-temp', '--apply', lister=unreadable)
+        self.assertEqual(code, S.EXIT_DRAIN_REFUSED, text)
+        with mock.patch.object(S, 'env_changed_at', lambda: None):
+            code, text = self.main('--drain-old-user-temp', '--apply')
+        self.assertEqual(code, S.EXIT_DRAIN_REFUSED, text)
+        code, text = self.main('--drain-old-user-temp', '--apply',
+                               lister=started(('claude.exe', 'not a time')))
+        self.assertEqual(code, S.EXIT_DRAIN_REFUSED, text)
+        self.assertTrue(os.path.isdir(old))
+
+    def test_drain_is_refused_when_the_registry_temp_is_relative_or_unexpanded(self):
+        self.config({S.KEY: {'dir': self.dir}})
+        old = self.session(self.local, 'proj', SID_OLD)
+        for u in ('%USERPROFILE%\\AppData\\Local\\Temp', 'rel\\temp'):
+            with mock.patch.object(S, 'registry_user_temp', lambda u=u: u):
+                code, text = self.main('--drain-old-user-temp', '--apply')
+            self.assertEqual(code, S.EXIT_DRAIN_REFUSED, text)
+            self.assertIn('not absolute', text)
+            self.assertTrue(os.path.isdir(old), u)
+
+    def test_drain_is_refused_when_an_absolute_registry_temp_holds_an_unexpanded_var(self):
+        self.config({S.KEY: {'dir': self.dir}})
+        old = self.session(self.local, 'proj', SID_OLD)
+        u = os.path.join(self.tmp, '%USERNAME%', 'Temp')
+        with mock.patch.object(S, 'registry_user_temp', lambda: u):
+            code, text = self.main('--drain-old-user-temp', '--apply')
+        self.assertEqual(code, S.EXIT_DRAIN_REFUSED, text)
+        self.assertTrue(os.path.isdir(old))
+
+    def test_drain_is_refused_without_a_registry_temp(self):
+        self.config({S.KEY: {'dir': self.dir}})
+        old = self.session(self.local, 'proj', SID_OLD)
+        with mock.patch.object(S, 'registry_user_temp', lambda: None):
+            code, text = self.main('--drain-old-user-temp', '--apply')
+        self.assertEqual(code, S.EXIT_DRAIN_REFUSED, text)
+        self.assertIn('no TEMP or TMP', text)
+        self.assertTrue(os.path.isdir(old))
+
+    def test_drain_is_refused_for_an_empty_process_list(self):
+        self.config({S.KEY: {'dir': self.dir}})
+        old = self.session(self.local, 'proj', SID_OLD)
+        code, text = self.main('--drain-old-user-temp', '--apply', lister=lambda: [])
+        self.assertEqual(code, S.EXIT_DRAIN_REFUSED, text)
+        self.assertTrue(os.path.isdir(old))
+
+    def test_drain_has_nothing_to_do_when_the_folder_lies_in_dir(self):
+        self.config({S.KEY: {'dir': self.local}})
+        old = self.session(self.local, 'proj', SID_OLD)
+        code, text = self.main('--drain-old-user-temp', '--apply')
+        self.assertEqual(code, 0, text)
+        self.assertIn('nothing to drain', text)
+        self.assertTrue(os.path.isdir(old))
+
+    def test_drain_has_nothing_to_do_when_the_registry_temp_is_the_default(self):
+        self.config({S.KEY: {'dir': self.dir}})
+        old = self.session(self.local, 'proj', SID_OLD)
+        with mock.patch.object(S, 'registry_user_temp', lambda: self.local):
+            code, text = self.main('--drain-old-user-temp', '--apply')
+        self.assertEqual(code, 0, text)
+        self.assertIn('nothing to drain', text)
+        self.assertTrue(os.path.isdir(old))
+
+    def test_drain_has_nothing_to_do_without_the_folder(self):
+        self.config({S.KEY: {'dir': self.dir}})
+        code, text = self.main('--drain-old-user-temp', '--apply')
+        self.assertEqual(code, 0, text)
+        self.assertIn('nothing to drain', text)
+
+    def test_the_change_time_and_start_times_parse(self):
+        self.assertAlmostEqual(S.started_at(at(CHANGE)), CHANGE, places=3)
+        self.assertAlmostEqual(S.started_at('2026-10-16T09:56:05.7019330Z'),
+                               S.started_at('2026-10-16T05:56:05.701933-04:00'), places=3)
+        self.assertIsNone(S.started_at('soon'))
+        self.assertIsNone(S.started_at(None))
+
+
 if __name__ == '__main__':
     unittest.main()

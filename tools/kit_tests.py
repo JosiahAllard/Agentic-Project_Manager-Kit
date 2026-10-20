@@ -1,8 +1,13 @@
 """kit_tests.py: run the kit's own test suite, whole or only the test packages a branch's change can
 reach (docs/test-tools.md "kit_tests").
 
-  kit_tests.py [-C DIR] --select [--base B] [--changed PATH ...] [--plan] [--jobs N]
+  kit_tests.py [-C DIR] --select [--smoke] [--base B] [--changed PATH ...] [--plan] [--jobs N]
   kit_tests.py [-C DIR] --full [--base B] [--plan] [--jobs N]
+  kit_tests.py [-C DIR] --scrub [--plan] [--jobs N]: only tests/scrub, one pass (the docs-only
+  gate step)
+  --smoke adds tests/selection.json's "smoke" modules to the selection unless every changed
+  path is prose (kitlib.tooldeps.selftree.smoke; the gate's smoke_steps, docs/gate.md); a
+  smoke entry naming no test module refuses
   kit_tests.py [-C DIR] --list: every test id sorted, then a summary and the decorator skips
   (kitlib.tooldeps.selflist; nothing runs; runtime skips are not counted)
   add --real-git to either: every test on real git, not the fake
@@ -97,6 +102,11 @@ def build_parser():
     g.add_argument('--full', action='store_true', help='the whole suite')
     g.add_argument('--list', dest='list_tests', action='store_true',
                    help='print every test id, sorted, and the decorator skips; run nothing')
+    g.add_argument('--scrub', action='store_true',
+                   help='only the scrub test package (the docs-only gate step)')
+    p.add_argument('--smoke', action='store_true',
+                   help='--select: add the table\'s "smoke" modules unless every changed path '
+                   'is prose')
     p.add_argument('--base', help='--select and --full: diff against the merge-base with this '
                    '(default: origin/main when it resolves, else main); --select picks from the '
                    'change, --full takes only the added or changed test modules for its real-git '
@@ -159,8 +169,14 @@ def main(argv=None, out=None):
         out.flush()
     parser = build_parser()
     a = parser.parse_args(argv)
-    if a.full and a.changed:
+    if (a.full or a.scrub) and a.changed:
         parser.error('--changed goes with --select')
+    if a.smoke and not a.select:
+        parser.error('--smoke goes with --select (--full already runs every module)')
+    if a.scrub:
+        for flag, used in (('--both-tiers', a.both_tiers), ('--base', a.base is not None)):
+            if used:
+                parser.error('%s does not go with --scrub (one pass, no change list)' % flag)
     if a.jobs is not None and a.jobs < 1:
         parser.error('--jobs must be at least 1')
     if a.both_tiers and a.real_git:
@@ -192,11 +208,13 @@ def main(argv=None, out=None):
     try:
         cfg = selftree.config(top)
     except selftree.ConfigError as e:
-        if not a.full:
+        if not (a.full or a.scrub):
             say('kit_tests: refused: %s - no test ran' % e)
             return USAGE
-        # --full is the escape hatch: it needs no table, so a broken one cannot stop it.
-        say('kit_tests: WARNING: %s; --full runs every module, none serial' % e)
+        # --full is the escape hatch: it needs no table, so a broken one cannot stop it; nor
+        # --scrub, which selects nothing from it.
+        say('kit_tests: WARNING: %s; %s runs %s, none serial'
+            % (e, '--full' if a.full else '--scrub', 'every module' if a.full else 'the scrub'))
         cfg = {'serial': [], 'skip_fails': []}
     stale = selftree.stale_skip_fails(cfg.get('skip_fails', ()), selftree.all_test_modules(top))
     for m in stale:
@@ -206,7 +224,16 @@ def main(argv=None, out=None):
     # on real git, as a second pass (kitlib.tooldeps.tiers): a test that only ever ran on the fake
     # cannot reach main unseen by real git.
     tier = '0' if a.real_git else os.environ.get('KIT_FAKE_GIT', '1')
-    if a.full:
+    if a.scrub:
+        # The docs-only gate step: no test a docs change cannot reach, but every tracked file
+        # still scanned. One pass, with the same isolation as any other run.
+        changed = []
+        args = selftree.test_modules(top, [selftree.SCRUB])
+        if not args:
+            say('kit_tests: refused: tests/%s holds no test module - no test ran' % selftree.SCRUB)
+            return USAGE
+        say('kit_tests: --scrub: tests/%s only, %d module(s)' % (selftree.SCRUB, len(args)))
+    elif a.full:
         say('kit_tests: full suite (--full)')
         args = FULL
         changed = []
@@ -239,6 +266,19 @@ def main(argv=None, out=None):
             say('kit_tests: --select against the merge-base with %s: %d changed path(s)'
                 % (base, len(changed)))
         args = plan(top, changed, cfg, say)
+        if a.smoke:
+            if args is FULL:
+                say('kit_tests: --smoke: the full suite holds every smoke module')
+            else:
+                try:
+                    extra, why = selftree.smoke(changed, cfg, args,
+                                                selftree.all_test_modules(top))
+                except selftree.ConfigError as e:
+                    say('kit_tests: refused: %s - no test ran' % e)
+                    return USAGE
+                say('kit_tests: --smoke: %s%s' % (why, ': ' + ', '.join(extra) if extra else ''))
+                if extra:
+                    args = (args or []) + extra
     again = []
     if tier == '1':
         again = tiers.changed_test_modules(changed, selftree.all_test_modules(top))
@@ -247,7 +287,7 @@ def main(argv=None, out=None):
             % (len(again), ', '.join(again)))
     if a.plan or args is None:
         return 0
-    if tier == '1' and not again and not a.both_tiers:
+    if tier == '1' and not again and not a.both_tiers and not a.scrub:
         # Said before the pass, and never a verdict: the run's verdict is the pass's own.
         say('kit_tests: real-git pass: no added or changed test module')
     hold = None
@@ -286,15 +326,22 @@ def main(argv=None, out=None):
             give = drainer(lambda line: (stream['out'].write(line + '\n'), stream['out'].flush()))
         counted = None
         first_give = give
-        if give is not None and real:
-            # Giving back is one-way, so the fake pass keeps what the real pass can use at once.
-            # The count child gets no offer, as the pool's own count child gets none.
-            env0 = {k: v for k, v in units_env('0').items() if k != giveback.GIVE_ENV}
+        if jobs != 1:
+            # One count child for both passes, not one each: the fake pass's modules and the
+            # real-git pass's, counted on the fake tier as the fake pass's own child counted them
+            # (a module's tests and classes do not depend on the tier: the loader only loads it).
+            # It gets no offer, as the pool's own count child gets none.
+            fake_set = selftree.all_test_modules(top) if args is FULL else args
+            seen = set(fake_set)
+            both = list(fake_set) + [m for m in real if m not in seen]
+            env1 = {k: v for k, v in units_env('1').items() if k != giveback.GIVE_ENV}
             try:
-                counted = selfrun.count_units(top, real, environ=env0)
+                counted = selfrun.count_units(top, both, environ=env1)
             except KeyboardInterrupt:
                 say('kit_tests: INTERRUPTED, exit %d before the first pass' % tiers.INTERRUPTED)
                 return tiers.INTERRUPTED
+        if give is not None and real:
+            # Giving back is one-way, so the fake pass keeps what the real pass can use at once.
             bound = tiers.unit_bound(real, counted[1])
             need = min(jobs, bound)
             first_give = tiers.keep_for_next(give, need)
@@ -308,7 +355,8 @@ def main(argv=None, out=None):
                 tier_out.write('kit_tests: no real-git module in the selection\n')
                 return 0
             if fake == '1':
-                return run_pass(use, top, cfg, jobs, fake, tier_out, hold, give_back=first_give)
+                return run_pass(use, top, cfg, jobs, fake, tier_out, hold, give_back=first_give,
+                                counted=counted)
             # Counted before the fake pass, so the units it plans are the ones the fake pass kept
             # threads for.
             return run_pass(use, top, cfg, jobs, fake, tier_out, None, give_back=give,

@@ -19,7 +19,7 @@ from kitlib import commit as C
 from kitlib.config import owner as ownermod
 from kitlib.git import cmd
 from kitlib.guard import ownercommits
-from tests import gitfixture
+from tests import gitfixture, inproc
 from tests.gitfixture import TempRepo
 from tests.home import TempHomeCase, machine_config, no_machine_owner
 from tests.realgit import real_git
@@ -310,7 +310,8 @@ class MessagePieces(unittest.TestCase):
 # ---------------------------------------------------------------------------------- end to end
 
 def _seed(t):
-    """The seed commit, built once per process; each test's repository is a copy."""
+    """The seed commit, built once per template key (fixture_env is in it, so each test's own home
+    gives a fresh build); each test's repository is a copy."""
     t.write('seed.txt', '0\n')
     t.commit('seed', 'seed.txt')
 
@@ -964,6 +965,8 @@ class AnotherWriterStagesDuringTheCallRealGit(AnotherWriterStagesDuringTheCall):
     pass
 
 
+@gitfixture.real_fixture('appends to the linked worktree\'s reflog (logs/HEAD), which only real '
+                         'git\'s `worktree add` writes')
 @real_git('hooks, and the reflog entry `git commit` writes under this call\'s tag: the fake runs '
           'no hooks and writes no reflog')
 class HooksAndTheReflog(LinkedCase):
@@ -1786,6 +1789,17 @@ class MergeCarriesAnOwnerChange(MergeCase):
 # ---------------------------------------------------------------------------------- the command
 
 class TheCommandLine(LinkedCase):
+    """commit.py's arguments, output and exit codes. The tests that commit run it as a real child
+    process; the usage errors and the refusal run its main(argv) in this process
+    (tests/inproc.py), with the env and cwd a child would get."""
+
+    def in_process(self, *args, cwd=None):
+        tool = getattr(TheCommandLine, 'tool', None)
+        if tool is None:
+            tool = TheCommandLine.tool = inproc.load_tool('commit')
+        code, out, err = inproc.run_main(tool.main, args, gitfixture.fixture_env({C.MODEL_ENV: ''}),
+                                         cwd or self.wt)
+        return code, out + err
 
     def cli(self, *args, cwd=None):
         r = subprocess.run([sys.executable, TOOL] + list(args), cwd=cwd or self.wt,
@@ -1807,19 +1821,19 @@ class TheCommandLine(LinkedCase):
         self.assertEqual(code, 0, out)
 
     def test_outside_a_repository_is_a_usage_error(self):
-        code, out = self.cli('-C', self.t.base, '-m', 's', '--model', 'M', 'a.py')
+        code, out = self.in_process('-C', self.t.base, '-m', 's', '--model', 'M', 'a.py')
         self.assertEqual(code, 2, out)
         self.assertIn('USAGE:', out)
 
     def test_no_flag_is_accepted_abbreviated(self):
         self.put('a.py', 'x\n')
         for flag in ('--owner-auth', '--owner-appr=x', '--mod=M', '--body-f=x', '--lander'):
-            code, out = self.cli('-m', 's', flag, 'a.py')
+            code, out = self.in_process('-m', 's', flag, 'a.py')
             self.assertEqual(code, 2, (flag, out))
             self.assertIn('USAGE:', out)
 
     def test_body_and_body_file_together_are_refused(self):
-        code, out = self.cli('-m', 's', '-b', 'x', '--body-file', 'y', 'a.py')
+        code, out = self.in_process('-m', 's', '-b', 'x', '--body-file', 'y', 'a.py')
         self.assertEqual(code, 2, out)
         self.assertIn('not allowed with', out)
 
@@ -1832,14 +1846,14 @@ class TheCommandLine(LinkedCase):
     def test_a_second_minus_m_is_a_usage_error_and_commits_nothing(self):
         self.put('a.py', 'x\n')
         before = self.git('rev-parse', 'HEAD')
-        code, out = self.cli('-m', 'subject', '-m', 'body', '--model', 'M', 'a.py')
+        code, out = self.in_process('-m', 'subject', '-m', 'body', '--model', 'M', 'a.py')
         self.assertEqual(code, 2, out)
         self.assertIn('USAGE:', out)
         self.assertIn('-b or --body-file', out)
         self.assertEqual(self.git('rev-parse', 'HEAD'), before)
 
     def test_a_refusal_exits_1(self):
-        code, out = self.cli('-m', 's', '--model', 'M', 'missing.txt')
+        code, out = self.in_process('-m', 's', '--model', 'M', 'missing.txt')
         self.assertEqual(code, 1, out)
         self.assertIn('git add failed', out)
 

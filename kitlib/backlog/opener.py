@@ -4,7 +4,8 @@ docs/backlog.md).
 
   open_repo(root)   -> (top, cfg, rules); Failure when `root` is no repository or its `.kit.json`
                        cannot be read
-  open_store(root, fetch=True, session=None, branch=None) -> plan.Context over the store
+  open_store(root, fetch=True, session=None, branch=None) -> plan.Context over the store, its
+                       `liveness` probe the worktree classifier's (liveness)
   planner(args, ctx) -> the plan `Store.write` runs for `args.verb` (one of WRITES, or `retarget`);
                        Usage for any other verb, raised before a plan exists
   retarget_dry(args, ctx) -> the Change `retarget` would write, checked as a write would be;
@@ -55,8 +56,16 @@ def open_store(root, fetch=True, session=None, branch=None):
         code_main, code_remote = code_main or code.main_branch, code.remote
     ctx = pmod.Context(store, top, remote=cfg.remote, main_branch=cfg.main_branch,
                        branch=branch, code_main=code_main or cfg.main_branch,
-                       code_remote=code_remote)
+                       code_remote=code_remote, liveness=lambda name: liveness(top, name))
     return ctx
+
+
+def liveness(top, branch):
+    """plan.Context's `liveness` probe: kitlib.worktree.classify.branch_liveness on the repository
+    `top` is in. Imported here, when a block or release asks, never at load: kitlib.worktree
+    imports this package's store."""
+    from kitlib.worktree import classify
+    return classify.branch_liveness(top, branch)
 
 
 def set_changes(args):

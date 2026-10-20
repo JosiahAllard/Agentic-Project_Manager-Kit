@@ -139,13 +139,13 @@ class ManifestTest(unittest.TestCase):
                 'weak-worker': 'write', 'worker': 'write', 'senior-worker': 'write', 'strong-worker': 'write', 'deep-worker': 'write',
                 'asset-smith': 'write', 'sound-smith': 'write', 'tech-artist': 'write', 'spec-writer': 'write',
                 'records': 'write', 'reviewer': 'read', 'researcher': 'read', 'consultant': 'read',
-                'test-runner': 'test', 'lander': 'lander'}
+                'test-runner': 'test', 'lander': 'lander', 'helper': 'write'}
         self.assertEqual({r.name: r.mode for r in content.load(KIT_ROOT).roles}, want)
         self.assertEqual(content.role_modes(KIT_ROOT), want)
         self.assertEqual(content.role_mode('opus-worker', KIT_ROOT), 'write')
-        self.assertEqual({r.name: r.writes for r in content.load(KIT_ROOT).roles if r.writes},
-                         {'consultant': ('docs/ops/consultant-notes.local.md',)})
-        self.assertEqual(content.role_writes('consultant', KIT_ROOT), ('docs/ops/consultant-notes.local.md',))
+        # the consultant's notes file is in agent temp now, so no role file names a `writes` path
+        self.assertEqual({r.name: r.writes for r in content.load(KIT_ROOT).roles if r.writes}, {})
+        self.assertEqual(content.role_writes('consultant', KIT_ROOT), ())
         for r in content.load(KIT_ROOT).roles:
             with self.subTest(r.name):
                 agent = read(os.path.join(KIT_ROOT, 'hosts', 'claude', 'shell', 'agents', r.name + '.md'))

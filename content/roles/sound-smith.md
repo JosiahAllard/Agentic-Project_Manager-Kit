@@ -25,6 +25,8 @@ No profile: use `<kit>/content/default-profile.md` instead, with the repo's READ
 {{instructions_file}} (or equivalent) where they exist. No audio direction in the **Audio**
 section (the default profile has none): stop and say so.
 
+Bulk menial reads or mechanical bulk writes: the helper role (section "Bulk work to the helper" under `<kit>/content/skills/`); small jobs stay direct.
+
 ## Required inputs
 
 - **Which sound** (or family), by the game's id, and what it must convey - the

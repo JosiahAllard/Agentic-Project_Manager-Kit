@@ -248,5 +248,51 @@ class Live(unittest.TestCase):
         self.assertEqual(len(closed), 1)
         self.assertTrue(closed[0])
 
+
+@unittest.skipUnless(os.name == "nt", "Windows only")
+class Processes(unittest.TestCase):
+    """Job.processes counts every process ever started in the job: the pool's per-unit count of
+    process starts (kitlib/tooldeps/pool.py) reads it before and after a unit."""
+
+    def setUp(self):
+        # A child of a parent with no console gets one of its own (Job.start: CREATE_NO_WINDOW),
+        # and that console's conhost is started in the job too.
+        from kitlib.proc import console
+        self.each = 1 if console.has_console() else 2
+
+    def test_n_children_raise_the_count_by_n(self):
+        j = job.Job()
+        try:
+            self.assertEqual(j.processes(), 0)
+            for _ in range(3):
+                self.assertEqual(j.start([sys.executable, "-c", "pass"]).wait(60), 0)
+            self.assertEqual(j.processes(), 3 * self.each)
+        finally:
+            j.end(kill=True)
+        self.assertIsNone(j.processes())                        # the job is closed
+
+    def test_processes_in_a_job_nested_in_it_count_too(self):
+        # The child starts two processes in a job of its own, as kitlib.git.cmd starts each git.
+        env = dict(os.environ, PYTHONPATH=ROOT)
+        code = ("import sys\nfrom kitlib.proc import job\nj = job.Job()\n"
+                "for _ in range(2):\n    j.start([sys.executable, '-c', 'pass']).wait(60)\n"
+                "j.end(kill=True)\n")
+        outer = job.Job()
+        try:
+            self.assertEqual(outer.start([sys.executable, "-c", code], env=env).wait(60), 0)
+            self.assertEqual(outer.processes(), self.each + 2)
+        finally:
+            outer.end(kill=True)
+
+    def test_a_child_with_a_console_of_its_own_counts_its_conhost(self):
+        j = job.Job()
+        try:
+            p = j.start([sys.executable, "-c", "pass"], creationflags=win32.CREATE_NO_WINDOW)
+            self.assertEqual(p.wait(60), 0)
+            self.assertEqual(j.processes(), 2)
+        finally:
+            j.end(kill=True)
+
+
 if __name__ == "__main__":
     unittest.main()

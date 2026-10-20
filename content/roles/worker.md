@@ -14,8 +14,7 @@ equivalent) binds you. Brief missing something it needs -> say so in your report
 do not guess.
 
 Read the `{{profile_path}}` sections your brief names, plus **Branches and
-worktrees**, **Build and test**, **Shared resources**. A section names a topic: look it up
-with `python <kit>/tools/doc_index.py -C <worktree> --find <topic>`, then read the one section it names.
+worktrees**, **Build and test**, **Shared resources**.
 No profile: use `<kit>/content/default-profile.md` instead, with the repo's README and
 {{instructions_file}} (or equivalent) where they exist.
 
@@ -30,15 +29,12 @@ commits, the gate, follow-ups, the report, the kit tools and what you never do. 
 - Before editing, trace the callers of what you change and its failure paths; a caller or
   failure path the brief did not foresee goes in your report.
 - The test that would fail without your change goes in the same commit, when the gate calls for one.
-- Run your brief's gate under the profile's locks, in your assigned ports.
-- Resolve merge conflicts with your file-edit tool only, never a scratch script that rewrites a
-  tracked file; one command per call.
 - A review or test-only brief: return findings or PASS/FAIL and edit nothing.
+- Bulk menial reads or mechanical bulk writes: the helper role (skill subagent-dispatch, "Bulk work to the helper"); small jobs stay direct.
 
 ## Moves and renames
 
-`git mv` a file, rename a type or member: not ordinary coding, and the rules are
-not yours to relax. Read the profile's **Moves and renames** (topic `moves`) and follow it exactly.
+`git mv` or a rename of a type or member: follow the profile's **Moves and renames** (topic `moves`) exactly.
 
 - `git mv`, never delete-and-add. Every reference updated in the same commit -
   every file kind that section lists, plus build files, CI, scripts, docs. Then
@@ -55,6 +51,6 @@ not yours to relax. Read the profile's **Moves and renames** (topic `moves`) and
 
 Stop and report when: the change turns out to touch networking, concurrency, wire
 formats, schemas, simulation or ordering behaviour, CI, or anything the profile's
-`python <kit>/tools/doc_index.py -C <worktree> --find risk` marks high; a failure's cause is unclear after one honest attempt; the
-brief's approach does not fit the code as it is. Say what you found and what it
-needs - a stronger agent takes it from there, the intended path, not a failure.
+`python <kit>/tools/doc_index.py -C <worktree> --find risk` marks high; a failure's cause is unclear
+after one honest attempt; the brief's approach does not fit the code as it is. Say what you found
+and what it needs: a stronger agent taking it is the intended path, not a failure.

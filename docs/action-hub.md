@@ -121,7 +121,10 @@ repository; Questions, To do and Docs also by id or title.
   scheduled task's state first and starts the task again only when the task ran the server it
   stopped (the task is `Running` or `Queued`), or when nothing ran and the task is ready; then it
   waits until the new server answers on `hub.port` (`RESTARTED: ...`). A task that cannot be read
-  or started after the stop prints the `STOPPED` line, why, and the start command (exit 1).
+  or started after the stop prints the `STOPPED` line, why, and how to start the task (exit 1).
+  A `restart` that starts nothing, like a failed start, points at the task (`setup --autostart`,
+  `Enable-ScheduledTask`, `Start-ScheduledTask`), never at `hub.py serve`: a server started in a
+  console ends with that shell, the task's does not.
   Neither ever kills a process: past `--timeout` (default 300 s, approximate: one request in
   flight may run past it) they print `TIMED OUT: ...` and exit 4.
 - `python tools/hub.py setup --check` writes nothing: it says whether `hub.access` is unset, set
@@ -495,16 +498,20 @@ is an orphan, which `kitlib.hubvalidate` warns of and the next publish of that i
 (`test_a_body_delete_that_fails_leaves_the_card_deleted_and_an_orphan_body`).
 
 What a body may hold (`kitlib/hubsite/pagecheck.py`, its docstring has the full list): at most
-512 KiB of UTF-8 (`MAX_BYTES`); no `script`, `iframe`, `object`, `embed`, `form`, `link`, `meta`,
-`base` or other element of `TAGS`; no `on*` attribute; no `href` that is not a `#fragment` (a
+512 KiB of UTF-8 (`MAX_BYTES`); no `script`, `iframe`, `object`, `embed`, `form`, `link`,
+`base` or other element of `TAGS`; a `meta` only as exactly `<meta charset="utf-8">` or
+`<meta name content>` with a name of `META_NAMES` (viewport, color-scheme, description, author,
+generator), each attribute once; a `<title>` only as `<title>text</title>`, with no attribute and
+no `<` in its text (`TITLE_SAYS`); no `on*` attribute; no `href` that is not a `#fragment` (a
 `data:` image on an svg `image` is the one exception); `src` and CSS `url()` only as `data:`; no
 `@import`, CSS backslash escape or function of `CSS_FUNCTIONS` (`image-set()`, `image()`,
 `src()`). Markup that the check's parser and a browser
 could read differently is refused too: `<` or `&` in a style element's text, a self-closing
-`<style/>`, and the words of `RAW` anywhere in the text: `<title`, `<textarea`, `<xmp`,
+`<style/>`, and the words of `RAW` anywhere in the text: `<textarea`, `<xmp`,
 `<noembed`, `<noframes`, `<plaintext`, and the comment and CDATA endings the two may place
 differently (`DIFFERENTIAL` and `RAW_ONLY` in
-`tests/hubsite/test_pagecheck.py`). A body that breaks a rule is refused whole, never stripped
+`tests/hubsite/test_pagecheck.py`). A whole document (doctype, `html`, `head`, `body`) passes
+(`FULL_DOCUMENT` there). A body that breaks a rule is refused whole, never stripped
 (`invalid`, field `html`, nothing written). Mermaid is not rendered by the kit: a body with `class="mermaid"` or a
 ` ```mermaid ` fence is refused with "render it to svg first", and the publisher draws the
 diagram as inline `<svg>`. The listener refuses any request body over 1 MiB (`MAX_BODY` in
@@ -529,9 +536,14 @@ and form posts. A diagram therefore shows only as an inline `<svg>` or a `data:`
 not blocked. A link clicked inside the reader moves the frame itself to that address, and the
 policy no longer applies there; the sandbox still blocks scripts and forms on that page. Some
 browsers may also look up the host names of links in advance (DNS prefetch). The page check
-refuses such a link, `<meta>` and `<link>` at publish, along with any markup where a browser
+refuses such a link, `<link>` and every `<meta>` but the ones above at publish, along with any markup where a browser
 could build one the check's parser never saw (the paragraph above), so a body published through
 the check has none. A body placed in the store by hand or copied in by `migrate` is not checked.
+A whole document goes in unchanged, the policy still first
+(`test_a_whole_document_is_framed_with_the_policy_still_first`). That a browser still applies it
+there is inferred from the HTML spec, not tested: an iframe srcdoc document is always no-quirks,
+and the policy meta opens the head, so the body's later doctype and `<head>` are ignored. The
+owner checks it in a real browser.
 
 Esc closes the reader only while the focus is outside the frame: keys typed inside the sandboxed
 document never reach the hub page. The Close button always works and gives the focus back to the

@@ -32,7 +32,7 @@ Dispatch traps (built-in planners that cannot write, output files are no rescue 
 
 ## The brief
 
-- Holds: role; the owner's words verbatim where they matter; verified facts; **exact files and sections
+- Holds: role; the owner's decisions where they matter, as a paraphrase plus the ruling id; verified facts; **exact files and sections
   to read**; scope + files *not* theirs + their owners; shared resources assigned; test gate (final: `gate.py --full` on the exact tip);
   report wanted; no land, merge or push; for code work the entry files and symbols you know
   (path:Symbol) - a brief with no paths costs the worker about 35 calls. Brief names doc topics
@@ -112,7 +112,7 @@ each host's tier-to-model map) is `<kit>/docs/ROSTER.md`.
   rewrite or delete each line, in ONE records-role commit. A new `.md`, shard or section adds its
   index line in the same commit, or the doc-budget check refuses the branch.
 - Durable facts -> the repo's docs, landed like any docs change, never in the host's config
-  folder; session state -> `docs/ops/state.local.md`. Worktrees are created and removed as the
+  folder; session state -> your state note (`<agent temp>/<repo slug>-coordinator/state-<session>.md`). Worktrees are created and removed as the
   profile says.
 - **Grow the tool set.** Weekly, run the repetition report on the repo
   (`<kit>/optional/usage/repetition_report.py`): repeated shell shapes, or a scratch script

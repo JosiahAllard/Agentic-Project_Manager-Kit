@@ -1,5 +1,8 @@
 """kitlib.gate.steps: selection by what changed, and judging a step by its log."""
+import builtins
+import time
 import unittest
+from unittest import mock
 
 from kitlib.gate import steps as S
 
@@ -144,6 +147,83 @@ class Select(unittest.TestCase):
         self.assertEqual(pick(g, ['x.md'])[0], [])
 
 
+class Smoke(unittest.TestCase):
+    """"gate".smoke_steps: added in the default (diff) mode only, manual ones included."""
+    G = gate_of(cmd('py', globs=['*.py']), cmd('boot', manual=True), cmd('proto', globs=['p/*']),
+                cmd('quick', globs=['*.py'], skip_if_selected=['proto']),
+                smoke_steps=['boot', 'quick'])
+
+    def test_the_default_mode_adds_the_smoke_steps_whatever_changed(self):
+        names, why = pick(self.G, ['readme.md'])
+        self.assertEqual(sorted(names), ['boot', 'quick'])
+        self.assertEqual(why, {'boot': 'smoke', 'quick': 'smoke'})
+        names, why = pick(self.G, ['a.py'])
+        self.assertEqual(sorted(names), ['boot', 'py', 'quick'])
+        self.assertEqual(why['quick'], 'changed a.py')        # selected anyway: its own reason
+
+    def test_a_smoke_step_is_never_dropped_by_skip_if_selected(self):
+        names, why = pick(self.G, ['a.py', 'p/x'])
+        self.assertIn('quick', names)
+        self.assertEqual(why['quick'], 'smoke')
+
+    def test_full_only_and_docs_add_no_smoke(self):
+        self.assertEqual(sorted(pick(self.G, [], full=True)[0]), ['proto', 'py'])
+        self.assertEqual(pick(self.G, [], only=['py'])[0], ['py'])
+        g = dict(self.G, docs_only={'globs': ['*.md'], 'steps': ['proto']})
+        self.assertEqual(pick(g, ['a.md'], docs=True)[0], ['proto'])
+
+    def test_unset_changes_nothing(self):
+        g = dict(self.G)
+        del g['smoke_steps']
+        self.assertEqual(pick(g, ['readme.md'])[0], [])
+
+    def test_an_unknown_smoke_or_docs_step_name_refuses_in_build(self):
+        for top in ({'smoke_steps': ['nosuch']},
+                    {'docs_only': {'globs': ['*.md'], 'steps': ['nosuch']}}):
+            with self.assertRaises(S.GateConfigError, msg=top) as cm:
+                S.build(gate_of(cmd('a'), **top), ROOT, 'b', 't')
+            self.assertIn('nosuch', str(cm.exception))
+            self.assertNotIsInstance(cm.exception, S.UnknownStep)
+
+    def test_a_docs_only_section_with_empty_or_missing_steps_refuses_in_build(self):
+        # a docs-only change skips the tests but keeps the scrub; without this a docs-only
+        # gate would run nothing and still write a record
+        for spec in ({'globs': ['*.md'], 'steps': []}, {'globs': ['*.md']}):
+            with self.assertRaises(S.GateConfigError, msg=spec) as cm:
+                S.build(gate_of(cmd('scrub'), docs_only=spec), ROOT, 'b', 't')
+            self.assertIn('"docs_only".steps is empty', str(cm.exception))
+            self.assertIn('scrub step', str(cm.exception))
+        S.build(gate_of(cmd('scrub'), docs_only={'globs': ['*.md'], 'steps': ['scrub']}),
+                ROOT, 'b', 't')
+
+
+class DocsOnly(unittest.TestCase):
+    G = gate_of(cmd('scrub', globs=['*']), cmd('suite', always=True),
+                docs_only={'globs': ['docs/*.md', '*.txt'], 'exclude': ['docs/ops/*'],
+                           'steps': ['scrub']})
+
+    def test_every_path_must_match_its_globs_and_none_its_exclude(self):
+        self.assertTrue(S.docs_only(self.G, ['docs/a.md', 'DOCS/B.MD', 'x/y.txt']))
+        self.assertFalse(S.docs_only(self.G, ['docs/a.md', 'kitlib/a.py']))
+        self.assertFalse(S.docs_only(self.G, ['docs/ops/a.md']))
+
+    def test_no_change_unset_kit_json_and_barred_paths_are_never_docs_only(self):
+        self.assertFalse(S.docs_only(self.G, []))
+        self.assertFalse(S.docs_only(gate_of(cmd('a')), ['docs/a.md']))
+        g = dict(self.G, docs_only={'globs': ['*'], 'steps': ['scrub']})
+        self.assertTrue(S.docs_only(g, ['docs/a.md']))
+        self.assertFalse(S.docs_only(g, ['docs/a.md', '.kit.json']))
+        self.assertFalse(S.docs_only(g, ['docs/a.md', '.KIT.JSON']))
+        self.assertFalse(S.docs_only(g, ['docs/a.md', 'tools/x.py'], barred=['tools\\x.py']))
+
+    def test_docs_mode_runs_exactly_the_docs_steps_with_setup(self):
+        names, why = pick(self.G, ['docs/a.md'], docs=True)
+        self.assertEqual(names, ['scrub'])
+        self.assertEqual(why, {'scrub': 'docs-only'})
+        g = dict(self.G, setup=['{python}', '-c', 'pass'])
+        self.assertEqual(pick(g, ['docs/a.md'], docs=True)[0], ['setup', 'scrub'])
+
+
 class Judge(unittest.TestCase):
     def step(self, **kw):
         spec = cmd('s', **kw)
@@ -177,6 +257,16 @@ class Judge(unittest.TestCase):
         g = {'zero_tests': r'No test is available'}
         self.assertEqual(S.judge(self.step(), 'No test is available\n', 0, g)[0], 'FAIL')
 
+    def test_zero_tests_fails_a_step_whose_bare_pass_pattern_matched(self):
+        # a bare pass string also matches the zero-count line, so the gate's zero_tests rule is
+        # what keeps that run from passing
+        st = self.step(**{'pass': 'UNIT TESTS OK'})
+        g = {'zero_tests': [r'\bUNIT TESTS OK 0\b']}
+        status, why = S.judge(st, 'UNIT TESTS OK 0\n', 0, g)
+        self.assertEqual(status, 'FAIL')
+        self.assertEqual(why, ["reported zero tests run ('UNIT TESTS OK 0')"])
+        self.assertEqual(S.judge(st, 'UNIT TESTS OK 12\n', 0, g), ('PASS', []))
+
     def test_errors_policy_windows_and_excuses(self):
         g = {'errors': {'match': 'ERROR', 'excuse': 'ERROR expected', 'expect': ['BEGIN', 'END']}}
         st = self.step()
@@ -196,6 +286,100 @@ class Judge(unittest.TestCase):
     def test_check_step_may_have_an_empty_log(self):
         st = S.build(gate_of({'name': 'c', 'check': 'x'}), ROOT, 'b', 't')[0]
         self.assertEqual(S.judge(st, '', 0, {})[0], 'PASS')
+
+
+class ZeroCountPasses(unittest.TestCase):
+    """zero_count_passes: the pass patterns that would also match a zero-test run."""
+
+    def warned(self, passes, **top):
+        return S.zero_count_passes(gate_of(cmd('t', **{'pass': passes}), **top))
+
+    def test_a_bare_pass_string_warns_under_a_zero_tests_pattern_that_extends_it(self):
+        (line,) = self.warned('UNIT TESTS OK', zero_tests=[r'\bUNIT TESTS OK 0\b'])
+        self.assertIn("step t \"pass\" 'UNIT TESTS OK' accepts a zero-test run", line)
+        self.assertIn("'UNIT TESTS OK 0'", line)
+
+    def test_a_floored_count_does_not_warn(self):
+        self.assertEqual(self.warned(r'\bUNIT TESTS OK [1-9]\d*\b',
+                                     zero_tests=r'\bUNIT TESTS OK 0\b'), [])
+        self.assertEqual(self.warned([r'(?m)^Ran [1-9][0-9]* tests? in', r'(?m)^OK\b']), [])
+
+    def test_a_count_that_may_be_zero_warns_without_zero_tests(self):
+        self.assertEqual(len(self.warned(r'(?m)^Ran \d+ tests? in')), 1)    # the Ran 0 tests line
+        (line,) = self.warned(r'Passed: \d+')                                 # its own count
+        self.assertIn("'Passed: 0'", line)
+
+    def test_a_literal_zero_or_a_class_that_takes_letters_is_no_count(self):
+        self.assertEqual(self.warned(r'\b0 failed\b'), [])
+        self.assertEqual(self.warned(r'(?m)^engine_run: dir=\S'), [])     # a game repo's step
+        self.assertEqual(self.warned(r'done: .+'), [])
+
+    def test_a_bare_pass_string_with_no_zero_line_it_matches_does_not_warn(self):
+        self.assertEqual(self.warned('kit_tests: OK'), [])
+        self.assertEqual(self.warned('^OK$', zero_tests=r'^OK 0$'), [])
+
+    def test_the_ran_zero_tests_line_alone_warns(self):
+        # no zero_tests, and no count of its own: only the built-in Ran 0 tests line matches
+        (line,) = self.warned(r'(?m)^Ran .+ in ')
+        self.assertIn("'Ran 0 tests in 0.000s'", line)
+
+    def test_a_malformed_regex_gives_no_line_and_never_raises(self):
+        self.assertEqual(self.warned('('), [])                            # as a pass pattern
+        self.assertEqual(self.warned('UNIT TESTS OK', zero_tests='('), [])  # as a zero_tests one
+
+    def test_a_pattern_it_cannot_read_gives_no_line(self):
+        self.assertEqual(self.warned(r'(?P<a>x)(?(a)y|z) OK'), [])
+        self.assertEqual(S.zero_count_passes({}), [])
+
+    def test_a_count_that_may_be_empty_warns(self):
+        (line,) = self.warned(r'Passed: \d*')                 # matches 'Passed: 0' too
+        self.assertIn("'Passed: 0'", line)
+        self.assertEqual(self.warned(r'Passed: [1-9]\d*'), [])
+        self.assertEqual(self.warned(r'(?m)^Ran [1-9]\d* tests? in'), [])
+
+    def test_an_optional_group_holding_a_count_is_left_out(self):
+        # walked once it would read '0 skipped, 10 passed': the 0 is not the pass count
+        self.assertEqual(self.warned(r'(?:\d+ skipped, )?[1-9]\d* passed'), [])
+
+    def assertQuietAndFast(self, passes, **top):
+        start = time.monotonic()
+        self.assertEqual(self.warned(passes, **top), [])
+        self.assertLess(time.monotonic() - start, 5.0)
+
+    def test_a_huge_or_nested_repeat_gives_no_line_fast(self):
+        self.assertQuietAndFast(r'Passed: \d{2000000000}')
+        self.assertQuietAndFast(r'Passed: ((\d{1000}){1000}){1000}')
+        self.assertQuietAndFast(r'Passed: ((?:\b){1000}){1000000}')        # an empty body
+        self.assertQuietAndFast('UNIT TESTS OK', zero_tests=r'OK ((\d{1000}){1000}){1000}')
+
+    def test_deep_nesting_gives_no_line_and_never_raises(self):
+        deep = '(' * 3000 + r'\d+' + ')' * 3000
+        self.assertQuietAndFast(deep)
+        self.assertQuietAndFast('UNIT TESTS OK', zero_tests=deep)
+
+    def without(self, *blocked):
+        """builtins.__import__ that refuses kitlib.gate.steps the modules `blocked`: a module
+        name, or 're' to refuse `from re import _parser` (before Python 3.11 the stdlib regex
+        parser was only sre_parse, and a later Python may drop both). Only steps' own imports:
+        sre_parse itself reads re._parser on 3.11 on."""
+        real = builtins.__import__
+
+        def imp(name, globals=None, locals=None, fromlist=(), level=0):
+            if (name in blocked and (globals or {}).get('__name__') == S.__name__
+                    and (name != 're' or {'_parser', '_constants'} & set(fromlist or ()))):
+                raise ImportError('blocked: %s' % name)
+            return real(name, globals, locals, fromlist, level)
+        return mock.patch.object(builtins, '__import__', imp)
+
+    def test_the_older_parser_modules_serve_when_re_has_none(self):
+        with self.without('re'):
+            (line,) = self.warned(r'Passed: \d+')
+        self.assertIn("'Passed: 0'", line)
+
+    def test_no_regex_parser_gives_no_line_and_never_raises(self):
+        with self.without('re', 'sre_parse', 'sre_constants'):
+            self.assertEqual(self.warned('UNIT TESTS OK', zero_tests=r'\bUNIT TESTS OK 0\b'), [])
+            self.assertEqual(self.warned(r'(?m)^Ran \d+ tests? in'), [])
 
 
 if __name__ == '__main__':

@@ -4,7 +4,7 @@ they were: the same entries in the same order, so docs/kit-json.md and every rep
 as they were. Codex's folder stays locked until a hosts.json entry declares it."""
 import unittest
 
-from kitlib.config import schema
+from kitlib.config import owner, schema
 from kitlib.host import registry
 
 
@@ -13,8 +13,12 @@ class OwnerDefaults(unittest.TestCase):
         self.assertEqual(schema.OWNER_PATHS, [
             'AGENTS.md', 'CLAUDE.md', '.claude/', '.codex/', 'docs/agent-profile.md',
             '.github/workflows/', '.kit.json', 'tools/gate.json', 'kitlib/gate/strict_defaults.py',
-            'kitlib/backlog/roles.py'])
+            'kitlib/backlog/roles.py', 'hosts/claude/managed-settings.json'])
         self.assertEqual(schema.OWNER_PATHS_EXCEPT, ['.claude/worktrees/', '.codex/worktrees/'])
+
+    def test_the_managed_settings_template_is_owner_locked_by_default(self):
+        self.assertIn('hosts/claude/managed-settings.json', schema.OWNER_PATHS)
+        self.assertTrue(owner.Rules().is_locked('hosts/claude/managed-settings.json'))
 
     def test_every_hosts_owner_paths_and_worktrees_folder_are_in_it(self):
         for profile in registry.profiles():
