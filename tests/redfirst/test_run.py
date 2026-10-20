@@ -31,6 +31,7 @@ TEST_MUL = ('import unittest\nfrom calc import mul\n\n\nclass T(unittest.TestCas
             '    def test_mul(self):\n        self.assertEqual(mul(2, 3), 6)\n')
 TEST_ADD = ('import unittest\nfrom calc import add\n\n\nclass T(unittest.TestCase):\n'
             '    def test_add(self):\n        self.assertEqual(add(2, 3), 5)\n')
+SUMMARY = 'summary.txt'                         # the file a run writes in its log folder
 CONFIG = {'redfirst': {'runners': [{'glob': 'tests/test_*.py', 'kind': 'python',
                                     'pythonpath': 'tests'},
                                    {'glob': 'src/test_*.py', 'kind': 'python', 'pythonpath': 'src'}]}}
@@ -381,14 +382,14 @@ class SummaryFile(Case):
         return rc, out.getvalue().splitlines()
 
     def summary(self, logs):
-        with open(os.path.join(logs, R.SUMMARY), encoding='utf-8') as f:
+        with open(os.path.join(logs, SUMMARY), encoding='utf-8') as f:
             return f.read().splitlines()
 
     def test_the_summary_holds_every_line_said_and_the_last_line_names_it(self):
         self.commit({'tests/calc.py': CALC_MUL, 'tests/test_mul.py': TEST_MUL})
         rc, lines = self.run_into(self.logs, '--tests', 'tests/test_mul.py')
         self.assertEqual(rc, V.EXIT_RED, lines)
-        path = os.path.join(self.logs, R.SUMMARY)
+        path = os.path.join(self.logs, SUMMARY)
         self.assertEqual(lines[-1], 'summary   %s' % path)
         self.assertEqual(self.summary(self.logs), lines[:-1])
         self.assertTrue(lines[-2].startswith('REDFIRST OK'), lines)
@@ -401,8 +402,8 @@ class SummaryFile(Case):
         rc1, lines1 = self.run_into(one, '--tests', 'tests/test_mul.py')
         rc2, lines2 = self.run_into(two, '--tests', 'src/test_add.py')
         self.assertEqual((rc1, rc2), (V.EXIT_RED, V.EXIT_GREEN), (lines1, lines2))
-        self.assertEqual(lines1[-1], 'summary   %s' % os.path.join(one, R.SUMMARY))
-        self.assertEqual(lines2[-1], 'summary   %s' % os.path.join(two, R.SUMMARY))
+        self.assertEqual(lines1[-1], 'summary   %s' % os.path.join(one, SUMMARY))
+        self.assertEqual(lines2[-1], 'summary   %s' % os.path.join(two, SUMMARY))
         s1, s2 = self.summary(one), self.summary(two)
         self.assertEqual((s1, s2), (lines1[:-1], lines2[:-1]))
         self.assertIn('logs      %s' % one, s1)
@@ -415,7 +416,7 @@ class SummaryFile(Case):
         with mock.patch.object(R, 'make_tree', return_value=(None, 'no tree today')):
             rc, lines = self.run_into(self.logs, '--tests', 'tests/test_mul.py')
         self.assertEqual(rc, V.EXIT_UNDECIDED, lines)
-        self.assertEqual(lines[-1], 'summary   %s' % os.path.join(self.logs, R.SUMMARY))
+        self.assertEqual(lines[-1], 'summary   %s' % os.path.join(self.logs, SUMMARY))
         self.assertEqual(self.summary(self.logs), lines[:-1])
         self.assertIn('failed    no tree today', lines)
 
