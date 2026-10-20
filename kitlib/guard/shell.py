@@ -981,7 +981,7 @@ def msys_to_win(p):
 # from its own module) holds files, so its <rest> is the file: absolute (ps_filesystem_path), or
 # relative and read from the location (ps_filesystem_relative); any other provider, or a module
 # the guard does not know, is a place it cannot tell. PowerShell takes a \ before a bare provider
-# (\FileSystem::C:\x is C:\x); a / there, or a \ before a module, it refuses, and the guard reads
+# (\FileSystem::<drive>:\x is <drive>:\x); a / there, or a \ before a module, it refuses, and the guard reads
 # them as the place they would name. A module of . or .. is no module (_ps_provider).
 PS_PROVIDER_RE = re.compile(r'^[\\/]?(?:([^\\/:]+)\\)?([^\\/:]+)::(.*)$', re.S)
 PS_FILESYSTEM_MODULES = (None, 'microsoft.powershell.core')

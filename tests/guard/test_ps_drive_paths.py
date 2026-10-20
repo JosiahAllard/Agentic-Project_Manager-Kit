@@ -83,7 +83,7 @@ class IntoMain(Base):
     def test_a_relative_filesystem_path_is_read_from_the_location(self):
         # PowerShell reads FileSystem::x.txt (and \FileSystem::x.txt) from the process's directory,
         # which Set-Location does not move; the guard reads it from the location, as it reads a
-        # relative .NET path (docs/guard-v2.md B17, cut: R-2271, R-2322)
+        # relative .NET path (docs/guard-v2.md B17, cut)
         for text in (r'New-Item FileSystem::x.txt', r'New-Item \FileSystem::x.txt',
                      r"Set-Content -LiteralPath '\FileSystem::x.txt' -Value y",
                      r'New-Item Microsoft.PowerShell.Core\FileSystem::sub\x.txt'):
@@ -675,7 +675,7 @@ class DriveAndProviderTargets(Base):
                 self.assertIn('cannot place', d.reason)
 
     def test_another_provider_after_a_leading_separator(self):
-        # B16 cut (R-2266, R-2322): read as a folder at the drive's root before, so the jail refused
+        # B16 cut: read as a folder at the drive's root before, so the jail refused
         # it from a worktree; now a place the guard cannot tell, passed from a worktree
         for text in (r'New-Item \Registry::HKCU\x', r'New-Item /Registry::HKCU\x',
                      r"Set-Content -LiteralPath '\Environment::FOO' -Value y"):
@@ -816,7 +816,7 @@ class ResolvePath(unittest.TestCase):
             'filesystem::C:/m/x': 'C:\\m\\x',
             'Microsoft.PowerShell.Core\\FileSystem::C:\\m\\x': 'C:\\m\\x',
             'FileSystem::\\\\srv\\share\\x': '\\\\srv\\share\\x',
-            # relative: read from the location, as a .NET path is (B17; R-2271, R-2322)
+            # relative: read from the location, as a .NET path is (B17, cut)
             'FileSystem::x.txt': 'C:\\w\\wt\\x.txt',
             'FileSystem::sub\\x.txt': 'C:\\w\\wt\\sub\\x.txt',
             'FileSystem::C:x': None,
@@ -852,7 +852,7 @@ class ResolvePath(unittest.TestCase):
                      'FileSystem::~', 'FileSystem::Registry::x', 'FileSystem::Main:\\x'):
             with self.subTest(text):
                 self.assertTrue(sh.ps_unplaceable(text))
-        # a relative FileSystem:: path is read from the location (B17; R-2271, R-2322)
+        # a relative FileSystem:: path is read from the location (B17, cut)
         for text in ('', 'C:\\x', 'C:x', 'x.txt', '.\\a:b', '\\\\srv\\s', '//srv/s',
                      'FileSystem::C:\\x', 'Microsoft.PowerShell.Core\\FileSystem::\\\\srv\\s',
                      '\\FileSystem::C:\\x', '.\\x.txt::$DATA', '..\\x.txt::$DATA',
