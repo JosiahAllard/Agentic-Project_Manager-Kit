@@ -494,7 +494,7 @@ class SlugRedirect(OutsideCase):
 
 
 class BranchByPath(OutsideCase):
-    """Owner ruling R-2343: the plain verb, named by its PATH, removes a registered, unlocked tree
+    """The owner's rule: the plain verb, named by its PATH, removes a registered, unlocked tree
     on a branch outside the worktree folders once that branch has landed; every later check runs.
     `--abandon`, the slug form and the landing cleanup still refuse it."""
 

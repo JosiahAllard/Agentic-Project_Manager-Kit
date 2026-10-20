@@ -12,7 +12,8 @@ lines). Nothing here prints. The checks, in order, are the PM tool's:
   one of `branch_template`'s branches when one is set; or, named by its PATH, a registered DETACHED tree
   outside those folders (`outside_target`: not the main checkout nor in it, no link on the way,
   not locked, holding no other registered tree); the plain verb (`remove`) alone also takes such a
-  tree on a branch (owner ruling R-2343), every later check still running. A slug never names
+  tree on a branch (the owner's rule: only that deliberate by-path call clears one), every later
+  check still running. A slug never names
   an outside tree: one that only matches such a tree is refused with its path-form command
   (`slug_redirect`);
 - landed: the branch (or detached HEAD) is an ancestor of `<remote>/<main_branch>` AS IT STANDS,
@@ -575,7 +576,7 @@ def outside_target(ctx, path, branch_ok=False):
     """`(path, registrations)` for a registered DETACHED worktree outside every worktree folder,
     named by its path (an agent's red-run tree in a scratchpad), or the exit status after saying
     why not (a missing folder: OK). The scope is git's own registration list. With `branch_ok`
-    (only the plain verb, `remove`: owner ruling R-2343) a tree on a branch is taken too, and
+    (only the plain verb, `remove`, by the owner's rule) a tree on a branch is taken too, and
     `merge_check` then judges that branch; `--abandon`, the landing cleanup and classify (which
     call `_remove` directly) take only a detached one."""
     main, nothing = ctx.main, 'nothing was removed'
