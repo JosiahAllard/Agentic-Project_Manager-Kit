@@ -107,7 +107,7 @@ Tests: `tests/worktree/test_remove_snapshot.py` (`IgnoredAfterTheLastStatusRead`
 - Machine lock: read through the kit's own `<kit>/tools/machine_lock.py status --json` only (the tool read beside the kit, `kitroot.lock_tool`). There is no `MACHINE_LOCK_TOOL` or `MACHINE_LOCK_TEST_ROOT`. Both the PM shape (`lock.held/waiting/background`) and the kit snapshot (`runs` plus `queue.entries`) are accepted; anything else defers the sweep.
 - Sweep task: `-C` replaces `--repo`. The task runs this kit's `tools/worktree_remove.py` by absolute path with `-C <main checkout>`. The kit-stub check is replaced by a check that the tool sits in a main checkout (not a branch worktree's copy).
 - `<branch> --branch` without `--abandon` is new: neither the PM tool nor any repo's own copy removed a landed branch without its worktree. Its checks are the plain verb's merge check and the sweep's open-claim check.
-- Output is collected and printed when the verb ends, not streamed. The `--apply` log (`<shared temp>/<repo name>-worktree-sweep.log`) is written from the same lines.
+- Output is collected and printed when the verb ends, not streamed. The `--apply` log (`<shared temp>/<repo name>-worktree-sweep.log`; `<shared temp>` is `kitlib.config.user.shared_temp`: the machine config's `temp_dir`, else the system temp folder) is written from the same lines.
 
 ## Not ported
 

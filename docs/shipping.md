@@ -95,7 +95,7 @@ than the baseline fails, a file with no baseline fails on its first hit, and few
   `optional/bridge/STATUS.md`). Tests in `tests/bridge`.
 - `agenttemp`: `agent_temp_sweep.py` clears old entries from the agents' shared temp folder and its
   session folders, set by `agent_temp_sweep` in the machine config (docs/kit-json.md). It never
-  removes a `*-coordinator` or `*-consultant` folder, whatever `keep` says (`BUILT_IN_KEEP`; they
+  removes a `*-coordinator`, `*-consultant` or `shared` folder, whatever `keep` says (`BUILT_IN_KEEP`; the first two
   hold a coordinator's state note and a consultant's notes, docs/launcher.md "Start").
 
 ## Knowledge (`knowledge/asset-generation`)
