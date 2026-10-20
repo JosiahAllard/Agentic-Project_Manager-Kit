@@ -504,7 +504,7 @@ class ApiCase(httpfix.ListenerCase):
                         r = post(lis.port, path, body, token)
                     else:
                         r = get(lis.port, path, token)
-                    if route.role in (role, ANY):
+                    if roles.allowed(route, role):     # the local listener: never strong
                         self.assertEqual((r.status, r.json().get('error')), (200, None))
                     else:
                         self.assertEqual((r.status, r.code()), (403, 'forbidden'))

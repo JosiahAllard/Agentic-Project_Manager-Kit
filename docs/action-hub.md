@@ -603,16 +603,15 @@ read; they are disabled unless the snapshot says `strong`, and a refusal (a 403 
 on the card in the server's words (`DomTest` in `tests/hubsite/test_page.py`).
 
 ## Machine lock routes
-The hub server reads the machine lock in-process through `kitlib.lock.api` (the owner's decision), for the
-schedule view the page will show. `kitlib/hubsite/api.py` docstring "Machine lock" is the
-source; the server's door to the lock is `kitlib/hubsite/lockdoor.py`, made by
-`serve.machine_sources` and first opening the lock on its first read.
-- Three routes, all the owner's: `GET /api/v1/lock/view`, `GET /api/v1/lock/stats` and
+The hub server reads and changes the machine lock in-process through `kitlib.lock.api` (the
+owner's decision), for the schedule page. `kitlib/hubsite/api.py` docstring "Machine lock" is
+the source; the server's door to the lock is `kitlib/hubsite/lockdoor.py`, made by
+`serve.machine_sources` and first opening the lock on its first call.
+- Three reads, all the owner's: `GET /api/v1/lock/view`, `GET /api/v1/lock/stats` and
   `GET /api/v1/lock/wait`. An agent token, or no token, is refused every one with 403
   `forbidden` (field `role`) on the local and the tunnel listener alike, before the lock is
-  read. The lock's writes are not hub routes, and the lock MCP server keeps no write path,
-  by the owner's decision.
-- `lock/view` answers `{lock_revision, view}`: the schedule window's view as JSON
+  read. The lock MCP server keeps no write path, by the owner's decision.
+- `lock/view` answers `{lock_revision, view, writer, writes}`: the schedule window's view as JSON
   (`kitlib.lockui.model.to_json`): holds, runs, the strip, lanes, details, cores, memory,
   warnings, the game slots and the CPU division. One allow-list of keys serves both
   listeners: no pid, process tree, log path, session, store folder or run note is in it.
@@ -629,6 +628,43 @@ source; the server's door to the lock is `kitlib/hubsite/lockdoor.py`, made by
   local client that sends the tunnel's word gets the local view.
 - With no lock door, or a lock that cannot be read, a route answers 503 `unavailable` (field
   `lock`), naming only the error's class, never its text.
+- `writer` is `owner` when the lock takes the hub's own process for the owner, else `agent` (a
+  hub started under an agent session). `writes` is `{lock, strong, why}` for this caller: `lock`
+  true when it may make the `lock-write` writes, `strong` true when it may make every write, and
+  `why` the reason it may not, for the page to show.
+
+Eight writes, by the owner's decision. Each answers `{ok, result}` plus the view after the write
+(`lock_revision`, `view`, `writer`, `writes`):
+
+| Route (POST `/api/v1/...`) | Body | Role |
+|---|---|---|
+| `lock/holds` | `{kind: reserve, scope, start, end, note}` or `{kind: hold, scope, start, end, note, cpu, gpu}` | approver |
+| `lock/holds/{id}/edit` | `{start, end, note}`, each optional | approver |
+| `lock/holds/{id}/end` | `{}` | approver |
+| `lock/division` | `{fields}` or `{defaults: true}` | approver |
+| `lock/runs/{id}/end` | `{confirm}`, which repeats the run id | lock-write |
+| `lock/runs/{id}/top` | `{}` | lock-write |
+| `lock/game_mode` | `{enabled}` | lock-write |
+| `lock/games` | `{text}`, the Games dialog's lines | lock-write |
+
+- `lock-write` (`kitlib.hubsite.api.LOCK_WRITE`) is the owner on the PC's listener, and only the
+  strong owner through the tunnel. `approver` is the strong owner on either listener (a browser
+  paired as the strong owner, or the Access login; docs/hub-remote-access.md "The strong owner").
+  An agent may make no write. Warning: the local listener takes the owner token for a lock
+  writer, so a future relay that forwards remote requests to the local listener must close that
+  path.
+- The page makes owner holds only; it may edit or end any hold. A reserve's `start` and `end`
+  are ISO times with their offset. A hold's and an edit's typed times (`HH:MM`,
+  `YYYY-MM-DD HH:MM`, `+2h`) are read in the PC's local zone, whatever zone the browser is in
+  (`kitlib.lockui.actions`); an edit's missing note keeps the hold's own.
+- The lock records the writer as `hub`, or `hub-tunnel` for the tunnel's calls. A hub whose
+  `writer` is `agent` refuses every write with 403 `forbidden` (field `lock`) and the reason,
+  before the lock is asked.
+- The hub's writes run one at a time. The lock's refusals are the hub's codes: `invalid` 400
+  (the lock's field), `forbidden` 403 (field `lock`), `not_found` 404 (field `id`), `conflict` and
+  the lock's `busy` 409 (busy says to try again), a store failure 503 `unavailable`. Through the
+  tunnel a store failure, and any message or note that names a folder, is a fixed phrase
+  (`lockdoor.REMOTE_SAYS`).
 
 ## Views read live
 Never stored; read from their sources (`kitlib.hubsite.derived`, `kitlib.hubsite.backlog`):
