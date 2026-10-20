@@ -160,7 +160,8 @@ class Spellings(Base):
     def test_start_process(self):
         """A Start-Process -ArgumentList run (rules.tool_run; commands._split_list): its words, a
         list or strings split as Windows splits them, are the tool's, judged for the role as any
-        run."""
+        run. A double-quoted segment is ONE argument, as Windows hands it to the tool, so
+        `--summary "x --priority 1"` is a summary, not a price."""
         for args in ("'%s','set','X-1','--priority','1'" % self.tool,
                      "'%s set X-1 --priority 1'" % self.tool,
                      "'%s','-C','%s','close','X-1'" % (self.tool, self.wt),
@@ -172,10 +173,6 @@ class Spellings(Base):
                      "'%s','-C %s show X-1'" % (self.tool, self.wt)):
             with self.subTest(args):
                 self.allowed(self.cmd('Start-Process python -ArgumentList %s' % args, tool='PowerShell'))
-
-    def test_start_process_keeps_a_double_quoted_value_one_word(self):
-        """Windows hands a double-quoted -ArgumentList segment to the tool as ONE argument
-        (commands._split_list), so `--summary "x --priority 1"` is a summary, not a price."""
         self.rec = pulled_by('kit/wt')
         self.allowed(self.cmd("Start-Process python -ArgumentList '%s -C %s set X-1 --summary \"x --priority 1\"'"
                               % (self.tool, self.wt), tool='PowerShell'))
