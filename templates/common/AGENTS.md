@@ -77,7 +77,7 @@ A classifier refusal or permission denial ends that action: report it verbatim. 
 
 ## Owner decisions
 
-- Recorded in `docs/DECISIONS.md` (line format in its header) by a `pm-kit:records` agent as
+- Recorded in `docs/DECISIONS.md` (line format in its header) by a `pm-kit:docs-writer` agent as
   `<one-line summary, the agent's paraphrase>`; the owner's words stay with the PM, never
   quoted here (quoting relayed words into an authority file is what the safety check refuses as
   instruction injection). Words the owner types in this repo's own session are passed on as a paraphrase plus the ruling id. Never
