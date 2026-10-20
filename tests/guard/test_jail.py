@@ -1107,15 +1107,19 @@ class UnplacedGit(MainGit):
         self.worker_denied(['cmd /c "set GIT_DIR=%s/.git && %s"' % (m, g)], tool='PowerShell')
 
     def test_declare_p_git_dir_not_setter(self):
-        # -p lists the variables named (any other attribute is then ignored): no value is set
+        # declare, typeset and local -p list the variables named (any other attribute is then
+        # ignored): no value is set
         m, wt = self.main, W.fwd(self.w.wt)
         g = 'git -C "%s" branch -m main old' % wt
         self.judged_as_written(['declare -p GIT_DIR; %s' % g, 'typeset -p GIT_DIR GIT_WORK_TREE; %s' % g,
-                                'declare -xp GIT_DIR; %s' % g, 'readonly -p GIT_DIR; %s' % g,
-                                'export -p; %s' % g])
+                                'declare -xp GIT_DIR; %s' % g, 'export -p; %s' % g, 'readonly -p; %s' % g])
         # without -p the name is set or exported: the line's git stays unplaceable
         self.worker_denied(['declare -x GIT_DIR; %s' % g, 'export GIT_DIR; %s' % g,
                             'declare -x GIT_DIR="%s/.git"; %s' % (m, g), 'typeset -r GIT_DIR=x; %s' % g])
+        # export -p and readonly -p with a name still export, mark or set it (bash 5): unplaceable
+        self.worker_denied(['export -p GIT_DIR="%s/.git" GIT_WORK_TREE="%s"; git -C "%s" reset --hard' % (m, m, wt),
+                            'readonly -p GIT_DIR="%s/.git"; %s' % (m, g), 'export -p GIT_DIR; %s' % g,
+                            'export -np GIT_DIR="%s/.git"; %s' % (m, g), 'readonly -p GIT_DIR; %s' % g])
 
     def test_git_index_file_prefix_scoped_to_its_command(self):
         # GIT_INDEX_FILE=x before git reaches that git alone (the temp-index pattern): the line's
