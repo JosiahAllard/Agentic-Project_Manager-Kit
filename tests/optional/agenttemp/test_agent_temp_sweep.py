@@ -842,6 +842,15 @@ class UserTemp(Case):
             self.assertIn('not absolute', text)
             self.assertTrue(os.path.isdir(old), u)
 
+    def test_drain_is_refused_when_an_absolute_registry_temp_holds_an_unexpanded_var(self):
+        self.config({S.KEY: {'dir': self.dir}})
+        old = self.session(self.local, 'proj', SID_OLD)
+        u = os.path.join(self.tmp, '%USERNAME%', 'Temp')
+        with mock.patch.object(S, 'registry_user_temp', lambda: u):
+            code, text = self.main('--drain-old-user-temp', '--apply')
+        self.assertEqual(code, S.EXIT_DRAIN_REFUSED, text)
+        self.assertTrue(os.path.isdir(old))
+
     def test_drain_is_refused_without_a_registry_temp(self):
         self.config({S.KEY: {'dir': self.dir}})
         old = self.session(self.local, 'proj', SID_OLD)
