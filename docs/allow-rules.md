@@ -50,11 +50,12 @@ are `PowerShell(...)` only; the denies come in both `Bash(...)` and `PowerShell(
 - **Allow:** `PowerShell(python <script> -C R * --expect-tip * --submit)`, plus one line per lane
   that adds ` --lane <lane>`. There is never a `--lane *`: a `*` at the end would carry `> file`.
   With no extra lanes this is 4 lines.
-- **Deny:** 32 lines per shell and spelling, 128 in all:
+- **Deny:** 54 lines per shell and spelling, 216 in all:
   - `python <script> * -C*`: a second `-C` after a space, or a glued one;
   - `python <script> -C R *-C*`: the text `-C` anywhere after the fixed `-C R` prefix;
   - `python <script> *--lo*`: `--log-dir` or any prefix of it, so an allowed submit cannot send the gate's logs anywhere (`land.py` takes abbreviations);
-  - `python <script> *X*` for each X of `METACHARS` in `kitlib/allowrules/rules.py`: `> < | ; & $ ( % ' " \ { } #`, the backtick, tab, CR, LF and NUL, the typographic quotes U+2018-U+201E and the dashes U+2013-U+2015.
+  - `python <script> * -- *`: a bare `--` (`END_OF_OPTIONS`). argparse reads everything after it as a branch name, the trailing `--submit` included, so `land.py -C R --expect-tip T -- kit/a --submit` would run a foreground landing. With `--submitted P` before the `--` it would also skip `land.py`'s "`--submit` and `--submitted`, not both" check (`test_double_dash_makes_submit_a_branch_denied`);
+  - `python <script> *X*` for each X of `METACHARS` in `kitlib/allowrules/rules.py`: `> < | ; & $ ( % ' " \ { } #`, the backtick, tab, CR, LF and NUL, the typographic quotes U+2018-U+201E, the dashes U+2013-U+2015, and `SEPARATORS`: VT, FF, U+0085, U+00A0, U+1680, U+2000-U+200A, U+2028, U+2029, U+202F, U+205F and U+3000.
 
 argparse keeps the last `-C`, so a second one would move the landing to another checkout. The
 `-C` denies close it however it is spelled: `'-C'`, `"-C"`, `\-C`, `{-C,...}`, a tab before it, or
@@ -77,9 +78,10 @@ The metacharacter denies close what an allow's inner `*` would otherwise carry:
 - a quote, backslash or tab that hides a second `-C`, or glues a flag into a value. In Bash, `--expect-tip abc\ --submit` is one word, so `land.py` would run without `--submit`;
 - a cut that drops the trailing `--submit`, so `land.py` would run a foreground landing (say from an agent-written `--submitted` payload): ` #` starts a PowerShell comment, PowerShell ends a statement at a bare CR, and a native command line ends at NUL;
 - PowerShell's other quotes, U+2018-U+201B (single) and U+201C-U+201E (double). It strips them like `'` and `"`, so `-‘C’` reaches `land.py` as `-C` and `--l‘o’g-dir` as `--log-dir`;
-- PowerShell's other parameter dashes, U+2013-U+2015. Windows PowerShell 5.1 passes them to python as written, so `–C` is no `-C` there; they are denied anyway, since no submit needs one.
+- PowerShell's other parameter dashes, U+2013-U+2015. Windows PowerShell 5.1 passes them to python as written, so `–C` is no `-C` there; they are denied anyway, since no submit needs one;
+- PowerShell's other argument separators (`SEPARATORS`). Each splits a native argument as a space does, so `T<U+00A0>--<U+00A0>kit/a` reaches `land.py` as `T`, `--`, `kit/a` and would step around the spaced `-- ` deny. With them denied, a space is the only separator an allow's `*` carries.
 
-How PowerShell treats `#`, CR, NUL, these quotes and dashes was probed on Windows PowerShell 5.1 on 2026-10-19: a script printed its `sys.argv` for each case run through `Invoke-Expression`. PowerShell 7 was not probed.
+How PowerShell treats `#`, CR, NUL, these quotes, dashes and separators was probed on Windows PowerShell 5.1 on 2026-10-19: a script printed its `sys.argv` for each case run through `Invoke-Expression`. The same probe showed that a bare `--` reaches python as written, and that a comma neither splits a native argument (`T,-C` arrives as one) nor forms a `--` token (`T,--` is a parse error). PowerShell 7 was not probed.
 
 A legitimate submit holds none of them. A summary with spaces needs quotes, so it is denied. So is a summary with `;`, `&`, `%`, `$`, `(`, `|` or a brace. Use a one-word summary or leave it out.
 
@@ -123,9 +125,8 @@ with a prefix of it, unless the tool sets `allow_abbrev=False`.
 
 ## Known limits
 
-- `--` before `--submit` makes `--submit` a branch name, so `land.py` would land without submitting. The allows match it, and `land.py` refuses it as a bad revision (`bad_rev`), not the rules.
 - PowerShell splatting (`@var`) is not denied: `@` alone is no metacharacter here. A splat needs a variable set earlier in the same shell, which the allow does not carry.
-- Other control characters and Unicode spaces are not denied. In the 5.1 probe, VT, FF, U+00A0, U+0085, U+2028 and U+2029 split arguments as a space does, and the other control characters tried (U+001A, U+001B) reached python as written. Every deny matches text, so neither hides a `-C` or `--lo`.
+- Other control characters and the zero-width characters are not denied. In the 5.1 probe they reached python as written, inside the argument: U+001A, U+001B, U+180E, U+200B and U+FEFF. None splits an argument, so none forms a `--` token, and every other deny matches text, so none hides a `-C` or `--lo`.
 - Whether Claude Code reads a rule holding CR, LF or NUL as that literal character is INFERENCE, like the tab.
 
 ## Open note

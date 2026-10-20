@@ -73,13 +73,18 @@ class RuleTextTest(unittest.TestCase):
                 want.append('%s(python %s * -C*)' % (shell, script))
                 want.append('%s(python %s -C Y:/repo *-C*)' % (shell, script))
                 want.append('%s(python %s *--lo*)' % (shell, script))
+                want.append('%s(python %s * -- *)' % (shell, script))
                 want += ['%s(python %s *%s*)' % (shell, script, c)
                          for c in ('>', '<', '|', ';', '&', '$', '(', '`', '%', "'", '"', '\\', '{', '}', '#',
                                    '\t', '\r', '\n', '\0',
                                    '‘', '’', '‚', '‛', '“', '”', '„',
-                                   '–', '—', '―')]
+                                   '–', '—', '―',
+                                   '\x0b', '\x0c', '\x85', '\xa0', ' ',
+                                   ' ', ' ', ' ', ' ', ' ', ' ',
+                                   ' ', ' ', ' ', ' ', ' ',
+                                   ' ', ' ', ' ', ' ', '　')]
         self.assertEqual(LINES['deny'], want)
-        self.assertEqual(len(want), 128)
+        self.assertEqual(len(want), 216)
 
 
 class AllowedTest(unittest.TestCase):
@@ -194,6 +199,33 @@ class DeniedTest(unittest.TestCase):
         """A native command line ends at NUL: python gets no argument after it."""
         self.assertEqual(decide(self.submit_dropped('\0'), lines=ALLOW_ONLY), 'allow')
 
+    def test_double_dash_makes_submit_a_branch_denied(self):
+        """A bare `--` inside the first `*` ends land.py's options: the trailing --submit becomes a
+        branch name, so land.py runs a foreground landing, and one with --submitted before the `--`
+        skips land.py's "--submit and --submitted, not both" check. The allow alone matches every
+        form; the `-- ` deny closes it, and the PowerShell separators (probed 5.1: each splits a
+        native argument as a space does) cannot stand in for the spaces around it."""
+        tip = 'a' * 40
+        forms = [('--full --expect-tip %s -- kit/a' % tip, ''),
+                 ('--submitted Z:/p.land.submit --expect-tip %s -- kit/a' % tip, ''),
+                 ('--expect-tip %s -- kit/a' % tip, ' --lane full')]
+        for middle, tail in forms:
+            argv = ['-C', R] + middle.split() + ['--expect-tip', tip, '--submit'] + tail.split()
+            a = land.parser().parse_args(argv)
+            self.assertFalse(a.submit, argv)
+            self.assertIn('--submit', a.branches)
+            for script in (P, Q):
+                for shell in SHELLS:
+                    cmd = '%s -C %s %s --expect-tip %s --submit%s' % (script, R, middle, tip, tail)
+                    with self.subTest(shell=shell, cmd=cmd):
+                        self.assertEqual(decide(cmd, shell, ALLOW_ONLY), ALLOWED[shell])
+                        self.assertEqual(decide(cmd, shell), 'deny')
+        for sep in rules.SEPARATORS:
+            cmd = submit(middle='--full --expect-tip %s%s--%skit/a' % (tip, sep, sep))
+            with self.subTest(sep='U+%04X' % ord(sep)):
+                self.assertEqual(decide(cmd, lines=ALLOW_ONLY), 'allow')
+                self.assertEqual(decide(cmd), 'deny')
+
     def test_typographic_quotes_split_C_and_log_dir_denied(self):
         """PowerShell takes U+2018-U+201B as single and U+201C-U+201E as double quotes and strips
         them from a native argument (probed): `-‘C’` reaches land.py as -C, `--l‘o’g-dir` as --log-dir."""
@@ -214,7 +246,7 @@ class DeniedTest(unittest.TestCase):
     def test_first_C_not_denied(self):
         deny_only = {'allow': [], 'deny': LINES['deny']}
         for shell in SHELLS:
-            for cmd in (submit(), submit(Q), submit(tail=' --lane full')):
+            for cmd in (submit(), submit(Q), submit(tail=' --lane full'), submit(middle='kit/a--b')):
                 self.assertIsNone(decide(cmd, shell, deny_only))
 
     def test_two_spaces_before_first_C_denied_by_the_reference(self):

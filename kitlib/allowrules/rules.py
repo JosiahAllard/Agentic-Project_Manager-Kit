@@ -1,7 +1,8 @@
 """The text of the land permission rules, and a reference matcher for them (docs/allow-rules.md).
 
   allow_lines(kit, repo, lanes)  one PowerShell allow per script spelling and lane (plus the plain one)
-  deny_lines(kit, repo)          a second -C, --log-dir, and each shell metacharacter, after the script
+  deny_lines(kit, repo)          a second -C, --log-dir, a bare --, and each shell metacharacter,
+                                 after the script
   decide(lines, shell, command)  'allow', 'deny' or None under the matching model in the doc
 
 `decide` is a model of Claude Code's documented rule matching, written so the tests can pin what
@@ -22,12 +23,22 @@ SCRIPT = 'tools/land.py'
 # second -C or glue a flag into a value, as in `abc\ --submit`). `#` (a comment), CR (PowerShell
 # ends a statement there) and NUL (a native command line ends there) drop the trailing --submit.
 # PowerShell also takes U+2018-U+201B and U+201C-U+201E as quotes, and U+2013-U+2015 as dashes.
+# SEPARATORS: the characters besides space, tab, CR and LF that split a native argument in
+# PowerShell as a space does (probed on 5.1: VT, FF, U+0085 and Unicode's space, line and paragraph
+# separators). Denied, so a space is the only separator an allow's `*` carries, and the `--` deny
+# (END_OF_OPTIONS) cannot be stepped around with another one.
+SEPARATORS = ('\x0b', '\x0c', '\x85', '\xa0', ' ') + tuple(chr(c) for c in range(0x2000, 0x200b)) + (
+    ' ', ' ', ' ', ' ', '　')
 METACHARS = ('>', '<', '|', ';', '&', '$', '(', '`', '%', "'", '"', '\\', '{', '}', '#',
              '\t', '\r', '\n', '\0',
              '‘', '’', '‚', '‛', '“', '”', '„',
-             '–', '—', '―')
+             '–', '—', '―') + SEPARATORS
 # The prefix of land.py's --log-dir that no other option shares (land.py takes abbreviations).
 LOG_DIR = '--lo'
+# A bare `--` ends argparse's options: everything after it, the trailing --submit included, is a
+# branch name, so land.py would run a foreground landing (and with --submitted before the `--`,
+# skip its "--submit and --submitted, not both" check).
+END_OF_OPTIONS = ' -- '
 # The operators a command is split on before each part is matched (newlines too).
 _SPLIT = {
     'Bash': re.compile(r'\|&|&&|\|\||[;|&\n]'),
@@ -55,13 +66,15 @@ def allow_lines(kit, repo, lanes):
 
 def deny_lines(kit, repo):
     """The deny rules, for each shell and spelling: a -C after the first (spaced, or any text -C past
-    the fixed `-C <repo>` prefix), --log-dir by its shortest prefix, and each metacharacter."""
+    the fixed `-C <repo>` prefix), --log-dir by its shortest prefix, a bare `--`, and each
+    metacharacter."""
     out = []
     for shell in SHELLS:
         for script in scripts(kit):
             out.append('%s(python %s * -C*)' % (shell, script))
             out.append('%s(python %s -C %s *-C*)' % (shell, script, repo))
             out.append('%s(python %s *%s*)' % (shell, script, LOG_DIR))
+            out.append('%s(python %s *%s*)' % (shell, script, END_OF_OPTIONS))
             out += ['%s(python %s *%s*)' % (shell, script, c) for c in METACHARS]
     return out
 
