@@ -832,6 +832,40 @@ class UserTemp(Case):
         self.assertEqual(code, S.EXIT_DRAIN_REFUSED, text)
         self.assertTrue(os.path.isdir(old))
 
+    def test_drain_is_refused_when_the_registry_temp_is_relative_or_unexpanded(self):
+        self.config({S.KEY: {'dir': self.dir}})
+        old = self.session(self.local, 'proj', SID_OLD)
+        for u in ('%USERPROFILE%\\AppData\\Local\\Temp', 'rel\\temp'):
+            with mock.patch.object(S, 'registry_user_temp', lambda u=u: u):
+                code, text = self.main('--drain-old-user-temp', '--apply')
+            self.assertEqual(code, S.EXIT_DRAIN_REFUSED, text)
+            self.assertIn('not absolute', text)
+            self.assertTrue(os.path.isdir(old), u)
+
+    def test_drain_is_refused_without_a_registry_temp(self):
+        self.config({S.KEY: {'dir': self.dir}})
+        old = self.session(self.local, 'proj', SID_OLD)
+        with mock.patch.object(S, 'registry_user_temp', lambda: None):
+            code, text = self.main('--drain-old-user-temp', '--apply')
+        self.assertEqual(code, S.EXIT_DRAIN_REFUSED, text)
+        self.assertIn('no TEMP or TMP', text)
+        self.assertTrue(os.path.isdir(old))
+
+    def test_drain_is_refused_for_an_empty_process_list(self):
+        self.config({S.KEY: {'dir': self.dir}})
+        old = self.session(self.local, 'proj', SID_OLD)
+        code, text = self.main('--drain-old-user-temp', '--apply', lister=lambda: [])
+        self.assertEqual(code, S.EXIT_DRAIN_REFUSED, text)
+        self.assertTrue(os.path.isdir(old))
+
+    def test_drain_has_nothing_to_do_when_the_folder_lies_in_dir(self):
+        self.config({S.KEY: {'dir': self.local}})
+        old = self.session(self.local, 'proj', SID_OLD)
+        code, text = self.main('--drain-old-user-temp', '--apply')
+        self.assertEqual(code, 0, text)
+        self.assertIn('nothing to drain', text)
+        self.assertTrue(os.path.isdir(old))
+
     def test_drain_has_nothing_to_do_when_the_registry_temp_is_the_default(self):
         self.config({S.KEY: {'dir': self.dir}})
         old = self.session(self.local, 'proj', SID_OLD)
