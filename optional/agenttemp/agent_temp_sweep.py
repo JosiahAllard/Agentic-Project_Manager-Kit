@@ -761,7 +761,7 @@ def drain(cfg, apply, now, home, lister, out):
         nothing = "LOCALAPPDATA is not set"
     elif not os.path.isdir(root):
         nothing = "%s is not there" % root
-    elif u and os.path.isabs(u) and overlaps(os.path.join(u, SESSIONS), root):
+    elif u and os.path.isabs(u) and "%" not in u and overlaps(os.path.join(u, SESSIONS), root):
         nothing = "%s is the current user temp's (HKCU\\Environment TEMP %s)" % (root, u)
     elif overlaps(root, cfg.dir):
         nothing = "%s is %s, in it or holds it (the daily run sweeps it)" % (root, cfg.dir)
@@ -773,9 +773,9 @@ def drain(cfg, apply, now, home, lister, out):
     blockers = drain_blockers(lister)
     if not u:
         blockers.insert(0, "HKCU\\Environment has no TEMP or TMP, so %s may still be in use" % root)
-    elif not os.path.isabs(u):          # unexpanded %VAR% or relative: which folder it is cannot be told
-        blockers.insert(0, "HKCU\\Environment TEMP %r is not absolute, so %s may still be in use"
-                        % (u, root))
+    elif not os.path.isabs(u) or "%" in u:     # relative or an unexpanded %VAR%: which folder it is cannot be told
+        blockers.insert(0, "HKCU\\Environment TEMP %r is not absolute or holds an unexpanded %%VAR%%, "
+                        "so %s may still be in use" % (u, root))
     for b in blockers:
         print("drain: held: %s" % b, file=out)
     if blockers and apply:
