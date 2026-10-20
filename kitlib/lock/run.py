@@ -1498,13 +1498,17 @@ def bare_hint(cmd, err):
     """The text that follows a failed start of a list command whose first item is a bare name
     (no folder part) that is a file in this process's folder while NoDefaultCurrentDirectoryInExePath
     is set: Windows then does not look in the current folder for a bare name (agent hosts set it),
-    so the hint names the folder and the .\\<name> form that runs. "" in every other case."""
+    so the hint names the folder and the .\\<name> form that runs. "" in every other case,
+    including a current folder that cannot be read (removed under us)."""
     if not isinstance(err, FileNotFoundError) or isinstance(cmd, str) or not cmd:
         return ""
     name = str(cmd[0])
     if not name or os.path.dirname(name) or not os.environ.get(NO_CWD_ENV):
         return ""
-    here = os.getcwd()
+    try:
+        here = os.getcwd()
+    except OSError:
+        return ""
     if not os.path.isfile(os.path.join(here, name)):
         return ""
     return ("; %s is in %s, but %s is set, so Windows does not look in the current folder for a "

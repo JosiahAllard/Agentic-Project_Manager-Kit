@@ -199,6 +199,31 @@ class CallerFolder(StoreCase):
         self.assertTrue(line, self.said)
         self.assertNotIn(".\\", line)
 
+    # bare_hint's own conditions. With the setting unset a bare name in the folder starts, so
+    # the failure these need is made up here.
+    def test_the_hint_needs_the_setting_set(self):
+        missing = FileNotFoundError(2, "The system cannot find the file specified")
+        with mock.patch.dict(os.environ, {NO_CWD: "1"}):
+            self.assertIn(".\\hello.bat", rm.bare_hint(["hello.bat"], missing))
+        with mock.patch.dict(os.environ):
+            os.environ.pop(NO_CWD, None)
+            self.assertEqual(rm.bare_hint(["hello.bat"], missing), "")
+
+    def test_a_folder_qualified_name_gets_no_hint(self):
+        missing = FileNotFoundError(2, "The system cannot find the file specified")
+        os.mkdir(os.path.join(self.folder, "sub"))
+        with open(os.path.join(self.folder, "sub", "hello.bat"), "w") as f:
+            f.write("@echo off\r\n")
+        with mock.patch.dict(os.environ, {NO_CWD: "1"}):
+            for name in ("sub\\hello.bat", ".\\hello.bat", os.path.join(self.folder, "hello.bat")):
+                self.assertEqual(rm.bare_hint([name], missing), "", name)
+
+    def test_an_unreadable_folder_gets_no_hint(self):
+        missing = FileNotFoundError(2, "The system cannot find the file specified")
+        with mock.patch.dict(os.environ, {NO_CWD: "1"}), \
+                mock.patch.object(rm.os, "getcwd", side_effect=FileNotFoundError(2, "gone")):
+            self.assertEqual(rm.bare_hint(["hello.bat"], missing), "")
+
 
 class Refusals(StoreCase):
     def code(self, **kw):
