@@ -151,7 +151,7 @@ SCHEMA = {
     'launcher': Field(Owned('kitlib.launcher'), None, 'the session launcher settings: state folder, repos, account folders (docs/launcher.md "Settings")'),
     'backlog_lint': Field(Owned('kitlib.backloglint'), None, 'the backlog lint repositories'),
     'machine_lock': Field(Owned('kitlib.lock.site'), None, 'the machine lock settings: build daemons at release, lock-window notices'),
-    'temp_dir': Field(AbsPath(), None, "the folder the kit's own temp files go in (test run folders, gate logs), and the shared temp folder (gate fallback logs, the worktree sweep log, private index folders; comfy_gen's lock and state do not follow it yet) while its drive is there, made if missing; on Windows, as the test and gate folder, it is skipped when it is, holds or sits inside a session temp (`agent_temp_sweep` `dir`, or the user environment's AGENT_TEMP, TEMP or TMP); unset or skipped: the first of these clear of every session temp: `kit-temp`, then `kit-work`, at the root of the checkout's drive (not the system temp folder's drive), the system temp folder (%LOCALAPPDATA%\\Temp), `kit-work` beside it (docs/test-tools.md \"Temp folders\"); older kit copies reject the key"),
+    'temp_dir': Field(AbsPath(), None, "the folder the kit's own temp files go in (test run folders, gate logs), and the shared temp folder (gate fallback logs, the worktree sweep log, private index folders, comfy_gen's GPU self-lock and state) while its drive is there, made if missing; on Windows, as the test and gate folder, it is skipped when it is, holds or sits inside a session temp (`agent_temp_sweep` `dir`, or the user environment's AGENT_TEMP, TEMP or TMP); unset or skipped: the first of these clear of every session temp: `kit-temp`, then `kit-work`, at the root of the checkout's drive (not the system temp folder's drive), the system temp folder (%LOCALAPPDATA%\\Temp), `kit-work` beside it (docs/test-tools.md \"Temp folders\"); older kit copies reject the key"),
     'machine_path_folders': Field(ListOf(Str(pattern=r'[^\\/:*?"<>|\s]+', what='a folder name')), None, 'the drive-rooted folder names the machine-paths check refuses besides a user profile (docs/commit.md "machine_paths.py"); unset: none, so only drive-rooted user-profile paths are refused and tools/machine_paths.py prints a NOTE saying so; older kit copies reject the key; set it only after every folder runs a kit that knows it'),
     'agent_temp_sweep': Field(Owned('optional/agenttemp/agent_temp_sweep.py'), None, "the agents' temp folder to sweep (`dir`), the age past which an unused entry goes (`max_age_days`, default 3), the entries it never removes (`keep`, relative paths such as `claude/<project>/<session>`) and whether it also sweeps the session folders under the user's own temp, HKCU\\Environment TEMP, else TMP (`user_temp`, true or false, default false; older sweeps refuse the key); `tools/machine_setup.py` adds it when absent (docs/machine-setup.md \"Extras\")"),
     'plugin': Field(Owned('kitlib.pluginsource'), None, 'where the plugin export of pushed kit main lives, and whether pm_watch refreshes it on its own (docs/plugin-source.md); older kit copies reject the key; set it only after every folder is migrated'),
@@ -345,8 +345,9 @@ def temp_parent(home=None):
 
 def shared_temp(environ=None, platform=None, home=None):
     """The temp folder every process on the machine shares, whatever TEMP/TMP it inherited, for
-    the kit's few small files there (gate fallback logs, the worktree sweep log, private index
-    folders; comfy_gen does not use it yet): the machine config's `temp_dir` (temp_parent), even
+    the kit's few small files there (gate fallback logs, the worktree sweep log, comfy_gen's GPU
+    self-lock and state; private index folders go in the same `temp_dir` through mkdtemp): the
+    machine config's `temp_dir` (temp_parent), even
     when it is a session's TEMP, made here if missing since its callers open files in it at once;
     else, or when it cannot be made, system_temp(). Only work_temp keeps the heavy churn out of
     session temps. RuntimeError as system_temp, when `temp_dir` is not used."""

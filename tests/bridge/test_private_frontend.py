@@ -129,8 +129,9 @@ class PrivateFrontendTests(unittest.TestCase):
         from optional.bridge.win.rpc import request
         from optional.bridge.win.transport import PipeTarget
         with mock.patch.object(self.leader.listener,'verify_client',side_effect=ProcError('pipe-client-process-mismatch')):
-            request(PipeTarget(self.leader.endpoint,os.getpid(),own_ctime()),{
+            result=request(PipeTarget(self.leader.endpoint,os.getpid(),own_ctime()),{
                 'protocol':1,'request':{'jsonrpc':'2.0','id':8,'method':'ping'}})
+        self.assertEqual(result,{'error':{'code':'private-client-unavailable'}})
         self.assertTrue(self.thread.is_alive())
         self.initialize()
 
