@@ -35,7 +35,11 @@ The classes, decided first-match in this order:
   empty tree a record claims, whose claims cannot be read, or whose reflogs hold a commit).
 
 Who the tree belongs to (a backlog record pulled by its branch) is shown; it decides only whether
-an empty tree is A or C. Each claim on a B or C tree gets a `next` release line.
+an empty tree is A or C. Each claim on a B or C tree gets a `next` release line. A stale mark
+(kitlib.worktree.marks) on a tree's branch is shown, void or not (`mark`); a B or C tree in a
+worktree folder gets a `next --mark-stale` line when its branch has no mark that holds, and a
+`next --unmark-stale` line when it has one. A marks file that cannot be read is a note, and no
+mark is shown.
 `classify` returns Result(code, lines, data): 0 when every tree is L; 1 when one is A, B, C, E or
 O, or a run-wide read failed; 2 for a refused kit configuration. With `apply`: 0 when every A, E
 and O tree was removed and no B or C tree is left; 1 when the run was refused (not the main
@@ -53,7 +57,7 @@ from kitlib.records import gate_ok
 
 from kitlib.git import refs
 
-from . import holders, remove, scratch, sweep
+from . import holders, marks, remove, scratch, sweep
 from .holders import WALK_MAX, canon, extended, plain, prune
 from .remove import OK, REFUSED, failure, git
 
@@ -570,6 +574,9 @@ def _classify(ctx, now, machine, procs, dead_after_s, act=None, environ=None):
     if run_wide:
         ctx.say('note      %s: every tree is L' % run_wide)
     claims = live_claims(ctx, base) if entries else (None, 'no tree to claim')
+    marked, marks_error = read_marks(ctx)
+    if marks_error:
+        ctx.say('note      the stale marks cannot be read (%s): no mark is shown' % marks_error)
     trees, acted = [], []
     for entry in entries:
         path = os.path.normpath(entry['path'])
@@ -598,6 +605,11 @@ def _classify(ctx, now, machine, procs, dead_after_s, act=None, environ=None):
         if entry['branch']:
             row['claims'] = (claimed(claims[0], entry['branch']) if claims[0] is not None
                              else 'unknown: %s' % claims[1])
+        mark = marks.find(marked, entry['branch']) if entry['branch'] else None
+        if mark is not None:
+            row['mark'] = {'at': mark['at'], 'why': mark['why'], 'by': mark['by'],
+                           'tip': mark['tip'],
+                           'void': marks.void_reason(mark, path, entry['head'], seen)}
         trees.append(row)
         if row['class'] in ACTED:
             acted.append((entry, row))
@@ -642,6 +654,15 @@ def _classify(ctx, now, machine, procs, dead_after_s, act=None, environ=None):
                             kitroot.command('backlog', writer), rid, t['class'], rid))
             ctx.say('next      %s %s --abandon "<why>"   (%s, after it is taken up or'
                     ' recorded)' % (s['tool'], remove.handle(ctx, t['path']), t['class']))
+            if not t['branch'] or marks_error or not remove.is_workstream(ctx, t['path']):
+                continue
+            if t.get('mark') and not t['mark']['void']:
+                ctx.say('next      %s %s --unmark-stale   (%s, marked stale: the nightly sweep'
+                        ' abandons it once idle; this clears the mark)' % (
+                            s['tool'], t['branch'], t['class']))
+            else:
+                ctx.say('next      %s %s --mark-stale "<why>"   (%s, so the nightly sweep abandons'
+                        ' it once idle, if it is stale)' % (s['tool'], t['branch'], t['class']))
     ctx.say('summary   %s' % ', '.join('%s %d' % (k, counts[k]) for k in CLASSES))
     code = REFUSED if any(counts[k] for k in CLASSES if k != 'L') else OK
     if applied is not None:
@@ -652,11 +673,22 @@ def _classify(ctx, now, machine, procs, dead_after_s, act=None, environ=None):
     data = {'base': base, 'upstream': s['upstream'], 'dead_after_h': dead_after_s // 3600,
             'now_utc': gate_ok.utc(datetime.datetime.fromtimestamp(now, datetime.timezone.utc)),
             'unreadable': run_wide or None, 'counts': counts, 'trees': trees}
+    if marks_error:
+        data['marks_error'] = marks_error
     if cwds is not None:
         data['processes'] = {'scanned': cwds[2], 'unreadable': cwds[1]}
     if applied is not None:
         data['applied'] = applied
     return Result(code, list(ctx.out), data)
+
+
+def read_marks(ctx):
+    """`(marks, None)` or `([], why)` when the stale marks cannot be read (read-only)."""
+    try:
+        got, why = marks.load(marks.file_of(ctx))
+    except marks.MarksError as e:
+        got, why = None, str(e)
+    return (got, None) if got is not None else ([], why)
 
 
 def machine_hold(machine, entry):
@@ -807,4 +839,8 @@ def describe(t, base):
         claims = t['claims']
         bits.append('claim: %s' % (', '.join(claims) or 'none' if isinstance(claims, list)
                                    else claims))
+    mark = t.get('mark')
+    if mark:
+        bits.append('mark: void (%s)' % mark['void'] if mark['void'] else
+                    'mark: stale since %s (%s)' % (marks.shown_at(mark), mark['why']))
     return '  '.join(bits)

@@ -19,6 +19,11 @@ holds it (docs/worktree-remove.md).
   worktree_remove.py [-C DIR] <path> --scratch                   a DETACHED tree under a temp folder
                                                                  whose dirt git already holds: restore,
                                                                  then remove
+  worktree_remove.py [-C DIR] <branch> --mark-stale "<why>"      mark the UNLANDED worktree on
+                                                                 <branch> stale: the nightly sweep
+                                                                 abandons it (tag archive/<slug>)
+                                                                 once it is idle, unless it changes
+  worktree_remove.py [-C DIR] <branch> --unmark-stale            clear that mark
   worktree_remove.py [-C DIR] --check                           leftovers; exit 1 if any
   worktree_remove.py [-C DIR] --sweep-merged                     DRY RUN of the nightly sweep
   worktree_remove.py [-C DIR] --sweep-merged --apply             the nightly sweep
@@ -35,7 +40,7 @@ holds it (docs/worktree-remove.md).
 the MAIN checkout's, and the sweep takes only the main checkout. A relative path argument means
 the caller's directory. A registered DETACHED worktree outside the worktree folders is named by
 its path, never its slug. A thin entry point (ARCHITECTURE.md, Layers): it parses, calls
-kitlib.worktree.remove, .scratch, .sweep or .classify, prints and exits. Exit codes: 0 done (or
+kitlib.worktree.remove, .scratch, .sweep, .classify or .marks, prints and exits. Exit codes: 0 done (or
 nothing to do); 1 refused, a leftover, git failed, the sweep deferred, --classify found a tree of
 class A, B, C, E or O, or --classify --apply left a B or C tree or did not remove an A, E or O
 one; 2
@@ -48,7 +53,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from kitlib.git import repo as gitrepo                              # noqa: E402
-from kitlib.worktree import classify, remove, scratch, sweep        # noqa: E402
+from kitlib.worktree import classify, marks, remove, scratch, sweep  # noqa: E402
 
 USAGE = 2
 
@@ -98,11 +103,49 @@ def split_tag(args):
     return tag, rest
 
 
+def parse_mark(args):
+    """`--mark-stale "<why>"` or `--unmark-stale` with one <branch>: the parse() tuple, or a usage
+    message (str)."""
+    marks = [a for a in args if a == '--mark-stale' or a.startswith('--mark-stale=')]
+    if marks and '--unmark-stale' in args:
+        return '--mark-stale and --unmark-stale do not go together'
+    if '--unmark-stale' in args:
+        rest = [a for a in args if a != '--unmark-stale']
+        if args.count('--unmark-stale') != 1 or len(rest) != 1 or rest[0].startswith('-'):
+            return '--unmark-stale takes exactly one <branch> and no other option'
+        return 'unmark-stale', rest[0], None, False, False
+    if len(marks) != 1:
+        return '--mark-stale is given twice'
+    rest, why, i = [], None, 0
+    while i < len(args):
+        a = args[i]
+        if a == '--mark-stale':
+            value = args[i + 1] if i + 1 < len(args) else None
+            if value is not None and not value.startswith('--'):
+                why = value
+                i += 1
+        elif a.startswith('--mark-stale='):
+            value = a[len('--mark-stale='):]
+            why = None if value.startswith('--') else value
+        else:
+            rest.append(a)
+        i += 1
+    if len(rest) != 1 or rest[0].startswith('-'):
+        return '--mark-stale "<why>" takes exactly one <branch> and no other option'
+    why = (why or '').strip()
+    if not why:
+        return '--mark-stale needs a reason: say why this work is stale (it becomes the tag message)'
+    return 'mark-stale', rest[0], why, False, False
+
+
 def parse(args):
     """`(verb, target, why, keep, apply)` or a usage message (str). Verbs: sweep, check, abandon,
-    abandon-branch, remove-branch, remove, scratch, classify and classify-apply (`apply` then
-    means --json). A why
-    that starts with `--` is a flag typed where the why belongs, never a reason."""
+    abandon-branch, remove-branch, remove, scratch, mark-stale, unmark-stale, classify and
+    classify-apply (`apply` then means --json). A why that starts with `--` is a flag typed where
+    the why belongs, never a reason."""
+    if '--unmark-stale' in args or any(a == '--mark-stale' or a.startswith('--mark-stale=')
+                                       for a in args):
+        return parse_mark(args)
     if '--classify' in args or '--json' in args:
         if sorted(args) not in (['--classify'], ['--classify', '--json'], ['--apply', '--classify'],
                                 ['--apply', '--classify', '--json']):
@@ -182,6 +225,10 @@ def main(argv=None):
             outcome = sweep.sweep(top, apply=apply)
         elif verb == 'check':
             outcome = remove.check(top)
+        elif verb == 'mark-stale':
+            outcome = marks.mark(top, target, why)
+        elif verb == 'unmark-stale':
+            outcome = marks.unmark(top, target)
         elif verb == 'scratch':
             outcome = scratch.remove_scratch(top, target)
         elif verb == 'abandon-branch':

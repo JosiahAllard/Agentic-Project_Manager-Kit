@@ -14,7 +14,7 @@ from unittest import mock
 
 from kitlib import kitroot, pmdata
 from kitlib.records import gate_ok
-from kitlib.worktree import classify, holders, remove, sweep
+from kitlib.worktree import classify, holders, marks, remove, sweep
 from tests import gitfixture
 from tests.realgit import real_git
 from tests.worktree.test_worktree_remove import TOOL, WINDOWS, RemoveCase
@@ -93,7 +93,10 @@ class Classes(ClassifyCase):
         self.assertIn('tip %s' % head[:10], out)
         self.assertIn('next      ', out)
         self.assertIn(' ready --abandon "<why>"   (B,', out)
-        self.assertEqual(out.count(' -C '), 1, out)
+        nexts = [line for line in out.splitlines() if line.startswith('next      ')]
+        self.assertEqual(len(nexts), 2, out)       # --abandon, then --mark-stale
+        self.assertEqual([line.count(' -C ') for line in nexts], [1, 1], out)
+        self.assertEqual(out.count(' -C '), 2, out)
 
     def test_no_gate_ok_record_is_c(self):
         path = self.workstream('open')
@@ -764,6 +767,77 @@ class BranchLiveness(ClassifyCase):
         self.assertEqual(self.liveness('kit/treeless', time.time() + LATER),
                          ('no worktree here is on kit/treeless, so whether its work goes on '
                           'cannot be judged', None))
+
+
+class StaleMarkShown(ClassifyCase):
+
+    def write_marks(self, *records, text=None):
+        with open(os.path.join(self.fx.common_dir(), marks.FILE_NAME), 'w', encoding='utf-8') as f:
+            f.write(text if text is not None else json.dumps({'version': 1,
+                                                              'marks': list(records)}))
+
+    def record(self, slug, path, at=None):
+        return {'branch': 'kit/' + slug, 'tip': self.git('rev-parse', 'kit/' + slug),
+                'path': path, 'why': 'superseded', 'by': 'c1 (coordinator)',
+                'at': marks.stamp(time.time() if at is None else at)}
+
+    def test_an_unmarked_tree_is_offered_a_mark(self):
+        path = self.workstream('open')
+        rc, out, data = self.run_classify()
+        self.assertNotIn('mark', self.row(data, path))
+        self.assertIn(' kit/open --mark-stale "<why>"   (C, so the nightly sweep abandons it', out)
+        self.assertNotIn('--unmark-stale', out)
+        self.assertNotIn('marks_error', data)
+
+    def test_a_mark_that_holds_is_shown_with_its_clear_line(self):
+        path = self.workstream('open')
+        self.write_marks(self.record('open', path))
+        rc, out, data = self.run_classify()
+        row = self.row(data, path)
+        self.assertEqual(row['class'], 'C', row)
+        self.assertIsNone(row['mark']['void'], row)
+        self.assertEqual((row['mark']['why'], row['mark']['by']), ('superseded', 'c1 (coordinator)'))
+        self.assertIn('mark: stale since ', out)
+        self.assertIn(' kit/open --unmark-stale   (C, marked stale', out)
+        self.assertNotIn('--mark-stale', out)
+
+    def test_a_void_mark_is_shown_void_and_a_new_mark_offered(self):
+        path = self.workstream('open')
+        mark = self.record('open', path)
+        self.write_marks(mark)
+        self.fx.write('more.txt', 'more\n', root=path)
+        self.fx.commit('more', 'more.txt', cwd=path)
+        rc, out, data = self.run_classify()
+        row = self.row(data, path)
+        self.assertIn('the tip moved from %s' % mark['tip'][:10], row['mark']['void'])
+        self.assertIn('mark: void (the tip moved from ', out)
+        self.assertIn(' kit/open --mark-stale "<why>"', out)
+        self.assertNotIn('--unmark-stale', out)
+
+    def test_activity_after_the_mark_shows_it_void(self):
+        path = self.workstream('open')
+        self.write_marks(self.record('open', path, at=time.time() - 3600))
+        rc, out, data = self.run_classify()
+        self.assertIn('changed at ', self.row(data, path)['mark']['void'])
+
+    def test_an_unreadable_marks_file_is_a_note_and_offers_nothing(self):
+        path = self.workstream('open')
+        self.write_marks(text='not json')
+        rc, out, data = self.run_classify()
+        self.assertIn('note      the stale marks cannot be read (', out)
+        self.assertIn('is not valid JSON', data['marks_error'])
+        self.assertNotIn('mark', self.row(data, path))
+        self.assertNotIn('--mark-stale', out)
+        self.assertNotIn('--unmark-stale', out)
+
+    def test_a_tree_outside_the_worktree_folder_is_offered_no_mark(self):
+        path = self.outside('away', 'main')
+        self.git('checkout', '-q', '-b', 'kit/away', cwd=path)
+        self.fx.write('a.txt', 'a\n', root=path)
+        self.fx.commit('a', 'a.txt', cwd=path)
+        rc, out, data = self.run_classify()
+        self.assertIn(self.row(data, path)['class'], ('B', 'C'))
+        self.assertNotIn('--mark-stale', out)
 
 
 class Tool(ClassifyCase):

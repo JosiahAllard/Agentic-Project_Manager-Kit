@@ -1408,7 +1408,10 @@ def abandon(top, argument, why, keep_branch=False, cwd=None, today=None, tag=Non
     return ctx.outcome(_abandon(ctx, argument, why, keep_branch, today, tag))
 
 
-def _abandon(ctx, argument, why, keep_branch, today, named=None):
+def _abandon(ctx, argument, why, keep_branch, today, named=None, expect=None):
+    """The abandon of one registered tree. `expect`, when given, is the commit the caller checked
+    (the sweep's stale mark): a tree at any other commit, or one whose work is already in the base,
+    is refused, never tagged."""
     found = registered_target(ctx, argument)
     if not isinstance(found, tuple):
         return found
@@ -1428,6 +1431,10 @@ def _abandon(ctx, argument, why, keep_branch, today, named=None):
     if not tip:
         ctx.say('refused   %s: git reported no HEAD for it; nothing was tagged or removed' % path)
         return REFUSED
+    if expect is not None and tip != expect:
+        ctx.say('refused   %s: it is at %s, not the %s it was checked at; nothing was tagged or'
+                ' removed' % (path, tip[:10], expect[:10]))
+        return REFUSED
     name = branch or ('detached HEAD %s' % tip[:10])
     others = sorted(os.path.normpath(p) for k, (p, b) in known.items()
                     if branch and b == branch and k != key)
@@ -1440,6 +1447,10 @@ def _abandon(ctx, argument, why, keep_branch, today, named=None):
         ctx.say('refused   %s: cannot read %s (%s); nothing was tagged or removed' % (path, up, err))
         return REFUSED
     merged, why_not = refs.is_ancestor(tip, base, main)
+    if merged and expect is not None:
+        ctx.say('refused   %s: %s is already in %s %s, so it is no longer stale work; nothing was'
+                ' tagged or removed' % (path, name, up, base[:10]))
+        return REFUSED
     if merged:
         work = dirty(ctx, path)[0]
         if work:
