@@ -3,7 +3,9 @@
 The page is its own file, linked from the Action Hub page. Its script runs under node against the
 stand-in DOM (tests/hubsite/pagedom.py) with a scripted server: what it draws from a lock view, how
 it follows the lock (GET /lock/view, then GET /lock/wait from the revision it holds), how it backs
-off, and that server text is drawn as text. What node cannot show without a browser is checked on
+off, that server text is drawn as text, and the owner's changes: each one POST to its lock route,
+the answer's view drawn at once, a refusal said with the dialog kept, and a control this login may
+not use disabled with the reason. What node cannot show without a browser is checked on
 the file's text: one transport, only the lock routes, no HTML sink, no outside resource, and a
 colour from the server only after it reads as #rrggbb.
 """
@@ -353,6 +355,271 @@ class FollowTest(unittest.TestCase):
         self.assertEqual(out["cells"], 0)
 
 
+# The scripted server for changes: the reads as SERVER, and a POST answered by REPLY(call), by default the write's
+# answer: {ok, result: RESULT} with VIEW (the lock's view after it) over it.
+WSERVER = SERVER + """
+  let RESULT = {};
+  let REPLY = c => ({ status: 200, body: Object.assign({ ok: true, result: RESULT }, VIEW) });
+  const reads = server.route;
+  server.route = c => c.method === "POST" ? REPLY(c) : reads(c);
+  const posts = () => calls.filter(c => c.method === "POST").map(c => [c.path, c.body]);
+  const refuse = (status, code, message, field) => () => ({ status, body: { ok: false, error: { code, message, field: field || "lock" } } });
+  const said = () => ({ acted: text($("#acted")), acterr: text($("#acterr")) });
+  const row = (kind, id) => $("#" + kind + " tr[data-" + (kind === "holds" ? "hold" : "run") + "=" + id + "]");
+"""
+
+
+def wdom(body, first=None):
+    src = WSERVER % (json.dumps(first if first is not None else answer()), json.dumps(STATS))
+    return pagedom.run(NODE, page(), src + body, None)
+
+
+HOLD = {"id": "H-1", "owner": "owner", "scope": "whole", "start": "2026-10-20T14:00:00Z", "end": "2026-10-20T15:00:00Z",
+        "note": "dinner", "covers": {"cpu": [0, 1], "gpu": [0]}, "live": False}
+AGENT_HOLD = {"id": "A-1", "owner": "agent", "repo": "alpha", "slug": "s", "scope": "slots",
+              "start": "2026-10-20T06:00:00Z", "end": "2026-10-20T08:00:00Z", "covers": {"cpu": [2]}, "lost": {},
+              "lost_to": [], "live": True}
+RUN = {"id": "r-1", "state": "running", "repo": "alpha", "slug": "kit-1", "kind": "engine-test",
+       "since": "2026-10-20T06:00:00Z", "cores": [0, 1], "gpus": []}
+
+
+@unittest.skipUnless(NODE, "node is needed to run the page's logic")
+class WriteTest(unittest.TestCase):
+    """The page's changes: each one POST to its lock route with the body the hub's lock door reads, the answer's
+    view drawn at once, and a refusal said in the owner's words with the dialog kept."""
+
+    def test_a_window_picked_on_the_grid_is_reserved(self):
+        out = wdom("""
+            await start();
+            const cell = iso => $("#grid td[data-t=" + String(Date.parse(iso)) + "]");
+            const r = { before: { shown: !$("#pick").hidden } };
+            await click(cell("2026-10-20T14:30:00Z"));
+            r.one = { picked: text($("#picked")), cells: $$("#grid td.pick").length, whole: $("#reservewhole").disabled };
+            await click(cell("2026-10-20T14:00:00Z"));
+            r.two = { picked: text($("#picked")), cells: $$("#grid td.pick").length, whole: $("#reservewhole").disabled,
+                      half: $("#reservehalf").disabled };
+            await type($("#picknote"), "dinner");
+            RESULT = { hold: { id: "H-9", scope: "whole", start: "2026-10-20T14:00:00Z", end: "2026-10-20T15:00:00Z" },
+                       notes: ["it overlaps run r-1"] };
+            VIEW = Object.assign({}, VIEW, { view: Object.assign({}, VIEW.view, { holds: [Object.assign({}, RESULT.hold, { owner: "owner" })] }) });
+            await click($("#reservewhole"));
+            r.after = Object.assign(said(), { posts: posts(), shown: !$("#pick").hidden, note: $("#picknote").value,
+                      own: $$("#grid td.own").length });
+            await click(cell("2026-10-20T06:00:00Z"));
+            await click(cell("2026-10-20T07:00:00Z"));
+            r.past = text($("#picked"));
+            await click(cell("2026-10-20T09:00:00Z"));
+            r.third = text($("#picked"));
+            await click($("#pickclear"));
+            r.cleared = { shown: !$("#pick").hidden, cells: $$("#grid td.pick").length };
+            return r;
+        """)
+        self.assertEqual(out["before"], {"shown": False})
+        self.assertEqual(out["one"], {"picked": "From Tue 20 Oct 10:30: now click the half hour the window ends in.",
+                                      "cells": 1, "whole": True})
+        self.assertEqual(out["two"], {"picked": "Reserve from Tue 20 Oct 10:00 to Tue 20 Oct 11:00, PC time.",
+                                      "cells": 2, "whole": False, "half": False})
+        self.assertEqual(out["after"]["posts"], [["/lock/holds", {"kind": "reserve", "scope": "whole",
+                                                                  "start": "2026-10-20T14:00:00Z",
+                                                                  "end": "2026-10-20T15:00:00Z", "note": "dinner"}]])
+        self.assertEqual(out["after"]["acted"], "Held the whole machine to Tue 20 Oct 11:00. it overlaps run r-1")
+        self.assertEqual(out["after"]["acterr"], "")
+        self.assertEqual((out["after"]["shown"], out["after"]["note"]), (False, ""))
+        self.assertEqual(out["after"]["own"], 2)                # the answer's view is drawn at once
+        self.assertEqual(out["past"], "Reserve from now to Tue 20 Oct 03:30, PC time.")
+        self.assertEqual(out["third"], "From Tue 20 Oct 05:00: now click the half hour the window ends in.")
+        self.assertEqual(out["cleared"], {"shown": False, "cells": 0})
+
+    def test_a_typed_hold_is_sent_as_typed_and_a_refusal_keeps_the_dialog(self):
+        out = wdom("""
+            await start();
+            const r = { open: !$("#holdform").hidden };
+            await click($("#newhold"));
+            r.shown = { form: !$("#holdform").hidden, cpu: !$("#hcpu").hidden, focus: document.activeElement === $("#hend") };
+            await click(button($("#holdscope"), "Named slots"));
+            r.slots = { cpu: !$("#hcpu").hidden, gpu: !$("#hgpu").hidden,
+                        pressed: $$("#holdscope button").map(b => b.getAttribute("aria-pressed")) };
+            await type($("#hstart"), "18:00"); await type($("#hend"), "+2h"); await type($("#hnote"), "render");
+            await type($("#hcpuv"), "0-3"); await type($("#hgpuv"), "0");
+            REPLY = refuse(400, "invalid", "the machine lock refused: cpu slot 40 is not on this machine", "cpu");
+            await click($("#holdgo"));
+            r.refused = Object.assign(said(), { form: !$("#holdform").hidden, end: $("#hend").value, go: $("#holdgo").disabled });
+            REPLY = c => ({ status: 200, body: Object.assign({ ok: true, result: { hold: { scope: "slots", end: "2026-10-20T19:00:00Z" } } }, VIEW) });
+            await click($("#holdgo"));
+            r.made = Object.assign(said(), { form: !$("#holdform").hidden, end: $("#hend").value, posts: posts() });
+            await click(button($("#holdscope"), "Half"));
+            await type($("#hend"), "20:00");
+            await click($("#holdgo"));
+            r.half = posts()[2];
+            return r;
+        """)
+        self.assertFalse(out["open"])
+        self.assertEqual(out["shown"], {"form": True, "cpu": False, "focus": True})
+        self.assertEqual(out["slots"], {"cpu": True, "gpu": True, "pressed": ["false", "false", "true"]})
+        self.assertEqual(out["refused"], {"acted": "", "acterr": "Not changed: the machine lock refused: cpu slot 40 is not on this machine.",
+                                          "form": True, "end": "+2h", "go": False})
+        body = {"kind": "hold", "scope": "slots", "start": "18:00", "end": "+2h", "note": "render", "cpu": "0-3", "gpu": "0"}
+        self.assertEqual(out["made"]["posts"], [["/lock/holds", body], ["/lock/holds", body]])
+        self.assertEqual(out["made"]["acted"], "Held slots to Tue 20 Oct 15:00.")
+        self.assertEqual((out["made"]["acterr"], out["made"]["form"], out["made"]["end"]), ("", False, ""))
+        self.assertEqual(out["half"], ["/lock/holds", {"kind": "hold", "scope": "half", "start": "", "end": "20:00",
+                                                       "note": "", "cpu": "", "gpu": ""}])
+
+    def test_a_hold_is_edited_and_released_after_a_second_click(self):
+        out = wdom("""
+            await start();
+            const r = {};
+            await click(button(row("holds", "H-1"), "Edit"));
+            r.edit = { form: !$("#editform").hidden, what: text($("#editwhat")), note: $("#enote").value, start: $("#estart").value };
+            await type($("#eend"), "12:00");
+            REPLY = refuse(409, "conflict", "the machine lock is busy, try again: another change is being written");
+            await click($("#editgo"));
+            r.busy = Object.assign(said(), { form: !$("#editform").hidden });
+            RESULT = { hold: { id: "H-1", start: "2026-10-20T14:00:00Z", end: "2026-10-20T16:00:00Z" } };
+            REPLY = c => ({ status: 200, body: Object.assign({ ok: true, result: RESULT }, VIEW) });
+            await click($("#editgo"));
+            r.edited = Object.assign(said(), { form: !$("#editform").hidden });
+            const n = posts().length;
+            await click(button(row("holds", "A-1"), "Release"));
+            r.ask = { sent: posts().length - n, buttons: row("holds", "A-1").querySelectorAll("button").map(text) };
+            await click(button(row("holds", "A-1"), "Keep it"));
+            r.kept = { sent: posts().length - n, buttons: row("holds", "A-1").querySelectorAll("button").map(text) };
+            await click(button(row("holds", "A-1"), "Release"));
+            RESULT = { hold: { id: "A-1" } };
+            await click(button(row("holds", "A-1"), "Release it"));
+            r.released = Object.assign(said(), { buttons: row("holds", "A-1").querySelectorAll("button").map(text) });
+            r.posts = posts();
+            return r;
+        """, answer(view(holds=[HOLD], agent_holds=[AGENT_HOLD])))
+        self.assertEqual(out["edit"], {"form": True, "note": "dinner", "start": "",
+                                       "what": "Hold H-1, you whole: Tue 20 Oct 10:00 to Tue 20 Oct 11:00. "
+                                               "Type times as for New hold; leave a field blank to keep it."})
+        self.assertEqual(out["busy"], {"acted": "", "form": True,
+                                       "acterr": "Not changed: the machine lock is busy, try again: another change is being written."})
+        self.assertEqual(out["edited"], {"acted": "Changed hold H-1: Tue 20 Oct 10:00 to Tue 20 Oct 12:00.", "acterr": "", "form": False})
+        self.assertEqual(out["ask"], {"sent": 0, "buttons": ["Release it", "Keep it"]})
+        self.assertEqual(out["kept"], {"sent": 0, "buttons": ["Edit", "Release"]})
+        self.assertEqual(out["released"], {"acted": "Released hold A-1.", "acterr": "", "buttons": ["Edit", "Release"]})
+        edit = ["/lock/holds/H-1/edit", {"start": "", "end": "12:00", "note": "dinner"}]
+        self.assertEqual(out["posts"], [edit, edit, ["/lock/holds/A-1/end", {}]])
+
+    def test_a_run_is_ended_after_a_second_click_and_a_waiting_one_moved_to_the_top(self):
+        queue = [["r-2 alpha/kit-2 waits for 2 cpu slots", ["head"]], ["", ["move:r-2"]], ["\\n", []]]
+        out = wdom("""
+            await start();
+            const r = { top: $$("#queue button").map(text) };
+            await click(button(row("runs", "r-1"), "End run"));
+            r.ask = { sent: posts().length, buttons: row("runs", "r-1").querySelectorAll("button").map(text) };
+            RESULT = { id: "r-1", requested: true };
+            await click(button(row("runs", "r-1"), "End run r-1"));
+            r.ended = said();
+            RESULT = { id: "r-2", position: 1 };
+            await click(button($("#queue"), "Move to top"));
+            r.moved = said();
+            REPLY = c => new Error("connection reset");
+            await click(button($("#queue"), "Move to top"));
+            r.lost = said();
+            r.posts = posts();
+            r.shown = text($("#queue"));
+            return r;
+        """, answer(view(runs=[RUN], queue=queue)))
+        self.assertEqual(out["top"], ["Move to top"])
+        self.assertEqual(out["ask"], {"sent": 0, "buttons": ["End run r-1", "Let it run"]})
+        self.assertEqual(out["ended"], {"acted": "Asked run r-1 to end.", "acterr": ""})
+        self.assertEqual(out["moved"], {"acted": "Run r-2 is now first in line.", "acterr": ""})
+        self.assertEqual(out["lost"]["acted"], "")
+        self.assertIn("did not answer, so the change may or may not have been made", out["lost"]["acterr"])
+        self.assertEqual(out["posts"], [["/lock/runs/r-1/end", {"confirm": "r-1"}], ["/lock/runs/r-2/top", {}],
+                                        ["/lock/runs/r-2/top", {}]])
+        self.assertIn("r-2 alpha/kit-2 waits for 2 cpu slots", out["shown"])
+
+    def test_game_mode_and_the_games_list(self):
+        games = [{"exe": "alpha.exe", "name": "Alpha Strike", "anti_cheat": False, "pin": True},
+                 {"exe": "beta.exe", "name": "beta.exe", "anti_cheat": True, "pin": False}]
+        out = wdom("""
+            await start();
+            const r = { label: text($("#gametoggle")) };
+            RESULT = { enabled: true };
+            VIEW = Object.assign({}, VIEW, { view: Object.assign({}, VIEW.view, { game: Object.assign({}, VIEW.view.game, { enabled: true }) }) });
+            await click($("#gametoggle"));
+            r.on = Object.assign(said(), { label: text($("#gametoggle")) });
+            await click($("#gamesedit"));
+            r.text = $("#gamestext").value;
+            await type($("#gamestext"), "gamma.exe pin Gamma\\n");
+            RESULT = { games: [{ exe: "gamma.exe", name: "Gamma", pin: true }] };
+            await click($("#gamesgo"));
+            r.saved = Object.assign(said(), { form: !$("#gamesform").hidden });
+            r.posts = posts();
+            return r;
+        """, answer(view(game={"enabled": False, "hold": None, "slots": [], "would_take": [4, 5], "games": games,
+                               "running": None})))
+        self.assertEqual(out["label"], "Turn game mode on")
+        self.assertEqual(out["on"], {"acted": "Game mode is on.", "acterr": "", "label": "Turn game mode off"})
+        self.assertEqual(out["text"], "alpha.exe  pin  Alpha Strike\nbeta.exe  nopin\n")
+        self.assertEqual(out["saved"], {"acted": "The games list has 1 game.", "acterr": "", "form": False})
+        self.assertEqual(out["posts"], [["/lock/game_mode", {"enabled": True}],
+                                        ["/lock/games", {"text": "gamma.exe pin Gamma\n"}]])
+
+    def test_the_division_fields_and_the_defaults(self):
+        out = wdom("""
+            await start();
+            await click($("#divedit"));
+            const field = k => $("#divfields input[data-key=" + k + "]");
+            const r = { keys: $$("#divfields input").map(f => f.dataset.key), share: field("gpu_share").value,
+                        cap: field("agent_cap").value };
+            await type(field("agent_cap"), "3");
+            RESULT = { applied: false, reason: "runs hold the slots" };
+            await click($("#divgo"));
+            r.saved = Object.assign(said(), { form: !$("#divform").hidden });
+            RESULT = { applied: true, reason: null };
+            await click($("#divdefaults"));
+            r.defaults = said();
+            r.posts = posts();
+            return r;
+        """)
+        keys = ["threads", "cpu_slot_threads", "cpu_slots", "gpu_share", "half_cpu_slots", "half_gpu_slots",
+                "agent_cap", "medium_cores"]
+        self.assertEqual(out["keys"], keys)
+        self.assertEqual((out["share"], out["cap"]), ("1, 1", "4"))
+        self.assertEqual(out["saved"], {"acted": "The new division waits: runs hold the slots.", "acterr": "", "form": False})
+        self.assertEqual(out["defaults"], {"acted": "The new division is in force.", "acterr": ""})
+        fields = {"threads": "24", "cpu_slot_threads": "2", "cpu_slots": "12", "gpu_share": "1, 1", "half_cpu_slots": "6",
+                  "half_gpu_slots": "1", "agent_cap": "3", "medium_cores": "2"}
+        self.assertEqual(out["posts"], [["/lock/division", {"fields": fields}], ["/lock/division", {"defaults": True}]])
+
+    GATED = """
+        await start();
+        const need = $$("[data-need]");
+        return { strong: need.filter(b => b.dataset.need === "strong").map(b => [b.disabled, b.title]),
+                 lock: need.filter(b => b.dataset.need === "lock").map(b => [b.disabled, b.title]),
+                 writer: text($("#writer")), count: need.length };
+    """
+
+    def test_what_this_login_may_not_change_is_disabled_and_says_why(self):
+        why = "the holds and the division need the owner's own sign-in"
+        out = wdom(self.GATED, answer(view(holds=[HOLD], runs=[RUN]), writes={"lock": True, "strong": False, "why": why}))
+        # reserve whole and half, New hold, Make the hold, Change the hold, Change the division, Use the defaults,
+        # Save the division, and the hold's Edit and Release
+        self.assertEqual(out["strong"], [[True, why]] * 10)
+        # Turn game mode on, Change the games list, Save the games list, and the run's End run
+        self.assertEqual(out["lock"], [[False, ""]] * 4)
+        self.assertEqual(out["writer"], "Some changes are closed: " + why)
+
+    def test_a_hub_the_lock_takes_for_an_agent_changes_nothing(self):
+        why = "the machine lock takes this hub for an agent"
+        out = wdom(self.GATED, answer(view(holds=[HOLD], runs=[RUN]), writer="agent",
+                                      writes={"lock": False, "strong": False, "why": why}))
+        self.assertEqual(out["strong"], [[True, why]] * 10)
+        self.assertEqual(out["lock"], [[True, why]] * 4)
+        self.assertEqual(out["writer"], "Read only: " + why)
+
+    def test_the_owner_may_change_everything_but_reserve_waits_for_a_window(self):
+        out = wdom(self.GATED, answer(view(holds=[HOLD], runs=[RUN])))
+        self.assertEqual(out["strong"], [[True, ""], [True, ""]] + [[False, ""]] * 8)
+        self.assertEqual(out["lock"], [[False, ""]] * 4)
+        self.assertEqual(out["writer"], "")
+
+
 class PageTextTest(unittest.TestCase):
     def setUp(self):
         self.p = page()
@@ -379,7 +646,7 @@ class PageTextTest(unittest.TestCase):
         for gone in ("location", "window.open"):
             self.assertNotIn(gone, self.script, gone)
         names = re.findall(r"setAttribute\(([^,]*),", self.script)
-        self.assertEqual(sorted(set(names)), ['"aria-pressed"', "k"])
+        self.assertEqual(sorted(set(names)), ['"aria-pressed"', '"title"', "k"])
 
     def test_nothing_outside_the_page_is_loaded(self):
         self.assertIsNone(re.search(r"https?:", self.p))
@@ -406,7 +673,13 @@ class PageTextTest(unittest.TestCase):
     def test_only_the_lock_routes(self):
         self.assertEqual(sorted(re.findall(r'call\("(GET|POST)", "(/[a-z_/]+)', self.script)),
                          [("GET", "/lock/stats"), ("GET", "/lock/view"), ("GET", "/lock/wait")])
-        self.assertEqual(self.script.count("hub.call(") + self.script.count("this.call("), 3)
+        # Every change is one POST, from write(), to a lock route the page names.
+        self.assertEqual(re.findall(r'call\("POST", (\w+)', self.script), ["path"])
+        self.assertEqual(self.script.count("hub.call(") + self.script.count("this.call("), 4)
+        self.assertEqual(sorted(set(re.findall(r'write\("([^"]*)"', self.script))),
+                         ["/lock/division", "/lock/game_mode", "/lock/games", "/lock/holds", "/lock/holds/",
+                          "/lock/runs/"])
+        self.assertEqual(len(re.findall(r'write\(', self.script)), 11)   # the definition and ten changes
         self.assertEqual(self.script.count("fetch("), 1)
         self.assertIn('base: "/api/v1",', self.script)
         self.assertIn('headers: { Accept: "application/json", "X-Hub-Via": "web" }', self.script)

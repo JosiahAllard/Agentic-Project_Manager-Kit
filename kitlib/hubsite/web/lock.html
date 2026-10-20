@@ -79,6 +79,19 @@ pre.parts{margin:0;font:500 .8rem/1.5 var(--f-mono);white-space:pre-wrap;overflo
 .parts .warn{color:var(--rec)}
 .parts .dim{color:var(--muted)}
 .parts .headline{font-weight:700}
+.grid td.pick{outline:2px solid var(--accent);outline-offset:-2px}
+.grid td.pick.now{outline-color:var(--warn)}
+.dlg{border:1px solid var(--line);border-radius:8px;padding:12px;display:grid;gap:10px;background:var(--bg)}
+.field{display:grid;gap:3px;font-size:.85rem;color:var(--muted)}
+.field input,.dlg textarea{font:500 .9rem var(--f-body);color:var(--fg);background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:6px 8px;min-width:0}
+.dlg textarea{font-family:var(--f-mono);min-height:7em;resize:vertical}
+.fields{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
+button.go{border-color:var(--accent);background:var(--accent);color:var(--surface)}
+button.stop{border-color:var(--warn);color:var(--warn)}
+.t td.acts{white-space:nowrap}
+.t td.acts button+button{margin-left:6px}
+.parts button{font-size:.75rem;padding:1px 8px;margin-right:6px}
+.status.ok{color:var(--ok);background:var(--ok-soft);border-radius:8px;padding:8px 12px}
 .kv{display:grid;grid-template-columns:max-content 1fr;gap:2px 14px;margin:0;font-size:.85rem}
 .kv dt{color:var(--muted)}
 .kv dd{margin:0;font-family:var(--f-mono)}
@@ -93,6 +106,8 @@ pre.parts{margin:0;font:500 .8rem/1.5 var(--f-mono);white-space:pre-wrap;overflo
     <p class="status" id="zone"></p>
     <div class="status ro" id="writer" role="status" hidden></div>
     <div class="status err" id="loaderr" role="alert" hidden></div>
+    <div class="status ok" id="acted" role="status" hidden></div>
+    <div class="status err" id="acterr" role="alert" hidden></div>
   </header>
 
   <section class="panel" aria-labelledby="h-now">
@@ -116,11 +131,53 @@ pre.parts{margin:0;font:500 .8rem/1.5 var(--f-mono);white-space:pre-wrap;overflo
     </div>
     <p class="head" id="weekhead"></p>
     <div class="gridwrap"><table class="grid" id="grid"></table></div>
-    <p class="legend">Light blue: your holds (striped: half the machine). Amber: game mode. Grey: agent holds. A coloured left edge: a run. Red outline: now.</p>
+    <p class="legend">Light blue: your holds (striped: half the machine). Amber: game mode. Grey: agent holds. A coloured left edge: a run. Red outline: now. Click the half hour a window starts in, then the one it ends in, to reserve it; New hold, under Holds, takes typed times.</p>
+    <div class="dlg" id="pick" hidden>
+      <p class="head" id="picked"></p>
+      <label class="field">Note <input id="picknote" type="text" maxlength="200" placeholder="reserve window"></label>
+      <div class="btns">
+        <button type="button" class="go" id="reservewhole" data-need="strong">Reserve the whole machine</button>
+        <button type="button" id="reservehalf" data-need="strong">Reserve half</button>
+        <button type="button" id="pickclear">Clear</button>
+      </div>
+    </div>
   </section>
 
   <section class="panel" aria-labelledby="h-holds">
-    <h2 id="h-holds">Holds</h2>
+    <div class="bar">
+      <h2 id="h-holds">Holds</h2>
+      <div class="btns"><button type="button" id="newhold" data-need="strong">New hold</button></div>
+    </div>
+    <div class="dlg" id="holdform" hidden>
+      <div class="btns" id="holdscope" role="group" aria-label="What the hold takes">
+        <button type="button" class="chip" data-scope="whole" aria-pressed="true">The whole machine</button>
+        <button type="button" class="chip" data-scope="half" aria-pressed="false">Half</button>
+        <button type="button" class="chip" data-scope="slots" aria-pressed="false">Named slots</button>
+      </div>
+      <div class="fields">
+        <label class="field">From (blank: now) <input id="hstart" type="text" placeholder="18:00, 2026-10-21 18:00 or +30m"></label>
+        <label class="field">To <input id="hend" type="text" placeholder="20:00, 2026-10-21 20:00 or +2h"></label>
+        <label class="field" id="hcpu" hidden>CPU slots <input id="hcpuv" type="text" placeholder="0-3, 6"></label>
+        <label class="field" id="hgpu" hidden>GPU slots <input id="hgpuv" type="text" placeholder="0"></label>
+        <label class="field">Note <input id="hnote" type="text" maxlength="200" placeholder="reserve window"></label>
+      </div>
+      <div class="btns">
+        <button type="button" class="go" id="holdgo" data-need="strong">Make the hold</button>
+        <button type="button" id="holdcancel">Cancel</button>
+      </div>
+    </div>
+    <div class="dlg" id="editform" hidden>
+      <p class="head" id="editwhat"></p>
+      <div class="fields">
+        <label class="field">From (blank: keep) <input id="estart" type="text"></label>
+        <label class="field">To (blank: keep) <input id="eend" type="text"></label>
+        <label class="field">Note <input id="enote" type="text" maxlength="200"></label>
+      </div>
+      <div class="btns">
+        <button type="button" class="go" id="editgo" data-need="strong">Change the hold</button>
+        <button type="button" id="editcancel">Cancel</button>
+      </div>
+    </div>
     <div class="tablewrap" id="holds"></div>
   </section>
 
@@ -135,13 +192,40 @@ pre.parts{margin:0;font:500 .8rem/1.5 var(--f-mono);white-space:pre-wrap;overflo
   </section>
 
   <section class="panel" aria-labelledby="h-game">
-    <h2 id="h-game">Game mode</h2>
+    <div class="bar">
+      <h2 id="h-game">Game mode</h2>
+      <div class="btns">
+        <button type="button" id="gametoggle" data-need="lock">Turn game mode on</button>
+        <button type="button" id="gamesedit" data-need="lock">Change the games list</button>
+      </div>
+    </div>
     <div id="game"></div>
+    <div class="dlg" id="gamesform" hidden>
+      <label class="field">One game a line: the program, then pin or nopin (pin: the game gets its own slots), then a name. A line that starts with # is skipped. <textarea id="gamestext" spellcheck="false"></textarea></label>
+      <div class="btns">
+        <button type="button" class="go" id="gamesgo" data-need="lock">Save the games list</button>
+        <button type="button" id="gamescancel">Cancel</button>
+      </div>
+    </div>
   </section>
 
   <section class="panel" aria-labelledby="h-division">
-    <h2 id="h-division">Division</h2>
+    <div class="bar">
+      <h2 id="h-division">Division</h2>
+      <div class="btns">
+        <button type="button" id="divedit" data-need="strong">Change the division</button>
+        <button type="button" id="divdefaults" data-need="strong">Use the defaults</button>
+      </div>
+    </div>
     <div id="division"></div>
+    <div class="dlg" id="divform" hidden>
+      <p class="head">A blank field takes its default. gpu_share is one number, or one per card like 4, 2.</p>
+      <div class="fields" id="divfields"></div>
+      <div class="btns">
+        <button type="button" class="go" id="divgo" data-need="strong">Save the division</button>
+        <button type="button" id="divcancel">Cancel</button>
+      </div>
+    </div>
   </section>
 
   <section class="panel" aria-labelledby="h-stats">
@@ -167,7 +251,8 @@ pre.parts{margin:0;font:500 .8rem/1.5 var(--f-mono);white-space:pre-wrap;overflo
   const DAY = 86400000, HALF = 1800000, DAYS = 7, ROWS = 48, BACK_DAYS = 14, AHEAD_DAYS = 28;
   const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  const state = { view: null, rev: null, writer: null, writes: { lock: false, strong: false, why: "" }, shift: 0, days: 7, stats: null, statsWhy: "", statsRev: null };
+  const state = { view: null, rev: null, writer: null, writes: { lock: false, strong: false, why: "" }, shift: 0, days: 7, stats: null, statsWhy: "", statsRev: null,
+    pick: null, confirm: "", busy: false, scope: "whole", editing: "" };
 
   // The one transport, as on the Action Hub page: the session cookie is the page's only credential. A refusal is an
   // Error with status, code, field, retryAfter and unpaired; a call that got no answer has status 0, code "network".
@@ -199,6 +284,8 @@ pre.parts{margin:0;font:500 .8rem/1.5 var(--f-mono);white-space:pre-wrap;overflo
     wait(since){ return this.call("GET", "/lock/wait?since=" + encodeURIComponent(String(since)) + "&timeout=30", null, 90000); },
     stats(days){ return this.call("GET", "/lock/stats?days=" + encodeURIComponent(String(days))); }
   };
+  // A hold's or a run's id as one path segment.
+  const seg = id => encodeURIComponent(String(id));
 
   function el(tag, attrs, ...kids){
     const n = document.createElement(tag);
@@ -243,9 +330,13 @@ pre.parts{margin:0;font:500 .8rem/1.5 var(--f-mono);white-space:pre-wrap;overflo
   const table = (heads, rows) => el("table", {class:"t"}, el("thead", null, el("tr", null, heads.map(h => el("th", {text: h})))), el("tbody", null, rows));
   const td = (text, cls) => el("td", {class: cls || null, text: text == null ? "" : String(text)});
   const PART_TAGS = { bad: "bad", warn: "warn", dim: "dim", head: "headline" };
-  // A text panel of the view: [text, tags] parts, each drawn as text; a tag "c:<run id>" is that run's colour.
+  // A text panel of the view: [text, tags] parts, each drawn as text; a tag "c:<run id>" is that run's colour, and
+  // a part tagged "move:<run id>" is where that waiting run's Move to top button goes.
   const parts = (node, list) => {
     node.replaceChildren(...(list || []).map(([t, tags]) => {
+      const mv = (tags || []).find(x => typeof x === "string" && x.startsWith("move:"));
+      if (mv) { const id = mv.slice(5); return el("button", {type: "button", "data-need": "lock", "data-top": id,
+        onclick: () => write("/lock/runs/" + seg(id) + "/top", {}, r => "Run " + (r.id || id) + " is now first in line.")}, "Move to top"); }
       const s = el("span", {class: (tags || []).map(x => PART_TAGS[x]).filter(Boolean).join(" ") || null, text: String(t)});
       const c = (tags || []).find(x => typeof x === "string" && x.startsWith("c:"));
       if (c && colourOf(c.slice(2))) s.style.color = colourOf(c.slice(2));
@@ -297,7 +388,7 @@ pre.parts{margin:0;font:500 .8rem/1.5 var(--f-mono);white-space:pre-wrap;overflo
   }
   const RANK = { agent: 1, game: 2, half: 3, own: 4 };
   function drawWeek(){
-    const base = today() + state.shift * DAY, now = nowMs(), cover = spans();
+    const base = today() + state.shift * DAY, now = nowMs(), cover = spans(), pick = picked();
     say($("#weekhead"), dayName(base) + " to " + dayName(base + (DAYS - 1) * DAY) + ", PC time.");
     $("#earlier").disabled = state.shift <= -BACK_DAYS;
     $("#later").disabled = state.shift + DAYS >= AHEAD_DAYS;
@@ -311,7 +402,7 @@ pre.parts{margin:0;font:500 .8rem/1.5 var(--f-mono);white-space:pre-wrap;overflo
         let kind = "";
         for (const x of on) if ((RANK[x.kind] || 0) > (RANK[kind] || 0)) kind = x.kind;
         const run = on.find(x => x.kind === "run");
-        const cls = [e <= now ? "past" : "", kind, s <= now && now < e ? "now" : ""].filter(Boolean).join(" ");
+        const cls = [e <= now ? "past" : "", kind, s <= now && now < e ? "now" : "", pick && s >= pick.s && s < pick.e ? "pick" : ""].filter(Boolean).join(" ");
         const c = el("td", {class: cls || null, "data-t": String(s), title: dayName(s) + " " + hhmm(s) + (on.length ? ": " + on.map(x => x.text).join("; ") : "")});
         if (run && colourOf(run.id)) c.style.borderLeftColor = colourOf(run.id);
         cells.push(c);
@@ -319,21 +410,49 @@ pre.parts{margin:0;font:500 .8rem/1.5 var(--f-mono);white-space:pre-wrap;overflo
       rows.push(el("tr", {class: r % 2 === 0 ? "hour" : null}, el("th", {scope: "row", text: r % 2 === 0 ? pad(r / 2) + ":00" : ""}), cells));
     }
     $("#grid").replaceChildren(el("thead", null, head), el("tbody", null, rows));
+    drawPick();
+  }
+  // The window the owner picked on the grid, [s, e) in ms: from the half hour clicked first to the end of the one
+  // clicked second, whichever order they came in. Until the second click it is the one half hour.
+  function picked(){
+    const p = state.pick;
+    if (!p) return null;
+    const b = p.b == null ? p.a : p.b;
+    return { s: Math.min(p.a, b), e: Math.max(p.a, b) + HALF, done: p.b != null };
+  }
+  function drawPick(){
+    const p = picked();
+    $("#pick").hidden = !p;
+    if (!p) return;
+    const from = p.s <= nowMs() ? "now" : dayName(p.s) + " " + hhmm(p.s);
+    say($("#picked"), p.done ? "Reserve from " + from + " to " + dayName(p.e) + " " + hhmm(p.e) + ", PC time."
+      : "From " + from + ": now click the half hour the window ends in.");
   }
   function drawHolds(){
     const v = state.view, all = [...(v.holds || []), ...(v.agent_holds || [])];
-    $("#holds").replaceChildren(all.length ? table(["Who", "Scope", "From", "To", "Note", "State"], all.map(h => el("tr", {"data-hold": String(h.id || "")},
+    $("#holds").replaceChildren(all.length ? table(["Who", "Scope", "From", "To", "Note", "State", ""], all.map(h => el("tr", {"data-hold": String(h.id || "")},
       td(holdWho(h)), td(holdScope(h)), td(when(h.start)), td(when(h.end)), td(h.note || ""),
-      td(h.lost && h.lost.cpu ? "lost " + pools(h.lost) + " to " + (h.lost_to || []).join(", ") : h.state || (h.live ? "in force" : "booked")))))
+      td(h.lost && h.lost.cpu ? "lost " + pools(h.lost) + " to " + (h.lost_to || []).join(", ") : h.state || (h.live ? "in force" : "booked")),
+      holdActs(h))))
       : el("p", {class: "none", text: "No holds."}));
+  }
+  // A hold's Edit and Release. Release asks once more, in its row, before anything is sent.
+  function holdActs(h){
+    const id = String(h.id || ""), key = "hold:" + id;
+    if (state.confirm === key) return el("td", {class: "acts"},
+      el("button", {type: "button", class: "stop", "data-need": "strong", onclick: () => write("/lock/holds/" + seg(id) + "/end", {}, () => { state.confirm = ""; return "Released hold " + id + "."; })}, "Release it"),
+      el("button", {type: "button", onclick: () => { state.confirm = ""; render(); }}, "Keep it"));
+    return el("td", {class: "acts"},
+      el("button", {type: "button", "data-need": "strong", onclick: () => openEdit(h)}, "Edit"),
+      el("button", {type: "button", "data-need": "strong", onclick: () => { state.confirm = key; render(); }}, "Release"));
   }
   function drawRuns(){
     const v = state.view, runs = v.runs || [];
-    $("#runs").replaceChildren(runs.length ? table(["Run", "What", "Kind", "State", "Slots", "Since", "Expected end", "Peak"], runs.map(r => {
+    $("#runs").replaceChildren(runs.length ? table(["Run", "What", "Kind", "State", "Slots", "Since", "Expected end", "Peak", ""], runs.map(r => {
       const u = r.usage || {}, tr = el("tr", {"data-run": String(r.id || "")},
         td(r.id, "mono"), td([r.repo, r.slug].filter(Boolean).join("/")), td(r.kind), td(r.state + (r.background ? ", background run" : "")),
         td(pools({cpu: r.cores, gpu: r.gpus})), td(when(r.held_since || r.since)), td(when(r.expected_end) + (r.overrun ? " (late)" : "")),
-        td([u.peak_cpu_cores != null ? u.peak_cpu_cores + " cores" : "", mb(u.peak_mem_mb)].filter(Boolean).join(", ")));
+        td([u.peak_cpu_cores != null ? u.peak_cpu_cores + " cores" : "", mb(u.peak_mem_mb)].filter(Boolean).join(", ")), runActs(r));
       if (colourOf(r.id)) tr.firstChild.style.borderLeft = "6px solid " + colourOf(r.id);
       return tr;
     })) : el("p", {class: "none", text: "No run holds the lock."}));
@@ -343,6 +462,14 @@ pre.parts{margin:0;font:500 .8rem/1.5 var(--f-mono);white-space:pre-wrap;overflo
     parts($("#bookings"), v.bookings);
     if (!(v.bookings || []).length) { $("#bookings").textContent = "No agent bookings."; $("#bookings").hidden = false; }
   }
+  // A run's End run, which asks once more before anything is sent: the run is stopped, whatever it was doing.
+  function runActs(r){
+    const id = String(r.id || ""), key = "run:" + id;
+    if (state.confirm === key) return el("td", {class: "acts"},
+      el("button", {type: "button", class: "stop", "data-need": "lock", onclick: () => write("/lock/runs/" + seg(id) + "/end", {confirm: id}, () => { state.confirm = ""; return "Asked run " + id + " to end."; })}, "End run " + id),
+      el("button", {type: "button", onclick: () => { state.confirm = ""; render(); }}, "Let it run"));
+    return el("td", {class: "acts"}, el("button", {type: "button", "data-need": "lock", onclick: () => { state.confirm = key; render(); }}, "End run"));
+  }
   function drawGame(){
     const g = state.view.game || {}, out = [];
     out.push(el("p", {class: "head", text: "Game mode is " + (g.enabled ? "on" : "off") + "." + (g.enabled && (g.slots || []).length ? " It holds cpu slots " + ranges(g.slots) + "." : !g.enabled && (g.would_take || []).length ? " Turned on, it would take cpu slots " + ranges(g.would_take) + "." : "")}));
@@ -351,6 +478,7 @@ pre.parts{margin:0;font:500 .8rem/1.5 var(--f-mono);white-space:pre-wrap;overflo
     out.push(games.length ? table(["Game", "Program", "Anti-cheat"], games.map(x => el("tr", null, td(x.name || x.exe), td(x.exe, "mono"), td(x.anti_cheat ? "yes" : ""))))
       : el("p", {class: "none", text: "No games are listed."}));
     $("#game").replaceChildren(...out);
+    $("#gametoggle").textContent = g.enabled ? "Turn game mode off" : "Turn game mode on";
   }
   const KEYS = ["threads", "cpu_slot_threads", "cpu_slots", "gpu_share", "half_cpu_slots", "half_gpu_slots", "agent_cap", "medium_cores"];
   const shown = x => x == null ? "" : Array.isArray(x) ? x.join(", ") : String(x);
@@ -374,9 +502,70 @@ pre.parts{margin:0;font:500 .8rem/1.5 var(--f-mono);white-space:pre-wrap;overflo
   }
   function render(){
     drawHeader();
-    if (!state.view) return;
-    drawNow(); drawWeek(); drawHolds(); drawRuns(); drawGame(); drawDivision(); drawStats();
+    if (state.view) { drawNow(); drawWeek(); drawHolds(); drawRuns(); drawGame(); drawDivision(); drawStats(); }
+    gates();
   }
+  // Every control that changes the lock names what it needs (data-need): "lock" (end a run, move one to the top,
+  // game mode, the games list) or "strong" (the holds and the division). One this login may not use is disabled and
+  // says why; while a change is on its way, every one is. Reserve also waits for a window to be picked.
+  function gates(){
+    const w = state.writes || {}, why = w.why || "this login may not change the machine lock";
+    const may = { lock: !!state.view && w.lock === true, strong: !!state.view && w.strong === true };
+    for (const b of document.querySelectorAll("[data-need]")) {
+      const ok = may[b.dataset.need] === true;
+      b.disabled = !ok || state.busy || (b.id === "reservewhole" || b.id === "reservehalf") && !(picked() || {}).done;
+      if (!ok) b.setAttribute("title", why); else b.removeAttribute("title");
+    }
+  }
+
+  // ---- changing the lock
+  // Why a change was not made, in the owner's words.
+  const whyNot = e => e.unpaired ? "Not changed: " + PAIR_AGAIN
+    : e.code === "network" ? "The hub server did not answer, so the change may or may not have been made. The page shows the lock as it is when it next reads it."
+    : "Not changed: " + (e.message || "the hub server answered " + e.status) + ".";
+  // One change: POST `path` with `body`. The answer carries the lock's view after it, which is drawn at once;
+  // `done(result)` is what to tell the owner. Answers true when the lock took the change.
+  async function write(path, body, done){
+    if (state.busy) return false;
+    state.busy = true; say($("#acterr"), ""); say($("#acted"), "Sending..."); gates();
+    try {
+      const j = await hub.call("POST", path, body);
+      const result = (j && j.result && typeof j.result === "object") ? j.result : {};
+      const said = [done(result)].concat((Array.isArray(result.notes) ? result.notes : []).filter(n => typeof n === "string"));
+      state.busy = false;
+      if (j && j.view && typeof j.view === "object") take(j); else render();
+      say($("#acted"), said.join(" "));
+      return true;
+    } catch (e) {
+      state.busy = false; say($("#acted"), ""); say($("#acterr"), whyNot(e || {})); render();
+      return false;
+    }
+  }
+  const val = sel => $(sel).value;
+  const iso = t => new Date(t).toISOString().replace(/\.\d{3}Z$/, "Z");
+  const heldText = r => { const h = (r && r.hold) || {}; return "Held " + (h.scope === "half" ? "half the machine" : h.scope === "whole" ? "the whole machine" : "slots") + " to " + (when(h.end) || "the end you gave") + "."; };
+  async function reserve(scope){
+    const p = picked();
+    if (!p || !p.done) return;
+    if (await write("/lock/holds", {kind: "reserve", scope, start: iso(p.s), end: iso(p.e), note: val("#picknote")}, heldText)) {
+      state.pick = null; $("#picknote").value = ""; render();
+    }
+  }
+  function openEdit(h){
+    state.editing = String(h.id || "");
+    say($("#editwhat"), "Hold " + state.editing + ", " + holdWho(h) + " " + holdScope(h) + ": " + when(h.start) + " to " + when(h.end) + ". Type times as for New hold; leave a field blank to keep it.");
+    $("#estart").value = ""; $("#eend").value = ""; $("#enote").value = h.note || "";
+    $("#editform").hidden = false;
+    $("#eend").focus();
+  }
+  function drawScope(){
+    for (const b of $("#holdscope").querySelectorAll("button")) b.setAttribute("aria-pressed", String(b.dataset.scope === state.scope));
+    $("#hcpu").hidden = $("#hgpu").hidden = state.scope !== "slots";
+  }
+  // The games list as the Games dialog's text, as the schedule window writes it: the program, pin or nopin, then
+  // the name when it is not the program's.
+  const gamesText = games => (games || []).map(g => [String(g.exe || ""), g.pin ? "pin" : "nopin", g.name && g.name !== g.exe ? String(g.name) : ""].filter(Boolean).join("  ") + "\n").join("");
+  const divided = r => r.applied ? "The new division is in force." : "The new division waits: " + (r.reason || "it changes once nothing runs or waits") + ".";
 
   // ---- reading
   function take(j){
@@ -432,6 +621,68 @@ pre.parts{margin:0;font:500 .8rem/1.5 var(--f-mono);white-space:pre-wrap;overflo
     if (state.view) drawStats();
     return readStats();
   });
+  // Reserve: click the half hour a window starts in, then the one it ends in; a third click starts again.
+  $("#grid").addEventListener("click", ev => {
+    const c = ev.target && ev.target.closest ? ev.target.closest("td") : null;
+    if (!c || !c.dataset.t) return;
+    const t = Number(c.dataset.t), p = state.pick;
+    state.pick = !p || p.b != null ? { a: t, b: null } : { a: p.a, b: t };
+    render();
+  });
+  $("#pickclear").addEventListener("click", () => { state.pick = null; render(); });
+  $("#reservewhole").addEventListener("click", () => reserve("whole"));
+  $("#reservehalf").addEventListener("click", () => reserve("half"));
+  $("#newhold").addEventListener("click", () => { $("#holdform").hidden = false; drawScope(); $("#hend").focus(); });
+  $("#holdcancel").addEventListener("click", () => { $("#holdform").hidden = true; });
+  $("#holdscope").addEventListener("click", ev => {
+    const b = ev.target && ev.target.closest ? ev.target.closest("button") : null;
+    if (b && b.dataset.scope) { state.scope = b.dataset.scope; drawScope(); }
+  });
+  $("#holdgo").addEventListener("click", async () => {
+    const slots = state.scope === "slots";
+    if (await write("/lock/holds", {kind: "hold", scope: state.scope, start: val("#hstart"), end: val("#hend"), note: val("#hnote"),
+      cpu: slots ? val("#hcpuv") : "", gpu: slots ? val("#hgpuv") : ""}, heldText)) {
+      $("#holdform").hidden = true;
+      for (const f of ["#hstart", "#hend", "#hnote", "#hcpuv", "#hgpuv"]) $(f).value = "";
+    }
+  });
+  $("#editcancel").addEventListener("click", () => { $("#editform").hidden = true; state.editing = ""; });
+  $("#editgo").addEventListener("click", async () => {
+    const id = state.editing;
+    if (!id) return;
+    if (await write("/lock/holds/" + seg(id) + "/edit", {start: val("#estart"), end: val("#eend"), note: val("#enote")},
+      r => { const h = (r && r.hold) || {}; return "Changed hold " + id + ": " + (when(h.start) || "now") + " to " + when(h.end) + "."; })) {
+      $("#editform").hidden = true; state.editing = "";
+    }
+  });
+  $("#gametoggle").addEventListener("click", () => {
+    const on = !(state.view && state.view.game && state.view.game.enabled);
+    return write("/lock/game_mode", {enabled: on}, r => "Game mode is " + ((typeof r.enabled === "boolean" ? r.enabled : on) ? "on" : "off") + ".");
+  });
+  $("#gamesedit").addEventListener("click", () => {
+    $("#gamestext").value = gamesText(state.view && state.view.game && state.view.game.games);
+    $("#gamesform").hidden = false; $("#gamestext").focus();
+  });
+  $("#gamescancel").addEventListener("click", () => { $("#gamesform").hidden = true; });
+  $("#gamesgo").addEventListener("click", async () => {
+    if (await write("/lock/games", {text: val("#gamestext")}, r => { const n = (Array.isArray(r.games) ? r.games : []).length; return "The games list has " + n + (n === 1 ? " game." : " games."); }))
+      $("#gamesform").hidden = true;
+  });
+  // The Division dialog's fields, one a key: the page's own names, made once.
+  $("#divfields").replaceChildren(...KEYS.map(k => el("label", {class: "field"}, k, el("input", {type: "text", "data-key": k}))));
+  $("#divedit").addEventListener("click", () => {
+    const d = (state.view && state.view.division) || {}, own = d.owner_division || {};
+    const src = Object.keys(own).length ? own : d.division || {};
+    for (const f of $("#divfields").querySelectorAll("input")) f.value = shown(src[f.dataset.key]);
+    $("#divform").hidden = false;
+  });
+  $("#divcancel").addEventListener("click", () => { $("#divform").hidden = true; });
+  $("#divgo").addEventListener("click", async () => {
+    const fields = {};
+    for (const f of $("#divfields").querySelectorAll("input")) fields[f.dataset.key] = f.value;
+    if (await write("/lock/division", {fields}, divided)) $("#divform").hidden = true;
+  });
+  $("#divdefaults").addEventListener("click", async () => { if (await write("/lock/division", {defaults: true}, divided)) $("#divform").hidden = true; });
   render();
   watch();
 })();

@@ -51,6 +51,23 @@ or after an unpair or a session that ran out) is told so on the page and to run
   (`test_a_page_id_in_a_question_or_a_to_do_opens_the_reader`). Delete (pressed twice) removes a document; the page writes
   none, agents publish them.
 - **Info.** Usage (each account's plan usage) and Agents (each agent's model and effort).
+- **Machine schedule.** A link under the header opens `/lock.html`, the machine lock's own page
+  ("Machine lock routes" below): what holds the PC's slots now, a week of half hours (back two
+  weeks, on four), the holds, runs and queue, game mode, the division, and what ran over 1, 7, 30
+  or 90 days. It follows the lock as it changes. Times are the PC's local time, labelled with its
+  zone, and times you type are read in that zone. The changes are:
+  - Pick a window on the grid (the half hour it starts in, then the one it ends in), then Reserve
+    the whole machine or half.
+  - New hold takes typed times (`18:00`, `2026-10-21 18:00`, `+2h`) for the whole machine, half or
+    named slots.
+  - A hold's Edit, and Release (asked twice).
+  - A run's End run (asked twice), and a waiting run's Move to top.
+  - Game mode on or off, and the games list.
+  - The division's fields, or its defaults.
+
+  A control this login may not use is disabled and says why: holds and the division need the
+  strong owner; a hub started under an agent session changes nothing
+  (`tests/hubsite/test_lock_page.py`, `WriteTest`).
 
 Under the header a line says whether a PM is listening: "A PM is listening." while a PM holds a
 `wait` open, else when one last asked; another session's wait `--for` its own key does not

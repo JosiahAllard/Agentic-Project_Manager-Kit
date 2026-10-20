@@ -318,6 +318,8 @@ class ToJson(unittest.TestCase):
         self.assertEqual(out["cores"]["cpu"][0]["holder"], "r-A")
         self.assertEqual(out["memory"], {"free_mb": 16384, "total_mb": 65536})
         self.assertEqual(out["game"]["running"], {"exe": "Game.exe", "name": "Game"})
+        # The games list carries pin, so the hub's games editor writes each line back as it was.
+        self.assertEqual(out["game"]["games"], [{"name": "Game", "exe": "Game.exe", "anti_cheat": False, "pin": True}])
         self.assertEqual(out["game"]["would_take"], [2, 3])
         self.assertEqual(out["division"]["agent_cap"], 2)
         self.assertEqual(out["division"]["cpu_slots"], 4)
