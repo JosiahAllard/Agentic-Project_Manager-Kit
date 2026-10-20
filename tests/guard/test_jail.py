@@ -1097,6 +1097,78 @@ class UnplacedGit(MainGit):
                             'iex \'$env:GIT_DIR = "%s/.git"\'; %s' % (m, g)], tool='PowerShell')
         self.allowed(self.git('eval "export GIT_DIR=%s/.git"; git -C "%s" status' % (m, wt), 'worker'))
 
+    def test_set_dashdash_git_dir_not_setter(self):
+        # bash's set takes options and positional parameters, never a variable: set -- GIT_DIR and
+        # set GIT_DIR=x set $1 (commands.exporter_names); cmd's set NAME=value is the setter
+        m, wt = self.main, W.fwd(self.w.wt)
+        g = 'git -C "%s" branch -m main old' % wt
+        self.judged_as_written(['set -- GIT_DIR; %s' % g, 'set -- GIT_DIR "%s/.git"; %s' % (m, g),
+                                'set GIT_DIR="%s/.git"; %s' % (m, g), 'set -e -- GIT_WORK_TREE; %s' % g])
+        self.worker_denied(['cmd /c "set GIT_DIR=%s/.git && %s"' % (m, g)], tool='PowerShell')
+
+    def test_declare_p_git_dir_not_setter(self):
+        # -p lists the variables named (any other attribute is then ignored): no value is set
+        m, wt = self.main, W.fwd(self.w.wt)
+        g = 'git -C "%s" branch -m main old' % wt
+        self.judged_as_written(['declare -p GIT_DIR; %s' % g, 'typeset -p GIT_DIR GIT_WORK_TREE; %s' % g,
+                                'declare -xp GIT_DIR; %s' % g, 'readonly -p GIT_DIR; %s' % g,
+                                'export -p; %s' % g])
+        # without -p the name is set or exported: the line's git stays unplaceable
+        self.worker_denied(['declare -x GIT_DIR; %s' % g, 'export GIT_DIR; %s' % g,
+                            'declare -x GIT_DIR="%s/.git"; %s' % (m, g), 'typeset -r GIT_DIR=x; %s' % g])
+
+    def test_git_index_file_prefix_scoped_to_its_command(self):
+        # GIT_INDEX_FILE=x before git reaches that git alone (the temp-index pattern): the line's
+        # other git is placed as written, while the prefixed one stays unplaceable
+        wt = W.fwd(self.w.wt)
+        line = 'git -C "%s" add a.py && GIT_INDEX_FILE=/tmp/idx git -C "%s" write-tree' % (wt, wt)
+        p = cm.read(line, sh.BASH, wt)
+        self.assertEqual([c.git_env for c in p.commands], [False, 'GIT_INDEX_FILE'])
+        d = self.jailed(self.git(line, 'worker'))
+        self.assertIn('GIT_INDEX_FILE=/tmp/idx git', d.reason)
+        self.assertNotIn('`git -C "%s" add a.py`' % wt, d.reason)
+        for text in ('git -C "%s" add a.py && GIT_INDEX_FILE=/tmp/idx git -C "%s" log -3' % (wt, wt),
+                     'env GIT_INDEX_FILE=/tmp/idx git -C "%s" log -3; git -C "%s" add a.py' % (wt, wt),
+                     'GIT_INDEX_FILE=/tmp/idx git -C "%s" log -3; git -C "%s" branch -m main old' % (wt, wt)):
+            with self.subTest(text):
+                self.allowed(self.git(text, 'worker'))
+                self.allowed(self.marked(text, COORDINATOR))
+        # an export, or another git variable beside it, still reaches every git of the line
+        self.worker_denied(['export GIT_INDEX_FILE=/tmp/idx; git -C "%s" add a.py' % wt,
+                            'GIT_INDEX_FILE=/tmp/idx GIT_DIR=/x git log -3; git -C "%s" add a.py' % wt,
+                            'GIT_DIR=/x git log -3; git -C "%s" add a.py' % wt,
+                            'GIT_INDEX_FILE=/tmp/idx bash -c "git -C %s add a.py"' % wt,
+                            'GIT_INDEX_FILE=/tmp/idx git -C "%s" add a.py' % wt])
+
+    def test_remove_item_env_passes(self):
+        # removing an env: item writes no file and sets no git variable, from the main checkout too
+        wt = W.fwd(self.w.wt)
+        for text in ('Remove-Item Env:X', 'Remove-Item Env:\\X', 'ri env:FOO', 'Remove-Item -Path Env:X'):
+            for cwd in (self.w.wt, self.w.main):
+                with self.subTest(text, cwd=cwd):
+                    self.allowed(decide(event('PowerShell', {'command': text, 'description': 'test'}, cwd, True,
+                                              'worker'), self.w.ctx(environ={})))
+        self.judged_as_written(['Remove-Item Env:GIT_DIR; git -C "%s" branch -m main old' % wt], tool='PowerShell')
+
+    def test_ps_double_quoted_text_not_scanned(self):
+        # a string is text: SetEnvironmentVariable(...) written inside one (a commit message, a
+        # Write-Host line) sets nothing, so the line's git is placed as written
+        wt = W.fwd(self.w.wt)
+        g = 'git -C "%s" branch -m main old' % wt
+        self.judged_as_written([
+            'git -C "%s" commit -m "SetEnvironmentVariable(\'GIT_DIR\', 1)"' % wt,
+            "git -C \"%s\" commit -m 'SetEnvironmentVariable(\"GIT_DIR\", 1)'" % wt,
+            'Write-Host "[Environment]::SetEnvironmentVariable(\'GIT_DIR\',\'x\')"; %s' % g,
+            '$s = "SetEnvironmentVariable(\'GIT_INDEX_FILE\'"; %s' % g], tool='PowerShell')
+        # the call itself still sets one
+        self.held_everywhere([
+            '[Environment]::SetEnvironmentVariable(\'GIT_DIR\', \'x\'); %s' % g,
+            '$null = [Environment]::SetEnvironmentVariable("GIT_DIR", "x"); %s' % g,
+            '[System.Environment]::SetEnvironmentVariable(\'GIT_WORK_TREE\', \'x\', \'Process\'); %s' % g,
+            # a $( ) subexpression in a string runs
+            'Write-Output "$([Environment]::SetEnvironmentVariable(\'GIT_DIR\', \'x\'))"; %s' % g],
+            tool='PowerShell')
+
     def test_a_sourced_here_string_is_read_like_eval(self):
         self.worker_denied(['. /dev/stdin <<< "git -C %s commit -m x"' % self.main,
                             'source /dev/stdin <<EOF\ngit -C "%s" commit -m x\nEOF' % self.main], 'git-main-history')
