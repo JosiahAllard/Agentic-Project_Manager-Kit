@@ -1,4 +1,6 @@
 """Real private Windows request/reply traffic with kernel client identity."""
+import ctypes
+from ctypes import wintypes as w
 import io
 import json
 import os
@@ -10,11 +12,13 @@ from unittest.mock import patch
 
 from optional.bridge.core.jsonwire import encode_frame
 from optional.bridge.core.messages import BeforeWriteError,DeliveryError
+from optional.bridge.win import rpcworker
 from optional.bridge.win.leader import ServiceLeader
 from optional.bridge.win.rpc import PipeServer,encode,request
 from optional.bridge.win.rpcworker import exchange
 from optional.bridge.win.transport import PipeTarget
-from kitlib.proc.pipe import connect
+from kitlib.proc.errors import ProcError
+from kitlib.proc.pipe import connect,write
 from kitlib.proc.process import own_ctime
 
 
@@ -140,6 +144,53 @@ class PipeRpcTests(unittest.TestCase):
         outcome,gave_up=self.busy_request_with_slow_helper_start(2.5)
         self.assertIsInstance(outcome,BeforeWriteError)
         self.assertIsNone(gave_up)  # the budget was spent starting it: nothing sent
+
+    def early_reject(self):
+        """The server's first client check fails, so it replies before reading the request."""
+        return patch.object(self.leader.listener,'verify_client',
+            side_effect=ProcError('pipe-client-process-mismatch'))
+
+    def test_early_reject_reply_reaches_a_client_slow_to_read_it(self):
+        # The server took the unread request for an extra frame and disconnected at once,
+        # discarding its reply before the client read it: private-outcome-uncertain.
+        real=rpcworker.read_frame
+        def slow(*args,**kwargs):
+            time.sleep(.5)  # the request is written; the client is descheduled before reading
+            return real(*args,**kwargs)
+        packet=encode({'id':'early'})
+        header=encode_frame({'pipe':self.target.name,'pid':self.target.pid,'creation':self.target.creation,
+            'length':len(packet),'wait':2500},max_frame_bytes=2048)
+        output=io.BytesIO()
+        with self.early_reject(),patch.object(rpcworker,'read_frame',slow):
+            self.serve()
+            exchange(io.BytesIO(header+packet),output)
+            self.threads[-1].join(timeout=5)
+        status,_,body=output.getvalue().partition(b'\n')
+        self.assertEqual(json.loads(status)['state'],'reply',output.getvalue())
+        self.assertEqual(json.loads(body),{'error':{'code':'private-client-unavailable'}})
+
+    def test_early_reject_of_a_request_past_the_pipe_buffer_still_replies(self):
+        # The client is still blocked writing a request larger than the 4 KB pipe buffer
+        # when the server, which never reads it, disconnects.
+        with self.early_reject():
+            self.serve()
+            result=request(self.target,{'id':'large','text':'x'*16384},timeout=5)
+            self.threads[-1].join(timeout=5)
+        self.assertEqual(result,{'error':{'code':'private-client-unavailable'}})
+
+    def test_client_that_never_reads_or_closes_holds_the_server_only_for_a_bound(self):
+        holder=connect(self.leader.endpoint,os.getpid(),own_ctime())
+        self.addCleanup(holder.close)
+        packet,count=encode({'id':'stuck'}),w.DWORD()
+        self.assertTrue(write(holder.handle,packet,len(packet),ctypes.byref(count),None))
+        start=time.monotonic()
+        with self.early_reject():
+            try: PipeServer(self.leader).once(timeout=3)
+            except DeliveryError: pass
+        # The drain bound (3 s) plus slack; never the client's own lifetime.
+        self.assertLess(time.monotonic()-start,5)
+        self.serve(lambda peer,message:{'ok':True})
+        self.assertEqual(request(self.target,{'id':'next'}),{'ok':True})
 
     def test_bad_handler_is_content_free_and_next_connection_still_works(self):
         def fail(peer,message): raise RuntimeError('private message must not enter logs')
