@@ -63,11 +63,13 @@ permissions.
 ## Creative dispatches
 
 - Art that is code (skill `specialty-tech-art`), scripted 3D props (skill `specialty-3d-assets`)
-  and scripted character rigs (skill `specialty-rigging`) go to senior-worker at least; sound (skill `specialty-sound`; the agent cannot hear, so its report
-  ends in a question you put to the owner) to worker at least, senior-worker for design; never
-  weak-worker. They work via the owner's local models, against an art direction the owner has
-  decided or, where none exists, by proposing strongly different looks for the owner to pick; none
-  hand-sculpts, and rigs and test animations are scripted (skill `specialty-rigging`). An asset generation cannot supply -> the owner, not another agent.
+  and scripted character rigs (skill `specialty-rigging`) go to senior-worker at least; sound
+  (skill `specialty-sound`; the agent cannot hear, so its report ends in a question you put to the
+  owner) to worker at least, senior-worker for design; never weak-worker. They work via the
+  owner's local models, against an art direction the owner has decided or, where none exists, by
+  proposing strongly different looks for the owner to pick; none hand-sculpts; rigs and their test
+  animations are scripted (skill `specialty-rigging`). An asset generation cannot supply -> the
+  owner, not another agent.
 - Every creative brief carries this block, filled in:
 
   > FEEL: one sentence. REFERENCES: one to three (a game and what specifically, or an image path,
