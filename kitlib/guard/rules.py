@@ -1027,20 +1027,21 @@ def own_worktree(ctx, cwd, main_top=None):
 
 
 def edit_target(event, ctx, target, cwd, role, what, unknown_why=None, rewrite=None, run=None, redirect=False,
-                shell=None):
+                shell=None, item=False):
     """Deny an edit of `target` in a main checkout (or a place git cannot tell) by a role that
     may not edit one, and an agent session's write outside its roots (write_jail). `rewrite(path)`
     gives the same edit aimed at `path` (the alternative); `run` the command to rerun from the
     worktree when it writes into the directory it runs in; `redirect`, a shell redirect's target:
     output, so the alternative with no worktree of the session's own is the temp folder; `shell`,
-    the dialect of the line `run` is on (the cd line of worktree_alternative)."""
+    the dialect of the line `run` is on (the cd line of worktree_alternative); `item`, a target the
+    guard cannot place that is a provider item on a line of more than plain calls (ps_provider_word)."""
     d = ledger_rule(ctx, target, role, what) or pm_data_unknown(ctx, target, cwd, role, what) or \
         lock_state(event, ctx, target, role, what) or hub_secret_edit(event, ctx, target, role, what) or \
         kit_json(event, ctx, target, role, what) or gate_result(event, ctx, target, role, what) or \
         generated_file(ctx, target, role, what)
     if d:
         return d
-    return main_checkout(event, ctx, target, cwd, role, what, unknown_why, rewrite, run, redirect, shell) or \
+    return main_checkout(event, ctx, target, cwd, role, what, unknown_why, rewrite, run, redirect, shell, item) or \
         write_jail(event, ctx, target, cwd, role, what, rewrite, run)
 
 
@@ -1096,8 +1097,15 @@ def gate_result(event, ctx, target, role, what):
     return None
 
 
+# The refusal of a provider item the guard reads as a file only because of the line around it
+# (ps_provider_word): it says so, and its Instead runs the command from the worktree
+PROVIDER_ITEM_WHY = ('%s: that names an item on a drive that holds no files only on a line of plain calls with '
+                     'literal words, and this line is not one, so the guard reads it as a file it cannot place. '
+                     'Run the command from your worktree:')
+
+
 def main_checkout(event, ctx, target, cwd, role, what, unknown_why=None, rewrite=None, run=None, redirect=False,
-                  shell=None):
+                  shell=None, item=False):
     # a target it cannot place may be in any checkout, so both the kit defaults and the roles of
     # the repository the call runs in must let the role edit one: the defaults alone would let a
     # role that repository keeps out of its main checkout write anywhere, and the repository's
@@ -1111,6 +1119,9 @@ def main_checkout(event, ctx, target, cwd, role, what, unknown_why=None, rewrite
     no_wt, new_wt = new_worktree(ctx, main_top)
     if target is None:
         mine = own_worktree(ctx, cwd)
+        if item and run and main_top and not no_wt:
+            return refuse(UNPLACED, role, PROVIDER_ITEM_WHY % what,
+                          cd_line(fwd(mine) if mine else '<worktree>', run, shell or sh.PS))
         only = ''
         if rewrite is not None and (mine or redirect):
             instead = rewrite(fwd(mine or ctx.tempdir) + '/<file>')
@@ -1331,13 +1342,18 @@ PS_COMMON_ALIASES = {'ea': 'erroraction', 'wa': 'warningaction', 'infa': 'inform
 class PSCmdlet(object):
     """A cmdlet's parameters as far as the guard needs them: `values` take a value, `switches`
     do not, `pos` names the positional slots in order, `writes` the parameters naming a file it
-    writes (`'*'` in pos: every further positional binds to the last slot)."""
+    writes (`'*'` in pos: every further positional binds to the last slot). `piped`: the groups of
+    those it binds from the pipeline when the line binds no parameter of the group (a path the
+    text does not show, PIPE_UNPLACED). `here`: the parameter whose absence makes it write the
+    location it runs in (Copy-Item with no -Destination). `provider`: a provider-aware item or
+    content cmdlet, whose item on a drive that holds no files is no file (PS_PROVIDER_CMDLETS)."""
 
-    def __init__(self, values, switches=(), pos=(), writes=(), aliases=None):
+    def __init__(self, values, switches=(), pos=(), writes=(), aliases=None, piped=(), here=None, provider=False):
         self.values = tuple(values) + PS_COMMON_VALUES
         self.switches = tuple(switches) + PS_COMMON_SWITCHES
         self.pos, self.writes = tuple(pos), tuple(writes)
         self.aliases = dict(PS_COMMON_ALIASES, **(aliases or {}))
+        self.piped, self.here, self.provider = tuple(piped), here, provider
 
     def names(self):
         return self.values + self.switches
@@ -1350,22 +1366,30 @@ PS_CMDLETS = {
                          ('append', 'force', 'noclobber', 'nonewline'), ('filepath', 'encoding'),
                          ('filepath', 'literalpath'), {'path': 'filepath'}),
     'set-content': PSCmdlet(_PATHS + _FILTERS + ('value', 'encoding', 'stream'),
-                            ('passthru', 'force', 'nonewline', 'asbytestream'), ('path', 'value'), _PATHS),
+                            ('passthru', 'force', 'nonewline', 'asbytestream'), ('path', 'value'), _PATHS,
+                            piped=(_PATHS,), provider=True),
     'add-content': PSCmdlet(_PATHS + _FILTERS + ('value', 'encoding', 'stream'),
-                            ('passthru', 'force', 'nonewline', 'asbytestream'), ('path', 'value'), _PATHS),
-    'clear-content': PSCmdlet(_PATHS + _FILTERS + ('stream',), ('force',), ('path',), _PATHS),
+                            ('passthru', 'force', 'nonewline', 'asbytestream'), ('path', 'value'), _PATHS,
+                            piped=(_PATHS,), provider=True),
+    'clear-content': PSCmdlet(_PATHS + _FILTERS + ('stream',), ('force',), ('path',), _PATHS,
+                              piped=(_PATHS,), provider=True),
     'tee-object': PSCmdlet(('filepath', 'literalpath', 'variable', 'inputobject', 'encoding'), ('append',),
                            ('filepath',), ('filepath', 'literalpath'), {'path': 'filepath'}),
     'new-item': PSCmdlet(('path', 'name', 'itemtype', 'value', 'credential'), ('force',), ('path',), ('path',),
-                         {'type': 'itemtype'}),
-    'remove-item': PSCmdlet(_PATHS + _FILTERS + ('stream',), ('recurse', 'force'), ('path', '*'), _PATHS),
+                         {'type': 'itemtype'}, piped=(('path',),), provider=True),
+    'remove-item': PSCmdlet(_PATHS + _FILTERS + ('stream',), ('recurse', 'force'), ('path', '*'), _PATHS,
+                            piped=(_PATHS,), provider=True),
+    # the paths Copy-Item takes from the pipeline are what it reads; its -Destination is the write
     'copy-item': PSCmdlet(_PATHS + _FILTERS + ('destination', 'tosession', 'fromsession'),
-                          ('container', 'force', 'recurse', 'passthru'), ('path', 'destination'), ('destination',)),
+                          ('container', 'force', 'recurse', 'passthru'), ('path', 'destination'), ('destination',),
+                          piped=(('destination',),), here='destination', provider=True),
     'move-item': PSCmdlet(_PATHS + _FILTERS + ('destination',), ('force', 'passthru'), ('path', 'destination'),
-                          _PATHS + ('destination',)),
-    'rename-item': PSCmdlet(_PATHS + ('newname', 'credential'), ('force', 'passthru'), ('path', 'newname'), _PATHS),
+                          _PATHS + ('destination',), piped=(_PATHS, ('destination',)), here='destination',
+                          provider=True),
+    'rename-item': PSCmdlet(_PATHS + ('newname', 'credential'), ('force', 'passthru'), ('path', 'newname'), _PATHS,
+                            piped=(_PATHS,), provider=True),
     'expand-archive': PSCmdlet(_PATHS + ('destinationpath',), ('force', 'passthru'), ('path', 'destinationpath'),
-                               ('destinationpath',)),
+                               ('destinationpath',), here='destinationpath'),
     'compress-archive': PSCmdlet(_PATHS + ('destinationpath', 'compressionlevel'), ('update', 'force', 'passthru'),
                                  ('path', 'destinationpath'), ('destinationpath',)),
     'export-csv': PSCmdlet(_PATHS + ('inputobject', 'delimiter', 'encoding', 'quotefields', 'usequotes'),
@@ -1384,7 +1408,7 @@ PS_CMDLETS = {
                               ('recurse', 'force', 'name', 'directory', 'file', 'hidden', 'readonly', 'system',
                                'followsymlink'), ('path', 'filter'), ()),
     'set-itemproperty': PSCmdlet(_PATHS + _FILTERS + ('name', 'value', 'type', 'inputobject'), ('passthru', 'force'),
-                                 ('path', 'name', 'value'), _PATHS),
+                                 ('path', 'name', 'value'), _PATHS, piped=(_PATHS,), provider=True),
     'start-transcript': PSCmdlet(_PATHS + ('outputdirectory',),
                                  ('append', 'force', 'noclobber', 'includeinvocationheader', 'useminimalheader'),
                                  ('path',), _PATHS + ('outputdirectory',)),
@@ -1527,6 +1551,22 @@ def _split_commas(w):
 def here(w):
     """A Word for the directory a command runs in: the file it writes there is not named."""
     return sh.Word('.', False, w.start if w is not None else 0, w.end if w is not None else 0)
+
+
+# Why a path a cmdlet takes from the pipeline is one the guard cannot place
+PIPE_UNPLACED = 'the text does not show what the command before the | sends'
+PIPE_WORD = '(a path from the pipeline)'
+
+
+def pipe_stand_in(cmd):
+    """The Word write_targets gives for a path a PowerShell cmdlet takes from the pipeline
+    (PSCmdlet piped): no text to place, at the command's end (pipe_stand_in_word)."""
+    return sh.Word(PIPE_WORD, False, cmd.end, cmd.end)
+
+
+def pipe_stand_in_word(cmd, w):
+    """True when the write `w` is pipe_stand_in(cmd)."""
+    return w.text == PIPE_WORD and not w.dyn and w.start == w.end == cmd.end
 
 
 class NetWrite(object):
@@ -2464,7 +2504,10 @@ def write_targets(cmd, inv):
                 out.extend(x for x in bound.get(p, []) if native or not ps_provider_item(cmd, x))
             if spec.writes:
                 out.extend(ps_unread(cmd, args, spec))
-            if cmdlet == 'expand-archive' and not bound.get('destinationpath'):
+            piped = [g for g in spec.piped if cmd.piped_in and not any(bound.get(p) for p in g)]
+            if piped:
+                out.append(pipe_stand_in(cmd))
+            if spec.here and not bound.get(spec.here) and not any(spec.here in g for g in piped):
                 out.append(here(word))
             if cmdlet == 'new-item' and bound.get('name'):
                 base = (bound.get('path') or [None])[0]
@@ -2704,13 +2747,14 @@ PS_DRIVE_REMAP_RE = re.compile(r'(?im)drive|psdr|\b(?:ndr|rdr|mount|iex|ipmo)\b|
                                r'|\.ps1\b|\.psm1\b|scriptblock|sessionstate|(?:^|[;&|({])\s*\.\s')
 # Session objects, .NET types and static calls a line may reach a drive through
 PS_DOTNET_RE = re.compile(r'(?im)\$executioncontext|\$host\b|new-object|add-type|^\s*using\b|[\])]\s*::')
-# The provider-aware item and content cmdlets, as the line names them (the canonical name or one
-# of these aliases): their item on a drive that holds no files is no file. Script functions
-# (Compress-Archive, mkdir) and the file-only writers (Out-File, Tee-Object, Export-*,
-# Start-Transcript, Invoke-WebRequest -OutFile) are not here and are judged as files.
-PS_PROVIDER_CMDLETS = frozenset(('new-item', 'set-content', 'add-content', 'clear-content', 'remove-item',
-                                 'rename-item', 'move-item', 'copy-item', 'set-itemproperty',
-                                 'ni', 'sc', 'ac', 'clc', 'ri', 'del', 'rni', 'mi', 'move', 'cpi', 'copy', 'sp'))
+# The provider-aware item and content cmdlets (PSCmdlet provider), as the line names them: the
+# canonical name or one of PS_PROVIDER_ALIASES (any other alias is judged as a file write). Their
+# item on a drive that holds no files is no file. Script functions (Compress-Archive, mkdir) and
+# the file-only writers (Out-File, Tee-Object, Export-*, Start-Transcript, Invoke-WebRequest
+# -OutFile) are not here and are judged as files.
+PS_PROVIDER_ALIASES = ('ni', 'sc', 'ac', 'clc', 'ri', 'del', 'rni', 'mi', 'move', 'cpi', 'copy', 'sp')
+PS_PROVIDER_CMDLETS = frozenset([n for n, s in PS_CMDLETS.items() if s.provider] +
+                                [a for a in PS_PROVIDER_ALIASES if PS_CMDLETS[PS_ALIASES[a]].provider])
 # Read-only cmdlets a line of provider items may also hold
 PS_READ_CMDLETS = frozenset(('get-item', 'gi', 'get-content', 'gc', 'get-childitem', 'gci', 'test-path',
                              'get-location', 'gl', 'pwd', 'write-output', 'echo', 'write-host'))
@@ -2749,6 +2793,15 @@ def ps_line_plain(cmd):
             if w.dyn and not PS_ENV_READ_WORD_RE.match(w.text) or any(r.search(w.text) for r in (PS_DRIVE_REMAP_RE, cm.PS_SCRIPT_TEXT_RE, PS_DOTNET_RE)):
                 return False
     return True
+
+
+def ps_provider_word(cmd, inv, w):
+    """True when the Word `w`, written by the command `cmd` (invocation `inv`), is a literal item
+    of a provider-aware cmdlet on a drive that holds no files (PS_PROVIDER_ITEM_RE, no `..` part),
+    whatever the line around it: ps_provider_item without ps_line_plain. Its refusal says why
+    (PROVIDER_ITEM_WHY) instead of naming a file to write."""
+    return cmd.shell == sh.PS and inv is not None and inv.via is None and inv.name in PS_PROVIDER_CMDLETS and \
+        not w.dyn and bool(PS_PROVIDER_ITEM_RE.match(w.text)) and not DOTDOT_RE.search(w.text)
 
 
 def ps_provider_item(cmd, w):
@@ -2834,17 +2887,15 @@ def shell_writes(event, ctx, cmd, inv, cwd, role):
     searched = False
     # A Start-Process program with a -WorkingDirectory runs there (commands.run_dir), while
     # PowerShell places the call's redirections and the -RedirectStandard* files from its own
-    # location, the command's directory. Only git's targets are read from the workdir alone; any
-    # other program's are judged from both folders, so a workdir never lets a write pass that the
-    # command's own directory refuses.
+    # location, the command's directory. The program's own targets are judged from both folders,
+    # so a workdir never lets a write pass that the command's own directory refuses. git (and a
+    # git-* program) gives none: the git rules judge its writes, from the workdir (commands.git_call).
     moved = len(write_targets(cmd, None)) + len(inv.writes) \
         if inv is not None and inv.via == 'start-process' and inv.workdir is not None else None
-    git = inv is not None and (inv.name == 'git' or (inv.name or '').startswith('git-'))
     for k, w in enumerate(write_targets(cmd, inv)):
         if cmd.shell == sh.BASH and not w.dyn and BASH_DEVICE_RE.match(w.text):
             continue
-        bases = (OUTER,) if moved is None or k < moved else \
-            (cm.run_dir(inv),) if git else (OUTER, cm.run_dir(inv))
+        bases = (OUTER,) if moved is None or k < moved else (OUTER, cm.run_dir(inv))
         for base in bases:
             d, searched = _write_from(event, ctx, cmd, inv, cwd, role, w, base, net, into, searched)
             if d:
@@ -2856,7 +2907,8 @@ def _write_from(event, ctx, cmd, inv, cwd, role, w, base, net, into, searched):
     """(Decision or None, searched) for the write target `w` of shell_writes read from `base`
     (OUTER, or the folder a Start-Process -WorkingDirectory names)."""
     runs_in = cmd.cwd if base is OUTER else base
-    target, why = write_place(ctx, cmd, w, base)
+    piped = pipe_stand_in_word(cmd, w)
+    target, why = (None, PIPE_UNPLACED) if piped else write_place(ctx, cmd, w, base)
     unread = py_unread(cmd, inv, w) or (NET_UNPLACED if net_stand_in(cmd, w) else None)
     # a kit tool acts on the checkout its -C names: that folder, not the one it runs in
     checked = kit_tool_dir(event, ctx, cmd, inv, cwd) if base is OUTER and unread == PY_PS_WHY else None
@@ -2873,7 +2925,8 @@ def _write_from(event, ctx, cmd, inv, cwd, role, w, base, net, into, searched):
     elif target is None and runs_in is not None and \
             ctx.place(runs_in).kind not in (repo.MAIN, repo.UNKNOWN):
         return None, searched                   # a target it cannot place, from a worktree or elsewhere
-    what = '`%s` writes %s' % (cmd.text, w.text if w.text != '.' else 'files in the directory it runs in') \
+    what = '`%s` writes the path the pipeline gives it' % cmd.text if piped else \
+        '`%s` writes %s' % (cmd.text, w.text if w.text != '.' else 'files in the directory it runs in') \
         if unread is None else \
         'the directory `%s` runs in (counted as written: %s)' % (cmd.text, unread) if checked is None else \
         'the checkout `%s` acts on, %s (counted as written: %s)' % (cmd.text, checked[0].text, unread)
@@ -2895,9 +2948,10 @@ def _write_from(event, ctx, cmd, inv, cwd, role, w, base, net, into, searched):
     placed = target is not None and not unread_write(cmd, inv, w)
     output = any(r.writes and r.target is not None and r.target.start is not None and
                  (r.target.start, r.target.end) == (w.start, w.end) for r in cmd.redirects) or (getattr(inv, 'name', None) or '').lower() in OUTPUT_WRITERS
+    item = target is None and ps_provider_word(cmd, inv, w)
     for t in into_folder(target, w, into, runs_in, getattr(ctx, 'home', None)) if target else [target]:
         d = edit_target(event, ctx, t, cwd, role, what, why, rewrite=rewrite, run=bare(cmd), redirect=output,
-                        shell=outer_shell(cmd))
+                        shell=outer_shell(cmd), item=item)
         if not placed:
             d = unplaced(d, role)
         if d:
