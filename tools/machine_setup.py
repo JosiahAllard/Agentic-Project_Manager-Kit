@@ -3,8 +3,11 @@ It writes nothing into any repository: a repository works with the kit with noth
 
   machine_setup.py [--owner-email EMAIL]               DRY RUN of the machine setup: the guard's
                                                        entry in each account's settings.json, the
-                                                       kit plugin per account, the owner's email in
-                                                       the machine config, the agents' temp folder
+                                                       kit plugin per account (then, there, the 3
+                                                       machine-lock tools' allow rules and the drop
+                                                       of the kit SessionStart hooks the plugin
+                                                       runs), the owner's email in the machine
+                                                       config, the agents' temp folder
   machine_setup.py ... --apply                         make them
   machine_setup.py --old-kit DIR [--apply]             switch the Claude config folders from an
                                                        older kit clone instead (settings, the
