@@ -329,22 +329,48 @@ class Refs(Base):
                 self.allowed(self.cmd(text, tool=tool, sub=False, env={}))
 
     def test_an_unread_update_ref_where_no_store_reads(self):
-        """Where no backlog store reads (backlogrole.store_kind None: here a .kit.json that does not
-        load), an update-ref the guard cannot read is not this rule's: the PM keeps it, as
+        """Where no backlog store reads (a folder in no checkout: store_kind None for no fault),
+        an update-ref the guard cannot read is not this rule's: the PM keeps it, as
         git-shared-ref leaves the PM free on refs. A ref named literally under refs/backlog/ is
         still the store's, whatever else leaves the update-ref unread (a computed word before it,
         an option the guard does not know)."""
-        with open(os.path.join(self.w.main, '.kit.json'), 'w', encoding='utf-8') as f:
-            f.write('{"backlog": {"store": 7}}')
+        plain = W.fwd(self.w.plain)
         for text, tool, _said in self.UNREAD_UPDATE_REFS:
-            text = text.format(wt=self.wt)
+            text = text.format(wt=plain)
             with self.subTest(text=text):
-                self.allowed(self.cmd(text, tool=tool, sub=False, env=PM))
+                self.allowed(self.cmd(text, tool=tool, sub=False, env=PM, cwd=self.w.plain))
         for args in ('update-ref refs/backlog/main %s' % OID, 'update-ref -m "$msg" refs/backlog/main %s' % OID,
                      'update-ref --no-create-reflog refs/backlog/main %s' % OID):
             for env in (PM, {context.ROLE_ENV: 'plain'}):
                 with self.subTest(args=args, env=env):
-                    self.refused(self.git(args, env=env), 'backlog-raw-write')
+                    self.refused(self.git(args, env=env, cwd=self.w.plain), 'backlog-raw-write')
+
+    def test_an_unread_update_ref_where_the_store_cannot_be_told(self):
+        """store_kind None for a fault is no ground to allow (fail closed): a .kit.json that does not
+        load (ctx.config_error), a directory git runs in that the text does not name (gc.unknown,
+        here run from a folder in no checkout), a place git cannot tell about (repo.UNKNOWN). A
+        repository with no .kit.json reads the default ref store, so it is refused as any store."""
+        cases = ((None, 'git -C "%s" update-ref --stdin < cmds.txt' % self.wt, 'kit'),
+                 (self.w.plain, 'git -C $d update-ref --stdin < cmds.txt', 'plain'),
+                 (self.w.unknown, 'git update-ref --stdin < cmds.txt', 'unknown'))
+        broken = os.path.join(self.w.main, '.kit.json')
+        for cwd, text, name in cases:
+            if name == 'kit':
+                with open(broken, 'w', encoding='utf-8') as f:
+                    f.write('{"backlog": {"store": 7}}')
+            for env in (PM, {context.ROLE_ENV: 'plain'}):
+                with self.subTest(text=text, case=name, env=env):
+                    d = self.refused(self.cmd(text, sub=False, env=env, cwd=cwd), 'backlog-raw-write')
+                    self.assertIn('store', d.reason.split('Instead:')[0])
+            if name == 'kit':
+                for t, tool, _said in self.UNREAD_UPDATE_REFS:
+                    t = t.format(wt=self.wt)
+                    with self.subTest(text=t, case=name):
+                        self.refused(self.cmd(t, tool=tool, sub=False, env=PM), 'backlog-raw-write')
+                os.remove(broken)
+        with self.subTest(case='no .kit.json'):
+            self.refused(self.cmd('git -C "%s" update-ref --stdin < cmds.txt' % self.wt, sub=False, env=PM),
+                         'backlog-raw-write')
 
     def test_a_subagent_is_refused_too(self):
         for args in ('update-ref refs/backlog/main %s' % OID, 'push origin refs/backlog/main'):
