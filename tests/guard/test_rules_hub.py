@@ -191,7 +191,7 @@ class SecretShell(Hub):
         self.allowed(lambda sub: ps('Select-String -Path docs\\*.md -Pattern owner.token', self.w.wt, sub))
 
     def test_unclean_lines_are_judged_on_what_was_read(self):
-        # the fallback has no hub pattern; the hub rules run on what the parser did read
+        # the hub rules run on what the parser did read, before the fallback's name pattern
         rows = (
             ('unclosed quote', lambda sub: bash('cat ~/.pm-kit/hub/owner.token "', self.w.wt, sub), 'hub-secrets'),
             ('after eval', lambda sub: bash('eval "$c"; cat ~/.pm-kit/hub/agent.token', self.w.wt, sub),
@@ -204,6 +204,35 @@ class SecretShell(Hub):
         for name, make, rule in rows:
             with self.subTest(name):
                 self.denied(make, rule)
+
+    def test_an_unclean_line_naming_the_hub_tool_is_refused(self):
+        # docs/guard.md "Fallback": any hub tool call on a line the parser cannot read, read
+        # verbs included, is refused as hub-owner-verb; the owner's own session is not held
+        hub = self.hub
+        rows = (
+            ('read verb after eval', lambda sub: bash('eval "$c"; python "%s" questions' % hub, self.w.wt, sub)),
+            ('module after eval', lambda sub: bash('eval "$c"; python -m tools.hub todos --json', self.w.wt, sub)),
+            ('-m hub', lambda sub: bash('eval "$c"; python -m hub questions', self.w.wt, sub)),
+            ('unclosed quote', lambda sub: bash('python "%s" questions add --title "x' % hub, self.w.wt, sub)),
+            ('PowerShell iex', lambda sub: ps('iex $c; python "%s" questions' % hub, self.w.wt, sub)),
+            ('owner verb unread', lambda sub: bash('echo \'x ; python "%s" answer Q-1' % hub, self.w.wt, sub)),
+        )
+        for name, make in rows:
+            with self.subTest(name):
+                self.denied(make, 'hub-owner-verb')
+                self.owner_allowed(make)
+                d = decide(make(True), self.ctx(OWNER))
+                self.assertIn('could not read this command', d.reason)
+                self.assertIn('names the hub tool', d.reason)
+
+    def test_an_unclean_line_naming_another_hub_file_is_not_held(self):
+        # test_rules_hub.py, a hub.pyw or a word holding hub are not the hub tool
+        for cmd in ('eval "$c"; python -m unittest tests/guard/test_rules_hub.py',
+                    'eval "$c"; cat docs/hub.pyw', 'eval "$c"; ls kitlib/hub'):
+            with self.subTest(cmd):
+                for label, sub, environ in HELD:
+                    d = decide(bash(cmd, self.w.wt, sub), self.ctx(environ))
+                    self.assertTrue(d is None or d.rule != 'hub-owner-verb', d and d.reason)
 
     def test_hub_tool_with_the_store_passes(self):
         st = W.fwd(self.store)

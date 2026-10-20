@@ -783,6 +783,43 @@ class OwnerLockTools(unittest.TestCase):
                 d = self.run_one(shell, text, True)
                 self.assertIsNone(d, d and d.reason)
 
+    # docs/guard.md "Fallback": a line the parser cannot read that names the lock CLI is refused
+    # whole, its read verbs included, in every session but the owner's own
+    UNCLEAN = [
+        ('bash', 'eval "$c"; python tools/machine_lock.py status'),
+        ('bash', 'eval "$c"; python %s status' % LIVE),
+        ('bash', "echo 'x ; python tools/machine_lock.py hold list"),
+        ('bash', 'eval "$c"; python -m tools.machine_lock status'),
+        ('ps', 'iex $c; python tools\\machine_lock.py status'),
+    ]
+
+    def test_an_unclean_line_naming_the_lock_cli_is_refused(self):
+        for shell, text in self.UNCLEAN:
+            for sub, environ in ((True, None), (False, None), (False, UNHELD)):
+                with self.subTest(text, sub=sub, environ=environ):
+                    d = self.run_one(shell, text, sub, environ)
+                    self.assertIsNotNone(d, 'allowed')
+                    self.assertEqual((d.verdict, d.rule), ('deny', 'owner-tool'), d.reason)
+                    self.assertIn('could not read this command', d.reason)
+                    self.assertIn('names the lock CLI', d.reason)
+            with self.subTest(text, owner=True):
+                d = self.run_one(shell, text, False, environ={})
+                self.assertTrue(d is None or d.rule != 'owner-tool', d and d.reason)
+
+    def test_an_unclean_line_running_an_owner_write_gives_the_write(self):
+        d = self.run_one('bash', "echo 'x ; python tools/machine_lock.py hold whole --for 1h", True)
+        self.assertIsNotNone(d, 'allowed')
+        self.assertEqual((d.verdict, d.rule), ('deny', 'owner-tool'), d.reason)
+        self.assertIn(OWNER_ONLY, d.reason)
+        self.assertIn('machine_lock.py hold whole', d.reason)
+
+    def test_an_unclean_line_naming_another_lock_file_is_not_held(self):
+        for text in ('eval "$c"; python -m unittest tests/lock/test_machine_lock.py',
+                     'eval "$c"; ls tools/machine_lock', 'eval "$c"; cat docs/machine_lock.pyw'):
+            with self.subTest(text):
+                d = self.run_one('bash', text, True)
+                self.assertTrue(d is None or d.rule != 'owner-tool', d and d.reason)
+
 
 class OwnerSetup(unittest.TestCase):
     """Machine setup's writes (the machine config's owner_email among them, plan decision 27) are the
