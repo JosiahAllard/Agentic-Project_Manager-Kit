@@ -151,8 +151,9 @@ def _walk(_C, items, out):
     `items` (parser constants `_C`) matches, taking '0' wherever a digit may stand; `free` is
     True for a character a digit class chose (`\\d`, `[0-9]`: a count), False for a literal or
     a class that takes letters too (`\\S`, `.`). A repeat is walked its minimum times, except
-    that one which may be empty and is the count itself (only digit classes: `\\d*`) is walked
-    once ('0'); an optional group (`(?:\\d+ skipped, )?`) is left out. A repeat whose text
+    that one which may be empty and is the count itself (only digit classes that take 0:
+    `\\d*`) is walked once ('0'); an optional group (`(?:\\d+ skipped, )?`) or a digit that
+    cannot be 0 (`[1-9]?`) is left out. A repeat whose text
     would pass SAMPLE_MAX characters raises ValueError: no sample, never a hang."""
     repeats = (_C.MAX_REPEAT, _C.MIN_REPEAT, getattr(_C, 'POSSESSIVE_REPEAT', None))
     for op, av in items:
@@ -170,7 +171,7 @@ def _walk(_C, items, out):
                 if len(out) + len(body) * av[0] > SAMPLE_MAX:
                     raise ValueError('sample longer than %d' % SAMPLE_MAX)
                 out.extend(body * av[0])
-            elif body and all(free and c.isdigit() for c, free in body):
+            elif body and all(free and c == '0' for c, free in body):
                 out.extend(body)
         elif op is _C.SUBPATTERN:
             _walk(_C, av[-1], out)
@@ -214,8 +215,8 @@ def zero_count_passes(gate):
     pattern's shortest text, counts 0), or its own first count may be 0 (`\\d+`). judge()
     still fails such a run when it says zero (`Ran 0 tests` or zero_tests); a pattern with a
     floor (`[1-9]\\d*`) needs no backstop. A warning only: nothing refuses on it, and with no
-    stdlib regex parser (_regex_parser) it gives []. No caller yet: the gate run's WARNING
-    line is a follow-up (kitlib.gate.runner)."""
+    stdlib regex parser (_regex_parser) it gives []. Its caller is kitlib.gate.runner's
+    zero_count_warnings, a branch gate's WARNING lines only (never a landing's)."""
     parser = _regex_parser()
     if parser is None:
         return []
