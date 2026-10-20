@@ -704,15 +704,14 @@ def plugin_enabled(settings=None, folders=None):
     (docs/machine-setup.md "Default mode"); false is the owner's choice and is silent. A settings.json
     that is not a JSON object is its own "could not check" line. None for `settings` reads the machine
     config (plugin_settings); a loader that gives None checks nothing. None for `folders`: this
-    machine's account folders (kitlib.pluginsource.claude.account_folders)."""
+    machine's account folders (kitlib.pluginsource.account_folders)."""
     from kitlib import pluginsource
     from kitlib.machinesetup import plugin
-    from kitlib.pluginsource import claude as pclaude
     s = plugin_settings() if settings is None else settings
     if s is None:
         return []
     lines, absent = [], []
-    for d in pclaude.account_folders() if folders is None else folders:
+    for d in pluginsource.account_folders() if folders is None else folders:
         have = plugin.enabled(os.path.join(d, "settings.json"), pluginsource.PLUGIN_ID)
         if have is None:
             lines.append("could not check the pm-kit plugin in %s: its settings.json is not a JSON object" % d)

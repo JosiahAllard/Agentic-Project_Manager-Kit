@@ -808,7 +808,7 @@ def plugin_hooks(kit, home):
 
 
 # The kit plugin's machine-lock tools an account's settings allow once the plugin is enabled
-# (plugin.edit_settings): exactly these three, the ones KIT-PLUGIN-AUTO-INSTALL names. Only the owner
+# (plugin.edit_settings): exactly these three; lock_wait_change and lock_stats stay out. Only the owner
 # widens a permissions grant.
 LOCK_ALLOW = ('mcp__plugin_pm-kit_machine-lock__lock_snapshot', 'mcp__plugin_pm-kit_machine-lock__lock_run',
               'mcp__plugin_pm-kit_machine-lock__lock_hold')

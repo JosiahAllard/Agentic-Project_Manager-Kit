@@ -1089,6 +1089,11 @@ def _folders(folders):
     return list(folders)
 
 
+def account_folders():
+    """This machine's account folders on the plugin's host (the ones `folders=None` means here)."""
+    return _folders(None)
+
+
 def installs(folders=None):
     """[(install path, account folder)]: where each account folder of `folders` (default every
     one) loads the kit plugin from, for the folders that have it installed. Reads each folder's
