@@ -127,6 +127,23 @@ class ReadArgv(unittest.TestCase):
         self.assertTrue(policy.read_argv(words('-h')).help)
         self.assertFalse(policy.read_argv(words('set', 'FOO', '--', '-h')).help)
 
+    def test_a_dash_dash_before_the_verb_leaves_its_options_options(self):
+        """The tool's parser drops a `--` right before the verb, so the verb's options after it are
+        still options: each such command sorts as it does without the `--`."""
+        parser = BACKLOG.build_parser()
+        rows = ((('retarget', 'A', 'B', '--apply'), ['retarget']),
+                (('set', 'FOO', '--priority', '1'), ['set-price-owner']),
+                (('pull', 'FOO', '--ruling', 'R'), ['pull-collision']),
+                (('block', 'FOO', '--on', 'owner'), ['block-owner']))
+        for argv, want in rows:
+            for lead in ((), ('-C', 'Z:/pm')):
+                line = lead + ('--',) + argv
+                parser.parse_args(list(line))            # the tool takes it
+                a = policy.read_argv(words(*line))
+                self.assertEqual((a.verb, a.rid), (argv[0], argv[1]), line)
+                self.assertEqual(policy.sort(a.verb, a.given), want, line)
+                self.assertEqual(a.given, policy.read_argv(words(*argv)).given, line)
+
     def test_a_word_it_cannot_read_counts_as_unknown(self):
         self.assertEqual(policy.read_argv([('set', True), ('FOO', True), ('$x', False)]).given,
                          {'fields': [], 'priority': [], 'on': [], 'unknown': True})
