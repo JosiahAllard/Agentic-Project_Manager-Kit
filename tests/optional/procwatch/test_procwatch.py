@@ -366,6 +366,25 @@ class ParsePs(unittest.TestCase):
         self.assertEqual(W.parse_ps_l(""), {})
 
 
+@unittest.skipUnless(os.name == "nt", "Windows only")
+class MsysTable(unittest.TestCase):
+    """winproc.msys_table: a failed ps gives no table, never a partial one."""
+
+    def _run(self, returncode):
+        import winproc as W
+        from unittest import mock
+        out = "  1563560  320617  320617      50444  ?         197609 11:10:25 /usr/bin/tail\n"
+        done = subprocess.CompletedProcess(["ps", "-l"], returncode, stdout=out, stderr="")
+        with mock.patch("subprocess.run", return_value=done):
+            return W.msys_table(ps_exe="ps.exe")
+
+    def test_nonzero_exit_is_no_table(self):
+        self.assertIsNone(self._run(1))
+
+    def test_zero_exit_parses_the_rows(self):
+        self.assertEqual(self._run(0), {50444: (1563560, 320617, "?")})
+
+
 class LogPath(unittest.TestCase):
     """--log: a bare flag and a path inside the tool folder both go to <home>/.claude/logs (C3)."""
 

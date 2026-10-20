@@ -225,7 +225,7 @@ def parse_ps_l(text):
 
 def msys_table(ps_exe=None):
     """{windows pid: (msys pid, msys parent pid, tty)} for every Git-Bash (MSYS) process, from
-    Git's `ps -l` (parse_ps_l), or None when Git's ps is not there. Needed because Git-Bash breaks
+    Git's `ps -l` (parse_ps_l), or None when Git's ps is not there or exits non-zero. Needed because Git-Bash breaks
     the Windows parent chain: a program bash runs usually has a Windows parent that has already
     exited, while its MSYS parent is alive. MSYS parent 1 = started from a Windows program."""
     import subprocess
@@ -233,11 +233,13 @@ def msys_table(ps_exe=None):
     if not exe:
         return None
     try:
-        out = subprocess.run([exe, "-l"], capture_output=True, text=True, timeout=15,
-                             creationflags=0x08000000).stdout       # CREATE_NO_WINDOW
+        res = subprocess.run([exe, "-l"], capture_output=True, text=True, timeout=15,
+                             creationflags=0x08000000)              # CREATE_NO_WINDOW
     except (OSError, subprocess.SubprocessError):
         return None
-    return parse_ps_l(out or "")
+    if res.returncode != 0:     # partial output could miss a live parent's row
+        return None
+    return parse_ps_l(res.stdout or "")
 
 
 class PERFORMANCE_INFORMATION(ctypes.Structure):
