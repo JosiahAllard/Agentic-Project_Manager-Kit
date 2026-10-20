@@ -109,11 +109,15 @@ ANYWHERE = (
 )
 # the owner's tools by name (docs/guard.md "Fallback"): a line the guard cannot read that names one
 # is refused whole under that tool's rule, in every session but the owner's own, read verbs included
+# python's -m, alone or ending a cluster of its no-value flags (-Im) as rules.PY_FLAG_RE reads it, the
+# module joined or not, and maybe quoted
+PY_M = r'(?<![\w-])-[bBdEiIOPqsSuvx]*m\s*[\'"]?'
 NAMED = (
-    ('hub-owner-verb', re.compile(r'(?i)(?<![\w.-])hub\.py\b|\btools\.hub(?![\w.])|(?<![\w-])-m\s*hub(?![\w.])'),
+    ('hub-owner-verb', re.compile(r'(?i)(?<![\w.-])hub\.py\b|\btools\.hub(?![\w.])|' + PY_M + r'hub(?![\w.])'),
      'names the hub tool, and a part of it the guard cannot read may run one of its owner verbs: %s'
      % rules.HUB_OWNER_WHY),
-    ('owner-tool', re.compile(r'(?i)(?<![\w.-])machine_lock\.py\b|\btools\.machine_lock(?![\w.])'),
+    ('owner-tool', re.compile(r'(?i)(?<![\w.-])machine_lock\.py\b|\btools\.machine_lock(?![\w.])|' + PY_M
+                              + r'machine_lock(?![\w.])'),
      'names the lock CLI, and a part of it the guard cannot read may run one of its owner-only writes, which '
      'the owner runs, not agents.'),
 )

@@ -783,8 +783,10 @@ def _shell_text(inv, parsed):
                     if [w.text for w in rest] == ['-']:
                         if unknown is None:
                             return (STDIN,)
+                        # the script comes from the pipe; the words from the unknown switch on
+                        # are still judged as powershell.exe's command
                         parsed.flag(lit)
-                        return None
+                        return nested(lit, first)
                     return nested('a nested powershell -Command whose text is not literal', first, rest)
                 if unknown is None and t.startswith('-') and t != '-' and not _ps51_known(t):
                     # a value switch included: powershell.exe never takes its value
@@ -796,7 +798,7 @@ def _shell_text(inv, parsed):
                         if unknown is None:
                             return (STDIN,)
                         parsed.flag(lit)
-                        return None
+                        return nested(lit, first)
                     return nested(lit, first) if first else None
                 if t.startswith('-') and _ps_value_either(t) and k + 1 < len(a):
                     if forks < PS_FORKS_MAX:
