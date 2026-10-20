@@ -669,7 +669,9 @@ def machine_hold(machine, entry):
 
 
 def unsaved_count(ctx, commits, also_saved=()):
-    """remove.unsaved_count (a seam the tests replace)."""
+    """remove.unsaved_count, called through this module so a test can replace it for classify
+    alone (tests/worktree/test_classify_apply.py, class Unsaved, the failed-count case);
+    remove.prune_orphan and remove.orphan_unsaved call remove's own."""
     return remove.unsaved_count(ctx, commits, also_saved)
 
 
