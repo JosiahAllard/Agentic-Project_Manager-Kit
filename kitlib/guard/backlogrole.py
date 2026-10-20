@@ -245,7 +245,8 @@ def _written_refs(gc, store):
     """The store refs the git call `gc` writes (texts), and why it may write the store's ref (a
     text) when its words do not name it: a mirror push, or, where a store reads (`store` not None),
     an update-ref whose ref the guard cannot read (rules._update_ref_unread: --stdin, an option it
-    does not know, xargs, a computed word, no ref)."""
+    does not know, xargs, a computed word, no ref). Where none reads, such an update-ref still
+    writes every store ref its words name literally."""
     sub = gc.sub
     short, longs, pos = rules._opts(sub, gc.rest)
     texts = [w.text for w in pos if not w.dyn]
@@ -253,7 +254,7 @@ def _written_refs(gc, store):
         unread = rules._update_ref_unread(gc, short, longs, pos)
         if unread:
             if store is None:
-                return [], None
+                return [t for t in texts if is_store_ref(t, store)], None
             return [], ('may write the backlog store\'s ref: the guard cannot tell which ref it writes (%s), '
                         'and this repository reads a backlog store (%s)' % (unread, store))
         return [pos[0].text] if is_store_ref(pos[0].text, store) else [], None
