@@ -566,7 +566,7 @@ class WriteTest(unittest.TestCase):
             await click($("#divedit"));
             const field = k => $("#divfields input[data-key=" + k + "]");
             const r = { keys: $$("#divfields input").map(f => f.dataset.key), share: field("gpu_share").value,
-                        cap: field("agent_cap").value };
+                        cap: field("agent_cap").value, hint: field("gpu_share").placeholder };
             await type(field("agent_cap"), "3");
             RESULT = { applied: false, reason: "runs hold the slots" };
             await click($("#divgo"));
@@ -580,12 +580,33 @@ class WriteTest(unittest.TestCase):
         keys = ["threads", "cpu_slot_threads", "cpu_slots", "gpu_share", "half_cpu_slots", "half_gpu_slots",
                 "agent_cap", "medium_cores"]
         self.assertEqual(out["keys"], keys)
-        self.assertEqual((out["share"], out["cap"]), ("1, 1", "4"))
+        # A fresh machine (the owner set nothing): the fields are blank, the in-force value only a hint.
+        self.assertEqual((out["share"], out["cap"]), ("", ""))
+        self.assertEqual(out["hint"], "1, 1")
         self.assertEqual(out["saved"], {"acted": "The new division waits: runs hold the slots.", "acterr": "", "form": False})
         self.assertEqual(out["defaults"], {"acted": "The new division is in force.", "acterr": ""})
-        fields = {"threads": "24", "cpu_slot_threads": "2", "cpu_slots": "12", "gpu_share": "1, 1", "half_cpu_slots": "6",
-                  "half_gpu_slots": "1", "agent_cap": "3", "medium_cores": "2"}
-        self.assertEqual(out["posts"], [["/lock/division", {"fields": fields}], ["/lock/division", {"defaults": True}]])
+        self.assertEqual(out["posts"], [["/lock/division", {"fields": {"agent_cap": "3"}}],
+                                        ["/lock/division", {"defaults": True}]])
+
+    def test_the_division_dialog_keeps_only_what_the_owner_set(self):
+        # As the schedule window does: the owner's own keys fill the fields, the rest stay blank (the default),
+        # and a cleared field goes back to the default.
+        d = division()
+        d["owner_division"] = {"agent_cap": 6, "gpu_share": [2, 1]}
+        out = wdom("""
+            await start();
+            await click($("#divedit"));
+            const field = k => $("#divfields input[data-key=" + k + "]");
+            const r = { filled: $$("#divfields input").filter(f => f.value).map(f => [f.dataset.key, f.value]) };
+            await type(field("gpu_share"), "");
+            await type(field("medium_cores"), "3");
+            RESULT = { applied: true, reason: null };
+            await click($("#divgo"));
+            r.posts = posts();
+            return r;
+        """, answer(view(division=d)))
+        self.assertEqual(out["filled"], [["gpu_share", "2, 1"], ["agent_cap", "6"]])
+        self.assertEqual(out["posts"], [["/lock/division", {"fields": {"agent_cap": "6", "medium_cores": "3"}}]])
 
     GATED = """
         await start();
