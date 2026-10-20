@@ -356,6 +356,15 @@ class Pure(unittest.TestCase):
                 self.assertTrue(land.is_author(dict(REVIEWER, reviewer='pm-kit:strong-worker',
                                                     author=author)))
 
+    def test_is_author_matches_each_id_of_a_reviewer_id_list(self):
+        for rid, author in (('a169fe6a70777751b,a85bb01f9175819d1', 'a85bb01f9175819d1'),
+                            ('a169fe6a70777751b,a85bb01f9175819d1',
+                             'Kit Test / a85bb01f9175819d1'),
+                            ('agent-r9/agent-r1', 'Kit Test / worker agent-r1'),
+                            ('agent-r9 agent-r1', 'Kit Test / worker (agent-r1)')):
+            with self.subTest(reviewer_id=rid, author=author):
+                self.assertTrue(land.is_author(dict(REVIEWER, reviewer_id=rid, author=author)))
+
     def test_is_author_never_matches_part_of_a_longer_type(self):
         for reviewer, author in (('pm-kit:worker', 'Kit Test | strong-worker'),
                                  ('pm-kit:worker', 'Kit Test (agent) (pm-kit:strong-worker)'),
@@ -369,6 +378,10 @@ class Pure(unittest.TestCase):
             with self.subTest(reviewer=reviewer, author=author):
                 self.assertFalse(land.is_author(dict(REVIEWER, reviewer=reviewer,
                                                      author=author)))
+        for rid in ('agent-r9,agent-r1', 'agent-r9 / agent-r1', 'agent-r9 agent-r1'):
+            with self.subTest(reviewer_id=rid):
+                self.assertFalse(land.is_author(dict(REVIEWER, reviewer_id=rid,
+                                                     author='Kit Test / worker agent-r12')))
 
     def test_strong_alias_maps_a_full_model_id_and_refuses_the_rest(self):
         strong, weak = {'opus'}, {'haiku', 'sonnet', 'account-default'}
