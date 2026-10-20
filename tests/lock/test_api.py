@@ -173,6 +173,15 @@ class WaitChange(ApiCase):
         self.assertNotEqual(s["revision"], rev)
 
 
+class Revision(ApiCase):
+    def test_revision_is_the_store_revision_with_no_snapshot(self):
+        self.assertEqual(api.revision(self.store), self.store.revision())
+        rev = api.revision(self.store)
+        self.store.bump()
+        self.assertEqual(api.revision(self.store), rev + 1)
+        self.assertEqual(api.snapshot(self.store)["revision"], rev + 1)
+
+
 class OwnerHook(ApiCase):
     def test_default_check(self):
         self.assertTrue(api.default_owner_check(OWNER))

@@ -15,7 +15,11 @@ the environment unless it is already there (kit_tests.py marks its units; a nest
 outer run's): a kit process that inherits it refuses that folder too, and the profile folder
 Windows reports. A child given a hand-built environment without the marker is not fenced.
 
-The fence has one exception, real_install_config(): the scrub tests check the kit's files against
+The time fence (docs/flaky-tests.md): KIT_TIME_FENCE=1 unless the environment already says
+otherwise, so kitlib.clock.budget gives its ceiling for a degrade budget (kitlib.agentstart's) and a
+loaded machine makes a test slower, not different. The tool processes a test starts inherit it.
+
+The home fence has one exception, real_install_config(): the scrub tests check the kit's files against
 this install's own names, which only the real machine config holds. It reads the machine config
 under the home recorded below, before the fence, and returns only the install-name keys
 (install_config).
@@ -30,7 +34,10 @@ import kitlib  # noqa: F401  (installs the CreateProcess hook before anything st
 
 os.environ.setdefault('KIT_FAKE_GIT', '1')
 
+from kitlib import clock as _kclock  # noqa: E402
 from kitlib.config import user as _kuser  # noqa: E402  (after KIT_FAKE_GIT is set)
+
+os.environ.setdefault(_kclock.FENCE_ENV, '1')   # the time fence: degrade budgets are the ceiling
 
 _REAL_HOME = os.path.expanduser('~')    # read by real_install_config() only
 _kuser.fence_env(os.environ)            # the marker the children of this process inherit

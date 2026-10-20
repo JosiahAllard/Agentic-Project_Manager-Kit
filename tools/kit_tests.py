@@ -42,6 +42,8 @@ drainer serves both passes.
 The units also get the home fence's marker (docs/test-tools.md "Home fence"): KIT_HOME_FENCE, the
 home folder this process resolves, unless the environment already carries one. The tools a test
 starts inherit it and refuse that home.
+And the time fence's marker (docs/flaky-tests.md): KIT_TIME_FENCE=1 unless it is set, so a degrade
+budget (kitlib.clock.budget) is the ceiling in every unit; kit_tests' own process stays unmarked.
 No test child gets the session's kit binding: PM_KIT_ROOT, PM_KIT_RELEASE_ID, KIT_LIVE_ROOT and
 KIT_PINNED, PM_KIT_ROLE, PM_KIT_HOST and PM_KIT_SESSION_NAME (KIT_SESSION_ENV), each registered
 host's session_env variable and its PM_KIT_<HOST>_ variables (hosts.json; session_env_names()) are
@@ -60,6 +62,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from kitlib import clock                                            # noqa: E402
 from kitlib import config as kconfig                                # noqa: E402
 from kitlib.config import user as kuser                             # noqa: E402
 from kitlib.git import refs as gitrefs                              # noqa: E402
@@ -397,10 +400,12 @@ def child_env():
     """The environment every test child starts from (the units, the count child, --list's loader):
     this process's without session_env_names(), with the home fence's marker (kitlib.config.user.
     fence_env: a pool worker (kitlib/tooldeps/pool_worker.py) replaces its environment for each
-    unit, so tests/__init__.py's marker would not reach it)."""
+    unit, so tests/__init__.py's marker would not reach it), and the time fence's marker
+    (kitlib.clock.FENCE_ENV = '1' unless set, for the same reason)."""
     names, prefixes = session_env_names()
     env = {k: v for k, v in os.environ.items()
            if k.upper() not in names and not k.upper().startswith(prefixes)}
+    env.setdefault(clock.FENCE_ENV, '1')
     return kuser.fence_env(env)
 
 

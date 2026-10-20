@@ -1,6 +1,6 @@
 # Machine lock API
 
-`kitlib/lock/api.py` is the one way any UI reads or changes the machine lock. Today that means `tools/machine_lock.py` (`status --json` prints `snapshot()`) and, for reads only, the lock MCP server, `mcp/lock_server.py` (docs/lock-mcp.md; it has no write tools, by the owner's decision).
+`kitlib/lock/api.py` is the one way any UI reads or changes the machine lock. Today that means `tools/machine_lock.py` (`status --json` prints `snapshot()`) and, for reads only, the lock MCP server, `mcp/lock_server.py` (docs/lock-mcp.md; it has no write tools, by the owner's decision). The Action Hub server reads it in-process too, by the owner's decision: `kitlib/hubsite/lockdoor.py` calls `revision()`, `snapshot()`, `history()` and `stats()` for the hub's owner-only lock routes (docs/action-hub.md "Machine lock routes"), and `set_owner_check` stays as it is.
 
 - Calls are plain functions. JSON-ready dicts go in and out, and there is no transport.
 - The schedule window, `reserve_ui.pyw` (kit root) (logic in `kitlib/lockui/`), reads with `snapshot()` and `history()` and makes every change with the write calls below. Owner writes go through only when the owner runs it (Who may, below).
@@ -14,6 +14,7 @@
 | call | returns |
 |---|---|
 | `snapshot(store, history_days=7, since=None, until=None)` | The Snapshot below. |
+| `revision(store)` | The store's revision alone (`Store.revision()`, an int that moves on every write), for a caller that only asks whether anything changed: no snapshot is built. |
 | `wait_change(revision, timeout_s=30, store)` | The snapshot once the store's revision moves past `revision`, or after `timeout_s`. It polls every `settings.wait_change_poll_s`. Live use (cpu, memory) can move without a new revision. |
 | `stats(store, days=7, since, until)` | The snapshot's `stats`. `since` and `until` are ISO times with their offset; a bad one raises `ApiError` (`invalid`). |
 | `history(store, days=7, since=None, until=None)` | The runs that ended in `[since, until)` (default: the last `days`), oldest first, one store history line each (`held_s`, `wait_s`, `partial`, `background`). A bad time or a non-numeric `days` raises `ApiError` (`invalid`). |

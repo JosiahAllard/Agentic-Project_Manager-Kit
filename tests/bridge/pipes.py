@@ -13,6 +13,21 @@ MAX_SEND_BYTES = 4096
 MAX_FRAMES = 4
 
 
+def connect_waiting(name, pid, creation, timeout=5):
+    """kitlib.proc.pipe.connect that waits, bounded, while the one instance serves another client.
+
+    Under load a test's client meets ERROR_PIPE_BUSY; this is the product's own bounded wait
+    (optional.bridge.win.rpcworker._connect), not a copy. Any other failure raises at once."""
+    from optional.bridge.win.rpcworker import _connect
+    from optional.bridge.win.transport import PipeTarget
+    try:
+        return _connect(PipeTarget(name, pid, creation), time.monotonic() + timeout)
+    except ProcError as error:
+        if error.code != 'pipe-busy-timeout':
+            raise
+        raise AssertionError('pipe %s still busy after %s s' % (name, timeout)) from error
+
+
 def send(pipe, frames):
     """Write `frames` as JSON lines through a connected pipe (kitlib.proc.pipe.connect)."""
     from ctypes import wintypes as w

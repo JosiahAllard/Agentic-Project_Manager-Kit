@@ -3,7 +3,9 @@ handoff --stem, the one-release guard against an old-stem session, and the autos
 import io
 import json
 import os
+import shutil
 import sys
+import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 
@@ -178,7 +180,10 @@ class OldStateFileElsewhere(unittest.TestCase):
 
 class Autostart(unittest.TestCase):
     def test_install_registers_the_new_name_then_unregisters_the_old(self):
-        out = autostart.install('/kit/tools/launch.py', python='/py/python.exe', whatif=True)
+        d = tempfile.mkdtemp(prefix='kit-autostart-')           # a pythonw.exe that is there
+        self.addCleanup(shutil.rmtree, d, True)
+        open(os.path.join(d, 'pythonw.exe'), 'w').close()
+        out = autostart.install('/kit/tools/launch.py', python=os.path.join(d, 'python.exe'), whatif=True)
         script = out[1]
         self.assertEqual(autostart.TASK_NAME, 'Claude coordinators after reboot')
         reg = script.index("Register-ScheduledTask -TaskName 'Claude coordinators after reboot'")

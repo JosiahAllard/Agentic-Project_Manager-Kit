@@ -22,14 +22,18 @@ holds it (docs/worktree-remove.md).
   worktree_remove.py [-C DIR] --classify [--json]               read-only: every worktree's class
                                                                  (A landed, B finished, C half-done,
                                                                  E evidence, L live or kept)
+  worktree_remove.py [-C DIR] --classify [--json] --apply       the same, then remove each A and E
+                                                                 tree by its own remove path; B, C
+                                                                 and L are never touched
 
 -C names the repository by any of its work trees (default: here); the worktrees acted on are always
 the MAIN checkout's, and the sweep takes only the main checkout. A relative path argument means
 the caller's directory. A registered DETACHED worktree outside the worktree folders is named by
 its path, never its slug. A thin entry point (ARCHITECTURE.md, Layers): it parses, calls
 kitlib.worktree.remove, .scratch, .sweep or .classify, prints and exits. Exit codes: 0 done (or
-nothing to do); 1 refused, a leftover, git failed, the sweep deferred, or --classify found a tree of
-class A, B, C or E; 2 usage, or the kit configuration was refused; 130 Ctrl+C.
+nothing to do); 1 refused, a leftover, git failed, the sweep deferred, --classify found a tree of
+class A, B, C or E, or --classify --apply left a B or C tree or did not remove an A or E one; 2
+usage, or the kit configuration was refused; 130 Ctrl+C.
 """
 import json
 import os
@@ -70,12 +74,15 @@ def split_root(argv):
 
 def parse(args):
     """`(verb, target, why, keep, apply)` or a usage message (str). Verbs: sweep, check, abandon,
-    abandon-branch, remove-branch, remove, scratch, classify (`apply` then means --json). A why
+    abandon-branch, remove-branch, remove, scratch, classify and classify-apply (`apply` then
+    means --json). A why
     that starts with `--` is a flag typed where the why belongs, never a reason."""
     if '--classify' in args or '--json' in args:
-        if sorted(args) not in (['--classify'], ['--classify', '--json']):
-            return '--classify takes only --json (and -C); it is read-only and has no --apply'
-        return 'classify', None, None, False, '--json' in args
+        if sorted(args) not in (['--classify'], ['--classify', '--json'], ['--apply', '--classify'],
+                                ['--apply', '--classify', '--json']):
+            return '--classify takes only --json and --apply (and -C)'
+        return ('classify-apply' if '--apply' in args else 'classify'), None, None, False, \
+            '--json' in args
     if '--sweep-merged' in args or '--apply' in args:
         if sorted(args) not in (['--sweep-merged'], ['--apply', '--sweep-merged']):
             return '--sweep-merged takes only --apply (and -C)'
@@ -134,8 +141,8 @@ def main(argv=None):
     if top is None:
         return usage('-C: %s' % err)
     try:
-        if verb == 'classify':
-            outcome = classify.classify(top)
+        if verb in ('classify', 'classify-apply'):
+            outcome = classify.classify(top, apply=verb == 'classify-apply')
             if apply:
                 print(json.dumps(outcome.data, indent=2, sort_keys=True), flush=True)
                 return outcome.code

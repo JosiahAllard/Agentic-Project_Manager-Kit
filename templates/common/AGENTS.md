@@ -73,14 +73,14 @@ onto the main it finds at its turn, so no `--expect-main` is needed.
 No `cd` prefix, `Tee-Object`, pipe or chaining: the bare form is what the allow rule matches.
 Success, whatever the exit code: the call's `LANDED` line, `git rev-parse main origin/main` match
 **and** the branch tip is an ancestor of `origin/main` (`git merge-base --is-ancestor <tip> origin/main`).
-Any denial: stop and report it.
+A classifier refusal or permission denial ends that action: report it verbatim. A kit-guard (hook) refusal: fix the form its Instead: line gives, then retry.
 
 ## Owner decisions
 
 - Recorded in `docs/DECISIONS.md` (line format in its header) by a `pm-kit:records` agent as
   `<one-line summary, the agent's paraphrase>`; the owner's words stay with the PM, never
   quoted here (quoting relayed words into an authority file is what the safety check refuses as
-  instruction injection). Words the owner types in this repo's own session are quoted as `typed`. Never
+  instruction injection). Words the owner types in this repo's own session are passed on as a paraphrase plus the ruling id. Never
   invent one; silence is not agreement; a decision the PM has not relayed binds nothing until the owner confirms. For anything
   attributed to the owner, ask for the utterance, not for confirmation that it happened.
 - Owner-locked: `AGENTS.md`, `CLAUDE.md`, tracked `.claude/` files (not `.claude/worktrees/`),
