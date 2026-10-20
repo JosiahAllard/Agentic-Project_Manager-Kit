@@ -6,6 +6,7 @@ job. Times are FILETIMEs (100 ns units since 1601).
 """
 import ctypes
 import os
+import re
 import time
 from ctypes import wintypes
 
@@ -207,27 +208,38 @@ def git_ps(env=os.environ):
 GIT_PS = git_ps()
 
 
+PS_L_ROW = re.compile(r"^\s*[A-Z]?\s*(\d+)\s+(\d+)\s+\d+\s+(\d+)\s+(\S+)\s")
+
+
+def parse_ps_l(text):
+    """Git's `ps -l` output (columns PID PPID PGID WINPID TTY UID STIME COMMAND, a status letter
+    before some rows) -> {windows pid: (msys pid, msys parent pid, tty)}. TTY `?` = no terminal,
+    as for a program an agent's tool shell runs; `pty0`, `cons1` = a terminal window's."""
+    table = {}
+    for line in text.splitlines():
+        m = PS_L_ROW.match(line)
+        if m:
+            table[int(m.group(3))] = (int(m.group(1)), int(m.group(2)), m.group(4))
+    return table
+
+
 def msys_table(ps_exe=None):
-    """{windows pid: (msys pid, msys parent pid)} for every Git-Bash (MSYS) process, from Git's
-    `ps -l`, or None when Git's ps is not there. Needed because Git-Bash breaks the Windows
-    parent chain: a program bash runs usually has a Windows parent that has already exited, while
-    its MSYS parent is alive. MSYS parent 1 = started from a Windows program."""
-    import re
+    """{windows pid: (msys pid, msys parent pid, tty)} for every Git-Bash (MSYS) process, from
+    Git's `ps -l` (parse_ps_l), or None when Git's ps is not there or exits non-zero. Needed because Git-Bash breaks
+    the Windows parent chain: a program bash runs usually has a Windows parent that has already
+    exited, while its MSYS parent is alive. MSYS parent 1 = started from a Windows program."""
     import subprocess
     exe = ps_exe or next((p for p in GIT_PS if os.path.exists(p)), None)
     if not exe:
         return None
     try:
-        out = subprocess.run([exe, "-l"], capture_output=True, text=True, timeout=15,
-                             creationflags=0x08000000).stdout       # CREATE_NO_WINDOW
+        res = subprocess.run([exe, "-l"], capture_output=True, text=True, timeout=15,
+                             creationflags=0x08000000)              # CREATE_NO_WINDOW
     except (OSError, subprocess.SubprocessError):
         return None
-    table = {}
-    for line in out.splitlines()[1:]:
-        m = re.match(r"^\s*[A-Z]?\s*(\d+)\s+(\d+)\s+\d+\s+(\d+)\s", line)
-        if m:
-            table[int(m.group(3))] = (int(m.group(1)), int(m.group(2)))
-    return table
+    if res.returncode != 0:     # partial output could miss a live parent's row
+        return None
+    return parse_ps_l(res.stdout or "")
 
 
 class PERFORMANCE_INFORMATION(ctypes.Structure):

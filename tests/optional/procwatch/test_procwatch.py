@@ -48,11 +48,17 @@ def tearDownModule():
 
 
 def proc(pid, ppid, name, cmd="", image=None, age=HOUR, cpu=0.0, ws=10 * 2**20, msys=None):
-    """msys = (msys pid, msys parent pid) for a Git-Bash program, as Git's ps -l reports it."""
+    """msys = (msys pid, msys parent pid[, tty]) for a Git-Bash program, as Git's ps -l reports it
+    (tty `?`: no terminal, as in an agent's tool shell)."""
     return {"pid": pid, "ppid": ppid, "name": name, "cmd": cmd,
             "image": image if image is not None else rf"C:\x\{name}", "ctime": NOW - int(age * 1e7),
             "age": age, "cpu_pct": cpu, "cpu_s": 1.0, "ws": ws, "priv": ws, "handles": 100, "session": 1,
-            "mpid": msys[0] if msys else None, "mppid": msys[1] if msys else None}
+            "mpid": msys[0] if msys else None, "mppid": msys[1] if msys else None,
+            "mtty": msys[2] if msys and len(msys) > 2 else None}
+
+
+NO_TTY = "?"
+AGENT_TAIL = "tail.exe -n +1 -F Z:/AgentTemp/claude/Z--repo/1234/tasks/b1.output"    # a Monitor's tail
 
 
 def gitp(pid, ppid, name, cmd, age, msys):
@@ -136,10 +142,48 @@ class Classify(unittest.TestCase):
                 self.assertNotEqual(ps[900]["rule"], "agent-script")
 
     def test_orphaned_tail_follow_and_grep_are_kill_ok_suspects(self):
-        ps = by_pid(world(gitp(900, 77, "tail.exe", r"tail.exe -n +1 -f C:\t\x.output", 2 * HOUR, (60, GONE)),
-                          gitp(901, 78, "grep.exe", 'grep.exe --line-buffered -E "FAIL"', 2 * HOUR, (61, GONE))))
+        # agent-started: no terminal, and the tail follows a file under the agents' temp folder
+        ps = by_pid(world(gitp(900, 77, "tail.exe", AGENT_TAIL, 2 * HOUR, (60, GONE, NO_TTY)),
+                          gitp(901, 78, "grep.exe", 'grep.exe --line-buffered -E "FAIL"', 2 * HOUR,
+                               (61, GONE, NO_TTY))))
         for pid, rule in ((900, "msys-follow"), (901, "msys-filter")):
             self.assertEqual((ps[pid]["verdict"], ps[pid]["rule"], ps[pid]["kill_ok"]), ("SUSPECT", rule, True))
+
+    def test_orphaned_agent_follow_is_kill_ok_for_every_agent_path_form(self):
+        self._with_agent_temp(lambda: r"Q:\odd-agent-temp")
+        for cmd in (AGENT_TAIL,
+                    r"tail.exe -F Z:\AgentTemp\claude\p\s\tasks\b1.output",
+                    "tail.exe -F /z/agenttemp/claude/p/s/tasks/b1.output",
+                    r"tail.exe -f D:\local\Temp\claude\p\s\tasks\b1.output",   # <TEMP>\claude\
+                    "tail.exe -F Z:/GitHub/repo/.claude/worktrees/x/gate.log",
+                    r"tail.exe -F Q:\odd-agent-temp\claude\p\x.log",           # the resolved agent temp
+                    "tail.exe -F /q/odd-agent-temp/claude/p/x.log",            # ... in MSYS form
+                    "tail.exe -F q:/Odd-Agent-Temp/claude/p/x.log"):
+            with self.subTest(cmd):
+                p = by_pid(world(gitp(900, 77, "tail.exe", cmd, 2 * HOUR, (60, GONE, NO_TTY))))[900]
+                self.assertEqual((p["verdict"], p["kill_ok"]), ("SUSPECT", True))
+
+    def test_orphaned_follow_outside_agent_paths_is_reported_not_ended(self):
+        for cmd in (r"tail.exe -n +1 -f C:\t\x.output", "tail.exe -F /c/logs/claude.log",
+                    "tail.exe -F D:/claudette/x.log"):
+            with self.subTest(cmd):
+                p = by_pid(world(gitp(900, 77, "tail.exe", cmd, 2 * HOUR, (60, GONE, NO_TTY))))[900]
+                self.assertEqual((p["verdict"], p["rule"], p["kill_ok"]), ("SUSPECT", "msys-follow", False))
+                self.assertIn("reported only", p["reason"])
+
+    def test_orphaned_follow_with_a_terminal_or_no_tty_known_is_not_ended(self):
+        for msys in ((60, GONE, "pty0"), (60, GONE, "cons1"), (60, GONE)):
+            with self.subTest(msys):
+                p = by_pid(world(gitp(900, 77, "tail.exe", AGENT_TAIL, 2 * HOUR, msys)))[900]
+                self.assertEqual((p["verdict"], p["kill_ok"]), ("SUSPECT", False))
+
+    def test_orphaned_filter_or_sleep_with_a_terminal_is_not_ended(self):
+        for name, cmd in (("grep.exe", "grep.exe FAIL"), ("sleep.exe", "sleep 9999")):
+            for tty, ok in (("pty0", False), (None, False), (NO_TTY, True)):
+                with self.subTest((name, tty)):
+                    msys = (60, GONE, tty) if tty else (60, GONE)
+                    p = by_pid(world(gitp(900, 77, name, cmd, 2 * HOUR, msys)))[900]
+                    self.assertEqual((p["verdict"], p["kill_ok"]), ("SUSPECT", ok))
 
     def test_live_parent_or_young_means_expected(self):
         ps = by_pid(world(gitp(900, 501, "tail.exe", "tail.exe -f x", 2 * HOUR, (60, 50)),
@@ -251,12 +295,31 @@ class Classify(unittest.TestCase):
         self.assertEqual(ps[900]["group"], "agent tool commands (parent alive)")
 
     def test_kill_respects_only_and_reports_results(self):
-        ps = world(gitp(900, 77, "tail.exe", "tail -f a", 2 * HOUR, (60, GONE)),
-                   gitp(901, 77, "sleep.exe", "sleep 9999", 2 * HOUR, (61, GONE)))
+        ps = world(gitp(900, 77, "tail.exe", AGENT_TAIL, 2 * HOUR, (60, GONE, NO_TTY)),
+                   gitp(901, 77, "sleep.exe", "sleep 9999", 2 * HOUR, (61, GONE, NO_TTY)))
         seen = []
         done = PW.kill(ps, only={"msys-sleep"}, terminate=lambda pid, ct: seen.append(pid) or "killed")
         self.assertEqual(seen, [901])
         self.assertEqual(done, [(901, "sleep.exe", "msys-sleep", "killed")])
+
+    def test_kill_passes_the_seen_creation_time(self):
+        ps = world(gitp(900, 77, "tail.exe", AGENT_TAIL, 2 * HOUR, (60, GONE, NO_TTY)))
+        seen = []
+        PW.kill(ps, terminate=lambda pid, ct: seen.append((pid, ct)) or "killed")
+        self.assertEqual(seen, [(900, by_pid(ps)[900]["ctime"])])
+
+    def test_kill_skips_an_unknown_creation_time(self):
+        ps = world(gitp(900, 77, "tail.exe", AGENT_TAIL, 2 * HOUR, (60, GONE, NO_TTY)))
+        by_pid(ps)[900]["ctime"] = None
+        self.assertEqual(PW.kill(ps, terminate=lambda *a: self.fail("ended with no creation time")), [])
+
+    def test_kill_rechecks_the_agent_gate(self):
+        ps = world(gitp(900, 77, "tail.exe", r"tail.exe -f C:\t\x.output", 2 * HOUR, (60, GONE, NO_TTY)),
+                   gitp(901, 77, "sleep.exe", "sleep 9999", 2 * HOUR, (61, GONE, "pty0")))
+        for p in ps:
+            if p["pid"] in (900, 901):
+                p["kill_ok"] = True             # however kill_ok came to be set, kill() asks again
+        self.assertEqual(PW.kill(ps, terminate=lambda *a: self.fail("ended a non-agent process")), [])
 
     def test_kill_live_parent_only_for_root_search(self):
         ps = world(gitp(900, 77, "find.exe", '"C:\\Git\\usr\\bin\\find.exe" / -iname x', 15 * MIN, (60, 50)),
@@ -266,9 +329,60 @@ class Classify(unittest.TestCase):
         self.assertEqual(seen, [900])      # root search with a live shell: killed; live-parent sleep: never
 
     def test_summary_counts(self):
-        rows = PW.summarize(world(gitp(900, 77, "tail.exe", "tail -f a", 2 * HOUR, (60, GONE))))
+        rows = PW.summarize(world(gitp(900, 77, "tail.exe", AGENT_TAIL, 2 * HOUR, (60, GONE, NO_TTY))))
         sus = [r for r in rows if r["verdict"] == "SUSPECT"]
         self.assertEqual([(r["count"], r["kill_ok"], r["pids"]) for r in sus], [(1, 1, [900])])
+
+    def test_log_line_counts_what_kill_would_end(self):
+        import datetime
+        procs = world(gitp(900, 77, "tail.exe", AGENT_TAIL, 2 * HOUR, (60, GONE, NO_TTY)),
+                      gitp(901, 77, "tail.exe", r"tail.exe -f C:\t\x.output", 2 * HOUR, (61, GONE, NO_TTY)))
+        rows = PW.summarize(procs)
+        when = datetime.datetime(2026, 10, 20, 11, 0, 0)
+        line = PW.log_line(when, procs, rows, "3.3")
+        self.assertTrue(line.startswith("2026-10-20T11:00:00 procs=5 suspect=2 pool=3.3G kill_ok=1 "), line)
+        self.assertIn("msys-follow=2", line)
+        self.assertNotIn("killed=", line)
+        self.assertTrue(PW.log_line(when, procs, rows, "3.3", killed=[(900, "tail.exe", "msys-follow", "killed"),
+                                                                       (9, "x", "y", "reused")])
+                        .endswith(" killed=1"))
+
+
+class ParsePs(unittest.TestCase):
+    """winproc.parse_ps_l: Git's `ps -l` text -> {windows pid: (msys pid, msys parent pid, tty)}."""
+    TEXT = ("      PID    PPID    PGID     WINPID   TTY         UID    STIME COMMAND\n"
+            "  1563560  320617  320617      50444  ?         197609 11:10:25 /usr/bin/tail\n"
+            "S  320617       1  320617      48084  pty0      197609   Oct 15 /usr/bin/bash\n"
+            "I     777     776     777       9999  cons1     197609 09:00:00 /usr/bin/sleep\n"
+            "garbage line\n")
+
+    def test_reads_ids_and_tty(self):
+        import winproc as W
+        self.assertEqual(W.parse_ps_l(self.TEXT), {50444: (1563560, 320617, "?"), 48084: (320617, 1, "pty0"),
+                                                   9999: (777, 776, "cons1")})
+
+    def test_empty_output_is_an_empty_table(self):
+        import winproc as W
+        self.assertEqual(W.parse_ps_l(""), {})
+
+
+@unittest.skipUnless(os.name == "nt", "Windows only")
+class MsysTable(unittest.TestCase):
+    """winproc.msys_table: a failed ps gives no table, never a partial one."""
+
+    def _run(self, returncode):
+        import winproc as W
+        from unittest import mock
+        out = "  1563560  320617  320617      50444  ?         197609 11:10:25 /usr/bin/tail\n"
+        done = subprocess.CompletedProcess(["ps", "-l"], returncode, stdout=out, stderr="")
+        with mock.patch("subprocess.run", return_value=done):
+            return W.msys_table(ps_exe="ps.exe")
+
+    def test_nonzero_exit_is_no_table(self):
+        self.assertIsNone(self._run(1))
+
+    def test_zero_exit_parses_the_rows(self):
+        self.assertEqual(self._run(0), {50444: (1563560, 320617, "?")})
 
 
 class LogPath(unittest.TestCase):
@@ -454,6 +568,7 @@ class Live(unittest.TestCase):
             PW.classify(procs, 0.2)
             p = mine[0]
             self.assertIsNotNone(p["mpid"])
+            self.assertIsNotNone(p["mtty"], "Git's ps -l TTY column was not read")
             self.assertTrue(p["parent_alive"], "a running Git-Bash child was reported as an orphan")
         finally:
             for q in procs:
