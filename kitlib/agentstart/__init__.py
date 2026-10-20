@@ -16,13 +16,16 @@ says how old that is (the mtime of FETCH_HEAD). As in preflight, a reading that 
 
 The hook waits for it at most `budget` seconds: the reading runs on a daemon thread, each git call
 is given what is left of the budget as its timeout, and whatever is not done by then is one
-`NOT CHECKED` line. At a subagent's start the folder is its parent's (the agent has not made its
-own worktree yet), so the block describes where the agent starts, not where it will work.
+`NOT CHECKED` line. No `budget` is `kitlib.clock.budget(BUDGET)`: BUDGET in a real run, the time
+fence's ceiling under the kit's tests (docs/flaky-tests.md); a budget passed in is used as is.
+At a subagent's start the folder is its parent's (the agent has not made its own worktree yet), so
+the block describes where the agent starts, not where it will work.
 """
 import os
 import threading
 import time
 
+from kitlib import clock
 from kitlib.git import cmd, repo, stray
 
 BUDGET = 1.0
@@ -45,7 +48,7 @@ def is_dispatched(role, kit):
     return False
 
 
-def text(cwd, kit, role=None, budget=BUDGET):
+def text(cwd, kit, role=None, budget=None):
     start = time.monotonic()
     rows = lines(cwd, kit, budget)
     took = int((time.monotonic() - start) * 1000)
@@ -55,8 +58,9 @@ def text(cwd, kit, role=None, budget=BUDGET):
     return title + '\n' + '\n'.join('- ' + r for r in rows)
 
 
-def lines(cwd, kit, budget=BUDGET, now=None):
+def lines(cwd, kit, budget=None, now=None):
     out = []
+    budget = clock.budget(BUDGET) if budget is None else budget
     deadline = time.monotonic() + budget
 
     def work():
