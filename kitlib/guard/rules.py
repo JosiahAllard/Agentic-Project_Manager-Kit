@@ -268,8 +268,8 @@ def shell_command(event, ctx, text, shell, cwd, role):
     for cmd in parsed.commands:
         inv = cm.invocation(cmd)
         for rule in (owner_tool, hub_rules.secrets, hub_rules.owner_verb, wrapped_gate, root_search,
-                     heavy, git_rules, backlog_shell, git_hooks_path, owner_identity, kill_by_name,
-                     shell_writes):
+                     heavy, git_rules, backlog_shell, gate_allow, git_hooks_path, owner_identity,
+                     kill_by_name, shell_writes):
             d = rule(event, ctx, cmd, inv, cwd, role)
             if d:
                 return d
@@ -286,6 +286,12 @@ def backlog_shell(event, ctx, cmd, inv, cwd, role):
     """The backlog roles' shell rules (kitlib.guard.backlogrole.shell)."""
     from . import backlogrole
     return backlogrole.shell(event, ctx, cmd, inv, cwd, role)
+
+
+def gate_allow(event, ctx, cmd, inv, cwd, role):
+    """Who may run `gate.py allow` (kitlib.guard.gaterole.shell)."""
+    from . import gaterole
+    return gaterole.shell(event, ctx, cmd, inv, cwd, role)
 
 
 def backlog_edit(event, ctx, target, role, what):
