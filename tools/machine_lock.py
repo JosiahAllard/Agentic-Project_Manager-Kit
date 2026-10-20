@@ -32,7 +32,7 @@ from kitlib.lock import holds as hl                                # noqa: E402
 from kitlib.lock import layout as lay                              # noqa: E402
 from kitlib.lock import status as st                               # noqa: E402
 from kitlib.lock.background import run_background                  # noqa: E402
-from kitlib.lock.run import ORIGIN_ENV, run_command                # noqa: E402
+from kitlib.lock.run import ORIGIN_ENV, check_resource, run_command  # noqa: E402
 from kitlib.lock.store import (EXIT_REQUIRE, EXIT_USAGE, LockError, Store,  # noqa: E402
                                caller, iso, new_id, utc_now)
 from kitlib.proc import bash, process                              # noqa: E402
@@ -303,6 +303,7 @@ def cmd_run(a, cmd, store, argv):
         say("usage: machine_lock.py %s ... -- <command>: no command after --" % a.cmd)
         return EXIT_USAGE
     resource = getattr(a, "resource", None)     # run only; before a detach books anything
+    check_resource(resource)                    # "" is usage here, not in a detached log
     if resource and resource.startswith("landing:"):
         say("usage: --resource %s: landing resources belong to land.py (kitlib.gate.land); "
             "name another resource" % resource)
