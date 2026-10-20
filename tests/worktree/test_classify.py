@@ -370,6 +370,17 @@ class Live(ClassifyCase):
                                           'has more than' % path), reason)
         self.assertTrue(reason.endswith('a process we could not read may hold it'), reason)
 
+    def test_an_unread_process_off_windows_is_l_and_says_not_probed(self):
+        path = self.workstream('offwin')
+        with mock.patch.object(holders, 'WINDOWS', False):
+            rc, out, data = self.run_classify(procs=lambda: (([], 1, 1), None))
+        row = self.row(data, path)
+        self.assertEqual(row['class'], 'L', row)
+        self.assertEqual(row['reason'],
+                         'unreadable: 1 process(es) could not be read and %s was not probed: the '
+                         'open for delete is made on Windows only: a process we could not read '
+                         'may hold it' % path)
+
     @unittest.skipUnless(WINDOWS, 'the process scan is Windows only')
     def test_the_real_process_scan_finds_this_process_in_a_tree(self):
         path = self.workstream('here')

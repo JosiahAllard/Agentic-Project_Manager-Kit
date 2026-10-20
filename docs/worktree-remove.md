@@ -55,9 +55,9 @@ A `worktree_remove.build_output` entry `{"piece": "<id>", "path": "<folder>/"}` 
 | Class | Rule | Next step the output names |
 |---|---|---|
 | L live or kept | Locked with `git worktree lock`; exempt; the landing tree (`_landing`); its folder missing; or held. Held means one of: the landing lock names its branch; a machine lock record names it (`sweep.machine_lock_holder`); a process has its current directory in it; or its last activity is newer than the dead bar. A tree whose status or last activity cannot be read is L too. | reported only |
-| A landed | The tip is in the base and off its first-parent chain (`merged_worktrees`' rule), and the tree is clean. | `worktree_remove.py <slug>` |
+| A landed | The tip is in the base and off its first-parent chain (`merged_worktrees`' rule), the tree is clean, and a tree on a branch has a commit of its own in the branch's reflog (`own_commit`). | `worktree_remove.py <slug>` |
 | E evidence | The folder name matches `EVIDENCE_GLOBS` (`agent-*`, `*-red`, `redcheck`, `mutant*`), or a detached tree outside every worktree folder. | `--scratch` or `--abandon "evidence"` |
-| B finished | Clean, ahead of the base, and its tip has a gate-OK record git still agrees with (`gate_ok.verify`). | land it or record why not |
+| B finished | Clean, ahead of the base, and its tip has a `--full` gate-OK record git still agrees with (`gate_ok.verify_full`). | land it or record why not |
 | C half-done | Anything else: dirty, no gate-OK record, a record that cannot be read, or no commit of its own. | take it up, or block or release its record; then `--abandon` |
 
 - The dead bar is `DEAD_AFTER_S`, 24 h. Last activity is `sweep.last_activity` for a tree on a branch. For a detached tree it is the newest of: the tree, its git dir (the index left out) and the HEAD commit's date.

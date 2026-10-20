@@ -243,7 +243,9 @@ def live_reason(ctx, entry, run_wide, landing, machine, cwds, now, dead_after_s)
         held = holders.held_folder(path)
         if held is not None:
             where, err = held
-            what = ('has more than %d entries, so not every folder in it was opened' % WALK_MAX
+            what = ('was not probed: the open for delete is made on Windows only'
+                    if err == holders.NOT_SEARCHED and not holders.WINDOWS else
+                    'has more than %d entries, so not every folder in it was opened' % WALK_MAX
                     if err == holders.NOT_SEARCHED else
                     'cannot be opened for delete (Windows error %d)' % err if err else
                     'cannot be read in full')
