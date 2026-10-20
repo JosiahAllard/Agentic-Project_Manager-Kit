@@ -326,7 +326,33 @@ class CarrierTest(_Folder):
         code, err = self.carry_stderr()
         self.assertEqual(code, 2)
         self.assertIn("USAGE: pythonw no_window.py PROGRAM [ARGS...]", err)
-        self.assertEqual(self.carry(), 2)             # and with no stderr at all, as a task has
+        self.assertEqual(self.carry(), 2)             # and with stderr the null device
+
+    def test_no_program_with_no_standard_handles_at_all_exits_2(self):
+        """Started with no handles (no redirection, so pythonw gets none): sys.stderr is None in
+        the carrier, and the usage line is skipped, not an AttributeError's exit 1."""
+        seen = os.path.join(self.dir, "handles.txt")
+        probe = self.write("handles.py", "import sys; open(sys.argv[1], 'w').write("
+                                         "repr((sys.stdin, sys.stdout, sys.stderr)))")
+        self.assertEqual(subprocess.run([self.pythonw, probe, seen], timeout=120,
+                                        env=self.env).returncode, 0)
+        with open(seen) as f:
+            self.assertEqual(f.read(), "(None, None, None)")   # the start form gives no stderr
+        self.assertEqual(subprocess.run([self.pythonw, self.CARRIER], timeout=120,
+                                        env=self.env).returncode, 2)
+
+    def test_no_program_with_a_closed_stderr_pipe_exits_2(self):
+        """A stderr whose reading end is gone: the usage line cannot be written, and the exit is
+        still 2 (unguarded, the failed flush at interpreter exit made it 120)."""
+        r, w = os.pipe()
+        os.close(r)
+        try:
+            code = subprocess.run([self.pythonw, self.CARRIER], timeout=120, env=self.env,
+                                  stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                  stderr=w).returncode
+        finally:
+            os.close(w)
+        self.assertEqual(code, 2)
 
     def test_an_exit_code_above_the_signed_range_comes_back_whole(self):
         """A program that ends as a crash does (0xC0000005) is seen as that by whoever started the
