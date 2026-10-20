@@ -158,7 +158,7 @@ class Classify(unittest.TestCase):
                     "tail.exe -F Z:/GitHub/repo/.claude/worktrees/x/gate.log",
                     r"tail.exe -F Q:\odd-agent-temp\claude\p\x.log",           # the resolved agent temp
                     "tail.exe -F /q/odd-agent-temp/claude/p/x.log",            # ... in MSYS form
-                    "tail.exe -F q:/ODD-AGENT-TEMP/claude/p/x.log"):
+                    "tail.exe -F q:/Odd-Agent-Temp/claude/p/x.log"):
             with self.subTest(cmd):
                 p = by_pid(world(gitp(900, 77, "tail.exe", cmd, 2 * HOUR, (60, GONE, NO_TTY))))[900]
                 self.assertEqual((p["verdict"], p["kill_ok"]), ("SUSPECT", True))

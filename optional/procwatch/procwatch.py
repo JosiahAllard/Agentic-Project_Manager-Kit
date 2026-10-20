@@ -193,7 +193,7 @@ def _agent_path(cmd):
     """Does this command line name a path agent tooling uses: a `.claude` folder (worktrees, a
     session's files), `<TEMP>\\claude\\` (a Monitor's or background task's output), or the agent temp
     folder's `claude\\`? Compared lower case with `\\` as `/`; the resolved agent temp in both the
-    Windows (`z:/x/claude/`) and MSYS (`/z/x/claude/`) forms."""
+    Windows (`<drive>:/x/claude/`) and MSYS (`/z/x/claude/`) forms."""
     c = (cmd or "").lower().replace("\\", "/")
     if any(x in c for x in AGENT_PATHS):
         return True
