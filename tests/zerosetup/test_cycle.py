@@ -320,7 +320,8 @@ class AnyPlatform(Cycle, unittest.TestCase):
         patch = mock.patch.object(lockstore, 'real_root', lambda: os.path.join(self.base, 'machine-store'))
         patch.start()
         self.addCleanup(patch.stop)
-        # A scratch lock store, so the gates this test books never meet the real store's per-coordinator cap.
+        # A scratch lock store: under the kit's tests the machine's store is fenced (Store.path raises
+        # HomeFenced, kitlib/lock/store.py), so the gates this test books cannot use it.
         self.book_kw = {'env': self.env, 'store': lockstore.Store(root=os.path.join(self.base, 'scratch-store'))}
 
     def pre_commit_passed(self, wt):
