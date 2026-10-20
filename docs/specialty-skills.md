@@ -61,7 +61,7 @@ The analyst keeps the reviewer's light/high pin, so the "Reviewer model" rule is
 
 ## Specialty skills
 
-Seven folders `content/skills/specialty-<name>/SKILL.md`, long material in companion files, shipped
+Seven folders `content/skills/specialty-<name>/SKILL.md` (an eighth, `specialty-rigging`, was added after the build), long material in companion files, shipped
 by the existing render (Claude loads `content/skills/`; Codex gets the copy
 `hosts/codex/shell/skills/`, docs/content.md "Skills"). The `specialty-` prefix: a skill named
 `branch-review` already exists (the coordinator's), a bare `records` would read as the retired type,
@@ -69,7 +69,8 @@ and names start with a letter (`_NAME` in `kitlib/host/content.py`).
 
 | skill | replaces | brief names (inference) | keeps from the role |
 |---|---|---|---|
-| specialty-3d-assets | asset-smith | senior-worker | script is the asset, budgets, contact sheet, options-first, no rigging |
+| specialty-3d-assets | asset-smith | senior-worker | script is the asset, budgets, contact sheet, options-first; props here, characters and rigs in specialty-rigging |
+| specialty-rigging | (added later; no role) | senior-worker | scripted rig to the repo's body contract, weight and bend checks, contact sheet, skins on one shared rig |
 | specialty-tech-art | tech-artist | senior-worker | art that is code, checked by rendering, art-direction stop |
 | specialty-sound | sound-smith | worker; senior-worker for design | measure clips, ends in a question for the owner |
 | specialty-review | reviewer | read type | brief + diff range + logs, report format |

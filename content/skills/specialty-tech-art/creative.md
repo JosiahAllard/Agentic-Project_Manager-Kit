@@ -1,7 +1,7 @@
 # Creative work: brief, options first, generation, delivery, limits
 
-Shared by the specialty-3d-assets, specialty-tech-art and specialty-sound skills; the same bytes in
-each folder.
+Shared by the specialty-3d-assets, specialty-rigging, specialty-tech-art and specialty-sound skills;
+the same bytes in each folder.
 
 ## The brief block
 
@@ -57,8 +57,8 @@ narrow them:
   where the project records them, public domain included.
 - Never change gameplay, physics or netcode to make something look or sound better: report the
   conflict.
-- Needs something no route here produces (a rigged or animated character, a hand-painted
-  texture, a recorded performance): stop and report exactly what - subject, format, size or
+- Needs something no route here produces (a hand-sculpted mesh, a hand-painted texture, a
+  recorded performance): stop and report exactly what - subject, format, size or
   budget, where it would live - so the owner can source it. Never ship a placeholder that could
   pass for the real thing.
 
