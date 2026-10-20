@@ -7,9 +7,10 @@ unreadable line is never a way around a rule, and a plain line is never denied b
 
   - the owner's tools by name (NAMED), first, in every session but the owner's own: text naming
     the hub tool (hub.py, tools.hub, -m hub) is refused as `hub-owner-verb`, text naming the lock
-    CLI (machine_lock.py, tools.machine_lock) as `owner-tool`, read verbs included. The part of
-    the line holding the name is read again first (named_reread): a hub owner verb or a lock
-    owner-only write there gives that rule's own refusal; otherwise the reason says the line
+    CLI (machine_lock.py, tools.machine_lock) as `owner-tool`, read verbs included, and text
+    naming the owner's delegation list (owner-delegations) as `owner-delegations`, reads included.
+    The part of the line holding the name is read again first (named_reread): a hub owner verb, a
+    lock owner-only write or a write of the list there gives that rule's own refusal; otherwise the reason says the line
     names the tool and the alternative is plainly()'s.
   - a git or root-search pattern that matches: the text from the match to the next ; | & or
     newline is read again as a command of its own and the rules run on it. A rule that denies it
@@ -120,6 +121,9 @@ NAMED = (
                               + r'machine_lock(?![\w.])'),
      'names the lock CLI, and a part of it the guard cannot read may run one of its owner-only writes, which '
      'the owner runs, not agents.'),
+    ('owner-delegations', re.compile(r'(?i)owner-delegations'),
+     "names the owner's delegation list, and a part of it the guard cannot read may write, move or delete it, "
+     'which only the owner does.'),
 )
 PARSED_RULES = ('owner_tool', 'wrapped_gate', 'root_search', 'heavy', 'git_rules', 'shell_writes')
 WHY = 'The guard could not read this command; write the program name literally. Why: %s.'
@@ -204,8 +208,9 @@ def runs_hidden(inv):
 def named_reread(event, ctx, text, shell, parsed, pos, cwd, role, rule):
     """The NAMED rule's own deny of the part of the line holding text position `pos` (from the
     last ; | & or newline before it to the next), read again as a command of its own: a hub tool
-    run there that runs an owner verb (rules.hub_owner_run), or a lock CLI owner-only write
-    (rules.owner_tool); None when the part runs neither."""
+    run there that runs an owner verb (rules.hub_owner_run), a lock CLI owner-only write
+    (rules.owner_tool), or a write of the owner's delegation list (rules.owner_delegations); None
+    when the part runs none of them."""
     start = max(text.rfind(c, 0, pos) for c in ';|&\n') + 1
     where = cwd_at(parsed, pos, cwd) or cwd
     p = cm.read(segment(text, start), shell, where, home=getattr(ctx, 'home', None))
@@ -217,8 +222,9 @@ def named_reread(event, ctx, text, shell, parsed, pos, cwd, role, rule):
                             'is %s. Ask the owner through a question:' % (verb, rules.HUB_OWNER_WHY,
                                                                          rules.hub_session(event, ctx)),
                             rules.hub_ask_alternative(ctx))
+    named = rules.owner_delegations if rule == 'owner-delegations' else rules.owner_tool
     for c in p.commands:
-        d = rules.owner_tool(event, ctx, c, cm.invocation(c), cwd, role)
+        d = named(event, ctx, c, cm.invocation(c), cwd, role)
         if d:
             return d
     return None

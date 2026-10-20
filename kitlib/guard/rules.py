@@ -267,8 +267,8 @@ def shell_command(event, ctx, text, shell, cwd, role):
     hub_rules = HubShell(event, ctx, parsed)
     for cmd in parsed.commands:
         inv = cm.invocation(cmd)
-        for rule in (owner_tool, hub_rules.secrets, hub_rules.owner_verb, wrapped_gate, root_search,
-                     heavy, git_rules, backlog_shell, gate_allow, git_hooks_path, owner_identity,
+        for rule in (owner_tool, hub_rules.secrets, hub_rules.owner_verb, owner_delegations, wrapped_gate,
+                     root_search, heavy, git_rules, backlog_shell, gate_allow, git_hooks_path, owner_identity,
                      kill_by_name, shell_writes):
             d = rule(event, ctx, cmd, inv, cwd, role)
             if d:
@@ -286,6 +286,18 @@ def backlog_shell(event, ctx, cmd, inv, cwd, role):
     """The backlog roles' shell rules (kitlib.guard.backlogrole.shell)."""
     from . import backlogrole
     return backlogrole.shell(event, ctx, cmd, inv, cwd, role)
+
+
+def owner_delegations(event, ctx, cmd, inv, cwd, role):
+    """A write, move or delete of the owner's delegation list (kitlib.guard.delegfile.shell)."""
+    from . import delegfile
+    return delegfile.shell(event, ctx, cmd, inv, cwd, role)
+
+
+def delegations_edit(event, ctx, target, role, what, stand_in=False):
+    """An edit of the owner's delegation list, or of a folder that holds it (kitlib.guard.delegfile.edit)."""
+    from . import delegfile
+    return delegfile.edit(event, ctx, target, role, what, stand_in)
 
 
 def gate_allow(event, ctx, cmd, inv, cwd, role):
@@ -1056,16 +1068,19 @@ def own_worktree(ctx, cwd, main_top=None):
 
 
 def edit_target(event, ctx, target, cwd, role, what, unknown_why=None, rewrite=None, run=None, redirect=False,
-                shell=None, item=False):
+                shell=None, item=False, stand_in=False):
     """Deny an edit of `target` in a main checkout (or a place git cannot tell) by a role that
     may not edit one, and an agent session's write outside its roots (write_jail). `rewrite(path)`
     gives the same edit aimed at `path` (the alternative); `run` the command to rerun from the
     worktree when it writes into the directory it runs in; `redirect`, a shell redirect's target:
     output, so the alternative with no worktree of the session's own is the temp folder; `shell`,
     the dialect of the line `run` is on (the cd line of worktree_alternative); `item`, a target the
-    guard cannot place that is a provider item on a line of more than plain calls (ps_provider_word)."""
+    guard cannot place that is a provider item on a line of more than plain calls (ps_provider_word);
+    `stand_in`, a target that stands for the folder a program runs in or for what the guard cannot
+    read, which counts as the owner's delegation list only when it is that file (delegfile.edit)."""
     d = ledger_rule(ctx, target, role, what) or pm_data_unknown(ctx, target, cwd, role, what) or \
         lock_state(event, ctx, target, role, what) or hub_secret_edit(event, ctx, target, role, what) or \
+        delegations_edit(event, ctx, target, role, what, stand_in) or \
         kit_json(event, ctx, target, role, what) or gate_result(event, ctx, target, role, what) or \
         generated_file(ctx, target, role, what) or backlog_edit(event, ctx, target, role, what)
     if d:
@@ -3019,7 +3034,7 @@ def _write_from(event, ctx, cmd, inv, cwd, role, w, base, net, into, searched):
         # call may set what it reads (PROVIDER_ITEM_WHY)
         d = edit_target(event, ctx, t, cwd, role, what, why, rewrite=rewrite,
                         run=whole_line(ctx, cmd) if item else bare(cmd), redirect=output,
-                        shell=outer_shell(cmd), item=item)
+                        shell=outer_shell(cmd), item=item, stand_in=stand_in or unread is not None or piped)
         if not placed:
             d = unplaced(d, role)
         if d:

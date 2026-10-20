@@ -164,6 +164,18 @@ class KeptDenies(World):
         d = self.decide(W.bash('echo {} > %s' % W.fwd(cfg), self.w.wt, sub=True))
         self.assertEqual((d.verdict, d.rule), ('deny', 'write-jail'))
 
+    def test_the_owners_delegation_list_is_a_kept_deny(self):
+        """owner-delegations is not softened (no modes.DEFAULTS entry), so a write of the list is
+        denied, a plain-marked session's included."""
+        self.assertNotIn('owner-delegations', modes.DEFAULTS)
+        self.assertEqual(modes.mode('owner-delegations'), modes.DENY)
+        target = os.path.join(self.w.home, '.pm-kit', 'owner-delegations.json')
+        for payload, kw in ((write_ev(target, self.w.wt), {}),
+                            (W.bash('rm %s' % W.fwd(target), self.w.wt, sub=False),
+                             {'role_resolver': lambda *a: 'plain'})):
+            d = self.decide(payload, pointer=lambda: None, **kw)
+            self.assertEqual((d.verdict, d.rule), ('deny', 'owner-delegations'), d.reason)
+
 
 class StrictGitReads(World):
     """Where the checkout cannot be placed (git -C $x), git_reads(strict) keeps each form below a
