@@ -19,6 +19,10 @@ kitlib.host.hookmain.dispatch.
                        agent's context, {"hookSpecificOutput": {"hookEventName",
                        "additionalContext"}} and a newline; nothing for no text. Only the
                        CONTEXT_EVENTS take it.
+  tool_context(event_name, text)   stdout for a PreToolUse allow that adds `text` to the agent's
+                       context (kitlib.host.hookmain's header-update line): {"hookSpecificOutput":
+                       {"hookEventName", "additionalContext"}} with no permissionDecision, so
+                       Claude Code's own permission flow runs as for an empty answer; '' for no text
   start_text(event_name, kit, payload, environ, part)   the text of one start hook, by its part
                        (PARTS): None the kit header (kitlib.host.header; hooks.json, SessionStart
                        and SubagentStart), and at a SubagentStart of a dispatched kit role the
@@ -111,6 +115,15 @@ class ClaudeAdapter(object):
             return '', 0
         return json.dumps({'hookSpecificOutput': {'hookEventName': event_name,
                                                   'additionalContext': text}}) + '\n', 0
+
+    @staticmethod
+    def tool_context(event_name, text):
+        if event_name != 'PreToolUse':
+            raise ValueError('%s carries no tool additionalContext' % event_name)
+        if not text:
+            return ''
+        return json.dumps({'hookSpecificOutput': {'hookEventName': event_name,
+                                                  'additionalContext': text}}) + '\n'
 
     @staticmethod
     def start_text(event_name, kit, payload=None, environ=None, part=None):

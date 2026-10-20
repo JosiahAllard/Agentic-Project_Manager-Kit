@@ -45,6 +45,15 @@ class ClaudeContext(unittest.TestCase):
         with self.assertRaises(ValueError):
             ADAPTER.context('PreToolUse', 'x')
 
+    def test_a_tool_event_carries_context_without_a_permission_decision(self):
+        text = ADAPTER.tool_context('PreToolUse', 'hello')
+        self.assertEqual(json.loads(text), {'hookSpecificOutput': {'hookEventName': 'PreToolUse',
+                                                                   'additionalContext': 'hello'}})
+        self.assertTrue(text.endswith('\n'))
+        self.assertEqual(ADAPTER.tool_context('PreToolUse', ''), '')
+        with self.assertRaises(ValueError):
+            ADAPTER.tool_context('SessionStart', 'x')
+
 
 class Entry(unittest.TestCase):
     def run_entry(self, *args, payload=None, **env):
