@@ -173,6 +173,15 @@ class Spellings(Base):
             with self.subTest(args):
                 self.allowed(self.cmd('Start-Process python -ArgumentList %s' % args, tool='PowerShell'))
 
+    def test_start_process_keeps_a_double_quoted_value_one_word(self):
+        """Windows hands a double-quoted -ArgumentList segment to the tool as ONE argument
+        (commands._split_list), so `--summary "x --priority 1"` is a summary, not a price."""
+        self.rec = pulled_by('kit/wt')
+        self.allowed(self.cmd("Start-Process python -ArgumentList '%s -C %s set X-1 --summary \"x --priority 1\"'"
+                              % (self.tool, self.wt), tool='PowerShell'))
+        self.refused(self.cmd("Start-Process python -ArgumentList '%s -C %s set X-1 --summary x --priority 1'"
+                              % (self.tool, self.wt), tool='PowerShell'))
+
     def test_a_powershell_word_holding_a_double_quote_is_unread(self):
         self.rec = pulled_by('kit/wt')
         self.allowed(self.cmd("python \"%s\" -C \"%s\" set X-1 --scope 'a b'" % (self.tool, self.wt),
@@ -291,24 +300,49 @@ class Refs(Base):
     def test_a_mirror_push_writes_it(self):
         self.denied(self.git('push --mirror origin'))
 
+    UNREAD_UPDATE_REFS = (
+        # (command, host tool, a word the refusal names before Instead:)
+        ('echo "update refs/backlog/main %s" | git -C "{wt}" update-ref --stdin' % OID, 'Bash', 'input'),
+        ('git -C "{wt}" update-ref --stdin < cmds.txt', 'Bash', 'input'),
+        ('git -C "{wt}" update-ref -z --stdin < cmds.txt', 'Bash', 'input'),
+        ('"update refs/backlog/main %s" | git -C "{wt}" update-ref --stdin' % OID, 'PowerShell', 'input'),
+        ('git -C "{wt}" update-ref --std < cmds.txt', 'Bash', 'input'),            # git takes an abbreviation
+        ('git -C "{wt}" update-ref --stdi < cmds.txt', 'Bash', 'input'),
+        ('echo refs/backlog/main %s | xargs git -C "{wt}" update-ref' % OID, 'Bash', 'xargs'),
+        ('git -C "{wt}" update-ref "$R" %s' % OID, 'Bash', '$R'),                  # a computed ref
+        ('git -C "{wt}" update-ref $R %s' % OID, 'PowerShell', '$R'),
+    )
+
     def test_update_ref_from_its_input_may_write_it(self):
-        """`update-ref --stdin` reads the refs it writes from its input, which the guard does not
-        read, so it may write the store's ref: refused for every session but the owner's (fail
-        closed). git-shared-ref holds an agent session's first; the PM and a plain mark meet this."""
-        for text, tool in (('echo "update refs/backlog/main %s" | git -C "%s" update-ref --stdin' % (OID, self.wt),
-                            'Bash'),
-                           ('git -C "%s" update-ref --stdin < cmds.txt' % self.wt, 'Bash'),
-                           ('git -C "%s" update-ref -z --stdin < cmds.txt' % self.wt, 'Bash'),
-                           ('"update refs/backlog/main %s" | git -C "%s" update-ref --stdin' % (OID, self.wt),
-                            'PowerShell')):
+        """An update-ref whose ref the guard cannot read (rules._update_ref_unread: --stdin, an
+        option it does not know such as an abbreviation, xargs, a computed word) may write the
+        store's ref: refused for every session but the owner's (fail closed) where a store reads.
+        git-shared-ref holds an agent session's first; the PM and a plain mark meet this."""
+        for text, tool, said in self.UNREAD_UPDATE_REFS:
+            text = text.format(wt=self.wt)
             for env in (PM, {context.ROLE_ENV: 'plain'}):
                 with self.subTest(text=text, env=env):
                     d = self.refused(self.cmd(text, tool=tool, sub=False, env=env), 'backlog-raw-write')
-                    self.assertIn('input', d.reason.split('Instead:')[0])
+                    why = d.reason.split('Instead:')[0].split('`', 2)[2]       # after the quoted command
+                    self.assertIn(said, why)
+                    self.assertIn('store', why)
             with self.subTest(text=text, who='subagent'):
                 self.denied(self.cmd(text, tool=tool, env={}))
             with self.subTest(text=text, who='owner'):
                 self.allowed(self.cmd(text, tool=tool, sub=False, env={}))
+
+    def test_an_unread_update_ref_where_no_store_reads(self):
+        """Where no backlog store reads (backlogrole.store_kind None: here a .kit.json that does not
+        load), an update-ref the guard cannot read is not this rule's: the PM keeps it, as
+        git-shared-ref leaves the PM free on refs. A ref named literally under refs/backlog/ is
+        still the store's."""
+        with open(os.path.join(self.w.main, '.kit.json'), 'w', encoding='utf-8') as f:
+            f.write('{"backlog": {"store": 7}}')
+        for text, tool, _said in self.UNREAD_UPDATE_REFS:
+            text = text.format(wt=self.wt)
+            with self.subTest(text=text):
+                self.allowed(self.cmd(text, tool=tool, sub=False, env=PM))
+        self.refused(self.git('update-ref refs/backlog/main %s' % OID), 'backlog-raw-write')
 
     def test_a_subagent_is_refused_too(self):
         for args in ('update-ref refs/backlog/main %s' % OID, 'push origin refs/backlog/main'):

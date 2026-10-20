@@ -10,6 +10,7 @@ import os
 import re
 import tempfile
 import unittest
+from unittest import mock
 
 from kitlib import sessionmark
 from kitlib.backlog import audit
@@ -170,6 +171,23 @@ class Tool(unittest.TestCase):
         self.assertNotEqual(self.tip(), before)                # the write stands
         self.assertIn('WARNING:', err)
         self.assertIn('audit', err)
+
+    def test_any_other_failure_of_the_log_is_a_warning_and_the_exit_stands(self):
+        """An exception audit.after_write does not catch (not ConfigError, PmDataError or OSError)
+        after a published write: a WARNING naming it on standard error, exit 0, never a traceback."""
+        self.add()
+        before = self.tip()
+
+        def boom(path, fields):
+            raise ValueError('an odd failure')
+        with mock.patch.object(BACKLOG.audit, 'append', boom):
+            out, err = self.ok('close', 'FOO', '--reason', 'the work is finished')
+        self.assertIn('WROTE', out)
+        self.assertNotEqual(self.tip(), before)                # the write stands
+        self.assertIn('WARNING:', err)
+        self.assertIn('ValueError', err)
+        self.assertIn('an odd failure', err)
+        self.assertNotIn('Traceback', err)
 
     def test_migrate_is_audited(self):
         self.repo.write('docs/backlog/FOO.md', 'id: FOO\narea: xx\npriority: 2\npriority_by: agent\n'
