@@ -60,6 +60,15 @@ class ClassifyCase(RemoveCase):
         self.git('worktree', 'add', '-q', '--detach', path, commit)
         return path
 
+    def record(self, text, name='T-001.md'):
+        """A record committed to the configured store on main and pushed (the base)."""
+        full = os.path.join(self.repo, 'docs', 'backlog', name)
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        with open(full, 'wb') as f:
+            f.write(text if isinstance(text, bytes) else text.encode('utf-8'))
+        self.fx.commit('record', 'docs/backlog/' + name)
+        self.fx.git('push', '-q', 'origin', 'main')
+
     def snapshot(self):
         files = []
         for top in [self.repo] + [os.path.join(os.path.realpath(self.fx.base), 'outside')]:
@@ -121,6 +130,7 @@ class Classes(ClassifyCase):
         self.assertEqual(row['claims'], 'unknown: ' + NO_STORE)
 
     def test_an_evidence_name_is_e(self):
+        self.configure({'backlog': {'store': 'main'}})
         path = self.workstream('agent-1234')
         rc, out, data = self.run_classify()
         self.assertEqual(self.row(data, path)['class'], 'E')
@@ -166,6 +176,61 @@ class Classes(ClassifyCase):
         with mock.patch.object(classify, 'canon', counted):
             self.run_classify(procs=lambda: ((procs, 0, 5), None))
         self.assertLessEqual(len(calls), len(procs) + 3 + 2, calls)
+
+
+class EvidenceKept(ClassifyCase):
+    """An evidence name alone proves nothing about the work in a tree: it is E only when the tree
+    is clean and, on a branch, every live backlog store can be read and none claims the branch."""
+
+    CONFIG = {'backlog': {'store': 'main'}}
+
+    def test_a_claimed_evidence_named_tree_is_c(self):
+        self.record('id: T-001\nstate: pulled\npulled_by: kit/agent-1234\n')
+        path = self.workstream('agent-1234')
+        rc, out, data = self.run_classify()
+        row = self.row(data, path)
+        self.assertEqual((row['class'], row['claims']), ('C', ['T-001']), row)
+        self.assertIn('an evidence name, kept from E: claimed by T-001', row['note'])
+        self.assertIn('next      release T-001 or block it (C)', out)
+
+    def test_a_dirty_evidence_named_tree_is_c(self):
+        path = self.workstream('agent-5')
+        self.fx.write('loose.txt', 'not committed\n', root=path)
+        rc, out, data = self.run_classify()
+        row = self.row(data, path)
+        self.assertEqual((row['class'], row['dirty']), ('C', 1), row)
+        self.assertIn('an evidence name, kept from E: 1 dirty file(s)', row['note'])
+
+    def test_a_dirty_detached_evidence_named_tree_is_c(self):
+        path = self.workstream('mutant1')
+        self.git('checkout', '-q', '--detach', cwd=path)
+        self.fx.write('loose.txt', 'not committed\n', root=path)
+        rc, out, data = self.run_classify()
+        row = self.row(data, path)
+        self.assertEqual((row['class'], row['branch']), ('C', None), row)
+
+    def test_an_evidence_named_tree_whose_claims_cannot_be_read_is_c(self):
+        self.configure({})
+        path = self.workstream('agent-6')
+        rc, out, data = self.run_classify()
+        row = self.row(data, path)
+        self.assertEqual(row['class'], 'C', row)
+        self.assertIn('an evidence name, kept from E: whether a backlog record claims it is'
+                      ' unknown: ' + NO_STORE, row['note'])
+
+    def test_a_claim_of_another_branch_leaves_it_e(self):
+        self.record('id: T-001\nstate: pulled\npulled_by: kit/other\n')
+        path = self.workstream('agent-7')
+        rc, out, data = self.run_classify()
+        row = self.row(data, path)
+        self.assertEqual((row['class'], row['claims']), ('E', []), row)
+
+    def test_a_clean_detached_evidence_named_tree_is_e_whatever_the_claims(self):
+        self.configure({})
+        path = self.workstream('redcheck')
+        self.git('checkout', '-q', '--detach', cwd=path)
+        rc, out, data = self.run_classify()
+        self.assertEqual(self.row(data, path)['class'], 'E')
 
 
 @real_git('git reflog: the fake writes no reflog, and A reads it')
@@ -235,15 +300,6 @@ class EmptyTrees(ClassifyCase):
     backlog store can be read and no record claims its branch, and its reflogs lose nothing."""
 
     CONFIG = {'backlog': {'store': 'main'}}
-
-    def record(self, text, name='T-001.md'):
-        """A record committed to the configured store on main and pushed (the base)."""
-        full = os.path.join(self.repo, 'docs', 'backlog', name)
-        os.makedirs(os.path.dirname(full), exist_ok=True)
-        with open(full, 'wb') as f:
-            f.write(text if isinstance(text, bytes) else text.encode('utf-8'))
-        self.fx.commit('record', 'docs/backlog/' + name)
-        self.fx.git('push', '-q', 'origin', 'main')
 
     def pm_worktree(self, store):
         """The PM data worktree (kitlib.pmdata), outside the worktree folder, its `.kit.json`
@@ -603,6 +659,7 @@ class ReadOnly(ClassifyCase):
         self.fx.write('loose.txt', 'x\n', root=dirty)
         self.workstream('agent-1')
         self.outside('scratch', self.git('rev-parse', 'HEAD'))
+        self.configure({'backlog': {'store': 'main'}})
         before = self.snapshot()
         rc, out, data = self.run_classify()
         self.assertEqual(data['counts'], {'A': 1, 'B': 1, 'C': 1, 'E': 2, 'L': 0}, out)

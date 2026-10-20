@@ -30,6 +30,9 @@ def load_tool():
 @gitfixture.real_fixture('A reads the reflog entry a fixture commit() writes, which only real '
                          'git writes')
 class ApplyCase(ClassifyCase):
+    """A backlog store is named, so whether a record claims an evidence-named tree can be read."""
+
+    CONFIG = {'backlog': {'store': 'main'}}
 
     def setUp(self):
         super().setUp()
@@ -92,6 +95,32 @@ class Removes(ApplyCase):
         self.assertEqual(rc, 0, out)
         self.assertIn('removed   %s: E, plain remove' % path, out)
         self.gone(path)
+        self.assertEqual(self.git('tag', '-l', 'archive/*'), '')
+
+
+class EvidenceKept(ApplyCase):
+    """An evidence-named tree that is dirty, or whose branch a record claims, is C: left."""
+
+    def test_a_claimed_evidence_tree_is_left_with_its_branch_and_no_tag(self):
+        self.record('id: T-001\nstate: pulled\npulled_by: kit/agent-7\n')
+        path = self.workstream('agent-7')
+        rc, out, data = self.run_apply()
+        self.assertEqual(rc, 1, out)
+        row = self.row(data, path)
+        self.assertEqual(row['class'], 'C', out)
+        self.assertNotIn('apply', row)
+        self.kept(path)
+        self.assertIn('kit/agent-7', self.branches())
+        self.assertEqual(self.git('tag', '-l', 'archive/*'), '')
+
+    def test_a_dirty_evidence_tree_is_left_with_its_files(self):
+        path = self.workstream('agent-3')
+        self.fx.write('loose.txt', 'not committed\n', root=path)
+        rc, out, data = self.run_apply()
+        self.assertEqual(rc, 1, out)
+        self.assertEqual(self.row(data, path)['class'], 'C', out)
+        self.kept(path)
+        self.assertTrue(os.path.isfile(os.path.join(path, 'loose.txt')))
         self.assertEqual(self.git('tag', '-l', 'archive/*'), '')
 
 

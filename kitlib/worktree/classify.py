@@ -19,8 +19,9 @@ The classes, decided first-match in this order:
   reflog that cannot be read, C). Also A, empty: clean, tip in the base, nothing of its own, and
   no commit to lose (unsaved_reflog), when the live backlog stores can be read and none claims
   it (live_claims; empty_keep says why one stays C). The PM data worktree is never empty-A.
-- E evidence: the folder name matches EVIDENCE_GLOBS, or a detached tree outside every worktree
-  folder.
+- E evidence: a detached tree outside every worktree folder; or the folder name matches
+  EVIDENCE_GLOBS and the tree is clean and, on a branch, the live backlog stores can be read and
+  none claims it (evidence_keep). An evidence name that fails that goes on to B or C.
 - B finished: clean, ahead of the base (tip not in it), and the tip has a gate-OK record from a
   --full gate that git still agrees with (kitlib.records.gate_ok.verify_full).
 - C half-done: everything else (dirty, no gate-OK record, a record that cannot be read, or an
@@ -73,7 +74,8 @@ HEADINGS = {
           'take up: land it or record why not'),
     'C': ('half-done', 'dirty, no gate-OK record, or empty and claimed or unknown; dead',
           'take up, or block/release its record; then --abandon'),
-    'E': ('evidence', 'agent-*/red/mutant name, or detached outside the worktree folder; dead',
+    'E': ('evidence', 'agent-*/red/mutant name, clean and unclaimed, or detached outside the'
+          ' worktree folder; dead',
           'removable: --scratch or --abandon "evidence"'),
     'L': ('live/kept', 'locked, exempt, held, active or unreadable', 'reported only'),
 }
@@ -373,7 +375,8 @@ def empty_keep(ctx, entry, own, claims):
 
 def judge(ctx, entry, base, chain, ancestors, claims=(None, 'not read')):
     """`(class, fields)` for a dead tree: A, E, B or C, first match. `claims`: `(Claims, why)`
-    (live_claims): an empty tree is A only when it is readable and names no claim."""
+    (live_claims): an empty tree is A, and an evidence-named one on a branch E, only when it is
+    readable and names no claim (evidence_keep)."""
     path, branch, head = entry['path'], entry['branch'], entry['head']
     work, disposable, ignored, why = remove.dirty(ctx, path)
     if work is None:
@@ -392,8 +395,41 @@ def judge(ctx, entry, base, chain, ancestors, claims=(None, 'not read')):
         if own:
             return 'A', fields
     outside = not remove.is_workstream(ctx, path)
-    if evidence_name(path) or (branch is None and outside):
+    if branch is None and outside:
         return 'E', fields
+    kept = None
+    if evidence_name(path):
+        kept = evidence_keep(ctx, entry, dirt, claims)
+        if kept is None:
+            return 'E', fields
+    klass, fields = work_class(ctx, entry, base, ancestors, own, claims, dirt, landed, fields)
+    if kept and kept not in fields.get('note', ''):
+        fields['note'] = '; '.join(n for n in (fields.get('note'),
+                                               'an evidence name, kept from E: %s' % kept) if n)
+    return klass, fields
+
+
+def evidence_keep(ctx, entry, dirt, claims):
+    """Why a dead tree with an evidence name is not E (judge), or None when it is: the name alone
+    proves nothing about the work in it, so it is E only when it is clean and, on a branch, every
+    live backlog store can be read and none claims the branch (`claims`: live_claims)."""
+    if dirt:
+        return '%d dirty file(s)' % dirt
+    branch = entry['branch']
+    if branch is None:
+        return None
+    got, why = claims
+    if got is None:
+        return 'whether a backlog record claims it is unknown: %s' % why
+    if got.pm_root and (entry.get('canon') or canon(entry['path'])) == got.pm_root:
+        return 'the PM data worktree'
+    ids = claimed(got, branch)
+    return 'claimed by %s' % ', '.join(ids) if ids else None
+
+
+def work_class(ctx, entry, base, ancestors, own, claims, dirt, landed, fields):
+    """judge's B or C (or an empty tree's A) for a tree that is neither landed-A nor E."""
+    head = entry['head']
     if head in ancestors:
         if dirt:
             fields['note'] = 'landed, not clean' if landed else 'nothing of its own'
