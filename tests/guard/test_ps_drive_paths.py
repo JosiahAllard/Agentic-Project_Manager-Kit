@@ -80,6 +80,18 @@ class IntoMain(Base):
         d = decide(W.ps(r'New-Item \Registry::HKCU\x', self.w.main, True), self.w.ctx())
         self.denied(d, 'unplaced')
 
+    def test_a_relative_filesystem_path_is_read_from_the_location(self):
+        # PowerShell reads FileSystem::x.txt (and \FileSystem::x.txt) from the process's directory,
+        # which Set-Location does not move; the guard reads it from the location, as it reads a
+        # relative .NET path (docs/guard-v2.md B17, cut: R-2271, R-2322)
+        for text in (r'New-Item FileSystem::x.txt', r'New-Item \FileSystem::x.txt',
+                     r"Set-Content -LiteralPath '\FileSystem::x.txt' -Value y",
+                     r'New-Item Microsoft.PowerShell.Core\FileSystem::sub\x.txt'):
+            with self.subTest(text):
+                d = self.denied(decide(W.ps(text, self.w.main, True), self.w.ctx()), 'main-checkout')
+                self.assertIn('is in the main checkout', d.reason)
+                self.allowed(self.run_ps(text))
+
     def test_a_stream_of_a_file_in_the_location(self):
         # .\x.txt::$DATA is the data stream of the file x.txt in the location, never a provider named x.txt
         for text in (r"cd {main}; Set-Content '.\x.txt::$DATA' y", r"Set-Content '{main}\x.txt::$DATA' y",
@@ -661,6 +673,15 @@ class DriveAndProviderTargets(Base):
                 text = text.format(main=self.w.main, wt=self.w.wt)
                 d = self.denied(decide(W.ps(text, self.w.main, True), self.w.ctx()), 'unplaced')
                 self.assertIn('cannot place', d.reason)
+
+    def test_another_provider_after_a_leading_separator(self):
+        # B16 cut (R-2266, R-2322): read as a folder at the drive's root before, so the jail refused
+        # it from a worktree; now a place the guard cannot tell, passed from a worktree
+        for text in (r'New-Item \Registry::HKCU\x', r'New-Item /Registry::HKCU\x',
+                     r"Set-Content -LiteralPath '\Environment::FOO' -Value y"):
+            with self.subTest(text):
+                self.allowed(self.run_ps(text))
+                self.denied(decide(W.ps(text, self.w.main, True), self.w.ctx()), 'unplaced')
 
 
 class PipelineTargets(Base):

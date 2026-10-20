@@ -16,6 +16,13 @@ from .world import bash, event, ps
 from kitlib.guard import decide as guard_decide
 from kitlib.host import Action
 
+
+def _isabs_before_313(p):
+    """os.path.isabs as Windows Pythons before 3.13 read it: a rooted path with no drive (\\x) is
+    absolute too."""
+    s = os.fspath(p)[:3].replace('/', '\\')
+    return s.startswith('\\') or s[1:3] == ':\\'
+
 # (name, tool, -C?, the arguments after the tool and its -C, shell, cwd attribute, subagent)
 SHARED = [
     ('gate piped to tail', 'gate', True, '--full 2>&1 | tail -5', 'bash', 'wt', False),
@@ -241,6 +248,19 @@ class LookalikeWrappers(unittest.TestCase):
         # an absolute script is the kit's wherever it starts
         text = sp % ('$k', '%s/tools/gate.py' % kit)
         self.assertEqual(verdict(claude_decide(ps(text, self.w.wt), self.w.ctx())), ('allow', None))
+
+    def test_a_drive_less_script_in_a_computed_working_directory_is_not_the_kit_s(self):
+        # \<kit>\tools\gate.py is on the drive of the folder Start-Process starts in, which the guard
+        # cannot tell here: only a drive or share path is read then, on every Python (before 3.13,
+        # os.path.isabs took a rooted path with no drive; the patch holds that reading)
+        from unittest import mock
+        kit = self.w.kit_dir[2:]
+        sp = "Start-Process python -WorkingDirectory $k -ArgumentList '%s','--full'"
+        with mock.patch('os.path.isabs', _isabs_before_313):
+            for script in (kit + '\\tools\\gate.py', W.fwd(kit) + '/tools/gate.py'):
+                text = sp % script
+                with self.subTest(text):
+                    self.assertEqual(verdict(claude_decide(ps(text, self.w.wt), self.w.ctx())), ('deny', 'heavy'))
 
     def test_a_start_process_script_elsewhere_is_not_the_kit_s(self):
         # the same call from the kit's folder, started in temp, runs temp's tools/gate.py
