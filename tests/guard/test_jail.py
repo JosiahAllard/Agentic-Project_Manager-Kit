@@ -1117,7 +1117,7 @@ class UnplacedGit(MainGit):
         self.worker_denied(['declare -x GIT_DIR; %s' % g, 'export GIT_DIR; %s' % g,
                             'declare -x GIT_DIR="%s/.git"; %s' % (m, g), 'typeset -r GIT_DIR=x; %s' % g])
         # export -p and readonly -p with a name still export, mark or set it (bash 5): unplaceable
-        self.worker_denied(['export -p GIT_DIR="%s/.git" GIT_WORK_TREE="%s"; git -C "%s" reset --hard' % (m, m, wt),
+        self.worker_denied(['export -p GIT_DIR="%s/.git" GIT_WORK_TREE="%s"; %s' % (m, m, g),
                             'readonly -p GIT_DIR="%s/.git"; %s' % (m, g), 'export -p GIT_DIR; %s' % g,
                             'export -np GIT_DIR="%s/.git"; %s' % (m, g), 'readonly -p GIT_DIR; %s' % g])
 
