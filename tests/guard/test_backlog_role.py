@@ -332,14 +332,19 @@ class Refs(Base):
         """Where no backlog store reads (backlogrole.store_kind None: here a .kit.json that does not
         load), an update-ref the guard cannot read is not this rule's: the PM keeps it, as
         git-shared-ref leaves the PM free on refs. A ref named literally under refs/backlog/ is
-        still the store's."""
+        still the store's, whatever else leaves the update-ref unread (a computed word before it,
+        an option the guard does not know)."""
         with open(os.path.join(self.w.main, '.kit.json'), 'w', encoding='utf-8') as f:
             f.write('{"backlog": {"store": 7}}')
         for text, tool, _said in self.UNREAD_UPDATE_REFS:
             text = text.format(wt=self.wt)
             with self.subTest(text=text):
                 self.allowed(self.cmd(text, tool=tool, sub=False, env=PM))
-        self.refused(self.git('update-ref refs/backlog/main %s' % OID), 'backlog-raw-write')
+        for args in ('update-ref refs/backlog/main %s' % OID, 'update-ref -m "$msg" refs/backlog/main %s' % OID,
+                     'update-ref --no-create-reflog refs/backlog/main %s' % OID):
+            for env in (PM, {context.ROLE_ENV: 'plain'}):
+                with self.subTest(args=args, env=env):
+                    self.refused(self.git(args, env=env), 'backlog-raw-write')
 
     def test_a_subagent_is_refused_too(self):
         for args in ('update-ref refs/backlog/main %s' % OID, 'push origin refs/backlog/main'):
