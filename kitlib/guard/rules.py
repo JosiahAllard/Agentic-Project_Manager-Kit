@@ -1729,29 +1729,14 @@ def _net_new_object(cmd, inv):
     return kind[0], vals.get('argumentlist', []), k, _net_lost(lost)
 
 
-FILE_MODE_RE = re.compile(r'(?i)^(?:\[(?:System\.)?IO\.FileMode\]::)?(\w+)$')
-FILE_ACCESS_RE = re.compile(r'(?i)^(?:\[(?:System\.)?IO\.FileAccess\]::)?(\w+)$')
-
-
-def _net_arg_name(src, arg, pattern):
-    """The enum value name the argument names ('Open', [IO.FileMode]::Open), lower case, or ''."""
-    text, s, e = arg
-    m = pattern.match(text if text is not None else src[s:e].strip())
-    return m.group(1).lower() if m else ''
-
-
 def _net_ctor(src, kind, args, end, out):
-    """Add the path a StreamWriter or FileStream constructor with `args` writes to `out`; True
-    when the guard does not read it: no arguments, or a StreamWriter's first argument that is not a
-    plain string (a Stream it writes through, judged where it is opened, or a path the line
-    computes). A FileStream opened to read only (FileMode Open, FileAccess Read) writes nothing,
-    unless it names FileOptions (a sixth argument: DeleteOnClose deletes the file)."""
+    """Add the path a StreamWriter or FileStream constructor with `args` writes to `out`: its first
+    argument. True when the guard does not read it: no arguments, or a StreamWriter's first argument
+    that is not a plain string (a Stream it writes through, judged where it is opened, or a path the
+    line computes). A FileStream opened only to read counts as a write (docs/guard-v2.md v2:114)."""
     if not args:
         return True
     text, s, e = args[0]
-    if kind == 'filestream' and 3 <= len(args) < 6 and _net_arg_name(src, args[1], FILE_MODE_RE) == 'open' and \
-            _net_arg_name(src, args[2], FILE_ACCESS_RE) == 'read':
-        return False
     if text is None and (kind == 'streamwriter' or src[s:e].lower() == '$null'):
         return kind == 'streamwriter'
     out.append(NetWrite(sh.Word(src[s:e] if text is None else text, text is None, s, e), end))
@@ -1762,8 +1747,7 @@ def net_writes(cmd):
     """([NetWrite], unread): each path the PowerShell command's .NET file calls (IO_FILE_RE) and
     StreamWriter and FileStream constructors (NET_TYPE_RE: ::new(...) or New-Object) write, and True
     when a match is a write the guard does not read the path of, so write_targets judges the
-    directory the command runs in, as it did for every such call, and dotnet_process_dir the one
-    its process started in: one inside a quoted word, a method named with no '(' after it (called
+    directory the command runs in, as a path it cannot place: one inside a quoted word, a method named with no '(' after it (called
     later, through .Invoke or a variable), a call with fewer arguments than the ones it writes
     (_net_written), one whose arguments the parse may have lost its place in (_net_lost), a type
     named any other way (a cast, [type] as a value) and a New-Object call _net_new_object does
@@ -1834,8 +1818,22 @@ def net_writes(cmd):
 def net_placed(w):
     """True when the .NET argument Word `w` is a literal absolute path on a drive (NET_ABS_RE;
     net_writes reads \\\\?\\<drive>:\\x as <drive>:\\x). A share (\\\\host\\<drive>$\\x) is not: the guard cannot tell
-    which folder it is, so dotnet_unplaced judges it as a path it cannot place."""
+    which folder it is, so write_targets judges it as a path it cannot place."""
     return not w.dyn and bool(NET_ABS_RE.match(w.text))
+
+
+def net_relative(w):
+    """True when the .NET argument Word `w` is a literal relative path (no drive, no leading slash,
+    no ~): write_targets judges it where the PowerShell location puts it, as a bash one is, though
+    .NET reads it against the process's directory (NET_UNPLACED), which the guard does not judge
+    (docs/guard-v2.md B17)."""
+    return not w.dyn and bool(w.text) and w.text[0] not in '\\/~' and ':' not in w.text
+
+
+# why a .NET write the guard cannot place is counted as a write to the directory the line runs in
+NET_UNPLACED = ('a .NET call whose path the guard does not read or cannot place: a driveless path, a share or '
+                'device path, or one the line computes. .NET reads a relative or driveless path against the '
+                'process\'s working directory ([Environment]::CurrentDirectory), not the PowerShell location')
 
 
 def net_retarget(cmd, x, path):
@@ -2422,10 +2420,10 @@ def write_targets(cmd, inv):
         out.append(t)
     if net_mentioned(cmd):
         net, unread = net_writes(cmd)
-        out.extend(x.word for x in net if net_placed(x.word))
-        # The rest are dotnet_unplaced's, and the directory the command runs in is judged too,
-        # as it was for every .NET call: the repository's roles there answer for any session.
-        if unread or any(not net_placed(x.word) for x in net):
+        # a literal path is judged where it points, a relative one where the location puts it; for
+        # any other the directory the command runs in stands in, as a path it cannot place (NET_UNPLACED)
+        out.extend(x.word for x in net if net_placed(x.word) or net_relative(x.word))
+        if unread or any(not (net_placed(x.word) or net_relative(x.word)) for x in net):
             out.append(here(cmd.words[0] if cmd.words else None))
     if inv is None:
         return out
@@ -2803,14 +2801,17 @@ def unread_write(cmd, inv, w):
         return True
     if inv is not None and (inv.name in EVALS or inv.name == 'perl' or inv.via == 'xargs'):
         return True
-    return net_mentioned(cmd) and bool(cmd.words) and (w.start, w.end) == (cmd.words[0].start, cmd.words[0].end)
+    return net_stand_in(cmd, w)
+
+
+def net_stand_in(cmd, w):
+    """True when the write `w` is the stand-in write_targets gives a .NET write it cannot place
+    (NET_UNPLACED): the directory the command runs in, at its first word."""
+    return net_mentioned(cmd) and bool(cmd.words) and w.text == '.' and         (w.start, w.end) == (cmd.words[0].start, cmd.words[0].end) and cmd.source[w.start:w.end] != '.'
 
 
 def shell_writes(event, ctx, cmd, inv, cwd, role):
     d = git_jail(event, ctx, cmd, inv, cwd, role)
-    if d:
-        return d
-    d = dotnet_unplaced(event, ctx, cmd, cwd, role) or dotnet_process_dir(event, ctx, cmd, cwd, role)
     if d:
         return d
     net = {}
@@ -2843,7 +2844,7 @@ def _write_from(event, ctx, cmd, inv, cwd, role, w, base, net, into, searched):
     (OUTER, or the folder a Start-Process -WorkingDirectory names)."""
     runs_in = cmd.cwd if base is OUTER else base
     target, why = write_place(ctx, cmd, w, base)
-    unread = py_unread(cmd, inv, w)
+    unread = py_unread(cmd, inv, w) or (NET_UNPLACED if net_stand_in(cmd, w) else None)
     # a kit tool acts on the checkout its -C names: that folder, not the one it runs in
     checked = kit_tool_dir(event, ctx, cmd, inv, cwd) if base is OUTER and unread == PY_PS_WHY else None
     if checked is not None:
@@ -2960,98 +2961,6 @@ def find_exec_writes(event, ctx, cmd, cwd, role):
                 d = unplaced(d, role)
             if d:
                 return d
-    return None
-
-
-NET_RELATIVE = ('.NET reads a relative path against the process\'s working directory '
-                '([Environment]::CurrentDirectory), not the PowerShell location: Set-Location and cd do not move it, '
-                'so the file may land in the checkout the session started in.')
-
-
-def dotnet_unplaced(event, ctx, cmd, cwd, role):
-    """A .NET file call (net_writes) that writes a path the guard cannot place: a relative path,
-    a rooted one with no drive, or a path the line computes. .NET resolves it against the
-    process's directory (NET_RELATIVE), which the guard cannot tell, from a worktree too. Refused
-    for a role that may not edit a main checkout (main-checkout) and for an agent session
-    (write-jail); the owner's own session is not judged. A relative path is first judged where the
-    PowerShell location puts it (edit_target), and the alternative is the call on that absolute
-    path."""
-    if not net_mentioned(cmd):
-        return None
-    for x in net_writes(cmd)[0]:
-        w = x.word
-        if net_placed(w):
-            continue
-        plain = not w.dyn and w.text and w.text[0] not in '\\/~' and ':' not in w.text
-        fixed = paths.norm(os.path.join(cmd.cwd, w.text), fold=False) if plain and cmd.cwd else None
-        start = cmd.words[0].start if cmd.words else cmd.start
-        what = '`%s` writes %s' % (cmd.source[start:x.end],
-                                   'a path the line computes (%s)' % w.text if w.dyn else w.text)
-        rewrite = lambda path, x=x: net_retarget(cmd, x, path)
-        if fixed:
-            d = edit_target(event, ctx, fixed, cwd, role, what, rewrite=rewrite)
-            if d:
-                return d
-        cfg = ctx.config(fixed or cmd.cwd) if fixed or cmd.cwd else None
-        if kconfig.permissions(event, kconfig.roles(cfg)).get('edit_main_checkout') and \
-                not agent_session(event, ctx):
-            continue
-        why = '%s through .NET. %s' % (what, NET_RELATIVE)
-        if w.dyn:
-            why += ' The guard does not read a path the line computes.'
-        elif re.match(r'^[\\/]{2}', w.text):
-            why += ' The guard cannot tell which folder a share path names.'
-        if fixed:
-            d = refuse(UNPLACED, role, why + ' The same write on the absolute path:', rewrite(fixed))
-        else:
-            base = own_worktree(ctx, cwd) or cmd.cwd
-            d = refuse(UNPLACED, role, why + ' Give it a literal absolute path:', rewrite(fwd(base) + '/<file>')) \
-                if base else \
-                refuse(UNPLACED, role, why + ' Give it a literal absolute path; to see where this session runs:', 'pwd')
-        if d:
-            return d
-    return None
-
-
-def dotnet_process_dir(event, ctx, cmd, cwd, role):
-    """A .NET write the guard does not read the path of, or one it cannot place (net_writes,
-    net_placed), judged in each directory its process may have started in (edit_target): the
-    directory the call runs in (`cwd`) and the PowerShell location of each command it is nested
-    in, before and after a cd in that command's $( ) (shell.track). .NET reads a relative path there (NET_RELATIVE), so a Set-Location into a worktree does not
-    take the write with it; write_targets judges the PowerShell location itself. A session that
-    runs outside a worktree of its own (in the main checkout, or outside any repository) is told to
-    give the call literal absolute paths, not to make a worktree (that does not move where its
-    process starts)."""
-    if not net_mentioned(cmd):
-        return None
-    net, unread = net_writes(cmd)
-    if not unread and all(net_placed(x.word) for x in net):
-        return None
-    dirs, outer = [cwd], cmd.nested_in
-    while outer is not None:
-        dirs.extend((outer.cwd, outer.subs_cwd))    # subs_cwd: where it stood before a cd in its $( ) moved it
-        outer = outer.nested_in
-    seen = set([paths.norm(cmd.cwd)] if cmd.cwd else [])
-    for d in dirs:
-        if not d or paths.norm(d) in seen:
-            continue
-        seen.add(paths.norm(d))
-        what = ('`%s` may write through .NET in %s, the directory its process started in (.NET reads a relative '
-                'path there, and Set-Location does not move it; give the call literal absolute paths)'
-                % (bare(cmd), fwd(d)))
-        target = paths.norm(d, fold=False)
-        res = edit_target(event, ctx, target, cwd, role, what, run=bare(cmd), shell=outer_shell(cmd))
-        place = ctx.place(target) if res and res.rule == 'main-checkout' and own_worktree(ctx, cwd) is None \
-            else None
-        if place is not None and place.kind == repo.MAIN and not ctx.is_pm_data(place.top):
-            # the session runs outside a worktree: a worktree it makes does not move where its process starts
-            res = refuse(UNPLACED, role, '%s is in the main checkout %s; this role may not edit a main '
-                         'checkout. A new worktree does not move the directory this PowerShell process '
-                         'started in, so call each .NET method directly with literal absolute paths inside '
-                         'a worktree. To see where this session runs:' % (what, place.top), 'pwd')
-        res = unplaced(res, role)               # a .NET path it does not read, or cannot place
-        if res:
-            return res
     return None
 
 

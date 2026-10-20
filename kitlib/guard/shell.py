@@ -114,7 +114,7 @@ class Redirect(object):
 class Command(object):
     __slots__ = ('words', 'redirects', 'start', 'end', 'source', 'shell', 'depth', 'cwd',
                  'piped_out', 'piped_in', 'subs', 'groups', 'nested_in', 'prev_op', 'next_op',
-                 'pipe_from', 'git_env', 'home_env', 'path_env', 'cwd_home', 'home', 'subs_cwd',
+                 'pipe_from', 'git_env', 'home_env', 'path_env', 'cwd_home', 'home',
                  'split')
 
     def __init__(self, source, shell, depth, home=None):
@@ -124,7 +124,6 @@ class Command(object):
         self.home = home            # the folder `~` names, its Parsed's home (home_folder: None is the user's)
         self.cwd = None
         self.cwd_home = None        # cwd, with a cd to a home variable ($HOME/x) followed too (track)
-        self.subs_cwd = None        # the directory its substitutions start in; cwd unless a cd in one moved it (track)
         self.piped_out = self.piped_in = False
         self.groups = ()            # the ( ) or { } groups it is inside, outermost first: (id, '(' or '{')
         self.prev_op = self.next_op = None      # the operators around it: ; && || & newline ( ) { } |
@@ -1175,7 +1174,6 @@ def track(cmds, cwd, home=None, cwd_home=None):
         for g in c.groups[common:]:
             open_.append((g, here, here_h))
         sub_from[id(c)] = (here, here_h)
-        c.subs_cwd = here
         # PowerShell runs a $( ) or an argument's ( ) in the caller's scope: a cd there moves this
         # command and every one after it (bash's $( ) is a subshell)
         if c.shell == PS and any(cd_target(x, None, home)[0] for x in flatten(c.subs)):
