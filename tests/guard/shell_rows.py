@@ -190,8 +190,11 @@ ROWS = [
         "Start-Process bash -WorkingDirectory %s -ArgumentList '-c', '\"echo x > f.txt\"'" % w.wt, w.wt, sub=True),
      None, None, None),
     ('Start-Process powershell in a computed working directory', lambda w: ps(
+        "Start-Process powershell -WorkingDirectory $d -ArgumentList '-Command', 'echo x > f.txt'", w.wt,
+        sub=True), 'deny', 'unplaced', None),
+    ('Start-Process powershell reading in a computed working directory stays allowed', lambda w: ps(
         "Start-Process powershell -WorkingDirectory $d -ArgumentList '-Command', 'echo hi'", w.wt, sub=True),
-     'deny', 'unreadable', None),
+     None, None, None),
     ('start cmd /c redirect into main', lambda w: ps(
         "start cmd -ArgumentList '/c echo x > %s'" % win(w.main, 'f.txt'), w.wt, sub=True),
      'deny', 'main-checkout', None),
