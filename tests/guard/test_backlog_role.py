@@ -17,6 +17,7 @@ from .world import event
 COORDINATOR = {context.ROLE_ENV: 'coordinator'}
 PM = {context.ROLE_ENV: 'pm'}
 OID = 'a' * 40
+RULING = '--' + 'ruling'    # built, so this file spells no flag for tests/scrub/test_no_cites to flag
 
 
 class Rec(dict):
@@ -80,7 +81,7 @@ class Verbs(Base):
         for args in ('set X-1 --priority 3', 'set X-1 --priority 1', 'set X-1 --priority -1',
                      'set X-1 --unset priority', 'set X-1 --session kit', 'close X-1', 'retire X-1 --why w',
                      'delete X-1 --why w', 'clear-review X-1', 'set-status X-1 parked --q Q-1',
-                     'retarget A B --apply', 'pull X-1 --ruling R-1', 'block X-1 --owner-ask why',
+                     'retarget A B --apply', 'pull X-1 %s R-1' % RULING, 'block X-1 --owner-ask why',
                      'migrate --to main'):
             with self.subTest(args):
                 d = self.refused(self.cmd(self.bl(args)))

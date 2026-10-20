@@ -333,7 +333,7 @@ The guard reads the command line, not the shell's state:
 - **Backlog roles and code:** `backlog-raw-write` reads code given on the line (`-c`, standard input, `-m`); a script file that imports `kitlib.backlog` is not read. A main session's python importing it is not judged either: only the tool's own check holds a main session.
 - **Backlog roles by name:** any script named `backlog.py` a subagent runs is judged as the kit's tool, wherever it lives.
 - **Backlog roles on Codex:** Codex sends no subagent identity, so its subagents carry their session's mark and meet only the tool's own check ("Backlog roles").
-- **Backlog roles and a reason:** the map's `NEEDS_WHY` (a HIGH write must say why) is not built; the tool's `--ruling` is the reason it records.
+- **Backlog roles and a reason:** the map's `NEEDS_WHY` (a HIGH write must say why) is not built; the owner's ruling a write carries is the only reason the tool records.
 
 ## Lock MCP
 
