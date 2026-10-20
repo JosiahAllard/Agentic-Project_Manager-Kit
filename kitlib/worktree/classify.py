@@ -18,7 +18,9 @@ The classes, decided first-match in this order:
 - O orphan: registered, not locked, exempt or the landing tree, and its folder is missing (with a
   run-wide read failed it is L, as every tree is). Its note says whether its admin folder keeps a
   commit no ref reaches (remove.orphan_unsaved: its HEAD reflog, per-worktree refs and
-  pseudo-refs); one that does, or cannot be read, is left for the owner.
+  pseudo-refs); one that does, or cannot be read, is left for the owner. So is one outside every
+  worktree folder and scratch root (remove.orphan_outside: an unmounted or remapped drive looks
+  the same): reported only.
 - A landed: the tip is in the base AND off its first-parent chain (remove.merged_worktrees's
   rule), the tree is clean, and a branch's reflog shows a commit made on it (own_commit; a
   reflog that cannot be read, C). Also A, empty: clean, tip in the base, nothing of its own, and
@@ -86,7 +88,8 @@ HEADINGS = {
           'removable: --scratch or --abandon "evidence"'),
     'L': ('live/kept', 'locked, exempt, held, active or unreadable', 'reported only'),
     'O': ('orphan', 'registered, its folder gone, not locked or exempt',
-          '--apply drops the registration (the branch stays) unless it keeps an unsaved commit'),
+          '--apply drops the registration (the branch stays) unless it keeps an unsaved commit'
+          ' or is outside the worktree folders and scratch roots'),
 }
 
 
@@ -466,7 +469,7 @@ def classify(top, now=None, machine=sweep.machine_lock_entries, procs=process_cw
         return Result(refused.code, refused.lines, {'error': ' '.join(refused.lines)})
     now = time.time() if now is None else now
     if not apply:
-        return _classify(ctx, now, machine, procs, dead_after_s)
+        return _classify(ctx, now, machine, procs, dead_after_s, environ=environ)
     if canon(top) != canon(ctx.main):
         why = '--classify --apply runs on the main checkout only (%s), not %s' % (ctx.main, top)
     else:
@@ -476,7 +479,7 @@ def classify(top, now=None, machine=sweep.machine_lock_entries, procs=process_cw
         return Result(REFUSED, list(ctx.out), {'error': why})
     return _classify(ctx, now, machine, procs, dead_after_s,
                      act=lambda entry, row, base: apply_tree(ctx, entry, row, base, environ,
-                                                             today))
+                                                             today), environ=environ)
 
 
 def trees_besides_main(main, listing):
@@ -539,7 +542,7 @@ def _fail(ctx, why):
     return Result(REFUSED, list(ctx.out), {'error': why})
 
 
-def _classify(ctx, now, machine, procs, dead_after_s, act=None):
+def _classify(ctx, now, machine, procs, dead_after_s, act=None, environ=None):
     s, main = ctx.s, ctx.main
     try:
         listing = remove.worktree_listing(main)
@@ -583,6 +586,9 @@ def _classify(ctx, now, machine, procs, dead_after_s, act=None):
                            ' left for the owner' % lost if lost else
                            'whether its registration keeps an unsaved commit is unknown (%s):'
                            ' left for the owner' % why)
+            row['outside'] = remove.orphan_outside(ctx, path, environ)
+            if row['outside']:
+                row['note'] = '%s; %s' % (row['outside'], row['note'])
         elif reason:
             row.update({'class': 'L', 'reason': reason})
         else:
@@ -709,8 +715,9 @@ def apply_tree(ctx, entry, row, base, environ=None, today=None):
     """Send one A, E or O tree through an existing remove path, each making its own checks again
     (a tree held or changed since it was classified is refused there): A plain; E `--scratch` when
     scratch_route says so, plain when its tip is in the base, else `--abandon "evidence"` (tag
-    archive/<slug>); O remove.prune_orphan, unless classify found its registration keeps a commit
-    no ref reaches or could not tell (skipped: left for the owner). An A tree, or an E tree not
+    archive/<slug>); O remove.prune_orphan, unless it is outside the worktree folders and scratch
+    roots (remove.orphan_outside) or classify found its registration keeps a commit no ref
+    reaches or could not tell (skipped: left for the owner). An A tree, or an E tree not
     for --scratch, whose HEAD reflog holds a commit no ref and not its tip reaches is skipped
     instead (reflog_skip): the remove deletes that reflog, and the tag holds only the tip. Returns
     {'result': removed|failed|skipped, 'why', 'lines': the path's own}. A tree removed whose
@@ -719,6 +726,8 @@ def apply_tree(ctx, entry, row, base, environ=None, today=None):
     sub = copy.copy(ctx)
     sub.out = []
     if row['class'] == 'O':
+        if row.get('outside'):
+            return {'result': 'skipped', 'why': 'O: %s' % row['outside'], 'lines': []}
         if row.get('unsaved') != 0:
             return {'result': 'skipped', 'why': 'O: %s' % row['note'], 'lines': []}
         how, verb = 'O, its stale registration dropped', 'orphan'
@@ -745,7 +754,7 @@ def apply_tree(ctx, entry, row, base, environ=None, today=None):
             if held:
                 return held
     if verb == 'orphan':
-        code = remove.prune_orphan(sub, path)
+        code = remove.prune_orphan(sub, path, environ)
     elif verb == 'plain':
         code = remove._remove(sub, path, False)
     elif verb == 'scratch':

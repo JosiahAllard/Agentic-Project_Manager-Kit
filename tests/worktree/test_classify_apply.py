@@ -440,6 +440,30 @@ class Orphans(ApplyCase):
                   encoding='utf-8') as f:
             self.assertIn(left, f.read())
 
+    def test_one_outside_the_worktree_folders_and_scratch_roots_is_reported_only(self):
+        # Its folder may be on a drive that is not mounted now, or was remapped: only a
+        # registration in a worktree folder or under a scratch root is the kit's to drop.
+        path = os.path.join(os.path.realpath(self.fx.base), 'elsewhere', 'gone')
+        self.git('worktree', 'add', '-q', '-b', 'kit/elsewhere', path, 'main')
+        shutil.rmtree(path)
+        rc, out, data = self.run_apply()
+        self.assertEqual(rc, 1, out)
+        row = self.row(data, path)
+        self.assertEqual(row['class'], 'O', out)
+        self.assertEqual(row['apply']['result'], 'skipped', out)
+        self.assertIn('outside every worktree folder and scratch root', row['apply']['why'])
+        self.assertIn('reported only', row['apply']['why'])
+        self.assertIn(os.path.normcase(path), self.registered())
+        self.assertTrue(os.path.isdir(os.path.join(self.fx.common_dir(), 'worktrees', 'gone')))
+
+    def test_one_under_a_scratch_root_is_dropped(self):
+        path = self.outside('gone', self.git('rev-parse', 'HEAD'))
+        shutil.rmtree(path)
+        rc, out, data = self.run_apply()
+        self.assertEqual(rc, 0, out)
+        self.assertIn('removed   %s: O, its stale registration dropped' % path, out)
+        self.assertNotIn(os.path.normcase(path), self.registered())
+
 
 class Arguments(unittest.TestCase):
 

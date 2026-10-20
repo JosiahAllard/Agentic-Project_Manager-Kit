@@ -680,11 +680,27 @@ def orphan_unsaved(ctx, path):
     return unsaved_count(ctx, oids) if oids else (0, None)
 
 
-def prune_orphan(ctx, path):
+def orphan_outside(ctx, path, environ=None):
+    """Why the stale registration at `path` is reported only, or None when it is the kit's to
+    drop: in a worktree folder (is_workstream) or under a scratch root (kitlib.worktree.scratch
+    roots, from `environ`). A folder anywhere else may be on a drive that is not mounted now or
+    was remapped: gone from this view only."""
+    if is_workstream(ctx, path):
+        return None
+    from . import scratch           # scratch imports this module
+    rts, _ = scratch.roots(environ, ctx.main)
+    if any(scratch._strictly_under(path, r) for r in rts):
+        return None
+    return ('it is outside every worktree folder and scratch root (a drive not mounted now, or'
+            ' remapped, looks the same): reported only')
+
+
+def prune_orphan(ctx, path, environ=None):
     """Drop the registration of the worktree at `path` whose folder is already gone (`--classify`
     class O), keeping its branch: `git worktree remove <the registered path>`, never forced, never
     `git worktree prune` (which drops every such registration). Refused, nothing changed: a path
-    that exists, an exempt folder, a locked tree, the main checkout, and a registration whose
+    that exists, a path outside the worktree folders and scratch roots (orphan_outside; `environ`
+    names the roots), an exempt folder, a locked tree, the main checkout, and a registration whose
     admin folder keeps a commit no ref reaches (its HEAD reflog, a per-worktree ref or a
     pseudo-ref: the owner's call) or cannot be read. The folder and the admin folder are read once
     more just before git; a folder made inside that window is the window this narrows, not
@@ -693,6 +709,10 @@ def prune_orphan(ctx, path):
     nothing = 'nothing was removed'
     if os.path.lexists(path):
         ctx.say('refused   %s exists: its registration is not stale; %s' % (path, nothing))
+        return REFUSED
+    outside = orphan_outside(ctx, path, environ)
+    if outside:
+        ctx.say('refused   %s: %s; %s' % (path, outside, nothing))
         return REFUSED
     ruling = exemption(ctx.s, path)
     if ruling:

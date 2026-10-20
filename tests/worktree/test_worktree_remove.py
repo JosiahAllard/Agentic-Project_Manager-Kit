@@ -642,6 +642,18 @@ class PruneOrphan(RemoveCase):
         self.assertTrue(os.path.isdir(path))
         self.assertIn(os.path.normcase(path), self.registered())
 
+    def test_one_outside_the_worktree_folders_and_scratch_roots_is_refused(self):
+        path = os.path.join(os.path.realpath(self.fx.base), 'elsewhere', 'gone')
+        self.git('worktree', 'add', '-q', '-b', 'kit/elsewhere', path, 'main')
+        shutil.rmtree(path)
+        ctx, refused = remove.open_ctx(self.repo)
+        self.assertIsNone(refused)
+        rc = remove.prune_orphan(ctx, path, environ={})
+        out = '\n'.join(ctx.out)
+        self.assertEqual(rc, 1, out)
+        self.assertIn('outside every worktree folder and scratch root', out)
+        self.assertIn(os.path.normcase(path), self.registered())
+
     def test_a_locked_one_is_refused(self):
         path = self.workstream('gone')
         self.git('worktree', 'lock', '--reason', 'on a drive', path)
