@@ -27,6 +27,7 @@ import tempfile
 import time
 
 from kitlib import pmdata
+from kitlib.config import user as kuser
 from kitlib.git import batch, cmd, refs
 from kitlib.git import repo as gitrepo
 
@@ -350,7 +351,7 @@ class RefBackend(object):
     def build(self, snap, writes, message):
         """The commit holding `writes` ({stem: text or None}) on top of snap.tip, or None when the
         tree would not change. No working tree or real index is touched."""
-        tmp = tempfile.mkdtemp(prefix='kit-backlog-')
+        tmp = kuser.mkdtemp('kit-backlog-')
         try:
             env = dict(cmd.scrubbed_env(), GIT_INDEX_FILE=os.path.join(tmp, 'index'))
             self._git(['read-tree', snap.tip] if snap.tip else ['read-tree', '--empty'], env=env)
@@ -1081,7 +1082,7 @@ class MainBackend(object):
     def _tree(self, head, lines, paths):
         """The tree of `head` with `lines` (`update-index --index-info` input) applied, built in a
         temporary index."""
-        tmp = tempfile.mkdtemp(prefix='kit-backlog-')
+        tmp = kuser.mkdtemp('kit-backlog-')
         try:
             env = dict(_store_env(), GIT_INDEX_FILE=os.path.join(tmp, 'index'))
             self._git(['read-tree', head], paths, env=env)
