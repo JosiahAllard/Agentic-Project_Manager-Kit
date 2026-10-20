@@ -896,11 +896,12 @@ class PluginEdit(unittest.TestCase):
             'SubagentStart': [{'hooks': [exec_hook(self.entry, 'claude', 'SubagentStart')]}],
         }}
         before = json.dumps(data, sort_keys=True)
-        new, added, dropped = self.edit(data)
+        new, added, dropped, kept = self.edit(data)
         self.assertEqual(json.dumps(data, sort_keys=True), before)  # the input is not changed
         self.assertEqual(added, LOCK_RULES)
         self.assertEqual(dropped, ['hook.py claude SessionStart', 'hook.py claude SessionStart coordinator',
                                    'hook.py claude SessionStart'])
+        self.assertEqual(kept, [])
         ss = new['hooks']['SessionStart']
         self.assertEqual(ss, [
             {'matcher': 'startup', 'hooks': [{'type': 'command', 'command': 'echo hi'}]},
@@ -951,20 +952,20 @@ class PluginEdit(unittest.TestCase):
 
     def test_an_event_this_step_empties_goes_and_hooks_stays(self):
         data = {'hooks': {'SessionStart': [{'hooks': [exec_hook(self.entry, 'claude', 'SessionStart')]}]}}
-        new, _added, dropped = self.edit(data)
+        new, _added, dropped, _kept = self.edit(data)
         self.assertEqual(new['hooks'], {})
         self.assertEqual(dropped, ['hook.py claude SessionStart'])
 
     def test_allow_rules_are_appended_once_in_order(self):
         data = {'permissions': {'allow': ['Bash(git status)', LOCK_RULES[1]], 'deny': ['x']}}
-        new, added, dropped = self.edit(data)
+        new, added, dropped, kept = self.edit(data)
         self.assertEqual(added, [LOCK_RULES[0], LOCK_RULES[2]])
         self.assertEqual(dropped, [])
         self.assertEqual(new['permissions'], {'allow': ['Bash(git status)', LOCK_RULES[1], LOCK_RULES[0],
                                                         LOCK_RULES[2]], 'deny': ['x']})
-        again, added, dropped = self.edit(new)
-        self.assertEqual((again, added, dropped), (new, [], []))
-        new, added, _ = self.edit({})
+        again, added, dropped, kept = self.edit(new)
+        self.assertEqual((again, added, dropped, kept), (new, [], [], []))
+        new, added, _, _ = self.edit({})
         self.assertEqual(new, {'permissions': {'allow': LOCK_RULES}})
 
     def test_a_wrong_shape_is_a_value_error(self):
@@ -975,7 +976,7 @@ class PluginEdit(unittest.TestCase):
     def test_no_plugin_hooks_file_drops_nothing(self):
         os.remove(os.path.join(self.kit, '.claude-plugin', 'plugin.json'))
         data = {'hooks': {'SessionStart': [{'hooks': [exec_hook(self.entry, 'claude', 'SessionStart')]}]}}
-        new, _added, dropped = self.edit(data)
+        new, _added, dropped, _kept = self.edit(data)
         self.assertEqual(dropped, [])
         self.assertEqual(new['hooks'], data['hooks'])
 

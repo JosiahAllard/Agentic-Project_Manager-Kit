@@ -136,7 +136,8 @@ def _plan_settings(plan, ctx, folders, pid):
     """Per folder of `folders` ((config folder, settings.json), each enabled before this run or by its
     install change), one change after the installs: settings.plugin_edit's allow rules and kit
     SessionStart drop (edit_settings, re-read when it runs). Nothing to change is no change; a
-    symbolic or hard link is a note; a wrong-shaped permissions is a refusal."""
+    symbolic or hard link is a note; a wrong-shaped permissions is a refusal; a kit SessionStart
+    entry kept for its matcher (settings.plugin_edit) is a note."""
     for d, path in folders:
         data = {}
         raw = None
@@ -152,10 +153,12 @@ def _plan_settings(plan, ctx, folders, pid):
         else:
             layout = dict(settings.NEW_LAYOUT)
         try:
-            new, added, dropped = settings.plugin_edit(data, ctx.kit, ctx.home)
+            new, added, dropped, kept = settings.plugin_edit(data, ctx.kit, ctx.home)
         except ValueError as e:
             plan.refuse('%s: %s' % (path, e))
             continue
+        for name, matcher, missing in kept:
+            plan.note('plugin', _kept_note(path, name, matcher, missing))
         if not added and not dropped:
             continue
         what = []
@@ -180,6 +183,18 @@ def _plan_settings(plan, ctx, folders, pid):
                  undo='copy "%s" over "%s"' % (bak, path), detail=diff)
 
 
+def _kept_note(path, name, matcher, missing):
+    """The note for a kit SessionStart entry settings.plugin_edit keeps for its group's matcher."""
+    shown = '(none: every source)' if matcher is None else '"%s"' % matcher
+    if missing is None:
+        why = 'is not a plain list of sources (a|b), so the kit plugin\'s is not known to cover it'
+    else:
+        why = 'also covers %s, which the kit plugin\'s does not' % ', '.join(missing)
+    return ('%s: the kit %s entry %s stays: its matcher %s %s; on a source both cover it runs twice (the '
+            'plugin\'s and this one), so narrow its matcher by hand to stop that'
+            % (path, settings.REPLACED_EVENT, name, shown, why))
+
+
 def edit_settings(kit, home, path, bak, pid):
     """The settings change _plan_settings planned, on settings.json at `path` as it is now (the CLI
     may have rewritten it): refused (RuntimeError, nothing written) unless it is a plain file holding
@@ -191,7 +206,7 @@ def edit_settings(kit, home, path, bak, pid):
     with open(path, 'rb') as f:
         raw = f.read()
     layout, data = settings.read(raw)
-    new, added, dropped = settings.plugin_edit(data, kit, home)
+    new, added, dropped, _kept = settings.plugin_edit(data, kit, home)
     if not added and not dropped:
         return
     settings._write(path, raw, settings.write(layout, new), bak)
