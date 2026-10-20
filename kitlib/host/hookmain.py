@@ -28,7 +28,10 @@ lives here once:
         booted), the header-update line of a session whose header named an older plugin export
         (kitlib.host.headerfollow.line, once per refresh) goes with the verdict whatever it is, through
         the adapter's optional tool_context(event_name, text, rendered) (none: no line), so a
-        reason keeps its format; the record is rewritten only after the answer is written.
+        reason keeps its format; the record is rewritten only after the answer is written. A deny,
+        whatever made it, is then logged: one line in <pm_data>/audit/refusals.jsonl
+        (kitlib.guard.refusal_log; docs/guard-v2.md "Refusal log"), which never changes the answer
+        or the exit code.
   failure(e, role, entry, args)       that guard-error Decision
   command_line(script, executable)
         {"command", "args"} that starts `script` with no console window: the one place a hook
@@ -243,7 +246,26 @@ def run(adapter, event_name, stdin, stdout, environ=None, entry=None, deadline=N
             settle()
         except Exception:
             pass
+    if decision.verdict == 'deny':
+        _log(adapter, payload, action, decision, environ)
     return code
+
+
+def _log(adapter, payload, action, decision, environ):
+    """The refusal log's line for the deny run() answered (kitlib.guard.refusal_log), once the
+    answer is written: the call's first Action as the guard judged it (unidentified()), or None
+    when parse refused the payload. Never raises: the line is a record, not part of the answer."""
+    try:
+        from kitlib.guard import refusal_log
+        first = action[0] if isinstance(action, tuple) and action else action
+        if first is not None and not isinstance(first, tuple):
+            first = unidentified(adapter, first, environ)
+        else:
+            first = None
+        refusal_log.record(decision, first, getattr(adapter, 'name', None), _role(adapter, payload, action),
+                           environ)
+    except Exception:
+        pass
 
 
 def dispatch(adapter, event_name, kit, text, stdout, entry=None, args=(), part=None, environ=None, started=None):
