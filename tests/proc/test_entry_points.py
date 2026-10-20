@@ -63,8 +63,6 @@ ENTRY_EXEMPT = {
     'hosts/codex/shell/boot/hook.py': BOOT_HOOK + ' (the Codex plugin\'s byte copy of boot/hook.py)',
     'hosts/codex/shell/boot/kitboot.py': BOOT_KITBOOT + ' (the Codex plugin\'s byte copy)',
     'kitlib/tooldeps/pool_worker.py': POOL_WORKER,
-    'optional/comfy/comfy_gen.py': COMFY + '. It starts ComfyUI and its idle watcher detached '
-                                           '(tests/proc/test_spawn_sites.py HAZARD_EXEMPT)',
     'optional/comfy/compare_sheet.py': STARTS_NOTHING + COMFY,
     'optional/comfy/render_glb.py': COMFY + ', and it runs inside Blender\'s own Python, where '
                                             'no kit is on sys.path. Its one start, subprocess.call '
