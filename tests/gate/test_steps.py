@@ -1,5 +1,8 @@
 """kitlib.gate.steps: selection by what changed, and judging a step by its log."""
+import builtins
+import time
 import unittest
+from unittest import mock
 
 from kitlib.gate import steps as S
 
@@ -254,6 +257,16 @@ class Judge(unittest.TestCase):
         g = {'zero_tests': r'No test is available'}
         self.assertEqual(S.judge(self.step(), 'No test is available\n', 0, g)[0], 'FAIL')
 
+    def test_zero_tests_fails_a_step_whose_bare_pass_pattern_matched(self):
+        # a bare pass string also matches the zero-count line, so the gate's zero_tests rule is
+        # what keeps that run from passing
+        st = self.step(**{'pass': 'UNIT TESTS OK'})
+        g = {'zero_tests': [r'\bUNIT TESTS OK 0\b']}
+        status, why = S.judge(st, 'UNIT TESTS OK 0\n', 0, g)
+        self.assertEqual(status, 'FAIL')
+        self.assertEqual(why, ["reported zero tests run ('UNIT TESTS OK 0')"])
+        self.assertEqual(S.judge(st, 'UNIT TESTS OK 12\n', 0, g), ('PASS', []))
+
     def test_errors_policy_windows_and_excuses(self):
         g = {'errors': {'match': 'ERROR', 'excuse': 'ERROR expected', 'expect': ['BEGIN', 'END']}}
         st = self.step()
@@ -273,6 +286,100 @@ class Judge(unittest.TestCase):
     def test_check_step_may_have_an_empty_log(self):
         st = S.build(gate_of({'name': 'c', 'check': 'x'}), ROOT, 'b', 't')[0]
         self.assertEqual(S.judge(st, '', 0, {})[0], 'PASS')
+
+
+class ZeroCountPasses(unittest.TestCase):
+    """zero_count_passes: the pass patterns that would also match a zero-test run."""
+
+    def warned(self, passes, **top):
+        return S.zero_count_passes(gate_of(cmd('t', **{'pass': passes}), **top))
+
+    def test_a_bare_pass_string_warns_under_a_zero_tests_pattern_that_extends_it(self):
+        (line,) = self.warned('UNIT TESTS OK', zero_tests=[r'\bUNIT TESTS OK 0\b'])
+        self.assertIn("step t \"pass\" 'UNIT TESTS OK' accepts a zero-test run", line)
+        self.assertIn("'UNIT TESTS OK 0'", line)
+
+    def test_a_floored_count_does_not_warn(self):
+        self.assertEqual(self.warned(r'\bUNIT TESTS OK [1-9]\d*\b',
+                                     zero_tests=r'\bUNIT TESTS OK 0\b'), [])
+        self.assertEqual(self.warned([r'(?m)^Ran [1-9][0-9]* tests? in', r'(?m)^OK\b']), [])
+
+    def test_a_count_that_may_be_zero_warns_without_zero_tests(self):
+        self.assertEqual(len(self.warned(r'(?m)^Ran \d+ tests? in')), 1)    # the Ran 0 tests line
+        (line,) = self.warned(r'Passed: \d+')                                 # its own count
+        self.assertIn("'Passed: 0'", line)
+
+    def test_a_literal_zero_or_a_class_that_takes_letters_is_no_count(self):
+        self.assertEqual(self.warned(r'\b0 failed\b'), [])
+        self.assertEqual(self.warned(r'(?m)^engine_run: dir=\S'), [])     # a game repo's step
+        self.assertEqual(self.warned(r'done: .+'), [])
+
+    def test_a_bare_pass_string_with_no_zero_line_it_matches_does_not_warn(self):
+        self.assertEqual(self.warned('kit_tests: OK'), [])
+        self.assertEqual(self.warned('^OK$', zero_tests=r'^OK 0$'), [])
+
+    def test_the_ran_zero_tests_line_alone_warns(self):
+        # no zero_tests, and no count of its own: only the built-in Ran 0 tests line matches
+        (line,) = self.warned(r'(?m)^Ran .+ in ')
+        self.assertIn("'Ran 0 tests in 0.000s'", line)
+
+    def test_a_malformed_regex_gives_no_line_and_never_raises(self):
+        self.assertEqual(self.warned('('), [])                            # as a pass pattern
+        self.assertEqual(self.warned('UNIT TESTS OK', zero_tests='('), [])  # as a zero_tests one
+
+    def test_a_pattern_it_cannot_read_gives_no_line(self):
+        self.assertEqual(self.warned(r'(?P<a>x)(?(a)y|z) OK'), [])
+        self.assertEqual(S.zero_count_passes({}), [])
+
+    def test_a_count_that_may_be_empty_warns(self):
+        (line,) = self.warned(r'Passed: \d*')                 # matches 'Passed: 0' too
+        self.assertIn("'Passed: 0'", line)
+        self.assertEqual(self.warned(r'Passed: [1-9]\d*'), [])
+        self.assertEqual(self.warned(r'(?m)^Ran [1-9]\d* tests? in'), [])
+
+    def test_an_optional_group_holding_a_count_is_left_out(self):
+        # walked once it would read '0 skipped, 10 passed': the 0 is not the pass count
+        self.assertEqual(self.warned(r'(?:\d+ skipped, )?[1-9]\d* passed'), [])
+
+    def assertQuietAndFast(self, passes, **top):
+        start = time.monotonic()
+        self.assertEqual(self.warned(passes, **top), [])
+        self.assertLess(time.monotonic() - start, 5.0)
+
+    def test_a_huge_or_nested_repeat_gives_no_line_fast(self):
+        self.assertQuietAndFast(r'Passed: \d{2000000000}')
+        self.assertQuietAndFast(r'Passed: ((\d{1000}){1000}){1000}')
+        self.assertQuietAndFast(r'Passed: ((?:\b){1000}){1000000}')        # an empty body
+        self.assertQuietAndFast('UNIT TESTS OK', zero_tests=r'OK ((\d{1000}){1000}){1000}')
+
+    def test_deep_nesting_gives_no_line_and_never_raises(self):
+        deep = '(' * 3000 + r'\d+' + ')' * 3000
+        self.assertQuietAndFast(deep)
+        self.assertQuietAndFast('UNIT TESTS OK', zero_tests=deep)
+
+    def without(self, *blocked):
+        """builtins.__import__ that refuses kitlib.gate.steps the modules `blocked`: a module
+        name, or 're' to refuse `from re import _parser` (before Python 3.11 the stdlib regex
+        parser was only sre_parse, and a later Python may drop both). Only steps' own imports:
+        sre_parse itself reads re._parser on 3.11 on."""
+        real = builtins.__import__
+
+        def imp(name, globals=None, locals=None, fromlist=(), level=0):
+            if (name in blocked and (globals or {}).get('__name__') == S.__name__
+                    and (name != 're' or {'_parser', '_constants'} & set(fromlist or ()))):
+                raise ImportError('blocked: %s' % name)
+            return real(name, globals, locals, fromlist, level)
+        return mock.patch.object(builtins, '__import__', imp)
+
+    def test_the_older_parser_modules_serve_when_re_has_none(self):
+        with self.without('re'):
+            (line,) = self.warned(r'Passed: \d+')
+        self.assertIn("'Passed: 0'", line)
+
+    def test_no_regex_parser_gives_no_line_and_never_raises(self):
+        with self.without('re', 'sre_parse', 'sre_constants'):
+            self.assertEqual(self.warned('UNIT TESTS OK', zero_tests=r'\bUNIT TESTS OK 0\b'), [])
+            self.assertEqual(self.warned(r'(?m)^Ran \d+ tests? in'), [])
 
 
 if __name__ == '__main__':
