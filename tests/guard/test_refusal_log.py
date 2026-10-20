@@ -202,7 +202,8 @@ class Record(unittest.TestCase):
             started.append(a)
             time.sleep(5)
             raise OSError('hung')
-        with mock.patch('subprocess.Popen', side_effect=hung), mock.patch('subprocess.run', side_effect=hung):
+        with mock.patch('kitlib.git.cmd.call', side_effect=hung), \
+                mock.patch('subprocess.Popen', side_effect=hung), mock.patch('subprocess.run', side_effect=hung):
             began = time.monotonic()
             got = refusal_log.record(DENY, Action('shell', cwd=repo.root), 'claude', 'main', {}, now=NOW)
             took = time.monotonic() - began

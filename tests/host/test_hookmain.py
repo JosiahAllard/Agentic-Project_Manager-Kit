@@ -344,7 +344,8 @@ class RefusalLog(unittest.TestCase):
             time.sleep(5)
             raise OSError('hung')
         deny = lambda *x, **k: Decision('deny', 'r', 'why')                            # noqa: E731
-        with mock.patch('subprocess.Popen', side_effect=hung), mock.patch('subprocess.run', side_effect=hung):
+        with mock.patch('kitlib.git.cmd.call', side_effect=hung), \
+                mock.patch('subprocess.Popen', side_effect=hung), mock.patch('subprocess.run', side_effect=hung):
             began = time.monotonic()
             self.assertEqual(run(FakeAdapter(), {'kind': 'shell'}, deny), (3, 'deny r\n'))
             took = time.monotonic() - began
