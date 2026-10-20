@@ -8,6 +8,7 @@ import unittest
 from unittest import mock
 
 from kitlib import agentname
+from kitlib.git import repo
 from kitlib.guard import backlogrole, context
 
 from . import world as W
@@ -351,20 +352,20 @@ class Refs(Base):
         here run from a folder in no checkout), a place git cannot tell about (repo.UNKNOWN), git
         re-pointed from a folder in no checkout (gc.blind: --git-dir, GIT_DIR). A
         repository with no .kit.json reads the default ref store, so it is refused as any store."""
-        cases = ((None, 'git -C "%s" update-ref --stdin < cmds.txt' % self.wt, 'kit'),
-                 (self.w.plain, 'git -C $d update-ref --stdin < cmds.txt', 'plain'),
-                 (self.w.unknown, 'git update-ref --stdin < cmds.txt', 'unknown'),
-                 (self.w.plain, 'git --git-dir=/x/.git update-ref --stdin < cmds.txt', 'blind'),
-                 (self.w.plain, 'GIT_DIR=/x/.git git update-ref --stdin < cmds.txt', 'blind'))
+        cases = ((None, 'git -C "%s" update-ref --stdin < cmds.txt' % self.wt, 'kit', '.kit.json does not load'),
+                 (self.w.plain, 'git -C $d update-ref --stdin < cmds.txt', 'plain', 'directory git runs in is unknown'),
+                 (self.w.unknown, 'git update-ref --stdin < cmds.txt', 'unknown', 'git cannot tell the place'),
+                 (self.w.plain, 'git --git-dir=/x/.git update-ref --stdin < cmds.txt', 'blind', 're-pointed: --git-dir'),
+                 (self.w.plain, 'GIT_DIR=/x/.git git update-ref --stdin < cmds.txt', 'blind', 're-pointed: GIT_DIR'))
         broken = os.path.join(self.w.main, '.kit.json')
-        for cwd, text, name in cases:
+        for cwd, text, name, cause in cases:
             if name == 'kit':
                 with open(broken, 'w', encoding='utf-8') as f:
                     f.write('{"backlog": {"store": 7}}')
             for env in (PM, {context.ROLE_ENV: 'plain'}):
                 with self.subTest(text=text, case=name, env=env):
                     d = self.refused(self.cmd(text, sub=False, env=env, cwd=cwd), 'backlog-raw-write')
-                    self.assertIn('store', d.reason.split('Instead:')[0])
+                    self.assertUnsure(d, cause)
             if name == 'kit':
                 for t, tool, _said in self.UNREAD_UPDATE_REFS:
                     t = t.format(wt=self.wt)
@@ -374,6 +375,53 @@ class Refs(Base):
         with self.subTest(case='no .kit.json'):
             self.refused(self.cmd('git -C "%s" update-ref --stdin < cmds.txt' % self.wt, sub=False, env=PM),
                          'backlog-raw-write')
+
+    def assertUnsure(self, d, cause):
+        """The refusal says the guard cannot tell whether a store reads, and names its cause."""
+        why = d.reason.split('Instead:')[0].split('`', 2)[2]               # after the quoted command
+        self.assertIn('the guard cannot tell whether a backlog store reads there (', why)
+        self.assertIn(cause, why)
+
+    def test_an_unread_update_ref_where_no_main_checkout_is_found(self):
+        """A linked worktree whose git common dir is not named .git (a bare clone's worktree, a
+        --separate-git-dir repository's): ctx.main_top finds no main checkout, so no .kit.json
+        is read and store_kind is None for no proof that none reads there (fail closed). Any
+        place but a folder in no checkout counts so."""
+        for common in ('bare.git', 'sep'):
+            top = os.path.join(self.w.base, 'linked-' + common.replace('.', '-'))
+            os.makedirs(top)
+            git_common = os.path.join(self.w.base, common)
+            here = os.path.normcase(top)
+
+            def classify(path, orig=self.w.classify, top=top, here=here, git_common=git_common):
+                if os.path.normcase(os.path.abspath(path)).startswith(here):
+                    return repo.Place(repo.LINKED, top, '', os.path.join(git_common, 'worktrees', 'w'), git_common)
+                return orig(path)
+            self.w.classify = classify
+            try:
+                for text in ('git update-ref --stdin < cmds.txt', 'git -C "%s" update-ref --stdin < cmds.txt' % W.fwd(top)):
+                    for env in (PM, {context.ROLE_ENV: 'plain'}):
+                        with self.subTest(common=common, text=text, env=env):
+                            d = self.refused(self.cmd(text, sub=False, env=env, cwd=top), 'backlog-raw-write')
+                            self.assertUnsure(d, 'place')
+                with self.subTest(common=common, case='a literal ref outside the store'):
+                    self.allowed(self.cmd('git update-ref refs/heads/x %s' % OID, sub=False, env=PM, cwd=top))
+            finally:
+                del self.w.classify
+
+    def test_an_unread_update_ref_where_the_kit_json_is_not_text(self):
+        """A .kit.json that is not UTF-8 raises out of the config load (UnicodeDecodeError, no
+        ConfigError, so no ctx.config_error): store_kind's fault is no ground to allow. The rule
+        `heavy`, which reads the same config before this one, is stubbed out: its raise is the
+        hook's fail-closed failure (kitlib.host.hookmain), which would hide this rule's answer."""
+        with open(os.path.join(self.w.main, '.kit.json'), 'wb') as f:
+            f.write(b'{"repo": {"name": "d\xff\xfeo"}}')
+        with mock.patch('kitlib.guard.rules.heavy', lambda *a: None):
+            for env in (PM, {context.ROLE_ENV: 'plain'}):
+                with self.subTest(env=env):
+                    d = self.refused(self.cmd('git -C "%s" update-ref --stdin < cmds.txt' % self.wt, sub=False,
+                                              env=env), 'backlog-raw-write')
+                    self.assertUnsure(d, '.kit.json does not read: UnicodeDecodeError')
 
     def test_a_subagent_is_refused_too(self):
         for args in ('update-ref refs/backlog/main %s' % OID, 'push origin refs/backlog/main'):
