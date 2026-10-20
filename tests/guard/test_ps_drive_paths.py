@@ -124,7 +124,13 @@ class IntoMain(Base):
                  r'cd {wt}; cd \FileSystem::.; git reset --hard',
                  r'cd {wt}; Push-Location Microsoft.PowerShell.Core\FileSystem::.; git reset --hard',
                  r'cd {wt}\sub; sl -LiteralPath FileSystem::..; git reset --hard',
-                 r'cd {wt}; Set-Location FileSystem::.; git checkout -- .')
+                 r'cd {wt}; Set-Location FileSystem::.; git checkout -- .',
+                 r'cd {wt}; chdir FileSystem::.; git reset --hard',
+                 r'cd {wt}; pushd FileSystem::sub; git reset --hard',
+                 r'cd {wt}; Set-Location -Path FileSystem::.; git reset --hard',
+                 r'cd {wt}; Push-Location -Path \FileSystem::..; git reset --hard',
+                 r"cd {wt}; Set-Location 'FileSystem::.'; git reset --hard",
+                 r'cd {wt}; cd "\FileSystem::sub"; git reset --hard')
         for text in texts:
             with self.subTest(text, cwd='main'):
                 d = decide(W.ps(text.format(wt=self.w.wt), self.w.main, True), self.w.ctx())
