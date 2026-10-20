@@ -319,6 +319,38 @@ class RefusalLog(unittest.TestCase):
             hookmain.run(FakeAdapter(), 'PreToolUse', io.StringIO('{}'), Out(), environ={}, entry='h')
         self.assertEqual(order, ['answer', 'log'])
 
+    def test_a_marked_call_on_a_host_without_identity_logs_the_role_the_guard_judged(self):
+        a = FakeAdapter()
+        a.capabilities = HostCapabilities(('PreToolUse',), True, False, True, True, 'x')
+        tags = []
+
+        def deny(action, ctx=None, environ=None, profile=None):
+            role = 'subagent' if action.agent else 'main'
+            tags.append(role)
+            return Decision('deny', 'r', 'why [kit guard: rule=r role=%s]' % role)
+        with mock.patch('kitlib.guard.decide', deny):
+            code = hookmain.run(a, 'PreToolUse', io.StringIO('{"kind": "edit"}'), io.StringIO(),
+                                environ={'PM_KIT_ROLE': 'worker'}, entry='h.py')
+        self.assertEqual((code, tags), (3, ['subagent']))
+        self.assertEqual([(r['role'], r['agent'], r['agent_role']) for r in self.rows()],
+                         [('subagent', hookmain.UNIDENTIFIED, 'worker')])
+
+    def test_a_hung_git_cannot_hold_the_deny_up(self):
+        from kitlib.guard import refusal_log
+        started = []
+
+        def hung(*a, **k):
+            started.append(a)
+            time.sleep(5)
+            raise OSError('hung')
+        deny = lambda *x, **k: Decision('deny', 'r', 'why')                            # noqa: E731
+        with mock.patch('subprocess.Popen', side_effect=hung), mock.patch('subprocess.run', side_effect=hung):
+            began = time.monotonic()
+            self.assertEqual(run(FakeAdapter(), {'kind': 'shell'}, deny), (3, 'deny r\n'))
+            took = time.monotonic() - began
+        self.assertEqual((len(self.rows()), started), (1, []))
+        self.assertLess(took, refusal_log.BOUND)
+
 
 class CommandLine(unittest.TestCase):
     def test_the_one_hook_command_line_is_exec_form(self):

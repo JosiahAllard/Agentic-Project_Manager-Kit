@@ -237,29 +237,32 @@ The open record that asked for this is closed into this design. Its ask: a kit t
 
 ## Refusal log
 
-Every deny the guard's hook answers adds one JSON line to `<pm_data>/audit/refusals.jsonl`, where `<pm_data>` is the machine config's `pm_data.path` (kitlib/guard/refusal_log.py). The line is written after the answer, so the agent gets its deny first. This is the "automatic refusal log" kept above. With it the owner can count which rules refuse which roles, without asking an agent to keep a log.
+Every deny the guard's hook answers adds one JSON line to `<pm_data>/audit/refusals.jsonl`, where `<pm_data>` is the machine config's `pm_data.path` (kitlib/guard/refusal_log.py). The hook writes the line after its answer text and before it exits. The host reads the answer only when the hook exits, so the log's time is added to the hook's ("Known limits" below). This is the "automatic refusal log" kept above. With it the owner can count which rules refuse which roles, without asking an agent to keep a log.
 
-- **Who writes it.** kitlib/host/hookmain.py `run` writes it for every host's hook, whatever made the deny: a rule, a guard error (`guard-error`), the deadline (`guard-timeout`) or the host's own screen. Codex's broker writes it in hosts/codex/adapter/runtime.py `evaluate_bound`, both for a deny and for its own error (`host-runtime-error`). Codex has no ask, so an ask refused there is logged as a deny. An allow, a warning and an ask add no line.
+- **Who writes it.** kitlib/host/hookmain.py `run` writes it for every host's hook, whatever made the deny: a rule, a guard error (`guard-error`), the deadline (`guard-timeout`) or the host's own screen. Codex's broker writes it in hosts/codex/adapter/runtime.py `evaluate_bound`, both for a deny and for its own error (`host-runtime-error`). Codex has no ask, so on Codex an ask is logged as a deny on both paths: on the hook path hookmain's `degrade` lowers it to a deny before the log check, and the broker refuses it. An allow and a warning add no line anywhere; an ask adds none only on a host that keeps it as an ask (Claude Code).
 - **What a line holds**, in this order:
   - `utc`;
   - `host`;
   - `rule` (`unknown` when the deny names none);
-  - `role`: the tag in the deny's reason, `main` or `subagent`;
+  - `role`: `main` or `subagent`, for the Action as the guard judged it. On a host whose hooks carry no subagent identity, a call in a marked session counts as `subagent` (hookmain `unidentified`);
   - `agent_role` and `agent`: the subagent's role name and its identity;
   - `session`: the launcher's `PM_KIT_SESSION_NAME`;
   - `tool` and `kind`: the host's tool name and the Action's kind;
-  - `repo`: the name of the folder that holds the call's git common dir, read from the filesystem with no git child;
+  - `repo`: the folder name of the call's main checkout, the folder whose `.git` is the common dir, read from the filesystem with no git child. Any other layout (a submodule, a separate git dir) logs `-`, and so does a folder that is the user-profile folder or is named as the account, so a line never carries the account name;
   - `instead_given`: true when the deny gave an Instead.
 
   A value that is absent is `-`. For a call of several Actions (one patch over several files), the line describes the first Action.
 - **What a line never holds:** the reason, the command, the path, the working directory or the Instead text. These carry what a call touched, and a count needs none of them.
-- **Concurrent hooks.** Appends hold kitlib.fs.writelock (prefix `kit-refusals`). The lock file goes in the PM data checkout's git common dir, or beside the log outside a checkout. So lines never interleave. Without the lock they did, measured on this machine: four processes each appending 50 lines of about 8 KB lost or broke lines in each of five runs.
+- **Concurrent hooks.** Appends hold an OS lock (kitlib.fs.treelock) on `.refusals.lock` beside the log, in the audit folder, so lines never interleave. Nothing on the log's way starts a process, so a slow or hung git cannot hold a deny up (kitlib.fs.writelock would ask git where the checkout is first). Without the lock they did, measured on this machine: four processes each appending 50 lines of about 8 KB lost or broke lines in each of five runs.
 - **No line, and never a changed answer.** The log is best effort. A missing `pm_data`, a machine config that cannot be read, a lock still busy after 1 s or a failed write each add no line, and none of them changes the verdict or the exit code. Under the kit's tests, a lookup of the real home (`HomeFenced`) also adds no line, so a test never writes to the real PM data.
 - **The folder.** It is the backlog audit log's folder (docs/backlog.md "Audit log"): made on the first write, left untracked and committed by nothing. The guard refuses agents' own edits there (docs/guard.md `pm-data-audit`). The hook's own append is not a tool call, so that rule does not judge it.
 - **Known limits.**
   - Only the kit guard's denies are logged. These add no line: a refusal by the host's own permission system or its classifier, an ask the owner then declines, and a kit tool's own REFUSED exit.
   - No kit tool reads or tallies the log yet.
   - The session name is the hook's environment's, so a session the launcher did not name logs `-`.
+  - The time it adds: the hook exits after the line, so a deny's hook takes up to about 1.55 s longer (`refusal_log.BOUND`: a 1 s lock wait, one busy try's 0.5 s read of the holder's record and a 0.05 s pause), plus reading the machine config and walking up the folders to the checkout. On Codex, the hook's 7 s deadline plus this stays under the 10 s timeout in hooks.json.
+  - A block before kitlib loads (boot/hook.py and boot/kitboot.py's check) writes no line.
+  - The `role` field is the judged Action's. The tag in a `guard-timeout` or `guard-error` reason is read from the call before that, so in a marked session on a host with no subagent identity the two can differ.
 - Tests: `tests/guard/test_refusal_log.py`, `tests/host/test_hookmain.py` `RefusalLog`, `tests/codex/test_runtime.py` `BoundGuard`.
 
 ## Open guard-area records [out of repo]

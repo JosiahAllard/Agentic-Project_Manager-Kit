@@ -1,8 +1,10 @@
 """The guard's refusal log (kitlib/guard/refusal_log.py; docs/guard-v2.md "Refusal log"): one JSON
 line per deny in `<pm_data>/audit/refusals.jsonl`, the folder made on the first write: FIELDS in
 order and nothing else, never the reason, the command, the path, the working directory or the
-Instead text. Appends hold the write lock, so concurrent hooks never interleave a line. record()
-never raises: no pm_data, an unreadable config, a busy lock or a failed write is no line."""
+Instead text, and never a folder name that could be the account's. Appends hold an OS lock
+beside the log, so concurrent hooks never interleave a line, and nothing on the way starts a
+process, so a hung git cannot hold a deny up. record() never raises: no pm_data, an unreadable
+config, a busy lock or a failed write is no line."""
 import datetime
 import json
 import os
@@ -10,14 +12,15 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from unittest import mock
 
 from kitlib import kitroot, sessionmark
-from kitlib.fs import writelock
+from kitlib.fs import treelock
 from kitlib.guard import refusal_log
 from kitlib.host import Action, Decision
-from tests.gitfixture import TempRepo, rmtree
+from tests.gitfixture import TempRepo, fixture_parent, rmtree
 from tests.home import machine_config, temp_home
 
 NOW = datetime.datetime(2026, 10, 20, 9, 8, 7, tzinfo=datetime.timezone.utc)
@@ -62,6 +65,66 @@ class Entry(unittest.TestCase):
         self.assertEqual(refusal_log.repo_of(Action('shell', cwd='C:/elsewhere', workdir=sub)), 'repo')
         with mock.patch('kitlib.guard.place.classify', return_value=None):
             self.assertEqual(refusal_log.repo_of(Action('shell', cwd=sub)), '-')
+
+
+def git_dir(path):
+    """A folder git (and kitlib.guard.place) takes for a git directory: objects/, refs/, HEAD."""
+    os.makedirs(os.path.join(path, 'objects'))
+    os.makedirs(os.path.join(path, 'refs'))
+    with open(os.path.join(path, 'HEAD'), 'w') as fh:
+        fh.write('ref: refs/heads/main\n')
+
+
+def dot_git_file(checkout, target):
+    os.makedirs(checkout, exist_ok=True)
+    with open(os.path.join(checkout, '.git'), 'w') as fh:
+        fh.write('gitdir: %s\n' % target)
+
+
+class RepoName(unittest.TestCase):
+    """repo_of names only a checkout whose common dir is `<checkout>/.git`, and never a folder that
+    could be the account's name."""
+
+    def setUp(self):
+        self.base = tempfile.mkdtemp(prefix='kit-rl-', dir=fixture_parent())
+        self.addCleanup(rmtree, self.base)
+
+    def name(self, where, env=None):
+        return refusal_log.repo_of(Action('shell', cwd=where), env or {})
+
+    def test_a_linked_worktree_names_its_main_checkout(self):
+        main = os.path.join(self.base, 'mainrepo')
+        git_dir(os.path.join(main, '.git'))
+        wt = os.path.join(main, '.git', 'worktrees', 'wt')
+        os.makedirs(wt)
+        with open(os.path.join(wt, 'HEAD'), 'w') as fh:
+            fh.write('ref: refs/heads/side\n')
+        with open(os.path.join(wt, 'commondir'), 'w') as fh:
+            fh.write('../..\n')
+        dot_git_file(os.path.join(self.base, 'tree'), wt)
+        self.assertEqual(self.name(os.path.join(self.base, 'tree')), 'mainrepo')
+
+    def test_a_submodule_and_a_separate_git_dir_are_missing(self):
+        sup = os.path.join(self.base, 'super')
+        git_dir(os.path.join(sup, '.git'))
+        git_dir(os.path.join(sup, '.git', 'modules', 'sub'))
+        dot_git_file(os.path.join(sup, 'sub'), '../.git/modules/sub')
+        self.assertEqual(self.name(os.path.join(sup, 'sub')), '-', 'not "modules"')
+        git_dir(os.path.join(self.base, 'store', '.git'))
+        dot_git_file(os.path.join(self.base, 'work'), os.path.join(self.base, 'store', '.git'))
+        self.assertEqual(self.name(os.path.join(self.base, 'work')), '-', 'not "store"')
+        git_dir(os.path.join(self.base, 'elsewhere.git'))
+        dot_git_file(os.path.join(self.base, 'plain'), os.path.join(self.base, 'elsewhere.git'))
+        self.assertEqual(self.name(os.path.join(self.base, 'plain')), '-')
+
+    def test_the_profile_folder_and_the_accounts_name_are_missing(self):
+        repo = TempRepo()
+        self.addCleanup(repo.cleanup)
+        self.assertEqual(self.name(repo.root, {'USERPROFILE': repo.root + os.sep}), '-')
+        self.assertEqual(self.name(repo.root, {'USERPROFILE': repo.root.upper()}), '-')
+        self.assertEqual(self.name(repo.root, {'USERNAME': 'Repo'}), '-')
+        self.assertEqual(self.name(repo.root, {'USERPROFILE': repo.base, 'USERNAME': 'someone'}), 'repo',
+                         "a checkout inside the profile folder keeps its own name")
 
 
 class Record(unittest.TestCase):
@@ -115,7 +178,7 @@ class Record(unittest.TestCase):
         held, done = threading.Event(), threading.Event()
 
         def hold():
-            with writelock.locked(self.log, refusal_log.LOCK_PREFIX, 5):
+            with treelock.TreeLock(os.path.join(os.path.dirname(self.log), refusal_log.LOCK_FILE)):
                 held.set()
                 done.wait(10)
         t = threading.Thread(target=hold)
@@ -126,6 +189,26 @@ class Record(unittest.TestCase):
         with mock.patch.object(refusal_log, 'WAIT', 0.1):
             self.assertIsNone(refusal_log.record(DENY, ACTION, 'claude', 'main', {}))
         self.assertFalse(os.path.exists(self.log))
+        start = time.monotonic()
+        self.assertIsNone(refusal_log.record(DENY, ACTION, 'claude', 'main', {}))
+        self.assertLess(time.monotonic() - start, refusal_log.BOUND + 0.5, 'the wait is bounded')
+
+    def test_no_process_is_started_so_a_hung_git_cannot_hold_a_deny_up(self):
+        repo = TempRepo()
+        self.addCleanup(repo.cleanup)
+        started = []
+
+        def hung(*a, **k):
+            started.append(a)
+            time.sleep(5)
+            raise OSError('hung')
+        with mock.patch('subprocess.Popen', side_effect=hung), mock.patch('subprocess.run', side_effect=hung):
+            began = time.monotonic()
+            got = refusal_log.record(DENY, Action('shell', cwd=repo.root), 'claude', 'main', {}, now=NOW)
+            took = time.monotonic() - began
+        self.assertEqual((got, started), (self.log, []))
+        self.assertLess(took, refusal_log.BOUND)
+        self.assertEqual(json.loads(self.lines()[0])['repo'], 'repo')
 
     def test_concurrent_writers_never_interleave_a_line(self):
         code = ('import sys; sys.path.insert(0, sys.argv[1])\n'
