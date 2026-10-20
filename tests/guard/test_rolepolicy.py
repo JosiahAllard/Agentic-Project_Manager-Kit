@@ -8,6 +8,7 @@ a role with none is judged by the shared rules alone, exactly as before. The Wor
 import os
 import re
 import unittest
+from unittest import mock
 
 from kitlib import content as kcontent
 from kitlib import kitroot
@@ -20,6 +21,14 @@ from . import world as W
 MODES = {'senior-worker': 'write', 'reviewer': 'read', 'test-runner': 'test', 'lander': 'lander',
          'pm': 'controller', 'coordinator': 'read'}
 LOCK = 'python tools/machine_lock.py'
+
+
+class Rec(dict):
+    """A backlog record as kitlib.backlog.store's Snapshot gives it: get() and all()."""
+
+    def all(self, key):
+        v = self.get(key)
+        return [] if v is None else v if isinstance(v, list) else [v]
 
 
 def kit(modes=MODES, on=True):
@@ -207,12 +216,14 @@ class ReadOnlyCheckout(Base):
                 self.assertIn('Run it with "%s" as the working directory' % W.fwd(self.w.temp), d.reason)
                 self.allowed(self.shell(text, 'reviewer', shell='bash', cwd=self.w.temp))
 
-    def test_inline_code_the_guard_proves_reads_only_runs_in_the_checkout(self):
-        """rules.py_reads_only: isolated (-I) code that only reads writes nothing, so the jail lets it
-        run in the read-only checkout; the same code without -I is still refused."""
+    def test_inline_code_that_only_reads_is_still_refused_in_the_checkout(self):
+        """The guard proves no code reads only: isolated (-I) code that only reads is refused in the
+        read-only checkout like any other, and runs from temp."""
         code = "import json,sys; print(json.load(open(sys.argv[1]))['a'])"
-        self.allowed(self.shell('python3 -I -c "%s" x.json' % code, 'reviewer', shell='bash'))
-        self.denied(self.shell('python3 -c "%s" x.json' % code, 'reviewer', shell='bash'), 'unplaced')
+        for text in ('python3 -I -c "%s" x.json' % code, 'python3 -c "%s" x.json' % code):
+            with self.subTest(text):
+                self.denied(self.shell(text, 'reviewer', shell='bash'), 'unplaced')
+                self.allowed(self.shell(text, 'reviewer', shell='bash', cwd=self.w.temp))
 
 
 class Workdir(Base):
@@ -392,14 +403,22 @@ class LockVerbs(Base):
                   'uv run python -m unittest tests.lock.test_machine_lock',
                   "Get-ChildItem env: | Where-Object { $_.Name -match 'MACHINE_LOCK|KIT|GATE' } | "
                   "Format-Table Name, Value")
+        # the backlog writes are judged by the backlog's roles (tests/guard/test_backlog_role.py),
+        # never as a lock call: a pm subagent is unlisted there, so backlog-role refuses them; a
+        # builder may add, and may set a record's text on its own pull (the record read pulled by
+        # the branch checked out where the tool runs: FakeGit's `main` for the PM data folder)
+        own = {'id': 'EX-LOCK', 'state': 'pulled', 'pulled_by': 'main'}
         for shell in ('bash', 'powershell'):
-            for role in ('pm', 'reviewer', 'lander'):
+            for role in ('pm', 'reviewer', 'lander', 'senior-worker'):
                 for text in refused + others:
                     with self.subTest(shell=shell, role=role, text=text):
                         self.assertIsNone(rolepolicy.check(self.shell(text, role, shell=shell), self.w.ctx()))
             for text in refused:
                 with self.subTest(shell=shell, text=text):
-                    self.allowed(self.shell(text, 'pm', shell=shell))
+                    self.denied(self.shell(text, 'pm', shell=shell), 'backlog-role')
+                with self.subTest(shell=shell, text=text, role='senior-worker'), \
+                        mock.patch('kitlib.guard.backlogrole.read_record', lambda root, rid: Rec(own, id=rid)):
+                    self.allowed(self.shell(text, 'senior-worker', shell=shell))
 
     def test_every_real_lock_call_is_still_read(self):
         """The lock CLI as the program, or as the script python runs, through the wrappers the

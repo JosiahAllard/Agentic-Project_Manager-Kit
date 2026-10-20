@@ -2,7 +2,7 @@
 nested bash -c wait), Windows paths in python heredocs (which pass: heredoc-winpath is cut,
 docs/guard-v2.md B8), core.hooksPath changes (git config, -c,
 clone -c, GIT_CONFIG_*), ending processes by name, the .NET and Gradle heavy defaults, and a
-python -c the guard proves reads only
+python's code, which counts as written where it runs
 (docs/guard.md "Rules"). Same shape as ROWS there; the expected alternative is str.format text, so
 a PowerShell brace is doubled.
 
@@ -66,9 +66,9 @@ ROWS = [
     ('unreadable: a double-quoted bash -c wait from PowerShell', lambda w: ps(
         'bash -c "until [ -f $F ]; do sleep 5; done"', w.wt, sub=True),
      'deny', 'unreadable', 'powershell -NoProfile -ExecutionPolicy Bypass -File "{temp}/script.ps1"'),
-    # plain() closes the odd single quote, which leaves the double quote open: that rewrite is
-    # unreadable too, so the alternative is the script file
-    ('unreadable: a rewrite that still does not read gives the script, subagent', lambda w: bash(
+    # an odd single and double quote: the guard never rewrites the line, so the
+    # alternative is the script file
+    ('unreadable: an unclosed quote gives the script, subagent', lambda w: bash(
         'echo "a\'b', w.wt, sub=True),
      'deny', 'unreadable', 'bash "{temp}/script.sh"'),
     ('unreadable alternative, bash script, is allowed', lambda w: bash('bash "%s/script.sh"' % W.fwd(w.temp), w.wt, sub=True),
@@ -262,107 +262,55 @@ ROWS = [
     ('heavy: dotnet --info', lambda w: bash('dotnet --info', w.wt), None, None, None),
     ('heavy: gradlew --version', lambda w: bash('./gradlew --version', w.wt), None, None, None),
 
-    # ---------------------------------------------------------------- python -c the guard proves reads only
+    # ---------------------------------------------------------------- python's code counts as written where it runs
+    # python -c, or a program read from standard input, writes the directory python runs in, whatever
+    # the code is: the guard does not read it (docs/guard.md "Shell writes")
     ('main-checkout: python -I -c that only reads json, subagent', lambda w: bash(
         'python -I -c "import json,sys; d=json.load(open(sys.argv[1])); print(len(d))" x.json', w.main, sub=True),
-     None, None, None),
+     'deny', 'unplaced', None),
     ('main-checkout: python -I -c read-only, PowerShell, subagent', lambda w: ps(
         'python -I -c "import json; print(json.load(open(\'x.json\', encoding=\'utf-8\'))[\'a\'])"', w.main, sub=True),
-     None, None, None),
+     'deny', 'unplaced', None),
     ('main-checkout: py -3 -Ic read-only', lambda w: bash(
-        'py -3 -Ic "from os.path import exists; print(exists(\'x\'))"', w.main, sub=True), None, None, None),
-    ('main-checkout: python -c without -I may import from the directory', lambda w: bash(
+        'py -3 -Ic "from os.path import exists; print(exists(\'x\'))"', w.main, sub=True), 'deny', 'unplaced', None),
+    ('main-checkout: python -c without -I', lambda w: bash(
         'python -c "import json,sys; print(json.load(open(sys.argv[1])))" x.json', w.main, sub=True),
      'deny', 'unplaced', None),
-    ('main-checkout: python -I -c opening to write', lambda w: bash(
-        'python -I -c "open(\'x\', \'w\').write(\'y\')"', w.main, sub=True), 'deny', 'unplaced', None),
-    ('main-checkout: python -I -c importing os', lambda w: bash(
-        'python -I -c "import os; os.remove(\'x\')"', w.main, sub=True), 'deny', 'unplaced', None),
-    ('main-checkout: python -I -c reaching a module through sys', lambda w: bash(
-        'python -I -c "import sys; sys.modules[\'os\'].remove(\'x\')"', w.main, sub=True), 'deny', 'unplaced', None),
     ('main-checkout: python -I -c with text the shell fills in', lambda w: bash(
         'python -I -c "$CODE"', w.main, sub=True), 'deny', 'unplaced', None),
     ('main-checkout: python -I -cCODE in one word', lambda w: bash(
         'python -I -c"open(\'x\',\'w\').write(\'y\')"', w.main, sub=True), 'deny', 'unplaced', None),
     ('main-checkout: python -I - reads its code from a pipe', lambda w: bash(
         'echo "print(1)" | python -I -', w.main, sub=True), 'deny', 'unplaced', None),
-    # Windows PowerShell 5.1 may hand python other text when the code holds a double quote
-    ('main-checkout: python -I -c with a double quote, PowerShell', lambda w: ps(
-        'python -I -c \'print("x")\'', w.main, sub=True), 'deny', 'unplaced', None),
-    ('main-checkout: python -I -c with a double quote, bash -c from PowerShell', lambda w: ps(
-        'bash -c \'python -I -c "print(\\"x\\")"\'', w.main, sub=True), 'deny', 'unplaced', None),
-    ('main-checkout: python -I -c with a double quote, bash', lambda w: bash(
-        'python -I -c \'print("x")\'', w.main, sub=True), None, None, None),
-    ('main-checkout: python -I -c naming type', lambda w: bash(
-        'python -I -c "print(type(1))"', w.main, sub=True), 'deny', 'unplaced', None),
-    # PowerShell 5.1 wraps an argument with a space in quotes without doubling a trailing
-    # backslash: through it, code with a backslash is not proved either. Through cmd.exe no code
-    # is: cmd ends a quoted part at a quote python reads as text, and keeps print(...) one word
-    ('main-checkout: python -I -c ending in a backslash, PowerShell', lambda w: ps(
-        "python -I -c 'print(1) #%s'" % BS, w.main, sub=True), 'deny', 'unplaced', None),
-    ('main-checkout: python -I -c with a backslash, bash -c from PowerShell', lambda w: ps(
-        "bash -c 'python -I -c \"print(1) #%s%s\"'" % (BS, BS), w.main, sub=True), 'deny', 'unplaced', None),
     ('main-checkout: python -I -c with no quote or backslash, PowerShell', lambda w: ps(
-        "python -I -c 'print(1)'", w.main, sub=True), None, None, None),
-    ('main-checkout: python -I -c ending in a backslash, bash', lambda w: bash(
-        "python -I -c 'print(1) #%s'" % BS, w.main, sub=True), None, None, None),
-    ('main-checkout: python -I -c with a backslash, cmd', lambda w: bash(
-        "cmd /c \"python -I -c print('a%sb')\"" % BS, w.main, sub=True), 'deny', 'unplaced', None),
-    ('main-checkout: python -I -c with an escaped double quote, cmd', lambda w: bash(
-        "cmd /c 'python -I -c \"print(len(%s\"a b%s\"))\"'" % (BS, BS), w.main, sub=True),
-     'deny', 'unplaced', None),
-    ('main-checkout: python -I -c opening to write inside one cmd word', lambda w: bash(
-        "cmd /c \"python -I -c print(open('x','w').write('y'))\"", w.main, sub=True),
-     'deny', 'unplaced', None),
-    ('main-checkout: python -I -c opening to write inside one cmd word, PowerShell', lambda w: ps(
-        "cmd /c \"python -I -c print(open('x','w').write('y'))\"", w.main, sub=True),
-     'deny', 'unplaced', None),
+        "python -I -c 'print(1)'", w.main, sub=True), 'deny', 'unplaced', None),
+    # a script decides what it writes, but PowerShell drops the empty word after the bash -c text,
+    # so the words bash, and then python, gets are not the ones read: python_unread walks out
+    # through every shell around python (nested_in) to that PowerShell word
+    ('main-checkout: python script in a bash -c text with an empty word, PowerShell', lambda w: ps(
+        "bash -c 'python x.py' ''", w.main, sub=True), 'deny', 'unplaced', None),
+    ('main-checkout: python -I -c in a bash -c text, PowerShell', lambda w: ps(
+        "bash -c 'python -I -c print(1)'", w.main, sub=True), 'deny', 'unplaced', None),
+    ('main-checkout: python -I -c through cmd and then bash', lambda w: bash(
+        "cmd /c 'bash -c \"python -I -c print(1)\"'", w.main, sub=True), 'deny', 'unplaced', None),
+    ('main-checkout: python -I -c through cmd, in a worktree', lambda w: bash(
+        "cmd /c \"python -I -c print(open('x','w').write('y'))\"", w.wt, sub=True), None, None, None),
     # unquoted, PowerShell passes `print` and then runs the ( ) itself (shell._Scan.ps_paren_arg):
     # the text cmd gets is computed
     ('unreadable: a ( ) touching a word in a PowerShell cmd /c', lambda w: ps(
         "cmd /c python -I -c print(open('x','w').write('y'))", w.main, sub=True),
      'deny', 'unreadable', None),
-    ('main-checkout: python -I -c in double quotes, cmd', lambda w: bash(
-        "cmd /c 'python -I -c \"print(1)\"'", w.main, sub=True), 'deny', 'unplaced', None),
-    ('main-checkout: python -I -c through cmd, in a worktree', lambda w: bash(
-        "cmd /c \"python -I -c print(open('x','w').write('y'))\"", w.wt, sub=True), None, None, None),
-    ('main-checkout: python -I -c through cmd and then bash', lambda w: bash(
-        "cmd /c 'bash -c \"python -I -c print(1)\"'", w.main, sub=True), 'deny', 'unplaced', None),
-    # PowerShell 5.1 drops an empty argument, so python takes the next word as its code
-    ('main-checkout: python -I -c with empty code, PowerShell', lambda w: ps(
-        "python -I -c '' \"open('f','w').write('y')\"", w.main, sub=True), 'deny', 'unplaced', None),
-    ('main-checkout: python -I -c with blank code, PowerShell', lambda w: ps(
-        "python -I -c ' ' \"open('f','w').write('y')\"", w.main, sub=True), 'deny', 'unplaced', None),
-    ('main-checkout: python -I -c with empty code, bash', lambda w: bash(
-        "python -I -c '' x", w.main, sub=True), 'deny', 'unplaced', None),
-    # Start-Process re-splits -ArgumentList with its quotes taken out: python reads other code
+    # Start-Process re-splits -ArgumentList with its quotes taken out: python reads other words
     ('main-checkout: python -I -c through Start-Process', lambda w: ps(
-        "Start-Process python -ArgumentList '-I -c \"print(1)\";open(''f'',''w'').write(''y'')'",
-        w.main, sub=True), 'deny', 'unplaced', None),
-    ('main-checkout: python -I -c through the start alias', lambda w: ps(
-        "start python -ArgumentList '-I -c \"print(1)\";open(''f'',''w'').write(''y'')'",
-        w.main, sub=True), 'deny', 'unplaced', None),
-    ('main-checkout: python -I -c through Start-Process, read-only code', lambda w: ps(
         "Start-Process python -ArgumentList '-I','-c','print(1)'", w.main, sub=True),
      'deny', 'unplaced', None),
-    ('main-checkout: python -I -c through the saps alias, read-only code', lambda w: ps(
+    ('main-checkout: python -I -c through the saps alias', lambda w: ps(
         "saps python -ArgumentList '-I','-c','print(1)'", w.main, sub=True),
      'deny', 'unplaced', None),
-    # any word of a PowerShell command on the way to python that PowerShell 5.1 may hand on as
-    # other than one argument: empty (dropped), or a blank and a backslash at its end
-    ('main-checkout: python -I -c in a bash -c beside an empty word, PowerShell', lambda w: ps(
-        "bash -c 'python -I -c print(1)' ''", w.main, sub=True), 'deny', 'unplaced', None),
-    ('main-checkout: python -I -c in a bash -c beside a word ending in a backslash, PowerShell',
-     lambda w: ps("bash -c 'python -I -c print(1)' 'a b%s'" % BS, w.main, sub=True),
-     'deny', 'unplaced', None),
-    ('main-checkout: python -I -c beside a word ending in a backslash, PowerShell', lambda w: ps(
-        "python -I -c 'print(1)' 'a b%s'" % BS, w.main, sub=True), 'deny', 'unplaced', None),
+    # a script decides its own writes, but PowerShell 5.1 drops an empty word, so python may take
+    # the next one as its code (rules.ps_native_unsure)
+    ('main-checkout: python script, PowerShell', lambda w: ps(
+        'python x.py --note a', w.main, sub=True), None, None, None),
     ('main-checkout: python script beside an empty word, PowerShell', lambda w: ps(
         "python '' -c \"open('f','w').write('y')\"", w.main, sub=True), 'deny', 'unplaced', None),
-    # a bash -c text with a double quote reaches bash split differently through PowerShell 5.1
-    ('main-checkout: python -I -c in a bash -c text with a double quote, PowerShell', lambda w: ps(
-        "bash -c 'python -I -c \"print(1)\" \"x;touch f\"'", w.main, sub=True),
-     'deny', 'unplaced', None),
-    ('main-checkout: python -I -c in a bash -c text, PowerShell', lambda w: ps(
-        "bash -c 'python -I -c print(1)'", w.main, sub=True), None, None, None),
 ]

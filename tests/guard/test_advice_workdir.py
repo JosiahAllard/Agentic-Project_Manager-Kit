@@ -1,6 +1,7 @@
 """Start-Process -WorkingDirectory as the directory git and python start in (commands.run_dir),
 the wrapped-gate alternative run bare, the kit folder advice names (rules.advice_kit), and the
-sleep-wait refusal's reason (docs/guard.md "Rules", "Parsing" and "Kit paths in advice")."""
+reason a python whose code the guard does not read is refused with (docs/guard.md "Rules",
+"Parsing" and "Kit paths in advice")."""
 import json
 import os
 import unittest
@@ -197,56 +198,63 @@ class AdviceKit(unittest.TestCase):
         self.assertIn('python "%s/tools/machine_lock.py" run ' % W.fwd(self.w.kit_dir), self.heavy_advice().instead)
 
 
-class SleepWait(unittest.TestCase):
-    """A python -c that only sleeps, refused in a main checkout, is
-    named as a sleep-wait, not as writing files."""
+class NoSleepWait(unittest.TestCase):
+    """A python -c that only sleeps is code like any other: no sleep-wait reason of its own."""
 
     def setUp(self):
         self.w = W.World()
         self.addCleanup(self.w.cleanup)
 
-    def test_a_sleep_in_the_main_checkout_says_sleep_wait(self):
+    def test_a_sleep_in_the_main_checkout_is_code_counted_as_written(self):
         for code in ('import time;time.sleep(110)', 'from time import sleep; sleep(5.5)'):
             with self.subTest(code):
                 d = decide(ps('python -c "%s"' % code, self.w.main, sub=True), self.w.ctx())
                 self.assertEqual(verdict(d), ('deny', 'unplaced'))
-                self.assertIn('is a sleep-wait', d.reason)
-                self.assertNotIn('writes files in the directory it runs in', d.reason)
-                self.assertNotIn('worktree add', d.instead)
+                self.assertNotIn('sleep-wait', d.reason)
+                self.assertIn('the guard does not read what the code python is given writes', d.reason)
 
     def test_a_sleep_in_a_worktree_is_unchanged(self):
         self.assertIsNone(decide(ps('python -c "import time;time.sleep(110)"', self.w.wt, sub=True), self.w.ctx()))
 
-    def test_other_code_is_not_named_a_sleep_wait(self):
-        for code in ('import time;time.sleep(1);open(\'x\',\'w\')', 'import os;os.remove(\'x\')'):
-            with self.subTest(code):
-                d = decide(ps('python -c "%s"' % code, self.w.main, sub=True), self.w.ctx())
-                self.assertEqual(verdict(d), ('deny', 'unplaced'))
-                self.assertNotIn('sleep-wait', d.reason)
-
 
 class UnreadPython(unittest.TestCase):
-    """A python the guard does not read as read-only (rules.py_unread), refused in a main
-    checkout, gives that as its reason: it names no file it writes."""
+    """A python whose code the guard does not read (rules.py_unread), refused in a main checkout,
+    gives that as its reason: it names no file it writes."""
 
     def setUp(self):
         self.w = W.World()
         self.addCleanup(self.w.cleanup)
 
     def test_an_unread_program_says_the_guard_does_not_read_it(self):
-        for shell, text, why in (
-                (ps, 'python -c "import sys; print(sys.argv)" a b', 'the code of that python -c'),
-                (bash, 'python -c "import sys; print(sys.argv)" a "" b', 'the code of that python -c'),
-                (ps, 'python -c "import os;os.remove(\'x\')"', 'the code of that python -c'),
-                (bash, 'echo x | python -', 'the program python is given'),
-                (ps, "Start-Process python -ArgumentList '-c','print(1)'", 'Start-Process hands python')):
+        why = '(counted as written: the guard does not read what the code python is given writes)'
+        for shell, text in (
+                (ps, 'python -c "import sys; print(sys.argv)" a b'),
+                (bash, 'python -c "import sys; print(sys.argv)" a "" b'),
+                (ps, 'python -c "import os;os.remove(\'x\')"'),
+                (bash, 'echo x | python -')):
             with self.subTest(text):
-                d = decide(shell(text, self.w.main, sub=True), self.w.ctx())
-                self.assertEqual(verdict(d), ('deny', 'unplaced'))
-                self.assertTrue(d.reason.startswith('the directory `'), d.reason)
-                self.assertIn('(counted as written: ', d.reason)
-                self.assertIn(why, d.reason)
-                self.assertNotIn('writes files in the directory it runs in', d.reason)
+                self.counted(shell, text, why)
+
+    def counted(self, shell, text, why):
+        d = decide(shell(text, self.w.main, sub=True), self.w.ctx())
+        self.assertEqual(verdict(d), ('deny', 'unplaced'))
+        self.assertTrue(d.reason.startswith('the directory `'), d.reason)
+        self.assertIn(why, d.reason)
+        self.assertNotIn('writes files in the directory it runs in', d.reason)
+
+    def test_a_script_powershell_may_hand_other_words_says_so(self):
+        # a script writes nothing by itself: what is unread is the words PowerShell hands it
+        why = '(counted as written: PowerShell may hand python other words than the guard read)'
+        for text in ("python tools/x.py --note ''", "python tools/x.py -m 'a \"b\" c'"):
+            with self.subTest(text):
+                self.counted(ps, text, why)
+
+    def test_a_start_process_python_says_its_command_line_is_unread(self):
+        why = '(counted as written: Start-Process hands python a command line the guard does not read)'
+        for text in ("Start-Process python -ArgumentList '-c','print(1)'",
+                     "Start-Process python -ArgumentList 'tools/x.py'"):
+            with self.subTest(text):
+                self.counted(ps, text, why)
 
     def test_a_named_write_keeps_its_reason(self):
         d = decide(bash('cp a b', self.w.main, sub=True), self.w.ctx())
@@ -257,6 +265,86 @@ class UnreadPython(unittest.TestCase):
     def test_an_unread_program_in_a_worktree_still_passes(self):
         self.assertIsNone(decide(ps('python -c "import sys; print(sys.argv)" a b', self.w.wt, sub=True),
                                  self.w.ctx()))
+
+
+class WorktreeAdvice(unittest.TestCase):
+    """A write refused in a main checkout is offered in the session's worktree: its own path when
+    the call runs there, else <worktree>; a new worktree only in a clause for a session with none,
+    never as the Instead (docs/guard.md "Main checkout")."""
+
+    ONLY = 'only a session with no worktree makes one, first (git -C "%s" worktree add'
+
+    def setUp(self):
+        self.w = W.World()
+        self.addCleanup(self.w.cleanup)
+        self.main, self.wt, self.kit = W.fwd(self.w.main), W.fwd(self.w.wt), W.fwd(self.w.kit_dir)
+
+    def refused(self, payload, rule):
+        d = decide(payload, self.w.ctx())
+        self.assertEqual(verdict(d), ('deny', rule), d and d.reason)
+        self.assertNotIn('worktree add', d.instead)
+        return d
+
+    def test_an_unplaced_target_from_main_never_offers_a_new_worktree(self):
+        d = self.refused(bash('cp a "$X"', self.w.main, sub=True), 'unplaced')
+        self.assertEqual(d.instead, 'cp a "<worktree>/<file>"')
+        self.assertIn(self.ONLY % self.main, d.reason)
+
+    def test_an_unplaced_target_with_no_word_to_aim_shows_the_worktrees(self):
+        d = self.refused(bash('tar -xf a.tar -C"$X"', self.w.main, sub=True), 'unplaced')
+        self.assertEqual(d.instead, 'git -C "%s" worktree list' % self.main)
+        self.assertIn(self.ONLY % self.main, d.reason)
+
+    def test_a_main_target_with_no_word_to_aim_shows_the_worktrees(self):
+        # cp -t<dir> has no word the guard rewrites: it offered a new worktree as the Instead before
+        d = self.refused(bash('cp -t%s/d a' % self.main, self.w.main, sub=True), 'main-checkout')
+        self.assertEqual(d.instead, 'git -C "%s" worktree list' % self.main)
+        self.assertIn(self.ONLY % self.main, d.reason)
+        self.assertIn('(d there)', d.reason)
+
+    def test_an_unknown_target_never_offers_a_new_worktree(self):
+        # a place git cannot tell offered a new worktree as the Instead before, from a worktree too
+        unknown = W.fwd(self.w.unknown)
+        for payload, instead, only in (
+                (bash('cp -t%s/d a' % unknown, self.w.wt, sub=True), 'git -C "%s" worktree list' % self.main, False),
+                (bash('cp -t%s/d a' % unknown, self.w.main, sub=True), 'git -C "%s" worktree list' % self.main, True),
+                (bash('cp a %s/b' % unknown, self.w.main, sub=True), 'cp a "<worktree>/b"', True),
+                (bash('cp a %s/b' % unknown, self.w.wt, sub=True), 'cp a "%s/b"' % self.wt, False)):
+            with self.subTest(payload['tool_input']['command'], cwd=payload['cwd']):
+                d = self.refused(payload, 'unplaced')
+                self.assertEqual(d.instead, instead)
+                if only:
+                    self.assertIn(self.ONLY % self.main, d.reason)
+                else:
+                    self.assertNotIn('worktree add', d.reason)
+
+    def test_a_main_target_from_main_is_aimed_at_the_worktree(self):
+        for payload, instead in (
+                (bash('cp a b', self.w.main, sub=True), 'cp a "<worktree>/b"'),
+                (W.event('Write', {'file_path': os.path.join(self.w.main, 'd', 'b.md'), 'content': 'x'},
+                         self.w.main, sub=True), 'Write(file_path="<worktree>/d/b.md")'),
+                (ps("python %s/tools/commit.py -C '%s' -m 'a \"b\" c' x.py" % (self.kit, self.main), self.w.main,
+                    sub=True), 'python %s/tools/commit.py -C "<worktree>" -m \'a "b" c\' x.py' % self.kit)):
+            with self.subTest(instead):
+                rule = 'unplaced' if instead.startswith('python') else 'main-checkout'
+                d = self.refused(payload, rule)
+                self.assertEqual(d.instead, instead)
+                self.assertIn(self.ONLY % self.main, d.reason)
+                self.assertNotIn('(. there)', d.reason)
+
+    def test_main_checkout_advice_in_worktree_names_own_worktree_path(self):
+        commit = "python %s/tools/commit.py -C%s -m 'a \"b\" c' x.py"
+        for payload, rule, instead in (
+                (bash('cp a %s/b' % self.main, self.w.wt, sub=True), 'main-checkout', 'cp a "%s/b"' % self.wt),
+                (ps('"x" > $env:OUT', self.w.wt, sub=True), 'unplaced', '"x" > "%s/<file>"' % self.wt),
+                (ps(commit % (self.kit, " '%s'" % self.main), self.w.wt, sub=True), 'unplaced',
+                 commit % (self.kit, ' "%s"' % self.wt)),
+                (ps(commit % (self.kit, "'%s'" % self.main), self.w.wt, sub=True), 'unplaced',
+                 commit % (self.kit, ' "%s"' % self.wt))):
+            with self.subTest(payload['tool_input']['command']):
+                d = self.refused(payload, rule)
+                self.assertEqual(d.instead, instead)
+                self.assertNotIn('worktree add', d.reason)
 
 
 setUpModule = W.deny_softened           # these pin what the guard cannot place and the dropped rules (world.deny_softened)

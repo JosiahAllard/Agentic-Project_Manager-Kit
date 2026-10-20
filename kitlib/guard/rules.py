@@ -22,9 +22,10 @@ Rules, in the order they are checked:
                    whole|half|slots, division --set, game on|off|set, top, stop/unbook --force);
                    machine setup with --apply (its PowerShell front ends with -Apply), which
                    writes the owner's email; in any session but the owner's own
-  hub-secrets      a shell command whose literal words name the hub's token folder or a token file
-                   (owner.token, agent.token, approval.key) or a literal path into the token folder
-                   (a computed word, a wildcard, the word hub and the store are not read), or python
+  hub-secrets      a shell command with a literal path into the hub's token folder (a bare token
+                   file's name, a hub-like name elsewhere, a computed word, the word hub and the
+                   store are not refused; a wildcard path is read as the literal folder before
+                   its first wildcard, glob_folder, so `cat ~/.pm-kit/hub/*` is), or python
                    or node code that names a token file or the folder (kitlib.guard.hub.INLINE_RE);
                    an edit of a file in the token folder or the store; a read tool's
                    read of the token folder or a file in it, or a Grep that can read one (Glob
@@ -73,8 +74,6 @@ A command line the parser cannot read cleanly also goes through kitlib.guard.fal
 unreadable, is a warning by default).
 "Agent session" and "the owner's own" are the session mark's (docs/guard.md "Session mark").
 """
-import ast
-import builtins
 import json
 import ntpath
 import os
@@ -269,7 +268,8 @@ def shell_command(event, ctx, text, shell, cwd, role):
     for cmd in parsed.commands:
         inv = cm.invocation(cmd)
         for rule in (owner_tool, hub_rules.secrets, hub_rules.owner_verb, wrapped_gate, root_search,
-                     heavy, git_rules, git_hooks_path, owner_identity, kill_by_name, shell_writes):
+                     heavy, git_rules, backlog_shell, git_hooks_path, owner_identity, kill_by_name,
+                     shell_writes):
             d = rule(event, ctx, cmd, inv, cwd, role)
             if d:
                 return d
@@ -280,6 +280,20 @@ def shell_command(event, ctx, text, shell, cwd, role):
         from . import fallback
         return fallback.check(event, ctx, text, cwd, role, parsed)
     return None
+
+
+def backlog_shell(event, ctx, cmd, inv, cwd, role):
+    """The backlog roles' shell rules (kitlib.guard.backlogrole.shell)."""
+    from . import backlogrole
+    return backlogrole.shell(event, ctx, cmd, inv, cwd, role)
+
+
+def backlog_edit(event, ctx, target, role, what):
+    """An edit of a folder store's records (kitlib.guard.backlogrole.raw_edit), or of the backlog's
+    audit log (audit_edit)."""
+    from . import backlogrole
+    return backlogrole.raw_edit(event, ctx, target, role, what) or \
+        backlogrole.audit_edit(event, ctx, target, role, what)
 
 
 # ---------------------------------------------------------------- lock MCP
@@ -686,15 +700,6 @@ def hub_secret_names(secret):
     return found
 
 
-def hub_name(text):
-    """The hub secret a word names by itself, or None: the token folder (`.pm-kit/hub`) or a
-    token file's name as its last part."""
-    if hubg.FOLDER_RE.search(text):
-        return '.pm-kit/hub'
-    base = re.split(r'[\\/]', text)[-1].strip().lower()
-    return base if base in hubg.SECRET_FILES else None
-
-
 def hub_path_texts(text):
     """The texts of one word that may be paths: the word, and the value of `--opt=value` or
     PowerShell's `-Opt:value`; an option alone is none."""
@@ -706,10 +711,22 @@ def hub_path_texts(text):
     return []
 
 
-def inline_code(cmd, inv):
+def glob_folder(text):
+    """The literal folder a wildcard path `text` starts with (everything before the separator
+    ahead of its first wildcard character), or None when it has none: `<token folder>/o*` is in
+    the token folder whatever the wildcard matches."""
+    first = min(text.index(c) for c in hubg.GLOB_CHARS if c in text)
+    cut = max(text.rfind('/', 0, first), text.rfind('\\', 0, first))
+    return text[:cut] if cut > 0 else None
+
+
+def inline_code(cmd, inv, skip_pipe=None):
     """The code python or node runs from its own command line (-c, -e) or from standard input
     (a heredoc, a here-string, the command piped in), as texts; [] for a script run or another
-    program. The command line's texts are every argument (a path the code is given counts)."""
+    program. The command line's texts are every argument (a path the code is given counts).
+    `skip_pipe(c)` true leaves out the text of the command `c` piped in when the code is on the
+    command line (it is then the code's data, not code); code read from standard input always
+    counts what is piped in."""
     if inv is None:
         return []
     py, node = PY_RUN_RE.match(inv.name or '') is not None, inv.name == 'node'
@@ -738,7 +755,7 @@ def inline_code(cmd, inv):
         for c in (cmd, cmd.pipe_from):
             if c is None:
                 continue
-            if c is not cmd:
+            if c is not cmd and not (code and skip_pipe is not None and skip_pipe(c)):
                 texts.append(c.text)
             texts.extend(r.target.text for r in c.redirects
                          if r.target is not None and (r.body or r.op == '<<<'))
@@ -746,27 +763,24 @@ def inline_code(cmd, inv):
 
 
 def hub_secret_shell(ctx, cmd, inv, places):
-    """What the command `cmd` names of the hub's secrets, as text, or None: a literal word
-    naming the token folder or a token file (hub_name; a search's or git's words are its patterns
-    and messages, so they do not count), a literal path in the token folder, and python or node
-    code that names a token file or the folder (kitlib.guard.hub.INLINE_RE). A word the shell
-    computes (a variable, a substitution) is not name-read, nor is a wildcard path, the store or
-    the word hub (the guard blocks only what it can place; an edit tool's write into the store is
-    still hub_secret_edit's).
+    """What the command `cmd` names of the hub's secrets, as text, or None: a literal path in
+    the token folder (a word that only names a token file or looks like the folder, with
+    no path into it, passes), and python or node code that names a token file or the folder
+    (kitlib.guard.hub.INLINE_RE; docs/guard-v2.md W3: a parsed hub tool run of an agent verb piped into
+    code given on the command line is that code's data, hub_run_verb). A wildcard path is read as the literal folder before its first
+    wildcard (glob_folder); the store and the word hub are not refused (the guard blocks only
+    what it can place; an edit tool's write into the store is still hub_secret_edit's).
     A path may start with the home folder as `~` or a home variable ($HOME, $env:USERPROFILE,
     %USERPROFILE%, $env:HOMEDRIVE$env:HOMEPATH: shell.home_text, read as ctx.home), and a
     relative one is read from the directory a cd to the home folder, or a bare cd, moved to
     (the command's cwd_home). `places()` gives the HubPlaces."""
-    name_only = inv is not None and inv.name in hubg.NAME_ONLY_PROGRAMS
     targets = [r.target for r in cmd.redirects if r.target is not None and not r.body and r.op != '<<<']
-    for w in ([] if name_only else list(cmd.words)) + targets:
-        hit = None if w.dyn else hub_name(w.text)
-        if hit:
-            return 'names %s' % hit
     for w in list(cmd.words) + targets:
         for text in hub_path_texts(w.text):
             text = sh.home_text(text, ctx.home, w.dyn)
-            if text is None or hubg.has_glob(text):
+            if text is not None and hubg.has_glob(text):
+                text = glob_folder(text)
+            if text is None:
                 continue
             try:
                 p = sh.resolve_path(text, cmd.cwd_home, cmd.shell, ctx.home)
@@ -777,7 +791,7 @@ def hub_secret_shell(ctx, cmd, inv, places):
             p_ = places()
             if p_.where(p) == 'secret':
                 return 'reaches %s (%s)' % (p_.label('secret'), w.text)
-    for text in inline_code(cmd, inv):
+    for text in inline_code(cmd, inv, lambda c: hub_run_verb(c) == ''):
         m = hubg.INLINE_RE.search(text)
         if m:
             return 'runs code that names %s' % m.group(0)
@@ -805,14 +819,21 @@ def hub_owner_run(parsed):
     read counts as unreadable there, and so does a PowerShell word holding a double quote, which
     Windows PowerShell 5.1 passes on unescaped (it can split into --owner)."""
     for cmd in parsed.commands:
-        args = hub_run_args(cm.invocation(cmd))
-        if args is None:
-            continue
-        ps = cmd.shell == sh.PS
-        verb = hubg.owner_verb([hubg.Word(w.text, w.dyn or (ps and '"' in w.text)) for w in args])
+        verb = hub_run_verb(cmd)
         if verb:
             return verb
     return None
+
+
+def hub_run_verb(cmd):
+    """For the command `cmd`: None when it is not a parsed hub tool run (hub_run_args), else the
+    owner verb it runs (kitlib.guard.hub.owner_verb, read as hub_owner_run reads it), or '' for
+    an agent verb."""
+    args = hub_run_args(cm.invocation(cmd))
+    if args is None:
+        return None
+    ps = cmd.shell == sh.PS
+    return hubg.owner_verb([hubg.Word(w.text, w.dyn or (ps and '"' in w.text)) for w in args]) or ''
 
 
 def hub_line(text):
@@ -1028,19 +1049,22 @@ def own_worktree(ctx, cwd, main_top=None):
     return here_.top
 
 
-def edit_target(event, ctx, target, cwd, role, what, unknown_why=None, rewrite=None, run=None, redirect=False):
+def edit_target(event, ctx, target, cwd, role, what, unknown_why=None, rewrite=None, run=None, redirect=False,
+                shell=None, item=False):
     """Deny an edit of `target` in a main checkout (or a place git cannot tell) by a role that
     may not edit one, and an agent session's write outside its roots (write_jail). `rewrite(path)`
     gives the same edit aimed at `path` (the alternative); `run` the command to rerun from the
     worktree when it writes into the directory it runs in; `redirect`, a shell redirect's target:
-    output, so the alternative with no worktree of the session's own is the temp folder."""
+    output, so the alternative with no worktree of the session's own is the temp folder; `shell`,
+    the dialect of the line `run` is on (the cd line of worktree_alternative); `item`, a target the
+    guard cannot place that is a provider item on a line of more than plain calls (ps_provider_word)."""
     d = ledger_rule(ctx, target, role, what) or pm_data_unknown(ctx, target, cwd, role, what) or \
         lock_state(event, ctx, target, role, what) or hub_secret_edit(event, ctx, target, role, what) or \
         kit_json(event, ctx, target, role, what) or gate_result(event, ctx, target, role, what) or \
-        generated_file(ctx, target, role, what)
+        generated_file(ctx, target, role, what) or backlog_edit(event, ctx, target, role, what)
     if d:
         return d
-    return main_checkout(event, ctx, target, cwd, role, what, unknown_why, rewrite, run, redirect) or \
+    return main_checkout(event, ctx, target, cwd, role, what, unknown_why, rewrite, run, redirect, shell, item) or \
         write_jail(event, ctx, target, cwd, role, what, rewrite, run)
 
 
@@ -1096,7 +1120,16 @@ def gate_result(event, ctx, target, role, what):
     return None
 
 
-def main_checkout(event, ctx, target, cwd, role, what, unknown_why=None, rewrite=None, run=None, redirect=False):
+# The refusal of a provider item the guard reads as a file only because of the line around it
+# (ps_provider_word): it says so in one sentence, and its Instead runs the whole line from the
+# worktree (whole_line)
+PROVIDER_ITEM_WHY = ('%s, an item on a drive that holds no files, which the guard skips only on a line of plain '
+                     'calls with literal words, so on this line it is a file the guard cannot place; run the whole '
+                     'line from your worktree:')
+
+
+def main_checkout(event, ctx, target, cwd, role, what, unknown_why=None, rewrite=None, run=None, redirect=False,
+                  shell=None, item=False):
     # a target it cannot place may be in any checkout, so both the kit defaults and the roles of
     # the repository the call runs in must let the role edit one: the defaults alone would let a
     # role that repository keeps out of its main checkout write anywhere, and the repository's
@@ -1107,31 +1140,51 @@ def main_checkout(event, ctx, target, cwd, role, what, unknown_why=None, rewrite
     if may:
         return None
     main_top = ctx.main_top(cwd) if cwd else None
-    new_wt = new_worktree(ctx, main_top)[1]
+    no_wt, new_wt = new_worktree(ctx, main_top)
     if target is None:
         mine = own_worktree(ctx, cwd)
+        if item and run and main_top and not no_wt:
+            return refuse(UNPLACED, role, PROVIDER_ITEM_WHY % what,
+                          cd_line(fwd(mine) if mine else '<worktree>', run, shell or sh.PS))
+        only = ''
         if rewrite is not None and (mine or redirect):
             instead = rewrite(fwd(mine or ctx.tempdir) + '/<file>')
-        else:
+        elif no_wt or not main_top:
             instead = new_wt
+        else:
+            # from the main checkout the session's worktree is unknown, not missing (only_new)
+            only = only_new(new_wt)
+            instead = rewrite('<worktree>/<file>') if rewrite is not None else \
+                'git -C %s worktree list' % quote(main_top)
         return refuse(UNPLACED, role, '%s: the guard cannot tell where it writes (%s). Name a literal path '
-                      'inside your worktree%s (the Edit or Write tool for a file).' %
-                      (what, unknown_why or 'unknown path', ' or, for output, the temp folder' if redirect else ''),
+                      'inside your worktree%s (the Edit or Write tool for a file)%s.%s' %
+                      (what, unknown_why or 'unknown path', ' or, for output, the temp folder' if redirect else '',
+                       only, '' if rewrite is not None or not only else ' To see the worktrees:'),
                       instead)
     place = ctx.place(target)
     if place.kind not in (repo.MAIN, repo.UNKNOWN):
         return None
     if place.kind == repo.UNKNOWN:
         mine = own_worktree(ctx, cwd)
-        instead = rewrite(fwd(os.path.join(mine, os.path.basename(target)))) if mine and rewrite is not None \
-            else new_wt
+        name, only, see = os.path.basename(target), '', ''
+        if mine and rewrite is not None:
+            instead = rewrite(fwd(os.path.join(mine, name)))
+        elif no_wt or not main_top:
+            instead = new_wt
+        else:
+            # a new worktree is never the Instead: from the main checkout only in a clause (only_new)
+            only = '' if mine else only_new(new_wt)
+            if rewrite is not None:
+                instead = rewrite('<worktree>/' + name)
+            else:
+                instead, see = 'git -C %s worktree list' % quote(main_top), ' To see the worktrees:'
         # a git directory is placed by its name: git answers no work tree there, and its config,
         # hooks and refs are the repository's own
         rule = 'main-checkout' if in_git_dir(target) else UNPLACED
         return refuse(rule, role, '%s: git cannot tell whether %s is in a main checkout (%s); '
-                      'this role may not edit one. Write inside a path git reports as a linked worktree.' %
-                      (what, target, place.detail), instead)
-    what2, instead = worktree_alternative(ctx, target, place.top, cwd, rewrite, run, redirect)
+                      'this role may not edit one. Write inside a path git reports as a linked worktree%s.%s' %
+                      (what, target, place.detail, only, see), instead)
+    what2, instead = worktree_alternative(ctx, target, place.top, cwd, rewrite, run, redirect, shell)
     return refuse('main-checkout', role, '%s is in the main checkout %s; this role may not edit a main '
                   'checkout. %s' % (what, place.top, what2), instead)
 
@@ -1231,10 +1284,11 @@ def jail_refusal(role, rs, verdict, root, what, target, rewrite=None, run=None):
                   run or 'cd %s' % quote(dest.path))
 
 
-def worktree_alternative(ctx, target, main_top, cwd, rewrite=None, run=None, redirect=False):
+def worktree_alternative(ctx, target, main_top, cwd, rewrite=None, run=None, redirect=False, shell=None):
     """(sentence, command): the same edit in the session's own worktree of this main checkout, or
     a new worktree to make it in; a redirect's output with no worktree of the session's own, the
-    same redirect into the temp folder."""
+    same redirect into the temp folder; a run that writes through the main checkout it runs in,
+    the same run from the worktree, its cd in the same call (cd_line)."""
     rel = os.path.relpath(target, main_top)
     mine = own_worktree(ctx, cwd, main_top)
     if mine:
@@ -1249,25 +1303,86 @@ def worktree_alternative(ctx, target, main_top, cwd, rewrite=None, run=None, red
         name = os.path.basename(target.rstrip('\\/')) or 'out'
         return REDIRECT_HINT, rewrite(fwd(os.path.join(ctx.tempdir, name)))
     if rewrite is None and run is not None and cwd and paths.norm(target) == paths.norm(cwd):
-        py_c = PY_C_HINT if PY_C_RUN_RE.search(run) else ''
-        return (py_c + MAIN_CWD_HINT, instead)   # it writes through the main checkout it runs in
-    return 'Make the change in a worktree of it (%s there); the lander brings it to main:' % fwd(rel), instead
+        # it writes through the main checkout it runs in
+        return MAIN_CWD_HINT % instead, cd_line('<worktree>', run, shell)
+    if rewrite is not None:
+        # the session may have a worktree the call does not run in: aim at it, a new one only for a session with none
+        there = '' if rel == '.' else ' (%s there)' % fwd(rel)
+        return ('Make the change in your worktree%s%s; the lander brings it to main:' % (there, only_new(instead)),
+                rewrite('<worktree>' if rel == '.' else '<worktree>/' + fwd(rel)))
+    # no word to aim (cp -t<dir>): the worktrees to make it in; a new one only in a clause (only_new)
+    there = '' if rel == '.' else ' (%s there)' % fwd(rel)
+    return ('Make the change in your worktree%s%s; the lander brings it to main. To see the worktrees:'
+            % (there, '' if mine else only_new(instead)), 'git -C %s worktree list' % quote(main_top))
+
+
+def only_new(new_wt):
+    """The clause a refusal from the main checkout offers a new worktree in: the call does not
+    say whether the session has one, so the Instead aims at <worktree> and only a session with
+    none makes one: the new worktree is never the Instead itself."""
+    return '; only a session with no worktree makes one, first (%s)' % new_wt
 
 
 REDIRECT_HINT = ('A redirect writes output: send it to the temp folder (a change to the repository is made in a '
                  'worktree of it, which the lander brings to main):')
 # commands whose file is the output they are given, like a redirect's (their refusal names the temp folder)
 OUTPUT_WRITERS = ('out-file', 'tee-object', 'tee')
-MAIN_CWD_HINT = ('It writes through its working directory, which is the main checkout: cd into your worktree first, '
-                 'in the same call (no tool keeps a cd between calls), or run a script or module by absolute path '
-                 '(python <worktree>/tools/x.py -C <worktree>; python -m unittest discover -s <worktree>/tests/<pkg> '
-                 '-t <worktree>). No worktree yet:')
-# a run that is a python -c (python, python3, py, python.exe; -c alone or in a cluster such as -Ic):
-# its refusal names the isolated form that may run in a main checkout when the code only reads
-PY_C_RUN_RE = re.compile(r'(?i)(?:^|[\s&("\'\\/])py(?:thon[\d.]*)?(?:\.exe)?["\']?(?:\s+-[A-Za-z]+)*\s+-[A-Za-z]*c'
-                         r'(?=[\s"\']|$)')
-PY_C_HINT = ('A python -c whose code only reads may run in a main checkout as python -I -c (isolated; docs/guard.md '
-             '"Rules" lists what the code may use). ')
+MAIN_CWD_HINT = ('It writes through its working directory, which is the main checkout: run it from your worktree, '
+                 'with the cd in the same call (no tool keeps a cd between calls), or run a script or module by '
+                 'absolute path (python <worktree>/tools/x.py -C <worktree>; python -m unittest discover -s '
+                 '<worktree>/tests/<pkg> -t <worktree>). To read files, use the Read and Grep tools. Only a session '
+                 'with no worktree makes one, first (%s). From your worktree:')
+
+
+def cd_line(where, run, shell):
+    """`run` from the folder `where`, the cd in the same call: PowerShell runs it only when the cd
+    worked (`if ($?)`), any other shell after `&&`."""
+    if shell == sh.PS:
+        return 'cd "%s"; if ($?) { %s }' % (where, run)
+    return 'cd "%s" && %s' % (where, run)
+
+
+def outer_shell(cmd):
+    """The dialect of the line `cmd` is on: its outermost shell (a bash -c inside PowerShell is on a
+    PowerShell line)."""
+    while cmd.nested_in is not None:
+        cmd = cmd.nested_in
+    return cmd.shell
+
+
+def whole_line(ctx, cmd):
+    """The text of the whole line `cmd` is on, as its outermost shell reads it (outer_shell), for
+    a refusal that runs it from the worktree (cd_line): a cd into the top of a main checkout at
+    its start (each one before the first other command, a ; or a line break after it) is left
+    out, as is a comment after its last command. A line with any other cd, or a Pop-Location,
+    would move off the worktree: it gives the call alone (bare)."""
+    outer = cmd
+    while outer.nested_in is not None:
+        outer = outer.nested_in
+    src = outer.source or ''
+    _, cmds = sh.parse(src, outer.shell, outer.cwd)
+    top = [c for c in cmds if c.depth == 0 and c.start is not None]
+    if not top:
+        return src.strip()
+    start = top[0].start
+    for i, c in enumerate(top):
+        is_cd, where = sh.cd_target(c, outer.cwd)
+        if not is_cd:
+            break
+        place = ctx.place(where) if where else None
+        after = src[c.end:top[i + 1].start] if i + 1 < len(top) else None
+        if (place is None or place.kind != repo.MAIN or paths.norm(where) != paths.norm(place.top)
+                or after is None or after.strip() not in ('', ';')):
+            return bare(cmd)
+        start = top[i + 1].start
+    if any(sh.cd_target(c, outer.cwd)[0] for c in cmds if c.start is None or c.start >= start):
+        return bare(cmd)
+    end = max(c.end for c in top)
+    tail = src[end:]
+    cut = tail.find('#')
+    if cut >= 0:
+        tail = tail[:cut - 1 if cut and tail[cut - 1] == '<' else cut]
+    return (src[start:end] + tail).strip()
 
 
 # ---------------------------------------------------------------- shell writes
@@ -1286,13 +1401,18 @@ PS_COMMON_ALIASES = {'ea': 'erroraction', 'wa': 'warningaction', 'infa': 'inform
 class PSCmdlet(object):
     """A cmdlet's parameters as far as the guard needs them: `values` take a value, `switches`
     do not, `pos` names the positional slots in order, `writes` the parameters naming a file it
-    writes (`'*'` in pos: every further positional binds to the last slot)."""
+    writes (`'*'` in pos: every further positional binds to the last slot). `piped`: the groups of
+    those it binds from the pipeline when the line binds no parameter of the group (a path the
+    text does not show, PIPE_UNPLACED). `here`: the parameter whose absence makes it write the
+    location it runs in (Copy-Item with no -Destination). `provider`: a provider-aware item or
+    content cmdlet, whose item on a drive that holds no files is no file (PS_PROVIDER_CMDLETS)."""
 
-    def __init__(self, values, switches=(), pos=(), writes=(), aliases=None):
+    def __init__(self, values, switches=(), pos=(), writes=(), aliases=None, piped=(), here=None, provider=False):
         self.values = tuple(values) + PS_COMMON_VALUES
         self.switches = tuple(switches) + PS_COMMON_SWITCHES
         self.pos, self.writes = tuple(pos), tuple(writes)
         self.aliases = dict(PS_COMMON_ALIASES, **(aliases or {}))
+        self.piped, self.here, self.provider = tuple(piped), here, provider
 
     def names(self):
         return self.values + self.switches
@@ -1305,22 +1425,30 @@ PS_CMDLETS = {
                          ('append', 'force', 'noclobber', 'nonewline'), ('filepath', 'encoding'),
                          ('filepath', 'literalpath'), {'path': 'filepath'}),
     'set-content': PSCmdlet(_PATHS + _FILTERS + ('value', 'encoding', 'stream'),
-                            ('passthru', 'force', 'nonewline', 'asbytestream'), ('path', 'value'), _PATHS),
+                            ('passthru', 'force', 'nonewline', 'asbytestream'), ('path', 'value'), _PATHS,
+                            piped=(_PATHS,), provider=True),
     'add-content': PSCmdlet(_PATHS + _FILTERS + ('value', 'encoding', 'stream'),
-                            ('passthru', 'force', 'nonewline', 'asbytestream'), ('path', 'value'), _PATHS),
-    'clear-content': PSCmdlet(_PATHS + _FILTERS + ('stream',), ('force',), ('path',), _PATHS),
+                            ('passthru', 'force', 'nonewline', 'asbytestream'), ('path', 'value'), _PATHS,
+                            piped=(_PATHS,), provider=True),
+    'clear-content': PSCmdlet(_PATHS + _FILTERS + ('stream',), ('force',), ('path',), _PATHS,
+                              piped=(_PATHS,), provider=True),
     'tee-object': PSCmdlet(('filepath', 'literalpath', 'variable', 'inputobject', 'encoding'), ('append',),
                            ('filepath',), ('filepath', 'literalpath'), {'path': 'filepath'}),
     'new-item': PSCmdlet(('path', 'name', 'itemtype', 'value', 'credential'), ('force',), ('path',), ('path',),
-                         {'type': 'itemtype'}),
-    'remove-item': PSCmdlet(_PATHS + _FILTERS + ('stream',), ('recurse', 'force'), ('path', '*'), _PATHS),
+                         {'type': 'itemtype'}, piped=(('path',),), provider=True),
+    'remove-item': PSCmdlet(_PATHS + _FILTERS + ('stream',), ('recurse', 'force'), ('path', '*'), _PATHS,
+                            piped=(_PATHS,), provider=True),
+    # the paths Copy-Item takes from the pipeline are what it reads; its -Destination is the write
     'copy-item': PSCmdlet(_PATHS + _FILTERS + ('destination', 'tosession', 'fromsession'),
-                          ('container', 'force', 'recurse', 'passthru'), ('path', 'destination'), ('destination',)),
+                          ('container', 'force', 'recurse', 'passthru'), ('path', 'destination'), ('destination',),
+                          piped=(('destination',),), here='destination', provider=True),
     'move-item': PSCmdlet(_PATHS + _FILTERS + ('destination',), ('force', 'passthru'), ('path', 'destination'),
-                          _PATHS + ('destination',)),
-    'rename-item': PSCmdlet(_PATHS + ('newname', 'credential'), ('force', 'passthru'), ('path', 'newname'), _PATHS),
+                          _PATHS + ('destination',), piped=(_PATHS, ('destination',)), here='destination',
+                          provider=True),
+    'rename-item': PSCmdlet(_PATHS + ('newname', 'credential'), ('force', 'passthru'), ('path', 'newname'), _PATHS,
+                            piped=(_PATHS,), provider=True),
     'expand-archive': PSCmdlet(_PATHS + ('destinationpath',), ('force', 'passthru'), ('path', 'destinationpath'),
-                               ('destinationpath',)),
+                               ('destinationpath',), here='destinationpath'),
     'compress-archive': PSCmdlet(_PATHS + ('destinationpath', 'compressionlevel'), ('update', 'force', 'passthru'),
                                  ('path', 'destinationpath'), ('destinationpath',)),
     'export-csv': PSCmdlet(_PATHS + ('inputobject', 'delimiter', 'encoding', 'quotefields', 'usequotes'),
@@ -1339,7 +1467,7 @@ PS_CMDLETS = {
                               ('recurse', 'force', 'name', 'directory', 'file', 'hidden', 'readonly', 'system',
                                'followsymlink'), ('path', 'filter'), ()),
     'set-itemproperty': PSCmdlet(_PATHS + _FILTERS + ('name', 'value', 'type', 'inputobject'), ('passthru', 'force'),
-                                 ('path', 'name', 'value'), _PATHS),
+                                 ('path', 'name', 'value'), _PATHS, piped=(_PATHS,), provider=True),
     'start-transcript': PSCmdlet(_PATHS + ('outputdirectory',),
                                  ('append', 'force', 'noclobber', 'includeinvocationheader', 'useminimalheader'),
                                  ('path',), _PATHS + ('outputdirectory',)),
@@ -1482,6 +1610,22 @@ def _split_commas(w):
 def here(w):
     """A Word for the directory a command runs in: the file it writes there is not named."""
     return sh.Word('.', False, w.start if w is not None else 0, w.end if w is not None else 0)
+
+
+# Why a path a cmdlet takes from the pipeline is one the guard cannot place
+PIPE_UNPLACED = 'the text does not show what the command before the | sends'
+PIPE_WORD = '(a path from the pipeline)'
+
+
+def pipe_stand_in(cmd):
+    """The Word write_targets gives for a path a PowerShell cmdlet takes from the pipeline
+    (PSCmdlet piped): no text to place, at the command's end (pipe_stand_in_word)."""
+    return sh.Word(PIPE_WORD, False, cmd.end, cmd.end)
+
+
+def pipe_stand_in_word(cmd, w):
+    """True when the write `w` is pipe_stand_in(cmd)."""
+    return w.text == PIPE_WORD and not w.dyn and w.start == w.end == cmd.end
 
 
 class NetWrite(object):
@@ -1697,29 +1841,14 @@ def _net_new_object(cmd, inv):
     return kind[0], vals.get('argumentlist', []), k, _net_lost(lost)
 
 
-FILE_MODE_RE = re.compile(r'(?i)^(?:\[(?:System\.)?IO\.FileMode\]::)?(\w+)$')
-FILE_ACCESS_RE = re.compile(r'(?i)^(?:\[(?:System\.)?IO\.FileAccess\]::)?(\w+)$')
-
-
-def _net_arg_name(src, arg, pattern):
-    """The enum value name the argument names ('Open', [IO.FileMode]::Open), lower case, or ''."""
-    text, s, e = arg
-    m = pattern.match(text if text is not None else src[s:e].strip())
-    return m.group(1).lower() if m else ''
-
-
 def _net_ctor(src, kind, args, end, out):
-    """Add the path a StreamWriter or FileStream constructor with `args` writes to `out`; True
-    when the guard does not read it: no arguments, or a StreamWriter's first argument that is not a
-    plain string (a Stream it writes through, judged where it is opened, or a path the line
-    computes). A FileStream opened to read only (FileMode Open, FileAccess Read) writes nothing,
-    unless it names FileOptions (a sixth argument: DeleteOnClose deletes the file)."""
+    """Add the path a StreamWriter or FileStream constructor with `args` writes to `out`: its first
+    argument. True when the guard does not read it: no arguments, or a StreamWriter's first argument
+    that is not a plain string (a Stream it writes through, judged where it is opened, or a path the
+    line computes). A FileStream opened only to read counts as a write (docs/guard-v2.md v2:114)."""
     if not args:
         return True
     text, s, e = args[0]
-    if kind == 'filestream' and 3 <= len(args) < 6 and _net_arg_name(src, args[1], FILE_MODE_RE) == 'open' and \
-            _net_arg_name(src, args[2], FILE_ACCESS_RE) == 'read':
-        return False
     if text is None and (kind == 'streamwriter' or src[s:e].lower() == '$null'):
         return kind == 'streamwriter'
     out.append(NetWrite(sh.Word(src[s:e] if text is None else text, text is None, s, e), end))
@@ -1730,8 +1859,7 @@ def net_writes(cmd):
     """([NetWrite], unread): each path the PowerShell command's .NET file calls (IO_FILE_RE) and
     StreamWriter and FileStream constructors (NET_TYPE_RE: ::new(...) or New-Object) write, and True
     when a match is a write the guard does not read the path of, so write_targets judges the
-    directory the command runs in, as it did for every such call, and dotnet_process_dir the one
-    its process started in: one inside a quoted word, a method named with no '(' after it (called
+    directory the command runs in, as a path it cannot place: one inside a quoted word, a method named with no '(' after it (called
     later, through .Invoke or a variable), a call with fewer arguments than the ones it writes
     (_net_written), one whose arguments the parse may have lost its place in (_net_lost), a type
     named any other way (a cast, [type] as a value) and a New-Object call _net_new_object does
@@ -1802,8 +1930,22 @@ def net_writes(cmd):
 def net_placed(w):
     """True when the .NET argument Word `w` is a literal absolute path on a drive (NET_ABS_RE;
     net_writes reads \\\\?\\<drive>:\\x as <drive>:\\x). A share (\\\\host\\<drive>$\\x) is not: the guard cannot tell
-    which folder it is, so dotnet_unplaced judges it as a path it cannot place."""
+    which folder it is, so write_targets judges it as a path it cannot place."""
     return not w.dyn and bool(NET_ABS_RE.match(w.text))
+
+
+def net_relative(w):
+    """True when the .NET argument Word `w` is a literal relative path (no drive, no leading slash,
+    no ~): write_targets judges it where the PowerShell location puts it, as a bash one is, though
+    .NET reads it against the process's directory (NET_UNPLACED), which the guard does not judge
+    (docs/guard-v2.md B17)."""
+    return not w.dyn and bool(w.text) and w.text[0] not in '\\/~' and ':' not in w.text
+
+
+# why a .NET write the guard cannot place is counted as a write to the directory the line runs in
+NET_UNPLACED = ('a .NET call whose path the guard does not read or cannot place: a driveless path, a share or '
+                'device path, or one the line computes. .NET reads a relative or driveless path against the '
+                'process\'s working directory ([Environment]::CurrentDirectory), not the PowerShell location')
 
 
 def net_retarget(cmd, x, path):
@@ -2078,13 +2220,31 @@ def _tar_word(args, k, state, dirs):
     return 'maybe' if doubt else 'value'
 
 
+def _tar_stdout(t):
+    """True when tar's word `t`, no value of the word before it, is -O/--to-stdout (GNU tar and
+    bsdtar alike: -x prints each file and writes none): --to-stdout, or an O in a cluster before
+    any letter that takes or may take a value (-xvOf; in -xfO the O is f's file)."""
+    if t.startswith('--'):
+        return t == '--to-stdout'
+    if not t.startswith('-'):
+        return False
+    for c in t[1:]:
+        if c == 'O':
+            return True
+        if c not in TAR_FLAGS:
+            return False
+    return False
+
+
 def _tar(args, cmd_word):
     """[Word]: the folders tar -x writes: each folder a -C/--directory names, relative to the one
     before it (_TarDirs), with none the working directory, and the working directory too once a -C
-    was read that may not be one (_tar_word, _tar_old: fail closed)."""
+    was read that may not be one (_tar_word, _tar_old: fail closed). None with -O/--to-stdout
+    where tar reads it as that option (_tar_stdout; any O of the old-style first word)."""
     first = args[0].text if args else ''
     extract = bool(re.match(r'^[A-Za-z]*x', first)) and not first.startswith('-')       # tar xf a.tar
     dirs, k, state = _TarDirs(), 0, None
+    stdout = extract and 'O' in first
     if extract:
         k, state = _tar_old(args, dirs)
     while k < len(args):
@@ -2093,9 +2253,10 @@ def _tar(args, cmd_word):
             break
         if t in ('--extract', '--get') or re.match(r'^-[A-Za-z]*x', t) and not t.startswith('--'):
             extract = True
+        stdout = stdout or state is None and _tar_stdout(t)
         state = _tar_word(args, k, state, dirs)
         k += 1
-    if not extract:
+    if not extract or stdout:
         return []
     if not dirs.seen:
         return [here(cmd_word)]
@@ -2137,11 +2298,9 @@ PY_LAUNCHER_VER_RE = re.compile(r'^-\d+(\.\d+)*(-(32|64))?$')
 
 
 def py_program(name, args):
-    """(kind, value, flags): how python reads its program from `args`. kind is 'code' (value the
-    -c Word), 'module' (-m), 'stdin' (`-`), 'script' or 'none' (no program named: python reads
-    standard input). flags is the set of option letters before it that take no value; a -W or -X
-    value or a long option adds '?'."""
-    flags = set()
+    """(kind, value): how python reads its program from `args`. kind is 'code' (value the -c
+    Word), 'module' (-m), 'stdin' (`-`), 'script' or 'none' (no program named: python reads
+    standard input)."""
     k = 0
     if name == 'py' and args and PY_LAUNCHER_VER_RE.match(args[0].text):
         k = 1
@@ -2149,248 +2308,64 @@ def py_program(name, args):
         w = args[k]
         t = w.text
         if t == '-':
-            return 'stdin', None, flags
+            return 'stdin', None
         if t == '--':
-            return ('script' if k + 1 < len(args) else 'none'), None, flags
+            return ('script' if k + 1 < len(args) else 'none'), None
         if t.startswith('--'):
-            flags.add('?')
             k += 2 if t in PY_LONG_VALUE else 1
             continue
         if not t.startswith('-') or len(t) < 2:
-            return 'script', None, flags
+            return 'script', None
         for j in range(1, len(t)):
             ch = t[j]
             if ch not in PY_SHORT_VALUE:
-                flags.add(ch)
                 continue
             if t[j + 1:]:
                 value, k = sh.Word(t[j + 1:], w.dyn, w.start, w.end), k + 1
             else:
                 value, k = (args[k + 1] if k + 1 < len(args) else None), k + 2
             if ch == 'c':
-                return 'code', value, flags
+                return 'code', value
             if ch == 'm':
-                return 'module', value, flags
-            flags.add('?')
+                return 'module', value
             break
         else:
             k += 1
-    return 'none', None, flags
-
-
-# A python -c the guard can prove reads only (py_reads_only): isolated (-I: no working directory
-# or PYTHON* variable decides what an import loads) with these other plain flags, importing only
-# these modules and naming only these of their attributes (os.path only as `from os.path import`)
-PY_READ_FLAGS = set('IESsBbdqOuvP')
-PY_READ_MODULES = {
-    'json': frozenset(('load', 'loads', 'dump', 'dumps', 'JSONDecodeError')),
-    'sys': frozenset(('argv', 'stdin', 'stdout', 'stderr', 'exit', 'version', 'version_info',
-                      'platform', 'maxsize', 'executable')),
-    're': frozenset(('match', 'fullmatch', 'search', 'findall', 'finditer', 'sub', 'subn',
-                     'split', 'escape', 'error', 'A', 'ASCII', 'I', 'IGNORECASE', 'M', 'MULTILINE',
-                     'S', 'DOTALL', 'X', 'VERBOSE')),
-    'collections': frozenset(('Counter', 'defaultdict', 'OrderedDict', 'deque')),
-    'itertools': frozenset(('chain', 'islice', 'groupby', 'count', 'product', 'permutations',
-                            'combinations', 'accumulate', 'zip_longest', 'takewhile', 'dropwhile',
-                            'starmap', 'repeat', 'compress', 'filterfalse')),
-    'math': frozenset(('ceil', 'floor', 'sqrt', 'log', 'log2', 'log10', 'exp', 'fabs', 'fsum',
-                       'prod', 'gcd', 'isclose', 'isnan', 'isinf', 'trunc', 'pi', 'e', 'inf', 'nan')),
-    'os.path': frozenset(('basename', 'dirname', 'exists', 'isfile', 'isdir', 'isabs', 'join',
-                          'getsize', 'getmtime', 'abspath', 'normpath', 'normcase', 'realpath',
-                          'relpath', 'split', 'splitext', 'commonpath')),
-}
-# The only builtins the code may name (an allowlist: type, object and the rest stay out). open
-# only as a call that opens for reading (_py_open_reads)
-PY_BUILTINS = frozenset(('print', 'len', 'range', 'sorted', 'reversed', 'enumerate', 'zip', 'min', 'max',
-                         'sum', 'abs', 'round', 'any', 'all', 'str', 'int', 'float', 'bool', 'list',
-                         'dict', 'set', 'tuple', 'repr', 'isinstance', 'map', 'filter', 'open'))
-# The only attributes the code may take of a value that is not an imported module: string, list,
-# dict, match and read-file methods. A file object's buffer, raw or name, and every class or
-# type attribute, stay out
-PY_VALUE_ATTRS = frozenset((
-    'read', 'readline', 'readlines', 'write', 'flush',
-    'strip', 'lstrip', 'rstrip', 'split', 'rsplit', 'splitlines', 'join', 'replace', 'startswith',
-    'endswith', 'lower', 'upper', 'find', 'count', 'format', 'encode', 'decode', 'partition',
-    'rpartition', 'isdigit',
-    'items', 'keys', 'values', 'get', 'append', 'extend', 'sort', 'index', 'most_common',
-    'group', 'groups', 'groupdict', 'start', 'end', 'span'))
-# names that run text as code, open a file, reach any attribute or module by name, give a value's
-# type, or start a debugger or pager: refused as any identifier (a name, attribute, import alias,
-# keyword); open is the one builtin call let through, as a Name only
-PY_DENIED_NAMES = {'exec', 'eval', 'compile', 'open', 'getattr', 'setattr', 'delattr', 'globals',
-                   'locals', 'vars', 'breakpoint', 'help', 'type', 'object', 'super', 'input'}
-# identifiers that reach a frame, its globals or code: the way back to every module
-PY_FRAME_ATTR_RE = re.compile(r'^(gi|cr|ag|f|tb|co|func|im)_')
-PY_OPEN_KEYWORDS = {'encoding', 'errors', 'newline', 'buffering'}
-# The only syntax the code may use: statements and expressions that bind, call, compute and loop.
-# No def, lambda or class (new names the walk would have to follow), no match (its patterns bind
-# and read attributes with no Name or Attribute node), no try, while, del, global, walrus, await,
-# yield or template string; any node type a later python adds is refused too
-PY_NODES = tuple(t for t in (getattr(ast, n, None) for n in (
-    'Module', 'Expr', 'Assign', 'AugAssign', 'For', 'If', 'With', 'withitem', 'Pass', 'Break',
-    'Continue', 'Import', 'ImportFrom', 'alias',
-    'Call', 'keyword', 'Name', 'Attribute', 'Subscript', 'Slice', 'Starred', 'Constant',
-    'JoinedStr', 'FormattedValue', 'BinOp', 'UnaryOp', 'BoolOp', 'Compare', 'IfExp', 'Tuple', 'List',
-    'Dict', 'Set', 'ListComp', 'SetComp', 'DictComp', 'GeneratorExp', 'comprehension',
-    'Load', 'Store', 'operator', 'unaryop', 'boolop', 'cmpop')) if t is not None)
-# Every public builtin name up to python 3.14, written out so the guard does not depend on the
-# python it runs on: the python a line starts may be newer than the guard's
-PY_BUILTIN_NAMES = frozenset((
-    'abs', 'aiter', 'all', 'anext', 'any', 'ascii', 'bin', 'bool', 'breakpoint', 'bytearray', 'bytes',
-    'callable', 'chr', 'classmethod', 'compile', 'complex', 'copyright', 'credits', 'delattr', 'dict',
-    'dir', 'divmod', 'enumerate', 'eval', 'exec', 'exit', 'filter', 'float', 'format', 'frozenset',
-    'getattr', 'globals', 'hasattr', 'hash', 'help', 'hex', 'id', 'input', 'int', 'isinstance',
-    'issubclass', 'iter', 'len', 'license', 'list', 'locals', 'map', 'max', 'memoryview', 'min', 'next',
-    'object', 'oct', 'open', 'ord', 'pow', 'print', 'property', 'quit', 'range', 'repr', 'reversed',
-    'round', 'set', 'setattr', 'slice', 'sorted', 'staticmethod', 'str', 'sum', 'super', 'tuple', 'type',
-    'vars', 'zip', 'Ellipsis', 'NotImplemented', 'True', 'False', 'None',
-    'ArithmeticError', 'AssertionError', 'AttributeError', 'BaseException', 'BaseExceptionGroup',
-    'BlockingIOError', 'BrokenPipeError', 'BufferError', 'BytesWarning', 'ChildProcessError',
-    'ConnectionAbortedError', 'ConnectionError', 'ConnectionRefusedError', 'ConnectionResetError',
-    'DeprecationWarning', 'EOFError', 'EncodingWarning', 'EnvironmentError', 'Exception',
-    'ExceptionGroup', 'FileExistsError', 'FileNotFoundError', 'FloatingPointError', 'FutureWarning',
-    'GeneratorExit', 'IOError', 'ImportError', 'ImportWarning', 'IndentationError', 'IndexError',
-    'InterruptedError', 'IsADirectoryError', 'KeyError', 'KeyboardInterrupt', 'LookupError',
-    'MemoryError', 'ModuleNotFoundError', 'NameError', 'NotADirectoryError', 'NotImplementedError',
-    'OSError', 'OverflowError', 'PendingDeprecationWarning', 'PermissionError', 'ProcessLookupError',
-    'PythonFinalizationError', 'RecursionError', 'ReferenceError', 'ResourceWarning', 'RuntimeError',
-    'RuntimeWarning', 'StopAsyncIteration', 'StopIteration', 'SyntaxError', 'SyntaxWarning',
-    'SystemError', 'SystemExit', 'TabError', 'TimeoutError', 'TypeError', 'UnboundLocalError',
-    'UnicodeDecodeError', 'UnicodeEncodeError', 'UnicodeError', 'UnicodeTranslateError',
-    'UnicodeWarning', 'UserWarning', 'ValueError', 'Warning', 'WindowsError', 'ZeroDivisionError'))
-# names a stored name or import alias may not take: it would hide the builtin only when the
-# binding runs, so a name read as the binding might reach the builtin. The fixed list joined with
-# the running python's own, so a python newer or older than the guard's is covered either way
-PY_SHADOWED = PY_BUILTIN_NAMES | frozenset(dir(builtins)) | frozenset(PY_DENIED_NAMES)
-
-
-def _py_open_reads(call):
-    """True when the open() call opens for reading only: a path, then at most a literal mode
-    without w, a, x or +, and only plain keywords."""
-    if not 1 <= len(call.args) <= 2 or any(isinstance(a, ast.Starred) for a in call.args):
-        return False
-    mode = call.args[1] if len(call.args) == 2 else None
-    for kw in call.keywords:
-        if kw.arg == 'mode' and mode is None:
-            mode = kw.value
-        elif kw.arg not in PY_OPEN_KEYWORDS:
-            return False                        # **kwargs, opener=, a second mode
-    if mode is None:
-        return True
-    return isinstance(mode, ast.Constant) and isinstance(mode.value, str) and set(mode.value) <= set('rbtU')
-
-
-def _py_ident_ok(name):
-    """False for an identifier the code may not hold anywhere: one starting with _, a frame
-    identifier, or one of PY_DENIED_NAMES."""
-    return not (name.startswith('_') or PY_FRAME_ATTR_RE.match(name) or name in PY_DENIED_NAMES)
-
-
-def py_reads_only(code, flags, ps=False):
-    """True when the guard can prove the python -c Word `code`, run with the option letters
-    `flags`, writes no file: literal text, isolated mode, only PY_NODES syntax, imports and module
-    attributes only from PY_READ_MODULES, a module name only as `module.attr`, other attributes
-    only from PY_VALUE_ATTRS, names only from PY_BUILTINS, the imports and the names the code
-    stores, no identifier _py_ident_ok refuses, and open() only as a call that opens for reading.
-    `ps`: the line reaches python through PowerShell, whose native-argument quoting can hand python
-    other text than the Word when it holds a double quote or a backslash (PowerShell 5.1 also
-    wraps an argument with a space in quotes without doubling a trailing backslash), so such code
-    is not proved; nor is empty or blank code, which PowerShell 5.1 drops so that python takes the
-    next word as its code. Each import name binds once. Any text it cannot parse, or any other
-    shape, is not proved (False)."""
-    if code is None or code.dyn or 'I' not in flags or not flags <= PY_READ_FLAGS:
-        return False
-    if not code.text.strip():
-        return False
-    if ps and (ps_native_unsure(code) or '\\' in code.text):
-        return False
-    try:
-        tree = ast.parse(code.text, mode='exec')
-    except Exception:                           # SyntaxError, ValueError, RecursionError: unread
-        return False
-    mods, imported, stored, aliases, parents = {}, set(), set(), set(), {}
-    for node in ast.walk(tree):
-        if not isinstance(node, PY_NODES):
-            return False
-        for child in ast.iter_child_nodes(node):
-            parents[child] = node
-        if isinstance(node, ast.Import):
-            for a in node.names:
-                if a.name not in PY_READ_MODULES or '.' in a.name:
-                    return False
-                mods[a.asname or a.name] = PY_READ_MODULES[a.name]
-        elif isinstance(node, ast.ImportFrom):
-            if node.level or node.module not in PY_READ_MODULES:
-                return False
-            if any(a.name not in PY_READ_MODULES[node.module] for a in node.names):
-                return False                    # `*` too
-            imported.update(a.asname or a.name for a in node.names)
-        elif isinstance(node, ast.alias):
-            bound = node.asname or node.name
-            if not all(_py_ident_ok(n) for n in (node.name, node.asname) if n) \
-                    or bound in PY_SHADOWED or bound in aliases:
-                return False                    # a name two imports bind: which one is unknown
-            aliases.add(bound)
-        elif isinstance(node, ast.keyword):
-            if node.arg is not None and not _py_ident_ok(node.arg):
-                return False
-        elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
-            stored.add(node.id)
-    if stored & (set(mods) | imported | PY_SHADOWED):
-        return False                            # a module, an import or a builtin rebound
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Attribute):
-            if not _py_ident_ok(node.attr) or not isinstance(node.ctx, ast.Load):
-                return False
-            v = node.value
-            allowed = mods[v.id] if isinstance(v, ast.Name) and v.id in mods else PY_VALUE_ATTRS
-            if node.attr not in allowed:
-                return False
-        elif isinstance(node, ast.Name):
-            n, parent = node.id, parents.get(node)
-            if n == 'open':
-                if not (isinstance(parent, ast.Call) and parent.func is node and _py_open_reads(parent)):
-                    return False
-                continue
-            if not _py_ident_ok(n):
-                return False
-            if n in mods:
-                if not (isinstance(parent, ast.Attribute) and parent.value is node
-                        and isinstance(node.ctx, ast.Load)):
-                    return False                # a module passed on, rebound or aliased
-            elif n not in PY_BUILTINS and n not in imported and n not in stored:
-                return False                    # any other builtin, or a name never bound
-    return True
+    return 'none', None
 
 
 def _python(cmd, name, args, cmd_word, via=None):
+    return [here(cmd_word)] if python_unread(cmd, name, args, via) else []
+
+
+PY_SP_WHY = 'Start-Process hands python a command line the guard does not read'
+PY_PS_WHY = 'PowerShell may hand python other words than the guard read'
+PY_UNREAD_WHY = 'the guard does not read what the code python is given writes'
+
+
+def python_unread(cmd, name, args, via=None):
+    """Why a python run counts as a write of the directory it runs in, or None when its own file
+    decides what it writes (a script or module, or nothing to run)."""
     # Start-Process hands python one command line the guard re-split with its quotes taken out
     # (commands._split_list), so what python reads is not the words below
     if via == 'start-process':
-        return [here(cmd_word)]
-    shells, c = set(), cmd
+        return PY_SP_WHY
+    c = cmd
     while c is not None:                        # every shell on the way to python
-        shells.add(c.shell)
         # a word PowerShell may hand on as other than one argument (dropped when empty, split at a
         # double quote): python's own words, or the text of a bash -c around it, are not the
         # ones read here
         if c.shell == sh.PS and any(ps_native_unsure(w) for w in c.words):
-            return [here(cmd_word)]
+            return PY_PS_WHY
         c = c.nested_in
-    kind, code, flags = py_program(name, args)
-    if kind == 'code':
-        # through cmd.exe the Word is not what python gets: cmd ends a quoted part at a \" python
-        # reads as a quote, and keeps print(...) one word where the read splits it at the (
-        if sh.CMD in shells:
-            return [here(cmd_word)]
-        return [] if py_reads_only(code, flags, sh.PS in shells) else [here(cmd_word)]
-    if kind == 'stdin':
-        return [here(cmd_word)]
+    kind, _ = py_program(name, args)
+    if kind in ('code', 'stdin'):
+        return PY_UNREAD_WHY                    # the guard does not read what the code writes
     if kind in ('module', 'script'):
-        return []                               # its own file decides what it writes
+        return None                             # its own file decides what it writes
     if cmd.piped_in or any(r.op in ('<<', '<<<', '<') for r in cmd.redirects):
-        return [here(cmd_word)]                 # a script read from standard input
-    return []
+        return PY_UNREAD_WHY                    # a script read from standard input
+    return None
 
 
 # The coarse rule for a PowerShell writer (ps_unread). Parameters whose value is no path: their one
@@ -2557,10 +2532,10 @@ def write_targets(cmd, inv):
         out.append(t)
     if net_mentioned(cmd):
         net, unread = net_writes(cmd)
-        out.extend(x.word for x in net if net_placed(x.word))
-        # The rest are dotnet_unplaced's, and the directory the command runs in is judged too,
-        # as it was for every .NET call: the repository's roles there answer for any session.
-        if unread or any(not net_placed(x.word) for x in net):
+        # a literal path is judged where it points, a relative one where the location puts it; for
+        # any other the directory the command runs in stands in, as a path it cannot place (NET_UNPLACED)
+        out.extend(x.word for x in net if net_placed(x.word) or net_relative(x.word))
+        if unread or any(not (net_placed(x.word) or net_relative(x.word)) for x in net):
             out.append(here(cmd.words[0] if cmd.words else None))
     if inv is None:
         return out
@@ -2588,7 +2563,10 @@ def write_targets(cmd, inv):
                 out.extend(x for x in bound.get(p, []) if native or not ps_provider_item(cmd, x))
             if spec.writes:
                 out.extend(ps_unread(cmd, args, spec))
-            if cmdlet == 'expand-archive' and not bound.get('destinationpath'):
+            piped = [g for g in spec.piped if cmd.piped_in and not any(bound.get(p) for p in g)]
+            if piped:
+                out.append(pipe_stand_in(cmd))
+            if spec.here and not bound.get(spec.here) and not any(spec.here in g for g in piped):
                 out.append(here(word))
             if cmdlet == 'new-item' and bound.get('name'):
                 base = (bound.get('path') or [None])[0]
@@ -2828,13 +2806,14 @@ PS_DRIVE_REMAP_RE = re.compile(r'(?im)drive|psdr|\b(?:ndr|rdr|mount|iex|ipmo)\b|
                                r'|\.ps1\b|\.psm1\b|scriptblock|sessionstate|(?:^|[;&|({])\s*\.\s')
 # Session objects, .NET types and static calls a line may reach a drive through
 PS_DOTNET_RE = re.compile(r'(?im)\$executioncontext|\$host\b|new-object|add-type|^\s*using\b|[\])]\s*::')
-# The provider-aware item and content cmdlets, as the line names them (the canonical name or one
-# of these aliases): their item on a drive that holds no files is no file. Script functions
-# (Compress-Archive, mkdir) and the file-only writers (Out-File, Tee-Object, Export-*,
-# Start-Transcript, Invoke-WebRequest -OutFile) are not here and are judged as files.
-PS_PROVIDER_CMDLETS = frozenset(('new-item', 'set-content', 'add-content', 'clear-content', 'remove-item',
-                                 'rename-item', 'move-item', 'copy-item', 'set-itemproperty',
-                                 'ni', 'sc', 'ac', 'clc', 'ri', 'del', 'rni', 'mi', 'move', 'cpi', 'copy', 'sp'))
+# The provider-aware item and content cmdlets (PSCmdlet provider), as the line names them: the
+# canonical name or one of PS_PROVIDER_ALIASES (any other alias is judged as a file write). Their
+# item on a drive that holds no files is no file. Script functions (Compress-Archive, mkdir) and
+# the file-only writers (Out-File, Tee-Object, Export-*, Start-Transcript, Invoke-WebRequest
+# -OutFile) are not here and are judged as files.
+PS_PROVIDER_ALIASES = ('ni', 'sc', 'ac', 'clc', 'ri', 'del', 'rni', 'mi', 'move', 'cpi', 'copy', 'sp')
+PS_PROVIDER_CMDLETS = frozenset([n for n, s in PS_CMDLETS.items() if s.provider] +
+                                [a for a in PS_PROVIDER_ALIASES if PS_CMDLETS[PS_ALIASES[a]].provider])
 # Read-only cmdlets a line of provider items may also hold
 PS_READ_CMDLETS = frozenset(('get-item', 'gi', 'get-content', 'gc', 'get-childitem', 'gci', 'test-path',
                              'get-location', 'gl', 'pwd', 'write-output', 'echo', 'write-host'))
@@ -2873,6 +2852,15 @@ def ps_line_plain(cmd):
             if w.dyn and not PS_ENV_READ_WORD_RE.match(w.text) or any(r.search(w.text) for r in (PS_DRIVE_REMAP_RE, cm.PS_SCRIPT_TEXT_RE, PS_DOTNET_RE)):
                 return False
     return True
+
+
+def ps_provider_word(cmd, inv, w):
+    """True when the Word `w`, written by the command `cmd` (invocation `inv`), is a literal item
+    of a provider-aware cmdlet on a drive that holds no files (PS_PROVIDER_ITEM_RE, no `..` part),
+    whatever the line around it: ps_provider_item without ps_line_plain. Its refusal says why
+    (PROVIDER_ITEM_WHY) instead of naming a file to write."""
+    return cmd.shell == sh.PS and inv is not None and inv.via is None and inv.name in PS_PROVIDER_CMDLETS and \
+        not w.dyn and bool(PS_PROVIDER_ITEM_RE.match(w.text)) and not DOTDOT_RE.search(w.text)
 
 
 def ps_provider_item(cmd, w):
@@ -2918,70 +2906,13 @@ BASH_DEVICE_RE = re.compile(r'^/dev/')         # /dev/stderr, /dev/tty, /dev/fd/
 BASH_TMP_RE = re.compile(r'^/tmp(?:/|$)')        # Git Bash mounts /tmp on a temp folder: jail.bash_tmp
 
 
-PY_SLEEP_CALLS = ('time.sleep', 'sleep')
-
-
-def py_only_sleeps(text):
-    """True when the python program `text` only imports time (import time, from time import sleep)
-    and calls time.sleep or sleep with a number: a pause and nothing else."""
-    try:
-        tree = ast.parse(text)
-    except (SyntaxError, ValueError):
-        return False
-    slept = False
-    for node in tree.body:
-        if isinstance(node, ast.Import) and all(a.name == 'time' and a.asname is None for a in node.names):
-            continue
-        if isinstance(node, ast.ImportFrom) and node.module == 'time' and not node.level and \
-                all(a.name == 'sleep' and a.asname is None for a in node.names):
-            continue
-        call = node.value if isinstance(node, ast.Expr) else None
-        if not isinstance(call, ast.Call) or call.keywords or len(call.args) != 1:
-            return False
-        f, arg = call.func, call.args[0]
-        name = f.id if isinstance(f, ast.Name) else \
-            '%s.%s' % (f.value.id, f.attr) if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) \
-            else None
-        if name not in PY_SLEEP_CALLS or not isinstance(arg, ast.Constant) or \
-                isinstance(arg.value, bool) or not isinstance(arg.value, (int, float)):
-            return False
-        slept = True
-    return slept
-
-
-def sleep_wait(cmd, inv, w):
-    """True when `w` is the stand-in for the directory a python -c runs in (here) and that program
-    only pauses (py_only_sleeps): a sleep-wait, which the main-checkout refusal names as one
-    (sleep_refusal) rather than as writing files. Its verdict is unchanged."""
-    if inv is None or inv.dyn or inv.via == 'start-process' or not cm.PYTHON_RE.match(inv.name or ''):
-        return False
-    if w.text != '.' or cmd.source[w.start:w.end] == '.':
-        return False
-    kind, code, _ = py_program(inv.name, inv.args)
-    return kind == 'code' and code is not None and not code.dyn and py_only_sleeps(code.text)
-
-
-SLEEP_WAIT_WHY = ('is a sleep-wait: it only pauses, and a pause in the foreground holds the session while '
-                  'what it waits for runs (a python -c the guard cannot prove reads only is also read as '
-                  'writing the main checkout it runs in). Never sleep-wait: run the work in the background '
-                  '(run_in_background: true) and wait for the notice it sends when it exits; to wait on a '
-                  'condition, run a command that exits when the condition holds in the background, or use '
-                  'the Monitor tool with one:')
-SLEEP_WAIT_INSTEAD = 'until <condition>; do sleep 5; done'
-
-
 def py_unread(cmd, inv, w):
-    """Why python's stand-in write `w` (_python's here()) is one, or None for any other write: the
-    guard does not read its program as read-only, which is the reason a refusal gives (not a file
-    it names). The verdict is unchanged."""
+    """Why python's stand-in write `w` (_python's here()) is one (python_unread), or None for any
+    other write: the reason a refusal gives, not a file it names. The verdict is unchanged."""
     if inv is None or not cm.PYTHON_RE.match(inv.name or '') or w.text != '.' or \
             cmd.source[w.start:w.end] == '.':
         return None
-    if inv.via == 'start-process':
-        return 'Start-Process hands python a command line the guard does not read'
-    if not inv.dyn and py_program(inv.name, inv.args)[0] == 'code':
-        return 'the guard does not read the code of that python -c as read-only'
-    return 'the guard does not read the program python is given'
+    return python_unread(cmd, inv.name, inv.args, inv.via) or PY_UNREAD_WHY
 
 
 def unread_write(cmd, inv, w):
@@ -2995,20 +2926,17 @@ def unread_write(cmd, inv, w):
         return True
     if inv is not None and (inv.name in EVALS or inv.name == 'perl' or inv.via == 'xargs'):
         return True
-    return net_mentioned(cmd) and bool(cmd.words) and (w.start, w.end) == (cmd.words[0].start, cmd.words[0].end)
+    return net_stand_in(cmd, w)
 
 
-def sleep_refusal(d, cmd, role):
-    """The main-checkout Decision `d` for a sleep-wait (sleep_wait), its reason saying so: same
-    verdict and rule, the background wait as its alternative."""
-    return refuse(d.rule, role, '`%s` %s' % (cmd.text, SLEEP_WAIT_WHY), SLEEP_WAIT_INSTEAD, kind=d.verdict)
+def net_stand_in(cmd, w):
+    """True when the write `w` is the stand-in write_targets gives a .NET write it cannot place
+    (NET_UNPLACED): the directory the command runs in, at its first word."""
+    return net_mentioned(cmd) and bool(cmd.words) and w.text == '.' and         (w.start, w.end) == (cmd.words[0].start, cmd.words[0].end) and cmd.source[w.start:w.end] != '.'
 
 
 def shell_writes(event, ctx, cmd, inv, cwd, role):
     d = git_jail(event, ctx, cmd, inv, cwd, role)
-    if d:
-        return d
-    d = dotnet_unplaced(event, ctx, cmd, cwd, role) or dotnet_process_dir(event, ctx, cmd, cwd, role)
     if d:
         return d
     net = {}
@@ -3018,17 +2946,15 @@ def shell_writes(event, ctx, cmd, inv, cwd, role):
     searched = False
     # A Start-Process program with a -WorkingDirectory runs there (commands.run_dir), while
     # PowerShell places the call's redirections and the -RedirectStandard* files from its own
-    # location, the command's directory. Only git's targets are read from the workdir alone; any
-    # other program's are judged from both folders, so a workdir never lets a write pass that the
-    # command's own directory refuses.
+    # location, the command's directory. The program's own targets are judged from both folders,
+    # so a workdir never lets a write pass that the command's own directory refuses. git (and a
+    # git-* program) gives none: the git rules judge its writes, from the workdir (commands.git_call).
     moved = len(write_targets(cmd, None)) + len(inv.writes) \
         if inv is not None and inv.via == 'start-process' and inv.workdir is not None else None
-    git = inv is not None and (inv.name == 'git' or (inv.name or '').startswith('git-'))
     for k, w in enumerate(write_targets(cmd, inv)):
         if cmd.shell == sh.BASH and not w.dyn and BASH_DEVICE_RE.match(w.text):
             continue
-        bases = (OUTER,) if moved is None or k < moved else \
-            (cm.run_dir(inv),) if git else (OUTER, cm.run_dir(inv))
+        bases = (OUTER,) if moved is None or k < moved else (OUTER, cm.run_dir(inv))
         for base in bases:
             d, searched = _write_from(event, ctx, cmd, inv, cwd, role, w, base, net, into, searched)
             if d:
@@ -3040,7 +2966,13 @@ def _write_from(event, ctx, cmd, inv, cwd, role, w, base, net, into, searched):
     """(Decision or None, searched) for the write target `w` of shell_writes read from `base`
     (OUTER, or the folder a Start-Process -WorkingDirectory names)."""
     runs_in = cmd.cwd if base is OUTER else base
-    target, why = write_place(ctx, cmd, w, base)
+    piped = pipe_stand_in_word(cmd, w)
+    target, why = (None, PIPE_UNPLACED) if piped else write_place(ctx, cmd, w, base)
+    unread = py_unread(cmd, inv, w) or (NET_UNPLACED if net_stand_in(cmd, w) else None)
+    # a kit tool acts on the checkout its -C names: that folder, not the one it runs in
+    checked = kit_tool_dir(event, ctx, cmd, inv, cwd) if base is OUTER and unread == PY_PS_WHY else None
+    if checked is not None:
+        target, why = checked[1], None
     if target is None and not searched:
         searched = True                         # find's start paths answer for every such target at once
         d = find_exec_writes(event, ctx, cmd, cwd, role)
@@ -3052,32 +2984,43 @@ def _write_from(event, ctx, cmd, inv, cwd, role, w, base, net, into, searched):
     elif target is None and runs_in is not None and \
             ctx.place(runs_in).kind not in (repo.MAIN, repo.UNKNOWN):
         return None, searched                   # a target it cannot place, from a worktree or elsewhere
-    sleep = sleep_wait(cmd, inv, w)
-    unread = py_unread(cmd, inv, w)
-    what = '`%s` writes %s' % (cmd.text, w.text if w.text != '.' else 'files in the directory it runs in') \
+    what = '`%s` writes the path the pipeline gives it' % cmd.text if piped else \
+        '`%s` writes %s' % (cmd.text, w.text if w.text != '.' else 'files in the directory it runs in') \
         if unread is None else \
-        'the directory `%s` runs in (counted as written: %s)' % (cmd.text, unread)
+        'the directory `%s` runs in (counted as written: %s)' % (cmd.text, unread) if checked is None else \
+        'the checkout `%s` acts on, %s (counted as written: %s)' % (cmd.text, checked[0].text, unread)
     # here() or ps_unread(): no word to aim
     stand_in = (w.text == '.' and cmd.source[w.start:w.end] != '.') or w.start == w.end
     part = any((x.start, x.end) == (w.start, w.end) and x.text != w.text for x in cmd.words)
     rewrite = None if stand_in or part else (lambda path, w=w: retarget(cmd, w, path))   # part: -tDIR
     if (w.start, w.end) in net and not w.dyn:
         rewrite = lambda path, x=net[(w.start, w.end)]: net_retarget(cmd, x, path)
+    if checked is not None:
+        x = checked[0]
+        # -C'dir' spelt other than its text: the value's span is the whole word, so the rewrite spells -C again
+        lead = '' if any(a is x for a in inv.args) or cmd.source[x.start:x.end] == x.text else '-C '
+        rewrite = (lambda path: retarget(cmd, x, path if path.startswith('<') else
+                                         fwd(paths.norm(path, fold=False)), lead)) if x.start is not None else None
     if stand_in and base is not OUTER and base is not None:
         # the folder it runs in is the -WorkingDirectory value: aim that word instead
         rewrite = lambda path, x=inv.workdir: retarget(cmd, x, paths.norm(path, fold=False))
     placed = target is not None and not unread_write(cmd, inv, w)
     output = any(r.writes and r.target is not None and r.target.start is not None and
                  (r.target.start, r.target.end) == (w.start, w.end) for r in cmd.redirects) or (getattr(inv, 'name', None) or '').lower() in OUTPUT_WRITERS
+    item = target is None and ps_provider_word(cmd, inv, w)
     for t in into_folder(target, w, into, runs_in, getattr(ctx, 'home', None)) if target else [target]:
-        d = edit_target(event, ctx, t, cwd, role, what, why, rewrite=rewrite, run=bare(cmd), redirect=output)
-        if d and sleep and d.rule == 'main-checkout':
-            d = sleep_refusal(d, cmd, role)     # named before unplaced(), so a warning says it too
+        # a provider item's refusal runs the whole line from the worktree: a statement before the
+        # call may set what it reads (PROVIDER_ITEM_WHY)
+        d = edit_target(event, ctx, t, cwd, role, what, why, rewrite=rewrite,
+                        run=whole_line(ctx, cmd) if item else bare(cmd), redirect=output,
+                        shell=outer_shell(cmd), item=item)
         if not placed:
             d = unplaced(d, role)
         if d:
             return d, searched
-    if computed:
+    # A computed PowerShell target, or a path read from a directory the guard cannot tell (after a
+    # `cd $x`): for a role main_checkout lets through, the jail cannot judge it either.
+    if computed or (target is None and runs_in is None):
         d = ps_drive_jail(event, ctx, cwd, role, what, why, rewrite)
         if d:
             return d, searched
@@ -3143,7 +3086,8 @@ def find_exec_writes(event, ctx, cmd, cwd, role):
             stand_in = (w.text == '.' and f.source[w.start:w.end] != '.') or w.start == w.end
             part = any((x.start, x.end) == (w.start, w.end) and x.text != w.text for x in f.words)
             rewrite = None if stand_in or part else (lambda path, w=w, f=f: retarget(f, w, path))
-            d = edit_target(event, ctx, target, cwd, role, what, why, rewrite=rewrite, run=bare(f))
+            d = edit_target(event, ctx, target, cwd, role, what, why, rewrite=rewrite, run=bare(f),
+                            shell=outer_shell(f))
             if target is None:
                 d = unplaced(d, role)
             if d:
@@ -3151,100 +3095,9 @@ def find_exec_writes(event, ctx, cmd, cwd, role):
     return None
 
 
-NET_RELATIVE = ('.NET reads a relative path against the process\'s working directory '
-                '([Environment]::CurrentDirectory), not the PowerShell location: Set-Location and cd do not move it, '
-                'so the file may land in the checkout the session started in.')
-
-
-def dotnet_unplaced(event, ctx, cmd, cwd, role):
-    """A .NET file call (net_writes) that writes a path the guard cannot place: a relative path,
-    a rooted one with no drive, or a path the line computes. .NET resolves it against the
-    process's directory (NET_RELATIVE), which the guard cannot tell, from a worktree too. Refused
-    for a role that may not edit a main checkout (main-checkout) and for an agent session
-    (write-jail); the owner's own session is not judged. A relative path is first judged where the
-    PowerShell location puts it (edit_target), and the alternative is the call on that absolute
-    path."""
-    if not net_mentioned(cmd):
-        return None
-    for x in net_writes(cmd)[0]:
-        w = x.word
-        if net_placed(w):
-            continue
-        plain = not w.dyn and w.text and w.text[0] not in '\\/~' and ':' not in w.text
-        fixed = paths.norm(os.path.join(cmd.cwd, w.text), fold=False) if plain and cmd.cwd else None
-        start = cmd.words[0].start if cmd.words else cmd.start
-        what = '`%s` writes %s' % (cmd.source[start:x.end],
-                                   'a path the line computes (%s)' % w.text if w.dyn else w.text)
-        rewrite = lambda path, x=x: net_retarget(cmd, x, path)
-        if fixed:
-            d = edit_target(event, ctx, fixed, cwd, role, what, rewrite=rewrite)
-            if d:
-                return d
-        cfg = ctx.config(fixed or cmd.cwd) if fixed or cmd.cwd else None
-        if kconfig.permissions(event, kconfig.roles(cfg)).get('edit_main_checkout') and \
-                not agent_session(event, ctx):
-            continue
-        why = '%s through .NET. %s' % (what, NET_RELATIVE)
-        if w.dyn:
-            why += ' The guard does not read a path the line computes.'
-        elif re.match(r'^[\\/]{2}', w.text):
-            why += ' The guard cannot tell which folder a share path names.'
-        if fixed:
-            d = refuse(UNPLACED, role, why + ' The same write on the absolute path:', rewrite(fixed))
-        else:
-            base = own_worktree(ctx, cwd) or cmd.cwd
-            d = refuse(UNPLACED, role, why + ' Give it a literal absolute path:', rewrite(fwd(base) + '/<file>')) \
-                if base else \
-                refuse(UNPLACED, role, why + ' Give it a literal absolute path; to see where this session runs:', 'pwd')
-        if d:
-            return d
-    return None
-
-
-def dotnet_process_dir(event, ctx, cmd, cwd, role):
-    """A .NET write the guard does not read the path of, or one it cannot place (net_writes,
-    net_placed), judged in each directory its process may have started in (edit_target): the
-    directory the call runs in (`cwd`) and the PowerShell location of each command it is nested
-    in, before and after a cd in that command's $( ) (shell.track). .NET reads a relative path there (NET_RELATIVE), so a Set-Location into a worktree does not
-    take the write with it; write_targets judges the PowerShell location itself. A session that
-    runs outside a worktree of its own (in the main checkout, or outside any repository) is told to
-    give the call literal absolute paths, not to make a worktree (that does not move where its
-    process starts)."""
-    if not net_mentioned(cmd):
-        return None
-    net, unread = net_writes(cmd)
-    if not unread and all(net_placed(x.word) for x in net):
-        return None
-    dirs, outer = [cwd], cmd.nested_in
-    while outer is not None:
-        dirs.extend((outer.cwd, outer.subs_cwd))    # subs_cwd: where it stood before a cd in its $( ) moved it
-        outer = outer.nested_in
-    seen = set([paths.norm(cmd.cwd)] if cmd.cwd else [])
-    for d in dirs:
-        if not d or paths.norm(d) in seen:
-            continue
-        seen.add(paths.norm(d))
-        what = ('`%s` may write through .NET in %s, the directory its process started in (.NET reads a relative '
-                'path there, and Set-Location does not move it; give the call literal absolute paths)'
-                % (bare(cmd), fwd(d)))
-        target = paths.norm(d, fold=False)
-        res = edit_target(event, ctx, target, cwd, role, what, run=bare(cmd))
-        place = ctx.place(target) if res and res.rule == 'main-checkout' and own_worktree(ctx, cwd) is None \
-            else None
-        if place is not None and place.kind == repo.MAIN and not ctx.is_pm_data(place.top):
-            # the session runs outside a worktree: a worktree it makes does not move where its process starts
-            res = refuse(UNPLACED, role, '%s is in the main checkout %s; this role may not edit a main '
-                         'checkout. A new worktree does not move the directory this PowerShell process '
-                         'started in, so call each .NET method directly with literal absolute paths inside '
-                         'a worktree. To see where this session runs:' % (what, place.top), 'pwd')
-        res = unplaced(res, role)               # a .NET path it does not read, or cannot place
-        if res:
-            return res
-    return None
-
-
 def ps_drive_jail(event, ctx, cwd, role, what, why, rewrite):
     """An agent session's PowerShell write to a computed target ($p, a ( ) expression: _write_from),
+    or any shell's write of a path read from a directory the guard cannot tell (after `cd $x`),
     by a role main_checkout lets through (it may edit a main checkout): the jail cannot judge a
     place it cannot tell, so it refuses, as git_jail_unknown does for git."""
     if not agent_session(event, ctx):
@@ -3261,15 +3114,15 @@ def ps_drive_jail(event, ctx, cwd, role, what, why, rewrite):
 DUPS_RE = re.compile(r'(?:[ \t]*[0-9]*[<>]&[0-9-]+)+')
 
 
-def retarget(cmd, w, path):
+def retarget(cmd, w, path, lead=''):
     """The command `cmd` (from its program word, redirections kept) with the word `w` replaced
-    by `path`, quoted."""
+    by `path`, quoted, after `lead` (an option the word's span also covers, as -C'dir' does)."""
     start = cmd.words[0].start if cmd.words else w.start
     start = min(start, w.start)
     end = max(cmd.end, w.end)
     m = DUPS_RE.match(cmd.source, end)          # a dup (2>&1) has no word, so no span
     end = m.end() if m else end
-    return (cmd.source[start:w.start] + quote(path) + cmd.source[w.end:end]).strip()
+    return (cmd.source[start:w.start] + lead + quote(path) + cmd.source[w.end:end]).strip()
 
 
 # ---------------------------------------------------------------- wrapped gates (P16)
@@ -3551,20 +3404,87 @@ def kit_wrapper(ctx, cmd, inv, cwd, event=None):
         return None
     found = cm.python_script(inv)
     word = inv.args[found[0]] if found else inv.word
+    return kind if kit_script(ctx, cmd, word, cwd, event, inv) else None
+
+
+def kit_script(ctx, cmd, word, cwd, event=None, inv=None):
+    """True when the program or script Word `word` is one of the kit's own tools: in the tools
+    folder of the kit the guard runs from (ctx.kit) or, given the Action `event`, of an export of
+    it the session cannot write (rolepolicy.kit_export), the path resolved, links followed, from
+    the directory the program runs in: the command's, or for a Start-Process call `inv` with a
+    -WorkingDirectory the folder that names (cm.run_dir), where only a path with a drive or a
+    share is read when the guard cannot place that folder (a rooted \\x takes that folder's
+    drive). The heavy program's repository (heavy) is still the command's."""
     if word is None or word.dyn:
-        return None
-    path = sh.resolve_path(word.text, cmd.cwd or cwd, cmd.shell, getattr(ctx, 'home', None)) or (
-        word.text if os.path.isabs(word.text) else None)
+        return False
+    if inv is not None and inv.via == 'start-process' and inv.workdir is not None:
+        base = cm.run_dir(inv)
+    else:
+        base = cmd.cwd or cwd
+    path = sh.resolve_path(word.text, base, cmd.shell, getattr(ctx, 'home', None)) or (
+        word.text if sh.is_absolute(word.text) else None)
     if not path:
-        return None
+        return False
     tools = paths.norm(os.path.join(ctx.kit, 'tools'), real=True)
     folder = paths.norm(os.path.dirname(path), real=True)
     if folder == tools:
-        return kind
+        return True
     if event is None or os.path.basename(folder) != 'tools':
-        return None
+        return False
     from . import rolepolicy
-    return kind if rolepolicy.kit_export(ctx, os.path.dirname(folder), event, cwd) else None
+    return bool(rolepolicy.kit_export(ctx, os.path.dirname(folder), event, cwd))
+
+
+# a piece Windows PowerShell 5.1 may split out of an unsure word (ps_native_unsure) that python's
+# argparse may read as a -C: a dash after a blank or a quote, then a dash (a long option, which
+# argparse also takes abbreviated) or a run with a C in it (-C, a cluster -vC)
+PS_SPLIT_C_RE = re.compile(r'(?:^|[\s"])-(?:-|\S*C)')
+
+
+def kit_tool_dir(event, ctx, cmd, inv, cwd):
+    """(Word, path) of the one literal absolute -C <dir> (or -C<dir>) a kit tool (kit_script) is
+    given, which is the checkout it acts on, or None. Only for a python that PowerShell runs
+    directly (not Start-Process), on no PowerShell line around it with a word it may hand on as
+    other than one argument, and only when no such word comes before the -C value or, after it,
+    may split into a word argparse reads as another -C (PS_SPLIT_C_RE); a second -C, or a --root,
+    is none either."""
+    if inv is None or inv.via is not None or not cm.PYTHON_RE.match(inv.name or ''):
+        return None
+    c = cmd.nested_in
+    while c is not None:
+        if c.shell == sh.PS and any(ps_native_unsure(w) for w in c.words):
+            return None
+        c = c.nested_in
+    found = cm.python_script(inv)
+    if not found or not kit_script(ctx, cmd, inv.args[found[0]], cwd, event):
+        return None
+    args = inv.args
+    marks = [k for k, w in enumerate(args) if k > found[0] and
+             (w.text.startswith('-C') or w.text.split('=')[0] in ('--r', '--ro', '--roo', '--root'))]
+    if len(marks) != 1 or args[marks[0]].text.startswith('--'):
+        return None
+    k = marks[0]
+    w = args[k]
+    if w.text == '-C':
+        if k + 1 >= len(args):
+            return None
+        value, last = args[k + 1], k + 1
+    else:
+        value, last = tail_word(w, w.text[2:]), k
+    if value.dyn or not value.text or not (value.text.startswith(('/', '\\')) or
+                                           ntpath.splitdrive(value.text)[0]):
+        return None
+    words = [inv.word] + list(args) if inv.word is not None else list(args)
+    cut = len(words) - (len(args) - last)
+    if cmd.shell == sh.PS:
+        if any(ps_native_unsure(x) for x in words[:cut + 1]):
+            return None
+        after = words[cut + 1:]
+        first = next((i for i, x in enumerate(after) if ps_native_unsure(x)), None)
+        if first is not None and any(PS_SPLIT_C_RE.search(x.text) for x in after[first:]):
+            return None
+    path = sh.resolve_path(value.text, cmd.cwd or cwd, cmd.shell, getattr(ctx, 'home', None))
+    return (value, path) if path else None
 
 
 def heavy(event, ctx, cmd, inv, cwd, role):
@@ -3866,10 +3786,12 @@ GIT_READS = {'status', 'log', 'diff', 'show', 'rev-parse', 'ls-files', 'ls-tree'
              'name-rev', 'help', 'version', 'check-ignore', 'check-attr', 'check-ref-format', 'var', 'count-objects',
              'diff-tree', 'diff-files', 'diff-index', 'cherry', 'range-diff', 'whatchanged', 'verify-commit',
              'verify-tag', 'show-branch', 'fsck', 'patch-id'}
-# git apply --check applies nothing (with --stat and the like it only reports); these are the only
-# options such an apply may carry, spelt in full: git expands a unique prefix (--app is --apply,
-# which applies after all), so any other option fails closed (apply_checks)
-APPLY_CHECK_OPTS = {'--check', '--stat', '--numstat', '--summary', '-v', '--verbose', '-R', '--reverse', '--'}
+# git apply --check applies nothing, nor do --stat, --numstat and --summary: each turns applying
+# off, and only --apply turns it back on (git 2.55, observed). These are the only options such an
+# apply may carry, spelt in full: git expands a unique prefix (--app is --apply, which applies
+# after all), so any other option fails closed (apply_checks)
+APPLY_REPORTS = ('--check', '--stat', '--numstat', '--summary')
+APPLY_CHECK_OPTS = set(APPLY_REPORTS) | {'-v', '--verbose', '-R', '--reverse', '--'}
 APPLY_STRIP_RE = re.compile(r'-p\d+$')
 # subcommands that only read when their first word is one of these (None: when they have no word)
 GIT_READ_VERBS = {'stash': ('list', 'show'), 'worktree': ('list',), 'remote': (None, 'show', 'get-url'),
@@ -4234,7 +4156,7 @@ def git_reads(gc, strict=False):
             writes -= {'-a'}                    # branch -a lists every branch
         return not writes and (not pos or bool(flags & GIT_LIST_FLAGS))
     if sub == 'config':
-        return any(t in CONFIG_READ_OPTS or t in ('-l', '--list') for t in words)
+        return config_reads(gc)
     if sub == 'apply':
         return apply_checks(gc)
     if sub == 'symbolic-ref':
@@ -4243,9 +4165,10 @@ def git_reads(gc, strict=False):
 
 
 def apply_checks(gc):
-    """True when git apply `gc` only checks its patch: --check among its options (the words before
-    the first --; after it git reads every word as a patch file, `--check` too) and every option one
-    APPLY_CHECK_OPTS names (or -p<n>), read as the shell hands it to git (archive_words), and no
+    """True when git apply `gc` only checks or reports on its patch: one of APPLY_REPORTS among its
+    options (the words before the first --; after it git reads every word as a patch file,
+    `--check` too) and every option one APPLY_CHECK_OPTS names (or -p<n>; --apply, which applies
+    after all, is not one), read as the shell hands it to git (archive_words), and no
     word the guard cannot read (computed, a PowerShell splat, or one PowerShell or cmd may split:
     native_unsure). Any other apply writes the checkout."""
     if gc.inv is None:
@@ -4257,7 +4180,34 @@ def apply_checks(gc):
     if '--' in texts:                           # git reads no option after --: those words are patches
         texts = texts[:texts.index('--')]
     opts = [t for t in texts if t.startswith('-') and t != '-']
-    return '--check' in opts and all(t in APPLY_CHECK_OPTS or APPLY_STRIP_RE.match(t) for t in opts)
+    return any(t in APPLY_REPORTS for t in opts) and all(t in APPLY_CHECK_OPTS or APPLY_STRIP_RE.match(t)
+                                                          for t in opts)
+
+
+def config_reads(gc):
+    """True when git config `gc` carries a read flag (CONFIG_READ_OPTS, spelt in full) as its own
+    option. git config reads options only up to its first word that is no option (git 2.55,
+    observed: `config a.b --list` sets a.b to "--list"), so the flag counts only there, before any
+    `--` and not as the value of an option that takes one (-f/--file, -t/--type, --blob, --default,
+    --comment, --value, --url, abbreviated too: _config_long). A computed word there ends the scan
+    (fail closed), as does a first `--`, which git 2.55 passes over (`config -- --list` lists)."""
+    words, k = gc.rest, 0
+    while k < len(words):
+        w, t = words[k], words[k].text
+        if w.dyn or t == '--' or len(t) < 2 or not t.startswith('-'):
+            return False
+        if t in CONFIG_READ_OPTS:
+            return True
+        if t.startswith('--'):
+            body, eq, _v = t[2:].partition('=')
+            if not eq and any(n in CONFIG_LONG_VALUES for n in _config_long(body)):
+                k += 1                          # its value, whatever it says
+        else:
+            at = min((t.find(c, 1) for c in 'ft' if c in t[1:]), default=-1)
+            if at == len(t) - 1:
+                k += 1                          # -f <file>, -t <type>: the value is the next word
+        k += 1
+    return False
 
 
 def git_targets(gc):
@@ -4430,7 +4380,7 @@ def git_jail(event, ctx, cmd, inv, cwd, role):
             what = '`%s` makes %s' % (bare(cmd), w.text)
             # a word an inline alias gave has no span in the line to aim (inline_alias)
             return jail_refusal(role, rs, verdict, root, what, target,
-                                rewrite=None if w.start is None else (lambda path, w=w: retarget(cmd, w, path)))
+                                rewrite=None if w.start is None else git_retarget(ctx, cmd, inv, gc, w, cwd))
     if git_reads(gc):
         return None
     landed, why = lander_check(event, ctx, cmd, inv, gc)
@@ -4453,6 +4403,29 @@ def git_jail(event, ctx, cmd, inv, cwd, role):
     return refuse('write-jail', role, '%s: it is outside the folders an agent session may write: %s. %s The same command '
                   'in %s:' % (what, jail.describe(rs), JAIL_ASK, fwd(dest.path)),
                   ('git -C %s %s %s' % (quote(dest.path), gc.sub, rest)).rstrip())
+
+
+def git_retarget(ctx, cmd, inv, gc, w, cwd):
+    """rewrite(path) for the refused output word `w` of git `gc`: the same command with `w` aimed
+    at `path`. A git archive with no -C of its own also names the checkout it archives: an agent's
+    shell keeps no cd between calls, so the bare command run again from a main checkout archives
+    main, not the branch. That is the session's own worktree of the main checkout git runs in
+    (`<worktree>` when it has none, its output aimed there too), else the folder git runs in."""
+    def rewrite(path):
+        if gc.sub != 'archive' or inv.via is not None or inv.word is None or inv.word.start is None or \
+                any(x.text.startswith('-C') for x in gc.before()):
+            return retarget(cmd, w, path)
+        place = ctx.place(gc.dir)
+        where = gc.dir
+        if place.kind == repo.MAIN and place.top:
+            where = own_worktree(ctx, cwd, place.top) or '<worktree>'
+            top = paths.norm(place.top)
+            if jail.inside(paths.norm(path), top):
+                path = fwd(where) + fwd(paths.norm(path, fold=False)[len(top):])
+        line = retarget(cmd, w, path)
+        at = inv.word.end - min(cmd.words[0].start, w.start)
+        return line[:at] + ' -C ' + quote(fwd(where)) + line[at:]
+    return rewrite
 
 
 def git_in_worktree(ctx, cmd, gc, main_top, cwd):

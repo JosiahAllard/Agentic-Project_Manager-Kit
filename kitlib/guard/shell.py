@@ -43,6 +43,10 @@ def ps_dashed(text):
 BASH_ESC = ' \t"\'\\$`&|;<>(){}#*?[]!~'
 CD_VERBS = {'cd', 'chdir', 'set-location', 'sl', 'push-location', 'pushd'}
 CD_UNKNOWN = {'popd', 'pop-location'}
+# the one module-qualified spelling of each PowerShell cd cmdlet (another module, a `/`, an alias
+# behind a module is no command PowerShell runs: cd_target reads it as a cd to a place unknown)
+PS_QUALIFIED_CD = {'microsoft.powershell.management\\' + v: v
+                   for v in ('set-location', 'push-location', 'pop-location')}
 # PowerShell keywords a ( ) group follows (if (...), foreach (...), switch -regex (...)): the ( after
 # them, or in a command they start, is a group, not an argument (_Scan.ps_paren_arg)
 PS_PAREN_KEYWORDS = {'if', 'elseif', 'else', 'foreach', 'for', 'while', 'do', 'until', 'switch',
@@ -114,7 +118,7 @@ class Redirect(object):
 class Command(object):
     __slots__ = ('words', 'redirects', 'start', 'end', 'source', 'shell', 'depth', 'cwd',
                  'piped_out', 'piped_in', 'subs', 'groups', 'nested_in', 'prev_op', 'next_op',
-                 'pipe_from', 'git_env', 'home_env', 'path_env', 'cwd_home', 'home', 'subs_cwd',
+                 'pipe_from', 'git_env', 'home_env', 'path_env', 'cwd_home', 'home',
                  'split')
 
     def __init__(self, source, shell, depth, home=None):
@@ -124,7 +128,6 @@ class Command(object):
         self.home = home            # the folder `~` names, its Parsed's home (home_folder: None is the user's)
         self.cwd = None
         self.cwd_home = None        # cwd, with a cd to a home variable ($HOME/x) followed too (track)
-        self.subs_cwd = None        # the directory its substitutions start in; cwd unless a cd in one moved it (track)
         self.piped_out = self.piped_in = False
         self.groups = ()            # the ( ) or { } groups it is inside, outermost first: (id, '(' or '{')
         self.prev_op = self.next_op = None      # the operators around it: ; && || & newline ( ) { } |
@@ -978,10 +981,13 @@ def msys_to_win(p):
     return (m.group(1).upper() + ':' + (m.group(2) or '/')) if m else p
 
 
-# A PowerShell provider-qualified path: [<module>\]<provider>::<rest>. FileSystem (bare or from
-# its own module) holds files, so its <rest>, when absolute, is the file; any other provider, or
-# a module the guard does not know, is a place it cannot tell.
-PS_PROVIDER_RE = re.compile(r'^(?:([^\\/:]+)\\)?([^\\/:]+)::(.*)$', re.S)
+# A PowerShell provider-qualified path: [\][<module>\]<provider>::<rest>. FileSystem (bare or
+# from its own module) holds files, so its <rest> is the file: absolute (ps_filesystem_path), or
+# relative and read from the location (ps_filesystem_relative); any other provider, or a module
+# the guard does not know, is a place it cannot tell. PowerShell takes a \ before a bare provider
+# (\FileSystem::<drive>:\x is <drive>:\x); a / there, or a \ before a module, it refuses, and the guard reads
+# them as the place they would name. A module of . or .. is no module (_ps_provider).
+PS_PROVIDER_RE = re.compile(r'^[\\/]?(?:([^\\/:]+)\\)?([^\\/:]+)::(.*)$', re.S)
 PS_FILESYSTEM_MODULES = (None, 'microsoft.powershell.core')
 # A PowerShell drive whose name is anything but one ASCII letter (Main:\x, Temp:\x, env:FOO, 1:\x,
 # _:\x, a non-ASCII letter): a drive the session may have made with New-PSDrive, which takes such
@@ -990,10 +996,30 @@ PS_LONG_DRIVE_RE = re.compile(r'^(?![A-Za-z]:)[^\\/:]+:')
 _ABS_RE = re.compile(r'^(?:[A-Za-z]:[\\/]|\\\\|//)')
 
 
+def is_absolute(p):
+    """True when the text `p` names its folder whatever the current one: a drive and a separator,
+    or a share. A rooted \\x is not (it takes the current drive; os.path.isabs reads it as
+    absolute before Python 3.13)."""
+    return bool(_ABS_RE.match(p or ''))
+
+
+def _ps_provider(p):
+    """The PS_PROVIDER_RE match of `p` when the guard reads it as a provider-qualified path, else
+    None: a relative path whose first folder is . or .. is read as a path, its :: a stream.
+    PowerShell writes .\\x.txt::$DATA into the stream of x.txt in the location; ..\\x.txt::$DATA it
+    reads as a provider named ..\\x.txt and refuses, writing nothing, so the guard's reading (a
+    stream of x.txt in the folder above) is the stricter one."""
+    m = PS_PROVIDER_RE.match(p or '')
+    if m and m.group(1) in ('.', '..'):
+        return None
+    return m
+
+
 def ps_filesystem_path(p):
     """The file path a PowerShell `FileSystem::<abs>` (or
-    `Microsoft.PowerShell.Core\\FileSystem::<abs>`) spells, else None."""
-    m = PS_PROVIDER_RE.match(p or '')
+    `Microsoft.PowerShell.Core\\FileSystem::<abs>`, either after a leading separator) spells,
+    else None."""
+    m = _ps_provider(p)
     if not m or m.group(2).lower() != 'filesystem':
         return None
     module = m.group(1).lower() if m.group(1) is not None else None
@@ -1002,14 +1028,35 @@ def ps_filesystem_path(p):
     return m.group(3)
 
 
+def ps_filesystem_relative(p):
+    """The relative path a PowerShell `FileSystem::<rel>` (or
+    `Microsoft.PowerShell.Core\\FileSystem::<rel>`, either after a leading separator) spells, read
+    from the location as the guard reads a .NET method's relative path; else None. PowerShell
+    itself reads it from the process's directory, which a cd does not move (docs/guard.md "Known
+    limits"). A drive-relative C:x, ~, another provider or a long drive in <rel> is no such path."""
+    m = _ps_provider(p)
+    if not m or m.group(2).lower() != 'filesystem':
+        return None
+    module = m.group(1).lower() if m.group(1) is not None else None
+    rest = m.group(3)
+    if (module not in PS_FILESYSTEM_MODULES or not rest or _ABS_RE.match(rest)
+            or re.match(r'^[A-Za-z]:', rest) or rest.startswith('~')
+            or _ps_provider(rest) or PS_LONG_DRIVE_RE.match(rest)):
+        return None
+    return rest
+
+
 def ps_unplaceable(p):
     """True when PowerShell reads the text `p` as a place the guard cannot tell: a
-    provider-qualified path other than an absolute FileSystem:: one, or a drive whose name is not
-    one ASCII letter. A one-letter drive (absolute or drive-relative) and a relative path are not."""
+    provider-qualified path other than a FileSystem:: one the guard reads (ps_filesystem_path,
+    ps_filesystem_relative) (x.txt::$DATA and sub\\x.txt::$DATA among them: PowerShell reads x.txt
+    as a provider's name), or a drive whose name is not one ASCII letter. A one-letter drive
+    (absolute or drive-relative) and a relative path (.\\x.txt::$DATA among them, _ps_provider) are
+    not."""
     if not p or p[:2] in ('\\\\', '//'):
         return False
-    if PS_PROVIDER_RE.match(p):
-        return ps_filesystem_path(p) is None
+    if _ps_provider(p):
+        return ps_filesystem_path(p) is None and ps_filesystem_relative(p) is None
     return bool(PS_LONG_DRIVE_RE.match(p))
 
 
@@ -1052,13 +1099,16 @@ def home_text(text, home=None, dyn=False):
 def resolve_path(p, cwd, shell=None, home=None):
     """`p` (a word's text) as an absolute normalised path, or None when the text cannot tell (a
     drive-relative C:x, ~user, a rooted \\x with no cwd to take the drive from). With `shell` PS,
-    `FileSystem::<abs>` is <abs> and any other provider or a drive not named by one ASCII letter
-    is None (ps_unplaceable); bash and cmd text is read as it always was. `~` is `home`
-    (home_folder)."""
+    `FileSystem::<abs>` (after a leading separator too) is <abs>, `FileSystem::<rel>` is <rel> in
+    `cwd` (ps_filesystem_relative), any other provider or a drive not named by one ASCII letter
+    is None (ps_unplaceable), and .\\x.txt::$DATA is a stream of a file in `cwd`; bash and cmd
+    text is read as it always was. `~` is `home` (home_folder)."""
     if not p:
         return None
     if shell == PS:
         fs = ps_filesystem_path(p)
+        if fs is None:
+            fs = ps_filesystem_relative(p)
         if fs is not None:
             p = fs
         elif ps_unplaceable(p):
@@ -1099,11 +1149,20 @@ def cd_target(cmd, cwd, home=None, home_vars=False):
     read too, bash cd's own options and a `--` are passed over, and a bash or PowerShell cd with
     no place goes home (bash's cd, and PowerShell 7's; Windows PowerShell's stays put, but only a
     deny reads it). A bash cd behind `builtin` or `command` is the cd itself (cd_words), and
-    PowerShell's `cd $null` is a cd with no place."""
+    PowerShell's `cd $null` is a cd with no place. A PowerShell cd to a relative FileSystem:: path
+    (ps_filesystem_relative: FileSystem::., FileSystem::sub) goes where the text cannot tell:
+    PowerShell reads it from the process's directory, which no cd before it moved. A PowerShell
+    `Microsoft.PowerShell.Management\\Set-Location` (or Push-, Pop-Location) is that cmdlet
+    (PS_QUALIFIED_CD); any other module-qualified cd word is a cd to a place unknown."""
     words = cd_words(cmd)
     if not words:
         return False, cwd
     verb = words[0].text.lower()
+    name = re.split(r'[\\/]', verb)[-1]
+    if cmd.shell == PS and name != verb and name in CD_VERBS | CD_UNKNOWN:
+        if verb not in PS_QUALIFIED_CD:
+            return True, None                   # a qualified cd word PowerShell does not run
+        verb = PS_QUALIFIED_CD[verb]
     if verb in CD_UNKNOWN:
         return True, None
     if verb not in CD_VERBS:
@@ -1131,6 +1190,8 @@ def cd_target(cmd, cwd, home=None, home_vars=False):
             return True, None
     if p in ('-', '+') or p.startswith('-') or any(ch in p for ch in '*?'):
         return True, None
+    if cmd.shell == PS and ps_filesystem_relative(p) is not None:
+        return True, None                       # read from the process's directory, not the location
     return True, resolve_path(p, cwd, cmd.shell, home)
 
 
@@ -1175,7 +1236,6 @@ def track(cmds, cwd, home=None, cwd_home=None):
         for g in c.groups[common:]:
             open_.append((g, here, here_h))
         sub_from[id(c)] = (here, here_h)
-        c.subs_cwd = here
         # PowerShell runs a $( ) or an argument's ( ) in the caller's scope: a cd there moves this
         # command and every one after it (bash's $( ) is a subshell)
         if c.shell == PS and any(cd_target(x, None, home)[0] for x in flatten(c.subs)):

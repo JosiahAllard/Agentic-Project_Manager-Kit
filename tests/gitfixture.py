@@ -19,6 +19,7 @@ import re
 import shutil
 import tempfile
 
+from kitlib import sessionmark
 from kitlib.config import user as kuser
 from kitlib.git import batch, cmd as gitcmd
 from kitlib.git import cache as gitcache
@@ -39,10 +40,15 @@ BUILD_CONFIG = (('user', 'name', NAME), ('user', 'email', EMAIL), ('commit', 'gp
 
 
 def fixture_env(extra=None):
+    """The environment for the fixture's tools: this process's, without git's repository and
+    identity variables and without the caller's session mark (kitlib.sessionmark: a test run from a
+    marked session must not take its role, which tools/backlog.py reads); then `extra`, which may
+    set a mark of its own."""
     env = {k: v for k, v in os.environ.items()
            if k.upper() not in ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_CEILING_DIRECTORIES',
                                 'GIT_INDEX_FILE', 'GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL',
-                                'GIT_COMMITTER_NAME', 'GIT_COMMITTER_EMAIL')}
+                                'GIT_COMMITTER_NAME', 'GIT_COMMITTER_EMAIL',
+                                sessionmark.ENV, sessionmark.SESSION_NAME_ENV)}
     env.update(batch.fixture_env(env))
     env['GIT_CONFIG_GLOBAL'] = os.devnull
     env['GIT_CONFIG_NOSYSTEM'] = '1'

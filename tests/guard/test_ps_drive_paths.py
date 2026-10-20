@@ -68,6 +68,38 @@ class IntoMain(Base):
                         'main-checkout')
         self.assertIn('is in the main checkout', d.reason)
 
+    def test_a_provider_path_after_a_leading_separator(self):
+        # PowerShell reads \FileSystem::<abs> as the provider path, not a folder at the drive's root
+        for text in (r'New-Item \FileSystem::{main}\x.txt', r'Set-Content -Path \FileSystem::{main}\x.txt -Value y',
+                     r'New-Item /FileSystem::{main}\x.txt', r'New-Item \Microsoft.PowerShell.Core\FileSystem::{main}\x.txt'):
+            with self.subTest(text):
+                d = self.denied(self.run_ps(text), 'main-checkout')
+                self.assertIn('is in the main checkout', d.reason)
+        self.allowed(self.run_ps(r'New-Item \FileSystem::{wt}\x.txt'))
+        # another provider after the separator is a place the guard cannot tell: refused outside a worktree
+        d = decide(W.ps(r'New-Item \Registry::HKCU\x', self.w.main, True), self.w.ctx())
+        self.denied(d, 'unplaced')
+
+    def test_a_relative_filesystem_path_is_read_from_the_location(self):
+        # PowerShell reads FileSystem::x.txt (and \FileSystem::x.txt) from the process's directory,
+        # which Set-Location does not move; the guard reads it from the location, as it reads a
+        # relative .NET path (docs/guard-v2.md B16 for the provider path, B17 for the .NET one; both cut)
+        for text in (r'New-Item FileSystem::x.txt', r'New-Item \FileSystem::x.txt',
+                     r"Set-Content -LiteralPath '\FileSystem::x.txt' -Value y",
+                     r'New-Item Microsoft.PowerShell.Core\FileSystem::sub\x.txt'):
+            with self.subTest(text):
+                d = self.denied(decide(W.ps(text, self.w.main, True), self.w.ctx()), 'main-checkout')
+                self.assertIn('is in the main checkout', d.reason)
+                self.allowed(self.run_ps(text))
+
+    def test_a_stream_of_a_file_in_the_location(self):
+        # .\x.txt::$DATA is the data stream of the file x.txt in the location, never a provider named x.txt
+        for text in (r"cd {main}; Set-Content '.\x.txt::$DATA' y", r"Set-Content '{main}\x.txt::$DATA' y",
+                     r"cd {main}\sub; Set-Content '..\x.txt::$DATA' y"):
+            with self.subTest(text):
+                self.denied(self.run_ps(text), 'main-checkout')
+        self.allowed(self.run_ps(r"Set-Content '.\x.txt::$DATA' y"))
+
     def test_cd_filesystem_provider_then_relative_write(self):
         d = self.denied(self.run_ps(r'cd FileSystem::{main}; New-Item x.txt'), 'main-checkout')
         self.assertIn('is in the main checkout', d.reason)
@@ -82,6 +114,34 @@ class IntoMain(Base):
             with self.subTest(text):
                 d = self.denied(self.run_ps(text), 'unplaced')
                 self.assertIn('Name a literal path inside your worktree', d.reason)
+
+    def test_a_cd_to_a_relative_filesystem_path_makes_the_directory_unknown(self):
+        # PowerShell reads Set-Location FileSystem::. (FileSystem::sub, ..) from the process's
+        # directory, not the location a cd moved: from a session whose process runs in the main
+        # checkout, `cd <worktree>; Set-Location FileSystem::.` puts the git write in main
+        texts = (r'cd {wt}; Set-Location FileSystem::.; git reset --hard',
+                 r'cd {wt}; Set-Location FileSystem::sub; git reset --hard',
+                 r'cd {wt}; cd \FileSystem::.; git reset --hard',
+                 r'cd {wt}; Push-Location Microsoft.PowerShell.Core\FileSystem::.; git reset --hard',
+                 r'cd {wt}\sub; sl -LiteralPath FileSystem::..; git reset --hard',
+                 r'cd {wt}; Set-Location FileSystem::.; git checkout -- .',
+                 r'cd {wt}; chdir FileSystem::.; git reset --hard',
+                 r'cd {wt}; pushd FileSystem::sub; git reset --hard',
+                 r'cd {wt}; Set-Location -Path FileSystem::.; git reset --hard',
+                 r'cd {wt}; Push-Location -Path \FileSystem::..; git reset --hard',
+                 r"cd {wt}; Set-Location 'FileSystem::.'; git reset --hard",
+                 r'cd {wt}; cd "\FileSystem::sub"; git reset --hard')
+        for text in texts:
+            with self.subTest(text, cwd='main'):
+                d = decide(W.ps(text.format(wt=self.w.wt), self.w.main, True), self.w.ctx())
+                self.assertIsNotNone(d, 'allowed')
+                self.assertEqual(d.verdict, 'deny', d.reason)
+            with self.subTest(text, cwd='worktree'):
+                d = self.run_ps(text.replace('{wt}', '{main}'))
+                self.assertIsNotNone(d, 'allowed')
+                self.assertEqual(d.verdict, 'deny', d.reason)
+        # a cd to an absolute FileSystem:: path is still placed
+        self.allowed(self.run_ps(r'Set-Location FileSystem::{wt}; git reset --hard'))
 
     def test_literal_path_filesystem_provider(self):
         d = self.denied(self.run_ps(r'New-Item -LiteralPath FileSystem::{main}\x.txt'), 'main-checkout')
@@ -98,6 +158,39 @@ class IntoMain(Base):
     def test_root_search_through_filesystem_provider(self):
         drive = os.path.splitdrive(self.w.base)[0]
         self.denied(self.run_ps('Get-ChildItem FileSystem::%s\\ -Recurse' % drive), 'root-search')
+
+
+class ModuleQualifiedLocation(Base):
+    """`Microsoft.PowerShell.Management\\Set-Location` (and `\\Push-Location`) is the cd itself, so
+    a git write or a relative write after one is placed where it moved; was read as no cd, so a
+    write after a move into the main checkout was judged in the worktree. Any other qualified cd
+    word (another module, `/`, an alias) is no command PowerShell runs: where it leaves the line is
+    not read as a move, so it is a cd to a place the guard cannot tell."""
+
+    def test_a_qualified_move_into_main_places_the_write_there(self):
+        for text in (r'Microsoft.PowerShell.Management\Set-Location {main}; git reset --hard',
+                     r'Microsoft.PowerShell.Management\Push-Location {main}; git reset --hard',
+                     r'microsoft.powershell.management\set-location -Path {main}; git reset --hard'):
+            with self.subTest(text):
+                self.denied(self.run_ps(text), 'git-reset-hard')
+        d = self.denied(self.run_ps(r'Microsoft.PowerShell.Management\Set-Location {main}; New-Item x.txt'),
+                        'main-checkout')
+        self.assertIn('is in the main checkout', d.reason)
+
+    def test_a_qualified_move_into_the_worktree_places_the_write_there(self):
+        text = r'Microsoft.PowerShell.Management\Set-Location {wt}; git reset --hard'
+        self.allowed(decide(W.ps(text.format(wt=self.w.wt), self.w.main, True), self.w.ctx()))
+
+    def test_any_other_qualified_cd_word_is_a_place_it_cannot_tell(self):
+        for text in (r'Microsoft.PowerShell.Management/Set-Location {main}; git reset --hard',
+                     r'Microsoft.PowerShell.Core\Set-Location {main}; git reset --hard',
+                     r'Microsoft.PowerShell.Management\sl {main}; git reset --hard',
+                     r'Microsoft.PowerShell.Management\cd {main}; git reset --hard',
+                     r'Microsoft.PowerShell.Management\Pop-Location; git reset --hard'):
+            with self.subTest(text):
+                d = self.run_ps(text)
+                self.assertIsNotNone(d, 'allowed')
+                self.assertEqual(d.verdict, 'deny', d.reason)
 
 
 class DynamicTargets(Base):
@@ -642,6 +735,83 @@ class DriveAndProviderTargets(Base):
                 d = self.denied(decide(W.ps(text, self.w.main, True), self.w.ctx()), 'unplaced')
                 self.assertIn('cannot place', d.reason)
 
+    def test_another_provider_after_a_leading_separator(self):
+        # B16 cut: read as a folder at the drive's root before, so the jail refused
+        # it from a worktree; now a place the guard cannot tell, passed from a worktree
+        for text in (r'New-Item \Registry::HKCU\x', r'New-Item /Registry::HKCU\x',
+                     r"Set-Content -LiteralPath '\Environment::FOO' -Value y"):
+            with self.subTest(text):
+                self.allowed(self.run_ps(text))
+                self.denied(decide(W.ps(text, self.w.main, True), self.w.ctx()), 'unplaced')
+
+
+class PipelineTargets(Base):
+    """A path a write cmdlet takes from the pipeline (rules.PSCmdlet piped: `'x.txt' | Remove-Item`,
+    `Get-Item x | Set-Content -Value y`): the text does not say what the command before the `|`
+    sends, so it is a place the guard cannot tell (rules.PIPE_UNPLACED), refused from the main
+    checkout and passed from a worktree, as a bash target it cannot place is. A path the line
+    binds itself is judged as written; a cmdlet whose file takes nothing from the pipeline
+    (Out-File, Tee-Object) is judged as before."""
+
+    TEXTS = ("'x.txt' | Remove-Item", 'Get-ChildItem *.tmp | Remove-Item', 'Get-ChildItem *.tmp | ri -Force',
+             'Get-Item x | Set-Content -Value y', 'Get-Item x | Add-Content -Value y', 'Get-Item x | Clear-Content',
+             '$f | ni', '$f | New-Item -Name x.txt', 'Get-Item a | Rename-Item -NewName b',
+             r'Get-Item a | Move-Item -Destination {wt}\b', 'Get-ChildItem | Copy-Item',
+             'Get-Item x | Set-ItemProperty -Name IsReadOnly -Value 1')
+
+    def test_piped_path_into_remove_item_unplaced_in_main_checkout(self):
+        for text in self.TEXTS:
+            with self.subTest(text):
+                text = text.format(main=self.w.main, wt=self.w.wt)
+                d = self.denied(decide(W.ps(text, self.w.main, True), self.w.ctx()), 'unplaced')
+                self.assertIn('pipeline', d.reason)
+                self.assertNotIn('\n', d.reason)
+
+    def test_piped_path_in_own_worktree_passes(self):
+        for text in self.TEXTS:
+            with self.subTest(text):
+                self.allowed(self.run_ps(text))
+
+    def test_a_path_the_line_binds_is_judged_as_written(self):
+        for text in ("'y' | Set-Content x.txt", "'x.txt' | Remove-Item -Path y.txt",
+                     "'x.txt' | Remove-Item -LiteralPath y.txt", 'Get-Item a | Move-Item b.txt c.txt',
+                     'Get-ChildItem | Copy-Item -Destination d'):
+            with self.subTest(text):
+                d = self.denied(decide(W.ps(text, self.w.main, True), self.w.ctx()), 'main-checkout')
+                self.assertIn('is in the main checkout', d.reason)
+                self.allowed(self.run_ps(text))
+
+    def test_a_file_the_pipeline_does_not_bind_is_judged_as_before(self):
+        for text in ("'x' | Tee-Object -Variable v", "'x' | Out-Null", 'Get-ChildItem | Get-Item'):
+            with self.subTest(text):
+                self.allowed(decide(W.ps(text, self.w.main, True), self.w.ctx()))
+
+
+class DefaultDestination(Base):
+    """Copy-Item and Move-Item with no -Destination, and Expand-Archive with no -DestinationPath,
+    write the location the command runs in (rules.PSCmdlet here): a placed write, judged there."""
+
+    def test_copy_and_move_with_no_destination_write_the_location(self):
+        for text in (r'Copy-Item {wt}\a.txt', r'Move-Item {wt}\a.txt', r'cpi -Path {wt}\a.txt -Force',
+                     r'Copy-Item -LiteralPath {wt}\a.txt', r'Expand-Archive {wt}\a.zip'):
+            with self.subTest(text):
+                text = text.format(main=self.w.main, wt=self.w.wt)
+                d = self.denied(decide(W.ps(text, self.w.main, True), self.w.ctx()), 'main-checkout')
+                self.assertIn('writes files in the directory it runs in', d.reason)
+                self.assertIn('is in the main checkout', d.reason)
+
+    def test_from_a_worktree_it_writes_the_worktree(self):
+        for text in (r'Copy-Item {main}\a.txt', r'Expand-Archive {main}\a.zip', r'Copy-Item {main}\a.txt -Recurse'):
+            with self.subTest(text):
+                self.allowed(self.run_ps(text))
+
+    def test_a_named_or_positional_destination_is_judged_alone(self):
+        for text in (r'Copy-Item a.txt {wt}\b.txt', r'Copy-Item a.txt -Destination {wt}\b.txt',
+                     r'Copy-Item -Destination {wt}\b.txt -Path a.txt'):
+            with self.subTest(text):
+                text = text.format(main=self.w.main, wt=self.w.wt)
+                self.allowed(decide(W.ps(text, self.w.main, True), self.w.ctx()))
+
 
 class Unchanged(Base):
     """What the fix leaves as it was."""
@@ -707,7 +877,11 @@ class ResolvePath(unittest.TestCase):
             'filesystem::C:/m/x': 'C:\\m\\x',
             'Microsoft.PowerShell.Core\\FileSystem::C:\\m\\x': 'C:\\m\\x',
             'FileSystem::\\\\srv\\share\\x': '\\\\srv\\share\\x',
-            'FileSystem::x.txt': None,              # relative: whose current folder is not shown
+            # relative: read from the location, as a .NET path is (B17, cut)
+            'FileSystem::x.txt': 'C:\\w\\wt\\x.txt',
+            'FileSystem::sub\\x.txt': 'C:\\w\\wt\\sub\\x.txt',
+            'FileSystem::C:x': None,
+            'FileSystem::': None,
             'Other.Module\\FileSystem::C:\\m\\x': None,
             'Registry::HKCU\\x': None,
             'Main:\\x': None,
@@ -718,18 +892,32 @@ class ResolvePath(unittest.TestCase):
             'x.txt': 'C:\\w\\wt\\x.txt',
             '.\\a:b': 'C:\\w\\wt\\a:b',
             '\\\\srv\\share\\x': '\\\\srv\\share\\x',
+            # a separator before the provider: still the provider path
+            '\\FileSystem::C:\\m\\x': 'C:\\m\\x',
+            '/FileSystem::C:/m/x': 'C:\\m\\x',
+            '\\Microsoft.PowerShell.Core\\FileSystem::C:\\m\\x': 'C:\\m\\x',
+            '\\FileSystem::x.txt': 'C:\\w\\wt\\x.txt',
+            '\\Registry::HKCU\\x': None,
+            # the stream of a file in a folder the text names: a file, not a provider
+            '.\\x.txt::$DATA': 'C:\\w\\wt\\x.txt::$DATA',
+            '..\\x.txt::$DATA': 'C:\\w\\x.txt::$DATA',
         }
         for text, want in cases.items():
             with self.subTest(text):
                 self.assertEqual(sh.resolve_path(text, self.CWD, sh.PS), want)
 
     def test_unplaceable(self):
-        for text in ('Main:\\x', 'Main:x', 'Registry::x', 'Foo\\Bar::x', 'FileSystem::rel', 'env:FOO',
-                     '1:\\x', '_:x', 'é:\\x', '12:\\x'):
+        for text in ('Main:\\x', 'Main:x', 'Registry::x', 'Foo\\Bar::x', 'env:FOO',
+                     '1:\\x', '_:x', 'é:\\x', '12:\\x', '\\Registry::x',
+                     'x.txt::$DATA', 'sub\\x.txt::$DATA', 'FileSystem::', 'FileSystem::C:x',
+                     'FileSystem::~', 'FileSystem::Registry::x', 'FileSystem::Main:\\x'):
             with self.subTest(text):
                 self.assertTrue(sh.ps_unplaceable(text))
+        # a relative FileSystem:: path is read from the location (B17, cut)
         for text in ('', 'C:\\x', 'C:x', 'x.txt', '.\\a:b', '\\\\srv\\s', '//srv/s',
-                     'FileSystem::C:\\x', 'Microsoft.PowerShell.Core\\FileSystem::\\\\srv\\s'):
+                     'FileSystem::C:\\x', 'Microsoft.PowerShell.Core\\FileSystem::\\\\srv\\s',
+                     '\\FileSystem::C:\\x', '.\\x.txt::$DATA', '..\\x.txt::$DATA',
+                     'FileSystem::rel', '\\FileSystem::rel'):
             with self.subTest(text):
                 self.assertFalse(sh.ps_unplaceable(text))
 

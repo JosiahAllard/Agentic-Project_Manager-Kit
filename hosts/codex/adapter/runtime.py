@@ -116,7 +116,8 @@ class _PolicyConfig(object):
 
 def evaluate_bound(event, binding, ctx=None, profile=None, environ=None):
     """In-process broker guard. Only the freshly resolved native binding supplies the role: every
-    Action is judged as an agent of the bound role (agent the binding's thread, root or child), with
+    Action is judged as an agent of the bound role (agent the child's thread, or UNIDENTIFIED for a
+    root, a marked session), with
     the role policy on for it (PolicyOn). While the main checkout's .kit.json fails to load, every
     call is refused (host-runtime-error)."""
     try:
@@ -139,8 +140,12 @@ def evaluate_bound(event, binding, ctx=None, profile=None, environ=None):
             raise ValueError("the main checkout's .kit.json does not load: fix it (%s)"
                              % base.config_error(binding.cwd))
         held = PolicyOn(base)
+        # A root is a marked session, judged as an agent of its mark as a hook here judges one
+        # (hookmain.UNIDENTIFIED), so the backlog's role check stays the tool's own under that mark.
+        from kitlib.host.hookmain import UNIDENTIFIED
+        agent = binding.thread if getattr(binding, 'parent', None) else UNIDENTIFIED
         for action in parsed if isinstance(parsed, tuple) else (parsed,):
-            action = replace(action, role=binding.role, agent=binding.thread, agent_role=binding.role)
+            action = replace(action, role=binding.role, agent=agent, agent_role=binding.role)
             d = policy.screen(action, env)
             if d is None or d.verdict == 'allow':
                 d = guard.decide(action, held)
