@@ -97,6 +97,26 @@ class T(unittest.TestCase):
 '''
 
 
+# What the worker's code cache (pool_worker.CODE) holds for tests.p.helper when a unit imports it.
+CACHE = r'''import json
+import os
+import sys
+import unittest
+
+import tests.p.helper as helper
+
+
+class T(unittest.TestCase):
+    def test_reads_the_cache(self):
+        code = sys.modules['__main__'].CODE
+        path = helper.__file__
+        with open(os.path.join(os.environ['PROBE_OUT'], __name__ + '.json'), 'w') as fh:
+            json.dump({'value': helper.VALUE, 'compiled': code.compiled.get(path, 0),
+                       'reused': code.reused.get(path, 0),
+                       'own': code.compiled.get(__file__, 0)}, fh)
+'''
+
+
 def unit_body(body, imports=''):
     return ('import os\nimport sys\nimport time\nimport unittest\n%s\n\n'
             'class T(unittest.TestCase):\n    def test_it(self):\n%s' % (imports, body))
@@ -123,7 +143,10 @@ class Pool(unittest.TestCase):
                           'tests/p/helper.py': 'VALUE = 1\n',
                           'tests/p/test_dirty.py': DIRTY, 'tests/p/test_clean.py': CLEAN,
                           'tests/p/test_pid.py': PID, 'tests/p/test_pid2.py': PID})
-        self.env = dict(os.environ, PROBE_OUT=self.out, PROBE_ROOT=self.root)
+        # As kit_tests runs them: no bytecode file, so each import of a source compiles it (or
+        # takes it from the worker's code cache).
+        self.env = dict(os.environ, PROBE_OUT=self.out, PROBE_ROOT=self.root,
+                        PYTHONDONTWRITEBYTECODE='1')
         self.env.pop('PYTHONPATH', None)
         self.pool = pool.WorkerPool(self.root, self.folder, self.env)
         self.addCleanup(self.pool.close)
@@ -171,6 +194,37 @@ class Pool(unittest.TestCase):
         self.assertEqual(self.pool.stats(), (1, {}))             # one worker ran both
         self.assertEqual(self.pool.starts(), {'tests.p.test_three': 3 + 2, 'tests.p.test_pid': 0})
         self.assertEqual(self.pool.starts('tests.p.test_three'), 5)
+
+    def cache_units(self, between=None):
+        """Run two units that import tests.p.helper in one worker, `between()` after the first;
+        what each read from the worker's code cache."""
+        write(self.root, {'tests/p/test_cache1.py': CACHE, 'tests/p/test_cache2.py': CACHE})
+        seen = []
+        for i, name in enumerate(('tests.p.test_cache1', 'tests.p.test_cache2')):
+            if i and between:
+                between()
+            _u, status, _ran, _s, text = self.unit(name)
+            self.assertEqual(status, 'OK', text)
+            seen.append(self.read(name + '.json'))
+        self.assertEqual(self.pool.stats(), (1, {}))             # one worker ran both
+        return seen
+
+    def test_a_later_unit_reuses_the_code_compiled_for_the_same_source(self):
+        first, second = self.cache_units()
+        self.assertEqual(first, {'value': 1, 'compiled': 1, 'reused': 0, 'own': 1})
+        self.assertEqual(second, {'value': 1, 'compiled': 1, 'reused': 1, 'own': 1})
+
+    def test_a_changed_source_is_compiled_again_whatever_its_time_stamp_and_size(self):
+        helper = os.path.join(self.root, 'tests', 'p', 'helper.py')
+
+        def change():
+            st = os.stat(helper)
+            write(self.root, {'tests/p/helper.py': 'VALUE = 2\n'})     # the same size
+            os.utime(helper, ns=(st.st_atime_ns, st.st_mtime_ns))    # and time stamp
+            self.assertEqual(os.stat(helper).st_size, st.st_size)
+        first, second = self.cache_units(change)
+        self.assertEqual(first, {'value': 1, 'compiled': 1, 'reused': 0, 'own': 1})
+        self.assertEqual(second, {'value': 2, 'compiled': 2, 'reused': 0, 'own': 1})
 
     def test_a_failing_unit_reports_its_output_and_the_worker_is_kept(self):
         write(self.root, {'tests/p/test_fails.py': unit_body("        self.assertEqual(1, 2)\n")})

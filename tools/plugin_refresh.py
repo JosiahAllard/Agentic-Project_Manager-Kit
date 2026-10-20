@@ -19,6 +19,10 @@ account folder's install from it (docs/plugin-source.md).
            --kit DIR (default: the checkout this file is in; run from an export, the checkout its
                       marker records, else refused)   --home DIR (default: the user's home)
 
+Every mode first prints a WARNING line for each account folder's known_marketplaces.json
+installLocation, and the managed settings file's extraKnownMarketplaces path, that is not the
+export root (kitlib.pluginsource marketplace_mismatches); it fixes none of them.
+
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.pluginsource.refresh, prints
 and exits. Exit codes: 0 done, or nothing to do; 1 refused, or a folder's claude command failed; 2 usage.
 """
@@ -71,12 +75,26 @@ def main(argv=None):
         out('REFUSED: not an account folder on this machine: %s' % ', '.join(bad))
         return 1
 
+    for line in marketplace_warnings(s.export_dir, folders):
+        out('WARNING: %s' % line)
+
     def in_use():
         return pluginsource.read_in_use(s.export_dir)
     if a.prune_caches:
         return prune_caches(s, folders, in_use, a.apply, out)
     return pluginsource.refresh(os.path.abspath(a.kit), s, folders, out, apply=a.apply,
                                 migrate=a.migrate, runner=claude.Runner(a.home), in_use=in_use)
+
+
+def marketplace_warnings(export_dir, folders):
+    """pluginsource.marketplace_mismatches over `folders` and the default host's managed settings
+    file (kitlib.machinesetup.extras Host.managed_path). Reports only; a check that fails is one
+    line, never an exit."""
+    try:
+        from kitlib.machinesetup.extras import Host
+        return pluginsource.marketplace_mismatches(export_dir, folders, managed=Host().managed_path())
+    except Exception as e:                       # never stop a refresh over a report
+        return ['could not check the pm-kit marketplace paths: %s: %s' % (type(e).__name__, e)]
 
 
 def prune_caches(s, folders, in_use, apply, out):

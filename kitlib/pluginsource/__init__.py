@@ -16,6 +16,8 @@ installs from (docs/plugin-source.md).
   pick_folders(folders, wanted)    the account folders --folder names, and the names that are not one
   refresh(...)                     the whole run tools/plugin_refresh.py makes
   installs(folders)                [(install path, account folder)] of each account's kit install
+  marketplace_mismatches(export_dir, folders, managed)
+                                   lines where a marketplace path is not the export (read only)
   current_lines(kit, s, folders)   the pm_start warning lines (no export, not migrated, behind, failed)
   poll(kit, s, last, ...)          the pm_watch check: an event line per new main, and the spawn
                                    of a refresh when plugin.auto_refresh is on
@@ -1092,6 +1094,13 @@ def installs(folders=None):
     one) loads the kit plugin from, for the folders that have it installed. Reads each folder's
     install record only."""
     return _host().installs(_folders(folders))
+
+
+def marketplace_mismatches(export_dir, folders=None, managed=None):
+    """Lines for each place pointing the pm-kit marketplace off `export_dir`: each account folder's
+    (`folders`, default every one) known marketplaces record and the managed settings file
+    `managed` (None: not checked). Reads only; never raises."""
+    return _host().marketplace_mismatches(export_dir, _folders(folders), managed=managed)
 
 
 def unmigrated(state, folders):

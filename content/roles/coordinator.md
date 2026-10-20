@@ -58,8 +58,8 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
    follow-up records (filed from a finding on a branch, a review or a worker's report) unpriced:
    Work sets, Follow-ups. Check every other unpriced open record (an owner story, a record from
    the PM's brief) for duplicates, size and fit, and against the code: fixed or no longer
-   applies -> close it. Price the rest 2-5 under the standing valuation
-   rules (`set <ID> --priority <n> --priority-by agent`). One that needs the owner (priority 1, a
+   applies -> close it. Price the rest 2-5
+   (`set <ID> --priority <n> --priority-by agent`). One that needs the owner (priority 1, a
    pre-emption, an owner-held area, a question only the owner can answer) goes on the Action Hub
    as a question from your session key (The owner, below), posted with the work set's other
    owner questions at its start (Look ahead); never ask the owner directly.
