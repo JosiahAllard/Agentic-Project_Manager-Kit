@@ -626,6 +626,10 @@ def outside_target(ctx, path, branch_ok=False):
                 ' verb named by its path removes one whose branch has landed); %s'
                 % (path, entry['branch'], home_of(ctx), nothing))
         return REFUSED
+    if entry['branch'] and same_name(entry['branch'], ctx.s['base']):
+        ctx.say('refused   %s is on the main branch %s: this tool never removes a tree on it nor'
+                ' deletes it; %s' % (path, entry['branch'], nothing))
+        return REFUSED
     if not entry['head']:
         ctx.say('refused   %s: git reported no HEAD for it; %s' % (path, nothing))
         return REFUSED
