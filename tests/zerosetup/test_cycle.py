@@ -320,7 +320,8 @@ class AnyPlatform(Cycle, unittest.TestCase):
         patch = mock.patch.object(lockstore, 'real_root', lambda: os.path.join(self.base, 'machine-store'))
         patch.start()
         self.addCleanup(patch.stop)
-        self.book_kw = {'env': self.env}
+        # A scratch lock store, so the gates this test books never meet the real store's per-coordinator cap.
+        self.book_kw = {'env': self.env, 'store': lockstore.Store(root=os.path.join(self.base, 'scratch-store'))}
 
     def pre_commit_passed(self, wt):
         """The commit asked for its pre-commit hook; the kit's, run in the worktree as git runs it

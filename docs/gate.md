@@ -201,6 +201,17 @@ Monitor({description: "gate result kit/x", timeout_ms: 1800000,
 
 Your own gate: run it in the foreground with `timeout` 600000 when it fits; otherwise `run_in_background` and end the turn. The exit notice wakes you. No Monitor, no polling the log, no sleep. Never `tail -f` or `-F` a log in Monitor or a background call: on Windows the tail outlives its Monitor and keeps reading the file every second. A gate another session runs: `gate.py wait-result` (below); a run of your own: `run_in_background` and its exit notice. A branch gate stays attached until its verdict, waiting for the machine lock included (`runner.branch_gate`), so its exit code is the verdict. The exit notice is a message the host sends you, never text in your own turn. While the log holds only its `result record:` line, the gate is still queued or running; `gate.py wait-result <branch> --tip <sha> --timeout 0 -C <repo>` says whether a final record exists yet. Monitor with `wait-result` is only for a gate another session runs: one arm at `timeout_ms` 1800000, re-armed only on exit 7. Never re-arm a wait because a turn ended with nothing new: each Monitor fire wakes the session for a full cache read.
 
+### The session gate cap
+
+`kitlib/gate/gatecap.py` `wait_turn`, called by `runner.gated` just before it books a branch gate's run (`capped=True`, which only `runner._gate_checkout` passes), in the store it books in. Off unless the machine config sets it: `"coordinator_start".gate_cap`, `{repo name: n}`, the name as the lock records it (`.kit.json` `"repo".name`, else the checkout's folder name), matched exactly, else lower case. Unset, 0 or null: no cap. A value that is not a whole number 0 or more, or a machine config that cannot be read, is said as one `WARNING: the session gate cap is not applied: ...` and caps nothing.
+
+- Counted: live gate runs (booked, waiting or held) of that repository, matched without case, whose recorded ancestors hold the caller's nearest agent host (`kitlib.lock.store.owns`): one coordinator and its in-process subagents count together. Not counted: a landing's runs (priority `land`), another session's, the run this process is inside.
+- At n, the gate says one line, `the gate waits for the session gate cap: <k> of <n> gate runs of this session in <repo> are in flight (<run ids>); it books when one ends`, counts again every `POLL_S` (5 s, never under the lock's `queue_poll_s`) and says nothing more, then books as usual. A fully reused gate books nothing and never waits.
+- Never waits: a landing (`merged_gate` books through `gated()` without `capped`, or runs in the slot it holds), the daily full run (`kitlib.dailyfull` calls `gated()` without `capped`) and the owner (no agent host above the caller, so no run is the owner's session's). The caller and the cap are read only while some gate run of the repository is live.
+- Known limit: the count and the booking are not one step, so gates of one session started together can each count below n and all book, going past it.
+
+Tests: tests/gate/test_gate_cap.py.
+
 ## Landing
 
 kitlib/gate/land.py runs from the main checkout, on main, and merges and gates in a landing tree of its own (step 5): the main checkout is never merged into, reset or gated. In this order:
