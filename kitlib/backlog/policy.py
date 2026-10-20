@@ -16,6 +16,7 @@ as the store holds it locally.
   read_argv(words)              what a backlog.py command line gives (the guard's reader), as an Argv
   check(args, ctx, snap, environ)
                                 tools/backlog.py's check: raises Refusal when its role may not
+                                take a row; else the rows it sorted
 
 `given` is a dict: 'fields' (the set fields given or unset, `body` for --body-file), 'priority'
 (each priority value given; '-' for --unset priority), 'hold_ruling', 'ruling', 'owner_ask',
@@ -170,7 +171,8 @@ def given_of(args):
 def check(args, ctx, snap, environ=None):
     """tools/backlog.py's own check before a write plans: Refusal when the session's role
     (cli_role) may not take a row the write sorts into. `snap` (None for migrate) gives the
-    record; OWN_PULL holds when the record is pulled by the branch the write acts as."""
+    record; OWN_PULL holds when the record is pulled by the branch the write acts as. Returns the
+    rows it sorted (sort's names), for the audit log (kitlib.backlog.audit)."""
     role = cli_role(environ)
     rid = getattr(args, 'id', None)
     rec = snap.get(rid) if snap is not None and rid else None
@@ -188,6 +190,7 @@ def check(args, ctx, snap, environ=None):
     text = refusal(role, rows, facts)
     if text:
         raise Refusal('%s (kitlib/backlog/roles.py); ask a session whose role may' % text)
+    return rows
 
 
 class _Absent(object):

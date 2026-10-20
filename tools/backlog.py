@@ -22,7 +22,9 @@
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.backlog, prints and exits.
 Every write first meets the session's role (kitlib.backlog.policy: the session mark, unmarked is
 the owner, against kitlib/backlog/roles.py; docs/backlog.md "Roles"): a row it may not take is
-REFUSED before the write plans.
+REFUSED before the write plans. A published write of a MEDIUM or HIGH row appends its line to the
+audit log, <pm_data>/audit/backlog.jsonl (kitlib.backlog.audit; docs/backlog.md "Audit log"); no
+pm_data is a NOTE and a log that cannot be written a WARNING, on standard error, after the write.
 Exit codes: 0 OK, 1 NOT FOUND / ERROR / a red check / a landable that cannot tell, 2 USAGE /
 REFUSED / NOT LANDABLE.
 """
@@ -33,6 +35,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from kitlib import kitroot                                         # noqa: E402
+from kitlib.backlog import audit                                    # noqa: E402
 from kitlib.backlog import check as checkmod                        # noqa: E402
 from kitlib.backlog import landable as landmod                      # noqa: E402
 from kitlib.backlog import migrate as mmod                          # noqa: E402
@@ -49,6 +52,15 @@ from kitlib.backlog.opener import (FIELD_FLAGS, WRITES, open_repo, open_store, p
 
 def say(line=''):
     print(line, flush=True)
+
+
+def audit_line(verb, rid, rows, tip, session):
+    """After a published write: its audit line (kitlib.backlog.audit), and on standard error the
+    note or warning when there is none. Never a refusal: the write stands."""
+    said = audit.after_write(verb, rid, rows, tip, session)
+    if said:
+        sys.stderr.write('%s: %s\n' % said)
+        sys.stderr.flush()
 
 
 class Parser(argparse.ArgumentParser):
@@ -313,10 +325,10 @@ def index_stale(exc):
 
 
 def do_write(args, ctx, store):
-    made = []
+    made, rows = [], []
 
     def plan(snap):                              # the change, kept for an IndexStale report
-        policy.check(args, ctx, snap)            # the session's role may take it (roles.py)
+        rows[:] = policy.check(args, ctx, snap)  # the session's role may take it (roles.py)
         made[:] = [planner(args, ctx)(snap)]
         return made[0]
     stale = None
@@ -336,6 +348,7 @@ def do_write(args, ctx, store):
     say('  %s' % change.subject)
     if stale is not None:
         index_stale(stale)
+    audit_line(args.verb, getattr(args, 'id', None), rows, tip, args.session)
     return 0
 
 
@@ -415,6 +428,8 @@ def do_migrate(args, top, cfg, rules):
         say('DRY RUN: nothing was written')
     else:
         say('MIGRATED -> %s at %s' % (backend.describe(), res.tip[:10]))
+        audit_line(args.verb, None, policy.sort(args.verb, policy.given_of(args)), res.tip,
+                   args.session)
     return 0
 
 

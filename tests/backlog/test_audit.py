@@ -21,6 +21,7 @@ from tests.home import machine_config
 
 BACKLOG = inproc.load_tool('backlog')
 UTC = re.compile(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\Z')
+PRICE = ('--priority', '2', '--priority-by', 'agent', '--effort', 's')    # set-other: MEDIUM
 WHEN = datetime.datetime(2026, 10, 20, 13, 5, 6, tzinfo=datetime.timezone.utc)
 
 
@@ -112,7 +113,7 @@ class Tool(unittest.TestCase):
 
     def test_a_low_write_writes_no_line(self):
         self.add()
-        self.ok('pull', 'FOO', '--as', 'tools/wk')
+        self.ok('set', 'FOO', '--summary', 'another thing to do')        # set-text: LOW
         self.assertFalse(os.path.exists(os.path.join(self.data, 'audit')))
 
     def test_a_medium_write_makes_the_folder_and_its_line(self):
@@ -129,31 +130,31 @@ class Tool(unittest.TestCase):
 
     def test_each_audited_write_adds_one_line(self):
         self.add()
-        self.ok('set', 'FOO', '--priority', '2', '--priority-by', 'agent', '--effort', 's')
+        self.ok('set', 'FOO', *PRICE)
         first = self.tip()
-        self.ok('close', 'FOO', '--reason', 'done')
+        self.ok('close', 'FOO', '--reason', 'the work is finished')
         self.assertEqual([(x['verb'], x['store_sha']) for x in self.lines()],
                          [('set', first), ('close', self.tip())])
 
     def test_a_marked_session_and_its_name(self):
         self.add()
         marked = {sessionmark.ENV: 'coordinator', sessionmark.SESSION_NAME_ENV: 'kit-x'}
-        self.ok('set', 'FOO', '--priority-by', 'agent', env=marked)
-        self.ok('close', 'FOO', '--reason', 'done', '--session', 's9')   # unmarked: the owner
+        self.ok('set', 'FOO', *PRICE, env=marked)
+        self.ok('--session', 's9', 'close', 'FOO', '--reason', 'the work is finished')   # unmarked: the owner
         self.assertEqual([(x['role'], x['session']) for x in self.lines()],
                          [('coordinator', 'kit-x'), ('owner', 's9')])
 
     def test_a_write_that_changes_nothing_writes_no_line(self):
         self.add()
-        self.ok('set', 'FOO', '--priority-by', 'agent')
-        out, _err = self.ok('set', 'FOO', '--priority-by', 'agent')
+        self.ok('set', 'FOO', *PRICE)
+        out, _err = self.ok('set', 'FOO', *PRICE)
         self.assertIn('nothing was written', out)
         self.assertEqual(len(self.lines()), 1)
 
     def test_no_pm_data_is_a_note_and_no_line(self):
         machine_config(self.home, {})
         self.add()
-        out, err = self.ok('close', 'FOO', '--reason', 'done')
+        out, err = self.ok('close', 'FOO', '--reason', 'the work is finished')
         self.assertIn('WROTE', out)
         self.assertIn('NOTE:', err)
         self.assertIn('pm_data', err)
@@ -164,7 +165,7 @@ class Tool(unittest.TestCase):
             fh.write('a file where the folder goes\n')
         self.add()
         before = self.tip()
-        out, err = self.ok('close', 'FOO', '--reason', 'done')
+        out, err = self.ok('close', 'FOO', '--reason', 'the work is finished')
         self.assertIn('WROTE', out)
         self.assertNotEqual(self.tip(), before)                # the write stands
         self.assertIn('WARNING:', err)

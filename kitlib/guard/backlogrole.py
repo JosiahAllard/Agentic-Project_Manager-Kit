@@ -10,6 +10,8 @@
                      tools/backlog.py; any session's but the owner's git write of the store's ref
                      (refs/backlog/*; the backlog branch when the store is `branch`); any
                      session's but the owner's edit of a folder store's records.
+  pm-data-audit      any session's but the owner's write in <pm_data>/audit/, the backlog's audit
+                     log (kitlib.backlog.audit), which only tools/backlog.py appends to.
 
 A main session's backlog.py run is the tool's own check (policy.check, by its session mark).
 A host with no subagent identity (kitlib.host.hookmain.UNIDENTIFIED) gives a subagent its
@@ -26,6 +28,8 @@ from . import rules
 
 ROLE_RULE = 'backlog-role'
 RAW_RULE = 'backlog-raw-write'
+AUDIT_RULE = 'pm-data-audit'
+AUDIT_FOLDER = 'audit'                          # kitlib.backlog.audit.FOLDER
 SCRIPT = 'backlog.py'
 TOOL = 'backlog'                                # rules.kit_tool's name for it
 UNIDENTIFIED = 'unidentified'                   # kitlib.host.hookmain.UNIDENTIFIED
@@ -323,3 +327,21 @@ def raw_edit(event, ctx, target, role, what):
                         'agent session makes (kitlib/backlog/roles.py). Run the tool\'s verb:'
                         % (what, rules.fwd(folder), store),
                         'python %s -C %s <verb> <arguments>' % (rules.kit_tool(ctx, TOOL), rules.quote(top)))
+
+
+def audit_edit(event, ctx, target, role, what):
+    """Any session's but the owner's write in <pm_data>/audit/ (the machine config's pm_data.path):
+    the backlog's audit log, which tools/backlog.py alone appends to after its writes. With no
+    pm_data named there is no log, and nothing to refuse."""
+    if not target or rules.is_owner_session(event, ctx):
+        return None
+    data = ctx.pm_data_path()
+    if not data:
+        return None
+    folder = os.path.join(data, AUDIT_FOLDER)
+    if not jail.inside(jail.real(target), jail.real(folder)):
+        return None
+    return rules.refuse(AUDIT_RULE, role, '%s: %s is the backlog\'s audit log, which only tools/backlog.py appends '
+                        'to, after its own writes; no session but the owner\'s writes there. Make the change '
+                        'through the tool, which logs it:' % (what, rules.fwd(folder)),
+                        'python %s -C <worktree> <verb> <arguments>' % rules.kit_tool(ctx, TOOL))

@@ -288,9 +288,11 @@ def backlog_shell(event, ctx, cmd, inv, cwd, role):
 
 
 def backlog_edit(event, ctx, target, role, what):
-    """An edit of a folder store's records (kitlib.guard.backlogrole.raw_edit)."""
+    """An edit of a folder store's records (kitlib.guard.backlogrole.raw_edit), or of the backlog's
+    audit log (audit_edit)."""
     from . import backlogrole
-    return backlogrole.raw_edit(event, ctx, target, role, what)
+    return backlogrole.raw_edit(event, ctx, target, role, what) or \
+        backlogrole.audit_edit(event, ctx, target, role, what)
 
 
 # ---------------------------------------------------------------- lock MCP
