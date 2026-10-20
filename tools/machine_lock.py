@@ -302,6 +302,11 @@ def cmd_run(a, cmd, store, argv):
     if not cmd:
         say("usage: machine_lock.py %s ... -- <command>: no command after --" % a.cmd)
         return EXIT_USAGE
+    resource = getattr(a, "resource", None)     # run only; before a detach books anything
+    if resource and resource.startswith("landing:"):
+        say("usage: --resource %s: landing resources belong to land.py (kitlib.gate.land); "
+            "name another resource" % resource)
+        return EXIT_USAGE
     try:                            # before a detach, whose log is the only place it would show
         bash.resolve(cmd)
     except bash.BareBashError as e:
