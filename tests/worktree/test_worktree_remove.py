@@ -551,6 +551,27 @@ class DetachedReflog(RemoveCase):
         self.assertEqual(rc, 0, out)
         self.assertFalse(os.path.exists(path), out)
 
+    def test_abandon_of_a_landed_dirty_tree_refuses_a_reflog_only_commit(self):
+        # Landed (HEAD is main's tip) with uncommitted work: --abandon takes the landed-dirty
+        # path (_abandon_landed_dirty), which must check the reflog before saving anything.
+        path = self.detached('red')
+        left = self.left_behind(path)
+        self.fx.write('wip.txt', 'wip\n', root=path)
+        rc, out = self.run_verb('abandon', 'red', 'superseded', today=self.TODAY)
+        self.assertKept(path, rc, out, left)
+        self.assertNotIn('saved     ', out)
+        self.assertEqual(self.git('tag', '-l', 'archive/*'), '')
+        self.assertTrue(os.path.isfile(os.path.join(path, 'wip.txt')))
+
+    def test_abandon_of_a_landed_dirty_tree_whose_reflog_a_ref_reaches_saves_and_removes(self):
+        path = self.detached('red')
+        self.fx.write('wip.txt', 'wip\n', root=path)
+        rc, out = self.run_verb('abandon', 'red', 'superseded', today=self.TODAY)
+        self.assertEqual(rc, 0, out)
+        self.assertIn('saved     uncommitted work (1)', out)
+        self.assertEqual(self.git('show', 'archive/red:wip.txt'), 'wip')
+        self.assertFalse(os.path.exists(path), out)
+
 
 @real_git('git reflog: the fake writes no reflog, and a detached tree here is checked by it')
 class DetachedTemplate(RemoveCase):
