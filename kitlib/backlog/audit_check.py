@@ -123,8 +123,10 @@ def history(root, rev, rel, since):
     """[Change] for each non-merge commit reachable from `rev` that touched `<rel>/*.md`, committed
     at or after the epoch `since`, newest first. Failure when git cannot answer."""
     rel = rel.replace('\\', '/').strip('/')
-    out, why = cmd.run_text(['log', '--no-merges', '--no-renames', '--since=@%d' % int(since),
-                             '--format=%x1e%H%x1f%ct%x1f%s%x1f%b%x1d', '--name-status', rev,
+    # git reads `--since=@0` as an empty window, so an epoch of 0 or less means no limit.
+    window = ['--since=@%d' % int(since)] if int(since) > 0 else []
+    out, why = cmd.run_text(['log', '--no-merges', '--no-renames'] + window +
+                            ['--format=%x1e%H%x1f%ct%x1f%s%x1f%b%x1d', '--name-status', rev,
                              '--', rel + '/*.md'], root, strip=False)
     if out is None:
         raise Failure('cannot read the store history: %s' % why)
