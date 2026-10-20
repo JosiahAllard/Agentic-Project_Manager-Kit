@@ -46,8 +46,8 @@ the failing lines from the log the gate names, not the whole log.
 
 ## Landing
 Only the coordinator or the project manager submits a landing to the land queue; no other role merges or pushes to the main branch.
-There is no standing landing approval here: each landing needs the owner's go for that branch,
-relayed by the coordinator or project manager with the reviewer's verdict. Missing either: do not
+There is no standing landing approval here: each landing needs the owner's go for that branch
+(a ruling in the ledger or typed in that session), with the reviewer's verdict. Missing either: do not
 land; say what is missing. From the main checkout, on the main branch:
 `python <kit>/tools/gate.py land <branch> --expect-tip <sha> -C <repo>` (with `--submit` it queues the
 landing and prints the `gate.py wait-result ... -C <repo>` command to wait with; its `RESULT` line

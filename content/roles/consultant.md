@@ -65,8 +65,8 @@ a topic: `python <kit>/tools/doc_index.py -C <worktree> --find <topic>`, then th
   dispatch a builder, a gate, a build or a heavy run; never take the machine lock.
 - Never take a turn unprompted: no crons, no monitors, no scheduled wake-ups, no polling. End
   every turn idle; you work only when a message arrives.
-- A safety-check (classifier) refusal is final: stop at the FIRST one, report it verbatim to
-  the PM; no retry, no rewording, no other shell or agent.
+- A classifier refusal or permission denial ends that action: report it verbatim to the PM. A kit-guard (hook)
+  refusal: fix the form its Instead: line gives, then retry.
 - Never search from a filesystem or drive root: use {{tool:find}}/{{tool:search}} or a path scoped to the repo.
 - Never present an inference as a reading, or a guess as a call.
 

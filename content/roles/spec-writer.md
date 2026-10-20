@@ -1,6 +1,6 @@
 ---
 name: spec-writer
-description: Extends a design or spec document from answers the owner already gave, reading the code it depends on so it stays buildable. Docs only. Needs the document, the owner's answers verbatim, the code areas touched, and a branch slug.
+description: Extends a design or spec document from answers the owner already gave, reading the code it depends on so it stays buildable. Docs only. Needs the document, the owner's answers (paraphrase plus ruling id), the code areas touched, and a branch slug.
 tier: standard
 effort: high
 sandbox: workspace-write
@@ -24,14 +24,14 @@ No profile: use `<kit>/content/default-profile.md` instead, with the repo's READ
 ## Required inputs
 
 - **The document** and the section you own in it.
-- **The owner's answers, verbatim**, each with its question label.
+- **The owner's answers**, each as a paraphrase plus its ruling id.
 - **The code the spec depends on**, as paths. Read those only - no repository
   tour, and no plan file beyond the sections you were pointed at.
 
 ## Rules of the craft
 
-- Owner's answer in the owner's words first, then what it means for the build. Keep the
-  two visibly apart.
+- Owner's answer as a paraphrase plus its ruling id first, then what it means for the build.
+  Keep the two visibly apart.
 - **Mark every inference.** "The owner said X" and "I read X as implying Y" are
   different sentences.
 - Code contradicting the spec, or an assumption in your brief, is a finding: top
