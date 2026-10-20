@@ -123,14 +123,15 @@ class Remove(RemoveCase):
         self.assertIn('kit/open', self.branches())
 
     def test_unlanded_refusal_names_abandon_as_the_route_and_raw_git_as_owner_terminal_only(self):
-        """KIT-UNLANDED-WORKTREE-REMOVE-LOOP: the refusal sent the owner raw git, which the hub
-        refuses as a to-do; --abandon on a ruling is the route, raw git his own terminal only."""
+        """The refusal sent the owner raw git, which the hub refuses as a to-do; --abandon on a
+        ruling is the route, raw git the owner's own terminal only."""
         self.workstream('open', commits=1)
         rc, out = self.run_verb('remove', 'open')
         self.assertEqual(rc, 1, out)
         self.assertIn("abandon  the supported route, run on the owner's or the PM's ruling", out)
         self.assertIn('--tag archive/<name>', out)
-        self.assertIn('in his own terminal only (the Action Hub refuses these as a to-do)', out)
+        self.assertIn("in the owner's own terminal only (the Action Hub refuses these as a"
+                      " to-do)", out)
         self.assertLess(out.index('--abandon "<why>"'), out.index('git worktree remove'))
 
     def test_landed_locally_but_not_pushed_is_unlanded(self):
@@ -459,7 +460,7 @@ class Abandon(RemoveCase):
         self.assertNotIn('kit/named', self.branches())
 
     def test_a_named_tag_on_the_tip_is_reused(self):
-        """The R-2064 shape: the ruling's tag already holds the work, under another name."""
+        """The ruling's tag already holds the work, under another name than archive/<slug>."""
         path = self.workstream('errand')
         self.git('tag', 'archive/api-errand', 'kit/errand')
         rc, out = self.abandon('errand', tag='archive/api-errand')

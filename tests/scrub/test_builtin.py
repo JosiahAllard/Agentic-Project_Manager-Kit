@@ -153,7 +153,7 @@ PENDING_OWNER_TEXT = {
     ('gender', 'kitlib/commit/__init__.py'): 2,
     ('gender', 'kitlib/config/owner.py'): 1,
     ('gender', 'kitlib/coordinatorstart/__init__.py'): 2,
-    ('gender', 'kitlib/worktree/remove.py'): 6,
+    ('gender', 'kitlib/worktree/remove.py'): 3,
     ('gender', 'kitlib/worktree/task.py'): 1,
     ('gender', 'tests/coordinatorstart/test_coordinatorstart.py'): 1,
     ('gender', 'tests/gate/test_land_owner.py'): 1,

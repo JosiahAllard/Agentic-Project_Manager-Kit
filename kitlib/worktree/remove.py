@@ -344,8 +344,9 @@ def merge_check(ctx, key, registered_path, seen=None):
              ' removes the tree:' % (ARCHIVE, slug, ARCHIVE),
              '             %s %s --abandon "<why>"' % (s['tool'], named),
              '  owner    removing unlanded work outright is the owner\'s standing rule that'
-             ' deleting data is his, and this verb has no override. If he chooses to discard it,'
-             ' he runs, in his own terminal only (the Action Hub refuses these as a to-do),',
+             ' deleting data is the owner\'s, and this verb has no override. To discard it, the'
+             ' owner runs, in the owner\'s own terminal only (the Action Hub refuses these as a'
+             ' to-do),',
              '           from %s:' % main,
              '             git worktree remove "%s"' % registered_path]
     if branch:
@@ -1187,8 +1188,8 @@ def _remove_branch(ctx, branch):
                 ' the commits under the tag %s%s (--tag %s<name> for the tag a ruling names),'
                 ' then deletes the branch:' % (ARCHIVE, branch_slug(ctx, branch), ARCHIVE),
                 '             %s %s --branch --abandon "<why>"' % (s['tool'], branch),
-                '  owner    deleting unlanded work outright is the owner\'s own act, in his own'
-                ' terminal only: the Action Hub refuses it as a to-do, and this verb has no'
+                '  owner    deleting unlanded work outright is the owner\'s own act, in the owner\'s'
+                ' own terminal only: the Action Hub refuses it as a to-do, and this verb has no'
                 ' override.',
                 '  note     %s was read as it stands, not fetched: if the branch has landed'
                 ' since, `git fetch %s` and run this again.' % (up, s['remote']))

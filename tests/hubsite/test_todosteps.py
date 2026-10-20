@@ -257,7 +257,7 @@ class Check(unittest.TestCase):
                 self.passes(commands=[cmd])
 
     def test_a_raw_git_delete_is_refused_naming_abandon_as_the_route(self):
-        """KIT-UNLANDED-WORKTREE-REMOVE-LOOP: no carve-out; the refusal names the route."""
+        """No carve-out for a raw delete; the refusal names the route."""
         for cmd in ('git worktree remove "Z:/r/.claude/worktrees/x"', 'git branch -D api/x',
                     'git update-ref -d refs/heads/x'):
             with self.subTest(cmd=cmd):
