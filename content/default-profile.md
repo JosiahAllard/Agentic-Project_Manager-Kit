@@ -33,8 +33,8 @@ stack from the files (Python, Node, Rust, Go, .NET) and runs its usual test and 
 verdict line then says "auto-detected" (`<kit>/docs/gate.md` "Auto-detected gate"). Read that line:
 an auto-detected gate may run the wrong checks, and a gate that found no stack ran none. A faster
 command for one area: the one the README names, else the test runner the gate detected, on that
-area only. Red-first: commit the new test, then `python <kit>/tools/redfirst.py -C <worktree> --tests FILE[::FILTER]` runs it at the
-base in a throwaway worktree and must say RED (docs/redfirst.md); never overwrite tracked files in your own worktree. Say so in the
+area only. Red-first: commit the new test, then `python <kit>/tools/redfirst.py --tests FILE[::FILTER]` runs it at the
+base in a throwaway worktree and must say RED (`<kit>/docs/redfirst.md`); never overwrite tracked files in your own worktree. Say so in the
 report. Docs gate: the same gate; the repository has no separate one unless its README names it.
 
 ### Known flakes
