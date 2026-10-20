@@ -429,7 +429,7 @@ class AnEmptyCommit(LinkedCase):
         self.assertEqual(code, 0, out)
         self.assertEqual(self.git('log', '-1', '--format=%P'), head)
         self.assertEqual(self.git('rev-parse', 'HEAD^{tree}'), tree)
-        self.assertEqual(self.message(), 'close it\n\nCloses: KIT-X\n' + COAUTHOR)
+        self.assertEqual(self.message(), 'close it\n\nCloses: KIT-X\n\n' + COAUTHOR)
         self.assertIn('files     none (--allow-empty)', out)
 
     def test_no_paths_without_the_flag_is_not_an_empty_commit(self):

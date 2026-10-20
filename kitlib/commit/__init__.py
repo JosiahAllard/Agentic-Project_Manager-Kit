@@ -8,6 +8,10 @@ commit(Request) -> Outcome(code, lines). Nothing here prints or exits; tools/com
   (outside: a usage error); a relative --body-file is the caller's (Request.cwd).
 - Explicit paths only: a directory, `.`, `-A` or a glob is a usage error. A named path already
   staged as a deletion is committed as that deletion; nothing unnamed is added.
+- --allow-empty (Request.allow_empty) is the one commit of no paths: HEAD's tree unchanged, only
+  the message and its trailers (a `Closes:` line). It refuses anything staged and a merge in
+  progress; with a path, --owner-approval or --consume it is a usage error. Every other check
+  runs as for any commit. No paths without it is never an empty commit.
 - The body: `-b` is the TEXT (a typed `\n` becomes a newline); --body-file reads it from a file
   (UTF-8, a BOM dropped, CRLF made LF; empty, unreadable or not UTF-8 is a usage error). A `-b`
   whose whole value is one line naming an existing file, or shaped like an absolute path, is a
@@ -104,20 +108,22 @@ norm = ownermod.norm
 # root: the work tree's top level; cwd: the caller's directory (a relative --body-file); env: the
 # environment the host's model variable is read from (None: os.environ); provider: the host name
 # (None: the hosts.json default); owner_approval: `hub:A-<n>` (--owner-approval); consume: the
-# commit --consume names; hub: the hub client to ask (None: the machine's hub; tests pass one).
+# commit --consume names; hub: the hub client to ask (None: the machine's hub; tests pass one);
+# allow_empty: --allow-empty, a commit of no paths (module docstring).
 Request = collections.namedtuple(
     'Request', 'root subject b body_file model owner_authored owner_approved '
-               'lander_main_checkout paths cwd env provider owner_approval consume hub',
-    defaults=(None, None, None, None))
+               'lander_main_checkout paths cwd env provider owner_approval consume hub '
+               'allow_empty',
+    defaults=(None, None, None, None, False))
 Outcome = collections.namedtuple('Outcome', 'code lines')
 
 
 def request(root, subject, paths, b='', body_file=None, model=None, owner_authored=False,
             owner_approved=(), lander_main_checkout=False, cwd=None, env=None, provider=None,
-            owner_approval=None, consume=None, hub=None):
+            owner_approval=None, consume=None, hub=None, allow_empty=False):
     return Request(root, subject, b, body_file, model, owner_authored, list(owner_approved),
                    lander_main_checkout, list(paths), cwd or os.getcwd(), env, provider,
-                   owner_approval, consume, hub)
+                   owner_approval, consume, hub, allow_empty)
 
 
 class _Stop(Exception):
@@ -822,9 +828,10 @@ def tagged_entry(root, tag):
     return hits[0] if len(hits) == 1 else None
 
 
-def commit_only(root, head, snap, msg):
+def commit_only(root, head, snap, msg, allow_empty=False):
     """`git commit` of exactly `snap` (index_snapshot) on `head` (head_commit) through
-    private_index; `(rc, out, err, commit id, note lines, trees)`. `trees` is None when the commit
+    private_index; `(rc, out, err, commit id, note lines, trees)`. `allow_empty` (--allow-empty):
+    git commits `head`'s tree unchanged. `trees` is None when the commit
     holds exactly the tree built, else `(tree built, tree committed)`: a hook changed it, and
     align_index brings the real index's entries for the paths that differ into line. Every other
     staged entry stays staged.
@@ -859,7 +866,8 @@ def commit_only(root, head, snap, msg):
             raise _Stop(REFUSED, head_moved_line(head, now), 'Nothing was committed; the files '
                         'this call named are still staged. Run this again.')
         saved = merge_state(root)
-        r = cmd.call(['commit', '-q', '-m', msg], root, env=dict(env, GIT_REFLOG_ACTION=tag))
+        r = cmd.call(['commit', '-q'] + (['--allow-empty'] if allow_empty else []) + ['-m', msg],
+                     root, env=dict(env, GIT_REFLOG_ACTION=tag))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     gout = r.out.decode('utf-8', 'replace')
@@ -1084,7 +1092,7 @@ def _stage(req, root, paths, rendered, named, merged, status_before, msg_warning
     staged_now = staged_status(root)
     status_after = {p: s for p, s in staged_now.items() if p in named or p in merged}
     others = set(staged_now) - set(status_after)
-    if not status_after:
+    if not status_after and not req.allow_empty:
         raise _Stop(REFUSED, 'nothing to commit in: %s' % ', '.join(paths))
     # What is committed is this one read of HEAD and of the index; the index must still hold it
     # after the machine-path check, so the blobs checked are the blobs committed.
@@ -1169,6 +1177,9 @@ def _commit(req, lines):
     err = approval.usage_error(req)
     if err:
         raise _usage(err)
+    if req.allow_empty and (req.paths or req.owner_approval or req.consume is not None):
+        raise _usage('--allow-empty takes no paths and no --owner-approval: it commits only the '
+                     'message and its trailers')
     if req.consume is not None:
         return _consume(req, lines)
     model, source, err = resolve_model(req.owner_authored, req.model, req.env, req.provider)
@@ -1219,6 +1230,13 @@ def _commit(req, lines):
         lines.append("WARNING: this merge drops the merged branch's change to owner-only %s (it "
                      "commits HEAD's copy); if that is not meant, restore it from the merged "
                      "branch" % p)
+    if req.allow_empty and status_before:
+        raise _Stop(REFUSED, 'refused: --allow-empty commits nothing staged, but this is staged: '
+                    '%s. Commit it by name, or unstage it. Nothing was committed.'
+                    % ', '.join(sorted(status_before)))
+    if req.allow_empty and (heads or merge_heads(root)):
+        raise _Stop(REFUSED, 'refused: --allow-empty during a merge in progress; commit the merge '
+                    'by naming its resolved files. Nothing was committed.')
     if foreign:
         raise _Stop(REFUSED, foreign_refusal(foreign, merge_why, len(heads) == 1))
     if hub:
@@ -1256,7 +1274,8 @@ def _commit(req, lines):
             req, root, paths, rendered, named, merged, status_before, msg_warnings, body,
             trailers, lines, hub)
         try:
-            rc, out, err, new, notes, trees = commit_only(root, head, snap, msg)
+            rc, out, err, new, notes, trees = commit_only(root, head, snap, msg,
+                                                          allow_empty=req.allow_empty)
         except _Stop as stop:
             if hub:                 # the commit may stand: the work tree is left as committed
                 stop.lines.append('%s was not consumed; the approved content is left in the work '
@@ -1271,8 +1290,8 @@ def _commit(req, lines):
         raise _Stop(stop.code, *_put_back(root, written, paths, stop.lines))
     _rc, short, _err = _git(root, 'rev-parse', '--short', new)
     lines.append('committed %s  %s' % (short.strip() or new[:12], req.subject))
-    lines.append('files     %s' % ', '.join(
-        paths + sorted((merged & set(status_after)) - set(paths))))
+    lines.append('files     %s' % (', '.join(
+        paths + sorted((merged & set(status_after)) - set(paths))) or 'none (--allow-empty)'))
     lines.extend(notes)
     aligned, misaligned = align_index(root, trees, new) if trees else ([], [])
     lines.extend(aligned)
