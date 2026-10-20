@@ -21,6 +21,7 @@ import os
 import re
 
 from kitlib import agentname
+from kitlib.git import repo
 
 from . import commands as cm
 from . import jail
@@ -241,22 +242,42 @@ def is_store_ref(name, store, short=False):
     return name == 'refs/heads/' + BRANCH or bool(REMOTE_BRANCH_RE.match(name)) or (short and name == BRANCH)
 
 
-def _written_refs(gc, store):
+def _store_unsure(ctx, gc, where):
+    """Why store_kind's None for `where` is no proof that no store reads there (a text), or None:
+    git re-pointed (gc.blind), a directory the text does not name (gc.unknown), a .kit.json that
+    does not load, a place git cannot tell about. A folder in no checkout is the one sure None."""
+    if gc.blind:
+        return 'git is re-pointed: %s' % gc.blind
+    if gc.unknown:
+        return 'the directory git runs in is unknown'
+    why = ctx.config_error(where) if where else None
+    if why:
+        return 'its .kit.json does not load: %s' % why
+    place = ctx.place(where)
+    if place.kind == repo.UNKNOWN:
+        return 'git cannot tell the place: %s' % place.detail
+    return None
+
+
+def _written_refs(gc, store, unsure=None):
     """The store refs the git call `gc` writes (texts), and why it may write the store's ref (a
-    text) when its words do not name it: a mirror push, or, where a store reads (`store` not None),
-    an update-ref whose ref the guard cannot read (rules._update_ref_unread: --stdin, an option it
-    does not know, xargs, a computed word, no ref). Where none reads, such an update-ref still
-    writes every store ref its words name literally."""
+    text) when its words do not name it: a mirror push, or, where a store reads (`store` not None)
+    or may (`unsure`, _store_unsure), an update-ref whose ref the guard cannot read
+    (rules._update_ref_unread: --stdin, an option it does not know, xargs, a computed word, no
+    ref). Where none reads, such an update-ref still writes every store ref its words name
+    literally."""
     sub = gc.sub
     short, longs, pos = rules._opts(sub, gc.rest)
     texts = [w.text for w in pos if not w.dyn]
     if sub == 'update-ref':
         unread = rules._update_ref_unread(gc, short, longs, pos)
         if unread:
-            if store is None:
+            if store is None and not unsure:
                 return [t for t in texts if is_store_ref(t, store)], None
+            held = ('this repository reads a backlog store (%s)' % store if store is not None else
+                    'the guard cannot tell whether a backlog store reads there (%s)' % unsure)
             return [], ('may write the backlog store\'s ref: the guard cannot tell which ref it writes (%s), '
-                        'and this repository reads a backlog store (%s)' % (unread, store))
+                        'and %s' % (unread, held))
         return [pos[0].text] if is_store_ref(pos[0].text, store) else [], None
     if sub == 'push':
         if 'mirror' in longs:
@@ -291,7 +312,8 @@ def _written_refs(gc, store):
 def store_ref_write(event, ctx, cmd, inv, cwd, role):
     """Any session's but the owner's git write of the backlog store's ref: update-ref, a push
     or a fetch whose destination is it, a mirror push, an update-ref whose ref the guard cannot
-    read where a store reads (store_kind; it fails closed: --stdin, xargs, a computed ref; not in a
+    read where a store reads or the guard cannot tell (store_kind, _store_unsure; it fails closed:
+    --stdin, xargs, a computed ref; not in a
     scratch repository, rules._scratch_repo, as git-shared-ref), and with a `branch` store a branch
     write of the backlog branch. The store tool writes it (its compare-and-swap) as a process,
     which no rule reads."""
@@ -302,7 +324,7 @@ def store_ref_write(event, ctx, cmd, inv, cwd, role):
         return None
     where = gc.dir if gc.dir and not gc.unknown else (cmd.cwd or cwd)
     store = store_kind(ctx, where) if where else None
-    refs, whole = _written_refs(gc, store)
+    refs, whole = _written_refs(gc, store, None if store is not None else _store_unsure(ctx, gc, where))
     if not refs and not whole:
         return None
     if not refs and gc.sub == 'update-ref' and gc.dir and not gc.unknown and not gc.blind and \
