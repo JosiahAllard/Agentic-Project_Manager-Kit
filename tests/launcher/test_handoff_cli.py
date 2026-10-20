@@ -114,7 +114,8 @@ class Autostart(unittest.TestCase):
     def test_what_if_registers_nothing_and_the_task_runs_after_reboot_unelevated(self):
         def run(*a, **k):
             raise AssertionError('what-if ran PowerShell')
-        out = autostart.install('/kit/tools/launch.py', python='/py/python.exe', whatif=True, run=run)
+        out = autostart.install('/kit/tools/launch.py', python='/py/python.exe', whatif=True, run=run,
+                                isfile=lambda p: True)        # /py is not there: say pythonw is
         script = out[1]
         self.assertIn("-TaskName 'Claude coordinators after reboot'", script)
         self.assertIn('-LogonType Interactive -RunLevel Limited', script)
