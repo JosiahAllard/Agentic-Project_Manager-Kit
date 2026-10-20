@@ -115,6 +115,28 @@ class IntoMain(Base):
                 d = self.denied(self.run_ps(text), 'unplaced')
                 self.assertIn('Name a literal path inside your worktree', d.reason)
 
+    def test_a_cd_to_a_relative_filesystem_path_makes_the_directory_unknown(self):
+        # PowerShell reads Set-Location FileSystem::. (FileSystem::sub, ..) from the process's
+        # directory, not the location a cd moved: from a session whose process runs in the main
+        # checkout, `cd <worktree>; Set-Location FileSystem::.` puts the git write in main
+        texts = (r'cd {wt}; Set-Location FileSystem::.; git reset --hard',
+                 r'cd {wt}; Set-Location FileSystem::sub; git reset --hard',
+                 r'cd {wt}; cd \FileSystem::.; git reset --hard',
+                 r'cd {wt}; Push-Location Microsoft.PowerShell.Core\FileSystem::.; git reset --hard',
+                 r'cd {wt}\sub; sl -LiteralPath FileSystem::..; git reset --hard',
+                 r'cd {wt}; Set-Location FileSystem::.; git checkout -- .')
+        for text in texts:
+            with self.subTest(text, cwd='main'):
+                d = decide(W.ps(text.format(wt=self.w.wt), self.w.main, True), self.w.ctx())
+                self.assertIsNotNone(d, 'allowed')
+                self.assertEqual(d.verdict, 'deny', d.reason)
+            with self.subTest(text, cwd='worktree'):
+                d = self.run_ps(text.replace('{wt}', '{main}'))
+                self.assertIsNotNone(d, 'allowed')
+                self.assertEqual(d.verdict, 'deny', d.reason)
+        # a cd to an absolute FileSystem:: path is still placed
+        self.allowed(self.run_ps(r'Set-Location FileSystem::{wt}; git reset --hard'))
+
     def test_literal_path_filesystem_provider(self):
         d = self.denied(self.run_ps(r'New-Item -LiteralPath FileSystem::{main}\x.txt'), 'main-checkout')
         self.assertIn('is in the main checkout', d.reason)
