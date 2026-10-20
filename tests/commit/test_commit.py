@@ -1695,6 +1695,22 @@ class MergeCarriesAnOwnerChange(MergeCase):
         self.assertEqual(self.git('diff', '--cached', '--name-only', '--', self.F), self.F)
         self.assert_refused_naming(self.F, tip)
 
+    def test_checking_out_head_over_mains_owner_change_commits_with_a_warning(self):
+        tip, main = self.merge('owner edit\n', branch_side='branch owner edit\n')
+        self.git('checkout', 'HEAD', '--', self.F)
+        code, out = self.commit('merge main', 'work.txt')
+        self.assert_merged(tip, main, out, code)
+        warn = [ln for ln in out.splitlines() if 'drops the merged' in ln]
+        self.assertEqual(len(warn), 1, out)
+        self.assertTrue(warn[0].startswith('WARNING: '), warn)
+        self.assertIn(self.F, warn[0])
+
+    def test_taking_mains_owner_change_has_no_drop_warning(self):
+        tip, main = self.merge('owner edit\n')
+        code, out = self.commit('merge main', 'work.txt')
+        self.assert_merged(tip, main, out, code)
+        self.assertNotIn('drops the merged', out)
+
     def test_an_octopus_merge_carries_no_owner_change(self):
         tip, _ = self.merge(None)
         path = self.git('rev-parse', '--path-format=absolute', '--git-path', 'MERGE_HEAD')

@@ -24,6 +24,8 @@ commit(Request) -> Outcome(code, lines). Nothing here prints or exits; tools/com
   staged itself (merge_owned), so only the resolved conflicts are named. An owner-only path is the
   merge's only when its staged state is exactly the merged branch's copy and that branch changed
   it (a deletion included; a conflict resolved to that copy too); named, it is refused as below.
+  An owner-only path the merged branch changed but the merge commits as HEAD's copy (a
+  `git checkout HEAD -- <path>`) is one WARNING line (dropped_owner_changes); nothing is refused.
 - The commit records only the paths this call named, rendered or let a merge carry (commit_only):
   it is made from a private index (GIT_INDEX_FILE), HEAD's tree plus those paths' staged entries,
   so a file another writer stages after the check above is not swept in. The real index is not
@@ -404,6 +406,29 @@ def carries_merged_copy(root, path, head, bases):
         if not known_b or at_base == theirs:
             return False
     return True
+
+
+def dropped_owner_changes(root, rules, heads):
+    """The owner-only paths a merge in progress would commit as HEAD's own copy although the merged
+    branch changed them from every merge base (a `git checkout HEAD -- <path>` dropped that
+    change). Only a single merge; a path git cannot list, or an unmerged one, is left out."""
+    if len(heads) != 1:
+        return []
+    bases = merge_bases(root, heads[0])
+    rc, out, _ = _git(root, 'diff', '--name-only', '--no-renames', '-z', 'HEAD', heads[0])
+    if not bases or rc != 0:
+        return []
+    dropped = []
+    for p in sorted(x for x in out.split('\0') if x and rules.is_locked(x)):
+        known_i, staged = index_entry(root, p)
+        known_h, ours = tree_entry(root, 'HEAD', p)
+        known_t, theirs = tree_entry(root, heads[0], p)
+        if not (known_i and known_h and known_t) or staged != ours or ours == theirs:
+            continue
+        at_bases = [tree_entry(root, b, p) for b in bases]
+        if all(known and at != theirs for known, at in at_bases):
+            dropped.append(p)
+    return dropped
 
 
 def merge_owned(root, rules, staged, heads, landed=()):
@@ -1190,6 +1215,10 @@ def _commit(req, lines):
     landed = landed_main(root, opts['remote'], opts['main_branch']) if heads else []
     merged, merge_why = merge_owned(root, rules, set(status_before) - named, heads, landed)
     foreign = set(status_before) - named - merged
+    for p in dropped_owner_changes(root, rules, heads or merge_heads(root)):
+        lines.append("WARNING: this merge drops the merged branch's change to owner-only %s (it "
+                     "commits HEAD's copy); if that is not meant, restore it from the merged "
+                     "branch" % p)
     if foreign:
         raise _Stop(REFUSED, foreign_refusal(foreign, merge_why, len(heads) == 1))
     if hub:
