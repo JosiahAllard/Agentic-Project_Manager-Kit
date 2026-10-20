@@ -1098,10 +1098,11 @@ def gate_result(event, ctx, target, role, what):
 
 
 # The refusal of a provider item the guard reads as a file only because of the line around it
-# (ps_provider_word): it says so, and its Instead runs the command from the worktree
-PROVIDER_ITEM_WHY = ('%s: that names an item on a drive that holds no files only on a line of plain calls with '
-                     'literal words, and this line is not one, so the guard reads it as a file it cannot place. '
-                     'Run the command from your worktree:')
+# (ps_provider_word): it says so in one sentence, and its Instead runs the whole line from the
+# worktree (whole_line)
+PROVIDER_ITEM_WHY = ('%s, an item on a drive that holds no files, which the guard skips only on a line of plain '
+                     'calls with literal words, so on this line it is a file the guard cannot place; run the whole '
+                     'line from your worktree:')
 
 
 def main_checkout(event, ctx, target, cwd, role, what, unknown_why=None, rewrite=None, run=None, redirect=False,
@@ -1324,6 +1325,13 @@ def outer_shell(cmd):
     while cmd.nested_in is not None:
         cmd = cmd.nested_in
     return cmd.shell
+
+
+def whole_line(cmd):
+    """The text of the whole line `cmd` is on, as its outermost shell reads it (outer_shell)."""
+    while cmd.nested_in is not None:
+        cmd = cmd.nested_in
+    return (cmd.source or '').strip()
 
 
 # ---------------------------------------------------------------- shell writes
@@ -2950,7 +2958,10 @@ def _write_from(event, ctx, cmd, inv, cwd, role, w, base, net, into, searched):
                  (r.target.start, r.target.end) == (w.start, w.end) for r in cmd.redirects) or (getattr(inv, 'name', None) or '').lower() in OUTPUT_WRITERS
     item = target is None and ps_provider_word(cmd, inv, w)
     for t in into_folder(target, w, into, runs_in, getattr(ctx, 'home', None)) if target else [target]:
-        d = edit_target(event, ctx, t, cwd, role, what, why, rewrite=rewrite, run=bare(cmd), redirect=output,
+        # a provider item's refusal runs the whole line from the worktree: a statement before the
+        # call may set what it reads (PROVIDER_ITEM_WHY)
+        d = edit_target(event, ctx, t, cwd, role, what, why, rewrite=rewrite,
+                        run=whole_line(cmd) if item else bare(cmd), redirect=output,
                         shell=outer_shell(cmd), item=item)
         if not placed:
             d = unplaced(d, role)
@@ -3342,17 +3353,24 @@ def kit_wrapper(ctx, cmd, inv, cwd, event=None):
         return None
     found = cm.python_script(inv)
     word = inv.args[found[0]] if found else inv.word
-    return kind if kit_script(ctx, cmd, word, cwd, event) else None
+    return kind if kit_script(ctx, cmd, word, cwd, event, inv) else None
 
 
-def kit_script(ctx, cmd, word, cwd, event=None):
+def kit_script(ctx, cmd, word, cwd, event=None, inv=None):
     """True when the program or script Word `word` is one of the kit's own tools: in the tools
     folder of the kit the guard runs from (ctx.kit) or, given the Action `event`, of an export of
-    it the session cannot write (rolepolicy.kit_export), the path resolved from the command's
-    directory with links followed."""
+    it the session cannot write (rolepolicy.kit_export), the path resolved, links followed, from
+    the directory the program runs in: the command's, or for a Start-Process call `inv` with a
+    -WorkingDirectory the folder that names (cm.run_dir), where only an absolute path is read
+    when the guard cannot place that folder. The heavy program's repository (heavy) is still the
+    command's."""
     if word is None or word.dyn:
         return False
-    path = sh.resolve_path(word.text, cmd.cwd or cwd, cmd.shell, getattr(ctx, 'home', None)) or (
+    if inv is not None and inv.via == 'start-process' and inv.workdir is not None:
+        base = cm.run_dir(inv)
+    else:
+        base = cmd.cwd or cwd
+    path = sh.resolve_path(word.text, base, cmd.shell, getattr(ctx, 'home', None)) or (
         word.text if os.path.isabs(word.text) else None)
     if not path:
         return False

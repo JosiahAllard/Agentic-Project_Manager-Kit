@@ -977,10 +977,13 @@ def msys_to_win(p):
     return (m.group(1).upper() + ':' + (m.group(2) or '/')) if m else p
 
 
-# A PowerShell provider-qualified path: [<module>\]<provider>::<rest>. FileSystem (bare or from
-# its own module) holds files, so its <rest>, when absolute, is the file; any other provider, or
-# a module the guard does not know, is a place it cannot tell.
-PS_PROVIDER_RE = re.compile(r'^(?:([^\\/:]+)\\)?([^\\/:]+)::(.*)$', re.S)
+# A PowerShell provider-qualified path: [\][<module>\]<provider>::<rest>. FileSystem (bare or
+# from its own module) holds files, so its <rest>, when absolute, is the file; any other provider,
+# or a module the guard does not know, is a place it cannot tell. PowerShell takes a \ before a
+# bare provider (\FileSystem::C:\x is C:\x); a / there, or a \ before a module, it refuses, and
+# the guard reads them as the place they would name. A module of . or .. is no module:
+# .\x.txt::$DATA is a stream of the file x.txt in the location (_ps_provider).
+PS_PROVIDER_RE = re.compile(r'^[\\/]?(?:([^\\/:]+)\\)?([^\\/:]+)::(.*)$', re.S)
 PS_FILESYSTEM_MODULES = (None, 'microsoft.powershell.core')
 # A PowerShell drive whose name is anything but one ASCII letter (Main:\x, Temp:\x, env:FOO, 1:\x,
 # _:\x, a non-ASCII letter): a drive the session may have made with New-PSDrive, which takes such
@@ -989,10 +992,21 @@ PS_LONG_DRIVE_RE = re.compile(r'^(?![A-Za-z]:)[^\\/:]+:')
 _ABS_RE = re.compile(r'^(?:[A-Za-z]:[\\/]|\\\\|//)')
 
 
+def _ps_provider(p):
+    """The PS_PROVIDER_RE match of `p` when PowerShell reads it as a provider-qualified path, else
+    None: a relative path whose first folder is . or .. (.\\x.txt::$DATA, ..\\x.txt::$DATA) is a
+    path in the location, its :: a stream."""
+    m = PS_PROVIDER_RE.match(p or '')
+    if m and m.group(1) in ('.', '..'):
+        return None
+    return m
+
+
 def ps_filesystem_path(p):
     """The file path a PowerShell `FileSystem::<abs>` (or
-    `Microsoft.PowerShell.Core\\FileSystem::<abs>`) spells, else None."""
-    m = PS_PROVIDER_RE.match(p or '')
+    `Microsoft.PowerShell.Core\\FileSystem::<abs>`, either after a leading separator) spells,
+    else None."""
+    m = _ps_provider(p)
     if not m or m.group(2).lower() != 'filesystem':
         return None
     module = m.group(1).lower() if m.group(1) is not None else None
@@ -1003,11 +1017,13 @@ def ps_filesystem_path(p):
 
 def ps_unplaceable(p):
     """True when PowerShell reads the text `p` as a place the guard cannot tell: a
-    provider-qualified path other than an absolute FileSystem:: one, or a drive whose name is not
-    one ASCII letter. A one-letter drive (absolute or drive-relative) and a relative path are not."""
+    provider-qualified path other than an absolute FileSystem:: one (x.txt::$DATA and
+    sub\\x.txt::$DATA among them: PowerShell reads x.txt as a provider's name), or a drive whose
+    name is not one ASCII letter. A one-letter drive (absolute or drive-relative) and a relative
+    path (.\\x.txt::$DATA among them, _ps_provider) are not."""
     if not p or p[:2] in ('\\\\', '//'):
         return False
-    if PS_PROVIDER_RE.match(p):
+    if _ps_provider(p):
         return ps_filesystem_path(p) is None
     return bool(PS_LONG_DRIVE_RE.match(p))
 
@@ -1051,8 +1067,9 @@ def home_text(text, home=None, dyn=False):
 def resolve_path(p, cwd, shell=None, home=None):
     """`p` (a word's text) as an absolute normalised path, or None when the text cannot tell (a
     drive-relative C:x, ~user, a rooted \\x with no cwd to take the drive from). With `shell` PS,
-    `FileSystem::<abs>` is <abs> and any other provider or a drive not named by one ASCII letter
-    is None (ps_unplaceable); bash and cmd text is read as it always was. `~` is `home`
+    `FileSystem::<abs>` (after a leading separator too) is <abs>, any other provider or a drive
+    not named by one ASCII letter is None (ps_unplaceable), and .\\x.txt::$DATA is a stream of a
+    file in `cwd`; bash and cmd text is read as it always was. `~` is `home`
     (home_folder)."""
     if not p:
         return None
