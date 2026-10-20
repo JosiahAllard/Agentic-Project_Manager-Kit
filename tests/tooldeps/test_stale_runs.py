@@ -122,11 +122,29 @@ class PruneStale(unittest.TestCase):
         link = os.path.join(self.parent, 'kit-tests-junction')
         if not junction(out, link):
             self.skipTest('no junction can be made here')
-        self.age(out, DAY * 3)
-        self.assertEqual(selfrun.prune_stale(self.parent, now=self.now), (0, 0))
+        # The junction's own times (os.lstat) are fresh: a clock three days on makes the
+        # junction itself, not only its target, look stale, so only the reparse check keeps it.
+        later = self.now + DAY * 3
+        self.assertGreaterEqual(later - os.lstat(link).st_mtime, DAY)
+        self.assertEqual(selfrun.prune_stale(self.parent, now=later), (0, 0))
         self.assertTrue(os.path.lexists(link))
         self.assertTrue(os.path.isfile(keep))
         os.rmdir(link)
+
+    def test_an_entry_that_is_no_plain_folder_once_claimed_is_kept_not_removed(self):
+        # Something swapped in between the first look and the rename: the second look refuses it.
+        path = self.folder('kit-tests-swapped', DAY * 2)
+        real = selfrun._plain_dir
+        looks = []
+
+        def plain(p):
+            looks.append(p)
+            return real(p) if len(looks) == 1 else None
+        with mock.patch.object(selfrun, '_plain_dir', side_effect=plain):
+            self.assertEqual(selfrun.prune_stale(self.parent, now=self.now), (0, 1))
+        self.assertEqual(len(looks), 2)
+        self.assertNotEqual(os.path.normcase(looks[1]), os.path.normcase(path))
+        self.assertTrue(os.path.isfile(os.path.join(looks[1], 'sub', 'a.txt')))
 
 
 class RunPrunes(unittest.TestCase):
