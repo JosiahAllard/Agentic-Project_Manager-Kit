@@ -1,5 +1,5 @@
 """The nightly worktree sweep task of every repository in the machine config's launcher.repos
-(docs/machine-setup.md "Extras", owner ruling R-2368): `<repo name>-worktree-sweep`, the task
+(docs/machine-setup.md "Extras"): `<repo name>-worktree-sweep`, the task
 kitlib.worktree.task describes (daily at 03:00 as the registering user, `-RunLevel Limited`,
 `-StartWhenAvailable`, base pythonw running the carrier, `--sweep-merged --apply`).
 
@@ -23,6 +23,7 @@ from kitlib import pluginsource
 from kitlib.config import ConfigError, load as load_kit_config
 from kitlib.git import repo as gitrepo
 from kitlib.launcher.pythonw import base_pythonw
+from kitlib.proc import spawn
 from kitlib.worktree.remove import main_checkout
 from kitlib.worktree.task import (AT, NOT_THE_STORE_ALIAS, PYTHONW_IS, argument, description, quoted,
                                   task_name)
@@ -78,7 +79,7 @@ def dry_run(tool, main, python, timeout=DRY_RUN_TIMEOUT, run=None):
     as UTF-8. RuntimeError when it exits any way but 0 (1: refused, failed or deferred by a held
     lock; 2: usage or a refused .kit.json) or takes over `timeout` seconds, so the task is not
     registered. run: the tests' subprocess.run."""
-    run = run or subprocess.run
+    run = run or spawn.run
     env = dict(os.environ, PYTHONIOENCODING='utf-8')
     try:
         r = run(dry_run_argv(tool, main, python), capture_output=True, encoding='utf-8', errors='replace',
