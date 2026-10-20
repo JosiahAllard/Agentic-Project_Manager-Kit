@@ -25,7 +25,6 @@ a constructor argument, and the defaults read this machine.
   pm_root()          the root commit in the record of the machine config's pm_data repository
                      ((None, None) when it names none or that repository has no record;
                      (None, why) when either cannot be read)
-  gitread            kitlib.guard.gitread (alias, has_commit, is_shallow), or a test's fake
   config(path)       the .kit.json of the main checkout `path` belongs to (never a worktree's own:
                      an agent cannot loosen the rules from its branch; the PM data worktree,
                      answered as MAIN, is the one worktree whose own .kit.json is read); a
@@ -75,7 +74,6 @@ from kitlib import pmdata
 from kitlib import sessionmark
 from kitlib.config import user as kuser
 from kitlib.git import refs, repo
-from kitlib.guard import gitread as fsgitread
 from kitlib.guard import paths
 from kitlib.guard import place as fsplace
 
@@ -139,7 +137,7 @@ def _same_dir(a, b):
 class Ctx(object):
     def __init__(self, environ=None, home=None, store=None, classify=None, load=None,
                  gate_ok=None, git=None, lock_held=None, role_resolver=None, tempdir=None,
-                 pm_data=None, gitread=None, kit=None, profile=None):
+                 pm_data=None, kit=None, profile=None):
         self.environ = dict(os.environ if environ is None else environ)
         self.home = home or kuser.home_dir()
         self.kit = kit or kitroot.root()
@@ -148,7 +146,6 @@ class Ctx(object):
         self._load = load or (lambda top: kconfig.load(top, home=self.home, machine=self.user))
         self._gate_ok = gate_ok
         self.git = git or refs
-        self.gitread = gitread or fsgitread
         self._lock_held = lock_held
         self._role = role_resolver or default_session_role
         self._profile = profile

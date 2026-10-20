@@ -52,9 +52,8 @@ class Action:
       params       an MCP call's input object as the host passed it (None: not an MCP call, or a
                    host that does not pass it); the hub-browser rule reads its strings. For a
                    'read': None for a one-file read, else a search's terms: {'search': 'contents',
-                   'filter': a file-name glob limiting the files it reads, None for all} or
-                   {'search': 'names', 'wildcard': the wildcard path it lists, relative to `path`
-                   unless absolute}. It takes no part in equality or hashing
+                   'filter': a file-name glob limiting the files it reads, None for all}. It takes
+                   no part in equality or hashing
     """
     kind: str
     tool: str = ''

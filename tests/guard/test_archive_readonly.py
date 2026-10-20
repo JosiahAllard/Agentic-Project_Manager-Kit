@@ -53,6 +53,11 @@ class ArchiveWorld(unittest.TestCase):
         d = self.pm(shell(text, self.w.plain))
         self.assertTrue(d.reason.startswith('`git'), d.reason)
 
+    def kept_a_read(self, shell, text):
+        """The PM's session runs `text` as a read: the line changes git's environment in a way the
+        guard does not read, and it catches honest mistakes, not evasion."""
+        self.assertIsNone(self.pm(shell(text, self.w.plain)))
+
 
 class ArchiveReadOnly(ArchiveWorld):
     # ---------------------------------------------------------------- the repro passes
@@ -102,9 +107,13 @@ class ArchiveReadOnly(ArchiveWorld):
                 d = self.sub(bash('git -C %s archive %s HEAD' % (self.wt, out), self.w.wt, sub=True))
                 self.assertIsNotNone(d, out)
 
-    def test_archive_exec_runs_a_program_and_is_no_read(self):
-        text = 'git -C %s archive --remote=. --exec=/tmp/x.sh HEAD' % self.main
-        self.assertIsNotNone(self.pm(bash(text, self.w.plain)))
+    def test_archive_remote_and_exec_read(self):
+        # --remote/--exec run git-upload-archive or the program --exec names; only an attacker
+        # hides a write there (honest mistakes only), so they read like any archive (docs/guard-v2.md)
+        for opt in ('--remote=. --exec=/tmp/x.sh', '--remote=origin', '--rem=origin', '--e=/tmp/x.sh'):
+            text = 'git -C %s archive %s HEAD' % (self.main, opt)
+            with self.subTest(text):
+                self.assertIsNone(self.pm(bash(text, self.w.plain)))
 
     def test_an_o_after_a_double_dash_is_a_pathspec(self):
         # git reads every word after `--` as a pathspec (git 2.55: "'<f>' is outside repository")
@@ -200,8 +209,7 @@ class ArchiveConfigFailsClosed(ArchiveWorld):
                 self.refused(bash, text)
 
     def test_a_user_config_moved_on_the_line_is_no_read(self):
-        for name in ('HOME', 'XDG_CONFIG_HOME', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'GIT_CONFIG_GLOBAL',
-                     'GIT_CONFIG_SYSTEM'):
+        for name in ('HOME', 'XDG_CONFIG_HOME', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH'):
             for text in ('%s=%s git -C %s archive --format=x HEAD', 'export %s=%s; git -C %s archive --format=x HEAD'):
                 text = text % (name, self.scratch, self.main)
                 with self.subTest(text):
@@ -209,6 +217,15 @@ class ArchiveConfigFailsClosed(ArchiveWorld):
             text = '$env:%s = "%s"; git -C %s archive --format=x HEAD' % (name, self.scratch, self.main)
             with self.subTest(text):
                 self.refused(ps, text)
+        # a config file named by GIT_CONFIG_GLOBAL or GIT_CONFIG_SYSTEM is set on purpose: not read
+        for name in ('GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM'):
+            for text in ('%s=%s git -C %s archive --format=x HEAD', 'export %s=%s; git -C %s archive --format=x HEAD'):
+                text = text % (name, self.scratch, self.main)
+                with self.subTest(text):
+                    self.kept_a_read(bash, text)
+            text = '$env:%s = "%s"; git -C %s archive --format=x HEAD' % (name, self.scratch, self.main)
+            with self.subTest(text):
+                self.kept_a_read(ps, text)
 
     def test_an_unplaced_git_is_no_read(self):
         other = '%s/r/.git' % self.scratch
@@ -246,10 +263,12 @@ class ArchiveProgramSearch(ArchiveWorld):
     def test_a_path_change_on_the_line_is_no_read(self):
         archive = 'git -C %s archive HEAD' % self.main
         for text in ('PATH=%s:$PATH %s', 'export PATH=%s:$PATH; %s', 'env PATH=%s %s', 'PATH+=:%s %s',
-                     'set -a; PATH=%s; %s', 'declare -x PATH=%s; %s', 'read PATH <<< %s; %s'):
+                     'set -a; PATH=%s; %s', 'declare -x PATH=%s; %s'):
             text = text % (self.scratch, archive)
             with self.subTest(text):
                 self.refused(bash, text)
+        # PATH set by read is not read (honest mistakes only)
+        self.kept_a_read(bash, 'read PATH <<< %s; %s' % (self.scratch, archive))
         for text in ('$env:Path = "%s;" + $env:Path; %s', '$env:PATH += ";%s"; %s',
                      "[Environment]::SetEnvironmentVariable('Path', '%s'); %s", 'Set-Item env:Path %s; %s',
                      'Set-Item -Path env:PATH -Value %s; %s'):
@@ -268,8 +287,9 @@ class ArchiveProgramSearch(ArchiveWorld):
                 with self.subTest(shell=shell.__name__, text=text):
                     self.refused(shell, call % text)
 
-    def test_cmd_s_path_command_is_no_read(self):
-        # cmd's own path command sets PATH: path X, path=X, path;X, and path ; (which clears it)
+    def test_cmd_s_path_command_is_not_read(self):
+        # cmd's own path command sets PATH (path X, path=X, path;X, and path ; which clears it), but
+        # only on purpose: the guard does not read it (honest mistakes only)
         archive = 'git -C %s archive HEAD' % self.main
         for spell in ('path {x};%PATH%', 'PATH {x}', 'Path={x}', 'path ;', 'path;{x}', 'path,{x}',
                       '@path {x}', '(path {x})'):
@@ -277,20 +297,26 @@ class ArchiveProgramSearch(ArchiveWorld):
             for shell, call in ((bash, "cmd //c '%s'"), (ps, "cmd /c '%s'")):
                 text = call % line
                 with self.subTest(text):
-                    self.archive_refused(shell, text)
+                    self.kept_a_read(shell, text)
 
     def test_cmd_s_leading_at_and_delimiters_still_name_the_command(self):
         # cmd drops a leading @ and its delimiters (, ; =) before the command name, as a prefix of
-        # the word or as words of their own: @set PATH=x is set, @ path x is path
+        # the word or as words of their own: @set PATH=x is set (cmd's path command and a batch
+        # file are not read: test_cmd_s_path_command_is_not_read)
         archive = 'git -C %s archive HEAD' % self.main
         for spell in ('@set PATH={x};%PATH%', '@set PATH={x}', '@set HOME={x}', '@SET GIT_DIR={x}',
-                      '@ set PATH={x}', ',set PATH={x}', ';set PATH={x}', '=set HOME={x}', '@@set HOME={x}',
-                      '@ path {x}', ', path {x}', '@;path {x}', '@call x.bat'):
+                      '@ set PATH={x}', ',set PATH={x}', ';set PATH={x}', '=set HOME={x}', '@@set HOME={x}'):
             line = spell.replace('{x}', self.scratch) + '& ' + archive
             for shell, call in ((bash, "cmd //c '%s'"), (ps, "cmd /c '%s'")):
                 text = call % line
                 with self.subTest(text):
                     self.archive_refused(shell, text)
+        for spell in ('@ path {x}', ', path {x}', '@;path {x}', '@call x.bat'):
+            line = spell.replace('{x}', self.scratch) + '& ' + archive
+            for shell, call in ((bash, "cmd //c '%s'"), (ps, "cmd /c '%s'")):
+                text = call % line
+                with self.subTest(text):
+                    self.kept_a_read(shell, text)
         # what changes nothing still reads: a bare @path prints PATH, @echo prints its words
         for spell in ('@path', '@ path', '@echo hi', '@set'):
             for shell, call in ((bash, "cmd //c '%s& %s'"), (ps, "cmd /c '%s& %s'")):
@@ -310,46 +336,52 @@ class ArchiveProgramSearch(ArchiveWorld):
                     self.assertIsNotNone(self.sub(shell(text, self.w.wt, sub=True)))
 
     def test_powershell_content_on_the_environment_sets_path(self):
-        # the environment provider's content and item cmdlets set or remove the variable a path
-        # names, in every spelling of the env: drive
+        # the environment provider's content cmdlets and New-Item set the variable a path names, in
+        # every spelling of the env: drive
         archive = 'git -C %s archive HEAD' % self.main
         drives = ('Environment::Path', 'ENVIRONMENT::path', 'Microsoft.PowerShell.Core\\Environment::Path',
                   'microsoft.powershell.core\\ENVIRONMENT::\\PATH', 'Env:Path', 'env:\\PATH')
         for verb, value in (('Set-Content', " -Value ';%s'" % self.scratch),
-                            ('Add-Content', " -Value ';%s'" % self.scratch), ('Clear-Content', '')):
+                            ('Add-Content', " -Value ';%s'" % self.scratch)):
             for drive in drives:
                 for form in ('%s', '-Path %s', '-LiteralPath %s', '-Path:%s'):
                     text = '%s %s%s; %s' % (verb, form % drive, value, archive)
                     with self.subTest(text):
                         self.archive_refused(ps, text)
         for item in ("sc Environment::Path ';%s'" % self.scratch, "ac Environment::Path ';%s'" % self.scratch,
-                     'clc Environment::Path', 'Clear-Item Environment::Path', 'cli env:Path',
-                     'Remove-Item Environment::Path', 'ri Microsoft.PowerShell.Core\\Environment::Path',
-                     'del -Path Environment::Path', 'New-Item -Path Environment:: -Name PATH -Value %s' % self.scratch,
+                     'New-Item -Path Environment:: -Name PATH -Value %s' % self.scratch,
                      'Set-Content -Path Environment::Path -Value %s' % self.scratch,
-                     "Add-Content Microsoft.PowerShell.Core\\Environment::Path ';%s'" % self.scratch,
-                     'Set-ItemProperty -Path Environment::Path -Name x -Value y', 'sp env:Path x y',
-                     'Clear-Item Environment::PAT*', 'Remove-Item Environment::\\ -Include PATH'):
+                     "Add-Content Microsoft.PowerShell.Core\\Environment::Path ';%s'" % self.scratch):
             text = '%s; %s' % (item, archive)
             with self.subTest(text):
                 self.archive_refused(ps, text)
-        # these two are refused already, with the provider cmdlet named as the writer
-        for item in ('rm env:Path', 'Set-Content -Path Environment::Path -Value "%s;$env:Path"' % self.scratch):
+        # refused already, with the provider cmdlet named as the writer
+        self.refused(ps, 'Set-Content -Path Environment::Path -Value "%s;$env:Path"; %s' % (self.scratch, archive))
+        # clearing or removing PATH, or setting a property on it, is not read (honest mistakes only)
+        for item in ('Clear-Content Environment::Path', 'Clear-Content -Path:env:\\PATH', 'clc Environment::Path',
+                     'Clear-Item Environment::Path', 'cli env:Path', 'Remove-Item Environment::Path',
+                     'ri Microsoft.PowerShell.Core\\Environment::Path', 'del -Path Environment::Path',
+                     'Set-ItemProperty -Path Environment::Path -Name x -Value y', 'sp env:Path x y',
+                     'Clear-Item Environment::PAT*', 'Remove-Item Environment::\\ -Include PATH', 'rm env:Path'):
             text = '%s; %s' % (item, archive)
             with self.subTest(text):
-                self.refused(ps, text)
+                self.kept_a_read(ps, text)
 
     def test_powershell_content_on_the_environment_moves_the_user_config(self):
         # HOMEDRIVE is left out: changing it is refused by itself, as a move of the drive a path names
         archive = 'git -C %s archive --format=x HEAD' % self.main
         for name in ('HOME', 'XDG_CONFIG_HOME', 'USERPROFILE', 'HOMEPATH'):
             for item in ('Set-Content Environment::%s %s' % (name, self.scratch),
-                         'Add-Content -LiteralPath Microsoft.PowerShell.Core\\Environment::%s x' % name,
-                         'Clear-Content env:%s' % name, 'Clear-Item -Path Environment::%s' % name,
-                         'Remove-Item env:%s' % name):
+                         'Add-Content -LiteralPath Microsoft.PowerShell.Core\\Environment::%s x' % name):
                 text = '%s; %s' % (item, archive)
                 with self.subTest(text):
                     self.archive_refused(ps, text)
+            # clearing or removing one is not read (honest mistakes only)
+            for item in ('Clear-Content env:%s' % name, 'Clear-Item -Path Environment::%s' % name,
+                         'Remove-Item env:%s' % name):
+                text = '%s; %s' % (item, archive)
+                with self.subTest(text):
+                    self.kept_a_read(ps, text)
 
     def test_reading_path_and_a_plain_cmd_keep_it_a_read(self):
         archive = 'git -C %s archive HEAD' % self.main
@@ -420,8 +452,7 @@ class ArchiveHoles(ArchiveWorld):
         self.assertIsNone(self.pm(bash('tar -x -C %s -C sub' % self.scratch, self.w.plain)))
 
     def test_archive_forms_the_guard_cannot_read_are_no_read(self):
-        for opt in ('$X', '--bogus', '--add=x', '--no-worktree-attributes', '--remote=origin', '--rem=origin',
-                    '--e=/tmp/x.sh', '-q', '-o $X', '-- $X'):
+        for opt in ('$X', '--bogus', '--add=x', '--no-worktree-attributes', '-q', '-o $X', '-- $X'):
             text = 'git -C %s archive %s HEAD' % (self.main, opt)
             with self.subTest(text):
                 d = self.pm(bash(text, self.w.plain))

@@ -101,9 +101,9 @@ ROWS = [
     ('patch -d main from a worktree', lambda w: bash('patch -d %s -p1 -i x.diff' % W.fwd(w.main), w.wt, sub=True), 'deny', 'main-checkout', None),
     ('rsync into main', lambda w: bash('rsync -a src/ %s/dst/' % W.fwd(w.main), w.wt, sub=True), 'deny', 'main-checkout', None),
     ('rsync out of main', lambda w: bash('rsync -a %s/src/ out/' % W.fwd(w.main), w.wt, sub=True), None, None, None),
-    ('python -c in main', lambda w: bash('python -c "open(\'x\', \'w\').write(\'y\')"', w.main, sub=True), 'deny', 'main-checkout', None),
+    ('python -c in main', lambda w: bash('python -c "open(\'x\', \'w\').write(\'y\')"', w.main, sub=True), 'deny', 'unplaced', None),
     ('python -c in its worktree', lambda w: bash('python -c "open(\'x\', \'w\').write(\'y\')"', w.wt, sub=True), None, None, None),
-    ('python heredoc in main', lambda w: bash("python - <<'EOF'\nprint(1)\nEOF", w.main, sub=True), 'deny', 'main-checkout', None),
+    ('python heredoc in main', lambda w: bash("python - <<'EOF'\nprint(1)\nEOF", w.main, sub=True), 'deny', 'unplaced', None),
     ('IO.File write in main', lambda w: ps("[IO.File]::WriteAllText('x.txt', 'y')", w.main, sub=True), 'deny', 'main-checkout', None),
     ('System.IO.File append in main', lambda w: ps("[System.IO.File]::AppendAllText('x.txt', 'y')", w.main, sub=True), 'deny', 'main-checkout', None),
     ('IO.File read in main', lambda w: ps("[IO.File]::ReadAllText('x.txt')", w.main, sub=True), None, None, None),
@@ -247,28 +247,28 @@ ROWS = [
     # wrong place; tests/guard/test_start_process_workdir.py holds the roles the jail does not cover
     ('Start-Process cmd in a bare drive from main', lambda w: ps(
         "Start-Process cmd -WorkingDirectory %s -ArgumentList '/c','echo x > f.txt'" % w.main[:2], w.main, sub=True),
-     'deny', 'main-checkout', None),
+     'deny', 'unplaced', None),
     ('Start-Process cmd -WorkingDirectory: a bare drive from main', lambda w: ps(
         "Start-Process cmd -WorkingDirectory:%s '/c','echo x > f.txt'" % w.main[:2], w.main, sub=True),
-     'deny', 'main-checkout', None),
+     'deny', 'unplaced', None),
     ('Start-Process cmd in a ? wildcard directory from main', lambda w: ps(
         "Start-Process cmd -WorkingDirectory '%s?' -ArgumentList '/c echo x > f.txt'" % w.main[:-1], w.main, sub=True),
-     'deny', 'main-checkout', None),
+     'deny', 'unplaced', None),
     ('Start-Process cmd in a * wildcard directory from main', lambda w: ps(
         "Start-Process cmd -WorkingDirectory '%s*' -ArgumentList '/c echo x > f.txt'" % w.main[:-1], w.main, sub=True),
-     'deny', 'main-checkout', None),
+     'deny', 'unplaced', None),
     ('Start-Process cmd in a [ wildcard directory from main', lambda w: ps(
         "Start-Process cmd -WorkingDirectory '%s[r]epo' -ArgumentList '/c echo x > f.txt'" % w.main[:-4], w.main,
-        sub=True), 'deny', 'main-checkout', None),
+        sub=True), 'deny', 'unplaced', None),
     ('Start-Process powershell in a ? wildcard directory from main', lambda w: ps(
         "Start-Process powershell -WorkingDirectory '%s?' -ArgumentList '-Command', 'echo x > f.txt'" % w.main[:-1],
-        w.main, sub=True), 'deny', 'main-checkout', None),
+        w.main, sub=True), 'deny', 'unplaced', None),
     ('Start-Process cmd in a drive-relative directory from main', lambda w: ps(
         "Start-Process cmd -WorkingDirectory %srepo -ArgumentList '/c echo x > f.txt'" % w.main[:2], w.main, sub=True),
-     'deny', 'main-checkout', None),
+     'deny', 'unplaced', None),
     ('Start-Process cmd in a relative wildcard directory from main', lambda w: ps(
         "Start-Process cmd -WorkingDirectory '..%srep?' -ArgumentList '/c echo x > f.txt'" % BS, w.main, sub=True),
-     'deny', 'main-checkout', None),
+     'deny', 'unplaced', None),
     ('Start-Process cmd in a relative directory that is main', lambda w: ps(
         "Start-Process cmd -WorkingDirectory %s -ArgumentList '/c echo x > f.txt'" % win('..', 'repo'), w.main, sub=True),
      'deny', 'main-checkout', None),
@@ -367,7 +367,7 @@ ROWS = [
     ('cd inside a subshell is followed', lambda w: bash('(cd %s && git checkout -b kit/x)' % W.fwd(w.wt), w.main), None, None, None),
     ('subshell cd does not leak', lambda w: bash('(cd %s); git checkout kit/x' % W.fwd(w.wt), w.main), 'deny', 'git-checkout', None),
     ('brace group cd carries', lambda w: bash('{ cd %s; }; git checkout -b kit/x' % W.fwd(w.wt), w.main), None, None, None),
-    ('cd || then git', lambda w: bash('cd %s || true; git stash' % W.fwd(w.wt), w.main), 'deny', 'git-stash', None),
-    ('variable cd in a subshell stays unknown', lambda w: bash('(cd "$WT" && git stash)', w.wt), 'deny', 'git-stash', None),
+    ('cd || then git', lambda w: bash('cd %s || true; git stash' % W.fwd(w.wt), w.main), 'deny', 'unplaced', None),
+    ('variable cd in a subshell stays unknown', lambda w: bash('(cd "$WT" && git stash)', w.wt), 'deny', 'unplaced', None),
     ('Push-Location chain', lambda w: ps('Push-Location %s; git checkout -b kit/x; Pop-Location' % w.wt, w.main), None, None, None),
 ]

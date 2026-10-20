@@ -22,6 +22,8 @@ class DefaultLockHeld(StoreCase):
         super().setUp()
         self.w = W.World()
         self.addCleanup(self.w.cleanup)
+        W.deny_softened()                       # heavy is a warning by default (test_cheap.py)
+        self.addCleanup(W.allow_unplaced)
 
     def ctx(self, value):
         return self.w.ctx(lock_held=None, store=self.store, environ={'MACHINE_LOCK_RUN': value})
