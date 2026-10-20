@@ -32,7 +32,8 @@ shows in `worktree_remove.py --check`.
 Runners: `.kit.json` "redfirst".runners as written; unwritten, the schema default plus a glob for
 the tools folder (runners_for). A path no runner takes is refused with the globs tried (select).
 
-Output goes through `say(line)`; nothing here prints or exits.
+Output goes through `say(line)`; nothing here prints or exits. execute also writes every line it
+says to `<log folder>/summary.txt` and says a last `summary` line naming it (write_summary).
 """
 import datetime
 import json
@@ -635,12 +636,48 @@ FINAL = {V.EXIT_RED: 'REDFIRST OK - every named test is red at %s',
          V.EXIT_LEFTOVER: 'REDFIRST LEFTOVER - verdicts above, the throwaway tree was not removed'}
 
 
+SUMMARY = 'summary.txt'
+
+
+def write_summary(log_dir, lines, say):
+    """Every line the run said, into `<log_dir>/summary.txt` (a file no other run writes: two
+    runs whose output shares one redirect file interleave there), then a last `summary` line
+    naming it. Nothing when the log folder was never made. Never raises."""
+    if not os.path.isdir(log_dir):
+        return
+    path = os.path.join(log_dir, SUMMARY)
+    try:
+        with open(path, 'w', encoding='utf-8', errors='replace') as fh:
+            fh.write(''.join(line + '\n' for line in lines))
+        say('summary   %s' % path)
+    except Exception as e:  # noqa: BLE001  (the verdict and exit code stand without it)
+        try:
+            say('note      the summary file %s could not be written: %s: %s'
+                % (path, type(e).__name__, e))
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def execute(plan, say, run=None, cleanup=None, ints=None, book_kw=None):
     """Book the machine lock when the plan names a kind (book_slot), make the tree, run every
     selector, release the lock, clean up. Returns the exit code; never raises.
 
     run: what runs one command, `run(argv, cwd, env, log)` -> its exit code; default locked_run
-    for a booked run, else default_run. book_kw: book_slot's."""
+    for a booked run, else default_run. book_kw: book_slot's. Every line said is also written to
+    the log folder's summary.txt, named by the last line (write_summary)."""
+    lines = []
+
+    def tell(line):
+        lines.append(line)
+        say(line)
+    try:
+        return run_all(plan, tell, run, cleanup, ints, book_kw)
+    finally:
+        write_summary(plan.log_dir, lines, say)
+
+
+def run_all(plan, say, run=None, cleanup=None, ints=None, book_kw=None):
+    """execute's body: its lines go through `say`."""
     cleanup = cleanup or cleanup_in_child
     ints = ints or Interrupts()
     tw, cleaned, slot = None, None, None
