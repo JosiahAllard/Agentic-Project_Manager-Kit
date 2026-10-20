@@ -157,7 +157,7 @@ class RefusalText(unittest.TestCase):
         as_form = 'backlog.py -C <store> --session kit --as <branch> pull FOO'
         self.assertIn(as_form, text)
         self.assertLess(text.index(as_form), text.index('backlog.py -C <worktree> pull FOO'))
-        self.assertIn('--session <session> --as <branch> pull FOO',
+        self.assertIn('-C <store> --as <branch> pull FOO',
                       pull_branch.refusal('FOO', 'main', 'main'))
 
 
