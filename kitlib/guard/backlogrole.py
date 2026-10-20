@@ -219,11 +219,18 @@ def raw_code(event, ctx, cmd, inv, role):
 
 def store_kind(ctx, path):
     """The "backlog".store of the .kit.json that holds for `path`, or None when none reads."""
+    return _store_read(ctx, path)[0]
+
+
+def _store_read(ctx, path):
+    """(store_kind for `path`, why the .kit.json there did not read: a text, or None). A load that
+    raises other than ConfigError (a file that is not UTF-8: kitlib.config lets that through, so
+    ctx.config_error has no word of it) answers no store and its fault."""
     try:
         cfg = ctx.config(path)
-        return cfg.section('backlog')['store'] if cfg is not None else None
-    except Exception:                           # noqa: BLE001 - no store read: refs/backlog only
-        return None
+        return (cfg.section('backlog')['store'] if cfg is not None else None), None
+    except Exception as e:                      # noqa: BLE001 - no store read: refs/backlog only
+        return None, 'its .kit.json does not read: %s: %s' % (type(e).__name__, e)
 
 
 def is_store_ref(name, store, short=False):
@@ -242,10 +249,14 @@ def is_store_ref(name, store, short=False):
     return name == 'refs/heads/' + BRANCH or bool(REMOTE_BRANCH_RE.match(name)) or (short and name == BRANCH)
 
 
-def _store_unsure(ctx, gc, where):
+def _store_unsure(ctx, gc, where, fault=None):
     """Why store_kind's None for `where` is no proof that no store reads there (a text), or None:
     git re-pointed (gc.blind), a directory the text does not name (gc.unknown), a .kit.json that
-    does not load, a place git cannot tell about. A folder in no checkout is the one sure None."""
+    does not load (ctx.config_error) or read (`fault`, _store_read), a place git cannot tell
+    about, and any other place in a checkout: one whose main checkout the guard does not find
+    (ctx.main_top: a linked worktree whose git common dir is not named .git, as a bare clone's
+    or a --separate-git-dir repository's), so no .kit.json was read there. A folder in no
+    checkout (repo.NONE) is the one sure None."""
     if gc.blind:
         return 'git is re-pointed: %s' % gc.blind
     if gc.unknown:
@@ -253,9 +264,14 @@ def _store_unsure(ctx, gc, where):
     why = ctx.config_error(where) if where else None
     if why:
         return 'its .kit.json does not load: %s' % why
+    if fault:
+        return fault
     place = ctx.place(where)
     if place.kind == repo.UNKNOWN:
         return 'git cannot tell the place: %s' % place.detail
+    if place.kind != repo.NONE:
+        return ('the guard finds no main checkout for the place %s (%s, git common dir %s), so it read no '
+                '.kit.json there' % (place.top, place.kind, place.common))
     return None
 
 
@@ -323,8 +339,8 @@ def store_ref_write(event, ctx, cmd, inv, cwd, role):
     if gc is None or gc.sub_dyn or gc.sub not in ('update-ref', 'push', 'fetch', 'branch'):
         return None
     where = gc.dir if gc.dir and not gc.unknown else (cmd.cwd or cwd)
-    store = store_kind(ctx, where) if where else None
-    refs, whole = _written_refs(gc, store, None if store is not None else _store_unsure(ctx, gc, where))
+    store, fault = _store_read(ctx, where) if where else (None, None)
+    refs, whole = _written_refs(gc, store, None if store is not None else _store_unsure(ctx, gc, where, fault))
     if not refs and not whole:
         return None
     if not refs and gc.sub == 'update-ref' and gc.dir and not gc.unknown and not gc.blind and \
