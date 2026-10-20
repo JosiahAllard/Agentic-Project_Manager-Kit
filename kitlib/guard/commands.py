@@ -790,6 +790,13 @@ def _shell_text(inv, parsed):
                     # a value switch included: powershell.exe never takes its value
                     unknown = k
                 if t.startswith('-') and len(t) > 1 and 'file'.startswith(t[1:]):
+                    if k + 1 < len(a) and not a[k + 1].dyn and a[k + 1].text == '-':
+                        # `-File -` reads the script from standard input, as `-Command -` does;
+                        # the words after it, if any, never make it a file
+                        if unknown is None:
+                            return (STDIN,)
+                        parsed.flag(lit)
+                        return None
                     return nested(lit, first) if first else None
                 if t.startswith('-') and _ps_value_either(t) and k + 1 < len(a):
                     if forks < PS_FORKS_MAX:
