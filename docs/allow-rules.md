@@ -50,12 +50,12 @@ are `PowerShell(...)` only; the denies come in both `Bash(...)` and `PowerShell(
 - **Allow:** `PowerShell(python <script> -C R * --expect-tip * --submit)`, plus one line per lane
   that adds ` --lane <lane>`. There is never a `--lane *`: a `*` at the end would carry `> file`.
   With no extra lanes this is 4 lines.
-- **Deny:** 54 lines per shell and spelling, 216 in all:
+- **Deny:** 55 lines per shell and spelling, 220 in all:
   - `python <script> * -C*`: a second `-C` after a space, or a glued one;
   - `python <script> -C R *-C*`: the text `-C` anywhere after the fixed `-C R` prefix;
   - `python <script> *--lo*`: `--log-dir` or any prefix of it, so an allowed submit cannot send the gate's logs anywhere (`land.py` takes abbreviations);
   - `python <script> * -- *`: a bare `--` (`END_OF_OPTIONS`). argparse reads everything after it as a branch name, the trailing `--submit` included, so `land.py -C R --expect-tip T -- kit/a --submit` would run a foreground landing. With `--submitted P` before the `--` it would also skip `land.py`'s "`--submit` and `--submitted`, not both" check (`test_double_dash_makes_submit_a_branch_denied`);
-  - `python <script> *X*` for each X of `METACHARS` in `kitlib/allowrules/rules.py`: `> < | ; & $ ( % ' " \ { } #`, the backtick, tab, CR, LF and NUL, the typographic quotes U+2018-U+201E, the dashes U+2013-U+2015, and `SEPARATORS`: VT, FF, U+0085, U+00A0, U+1680, U+2000-U+200A, U+2028, U+2029, U+202F, U+205F and U+3000.
+  - `python <script> *X*` for each X of `METACHARS` in `kitlib/allowrules/rules.py`: `> < | ; & $ ( % ' " \ { } # @`, the backtick, tab, CR, LF and NUL, the typographic quotes U+2018-U+201E, the dashes U+2013-U+2015, and `SEPARATORS`: VT, FF, U+0085, U+00A0, U+1680, U+2000-U+200A, U+2028, U+2029, U+202F, U+205F and U+3000.
 
 argparse keeps the last `-C`, so a second one would move the landing to another checkout. The
 `-C` denies close it however it is spelled: `'-C'`, `"-C"`, `\-C`, `{-C,...}`, a tab before it, or
@@ -73,6 +73,7 @@ The metacharacter denies close what an allow's inner `*` would otherwise carry:
 - a chain;
 - `$(...)`, backticks and `$var`;
 - PowerShell's `(expr)` and `@(...)`;
+- PowerShell splatting, `@var`, which passes a variable's contents as arguments. An automatic variable needs no setting: `@PSVersionTable` passes `-CLRVersion:...`, which argparse reads as a second `-C`. A variable set by an earlier approved call may still be there: after `$x=,'--'`, `... @x kit/a --expect-tip T --submit` would step around the `-- ` deny. Probed on 5.1: an array splats one argument per item, and a plain string splats one argument per character. No submit needs `@` (`test_splatting_denied`);
 - `%VAR%`;
 - brace expansion;
 - a quote, backslash or tab that hides a second `-C`, or glues a flag into a value. In Bash, `--expect-tip abc\ --submit` is one word, so `land.py` would run without `--submit`;
@@ -125,7 +126,7 @@ with a prefix of it, unless the tool sets `allow_abbrev=False`.
 
 ## Known limits
 
-- PowerShell splatting (`@var`) is not denied: `@` alone is no metacharacter here. A splat needs a variable set earlier in the same shell, which the allow does not carry.
+- Variables set by earlier calls are not seen. The rules match one command's text, so they deny every way the text names a variable (`$`, `@`, `%`), not the variables themselves.
 - Other control characters and the zero-width characters are not denied. In the 5.1 probe they reached python as written, inside the argument: U+001A, U+001B, U+180E, U+200B and U+FEFF. None splits an argument, so none forms a `--` token, and every other deny matches text, so none hides a `-C` or `--lo`.
 - Whether Claude Code reads a rule holding CR, LF or NUL as that literal character is INFERENCE, like the tab.
 

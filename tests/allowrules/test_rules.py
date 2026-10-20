@@ -75,7 +75,7 @@ class RuleTextTest(unittest.TestCase):
                 want.append('%s(python %s *--lo*)' % (shell, script))
                 want.append('%s(python %s * -- *)' % (shell, script))
                 want += ['%s(python %s *%s*)' % (shell, script, c)
-                         for c in ('>', '<', '|', ';', '&', '$', '(', '`', '%', "'", '"', '\\', '{', '}', '#',
+                         for c in ('>', '<', '|', ';', '&', '$', '(', '`', '%', "'", '"', '\\', '{', '}', '#', '@',
                                    '\t', '\r', '\n', '\0',
                                    '‘', '’', '‚', '‛', '“', '”', '„',
                                    '–', '—', '―',
@@ -84,7 +84,7 @@ class RuleTextTest(unittest.TestCase):
                                    ' ', ' ', ' ', ' ', ' ',
                                    ' ', ' ', ' ', ' ', '　')]
         self.assertEqual(LINES['deny'], want)
-        self.assertEqual(len(want), 216)
+        self.assertEqual(len(want), 220)
 
 
 class AllowedTest(unittest.TestCase):
@@ -225,6 +225,21 @@ class DeniedTest(unittest.TestCase):
             with self.subTest(sep='U+%04X' % ord(sep)):
                 self.assertEqual(decide(cmd, lines=ALLOW_ONLY), 'allow')
                 self.assertEqual(decide(cmd), 'deny')
+
+    def test_splatting_denied(self):
+        """PowerShell splats `@var` into a native command's arguments. An automatic variable needs no
+        setting (`@PSVersionTable` passes `-CLRVersion:...`, which argparse takes as a second -C), and
+        a variable set by an earlier approved call may carry over (`$x=,'--'`, then `@x` before the
+        trailing --submit steps around the `-- ` deny; probed 5.1). The allow alone matches each; `@` is denied."""
+        tip = 'a' * 40
+        for middle in ('kit/a @PSVersionTable', 'kit/a @x', '--full kit/a @args',
+                       '--full --expect-tip %s @x kit/a' % tip):
+            self.only_the_deny_closes(middle)
+            for shell in SHELLS:
+                cmd = submit(Q, middle=middle)
+                with self.subTest(shell=shell, cmd=cmd):
+                    self.assertEqual(decide(cmd, shell, ALLOW_ONLY), ALLOWED[shell])
+                    self.assertEqual(decide(cmd, shell), 'deny')
 
     def test_typographic_quotes_split_C_and_log_dir_denied(self):
         """PowerShell takes U+2018-U+201B as single and U+201C-U+201E as double quotes and strips

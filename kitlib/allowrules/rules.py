@@ -22,6 +22,9 @@ SCRIPT = 'tools/land.py'
 # stand for `$(`, `@(` and PowerShell's `(expr)`; quotes, the backslash, braces and the tab hide a
 # second -C or glue a flag into a value, as in `abc\ --submit`). `#` (a comment), CR (PowerShell
 # ends a statement there) and NUL (a native command line ends there) drop the trailing --submit.
+# `@` is PowerShell's splat: `@var` passes a variable's contents as arguments, an automatic one
+# (`@PSVersionTable`: -CLRVersion:..., a second -C to argparse) or one set by an earlier call
+# (`$x=,'--'` then `@x`: a bare --; probed 5.1).
 # PowerShell also takes U+2018-U+201B and U+201C-U+201E as quotes, and U+2013-U+2015 as dashes.
 # SEPARATORS: the characters besides space, tab, CR and LF that split a native argument in
 # PowerShell as a space does (probed on 5.1: VT, FF, U+0085 and Unicode's space, line and paragraph
@@ -29,7 +32,7 @@ SCRIPT = 'tools/land.py'
 # (END_OF_OPTIONS) cannot be stepped around with another one.
 SEPARATORS = ('\x0b', '\x0c', '\x85', '\xa0', ' ') + tuple(chr(c) for c in range(0x2000, 0x200b)) + (
     ' ', ' ', ' ', ' ', '　')
-METACHARS = ('>', '<', '|', ';', '&', '$', '(', '`', '%', "'", '"', '\\', '{', '}', '#',
+METACHARS = ('>', '<', '|', ';', '&', '$', '(', '`', '%', "'", '"', '\\', '{', '}', '#', '@',
              '\t', '\r', '\n', '\0',
              '‘', '’', '‚', '‛', '“', '”', '„',
              '–', '—', '―') + SEPARATORS
