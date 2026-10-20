@@ -246,15 +246,18 @@ def is_store_ref(name, store, short=False):
 
 
 def _written_refs(gc, store):
-    """The store refs the git call `gc` writes (texts), and whether it pushes every ref."""
+    """The store refs the git call `gc` writes (texts), and why it may write every ref (a text) when
+    its words do not name them: a mirror push, or update-ref reading its commands from its input."""
     sub = gc.sub
     short, longs, pos = rules._opts(sub, gc.rest)
     texts = [w.text for w in pos if not w.dyn]
     if sub == 'update-ref':
-        return [t for t in texts[:1] if is_store_ref(t, store)], False
+        if 'stdin' in longs:
+            return [], 'reads the refs it writes from its input, which may name the backlog store\'s'
+        return [t for t in texts[:1] if is_store_ref(t, store)], None
     if sub == 'push':
         if 'mirror' in longs:
-            return [], True
+            return [], 'pushes every ref, the backlog store\'s among them'
         delete = 'd' in short or 'delete' in longs
         out = []
         for spec in texts[1:]:
@@ -264,29 +267,30 @@ def _written_refs(gc, store):
                 dst = src
             if dst and is_store_ref(dst, store, short=True):
                 out.append(spec)
-        return out, False
+        return out, None
     if sub == 'fetch':
         out = []
         for spec in texts[1:]:
             _src, colon, dst = spec.lstrip('+').partition(':')
             if colon and dst and is_store_ref(dst, store, short=False):
                 out.append(spec)
-        return out, False
+        return out, None
     if sub == 'branch' and store == 'branch':
         listing = 'l' in short or bool({'list', 'show-current', 'merged', 'no-merged', 'contains', 'no-contains',
                                         'points-at'} & longs)
         writes = bool(set('dDmMcCf') & short) or bool({'delete', 'move', 'copy', 'force'} & longs)
         if listing and not writes:
-            return [], False
-        return [t for t in texts if is_store_ref(t, store, short=True)], False
-    return [], False
+            return [], None
+        return [t for t in texts if is_store_ref(t, store, short=True)], None
+    return [], None
 
 
 def store_ref_write(event, ctx, cmd, inv, cwd, role):
     """Any session's but the owner's git write of the backlog store's ref: update-ref, a push
-    or a fetch whose destination is it, a mirror push, and with a `branch` store a branch write
-    of the backlog branch. The store tool writes it (its compare-and-swap) as a process, which
-    no rule reads."""
+    or a fetch whose destination is it, a mirror push, `update-ref --stdin` (its refs are in its
+    input, which no rule reads, so it fails closed; not in a scratch repository, rules._scratch_repo,
+    as git-shared-ref), and with a `branch` store a branch write of the backlog branch. The store
+    tool writes it (its compare-and-swap) as a process, which no rule reads."""
     if rules.is_owner_session(event, ctx):
         return None
     gc = rules.git_call_judged(inv)
@@ -294,11 +298,13 @@ def store_ref_write(event, ctx, cmd, inv, cwd, role):
         return None
     where = gc.dir if gc.dir and not gc.unknown else (cmd.cwd or cwd)
     store = store_kind(ctx, where) if where else None
-    refs, every = _written_refs(gc, store)
-    if not refs and not every:
+    refs, whole = _written_refs(gc, store)
+    if not refs and not whole:
         return None
-    what = 'pushes every ref, the backlog store\'s among them' if every else \
-        'writes the backlog store\'s ref (%s)' % ', '.join(refs)
+    if not refs and gc.sub == 'update-ref' and gc.dir and not gc.unknown and not gc.blind and \
+            rules._scratch_repo(ctx, ctx.place(gc.dir)):
+        return None                             # --stdin in a scratch repository: its refs are its own
+    what = whole or 'writes the backlog store\'s ref (%s)' % ', '.join(refs)
     return rules.refuse(RAW_RULE, role, '`%s` %s: records are written only through tools/backlog.py (its '
                         'compare-and-swap and its role check), so a direct ref write is a raw write, which no agent '
                         'session makes (kitlib/backlog/roles.py). Run the tool\'s verb:' % (rules.bare(cmd), what),
