@@ -13,9 +13,9 @@ unreadable line is never a way around a rule, and a plain line is never denied b
     names the tool and the alternative is plainly()'s.
   - a git or root-search pattern that matches: the text from the match to the next ; | & or
     newline is read again as a command of its own and the rules run on it. A rule that denies it
-    gives the deny, its real alternative included; none: the `unreadable` deny, which shows the
-    line written plainly, or a script file's run when plain() cannot rewrite it or its rewrite
-    does not read cleanly either (plainly()).
+    gives the deny, its real alternative included; none: the `unreadable` deny, whose advice is
+    to write the names literally or run a script file (plainly(): advice only, the line is never
+    rewritten).
     The location-dependent git patterns are checked when the call's directory is a main checkout or one git cannot place; the push --no-verify pattern when that
     directory's repository has a PM data record (or git cannot place it), in every session but
     the owner's own. The update-ref pattern (git-shared-ref) is checked wherever the call runs, in a
@@ -123,8 +123,7 @@ NAMED = (
 )
 PARSED_RULES = ('owner_tool', 'wrapped_gate', 'root_search', 'heavy', 'git_rules', 'shell_writes')
 WHY = 'The guard could not read this command; write the program name literally. Why: %s.'
-PLAIN = ' Write it plainly:'
-# when plain() cannot rewrite the line, the alternative is a script file, never the line again
+# the alternative is a script file, never the line again nor a rewrite of it
 SCRIPT = (' Make every program name and nested shell text literal (a nested bash -c in single quotes; a '
           'variable it needs exported), or write the commands to a script file with the Write tool, then run it:')
 SCRIPT_RUNS = {'bash': ('script.sh', 'bash "%s"'),
@@ -166,36 +165,9 @@ def named_run(cmd, inv):
     return ' '.join(['<the program %s names>' % inv.path] + [w.text for w in inv.args])
 
 
-def plain(parsed, text):
-    """The line written so the guard can read it, as far as the text tells."""
-    dyn = _dyn_commands(parsed)
-    if dyn:
-        c, inv = dyn[0]
-        return named_run(c, inv)
-    for c in parsed.commands:
-        if any(w.synth or w.alt is not None for w in c.words):
-            return ' '.join(w.alt if w.alt is not None else w.text for w in c.words)
-    t = text.rstrip()
-    if t.count("'") % 2:
-        return t + "'"
-    if t.count('"') % 2:
-        return t + '"'
-    return t
-
-
-def plainly(ctx, parsed, text, cwd):
-    """(the reason's last sentence, the alternative): the line written plainly when plain() can
-    rewrite it and the rewrite reads cleanly (read again in `cwd`), else a run of a script file
-    in the temp folder: never the refused line itself, nor a rewrite the guard would refuse as
-    unreadable too."""
-    p = plain(parsed, text)
-    if p.strip() != text.strip():
-        try:
-            readable = cm.read(p, parsed.shell, cwd, home=getattr(ctx, 'home', None)).clean
-        except Exception:                       # a rewrite the reader cannot take: offer the script
-            readable = False
-        if readable:
-            return PLAIN, p
+def plainly(ctx, parsed):
+    """(the reason's last sentence, the alternative): advice only, a run of a script file in the
+    temp folder for the line's shell; the guard never rewrites the refused line (R-2363)."""
     name, run = SCRIPT_RUNS['powershell' if parsed.shell == sh.PS else 'bash']
     return SCRIPT, run % rules.fwd(os.path.join(ctx.tempdir, name))
 
@@ -269,7 +241,7 @@ def check(event, ctx, text, cwd, role, parsed):
     def answer(d, rule):
         if d is not None:
             return rules.reworded(d, '%s %s' % (why, d.reason))
-        last, alt = plainly(ctx, parsed, text, cwd)
+        last, alt = plainly(ctx, parsed)
         return rules.refuse('unreadable', role, '%s Its text matches the %s rule.%s' % (why, rule, last), alt)
 
     owner = rules.is_owner_session(event, ctx)
@@ -282,7 +254,7 @@ def check(event, ctx, text, cwd, role, parsed):
         d = named_reread(event, ctx, text, shell, parsed, m.start(), cwd, role, rule)
         if d is not None:
             return rules.reworded(d, '%s %s' % (why, d.reason))
-        last, alt = plainly(ctx, parsed, text, cwd)
+        last, alt = plainly(ctx, parsed)
         d = rules.refuse(rule, role, '%s Its text %s This session is %s.%s' % (
             why, what, rules.hub_session(event, ctx), last), alt)
         if d:
@@ -341,7 +313,7 @@ def check(event, ctx, text, cwd, role, parsed):
         d = reread(m.start(), cwd_at(parsed, m.start(), cwd) or cwd)
         if d is not None:
             return answer(d, 'heavy')
-    last, alt = plainly(ctx, parsed, text, cwd)
+    last, alt = plainly(ctx, parsed)
     if role == 'subagent':
         d = rules.refuse('unreadable', role, why + last, alt)
         if d:

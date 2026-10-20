@@ -32,10 +32,10 @@ ROWS = [
 
     # ---------------------------------------------------------------- lines the guard cannot read
     ('subagent variable program in its worktree', lambda w: bash('$TOOL --version', w.wt, sub=True), 'deny', 'unreadable',
-     '<the program $TOOL names> --version'),
+     'bash "{temp}/script.sh"'),
     ('main-role variable program in its worktree', lambda w: bash('$TOOL --version', w.wt), None, None, None),
     ('main-role variable program in main', lambda w: bash('"$TOOL" --version', w.main), 'deny', 'unreadable',
-     '<the program $TOOL names> --version'),
+     'bash "{temp}/script.sh"'),
     ('PowerShell assignment is no program', lambda w: ps('$p = "a"; Write-Output $p', w.main, sub=True), None, None, None),
     ('PowerShell expression statement', lambda w: ps('$x.Count', w.main, sub=True), None, None, None),
     ('PowerShell assignment from git status in main', lambda w: ps('$s = git status --short', w.main, sub=True), None, None, None),

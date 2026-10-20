@@ -187,7 +187,7 @@ ROWS = [
     ('unclosed quote hiding restore -SW', lambda w: bash("echo 'x ; git restore -SW a.py", w.main), 'deny', 'git-restore', None),
     ('unclosed quote hiding a subagent merge', lambda w: bash("echo 'x ; git merge kit/wt", w.main, sub=True), 'deny', 'git-main-history', None),
     ('unclosed quote hiding a main-role merge', lambda w: bash("echo 'x ; git merge kit/wt", w.main), 'deny', 'unreadable',
-     "echo 'x ; git merge kit/wt'"),
+     'bash "{temp}/script.sh"'),
     ('unclosed quote hiding a subagent merge in its worktree', lambda w: bash("echo 'x ; git merge kit/wt", w.wt, sub=True), 'deny', 'unreadable', None),
     ('cmd /c with a trailing backslash root', lambda w: bash('cmd /c "dir /s C:\\"', w.wt), 'deny', 'root-search', None),
     ('variable program running godot', lambda w: bash('GODOT=/c/tools/godot.exe; $GODOT --headless', w.wt), 'deny', 'heavy',
