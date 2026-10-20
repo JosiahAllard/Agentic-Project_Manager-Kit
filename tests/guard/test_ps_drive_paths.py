@@ -160,6 +160,39 @@ class IntoMain(Base):
         self.denied(self.run_ps('Get-ChildItem FileSystem::%s\\ -Recurse' % drive), 'root-search')
 
 
+class ModuleQualifiedLocation(Base):
+    """`Microsoft.PowerShell.Management\\Set-Location` (and `\\Push-Location`) is the cd itself, so
+    a git write or a relative write after one is placed where it moved; was read as no cd, so a
+    write after a move into the main checkout was judged in the worktree. Any other qualified cd
+    word (another module, `/`, an alias) is no command PowerShell runs: where it leaves the line is
+    not read as a move, so it is a cd to a place the guard cannot tell."""
+
+    def test_a_qualified_move_into_main_places_the_write_there(self):
+        for text in (r'Microsoft.PowerShell.Management\Set-Location {main}; git reset --hard',
+                     r'Microsoft.PowerShell.Management\Push-Location {main}; git reset --hard',
+                     r'microsoft.powershell.management\set-location -Path {main}; git reset --hard'):
+            with self.subTest(text):
+                self.denied(self.run_ps(text), 'git-reset-hard')
+        d = self.denied(self.run_ps(r'Microsoft.PowerShell.Management\Set-Location {main}; New-Item x.txt'),
+                        'main-checkout')
+        self.assertIn('is in the main checkout', d.reason)
+
+    def test_a_qualified_move_into_the_worktree_places_the_write_there(self):
+        text = r'Microsoft.PowerShell.Management\Set-Location {wt}; git reset --hard'
+        self.allowed(decide(W.ps(text.format(wt=self.w.wt), self.w.main, True), self.w.ctx()))
+
+    def test_any_other_qualified_cd_word_is_a_place_it_cannot_tell(self):
+        for text in (r'Microsoft.PowerShell.Management/Set-Location {main}; git reset --hard',
+                     r'Microsoft.PowerShell.Core\Set-Location {main}; git reset --hard',
+                     r'Microsoft.PowerShell.Management\sl {main}; git reset --hard',
+                     r'Microsoft.PowerShell.Management\cd {main}; git reset --hard',
+                     r'Microsoft.PowerShell.Management\Pop-Location; git reset --hard'):
+            with self.subTest(text):
+                d = self.run_ps(text)
+                self.assertIsNotNone(d, 'allowed')
+                self.assertEqual(d.verdict, 'deny', d.reason)
+
+
 class DynamicTargets(Base):
     """A PowerShell write target the guard cannot read as a literal ($p, "...$n...", $env:TEMP, a
     ( ) expression), from a worktree: refused, where before it was skipped and allowed
