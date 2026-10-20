@@ -20,6 +20,9 @@
                                           run lists them, --apply commits the paths it names)
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.backlog, prints and exits.
+Every write first meets the session's role (kitlib.backlog.policy: the session mark, unmarked is
+the owner, against kitlib/backlog/roles.py; docs/backlog.md "Roles"): a row it may not take is
+REFUSED before the write plans.
 Exit codes: 0 OK, 1 NOT FOUND / ERROR / a red check / a landable that cannot tell, 2 USAGE /
 REFUSED / NOT LANDABLE.
 """
@@ -35,6 +38,7 @@ from kitlib.backlog import landable as landmod                      # noqa: E402
 from kitlib.backlog import migrate as mmod                          # noqa: E402
 from kitlib.backlog import offer as omod                            # noqa: E402
 from kitlib.backlog import plan as pmod                             # noqa: E402
+from kitlib.backlog import policy                                   # noqa: E402
 from kitlib.backlog import record as rmod                           # noqa: E402
 from kitlib.backlog import stale as stalemod                        # noqa: E402
 from kitlib.backlog import store as smod                            # noqa: E402
@@ -312,6 +316,7 @@ def do_write(args, ctx, store):
     made = []
 
     def plan(snap):                              # the change, kept for an IndexStale report
+        policy.check(args, ctx, snap)            # the session's role may take it (roles.py)
         made[:] = [planner(args, ctx)(snap)]
         return made[0]
     stale = None
@@ -426,6 +431,8 @@ def main(argv=None):
                 raise Usage(err)
         root = os.path.abspath(args.root or os.getcwd())
         if args.verb == 'migrate':
+            if not args.dry_run:
+                policy.check(args, None, None)
             top, cfg, rules = open_repo(root)
             return do_migrate(args, top, cfg, rules)
         ctx = open_store(root, fetch=not args.no_fetch, session=args.session, branch=args.branch)
