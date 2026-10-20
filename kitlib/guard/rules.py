@@ -23,8 +23,9 @@ Rules, in the order they are checked:
                    machine setup with --apply (its PowerShell front ends with -Apply), which
                    writes the owner's email; in any session but the owner's own
   hub-secrets      a shell command with a literal path into the hub's token folder (a bare token
-                   file's name, a hub-like name elsewhere, a computed word, a wildcard, the word hub
-                   and the store are not refused), or python
+                   file's name, a hub-like name elsewhere, a computed word, the word hub and the
+                   store are not refused; a wildcard path is read as the literal folder before
+                   its first wildcard, glob_folder, so `cat ~/.pm-kit/hub/*` is), or python
                    or node code that names a token file or the folder (kitlib.guard.hub.INLINE_RE);
                    an edit of a file in the token folder or the store; a read tool's
                    read of the token folder or a file in it, or a Grep that can read one (Glob

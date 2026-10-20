@@ -434,6 +434,10 @@ class HomeAndWildcards(Hub):
             # the folder before the first wildcard is the token folder (glob_folder)
             (bash, 'cat %s/.pm-kit/hub/*' % home),
             (ps, 'gc %s\\.pm-kit\\hub\\o*' % self.w.home),
+            # a search program's wildcard path into the token folder too (grep, sls)
+            (bash, 'grep x ~/.pm-kit/hub/*'),
+            (bash, 'grep x %s/.pm-kit/hub/*' % home),
+            (ps, 'sls x ~\\.pm-kit\\hub\\o*'),
         ))
 
     def test_option_values_are_read_as_paths(self):
