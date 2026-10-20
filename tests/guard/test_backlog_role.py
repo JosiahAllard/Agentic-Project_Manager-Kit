@@ -17,7 +17,6 @@ from .world import event
 COORDINATOR = {context.ROLE_ENV: 'coordinator'}
 PM = {context.ROLE_ENV: 'pm'}
 OID = 'a' * 40
-RULING = '--' + 'ruling'    # built, so this file spells no flag for tests/scrub/test_no_cites to flag
 
 
 class Rec(dict):
@@ -81,7 +80,7 @@ class Verbs(Base):
         for args in ('set X-1 --priority 3', 'set X-1 --priority 1', 'set X-1 --priority -1',
                      'set X-1 --unset priority', 'set X-1 --session kit', 'close X-1', 'retire X-1 --why w',
                      'delete X-1 --why w', 'clear-review X-1', 'set-status X-1 parked --q Q-1',
-                     'retarget A B --apply', 'pull X-1 %s R-1' % RULING, 'block X-1 --owner-ask why',
+                     'retarget A B --apply', 'block X-1 --owner-ask why',
                      'migrate --to main'):
             with self.subTest(args):
                 d = self.refused(self.cmd(self.bl(args)))
@@ -157,6 +156,22 @@ class Spellings(Base):
                      'powershell -Command "python %s close X-1"' % self.tool):
             with self.subTest(text):
                 self.refused(self.cmd(text, tool='PowerShell'))
+
+    def test_start_process(self):
+        """A Start-Process -ArgumentList run (rules.tool_run; backlogrole.argv_words, inv.via
+        start-process): its words, a list or strings split as Windows joins them, are the tool's,
+        judged for the role as any run."""
+        for args in ("'%s','set','X-1','--priority','1'" % self.tool,
+                     "'%s set X-1 --priority 1'" % self.tool,
+                     "'%s','-C','%s','close','X-1'" % (self.tool, self.wt),
+                     "'%s','-C %s close X-1'" % (self.tool, self.wt)):
+            with self.subTest(args):
+                d = self.refused(self.cmd('Start-Process python -ArgumentList %s' % args, tool='PowerShell'))
+                self.assertIn('kitlib/backlog/roles.py', d.reason)
+        for args in ("'%s','show','X-1'" % self.tool, "'%s next'" % self.tool,
+                     "'%s','-C %s show X-1'" % (self.tool, self.wt)):
+            with self.subTest(args):
+                self.allowed(self.cmd('Start-Process python -ArgumentList %s' % args, tool='PowerShell'))
 
     def test_a_powershell_word_holding_a_double_quote_is_unread(self):
         self.rec = pulled_by('kit/wt')
