@@ -1327,11 +1327,39 @@ def outer_shell(cmd):
     return cmd.shell
 
 
-def whole_line(cmd):
-    """The text of the whole line `cmd` is on, as its outermost shell reads it (outer_shell)."""
-    while cmd.nested_in is not None:
-        cmd = cmd.nested_in
-    return (cmd.source or '').strip()
+def whole_line(ctx, cmd):
+    """The text of the whole line `cmd` is on, as its outermost shell reads it (outer_shell), for
+    a refusal that runs it from the worktree (cd_line): a cd into the top of a main checkout at
+    its start (each one before the first other command, a ; or a line break after it) is left
+    out, as is a comment after its last command. A line with any other cd, or a Pop-Location,
+    would move off the worktree: it gives the call alone (bare)."""
+    outer = cmd
+    while outer.nested_in is not None:
+        outer = outer.nested_in
+    src = outer.source or ''
+    _, cmds = sh.parse(src, outer.shell, outer.cwd)
+    top = [c for c in cmds if c.depth == 0 and c.start is not None]
+    if not top:
+        return src.strip()
+    start = top[0].start
+    for i, c in enumerate(top):
+        is_cd, where = sh.cd_target(c, outer.cwd)
+        if not is_cd:
+            break
+        place = ctx.place(where) if where else None
+        after = src[c.end:top[i + 1].start] if i + 1 < len(top) else None
+        if (place is None or place.kind != repo.MAIN or paths.norm(where) != paths.norm(place.top)
+                or after is None or after.strip() not in ('', ';')):
+            return bare(cmd)
+        start = top[i + 1].start
+    if any(sh.cd_target(c, outer.cwd)[0] for c in cmds if c.start is None or c.start >= start):
+        return bare(cmd)
+    end = max(c.end for c in top)
+    tail = src[end:]
+    cut = tail.find('#')
+    if cut >= 0:
+        tail = tail[:cut - 1 if cut and tail[cut - 1] == '<' else cut]
+    return (src[start:end] + tail).strip()
 
 
 # ---------------------------------------------------------------- shell writes
@@ -2961,7 +2989,7 @@ def _write_from(event, ctx, cmd, inv, cwd, role, w, base, net, into, searched):
         # a provider item's refusal runs the whole line from the worktree: a statement before the
         # call may set what it reads (PROVIDER_ITEM_WHY)
         d = edit_target(event, ctx, t, cwd, role, what, why, rewrite=rewrite,
-                        run=whole_line(cmd) if item else bare(cmd), redirect=output,
+                        run=whole_line(ctx, cmd) if item else bare(cmd), redirect=output,
                         shell=outer_shell(cmd), item=item)
         if not placed:
             d = unplaced(d, role)
@@ -3361,9 +3389,9 @@ def kit_script(ctx, cmd, word, cwd, event=None, inv=None):
     folder of the kit the guard runs from (ctx.kit) or, given the Action `event`, of an export of
     it the session cannot write (rolepolicy.kit_export), the path resolved, links followed, from
     the directory the program runs in: the command's, or for a Start-Process call `inv` with a
-    -WorkingDirectory the folder that names (cm.run_dir), where only an absolute path is read
-    when the guard cannot place that folder. The heavy program's repository (heavy) is still the
-    command's."""
+    -WorkingDirectory the folder that names (cm.run_dir), where only a path with a drive or a
+    share is read when the guard cannot place that folder (a rooted \\x takes that folder's
+    drive). The heavy program's repository (heavy) is still the command's."""
     if word is None or word.dyn:
         return False
     if inv is not None and inv.via == 'start-process' and inv.workdir is not None:
@@ -3371,7 +3399,7 @@ def kit_script(ctx, cmd, word, cwd, event=None, inv=None):
     else:
         base = cmd.cwd or cwd
     path = sh.resolve_path(word.text, base, cmd.shell, getattr(ctx, 'home', None)) or (
-        word.text if os.path.isabs(word.text) else None)
+        word.text if sh.is_absolute(word.text) else None)
     if not path:
         return False
     tools = paths.norm(os.path.join(ctx.kit, 'tools'), real=True)

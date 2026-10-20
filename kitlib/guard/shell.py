@@ -978,11 +978,11 @@ def msys_to_win(p):
 
 
 # A PowerShell provider-qualified path: [\][<module>\]<provider>::<rest>. FileSystem (bare or
-# from its own module) holds files, so its <rest>, when absolute, is the file; any other provider,
-# or a module the guard does not know, is a place it cannot tell. PowerShell takes a \ before a
-# bare provider (\FileSystem::C:\x is C:\x); a / there, or a \ before a module, it refuses, and
-# the guard reads them as the place they would name. A module of . or .. is no module:
-# .\x.txt::$DATA is a stream of the file x.txt in the location (_ps_provider).
+# from its own module) holds files, so its <rest> is the file: absolute (ps_filesystem_path), or
+# relative and read from the location (ps_filesystem_relative); any other provider, or a module
+# the guard does not know, is a place it cannot tell. PowerShell takes a \ before a bare provider
+# (\FileSystem::C:\x is C:\x); a / there, or a \ before a module, it refuses, and the guard reads
+# them as the place they would name. A module of . or .. is no module (_ps_provider).
 PS_PROVIDER_RE = re.compile(r'^[\\/]?(?:([^\\/:]+)\\)?([^\\/:]+)::(.*)$', re.S)
 PS_FILESYSTEM_MODULES = (None, 'microsoft.powershell.core')
 # A PowerShell drive whose name is anything but one ASCII letter (Main:\x, Temp:\x, env:FOO, 1:\x,
@@ -992,10 +992,19 @@ PS_LONG_DRIVE_RE = re.compile(r'^(?![A-Za-z]:)[^\\/:]+:')
 _ABS_RE = re.compile(r'^(?:[A-Za-z]:[\\/]|\\\\|//)')
 
 
+def is_absolute(p):
+    """True when the text `p` names its folder whatever the current one: a drive and a separator,
+    or a share. A rooted \\x is not (it takes the current drive; os.path.isabs reads it as
+    absolute before Python 3.13)."""
+    return bool(_ABS_RE.match(p or ''))
+
+
 def _ps_provider(p):
-    """The PS_PROVIDER_RE match of `p` when PowerShell reads it as a provider-qualified path, else
-    None: a relative path whose first folder is . or .. (.\\x.txt::$DATA, ..\\x.txt::$DATA) is a
-    path in the location, its :: a stream."""
+    """The PS_PROVIDER_RE match of `p` when the guard reads it as a provider-qualified path, else
+    None: a relative path whose first folder is . or .. is read as a path, its :: a stream.
+    PowerShell writes .\\x.txt::$DATA into the stream of x.txt in the location; ..\\x.txt::$DATA it
+    reads as a provider named ..\\x.txt and refuses, writing nothing, so the guard's reading (a
+    stream of x.txt in the folder above) is the stricter one."""
     m = PS_PROVIDER_RE.match(p or '')
     if m and m.group(1) in ('.', '..'):
         return None
@@ -1015,16 +1024,35 @@ def ps_filesystem_path(p):
     return m.group(3)
 
 
+def ps_filesystem_relative(p):
+    """The relative path a PowerShell `FileSystem::<rel>` (or
+    `Microsoft.PowerShell.Core\\FileSystem::<rel>`, either after a leading separator) spells, read
+    from the location as the guard reads a .NET method's relative path; else None. PowerShell
+    itself reads it from the process's directory, which a cd does not move (docs/guard.md "Known
+    limits"). A drive-relative C:x, ~, another provider or a long drive in <rel> is no such path."""
+    m = _ps_provider(p)
+    if not m or m.group(2).lower() != 'filesystem':
+        return None
+    module = m.group(1).lower() if m.group(1) is not None else None
+    rest = m.group(3)
+    if (module not in PS_FILESYSTEM_MODULES or not rest or _ABS_RE.match(rest)
+            or re.match(r'^[A-Za-z]:', rest) or rest.startswith('~')
+            or _ps_provider(rest) or PS_LONG_DRIVE_RE.match(rest)):
+        return None
+    return rest
+
+
 def ps_unplaceable(p):
     """True when PowerShell reads the text `p` as a place the guard cannot tell: a
-    provider-qualified path other than an absolute FileSystem:: one (x.txt::$DATA and
-    sub\\x.txt::$DATA among them: PowerShell reads x.txt as a provider's name), or a drive whose
-    name is not one ASCII letter. A one-letter drive (absolute or drive-relative) and a relative
-    path (.\\x.txt::$DATA among them, _ps_provider) are not."""
+    provider-qualified path other than a FileSystem:: one the guard reads (ps_filesystem_path,
+    ps_filesystem_relative) (x.txt::$DATA and sub\\x.txt::$DATA among them: PowerShell reads x.txt
+    as a provider's name), or a drive whose name is not one ASCII letter. A one-letter drive
+    (absolute or drive-relative) and a relative path (.\\x.txt::$DATA among them, _ps_provider) are
+    not."""
     if not p or p[:2] in ('\\\\', '//'):
         return False
     if _ps_provider(p):
-        return ps_filesystem_path(p) is None
+        return ps_filesystem_path(p) is None and ps_filesystem_relative(p) is None
     return bool(PS_LONG_DRIVE_RE.match(p))
 
 
@@ -1067,14 +1095,16 @@ def home_text(text, home=None, dyn=False):
 def resolve_path(p, cwd, shell=None, home=None):
     """`p` (a word's text) as an absolute normalised path, or None when the text cannot tell (a
     drive-relative C:x, ~user, a rooted \\x with no cwd to take the drive from). With `shell` PS,
-    `FileSystem::<abs>` (after a leading separator too) is <abs>, any other provider or a drive
-    not named by one ASCII letter is None (ps_unplaceable), and .\\x.txt::$DATA is a stream of a
-    file in `cwd`; bash and cmd text is read as it always was. `~` is `home`
-    (home_folder)."""
+    `FileSystem::<abs>` (after a leading separator too) is <abs>, `FileSystem::<rel>` is <rel> in
+    `cwd` (ps_filesystem_relative), any other provider or a drive not named by one ASCII letter
+    is None (ps_unplaceable), and .\\x.txt::$DATA is a stream of a file in `cwd`; bash and cmd
+    text is read as it always was. `~` is `home` (home_folder)."""
     if not p:
         return None
     if shell == PS:
         fs = ps_filesystem_path(p)
+        if fs is None:
+            fs = ps_filesystem_relative(p)
         if fs is not None:
             p = fs
         elif ps_unplaceable(p):

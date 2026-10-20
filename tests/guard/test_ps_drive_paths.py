@@ -816,7 +816,11 @@ class ResolvePath(unittest.TestCase):
             'filesystem::C:/m/x': 'C:\\m\\x',
             'Microsoft.PowerShell.Core\\FileSystem::C:\\m\\x': 'C:\\m\\x',
             'FileSystem::\\\\srv\\share\\x': '\\\\srv\\share\\x',
-            'FileSystem::x.txt': None,              # relative: whose current folder is not shown
+            # relative: read from the location, as a .NET path is (B17; R-2271, R-2322)
+            'FileSystem::x.txt': 'C:\\w\\wt\\x.txt',
+            'FileSystem::sub\\x.txt': 'C:\\w\\wt\\sub\\x.txt',
+            'FileSystem::C:x': None,
+            'FileSystem::': None,
             'Other.Module\\FileSystem::C:\\m\\x': None,
             'Registry::HKCU\\x': None,
             'Main:\\x': None,
@@ -831,7 +835,7 @@ class ResolvePath(unittest.TestCase):
             '\\FileSystem::C:\\m\\x': 'C:\\m\\x',
             '/FileSystem::C:/m/x': 'C:\\m\\x',
             '\\Microsoft.PowerShell.Core\\FileSystem::C:\\m\\x': 'C:\\m\\x',
-            '\\FileSystem::x.txt': None,
+            '\\FileSystem::x.txt': 'C:\\w\\wt\\x.txt',
             '\\Registry::HKCU\\x': None,
             # the stream of a file in a folder the text names: a file, not a provider
             '.\\x.txt::$DATA': 'C:\\w\\wt\\x.txt::$DATA',
@@ -842,14 +846,17 @@ class ResolvePath(unittest.TestCase):
                 self.assertEqual(sh.resolve_path(text, self.CWD, sh.PS), want)
 
     def test_unplaceable(self):
-        for text in ('Main:\\x', 'Main:x', 'Registry::x', 'Foo\\Bar::x', 'FileSystem::rel', 'env:FOO',
-                     '1:\\x', '_:x', 'é:\\x', '12:\\x', '\\Registry::x', '\\FileSystem::rel',
-                     'x.txt::$DATA', 'sub\\x.txt::$DATA'):
+        for text in ('Main:\\x', 'Main:x', 'Registry::x', 'Foo\\Bar::x', 'env:FOO',
+                     '1:\\x', '_:x', 'é:\\x', '12:\\x', '\\Registry::x',
+                     'x.txt::$DATA', 'sub\\x.txt::$DATA', 'FileSystem::', 'FileSystem::C:x',
+                     'FileSystem::~', 'FileSystem::Registry::x', 'FileSystem::Main:\\x'):
             with self.subTest(text):
                 self.assertTrue(sh.ps_unplaceable(text))
+        # a relative FileSystem:: path is read from the location (B17; R-2271, R-2322)
         for text in ('', 'C:\\x', 'C:x', 'x.txt', '.\\a:b', '\\\\srv\\s', '//srv/s',
                      'FileSystem::C:\\x', 'Microsoft.PowerShell.Core\\FileSystem::\\\\srv\\s',
-                     '\\FileSystem::C:\\x', '.\\x.txt::$DATA', '..\\x.txt::$DATA'):
+                     '\\FileSystem::C:\\x', '.\\x.txt::$DATA', '..\\x.txt::$DATA',
+                     'FileSystem::rel', '\\FileSystem::rel'):
             with self.subTest(text):
                 self.assertFalse(sh.ps_unplaceable(text))
 
