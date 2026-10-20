@@ -202,7 +202,7 @@ class CliRole(unittest.TestCase):
     def test_unmarked_is_the_owner(self):
         self.seed()
         self.refused('coordinator', 'retarget', 'FOO', 'BAR', '--apply')
-        self.ok(None, 'set', 'FOO', '--priority', '1', '--priority-by', 'owner', '--ruling', 'R-1234')
+        self.ok(None, 'set', 'FOO', '--priority', '1', '--priority-by', 'owner', '--ruling', 'R-9234')
 
     def test_a_role_may_not_take_a_row_roles_py_does_not_give_it(self):
         self.seed()
@@ -210,7 +210,7 @@ class CliRole(unittest.TestCase):
         self.assertIn('`set-price-owner` (risk medium)', out)
         self.assertIn("this session's role is coordinator", out)
         self.ok('coordinator', 'set', 'FOO', '--scope', 'tools/y.py')
-        self.ok('pm', 'set', 'FOO', '--priority', '1', '--priority-by', 'pm', '--ruling', 'R-1234')
+        self.ok('pm', 'set', 'FOO', '--priority', '1', '--priority-by', 'pm', '--ruling', 'R-9234')
         out = self.refused('plain', 'add', 'BAR', '--summary', 'x', '--scope', 'tools/z.py', *ADD_FLAGS)
         self.assertIn('unlisted (only risk none)', out)
         self.assertIn('FOO', self.ok('plain', 'show', 'FOO'))
