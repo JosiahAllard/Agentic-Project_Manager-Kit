@@ -21,6 +21,21 @@ def given(branch, tip, base='0' * 10, **over):
     return e
 
 
+class Check(unittest.TestCase):
+    def test_a_reviewer_that_names_no_agent_type_is_refused(self):
+        tip = 'a' * 40
+        for reviewer in ('pm-kit:', ' / ', ':', ', ;', 'pm-kit: / other:'):
+            for stored in (False, True):
+                e = given('kit/a', tip, reviewer=reviewer)
+                if stored:
+                    e.update(queued_utc='2026-01-01T00:00:00Z', state=V.QUEUED, last_result=None)
+                with self.subTest(reviewer=reviewer, stored=stored):
+                    self.assertIn('reviewer names no agent type', V.check(e, stored=stored) or '')
+        for reviewer in ('pm-kit:analyst', 'reviewer', 'pm-kit: / analyst'):
+            with self.subTest(reviewer=reviewer):
+                self.assertIsNone(V.check(given('kit/a', tip, reviewer=reviewer), stored=False))
+
+
 class QueueCase(GateRepoCase):
     def setUp(self):
         GateRepoCase.setUp(self)
