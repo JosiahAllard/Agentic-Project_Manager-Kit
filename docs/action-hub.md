@@ -102,6 +102,9 @@ repository; Questions, To do and Docs also by id or title.
   Access keys were fetched), `tunnel: bound, keys not fetched` (shown until the first request
   with a token; a failed fetch adds ` (reason)`, such as `keys-fetch`) or `tunnel: off: <why>`.
   `on` does not say that a tunnel program reaches the listener.
+- A running `hub serve` logs one error line, `this hub server is running older code than the hub
+  code now on disk: restart the hub ...`, when a file of `kitlib/hubsite` changed after it started.
+  It restarts nothing by itself.
 - Remote access is only through the tunnel listener: with `hub.access` set (an Access `team`,
   the application's audience tag `aud` and the allowed `emails`; all three), the server also
   listens on `hub.tunnel_port` (default 8791, loopback too) for a Cloudflare tunnel, and every
