@@ -57,7 +57,7 @@ class Block(StoppedCase):
         # The Stopped line is its own body line, so the `Blocked on` line still starts one and
         # record.hold_citations reads the ruling in it: check finds no void hold.
         self.seed(priced('FOO', pulled_by=BRANCH, **PULLED))
-        self.verb('block', 'FOO', ['deliberate'], reason='R-1234: until X')
+        self.verb('block', 'FOO', ['deliberate'], reason='R-9234: until X')
         snap = self.store.load()
         self.assertEqual(snap.get('FOO').get('state'), 'blocked')
         self.assertIn('Stopped on branch %s' % BRANCH, snap.get('FOO').body)
