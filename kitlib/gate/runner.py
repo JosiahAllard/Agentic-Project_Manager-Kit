@@ -672,6 +672,17 @@ def _branch_gate(root, base=None, full=False, only=None, plan=False, slug=None, 
     return out
 
 
+def zero_count_warnings(gate):
+    """The lines of steps.zero_count_passes(gate), or one line saying the check could not run:
+    a warning only, so nothing it raises stops or fails the gate. Each line is escaped to ASCII
+    (backslashreplace), so a console that cannot encode a pattern (cp1252) cannot raise either."""
+    try:
+        lines = list(S.zero_count_passes(gate))
+    except Exception as e:          # noqa: BLE001 - a warning never fails or stops the gate
+        lines = ['the zero-count "pass" check could not run: %s: %s' % (type(e).__name__, e)]
+    return [str(line).encode('ascii', 'backslashreplace').decode('ascii') for line in lines]
+
+
 def _gate_checkout(top, cfg, seen, base=None, full=False, only=None, plan=False, slug=None,
                    log_dir=None, say=None, book_kw=None):
     """_branch_gate() once the config is read. seen[0]: the gate it runs (detect.effective),
@@ -745,6 +756,8 @@ def _gate_checkout(top, cfg, seen, base=None, full=False, only=None, plan=False,
     if gate.get('warn_untracked') and untracked:
         say('WARNING: %d untracked file(s) are gated but not committed: %s' % (
             len(untracked), ', '.join(untracked[:10])))
+    for line in zero_count_warnings(gate):
+        say('WARNING: %s' % line)
     name = repo_name(cfg, top)
     started = gate_ok.utc()
     logs = new_log_dir(cfg, top, name, branch or head[:10], log_dir)
