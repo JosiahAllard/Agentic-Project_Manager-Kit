@@ -106,7 +106,7 @@ def read():
     return Pointer(OK, value, None)
 
 
-def _quoted(path):
+def quoted(path):
     # A trailing backslash would escape reg's closing quote (a drive root would lose
     # its quote): double it.
     return '"%s"' % (path + '\\' if path.endswith('\\') else path)
@@ -114,7 +114,7 @@ def _quoted(path):
 
 def command(path):
     """The elevated `reg add` that sets the pointer to `path`."""
-    return 'reg add "%s" /v %s /t REG_SZ /d %s /f /reg:64' % (KEY_NAME, VALUE, _quoted(path))
+    return 'reg add "%s" /v %s /t REG_SZ /d %s /f /reg:64' % (KEY_NAME, VALUE, quoted(path))
 
 
 def delete_command():

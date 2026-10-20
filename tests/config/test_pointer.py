@@ -281,6 +281,22 @@ class Setup(Repo):
         plan = mpointer.survey(mpointer.PointerContext(self.root, KIT, Host(True), Registry()))
         self.assertEqual(plan.changes[0].undo, pointer.delete_command())
 
+    def test_an_unreadable_old_value_is_never_restored_by_reg_delete(self):
+        reg = Registry(None, 'is not a REG_SZ (type 2)')
+        plan = mpointer.survey(mpointer.PointerContext(self.root, KIT, Host(True), reg))
+        self.assertIsNone(plan.changes[0].undo)
+        reg.write = mock.Mock(side_effect=OSError('denied'))
+        ctx = mpointer.PointerContext(self.root, KIT, host=Host(True), registry=reg)
+        code, lines = machinesetup.run_pointer(ctx, apply=True)
+        self.assertEqual(code, machinesetup.EXIT_REFUSED, lines)
+        self.assertTrue(any('STOPPED' in l for l in lines), lines)
+        self.assertFalse(any('reg delete' in l or 'restore:' in l for l in lines), lines)
+        self.assertTrue(any('cannot restore it' in l for l in lines), lines)
+
+    def test_the_refusal_command_doubles_a_trailing_backslash(self):
+        self.assertIn(r'--pm-repo "Z:\\"', mpointer.command(KIT, 'Z:' + chr(92)))
+        self.assertIn(r'--pm-repo "Z:\work"', mpointer.command(KIT, r'Z:\work'))
+
     def test_a_bad_target_is_refused_before_anything(self):
         self.record()
         code, lines = self.run_it(self.root, admin=True, apply=True)
@@ -294,7 +310,8 @@ class Setup(Repo):
                                   registry=Registry(None, 'is not a REG_SZ (type 2)'))
         self.assertEqual(code, machinesetup.EXIT_OK, lines)
         self.assertIn('  note: the value there now cannot be read (is not a REG_SZ (type 2)): it is '
-                      'replaced', lines)
+                      'replaced, and this tool cannot restore it; note it first, e.g. with '
+                      '`reg query "HKLM\\SOFTWARE\\pm-kit" /v pm_repo`', lines)
         self.assertEqual(self.reg.written, [self.root])
 
     def test_a_folder_that_is_not_a_kit_is_refused(self):

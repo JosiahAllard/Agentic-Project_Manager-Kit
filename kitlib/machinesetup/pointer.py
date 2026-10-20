@@ -20,8 +20,8 @@ COMMAND = 'tools/machine_setup.py'
 
 
 def command(kit, path, apply=True):
-    return 'python %s --pm-repo "%s"%s' % (kit_file(kit, COMMAND).replace('\\', '/'), path,
-                                         ' --apply' if apply else '')
+    return 'python %s --pm-repo %s%s' % (kit_file(kit, COMMAND).replace('\\', '/'),
+                                       cpointer.quoted(path), ' --apply' if apply else '')
 
 
 class Registry(object):
@@ -72,7 +72,9 @@ def survey(ctx, apply=False):
         return plan
     old, why = ctx.registry.read()
     if why:
-        plan.note(SECTION, 'the value there now cannot be read (%s): it is replaced' % why)
+        plan.note(SECTION, 'the value there now cannot be read (%s): it is replaced, and this tool '
+                           'cannot restore it; note it first, e.g. with `reg query "%s" /v %s`'
+                           % (why, cpointer.KEY_NAME, cpointer.VALUE))
     if old is not None and old == value:
         plan.note(SECTION, '%s %s already names %s' % (cpointer.KEY_NAME, cpointer.VALUE, value))
         return plan
@@ -85,7 +87,8 @@ def survey(ctx, apply=False):
         plan.note(SECTION, 'not elevated: --apply is refused here; run it from an administrator terminal')
     if old is None:
         text = '%s %s: set it to %s' % (cpointer.KEY_NAME, cpointer.VALUE, value)
-        undo = cpointer.delete_command()
+        # A value that exists but cannot be read is not absent: `reg delete` is no restore.
+        undo = None if why else cpointer.delete_command()
     else:
         text = '%s %s: replace %s with %s%s' % (
             cpointer.KEY_NAME, cpointer.VALUE, old, value,
