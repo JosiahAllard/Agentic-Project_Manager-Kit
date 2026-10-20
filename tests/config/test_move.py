@@ -100,7 +100,8 @@ class Move(unittest.TestCase):
         self.assertEqual(self.read('.gitignore').decode(), move.GITIGNORE)
         self.assertFalse(os.path.exists(self.target('config.json.bak1')))
         self.assertFalse(os.path.exists(self.target('hub/hub_backlog_state_x.json')))
-        self.assertIn('delete  %s' % os.path.join(self.new_dir, 'config.json.bak1'), out)
+        self.assertIn('delete  ~/%s/config.json.bak1' % user.DIR_NAME, out)
+        self.assertNotIn('delete  ' + self.home, out)
         self.assertIn('hub_backlog_state_x.json (never copied', out)
         self.assertIn('verify  git ignores', out)
         self.assertIn('commit -m "%s"' % move.COMMIT_MESSAGE, out)
@@ -139,7 +140,7 @@ class Move(unittest.TestCase):
         self.put(os.path.join(self.new_dir, 'stray.txt'), b'x')
         code, out = self.run_move(apply_it=True)
         self.assertEqual(code, move.OK, out)
-        self.assertIn('NOTE    %s' % os.path.join(self.new_dir, 'stray.txt'), out)
+        self.assertIn('NOTE    ~/%s/stray.txt' % user.DIR_NAME, out)
         self.assertFalse(os.path.exists(self.target('stray.txt')))
 
     def test_a_path_outside_the_pm_repo_stays_absolute(self):
@@ -172,11 +173,42 @@ class Move(unittest.TestCase):
         self.assertEqual(code, move.OK, out)
         self.assertIn('drop    ledger_refs (retired)', out)
 
+    def pm_data(self, **change):
+        value = {'path': self.pm, 'branch': 'main', 'remote': 'origin'}
+        value.update(change)
+        self.repo.git('remote', 'add', 'origin', '../pm-origin.git')
+        self.config({'pm_data': value})
+        return self.run_move()
+
     def test_pm_data_matching_the_pointer_is_dropped(self):
-        self.config({'pm_data': {'path': self.pm, 'branch': 'main', 'remote': 'origin'}})
-        code, out = self.run_move()
+        code, out = self.pm_data()
         self.assertEqual(code, move.OK, out)
         self.assertIn('drop    pm_data (matches the pointer)', out)
+
+    def test_pm_data_on_another_branch_refuses(self):
+        code, out = self.pm_data(branch='elsewhere')
+        self.assertEqual(code, move.REFUSED, out)
+        self.assertIn('its branch is not the branch the pointer is on', out)
+        self.assertNotIn('elsewhere', out)
+
+    def test_pm_data_naming_another_remote_refuses(self):
+        code, out = self.pm_data(remote='upstreamx')
+        self.assertEqual(code, move.REFUSED, out)
+        self.assertIn('its remote is not a remote of the PM repo', out)
+        self.assertNotIn('upstreamx', out)
+
+    def test_an_invalid_pm_data_value_refuses(self):
+        code, out = self.pm_data(path=7)
+        self.assertEqual(code, move.REFUSED, out)
+        self.assertIn('pm_data does not match the pointer:', out)
+        self.assertNotIn('drop    pm_data', out)
+
+    def test_pm_data_against_a_record_checks_its_branch_and_remote(self):
+        from kitlib import pmdata
+        pmdata.write(self.repo.common_dir(), 'main', 'origin', 'a' * 40)
+        code, out = self.pm_data(remote='upstreamx')
+        self.assertEqual(code, move.REFUSED, out)
+        self.assertIn('its remote is not the recorded remote', out)
 
     def test_pm_data_naming_another_folder_refuses(self):
         other = os.path.join(os.path.dirname(self.pm), 'other-pm')
@@ -263,6 +295,65 @@ class Move(unittest.TestCase):
         self.assertFalse(os.path.exists(self.target('hub/token.json')))
         self.assertFalse(os.path.exists(self.target('local.json')))
 
+    def test_check_ignore_on_real_git_stops_before_any_secret(self):
+        # A tracked hub file equal to the source counts as `same`, so the dirty check passes;
+        # git check-ignore does not report a tracked file, so the move refuses before it writes
+        # local.json. Stubbing ignored() to answer [] makes this test fail.
+        self.plain()
+        self.put(os.path.join(self.new_dir, 'hub', 'token.json'), SECRET)
+        self.put(self.target('hub/token.json'), SECRET)
+        self.repo.git('add', '-f', '.pm-kit/hub/token.json')
+        self.repo.git('commit', '-q', '-m', 'tracked secret')
+        code, out = self.run_move(apply_it=True)
+        self.assertEqual(code, move.REFUSED, out)
+        self.assertIn('git does not ignore hub/token.json', out)
+        self.assertIn('nothing secret was written', out)
+        self.assertFalse(os.path.exists(self.target('local.json')))
+        self.assertFalse(os.path.exists(self.target(move.MANAGED_FILE)))
+
+    def test_a_write_that_fails_part_way_leaves_no_temp_file_and_says_what_was_written(self):
+        self.plain()
+        self.put(os.path.join(self.new_dir, 'hub', 'token.json'), SECRET)
+        real = os.rename
+
+        def rename(src, dst):
+            if dst.endswith('token.json'):
+                raise PermissionError(13, 'Access is denied', dst)
+            return real(src, dst)
+        with mock.patch.object(move.os, 'rename', side_effect=rename):
+            code, out = self.run_move(apply_it=True)
+        self.assertEqual(code, move.REFUSED, out)
+        self.assertIn('wrote   config.json', out)
+        self.assertIn('wrote   local.json', out)
+        self.assertIn('REFUSE  cannot write %s: Access is denied' % self.target('hub/token.json'), out)
+        self.assertIn('a rerun resumes', out)
+        self.assertNotIn(EMAIL, out)
+        self.assertNotIn('Traceback', out)
+        left = [n for _r, _d, files in os.walk(self.folder) for n in files
+                if n.endswith(move.TMP_SUFFIX)]
+        self.assertEqual(left, [])
+        # the rerun resumes: what was written shows as same, the rest is written
+        code, out = self.run_move(apply_it=True)
+        self.assertEqual(code, move.OK, out)
+        self.assertIn('same    config.json', out)
+        self.assertIn('wrote   hub/token.json', out)
+        self.assertEqual(self.read('hub/token.json'), SECRET)
+
+    def test_a_write_error_is_removed_with_its_temp_file(self):
+        target = self.target('x.json')
+
+        class Boom(Exception):
+            pass
+        with mock.patch.object(move.os, 'rename', side_effect=Boom):
+            with self.assertRaises(Boom):
+                move._write_new(target, b'secret')
+        self.assertEqual(os.listdir(self.folder), [])
+
+    def test_git_ignores_the_moves_temp_files(self):
+        self.put(self.target('.gitignore'), move.GITIGNORE.encode())
+        missed, why = move.ignored(self.pm, ['.local.json.abc' + move.TMP_SUFFIX])
+        self.assertEqual((missed, why), ([], None))
+
     # --- personal details
 
     def test_an_email_in_a_policy_key_refuses_without_the_value(self):
@@ -313,6 +404,16 @@ class Move(unittest.TestCase):
         self.assertEqual(code, move.OK, out)
         self.assertIn('warn  config.json key pm_start matches a scrub pattern: check it holds no '
                       'personal detail before you commit', out.splitlines())
+        self.assertNotIn(PATTERN.lower(), out.lower())
+
+    def test_a_scrub_pattern_in_the_delegations_file_warns(self):
+        self.config({'scrub_patterns': [PATTERN], 'pm_start': {}})
+        self.put(os.path.join(self.new_dir, move.DELEGATIONS_FILE),
+                 json.dumps({'note': 'zebulon said so'}).encode())
+        code, out = self.run_move()
+        self.assertEqual(code, move.OK, out)
+        self.assertIn('warn  %s matches a scrub pattern: check it holds no personal detail before '
+                      'you commit' % move.DELEGATIONS_FILE, out.splitlines())
         self.assertNotIn(PATTERN.lower(), out.lower())
 
     # --- the tool

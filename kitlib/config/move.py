@@ -23,6 +23,7 @@ import fnmatch
 import json
 import os
 import re
+import tempfile
 
 from kitlib import pmdata
 from kitlib.coordinatorstart import LEGACY_KEY as OLD_START
@@ -45,13 +46,15 @@ DROPPED = ('ledger_refs', OLD_START, 'pm_data')
 RELATIVE_KEYS = ('ledger_dir', 'ledger_path', 'pending_path')
 
 FOLDER = user.DIR_NAME
+# The suffix of the move's own temp files (_write_new); git ignores them (GITIGNORE).
+TMP_SUFFIX = '.move-tmp'
 POLICY_FILE = user.FILE_NAME
 LOCAL_FILE = 'local.json'
 IGNORE_FILE = '.gitignore'
 DELEGATIONS_FILE = 'owner-delegations.json'      # kitlib.delegations.load.FILE_NAME
 MANAGED_FILE = 'managed-settings.json'           # kitlib.machinesetup.managed.OVERLAY
 HUB_DIR = 'hub'                                  # kitlib.hubsite.auth.FOLDER_NAME
-GITIGNORE = 'local.json\nhub/\nmanaged-settings.json\n*.bak*\n'
+GITIGNORE = 'local.json\nhub/\nmanaged-settings.json\n*.bak*\n*%s\n' % TMP_SUFFIX
 NEVER_COPIED = ('*.bak*', 'hub_backlog_state*.json')
 COMMIT_MESSAGE = 'Move the machine config into the PM repo'
 
@@ -163,7 +166,8 @@ def split(data, pm, plan):
 
 def pm_data_mismatch(value, pm):
     """None when the pm_data value names the pointer's work tree, branch and remote; else why not,
-    naming fields only."""
+    naming fields only. With a kit-pm-data.json record the branch and remote are the record's;
+    without one the branch is the one the pointer is on, and the remote one the PM repo has."""
     try:
         s = pmdata.check_settings(value, 'pm_data')
     except pmdata.PmDataError:
@@ -184,6 +188,8 @@ def pm_data_mismatch(value, pm):
     branch, _why = refs.current_branch(pm)
     if s['branch'] != branch:
         return 'its branch is not the branch the pointer is on'
+    if gitcmd.call(['config', '--get', 'remote.%s.url' % s['remote']], pm).rc != 0:
+        return 'its remote is not a remote of the PM repo'
     return None
 
 
@@ -340,12 +346,17 @@ def survey(home=None):
                     continue
                 if name == DELEGATIONS_FILE:
                     try:
-                        kind = personal(json.loads(data_bytes.decode('utf-8-sig')), email, folders)
+                        obj = json.loads(data_bytes.decode('utf-8-sig'))
                     except (ValueError, UnicodeDecodeError):
-                        kind = None
                         plan.refusals.append('%s is not valid JSON: fix it, then run again' % full)
-                    if kind:
-                        plan.refusals.append('%s holds %s: %s' % (DELEGATIONS_FILE, kind, FIX))
+                    else:
+                        kind = personal(obj, email, folders)
+                        if kind:
+                            plan.refusals.append('%s holds %s: %s' % (DELEGATIONS_FILE, kind, FIX))
+                        if any(rx.search(t) for t in _strings(obj) for rx in patterns):
+                            plan.warnings.append('%s matches a scrub pattern: check it holds no '
+                                                 'personal detail before you commit'
+                                                 % DELEGATIONS_FILE)
                 _target(plan, name, data_bytes, full, tracked)
             elif key.startswith(hub + os.sep):
                 try:
@@ -371,16 +382,21 @@ def survey(home=None):
 
 
 def _write_new(full, data):
-    """Write `data` to `full`, which must not exist: a temp file beside it, then a rename that
-    fails when the target appeared meanwhile."""
+    """Write `data` to `full`, which must not exist: a new temp file beside it (named
+    .<name>.*TMP_SUFFIX, which GITIGNORE ignores), then a rename that fails when the target
+    appeared meanwhile. On any failure the temp file is removed."""
     os.makedirs(os.path.dirname(full), exist_ok=True)
-    tmp = os.path.join(os.path.dirname(full), '.%s.move-tmp' % os.path.basename(full))
-    with open(tmp, 'xb') as f:
-        f.write(data)
+    fd, tmp = tempfile.mkstemp(prefix='.%s.' % os.path.basename(full), suffix=TMP_SUFFIX,
+                               dir=os.path.dirname(full))
     try:
+        with os.fdopen(fd, 'wb') as f:
+            f.write(data)
         os.rename(tmp, full)
     except BaseException:
-        os.remove(tmp)
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
         raise
 
 
@@ -401,11 +417,21 @@ def apply(plan):
     if plan.refusals:
         return []
     out = []
+    try:
+        return _apply(plan, out)
+    except OSError as e:
+        plan.refusals.append('cannot write %s: %s; the files listed as wrote are in place, and a '
+                             'rerun resumes (they show as same)'
+                             % (e.filename or 'a file', e.strerror or type(e).__name__))
+        return out
+
+
+def _apply(plan, out):
     by_rel = {t.rel: t for t in plan.targets}
     gi = by_rel[IGNORE_FILE]
     if gi.state == 'new':
         _write_new(os.path.join(plan.folder, IGNORE_FILE), gi.data)
-        out.append('wrote   %s' % os.path.join(plan.folder, IGNORE_FILE))
+        out.append('wrote   %s' % IGNORE_FILE)
     private = [t.rel for t in plan.targets if not t.tracked]
     probe = private or [LOCAL_FILE, HUB_DIR + '/probe']
     missed, why = ignored(plan.pm, probe)
@@ -416,7 +442,7 @@ def apply(plan):
     for t in plan.targets:
         if t.state == 'new' and t.rel != IGNORE_FILE:
             _write_new(os.path.join(plan.folder, *t.rel.split('/')), t.data)
-            out.append('wrote   %s' % os.path.join(plan.folder, *t.rel.split('/')))
+            out.append('wrote   %s' % t.rel)
     return out + verify(plan)
 
 
@@ -482,11 +508,18 @@ def verify(plan):
     return out
 
 
+def shown(path, home):
+    """`path` as a line for reading names it: ~/... under `home`, else as it is."""
+    if home and repo.inside(path, home) and not repo.same_path(path, home):
+        return '~/' + os.path.relpath(path, home).replace('\\', '/')
+    return path
+
+
 def lines(plan):
     """What the move does, as the tool prints it: names and paths, never a value."""
     out = []
     if plan.source:
-        out.append('source  %s' % plan.source)
+        out.append('source  %s' % shown(plan.source, plan.home))
     if plan.folder:
         out.append('target  %s' % plan.folder)
     if plan.source:
@@ -500,10 +533,10 @@ def lines(plan):
             out.append('%-7s %s%s' % ('same' if t.state == 'same' else 'write', t.rel,
                                       '' if t.tracked else ' (git-ignored)'))
         for f in plan.delete:
-            out.append('delete  %s (never copied: a backup or old hub state)' % f)
+            out.append('delete  %s (never copied: a backup or old hub state)' % shown(f, plan.home))
         for f in plan.unknown:
             out.append('NOTE    %s is not moved (the move does not know it): move it yourself '
-                       'before removing the folder' % f)
+                       'before removing the folder' % shown(f, plan.home))
     for w in plan.warnings:
         out.append('warn  %s' % w)
     return out
