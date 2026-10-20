@@ -96,7 +96,7 @@ class Removes(ApplyCase):
 
 
 class Empty(ApplyCase):
-    """R1: an empty, unclaimed tree is A and removed; a claimed one, or one whose reflog holds a
+    """An empty, unclaimed tree is A and removed; a claimed one, or one whose reflog holds a
     commit, stays on disk."""
 
     CONFIG = {'backlog': {'store': 'main'}}

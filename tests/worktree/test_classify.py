@@ -111,7 +111,7 @@ class Classes(ClassifyCase):
         self.assertEqual((row['class'], row['note']), ('C', 'landed, not clean'), row)
 
     def test_a_fresh_tree_is_c_when_no_backlog_store_is_named(self):
-        """No "backlog".store and no PM data worktree: "no claim" proves nothing (R1)."""
+        """No "backlog".store and no PM data worktree: "no claim" proves nothing, so it stays C."""
         path = self.workstream('fresh', commits=0)
         rc, out, data = self.run_classify()
         row = self.row(data, path)
@@ -231,7 +231,7 @@ class Landed(ClassifyCase):
 @gitfixture.real_fixture('an empty tree is A only when its branch reflog, which only real git '
                          'writes, shows nothing of its own')
 class EmptyTrees(ClassifyCase):
-    """R1: a clean tree with its tip in the base and nothing of its own is A only when the live
+    """A clean tree with its tip in the base and nothing of its own is A only when every live
     backlog store can be read and no record claims its branch, and its reflogs lose nothing."""
 
     CONFIG = {'backlog': {'store': 'main'}}
@@ -269,10 +269,82 @@ class EmptyTrees(ClassifyCase):
         row = self.row(data, path)
         self.assertEqual((row['class'], row['note'], row['claims']),
                          ('C', 'nothing of its own; kept: claimed by T-001', ['T-001']), row)
-        self.assertIn('next      %s release T-001 --reason "<why>"   (C, or `block T-001 --on <M>'
-                      ' --reason "<why>"` to keep the branch)'
-                      % kitroot.command('backlog', self.repo), out)
+        # A main store takes no write in the main checkout (MainBackend.publish): no -C line.
+        self.assertNotIn('%s release' % kitroot.command('backlog', self.repo), out)
+        self.assertIn('next      release T-001 or block it (C): its store is in the main checkout,'
+                      ' which takes no backlog write; run `backlog.py release T-001 --reason'
+                      ' "<why>"` (or `block T-001 --on <M> --reason "<why>"` to keep the branch)'
+                      ' from a worktree whose branch holds the record', out)
         self.assertLess(out.index('release T-001'), out.index('fresh --abandon'))
+
+    def test_a_claim_is_matched_without_regard_to_case(self):
+        self.record('id: T-001\nstate: pulled\npulled_by: Kit/Fresh\n')
+        path = self.workstream('fresh', commits=0)
+        rc, out, data = self.run_classify()
+        row = self.row(data, path)
+        self.assertEqual((row['class'], row['claims']), ('C', ['T-001']), row)
+        self.assertIn('kept: claimed by T-001', row['note'])
+
+    def test_both_stores_named_a_claim_in_the_pm_store_alone_keeps_it_c(self):
+        self.record('id: T-001\nstate: pulled\npulled_by: kit/other\n')
+        pm = self.pm_worktree('main')
+        self.fx.write('docs/backlog/T-002.md', 'id: T-002\nstate: pulled\npulled_by: kit/fresh\n',
+                      root=pm)
+        path = self.workstream('fresh', commits=0)
+        rc, out, data = self.run_classify()
+        row = self.row(data, path)
+        self.assertEqual((row['class'], row['claims']), ('C', ['T-002']), row)
+        self.assertIn('%s release T-002' % kitroot.command('backlog', pm), out)
+        self.assertNotIn('T-001', out)
+
+    def test_both_stores_named_a_claim_in_the_main_store_alone_keeps_it_c(self):
+        pm = self.pm_worktree('main')             # made first: its store never holds T-001
+        self.fx.write('docs/backlog/T-002.md', 'id: T-002\nstate: pulled\npulled_by: kit/other\n',
+                      root=pm)
+        self.record('id: T-001\nstate: pulled\npulled_by: kit/fresh\n')
+        path = self.workstream('fresh', commits=0)
+        rc, out, data = self.run_classify()
+        row = self.row(data, path)
+        self.assertEqual((row['class'], row['claims']), ('C', ['T-001']), row)
+        self.assertIn('next      release T-001 or block it (C): its store is in the main', out)
+        self.assertNotIn('%s release' % kitroot.command('backlog', pm), out)
+        self.assertNotIn('T-002', out)
+
+    def test_an_unreadable_record_in_the_pm_data_store_keeps_it_c(self):
+        self.configure({})
+        pm = self.pm_worktree('main')
+        os.makedirs(os.path.join(pm, 'docs', 'backlog'), exist_ok=True)
+        with open(os.path.join(pm, 'docs', 'backlog', 'T-009.md'), 'wb') as f:
+            f.write(b'id: T-009\nstate: pulled\ntitle: \xff\xfe\n')
+        path = self.workstream('fresh', commits=0)
+        rc, out, data = self.run_classify()
+        row = self.row(data, path)
+        self.assertEqual(row['class'], 'C', row)
+        self.assertIn('kept: whether a backlog record claims it is unknown: unreadable backlog'
+                      ' record(s)', row['note'])
+        self.assertIn('T-009', row['note'])
+
+    def test_a_pm_data_kit_json_that_fails_to_parse_keeps_it_c(self):
+        self.configure({})
+        pm = self.pm_worktree('main')
+        self.fx.write('.kit.json', '{not json\n', root=pm)
+        path = self.workstream('fresh', commits=0)
+        rc, out, data = self.run_classify()
+        row = self.row(data, path)
+        self.assertEqual(row['class'], 'C', row)
+        self.assertIn("kept: whether a backlog record claims it is unknown: the PM data"
+                      " worktree's backlog store cannot be read (the .kit.json of the PM data"
+                      " worktree", row['note'])
+
+    def test_a_pm_data_branch_with_no_worktree_keeps_it_c(self):
+        self.configure({})
+        pmdata.write(self.fx.common_dir(), 'pmdata', 'private', self.git('rev-parse', 'HEAD'))
+        path = self.workstream('fresh', commits=0)
+        rc, out, data = self.run_classify()
+        row = self.row(data, path)
+        self.assertEqual(row['class'], 'C', row)
+        self.assertIn("kept: whether a backlog record claims it is unknown: the PM data"
+                      " worktree's backlog store cannot be read", row['note'])
 
     def test_an_unreadable_store_keeps_it_c(self):
         self.record(b'id: T-009\nstate: pulled\npulled_by: kit/x\ntitle: \xff\xfe\n', 'T-009.md')

@@ -107,9 +107,8 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   it starts your successor on a fresh set. Start nothing new, leave `next` to it. Each item goes
   to an end, as the owner ruled: landed, blocked on its record with the reason and its branch kept
   (`backlog.py block`), or released with its worktree removed. Never park halfway; pull nothing
-  new while one of yours sits stopped without a block. Parking on an owner question
-  (`set-status parked`) stays. Your successor never waits for workers' reports: it re-dispatches
-  from the branch once the agent there has stopped. Queue no landing after you send `ready to restart:`: your successor
+  new while one of yours sits stopped without a block. Your successor never waits for workers'
+  reports: it re-dispatches from the branch once the agent there has stopped. Queue no landing after you send `ready to restart:`: your successor
   queues every LAND verdict in the note at once, and the PM stops you once it has checked in.
 - `next` empty only because finished branches still wait to land is no reason to restart: their
   open records and scopes still block the items behind them. Queue them at once, rerun

@@ -50,9 +50,17 @@ from .holders import WALK_MAX, canon, extended, plain, prune
 from .remove import OK, REFUSED, failure, git
 
 Result = collections.namedtuple('Result', 'code lines data')
-# live_claims: {branch: sorted ids pulled by it}, {id: the checkout whose backlog.py writes it},
-# and the PM data worktree's canon path (None when there is none).
+# live_claims: {lower-cased branch: sorted ids pulled by it}, {id: the checkout whose backlog.py
+# writes it, or None for a main or folder store named in .kit.json (it writes only from a linked
+# worktree whose branch holds the record, never the main checkout)}, and the PM data worktree's
+# canon path (None when there is none).
 Claims = collections.namedtuple('Claims', 'index stores pm_root')
+
+
+def claimed(got, branch):
+    """The ids `got` (Claims) holds pulled by `branch`, matched without regard to case as
+    backlog.py matches `pulled_by` (plan.py)."""
+    return got.index.get(branch.lower(), []) if branch else []
 
 DEAD_AFTER_S = 24 * 3600                       # owner answer Q3: 24 h, the sweep's idle bar
 EVIDENCE_GLOBS = ('agent-*', '*-red', 'redcheck', 'mutant*')
@@ -285,9 +293,12 @@ def live_claims(ctx, base):
         got, why = remove.pulled_index(ctx, base)
         if got is None:
             return None, why
+        # A main or folder store (open_backend: neither `ref` nor `branch`) writes only from a
+        # linked worktree (MainBackend.publish): no -C line can name the main checkout.
+        main_kind = ctx.cfg.written('backlog', 'store') not in ('ref', 'branch')
         for branch, ids in got.items():
-            index.setdefault(branch, set()).update(ids)
-            stores.update((i, ctx.main) for i in ids)
+            index.setdefault(branch.lower(), set()).update(ids)
+            stores.update((i, None if main_kind else ctx.main) for i in ids)
         read += 1
     pm_root, named, why = smod.pm_data_live_store(ctx.main)
     if why:
@@ -304,7 +315,7 @@ def live_claims(ctx, base):
                 snap.where, ', '.join(r.stem for r in snap.unreadable))
         for r in snap.records:
             if r.get('state') == 'pulled' and r.get('pulled_by'):
-                index.setdefault(r.get('pulled_by'), set()).add(r.id)
+                index.setdefault(r.get('pulled_by').lower(), set()).add(r.id)
                 stores[r.id] = pm_root
         read += 1
     if not read:
@@ -349,8 +360,8 @@ def empty_keep(ctx, entry, own, claims):
     if got.pm_root and (entry.get('canon') or canon(entry['path'])) == got.pm_root:
         return 'the PM data worktree'
     branch = entry['branch']
-    if branch and got.index.get(branch):
-        return 'claimed by %s' % ', '.join(got.index[branch])
+    if claimed(got, branch):
+        return 'claimed by %s' % ', '.join(claimed(got, branch))
     if branch and own is None:
         own, why = own_commit(ctx.main, branch)
         if own is None:
@@ -525,7 +536,7 @@ def _classify(ctx, now, machine, procs, dead_after_s, act=None):
             row['class'] = klass
             row.update(fields)
         if entry['branch']:
-            row['claims'] = (claims[0].index.get(entry['branch'], []) if claims[0] is not None
+            row['claims'] = (claimed(claims[0], entry['branch']) if claims[0] is not None
                              else 'unknown: %s' % claims[1])
         trees.append(row)
         if row['class'] in ('A', 'E'):
@@ -558,10 +569,17 @@ def _classify(ctx, now, machine, procs, dead_after_s, act=None):
     for t in trees:
         if t['class'] in ('B', 'C'):
             for rid in t['claims'] if isinstance(t.get('claims'), list) else ():
+                writer = claims[0].stores[rid]
+                if writer is None:
+                    ctx.say('next      release %s or block it (%s): its store is in the main'
+                            ' checkout, which takes no backlog write; run `backlog.py release %s'
+                            ' --reason "<why>"` (or `block %s --on <M> --reason "<why>"` to keep'
+                            ' the branch) from a worktree whose branch holds the record'
+                            % (rid, t['class'], rid, rid))
+                    continue
                 ctx.say('next      %s release %s --reason "<why>"   (%s, or `block %s --on <M>'
                         ' --reason "<why>"` to keep the branch)' % (
-                            kitroot.command('backlog', claims[0].stores[rid]), rid, t['class'],
-                            rid))
+                            kitroot.command('backlog', writer), rid, t['class'], rid))
             ctx.say('next      %s %s --abandon "<why>"   (%s, after it is taken up or'
                     ' recorded)' % (s['tool'], remove.handle(ctx, t['path']), t['class']))
     ctx.say('summary   %s' % ', '.join('%s %d' % (k, counts[k]) for k in CLASSES))
