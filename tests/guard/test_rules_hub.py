@@ -552,8 +552,15 @@ class BareWordsInTheDataFolder(Hub):
             (bash, 'python -Bm http.server --session hub'),
             (bash, 'python -Im http.server --session hub'),
             (bash, 'python -um tools.x --session hub'),
-            (bash, 'python -Ic pass --session hub'),
         ), deny=False)
+
+    def test_code_given_on_the_line_is_refused_as_a_write_not_as_the_store(self):
+        # python -c writes the directory it runs in (docs/guard.md "Shell writes"), and the data
+        # folder is a main checkout: a subagent is refused that write, never by the store's rule,
+        # and the sessions that may edit a main checkout pass
+        make = lambda sub: bash('python -Ic pass --session hub', self.w.data, sub)
+        self.denied(make, 'unplaced', HELD[:1])
+        self.allowed(make, HELD[1:])
 
     def test_the_token_folder_is_still_refused(self):
         # from the home's .pm-kit folder a bare `hub` is the token folder

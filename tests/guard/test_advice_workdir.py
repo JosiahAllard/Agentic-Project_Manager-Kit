@@ -1,6 +1,7 @@
 """Start-Process -WorkingDirectory as the directory git and python start in (commands.run_dir),
 the wrapped-gate alternative run bare, the kit folder advice names (rules.advice_kit), and the
-sleep-wait refusal's reason (docs/guard.md "Rules", "Parsing" and "Kit paths in advice")."""
+reason a python whose code the guard does not read is refused with (docs/guard.md "Rules",
+"Parsing" and "Kit paths in advice")."""
 import json
 import os
 import unittest
@@ -197,56 +198,63 @@ class AdviceKit(unittest.TestCase):
         self.assertIn('python "%s/tools/machine_lock.py" run ' % W.fwd(self.w.kit_dir), self.heavy_advice().instead)
 
 
-class SleepWait(unittest.TestCase):
-    """A python -c that only sleeps, refused in a main checkout, is
-    named as a sleep-wait, not as writing files."""
+class NoSleepWait(unittest.TestCase):
+    """A python -c that only sleeps is code like any other: no sleep-wait reason of its own."""
 
     def setUp(self):
         self.w = W.World()
         self.addCleanup(self.w.cleanup)
 
-    def test_a_sleep_in_the_main_checkout_says_sleep_wait(self):
+    def test_a_sleep_in_the_main_checkout_is_code_counted_as_written(self):
         for code in ('import time;time.sleep(110)', 'from time import sleep; sleep(5.5)'):
             with self.subTest(code):
                 d = decide(ps('python -c "%s"' % code, self.w.main, sub=True), self.w.ctx())
                 self.assertEqual(verdict(d), ('deny', 'unplaced'))
-                self.assertIn('is a sleep-wait', d.reason)
-                self.assertNotIn('writes files in the directory it runs in', d.reason)
-                self.assertNotIn('worktree add', d.instead)
+                self.assertNotIn('sleep-wait', d.reason)
+                self.assertIn('the guard does not read what the code python is given writes', d.reason)
 
     def test_a_sleep_in_a_worktree_is_unchanged(self):
         self.assertIsNone(decide(ps('python -c "import time;time.sleep(110)"', self.w.wt, sub=True), self.w.ctx()))
 
-    def test_other_code_is_not_named_a_sleep_wait(self):
-        for code in ('import time;time.sleep(1);open(\'x\',\'w\')', 'import os;os.remove(\'x\')'):
-            with self.subTest(code):
-                d = decide(ps('python -c "%s"' % code, self.w.main, sub=True), self.w.ctx())
-                self.assertEqual(verdict(d), ('deny', 'unplaced'))
-                self.assertNotIn('sleep-wait', d.reason)
-
 
 class UnreadPython(unittest.TestCase):
-    """A python the guard does not read as read-only (rules.py_unread), refused in a main
-    checkout, gives that as its reason: it names no file it writes."""
+    """A python whose code the guard does not read (rules.py_unread), refused in a main checkout,
+    gives that as its reason: it names no file it writes."""
 
     def setUp(self):
         self.w = W.World()
         self.addCleanup(self.w.cleanup)
 
     def test_an_unread_program_says_the_guard_does_not_read_it(self):
-        for shell, text, why in (
-                (ps, 'python -c "import sys; print(sys.argv)" a b', 'the code of that python -c'),
-                (bash, 'python -c "import sys; print(sys.argv)" a "" b', 'the code of that python -c'),
-                (ps, 'python -c "import os;os.remove(\'x\')"', 'the code of that python -c'),
-                (bash, 'echo x | python -', 'the program python is given'),
-                (ps, "Start-Process python -ArgumentList '-c','print(1)'", 'Start-Process hands python')):
+        why = '(counted as written: the guard does not read what the code python is given writes)'
+        for shell, text in (
+                (ps, 'python -c "import sys; print(sys.argv)" a b'),
+                (bash, 'python -c "import sys; print(sys.argv)" a "" b'),
+                (ps, 'python -c "import os;os.remove(\'x\')"'),
+                (bash, 'echo x | python -')):
             with self.subTest(text):
-                d = decide(shell(text, self.w.main, sub=True), self.w.ctx())
-                self.assertEqual(verdict(d), ('deny', 'unplaced'))
-                self.assertTrue(d.reason.startswith('the directory `'), d.reason)
-                self.assertIn('(counted as written: ', d.reason)
-                self.assertIn(why, d.reason)
-                self.assertNotIn('writes files in the directory it runs in', d.reason)
+                self.counted(shell, text, why)
+
+    def counted(self, shell, text, why):
+        d = decide(shell(text, self.w.main, sub=True), self.w.ctx())
+        self.assertEqual(verdict(d), ('deny', 'unplaced'))
+        self.assertTrue(d.reason.startswith('the directory `'), d.reason)
+        self.assertIn(why, d.reason)
+        self.assertNotIn('writes files in the directory it runs in', d.reason)
+
+    def test_a_script_powershell_may_hand_other_words_says_so(self):
+        # a script writes nothing by itself: what is unread is the words PowerShell hands it
+        why = '(counted as written: PowerShell may hand python other words than the guard read)'
+        for text in ("python tools/x.py --note ''", "python tools/x.py -m 'a \"b\" c'"):
+            with self.subTest(text):
+                self.counted(ps, text, why)
+
+    def test_a_start_process_python_says_its_command_line_is_unread(self):
+        why = '(counted as written: Start-Process hands python a command line the guard does not read)'
+        for text in ("Start-Process python -ArgumentList '-c','print(1)'",
+                     "Start-Process python -ArgumentList 'tools/x.py'"):
+            with self.subTest(text):
+                self.counted(ps, text, why)
 
     def test_a_named_write_keeps_its_reason(self):
         d = decide(bash('cp a b', self.w.main, sub=True), self.w.ctx())

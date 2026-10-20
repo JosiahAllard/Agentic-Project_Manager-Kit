@@ -1171,35 +1171,79 @@ class RolesFromConfig(unittest.TestCase):
 class MainCwdHint(unittest.TestCase):
     def test_a_command_writing_through_a_main_cwd_is_told_to_cd_first(self):
         # a subagent whose cwd is the main checkout runs python - or -c;
-        # the refusal stays, its advice is to cd into the worktree (or run a script by path)
+        # the refusal stays, its advice is the same run from the worktree (or a script by path)
         w = W.World()
         self.addCleanup(w.cleanup)
         for ev in (bash("python - <<'EOF'\nprint(1)\nEOF", w.main, sub=True),
                    ps('python -c "print(1)"', w.main, sub=True)):
             d = decide(ev, w.ctx())
             self.assertEqual(d and d.rule, 'unplaced', d and d.reason)
-            self.assertIn(rules.MAIN_CWD_HINT, d.reason)
-            self.assertIn('cd into your worktree first', d.reason)
+            self.assertIn('It writes through its working directory, which is the main checkout', d.reason)
+            self.assertTrue(d.instead.startswith('cd "<worktree>"'), d.instead)
             self.assertNotIn('Make the change in a worktree of it', d.reason)
         # a redirect to a named file keeps the plain worktree advice
         d = decide(bash('python x.py > out.log 2>&1', w.main, sub=True), w.ctx())
-        self.assertNotIn('cd into your worktree first', d.reason)
+        self.assertNotIn('It writes through its working directory', d.reason)
 
-    def test_a_python_c_refusal_names_the_isolated_form(self):
-        # the refusal of python -c in a main checkout names python -I -c (rules.PY_C_HINT), which
-        # runs there when its code only reads; python - and other runs do not get the clause
-        w = W.World()
-        self.addCleanup(w.cleanup)
-        for ev in (ps('python -c "print(1)"', w.main, sub=True), bash("python3 -Bc 'print(1)'", w.main, sub=True),
-                   ps('& "C:\\Py\\python.exe" -c "print(1)"', w.main, sub=True)):
-            d = decide(ev, w.ctx())
-            self.assertEqual(d and d.rule, 'unplaced', d and d.reason)
-            self.assertIn('python -I -c', d.reason)
-            self.assertIn(rules.MAIN_CWD_HINT, d.reason)
-        self.assertIsNone(decide(ps('python -I -c "print(1)"', w.main, sub=True), w.ctx()))
-        d = decide(bash("python - <<'EOF'\nprint(1)\nEOF", w.main, sub=True), w.ctx())
-        self.assertEqual(d and d.rule, 'unplaced', d and d.reason)
-        self.assertNotIn('python -I -c', d.reason)
+
+# python's code on the line, or read from standard input, counts as a write of the directory python
+# runs in, whatever the code is: the guard does not read it (docs/guard.md "Shell writes")
+PY_UNREAD = 'counted as written: the guard does not read what the code python is given writes'
+
+
+class PythonCodeCountsAsWrite(unittest.TestCase):
+    def setUp(self):
+        self.w = W.World()
+        self.addCleanup(self.w.cleanup)
+
+    def judge(self, ev):
+        d = decide(ev, self.w.ctx())
+        return ('allow', None) if d is None else (d.verdict, d.rule)
+
+    def test_python_c_read_only_program_in_main_checkout_counts_as_write(self):
+        code = "import json,sys; print(json.load(open(sys.argv[1]))['a'])"
+        for make, text in ((bash, 'python -I -c "%s" x.json' % code), (bash, 'python -I -c "print(1)"'),
+                           (ps, 'python -I -c "print(1)"'), (bash, "py -3 -Ic 'print(1)'"),
+                           (bash, 'python -c "import time; time.sleep(5)"')):
+            with self.subTest(text):
+                d = decide(make(text, self.w.main, sub=True), self.w.ctx())
+                self.assertEqual(d and (d.verdict, d.rule), ('deny', 'unplaced'), d and d.reason)
+                self.assertIn(PY_UNREAD, d.reason)
+                self.assertNotIn('sleep-wait', d.reason)
+
+    def test_python_c_advice_is_cd_worktree_line(self):
+        for make, text, instead in (
+                (bash, 'python -c "print(1)"', 'cd "<worktree>" && python -c "print(1)"'),
+                (bash, 'python3 -Bc \'print(1)\' a b', 'cd "<worktree>" && python3 -Bc \'print(1)\' a b'),
+                (ps, 'python -c "print(1)"', 'cd "<worktree>"; if ($?) { python -c "print(1)" }'),
+                (ps, '& "C:\\Py\\python.exe" -c "print(1)"',
+                 'cd "<worktree>"; if ($?) { & "C:\\Py\\python.exe" -c "print(1)" }')):
+            with self.subTest(text):
+                d = decide(make(text, self.w.main, sub=True), self.w.ctx())
+                self.assertEqual(d and d.instead, instead, d and d.reason)
+                self.assertIn('Read and Grep tools', d.reason)
+                self.assertNotIn('python -I -c', d.reason)
+                self.assertNotIn('worktree add', d.instead)
+
+    def test_python_c_in_own_worktree_passes(self):
+        for make, text in ((bash, 'python -c "open(\'x\', \'w\').write(\'y\')"'),
+                           (ps, 'python -c "import os; os.remove(\'x\')"'),
+                           (bash, "python - <<'EOF'\nopen('x', 'w')\nEOF")):
+            with self.subTest(text):
+                self.assertEqual(self.judge(make(text, self.w.wt, sub=True)), ('allow', None))
+
+    def test_python_stdin_counts_as_write_of_cwd(self):
+        sp = 'counted as written: Start-Process hands python a command line the guard does not read'
+        for make, text, why in ((bash, 'echo "print(1)" | python -I -', PY_UNREAD),
+                                (bash, "python - <<'EOF'\nprint(1)\nEOF", PY_UNREAD),
+                                (bash, 'echo "print(1)" | python', PY_UNREAD), (ps, "'print(1)' | python -", PY_UNREAD),
+                                (ps, "Start-Process python -ArgumentList '-c','print(1)'", sp)):
+            with self.subTest(text):
+                d = decide(make(text, self.w.main, sub=True), self.w.ctx())
+                self.assertEqual(d and (d.verdict, d.rule), ('deny', 'unplaced'), d and d.reason)
+                self.assertTrue(d.reason.startswith('the directory `'), d.reason)
+                self.assertIn(why, d.reason)
+                self.assertEqual(self.judge(make(text, self.w.wt, sub=True)), ('allow', None))
 
 
 class OtherTools(unittest.TestCase):
