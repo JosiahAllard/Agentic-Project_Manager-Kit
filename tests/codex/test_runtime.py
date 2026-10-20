@@ -3,6 +3,7 @@ import io
 import json
 import os
 import subprocess
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -340,6 +341,27 @@ class BoundGuard(unittest.TestCase):
     def test_bound_guard_ignores_the_inherited_role(self):
         self.assertIsNone(self.judge('worker', 'a.py'))
         self.assertIn('rule=host-role-edit', self.judge('analyst', 'a.py'))
+
+    def test_a_broker_deny_is_logged_and_an_allow_is_not(self):
+        # kitlib.guard.refusal_log (docs/guard-v2.md "Refusal log"): one line per deny, in the
+        # pm_data the machine config names, with the bound role and never the patch's text
+        from tests.gitfixture import rmtree
+        from tests.home import machine_config, temp_home
+        from hosts.codex.adapter.runtime import evaluate_bound
+        home = temp_home(self)
+        data = tempfile.mkdtemp(prefix='kit-pmdata-')
+        self.addCleanup(rmtree, data)
+        machine_config(home, {'pm_data': {'path': data}})
+        self.assertIsNone(self.judge('worker', 'a.py'))
+        self.assertIn('rule=host-role-edit', self.judge('analyst', 'secret-name.py', child=True))
+        binding = SimpleNamespace(role='worker', cwd=self.w.wt, parent=None, thread='t')
+        self.assertIn('rule=host-runtime-error', json.dumps(evaluate_bound({'cwd': 7}, binding)))
+        with open(os.path.join(data, 'audit', 'refusals.jsonl'), encoding='utf-8') as fh:
+            rows = [json.loads(line) for line in fh]
+        self.assertEqual([(r['host'], r['rule'], r['role'], r['agent_role'], r['agent']) for r in rows],
+                         [('codex', 'host-role-edit', 'subagent', 'analyst', 't'),
+                          ('codex', 'host-runtime-error', 'subagent', '-', '-')])
+        self.assertNotIn('secret-name', json.dumps(rows))
 
     def test_reader_lander_and_test_roles_cannot_patch_files(self):
         for role in ('analyst', 'lander', 'test-runner'):
