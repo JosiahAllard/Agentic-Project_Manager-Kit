@@ -1108,16 +1108,23 @@ def main_checkout(event, ctx, target, cwd, role, what, unknown_why=None, rewrite
     if may:
         return None
     main_top = ctx.main_top(cwd) if cwd else None
-    new_wt = new_worktree(ctx, main_top)[1]
+    no_wt, new_wt = new_worktree(ctx, main_top)
     if target is None:
         mine = own_worktree(ctx, cwd)
+        only = ''
         if rewrite is not None and (mine or redirect):
             instead = rewrite(fwd(mine or ctx.tempdir) + '/<file>')
-        else:
+        elif no_wt or not main_top:
             instead = new_wt
+        else:
+            # from the main checkout the session's worktree is unknown, not missing (only_new)
+            only = only_new(new_wt)
+            instead = rewrite('<worktree>/<file>') if rewrite is not None else \
+                'git -C %s worktree list' % quote(main_top)
         return refuse(UNPLACED, role, '%s: the guard cannot tell where it writes (%s). Name a literal path '
-                      'inside your worktree%s (the Edit or Write tool for a file).' %
-                      (what, unknown_why or 'unknown path', ' or, for output, the temp folder' if redirect else ''),
+                      'inside your worktree%s (the Edit or Write tool for a file)%s.%s' %
+                      (what, unknown_why or 'unknown path', ' or, for output, the temp folder' if redirect else '',
+                       only, '' if rewrite is not None or not only else ' To see the worktrees:'),
                       instead)
     place = ctx.place(target)
     if place.kind not in (repo.MAIN, repo.UNKNOWN):
@@ -1253,7 +1260,19 @@ def worktree_alternative(ctx, target, main_top, cwd, rewrite=None, run=None, red
     if rewrite is None and run is not None and cwd and paths.norm(target) == paths.norm(cwd):
         # it writes through the main checkout it runs in
         return MAIN_CWD_HINT % instead, cd_line('<worktree>', run, shell)
+    if rewrite is not None:
+        # the session may have a worktree the call does not run in: aim at it, a new one only for a session with none
+        there = '' if rel == '.' else ' (%s there)' % fwd(rel)
+        return ('Make the change in your worktree%s%s; the lander brings it to main:' % (there, only_new(instead)),
+                rewrite('<worktree>' if rel == '.' else '<worktree>/' + fwd(rel)))
     return 'Make the change in a worktree of it (%s there); the lander brings it to main:' % fwd(rel), instead
+
+
+def only_new(new_wt):
+    """The clause a refusal from the main checkout offers a new worktree in: the call does not
+    say whether the session has one, so the Instead aims at <worktree> and only a session with
+    none makes one: the new worktree is never the Instead itself."""
+    return '; only a session with no worktree makes one, first (%s)' % new_wt
 
 
 REDIRECT_HINT = ('A redirect writes output: send it to the temp folder (a change to the repository is made in a '
@@ -2091,13 +2110,31 @@ def _tar_word(args, k, state, dirs):
     return 'maybe' if doubt else 'value'
 
 
+def _tar_stdout(t):
+    """True when tar's word `t`, no value of the word before it, is -O/--to-stdout (GNU tar and
+    bsdtar alike: -x prints each file and writes none): --to-stdout, or an O in a cluster before
+    any letter that takes or may take a value (-xvOf; in -xfO the O is f's file)."""
+    if t.startswith('--'):
+        return t == '--to-stdout'
+    if not t.startswith('-'):
+        return False
+    for c in t[1:]:
+        if c == 'O':
+            return True
+        if c not in TAR_FLAGS:
+            return False
+    return False
+
+
 def _tar(args, cmd_word):
     """[Word]: the folders tar -x writes: each folder a -C/--directory names, relative to the one
     before it (_TarDirs), with none the working directory, and the working directory too once a -C
-    was read that may not be one (_tar_word, _tar_old: fail closed)."""
+    was read that may not be one (_tar_word, _tar_old: fail closed). None with -O/--to-stdout
+    where tar reads it as that option (_tar_stdout; any O of the old-style first word)."""
     first = args[0].text if args else ''
     extract = bool(re.match(r'^[A-Za-z]*x', first)) and not first.startswith('-')       # tar xf a.tar
     dirs, k, state = _TarDirs(), 0, None
+    stdout = extract and 'O' in first
     if extract:
         k, state = _tar_old(args, dirs)
     while k < len(args):
@@ -2106,9 +2143,10 @@ def _tar(args, cmd_word):
             break
         if t in ('--extract', '--get') or re.match(r'^-[A-Za-z]*x', t) and not t.startswith('--'):
             extract = True
+        stdout = stdout or state is None and _tar_stdout(t)
         state = _tar_word(args, k, state, dirs)
         k += 1
-    if not extract:
+    if not extract or stdout:
         return []
     if not dirs.seen:
         return [here(cmd_word)]
@@ -2805,6 +2843,11 @@ def _write_from(event, ctx, cmd, inv, cwd, role, w, base, net, into, searched):
     (OUTER, or the folder a Start-Process -WorkingDirectory names)."""
     runs_in = cmd.cwd if base is OUTER else base
     target, why = write_place(ctx, cmd, w, base)
+    unread = py_unread(cmd, inv, w)
+    # a kit tool acts on the checkout its -C names: that folder, not the one it runs in
+    checked = kit_tool_dir(event, ctx, cmd, inv, cwd) if base is OUTER and unread == PY_PS_WHY else None
+    if checked is not None:
+        target, why = checked[1], None
     if target is None and not searched:
         searched = True                         # find's start paths answer for every such target at once
         d = find_exec_writes(event, ctx, cmd, cwd, role)
@@ -2816,16 +2859,22 @@ def _write_from(event, ctx, cmd, inv, cwd, role, w, base, net, into, searched):
     elif target is None and runs_in is not None and \
             ctx.place(runs_in).kind not in (repo.MAIN, repo.UNKNOWN):
         return None, searched                   # a target it cannot place, from a worktree or elsewhere
-    unread = py_unread(cmd, inv, w)
     what = '`%s` writes %s' % (cmd.text, w.text if w.text != '.' else 'files in the directory it runs in') \
         if unread is None else \
-        'the directory `%s` runs in (counted as written: %s)' % (cmd.text, unread)
+        'the directory `%s` runs in (counted as written: %s)' % (cmd.text, unread) if checked is None else \
+        'the checkout `%s` acts on, %s (counted as written: %s)' % (cmd.text, checked[0].text, unread)
     # here() or ps_unread(): no word to aim
     stand_in = (w.text == '.' and cmd.source[w.start:w.end] != '.') or w.start == w.end
     part = any((x.start, x.end) == (w.start, w.end) and x.text != w.text for x in cmd.words)
     rewrite = None if stand_in or part else (lambda path, w=w: retarget(cmd, w, path))   # part: -tDIR
     if (w.start, w.end) in net and not w.dyn:
         rewrite = lambda path, x=net[(w.start, w.end)]: net_retarget(cmd, x, path)
+    if checked is not None:
+        x = checked[0]
+        # -C'dir' spelt other than its text: the value's span is the whole word, so the rewrite spells -C again
+        lead = '' if any(a is x for a in inv.args) or cmd.source[x.start:x.end] == x.text else '-C '
+        rewrite = (lambda path: retarget(cmd, x, path if path.startswith('<') else
+                                         fwd(paths.norm(path, fold=False)), lead)) if x.start is not None else None
     if stand_in and base is not OUTER and base is not None:
         # the folder it runs in is the -WorkingDirectory value: aim that word instead
         rewrite = lambda path, x=inv.workdir: retarget(cmd, x, paths.norm(path, fold=False))
@@ -3024,15 +3073,15 @@ def ps_drive_jail(event, ctx, cwd, role, what, why, rewrite):
 DUPS_RE = re.compile(r'(?:[ \t]*[0-9]*[<>]&[0-9-]+)+')
 
 
-def retarget(cmd, w, path):
+def retarget(cmd, w, path, lead=''):
     """The command `cmd` (from its program word, redirections kept) with the word `w` replaced
-    by `path`, quoted."""
+    by `path`, quoted, after `lead` (an option the word's span also covers, as -C'dir' does)."""
     start = cmd.words[0].start if cmd.words else w.start
     start = min(start, w.start)
     end = max(cmd.end, w.end)
     m = DUPS_RE.match(cmd.source, end)          # a dup (2>&1) has no word, so no span
     end = m.end() if m else end
-    return (cmd.source[start:w.start] + quote(path) + cmd.source[w.end:end]).strip()
+    return (cmd.source[start:w.start] + lead + quote(path) + cmd.source[w.end:end]).strip()
 
 
 # ---------------------------------------------------------------- wrapped gates (P16)
@@ -3314,20 +3363,80 @@ def kit_wrapper(ctx, cmd, inv, cwd, event=None):
         return None
     found = cm.python_script(inv)
     word = inv.args[found[0]] if found else inv.word
+    return kind if kit_script(ctx, cmd, word, cwd, event) else None
+
+
+def kit_script(ctx, cmd, word, cwd, event=None):
+    """True when the program or script Word `word` is one of the kit's own tools: in the tools
+    folder of the kit the guard runs from (ctx.kit) or, given the Action `event`, of an export of
+    it the session cannot write (rolepolicy.kit_export), the path resolved from the command's
+    directory with links followed."""
     if word is None or word.dyn:
-        return None
+        return False
     path = sh.resolve_path(word.text, cmd.cwd or cwd, cmd.shell, getattr(ctx, 'home', None)) or (
         word.text if os.path.isabs(word.text) else None)
     if not path:
-        return None
+        return False
     tools = paths.norm(os.path.join(ctx.kit, 'tools'), real=True)
     folder = paths.norm(os.path.dirname(path), real=True)
     if folder == tools:
-        return kind
+        return True
     if event is None or os.path.basename(folder) != 'tools':
-        return None
+        return False
     from . import rolepolicy
-    return kind if rolepolicy.kit_export(ctx, os.path.dirname(folder), event, cwd) else None
+    return bool(rolepolicy.kit_export(ctx, os.path.dirname(folder), event, cwd))
+
+
+# a piece Windows PowerShell 5.1 may split out of an unsure word (ps_native_unsure) that python's
+# argparse may read as a -C: a dash after a blank or a quote, then a dash (a long option, which
+# argparse also takes abbreviated) or a run with a C in it (-C, a cluster -vC)
+PS_SPLIT_C_RE = re.compile(r'(?:^|[\s"])-(?:-|\S*C)')
+
+
+def kit_tool_dir(event, ctx, cmd, inv, cwd):
+    """(Word, path) of the one literal absolute -C <dir> (or -C<dir>) a kit tool (kit_script) is
+    given, which is the checkout it acts on, or None. Only for a python that PowerShell runs
+    directly (not Start-Process), on no PowerShell line around it with a word it may hand on as
+    other than one argument, and only when no such word comes before the -C value or, after it,
+    may split into a word argparse reads as another -C (PS_SPLIT_C_RE); a second -C, or a --root,
+    is none either."""
+    if inv is None or inv.via is not None or not cm.PYTHON_RE.match(inv.name or ''):
+        return None
+    c = cmd.nested_in
+    while c is not None:
+        if c.shell == sh.PS and any(ps_native_unsure(w) for w in c.words):
+            return None
+        c = c.nested_in
+    found = cm.python_script(inv)
+    if not found or not kit_script(ctx, cmd, inv.args[found[0]], cwd, event):
+        return None
+    args = inv.args
+    marks = [k for k, w in enumerate(args) if k > found[0] and
+             (w.text.startswith('-C') or w.text.split('=')[0] in ('--r', '--ro', '--roo', '--root'))]
+    if len(marks) != 1 or args[marks[0]].text.startswith('--'):
+        return None
+    k = marks[0]
+    w = args[k]
+    if w.text == '-C':
+        if k + 1 >= len(args):
+            return None
+        value, last = args[k + 1], k + 1
+    else:
+        value, last = tail_word(w, w.text[2:]), k
+    if value.dyn or not value.text or not (value.text.startswith(('/', '\\')) or
+                                           ntpath.splitdrive(value.text)[0]):
+        return None
+    words = [inv.word] + list(args) if inv.word is not None else list(args)
+    cut = len(words) - (len(args) - last)
+    if cmd.shell == sh.PS:
+        if any(ps_native_unsure(x) for x in words[:cut + 1]):
+            return None
+        after = words[cut + 1:]
+        first = next((i for i, x in enumerate(after) if ps_native_unsure(x)), None)
+        if first is not None and any(PS_SPLIT_C_RE.search(x.text) for x in after[first:]):
+            return None
+    path = sh.resolve_path(value.text, cmd.cwd or cwd, cmd.shell, getattr(ctx, 'home', None))
+    return (value, path) if path else None
 
 
 def heavy(event, ctx, cmd, inv, cwd, role):
@@ -4193,7 +4302,7 @@ def git_jail(event, ctx, cmd, inv, cwd, role):
             what = '`%s` makes %s' % (bare(cmd), w.text)
             # a word an inline alias gave has no span in the line to aim (inline_alias)
             return jail_refusal(role, rs, verdict, root, what, target,
-                                rewrite=None if w.start is None else (lambda path, w=w: retarget(cmd, w, path)))
+                                rewrite=None if w.start is None else git_retarget(ctx, cmd, inv, gc, w, cwd))
     if git_reads(gc):
         return None
     landed, why = lander_check(event, ctx, cmd, inv, gc)
@@ -4216,6 +4325,29 @@ def git_jail(event, ctx, cmd, inv, cwd, role):
     return refuse('write-jail', role, '%s: it is outside the folders an agent session may write: %s. %s The same command '
                   'in %s:' % (what, jail.describe(rs), JAIL_ASK, fwd(dest.path)),
                   ('git -C %s %s %s' % (quote(dest.path), gc.sub, rest)).rstrip())
+
+
+def git_retarget(ctx, cmd, inv, gc, w, cwd):
+    """rewrite(path) for the refused output word `w` of git `gc`: the same command with `w` aimed
+    at `path`. A git archive with no -C of its own also names the checkout it archives: an agent's
+    shell keeps no cd between calls, so the bare command run again from a main checkout archives
+    main, not the branch. That is the session's own worktree of the main checkout git runs in
+    (`<worktree>` when it has none, its output aimed there too), else the folder git runs in."""
+    def rewrite(path):
+        if gc.sub != 'archive' or inv.via is not None or inv.word is None or inv.word.start is None or \
+                any(x.text.startswith('-C') for x in gc.before()):
+            return retarget(cmd, w, path)
+        place = ctx.place(gc.dir)
+        where = gc.dir
+        if place.kind == repo.MAIN and place.top:
+            where = own_worktree(ctx, cwd, place.top) or '<worktree>'
+            top = paths.norm(place.top)
+            if jail.inside(paths.norm(path), top):
+                path = fwd(where) + fwd(paths.norm(path, fold=False)[len(top):])
+        line = retarget(cmd, w, path)
+        at = inv.word.end - min(cmd.words[0].start, w.start)
+        return line[:at] + ' -C ' + quote(fwd(where)) + line[at:]
+    return rewrite
 
 
 def git_in_worktree(ctx, cmd, gc, main_top, cwd):
