@@ -63,7 +63,8 @@ or after an unpair or a session that ran out) is told so on the page and to run
   - A hold's Edit, and Release (asked twice).
   - A run's End run (asked twice), and a waiting run's Move to top.
   - Game mode on or off, and the games list.
-  - The division's fields, or its defaults.
+  - The division's fields, or its defaults. The fields hold only what the owner set; a blank one
+    is the default (shown as a hint) and stays blank on save, as in the lock window.
 
   A control this login may not use is disabled and says why: holds and the division need the
   strong owner; a hub started under an agent session changes nothing

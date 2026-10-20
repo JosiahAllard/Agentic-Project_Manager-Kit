@@ -671,15 +671,19 @@ button.stop{border-color:var(--warn);color:var(--warn)}
   // The Division dialog's fields, one a key: the page's own names, made once.
   $("#divfields").replaceChildren(...KEYS.map(k => el("label", {class: "field"}, k, el("input", {type: "text", "data-key": k}))));
   $("#divedit").addEventListener("click", () => {
-    const d = (state.view && state.view.division) || {}, own = d.owner_division || {};
-    const src = Object.keys(own).length ? own : d.division || {};
-    for (const f of $("#divfields").querySelectorAll("input")) f.value = shown(src[f.dataset.key]);
+    // Only the owner's own keys fill the fields, as the schedule window does; a blank one is the default,
+    // shown as a hint, so saving never turns a default into an owner-set value.
+    const d = (state.view && state.view.division) || {}, own = d.owner_division || {}, dflt = d.default_division || d.division || {};
+    for (const f of $("#divfields").querySelectorAll("input")) {
+      f.value = shown(own[f.dataset.key]);
+      f.placeholder = shown(dflt[f.dataset.key]);
+    }
     $("#divform").hidden = false;
   });
   $("#divcancel").addEventListener("click", () => { $("#divform").hidden = true; });
   $("#divgo").addEventListener("click", async () => {
     const fields = {};
-    for (const f of $("#divfields").querySelectorAll("input")) fields[f.dataset.key] = f.value;
+    for (const f of $("#divfields").querySelectorAll("input")) if (f.value.trim()) fields[f.dataset.key] = f.value;
     if (await write("/lock/division", {fields}, divided)) $("#divform").hidden = true;
   });
   $("#divdefaults").addEventListener("click", async () => { if (await write("/lock/division", {defaults: true}, divided)) $("#divform").hidden = true; });
