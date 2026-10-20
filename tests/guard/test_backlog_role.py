@@ -158,9 +158,9 @@ class Spellings(Base):
                 self.refused(self.cmd(text, tool='PowerShell'))
 
     def test_start_process(self):
-        """A Start-Process -ArgumentList run (rules.tool_run; backlogrole.argv_words, inv.via
-        start-process): its words, a list or strings split as Windows joins them, are the tool's,
-        judged for the role as any run."""
+        """A Start-Process -ArgumentList run (rules.tool_run; commands._split_list): its words, a
+        list or strings split as Windows splits them, are the tool's, judged for the role as any
+        run."""
         for args in ("'%s','set','X-1','--priority','1'" % self.tool,
                      "'%s set X-1 --priority 1'" % self.tool,
                      "'%s','-C','%s','close','X-1'" % (self.tool, self.wt),

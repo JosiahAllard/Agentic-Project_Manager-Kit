@@ -56,8 +56,13 @@ def say(line=''):
 
 def audit_line(verb, rid, rows, tip, session):
     """After a published write: its audit line (kitlib.backlog.audit), and on standard error the
-    note or warning when there is none. Never a refusal: the write stands."""
-    said = audit.after_write(verb, rid, rows, tip, session)
+    note or warning when there is none. Never a refusal: the write stands, so any failure here,
+    one after_write does not catch too, is a warning and the exit code is the write's."""
+    try:
+        said = audit.after_write(verb, rid, rows, tip, session)
+    except Exception as exc:                    # noqa: BLE001 - the write is published; say, never fail it
+        said = (audit.WARNING, 'the write stands, but its audit line was not written: %s: %s'
+                % (type(exc).__name__, ' '.join(str(exc).split())))
     if said:
         sys.stderr.write('%s: %s\n' % said)
         sys.stderr.flush()

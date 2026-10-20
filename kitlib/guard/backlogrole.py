@@ -105,17 +105,13 @@ def run_words(inv):
     return run[1]
 
 
-def argv_words(cmd, inv, words):
+def argv_words(cmd, words):
     """read_argv's (text, readable) pairs: a computed word is unreadable, and so is a PowerShell
-    word holding a double quote (Windows PowerShell 5.1 passes it on unescaped, so it can split);
-    a Start-Process -ArgumentList string is split as Windows joins it."""
+    word holding a double quote (Windows PowerShell 5.1 passes it on unescaped, so it can split).
+    A Start-Process -ArgumentList string comes already split as Windows splits it
+    (commands._split_list): a double-quoted segment is one word, spaces and all."""
     ps = cmd.shell == rules.sh.PS
-    out = []
-    for w in words:
-        ok = not w.dyn and not (ps and '"' in w.text)
-        texts = w.text.split() if inv.via == 'start-process' and ok and ' ' in w.text else [w.text]
-        out.extend((t, ok) for t in texts)
-    return out
+    return [(w.text, not w.dyn and not (ps and '"' in w.text)) for w in words]
 
 
 def role_run(event, ctx, cmd, inv, cwd, role):
@@ -128,7 +124,7 @@ def role_run(event, ctx, cmd, inv, cwd, role):
     if words is None:
         return None
     from kitlib.backlog import policy, roles
-    argv = policy.read_argv(argv_words(cmd, inv, words))
+    argv = policy.read_argv(argv_words(cmd, words))
     if argv.help:
         return None
     who = roles.role_of(agentname.bare(getattr(event, 'agent_role', None) or ''), True)
@@ -246,15 +242,21 @@ def is_store_ref(name, store, short=False):
 
 
 def _written_refs(gc, store):
-    """The store refs the git call `gc` writes (texts), and why it may write every ref (a text) when
-    its words do not name them: a mirror push, or update-ref reading its commands from its input."""
+    """The store refs the git call `gc` writes (texts), and why it may write the store's ref (a
+    text) when its words do not name it: a mirror push, or, where a store reads (`store` not None),
+    an update-ref whose ref the guard cannot read (rules._update_ref_unread: --stdin, an option it
+    does not know, xargs, a computed word, no ref)."""
     sub = gc.sub
     short, longs, pos = rules._opts(sub, gc.rest)
     texts = [w.text for w in pos if not w.dyn]
     if sub == 'update-ref':
-        if 'stdin' in longs:
-            return [], 'reads the refs it writes from its input, which may name the backlog store\'s'
-        return [t for t in texts[:1] if is_store_ref(t, store)], None
+        unread = rules._update_ref_unread(gc, short, longs, pos)
+        if unread:
+            if store is None:
+                return [], None
+            return [], ('may write the backlog store\'s ref: the guard cannot tell which ref it writes (%s), '
+                        'and this repository reads a backlog store (%s)' % (unread, store))
+        return [pos[0].text] if is_store_ref(pos[0].text, store) else [], None
     if sub == 'push':
         if 'mirror' in longs:
             return [], 'pushes every ref, the backlog store\'s among them'
@@ -287,10 +289,11 @@ def _written_refs(gc, store):
 
 def store_ref_write(event, ctx, cmd, inv, cwd, role):
     """Any session's but the owner's git write of the backlog store's ref: update-ref, a push
-    or a fetch whose destination is it, a mirror push, `update-ref --stdin` (its refs are in its
-    input, which no rule reads, so it fails closed; not in a scratch repository, rules._scratch_repo,
-    as git-shared-ref), and with a `branch` store a branch write of the backlog branch. The store
-    tool writes it (its compare-and-swap) as a process, which no rule reads."""
+    or a fetch whose destination is it, a mirror push, an update-ref whose ref the guard cannot
+    read where a store reads (store_kind; it fails closed: --stdin, xargs, a computed ref; not in a
+    scratch repository, rules._scratch_repo, as git-shared-ref), and with a `branch` store a branch
+    write of the backlog branch. The store tool writes it (its compare-and-swap) as a process,
+    which no rule reads."""
     if rules.is_owner_session(event, ctx):
         return None
     gc = rules.git_call_judged(inv)
@@ -303,9 +306,9 @@ def store_ref_write(event, ctx, cmd, inv, cwd, role):
         return None
     if not refs and gc.sub == 'update-ref' and gc.dir and not gc.unknown and not gc.blind and \
             rules._scratch_repo(ctx, ctx.place(gc.dir)):
-        return None                             # --stdin in a scratch repository: its refs are its own
+        return None                             # unread, in a scratch repository: its refs are its own
     what = whole or 'writes the backlog store\'s ref (%s)' % ', '.join(refs)
-    return rules.refuse(RAW_RULE, role, '`%s` %s: records are written only through tools/backlog.py (its '
+    return rules.refuse(RAW_RULE, role, '`%s` %s. Records are written only through tools/backlog.py (its '
                         'compare-and-swap and its role check), so a direct ref write is a raw write, which no agent '
                         'session makes (kitlib/backlog/roles.py). Run the tool\'s verb:' % (rules.bare(cmd), what),
                         'python %s -C <worktree> <verb> <arguments>' % rules.kit_tool(ctx, TOOL))
