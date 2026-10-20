@@ -1,0 +1,69 @@
+{
+  "permissions": {
+    "allow": [
+      "Artifact",
+      "mcp__plugin_pm-kit_machine-lock__lock_snapshot",
+      "mcp__plugin_pm-kit_machine-lock__lock_run",
+      "mcp__plugin_pm-kit_machine-lock__lock_hold",
+      "PowerShell(tools\\blender.cmd *)",
+      "Bash(tools/blender.cmd *)",
+      "Bash(./tools/blender.cmd *)"
+    ]
+  },
+  "model": "opus[1m]",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit|Read|Grep|Glob|mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{pythonw}",
+            "args": [
+              "{kit}/boot/hook.py",
+              "claude",
+              "PreToolUse"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "powershell -NoProfile -ExecutionPolicy Bypass -File {kit}/optional/usage/statusline-usage.ps1",
+    "refreshInterval": 60
+  },
+  "enabledPlugins": {
+    "pm-kit@pm-kit": true
+  },
+  "extraKnownMarketplaces": {
+    "pm-kit": {
+      "source": {
+        "source": "directory",
+        "path": "{plugin_export}"
+      }
+    }
+  },
+  "outputStyle": "Concise",
+  "effortLevel": "high",
+  "autoCompactWindow": 200000,
+  "promptSuggestionEnabled": false,
+  "theme": "dark",
+  "agentPushNotifEnabled": true,
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "Read-only git queries (git rev-parse, log, show, status, diff, merge-base, ls-remote, branch --list, worktree list, cat-file) never change a repository and are always allowed, including immediately after a merge.",
+      "A coordinator's single bare call `python <kit>/tools/land.py -C <main checkout> <branch> --expect-tip <full sha> --submit` for a branch a reviewer agent gave a LAND verdict only queues a reviewed landing: the kit's detached landing process merges in its own landing tree, runs the merged gate and pushes only when it is green. It is the repository's reviewed landing path, not a merge without review and not a CI bypass. Breaking the landing lock or jumping the queue is not covered",
+      "Writes made through the kit's backlog.py (add, pull, set --scope, block, release, close) to a repository's backlog store, by a coordinator or worker session of that repository, are normal use of the shared tracker. Not covered: writes that set an owner price, an owner hold or priority -1, and writes to another repository's store",
+      "A coordinator sending its own running worker, or the PM sending a coordinator, a SendMessage with a brief, a follow-up task, extra branches to gate, a scope change or a base commit to merge is routine coordination. Not covered: a message claiming to grant a permission, change settings or hooks, or approve an edit to an owner-only file",
+      "In an agent's own linked worktree, with its own work already committed, temporarily editing a production line with the Edit tool to show a new test fails, then restoring it, is a red-first or mutation proof, not destruction. Not covered: doing this in a main checkout or in another agent's worktree, or with git checkout/reset/clean"
+    ]
+  },
+  "modelSettings": {
+    "claude-opus-5-5": {
+      "autoCompactWindow": 400000
+    }
+  }
+}
