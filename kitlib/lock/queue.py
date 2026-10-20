@@ -5,7 +5,8 @@ queue.json is {"ticket": the last ticket given, "entries": [entry]}; an entry is
 expect_s, since, held_at, cores, gpus, hold, avoid, prefer, parked, blocked_by, clear_at,
 avoid_after, parent, resource, priority, moved, within}. It is read and written only under the store's
 "queue" mutex. moved is set only on a waiting entry the owner moved to the top (move_to_top):
-{by, name, at, seq}. resource and priority are set only by a library caller of kitlib.lock.run.book
+{by, name, at, seq}. resource is set by a library caller of kitlib.lock.run.book or by
+`machine_lock.py run --resource`; priority only by a library caller of book
 (None otherwise; an entry written before they existed has neither and loads as such): resource
 names an exclusive resource the run holds for its whole life, priority "land" plans it ahead of
 ordinary waiting runs (plan). within is set only on the entry of a run booked with within

@@ -312,6 +312,63 @@ class AgentOutputDir(unittest.TestCase):
             self.assertIsNone(G._agent_output_dir())
 
 
+class ComfyPaths(unittest.TestCase):
+    """The GPU self-lock's default and the state folder are in the shared temp
+    (kitlib.config.user.shared_temp), so the owner's shell and every agent find the same files;
+    with no kit library, or no shared temp, the old %LOCALAPPDATA%\\Temp paths."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.lad = os.path.join(self.tmp, "lad")
+        env = {k: v for k, v in os.environ.items() if k != "GPU_LOCK"}
+        env["LOCALAPPDATA"] = self.lad
+        for p in (mock.patch.dict(os.environ, env, clear=True),
+                  mock.patch.object(sys, "path", list(sys.path))):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def load(self):
+        """A fresh copy of comfy_gen, so its module-level paths are worked out again."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("comfy_gen_paths_probe", G.__file__)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def old_paths(self, mod):
+        self.assertEqual(mod.STATE_DIR, os.path.join(self.lad, "Temp", "comfy_gen"))
+        self.assertEqual(mod.GPU_LOCK, os.path.join(self.lad, "Temp", "comfy-gen.lock"))
+
+    def test_both_follow_the_shared_temp(self):
+        from kitlib.config import user as kuser
+        shared = os.path.join(self.tmp, "shared")
+        with mock.patch.object(kuser, "shared_temp", return_value=shared):
+            mod = self.load()
+        self.assertEqual(mod.STATE_DIR, os.path.join(shared, "comfy_gen"))
+        self.assertEqual(mod.STATE_FILE, os.path.join(shared, "comfy_gen", "state.json"))
+        self.assertEqual(mod.GPU_LOCK, os.path.join(shared, "comfy-gen.lock"))
+
+    def test_gpu_lock_from_the_environment_still_wins(self):
+        from kitlib.config import user as kuser
+        mine = os.path.join(self.tmp, "mine.lock")
+        with mock.patch.dict(os.environ, {"GPU_LOCK": mine}), \
+             mock.patch.object(kuser, "shared_temp", return_value=os.path.join(self.tmp, "shared")):
+            self.assertEqual(self.load().GPU_LOCK, mine)
+
+    def test_no_kit_library_keeps_the_old_paths(self):
+        with mock.patch.dict(sys.modules, {"kitlib": None, "kitlib.config": None,
+                                           "kitlib.config.user": None}):
+            mod = self.load()
+        self.old_paths(mod)
+
+    def test_a_shared_temp_that_cannot_be_resolved_keeps_the_old_paths(self):
+        from kitlib.config import user as kuser
+        with mock.patch.object(kuser, "shared_temp", side_effect=RuntimeError("no LOCALAPPDATA")):
+            mod = self.load()
+        self.old_paths(mod)
+
+
 class MachineLockRerun(unittest.TestCase):
     """Inside another locked run comfy_gen still asks the tool for gpu; only its own re-run skips."""
 

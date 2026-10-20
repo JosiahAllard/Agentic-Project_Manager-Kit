@@ -20,6 +20,9 @@ from .transport import PipeTarget,run_worker
 
 MAX_BYTES=1024*1024
 MAX_BUSY_WAIT_MS=5000
+# The server's bounds on one connection: reading the request, writing the reply, and
+# waiting for the client to read that reply and close before the pipe is disconnected.
+READ_SECONDS=WRITE_SECONDS=DRAIN_SECONDS=3
 
 
 def busy_wait(timeout):
@@ -123,6 +126,26 @@ def write_frame(handle,packet,deadline):
     if offset!=len(packet): raise DeliveryError('private-write-timeout')
 
 
+def drain(handle,deadline):
+    """Wait until the client closes, so disconnecting cannot discard a reply it has not read.
+
+    Peek sees only bytes the client sent, never whether it read the reply; its closing is
+    the proof. Inbound bytes are read and discarded: an unread request keeps peek succeeding
+    after the client has closed, and a client still writing one past the pipe buffer never
+    reads until it is taken. Returns how many bytes were discarded."""
+    discarded=0
+    while time.monotonic()<deadline and discarded<=MAX_BYTES:
+        available=w.DWORD()
+        if not peek(handle,None,0,None,ctypes.byref(available),None): break
+        if not available.value:
+            time.sleep(.005)
+            continue
+        buffer,count=ctypes.create_string_buffer(min(4096,available.value)),w.DWORD()
+        if not read(handle,buffer,len(buffer),ctypes.byref(count),None): break
+        discarded+=count.value
+    return discarded
+
+
 class PipeServer:
     def __init__(self,leader, *, handler=None):
         if type(leader) is not ServiceLeader or not leader.owns():
@@ -133,6 +156,7 @@ class PipeServer:
         if not self.leader.owns(): raise DeliveryError('service-ownership-unverified')
         listener=self.leader.listener
         listener.accept(timeout=timeout)
+        complete=False
         try:
             try:
                 pid=w.ULONG()
@@ -140,7 +164,8 @@ class PipeServer:
                     raise DeliveryError('private-client-unverified')
                 creation=proc_ctime(pid.value)
                 listener.verify_client(pid.value,creation)
-                message=read_frame(listener.handle,time.monotonic()+3)
+                message=read_frame(listener.handle,time.monotonic()+READ_SECONDS)
+                complete=True
                 listener.verify_client(pid.value,creation)
                 if self.handler is None: result={'error':{'code':'private-client-unverified'}}
                 else:
@@ -151,12 +176,9 @@ class PipeServer:
                 # Reset/leadership failures remain fatal outside this boundary.
                 result={'error':{'code':'private-client-unavailable'}}
             packet=encode(result)
-            write_frame(listener.handle,packet,time.monotonic()+3)
-            # Do not disconnect until the helper drains the response and closes.
-            deadline=time.monotonic()+1
-            while time.monotonic()<deadline:
-                available=w.DWORD()
-                if not peek(listener.handle,None,0,None,ctypes.byref(available),None): break
-                if available.value: raise DeliveryError('extra-private-frames')
-                time.sleep(.005)
+            write_frame(listener.handle,packet,time.monotonic()+WRITE_SECONDS)
+            # Do not disconnect until the helper drains the response and closes. A client
+            # rejected before its request was read leaves that request unread: not extra.
+            if drain(listener.handle,time.monotonic()+DRAIN_SECONDS) and complete:
+                raise DeliveryError('extra-private-frames')
         finally: listener.reset()
