@@ -967,8 +967,10 @@ def _assigned(c, words, name_re):
 
 def exporter_args(c, inv):
     """The words an exporter (EXPORTERS) may set a variable by. None when a -p before the first
-    name lists the variables named (declare -p GIT_DIR, export -p: bash then ignores every other
-    option), and none for set outside cmd: bash's set takes options and positional parameters
+    name of declare, typeset or local lists the variables named (declare -p GIT_DIR: bash then
+    ignores every other option); export -p and readonly -p list only with no name, and with one
+    still export, mark or set it (export -p GIT_DIR=x), so their words are read. None for set
+    outside cmd: bash's set takes options and positional parameters
     (set -- GIT_DIR, set GIT_DIR=x sets $1) and PowerShell's is Set-Variable, a variable of its
     own. The option words before the first name, or before --, are passed over."""
     if inv.name == 'set':
@@ -983,7 +985,7 @@ def exporter_args(c, inv):
                 opts = False
                 continue
             if len(t) > 1 and t[0] in '-+' and '=' not in t:
-                if t[0] == '-' and 'p' in t[1:]:
+                if t[0] == '-' and 'p' in t[1:] and inv.name in ('declare', 'typeset', 'local'):
                     return []
                 continue
         opts = False
