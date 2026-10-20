@@ -8,6 +8,10 @@
             --owner-approval hub:A-<n> PATH ...
       write, commit and consume the change the owner approved on the hub; PATH ... are exactly
       its files (docs/commit.md "Owner approval")
+  commit.py [-C DIR] -m SUBJECT [-b BODY | --body-file FILE] [--model NAME] [--host NAME]
+            [--owner-authored] --allow-empty
+      commit no paths, only the message and its trailers (a `Closes:` line); refused when
+      anything is staged, a merge is in progress or the branch is unborn
   commit.py [-C DIR] --owner-approval hub:A-<n> --consume COMMIT
       consume the approval for COMMIT, made already, when the consume after the commit failed
 
@@ -75,6 +79,9 @@ def parser():
                         '(no -m, no paths)')
     p.add_argument('--lander-main-checkout', action='store_true',
                    help='a lander commit in the main checkout (refused anywhere else)')
+    p.add_argument('--allow-empty', dest='allow_empty', action='store_true',
+                   help='commit no paths: only the message and its trailers (refused when '
+                        'anything is staged)')
     p.add_argument('paths', nargs='*', help='the files to commit, each named')
     return p
 
@@ -85,7 +92,7 @@ def main(argv=None):
     if a.consume is None:           # --consume's own mistakes are kitlib.commit's usage errors
         if a.subject is None:
             p.error('the following arguments are required: -m')
-        if not a.paths:
+        if not a.paths and not a.allow_empty:
             p.error('the following arguments are required: paths')
     try:
         host = registry.choose(a.host)
@@ -99,7 +106,8 @@ def main(argv=None):
                              model=a.model, owner_authored=a.owner_authored,
                              owner_approved=a.owner_approved,
                              lander_main_checkout=a.lander_main_checkout, provider=host,
-                             owner_approval=a.owner_approval, consume=a.consume))
+                             owner_approval=a.owner_approval, consume=a.consume,
+                             allow_empty=a.allow_empty))
     for line in out.lines:
         print(line, flush=True)
     return out.code
