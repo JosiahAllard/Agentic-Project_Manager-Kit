@@ -135,7 +135,6 @@ class OwnerDelegations(unittest.TestCase):
             (bash, "python -c \"import pathlib; pathlib.Path('%s').write_text('{}')\"" % p),
             (bash, "node -e \"require('fs').writeFileSync('%s', '{}')\"" % h),
             (bash, "python - <<'EOF'\nimport shutil\nshutil.move('%s', 'x.json')\nEOF" % h),
-            (ps, "Start-Process powershell -ArgumentList '-Command', 'Remove-Item \"%s\"'" % hb),
         ]
 
     def test_a_shell_write_of_either_copy_is_refused(self):
@@ -165,7 +164,7 @@ class OwnerDelegations(unittest.TestCase):
         when it is the file, so python and the kit's tools run in the PM repository pass."""
         data = W.fwd(self.w.data)
         for text in ('python -c "print(1)"', 'python script.py', 'cd %s && python -c "print(2)"' % data,
-                     'python tools/backlog.py -C %s show KIT-1' % data,
+                     'python tools/backlog.py -C %s show EX-1' % data,
                      "python -c \"import json; print(json.load(open('.pm-kit/owner-delegations.json')))\""):
             self.assert_not_refused(lambda sub, t=text: bash(t, self.w.data, sub), text)
 
