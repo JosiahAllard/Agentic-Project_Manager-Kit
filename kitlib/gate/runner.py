@@ -557,7 +557,7 @@ def gated(cfg, root, base, changed, chosen, kind, name, slug, log_dir, say, book
         return results, None
     if capped:
         store = (book_kw or {}).get('store') or Store()
-        over = budget.refusal(root, store, name, slug, budget_branch, say)
+        over = budget.refusal(root, store, name, budget_branch, say)
         if over:
             return None, G.Outcome(G.REFUSED, over, record=None,
                                    no_record='the branch gate budget')

@@ -207,10 +207,12 @@ Your own gate: run it in the foreground with `timeout` 600000 when it fits; othe
 
 `kitlib/gate/budget.py`, asked by `runner.gated` just before the session gate cap, for a branch gate only (`capped=True`, with `budget_branch` the checked-out branch). Skill builder, step 8, tells the worker the rule: after 5 gate runs on one branch, stop before the 6th, report to the coordinator and ask.
 
-- A run counted: a history line of the machine lock with `gate` true, a priority other than `land`, the gated repository (case aside) and the branch gate's slug, that ended at or after the branch was made (the first entry of its reflog, so a branch made again under an old name starts at 0). A fully reused gate books nothing and counts nothing. A landing, the daily full run and redfirst never ask. History lines written before they kept `gate` never count.
+- A run counted: a history line of the machine lock with `gate` true, a priority other than `land`, the gated repository (case aside) and the branch, that ended at or after the branch was made (the first entry of its reflog, so a branch made again under an old name starts at 0). A fully reused gate books nothing and counts nothing. A landing, the daily full run and redfirst never ask. History lines written before they kept `gate` never count.
+- The branch is the line's `branch` (case aside), which the branch gate books with, never its slug: two branches of one slug (`kit/a`, `kit-a`) each get 5, and a gate under `gate.py --slug` still counts. A null `branch` never counts. A line written before history lines kept `branch` counts by the branch's default slug (`runner.slug_of`).
 - At the limit (`budget.RUNS`, 5) a branch gate prints `REFUSED: the branch gate budget: ...` naming the counted run ids, with an `Instead:` line, and runs nothing. Below it the gate says `gate budget: run <k> of <n> on <branch>`.
 - `gate.py allow BRANCH --runs N --why TEXT` is the coordinator's: it writes `<git common dir>/kit-gate-budget/<branch stem>.json` (`branch`, `runs` the new total, `why`, `at`, `by`), replacing any earlier one. The limit is the larger of 5 and `runs`. An allowance written before the branch was last made is not read.
 - The owner is never refused. Anything the check cannot read (reflog, history, allowance) is one `WARNING: the branch gate budget is not applied: ...` and the gate runs (fail open).
+- Known limit: a new branch made at the same tip is another branch, with a budget of its own.
 
 Tests: tests/gate/test_gate_budget.py.
 
