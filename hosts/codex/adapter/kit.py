@@ -11,7 +11,7 @@ before any entry imports this) and roles.py/roles.json (content/roles is the one
   instructions(role)  the role's developer instructions on Codex (the rendered agent file's)
   native_role(name)   the kit role a native agent name (kit-<role>) stands for; ValueError for any
                       other name
-  current_role(environ)   PM_KIT_ROLE's role ('reviewer' when unset); ValueError for one no role file names
+  current_role(environ)   PM_KIT_ROLE's role ('analyst' when unset); ValueError for one no role file names
   child_environment(environ, additions, preserve_lock)
                       kitlib.sessionmark.child_environment for a Codex child
   trailer(model)      the Co-Authored-By line for `model` on Codex (an explicit model id)
@@ -26,7 +26,7 @@ from kitlib import sessionmark
 
 HOST = 'codex'
 ROLE_ENV = sessionmark.ENV
-DEFAULT_ROLE = 'reviewer'
+DEFAULT_ROLE = 'analyst'
 
 
 @dataclass(frozen=True)

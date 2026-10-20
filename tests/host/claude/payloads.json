@@ -265,13 +265,13 @@
     "cwd": "C:/r",
     "hook_event_name": "SubagentStart",
     "agent_id": "a0335183081908f5a",
-    "agent_type": "pm-kit:reviewer"
+    "agent_type": "pm-kit:analyst"
    },
    "action": {
     "kind": "subagent_start",
     "cwd": "C:/r",
     "agent": "a0335183081908f5a",
-    "agent_role": "reviewer"
+    "agent_role": "analyst"
    }
   }
  ],

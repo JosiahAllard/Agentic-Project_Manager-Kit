@@ -232,7 +232,7 @@ def handoff(task, expected_tip, reviewer_host):
     if good.get('base') != ancestor:
         raise Stopped('review', 'gate record base does not cover the prepared task scope')
     result = _run(task, 'review_pack', (task.branch, '--base', task.base),
-                  'reviewer', task.worker, reviewer_host)
+                  'analyst', task.worker, reviewer_host)
     _checkout(task)
     _claimed(task)
     if _head(task.worker) != expected_tip or _git(('status', '--porcelain'), task.worker):

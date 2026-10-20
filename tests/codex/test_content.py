@@ -72,6 +72,15 @@ class Agents(unittest.TestCase):
                     self.assertNotIn(value.encode(), data, (path, value))
 
 
+class DefaultRole(unittest.TestCase):
+    def test_an_unmarked_session_is_the_read_type(self):
+        """A Codex session with no PM_KIT_ROLE runs as the analyst, the read type (a role file the
+        kit ships), never as a retired name."""
+        from hosts.codex.adapter import kit
+        self.assertEqual(kit.current_role({}), 'analyst')
+        self.assertEqual(kit.catalog()['analyst']['sandbox'], 'read-only')
+
+
 class Banner(unittest.TestCase):
     def test_every_committed_agent_file_opens_with_the_generated_line(self):
         """Its first line names the role file and the render command (decision 19 in

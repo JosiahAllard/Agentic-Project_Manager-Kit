@@ -137,8 +137,7 @@ class ManifestTest(unittest.TestCase):
         read-only roles read, the test-runner tests, the lander lands. role_modes reads the same."""
         want = {'pm': 'controller', 'coordinator': 'controller',
                 'weak-worker': 'write', 'worker': 'write', 'senior-worker': 'write', 'strong-worker': 'write', 'deep-worker': 'write',
-                'asset-smith': 'write', 'sound-smith': 'write', 'tech-artist': 'write', 'spec-writer': 'write',
-                'records': 'write', 'reviewer': 'read', 'researcher': 'read', 'consultant': 'read',
+                'docs-writer': 'write', 'analyst': 'read', 'consultant': 'read',
                 'test-runner': 'test', 'lander': 'lander', 'helper': 'write'}
         self.assertEqual({r.name: r.mode for r in content.load(KIT_ROOT).roles}, want)
         self.assertEqual(content.role_modes(KIT_ROOT), want)

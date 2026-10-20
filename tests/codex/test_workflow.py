@@ -97,7 +97,7 @@ class Protocol(unittest.TestCase):
         request.assert_not_called()
 
     def test_wrong_bound_role_refuses_before_execution(self):
-        h = host('reviewer')
+        h = host('analyst')
         with self.assertRaisesRegex(W.Stopped, 'bound to the requested role'):
             W._run(task(), 'commit', (), 'worker', str(Path.cwd()), h)
         h.run_tool.assert_not_called()
@@ -133,7 +133,7 @@ class Protocol(unittest.TestCase):
                 W._run(task(), 'preflight', (), 'worker', str(Path.cwd()), h)
 
     def test_missing_full_hash_does_not_prepare_review(self):
-        h = host('reviewer')
+        h = host('analyst')
         with self.assertRaisesRegex(ValueError, 'full expected'):
             W.handoff(task(), 'a' * 8, h)
         h.run_tool.assert_not_called()
@@ -142,7 +142,7 @@ class Protocol(unittest.TestCase):
         with mock.patch.object(W, '_checkout'), mock.patch.object(W, '_claimed'), \
                 mock.patch.object(W, '_git', return_value=''), mock.patch.object(W, '_run') as run:
             with self.assertRaisesRegex(W.Stopped, 'do not replay'):
-                W.complete(task(), 'probe', host(), host('test-runner'), host('reviewer'))
+                W.complete(task(), 'probe', host(), host('test-runner'), host('analyst'))
             run.assert_not_called()
 
     def test_dirty_or_changed_tip_has_no_review_handoff(self):
@@ -150,7 +150,7 @@ class Protocol(unittest.TestCase):
                 mock.patch.object(W, '_head', return_value='b' * 40), \
                 mock.patch.object(W, '_run') as run:
             with self.assertRaisesRegex(W.Stopped, 'checkout changed'):
-                W.handoff(task(), 'a' * 40, host('reviewer'))
+                W.handoff(task(), 'a' * 40, host('analyst'))
             run.assert_not_called()
 
     def test_ungated_tip_is_not_review_ready(self):
@@ -160,7 +160,7 @@ class Protocol(unittest.TestCase):
                 mock.patch('kitlib.records.gate_ok.verify', return_value=(None, 'no record')), \
                 mock.patch.object(W, '_run') as run:
             with self.assertRaisesRegex(W.Stopped, 'gate proof is missing'):
-                W.handoff(task(), 'a' * 40, host('reviewer'))
+                W.handoff(task(), 'a' * 40, host('analyst'))
             run.assert_not_called()
 
     def test_tip_advancing_during_review_preparation_refuses_handoff(self):
@@ -171,7 +171,7 @@ class Protocol(unittest.TestCase):
                 mock.patch('kitlib.git.refs.merge_base', return_value=('a' * 40, None)), \
                 mock.patch.object(W, '_run', return_value={'stdout': 'pack'}):
             with self.assertRaisesRegex(W.Stopped, 'during review'):
-                W.handoff(task(), 'a' * 40, host('reviewer'))
+                W.handoff(task(), 'a' * 40, host('analyst'))
 
     def test_recovery_only_plans_read_tools(self):
         operations = W.recovery_plan(task())
@@ -192,7 +192,7 @@ class Protocol(unittest.TestCase):
                 mock.patch('kitlib.git.refs.merge_base', return_value=('b' * 40, None)), \
                 mock.patch.object(W, '_run') as run:
             with self.assertRaisesRegex(W.Stopped, 'not an ancestor'):
-                W.handoff(task(), 'a' * 40, host('reviewer'))
+                W.handoff(task(), 'a' * 40, host('analyst'))
             run.assert_not_called()
 
 
@@ -237,7 +237,7 @@ class LocalHost(BoundKitHost):
                   'model': 'gpt-6.1-sol', 'agentRole': None, 'parentThreadId': None,
                   'source': 'appServer'}
         value = {'thread': thread, 'cwd': cwd, 'runtimeWorkspaceRoots': [cwd],
-                 'model': 'gpt-6.1-sol', 'sandbox': {'type': 'readOnly' if role == 'reviewer'
+                 'model': 'gpt-6.1-sol', 'sandbox': {'type': 'readOnly' if role == 'analyst'
                   else 'workspaceWrite', 'networkAccess': False}, 'activePermissionProfile': None}
 
         def request(method, params):
@@ -309,23 +309,23 @@ class LocalAcceptance(fixtures.GateRepoCase):
         checkout.write_text('value.txt', 'after\n', root=self.task.worker)
         worker = LocalHost(self, 'worker', self.task.worker)
         tester = LocalHost(self, 'test-runner', self.task.worker)
-        reviewer = LocalHost(self, 'reviewer', self.task.worker)
-        result = W.complete(self.task, 'controlled acceptance fixture change', worker, tester, reviewer)
+        analyst = LocalHost(self, 'analyst', self.task.worker)
+        result = W.complete(self.task, 'controlled acceptance fixture change', worker, tester, analyst)
         self.assertEqual(result['stage'], 'review_requested')
         self.assertEqual(result['independent_review'], 'required')
         self.assertEqual(result['landing'], 'PM_only_disabled')
         self.assertEqual(worker.calls, ['commit'])
         self.assertEqual(tester.calls, ['gate'])
-        self.assertEqual(reviewer.calls, ['review_pack'])
+        self.assertEqual(analyst.calls, ['review_pack'])
         self.assertIn('Co-Authored-By: Codex gpt-6.1-sol <noreply@openai.com>',
                       self.repo.git('show', '-s', '--format=%B', result['tip']))
         self.assertIn('Closes: PROBE', self.repo.git('show', '-s', '--format=%B', result['tip']))
         self.assertEqual(self.repo.head(), self.main)
         self.assertTrue(any(d.get('kind') == 'engine-test' for d in self.store.history_records(1)))
-        self.assertEqual(W.handoff(self.task, result['tip'], reviewer)['tip'], result['tip'])
+        self.assertEqual(W.handoff(self.task, result['tip'], analyst)['tip'], result['tip'])
         checkout.write_text('value.txt', 'later uncommitted edit\n', root=self.task.worker)
         with self.assertRaisesRegex(W.Stopped, 'dirty'):
-            W.handoff(self.task, result['tip'], reviewer)
+            W.handoff(self.task, result['tip'], analyst)
 
     def test_prepare_cannot_replay_an_existing_checkout_or_changed_base(self):
         coordinator = LocalHost(self, 'coordinator', self.coordinator)
@@ -345,9 +345,9 @@ class LocalAcceptance(fixtures.GateRepoCase):
         narrower_base = self.repo.head(self.task.worker)
         checkout.write_text('value.txt', 'final task edit\n', root=self.task.worker)
         tester = LocalHost(self, 'test-runner', self.task.worker)
-        reviewer = LocalHost(self, 'reviewer', self.task.worker)
-        result = W.complete(self.task, 'final controlled fixture work', worker, tester, reviewer)
-        self.assertEqual(reviewer.calls, ['review_pack'])
+        analyst = LocalHost(self, 'analyst', self.task.worker)
+        result = W.complete(self.task, 'final controlled fixture work', worker, tester, analyst)
+        self.assertEqual(analyst.calls, ['review_pack'])
         from kitlib.gate import runner
         from kitlib.records import gate_ok
         from kitlib.config import load
@@ -364,8 +364,8 @@ class LocalAcceptance(fixtures.GateRepoCase):
         self.assertEqual(record['base'], narrower_base)
         self.assertNotEqual(record['base'], self.task.base)
         with self.assertRaisesRegex(W.Stopped, 'does not cover'):
-            W.handoff(self.task, result['tip'], reviewer)
-        self.assertEqual(reviewer.calls, ['review_pack'])
+            W.handoff(self.task, result['tip'], analyst)
+        self.assertEqual(analyst.calls, ['review_pack'])
 
     def test_main_and_escaping_file_plans_are_refused(self):
         for cwd, paths in ((self.repo.root, ('value.txt',)),

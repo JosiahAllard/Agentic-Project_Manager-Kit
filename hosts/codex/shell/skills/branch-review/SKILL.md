@@ -1,6 +1,6 @@
 ---
 name: branch-review
-description: Use as a coordinator before giving any branch its landing verdict. Covers the scope check, when to read the diff yourself and when to dispatch a reviewer, what to look for, sending findings back, the three verdicts, follow-up records, preventing a defect class seen twice, and CI changes that only add strictness.
+description: Use as a coordinator before giving any branch its landing verdict. Covers the scope check, when to read the diff yourself and when to dispatch a review, what to look for, sending findings back, the three verdicts, follow-up records, preventing a defect class seen twice, and CI changes that only add strictness.
 ---
 
 # Coordinator: branch review
@@ -9,7 +9,7 @@ No branch reaches the land queue without your verdict. Green proves the project 
 
 1. Gather the brief, the exact diff range, the author's gate report (the final one is `gate.py --full` on that tip) and log paths; `python <kit>/tools/review_pack.py -C <worktree> <branch>`.
 2. Scope check, yourself: `git diff --stat <merge-base>..<branch>` against the brief. A file outside scope is a finding before you read a line.
-3. Small (about 150 lines) and low or medium risk: read every hunk yourself (docs and additive content: skim). Larger or high risk: dispatch a fresh, read-only reviewer role, never the author, its tier by the "Reviewer model" rule in skill coordinator-dispatch, roster.md; give it the brief, range, gate report and logs. The verdict stays yours. Standing checks: `python <kit>/tools/doc_index.py -C <worktree> --find review`.
+3. Small (about 150 lines) and low or medium risk: read every hunk yourself (docs and additive content: skim). Larger or high risk: dispatch a fresh analyst (the read-only role) with skill `specialty-review`, never the author, its tier by the "Reviewer model" rule in skill coordinator-dispatch, roster.md; give it the brief, range, gate report and logs. The verdict stays yours. Standing checks: `python <kit>/tools/doc_index.py -C <worktree> --find review`.
 4. Look for: what the brief asked and only that; a test that fails without the change, and that it ran; new failure paths handled, not merely unreachable; a changed public interface, wire format, schema or stored data; a check weakened for green (a gate made green by deleting or loosening a test goes back); inferences marked as inferences; a commit trailer that misnames the host or model.
 5. Only a flake on the repo's known-flake list gets one rerun; any other failing run is real (the list: `python <kit>/tools/doc_index.py -C <worktree> --find flakes`).
 6. Findings go to the author by continuing that agent: numbered, file and symbol, each BLOCKING, FIX-HERE or NOTE (a NOTE is report only, never a record); it fixes and re-runs its gate; you re-review the fix only.

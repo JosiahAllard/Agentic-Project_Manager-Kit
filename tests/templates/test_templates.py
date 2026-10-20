@@ -74,7 +74,10 @@ class ProfileTemplatesTest(unittest.TestCase):
         self.assertLessEqual(set(self.COORDINATOR), self.headings("coordinator-profile.TEMPLATE.md"))
 
     def test_agent_sections_are_named_by_the_agents(self):
-        agents = "".join(p.read_text(encoding="utf-8") for p in (ROOT / "hosts" / "claude" / "shell" / "agents").glob("*.md"))
+        # the agents, and the specialty skills that carry the sections only creative work reads (Art, Audio)
+        files = list((ROOT / "hosts" / "claude" / "shell" / "agents").glob("*.md"))
+        files += list((ROOT / "content" / "skills").glob("specialty-*/SKILL.md"))
+        agents = "".join(p.read_text(encoding="utf-8") for p in files)
         for h in self.AGENT:
             if h == "Risk map":  # read by the dispatch brief (`doc_index --find risk`), not named in the agents
                 continue

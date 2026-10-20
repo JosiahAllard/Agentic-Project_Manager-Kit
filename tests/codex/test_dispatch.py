@@ -53,14 +53,14 @@ class KitAdapter(unittest.TestCase):
             with self.subTest(model=model), self.assertRaises(ValueError):
                 attribution.trailer(model)
 
-    def test_reviewer_cannot_mutate_backlog_using_a_read_verb_as_data(self):
+    def test_analyst_cannot_mutate_backlog_using_a_read_verb_as_data(self):
         for args in (["add", "ID", "--summary", "next"], ["--session", "next", "add", "ID"]):
             with self.subTest(args=args), self.assertRaises(ValueError):
-                plan("backlog", args, ROOT, role="reviewer")
+                plan("backlog", args, ROOT, role="analyst")
 
-    def test_reviewer_can_read_backlog_with_documented_globals(self):
-        result = plan("backlog", ["--session", "a", "--no-fetch", "next"], ROOT, role="reviewer")
-        self.assertEqual(result.role, "reviewer")
+    def test_analyst_can_read_backlog_with_documented_globals(self):
+        result = plan("backlog", ["--session", "a", "--no-fetch", "next"], ROOT, role="analyst")
+        self.assertEqual(result.role, "analyst")
 
     def test_owner_lock_commands_and_abbreviated_force_are_refused(self):
         for args in (["division", "--set", "x"], ["hold", "whole"], ["stop", "id", "--forc"]):
@@ -122,7 +122,7 @@ class KitAdapter(unittest.TestCase):
             plan("land", ["task", "--expect-main", "123", "--expect-tip", "2" * 40], ROOT, role="lander", review_verdict="LAND")
 
     def test_reading_landing_queue_does_not_require_landing_privilege(self):
-        self.assertEqual(plan("land", ["--queue"], ROOT, role="reviewer").role, "reviewer")
+        self.assertEqual(plan("land", ["--queue"], ROOT, role="analyst").role, "analyst")
 
     def test_expect_main_is_optional_and_full_when_given(self):
         args = ["codex/task", "--expect-tip", "2" * 40]
@@ -152,7 +152,7 @@ class KitAdapter(unittest.TestCase):
         main = str(Path(ROOT).parent)
         reads = (("land", ["-C", main, "--queue"]), ("land", ["-C" + main, "--queue"]),
                  ("gate", ["wait-result", "codex/task", "--tip", "2" * 40, "--kind", "land", "-C", main]))
-        for role in ("reviewer", "lander", "test-runner", "worker"):
+        for role in ("analyst", "lander", "test-runner", "worker"):
             for tool, args in reads:
                 with self.subTest(role=role, tool=tool, args=args):
                     planned = plan(tool, args, ROOT, role=role)
@@ -192,7 +192,7 @@ class KitAdapter(unittest.TestCase):
     def test_repo_label_exception_is_not_available_to_checkout_target_options(self):
         with self.assertRaises(ValueError):
             plan("preflight", ["--repo", "other"], ROOT, role="worker")
-        self.assertEqual(plan("ledger", ["show", "--repo", "label"], ROOT, role="reviewer").role, "reviewer")
+        self.assertEqual(plan("ledger", ["show", "--repo", "label"], ROOT, role="analyst").role, "analyst")
 
     def test_dispatch_child_environment_scrubs_parent_marks_without_mutating_them(self):
         parent = {"PATH": "keep", "PM_KIT_ROLE": "pm", "PM_KIT_SESSION_NAME": "parent",

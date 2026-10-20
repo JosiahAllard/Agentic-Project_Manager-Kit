@@ -53,7 +53,7 @@ class MarkedSessions(Base):
     """Codex's hooks carry no subagent identity, so hookmain holds a marked session as an
     unidentified agent of its mark's role (kitlib.host.hookmain): the main-checkout rule and the
     write jail hold it as they hold a subagent elsewhere. The owner's unmarked session is unchanged."""
-    ROLES = ('worker', 'senior-worker', 'reviewer', 'test-runner', 'lander', 'pm', 'coordinator')
+    ROLES = ('worker', 'senior-worker', 'analyst', 'test-runner', 'lander', 'pm', 'coordinator')
 
     def test_root_session_patch_to_main_is_denied(self):
         self.denied(self.patch(os.path.join(self.w.main, 'worker.py')), 'main-checkout')
@@ -93,7 +93,7 @@ class NoEditModes(Base):
         self.addCleanup(self.w.cleanup)
 
     def test_test_read_and_lander_roles_do_not_edit_their_checkout(self):
-        for role in ('test-runner', 'reviewer', 'lander', 'consultant'):
+        for role in ('test-runner', 'analyst', 'lander', 'consultant'):
             with self.subTest(role=role):
                 self.denied(self.event('Write', {'file_path': os.path.join(self.w.wt, 'a.py'), 'content': 'x'}),
                             'host-role-edit', role=role)
@@ -200,14 +200,14 @@ class Patches(Base):
         self.denied(self.event('apply_patch', {'command': patch}), 'write-jail', role='coordinator')
 
     def test_read_test_and_lander_roles_do_not_patch_their_checkout(self):
-        for role in ('reviewer', 'test-runner', 'lander'):
+        for role in ('analyst', 'test-runner', 'lander'):
             with self.subTest(role=role):
                 self.denied(self.patch('worker.py'), 'host-role-edit', role=role)
 
     def test_host_configuration_is_read_only_to_a_reader(self):
         for path in ('AGENTS.md', '.codex/config.toml', '.codex/agents/worker.toml'):
             with self.subTest(path=path):
-                self.assertEqual(self.judge(self.patch(path), role='reviewer').verdict, 'deny')
+                self.assertEqual(self.judge(self.patch(path), role='analyst').verdict, 'deny')
 
     def test_a_malformed_patch_fails_closed(self):
         with self.assertRaises(ValueError):
