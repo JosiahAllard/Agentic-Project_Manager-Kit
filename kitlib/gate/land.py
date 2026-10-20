@@ -399,13 +399,6 @@ def light_rule():
                      for m, ts in sorted(by_model.items()))
 
 
-def _who(text):
-    """`text` (the reviewer's agent type) as the types it names, casefolded: each part split on
-    '/', ',' or ';', stripped, a `plugin:` prefix dropped."""
-    return set(p.strip().rpartition(':')[2].strip().casefold()
-               for p in re.split(r'[/,;]', text)) - {''}
-
-
 def _word_in(word, text):
     """True when `word` appears in `text` as a word of its own: no letter, digit, '_' or '-' on
     either side, so `worker` is not found in `strong-worker` nor `strong-worker` in
@@ -414,16 +407,17 @@ def _word_in(word, text):
 
 
 def is_author(entry):
-    """True when the verdict entry's reviewer may be the branch's author: its reviewer_id, or an
-    agent type its reviewer names (`plugin:` prefix dropped), appears anywhere in `author` as a
-    word of its own (_word_in), whatever separates it from the rest: `Kit Test / strong-worker`,
+    """True when the verdict entry's reviewer may be the branch's author: an id its reviewer_id
+    lists (split on '/', ',', ';' or white space), or an agent type its reviewer names
+    (verdicts.reviewer_types), appears anywhere in `author` as a word of its own (_word_in),
+    casefolded, whatever separates it from the rest: `Kit Test / strong-worker`,
     `Kit Test (agent) (pm-kit:strong-worker)`, `x | strong-worker` and `x strong-worker` all name
-    strong-worker; `x / strong-worker` does not name worker. Pure."""
+    strong-worker; `x / strong-worker` does not name worker. A reviewer naming no type is refused
+    earlier, by verdicts.check. Pure."""
     author = entry['author'].casefold()
-    rid = entry['reviewer_id'].strip().casefold()
-    if rid and _word_in(rid, author):
-        return True
-    return any(_word_in(t, author) for t in _who(entry['reviewer']))
+    ids = re.split(r'[/,;\s]+', entry['reviewer_id'].casefold())
+    words = [w for w in ids if w] + sorted(verdicts.reviewer_types(entry['reviewer']))
+    return any(_word_in(w, author) for w in words)
 
 
 class _Held(object):
