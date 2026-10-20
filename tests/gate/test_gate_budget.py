@@ -18,11 +18,13 @@ from kitlib import gate as G
 import kitlib.config as kconfig
 from kitlib.gate import budget, runner
 from kitlib.gate import steps as S
+from kitlib.lock import run as lockrun
 from kitlib.lock import store as lockstore
 from tests.gate import fixtures, test_land
 
 BRANCH = 'kit/feature'
 SLUG = runner.slug_of(BRANCH)
+OTHER = 'kit-feature'                   # another branch, of the same slug
 AGENT = {'role': 'agent', 'host': [912345, 77], 'ancestors': [[912345, 77]], 'session': 'S1',
          'name': 't'}
 OWNER = {'role': 'owner', 'host': None, 'ancestors': [], 'session': 'S1', 'name': 't'}
@@ -62,12 +64,13 @@ class BudgetCase(fixtures.GateRepoCase):
         self.addCleanup(patcher.stop)
 
     def line(self, ago_s=0, **fields):
-        """One history line, ended ago_s seconds ago: by default a branch gate run of BRANCH."""
+        """One history line, ended ago_s seconds ago: by default a branch gate run of BRANCH. A
+        field given as None is left out of the run, so its line keeps it as null."""
         self.n += 1
         end = lockstore.utc_now() - datetime.timedelta(seconds=ago_s)
         rec = {'id': 'r-20261020T120000Z-%06x' % self.n, 'repo': self.name, 'slug': SLUG,
                'kind': 'engine-test', 'since': lockstore.iso(end), 'held_since': lockstore.iso(end),
-               'ended': lockstore.iso(end), 'gate': True}
+               'ended': lockstore.iso(end), 'gate': True, 'branch': BRANCH}
         rec.update(fields)
         rec = {k: v for k, v in rec.items() if v is not None}
         self.store.history_append(rec)
@@ -75,6 +78,16 @@ class BudgetCase(fixtures.GateRepoCase):
 
     def lines(self, n, **fields):
         return [self.line(**fields) for _ in range(n)]
+
+    def old_line(self, **fields):
+        """A history line as the store wrote it before its lines kept `branch`: no such key."""
+        keys = tuple(k for k in lockstore.Store.HISTORY_KEYS if k != 'branch')
+        with mock.patch.object(lockstore.Store, 'HISTORY_KEYS', keys):
+            rid = self.line(**fields)
+        got = [d for d in self.store.history_records() if d.get('id') == rid]
+        self.assertEqual(len(got), 1)
+        self.assertNotIn('branch', got[0])
+        return rid
 
     def gate(self, full=True):
         said = []
@@ -92,14 +105,52 @@ class Counting(BudgetCase):
         self.assertIsNotNone(after)
         mine = self.lines(2)
         mine.append(self.line(repo=self.name.upper()))     # the same repo, in other case
+        mine.append(self.line(branch=BRANCH.upper()))      # the same branch, in other case
+        mine.append(self.line(slug='kit-other'))           # this branch, under gate.py --slug
+        mine.append(self.old_line())                       # before lines kept `branch`: by slug
+        self.old_line(slug='kit-other')                     # ... another slug
         self.line(priority='land')                          # a landing of the branch
-        self.line(slug='kit-other')                         # another branch
+        self.line(slug='kit-other', branch='kit/other')     # another branch
+        self.line(branch=OTHER)                             # another branch with the same slug
+        self.line(branch=None)                              # a run booked with no branch
         self.line(repo='another-repo')                      # another repository
         self.line(gate=None)                                # a line written before `gate` was kept
         self.line(gate=None, kind='heavy')                  # not a gate run
         self.line(ago_s=3600)                               # before the branch was made
-        got = [d['id'] for d in budget.runs(self.store, self.name, SLUG, after)]
+        got = [d['id'] for d in budget.runs(self.store, self.name, BRANCH, after)]
         self.assertEqual(sorted(got), sorted(mine))
+
+
+class ByBranch(BudgetCase):
+    """The budget is the branch's, not its slug's: two branches that share a slug each get one,
+    and a gate booked under another slug (gate.py --slug) still counts."""
+    def test_two_branches_with_one_slug_have_a_budget_each(self):
+        self.assertEqual(runner.slug_of(OTHER), SLUG)
+        self.lines(budget.RUNS, branch=OTHER)
+        out, said = self.gate()
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertIn('gate budget: run 1 of %d on %s' % (budget.RUNS, BRANCH), said)
+
+    def test_runs_under_another_slug_still_count(self):
+        self.lines(budget.RUNS, slug='kit-other')
+        out, _ = self.gate()
+        self.assertEqual(out.code, G.REFUSED, out.lines)
+
+    def test_lines_from_before_the_branch_was_kept_count_by_slug(self):
+        for _ in range(budget.RUNS):
+            self.old_line()
+        out, _ = self.gate()
+        self.assertEqual(out.code, G.REFUSED, out.lines)
+
+    def test_the_gate_s_own_line_names_its_branch(self):
+        """Booked by the real kitlib.lock.run.book, not the tests' compat_book, which drops a
+        keyword the real one does not take: the branch reaches the history line through it."""
+        with mock.patch.object(lockrun, 'book', fixtures.REAL_BOOK):
+            out, _ = self.gate()
+        self.assertEqual(out.code, G.OK, out.lines)
+        got = self.store.history_records()
+        self.assertEqual(len(got), 1, got)
+        self.assertEqual((got[0].get('gate'), got[0].get('branch')), (True, BRANCH))
 
 
 class Refused(BudgetCase):
@@ -126,7 +177,7 @@ class Refused(BudgetCase):
         out, said = self.gate()
         self.assertEqual(out.code, G.OK, out.lines)
         self.assertIn('gate budget: run %d of %d on %s' % (budget.RUNS, budget.RUNS, BRANCH), said)
-        self.assertEqual(len(budget.runs(self.store, self.name, SLUG)), budget.RUNS)
+        self.assertEqual(len(budget.runs(self.store, self.name, BRANCH)), budget.RUNS)
         out, _ = self.gate()
         self.assertEqual(out.code, G.REFUSED, out.lines)
 
@@ -237,7 +288,8 @@ class LandingNeverAsks(test_land.LandCase):
             end = lockstore.iso(lockstore.utc_now())
             self.store.history_append({
                 'id': 'r-20261020T120000Z-%06x' % i, 'repo': name, 'slug': SLUG,
-                'kind': 'engine-test', 'since': end, 'held_since': end, 'ended': end, 'gate': True})
+                'kind': 'engine-test', 'since': end, 'held_since': end, 'ended': end, 'gate': True,
+                'branch': BRANCH})
         with mock.patch.object(budget, 'actor', return_value=AGENT):
             out = runner.branch_gate(wt, full=True, book_kw=self.book_kw, log_dir=self.logs)
             self.assertEqual(out.code, G.REFUSED, out.lines)     # the five count: the control

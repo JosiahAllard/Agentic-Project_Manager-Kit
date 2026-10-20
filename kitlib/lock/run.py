@@ -1311,7 +1311,7 @@ def check_resource(resource):
 def book(kind, repo, slug, cores=None, hold=None, gpu_share=None, wait_s=None, no_wait=False,
          expect_s=None, note=None, on_release_cmd=None, cmd=None, store=None, kinds_table=None,
          env=None, rid=None, detached=False, log=None, gate=False, resource=None, priority=None,
-         within=None, tree=None):
+         within=None, tree=None, branch=None):
     """Waits for a run of kind `kind` for repo/slug to hold its slots and returns its Slot.
     Raises LockError (the CLI's exit code) when it does not. cores: fewer cpu slots than the
     kind's size, 1..that size, never more; the kind's size is its whole number of cores
@@ -1334,7 +1334,9 @@ def book(kind, repo, slug, cores=None, hold=None, gpu_share=None, wait_s=None, n
     free. The record carries `within` (the list) and `within_slots`; its queue entry `within`.
     tree: the git tree hash the run tests (a gate's: kitlib.gate.runner.gated), recorded as `tree`
     and kept in its history line, so a gate's run is matched to the exact tree it tested;
-    Slot.note_tree records it on a run already held."""
+    Slot.note_tree records it on a run already held. branch: the git branch the run is for (a
+    branch gate's, which kitlib.gate.budget counts its runs by), recorded as `branch` and kept in
+    its history line."""
     store = store or Store()
     env = dict(os.environ if env is None else env)
     try:
@@ -1422,6 +1424,7 @@ def book(kind, repo, slug, cores=None, hold=None, gpu_share=None, wait_s=None, n
                        parent=parent["id"] if parent else None, gpu_share=gpu_share,
                        **({"gate": True} if gate else {}),
                        **({"tree": tree} if tree else {}),
+                       **({"branch": branch} if branch else {}),
                        **({"resource": resource} if resource else {}),
                        **({"priority": priority} if priority else {}),
                        **({"within": wtext, "within_slots": {"cpu": wslots}} if wtext else {}))

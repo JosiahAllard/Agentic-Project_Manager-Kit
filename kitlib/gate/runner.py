@@ -518,7 +518,8 @@ def gated(cfg, root, base, changed, chosen, kind, name, slug, log_dir, say, book
     in the store it books in); a landing and the daily full run leave it False and never wait.
     `budget_branch`: with `capped`, the branch whose gate budget (kitlib.gate.budget) is asked
     first, before the cap is waited for or anything is booked: `(None, REFUSED Outcome)` when it
-    is spent. None: not asked (a detached HEAD)."""
+    is spent. None: not asked (a detached HEAD). The run is booked with it as book's `branch`,
+    which its history line keeps, so the budget counts the run by its branch, not its slug."""
     checks, options = {}, {}
     if any(s.check for s in chosen):
         try:
@@ -557,13 +558,14 @@ def gated(cfg, root, base, changed, chosen, kind, name, slug, log_dir, say, book
         return results, None
     if capped:
         store = (book_kw or {}).get('store') or Store()
-        over = budget.refusal(root, store, name, slug, budget_branch, say)
+        over = budget.refusal(root, store, name, budget_branch, say)
         if over:
             return None, G.Outcome(G.REFUSED, over, record=None,
                                    no_record='the branch gate budget')
         gatecap.wait_turn(store, name, say)
     try:
-        slot = lockrun.book(kind, name, slug, **dict(book_kw or {}, gate=True, tree=tree))
+        mine = {'branch': budget_branch} if capped and budget_branch else {}
+        slot = lockrun.book(kind, name, slug, **dict(book_kw or {}, gate=True, tree=tree, **mine))
     except LockError as e:
         return None, lock_refusal(e)
     with slot:

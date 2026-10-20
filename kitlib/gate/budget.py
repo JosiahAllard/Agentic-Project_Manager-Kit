@@ -4,10 +4,14 @@ before booking one more, a branch gate is REFUSED until the branch's coordinator
 
 A run counted is a history line of the machine lock (kitlib.lock.store history_records) with
 `gate` true, a priority other than "land" (a landing books the branch's slug too), the gated
-repository (case aside) and the branch gate's slug, that ended at or after the branch was made:
+repository (case aside) and the branch (`of_branch`), that ended at or after the branch was made:
 the first entry of its reflog (`since`), so a branch made again under an old name starts at 0;
 a branch with no reflog file (git's reftable format, or the tests' fake git) has no such bound.
-History lines written before they kept `gate` have none and never count. A fully reused gate
+The branch is the line's `branch` (case aside: on Windows `Kit/A` and `kit/A` are one loose ref),
+never its slug, which two branches can share and `gate.py --slug` sets; a null `branch` (a run
+booked with none) never counts. A line with no `branch` key, written before history lines kept
+it, counts by the branch's default slug (runner.slug_of), as every line did before. History
+lines written before they kept `gate` have none and never count. A fully reused gate
 books nothing and is never counted or refused (kitlib.gate.runner `gated` asks, for a branch
 gate only, just before it waits for the gate cap and books); a landing, the daily full run and
 redfirst never ask.
@@ -61,13 +65,22 @@ def since(root, branch):
     return datetime.datetime.fromtimestamp(int(m.group(1)), datetime.timezone.utc)
 
 
-def runs(store, repo_name, slug, after=None):
-    """The counted history lines (above) of repo_name and slug that ended at or after `after`
+def runs(store, repo_name, branch, after=None):
+    """The counted history lines (above) of repo_name and branch that ended at or after `after`
     (None: the history the store keeps), oldest first."""
     want = str(repo_name).lower()
     return [d for d in store.history_records(since=after)
             if d.get('gate') is True and d.get('priority') != 'land'
-            and str(d.get('repo') or '').lower() == want and d.get('slug') == slug]
+            and str(d.get('repo') or '').lower() == want and of_branch(d, branch)]
+
+
+def of_branch(d, branch):
+    """Whether history line d is a run of `branch` (above): its `branch`, case aside; a line
+    with no `branch` key, by its slug."""
+    if 'branch' not in d:
+        return d.get('slug') == slug_of(branch)
+    got = d['branch']
+    return isinstance(got, str) and got.lower() == branch.lower()
 
 
 def allow_path(root, branch):
@@ -109,7 +122,7 @@ def is_owner(who):
     return isinstance(who, dict) and who.get('role') == 'owner'
 
 
-def refusal(root, store, repo_name, slug, branch, say, who=None):
+def refusal(root, store, repo_name, branch, say, who=None):
     """None to book, or the REFUSED lines. Says `gate budget: run <k+1> of <n> on <branch>` when
     it books. None for a detached HEAD (no branch), and for the owner (the caller, read only once
     the runs reach the limit); None after one WARNING when an input cannot be read."""
@@ -117,7 +130,7 @@ def refusal(root, store, repo_name, slug, branch, say, who=None):
         return None
     try:
         after = since(root, branch)
-        done = runs(store, repo_name, slug, after)
+        done = runs(store, repo_name, branch, after)
         n = limit(allowance(root, branch, after))
     except (BudgetError, OSError, ValueError) as e:
         say('WARNING: the branch gate budget is not applied: %s' % e)
@@ -151,7 +164,7 @@ def allow(root, branch, total, why, store, who=None):
     if not sha:
         raise BudgetError('%s is not a branch of %s' % (branch, root))
     after = since(root, branch)
-    used = len(runs(store, repo_name_of(root), slug_of(branch), after))
+    used = len(runs(store, repo_name_of(root), branch, after))
     path = allow_path(root, branch)
     rec = {'branch': branch, 'runs': total, 'why': why.strip(), 'at': lockstore.iso(),
            'by': {'role': who.get('role'), 'session': who.get('session')}}
