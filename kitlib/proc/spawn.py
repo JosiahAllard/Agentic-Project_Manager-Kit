@@ -19,7 +19,11 @@ start in the kit to that.
 since pythonw has no console, PROGRAM starts with a hidden one, which everything it starts in turn
 inherits. PROGRAM is not put in a job (kitlib.proc.job allows no breakaway, so a job here would
 hold every window `launch.py after-reboot` opens until the carrier ends). `exit_code` is how the
-carrier ends with PROGRAM's own code, a crash's included. Nothing here prints.
+carrier ends with PROGRAM's own code, a crash's included. PROGRAM's TEMP and TMP are the agents'
+temp folder AGENT_TEMP when there is one (`agent_temp_env`): a scheduled task and a detached start
+(kitlib.lock.detach, kitlib.gate.submit) inherit the user environment's TEMP, on the system drive,
+while everything agents produce goes in AGENT_TEMP (docs/daily-full.md "The schedule"; a launched
+session's window does the same, kitlib.launcher.window). Nothing here prints.
 """
 import os
 import subprocess
@@ -79,18 +83,48 @@ def exit_code(code):
     return code - 0x100000000 if code > 0x7FFFFFFF else code
 
 
+AGENT_TEMP = 'AGENT_TEMP'
+TEMP_NAMES = ('TEMP', 'TMP')
+
+
+def agent_temp_env(environ=None, makedirs=os.makedirs):
+    """A new environment: `environ` (default os.environ) with TEMP and TMP set to its AGENT_TEMP,
+    that folder made when missing. None, meaning "keep the environment as it is", when AGENT_TEMP
+    is unset, empty or not an absolute path with a drive or share, or the folder cannot be made or
+    is not a folder. `environ` itself is never changed, and nothing here raises."""
+    try:
+        source = os.environ if environ is None else environ
+        folder = source.get(AGENT_TEMP)
+        if not isinstance(folder, str) or not folder.strip():
+            return None
+        folder = folder.strip()
+        if not os.path.isabs(folder) or not os.path.splitdrive(folder)[0]:
+            return None
+        makedirs(folder, exist_ok=True)
+        if not os.path.isdir(folder):
+            return None
+        env = dict(source)
+        for name in TEMP_NAMES:
+            env[name] = folder
+        return env
+    except Exception:       # noqa: BLE001 - the carried program then gets the environment as is
+        return None
+
+
 def carry(argv):
     """Start argv[0] with argv[1:], wait for it, and give its exit code as exit_code has it, for
     sys.exit. A first word `python` or `python.exe` (any case) is the console python beside this
-    interpreter, so a task line needs no second path; any other program is started as named.
-    EXIT_USAGE with nothing started for an empty argv, EXIT_NO_START when the program cannot be
-    started."""
+    interpreter, so a task line needs no second path; any other program is started as named. The
+    program's TEMP and TMP are AGENT_TEMP when agent_temp_env gives an environment; else it gets
+    this one unchanged. EXIT_USAGE with nothing started for an empty argv, EXIT_NO_START when the
+    program cannot be started."""
     argv = list(argv)
     if not argv:
         return EXIT_USAGE
     if argv[0].lower() in PYTHON_WORDS:
         argv[0] = console_python() or argv[0]
+    env = agent_temp_env()
     try:
-        return exit_code(call(argv))
+        return exit_code(call(argv) if env is None else call(argv, env=env))
     except OSError:
         return EXIT_NO_START
