@@ -256,6 +256,17 @@ class Check(unittest.TestCase):
             with self.subTest(cmd=cmd):
                 self.passes(commands=[cmd])
 
+    def test_a_raw_git_delete_is_refused_naming_abandon_as_the_route(self):
+        """KIT-UNLANDED-WORKTREE-REMOVE-LOOP: no carve-out; the refusal names the route."""
+        for cmd in ('git worktree remove "Z:/r/.claude/worktrees/x"', 'git branch -D api/x',
+                    'git update-ref -d refs/heads/x'):
+            with self.subTest(cmd=cmd):
+                why = self.refused('commands', commands=[cmd])
+                self.assertIn('coordinator work', why)
+                self.assertIn('worktree_remove.py <slug> --abandon "<why>"', why)
+                self.assertIn("on the owner's or the PM's ruling", why)
+        self.assertNotIn('--abandon', self.refused('commands', commands=['git push -f origin x']))
+
     def test_generated_edit_code_and_edit_text_are_not_judged(self):
         # an edit may well write the word notepad, or prose, into a file
         self.passes(steps=[edit(old='use notepad', new='open it and apply the change'),

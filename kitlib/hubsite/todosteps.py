@@ -70,16 +70,23 @@ _PROSE_RES = (
 )
 _SEGMENT_RE = re.compile(r'&&|\|\||[;|\n]')
 _GIT = r'(?i)(?<![\w-])git(?:\.exe)?\b.*?\s'
+# the route a removal of unlanded work takes instead (docs/worktree-remove.md "--abandon")
+_ABANDON_ROUTE = ('; unlanded work leaves by worktree_remove.py <slug> --abandon "<why>" (or '
+                  '<branch> --branch --abandon "<why>"), which keeps its commits under an '
+                  'archive/ tag and which the coordinator runs on the owner\'s or the PM\'s ruling')
 _COORDINATOR_RES = (
-    ('git worktree add/remove', re.compile(_GIT + r'worktree\s+(?:add|remove|move|prune)\b')),
+    ('git worktree add/remove', re.compile(_GIT + r'worktree\s+(?:add|remove|move|prune)\b'),
+     _ABANDON_ROUTE),
     ('a kit landing, gate or worktree tool',
-     re.compile(r'(?i)(?<![\w-])(?:gate|land|new_worktree|worktree_remove|sync_base)\.py\b')),
+     re.compile(r'(?i)(?<![\w-])(?:gate|land|new_worktree|worktree_remove|sync_base)\.py\b'), ''),
     ('a branch or tag delete',
-     re.compile(_GIT + r'(?:branch|tag)\b.*?\s(?:-[A-Za-z]*[dD][A-Za-z]*|--delete)(?![\w-])')),
-    ('a ref delete', re.compile(_GIT + r'update-ref\b.*?\s(?:-d|--stdin)(?![\w-])')),
+     re.compile(_GIT + r'(?:branch|tag)\b.*?\s(?:-[A-Za-z]*[dD][A-Za-z]*|--delete)(?![\w-])'),
+     _ABANDON_ROUTE),
+    ('a ref delete', re.compile(_GIT + r'update-ref\b.*?\s(?:-d|--stdin)(?![\w-])'),
+     _ABANDON_ROUTE),
     ('a remote ref delete or forced push',
      re.compile(_GIT + r'push\b.*?\s(?:--delete|-d|--force(?:-with-lease|-if-includes)?(?:=\S*)?|'
-                       r'-[A-Za-z]*f[A-Za-z]*|--mirror|--prune|:\S+|\+\S+)(?![\w-])')),
+                       r'-[A-Za-z]*f[A-Za-z]*|--mirror|--prune|:\S+|\+\S+)(?![\w-])'), ''),
 )
 
 
@@ -308,7 +315,7 @@ def check(fields):
                           'change as an {edit: <file>, old, new} step' % where, field)
         if is_command:
             for segment in _SEGMENT_RE.split(text):
-                for what, r in _COORDINATOR_RES:
+                for what, r, route in _COORDINATOR_RES:
                     if r.search(segment):
                         raise Refused('%s is coordinator work (%s): a coordinator does it, not '
-                                      'the owner' % (where, what), field)
+                                      'the owner%s' % (where, what, route), field)
