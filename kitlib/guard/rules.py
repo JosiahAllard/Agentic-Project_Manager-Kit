@@ -2902,7 +2902,9 @@ def _write_from(event, ctx, cmd, inv, cwd, role, w, base, net, into, searched):
             d = unplaced(d, role)
         if d:
             return d, searched
-    if computed:
+    # A computed PowerShell target, or a path read from a directory the guard cannot tell (after a
+    # `cd $x`): for a role main_checkout lets through, the jail cannot judge it either.
+    if computed or (target is None and runs_in is None):
         d = ps_drive_jail(event, ctx, cwd, role, what, why, rewrite)
         if d:
             return d, searched
@@ -2979,6 +2981,7 @@ def find_exec_writes(event, ctx, cmd, cwd, role):
 
 def ps_drive_jail(event, ctx, cwd, role, what, why, rewrite):
     """An agent session's PowerShell write to a computed target ($p, a ( ) expression: _write_from),
+    or any shell's write of a path read from a directory the guard cannot tell (after `cd $x`),
     by a role main_checkout lets through (it may edit a main checkout): the jail cannot judge a
     place it cannot tell, so it refuses, as git_jail_unknown does for git."""
     if not agent_session(event, ctx):
