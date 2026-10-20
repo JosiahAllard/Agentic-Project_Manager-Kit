@@ -6,12 +6,12 @@ from pathlib import Path
 from tests.shipped import scan
 
 AGENTS = Path(__file__).resolve().parents[2] / "hosts" / "claude" / "shell" / "agents"
-EXPECTED = {"pm", "coordinator", "weak-worker", "worker", "senior-worker", "strong-worker", "deep-worker", "consultant", "reviewer",
-            "lander", "records", "researcher", "spec-writer", "test-runner", "asset-smith",
-            "sound-smith", "tech-artist", "helper"}
+EXPECTED = {"pm", "coordinator", "weak-worker", "worker", "senior-worker", "strong-worker", "deep-worker", "consultant",
+            "analyst", "lander", "docs-writer", "test-runner", "helper"}
+# the seven role files the specialty skills replaced (docs/specialty-skills.md): no host ships them
+RETIRED = ("asset-smith", "tech-artist", "sound-smith", "researcher", "reviewer", "records", "spec-writer")
 BULK_RULE = "Bulk work to the helper"
-BULK_PARENTS = ("worker", "strong-worker", "senior-worker", "deep-worker", "tech-artist", "asset-smith",
-                "sound-smith")
+BULK_PARENTS = ("worker", "strong-worker", "senior-worker", "deep-worker", "docs-writer")
 BASE_FORBIDDEN = [(re.compile(r"\bR-\d+"), "ruling id"),
                   (re.compile(r"[A-Za-z]:[\/]+Users[\/]", re.I), "Windows user path")]
 
@@ -162,6 +162,41 @@ class AgentFilesTest(unittest.TestCase):
 
     def test_set_is_complete(self):
         self.assertEqual({p.stem for p in AGENTS.glob("*.md")}, EXPECTED)
+
+    def test_the_two_types_load_skills_and_the_read_type_cannot_write(self):
+        """The analyst (read) and the docs-writer (docs) take their procedure from a specialty
+        skill, so both can load one; the analyst has no file-writing tool. No host ships a file
+        for a retired role name."""
+        tools = {}
+        for name in ("analyst", "docs-writer"):
+            path = AGENTS / (name + ".md")
+            self.assertTrue(path.exists(), name)
+            tools[name] = [t.strip() for t in frontmatter(path.read_text(encoding="utf-8")).get("tools", "").split(",")]
+        self.assertIn("Skill", tools["analyst"])
+        self.assertNotIn("Write", tools["analyst"])
+        self.assertNotIn("Edit", tools["analyst"])
+        self.assertIn("Skill", tools["docs-writer"])
+        codex = AGENTS.parents[2] / "codex" / "shell" / "agents"
+        self.assertTrue(codex.is_dir())
+        for name in RETIRED:
+            with self.subTest(role=name):
+                self.assertFalse((AGENTS / (name + ".md")).exists())
+                self.assertFalse((codex / ("kit-%s.toml" % name)).exists())
+
+    def test_every_specialty_skill_dispatches_to_a_role(self):
+        """A specialty skill's `Dispatch:` line opens with the role the coordinator sends it to;
+        that role has a file, and the line names no retired role."""
+        root = AGENTS.parents[3]
+        roles = {p.stem for p in (root / "content" / "roles").glob("*.md")}
+        skills = sorted((root / "content" / "skills").glob("specialty-*/SKILL.md"))
+        self.assertTrue(skills)
+        for p in skills:
+            with self.subTest(skill=p.parent.name):
+                lines = [ln for ln in p.read_text(encoding="utf-8").splitlines() if ln.startswith("Dispatch: ")]
+                self.assertEqual(len(lines), 1)
+                self.assertIn(re.match(r"Dispatch: ([\w-]+)", lines[0]).group(1), roles)
+                for name in RETIRED:
+                    self.assertIsNone(re.search(r"(?<![\w-])%s(?![\w-])" % name, lines[0]), name)
 
     def test_helper_is_light_and_has_no_shell(self):
         """The helper runs on the light tier's model with read and edit tools only: no shell, so it

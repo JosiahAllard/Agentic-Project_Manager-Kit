@@ -195,7 +195,6 @@ class ReviewerRuleTest(unittest.TestCase):
     def test_rule_names_only_what_the_code_prints_and_defines(self):
         rule = self.rule()
         roles = {r.name: r for r in content.load_roles(KIT_ROOT)}
-        self.assertEqual(roles['reviewer'].tier, 'light')
         self.assertIn('light tier', rule)
 
         def named(text):        # whole words: 'worker' must not match inside 'strong-worker'
@@ -218,6 +217,16 @@ class ReviewerRuleTest(unittest.TestCase):
             self.assertIn(roles[name].tier, ('strong', 'deep'), name)
         for name in self.LIGHT_BUILDERS:
             self.assertIn(roles[name].tier, ('light', 'standard'), name)
+
+    def test_rule_names_the_read_type_at_its_pinned_tier(self):
+        """The rule raises the analyst (the read type a review goes to) from the tier its role file
+        pins: the rule says `light tier` and the file pins light."""
+        rule = self.rule()
+        roles = {r.name: r for r in content.load_roles(KIT_ROOT)}
+        self.assertIn('analyst', roles)
+        self.assertRegex(rule, r'(?<![\w-])analyst(?![\w-])')
+        self.assertEqual(roles['analyst'].tier, 'light')
+        self.assertIn('%s tier' % roles['analyst'].tier, rule)
 
     def test_agent_definitions_are_a_strict_landing_path(self):
         from kitlib.gate import strict_defaults
