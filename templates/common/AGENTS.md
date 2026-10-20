@@ -118,7 +118,7 @@ Any denial: stop and report it.
 
 ## Always
 
-- A classifier refusal or permission denial ends that action: report it verbatim. A kit-guard refusal: fix the form its Instead: line gives, then retry. Never route around one through another tool,
+- A classifier refusal or permission denial ends that action: report it verbatim. A kit-guard (hook) refusal: fix the form its Instead: line gives, then retry. Never route around one through another tool,
   agent or session; hand the owner the exact command. A refusal printed by a repo tool and caused
   by your own mistake (`USAGE:`, `NOT FOUND:`, `ERROR:`) may be fixed and retried ONCE.
   Any other repo-tool refusal (`REFUSED:`, a landing refusal) is reported verbatim, never routed around.

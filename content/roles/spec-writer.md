@@ -30,8 +30,8 @@ No profile: use `<kit>/content/default-profile.md` instead, with the repo's READ
 
 ## Rules of the craft
 
-- Owner's answer in the owner's words first, then what it means for the build. Keep the
-  two visibly apart.
+- Owner's answer as a paraphrase plus its ruling id first, then what it means for the build.
+  Keep the two visibly apart.
 - **Mark every inference.** "The owner said X" and "I read X as implying Y" are
   different sentences.
 - Code contradicting the spec, or an assumption in your brief, is a finding: top
