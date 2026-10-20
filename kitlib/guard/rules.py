@@ -22,9 +22,9 @@ Rules, in the order they are checked:
                    whole|half|slots, division --set, game on|off|set, top, stop/unbook --force);
                    machine setup with --apply (its PowerShell front ends with -Apply), which
                    writes the owner's email; in any session but the owner's own
-  hub-secrets      a shell command whose literal words name the hub's token folder or a token file
-                   (owner.token, agent.token, approval.key) or a literal path into the token folder
-                   (a computed word, a wildcard, the word hub and the store are not read), or python
+  hub-secrets      a shell command with a literal path into the hub's token folder (a bare token
+                   file's name, a hub-like name elsewhere, a computed word, a wildcard, the word hub
+                   and the store are not refused), or python
                    or node code that names a token file or the folder (kitlib.guard.hub.INLINE_RE);
                    an edit of a file in the token folder or the store; a read tool's
                    read of the token folder or a file in it, or a Grep that can read one (Glob
@@ -699,15 +699,6 @@ def hub_secret_names(secret):
     return found
 
 
-def hub_name(text):
-    """The hub secret a word names by itself, or None: the token folder (`.pm-kit/hub`) or a
-    token file's name as its last part."""
-    if hubg.FOLDER_RE.search(text):
-        return '.pm-kit/hub'
-    base = re.split(r'[\\/]', text)[-1].strip().lower()
-    return base if base in hubg.SECRET_FILES else None
-
-
 def hub_path_texts(text):
     """The texts of one word that may be paths: the word, and the value of `--opt=value` or
     PowerShell's `-Opt:value`; an option alone is none."""
@@ -717,6 +708,15 @@ def hub_path_texts(text):
         if sep in text:
             return [text.split(sep, 1)[1]]
     return []
+
+
+def glob_folder(text):
+    """The literal folder a wildcard path `text` starts with (everything before the separator
+    ahead of its first wildcard character), or None when it has none: `<token folder>/o*` is in
+    the token folder whatever the wildcard matches."""
+    first = min(text.index(c) for c in hubg.GLOB_CHARS if c in text)
+    cut = max(text.rfind('/', 0, first), text.rfind('\\', 0, first))
+    return text[:cut] if cut > 0 else None
 
 
 def inline_code(cmd, inv):
@@ -759,27 +759,23 @@ def inline_code(cmd, inv):
 
 
 def hub_secret_shell(ctx, cmd, inv, places):
-    """What the command `cmd` names of the hub's secrets, as text, or None: a literal word
-    naming the token folder or a token file (hub_name; a search's or git's words are its patterns
-    and messages, so they do not count), a literal path in the token folder, and python or node
-    code that names a token file or the folder (kitlib.guard.hub.INLINE_RE). A word the shell
-    computes (a variable, a substitution) is not name-read, nor is a wildcard path, the store or
-    the word hub (the guard blocks only what it can place; an edit tool's write into the store is
-    still hub_secret_edit's).
+    """What the command `cmd` names of the hub's secrets, as text, or None: a literal path in
+    the token folder (R-2363: a word that only names a token file or looks like the folder, with
+    no path into it, passes), and python or node code that names a token file or the folder
+    (kitlib.guard.hub.INLINE_RE). A wildcard path is read as the literal folder before its first
+    wildcard (glob_folder); the store and the word hub are not refused (the guard blocks only
+    what it can place; an edit tool's write into the store is still hub_secret_edit's).
     A path may start with the home folder as `~` or a home variable ($HOME, $env:USERPROFILE,
     %USERPROFILE%, $env:HOMEDRIVE$env:HOMEPATH: shell.home_text, read as ctx.home), and a
     relative one is read from the directory a cd to the home folder, or a bare cd, moved to
     (the command's cwd_home). `places()` gives the HubPlaces."""
-    name_only = inv is not None and inv.name in hubg.NAME_ONLY_PROGRAMS
     targets = [r.target for r in cmd.redirects if r.target is not None and not r.body and r.op != '<<<']
-    for w in ([] if name_only else list(cmd.words)) + targets:
-        hit = None if w.dyn else hub_name(w.text)
-        if hit:
-            return 'names %s' % hit
     for w in list(cmd.words) + targets:
         for text in hub_path_texts(w.text):
             text = sh.home_text(text, ctx.home, w.dyn)
-            if text is None or hubg.has_glob(text):
+            if text is not None and hubg.has_glob(text):
+                text = glob_folder(text)
+            if text is None:
                 continue
             try:
                 p = sh.resolve_path(text, cmd.cwd_home, cmd.shell, ctx.home)

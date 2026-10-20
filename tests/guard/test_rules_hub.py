@@ -97,7 +97,6 @@ class SecretShell(Hub):
             ('type absolute', lambda sub: ps('type "%s\\agent.token"' % self.secrets, self.w.wt, sub)),
             ('Get-Content env', lambda sub: ps('Get-Content "$env:USERPROFILE\\.pm-kit\\hub\\agent.token"',
                                                self.w.wt, sub)),
-            ('Join-Path', lambda sub: ps("$d = 'x'; Get-Content (Join-Path $d 'owner.token')", self.w.wt, sub)),
             ('approval key', lambda sub: bash('cat "%s/approval.key"' % sec, self.w.wt, sub)),
             ('list the folder', lambda sub: bash('ls "%s"' % sec, self.w.wt, sub)),
             ('cd then read', lambda sub: bash('cd "%s" && cat agent.token' % sec, self.w.wt, sub)),
@@ -108,6 +107,16 @@ class SecretShell(Hub):
         for name, make in rows:
             with self.subTest(name):
                 self.denied(make, 'hub-secrets')
+
+    def test_a_token_name_with_no_path_into_the_folder_passes(self):
+        # R-2363 (A2): only a real path into the token folder is refused; a word that only names
+        # a token file, or looks like the folder, and is placed elsewhere passes
+        for shell, line in ((ps, "$d = 'x'; Get-Content (Join-Path $d 'owner.token')"),
+                            (bash, 'echo owner.token'), (bash, 'cat x/owner.token'),
+                            (bash, 'cat foo.pm-kit/hub-x'),
+                            (bash, 'grep -n "agent.token in .pm-kit/hub" notes.txt')):
+            with self.subTest(line):
+                self.allowed(lambda sub, line=line, shell=shell: shell(line, self.w.wt, sub))
 
     def test_writes_of_the_token_files(self):
         sec = W.fwd(self.secrets)
@@ -262,8 +271,8 @@ class HomeAndWildcards(Hub):
             with self.subTest(line=line):
                 self.allowed(lambda sub, shell=shell, line=line: shell(line, self.w.wt, sub))
 
-    # a wildcard path is not read, so each wildcard row below passes and
-    # the same place spelled literally is still refused. A literal relative path after a cd into
+    # a wildcard path is read only as far as the literal folder before its first wildcard, so
+    # each wildcard row below passes and the same place spelled literally is still refused. A literal relative path after a cd into
     # the home's .pm-kit folder (`hub\\x`) names neither the folder nor a token file by itself:
     # those rows show the cd is followed.
 
@@ -410,6 +419,9 @@ class HomeAndWildcards(Hub):
         self.rows_denied((
             (bash, 'ls %s/.pm-kit/hub' % home),
             (ps, 'gc %s\\.pm-kit\\hub\\x' % self.w.home),
+            # the folder before the first wildcard is the token folder (glob_folder)
+            (bash, 'cat %s/.pm-kit/hub/*' % home),
+            (ps, 'gc %s\\.pm-kit\\hub\\o*' % self.w.home),
         ))
 
     def test_option_values_are_read_as_paths(self):
@@ -720,7 +732,7 @@ class OwnerVerbs(Hub):
     def test_hub_code_reads_imports_of_hub_only(self):
         # the guard's own kitlib.guard.hub is not tools/hub.py; a from-import of another module
         # does not import hub, and python's arguments after the -c code are not code
-        for line in ('python -c "from kitlib.guard import hub; print(hub.NAME_ONLY_PROGRAMS)"',
+        for line in ('python -c "from kitlib.guard import hub; print(hub.SECRET_FILES)"',
                      'python -c "from kitlib.guard import hub as h, os; print(h)"',
                      'python -c "from kitlib.guard import (hub)"',
                      'python -c "import kitlib.guard.hub"'):
