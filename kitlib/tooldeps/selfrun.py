@@ -12,8 +12,11 @@ thread running is replaced. Each worker imports the units' top-level packages on
 Each unit gets its own temp folder: TEMP and TMP point at
 `<run folder>/<n>`, so `tempfile` scratch, scratch lock stores (whose mutex names derive from their
 path) and fixture repositories never meet another unit's. The run folder is made in the kit's temp folder
-for the checkout (work_parent: kitlib.config.user.work_temp, on the checkout's own drive), else,
-with a note, under this process's temp folder, and removed at the end.
+for the checkout (work_parent: kitlib.config.user.work_temp, on the checkout's own drive and out
+of every session's TEMP), else, with a note, in the kit's default temp folder or this process's
+temp folder, and removed at the end. An unfenced run that made its folder in the kit's temp folder
+first removes the run folders there a killed run left over a day ago (prune_stale), and says how
+many.
 
 The process. Each pool worker, and each own-process unit (kitlib.pytests.runner.run_unit), is
 created suspended, put in its own kill-on-close job, shielded from kills by pid, then resumed; a
@@ -240,11 +243,71 @@ def work_parent(root):
     return kuser.work_temp(root)
 
 
+# A run folder's name, and a direct test run's fixture folder's (tests/gitfixture.py
+# fixture_parent): the two prune_stale removes once STALE_AFTER seconds old.
+RUN_PREFIX = 'kit-tests-'
+DIRECT_PREFIX = 'kit-direct-'
+STALE_AFTER = 24 * 3600
+_REPARSE = getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0x400)
+
+
 def make_work(root):
-    """(the run folder, note): a new `kit-tests-*` folder in work_parent(root), made if missing;
-    else, with a note saying why, one in this process's temp folder (kuser.make_temp)."""
-    work, note = kuser.make_temp(root, 'kit-tests-')
+    """(the run folder, note): a new RUN_PREFIX folder in work_parent(root), made if missing;
+    else, with a note saying why, one in the kit's default temp folder or this process's
+    (kuser.make_temp)."""
+    work, note = kuser.make_temp(root, RUN_PREFIX)
     return work, note and 'the run folder %s' % note
+
+
+def _plain_dir(path):
+    """Whether `path` is a folder itself: not a link, junction or other reparse point."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return None
+    if not stat.S_ISDIR(st.st_mode) or getattr(st, 'st_file_attributes', 0) & _REPARSE:
+        return None
+    return st
+
+
+def prune_stale(parent, now=None, after=STALE_AFTER):
+    """(removed, kept): remove the RUN_PREFIX and DIRECT_PREFIX folders directly in `parent`
+    whose own modification time is at least `after` seconds before `now`, left by a run that was
+    killed or crashed: nothing else sweeps the kit's temp folder. Each is first claimed by
+    renaming it to `<name>.stale-<pid>` (one whose removal stopped part way keeps its first
+    name); Windows refuses that while any process has a file open in it, and such a folder is
+    counted kept and left whole. Links, junctions and
+    other reparse points are never followed or removed, whether they are the entry or inside it
+    (shutil.rmtree removes a link inside, not what it points at). A `parent` that cannot be
+    listed is (0, 0)."""
+    now = time.time() if now is None else now
+    removed = kept = 0
+    try:
+        names = sorted(e.name for e in os.scandir(parent))
+    except OSError:
+        return 0, 0
+    for name in names:
+        if not name.startswith((RUN_PREFIX, DIRECT_PREFIX)):
+            continue
+        path = os.path.join(parent, name)
+        st = _plain_dir(path)
+        if st is None or now - st.st_mtime < after:
+            continue
+        # A claimed folder whose removal stopped part way is claimed again under its first name.
+        claimed = os.path.join(parent, '%s.stale-%d' % (name.split('.stale-')[0], os.getpid()))
+        if os.path.normcase(claimed) == os.path.normcase(path):
+            claimed += '-again'
+        try:
+            os.rename(path, claimed)
+        except OSError:
+            kept += 1
+            continue
+        if _plain_dir(claimed) is None:
+            kept += 1
+            continue
+        rmtree_force(claimed, ignore_errors=True)
+        removed += 1
+    return removed, kept
 
 
 def _source(root, module):
@@ -438,6 +501,11 @@ def run(modules, root, jobs, serial=(), out=None, timeout=None, run_unit=None, e
     work, work_note = make_work(root)
     if work_note:
         say('kit_tests: %s' % work_note)
+    elif not kuser.fenced():
+        removed, kept = prune_stale(os.path.dirname(work))
+        if removed or kept:
+            say('kit_tests: removed %d stale run folder(s) from %s (%d older one(s) left: in use)'
+                % (removed, os.path.dirname(work), kept))
     counter = itertools.count(1)
     counter_lock = threading.Lock()
     workers = None if injected else worker_pool.WorkerPool(root, work, unit_env(base_env, work),
