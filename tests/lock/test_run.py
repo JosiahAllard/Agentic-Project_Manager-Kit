@@ -136,6 +136,70 @@ class Slot(StoreCase):
         self.assertEqual(len(self.store.history_records()), 1)
 
 
+NO_CWD = "NoDefaultCurrentDirectoryInExePath"
+
+
+class CallerFolder(StoreCase):
+    """run_command starts its command in the caller's folder. With NoDefaultCurrentDirectoryInExePath
+    set (agent hosts set it), Windows does not look there for a bare command name: CreateProcess
+    reads this process's environment, cmd.exe its own. A bare name that is a file there and fails
+    to start is said with the path form that runs (KIT-LOCK-RUN-CWD)."""
+
+    def setUp(self):
+        super().setUp()
+        self.confine(1)
+        self.said = []
+        self.store.say = self.said.append
+        self.folder = os.path.join(self.tmp, "caller")
+        os.mkdir(self.folder)
+        with open(os.path.join(self.folder, "hello.bat"), "w") as f:
+            f.write("@echo off\r\necho ran> ran.txt\r\n")
+        here = os.getcwd()
+        self.addCleanup(os.chdir, here)
+        os.chdir(self.folder)
+
+    @staticmethod
+    def no_cwd_env():
+        """clean_env with NoDefaultCurrentDirectoryInExePath set once, whatever case it had."""
+        env = {k: v for k, v in clean_env().items() if k.upper() != NO_CWD.upper()}
+        env[NO_CWD] = "1"
+        return env
+
+    def run_cmd(self, cmd, env):
+        return rm.run_command(cmd, "engine-test", "kit", "cwd", cores=1, store=self.store, env=env)
+
+    def test_the_command_runs_in_the_callers_folder(self):
+        code = self.run_cmd([sys.executable, "-c",
+                             "import os; open('cwd.txt', 'w').write(os.getcwd())"], clean_env())
+        self.assertEqual(code, 0, self.said)
+        with open(os.path.join(self.folder, "cwd.txt"), encoding="utf-8") as f:
+            self.assertEqual(os.path.normcase(f.read()), os.path.normcase(self.folder))
+
+    def test_a_bare_name_in_the_callers_folder_is_said_with_its_path(self):
+        with mock.patch.dict(os.environ, {NO_CWD: "1"}):
+            code = self.run_cmd(["hello.bat"], self.no_cwd_env())
+        self.assertEqual(code, 1)
+        line = next((s for s in self.said if s.startswith("could not start the command")), "")
+        self.assertIn(self.folder, line)
+        self.assertIn(NO_CWD, line)
+        self.assertIn(".\\hello.bat", line)
+        self.assertFalse(os.path.exists(os.path.join(self.folder, "ran.txt")))
+
+    def test_the_path_form_it_says_runs(self):
+        with mock.patch.dict(os.environ, {NO_CWD: "1"}):
+            code = self.run_cmd([".\\hello.bat"], self.no_cwd_env())
+        self.assertEqual(code, 0, self.said)
+        self.assertTrue(os.path.exists(os.path.join(self.folder, "ran.txt")))
+
+    def test_a_bare_name_not_in_the_folder_gets_no_hint(self):
+        with mock.patch.dict(os.environ, {NO_CWD: "1"}):
+            code = self.run_cmd(["no-such-tool-here.bat"], self.no_cwd_env())
+        self.assertEqual(code, 1)
+        line = next((s for s in self.said if s.startswith("could not start the command")), "")
+        self.assertTrue(line, self.said)
+        self.assertNotIn(".\\", line)
+
+
 class Refusals(StoreCase):
     def code(self, **kw):
         kw.setdefault("store", self.store)
