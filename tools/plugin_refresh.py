@@ -21,7 +21,7 @@ account folder's install from it (docs/plugin-source.md).
 
 Every mode first prints a WARNING line for each account folder's known_marketplaces.json
 installLocation, and the managed settings file's extraKnownMarketplaces path, that is not the
-export root (kitlib.pluginsource.claude marketplace_mismatches); it fixes none of them.
+export root (kitlib.pluginsource marketplace_mismatches); it fixes none of them.
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.pluginsource.refresh, prints
 and exits. Exit codes: 0 done, or nothing to do; 1 refused, or a folder's claude command failed; 2 usage.
@@ -86,13 +86,13 @@ def main(argv=None):
                                 migrate=a.migrate, runner=claude.Runner(a.home), in_use=in_use)
 
 
-def marketplace_warnings(export_dir, folders, environ=None):
-    """claude.marketplace_mismatches over `folders` and the Claude adapter's managed settings file
-    (from `environ`, default os.environ). Reports only; a check that fails is one line, never an exit."""
+def marketplace_warnings(export_dir, folders):
+    """pluginsource.marketplace_mismatches over `folders` and the default host's managed settings
+    file (kitlib.machinesetup.extras Host.managed_path). Reports only; a check that fails is one
+    line, never an exit."""
     try:
-        from hosts.claude.adapter.host import ADAPTER
-        managed = ADAPTER.managed_settings_path(os.environ if environ is None else environ)
-        return claude.marketplace_mismatches(export_dir, folders, managed=managed)
+        from kitlib.machinesetup.extras import Host
+        return pluginsource.marketplace_mismatches(export_dir, folders, managed=Host().managed_path())
     except Exception as e:                       # never stop a refresh over a report
         return ['could not check the pm-kit marketplace paths: %s: %s' % (type(e).__name__, e)]
 

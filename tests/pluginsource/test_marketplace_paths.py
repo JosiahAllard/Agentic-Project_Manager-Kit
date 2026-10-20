@@ -8,6 +8,7 @@ import shutil
 import tempfile
 import unittest
 
+from kitlib import pluginsource
 from kitlib.pluginsource import claude
 
 
@@ -98,6 +99,12 @@ class MismatchTest(MarketplaceCase):
         lines = claude.marketplace_mismatches(self.export, [], managed=m)
         self.assertEqual(len(lines), 1, lines)
         self.assertIn('could not check', lines[0])
+
+    def test_pluginsource_re_exports_the_check(self):
+        acct, m = self.account('a', self.elsewhere), self.managed(self.elsewhere)
+        lines = pluginsource.marketplace_mismatches(self.export, [acct], managed=m)
+        self.assertEqual(lines, claude.marketplace_mismatches(self.export, [acct], managed=m))
+        self.assertEqual(len(lines), 2, lines)
 
     def test_nothing_is_written(self):
         acct, m = self.account('a', self.elsewhere), self.managed(self.elsewhere)
