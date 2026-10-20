@@ -3735,10 +3735,12 @@ GIT_READS = {'status', 'log', 'diff', 'show', 'rev-parse', 'ls-files', 'ls-tree'
              'name-rev', 'help', 'version', 'check-ignore', 'check-attr', 'check-ref-format', 'var', 'count-objects',
              'diff-tree', 'diff-files', 'diff-index', 'cherry', 'range-diff', 'whatchanged', 'verify-commit',
              'verify-tag', 'show-branch', 'fsck', 'patch-id'}
-# git apply --check applies nothing (with --stat and the like it only reports); these are the only
-# options such an apply may carry, spelt in full: git expands a unique prefix (--app is --apply,
-# which applies after all), so any other option fails closed (apply_checks)
-APPLY_CHECK_OPTS = {'--check', '--stat', '--numstat', '--summary', '-v', '--verbose', '-R', '--reverse', '--'}
+# git apply --check applies nothing, nor do --stat, --numstat and --summary: each turns applying
+# off, and only --apply turns it back on (git 2.55, observed). These are the only options such an
+# apply may carry, spelt in full: git expands a unique prefix (--app is --apply, which applies
+# after all), so any other option fails closed (apply_checks)
+APPLY_REPORTS = ('--check', '--stat', '--numstat', '--summary')
+APPLY_CHECK_OPTS = set(APPLY_REPORTS) | {'-v', '--verbose', '-R', '--reverse', '--'}
 APPLY_STRIP_RE = re.compile(r'-p\d+$')
 # subcommands that only read when their first word is one of these (None: when they have no word)
 GIT_READ_VERBS = {'stash': ('list', 'show'), 'worktree': ('list',), 'remote': (None, 'show', 'get-url'),
@@ -4103,7 +4105,7 @@ def git_reads(gc, strict=False):
             writes -= {'-a'}                    # branch -a lists every branch
         return not writes and (not pos or bool(flags & GIT_LIST_FLAGS))
     if sub == 'config':
-        return any(t in CONFIG_READ_OPTS or t in ('-l', '--list') for t in words)
+        return config_reads(gc)
     if sub == 'apply':
         return apply_checks(gc)
     if sub == 'symbolic-ref':
@@ -4112,9 +4114,10 @@ def git_reads(gc, strict=False):
 
 
 def apply_checks(gc):
-    """True when git apply `gc` only checks its patch: --check among its options (the words before
-    the first --; after it git reads every word as a patch file, `--check` too) and every option one
-    APPLY_CHECK_OPTS names (or -p<n>), read as the shell hands it to git (archive_words), and no
+    """True when git apply `gc` only checks or reports on its patch: one of APPLY_REPORTS among its
+    options (the words before the first --; after it git reads every word as a patch file,
+    `--check` too) and every option one APPLY_CHECK_OPTS names (or -p<n>; --apply, which applies
+    after all, is not one), read as the shell hands it to git (archive_words), and no
     word the guard cannot read (computed, a PowerShell splat, or one PowerShell or cmd may split:
     native_unsure). Any other apply writes the checkout."""
     if gc.inv is None:
@@ -4126,7 +4129,34 @@ def apply_checks(gc):
     if '--' in texts:                           # git reads no option after --: those words are patches
         texts = texts[:texts.index('--')]
     opts = [t for t in texts if t.startswith('-') and t != '-']
-    return '--check' in opts and all(t in APPLY_CHECK_OPTS or APPLY_STRIP_RE.match(t) for t in opts)
+    return any(t in APPLY_REPORTS for t in opts) and all(t in APPLY_CHECK_OPTS or APPLY_STRIP_RE.match(t)
+                                                          for t in opts)
+
+
+def config_reads(gc):
+    """True when git config `gc` carries a read flag (CONFIG_READ_OPTS, spelt in full) as its own
+    option. git config reads options only up to its first word that is no option (git 2.55,
+    observed: `config a.b --list` sets a.b to "--list"), so the flag counts only there, before any
+    `--` and not as the value of an option that takes one (-f/--file, -t/--type, --blob, --default,
+    --comment, --value, --url, abbreviated too: _config_long). A computed word there ends the scan
+    (fail closed), as does a first `--`, which git 2.55 passes over (`config -- --list` lists)."""
+    words, k = gc.rest, 0
+    while k < len(words):
+        w, t = words[k], words[k].text
+        if w.dyn or t == '--' or len(t) < 2 or not t.startswith('-'):
+            return False
+        if t in CONFIG_READ_OPTS:
+            return True
+        if t.startswith('--'):
+            body, eq, _v = t[2:].partition('=')
+            if not eq and any(n in CONFIG_LONG_VALUES for n in _config_long(body)):
+                k += 1                          # its value, whatever it says
+        else:
+            at = min((t.find(c, 1) for c in 'ft' if c in t[1:]), default=-1)
+            if at == len(t) - 1:
+                k += 1                          # -f <file>, -t <type>: the value is the next word
+        k += 1
+    return False
 
 
 def git_targets(gc):
