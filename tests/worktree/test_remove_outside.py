@@ -515,6 +515,16 @@ class BranchByPath(OutsideCase):
         self.assertIn('deleted   branch kit/landed', out)
         self.assertEqual(self.branch('landed'), '')
 
+    def test_an_outside_tree_on_the_main_branch_is_refused(self):
+        self.git('checkout', '-q', '--detach')      # free main for the outside tree
+        path = os.path.join(self.outside, 'onmain')
+        self.git('worktree', 'add', '-q', path, 'main')
+        rc, out = self.run_remove(path)
+        self.assertKept(path, rc, out, 'is on the main branch main')
+        self.assertNotIn('merged    ', out)
+        self.assertEqual(self.git('rev-parse', '-q', '--verify', 'refs/heads/main',
+                                  check=False).strip(), self.base)
+
     def test_keep_branch_keeps_the_branch(self):
         path = self.branch_tree()
         got = remove.remove(self.repo, path, keep_branch=True, cwd=self.repo)
