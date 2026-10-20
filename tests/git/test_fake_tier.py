@@ -137,6 +137,13 @@ class FakeFailsLoudly(unittest.TestCase):
             cmd.subprocess_run(['git', '-C', self.r.root, 'config', 'kit.probe'])
         self.assertIn('inherited stdout', str(cm.exception))
 
+    def test_a_ref_set_on_both_sides_of_not_raises_unsupported(self):
+        # `--branches X --not --branches` is one flag flipped and not; the fake keeps one per set
+        from kitlib.git import fake
+        with self.assertRaises(fake.Unsupported) as cm:
+            cmd.call(['rev-list', '--count', '--branches', '--not', '--branches'], self.r.root)
+        self.assertIn('--branches both flipped by --not and not', str(cm.exception))
+
     def test_a_broken_loose_ref_raises_unsupported(self):
         # git warns "ignoring broken ref" at some readers only (rev-parse, log, for-each-ref:
         # yes; show-ref: no); the fake does not imitate which, so reading one fails loudly

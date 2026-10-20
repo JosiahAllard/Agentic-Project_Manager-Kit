@@ -495,12 +495,16 @@ _UNSUPPORTED_FLAGS = {'--stat', '--topo-order', '--simplify-merges', '--boundary
                       '--objects', '--use-mailmap', '--all-match', '--invert-grep', '--date-order'}
 
 
+REFSETS = ('--all', '--branches', '--tags', '--remotes')
+
+
 class Args:
     def __init__(self):
         self.flags = set()
         self.values = {}
         self.multi = {}
         self.revs = []           # in order, with '--not' entries
+        self.refsets = {}        # --all/--branches/--tags/--remotes: whether a '--not' flips it
         self.paths = None
         self.max_count = None
 
@@ -563,6 +567,13 @@ def parse_args(cmd, args):
             if name in _FLAGS:
                 if name in _UNSUPPORTED_FLAGS:
                     raise Unsupported('git %s %s' % (cmd, x))
+                if name in REFSETS:
+                    # git applies a '--not' before it to these too: `X --not --branches` is the
+                    # commits X reaches that no branch does.
+                    neg = a.revs.count('--not') % 2 == 1
+                    if a.refsets.get(name, neg) != neg:
+                        raise Unsupported('git %s %s both flipped by --not and not' % (cmd, x))
+                    a.refsets[name] = neg
                 a.flags.add(name)
                 i += 1
                 continue
@@ -694,14 +705,15 @@ class Walker:
                              ('--tags', 'refs/tags/'), ('--remotes', 'refs/remotes/')):
             if flag in a.flags:
                 from . import refs as _refs
+                into = self.exclude if a.refsets.get(flag) else self.include
                 for name, oid in _refs.list_refs(repo, prefix):
                     c = _revs.peel(repo, oid, 'commit')
                     if c is not None:
-                        self.include.append(c)
+                        into.append(c)
                 if flag == '--all':
                     h, _ = _refs.resolve(repo, 'HEAD')
                     if h:
-                        self.include.append(h)
+                        into.append(h)
         if not specs and not (a.flags & {'--all', '--branches', '--tags', '--remotes'}):
             if self.cmd == 'rev-list':
                 raise GitExit(129, 'usage: git rev-list [<options>] <commit>... [--] [<path>...]\n')
