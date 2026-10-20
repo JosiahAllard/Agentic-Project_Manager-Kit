@@ -501,6 +501,56 @@ class AbandonLandedDirty(RemoveCase):
         self.assertIn('kit/lc', self.branches())
 
 
+@real_git('git reflog: the fake writes no reflog')
+class DetachedReflog(RemoveCase):
+    """A DETACHED tree in a worktree folder: a commit made there and left by a checkout lives only
+    in its HEAD reflog, which `git worktree remove` deletes, so both verbs check that reflog as
+    they do an outside tree's (KIT-WORKTREE-LEFTOVERS)."""
+
+    TODAY = datetime.date(2026, 10, 20)
+
+    def detached(self, slug):
+        """A detached tree at <worktree folder>/<slug> on main's tip."""
+        path = os.path.join(self.home, slug)
+        self.git('worktree', 'add', '-q', '--detach', path, 'main')
+        return os.path.realpath(path)
+
+    def left_behind(self, path):
+        """A commit made in the tree at `path`, then left by a checkout of main. Its oid."""
+        self.fx.write('left.txt', 'left\n', root=path)
+        left = self.fx.commit('left behind', 'left.txt', cwd=path)
+        self.git('checkout', '-q', '--detach', 'main', cwd=path)
+        return left
+
+    def assertKept(self, path, rc, out, left):
+        self.assertEqual(rc, 1, out)
+        self.assertIn('which no ref reaches', out)
+        self.assertIn(left[:10], out)
+        self.assertTrue(os.path.isdir(path), out)
+        self.assertIn(os.path.normcase(path), self.registered())
+
+    def test_the_plain_verb_refuses_a_reflog_only_commit(self):
+        path = self.detached('red')
+        left = self.left_behind(path)
+        rc, out = self.run_verb('remove', 'red')
+        self.assertKept(path, rc, out, left)
+
+    def test_abandon_refuses_a_reflog_only_commit_and_tags_nothing(self):
+        path = self.detached('red')
+        left = self.left_behind(path)
+        self.fx.write('tip.txt', 'tip\n', root=path)
+        self.fx.commit('unlanded tip', 'tip.txt', cwd=path)
+        rc, out = self.run_verb('abandon', 'red', 'superseded', today=self.TODAY)
+        self.assertKept(path, rc, out, left)
+        self.assertEqual(self.git('tag', '-l', 'archive/*'), '')
+
+    def test_a_reflog_a_ref_reaches_is_removed(self):
+        path = self.detached('red')
+        rc, out = self.run_verb('remove', 'red')
+        self.assertEqual(rc, 0, out)
+        self.assertFalse(os.path.exists(path), out)
+
+
 class NoAncestryAnswer(RemoveCase):
     """kitlib.git.refs.is_ancestor gives no answer (None) for a git ended from outside,
     where `merge-base --is-ancestor` gave exit 1, a NO. Every verb

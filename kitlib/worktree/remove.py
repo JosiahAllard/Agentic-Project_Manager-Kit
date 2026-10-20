@@ -19,6 +19,10 @@ lines). Nothing here prints. The checks, in order, are the PM tool's:
 - landed: the branch (or detached HEAD) is an ancestor of `<remote>/<main_branch>` AS IT STANDS,
   never fetched (`merge_check`); UNLANDED work is the owner's to remove and the refusal prints his
   commands and the `--abandon` verb, running none of them;
+- on a tree outside the worktree folders or a DETACHED one anywhere, every commit in its HEAD
+  reflog is reached by a ref (`kept_reflog`; a commit left there by a checkout lives only in that
+  log, which `git worktree remove` deletes), and HEAD and the log are read again just before git
+  (`unmoved`);
 - holders (`holders.blockers`), then work (`dirty`: anything uncommitted or untracked, and any
   git-IGNORED file outside `build_output` or a keeper inside it; a `{piece, path}` entry is the
   folder the pieces table puts there, and one that cannot be resolved holds nothing), then links
@@ -521,9 +525,9 @@ def link_on_the_way(path):
 
 
 def kept_reflog(ctx, path, head, tagged):
-    """The outside tree's HEAD reflog (kitlib.worktree.scratch.reflog) when every commit in it is
-    kept: reached by a branch, remote-tracking branch or tag, and with `tagged` (--abandon) also
-    by `head`, which the tag is about to hold. Else None after saying why: a commit made in the tree
+    """The HEAD reflog (kitlib.worktree.scratch.reflog) of a tree outside every worktree folder or
+    detached anywhere, when every commit in it is kept: reached by a branch, remote-tracking
+    branch or tag, and with `tagged` (--abandon) also by `head`, which the tag is about to hold. Else None after saying why: a commit made in the tree
     and left by a checkout lives only in `logs/HEAD`, which `git worktree remove` deletes, and a
     commit no ref reaches is the owner's call (the --scratch verb's rule). Reads only."""
     from . import scratch           # scratch imports this module
@@ -567,7 +571,7 @@ def kept_reflog(ctx, path, head, tagged):
 
 def unmoved(ctx, path, head, logged):
     """kitlib.worktree.scratch.unmoved: HEAD and its reflog read once more just before git, so a
-    commit made while the verb ran is not removed with an outside tree."""
+    commit made while the verb ran is not removed with an outside or detached tree."""
     from . import scratch
     return scratch.unmoved(ctx, path, head, logged)
 
@@ -894,8 +898,10 @@ def _remove(ctx, argument, keep_branch, branch_ok=False):
             ctx.say('  note     release every holder first: his `git worktree remove` above fails'
                     ' the same destructive way this tool refuses to risk.')
         return REFUSED
-    outside = not is_workstream(ctx, path)
-    if outside:
+    # An outside tree, and a detached one anywhere: a commit made there and left by a checkout
+    # lives only in its HEAD reflog, which `git worktree remove` deletes.
+    logs = not is_workstream(ctx, path) or known[key][1] == '(detached)'
+    if logs:
         # The HEAD merge_check found in the base: the reflog check and `unmoved` hold the tree to
         # it, so a HEAD moved since (to an unlanded tip) is refused, never judged afresh.
         head = seen.get('head')
@@ -921,7 +927,7 @@ def _remove(ctx, argument, keep_branch, branch_ok=False):
         return REFUSED
     if not clear_disposable(ctx, path):
         return REFUSED
-    if outside and not unmoved(ctx, path, head, logged):
+    if logs and not unmoved(ctx, path, head, logged):
         return REFUSED
     registered_path, branch = known[key]
     if not git_remove(ctx, path, registered_path):
@@ -1218,9 +1224,10 @@ def _abandon(ctx, argument, why, keep_branch, today):
         ctx.say('refused   %s: the merge check failed (%s); nothing was tagged or removed'
                 % (path, why_not))
         return REFUSED
-    outside = not is_workstream(ctx, path)
-    logged = kept_reflog(ctx, path, tip, True) if outside else None
-    if outside and logged is None:
+    # An outside tree, and a detached one anywhere (the plain verb's rule).
+    logs = not is_workstream(ctx, path) or not branch
+    logged = kept_reflog(ctx, path, tip, True) if logs else None
+    if logs and logged is None:
         return REFUSED
     rerun = '%s %s --abandon "<why>"%s' % (s['tool'], handle(ctx, registered_path),
                                            ' --keep-branch' if keep_branch else '')
@@ -1263,7 +1270,7 @@ def _abandon(ctx, argument, why, keep_branch, today):
             return REFUSED
         ctx.say('tagged    %s -> %s (%s): abandoned: %s' % (tag, tip[:10], name, why))
     if (not clear_disposable(ctx, path)
-            or (outside and not unmoved(ctx, path, tip, logged))
+            or (logs and not unmoved(ctx, path, tip, logged))
             or not git_remove(ctx, path, registered_path)):
         ctx.say('  kept     tag %s stays on %s%s. Once the cause is cleared, the same command'
                 ' reruns and reuses the tag.' % (tag, tip[:10],
@@ -1308,9 +1315,9 @@ def _abandon_landed_dirty(ctx, path, registered_path, slug, branch, tip, name, c
     the reset is lost: the window is narrowed, not closed."""
     main, s = ctx.main, ctx.s
     nothing = 'nothing was tagged or removed'
-    outside = not is_workstream(ctx, path)
-    logged = kept_reflog(ctx, path, tip, False) if outside else None
-    if outside and logged is None:
+    logs = not is_workstream(ctx, path) or not branch
+    logged = kept_reflog(ctx, path, tip, False) if logs else None
+    if logs and logged is None:
         return REFUSED
     _, _, ignored, why_not = dirty(ctx, path)
     if ignored is None:
@@ -1380,7 +1387,7 @@ def _abandon_landed_dirty(ctx, path, registered_path, slug, branch, tip, name, c
                                         tip[:10], tag))
     kept = ('  kept     tag %s holds the saved work%s. Nothing was forced.'
             % (tag, ', and branch %s' % branch if branch else ''))
-    if outside and not unmoved(ctx, path, tip, logged):
+    if logs and not unmoved(ctx, path, tip, logged):
         ctx.say(kept)
         return REFUSED
     now, why_now = snapshot_tree(path)

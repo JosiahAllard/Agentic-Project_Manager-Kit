@@ -679,7 +679,7 @@ def reflog_skip(ctx, path, head):
     """The skipped result for a tree whose HEAD reflog holds a commit no ref and not its tip
     `head` reaches, or cannot be read; None when it holds none. `git worktree remove` deletes that
     reflog, and the remove path checks it (kept_reflog) only for a tree outside the worktree
-    folders."""
+    folders or a detached one."""
     logged, why = scratch.reflog(path)
     lost, why = (None, why) if logged is None else \
         unsaved_count(ctx, logged, (head,)) if logged else (0, None)
@@ -698,7 +698,8 @@ def apply_tree(ctx, entry, row, base, environ=None, today=None):
     tree held or changed since it was classified is refused there): A plain; E `--scratch` when
     scratch_route says so, plain when its tip is in the base, else `--abandon "evidence"` (tag
     archive/<slug>). An A tree, or an E tree not for --scratch, whose HEAD reflog holds a commit
-    no ref and not its tip reaches is skipped instead (reflog_skip): the remove deletes that reflog, and the tag holds only the tip. Returns
+    no ref and not its tip reaches is skipped instead (reflog_skip): the remove deletes that
+    reflog, and the tag holds only the tip. Returns
     {'result': removed|failed|skipped, 'why', 'lines': the path's own}. A tree removed whose
     branch then stayed (or any other later refusal) is failed."""
     path, head = row['path'], entry['head']
