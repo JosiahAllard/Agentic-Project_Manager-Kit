@@ -12,7 +12,7 @@ import time
 import unittest
 from unittest import mock
 
-from kitlib.worktree import classify, remove, sweep
+from kitlib.worktree import classify, remove, scratch, sweep
 from tests import gitfixture
 from tests.realgit import real_git
 from tests.worktree.test_classify import LATER, ClassifyCase, free, no_procs
@@ -227,6 +227,47 @@ class Unsaved(ApplyCase):
         self.kept(path)
         self.assertEqual(self.git('tag', '-l', 'archive/*'), '')
         self.assertIn(lost, self.git('reflog', 'show', '--format=%H', 'HEAD', cwd=path))
+
+
+    def test_a_landed_tree_whose_reflog_holds_an_unsaved_commit_is_skipped(self):
+        # A landed workstream tree commits X detached, then checks its branch out again: X lives
+        # only in the tree's HEAD reflog, the tree is still A, and a plain remove would lose X.
+        path = self.workstream('done')
+        self.land('kit/done')
+        self.git('checkout', '-q', '--detach', cwd=path)
+        self.fx.write('x.txt', 'x\n', root=path)
+        lost = self.fx.commit('x', 'x.txt', cwd=path)
+        self.git('checkout', '-q', 'kit/done', cwd=path)
+        rc, out, data = self.run_apply()
+        self.assertEqual(rc, 1, out)
+        row = self.row(data, path)
+        self.assertEqual(row['class'], 'A', out)
+        self.assertEqual(row['apply']['result'], 'skipped', out)
+        self.assertIn('reflog holds unsaved commits', row['apply']['why'])
+        self.kept(path)
+        self.assertIn(lost, self.git('reflog', 'show', '--format=%H', 'HEAD', cwd=path))
+
+    def test_a_tree_whose_reflog_cannot_be_read_is_skipped(self):
+        path = self.workstream('done')
+        self.land('kit/done')
+        with mock.patch.object(scratch, 'reflog', lambda p: (None, 'faked read')):
+            rc, out, data = self.run_apply()
+        self.assertEqual(rc, 1, out)
+        row = self.row(data, path)
+        self.assertEqual(row['apply']['result'], 'skipped', out)
+        self.assertIn('its HEAD reflog cannot be read (faked read)', row['apply']['why'])
+        self.kept(path)
+
+    def test_a_tree_whose_unsaved_count_fails_is_skipped(self):
+        path = self.workstream('agent-9')
+        with mock.patch.object(classify, 'unsaved_count', lambda *a, **k: (None, 'faked count')):
+            rc, out, data = self.run_apply()
+        self.assertEqual(rc, 1, out)
+        row = self.row(data, path)
+        self.assertEqual(row['class'], 'E', out)
+        self.assertEqual(row['apply']['result'], 'skipped', out)
+        self.assertIn('its HEAD reflog cannot be read (faked count)', row['apply']['why'])
+        self.kept(path)
 
 
 class Outcomes(ApplyCase):

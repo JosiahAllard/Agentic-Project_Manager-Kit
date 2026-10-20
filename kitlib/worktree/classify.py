@@ -513,12 +513,30 @@ def scratch_route(ctx, entry, environ):
     return count == 0, None
 
 
+def reflog_skip(ctx, path, head):
+    """The skipped result for a tree whose HEAD reflog holds a commit no ref and not its tip
+    `head` reaches, or cannot be read; None when it holds none. `git worktree remove` deletes that
+    reflog, and the remove path checks it (kept_reflog) only for a tree outside the worktree
+    folders."""
+    logged, why = scratch.reflog(path)
+    lost, why = (None, why) if logged is None else \
+        unsaved_count(ctx, logged, (head,)) if logged else (0, None)
+    if lost is None:
+        return {'result': 'skipped', 'why': 'its HEAD reflog cannot be read (%s)' % why,
+                'lines': []}
+    if lost:
+        return {'result': 'skipped', 'why': 'its HEAD reflog holds %d commit(s) no ref and not'
+                ' its tip reaches (reflog holds unsaved commits); left for the owner' % lost,
+                'lines': []}
+    return None
+
+
 def apply_tree(ctx, entry, row, base, environ=None, today=None):
     """Send one A or E tree through an existing remove path, each making its own checks again (a
     tree held or changed since it was classified is refused there): A plain; E `--scratch` when
     scratch_route says so, plain when its tip is in the base, else `--abandon "evidence"` (tag
-    archive/<slug>). An E tree whose HEAD reflog holds a commit no ref and not its tip reaches is
-    skipped instead: the remove deletes that reflog, and the tag holds only the tip. Returns
+    archive/<slug>). An A tree, or an E tree not for --scratch, whose HEAD reflog holds a commit
+    no ref and not its tip reaches is skipped instead (reflog_skip): the remove deletes that reflog, and the tag holds only the tip. Returns
     {'result': removed|failed|skipped, 'why', 'lines': the path's own}. A tree removed whose
     branch then stayed (or any other later refusal) is failed."""
     path, head = row['path'], entry['head']
@@ -526,6 +544,9 @@ def apply_tree(ctx, entry, row, base, environ=None, today=None):
     sub.out = []
     if row['class'] == 'A':
         how, verb = 'A, plain remove', 'plain'
+        held = reflog_skip(ctx, path, head)
+        if held:
+            return held
     else:
         route, why = scratch_route(ctx, entry, environ)
         if route is None:
@@ -534,22 +555,15 @@ def apply_tree(ctx, entry, row, base, environ=None, today=None):
         if route:
             how, verb = 'E, --scratch', 'scratch'
         else:
-            logged, why = scratch.reflog(path)
-            lost, why = (None, why) if logged is None else \
-                unsaved_count(ctx, logged, (head,)) if logged else (0, None)
-            if lost is None:
-                return {'result': 'skipped', 'why': 'its HEAD reflog cannot be read (%s)' % why,
-                        'lines': []}
-            if lost:
-                return {'result': 'skipped', 'why': 'its HEAD reflog holds %d commit(s) no ref'
-                        ' and not its tip reaches (reflog holds unsaved commits); left for the'
-                        ' owner' % lost, 'lines': []}
             landed, why = refs.is_ancestor(head, base, ctx.main)
             if landed is None:
                 return {'result': 'skipped', 'why': 'whether %s is in the base cannot be read (%s)'
                         % (head[:10], why), 'lines': []}
             how, verb = ('E, plain remove', 'plain') if landed else \
                 ('E, --abandon "evidence"', 'abandon')
+            held = reflog_skip(ctx, path, head)
+            if held:
+                return held
     if verb == 'plain':
         code = remove._remove(sub, path, False)
     elif verb == 'scratch':
