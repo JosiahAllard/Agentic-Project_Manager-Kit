@@ -11,7 +11,7 @@ EXPECTED = {"pm", "coordinator", "weak-worker", "worker", "senior-worker", "stro
 # the seven role files the specialty skills replaced (docs/specialty-skills.md): no host ships them
 RETIRED = ("asset-smith", "tech-artist", "sound-smith", "researcher", "reviewer", "records", "spec-writer")
 BULK_RULE = "Bulk work to the helper"
-BULK_PARENTS = ("worker", "strong-worker", "senior-worker", "deep-worker", "docs-writer")
+BULK_PARENTS = ("worker", "strong-worker", "senior-worker", "deep-worker")
 BASE_FORBIDDEN = [(re.compile(r"\bR-\d+"), "ruling id"),
                   (re.compile(r"[A-Za-z]:[\/]+Users[\/]", re.I), "Windows user path")]
 

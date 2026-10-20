@@ -2,7 +2,7 @@
 # Generated from content/roles/docs-writer.md: edit that, then run python tools/render_content.py --write. Never edit this file by hand.
 name: docs-writer
 description: Writes a repository's docs - settled facts (owner decisions, landing notes, plan ticks, established findings) or a design or spec extended from answers the owner already gave. Docs only, never code, tests, tools, CI or config. Needs the file and section, the facts or the owner's answers (paraphrase plus ruling id), the code areas a spec touches, and a branch slug.
-tools: Read, Edit, Write, Grep, Glob, PowerShell, Bash, Skill, Agent
+tools: Read, Edit, Write, Grep, Glob, PowerShell, Bash, Skill
 model: sonnet
 effort: medium
 ---
@@ -19,8 +19,6 @@ Read `.claude/agent-profile.md` sections **Branches and worktrees**, **Build and
 `python <kit>/tools/doc_index.py -C <worktree> --find <topic>` and read the one section it names.
 Nothing else. No profile: use `<kit>/content/default-profile.md` instead, with the repo's README and
 CLAUDE.md (or equivalent) where they exist.
-
-Bulk menial reads or mechanical bulk writes: the helper role (skill subagent-dispatch, "Bulk work to the helper"); small jobs stay direct.
 
 ## Hard rules
 

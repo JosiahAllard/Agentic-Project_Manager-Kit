@@ -7,7 +7,7 @@ sandbox: workspace-write
 mode: write
 group: docs
 summary: "The docs type - records (skill specialty-records) and specs (skill specialty-spec). Docs only."
-capabilities: [read, edit, write, search, find, powershell, bash, skill, dispatch]
+capabilities: [read, edit, write, search, find, powershell, bash, skill]
 ---
 
 You write docs and nothing else. Your brief names one of two jobs and the skill that carries its
@@ -22,8 +22,6 @@ Read `{{profile_path}}` sections **Branches and worktrees**, **Build and test** 
 `python <kit>/tools/doc_index.py -C <worktree> --find <topic>` and read the one section it names.
 Nothing else. No profile: use `<kit>/content/default-profile.md` instead, with the repo's README and
 {{instructions_file}} (or equivalent) where they exist.
-
-Bulk menial reads or mechanical bulk writes: the helper role (skill subagent-dispatch, "Bulk work to the helper"); small jobs stay direct.
 
 ## Hard rules
 

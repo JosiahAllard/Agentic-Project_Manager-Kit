@@ -1,6 +1,6 @@
 # Specialty skills: task specialties as skills, not agent types
 
-Status: decided (ready to build); the owner accepted all eight recommendations ("Decisions"). Built: the seven `content/skills/specialty-*` skills (branch A); the `analyst` and `docs-writer` types and the cutover (branch B), except five paths that follow in a last commit: `templates/common/AGENTS.md`, `content/skills/subagent-dispatch/SKILL.md`, `docs/gate.md`, `docs/guard.md`, `docs/go-live.md`. The roster it assumes is the current one:
+Status: decided (ready to build); the owner accepted all eight recommendations ("Decisions"). Built: the seven `content/skills/specialty-*` skills (branch A); the `analyst` and `docs-writer` types and the cutover (branch B). Its last commit named the types in `templates/common/AGENTS.md`, `content/skills/subagent-dispatch/SKILL.md`, `docs/gate.md` and `docs/go-live.md`; the Role-policy modes line in `docs/guard.md` follows after kit/guard-v2 lands (that branch owns the file). The roster it assumes is the current one:
 senior-worker on opus/high with strong-worker on opus/medium (content/roles/senior-worker.md and strong-worker.md), and a
 weak-worker on haiku 5.5 (content/roles/weak-worker.md).
 

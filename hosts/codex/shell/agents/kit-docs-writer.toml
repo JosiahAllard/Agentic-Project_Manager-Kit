@@ -19,8 +19,6 @@ Read `.codex/agent-profile.md` sections **Branches and worktrees**, **Build and 
 Nothing else. No profile: use `<kit>/content/default-profile.md` instead, with the repo's README and
 AGENTS.md (or equivalent) where they exist.
 
-Bulk menial reads or mechanical bulk writes: the helper role (skill subagent-dispatch, \"Bulk work to the helper\"); small jobs stay direct.
-
 ## Hard rules
 
 - A fact that looks wrong or contradicts the file: say so in your report and record nothing for
