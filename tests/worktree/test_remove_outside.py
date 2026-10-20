@@ -219,6 +219,14 @@ class ReflogOnly(OutsideCase):
     """A commit made in the tree and left by a checkout lives only in the tree's HEAD reflog
     (<admin dir>/logs/HEAD), which `git worktree remove` deletes: no verb drops it silently."""
 
+    def real_commit(self, path, name):
+        """A commit of `<name>.txt` in the tree at `path` made by the test's own git, so it is in
+        the tree's reflog. Returns its oid."""
+        self.fx.write(name + '.txt', name + '\n', root=path)
+        self.git('add', name + '.txt', cwd=path)
+        self.git('commit', '-q', '-m', name, cwd=path)
+        return self.git('rev-parse', 'HEAD', cwd=path).strip()
+
     def test_a_commit_made_while_the_verb_ran_is_refused(self):
         path = self.tree()
         real = remove.clear_disposable
@@ -320,11 +328,11 @@ class ReflogOnly(OutsideCase):
         self.assertEqual(self.tag('archive/red'), '')
 
     def test_abandon_keeps_a_reflog_commit_its_tag_reaches(self):
+        """The two commits go through the test's own (real) git: the fixture's commit runs on the
+        fake, which writes no reflog, and then the reflog would never name `mine` at all."""
         path = self.tree(commit=self.topic_tip)
-        self.fx.write('mine.txt', 'mine\n', root=path)
-        mine = self.fx.commit('mine', 'mine.txt', cwd=path)
-        self.fx.write('more.txt', 'more\n', root=path)
-        more = self.fx.commit('more', 'more.txt', cwd=path)
+        mine = self.real_commit(path, 'mine')
+        more = self.real_commit(path, 'more')
         rc, out = self.run_abandon(path)
         self.assertRemoved(path, rc, out)
         self.assertEqual(self.tag('archive/red'), more)
