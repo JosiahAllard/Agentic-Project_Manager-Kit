@@ -2,7 +2,9 @@
 Slot.note_tree in a landing's held slot) and its history line keeps it: a branch gate's is the
 tree of HEAD when the work tree is clean, and none when it is not (uncommitted files test no
 commit's tree); a landing's is its merge commit's tree. The daily full run gates its worktree at
-the day's commit the same way, so its run has that commit's tree."""
+the day's commit the same way, so its run has that commit's tree. The history line also keeps
+`gate` and `priority`, which the branch gate budget reads (kitlib.gate.budget): a branch gate's has
+gate and no priority, a landing's has priority "land"."""
 import os
 
 from kitlib import gate as G
@@ -43,3 +45,13 @@ class GateTree(test_land.LandCase):
         merged = self.main_now()
         self.assertNotEqual(merged, tip)
         self.assertIn(self.tree(merged), self.trees())
+
+    def test_the_history_line_keeps_gate_and_priority(self):
+        wt, tip = self.branch('feature', {'a.py': 'x = 1\n'})
+        out = runner.branch_gate(wt, book_kw=self.book_kw, log_dir=self.logs)
+        self.assertEqual(out.code, G.OK, out.lines)
+        out = self.lander(BRANCH, self.main, tip).run()
+        self.assertEqual(out.code, G.OK, out.lines)
+        got = [(d.get('gate'), d.get('priority')) for d in self.store.history_records()]
+        self.assertEqual(got[0], (True, None))
+        self.assertIn((True, 'land'), got[1:])
