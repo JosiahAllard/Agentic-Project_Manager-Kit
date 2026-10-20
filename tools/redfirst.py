@@ -60,6 +60,9 @@ def split_root(argv):
 
 def parse_args(argv):
     ap = argparse.ArgumentParser(prog='redfirst.py', description=__doc__.split('\n\n')[0])
+    # documents -C for --help only: split_root takes it out of argv before argparse runs
+    ap.add_argument('-C', dest='root', metavar='WORKTREE', default=None,
+                    help='the task worktree (default: the current directory; a main checkout is refused)')
     ap.add_argument('--tests', nargs='+', action='extend', required=True, metavar='FILE[::FILTER]')
     ap.add_argument('--also', nargs='+', action='extend', default=[], metavar='FILE')
     ap.add_argument('--base')
