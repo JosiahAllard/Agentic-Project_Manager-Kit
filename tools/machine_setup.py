@@ -28,6 +28,12 @@ It writes nothing into any repository: a repository works with the kit with noth
                                                        ~/.pm-kit/managed-settings.json instead;
                                                        --apply needs an elevated terminal
                                                        (docs/machine-setup.md "Managed settings")
+  machine_setup.py --pm-repo PATH [--kit DIR] [--apply]
+                                                       set the PM-repo pointer (HKLM\\SOFTWARE\\pm-kit
+                                                       pm_repo) to the PM repository's work tree
+                                                       PATH instead; --apply needs an elevated
+                                                       terminal (docs/machine-setup.md "PM repo
+                                                       pointer")
   machine-wide options: --config-dir DIR (repeatable; default: the plugin's account folders, ~/.claude,
                              every ~/.claude-* folder but the machine config's own and each folder
                              of the launcher's accounts and orgs; with --old-kit, the first two)
@@ -66,6 +72,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from kitlib import machinesetup                                     # noqa: E402
 from kitlib.config import user as kuser                             # noqa: E402
 from kitlib.machinesetup import owner as mowner                     # noqa: E402
+from kitlib.machinesetup import pointer as mpointer                 # noqa: E402
 from kitlib.machinesetup import repo as mrepo                       # noqa: E402
 
 KIT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -85,6 +92,8 @@ def parser():
     mode.add_argument('--managed-settings', action='store_true',
                       help="write the default host's machine-wide managed settings file from the "
                            "kit's template instead (--apply needs an elevated terminal)")
+    mode.add_argument('--pm-repo', help="set the PM-repo pointer in the registry to this PM repository's "
+                                        'work tree instead (--apply needs an elevated terminal)')
     p.add_argument('--owner-email', default=None, help="the owner's email (the machine config; with "
                    '--repo, .kit.json "owner".email)')
     p.add_argument('--pm-settings', default=None,
@@ -134,6 +143,13 @@ def main(argv=None):
                          % given[0].replace('_', '-'))
         home = a.home if a.home is not None else kuser.home_dir()
         code, _ = machinesetup.run_managed(machinesetup.ManagedContext(home, a.kit), apply=a.apply, out=out)
+        return code
+    if a.pm_repo is not None:
+        given = [n for n in REPO_ONLY + MACHINE_ONLY + ('owner_email',) if getattr(a, n) not in (None, False)]
+        if given:
+            return usage('--%s does not go with --pm-repo (it takes --kit and --apply)'
+                         % given[0].replace('_', '-'))
+        code, _ = machinesetup.run_pointer(mpointer.PointerContext(a.pm_repo, a.kit), apply=a.apply, out=out)
         return code
     if a.repo is not None:
         given = [n for n in MACHINE_ONLY if getattr(a, n) not in (None, False)]

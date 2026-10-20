@@ -211,3 +211,12 @@ The machine config folder was renamed: `kitlib.config.user.DIR_NAME` is the new 
 - **Other kit files in the folder:** the fallback covers `config.json` alone. The hub's token files live in the new folder only and are never read from the old one (`kitlib.hubsite.auth.folder`).
 - **The owner's move:** write the new folder's `config.json` from the old one (a copy, plus any new keys), check that the preflight `config` line names the new file, move any file the config points into the old folder (and its path), then retire the old folder by moving it out of the home folder's `.claude-*` names: `tools/machine_setup.py` takes every other `.claude-*` folder for a Claude account folder.
 - `machine_setup.py` skips both folder names (`kitlib.machinesetup.default_config_dirs`). The modules that use `OLD_DIR_NAME` are listed in tests/scrub/test_old_config_name.py, so retiring the fallback finds each.
+
+## The PM repo pointer
+
+One machine-wide registry value names the PM repository: `HKLM\SOFTWARE\pm-kit`, value `pm_repo`, a REG_SZ (`kitlib.config.pointer`). It lives under HKLM, so only an administrator can set it, and an agent cannot point the kit at another PM repository. Nothing reads it for config yet; preflight's `pointer` line reports it (docs/preflight.md).
+
+- **Read:** `kitlib.config.pointer.read`, straight from the registry in the 64-bit view (`KEY_WOW64_64KEY`), never from the environment. No key or no value: `NONE`. A value that cannot be read, is not a REG_SZ or is empty: `BAD`.
+- **The value:** the absolute path of the PM repository's main or data work tree, never a `pm/<slug>` worktree (`kitlib.config.pointer.check`). It must be an existing folder and the top of a git work tree. When the repository's git common dir holds `kit-pm-data.json` (`kitlib.pmdata`), the work tree must be on the recorded data branch; with no record it must be the main checkout. Anything else is `BAD`, with the reason.
+- **Under the kit's tests** (`kitlib.config.user.fenced`) the registry is never read: the value is the environment's `KIT_PM_REPO_FENCE`, and with none there is no pointer.
+- **Set it** from an administrator terminal: `machine_setup.py --pm-repo <PM repo>`, a dry run first (docs/machine-setup.md "PM repo pointer").

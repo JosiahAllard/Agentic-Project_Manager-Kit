@@ -105,6 +105,7 @@ def report(top, cfg, kit_root, base=None, fetch=False, lock_reader=lockline.read
     out.extend(hooks.lines(os.path.join(top, cfg.tools_dir), s['report_hooks']))
     out.extend(machine.preflight_lines(s))
     out.append(configline.line(home))
+    out.append(configline.pointer_line())
     # The default names a file; with no "preflight".traps set and no such file, there is no line.
     if (cfg.section(st.SECTION)['traps'] is not None
             or os.path.isfile(os.path.join(top, st.DEFAULT_TRAPS_FILE))):
