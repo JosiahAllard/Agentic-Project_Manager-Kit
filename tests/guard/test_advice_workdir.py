@@ -295,6 +295,29 @@ class WorktreeAdvice(unittest.TestCase):
         self.assertEqual(d.instead, 'git -C "%s" worktree list' % self.main)
         self.assertIn(self.ONLY % self.main, d.reason)
 
+    def test_a_main_target_with_no_word_to_aim_shows_the_worktrees(self):
+        # cp -t<dir> has no word the guard rewrites: it offered a new worktree as the Instead before
+        d = self.refused(bash('cp -t%s/d a' % self.main, self.w.main, sub=True), 'main-checkout')
+        self.assertEqual(d.instead, 'git -C "%s" worktree list' % self.main)
+        self.assertIn(self.ONLY % self.main, d.reason)
+        self.assertIn('(d there)', d.reason)
+
+    def test_an_unknown_target_never_offers_a_new_worktree(self):
+        # a place git cannot tell offered a new worktree as the Instead before, from a worktree too
+        unknown = W.fwd(self.w.unknown)
+        for payload, instead, only in (
+                (bash('cp -t%s/d a' % unknown, self.w.wt, sub=True), 'git -C "%s" worktree list' % self.main, False),
+                (bash('cp -t%s/d a' % unknown, self.w.main, sub=True), 'git -C "%s" worktree list' % self.main, True),
+                (bash('cp a %s/b' % unknown, self.w.main, sub=True), 'cp a "<worktree>/b"', True),
+                (bash('cp a %s/b' % unknown, self.w.wt, sub=True), 'cp a "%s/b"' % self.wt, False)):
+            with self.subTest(payload['tool_input']['command'], cwd=payload['cwd']):
+                d = self.refused(payload, 'unplaced')
+                self.assertEqual(d.instead, instead)
+                if only:
+                    self.assertIn(self.ONLY % self.main, d.reason)
+                else:
+                    self.assertNotIn('worktree add', d.reason)
+
     def test_a_main_target_from_main_is_aimed_at_the_worktree(self):
         for payload, instead in (
                 (bash('cp a b', self.w.main, sub=True), 'cp a "<worktree>/b"'),
