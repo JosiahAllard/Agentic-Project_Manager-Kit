@@ -66,6 +66,16 @@ import urllib.parse
 import uuid
 
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
+# The kit library, for the shared temp folder (kitlib.config.user.shared_temp: the machine
+# config's `temp_dir`, else %LOCALAPPDATA%\Temp); importing it also installs its CreateProcess
+# hook. Copied out of the kit, with no kitlib, the old %LOCALAPPDATA%\Temp paths are kept.
+KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+if KIT_ROOT not in sys.path:
+    sys.path.insert(0, KIT_ROOT)
+try:
+    from kitlib.config import user as kuser  # noqa: E402
+except ImportError:
+    kuser = None
 sys.path.insert(0, TOOL_DIR)
 import comfy_api as C  # noqa: E402
 # winproc.py (Toolhelp + job-object helpers, standard library only) lives beside procwatch.py,
@@ -73,6 +83,19 @@ import comfy_api as C  # noqa: E402
 # instead of re-implementing pid/ctime verification and process termination.
 sys.path.insert(0, os.path.join(TOOL_DIR, "..", "procwatch"))
 import winproc as W  # noqa: E402
+
+
+def _shared_temp():
+    """kuser.shared_temp(), or None when the kit library is missing or LOCALAPPDATA is unset."""
+    if kuser is None:
+        return None
+    try:
+        return kuser.shared_temp()
+    except (RuntimeError, OSError):
+        return None
+
+
+SHARED_TEMP = _shared_temp()
 
 # Approved local models. Anything not here needs the owner's approval and a licence check.
 MODELS = {
@@ -110,8 +133,10 @@ MAX_PIXELS = 2_100_000
 # file open; never delete a lock you did not create. This is not the machine lock (kitlib/lock):
 # machine_lock_rerun re-runs each command under it as kind local-ai, which covers ordering
 # against the repos' engine and render runs; this file just serialises comfy_gen against itself.
-GPU_LOCK = os.environ.get("GPU_LOCK", os.path.join(os.environ.get("LOCALAPPDATA", ""), "Temp",
-                                                   "comfy-gen.lock"))
+# In the shared temp, so every process finds it whatever TEMP it inherited.
+GPU_LOCK = os.environ.get("GPU_LOCK", os.path.join(SHARED_TEMP, "comfy-gen.lock") if SHARED_TEMP
+                          else os.path.join(os.environ.get("LOCALAPPDATA", ""), "Temp",
+                                            "comfy-gen.lock"))
 
 
 # ---------------------------------------------------------------- helpers
@@ -157,16 +182,18 @@ class gpu_lock:
 # Before that the owner always started ComfyUI by hand (a taskbar shortcut to Comfy Desktop);
 # agents only ever found it up or not. Now `ensure_running()` may start it, headless where
 # possible, and this tool shuts down only what IT started - a ComfyUI the owner started is
-# never touched. Design: one small state file under %TEMP%\comfy_gen\ records the pid, its
+# never touched. Design: one small state file under <shared temp>\comfy_gen\ records the pid, its
 # creation time (so a reused pid is never mistaken for ours - see winproc.terminate_verified)
 # and when it was last used; a detached "idle watcher" process (this script re-invoked as
 # `stop --idle-watch`) wakes every 60s and stops ComfyUI once ~10 minutes have passed with no
 # job touching last_used and the queue is empty. A watcher is simpler and more robust here than
 # a foreground timer thread: it survives this process exiting (every command is one-shot) and
 # a crashed watcher just means ComfyUI is not auto-stopped, not that it is wrongly stopped.
-# LOCALAPPDATA\Temp, not TEMP: `stop` from the owner's shell must find the state an agent wrote,
-# even when agents run with TEMP moved
-STATE_DIR = os.path.join(os.environ.get("LOCALAPPDATA") or os.environ.get("TEMP") or ".", "Temp", "comfy_gen")
+# The shared temp (SHARED_TEMP), else LOCALAPPDATA\Temp, never TEMP: `stop` from the owner's
+# shell must find the state an agent wrote, even when agents run with TEMP moved
+STATE_DIR = (os.path.join(SHARED_TEMP, "comfy_gen") if SHARED_TEMP else
+             os.path.join(os.environ.get("LOCALAPPDATA") or os.environ.get("TEMP") or ".", "Temp",
+                          "comfy_gen"))
 STATE_FILE = os.path.join(STATE_DIR, "state.json")
 IDLE_STOP_SECONDS = 600
 DESKTOP_EXE_DEFAULT = r"C:\Program Files\Comfy Desktop\Comfy Desktop.exe"   # the installer's default
