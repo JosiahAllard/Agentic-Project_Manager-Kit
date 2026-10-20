@@ -213,6 +213,11 @@ class SecretShell(Hub):
             ('read verb after eval', lambda sub: bash('eval "$c"; python "%s" questions' % hub, self.w.wt, sub)),
             ('module after eval', lambda sub: bash('eval "$c"; python -m tools.hub todos --json', self.w.wt, sub)),
             ('-m hub', lambda sub: bash('eval "$c"; python -m hub questions', self.w.wt, sub)),
+            # the forms the parsed rule reads: -m ending a flag cluster, and a quoted module
+            ('-Im hub', lambda sub: bash('eval "$c"; python -Im hub questions', self.w.wt, sub)),
+            ("-m 'hub'", lambda sub: bash("eval \"$c\"; python -m 'hub' questions", self.w.wt, sub)),
+            ('-m "hub"', lambda sub: ps('iex $c; python -m "hub" questions', self.w.wt, sub)),
+            ('-BIm"hub"', lambda sub: bash('eval "$c"; python -BIm"hub" questions', self.w.wt, sub)),
             ('unclosed quote', lambda sub: bash('python "%s" questions add --title "x' % hub, self.w.wt, sub)),
             ('PowerShell iex', lambda sub: ps('iex $c; python "%s" questions' % hub, self.w.wt, sub)),
             ('owner verb unread', lambda sub: bash('echo \'x ; python "%s" answer Q-1' % hub, self.w.wt, sub)),
@@ -228,7 +233,8 @@ class SecretShell(Hub):
     def test_an_unclean_line_naming_another_hub_file_is_not_held(self):
         # test_rules_hub.py, a hub.pyw or a word holding hub are not the hub tool
         for cmd in ('eval "$c"; python -m unittest tests/guard/test_rules_hub.py',
-                    'eval "$c"; cat docs/hub.pyw', 'eval "$c"; ls kitlib/hub'):
+                    'eval "$c"; cat docs/hub.pyw', 'eval "$c"; ls kitlib/hub',
+                    'eval "$c"; python -Im hubble x', "eval \"$c\"; python -m 'hub.x' y"):
             with self.subTest(cmd):
                 for label, sub, environ in HELD:
                     d = decide(bash(cmd, self.w.wt, sub), self.ctx(environ))

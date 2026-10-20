@@ -790,6 +790,11 @@ class OwnerLockTools(unittest.TestCase):
         ('bash', 'eval "$c"; python %s status' % LIVE),
         ('bash', "echo 'x ; python tools/machine_lock.py hold list"),
         ('bash', 'eval "$c"; python -m tools.machine_lock status'),
+        # the forms the parsed rule reads: -m ending a flag cluster, and a quoted module
+        ('bash', 'eval "$c"; python -m machine_lock status'),
+        ('bash', 'eval "$c"; python -Im machine_lock status'),
+        ('bash', "eval \"$c\"; python -m 'machine_lock' status"),
+        ('ps', 'iex $c; python -m "machine_lock" status'),
         ('ps', 'iex $c; python tools\\machine_lock.py status'),
     ]
 
@@ -815,7 +820,8 @@ class OwnerLockTools(unittest.TestCase):
 
     def test_an_unclean_line_naming_another_lock_file_is_not_held(self):
         for text in ('eval "$c"; python -m unittest tests/lock/test_machine_lock.py',
-                     'eval "$c"; ls tools/machine_lock', 'eval "$c"; cat docs/machine_lock.pyw'):
+                     'eval "$c"; ls tools/machine_lock', 'eval "$c"; cat docs/machine_lock.pyw',
+                     'eval "$c"; python -Im machine_locks status'):
             with self.subTest(text):
                 d = self.run_one('bash', text, True)
                 self.assertTrue(d is None or d.rule != 'owner-tool', d and d.reason)
