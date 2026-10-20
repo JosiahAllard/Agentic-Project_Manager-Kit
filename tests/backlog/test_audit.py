@@ -14,6 +14,10 @@ from unittest import mock
 
 from kitlib import sessionmark
 from kitlib.backlog import audit
+from kitlib.backlog import audit_check
+from kitlib.backlog import opener
+from kitlib.backlog import plan as pmod
+from kitlib.backlog import record as rmod
 from kitlib.backlog import store as smod
 from tests import inproc
 from tests.backlog.helpers import ADD_FLAGS, kit_json_ref
@@ -200,6 +204,143 @@ class Tool(unittest.TestCase):
         self.ok('migrate')
         self.assertEqual([(x['verb'], x['id'], x['store_sha']) for x in self.lines()],
                          [('migrate', '-', self.tip())])
+
+
+AUDIT = inproc.load_tool('backlog_audit')
+
+
+def kinds(report):
+    return [f.kind for f in report.findings]
+
+
+class Check(unittest.TestCase):
+    """kitlib.backlog.audit_check over a ref store the tool wrote, against its own audit log."""
+
+    setUp, run_tool, ok, lines, tip, add = (Tool.setUp, Tool.run_tool, Tool.ok, Tool.lines,
+                                            Tool.tip, Tool.add)
+
+    def report(self, entries=None, since=0):
+        _top, cfg, rules = opener.open_repo(self.repo.root)
+        backend = smod.open_backend(self.repo.root, cfg, fetch=False)
+        if entries is None:
+            entries, _notes = audit_check.read_log(self.log)
+        return audit_check.check(backend, rules, entries, since)
+
+    def test_an_audited_change_with_no_line_is_unaudited(self):
+        self.add()
+        self.ok('close', 'FOO', '--reason', 'the work is finished')
+        self.assertEqual(self.report().findings, [])                  # its line covers it
+        r = self.report(entries=[])
+        self.assertEqual(kinds(r), ['UNAUDITED'])
+        found = r.findings
+        self.assertIn(self.tip()[:10], found[0].text)
+        self.assertIn('FOO', found[0].text)
+        self.assertIn(' close rows=close ', found[0].text)
+
+    def test_a_low_change_needs_no_line(self):
+        self.add()
+        self.ok('set', 'FOO', '--summary', 'another thing to do')        # set-text: LOW
+        r = self.report(entries=[])
+        self.assertEqual((r.changes, r.findings), (2, []))
+
+    def test_a_set_of_another_field_needs_a_line(self):
+        self.add()
+        self.ok('set', 'FOO', *PRICE)                                     # set-other: MEDIUM
+        r = self.report(entries=[])
+        self.assertEqual(kinds(r), ['UNAUDITED'])
+        self.assertIn('set-other', r.findings[0].text)
+        self.assertEqual(self.report().findings, [])
+
+    def test_the_by_design_writers_are_counted_not_flagged(self):
+        self.add()
+        self.ok('set', 'FOO', *PRICE)
+        self.ok('--session', 'owner-hub', 'set', 'FOO', '--effort', 'm')
+        self.ok('--session', 'gate-land', 'close', 'FOO', '--reason', 'landed at abc1234')
+        r = self.report(entries=[])
+        self.assertEqual(kinds(r), ['UNAUDITED'])                       # the first set alone
+        self.assertEqual(dict(r.by_design), {'gate-land': 1, 'owner-hub': 1})
+
+    def test_the_by_design_sessions_are_the_writers_own(self):
+        from kitlib.backlog import at_landing
+        from kitlib.hubsite import recordwrite
+        self.assertEqual(audit_check.BY_DESIGN, (at_landing.SESSION, recordwrite.SESSION))
+
+    def test_a_role_not_in_the_map_is_unmapped(self):
+        def line(role, utc='2026-10-20T13:05:06Z'):
+            return (1, {'verb': 'close', 'id': 'X', 'role': role, 'session': 's',
+                        'utc': utc, 'store_sha': 'f' * 40})
+        self.add()
+        since = WHEN.timestamp() - 60
+        r = self.report([line('-'), line('no-such-role'), line('coordinator'), line('owner'),
+                         line('-', utc='2026-10-19T13:05:06Z')], since=since)
+        self.assertEqual(kinds(r), ['UNMAPPED', 'UNMAPPED'])
+        self.assertIn('role=-', r.findings[0].text)
+        self.assertIn('role=no-such-role', r.findings[1].text)
+
+    def test_a_change_before_the_window_is_not_read(self):
+        self.add()
+        self.ok('close', 'FOO', '--reason', 'the work is finished')
+        r = self.report(entries=[], since=datetime.datetime.now().timestamp() + 3600)
+        self.assertEqual((r.changes, r.findings), (0, []))
+
+    def test_a_line_without_a_sha_or_of_another_store_covers_nothing(self):
+        self.add()
+        self.ok('close', 'FOO', '--reason', 'the work is finished')
+        lines = [(1, dict(self.lines()[0], store_sha='-')),
+                 (2, dict(self.lines()[0], store_sha='e' * 40))]
+        r = self.report(lines)
+        self.assertEqual(kinds(r), ['UNAUDITED'])
+        self.assertEqual((r.lines_read, r.no_sha), (2, 1))
+
+    def test_a_subject_no_verb_wrote_is_unknown(self):
+        self.assertIsNone(audit_check.verb_of('records'))
+        for subject, verb in (('closes X: landed 1', 'close'), ('backlog: park X on Q-1', 'set-status'),
+                              ('backlog: pull X onto b', 'pull'), ('migrate: docs/backlog/*.md', 'migrate')):
+            self.assertEqual(audit_check.verb_of(subject), verb)
+
+    def run_check(self, *args):
+        return inproc.run_main(AUDIT.main, ['-C', self.repo.root, '--no-fetch'] + list(args),
+                               self.env, self.repo.root)
+
+    def test_the_exit_codes(self):
+        self.add()
+        rc, out, _err = self.run_check()
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(out.splitlines()[-1], 'OK')
+        self.assertIn('NOT LOGGED BY DESIGN: 0', out)
+        self.ok('close', 'FOO', '--reason', 'the work is finished')
+        os.remove(self.log)
+        rc, out, _err = self.run_check()
+        self.assertEqual(rc, 1, out)
+        self.assertIn('NOTE: no audit log', out)
+        self.assertIn('UNAUDITED ', out)
+        self.assertEqual(out.splitlines()[-1], 'FINDINGS 1')
+        machine_config(self.home, {})
+        rc, out, _err = self.run_check()
+        self.assertEqual(rc, 2, out)
+        self.assertIn('NOT CHECKED: the machine config names no pm_data', out)
+        rc, _out, _err = self.run_check('--days', '0')
+        self.assertEqual(rc, 2)
+
+
+class CheckFolder(unittest.TestCase):
+    """A folder store: read in the PM data worktree, NOT CHECKED anywhere else."""
+
+    def setUp(self):
+        from tests.backlog import test_pmdata_commit as pmc
+        pmc.PmDataStore.setUp(self)
+
+    def test_the_pm_data_worktree_is_read(self):
+        self.store.write(lambda snap: pmod.plan_close(snap, self.ctx, 'BAR', 'the work is done'))
+        r = audit_check.check(self.backend, rmod.Rules(), [], 0)
+        self.assertEqual(kinds(r), ['UNAUDITED', 'UNKNOWN'])            # the close, then the seed
+        self.assertIn('BAR', r.findings[0].text)
+        self.assertIn('seed the store', r.findings[1].text)
+
+    def test_a_folder_store_elsewhere_is_not_checked(self):
+        other = smod.MainBackend(self.repo.root, 'kit/backlog')
+        with self.assertRaises(audit_check.NotChecked):
+            audit_check.check(other, rmod.Rules(), [], 0)
 
 
 if __name__ == '__main__':
