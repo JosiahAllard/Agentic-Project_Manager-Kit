@@ -3,6 +3,8 @@ out of every folder sessions use as TEMP (session_temps), and make_temp falls ba
 default folder (default_work_temp) before this process's TEMP. Every test gives its home, its
 environment, platform 'win32' and a registry reader: nothing reads this machine's TEMP, AGENT_TEMP
 or registry."""
+import ast
+import importlib.util
 import json
 import os
 import shutil
@@ -226,6 +228,211 @@ class MakeTempFallback(unittest.TestCase):
                          os.path.normcase(tempfile.gettempdir()))
         self.assertIn("this process's temp folder: %s could not be used (access denied)"
                       % parent, note)
+
+
+KIT = os.path.dirname(os.path.dirname(HERE))
+
+
+class HomeConfig(unittest.TestCase):
+    """A temp home whose machine config this test writes."""
+
+    def setUp(self):
+        self.home = tempfile.mkdtemp(prefix='kit-home-')
+        self.addCleanup(shutil.rmtree, self.home, True)
+
+    def write(self, body):
+        os.makedirs(os.path.join(self.home, user.DIR_NAME), exist_ok=True)
+        with open(user.config_file(self.home), 'w', encoding='utf-8') as f:
+            json.dump(body, f)
+
+
+class SharedTempFollowsTempDir(HomeConfig):
+    """shared_temp is the configured temp_dir (temp_parent), else system_temp: the old
+    %LOCALAPPDATA%\\Temp rule."""
+
+    ENV = {'LOCALAPPDATA': r'C:\lad'}
+
+    def test_system_temp_is_the_old_rule(self):
+        self.assertEqual(user.system_temp(self.ENV, 'win32'), os.path.join(r'C:\lad', 'Temp'))
+        with self.assertRaises(RuntimeError):
+            user.system_temp({}, 'win32')
+        with mock.patch.object(tempfile, 'gettempdir', return_value='/tmp/x'):
+            self.assertEqual(user.system_temp({}, 'linux'), '/tmp/x')
+
+    def test_a_set_temp_dir_is_the_shared_temp(self):
+        configured = os.path.join(self.home, 'kit-shared')
+        self.write({'temp_dir': configured})
+        self.assertEqual(user.temp_parent(self.home), configured)
+        self.assertEqual(user.shared_temp(self.ENV, 'win32', home=self.home), configured)
+
+    def test_even_when_it_is_a_session_temp(self):
+        """Only work_temp keeps out of session temps; the shared temp is what every process
+        agrees on, and its users are a few files."""
+        configured = os.path.join(self.home, 'AgentTemp')
+        self.write({'temp_dir': configured, 'agent_temp_sweep': {'dir': configured}})
+        self.assertEqual(user.shared_temp(self.ENV, 'win32', home=self.home), configured)
+
+    def test_unset_gives_the_system_temp(self):
+        self.write({})
+        self.assertIsNone(user.temp_parent(self.home))
+        self.assertEqual(user.shared_temp(self.ENV, 'win32', home=self.home),
+                         os.path.join(r'C:\lad', 'Temp'))
+
+    def test_a_config_that_cannot_be_read_gives_the_system_temp_and_no_raise(self):
+        self.write({'temp_dir': 'relative'})
+        self.assertIsNone(user.temp_parent(self.home))
+        self.assertEqual(user.shared_temp(self.ENV, 'win32', home=self.home),
+                         os.path.join(r'C:\lad', 'Temp'))
+
+    @unittest.skipUnless(os.name == 'nt' and DRIVE, 'drive letters are Windows only')
+    def test_a_temp_dir_on_a_drive_that_is_not_there_gives_the_system_temp(self):
+        gone = next(c + ':' for c in 'QRSTUVWXYJKLMNOP' if not os.path.isdir(c + ':' + os.sep))
+        self.write({'temp_dir': gone + os.sep + 'kit'})
+        self.assertIsNone(user.temp_parent(self.home))
+        self.assertEqual(user.shared_temp(self.ENV, 'win32', home=self.home),
+                         os.path.join(r'C:\lad', 'Temp'))
+
+    def test_a_fenced_process_given_no_home_reads_no_config(self):
+        self.assertTrue(user.fenced())
+        with mock.patch.object(user, 'user_config', side_effect=AssertionError('config read')):
+            self.assertIsNone(user.temp_parent())
+            self.assertEqual(user.shared_temp(self.ENV, 'win32'),
+                             os.path.join(r'C:\lad', 'Temp'))
+
+    @unittest.skipUnless(os.name == 'nt' and DRIVE, 'drive letters are Windows only')
+    def test_work_temps_own_candidates_never_take_the_shared_temp(self):
+        """work_temp's chain past temp_dir uses the system temp, so a temp_dir it skipped as a
+        session temp never comes back through shared_temp."""
+        agent = os.path.join(ROOT, 'AgentTemp')
+        self.write({'temp_dir': agent})
+        env = {'LOCALAPPDATA': other_letter(DRIVE) + os.sep + 'lad'}
+        with mock.patch.object(user, 'temp_parent', return_value=agent):
+            got = user.work_temp(HERE, home=self.home, environ=env, platform='win32',
+                                 reg=reader({'AGENT_TEMP': agent, 'TMP': ROOT}))
+        self.assertEqual(got, user.system_temp(env, 'win32'))
+
+
+class Mkdtemp(HomeConfig):
+    """user.mkdtemp: a small private folder in temp_parent (made if missing), else in this
+    process's temp folder; never a config error."""
+
+    def setUp(self):
+        HomeConfig.setUp(self)
+        self.proc = os.path.join(self.home, 'proc-temp')
+        os.makedirs(self.proc)
+        patch = mock.patch.object(tempfile, 'tempdir', self.proc)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_it_is_made_in_temp_dir_made_if_missing(self):
+        configured = os.path.join(self.home, 'kit', 'shared')
+        self.write({'temp_dir': configured})
+        folder = user.mkdtemp('kit-x-', home=self.home)
+        self.assertEqual(os.path.dirname(folder), configured)
+        self.assertTrue(os.path.basename(folder).startswith('kit-x-'))
+        self.assertTrue(os.path.isdir(folder))
+
+    def test_no_temp_dir_gives_this_processs_temp(self):
+        self.write({})
+        folder = user.mkdtemp('kit-x-', home=self.home)
+        self.assertEqual(os.path.dirname(folder), self.proc)
+
+    def test_a_bad_config_gives_this_processs_temp(self):
+        self.write({'temp_dir': 'relative'})
+        self.assertEqual(os.path.dirname(user.mkdtemp('kit-x-', home=self.home)), self.proc)
+
+    def test_a_temp_dir_that_cannot_be_made_gives_this_processs_temp(self):
+        blocker = os.path.join(self.home, 'a-file')
+        with open(blocker, 'w') as f:
+            f.write('x')
+        self.write({'temp_dir': os.path.join(blocker, 'below')})
+        self.assertEqual(os.path.dirname(user.mkdtemp('kit-x-', home=self.home)), self.proc)
+
+    def test_make_temps_last_resort_is_mkdtemp(self):
+        got = os.path.join(self.proc, 'kit-x-last')
+        with mock.patch.object(user, 'work_temp', side_effect=RuntimeError('no')), \
+                mock.patch.object(user, 'default_work_temp', side_effect=RuntimeError('no')), \
+                mock.patch.object(user, 'mkdtemp', return_value=got) as made:
+            folder, note = user.make_temp(self.home, 'kit-x-', home=self.home)
+        made.assert_called_once_with('kit-x-', home=self.home)
+        self.assertEqual(folder, got)
+        self.assertIn('could not be used (no)', note)
+
+
+def _calls(path):
+    """(callee dotted name, keyword names) of every call in the module at `path`."""
+    with open(path, encoding='utf-8') as f:
+        tree = ast.parse(f.read(), path)
+    out = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+                and isinstance(node.func.value, ast.Name):
+            out.append(('%s.%s' % (node.func.value.id, node.func.attr),
+                        {k.arg for k in node.keywords}))
+    return out
+
+
+class PrivateIndexSites(unittest.TestCase):
+    """The private-index folders of commit, the backlog store and pmdata init go in the shared
+    temp (user.mkdtemp), never a bare tempfile.mkdtemp in the process's TEMP."""
+
+    SITES = {'kitlib/commit/__init__.py': 1, 'kitlib/backlog/store.py': 2,
+             'kitlib/pmdata/init.py': 1}
+
+    def test_each_site_calls_user_mkdtemp(self):
+        for rel, count in self.SITES.items():
+            calls = _calls(os.path.join(KIT, *rel.split('/')))
+            bare = [c for c in calls if c[0] == 'tempfile.mkdtemp' and 'dir' not in c[1]]
+            self.assertEqual(bare, [], rel)
+            made = [c for c in calls if c[0].endswith('.mkdtemp') and c[0] != 'tempfile.mkdtemp']
+            self.assertEqual(len(made), count, rel)
+
+
+class ScratchRoots(HomeConfig):
+    """scratch.roots lists the system temp, never temp_dir, and reads no machine config."""
+
+    def test_the_system_temp_is_a_root_and_temp_dir_is_not(self):
+        from kitlib.worktree import scratch
+        lad = os.path.join(self.home, 'lad')
+        os.makedirs(os.path.join(lad, 'Temp'))
+        main = os.path.join(self.home, 'repo')
+        os.makedirs(main)
+        env = {'LOCALAPPDATA': lad, 'USERPROFILE': os.path.join(self.home, 'profile')}
+        with mock.patch.object(user, 'temp_parent', return_value=main), \
+                mock.patch.object(user, 'user_config', side_effect=AssertionError('config')):
+            got, _dropped = scratch.roots(env, main)
+        self.assertEqual([os.path.normcase(p) for p in got],
+                         [os.path.normcase(os.path.join(lad, 'Temp'))])
+
+
+class ComfyPaths(unittest.TestCase):
+    """comfy_gen's GPU self-lock and state folder are in the shared temp, else the old
+    %LOCALAPPDATA%\\Temp paths."""
+
+    def load(self):
+        path = os.path.join(KIT, 'optional', 'comfy', 'comfy_gen.py')
+        spec = importlib.util.spec_from_file_location('comfy_gen_paths_probe', path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_they_follow_the_shared_temp(self):
+        shared = os.path.join('Q:' + os.sep, 'shared')
+        env = {k: v for k, v in os.environ.items() if k != 'GPU_LOCK'}
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch.object(user, 'shared_temp', return_value=shared):
+            g = self.load()
+        self.assertEqual(g.STATE_DIR, os.path.join(shared, 'comfy_gen'))
+        self.assertEqual(g.GPU_LOCK, os.path.join(shared, 'comfy-gen.lock'))
+
+    def test_no_shared_temp_keeps_the_old_paths(self):
+        env = {k: v for k, v in os.environ.items() if k != 'GPU_LOCK'}
+        env['LOCALAPPDATA'] = os.path.join('Q:' + os.sep, 'lad')
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch.object(user, 'shared_temp', side_effect=RuntimeError('none')):
+            g = self.load()
+        self.assertEqual(g.STATE_DIR, os.path.join(env['LOCALAPPDATA'], 'Temp', 'comfy_gen'))
+        self.assertEqual(g.GPU_LOCK, os.path.join(env['LOCALAPPDATA'], 'Temp', 'comfy-gen.lock'))
 
 
 if __name__ == '__main__':
