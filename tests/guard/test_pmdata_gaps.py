@@ -1,6 +1,6 @@
 """The routes past the pre-push leak stage that the remote-rewrite and pm-data-bypass guards
 name (docs/guard.md "Rules", docs/pm-data-branch.md "Pre-push guard"). Each is denied only when the
-repository has a PM data record (or, for a copy, holds the recorded root), and never in the owner's
+repository has a PM data record, and never in the owner's
 own session:
 
   - git-remote-rewrite: git remote set-url/add/rename/remove and git config writes to remote.*,
@@ -8,9 +8,11 @@ own session:
   - GIT_CONFIG_GLOBAL / GIT_CONFIG_SYSTEM / GIT_CONFIG before a push: denied today (the place is
     blind), pinned here;
   - a computed program name on an unreadable line, and `& (Get-Command git)`;
-  - a git alias, expanded from config and judged as what it runs;
-  - a push from a repository without a record that holds the recorded root, or is shallow;
-  - hand-driven remote helpers (git remote-https, git http-push, git-remote-*)."""
+  - hand-driven remote helpers (git remote-https, git http-push, git-remote-*).
+
+git aliases from config and a push from a copy of the data without a record (its root commit, a
+shallow clone) are no longer judged: the guard catches honest mistakes, not evasion.
+Their allowed forms stay pinned."""
 import os
 import unittest
 
@@ -30,32 +32,6 @@ ROOT = 'a' * 40
 PUBLIC = 'https://github.com/o/kit'
 
 
-class FakeRead(object):
-    """The guard's git config and object reads (kitlib.guard.gitread), answered from tables."""
-
-    def __init__(self):
-        self.aliases = {}                     # name -> value
-        self.alias_error = None
-        self.commits = set()                  # (normcase(dir), sha)
-        self.shallow = set()                  # normcase(dir)
-        self.error = None
-
-    def alias(self, cwd, name):
-        if self.alias_error:
-            return None, self.alias_error
-        return self.aliases.get(name.lower()), None
-
-    def has_commit(self, cwd, sha):
-        if self.error:
-            return None, self.error
-        return (os.path.normcase(os.path.abspath(cwd)), sha) in self.commits, None
-
-    def is_shallow(self, cwd):
-        if self.error:
-            return None, self.error
-        return os.path.normcase(os.path.abspath(cwd)) in self.shallow, None
-
-
 class Base(unittest.TestCase):
     def setUp(self):
         self.w = W.World(kit={'repo': {'name': 'demo'}})
@@ -68,7 +44,6 @@ class Base(unittest.TestCase):
         os.makedirs(wt_git, exist_ok=True)
         with open(os.path.join(wt_git, 'HEAD'), 'w', encoding='utf-8') as f:
             f.write('ref: refs/heads/kit/wt\n')
-        self.read = FakeRead()
         # a repository of its own under the temp folder (inside every session's write jail)
         self.clone = os.path.join(self.w.temp, 'scratch')
         os.makedirs(os.path.join(self.clone, '.git'))
@@ -81,9 +56,7 @@ class Base(unittest.TestCase):
         return self.w.classify(path)
 
     def ctx(self, environ=None):
-        c = self.w.ctx(environ=environ or {}, classify=self.classify)
-        c.gitread = self.read
-        return c
+        return self.w.ctx(environ=environ or {}, classify=self.classify)
 
     def decide(self, text, sub=False, environ=None, cwd=None, shell=bash):
         return decide(shell(text, cwd or self.w.wt, sub=sub), self.ctx(environ))
@@ -207,22 +180,28 @@ class RemoteRewrite(Base):
 
 
 class ConfigFileEnv(Base):
-    """GIT_CONFIG_GLOBAL, GIT_CONFIG_SYSTEM and GIT_CONFIG before a push or send-pack: already
-    denied (commands.git_env_unsafe blinds the place, and git_push refuses a place it cannot tell).
-    Pinned so the record's ask stays met."""
+    """GIT_CONFIG_GLOBAL, GIT_CONFIG_SYSTEM and GIT_CONFIG before a push or send-pack name a config
+    file on purpose: the guard catches honest mistakes, not evasion, so the push is judged
+    as the same push with no variable."""
 
-    def test_a_config_file_variable_before_a_push_is_denied(self):
+    def same(self, a, b):
+        if b is None:
+            self.assertIsNone(a)
+        else:
+            self.assertIsNotNone(a)
+            self.assertEqual((b.verdict, b.rule), (a.verdict, a.rule), a.reason)
+
+    def test_a_config_file_variable_before_a_push_changes_nothing(self):
         for name in ('GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM', 'GIT_CONFIG'):
             for label, sub, env in self.sessions():
                 with self.subTest(name=name, session=label):
-                    d = self.decide('%s=/tmp/x.cfg git push private pmdata' % name, sub=sub, environ=env)
-                    self.assert_denied(d, 'git-push-main')
-                    d = self.decide('%s=/tmp/x.cfg git send-pack %s pmdata' % (name, PUBLIC), sub=sub, environ=env)
-                    self.assert_denied(d)
+                    for push in ('git push private pmdata', 'git send-pack %s pmdata' % PUBLIC):
+                        self.same(self.decide('%s=/tmp/x.cfg %s' % (name, push), sub=sub, environ=env),
+                                  self.decide(push, sub=sub, environ=env))
 
     def test_powershell_too(self):
-        d = self.decide('$env:GIT_CONFIG_GLOBAL = "x"; git push private pmdata', environ=PM, shell=ps)
-        self.assert_denied(d, 'git-push-main')
+        self.same(self.decide('$env:GIT_CONFIG_GLOBAL = "x"; git push private pmdata', environ=PM, shell=ps),
+                  self.decide('git push private pmdata', environ=PM, shell=ps))
 
 
 class HomeConfig(Base):
@@ -250,10 +229,6 @@ class HomeConfig(Base):
             for label, sub, env in self.sessions():
                 with self.subTest(text=text, session=label):
                     self.assert_denied(self.decide(text, sub=sub, environ=env, shell=shell), 'git-push-pmdata')
-
-    def test_an_alias_for_push_too(self):
-        self.read.aliases = {'pu': 'push'}
-        self.assert_denied(self.decide('HOME=/tmp/h git pu private pmdata', environ=PM), 'git-push-pmdata')
 
     def test_owner_other_commands_and_no_record_pass(self):
         for text, shell in self.texts():
@@ -305,81 +280,21 @@ class ComputedProgram(Base):
         self.assertIsNone(self.decide(text, shell=ps))
 
 
-class Alias(Base):
-    """A git alias in config is expanded and judged as the command it runs."""
+class AliasAndCopyCut(Base):
+    """A git subcommand that is not a builtin is left to git, and a push from a repository
+    without a record of its own is not judged as a copy of the data (honest mistakes only)."""
 
-    def test_an_alias_for_push_no_verify_is_denied(self):
-        self.read.aliases = {'pu': 'push'}
-        for label, sub, env in self.sessions():
-            with self.subTest(label):
-                self.assert_denied(self.decide('git pu --no-verify origin pmdata', sub=sub, environ=env),
-                                   'git-push-pmdata')
-        self.assertIsNone(self.decide('git pu --no-verify origin pmdata'))
-        self.assertIsNone(self.decide('git pu origin kit/wt', environ=PM))
-
-    def test_an_alias_holding_the_flag_and_a_chain(self):
-        self.read.aliases = {'pnv': 'push --no-verify', 'p2': 'pnv'}
-        self.assert_denied(self.decide('git pnv origin pmdata', environ=PM), 'git-push-pmdata')
-        self.assert_denied(self.decide('git p2 origin pmdata', environ=PM), 'git-push-pmdata')
-
-    def test_aliases_for_other_hookless_or_rewriting_commands(self):
-        self.read.aliases = {'sp': 'send-pack', 'rs': "remote set-url", 'rh': 'remote-https'}
-        self.assert_denied(self.decide('git sp %s pmdata' % PUBLIC, environ=PM), 'git-push-pmdata')
-        self.assert_denied(self.decide('git rs private %s' % PUBLIC, environ=PM), 'git-remote-rewrite')
-        self.assert_denied(self.decide('git rh origin %s' % PUBLIC, environ=PM), 'git-push-pmdata')
-
-    def test_a_shell_alias_or_one_that_cannot_be_read_is_denied(self):
-        self.read.aliases = {'x': '!git push --no-verify origin pmdata', 'o': '-c a.b=c push', 'loop': 'loop'}
-        self.assert_denied(self.decide('git x', environ=PM), 'git-push-pmdata')
-        self.assert_denied(self.decide('git o origin pmdata', environ=PM), 'git-push-pmdata')
-        self.assert_denied(self.decide('git loop', environ=PM), 'git-push-pmdata')
-        self.read.alias_error = 'git config timed out'
-        self.assert_denied(self.decide('git pu origin pmdata', environ=PM), 'git-push-pmdata')
-
-    def test_builtins_unknown_names_and_no_record_pass(self):
-        self.read.aliases = {'pu': 'push --no-verify', 'status': 'push --no-verify'}
-        self.assertIsNone(self.decide('git status', environ=PM))         # git ignores an alias that hides a builtin
-        self.assertIsNone(self.decide('git lfs ls-files', environ=PM))   # no alias: git's own error or git-lfs
-        os.remove(self.record)
+    def test_builtins_and_unknown_names_pass(self):
+        self.assertIsNone(self.decide('git status', environ=PM))
+        self.assertIsNone(self.decide('git lfs ls-files', environ=PM))   # git's own error or git-lfs
         self.assertIsNone(self.decide('git pu origin pmdata', environ=PM))
 
-
-class DataCopy(Base):
-    """A repository without a record of its own that holds the recorded root commit (a clone or a
-    fetch of the data branch) or is shallow: it runs no kit pre-push leak stage, so every push and
-    send-pack from it is denied when the machine config names pm_data."""
-
-    def push(self, sub=False, environ=PM, text=None):
-        return self.decide(text or 'git -C "%s" push %s origin/pmdata:refs/heads/x' % (W.fwd(self.clone), PUBLIC),
-                           sub=sub, environ=environ)
-
-    def test_a_clone_holding_the_root_is_denied(self):
+    def test_a_push_from_a_repository_without_a_record_passes(self):
         self.machine_pm_data()
-        self.read.commits.add((os.path.normcase(self.clone), ROOT))
+        text = 'git -C "%s" push %s origin/pmdata:refs/heads/x' % (W.fwd(self.clone), PUBLIC)
         for label, sub, env in self.sessions():
-            with self.subTest(label):
-                self.assert_denied(self.push(sub=sub, environ=env), 'git-push-pmdata')
-        self.assert_denied(self.push(text='git -C "%s" push origin main' % W.fwd(self.clone)), 'git-push-pmdata')
-        self.assert_denied(self.push(text='git -C "%s" send-pack %s pmdata' % (W.fwd(self.clone), PUBLIC)),
-                           'git-push-pmdata')
-        self.assertIsNone(self.push(environ={}))
-
-    def test_a_shallow_repository_is_denied(self):
-        self.machine_pm_data()
-        self.read.shallow.add(os.path.normcase(self.clone))
-        self.assert_denied(self.push(), 'git-push-pmdata')
-
-    def test_a_check_that_fails_is_denied(self):
-        self.machine_pm_data()
-        self.read.error = 'git cat-file timed out'
-        self.assert_denied(self.push(), 'git-push-pmdata')
-
-    def test_an_unrelated_repository_and_no_machine_pm_data_pass(self):
-        self.machine_pm_data()
-        self.assertIsNone(self.push())
-        self.w.user_config({})
-        self.read.commits.add((os.path.normcase(self.clone), ROOT))
-        self.assertIsNone(self.push())
+            with self.subTest(session=label):
+                self.assertIsNone(self.decide(text, sub=sub, environ=env))
 
 
 class RemoteHelper(Base):

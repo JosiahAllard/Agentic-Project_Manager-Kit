@@ -41,7 +41,8 @@ lives here once:
 
 The adapter is kitlib.host.HostAdapter. Its parse may return one Action or a tuple of them, for a
 host whose one tool call acts on several targets (one patch that adds, deletes and renames files):
-each is judged, and the first deny decides, else the first ask, else allow. An empty tuple is
+each is judged, and the first deny decides, else the first ask, else allow (carrying every
+warning a warn-mode rule gave, kitlib.guard.modes, for the adapter to render). An empty tuple is
 refused (fail closed). run() also reads three optional attributes:
 `capabilities` (HostCapabilities: a verdict the host cannot show is lowered by kitlib.host.degrade),
 `agent(payload)` (the subagent a payload names, read even when parse refuses it, so a guard-error
@@ -154,7 +155,17 @@ def _judge(adapter, guard, actions, environ, deadline, started=None):
         if d.verdict == 'deny':
             return d
         found.append(d)
-    return next((d for d in found if d.verdict == 'ask'), found[0])
+    ask = next((d for d in found if d.verdict == 'ask'), None)
+    if ask is not None:
+        return ask
+    warned = [d for d in found if d.reason]     # an allow with a reason: a warning (kitlib.guard.modes)
+    if not warned:
+        return found[0]
+    reasons = []
+    for d in warned:
+        if d.reason not in reasons:
+            reasons.append(d.reason)
+    return Decision('allow', warned[0].rule, ' '.join(reasons))
 
 
 def run(adapter, event_name, stdin, stdout, environ=None, entry=None, deadline=None, started=None, args=()):

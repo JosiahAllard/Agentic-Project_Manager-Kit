@@ -63,27 +63,27 @@ class LockedMain(unittest.TestCase):
 
     def test_a_bare_drive_is_no_place(self):
         drive = self.w.main[:2]
-        d = self.denied(self.run_ps(self.sp(drive)), 'main-checkout')
+        d = self.denied(self.run_ps(self.sp(drive)), 'unplaced')
         self.assertIn('the directory it runs in is unknown', d.reason)
         self.denied(self.run_ps("Start-Process cmd -WorkingDirectory:%s '/c','echo x > f.txt'" % drive),
-                    'main-checkout')
+                    'unplaced')
         self.denied(self.run_ps("Start-Process cmd -WorkingDirectory: %s '/c','echo x > f.txt'" % drive),
-                    'main-checkout')
+                    'unplaced')
 
     def test_a_wildcard_is_no_place(self):
         for workdir in (self.w.main[:-1] + '?', self.w.main[:-1] + '*', self.w.main[:-4] + '[r]epo',
                         '..' + BS + 'rep?', self.w.main[:-1] + '`o'):
             with self.subTest(workdir=workdir):
-                d = self.denied(self.run_ps(self.sp(workdir)), 'main-checkout')
+                d = self.denied(self.run_ps(self.sp(workdir)), 'unplaced')
                 self.assertIn('the directory it runs in is unknown', d.reason)
 
     def test_a_wildcard_for_powershell_and_bash(self):
         wild = self.w.main[:-1] + '?'
-        self.denied(self.run_ps(self.sp(wild, 'powershell', "'-Command', 'echo x > f.txt'")), 'main-checkout')
-        self.denied(self.run_ps(self.sp(wild, 'bash', "'-c', '\"echo x > f.txt\"'")), 'main-checkout')
+        self.denied(self.run_ps(self.sp(wild, 'powershell', "'-Command', 'echo x > f.txt'")), 'unplaced')
+        self.denied(self.run_ps(self.sp(wild, 'bash', "'-c', '\"echo x > f.txt\"'")), 'unplaced')
 
     def test_a_drive_relative_folder_is_no_place(self):
-        self.denied(self.run_ps(self.sp(self.w.main[:2] + 'repo')), 'main-checkout')
+        self.denied(self.run_ps(self.sp(self.w.main[:2] + 'repo')), 'unplaced')
 
     def test_a_relative_folder_is_read_where_it_is(self):
         self.denied(self.run_ps(self.sp('..' + BS + 'repo')), 'main-checkout')
@@ -94,9 +94,9 @@ class LockedMain(unittest.TestCase):
         # repository's the call runs in, not the kit defaults that let main edit anywhere
         for text in ('echo x > $p', 'Set-Content -Path $p -Value x', 'Set-Content -Path (Join-Path $a b) -Value x'):
             with self.subTest(text=text):
-                d = self.denied(self.run_ps(text), 'main-checkout')
+                d = self.denied(self.run_ps(text), 'unplaced')
                 self.assertIn('cannot tell where it writes', d.reason)
-        self.denied(self.run_ps('echo x > $p', cwd=self.w.wt), 'main-checkout')
+        self.denied(self.run_ps('echo x > $p', cwd=self.w.wt), 'unplaced')
 
     def test_a_literal_folder_is_read_where_it_is(self):
         self.allowed(self.run_ps(self.sp(self.w.wt)))
@@ -118,7 +118,7 @@ class GrantedLander(unittest.TestCase):
         return decide(W.event(tool, {'command': text, 'description': 'test'}, cwd, sub=True,
                               agent_type='lander'), self.w.ctx())
 
-    def denied(self, d, rule='main-checkout'):
+    def denied(self, d, rule='unplaced'):
         self.assertIsNotNone(d, 'allowed')
         self.assertEqual((d.verdict, d.rule), ('deny', rule), d.reason)
 
@@ -139,6 +139,10 @@ class GrantedLander(unittest.TestCase):
                 with self.subTest(cwd=cwd, workdir=workdir):
                     self.denied(self.judge('PowerShell', "Start-Process cmd -WorkingDirectory '%s' -ArgumentList "
                                          "'/c','echo x > f.txt'" % workdir, cwd))
+
+
+setUpModule = W.deny_unplaced           # these pin what the guard cannot place (world.deny_unplaced)
+tearDownModule = W.allow_unplaced
 
 
 if __name__ == '__main__':

@@ -1,8 +1,9 @@
 """PowerShell provider and drive paths (shell.resolve_path with shell PS, shell.ps_unplaceable,
-rules.shell_writes, rules.ps_drive_jail): from a worktree, a write PowerShell sends into the main
-checkout through FileSystem::, a module-qualified FileSystem::, a drive named by anything but one
-ASCII letter (New-PSDrive Main FileSystem <main>, 1:, _:) or another provider, or after a cd into
-such a place, is refused, never read as a file in the worktree. Bash and cmd words, one-letter
+rules.shell_writes): from a worktree, a write PowerShell sends into the main checkout through
+FileSystem:: or a module-qualified FileSystem:: is refused, never read as a file in the worktree.
+A drive named by anything but one ASCII letter (New-PSDrive Main FileSystem <main>, 1:, _:) or
+another provider is a place the guard cannot tell: judged as a bash target it cannot place is,
+refused only outside a worktree (docs/guard-v2.md B16, cut). Bash and cmd words, one-letter
 drives and relative paths are read as before."""
 import os
 import time
@@ -67,30 +68,19 @@ class IntoMain(Base):
                         'main-checkout')
         self.assertIn('is in the main checkout', d.reason)
 
-    def test_multi_letter_drive(self):
-        d = self.denied(self.run_ps(r'New-PSDrive Main FileSystem {main}; New-Item Main:\x.txt'), 'main-checkout')
-        self.assertIn('cannot place: Main:\\x.txt', d.reason)
-
     def test_cd_filesystem_provider_then_relative_write(self):
         d = self.denied(self.run_ps(r'cd FileSystem::{main}; New-Item x.txt'), 'main-checkout')
         self.assertIn('is in the main checkout', d.reason)
 
     def test_cd_multi_letter_drive_then_relative_write(self):
-        d = self.denied(self.run_ps(r'cd Main:\; New-Item x.txt'), 'main-checkout')
-        self.assertIn('the directory it runs in is a PowerShell drive', d.reason)
-
-    def test_drive_named_by_anything_but_one_ascii_letter(self):
-        # New-PSDrive takes names such as 1, _ or a non-ASCII letter: not a one-letter drive
-        for text in (r'New-Item 1:\x.txt', r'New-Item _:\x.txt', 'New-Item é:\\x.txt',
-                     r'New-PSDrive 1 FileSystem {main}; New-Item 1:\x.txt'):
-            with self.subTest(text):
-                d = self.denied(self.run_ps(text), 'main-checkout')
-                self.assertIn('cannot place', d.reason)
+        # a cd the guard cannot place makes the directory unknown, as bash's cd $x does
+        d = self.denied(self.run_ps(r'cd Main:\; New-Item x.txt'), 'unplaced')
+        self.assertIn('the directory it runs in is unknown', d.reason)
 
     def test_cd_drive_named_by_anything_but_one_ascii_letter_then_write(self):
         for text in (r'cd 1:\; New-Item x.txt', r'cd _:\; New-Item x.txt', 'cd é:\\; New-Item x.txt'):
             with self.subTest(text):
-                d = self.denied(self.run_ps(text), 'main-checkout')
+                d = self.denied(self.run_ps(text), 'unplaced')
                 self.assertIn('Name a literal path inside your worktree', d.reason)
 
     def test_literal_path_filesystem_provider(self):
@@ -105,29 +95,6 @@ class IntoMain(Base):
                 d = self.denied(self.run_ps(text), 'main-checkout')
                 self.assertIn('is in the main checkout', d.reason)
 
-    def test_jailed_session_cd_into_unplaceable_place_then_write(self):
-        # cwd and target are both None after the cd: the jail still refuses (track's cwd_ps_drive)
-        for text in (r'cd Main:\; New-Item x.txt', r'cd Registry::HKCU\x; New-Item x',
-                     r'Set-Location -Path Main:\; New-Item x.txt', r'Push-Location 1:\; New-Item x.txt'):
-            with self.subTest(text):
-                d = self.denied(self.run_ps(text, env=COORDINATOR, sub=False), 'write-jail')
-                self.assertIn('PowerShell drive or provider path', d.reason)
-
-    def test_unknown_provider(self):
-        # a provider the guard does not know (a module's own, or FileSystem from another module)
-        # may hold files anywhere; the built-in non-file ones (Registry::, Environment::) are
-        # left to kit/guard-env-drive's skip and are not pinned here
-        for text in (r'New-Item Demo.Provider::{main}\x.txt', r'New-Item Other.Module\FileSystem::{main}\x.txt'):
-            with self.subTest(text):
-                d = self.denied(self.run_ps(text), 'main-checkout')
-                self.assertIn('cannot place', d.reason)
-
-    def test_jailed_session_that_may_edit_main_is_refused_by_the_jail(self):
-        # a coordinator's main session may edit a main checkout, so main_checkout lets an unplaced
-        # target through; the jail cannot judge it and refuses (ps_drive_jail)
-        d = self.denied(self.run_ps(r'New-Item Main:\x.txt', env=COORDINATOR, sub=False), 'write-jail')
-        self.assertIn('cannot tell where it writes', d.reason)
-
     def test_root_search_through_filesystem_provider(self):
         drive = os.path.splitdrive(self.w.base)[0]
         self.denied(self.run_ps('Get-ChildItem FileSystem::%s\\ -Recurse' % drive), 'root-search')
@@ -140,17 +107,17 @@ class DynamicTargets(Base):
     (rules.ps_pwd_path); a ( ) target fails closed from a main checkout too (shell._Scan.ps_paren_arg)."""
 
     def test_variable_target_into_main(self):
-        d = self.denied(self.run_ps(r'$p="{main}\x.txt"; Set-Content $p x'), 'main-checkout')
+        d = self.denied(self.run_ps(r'$p="{main}\x.txt"; Set-Content $p x'), 'unplaced')
         self.assertIn('cannot tell where it writes', d.reason)
 
     def test_jailed_session_variable_target_is_refused_by_the_jail(self):
-        self.denied(self.run_ps(r'$p="{main}\x.txt"; Set-Content $p x', env=COORDINATOR, sub=False), 'write-jail')
+        self.denied(self.run_ps(r'$p="{main}\x.txt"; Set-Content $p x', env=COORDINATOR, sub=False), 'unplaced')
 
     def test_variable_inside_a_literal_path(self):
-        self.denied(self.run_ps(r'Set-Content "{wt}\$n.txt" x'), 'main-checkout')
+        self.denied(self.run_ps(r'Set-Content "{wt}\$n.txt" x'), 'unplaced')
 
     def test_env_temp_target(self):
-        self.denied(self.run_ps(r'Set-Content $env:TEMP\x.txt x'), 'main-checkout')
+        self.denied(self.run_ps(r'Set-Content $env:TEMP\x.txt x'), 'unplaced')
 
     def test_pwd_and_a_literal_rest_is_read_against_the_location(self):
         self.allowed(self.run_ps(r'Set-Content "$PWD\x.txt" x'))
@@ -168,17 +135,17 @@ class DynamicTargets(Base):
             for cwd in (self.w.wt, self.w.main):
                 with self.subTest(text=text, cwd=cwd):
                     ev = W.ps(text.format(main=self.w.main), cwd, True)
-                    self.denied(decide(ev, self.w.ctx()), 'main-checkout')
+                    self.denied(decide(ev, self.w.ctx()), 'unplaced')
 
     def refused_for_both(self, text, cwd=None):
-        """`text` is refused for a worker (main-checkout) and for the coordinator's mark, which may
-        edit a main checkout, by the jail (write-jail, rules.ps_drive_jail), each because the guard
-        cannot tell where it writes."""
+        """`text` is refused for a worker and for the coordinator's mark, which may edit a main
+        checkout (rules.ps_drive_jail), each as unplaced (held at deny in this module) because the
+        guard cannot tell where it writes."""
         text = text.format(main=self.w.main, wt=self.w.wt)
         cwd = cwd or self.w.wt
-        d = self.denied(decide(W.ps(text, cwd, True), self.w.ctx()), 'main-checkout')
+        d = self.denied(decide(W.ps(text, cwd, True), self.w.ctx()), 'unplaced')
         self.assertIn('cannot tell where it writes', d.reason)
-        d = self.denied(decide(W.ps(text, cwd, False), self.w.ctx(environ=COORDINATOR)), 'write-jail')
+        d = self.denied(decide(W.ps(text, cwd, False), self.w.ctx(environ=COORDINATOR)), 'unplaced')
         self.assertIn('cannot tell where it writes', d.reason)
 
     def test_computed_target_is_judged_from_every_location(self):
@@ -214,9 +181,9 @@ class DynamicTargets(Base):
                      r'Set-Content -Value "$(sv PWD {main})" -Path "$PWD\x.txt"'):
             with self.subTest(text):
                 self.refused_for_both(text)
-        # & and a computed program is refused before any write is read (rule unreadable)
+        # & and a computed program is refused before any write is read (rules.call_subexpr_pmdata: unplaced)
         self.denied(self.run_ps(r"& ([scriptblock]::Create('sv PWD {main}')); Set-Content " + r'"$PWD\x.txt" x'),
-                    'unreadable')
+                    'unplaced')
         # a line that writes to a literal target is not judged by this rule
         for text in ('Write-Output "a`nb"; Set-Content x.txt "c`nd"', 'sv a 1; Set-Content x.txt $a'):
             with self.subTest(text):
@@ -650,7 +617,30 @@ class DynamicTargets(Base):
         # $( ) and ( ) run in the caller's scope: the cd moves the location for what follows
         for text in (r'echo $(cd {main}) ; New-Item x.txt', r'echo (cd {main}) ; New-Item x.txt'):
             with self.subTest(text):
-                self.denied(self.run_ps(text), 'main-checkout')
+                self.denied(self.run_ps(text), 'unplaced')
+
+
+class DriveAndProviderTargets(Base):
+    """A drive named by anything but one ASCII letter, or a provider the guard does not know, is a
+    place it cannot tell: from a worktree it passes, as a bash target the guard cannot place does,
+    and from the main checkout it is refused as unplaced (docs/guard-v2.md B16: the PS-drive jail
+    is cut, an unusual spelling that catches no honest mistake)."""
+
+    TEXTS = (r'New-PSDrive Main FileSystem {main}; New-Item Main:\x.txt', r'New-Item 1:\x.txt',
+             r'New-Item _:\x.txt', 'New-Item é:\\x.txt', r'New-PSDrive 1 FileSystem {main}; New-Item 1:\x.txt',
+             r'New-Item Demo.Provider::{main}\x.txt', r'New-Item Other.Module\FileSystem::{main}\x.txt')
+
+    def test_from_a_worktree_it_passes(self):
+        for text in self.TEXTS:
+            with self.subTest(text):
+                self.allowed(self.run_ps(text))
+
+    def test_from_the_main_checkout_it_is_unplaced(self):
+        for text in self.TEXTS:
+            with self.subTest(text):
+                text = text.format(main=self.w.main, wt=self.w.wt)
+                d = self.denied(decide(W.ps(text, self.w.main, True), self.w.ctx()), 'unplaced')
+                self.assertIn('cannot place', d.reason)
 
 
 class Unchanged(Base):
@@ -742,6 +732,10 @@ class ResolvePath(unittest.TestCase):
                      'FileSystem::C:\\x', 'Microsoft.PowerShell.Core\\FileSystem::\\\\srv\\s'):
             with self.subTest(text):
                 self.assertFalse(sh.ps_unplaceable(text))
+
+
+setUpModule = W.deny_softened           # these pin what the guard cannot place and the dropped rules (world.deny_softened)
+tearDownModule = W.allow_unplaced
 
 
 if __name__ == '__main__':

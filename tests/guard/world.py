@@ -115,6 +115,36 @@ class World(object):
         return context.Ctx(**args)
 
 
+_UNPLACED_DENY = []
+
+
+def deny_unplaced():
+    """Hold the rule unplaced at deny (as the owner's machine config can) until allow_unplaced():
+    a module of tests that pin which writes the guard cannot place calls it from setUpModule, so
+    each case still asserts the refusal itself. Its default, warn, is pinned in test_cheap.py."""
+    from unittest import mock
+    from kitlib.guard import modes, rules
+    p = mock.patch.dict(modes.DEFAULTS, {rules.UNPLACED: modes.DENY})
+    p.start()
+    _UNPLACED_DENY.append(p)
+
+
+def deny_softened():
+    """Hold every rule the kit's modes soften (modes.DEFAULTS: unplaced, and the rules dropped as
+    blocks) at deny, until allow_unplaced(): for a module of tests that pin those rules' refusals
+    from before the cheap guard. Their defaults are pinned in test_cheap.py."""
+    from unittest import mock
+    from kitlib.guard import modes
+    p = mock.patch.dict(modes.DEFAULTS, dict.fromkeys(list(modes.DEFAULTS), modes.DENY))
+    p.start()
+    _UNPLACED_DENY.append(p)
+
+
+def allow_unplaced():
+    """Undo deny_unplaced() or deny_softened() (tearDownModule)."""
+    _UNPLACED_DENY.pop().stop()
+
+
 # test_prefix_parity.py sets this to a function that renames every subagent's agent_type, so the
 # tests it names run again with the plugin-prefixed names; None leaves agent_type as given.
 AGENT_TYPE = None

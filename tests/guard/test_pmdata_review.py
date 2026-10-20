@@ -1,19 +1,22 @@
 """Second-review fixes to the PM data routes (docs/guard.md "Rules" and "Fallback"):
 
-  - `& (<expr>)` is denied for an agent session in any repository, as the fallback denies an
-    unreadable line: a computed program skips the rules that need a literal one (heavy, the
-    write jail, the git rules); only the owner and `plain` read it as any other line;
-  - HOME set by an arithmetic assignment (let, (( )), $(( )), for (( ))) or by select counts;
-  - git-remote-rewrite counts a directory the text cannot tell as git_alias_config does: only
-    when the machine config names pm_data or the command's own directory has a record;
-  - an alias on a call with --config-env is not judged by the guard's own read of the alias."""
+  - `& (<expr>)` is refused as unplaced for an agent session in any repository (a warning by
+    default): a computed program skips the rules that need a literal one (heavy,
+    the write jail, the git rules); only the owner and `plain` read it as any other line;
+  - git-remote-rewrite counts a directory the text cannot tell only when the machine config
+    names pm_data or the command's own directory has a record (rules._unknown_dir_counts).
+
+HOME set by arithmetic or select, and an alias from config on a --config-env call, are no
+longer judged: the guard catches honest mistakes, not evasion. Their allowed forms
+stay pinned."""
 import os
 import unittest
 
-from kitlib import pmdata
+from kitlib import guard, pmdata
 
+from . import claudehost
 from . import world as W
-from .test_pmdata_gaps import COORD, PLAIN, PM, ROOT, Base
+from .test_pmdata_gaps import PLAIN, PM, ROOT, Base
 from .world import ps
 
 
@@ -33,13 +36,21 @@ class CallSubexpressionAgents(Base):
                 "& (Join-Path $r x.exe) a; echo 'x")      # unclean for another reason too
 
     def test_an_agent_session_is_denied(self):
+        W.deny_unplaced()                       # unplaced is warn by default (test_by_default_...)
+        self.addCleanup(W.allow_unplaced)
         for text in self.lines():
-            with self.subTest(text=text, session='subagent'):
-                self.assert_denied(self.decide(text, sub=True, shell=ps), 'unreadable')
-            for label, env in (('pm', PM), ('coordinator', COORD)):
+            for label, sub, env in self.sessions():
                 with self.subTest(text=text, session=label):
-                    d = self.decide(text, environ=env, shell=ps)
-                    self.assert_denied(d, 'write-jail')
+                    d = self.decide(text, sub=sub, environ=env, shell=ps)
+                    self.assert_denied(d, 'unplaced')
+                    self.assertIn('Name the program literally', d.reason)
+
+    def test_by_default_an_agent_session_is_warned(self):
+        for text in self.lines():
+            for label, sub, env in self.sessions():
+                with self.subTest(text=text, session=label):
+                    d = guard.decide(claudehost.action(ps(text, self.w.wt, sub=sub)), self.ctx(env))
+                    self.assertEqual((d.verdict, d.rule), ('allow', 'warn'), d.reason)
                     self.assertIn('Name the program literally', d.reason)
 
     def test_the_owner_and_plain_pass(self):
@@ -59,31 +70,8 @@ class CallSubexpressionAgents(Base):
 
 
 class HomeByArithmetic(Base):
-    """Finding: let, arithmetic assignment ((( )), $(( )), for (( ))) and select set HOME without
-    commands.bash_var_targets counting it."""
-
-    DENIED = ('let HOME=1; git push private pmdata',
-              'let "HOME = 1"; git push private pmdata',
-              'let x=1 HOME+=1; git push private pmdata',
-              ': $((HOME=1)); git push private pmdata',
-              'echo "$((XDG_CONFIG_HOME+=1))"; git push private pmdata',
-              '(( HOME = 1 )); git push private pmdata',
-              '((x=1,HOME=2)); git push private pmdata',
-              '(( HOME++ )); git push private pmdata',
-              '(( ++USERPROFILE )); git push private pmdata',
-              'for ((i=0; i<1; HOME++)); do git push private pmdata; done',
-              'select HOME in a b; do git push private pmdata; done',
-              'select HOME; do git push private pmdata; done',
-              ': $(($n=1)); git push private pmdata',
-              'let "$n=1"; git push private pmdata')
-
-    def test_a_push_on_a_line_whose_arithmetic_sets_home_is_denied(self):
-        for text in self.DENIED:
-            for label, env in (('pm', PM), ('coordinator', COORD)):
-                with self.subTest(text=text, session=label):
-                    self.assert_denied(self.decide(text, environ=env), 'git-push-pmdata')
-            with self.subTest(text=text, session='owner'):
-                self.assertIsNone(self.decide(text))
+    """HOME is counted only when the line assigns it literally (commands.line_env_names): let,
+    arithmetic and select are not read (honest mistakes only), and a push after them is judged as any push."""
 
     def test_reads_and_other_names_pass(self):
         for text in ('let x=1; git push private pmdata',
@@ -121,30 +109,6 @@ class RemoteRewriteUnknownDirectory(Base):
         for text in self.TEXTS:
             with self.subTest(text=text, where='machine'):
                 self.assert_denied(self.decide(text, environ=PLAIN, cwd=self.w.plain), 'git-remote-rewrite')
-
-
-class AliasConfigEnv(Base):
-    """The --config-env branch of rules._alias_config_moved: git reads the setting from an
-    environment variable, so include.path there may add an alias the guard's read does not see."""
-
-    TEXTS = ('git --config-env=include.path=CFG pu origin pmdata',
-             'git --config-env include.path=CFG pu origin pmdata')
-
-    def test_an_alias_on_a_config_env_call_is_denied(self):
-        for text in self.TEXTS:
-            for label, env in (('pm', PM), ('coordinator', COORD), ('plain', PLAIN)):
-                with self.subTest(text=text, session=label):
-                    d = self.decide(text, environ=env)
-                    self.assert_denied(d, 'git-push-pmdata')
-                    self.assertIn('--config-env (include.path)', d.reason)
-            with self.subTest(text=text, session='owner'):
-                self.assertIsNone(self.decide(text))
-
-    def test_no_record_passes(self):
-        os.remove(self.record)
-        for text in self.TEXTS:
-            with self.subTest(text):
-                self.assertIsNone(self.decide(text, environ=PLAIN))
 
 
 if __name__ == '__main__':
