@@ -195,7 +195,9 @@ class Cli(StoreCase):
         """Only library callers (kitlib.gate.land) set a run's priority. --resource is run's
         alone (background does not book through kitlib.lock.run.book), never abbreviated."""
         cases = [("run", ["--priority", "land"]), ("run", ["--prio", "land"]),
-                 ("run", ["--res", "x"]), ("background", ["--resource", "x"])]
+                 ("run", ["--res", "x"]), ("background", ["--resource", "x"]),
+                 ("background", ["--priority", "land"]), ("background", ["--prio", "land"]),
+                 ("background", ["--res", "x"])]
         for verb, flag in cases:
             with self.subTest(verb=verb, flag=flag):
                 code, _, err = self.call(verb, "--repo", "kit", "--slug", "t", *flag,
@@ -242,10 +244,17 @@ class Cli(StoreCase):
         self.assertEqual(code, 0, err)
 
     def test_an_empty_resource_is_usage_and_books_nothing(self):
-        code, _, err = self.run_with("t", "--resource", "")
-        self.assertEqual(code, 2, err)
-        self.assertIn("a resource is a non-empty string", err)
+        """An empty --resource is usage (exit 2) before anything is booked, detached or not: a
+        detached run must not print '<run id> pid N' and exit 0 with the refusal only in its log."""
+        with mock.patch.object(self.tool, "detach", return_value=0) as det:
+            for extra in ((), ("--detach",)):
+                with self.subTest(extra=extra):
+                    code, _, err = self.run_with("t", "--resource", "", *extra)
+                    self.assertEqual(code, 2, err)
+                    self.assertIn("a resource is a non-empty string", err)
+        det.assert_not_called()
         self.assertIsNone(self.store.read("queue.json"))
+        self.assertFalse(os.path.isdir(self.store.path("ended")))
 
     def test_a_landing_resource_is_usage_and_books_nothing(self):
         """landing:<git dir> is land.py's resource (kitlib.gate.land): run --resource refuses
