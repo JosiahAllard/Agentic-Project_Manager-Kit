@@ -43,6 +43,10 @@ def ps_dashed(text):
 BASH_ESC = ' \t"\'\\$`&|;<>(){}#*?[]!~'
 CD_VERBS = {'cd', 'chdir', 'set-location', 'sl', 'push-location', 'pushd'}
 CD_UNKNOWN = {'popd', 'pop-location'}
+# the one module-qualified spelling of each PowerShell cd cmdlet (another module, a `/`, an alias
+# behind a module is no command PowerShell runs: cd_target reads it as a cd to a place unknown)
+PS_QUALIFIED_CD = {'microsoft.powershell.management\\' + v: v
+                   for v in ('set-location', 'push-location', 'pop-location')}
 # PowerShell keywords a ( ) group follows (if (...), foreach (...), switch -regex (...)): the ( after
 # them, or in a command they start, is a group, not an argument (_Scan.ps_paren_arg)
 PS_PAREN_KEYWORDS = {'if', 'elseif', 'else', 'foreach', 'for', 'while', 'do', 'until', 'switch',
@@ -1147,11 +1151,18 @@ def cd_target(cmd, cwd, home=None, home_vars=False):
     deny reads it). A bash cd behind `builtin` or `command` is the cd itself (cd_words), and
     PowerShell's `cd $null` is a cd with no place. A PowerShell cd to a relative FileSystem:: path
     (ps_filesystem_relative: FileSystem::., FileSystem::sub) goes where the text cannot tell:
-    PowerShell reads it from the process's directory, which no cd before it moved."""
+    PowerShell reads it from the process's directory, which no cd before it moved. A PowerShell
+    `Microsoft.PowerShell.Management\\Set-Location` (or Push-, Pop-Location) is that cmdlet
+    (PS_QUALIFIED_CD); any other module-qualified cd word is a cd to a place unknown."""
     words = cd_words(cmd)
     if not words:
         return False, cwd
     verb = words[0].text.lower()
+    name = re.split(r'[\\/]', verb)[-1]
+    if cmd.shell == PS and name != verb and name in CD_VERBS | CD_UNKNOWN:
+        if verb not in PS_QUALIFIED_CD:
+            return True, None                   # a qualified cd word PowerShell does not run
+        verb = PS_QUALIFIED_CD[verb]
     if verb in CD_UNKNOWN:
         return True, None
     if verb not in CD_VERBS:
