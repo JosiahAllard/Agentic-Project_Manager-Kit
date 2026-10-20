@@ -8,11 +8,14 @@ import json
 import os
 import shutil
 import tempfile
+import time
 import unittest
 from unittest import mock
 
 from kitlib.config import user
 from kitlib.config.types import ConfigError
+from kitlib.worktree import sweep
+from tests.worktree import test_worktree_sweep
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DRIVE = os.path.splitdrive(HERE)[0]
@@ -311,6 +314,62 @@ class SharedTempFollowsTempDir(HomeConfig):
         self.assertEqual(got, user.system_temp(env, 'win32'))
 
 
+class SharedTempMakesItsFolder(HomeConfig):
+    """shared_temp makes a configured temp_dir that is not there yet (its users open files in it
+    straight away), and falls back to system_temp when it cannot be made."""
+
+    ENV = {'LOCALAPPDATA': r'C:\lad'}
+
+    def test_a_missing_temp_dir_on_a_drive_that_is_there_is_made(self):
+        configured = os.path.join(self.home, 'not-yet', 'kit')
+        self.write({'temp_dir': configured})
+        self.assertEqual(user.shared_temp(self.ENV, 'win32', home=self.home), configured)
+        self.assertTrue(os.path.isdir(configured))
+
+    def test_one_that_cannot_be_made_gives_the_system_temp(self):
+        blocker = os.path.join(self.home, 'a-file')
+        with open(blocker, 'w') as f:
+            f.write('x')
+        self.write({'temp_dir': os.path.join(blocker, 'below')})
+        self.assertEqual(user.shared_temp(self.ENV, 'win32', home=self.home),
+                         os.path.join(r'C:\lad', 'Temp'))
+
+    def test_the_gate_fallback_log_base_sits_in_the_made_folder(self):
+        from kitlib.gate import runner
+        configured = os.path.join(self.home, 'not-yet', 'kit')
+        self.write({'temp_dir': configured})
+        real = user.shared_temp
+        with mock.patch.object(user, 'shared_temp', lambda: real(self.ENV, 'win32', home=self.home)):
+            base = runner.fallback_log_base('demo')
+        self.assertEqual(os.path.dirname(base), configured)
+        self.assertTrue(os.path.isdir(configured))
+
+
+class SweepLogInSharedTemp(test_worktree_sweep.SweepCase):
+    """`--sweep-merged --apply` with no log_dir writes its log into a configured temp_dir that
+    did not exist yet (shared_temp makes it). shared_temp is patched to read this test's home:
+    the home fence hides the machine config from a call with none."""
+
+    def test_the_sweep_log_is_written_into_a_missing_temp_dir(self):
+        khome = tempfile.mkdtemp(prefix='kit-home-')
+        self.addCleanup(shutil.rmtree, khome, True)
+        os.makedirs(os.path.join(khome, user.DIR_NAME))
+        configured = os.path.join(khome, 'not-yet', 'kit')
+        with open(user.config_file(khome), 'w', encoding='utf-8') as f:
+            json.dump({'temp_dir': configured}, f)
+        self.landed('done')
+        real = user.shared_temp
+        with mock.patch.object(user, 'shared_temp', lambda: real(home=khome)):
+            got = sweep.sweep(self.repo, apply=True, machine=test_worktree_sweep.free,
+                              now=time.time() + test_worktree_sweep.LATER)
+        out = '\n'.join(got.lines)
+        self.assertNotIn('could not be written', out)
+        logs = os.listdir(configured)
+        self.assertEqual(len(logs), 1, out)
+        with open(os.path.join(configured, logs[0]), encoding='utf-8') as f:
+            self.assertIn('exit      ', f.read())
+
+
 class Mkdtemp(HomeConfig):
     """user.mkdtemp: a small private folder in temp_parent (made if missing), else in this
     process's temp folder; never a config error."""
@@ -348,7 +407,7 @@ class Mkdtemp(HomeConfig):
         self.assertEqual(os.path.dirname(user.mkdtemp('kit-x-', home=self.home)), self.proc)
 
     def test_make_temps_last_resort_is_mkdtemp(self):
-        got = os.path.join(self.proc, 'kit-x-last')
+        got = os.path.join(self.home, 'kit-x-last')
         with mock.patch.object(user, 'work_temp', side_effect=RuntimeError('no')), \
                 mock.patch.object(user, 'default_work_temp', side_effect=RuntimeError('no')), \
                 mock.patch.object(user, 'mkdtemp', return_value=got) as made:
@@ -356,6 +415,7 @@ class Mkdtemp(HomeConfig):
         made.assert_called_once_with('kit-x-', home=self.home)
         self.assertEqual(folder, got)
         self.assertIn('could not be used (no)', note)
+        self.assertTrue(note.startswith('%s is in %s: ' % (got, self.home)), note)
 
 
 def _calls(path):
@@ -376,7 +436,7 @@ class PrivateIndexSites(unittest.TestCase):
     temp (user.mkdtemp), never a bare tempfile.mkdtemp in the process's TEMP."""
 
     SITES = {'kitlib/commit/__init__.py': 1, 'kitlib/backlog/store.py': 2,
-             'kitlib/pmdata/init.py': 1}
+             'kitlib/pmdata/init.py': 1, 'kitlib/worktree/remove.py': 1}
 
     def test_each_site_calls_user_mkdtemp(self):
         for rel, count in self.SITES.items():
