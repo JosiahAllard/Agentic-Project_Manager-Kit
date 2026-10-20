@@ -2,8 +2,10 @@
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 
@@ -101,6 +103,13 @@ class AfterReboot(unittest.TestCase):
 
 
 class Autostart(unittest.TestCase):
+    def empty_python(self):
+        """A python.exe path in a folder the test makes and leaves empty: no pythonw.exe beside it,
+        whatever the drive holds."""
+        d = tempfile.mkdtemp(prefix='kit-autostart-')
+        self.addCleanup(shutil.rmtree, d, True)
+        return os.path.join(d, 'python.exe')
+
     def test_what_if_registers_nothing_and_the_task_runs_after_reboot_unelevated(self):
         def run(*a, **k):
             raise AssertionError('what-if ran PowerShell')
@@ -126,12 +135,13 @@ class Autostart(unittest.TestCase):
 
     def test_no_pythonw_beside_the_python_is_refused_and_nothing_is_registered(self):
         """The task's program would be a file that is not there: it would register and never
-        start. /py is not a folder, so the default check itself says no."""
+        start. The folder is empty, so the default check itself says no."""
         def run(*a, **k):
             raise AssertionError('a refused install ran PowerShell')
+        python = self.empty_python()
         with self.assertRaisesRegex(autostart.LaunchError, 'no pythonw.exe beside') as cm:
-            autostart.install('/kit/tools/launch.py', python='/py/python.exe', run=run)
-        self.assertIn(os.path.join('/py', 'pythonw.exe'), str(cm.exception))
+            autostart.install('/kit/tools/launch.py', python=python, run=run)
+        self.assertIn(os.path.join(os.path.dirname(python), 'pythonw.exe'), str(cm.exception))
         self.assertIn('nothing registered', str(cm.exception))
 
     def test_the_pythonw_asked_about_is_the_one_registered(self):
@@ -152,7 +162,7 @@ class Autostart(unittest.TestCase):
         self.assertIn("-Execute '%s'" % asked[0], calls[0][-1])
 
     def test_what_if_says_the_install_would_refuse(self):
-        out = autostart.install('/kit/tools/launch.py', python='/py/python.exe', whatif=True)
+        out = autostart.install('/kit/tools/launch.py', python=self.empty_python(), whatif=True)
         self.assertEqual(len(out), 3)
         self.assertIn('install-autostart would refuse: no pythonw.exe beside', out[2])
         out = autostart.install('/kit/tools/launch.py', python='/py/python.exe', whatif=True,
