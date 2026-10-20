@@ -332,7 +332,7 @@ The guard reads the command line, not the shell's state:
 - **write-jail and a session's working directory:** the roots follow the payload's `cwd`. An agent started in another repository's checkout (a subagent of a session that runs there) gets that checkout, not the worktree it was told to work in, and is denied there.
 - **Backlog roles and code:** `backlog-raw-write` reads code given on the line (`-c`, standard input, `-m`); a script file that imports `kitlib.backlog` is not read. A main session's python importing it is not judged either: only the tool's own check holds a main session.
 - **Backlog roles by name:** any script named `backlog.py` a subagent runs is judged as the kit's tool, wherever it lives.
-- **Backlog roles on Codex:** Codex sends no subagent identity, so its subagents carry their session's mark and meet only the tool's own check ("Backlog roles").
+- **Backlog roles on Codex:** Codex's hooks send no subagent identity, so its subagents carry their session's mark and meet only the tool's own check ("Backlog roles"). The kit-tool broker (`hosts/codex/adapter/runtime.py`) holds a root binding the same way, as its marked session; only a child binding, whose role the broker checked, meets `backlog-role`.
 - **Backlog roles and a reason:** the map's `NEEDS_WHY` (a HIGH write must say why) is not built; the owner's ruling a write carries is the only reason the tool records.
 
 ## Lock MCP
