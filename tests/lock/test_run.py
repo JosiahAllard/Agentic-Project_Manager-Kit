@@ -143,7 +143,7 @@ class CallerFolder(StoreCase):
     """run_command starts its command in the caller's folder. With NoDefaultCurrentDirectoryInExePath
     set (agent hosts set it), Windows does not look there for a bare command name: CreateProcess
     reads this process's environment, cmd.exe its own. A bare name that is a file there and fails
-    to start is said with the path form that runs (KIT-LOCK-RUN-CWD)."""
+    to start is said with the path form that runs."""
 
     def setUp(self):
         super().setUp()
