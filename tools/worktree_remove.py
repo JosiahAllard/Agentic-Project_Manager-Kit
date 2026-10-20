@@ -81,7 +81,8 @@ def parse(args):
         if sorted(args) not in (['--classify'], ['--classify', '--json'], ['--apply', '--classify'],
                                 ['--apply', '--classify', '--json']):
             return '--classify takes only --json and --apply (and -C)'
-        return ('classify-apply' if '--apply' in args else 'classify'), None, None, False,             '--json' in args
+        return ('classify-apply' if '--apply' in args else 'classify'), None, None, False, \
+            '--json' in args
     if '--sweep-merged' in args or '--apply' in args:
         if sorted(args) not in (['--sweep-merged'], ['--apply', '--sweep-merged']):
             return '--sweep-merged takes only --apply (and -C)'

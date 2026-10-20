@@ -431,13 +431,15 @@ def _classify(ctx, now, machine, procs, dead_after_s, act=None):
     applied = None
     if act is not None:
         # The landing lock is read again before each tree: taken mid-run, the rest are skipped.
+        # The machine lock is read again too: a tree a record now names is skipped.
         applied = {'removed': 0, 'failed': 0, 'skipped': 0}
         stop = None
         for entry, row in acted:
             if stop is None:
                 stop = sweep.landing_hold(ctx)
-            if stop:
-                row['apply'] = {'result': 'skipped', 'why': stop, 'lines': []}
+            held = stop or machine_hold(machine, entry)
+            if held:
+                row['apply'] = {'result': 'skipped', 'why': held, 'lines': []}
             else:
                 row['apply'] = act(entry, row, base)
             applied[row['apply']['result']] += 1
@@ -471,6 +473,26 @@ def _classify(ctx, now, machine, procs, dead_after_s, act=None):
     return Result(code, list(ctx.out), data)
 
 
+def machine_hold(machine, entry):
+    """Why the machine lock keeps `entry` now (read afresh, as sweep_skip does), or None."""
+    held, why = machine()
+    if held is None:
+        return 'the machine lock cannot be read (%s)' % why
+    holder = sweep.machine_lock_holder(held, entry['path'], entry['branch'] or '')
+    return 'machine lock: %s' % holder if holder else None
+
+
+def unsaved_count(ctx, commits, also_saved=()):
+    """How many commits reached from `commits` no branch, remote-tracking branch, tag or
+    `also_saved` commit reaches: `(n, None)`, or `(None, why)`."""
+    args = ('rev-list', '--count', *commits, '--not', *also_saved, '--branches', '--remotes',
+            '--tags')
+    rc, count, err = git(ctx.main, *args)
+    if rc != 0 or not count.isdigit():
+        return None, failure(args[:2], rc, err)
+    return int(count), None
+
+
 def scratch_route(ctx, entry, environ):
     """`(True, None)` when a detached tree is for `--scratch`: under a scratch root (scratch.roots)
     and every commit its HEAD and HEAD reflog hold is reached by a branch, remote-tracking branch
@@ -485,19 +507,20 @@ def scratch_route(ctx, entry, environ):
     logged, why = scratch.reflog(path)
     if logged is None:
         return None, why
-    args = ('rev-list', '--count', entry['head'], *logged, '--not', '--branches', '--remotes',
-            '--tags')
-    rc, count, err = git(ctx.main, *args)
-    if rc != 0 or not count.isdigit():
-        return None, failure(args[:2], rc, err)
-    return count == '0', None
+    count, why = unsaved_count(ctx, (entry['head'], *logged))
+    if count is None:
+        return None, why
+    return count == 0, None
 
 
 def apply_tree(ctx, entry, row, base, environ=None, today=None):
     """Send one A or E tree through an existing remove path, each making its own checks again (a
     tree held or changed since it was classified is refused there): A plain; E `--scratch` when
     scratch_route says so, plain when its tip is in the base, else `--abandon "evidence"` (tag
-    archive/<slug>). Returns {'result': removed|failed|skipped, 'why', 'lines': the path's own}."""
+    archive/<slug>). An E tree whose HEAD reflog holds a commit no ref and not its tip reaches is
+    skipped instead: the remove deletes that reflog, and the tag holds only the tip. Returns
+    {'result': removed|failed|skipped, 'why', 'lines': the path's own}. A tree removed whose
+    branch then stayed (or any other later refusal) is failed."""
     path, head = row['path'], entry['head']
     sub = copy.copy(ctx)
     sub.out = []
@@ -511,6 +534,16 @@ def apply_tree(ctx, entry, row, base, environ=None, today=None):
         if route:
             how, verb = 'E, --scratch', 'scratch'
         else:
+            logged, why = scratch.reflog(path)
+            lost, why = (None, why) if logged is None else \
+                unsaved_count(ctx, logged, (head,)) if logged else (0, None)
+            if lost is None:
+                return {'result': 'skipped', 'why': 'its HEAD reflog cannot be read (%s)' % why,
+                        'lines': []}
+            if lost:
+                return {'result': 'skipped', 'why': 'its HEAD reflog holds %d commit(s) no ref'
+                        ' and not its tip reaches (reflog holds unsaved commits); left for the'
+                        ' owner' % lost, 'lines': []}
             landed, why = refs.is_ancestor(head, base, ctx.main)
             if landed is None:
                 return {'result': 'skipped', 'why': 'whether %s is in the base cannot be read (%s)'
@@ -531,8 +564,11 @@ def apply_tree(ctx, entry, row, base, environ=None, today=None):
     problems = [line.split(None, 1)[1] for line in lines
                 if line.startswith(('refused ', 'failed ')) and len(line.split(None, 1)) > 1]
     problem = problems[0] if problems else 'it exited %s' % code
-    if any(line.startswith('removed   ') for line in lines):
-        return {'result': 'removed', 'why': how if code == OK else '%s, but %s' % (how, problem),
+    removed = any(line.startswith('removed   ') for line in lines)
+    if removed and code == OK:
+        return {'result': 'removed', 'why': how, 'lines': lines}
+    if removed:
+        return {'result': 'failed', 'why': '%s: the worktree was removed, but %s' % (how, problem),
                 'lines': lines}
     if code == OK:
         return {'result': 'skipped', 'why': '%s: %s' % (how, ' '.join(lines) or 'nothing done'),

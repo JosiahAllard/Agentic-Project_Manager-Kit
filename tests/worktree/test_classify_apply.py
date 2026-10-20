@@ -12,7 +12,7 @@ import time
 import unittest
 from unittest import mock
 
-from kitlib.worktree import classify, sweep
+from kitlib.worktree import classify, remove, sweep
 from tests import gitfixture
 from tests.realgit import real_git
 from tests.worktree.test_classify import LATER, ClassifyCase, free, no_procs
@@ -36,8 +36,8 @@ class ApplyCase(ClassifyCase):
         self.temp = os.path.join(os.path.realpath(self.fx.base), 'outside')
         os.makedirs(self.temp, exist_ok=True)
 
-    def run_apply(self, top=None, procs=no_procs):
-        got = classify.classify(top or self.repo, now=time.time() + LATER, machine=free,
+    def run_apply(self, top=None, procs=no_procs, machine=free):
+        got = classify.classify(top or self.repo, now=time.time() + LATER, machine=machine,
                                 procs=procs, apply=True, environ={'AGENT_TEMP': self.temp})
         return got.code, '\n'.join(got.lines), got.data
 
@@ -171,9 +171,9 @@ class Untouched(ApplyCase):
         self.kept(done)
 
     @unittest.skipUnless(WINDOWS, 'holders.blockers opens folders for delete: Windows only')
-    def test_a_tree_held_after_it_was_classified_is_refused_by_the_remove_path(self):
+    def test_a_holder_the_process_seam_misses_is_refused_by_the_remove_path(self):
         # The process seam reports nobody, so classify judges the tree A; the remove path's own
-        # holder check finds the real process and refuses.
+        # holder check (an open for delete) finds the real process and refuses.
         path = self.workstream('done')
         self.land('kit/done')
         inner = os.path.join(path, 'sub')
@@ -205,6 +205,77 @@ class Untouched(ApplyCase):
         self.assertIn('failed    %s: ' % path, out)
         self.kept(path)
         self.assertTrue(os.path.isfile(os.path.join(path, 'late.txt')))
+
+
+class Unsaved(ApplyCase):
+
+    def test_an_evidence_tree_whose_reflog_holds_an_unsaved_commit_is_skipped(self):
+        # A detached agent-* tree commits X, then checks out another commit: only its HEAD reflog
+        # holds X, and `git worktree remove` would delete that reflog with the tree.
+        path = self.workstream('agent-8')
+        self.git('checkout', '-q', '--detach', cwd=path)
+        self.fx.write('x.txt', 'x\n', root=path)
+        lost = self.fx.commit('x', 'x.txt', cwd=path)
+        self.git('checkout', '-q', '--detach', 'HEAD~1', cwd=path)
+        self.git('branch', '-D', 'kit/agent-8')
+        rc, out, data = self.run_apply()
+        self.assertEqual(rc, 1, out)
+        row = self.row(data, path)
+        self.assertEqual(row['apply']['result'], 'skipped', out)
+        self.assertIn('reflog holds unsaved commits', row['apply']['why'])
+        self.assertIn('skipped   %s: ' % path, out)
+        self.kept(path)
+        self.assertEqual(self.git('tag', '-l', 'archive/*'), '')
+        self.assertIn(lost, self.git('reflog', 'show', '--format=%H', 'HEAD', cwd=path))
+
+
+class Outcomes(ApplyCase):
+
+    def test_a_removed_tree_whose_branch_delete_was_refused_counts_as_failed(self):
+        path = self.workstream('done')
+        self.land('kit/done')
+
+        def refused(ctx, branch, keep, removed=True):
+            ctx.say('failed    git branch -d %s exited 1: faked' % branch)
+            return remove.REFUSED
+        with mock.patch.object(remove, 'delete_branch', refused):
+            rc, out, data = self.run_apply()
+        self.assertEqual(rc, 1, out)
+        self.gone(path)
+        row = self.row(data, path)
+        self.assertEqual(row['apply']['result'], 'failed', out)
+        self.assertIn('the worktree was removed, but', row['apply']['why'])
+        self.assertEqual(data['applied'], {'removed': 0, 'failed': 1, 'skipped': 0})
+
+    def test_a_machine_lock_taken_mid_run_skips_that_tree(self):
+        path = self.workstream('done')
+        self.land('kit/done')
+        calls = []
+
+        def machine():
+            calls.append(1)
+            if len(calls) == 1:
+                return [], None
+            return [{'repo': 'r', 'slug': 'x', 'id': 7,
+                     'note': 'training in .claude/worktrees/done'}], None
+        rc, out, data = self.run_apply(machine=machine)
+        self.assertEqual(rc, 1, out)
+        self.assertEqual(self.row(data, path)['class'], 'A')
+        row = self.row(data, path)
+        self.assertEqual(row['apply']['result'], 'skipped', out)
+        self.assertTrue(row['apply']['why'].startswith('machine lock: r/x run 7'), row)
+        self.kept(path)
+
+    def test_a_machine_lock_unreadable_mid_run_skips_that_tree(self):
+        path = self.workstream('done')
+        self.land('kit/done')
+        answers = iter([([], None), (None, 'tool gone')])
+        rc, out, data = self.run_apply(machine=lambda: next(answers))
+        self.assertEqual(rc, 1, out)
+        row = self.row(data, path)
+        self.assertEqual(row['apply']['result'], 'skipped', out)
+        self.assertIn('the machine lock cannot be read (tool gone)', row['apply']['why'])
+        self.kept(path)
 
 
 class Arguments(unittest.TestCase):
