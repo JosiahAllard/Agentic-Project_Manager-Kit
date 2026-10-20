@@ -4,8 +4,8 @@ per-repository tools/backlog.py copies, with the keys and verbs the kit dropped 
 A plan only decides. It reads the snapshot it is given, refuses (Usage, Refusal, NotFound,
 Failure) or returns the records to write, and never touches a file, a ref or the screen. The
 store runs it again after a lost race, so a plan is a pure function of the snapshot and its
-arguments (plus the git probes it names: branch liveness, `requires: commit:`, and the diff of
-the branch `add --found-on` names).
+arguments (plus the git probes it names: branch liveness, the `Context.liveness` probe of a
+pulled branch's worktree, `requires: commit:`, and the diff of the branch `add --found-on` names).
 """
 import datetime
 
@@ -44,10 +44,13 @@ class Context(object):
     `code_main` (None: `main_branch`) is the branch code lands on, which `add --found-on`
     measures a branch's diff from (`.kit.json` backlog.code_main), as last fetched from
     `code_remote` (None: `remote`; the main checkout's remote in the PM data worktree,
-    opener.open_store)."""
+    opener.open_store). `liveness` (None: no probe) is `liveness(branch) -> (why it is live, None)
+    or (None, tip)`: whether the worktree on a pulled branch is dead, so a pull its holder left
+    may be blocked or released by anybody (stop_pull; opener.open_store passes
+    kitlib.worktree.classify.branch_liveness, so this module imports nothing from worktree)."""
 
     def __init__(self, store, root, remote='origin', main_branch='main', branch=None, today=None,
-                 code_main=None, code_remote=None):
+                 code_main=None, code_remote=None, liveness=None):
         self.store = store
         self.root = root
         self.remote = remote
@@ -56,6 +59,7 @@ class Context(object):
         self.code_remote = code_remote or remote
         self.branch = branch
         self.today = today
+        self.liveness = liveness
 
     @property
     def session(self):
@@ -848,7 +852,10 @@ def plan_block(snap, ctx, rid, members, owner_ask=None, ruling=None, reason=None
     and takes no `--ruling` (USAGE): removing a blocker is `unblock --on`'s job. `ruling` stays a parameter so the USAGE names it.
     `reason`, when given, goes into the commit subject and onto one line appended to the body
     (`Blocked on M (date): T`), so `show` says why the record is held; no header key is written
-    for it."""
+    for it. A PULLED record is blocked only by whoever may stop its pull (stop_pull), and only
+    with a `reason`: the one commit also clears the pull and pre-emption keys, which frees its
+    scope, and the body line starts `Stopped on branch B at <tip>, branch kept.` while that
+    branch exists. The branch is never touched."""
     refuse_machine_paths('--owner-ask', owner_ask)
     if reason is not None:
         refuse_machine_paths('--reason', reason)
@@ -867,16 +874,27 @@ def plan_block(snap, ctx, rid, members, owner_ask=None, ruling=None, reason=None
             raise Usage('bad `--on %s`: %s' % (m, err))
     if 'item:%s' % rid in members:
         raise Usage('`%s` cannot be blocked on itself' % rid)
-    if rec.get('state') == 'pulled':
-        raise Refusal('`%s` is in flight (pulled by %s): `release` it first, then block it'
-                      % (rid, rec.get('pulled_by')))
     if ruling is not None:
         raise Usage('`--ruling %s` was given, and `block` only adds blockers, so it releases no '
                     'hold of the owner\'s: `unblock %s --on owner --ruling R-nnnn` does that'
                     % (ruling, rid))
     if 'owner' in members and not owner_ask and not rec.has('owner_ask'):
         raise Usage('blocking on the owner needs `--owner-ask "<the question>"`')
-    old = [m for m in rec.all('blocked_on') if m != '-']
+    stop = None
+    if rec.get('state') == 'pulled':
+        if reason is None:
+            raise Usage('blocking a pulled record frees its scope: it needs `--reason T`, '
+                        'written to the body')
+        holder = rec.get('pulled_by')
+        if not holder:
+            raise Failure('`%s` is pulled with no `pulled_by`; `check` names it' % rid)
+
+        def live(why):
+            return ('`%s` is in flight (pulled by %s), and %s. Its holder blocks or releases it, '
+                    'from that branch' % (rid, holder, 'its tree is live: %s' % why if why else
+                                         'a branch or worktree by that name exists'))
+        stop = stop_pull(ctx, rid, holder, live)
+    old =[m for m in rec.all('blocked_on') if m != '-']
     after = list(old)
     for m in members:
         if m not in after:
@@ -884,15 +902,20 @@ def plan_block(snap, ctx, rid, members, owner_ask=None, ruling=None, reason=None
     changes = [('state', ['blocked']), ('blocked_on', after)]
     if owner_ask:
         changes.append(('owner_ask', [owner_ask]))
+    if stop is not None:
+        changes += [(k, []) for k in rmod.PULL_KEYS + rmod.PREEMPT_KEYS]
     pairs = rmod.apply_changes(rec.pairs(), changes)
     lines = ['BLOCKED %s on %s' % (rid, ', '.join(members))]
     if old:
         lines.append('  blocked_on: %s -> %s' % (', '.join(old), ', '.join(after)))
+    if stop is not None:
+        lines += stop[1]
     subject = 'backlog: block %s on %s' % (rid, ', '.join(members))
     body = rec.body
     if reason is not None:
         subject += ': %s' % reason
-        note = 'Blocked on %s (%s): %s' % (', '.join(members), ctx.date(), reason)
+        note = '%sBlocked on %s (%s): %s' % (stop[0] if stop else '', ', '.join(members),
+                                             ctx.date(), reason)
         body = (body or '').rstrip('\n')
         body = (body + '\n\n' if body.strip() else '') + note + '\n'
         lines.append('  reason (in the body): %s' % reason)
@@ -1288,10 +1311,49 @@ def branch_name_error(name, root):
     return None
 
 
+def stop_pull(ctx, rid, holder, live):
+    """Whether the caller may stop `rid`'s pull by `holder` (block or release it): its holder (the
+    caller's branch) may; anybody may when the pull is dead (no local branch, remote-tracking
+    branch or worktree by that name: offer.live_branches), or when `ctx.liveness` finds the
+    holder's worktree dead. Refusal(live(why)) otherwise, `why` None when there is no probe.
+    Returns `(stopped, lines)`: `stopped` is the body line's `Stopped on branch B at <tip>, branch
+    kept. `, '' when there is no local branch B; `lines` say what was found."""
+    mine = ctx.branch or refs.current_branch(ctx.root)[0]
+    if holder == mine:
+        how = ''
+    else:
+        bad = branch_name_error(holder, ctx.root)
+        if bad:
+            raise Refusal('%s, so what holds the pull of `%s` cannot be checked' % (bad, rid))
+        names, why = omod.live_branches(ctx.root, ctx.remote)
+        if names is None:
+            raise Failure('cannot tell whether the pull of `%s` by `%s` is dead: %s'
+                          % (rid, holder, why))
+        if holder not in names:
+            how = ' (dead)'
+        elif ctx.liveness is None:
+            raise Refusal(live(None))
+        else:
+            why, _tip = ctx.liveness(holder)
+            if why is not None:
+                raise Refusal(live(why))
+            how = ' (its worktree is dead)'
+    tip, why = refs.ref_commit('refs/heads/%s' % holder, ctx.root)
+    if tip is None:
+        raise Failure('cannot read branch `%s` for the body line: %s' % (holder, why))
+    lines = ['  was pulled_by: %s%s' % (holder, how)]
+    if not tip:
+        return '', lines
+    lines.append('  branch kept: %s at %s' % (holder, tip[:10]))
+    return 'Stopped on branch %s at %s, branch kept. ' % (holder, tip[:10]), lines
+
+
 def plan_release(snap, ctx, rid, reason):
-    """Return a pull to `state: open`: the caller's own pull, or a dead one (no local branch, no
-    remote-tracking branch, no worktree by its `pulled_by`). Pre-emption lines go with it, or the
-    released record would keep its pre-emption sort."""
+    """Return a pull to `state: open`: the caller's own pull, or one anybody may stop (stop_pull:
+    no branch or worktree by its `pulled_by`, or a worktree `ctx.liveness` finds dead). Pre-emption
+    lines go with it, or the released record would keep its pre-emption sort. While the branch
+    exists a body line `Stopped on branch B at <tip>, branch kept. Released (date): T` says where
+    the work was left; the branch is never touched."""
     refuse_machine_paths('--reason', reason)
     bad = reason_error(reason, '--reason')
     if bad:
@@ -1303,25 +1365,23 @@ def plan_release(snap, ctx, rid, reason):
     holder = rec.get('pulled_by')
     if not holder:
         raise Failure('`%s` is pulled with no `pulled_by`; `check` names it' % rid)
-    mine = ctx.branch or refs.current_branch(ctx.root)[0]
-    if holder != mine:
-        bad = branch_name_error(holder, ctx.root)
-        if bad:
-            raise Refusal('%s, so what holds the pull of `%s` cannot be checked' % (bad, rid))
-        names, why = omod.live_branches(ctx.root, ctx.remote)
-        if names is None:
-            raise Failure('cannot tell whether the pull of `%s` by `%s` is dead: %s' % (rid, holder, why))
-        if holder in names:
-            raise Refusal('the pull of `%s` by `%s` is live (a branch or worktree by that name '
-                          'exists). Its holder releases it, from that branch' % (rid, holder))
+    def live(why):
+        return ('the pull of `%s` by `%s` is live (a branch or worktree by that name exists)%s. '
+                'Its holder releases it, from that branch'
+                % (rid, holder, '; its tree is live: %s' % why if why else ''))
+    stopped, found = stop_pull(ctx, rid, holder, live)
     changes = [('state', ['open'])] + [(k, []) for k in rmod.PULL_KEYS + rmod.PREEMPT_KEYS]
     pairs = rmod.apply_changes(rec.pairs(), changes)
     text = ' '.join(reason.split())
-    return Change({rid: _text(pairs, rec.body)},
+    body = rec.body
+    if stopped:
+        body = (body or '').rstrip('\n')
+        body = ((body + '\n\n' if body.strip() else '') + '%sReleased (%s): %s\n'
+                % (stopped, ctx.date(), text))
+    return Change({rid: _text(pairs, body)},
                   'backlog: release %s from %s: %s' % (rid, holder, text),
                   ['RELEASED %s - state: pulled -> open' % rid,
-                   '  was pulled_at: %s' % rec.get('pulled_at'),
-                   '  was pulled_by: %s%s' % (holder, '' if holder == mine else ' (dead)')])
+                   '  was pulled_at: %s' % rec.get('pulled_at')] + found)
 
 
 # --- close / retire -------------------------------------------------------------------------------

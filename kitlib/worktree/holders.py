@@ -94,12 +94,7 @@ def blockers(root):
     found, walk_errors = [], []
 
     def undeletable(path):
-        handle = lib.CreateFileW(path, DELETE, SHARE_ALL, None, OPEN_EXISTING,
-                                 BACKUP_SEMANTICS | OPEN_REPARSE_POINT, None)
-        if handle is None or handle == INVALID_HANDLE:
-            return ctypes.get_last_error()
-        lib.CloseHandle(ctypes.c_void_p(handle))
-        return 0
+        return _delete_error(lib, path)
 
     seen = 0
     for where, dirs, files in os.walk(extended(root), onerror=walk_errors.append):
@@ -120,6 +115,50 @@ def blockers(root):
         found.append((plain(str(getattr(failure, 'filename', root))),
                       getattr(failure, 'winerror', None) or 0))
     return found
+
+
+def _delete_error(lib, path):
+    """0 when `path` opens for DELETE (every share mode granted; the handle is closed again), else
+    the Windows error: SHARING_VIOLATION when another handle denies delete."""
+    handle = lib.CreateFileW(path, DELETE, SHARE_ALL, None, OPEN_EXISTING,
+                             BACKUP_SEMANTICS | OPEN_REPARSE_POINT, None)
+    if handle is None or handle == INVALID_HANDLE:
+        return ctypes.get_last_error()
+    lib.CloseHandle(ctypes.c_void_p(handle))
+    return 0
+
+
+def held_folder(root):
+    """The first folder under `root` (itself included) that cannot be opened for DELETE, as
+    (path, windows error), or None when every folder opened: `blockers` for folders only, so a
+    holder is found without naming it. Windows holds a process's current directory open without
+    FILE_SHARE_DELETE, so that folder answers SHARING_VIOLATION and its parents do not (measured
+    2026-10-19); a file held open is not looked for. Fails closed: a walk error is
+    (its path, its error or 0), a tree past WALK_MAX entries is (root, NOT_SEARCHED), and off
+    Windows the answer is (root, NOT_SEARCHED). A link or junction is never descended."""
+    whole = plain(os.path.abspath(root))
+    if not WINDOWS:
+        return whole, NOT_SEARCHED
+    lib = kernel32()
+    walk_errors = []
+    err = _delete_error(lib, extended(root))
+    if err:
+        return whole, err
+    seen = 0
+    for where, dirs, files in os.walk(extended(root), onerror=walk_errors.append):
+        seen += len(dirs) + len(files)
+        if seen > WALK_MAX:
+            return whole, NOT_SEARCHED
+        prune(where, dirs)
+        for name in dirs:
+            path = os.path.join(where, name)
+            err = _delete_error(lib, path)
+            if err:
+                return plain(path), err
+    for failure in walk_errors:
+        return (plain(str(getattr(failure, 'filename', root))),
+                getattr(failure, 'winerror', None) or 0)
+    return None
 
 
 def processes():

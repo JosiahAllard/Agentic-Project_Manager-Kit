@@ -5,14 +5,17 @@ except one Windows test of the real scan on a temp tree.
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
 import unittest
+from unittest import mock
 
 from kitlib.records import gate_ok
-from kitlib.worktree import classify
+from kitlib.worktree import classify, holders, remove, sweep
 from tests import gitfixture
+from tests.realgit import real_git
 from tests.worktree.test_worktree_remove import TOOL, WINDOWS, RemoveCase
 
 LATER = 3 * 24 * 3600
@@ -66,15 +69,6 @@ class ClassifyCase(RemoveCase):
 
 
 class Classes(ClassifyCase):
-
-    def test_a_landed_clean_tree_is_a(self):
-        path = self.workstream('done')
-        self.land('kit/done')
-        rc, out, data = self.run_classify()
-        self.assertEqual(rc, 1, out)
-        self.assertEqual(self.row(data, path)['class'], 'A')
-        self.assertIn('A landed       1  tip in the base, clean', out)
-        self.assertIn('summary   A 1, B 0, C 0, E 0, L 0', out)
 
     def test_a_finished_tree_with_a_gate_ok_record_is_b(self):
         path = self.workstream('ready', commits=2)
@@ -130,6 +124,54 @@ class Classes(ClassifyCase):
         self.assertEqual((row['class'], row['branch']), ('E', None), row)
         self.assertIn('detached', out)
 
+    def test_a_record_from_a_gate_without_full_is_c_not_full(self):
+        path = self.workstream('half')
+        head = self.git('rev-parse', 'HEAD', cwd=path)
+        gate_ok.record_pass(self.repo, head, {}, {'version': 'test'}, 'r', gate_ok.utc(), [],
+                            full=False)
+        rc, out, data = self.run_classify()
+        row = self.row(data, path)
+        self.assertEqual((row['class'], row['gate']),
+                         ('C', 'not full: the record for %s is from a gate run without --full'
+                          % head), row)
+
+    def test_the_backlog_store_is_opened_once_for_every_tree(self):
+        for slug in ('one', 'two', 'three'):
+            self.workstream(slug)
+        with mock.patch.object(remove.backlog_store, 'open_backend',
+                               wraps=remove.backlog_store.open_backend) as opened:
+            rc, out, data = self.run_classify()
+        self.assertEqual(opened.call_count, 1)
+        self.assertEqual(len(data['trees']), 3)
+
+    def test_each_path_is_made_canonical_once_per_run(self):
+        for slug in ('one', 'two', 'three'):
+            self.workstream(slug)
+        elsewhere = os.path.realpath(self.fx.base)
+        procs = [(n, 'p.exe', os.path.join(elsewhere, 'p%d' % n)) for n in range(5)]
+        calls = []
+
+        def counted(path):
+            calls.append(path)
+            return holders.canon(path)
+        with mock.patch.object(classify, 'canon', counted):
+            self.run_classify(procs=lambda: ((procs, 0, 5), None))
+        self.assertLessEqual(len(calls), len(procs) + 3 + 2, calls)
+
+
+@real_git('git reflog: the fake writes no reflog, and A reads it')
+class Landed(ClassifyCase):
+    """A needs a commit of the branch's own in its reflog (classify.own_commit)."""
+
+    def test_a_landed_clean_tree_is_a(self):
+        path = self.workstream('done')
+        self.land('kit/done')
+        rc, out, data = self.run_classify()
+        self.assertEqual(rc, 1, out)
+        self.assertEqual(self.row(data, path)['class'], 'A')
+        self.assertIn('A landed       1  tip in the base, clean', out)
+        self.assertIn('summary   A 1, B 0, C 0, E 0, L 0', out)
+
     def test_a_landed_detached_tree_outside_is_a_first(self):
         work = self.workstream('side')
         tip = self.git('rev-parse', 'HEAD', cwd=work)
@@ -137,6 +179,26 @@ class Classes(ClassifyCase):
         path = self.outside('red-copy', tip)
         rc, out, data = self.run_classify()
         self.assertEqual(self.row(data, path)['class'], 'A')
+
+    def test_a_fresh_branch_at_a_landed_commit_is_c_nothing_of_its_own(self):
+        work = self.workstream('side')
+        tip = self.git('rev-parse', 'HEAD', cwd=work)
+        self.land('kit/side')
+        self.git('worktree', 'remove', '--force', work)
+        path = os.path.join(self.home, 'fresh')
+        self.git('worktree', 'add', '-q', path, '-b', 'kit/fresh', tip)
+        rc, out, data = self.run_classify()
+        row = self.row(data, path)
+        self.assertEqual((row['class'], row['note']), ('C', 'nothing of its own'), row)
+
+    def test_a_landed_tree_whose_reflog_is_gone_is_c(self):
+        path = self.workstream('done')
+        self.land('kit/done')
+        os.remove(os.path.join(self.fx.common_dir(), 'logs', 'refs', 'heads', 'kit', 'done'))
+        rc, out, data = self.run_classify()
+        row = self.row(data, path)
+        self.assertEqual((row['class'], row['note']),
+                         ('C', 'nothing of its own shown: its reflog is missing or expired'), row)
 
 
 class Live(ClassifyCase):
@@ -238,6 +300,76 @@ class Live(ClassifyCase):
             procs=lambda: (([(1, 'x.exe', path)], 0, 1), None))
         self.assertEqual(self.row(data, path)['class'], 'L')
 
+    def test_a_missing_folder_is_l(self):
+        path = self.workstream('gone')
+        shutil.rmtree(path)
+        rc, out, data = self.run_classify()
+        self.assertEqual(self.row(data, path)['reason'],
+                         'its folder is missing (an orphan: `--check` reports it)')
+
+    def test_no_head_is_l(self):
+        path = self.workstream('nohead')
+        with open(os.path.join(self.fx.common_dir(), 'worktrees', 'nohead', 'HEAD'), 'w',
+                  newline='\n') as f:
+            f.write('ref: refs/heads/kit/missing\n')
+        rc, out, data = self.run_classify()
+        row = self.row(data, path)
+        self.assertEqual((row['class'], row['reason']),
+                         ('L', 'unreadable: git reported no HEAD for it'), row)
+
+    def test_a_status_that_cannot_be_read_is_l(self):
+        path = self.workstream('badindex')
+        with open(os.path.join(self.fx.common_dir(), 'worktrees', 'badindex', 'index'),
+                  'wb') as f:
+            f.write(b'not an index at all')
+        rc, out, data = self.run_classify()
+        row = self.row(data, path)
+        self.assertEqual(row['class'], 'L', row)
+        self.assertTrue(row['reason'].startswith('unreadable: its status ('), row)
+
+    def test_activity_that_cannot_be_read_is_l(self):
+        path = self.workstream('denied')
+        with mock.patch.object(sweep, 'last_activity', return_value=(None, 'access denied')):
+            rc, out, data = self.run_classify()
+        self.assertEqual(self.row(data, path)['reason'],
+                         'unreadable: its last activity (access denied)')
+
+    @unittest.skipUnless(WINDOWS, 'held_folder opens folders for delete: Windows only')
+    def test_an_unread_process_and_no_held_folder_leaves_the_class(self):
+        path = self.workstream('free')
+        rc, out, data = self.run_classify(procs=lambda: (([], 1, 1), None))
+        self.assertEqual(self.row(data, path)['class'], 'C')
+
+    @unittest.skipUnless(WINDOWS, 'held_folder opens folders for delete: Windows only')
+    def test_an_unread_process_and_a_held_folder_is_l(self):
+        path = self.workstream('stood')
+        inner = os.path.join(path, 'sub')
+        os.makedirs(inner)
+        child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'],
+                                 cwd=inner)
+        self.addCleanup(child.wait)
+        self.addCleanup(child.kill)
+        deadline = time.time() + 10
+        while holders.held_folder(path) is None and time.time() < deadline:
+            time.sleep(0.1)
+        rc, out, data = self.run_classify(procs=lambda: (([], 1, 1), None))
+        row = self.row(data, path)
+        self.assertEqual(row['class'], 'L', row)
+        self.assertEqual(row['reason'],
+                         'unreadable: 1 process(es) could not be read and %s cannot be opened '
+                         'for delete (Windows error 32): a process we could not read may hold it'
+                         % inner)
+
+    @unittest.skipUnless(WINDOWS, 'held_folder opens folders for delete: Windows only')
+    def test_an_unread_process_and_a_tree_past_walk_max_is_l(self):
+        path = self.workstream('big')
+        with mock.patch.object(holders, 'WALK_MAX', 1):
+            rc, out, data = self.run_classify(procs=lambda: (([], 2, 3), None))
+        reason = self.row(data, path)['reason']
+        self.assertTrue(reason.startswith('unreadable: 2 process(es) could not be read and %s '
+                                          'has more than' % path), reason)
+        self.assertTrue(reason.endswith('a process we could not read may hold it'), reason)
+
     @unittest.skipUnless(WINDOWS, 'the process scan is Windows only')
     def test_the_real_process_scan_finds_this_process_in_a_tree(self):
         path = self.workstream('here')
@@ -249,6 +381,7 @@ class Live(ClassifyCase):
         self.assertIn('process pid %d ' % os.getpid(), self.row(data, path)['reason'])
 
 
+@real_git('git reflog: the fake writes no reflog, and A reads it')
 class ReadOnly(ClassifyCase):
 
     def test_a_run_changes_nothing_on_disk(self):
@@ -264,6 +397,32 @@ class ReadOnly(ClassifyCase):
         rc, out, data = self.run_classify()
         self.assertEqual(data['counts'], {'A': 1, 'B': 1, 'C': 1, 'E': 2, 'L': 0}, out)
         self.assertEqual(self.snapshot(), before)
+
+
+class BranchLiveness(ClassifyCase):
+
+    def liveness(self, branch, now):
+        return classify.branch_liveness(self.repo, branch, now=now, machine=free,
+                                        procs=no_procs)
+
+    def test_a_dead_tree_gives_its_tip(self):
+        path = self.workstream('quiet')
+        head = self.git('rev-parse', 'HEAD', cwd=path)
+        self.assertEqual(self.liveness('kit/quiet', time.time() + LATER), (None, head))
+
+    def test_a_live_tree_gives_why_and_where(self):
+        path = self.workstream('busy')
+        why, tip = self.liveness('kit/busy', time.time())
+        self.assertIsNone(tip)
+        self.assertTrue(why.startswith('active '), why)
+        self.assertTrue(why.endswith('under the 24 h dead bar (%s)' % os.path.normpath(path)),
+                        why)
+
+    def test_a_branch_no_tree_is_on_is_live(self):
+        self.git('branch', 'kit/treeless')
+        self.assertEqual(self.liveness('kit/treeless', time.time() + LATER),
+                         ('no worktree here is on kit/treeless, so whether its work goes on '
+                          'cannot be judged', None))
 
 
 class Tool(ClassifyCase):

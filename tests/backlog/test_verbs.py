@@ -189,8 +189,10 @@ class BlockUnblock(VerbCase):
                              (['owner'], Usage), (['whenever'], Usage)):
             with self.assertRaises(exc, msg=members):
                 self.verb('block', 'FOO', members)
-        with self.assertRaises(Refusal):
+        # A pulled record blocks only with a reason (tests/backlog/test_block_stopped.py).
+        with self.assertRaises(Usage) as cm:
             self.verb('block', 'BAR', ['live-client'])
+        self.assertIn('needs `--reason T`', str(cm.exception))
 
     def test_the_owners_hold_is_released_only_by_unblock_with_a_ruling(self):
         # `block` only adds, so it never releases the owner's hold and takes no `--ruling`.
