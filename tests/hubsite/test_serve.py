@@ -1173,6 +1173,45 @@ class ReasonCase(ServeCase):
         self.build().watch()
         self.assertEqual(self.lines, [])
 
+    def test_watch_says_once_that_the_hub_code_changed_since_this_server_started(self):
+        stamp = [(('serve.py', 1, 10),)]
+        with mock.patch.object(serve, 'code_stamp', lambda: stamp[0]),                 mock.patch.object(serve, 'CODE_LOOK_S', 0):
+            hub = self.build()
+            hub.watch()
+            self.assertEqual(self.lines, [])
+            stamp[0] = (('serve.py', 2, 12),)
+            hub.watch()
+            hub.watch()
+            self.assertEqual(self.lines, [('error', serve.STALE_CODE)])
+            self.assertIn('restart', serve.STALE_CODE)
+            stamp[0] = (('serve.py', 3, 14),)
+            hub.watch()
+            self.assertEqual(len(self.lines), 1, 'said again for the same stale server')
+        hub.close()
+
+    def test_watch_takes_the_code_stamp_at_most_once_in_the_look_window(self):
+        looks = []
+
+        def stamp():
+            looks.append(1)
+            return (('serve.py', len(looks), 1),)
+
+        with mock.patch.object(serve, 'code_stamp', stamp):
+            hub = self.build()
+            hub.watch()
+            hub.watch()
+            self.assertEqual(len(looks), 1, 'a look inside the window')
+            hub._looked -= serve.CODE_LOOK_S
+            hub.watch()
+            self.assertEqual(len(looks), 2)
+            self.assertEqual(self.lines, [('error', serve.STALE_CODE)])
+        hub.close()
+
+    def test_watch_survives_a_code_look_that_fails(self):
+        with mock.patch.object(serve, 'code_stamp', lambda: {}['gone']),                 mock.patch.object(serve, 'CODE_LOOK_S', 0):
+            self.build().watch()
+        self.assertEqual(self.lines, [])
+
     def test_run_logs_a_failing_sync_while_it_serves_and_its_last_pass(self):
         seen = threading.Event()
 
