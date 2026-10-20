@@ -66,7 +66,7 @@ ROWS = [
     ('unreadable: a double-quoted bash -c wait from PowerShell', lambda w: ps(
         'bash -c "until [ -f $F ]; do sleep 5; done"', w.wt, sub=True),
      'deny', 'unreadable', 'powershell -NoProfile -ExecutionPolicy Bypass -File "{temp}/script.ps1"'),
-    # an odd single and double quote: the guard never rewrites the line (R-2363), so the
+    # an odd single and double quote: the guard never rewrites the line, so the
     # alternative is the script file
     ('unreadable: an unclosed quote gives the script, subagent', lambda w: bash(
         'echo "a\'b', w.wt, sub=True),

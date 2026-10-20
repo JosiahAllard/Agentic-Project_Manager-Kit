@@ -763,9 +763,9 @@ def inline_code(cmd, inv, skip_pipe=None):
 
 def hub_secret_shell(ctx, cmd, inv, places):
     """What the command `cmd` names of the hub's secrets, as text, or None: a literal path in
-    the token folder (R-2363: a word that only names a token file or looks like the folder, with
+    the token folder (a word that only names a token file or looks like the folder, with
     no path into it, passes), and python or node code that names a token file or the folder
-    (kitlib.guard.hub.INLINE_RE; R-2363, W3: a parsed hub tool run of an agent verb piped into
+    (kitlib.guard.hub.INLINE_RE; docs/guard-v2.md W3: a parsed hub tool run of an agent verb piped into
     code given on the command line is that code's data, hub_run_verb). A wildcard path is read as the literal folder before its first
     wildcard (glob_folder); the store and the word hub are not refused (the guard blocks only
     what it can place; an edit tool's write into the store is still hub_secret_edit's).

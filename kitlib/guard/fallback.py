@@ -167,7 +167,7 @@ def named_run(cmd, inv):
 
 def plainly(ctx, parsed):
     """(the reason's last sentence, the alternative): advice only, a run of a script file in the
-    temp folder for the line's shell; the guard never rewrites the refused line (R-2363)."""
+    temp folder for the line's shell; the guard never rewrites the refused line."""
     name, run = SCRIPT_RUNS['powershell' if parsed.shell == sh.PS else 'bash']
     return SCRIPT, run % rules.fwd(os.path.join(ctx.tempdir, name))
 

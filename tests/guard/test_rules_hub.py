@@ -109,7 +109,7 @@ class SecretShell(Hub):
                 self.denied(make, 'hub-secrets')
 
     def test_a_token_name_with_no_path_into_the_folder_passes(self):
-        # R-2363 (A2): only a real path into the token folder is refused; a word that only names
+        # docs/guard-v2.md A2: only a real path into the token folder is refused; a word that only names
         # a token file, or looks like the folder, and is placed elsewhere passes
         for shell, line in ((ps, "$d = 'x'; Get-Content (Join-Path $d 'owner.token')"),
                             (bash, 'echo owner.token'), (bash, 'cat x/owner.token'),
@@ -166,7 +166,7 @@ class SecretShell(Hub):
         self.allowed(lambda sub: bash('python tools/hub.py questions list | head', self.w.wt, sub))
 
     def test_an_agent_verb_piped_into_code_is_its_data(self):
-        # R-2363 (W3): a parsed hub tool run of an agent verb piped into python -c is the code's
+        # docs/guard-v2.md W3: a parsed hub tool run of an agent verb piped into python -c is the code's
         # data, so a token file's name in its words is not read as code; piped into code read
         # from standard input (`python -`) it is the code, and still refused
         head = 'python "%s" questions add --title "owner.token" --json | ' % self.hub
