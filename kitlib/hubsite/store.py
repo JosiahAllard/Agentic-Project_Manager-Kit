@@ -295,6 +295,12 @@ class Store(object):
         if not self._open:
             raise HubError('store', 'the hub store %s is closed' % self.root)
 
+    def check_open(self):
+        """HubError store once the store is closed: for a caller that waits on wait() for
+        something else (the machine lock), which a close ends with no error."""
+        with self._mutex:
+            self._check_open()
+
     # ---------------------------------------------------------------- reads
     @property
     def revision(self):

@@ -68,7 +68,8 @@ def install(launch_py, python=None, whatif=False, run=spawn.run, isfile=os.path.
     interpreter's base install (kitlib.launcher.pythonw.base_pythonw; `base_prefix` stands in for
     sys.base_prefix in tests), never a PATH lookup. Refused, with nothing registered, when that
     pythonw.exe is under WindowsApps (the Store alias) or is not a file: the task would register
-    and then not start at sign-in. whatif says so in a third line."""
+    and then not start at sign-in. whatif refuses the same way, its lines (the script and an
+    `install-autostart would refuse:` line) on the LaunchError."""
     if in_worktree(launch_py):
         raise LaunchError('install-autostart from the main kit checkout, not a worktree: %s' % launch_py)
     given = python is not None
@@ -84,11 +85,12 @@ def install(launch_py, python=None, whatif=False, run=spawn.run, isfile=os.path.
                    'sign-in; nothing registered' % where)
     else:
         missing = None
+    said = ['Would run in PowerShell:', '  ' + text]
+    if missing:          # what-if predicts the real outcome: the same refusal, the script said first
+        raise LaunchError(missing, lines=said + ['install-autostart would refuse: %s' % missing]
+                          if whatif else None)
     if whatif:
-        return ['Would run in PowerShell:', '  ' + text] + (
-            ['install-autostart would refuse: %s' % missing] if missing else [])
-    if missing:
-        raise LaunchError(missing)
+        return said
     r = run(['powershell', '-NoProfile', '-NonInteractive', '-Command', text], capture_output=True, text=True,
             timeout=120)
     if r.returncode != 0:

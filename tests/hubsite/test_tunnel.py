@@ -1682,5 +1682,45 @@ class GateTest(unittest.TestCase):
                 self.assertEqual(gate.keys(), said)
 
 
+class TunnelLockTest(TunnelCase):
+    """The machine lock routes over the tunnel: only the Access token reaches them (the owner),
+    and the view it gets is the remote one (fixed phrases for warnings that name a path)."""
+    LOCK = (api.BASE + '/lock/view', api.BASE + '/lock/stats?days=7',
+            api.BASE + '/lock/wait?timeout=0')
+
+    def setUp(self):
+        from tests.hubsite import test_api_roles as roles
+        TunnelCase.setUp(self)
+        self.build(lock=roles.LockDoor())
+        self.good = ak.token(ak.KEY_A)
+
+    def test_every_lock_route_is_the_access_owners_alone(self):
+        self.assertEqual(sorted(r.pattern for r in api.ROUTES if r.pattern.startswith(
+            api.BASE + '/lock/')), sorted(p.split('?')[0] for p in self.LOCK))
+        for path in self.LOCK:
+            with self.subTest(path=path):
+                # no token, and the local listener's bearer tokens (agent and owner alike)
+                self.refused('GET', path)
+                self.refused('GET', path, headers=[bearer(self.agent)])
+                self.refused('GET', path, headers=[bearer(self.owner)])
+                # the agent is refused on the local listener too
+                r = get(self.lport, path, self.agent)
+                self.assertEqual((r.status, r.code()), (403, 'forbidden'), path)
+                r = self.ask('GET', path, token=self.good)
+                self.assertEqual((r.status, r.json().get('error')), (200, None), path)
+
+    def test_the_tunnel_gets_the_remote_view_and_the_local_owner_does_not(self):
+        r = self.ask('GET', api.BASE + '/lock/view', token=self.good)
+        self.assertEqual((r.status, r.json()['view']), (200, {'remote': True}))
+        r = self.ask('GET', api.BASE + '/lock/wait?timeout=0', token=self.good)
+        self.assertEqual((r.status, r.json()['view']), (200, {'remote': True}))
+        # a client of the local listener cannot claim to be the tunnel
+        r = get(self.lport, api.BASE + '/lock/view', self.owner,
+                headers=[(httpd.VIA_HEADER, httpd.TUNNEL_VIA)])
+        self.assertEqual((r.status, r.json().get('view')), (200, {'remote': False}))
+        r = get(self.lport, api.BASE + '/lock/view', self.owner)
+        self.assertEqual((r.status, r.json()['view']), (200, {'remote': False}))
+
+
 if __name__ == '__main__':
     unittest.main()
