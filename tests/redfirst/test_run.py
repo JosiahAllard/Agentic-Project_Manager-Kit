@@ -371,9 +371,8 @@ class Runs(Case):
 
 
 class SummaryFile(Case):
-    """Two runs that redirect into one shared file interleave there (KIT-REDFIRST-CONCURRENT-
-    CROSSTALK): every line a run says is also in its own log folder's summary.txt, and the last
-    line names that file."""
+    """Two runs that redirect into one shared file interleave there: every line a run says is
+    also in its own log folder's summary.txt, and the last line names that file."""
 
     def run_into(self, logs, *args):
         out = io.StringIO()
