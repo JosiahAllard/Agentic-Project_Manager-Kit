@@ -5,7 +5,7 @@ snapshot()) and anything later (a web page, an MCP server) call these and
 nothing else. docs/lock-api.md is the contract; SCHEMA_VERSION changes when a key's meaning
 changes or a key goes (added keys do not change it).
 
-Reads:  snapshot(), wait_change(revision, timeout_s), stats(...), history(...).
+Reads:  snapshot(), revision(), wait_change(revision, timeout_s), stats(...), history(...).
 Writes: set_division, hold_create, hold_edit, hold_end, set_games, set_game_mode, end_run,
         move_to_top.
 Each write takes `actor` and returns
@@ -367,6 +367,12 @@ def history(store=None, days=7, since=None, until=None):
         raise ApiError("invalid", "days is out of range", "days")
     t1 = _time(until, "until", None)
     return store.history_records(since=t0, until=t1)
+
+
+def revision(store=None):
+    """The store's revision alone (snapshot()'s `revision`, which every write moves on): what a
+    client that polls for a change reads, without building a snapshot."""
+    return _store(store).revision()
 
 
 def wait_change(revision, timeout_s=30.0, store=None, **snapshot_kw):

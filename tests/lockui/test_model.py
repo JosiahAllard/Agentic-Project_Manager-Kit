@@ -263,6 +263,101 @@ class Build(unittest.TestCase):
         self.assertIn("game Game", m.hold_line(v["holds"][0]))
 
 
+class ToJson(unittest.TestCase):
+    """to_json: the view as the hub's GET lock/view sends it. One allow-list for every listener;
+    over the tunnel (remote) a warning that can name a file is a fixed phrase."""
+
+    SECRET = "Z:\\made-up\\store"          # a path the snapshot may carry and no answer may
+
+    def full(self, **over):
+        s = snap(store=self.SECRET, **over)
+        s["runs"][0].update(pid=4242, ctime=99, tree=[4242, 4343], log=self.SECRET + "\\r-A.log",
+                            session="made-up-session", note="a run's own note")
+        s["hardware"]["problems"] = ["the gpus could not be read at %s" % self.SECRET]
+        s["layout"].update(warning="machine.json at %s is not used" % self.SECRET,
+                           hardware_change={"pending": "a pending text naming %s" % self.SECRET,
+                                            "changed": False},
+                           division={"cpu_slot_threads": 2}, default_division={"cpu_slot_threads": 2},
+                           owner_division={}, wanted_division={"cpu_slot_threads": 2})
+        s["queue"]["error"] = "queue unreadable: %s\\queue.json" % self.SECRET
+        s["holds_error"] = "holds unreadable: %s\\holds" % self.SECRET
+        s["kinds_error"] = "kinds table %s\\kinds.json names no kinds" % self.SECRET
+        s["game"] = {"enabled": True, "games": [{"exe": "Game.exe", "name": "Game", "pin": True,
+                                                 "anti_cheat": False}],
+                     "running": {"exe": "Game.exe", "name": "Game", "pid": 777}, "hold": None,
+                     "slots": [], "would_take": [2, 3], "pinned": "pinned",
+                     "anti_cheat_services": []}
+        return s
+
+    def json_of(self, remote, **over):
+        import json
+        s = self.full(**over)
+        out = m.to_json(m.build(s, HISTORY, now=NOW), s, remote=remote)
+        return out, json.dumps(out)     # it is plain JSON: dumps raises on a datetime
+
+    def test_the_view_is_plain_json_with_local_times(self):
+        out, _ = self.json_of(False)
+        self.assertEqual(out["now"], NOW.astimezone().isoformat(timespec="seconds"))
+        self.assertEqual(out["revision"], 5)
+        self.assertEqual([h["id"] for h in out["holds"]], ["h-whole", "h-half"])
+        self.assertEqual(out["holds"][0]["start"], at(60))
+        self.assertEqual(out["holds"][0]["note"], "gaming")
+        agent = out["agent_holds"][0]
+        self.assertEqual((agent["id"], agent["lost"], agent["lost_to"]),
+                         ("h-agent", {"gpu": [0]}, ["h-whole"]))
+        self.assertEqual([r["id"] for r in out["runs"]], ["r-A"])
+        self.assertEqual(out["colour"], {"r-A": m.RUN_COLOURS[0]})
+        types = sorted(it["type"] for it in out["strip"])
+        self.assertEqual(types, ["booking", "hist", "run", "wait"])
+        hist = next(it for it in out["strip"] if it["type"] == "hist")
+        self.assertTrue(hist["late"])
+        self.assertEqual(hist["expect_end"], (m.to_local(at(-190)) + dt.timedelta(seconds=1200))
+                         .isoformat(timespec="seconds"))
+        self.assertIn(hist["lane"], range(out["lanes"]))
+        self.assertEqual(out["queue"][0], ["", ["move:r-B"]])
+        self.assertEqual(out["cores"]["cpu"][0]["holder"], "r-A")
+        self.assertEqual(out["memory"], {"free_mb": 16384, "total_mb": 65536})
+        self.assertEqual(out["game"]["running"], {"exe": "Game.exe", "name": "Game"})
+        self.assertEqual(out["game"]["would_take"], [2, 3])
+        self.assertEqual(out["division"]["agent_cap"], 2)
+        self.assertEqual(out["division"]["cpu_slots"], 4)
+
+    def test_no_process_detail_and_no_store_folder_on_any_listener(self):
+        for remote in (False, True):
+            with self.subTest(remote=remote):
+                out, text = self.json_of(remote)
+                for key in ("pid", "ctime", "tree", "log", "session", "store", "pinned",
+                            "anti_cheat_services"):
+                    self.assertNotIn('"%s"' % key, text)
+                self.assertNotIn("a run's own note", text)
+                self.assertNotIn("made-up-session", text)
+                if remote:
+                    self.assertNotIn("made-up", text)
+
+    def test_the_local_owner_reads_the_warnings_as_the_window_does(self):
+        s = self.full()
+        self.assertEqual(m.to_json(m.build(s, now=NOW), s)["warnings"],
+                         m.build(s, now=NOW)["warnings"])
+
+    def test_over_the_tunnel_a_warning_that_can_name_a_file_is_a_fixed_phrase(self):
+        out, _ = self.json_of(True)
+        self.assertEqual(out["warnings"], [
+            m.REMOTE_SAYS["layout"], m.REMOTE_SAYS["pending"], m.REMOTE_SAYS["queue"],
+            m.REMOTE_SAYS["holds_error"], m.REMOTE_SAYS["kinds_error"],
+            m.REMOTE_SAYS["hardware"] % 1])
+        # the kit's own sentences for a layout wait name no file and are kept
+        lay = dict(snap()["layout"], hardware_change={"pending": True, "changed": True})
+        s = snap(layout=lay)
+        self.assertEqual(m.to_json(m.build(s, now=NOW), s, remote=True)["warnings"],
+                         ["a new division waits until nothing runs or queues"])
+
+    def test_a_bare_snapshot_does_not_raise(self):
+        out = m.to_json(m.build({}, now=NOW), {}, remote=True)
+        self.assertEqual((out["holds"], out["runs"], out["warnings"]), ([], [], []))
+        self.assertIsNone(out["memory"])
+        self.assertIsNone(out["game"]["running"])
+
+
 class Grid(unittest.TestCase):
     """The schedule's days and half-hour rows, with no tkinter."""
     DAY0 = dt.datetime(2026, 10, 8, 0, 0, tzinfo=dt.timezone(dt.timedelta(hours=-4)))

@@ -268,6 +268,14 @@ class ServeCase(unittest.TestCase):
 
 
 class BuildCase(ServeCase):
+    def test_the_api_reads_the_machine_lock_through_the_door_it_is_given(self):
+        from tests.hubsite import test_api_roles as roles
+        door = roles.LockDoor()
+        self.assertIs(self.build(lock=door).api.lock, door)
+        self.hub.close()
+        self.assertIsNone(self.build().api.lock)
+        self.assertIsNone(serve.Sources().lock)
+
     def test_the_api_reads_the_approval_key_and_finds_a_checkout_by_its_remote(self):
         from kitlib.hubsite import approvals
         lists = [[('alpha', 'X:\\alpha'), ('beta', 'X:\\beta')]]
@@ -1753,6 +1761,9 @@ class MachineCase(unittest.TestCase):
         self.assertEqual(os.path.basename(serve.STATIC_DIR), 'web')
         self.assertEqual(os.path.split(src.agents)[1], 'agents')
         self.assertIsNone(serve.machine_sources(self.home, sync=False).sync)
+        # the machine lock's door, made now and opened on its first read (none here)
+        from kitlib.hubsite import lockdoor
+        self.assertIsInstance(src.lock, lockdoor.LockDoor)
         self.assertEqual(os.listdir(self.home), [], 'reading the sources wrote something')
 
     def test_the_pm_start_config_gives_the_repository_views(self):

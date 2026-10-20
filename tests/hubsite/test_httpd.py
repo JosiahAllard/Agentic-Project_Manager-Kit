@@ -488,7 +488,8 @@ class ApiCase(httpfix.ListenerCase):
         git = TempRepo()                # the checkout POST /approvals reads its bases from
         self.addCleanup(git.cleanup)
         lis = self.listener(api.Api(self.store, views=httpfix.Views(), clock=httpfix.CLOCK,
-                                    approval_key=lambda: roles.KEY, checkout=lambda r: git.root))
+                                    approval_key=lambda: roles.KEY, checkout=lambda r: git.root,
+                                    lock=roles.LockDoor()))
         for route in api.ROUTES:
             for role, token in ((OWNER, self.owner), (AGENT, self.agent)):
                 seed, body, query = roles.row(route, role)

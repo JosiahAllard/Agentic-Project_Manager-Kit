@@ -363,11 +363,15 @@ class Sources(object):
                    no push notifications
       push_dir     the folder push notifications keep their outbox and undelivered log in (the
                    launcher's state folder); push notifications run only when both are set
+      lock         the machine lock's door for the Api's lock routes (kitlib.hubsite.lockdoor
+                   LockDoor, or its like: revision, view, stats); None: those routes answer
+                   `unavailable`
     """
 
     def __init__(self, tokens=None, static_dir=STATIC_DIR, pm_data=None, notices=None, repos=None,
                  usage=None, agents=None, backlog=None, sync=None, access_keys=None,
-                 access_now=None, known_repos=None, push=None, push_dir=None):
+                 access_now=None, known_repos=None, push=None, push_dir=None, lock=None):
+        self.lock = lock
         self.push = push
         self.push_dir = push_dir
         self.known_repos = known_repos
@@ -437,8 +441,9 @@ def _configured_repos(cfg):
 
 def machine_sources(home=None, sync=True):
     """This machine's Sources, read from the machine config under `home` (default the user's).
-    It writes nothing and starts no git. sync=False: no git sync (a scratch store). ConfigError
-    when the machine config cannot be used."""
+    It writes nothing and starts no git. sync=False: no git sync (a scratch store). The lock
+    door reads the machine lock (its own fixed folder, not `home`) on its first call, never
+    here. ConfigError when the machine config cannot be used."""
     path = user.readable_file(home)
     cfg = pmstart.load_config(path)
     try:
@@ -449,6 +454,8 @@ def machine_sources(home=None, sync=True):
                   notices=pmwatch.configured_notice_dir(path),
                   agents=agents_dir(),
                   sync=gitsync.GitSync if sync else None)
+    from . import lockdoor          # here: only the machine's server reads the machine lock
+    src.lock = lockdoor.LockDoor()
     if pmwatch.launcher_configured(home):
         def report():
             from kitlib.launcher import settings as launcher_settings   # here: only this needs it
@@ -899,7 +906,7 @@ def build(settings, sources, log=None):
             _follow_rounds(views_b, views)
         api = _api.Api(store, views,
                        approval_key=functools.partial(auth.read_approval_key, sources.tokens),
-                       checkout=_checkout(views_b))
+                       checkout=_checkout(views_b), lock=sources.lock)
         try:
             local = httpd.Listener((httpd.LOOPBACK, settings.port), api, None,
                                    static_dir=sources.static_dir, host_rule=httpd.local_hosts,

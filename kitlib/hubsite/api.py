@@ -5,7 +5,7 @@ hub site design, section 2 "HTTP API" and section 9).
              is a full path under BASE; a `{name}` segment takes one path segment. role is OWNER,
              AGENT, ANY or APPROVER: who may call it ("Roles").
   Api(store, views=None, clock=None, session_keys=None, now=None, approval_key=None,
-      checkout=None)
+      checkout=None, lock=None)
              .call(method, path, role, body=None, query=None, via='', raise_unexpected=False,
                    agent_words=False, strong=False) -> (status, object)
              via names the transport (web, desktop-mcp, cli, tunnel, ...); every write records
@@ -127,8 +127,27 @@ Both are read now, never cached, and neither is part of GET snapshot.
 They raise HubErrors as the record views do; a `store` one carries the store's text, which only
 the local owner is given. POST records/{repo}/{id}/delete takes `confirm`, which must repeat the id.
 
-Nothing here opens a socket, starts a thread, prints, parses arguments or exits. GET wait blocks
-in Store.wait for at most WAIT_MAX_S; how many may wait at once is the listener's rule.
+Machine lock. By the owner's decision the hub reads the machine lock in-process, through `lock`: a door object
+(kitlib.hubsite.lockdoor.LockDoor on the machine's server; this module never imports it) with
+  revision()                     the lock store's revision
+  view(remote=False)             {lock_revision, view}: kitlib.lockui.model to_json's view
+  stats(days, since, until)      kitlib.lock.api stats
+Its three routes are OWNER's: an agent is refused all of them (`forbidden`, field role), on every
+listener; the lock's writes are not routes here. GET lock/view gives the view; `remote` is true
+only for the tunnel listener's calls (via TUNNEL_VIA), whose warnings that can name a file are
+fixed phrases (model.REMOTE_SAYS); every listener gets the same allow-listed keys. GET lock/stats
+takes days (1 to 366), since and until (ISO times with their offset). GET lock/wait takes since (a
+lock revision; default the one now) and timeout (seconds, at most WAIT_MAX_S) and answers the view
+plus `changed` once the lock's revision differs from since, or at the timeout with changed false.
+The lock store has no wake of its own, so the wait looks at its revision every LOCK_POLL_S,
+sleeping in Store.wait so that a close of the hub store ends it at once (`store`). It is a wait
+for the listener (WAIT_HANDLERS): it takes one of the listener's wait slots. With no door every
+route is `unavailable`, field lock; a door that raises anything but a HubError is `unavailable`
+with only the exception's class name (_reason), never its text.
+
+Nothing here opens a socket, starts a thread, prints, parses arguments or exits. GET wait (and GET
+lock/wait) blocks in Store.wait for at most WAIT_MAX_S; how many may wait at once is the listener's
+rule.
 
 PM seen. GET snapshot carries `pm_seen`: {"waited", "pulled", "waiting"}. waited is the time
 (the Api's clock) an AGENT-role caller last entered or left GET wait, pulled the time one last
@@ -193,6 +212,9 @@ NOT_STRONG = ('%s %s needs the owner logged in through Cloudflare Access: the ow
 STATUS = {'invalid': 400, 'forbidden': 403, 'not_found': 404, 'conflict': 409, 'store': 503,
           'unavailable': 503, 'internal': 500}
 WAIT_MAX_S = 55
+LOCK_POLL_S = 0.5                   # how often GET lock/wait looks at the lock's revision
+LOCK_DAYS_MAX = 366                 # GET lock/stats `days`
+TUNNEL_VIA = 'tunnel'               # the tunnel listener's via (kitlib.hubsite.httpd): a remote view
 ACK_WINDOW_S = 30 * 60              # a creator's time to handle an item handed to it ("Routes")
 REACH_GRACE_S = WAIT_MAX_S + 30     # a key is reachable this long after its last wait ("Routes")
 ROUTE_SLACK_S = 0.01                # a PM wait looks again this long after a route's turn is due
@@ -423,12 +445,15 @@ class Api(object):
     iterable, called afresh on each use (default: launcher_keys); `now` gives monotonic seconds
     for the routes (default: time.monotonic). `approval_key()` gives the approval key or None,
     read on each decide and verify; `checkout(repo_id)` gives the root of this machine's checkout
-    of that repository or None ("Approvals"); both default to None, which no approval passes."""
+    of that repository or None ("Approvals"); both default to None, which no approval passes.
+    `lock` is the machine lock's door or None ("Machine lock")."""
 
     def __init__(self, store, views=None, clock=None, session_keys=None, now=None,
-                 approval_key=None, checkout=None):
+                 approval_key=None, checkout=None, lock=None):
         self.store = store
         self.views = views
+        self.lock = lock
+        self.lock_poll_s = LOCK_POLL_S
         self.clock = clock or store.clock
         self.approval_key = approval_key or (lambda: None)
         self.checkout = checkout or (lambda repo: None)
@@ -1275,10 +1300,8 @@ def pending(api, req):
     return {'items': items}
 
 
-def wait(api, req):
-    since = _q_int(req, 'since', 0, 10 ** 12)
-    if since is None:
-        since = api.store.revision
+def _timeout(req):
+    """A wait's `timeout` query: seconds, WAIT_MAX_S when not given; not capped here."""
     raw = _q(req, 'timeout')
     try:
         timeout = float(raw) if raw else float(WAIT_MAX_S)
@@ -1287,6 +1310,14 @@ def wait(api, req):
     if not math.isfinite(timeout) or timeout < 0:
         raise _invalid('timeout is a number of seconds from 0 to %d, not %r' % (WAIT_MAX_S, raw),
                        'timeout')
+    return timeout
+
+
+def wait(api, req):
+    since = _q_int(req, 'since', 0, 10 ** 12)
+    if since is None:
+        since = api.store.revision
+    timeout = _timeout(req)
     want = _q_flag(req, 'pending')
     for_key = _q(req, 'for')
     if for_key and not want:
@@ -1461,6 +1492,56 @@ def health(api, req):
     return out
 
 
+def _remote(req):
+    return req.via == TUNNEL_VIA
+
+
+def _lock(api, read, *args, **kw):
+    """read(door, ...) on the Api's lock door ("Machine lock"). No door, or a door that raises
+    anything but a HubError, is `unavailable` (field lock), named by the exception's class
+    only. HomeFenced and other BaseExceptions pass."""
+    door = api.lock
+    if door is None:
+        raise HubError('unavailable', 'this server has no machine lock', 'lock')
+    try:
+        return read(door, *args, **kw)
+    except HubError:
+        raise
+    except Exception as e:          # noqa: BLE001 - any lock failure is the lock being unavailable
+        raise HubError('unavailable', 'the machine lock could not be read (%s)' % _reason(e),
+                       'lock')
+
+
+def lock_view(api, req):
+    return _lock(api, lambda door: door.view(remote=_remote(req)))
+
+
+def lock_stats(api, req):
+    days = _q_int(req, 'days', 1, LOCK_DAYS_MAX)
+    since, until = _q(req, 'since') or None, _q(req, 'until') or None
+    return _lock(api, lambda door: door.stats(days=days, since=since, until=until))
+
+
+def lock_wait(api, req):
+    since = _q_int(req, 'since', 0, 10 ** 12)
+    timeout = min(_timeout(req), float(WAIT_MAX_S))
+    api.store.check_open()
+    if since is None:
+        since = _lock(api, lambda door: door.revision())
+    end = time.monotonic() + timeout
+    # the lock store wakes nobody: look at its revision every lock_poll_s, sleeping in the hub
+    # store's wait so that closing the hub ends this wait at once
+    while _lock(api, lambda door: door.revision()) == since:
+        left = end - time.monotonic()
+        if left <= 0:
+            break
+        api.store.wait(api.store.revision, min(api.lock_poll_s, left))
+        api.store.check_open()
+    out = _lock(api, lambda door: door.view(remote=_remote(req)))
+    out = dict(out, changed=out.get('lock_revision') != since)
+    return out
+
+
 def _r(method, path, role, handler):
     return Route(method, BASE + path, role, handler)
 
@@ -1513,4 +1594,9 @@ ROUTES = (
     _r('GET', '/wait', ANY, wait),
     _r('GET', '/snapshot', ANY, snapshot),
     _r('GET', '/health', ANY, health),
+    _r('GET', '/lock/view', OWNER, lock_view),
+    _r('GET', '/lock/stats', OWNER, lock_stats),
+    _r('GET', '/lock/wait', OWNER, lock_wait),
 )
+# the handlers that block: the listener counts each call to one as a wait (kitlib.hubsite.httpd)
+WAIT_HANDLERS = (wait, lock_wait)
