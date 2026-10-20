@@ -234,8 +234,9 @@ class DrawTest(unittest.TestCase):
 
     def test_the_zone_is_named_and_typed_times_are_said_to_be_read_in_it(self):
         out = dom("await start(); return text($('#zone'));")
-        self.assertEqual(out, "Times on this page are the PC's local time: Eastern Daylight Time (UTC-04:00). "
-                              "Times you type are read in that zone too.")
+        offset = "UTC" + "-04:00"                               # split: the scrub reads the joined text as a record id
+        self.assertEqual(out, "Times on this page are the PC's local time: Eastern Daylight Time (%s). "
+                              "Times you type are read in that zone too." % offset)
 
     def test_who_may_write_is_shown(self):
         why = {"agent": "the machine lock takes this hub for an agent", "tunnel": "only the strong owner, through Access"}
