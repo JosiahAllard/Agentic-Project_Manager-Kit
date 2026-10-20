@@ -248,7 +248,7 @@ Every deny the guard's hook answers adds one JSON line to `<pm_data>/audit/refus
   - `agent_role` and `agent`: the subagent's role name and its identity;
   - `session`: the launcher's `PM_KIT_SESSION_NAME`;
   - `tool` and `kind`: the host's tool name and the Action's kind;
-  - `repo`: the folder name of the call's main checkout, the folder whose `.git` is the common dir, read from the filesystem with no git child. Any other layout (a submodule, a separate git dir) logs `-`, and so does a folder that is the user-profile folder or is named as the account, so a line never carries the account name;
+  - `repo`: the folder name of the call's main checkout, the folder whose `.git` is the common dir, read from the filesystem with no git child. Any other layout (a submodule, a separate git dir) logs `-`. So does a checkout that is exactly the user-profile folder, or whose name equals `USERNAME` (ignoring case). Nothing else is screened: a folder name that contains the account name, a GitHub handle that is not `USERNAME`, or a repo whose name matches the profile folder's name logs as it is. The log stays on this machine and is never committed ("The folder" below);
   - `instead_given`: true when the deny gave an Instead.
 
   A value that is absent is `-`. For a call of several Actions (one patch over several files), the line describes the first Action.
