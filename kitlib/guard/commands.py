@@ -661,10 +661,10 @@ def run_dir(inv):
 
 def _sp_shell_text(inv, parsed):
     """_nested_text for a shell Start-Process starts. Start-Process hands the program one command
-    line, its -ArgumentList elements joined with spaces; a computed element, or a computed
-    -WorkingDirectory, makes the text unreadable. A literal -WorkingDirectory the guard cannot
-    place exactly (sp_workdir_unplaceable) gives the nested line no directory (None), so a write
-    there is refused as one whose directory is unknown. cmd runs the rest of that line after its
+    line, its -ArgumentList elements joined with spaces; a computed element makes the text
+    unreadable. A computed -WorkingDirectory, or a literal one the guard cannot place exactly
+    (sp_workdir_unplaceable), gives the nested line no directory (None, run_dir), so a write there
+    is refused as one whose directory is unknown. cmd runs the rest of that line after its
     /c (/k, /r), read with its outer quotes kept and dropped (cmd keeps or drops them by what lies
     between); bash and powershell read the words _split_list made of each element."""
     if any(w.dyn for w in inv.listed):
@@ -672,9 +672,6 @@ def _sp_shell_text(inv, parsed):
         return None
     where = ()
     if inv.workdir is not None:
-        if inv.workdir.dyn:
-            parsed.flag('a shell Start-Process starts in a working directory that is not literal (%s)' % inv.path)
-            return None
         where = (run_dir(inv),)
     if inv.name != 'cmd':
         found = _shell_text(inv, parsed)
