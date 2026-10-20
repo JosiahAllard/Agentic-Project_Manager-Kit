@@ -75,6 +75,10 @@ no git config and never rebases, resets or forces. The checks are a point in tim
 
 Right after `kit_sync`, the `plugin_current` check prints one line when the pm-kit plugin export is missing, behind the kit's `refs/remotes/<remote>/main`, or an account folder's last refresh failed, each with `python "<kit>/tools/plugin_refresh.py" --apply`, and when there is no export or an account folder is not migrated, with `python "<kit>/tools/plugin_refresh.py" --migrate --apply` instead (`<kit>` the kit's absolute path, `kitlib.pluginsource` `refresh_cmd`: the PM's session runs in another folder); an unreadable export state is a `could not check the pm-kit plugin` line. It reads the export root only, never an account folder (docs/plugin-source.md "Behind warnings"). Code: `kitlib/pmstart` `plugin_current`, `kitlib.pluginsource` `current_lines`; tests: `tests/pmstart/test_plugin_current.py`.
 
+## Plugin enabled (`plugin_enabled`)
+
+Right after `plugin_current`, the `plugin_enabled` check prints one line naming every account folder (`kitlib.pluginsource.claude.account_folders`) whose `settings.json` has no `enabledPlugins["pm-kit@pm-kit"]`: `pm-kit plugin: not enabled in <folders>: python "<kit>/tools/machine_setup.py" --apply (docs/machine-setup.md "Default mode")`. `false` is the owner's choice and prints nothing; a `settings.json` that is not a JSON object is its own `could not check the pm-kit plugin in <folder>` line; a machine config whose plugin settings cannot be read is the checklist's `could not check plugin_enabled` line. Code: `kitlib/pmstart` `plugin_enabled`; tests: `tests/pmstart/test_plugin_enabled_check.py`.
+
 ## Stubs (`stubs`)
 
 For each repository in the machine config's `launcher.repos`, the `stubs` check runs

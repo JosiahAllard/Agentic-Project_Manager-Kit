@@ -110,9 +110,19 @@ class MakeTemp(unittest.TestCase):
         self.assertTrue(os.path.isdir(folder))
 
     def test_a_work_temp_that_cannot_be_used_falls_back_with_a_note(self):
+        """To the kit's default temp folder (default_work_temp), and only when that cannot be
+        used either to this process's temp folder."""
+        fallback = os.path.join(self.base, 'default')
         for boom in (OSError('access denied'), RuntimeError('no LOCALAPPDATA'),
                      ConfigError('bad temp_dir')):
-            with mock.patch.object(user, 'work_temp', side_effect=boom):
+            with mock.patch.object(user, 'work_temp', side_effect=boom), \
+                    mock.patch.object(user, 'default_work_temp', return_value=fallback):
+                folder, note = user.make_temp(self.base, 'kit-x-')
+            self.assertEqual(os.path.dirname(folder), fallback)
+            self.assertIn(str(boom), note)
+            with mock.patch.object(user, 'work_temp', side_effect=boom), \
+                    mock.patch.object(user, 'default_work_temp',
+                                      side_effect=RuntimeError('no default')):
                 folder, note = user.make_temp(self.base, 'kit-x-')
             self.addCleanup(shutil.rmtree, folder, True)
             self.assertEqual(os.path.normcase(os.path.dirname(folder)),
