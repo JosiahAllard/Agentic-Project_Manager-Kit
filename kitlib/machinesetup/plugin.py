@@ -21,6 +21,11 @@ migrate command.
 Only folders in the refresh set (kitlib.pluginsource.claude.account_folders) are installed: a
 --config-dir folder outside it would never be updated by tools/plugin_refresh.py or pm_start, so it
 is a note giving the hand commands, and the export change is still made for them.
+
+After the installs, each refresh-set folder whose plugin is enabled (before this run, or by its
+install change) gets one more change (_plan_settings, edit_settings): the machine-lock tools' allow
+rules and the drop of the kit SessionStart entries the plugin also runs (settings.plugin_edit),
+re-read and recomputed on the file the CLI left, with its own .bak.
 """
 import difflib
 import json
