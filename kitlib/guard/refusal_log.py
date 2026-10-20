@@ -64,7 +64,7 @@ def repo_of(action):
     common = getattr(found, 'common', None) if found is not None else None
     if not common:
         return MISSING
-    return os.path.basename(os.path.dirname(os.path.normpath(common))) or MISSING
+    return os.path.basename(os.path.dirname(common.rstrip('/\\'))) or MISSING
 
 
 def entry(decision, action, host, role, environ=None, now=None):
