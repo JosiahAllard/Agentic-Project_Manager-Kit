@@ -674,11 +674,13 @@ def _branch_gate(root, base=None, full=False, only=None, plan=False, slug=None, 
 
 def zero_count_warnings(gate):
     """The lines of steps.zero_count_passes(gate), or one line saying the check could not run:
-    a warning only, so nothing it raises stops or fails the gate."""
+    a warning only, so nothing it raises stops or fails the gate. Each line is escaped to ASCII
+    (backslashreplace), so a console that cannot encode a pattern (cp1252) cannot raise either."""
     try:
-        return S.zero_count_passes(gate)
+        lines = list(S.zero_count_passes(gate))
     except Exception as e:          # noqa: BLE001 - a warning never fails or stops the gate
-        return ['the zero-count "pass" check could not run: %s: %s' % (type(e).__name__, e)]
+        lines = ['the zero-count "pass" check could not run: %s: %s' % (type(e).__name__, e)]
+    return [str(line).encode('ascii', 'backslashreplace').decode('ascii') for line in lines]
 
 
 def _gate_checkout(top, cfg, seen, base=None, full=False, only=None, plan=False, slug=None,

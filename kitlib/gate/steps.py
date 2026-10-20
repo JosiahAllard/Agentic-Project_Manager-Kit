@@ -215,19 +215,22 @@ def zero_count_passes(gate):
     pattern's shortest text, counts 0), or its own first count may be 0 (`\\d+`). judge()
     still fails such a run when it says zero (`Ran 0 tests` or zero_tests); a pattern with a
     floor (`[1-9]\\d*`) needs no backstop. A warning only: nothing refuses on it, and with no
-    stdlib regex parser (_regex_parser) it gives []. Its caller is kitlib.gate.runner's
-    zero_count_warnings, a branch gate's WARNING lines only (never a landing's)."""
+    stdlib regex parser (_regex_parser) it gives []; a pattern that is no string is skipped.
+    Its caller is kitlib.gate.runner's zero_count_warnings, a branch gate's WARNING lines only
+    (never a landing's)."""
     parser = _regex_parser()
     if parser is None:
         return []
     zero_lines = [ZERO_RAN]
     for z in _list(gate.get('zero_tests')):
-        s = _sample(parser, z)
+        s = _sample(parser, z) if isinstance(z, str) else None
         if s:
             zero_lines.append(''.join(c for c, _ in s))
     out = []
     for step in gate.get('steps') or []:
         for p in _list(step.get('pass')):
+            if not isinstance(p, str):      # config refuses it; skipped, it hides no other line
+                continue
             try:
                 hit = next((z for z in zero_lines if re.search(p, z, re.M)), None)
             except (re.error, OverflowError, RecursionError, MemoryError):
