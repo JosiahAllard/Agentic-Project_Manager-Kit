@@ -50,7 +50,7 @@ A `worktree_remove.build_output` entry `{"piece": "<id>", "path": "<folder>/"}` 
 
 ## Classify
 
-`kitlib/worktree/classify.py` `classify` deletes, moves, fetches and writes nothing. Every git call is a read, and the status is read with `--no-optional-locks`. The base (`origin/main`) is read as it stands and never fetched, so the header says `(as it stands, not fetched)`. The backlog store is opened with `fetch=False`. Each tree gets the first class that matches, in this order:
+`kitlib/worktree/classify.py` `classify` without `--apply` deletes, moves, fetches and writes nothing. Every git call is a read, and the status is read with `--no-optional-locks`. The base (`origin/main`) is read as it stands and never fetched, so the header says `(as it stands, not fetched)`. The backlog store is opened with `fetch=False`. Each tree gets the first class that matches, in this order:
 
 | Class | Rule | Next step the output names |
 |---|---|---|
@@ -65,6 +65,12 @@ A `worktree_remove.build_output` entry `{"piece": "<id>", "path": "<folder>/"}` 
 - Each tree's line shows the backlog records its branch pulled (`claim:`). This is shown only and never used to classify.
 - Each B and C tree gets a `next` line with its `--abandon "<why>"` command. That line is for after the tree has been taken up or recorded.
 - Exit codes: 0 when every tree is L, 1 when any tree is A, B, C or E (or a run-wide read failed: `failed ... nothing was classified`), 2 for a refused `.kit.json`.
+
+`--classify --apply` (with or without `--json`) classifies as above, then removes each A and E tree through the existing remove paths (`apply_tree`): A by the plain verb; E by `--scratch` when it is detached under a scratch root and every commit its HEAD and HEAD reflog hold is reached by a ref (`scratch_route`), by the plain verb when its tip is in the base, else by `--abandon "evidence"` (tag `archive/<slug>`). Each path makes its own checks again, so a tree held, dirtied or moved since it was classified is refused there. B, C and L trees are never touched, nothing is fetched and no remote branch is touched.
+
+- It runs on the main checkout only, as the sweep does. A held landing lock (`sweep.landing_hold`) refuses the run before anything is read: `refused   ...; nothing was classified or removed`. The lock is read again before each tree; taken mid-run, that tree and the rest are `skipped`.
+- One line per A or E tree, `removed|failed|skipped <path>: <class>, <path taken>[, tag archive/<slug>]` and, for a failure, the path's first refusal. The B, C and L blocks, `next` lines and `summary` follow, then `applied   removed N, failed N, skipped N`. In `--json`, each such tree has `apply` (`result`, `why`, and the path's own `lines`) and the data has `applied`.
+- Exit codes: 0 when every A and E tree was removed and no B or C tree is left; 1 when the run was refused, a tree failed or was skipped, or a B or C tree is left; 2 for usage or a refused `.kit.json`. `--apply` without `--classify` is still the sweep's (`--sweep-merged --apply`).
 
 ## The last status read
 

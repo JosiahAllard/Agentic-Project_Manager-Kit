@@ -1,7 +1,9 @@
-"""`worktree_remove.py --classify [--json]`: sort every registered worktree but the main checkout
-into one class, read-only (docs/worktree-remove.md "Classify"). Nothing here deletes, moves,
-fetches or writes: every git call is a read (the status with `--no-optional-locks`), the base is
-read as it stands, never fetched, and the backlog store is opened with `fetch=False`.
+"""`worktree_remove.py --classify [--json] [--apply]`: sort every registered worktree but the main
+checkout into one class (docs/worktree-remove.md "Classify"). Without `apply` nothing here
+deletes, moves, fetches or writes: every git call is a read (the status with
+`--no-optional-locks`), the base is read as it stands, never fetched, and the backlog store is
+opened with `fetch=False`. With `apply` (`apply_tree`), A and E trees then go through the existing
+remove paths, which make their own checks again; B, C and L are never touched.
 
 The classes, decided first-match in this order:
 
@@ -24,9 +26,12 @@ The classes, decided first-match in this order:
 
 Who the tree belongs to (a backlog record pulled by its branch) is shown, never used to classify.
 `classify` returns Result(code, lines, data): 0 when no tree is A, B, C or E; 1 when one is, or a
-run-wide read failed; 2 for a refused kit configuration.
+run-wide read failed; 2 for a refused kit configuration. With `apply`: 0 when every A and E tree
+was removed and no B or C tree is left; 1 when the run was refused (not the main checkout, the
+landing lock held), a tree failed or was skipped, or a B or C tree is left.
 """
 import collections
+import copy
 import datetime
 import fnmatch
 import os
@@ -34,7 +39,9 @@ import time
 
 from kitlib.records import gate_ok
 
-from . import holders, remove, sweep
+from kitlib.git import refs
+
+from . import holders, remove, scratch, sweep
 from .holders import WALK_MAX, canon, extended, plain, prune
 from .remove import OK, REFUSED, failure, git
 
@@ -45,7 +52,8 @@ EVIDENCE_GLOBS = ('agent-*', '*-red', 'redcheck', 'mutant*')
 LANDING_TREE = '_landing'                      # kitlib/gate/land.py TREE_NAME
 CLASSES = ('A', 'B', 'C', 'E', 'L')
 HEADINGS = {
-    'A': ('landed', 'tip in the base, clean', 'removable: worktree_remove.py <slug>'),
+    'A': ('landed', 'tip in the base, clean, a commit of its own on the branch',
+          'removable: worktree_remove.py <slug>'),
     'B': ('finished', 'clean, ahead of the base, gate-OK record, dead',
           'take up: land it or record why not'),
     'C': ('half-done', 'dirty, no gate-OK record, or nothing of its own; dead',
@@ -287,15 +295,28 @@ def judge(ctx, entry, base, chain, ancestors):
 
 
 def classify(top, now=None, machine=sweep.machine_lock_entries, procs=process_cwds,
-             dead_after_s=DEAD_AFTER_S, cwd=None):
+             dead_after_s=DEAD_AFTER_S, cwd=None, apply=False, environ=None, today=None):
     """`--classify` on the repository `top` is in. `now` (epoch seconds), `machine` (a
     sweep.machine_lock_entries-like callable) and `procs` (a process_cwds-like callable) are test
-    seams. Read-only."""
+    seams. Read-only unless `apply`: then `top` must be the main checkout, a held landing lock
+    refuses the run before anything is read, and each A and E tree goes through `apply_tree`
+    (`environ`: the scratch roots' environment, scratch.roots; `today`: the abandon tag's date)."""
     ctx, refused = remove.open_ctx(top, cwd)
     if refused:
         return Result(refused.code, refused.lines, {'error': ' '.join(refused.lines)})
     now = time.time() if now is None else now
-    return _classify(ctx, now, machine, procs, dead_after_s)
+    if not apply:
+        return _classify(ctx, now, machine, procs, dead_after_s)
+    if canon(top) != canon(ctx.main):
+        why = '--classify --apply runs on the main checkout only (%s), not %s' % (ctx.main, top)
+    else:
+        why = sweep.landing_hold(ctx)
+    if why:
+        ctx.say('refused   %s; nothing was classified or removed' % why)
+        return Result(REFUSED, list(ctx.out), {'error': why})
+    return _classify(ctx, now, machine, procs, dead_after_s,
+                     act=lambda entry, row, base: apply_tree(ctx, entry, row, base, environ,
+                                                             today))
 
 
 def trees_besides_main(main, listing):
@@ -358,7 +379,7 @@ def _fail(ctx, why):
     return Result(REFUSED, list(ctx.out), {'error': why})
 
 
-def _classify(ctx, now, machine, procs, dead_after_s):
+def _classify(ctx, now, machine, procs, dead_after_s, act=None):
     s, main = ctx.s, ctx.main
     try:
         listing = remove.worktree_listing(main)
@@ -387,7 +408,7 @@ def _classify(ctx, now, machine, procs, dead_after_s):
         ctx.say('note      %s: every tree is L' % run_wide)
     claims, claims_why = (remove.pulled_index(ctx, base) if any(e['branch'] for e in entries)
                           else ({}, None))
-    trees = []
+    trees, acted = [], []
     for entry in entries:
         path = os.path.normpath(entry['path'])
         row = {'path': path, 'branch': entry['branch'], 'head': entry['head']}
@@ -404,8 +425,26 @@ def _classify(ctx, now, machine, procs, dead_after_s):
             row['claims'] = (claims.get(entry['branch'], []) if claims is not None
                              else 'unknown: %s' % claims_why)
         trees.append(row)
+        if row['class'] in ('A', 'E'):
+            acted.append((entry, row))
     counts = {k: sum(1 for t in trees if t['class'] == k) for k in CLASSES}
+    applied = None
+    if act is not None:
+        # The landing lock is read again before each tree: taken mid-run, the rest are skipped.
+        applied = {'removed': 0, 'failed': 0, 'skipped': 0}
+        stop = None
+        for entry, row in acted:
+            if stop is None:
+                stop = sweep.landing_hold(ctx)
+            if stop:
+                row['apply'] = {'result': 'skipped', 'why': stop, 'lines': []}
+            else:
+                row['apply'] = act(entry, row, base)
+            applied[row['apply']['result']] += 1
+            ctx.say('%-9s %s: %s' % (row['apply']['result'], row['path'], row['apply']['why']))
     for klass in CLASSES:
+        if act is not None and klass in ('A', 'E'):
+            continue
         rows = [t for t in trees if t['class'] == klass]
         name, rule, action = HEADINGS[klass]
         ctx.say('%s %-10s %3d  %s -> %s' % (klass, name, len(rows), rule, action))
@@ -417,12 +456,88 @@ def _classify(ctx, now, machine, procs, dead_after_s):
                     ' recorded)' % (s['tool'], remove.handle(ctx, t['path']), t['class']))
     ctx.say('summary   %s' % ', '.join('%s %d' % (k, counts[k]) for k in CLASSES))
     code = REFUSED if any(counts[k] for k in ('A', 'B', 'C', 'E')) else OK
+    if applied is not None:
+        ctx.say('applied   %s' % ', '.join('%s %d' % (k, applied[k])
+                                           for k in ('removed', 'failed', 'skipped')))
+        code = REFUSED if (counts['B'] or counts['C'] or applied['failed']
+                           or applied['skipped']) else OK
     data = {'base': base, 'upstream': s['upstream'], 'dead_after_h': dead_after_s // 3600,
             'now_utc': gate_ok.utc(datetime.datetime.fromtimestamp(now, datetime.timezone.utc)),
             'unreadable': run_wide or None, 'counts': counts, 'trees': trees}
     if cwds is not None:
         data['processes'] = {'scanned': cwds[2], 'unreadable': cwds[1]}
+    if applied is not None:
+        data['applied'] = applied
     return Result(code, list(ctx.out), data)
+
+
+def scratch_route(ctx, entry, environ):
+    """`(True, None)` when a detached tree is for `--scratch`: under a scratch root (scratch.roots)
+    and every commit its HEAD and HEAD reflog hold is reached by a branch, remote-tracking branch
+    or tag; `(False, None)` when it is not; `(None, why)` when that cannot be read. The scratch
+    path checks it all again."""
+    path = entry['path']
+    if entry['branch']:
+        return False, None
+    rts, _ = scratch.roots(environ, ctx.main)
+    if not any(scratch._strictly_under(path, r) for r in rts):
+        return False, None
+    logged, why = scratch.reflog(path)
+    if logged is None:
+        return None, why
+    args = ('rev-list', '--count', entry['head'], *logged, '--not', '--branches', '--remotes',
+            '--tags')
+    rc, count, err = git(ctx.main, *args)
+    if rc != 0 or not count.isdigit():
+        return None, failure(args[:2], rc, err)
+    return count == '0', None
+
+
+def apply_tree(ctx, entry, row, base, environ=None, today=None):
+    """Send one A or E tree through an existing remove path, each making its own checks again (a
+    tree held or changed since it was classified is refused there): A plain; E `--scratch` when
+    scratch_route says so, plain when its tip is in the base, else `--abandon "evidence"` (tag
+    archive/<slug>). Returns {'result': removed|failed|skipped, 'why', 'lines': the path's own}."""
+    path, head = row['path'], entry['head']
+    sub = copy.copy(ctx)
+    sub.out = []
+    if row['class'] == 'A':
+        how, verb = 'A, plain remove', 'plain'
+    else:
+        route, why = scratch_route(ctx, entry, environ)
+        if route is None:
+            return {'result': 'skipped', 'why': 'whether it is for --scratch cannot be read (%s)'
+                    % why, 'lines': []}
+        if route:
+            how, verb = 'E, --scratch', 'scratch'
+        else:
+            landed, why = refs.is_ancestor(head, base, ctx.main)
+            if landed is None:
+                return {'result': 'skipped', 'why': 'whether %s is in the base cannot be read (%s)'
+                        % (head[:10], why), 'lines': []}
+            how, verb = ('E, plain remove', 'plain') if landed else \
+                ('E, --abandon "evidence"', 'abandon')
+    if verb == 'plain':
+        code = remove._remove(sub, path, False)
+    elif verb == 'scratch':
+        code = scratch._remove_scratch(sub, path, environ)
+    else:
+        code = remove._abandon(sub, path, 'evidence', False, today)
+    lines = list(sub.out)
+    tags = [line.split()[1] for line in lines if line.startswith('tagged    ')] + \
+        [line.split()[2] for line in lines if line.startswith('reused    tag ')]
+    if tags:
+        how += ', tag %s' % tags[0]
+    problems = [line.split(None, 1)[1] for line in lines
+                if line.startswith(('refused ', 'failed ')) and len(line.split(None, 1)) > 1]
+    problem = problems[0] if problems else 'it exited %s' % code
+    if any(line.startswith('removed   ') for line in lines):
+        return {'result': 'removed', 'why': how if code == OK else '%s, but %s' % (how, problem),
+                'lines': lines}
+    if code == OK:
+        return {'result': 'skipped', 'why': '%s: %s' % (how, ' '.join(lines) or 'nothing done'),
+                'lines': lines}
+    return {'result': 'failed', 'why': '%s: %s' % (how, problem), 'lines': lines}
 
 
 def describe(t, base):
