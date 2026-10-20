@@ -22,6 +22,7 @@ One rule runs through all three: a reading that failed is printed as `?`, `UNKNO
 - **report hooks**.
 - **engines and ports**: only when configured.
 - **config**: which machine config file is read, from `kitlib.preflight.configline` (docs/kit-json.md "Moving the machine config folder"): the file, `FALLBACK`, `WARN both`, `none` or `BROKEN`; keys are named, values never.
+- **pointer**: the PM-repo pointer (`HKLM\SOFTWARE\pm-kit` value `pm_repo`), from `configline.pointer_line` over `kitlib.config.pointer` (docs/kit-json.md "The PM repo pointer"): the PM repository's path, `none`, or `BROKEN` with the reason. Under the kit's tests the registry is never read.
 - **traps**: `.kit.json` "preflight".traps when set; else `docs/ops/gotchas.md (read once per task; add yours)`, printed only when the checkout has that file (`kitlib/preflight/report.py`, `settings.DEFAULT_TRAPS_FILE`), so no line when it has neither.
 - **index**.
 - **next**: the kit commands with this session's values, from `kitlib/preflight/nextblock.py`. Each runs the kit's own tool by its absolute path and names the checkout with `-C` (a repository holds no copy of the kit's tools, decision 21 in docs/multi-host-plan.md section 7). In the main checkout this is only `new_worktree.py`. In a worktree it is `commit.py`, `review_pack.py` and `codemap.py`, plus `sync_base.py` when the branch is behind its base.

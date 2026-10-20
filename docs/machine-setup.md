@@ -8,14 +8,16 @@ powershell -NoProfile -File installer\machine-setup.ps1 -OldKit <old kit clone> 
 python tools/machine_setup.py [--old-kit DIR] [--owner-email EMAIL] [--pm-settings FILE] [--config-dir DIR]... [--agent-temp DIR] [--no-sweep-task] [--shortcut] [--procwatch [--procwatch-kill]] [--kit DIR] [--home DIR] [--desktop DIR] [--apply]
 python tools/machine_setup.py --repo PATH --owner-email EMAIL --agent-email EMAIL [...] [--apply]
 python tools/machine_setup.py --managed-settings [--kit DIR] [--home DIR] [--apply]
+python tools/machine_setup.py --pm-repo PATH [--kit DIR] [--apply]
 ```
 
-Four modes:
+Five modes:
 
 - **The default** ("Default mode" below): the guard's entry in each Claude account's `settings.json`, the kit plugin on each host machine setup installs, the owner's email in the machine config ("Owner email") and the agents' temp folder ("Extras"). `--fresh` (`-Fresh`) is its old name and is still accepted.
 - **`--old-kit DIR`** (`-OldKit`): switches a machine's Claude config folders from an older kit clone to this kit checkout: each account's `settings.json` (with every link the clone's setup left reported, "Links"), the owner's email and the machine extras (the schedule shortcut, the agents' temp folder with its sweep, and `KIT_MACHINE_LOCK`). It is the switch-over command for the joint review (docs/go-live.md "Switches").
 - **`--repo PATH`**: the committed repo setup, for a repository that wants its kit settings committed: `.kit.json`, the ignore lines, a starter `docs/INDEX.md`, and with `--stack` and `--stubs` their files ("Committed repo setup (--repo)" below; docs/install.md "Committed setup (--repo)"). `installer/new-repo.ps1` is its PowerShell front end.
 - **`--managed-settings`** (`-ManagedSettings`): writes Claude Code's machine-wide managed settings file from the kit's template, and nothing else ("Managed settings" below). `--apply` needs an elevated terminal.
+- **`--pm-repo PATH`**: sets the PM-repo pointer in the registry to the PM repository's work tree PATH, and nothing else ("PM repo pointer" below). `--apply` needs an elevated terminal. The PowerShell wrapper has no switch for it.
 
 Run it from the kit's main checkout, not a worktree: `--kit` defaults to the checkout the tool is in, and every hook path and shortcut names that folder.
 
@@ -25,7 +27,7 @@ Run it from the kit's main checkout, not a worktree: `--kit` defaults to the che
 - **Refusals.** Any refusal stops the run before anything changes: an old-kit path in a settings file that this step neither removes nor re-points, a hook path it cannot resolve, a settings file it cannot read or must not replace, a machine config it cannot read, a kit file a path would need, a missing config folder, or `--kit` equal to `--old-kit`. Each refusal names the file and path.
 - **Part-way failure.** If a change fails under `--apply`, whatever the error, it stops there. It prints the change, the error, how to restore that change by hand, and the changes already made. Every line is printed as it is produced.
 
-Exit codes: 0 done, dry run printed or nothing to do; 1 refused or stopped; 2 usage: both `--old-kit` and `--fresh`, `--pm-settings` with `--old-kit`, a `--repo` option without `--repo` or a machine option with it, `--managed-settings` with any option but `--kit`, `--home` and `--apply` (the wrapper also exits 2 for `-OldKit` with `-Fresh`, `-ManagedSettings` with `-OldKit` or `-Fresh`, `-PmSettings` with `-OldKit`, a `-Python` that is not a file, or, without `-Python`, with no `python` on PATH). `--repo` has its own codes (docs/install.md).
+Exit codes: 0 done, dry run printed or nothing to do; 1 refused or stopped; 2 usage: both `--old-kit` and `--fresh`, `--pm-settings` with `--old-kit`, a `--repo` option without `--repo` or a machine option with it, `--managed-settings` with any option but `--kit`, `--home` and `--apply`, `--pm-repo` with any option but `--kit` and `--apply`, two modes at once (the wrapper also exits 2 for `-OldKit` with `-Fresh`, `-ManagedSettings` with `-OldKit` or `-Fresh`, `-PmSettings` with `-OldKit`, a `-Python` that is not a file, or, without `-Python`, with no `python` on PATH). `--repo` has its own codes (docs/install.md).
 
 The wrapper runs the tool under `-Python <python.exe>` when given, else under the `python` on PATH. The tests pass their own interpreter (`sys.executable`): with the Python install manager, the `python` alias reads its state under `%LOCALAPPDATA%`, and a run with a temp `LOCALAPPDATA` made it install a new Python there.
 
@@ -184,6 +186,15 @@ The write keeps the machine config's other keys and its layout (`kitlib/machines
 - **`--managed-settings`** (`run_managed`, `survey`). A dry run prints the diff from the file as it is to the rendered template; `--apply` writes it. The run is refused under `--apply` unless the process is elevated (`Host.is_admin`): the file is under Program Files, and nothing elevates itself. A new file is made, folder too, in indent 2 and LF; an existing one keeps its layout and is replaced whole, so it is refused when it is no JSON object or holds a top-level key that neither the template nor the overlay has (the refusal names the keys: add them to the template), is copied to `managed-settings.json.machine-setup-<yyyymmdd>.bak` first, and is refused when it changed since the survey or is a link (hard or symbolic). A missing overlay prints a `WARNING` line naming the home folder looked in. The file sits in `ClaudeCode` under `%ProgramW6432%`, else `%ProgramFiles%`. A template without this kit's guard entry is noted: each account then keeps its own. A second run prints `nothing to do`.
 - **In the other modes** (`survey_live`, `note_sync`). The managed file is read as it is, never written. It decides the guard ("Settings") above; the plugin step does not read it. One that is there but no JSON object is refused: machine setup cannot tell whether it carries the guard. The default and `--old-kit` runs note whether it is in sync with the template.
 
+## PM repo pointer
+
+`kitlib/machinesetup/pointer.py`; `tools/machine_setup.py --pm-repo PATH [--kit DIR] [--apply]` (`run_pointer`, `survey`). It sets the PM-repo pointer, `HKLM\SOFTWARE\pm-kit` value `pm_repo` (REG_SZ, 64-bit view), to PATH, and nothing else. What the value means and how it is read is docs/kit-json.md "The PM repo pointer".
+
+- **Checked first.** PATH is normalised and checked as the reader checks it (`kitlib.config.pointer.check`): absolute, an existing folder, the top of a git work tree, on the PM data branch when the repository records one (else the main checkout). Any failure is refused with the reason, before anything else, so the pointer is never set to a value the reader would call `BAD`.
+- **Elevation.** The value is under HKLM, so `--apply` is refused unless the process is elevated (`Host.is_admin`); the refusal names the command and the `reg add` that does the same by hand. Nothing elevates itself. A dry run notes that `--apply` would be refused.
+- **The plan.** One change: set the value, or replace the one there (named). Its detail line is the `reg add` that does the same by hand; the restore line is `reg delete "HKLM\SOFTWARE\pm-kit" /v pm_repo /f /reg:64` for a new value, or the `reg add` of the old one. A value already equal to PATH is nothing to do. A value there that cannot be read is noted and replaced.
+- **Under the kit's tests** the registry is never written: `Registry.write` raises when `kitlib.config.user.fenced()`.
+
 ## Committed repo setup (--repo)
 
 `kitlib/machinesetup/repo.py`; `tools/machine_setup.py --repo PATH --owner-email EMAIL --agent-email EMAIL [--main-branch NAME] [--repo-name NAME] [--stack NAME] [--stubs] [--pm-data DIR [--private-remote URL]] [--apply]`. What `installer/new-repo.ps1` did before this step, now in Python and tested on any platform; the script is its PowerShell front end and passes its parameters through (`-Target` is `--repo`). It writes into the repository and nothing on the machine; no machine option goes with it. What it writes, refuses and prints is docs/install.md "Committed setup (--repo)".
@@ -199,8 +210,9 @@ The write keeps the machine config's other keys and its layout (`kitlib/machines
 
 | Module | Holds |
 |---|---|
-| `kitlib/machinesetup/__init__.py` | `Context`, `default_config_dirs`, `dedupe`, `survey`, `run` (exit code and lines), `run_repo`, `run_managed` |
+| `kitlib/machinesetup/__init__.py` | `Context`, `default_config_dirs`, `dedupe`, `survey`, `run` (exit code and lines), `run_repo`, `run_managed`, `run_pointer` |
 | `kitlib/machinesetup/managed.py` | the managed settings file: the template's render and overlay, the `--managed-settings` plan, the other modes' read (`survey_live`, `note_sync`) |
+| `kitlib/machinesetup/pointer.py` | the `--pm-repo` plan (`survey`, `PointerContext`) and the registry write (`Registry`); the reader is `kitlib/config/pointer.py` |
 | `kitlib/machinesetup/common.py` | `Plan`, `Change`, link and path helpers |
 | `kitlib/machinesetup/links.py`, `settings.py`, `extras.py` | the three parts above: the leftover-link report (`survey`, `leftover`, `TOOL_LINKS`), the settings edits (`repoint_links`, `repoint_moved`), the extras; `settings.py` also holds the default mode's append and the PM hook (`survey_pm`) |
 | `kitlib/machinesetup/plugin.py` | the default mode's plugin step, per host (`survey_hosts`, `installer`), and the settings change after it (`_plan_settings`, `edit_settings`, `owns_settings`) |
@@ -210,6 +222,7 @@ The write keeps the machine config's other keys and its layout (`kitlib/machines
 | `tools/machine_setup.py`, `installer/machine-setup.ps1`, `installer/new-repo.ps1` | the entry point and its two PowerShell wrappers |
 | `tools/agent_temp_init.py` | the entry point for the agent temp steps alone |
 `tests/machinesetup/test_managed.py` covers "Managed settings": the mode's create, replace, backup, refusals and overlay, the elevation refusal, the default mode's note, the guard left out of the accounts, and the tool and wrapper switches. Its managed file and overlay are in a temp folder and a temp home; one test checks the real managed file is unchanged.
+`tests/config/test_pointer.py` covers "PM repo pointer" and the reader: a fake winreg for the read (64-bit view, no value, an error, not REG_SZ, empty), the test fence (the registry is never read or written), each check case, the dry run, the elevation refusal, the apply on a fake registry, the tool's usage and exit codes, and preflight's `pointer` line.
 `tests/machinesetup/test_moved.py` covers "Moved hook paths": the re-pointing in each mode and the PM settings, the skill links into a moved folder reported as leftovers (Windows), and the stubs.
 `tests/machinesetup/test_no_link.py` covers "Links": no link made or renamed aside in either mode, each leftover reported with its `cmd /c rmdir` line (Windows), and a `statusLine` or hook path through a tools link re-pointed to the kit's file, refused when the kit has no such file.
 `tests/machinesetup/test_owner.py` covers the owner's email (given, from git config, kept, replaced, none), the two machine config keys in one run, the per-host plugin notes and the mode checks; `tests/machinesetup/test_repo.py` covers the committed repo setup against throwaway repositories, on any platform, and `tests/stubs/test_new_repo.py` its PowerShell front end (Windows). `tests/zerosetup/test_cycle.py` is the zero repo setup proof (docs/install.md "What first use writes").

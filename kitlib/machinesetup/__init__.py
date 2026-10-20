@@ -249,6 +249,24 @@ def run_managed(ctx, apply=False, out=None):
     return _carry_out('managed-settings', managed.survey(ctx, apply=apply), apply, emit, lines)
 
 
+def run_pointer(ctx, apply=False, out=None):
+    """(exit code, lines) of the --pm-repo mode (kitlib.machinesetup.pointer.survey; ctx a
+    PointerContext): the PM-repo pointer in the registry, as run()."""
+    from . import pointer
+    lines = []
+
+    def emit(*ls):
+        for l in ls:
+            lines.append(l)
+            if out:
+                out(l)
+
+    emit('pm-repo: %s' % ('APPLY' if apply else 'DRY RUN (nothing changed; add --apply to act)'),
+         '  kit:            %s' % ctx.kit,
+         '  pm repo:        %s' % ctx.pm_repo)
+    return _carry_out('pm-repo', pointer.survey(ctx, apply=apply), apply, emit, lines)
+
+
 class AgentTempContext(object):
     """What the agent temp init alone (tools/agent_temp_init.py) reads: the subset of Context that
     kitlib.machinesetup.agenttemp and the folder's ACL step use."""
@@ -292,5 +310,5 @@ def run_agent_temp(ctx, apply=False, out=None):
 
 
 __all__ = ['AgentTempContext', 'Change', 'Context', 'ManagedContext', 'Plan', 'account_dirs', 'dedupe',
-           'default_config_dirs', 'run', 'run_agent_temp', 'run_managed', 'run_repo', 'survey',
-           'survey_agent_temp']
+           'default_config_dirs', 'run', 'run_agent_temp', 'run_managed', 'run_pointer', 'run_repo',
+           'survey', 'survey_agent_temp']
