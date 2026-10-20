@@ -197,9 +197,9 @@ class Check(Repo):
 class Commands(unittest.TestCase):
 
     def test_the_reg_commands(self):
-        self.assertEqual(pointer.command('Z:\\GitHub\\project-manager'),
+        self.assertEqual(pointer.command('Z:\\work\\pm-data'),
                          'reg add "HKLM\\SOFTWARE\\pm-kit" /v pm_repo /t REG_SZ '
-                         '/d "Z:\\GitHub\\project-manager" /f /reg:64')
+                         '/d "Z:\\work\\pm-data" /f /reg:64')
         self.assertEqual(pointer.delete_command(),
                          'reg delete "HKLM\\SOFTWARE\\pm-kit" /v pm_repo /f /reg:64')
 

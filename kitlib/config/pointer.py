@@ -107,7 +107,8 @@ def read():
 
 
 def _quoted(path):
-    # A trailing backslash would escape reg's closing quote ("Z:\" -> Z:"): double it.
+    # A trailing backslash would escape reg's closing quote (a drive root would lose
+    # its quote): double it.
     return '"%s"' % (path + '\\' if path.endswith('\\') else path)
 
 
