@@ -280,7 +280,7 @@ def probe(codex_exe=None, profile=None, fixture_root=None):
                                   (str(temporary),))
             _, _, tester = _start(stack, exe, directory, 'test-runner', task.worker, profile, env,
                                   (str(temporary), lock_root))
-            _, _, reviewer = _start(stack, exe, directory, 'reviewer', task.worker, profile, env,
+            _, _, reviewer = _start(stack, exe, directory, 'analyst', task.worker, profile, env,
                                     extra_reads=(lock_root,))
             if reviewer.binding.parent is not None:
                 raise RuntimeError('reviewer must be a dedicated native root')

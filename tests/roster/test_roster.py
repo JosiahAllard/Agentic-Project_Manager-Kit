@@ -159,11 +159,11 @@ class TempCopyTest(unittest.TestCase):
 
     def test_crlf_is_kept(self):
         write_file(self.roster, read(self.roster).replace(b'\n', b'\r\n'))
-        self.edit_role('records', b'effort: low', b'effort: medium')
+        self.edit_role('docs-writer', b'effort: medium', b'effort: high')
         cli.main(['--write', '-C', self.top], io.StringIO())
         data = read(self.roster)
         self.assertNotIn(b'\n', data.replace(b'\r\n', b''))
-        self.assertIn(b'| records | standard | medium |', data)
+        self.assertIn(b'| docs-writer | standard | high |', data)
 
     def test_an_unreadable_roster_is_usage(self):
         os.remove(self.roster)

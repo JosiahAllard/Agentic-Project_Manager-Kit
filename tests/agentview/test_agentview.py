@@ -79,7 +79,7 @@ class Base(unittest.TestCase):
 
 class Sections(Base):
     def test_every_section_given_first_then_held(self):
-        for name in ('worker', 'pm', 'consultant', 'reviewer'):
+        for name in ('worker', 'pm', 'consultant', 'analyst'):
             with self.subTest(role=name):
                 got = [s.title for s in self.view(name, brief=True)]
                 self.assertEqual(len(got), len(TITLES))
@@ -252,8 +252,8 @@ class GivenAndHeld(Base):
         self.assertIn('default model', self.text(self.view('worker', renderer=NoModel(), brief=True), 'Model, tools'))
 
     def test_backlog_rights_are_the_policy_rows(self):
-        for name, action, want in (('worker', 'pull', 'may'), ('reviewer', 'add', 'may not'),
-                                   ('reviewer', 'read', 'may'), ('lander', 'close', 'only through the landing tool'),
+        for name, action, want in (('worker', 'pull', 'may'), ('analyst', 'add', 'may not'),
+                                   ('analyst', 'read', 'may'), ('lander', 'close', 'only through the landing tool'),
                                    ('worker', 'release', 'only on a record it pulled itself')):
             with self.subTest(role=name, action=action):
                 lines = self.section(self.view(name, brief=True), 'Backlog rights').lines
@@ -269,17 +269,17 @@ class GivenAndHeld(Base):
 
 class Switches(Base):
     def test_policy_off_with_no_kit_json(self):
-        text = self.text(self.view('reviewer', brief=True), '.kit.json')
+        text = self.text(self.view('analyst', brief=True), '.kit.json')
         self.assertIn('none: every default', text)
         self.assertIn('guard.role_policy: false', text)
         self.assertIn('mode as the guard reads it: none', text)
 
     def test_policy_on_and_a_roles_override_are_what_the_guard_reads(self):
         write(os.path.join(self.repo, '.kit.json'), json.dumps(
-            {'guard': {'role_policy': True}, 'roles': {'reviewer': {'mode': 'test'}}}))
-        text = self.text(self.view('reviewer', brief=True), '.kit.json')
+            {'guard': {'role_policy': True}, 'roles': {'analyst': {'mode': 'test'}}}))
+        text = self.text(self.view('analyst', brief=True), '.kit.json')
         self.assertIn('guard.role_policy: true', text)
-        self.assertIn("roles.reviewer: {'mode': 'test'}", text)
+        self.assertIn("roles.analyst: {'mode': 'test'}", text)
         self.assertIn('mode as the guard reads it: test', text)
         self.assertIn('edit_main_checkout: False', text)
 
@@ -295,7 +295,7 @@ class Switches(Base):
 
 class GuardRules(Base):
     def test_the_rules_are_the_role_policys_rows_for_the_mode(self):
-        for name in ('reviewer', 'worker', 'lander', 'test-runner'):
+        for name in ('analyst', 'worker', 'lander', 'test-runner'):
             role = content.load(KIT).role(name)
             with self.subTest(role=name):
                 text = self.text(self.view(name, brief=True), 'Guard rules')
@@ -304,7 +304,7 @@ class GuardRules(Base):
                 self.assertIn(rolepolicy.verbs_text(rolepolicy.LOCK_VERBS[role.mode]), text)
 
     def test_a_read_mode_is_held_to_more_than_a_write_mode(self):
-        read = self.text(self.view('reviewer', brief=True), 'Guard rules')
+        read = self.text(self.view('analyst', brief=True), 'Guard rules')
         write_ = self.text(self.view('worker', brief=True), 'Guard rules')
         self.assertIn('role-edit:', read)
         self.assertNotIn('role-edit:', write_)
