@@ -192,6 +192,18 @@ ROWS = [
     ('cmd /c with a trailing backslash root', lambda w: bash('cmd /c "dir /s C:\\"', w.wt), 'deny', 'root-search', None),
     ('variable program running godot', lambda w: bash('GODOT=/c/tools/godot.exe; $GODOT --headless', w.wt), 'deny', 'heavy',
      LOCK + ' --kind engine-run --repo demo --slug wt -- <the program $GODOT names> --headless'),
+
+    # ---------------------------------------------------------------- backlog roles (tests/guard/test_backlog_role.py)
+    ('subagent builder closes a record', lambda w: bash('python "%s/tools/backlog.py" -C "%s" close X-1'
+                                                        % (W.fwd(w.kit_dir), W.fwd(w.wt)), w.wt, sub=True),
+     'deny', 'backlog-role', 'python "{kit}/tools/backlog.py" -C "{wt}" show X-1'),
+    ('subagent builder adds a record', lambda w: bash('python "%s/tools/backlog.py" add --summary s'
+                                                      % W.fwd(w.kit_dir), w.wt, sub=True), None, None, None),
+    ('subagent code importing the backlog library', lambda w: bash('python -c "from kitlib.backlog import store"',
+                                                                   w.wt, sub=True),
+     'deny', 'backlog-raw-write', 'python "{kit}/tools/backlog.py" -C <worktree> <verb> <arguments>'),
+    ('subagent push of the backlog store ref', lambda w: bash('git push origin HEAD:refs/backlog/main', w.wt, sub=True),
+     'deny', 'backlog-raw-write', 'python "{kit}/tools/backlog.py" -C <worktree> <verb> <arguments>'),
 ] + SHELL_ROWS + REVIEW_ROWS + EXTRA_ROWS
 
 # An alternative is a command to run as written: no closing full stop, no leading prose word
