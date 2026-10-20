@@ -14,6 +14,8 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from contextlib import redirect_stderr
 from unittest import mock
@@ -159,15 +161,41 @@ class Start(Base):
         self.assertEqual([c[0] for c in self.calls], ['SubagentStart'])
 
     def test_a_dispatched_role_on_claude_shows_the_agent_start_block(self):
+        # The block's default budget is 1.0 s of wall time. Under the time fence (docs/flaky-tests.md)
+        # it is the ceiling, so a reading slower than that (a loaded machine; here a stub that sleeps
+        # past it) still finishes: the hook's own default is what is checked, with no budget passed in.
         from hosts.claude.adapter.host import ADAPTER
         from kitlib import agentstart
-        real = agentstart.text      # its 1.0 s default budget is wall time; a loaded machine trips it
-        patched = mock.Mock(side_effect=lambda cwd, kit, role=None: real(cwd, kit, role, budget=60.0))
-        with mock.patch.object(agentstart, 'text', patched):
+        real = agentstart.repo.classify
+        calls = []
+
+        def slow(path, *args, **kwargs):
+            calls.append(path)
+            time.sleep(1.2)
+            return real(path, *args, **kwargs)
+        with mock.patch.object(agentstart.repo, 'classify', slow):
             got = self.text(self.view('worker', start_text=ADAPTER.start_text), 'At start')
-        patched.assert_called_once()
+        self.assertEqual(len(calls), 1)
         self.assertIn('Agent start (worker):', got)
         self.assertIn('checkout  NOT CHECKED', got)      # the temp repo is in no git work tree
+        self.assertNotIn('over the', got)
+
+    def test_a_real_run_keeps_the_one_second_budget(self):
+        # Without the fence's marker (a real run) the hook still gives up at 1.0 s.
+        from hosts.claude.adapter.host import ADAPTER
+        from kitlib import agentstart
+        real = agentstart.repo.classify
+        release = threading.Event()
+        self.addCleanup(release.set)
+
+        def stuck(path, *args, **kwargs):
+            release.wait(60)
+            return real(path, *args, **kwargs)
+        with mock.patch.dict(os.environ), mock.patch.object(agentstart.repo, 'classify', stuck):
+            os.environ.pop('KIT_TIME_FENCE', None)
+            got = self.text(self.view('worker', start_text=ADAPTER.start_text), 'At start')
+        self.assertIn('Agent start (worker):', got)
+        self.assertIn('NOT CHECKED - the rest: over the 1.0 s budget', got)
 
     def test_nothing_past_the_header_is_said(self):
         got = self.view('worker', start_text=lambda event, kit, payload, environ, part: header.text(kit))
