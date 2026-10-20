@@ -262,8 +262,10 @@ class Check(unittest.TestCase):
 
     def test_the_by_design_sessions_are_the_writers_own(self):
         from kitlib.backlog import at_landing
+        from kitlib.dailyfull import file as dailyfile
         from kitlib.hubsite import recordwrite
-        self.assertEqual(audit_check.BY_DESIGN, (at_landing.SESSION, recordwrite.SESSION))
+        self.assertEqual(audit_check.BY_DESIGN,
+                         (at_landing.SESSION, recordwrite.SESSION, dailyfile.SLUG))
 
     def test_a_role_not_in_the_map_is_unmapped(self):
         def line(role, utc='2026-10-20T13:05:06Z'):
@@ -321,6 +323,30 @@ class Check(unittest.TestCase):
         self.assertIn('NOT CHECKED: the machine config names no pm_data', out)
         rc, _out, _err = self.run_check('--days', '0')
         self.assertEqual(rc, 2)
+
+    def test_all_lists_the_covered_and_by_design_changes(self):
+        self.add()
+        self.ok('set', 'FOO', *PRICE)                                        # covered by its line
+        self.ok('--session', 'daily-full', 'set', 'FOO', '--priority', '3')  # by design
+        rc, out, _err = self.run_check('--all')
+        self.assertEqual(rc, 0, out)
+        listed = [x for x in out.splitlines() if x.startswith('  ')]
+        self.assertEqual([x.split()[0] for x in listed], ['BY', 'COVERED'], out)
+        self.assertIn('session=daily-full', listed[0])
+        self.assertIn('backlog: set FOO', listed[1])
+        self.assertIn('NOT LOGGED BY DESIGN: 1 (gate-land 0, owner-hub 0, daily-full 1)', out)
+        rc, out, _err = self.run_check()
+        self.assertEqual([x for x in out.splitlines() if x.startswith('  ')], [])
+
+    def test_an_unreadable_log_is_not_checked(self):
+        self.add()
+        why = PermissionError(13, 'Access is denied', self.log)
+        with mock.patch.object(audit_check, 'read_log', side_effect=why):
+            rc, out, _err = self.run_check()
+        self.assertEqual(rc, 2, out)
+        self.assertEqual(out.splitlines(), [
+            'NOT CHECKED: cannot read the log or the store: PermissionError: [Errno 13] Access is '
+            'denied: %r' % self.log])
 
 
 class CheckFolder(unittest.TestCase):

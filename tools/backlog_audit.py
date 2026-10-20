@@ -9,12 +9,14 @@ in the PM data worktree) for the last N days (default 1) and the machine's audit
              log line names by its store commit
   UNKNOWN    a store commit whose subject no backlog.py verb wrote
   UNMAPPED   a log line in the window whose role is `-` or not in the role map
-and counts the writes that add no line by design (the landing's close, the Action Hub's).
-`--all` also lists the changes a line covers and those by-design writes. Read-only: it writes
-nothing; a ref store's read fetches first unless --no-fetch. The logic is
-kitlib.backlog.audit_check; docs/backlog.md "Audit log".
-Exit codes: 0 OK, 1 findings, 2 USAGE or NOT CHECKED (no pm_data, the store cannot be read, or a
-folder store outside the PM data worktree).
+and counts the writes that add no line by design (the landing's close, the Action Hub's, the daily
+full run's pricing). `--all` also lists the changes a line covers and those by-design writes. It
+writes no record, no log line and no checkout file. By default a ref or branch store is fetched
+first: that rewrites the local store ref, and the first time it may add the store's fetch refspec
+to the remote in .git/config. --no-fetch skips both. The logic is kitlib.backlog.audit_check;
+docs/backlog.md "Audit log".
+Exit codes: 0 OK, 1 findings, 2 USAGE or NOT CHECKED (no pm_data, the store or the log cannot be
+read, or a folder store outside the PM data worktree).
 """
 import argparse
 import os

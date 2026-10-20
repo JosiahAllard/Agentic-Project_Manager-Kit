@@ -1,7 +1,9 @@
 """The audit check (tools/backlog_audit.py; docs/backlog.md "Audit log"): the backlog store's
-history read against the audit log kitlib.backlog.audit writes, for the PM's digest. Read-only:
-it writes nothing to the store, the log or the checkout (a ref store's read fetches, as every
-backlog read does, unless `fetch` is false).
+history read against the audit log kitlib.backlog.audit writes, for the PM's digest. It writes
+no record, no log line and no file in the checkout. With `fetch` (the default) a ref or branch
+store is fetched first, as every backlog read is: that rewrites the local store ref, and the
+first time it may add the store's fetch refspec to the remote in .git/config
+(store.ensure_refspec). With `fetch` false it does neither.
 
 A store change is a non-merge commit in the store's history, inside the window, that adds,
 changes or deletes a record file: on a ref or branch store the commits reachable from the
@@ -19,7 +21,8 @@ line whose sha is MISSING cannot be matched and is only counted.
 Findings: UNAUDITED (an AUDITED change no line covers), UNKNOWN (a store commit whose subject no
 SUBJECTS entry reads), UNMAPPED (a line inside the window whose role is MISSING or not in
 roles.ROLES; every repository's lines). Not findings: a change by a session in BY_DESIGN, whose
-writes add no line by design (the landing's close, the Action Hub's writes; docs/backlog.md
+writes add no line by design (the landing's close, the Action Hub's writes, the daily full run's
+pricing; docs/backlog.md
 "Audit log", Known limit), is counted.
 
   read_log(path)                  ([(line number, fields)], notes); a missing file is no lines
@@ -42,9 +45,10 @@ from .errors import Failure, Refusal
 
 OK, FINDINGS, NOT_CHECKED = 0, 1, 2
 
-# The sessions whose store writes add no line by design: kitlib.backlog.at_landing.SESSION and
-# kitlib.hubsite.recordwrite.SESSION (tests/backlog/test_audit.py holds them equal).
-BY_DESIGN = ('gate-land', 'owner-hub')
+# The sessions whose store writes add no line by design: kitlib.backlog.at_landing.SESSION,
+# kitlib.hubsite.recordwrite.SESSION and kitlib.dailyfull.file.SLUG (tests/backlog/test_audit.py
+# holds them equal).
+BY_DESIGN = ('gate-land', 'owner-hub', 'daily-full')
 
 # (subject prefix, verb): kitlib.backlog.plan's, migrate's, retarget's and store.catch_up's subjects.
 SUBJECTS = (
@@ -307,5 +311,8 @@ def run(root, days=1, fetch=True, home=None, now=None, show_all=False):
         return NOT_CHECKED, ['NOT CHECKED: %s' % exc]
     except Refusal as exc:
         return NOT_CHECKED, ['NOT CHECKED: %s' % ' '.join(str(exc).split())]
+    except (OSError, ValueError) as exc:          # an unreadable log or store: never FINDINGS
+        return NOT_CHECKED, ['NOT CHECKED: cannot read the log or the store: %s: %s'
+                             % (type(exc).__name__, ' '.join(str(exc).split()))]
     report.notes = notes
     return (FINDINGS if report.findings else OK), report_lines(report, days, show_all)
