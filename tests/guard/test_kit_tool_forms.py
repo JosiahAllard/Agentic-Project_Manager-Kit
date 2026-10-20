@@ -95,6 +95,35 @@ class SharedRules(unittest.TestCase):
         self.assertIn('in the background', d.reason)
 
 
+# (name, tool, -C?, the arguments after the tool and its -C, the verdict): a kit tool's output may be
+# piped like any program's, except a run that holds the machine or waits on it (docs/guard.md
+# "Rules", wrapped-gate)
+PIPED = [
+    ('gate help piped', 'gate', True, '--help | head', ('allow', None)),
+    ('gate plan piped', 'gate', True, '--plan | head', ('allow', None)),
+    ('backlog list piped', 'backlog', True, 'list | head', ('allow', None)),
+    ('hub questions list piped', 'hub', False, 'questions list | head', ('allow', None)),
+    ('gate full piped', 'gate', True, '--full | tail', ('deny', 'wrapped-gate')),
+    ('gate land piped', 'gate', True, 'land kit/wt | tail', ('deny', 'wrapped-gate')),
+]
+
+
+class KitToolsMayBePiped(unittest.TestCase):
+    def setUp(self):
+        self.w = W.World()
+        self.addCleanup(self.w.cleanup)
+        W.deny_softened()                       # wrapped-gate is off by default (test_cheap.py)
+        self.addCleanup(W.allow_unplaced)
+
+    def test_a_kit_tool_is_piped_unless_its_run_holds_the_machine(self):
+        for sub in (False, True):
+            for name, tool, takes_c, args, want in PIPED:
+                for text in forms(self.w, tool, takes_c, args, self.w.wt):
+                    with self.subTest(name, sub=sub, text=text):
+                        self.assertEqual(verdict(claude_decide(bash(text, self.w.wt, sub=sub), self.w.ctx())),
+                                         want)
+
+
 class RolePolicy(unittest.TestCase):
     def setUp(self):
         self.w = W.World(kit=policy_kit())
