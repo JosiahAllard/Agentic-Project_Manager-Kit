@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from unittest import mock
 
 from kitlib.launcher import autostart, handoff, reboot
 from kitlib.launcher import host as hostmod
@@ -161,10 +162,14 @@ class Autostart(unittest.TestCase):
         self.assertEqual(asked, [os.path.join('/py', 'pythonw.exe')])
         self.assertIn("-Execute '%s'" % asked[0], calls[0][-1])
 
-    def test_what_if_says_the_install_would_refuse(self):
-        out = autostart.install('/kit/tools/launch.py', python=self.empty_python(), whatif=True)
-        self.assertEqual(len(out), 3)
-        self.assertIn('install-autostart would refuse: no pythonw.exe beside', out[2])
+    def test_what_if_refuses_as_the_install_would(self):
+        """What-if predicts the real outcome: the same refusal, with the script and the refusal
+        line said before it."""
+        with self.assertRaisesRegex(autostart.LaunchError, 'no pythonw.exe beside') as cm:
+            autostart.install('/kit/tools/launch.py', python=self.empty_python(), whatif=True)
+        self.assertEqual(len(cm.exception.lines), 3)
+        self.assertEqual(cm.exception.lines[0], 'Would run in PowerShell:')
+        self.assertIn('install-autostart would refuse: no pythonw.exe beside', cm.exception.lines[2])
         out = autostart.install('/kit/tools/launch.py', python='/py/python.exe', whatif=True,
                                 isfile=lambda p: True)
         self.assertEqual(len(out), 2)
@@ -287,6 +292,21 @@ class Cli(unittest.TestCase):
         code, out, _, _ = self.main(base + ['--account', '2', '--prompt', 'go'])
         self.assertEqual(code, 0)
         self.assertIn("-n 'alpha-coord-a2'", out)
+
+    def test_install_autostart_what_if_with_no_pythonw_exits_1_as_the_install_does(self):
+        d = tempfile.mkdtemp(prefix='kit-autostart-')                  # empty: no pythonw.exe
+        self.addCleanup(shutil.rmtree, d, True)
+        with mock.patch.object(autostart, 'in_worktree', return_value=False),                 mock.patch.object(autostart.pythonw_mod, 'base_pythonw',
+                                  return_value=os.path.join(d, 'pythonw.exe')):
+            seen = {}
+            for argv in (['install-autostart', '--what-if'], ['install-autostart']):
+                with self.subTest(argv=argv):
+                    code, seen[len(argv)], err, _ = self.main(argv)
+                    self.assertEqual(code, 1)
+                    self.assertIn('launch.py install-autostart: no pythonw.exe at', err)
+                    self.assertIn('nothing registered', err)
+        self.assertIn('install-autostart would refuse: no pythonw.exe at', seen[2])   # what-if says it
+        self.assertEqual(seen[1], '')             # the real install refused before saying anything
 
     def test_usage_errors_exit_2(self):
         with redirect_stderr(io.StringIO()):
