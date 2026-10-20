@@ -83,7 +83,7 @@ class IntoMain(Base):
     def test_a_relative_filesystem_path_is_read_from_the_location(self):
         # PowerShell reads FileSystem::x.txt (and \FileSystem::x.txt) from the process's directory,
         # which Set-Location does not move; the guard reads it from the location, as it reads a
-        # relative .NET path (docs/guard-v2.md B17, cut)
+        # relative .NET path (docs/guard-v2.md B16 for the provider path, B17 for the .NET one; both cut)
         for text in (r'New-Item FileSystem::x.txt', r'New-Item \FileSystem::x.txt',
                      r"Set-Content -LiteralPath '\FileSystem::x.txt' -Value y",
                      r'New-Item Microsoft.PowerShell.Core\FileSystem::sub\x.txt'):
