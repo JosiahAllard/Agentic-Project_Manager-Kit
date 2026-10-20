@@ -261,13 +261,14 @@ class RemoveSettings(RemoveCase):
         exempt = self.workstream('daily')
         landed = self.workstream('landed')
         self.land('kit/landed')
-        self.workstream('fresh', commits=0)
+        fresh = self.workstream('fresh', commits=0)
         os.makedirs(os.path.join(self.home, 'stump'))
         rc, out = self.run_verb('check')
         self.assertEqual(rc, 1, out)
         self.assertIn('leftover  %s' % os.path.join(self.home, 'stump'), out)
         self.assertIn('merged    %s [kit/landed] landed' % landed, out)
-        self.assertNotIn('fresh', out)
+        self.assertNotIn(fresh, out)        # its path, not the word: the caller's own path may hold it
+        self.assertNotIn('kit/fresh', out)
         self.assertNotIn(exempt, out)       # its path, not the word: the caller's own path may hold it
         self.assertNotIn('kit/daily', out)
 
