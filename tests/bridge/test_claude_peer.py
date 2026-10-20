@@ -25,6 +25,7 @@ from optional.bridge.core.outbox import Outbox
 from optional.bridge.core.pairing import ChatBinding, PairingStore
 from kitlib.proc.pipe import PrivateListener, connect
 from optional.bridge.win.transport import PipeTarget, write_peer
+from kitlib.proc.errors import ProcError
 from kitlib.proc.process import own_ctime
 from tests.bridge.test_pairing import chat
 
@@ -99,7 +100,7 @@ class ClaudePeerTests(unittest.TestCase):
             'orig_msg_id':operation or native_message_id(self.message),
             'from':address or peer_address(self.snapshot.pipe),**fields}]
         # Simulate the verified native process, not our separate I/O helper.
-        pipe = connect(self.endpoint.pipe,os.getpid(),own_ctime())
+        pipe = pipes.connect_waiting(self.endpoint.pipe,os.getpid(),own_ctime())
         try:
             pipes.send(pipe,frames)
         finally:
@@ -112,6 +113,33 @@ class ClaudePeerTests(unittest.TestCase):
                 return result
             time.sleep(.01)
         return None
+
+    def test_a_client_meeting_the_busy_one_instance_pipe_waits_instead_of_failing(self):
+        # Under load the fake native client opened the pipe while its one instance still served
+        # another client: ERROR_PIPE_BUSY, 'pipe-connect-failed', no retry.
+        holder = connect(self.pipe,os.getpid(),own_ctime())
+        self.addCleanup(holder.close)
+        self.listener.accept(timeout=3)
+        with self.assertRaises(ProcError):
+            connect(self.pipe,os.getpid(),own_ctime())      # the bare open is refused as busy
+        opened = []
+        worker = threading.Thread(target=lambda: opened.append(
+            pipes.connect_waiting(self.pipe,os.getpid(),own_ctime(),timeout=5)))
+        worker.start()
+        worker.join(timeout=.5)
+        self.assertTrue(worker.is_alive())                  # still waiting, not failed
+        holder.close()
+        self.listener.reset()
+        worker.join(timeout=5)
+        self.assertEqual(len(opened),1)
+        opened[0].close()
+
+    def test_a_pipe_busy_past_the_deadline_gives_a_clear_failure(self):
+        holder = connect(self.pipe,os.getpid(),own_ctime())
+        self.addCleanup(holder.close)
+        self.listener.accept(timeout=3)
+        with self.assertRaisesRegex(AssertionError,'still busy after'):
+            pipes.connect_waiting(self.pipe,os.getpid(),own_ctime(),timeout=.3)
 
     def test_native_auth_and_exact_operation_reach_original_chat_but_write_is_unconfirmed(self):
         self.dispatch()
@@ -172,7 +200,7 @@ class ClaudePeerTests(unittest.TestCase):
         frames = [{'type':'auth','token':token},{
             'type':'user','from':peer_address(self.snapshot.pipe),
             'message':{'role':'user','content':'uncorrelated private reply'}}]
-        pipe = connect(self.endpoint.pipe,os.getpid(),own_ctime())
+        pipe = pipes.connect_waiting(self.endpoint.pipe,os.getpid(),own_ctime())
         try:
             pipes.send(pipe,frames)
         finally:

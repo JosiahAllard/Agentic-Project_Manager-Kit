@@ -602,6 +602,34 @@ reason and the stored diff as text. Approve and Deny post the decide route with 
 read; they are disabled unless the snapshot says `strong`, and a refusal (a 403 included) is shown
 on the card in the server's words (`DomTest` in `tests/hubsite/test_page.py`).
 
+## Machine lock routes
+The hub server reads the machine lock in-process through `kitlib.lock.api` (the owner's decision), for the
+schedule view the page will show. `kitlib/hubsite/api.py` docstring "Machine lock" is the
+source; the server's door to the lock is `kitlib/hubsite/lockdoor.py`, made by
+`serve.machine_sources` and first opening the lock on its first read.
+- Three routes, all the owner's: `GET /api/v1/lock/view`, `GET /api/v1/lock/stats` and
+  `GET /api/v1/lock/wait`. An agent token, or no token, is refused every one with 403
+  `forbidden` (field `role`) on the local and the tunnel listener alike, before the lock is
+  read. The lock's writes are not hub routes, and the lock MCP server keeps no write path,
+  by the owner's decision.
+- `lock/view` answers `{lock_revision, view}`: the schedule window's view as JSON
+  (`kitlib.lockui.model.to_json`): holds, runs, the strip, lanes, details, cores, memory,
+  warnings, the game slots and the CPU division. One allow-list of keys serves both
+  listeners: no pid, process tree, log path, session, store folder or run note is in it.
+- `lock/stats?days=N&since=T&until=T` is `kitlib.lock.api.stats`: `days` 1 to 366, the times ISO
+  with their offset; a bad one is 400 `invalid` naming the field.
+- `lock/wait?since=REV&timeout=S` answers the view plus `changed` once the lock's revision
+  differs from `since` (default: the revision now), or after `timeout` (at most 55 seconds) with
+  `changed: false`. It looks at the revision every half second. It takes one of the listener's
+  wait slots like `GET wait`: past `max_waits` it is 429 `busy` with a Retry-After. An agent
+  takes no slot: it gets the 403.
+- Through the tunnel the view is the same, except that a warning that could name a file on
+  this machine (an unreadable `queue.json`, holds file or kinds file, a layout problem) is a
+  fixed phrase (`model.REMOTE_SAYS`). Only the tunnel listener's own `via` asks for that; a
+  local client that sends the tunnel's word gets the local view.
+- With no lock door, or a lock that cannot be read, a route answers 503 `unavailable` (field
+  `lock`), naming only the error's class, never its text.
+
 ## Views read live
 Never stored; read from their sources (`kitlib.hubsite.derived`, `kitlib.hubsite.backlog`):
 - backlog and completed: each repository's backlog store (`.kit.json` backlog.store), every open
