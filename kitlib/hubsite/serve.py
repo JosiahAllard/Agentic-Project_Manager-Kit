@@ -218,6 +218,7 @@ import json
 import os
 import re
 import threading
+import time
 
 from kitlib import hubbacklog, pmdata, pmstart, pmwatch
 from kitlib.config import user
@@ -233,6 +234,7 @@ STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'web')
 CLOSE_TIMEOUT_S = 10            # each step of the clean close
 STALE_CODE = ('this hub server is running older code than the hub code now on disk: restart the '
               'hub (hub.py stop, then start it again) to use the landed change')
+CODE_LOOK_S = 30                # at most one look at the hub code's files in this many seconds
 POLL_S = 0.5                    # run()'s wait between two looks at `stop` (and at Ctrl+C)
 ASK_TIMEOUT_S = 10
 MAX_ANSWER = 16 << 20           # bytes of one answer ask() reads
@@ -1001,6 +1003,7 @@ class Hub(object):
             self._code = code_stamp()
         except Exception:                   # noqa: BLE001 - no stamp, no stale look
             self._code = None
+        self._looked = time.monotonic()     # when watch() last took the stamp
 
     @property
     def port(self):
@@ -1051,6 +1054,10 @@ class Hub(object):
     def _watch_code(self):
         if self._stale or self._code is None:
             return
+        at = time.monotonic()
+        if at - self._looked < CODE_LOOK_S:
+            return
+        self._looked = at
         try:
             now = code_stamp()
         except Exception:           # noqa: BLE001 - a look that fails is tried again next turn
