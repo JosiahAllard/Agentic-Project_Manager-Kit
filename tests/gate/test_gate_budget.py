@@ -19,7 +19,7 @@ import kitlib.config as kconfig
 from kitlib.gate import budget, runner
 from kitlib.gate import steps as S
 from kitlib.lock import store as lockstore
-from tests.gate import fixtures
+from tests.gate import fixtures, test_land
 
 BRANCH = 'kit/feature'
 SLUG = runner.slug_of(BRANCH)
@@ -219,6 +219,31 @@ class FullyReused(BudgetCase):
         self.assertEqual(out.verdict, 'GATE OK (reused: unit)')
         self.assertEqual(len(self.book_calls), calls)
         self.assertFalse([t for t in said if 'gate budget' in t], said)
+
+
+class LandingNeverAsks(test_land.LandCase):
+    """A landing books through gated() without the budget: five counted branch gate runs refuse
+    the branch's next branch gate, and the landing of the same tip still lands."""
+    def test_a_landing_is_not_refused_at_the_budget(self):
+        wt, tip = self.branch('feature', {'a.py': 'x = 1\n'})
+        name = runner.repo_name(kconfig.load(wt), wt)
+        path = os.path.join(self.repo.common_dir(), 'logs', 'refs', 'heads', 'kit', 'feature')
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        t = int(lockstore.utc_now().timestamp()) - 60
+        with open(path, 'w', encoding='utf-8', newline='\n') as f:
+            f.write('%s %s Kit Test <kit@example.invalid> %d -0400\tbranch: Created from main\n'
+                    % ('0' * 40, 'b' * 40, t))
+        for i in range(budget.RUNS):
+            end = lockstore.iso(lockstore.utc_now())
+            self.store.history_append({
+                'id': 'r-20261020T120000Z-%06x' % i, 'repo': name, 'slug': SLUG,
+                'kind': 'engine-test', 'since': end, 'held_since': end, 'ended': end, 'gate': True})
+        with mock.patch.object(budget, 'actor', return_value=AGENT):
+            out = runner.branch_gate(wt, full=True, book_kw=self.book_kw, log_dir=self.logs)
+            self.assertEqual(out.code, G.REFUSED, out.lines)     # the five count: the control
+            out = self.lander(BRANCH, self.main, tip).run()
+            self.assertEqual(out.code, G.OK, out.lines)
+            self.assertFalse([x for x in out.lines if 'budget' in x], out.lines)
 
 
 class AllowEntry(BudgetCase):
