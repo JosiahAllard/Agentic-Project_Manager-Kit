@@ -776,6 +776,49 @@ def agent_temp_lines(env=None, sweep_key=None, task_exists=None):
     return lines
 
 
+def worktree_sweep_lines(repos=None, read=None, plugin=None):
+    """One line per repository in launcher.repos whose `<repo>-worktree-sweep` task is missing, or
+    runs from a removed plugin export (kitlib.machinesetup.worktreesweep, docs/machine-setup.md
+    "Extras"); none when every task is current. A task list that cannot be read is one "could not
+    check" line; a repository that cannot be read is its own. `read`: the task list
+    (consoletasks.read_tasks); `plugin`: the plugin Settings, None or a raising loader checks
+    presence only."""
+    from kitlib.machinesetup import worktreesweep
+    from kitlib.worktree.task import task_name
+    repos = launcher_repos() if repos is None else repos
+    if not repos:
+        return []
+    try:
+        tasks = (read or consoletasks.read_tasks)()
+    except Exception as e:      # access denied, a timeout, no schtasks: unknown, never "not registered"
+        return ["could not check the worktree sweep tasks: %s: %s" % (type(e).__name__, e)]
+    try:
+        s = (plugin or plugin_settings)()
+    except Exception:           # the plugin_current check names a bad plugin config
+        s = None
+    export = s.export_dir if s is not None else None
+    lines = []
+    for label in sorted(repos):
+        try:
+            if not os.path.isdir(repos[label]):
+                raise OSError("no repository folder %s" % repos[label])
+            name = task_name(worktreesweep.repo_task(repos[label])[1])
+        except Exception as e:
+            lines.append("could not check the worktree sweep task (%s): %s: %s"
+                         % (label, type(e).__name__, _failure_text(e)))
+            continue
+        have = worktreesweep.find(tasks, name)
+        if have is None:
+            lines.append("worktree sweep task %s (%s) is not registered: machine_setup.py --apply registers "
+                         "it (the owner's act)" % (name, label))
+            continue
+        gone = worktreesweep.removed_export(have, export) if export else None
+        if gone:
+            lines.append("worktree sweep task %s (%s) runs from a removed plugin export %s: machine_setup.py "
+                         "--apply registers it again (the owner's act)" % (name, label, gone))
+    return lines
+
+
 def _failure_text(e):
     """The reason in a "could not check" line: the exception's own text, with any rejected value
     taken out (_without_values) when it is a machine config refusal (kitlib.config or
@@ -820,6 +863,9 @@ def checklist(cfg, now=None, procs=None, **fakes):
             "stubs", {}).items() if k == "repos"}))),
         ("repo_prep", lambda: repo_prep(**fakes.get("repo_prep", {}))),
         ("agent_temp", lambda: agent_temp_lines(**fakes.get("agent_temp", {}))),
+        # A stubs fake's repos stand for launcher.repos here too.
+        ("worktree_sweep", lambda: worktree_sweep_lines(**fakes.get("worktree_sweep", {
+            k: v for k, v in fakes.get("stubs", {}).items() if k == "repos"}))),
         ("console_tasks", lambda: consoletasks.check(cfg, **fakes.get("console_tasks", {}))),
         ("foreground_lock", lambda: fglock.check(cfg, **fakes.get("foreground_lock", {}))),
     ]

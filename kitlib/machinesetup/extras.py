@@ -95,6 +95,18 @@ class Host(object):
         this interpreter, reading the machine config of `home`."""
         return agenttemp.sweep_dry_run(kit, sys.executable, home=home)
 
+    def task_list(self):
+        """Every scheduled task with its actions (kitlib.pmstart.consoletasks.read_tasks):
+        RuntimeError, OSError or ET.ParseError when schtasks cannot be read."""
+        from kitlib.pmstart import consoletasks
+        return consoletasks.read_tasks(timeout=agenttemp.TASK_TIMEOUT)
+
+    def worktree_sweep_dry_run(self, tool, main):
+        """The worktree sweep's report lines from one run without --apply on the main checkout
+        `main` (worktreesweep.dry_run), under this interpreter."""
+        from . import worktreesweep
+        return worktreesweep.dry_run(tool, main, sys.executable)
+
     def guard_entry(self, kit):
         """The guard's settings entry, as the kit's hook entry prints it for the default host:
         `boot/hook.py <host> --settings-entry`, run by this interpreter."""

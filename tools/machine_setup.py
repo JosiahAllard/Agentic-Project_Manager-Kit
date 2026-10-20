@@ -47,6 +47,10 @@ It writes nothing into any repository: a repository works with the kit with noth
                              --apply registers it, after one dry run of the sweep printing what it
                              would remove; a task already registered is left as is)
            --register-sweep-task  the default now; still accepted
+           --no-worktree-sweep  do not register the `<repo>-worktree-sweep` task of each repository
+                             in the machine config's launcher.repos (by default --apply registers a
+                             missing one, or one that runs a removed plugin export, after one dry run
+                             of the sweep printing what it would remove)
            --shortcut        the machine schedule shortcut on the desktop (always with --old-kit)
            --procwatch       register (or update) the "Claude procwatch" scheduled task: every 15 min,
                              report only, its log in the agents' temp folder
@@ -78,7 +82,7 @@ from kitlib.machinesetup import repo as mrepo                       # noqa: E402
 KIT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO_ONLY = ('agent_email', 'main_branch', 'repo_name', 'stack', 'stubs', 'pm_data', 'private_remote')
 MACHINE_ONLY = ('config_dir', 'pm_settings', 'agent_temp', 'register_sweep_task', 'no_sweep_task',
-                'shortcut', 'procwatch', 'procwatch_kill',
+                'no_worktree_sweep', 'shortcut', 'procwatch', 'procwatch_kill',
                 'desktop', 'home')
 
 
@@ -107,6 +111,8 @@ def parser():
                    help="do not register the agents' temp sweep task (registered by default)")
     p.add_argument('--register-sweep-task', action='store_true',
                    help='the default; still accepted')
+    p.add_argument('--no-worktree-sweep', action='store_true',
+                   help="do not register each launcher repository's worktree sweep task (registered by default)")
     p.add_argument('--shortcut', action='store_true', help='the machine schedule shortcut on the desktop')
     p.add_argument('--procwatch', action='store_true',
                    help='register or update the procwatch scheduled task (report only)')
@@ -177,7 +183,8 @@ def main(argv=None):
                                agent_temp=a.agent_temp, desktop=a.desktop,
                                pm_settings=a.pm_settings, sweep_task=not a.no_sweep_task,
                                owner_email=a.owner_email, shortcut=True if a.shortcut else None,
-                               procwatch=a.procwatch, procwatch_kill=a.procwatch_kill)
+                               procwatch=a.procwatch, procwatch_kill=a.procwatch_kill,
+                               worktree_sweep=not a.no_worktree_sweep)
     if a.apply and not ctx.owner_email and interactive() and mowner.needs_prompt(ctx):
         ctx.owner_email = ask_owner_email(mowner.suggestion(ctx))
     code, _ = machinesetup.run(ctx, apply=a.apply, out=out)

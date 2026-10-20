@@ -20,6 +20,10 @@ dry run prints and the function --apply runs, plus the refusals that stop both. 
   shortcut, the agents' temp folder and KIT_MACHINE_LOCK for comfy. No plugin install
   (tools/plugin_refresh.py --migrate does it).
 
+In both modes each repository in the machine config's launcher.repos gets its nightly worktree
+sweep task when it has none or its task runs a removed plugin export, after one dry run of the
+sweep (kitlib.machinesetup.worktreesweep; opt-out: `worktree_sweep` false).
+
 In both modes machine setup makes no link: kitlib.machinesetup.links reports each link an earlier
 setup left under a config folder, with the command that removes the link only, and the settings
 step re-points a path through `<config>/tools/<link>` to the kit's own file
@@ -41,7 +45,7 @@ import os
 from kitlib.config import user
 from kitlib.config.migration import OLD_DIR_NAME
 
-from . import agenttemp, extras, links, managed, owner, plugin, settings
+from . import agenttemp, extras, links, managed, owner, plugin, settings, worktreesweep
 from .common import Change, Plan, Report, kit_file
 
 EXIT_OK, EXIT_REFUSED, EXIT_USAGE = 0, 1, 2
@@ -53,11 +57,13 @@ class Context(object):
     pass a fake. No `old_kit` is the default mode (`fresh` says the same and may not go with
     `old_kit`); `pm_settings` goes with the default mode only. `owner_email` is --owner-email.
     `shortcut` None: the machine schedule shortcut in the old kit switch only. `procwatch`: also
-    register the procwatch task (kitlib.machinesetup.procwatch); `procwatch_kill` makes it kill."""
+    register the procwatch task (kitlib.machinesetup.procwatch); `procwatch_kill` makes it kill.
+    `worktree_sweep` false: each repository's worktree sweep task is a note, not a change."""
 
     def __init__(self, home, kit, old_kit=None, config_dirs=None, agent_temp=None, desktop=None,
                  host=None, today=None, fresh=False, pm_settings=None, sweep_task=True,
-                 owner_email=None, shortcut=None, procwatch=False, procwatch_kill=False):
+                 owner_email=None, shortcut=None, procwatch=False, procwatch_kill=False,
+                 worktree_sweep=True):
         if fresh and old_kit:
             raise ValueError('give old_kit or fresh, not both')
         fresh = not old_kit
@@ -76,6 +82,7 @@ class Context(object):
         self.config_dirs = dedupe(os.path.abspath(d) for d in config_dirs)
         self.agent_temp = agent_temp
         self.sweep_task = bool(sweep_task)
+        self.worktree_sweep = bool(worktree_sweep)
         if procwatch_kill and not procwatch:
             raise ValueError('procwatch_kill goes with procwatch')
         self.procwatch = bool(procwatch)
@@ -157,6 +164,7 @@ def survey(ctx):
         plugin.survey_hosts(plan, ctx)
     owner.survey(plan, ctx)
     extras.survey(plan, ctx)
+    worktreesweep.survey(plan, ctx)
     return plan
 
 
