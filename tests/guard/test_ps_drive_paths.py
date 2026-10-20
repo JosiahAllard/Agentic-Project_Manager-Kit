@@ -643,6 +643,74 @@ class DriveAndProviderTargets(Base):
                 self.assertIn('cannot place', d.reason)
 
 
+class PipelineTargets(Base):
+    """A path a write cmdlet takes from the pipeline (rules.PSCmdlet piped: `'x.txt' | Remove-Item`,
+    `Get-Item x | Set-Content -Value y`): the text does not say what the command before the `|`
+    sends, so it is a place the guard cannot tell (rules.PIPE_UNPLACED), refused from the main
+    checkout and passed from a worktree, as a bash target it cannot place is. A path the line
+    binds itself is judged as written; a cmdlet whose file takes nothing from the pipeline
+    (Out-File, Tee-Object) is judged as before."""
+
+    TEXTS = ("'x.txt' | Remove-Item", 'Get-ChildItem *.tmp | Remove-Item', 'Get-ChildItem *.tmp | ri -Force',
+             'Get-Item x | Set-Content -Value y', 'Get-Item x | Add-Content -Value y', 'Get-Item x | Clear-Content',
+             '$f | ni', '$f | New-Item -Name x.txt', 'Get-Item a | Rename-Item -NewName b',
+             r'Get-Item a | Move-Item -Destination {wt}\b', 'Get-ChildItem | Copy-Item',
+             'Get-Item x | Set-ItemProperty -Name IsReadOnly -Value 1')
+
+    def test_piped_path_into_remove_item_unplaced_in_main_checkout(self):
+        for text in self.TEXTS:
+            with self.subTest(text):
+                text = text.format(main=self.w.main, wt=self.w.wt)
+                d = self.denied(decide(W.ps(text, self.w.main, True), self.w.ctx()), 'unplaced')
+                self.assertIn('pipeline', d.reason)
+                self.assertNotIn('\n', d.reason)
+
+    def test_piped_path_in_own_worktree_passes(self):
+        for text in self.TEXTS:
+            with self.subTest(text):
+                self.allowed(self.run_ps(text))
+
+    def test_a_path_the_line_binds_is_judged_as_written(self):
+        for text in ("'y' | Set-Content x.txt", "'x.txt' | Remove-Item -Path y.txt",
+                     "'x.txt' | Remove-Item -LiteralPath y.txt", 'Get-Item a | Move-Item b.txt c.txt',
+                     'Get-ChildItem | Copy-Item -Destination d'):
+            with self.subTest(text):
+                d = self.denied(decide(W.ps(text, self.w.main, True), self.w.ctx()), 'main-checkout')
+                self.assertIn('is in the main checkout', d.reason)
+                self.allowed(self.run_ps(text))
+
+    def test_a_file_the_pipeline_does_not_bind_is_judged_as_before(self):
+        for text in ("'x' | Tee-Object -Variable v", "'x' | Out-Null", 'Get-ChildItem | Get-Item'):
+            with self.subTest(text):
+                self.allowed(decide(W.ps(text, self.w.main, True), self.w.ctx()))
+
+
+class DefaultDestination(Base):
+    """Copy-Item and Move-Item with no -Destination, and Expand-Archive with no -DestinationPath,
+    write the location the command runs in (rules.PSCmdlet here): a placed write, judged there."""
+
+    def test_copy_and_move_with_no_destination_write_the_location(self):
+        for text in (r'Copy-Item {wt}\a.txt', r'Move-Item {wt}\a.txt', r'cpi -Path {wt}\a.txt -Force',
+                     r'Copy-Item -LiteralPath {wt}\a.txt', r'Expand-Archive {wt}\a.zip'):
+            with self.subTest(text):
+                text = text.format(main=self.w.main, wt=self.w.wt)
+                d = self.denied(decide(W.ps(text, self.w.main, True), self.w.ctx()), 'main-checkout')
+                self.assertIn('writes files in the directory it runs in', d.reason)
+                self.assertIn('is in the main checkout', d.reason)
+
+    def test_from_a_worktree_it_writes_the_worktree(self):
+        for text in (r'Copy-Item {main}\a.txt', r'Expand-Archive {main}\a.zip', r'Copy-Item {main}\a.txt -Recurse'):
+            with self.subTest(text):
+                self.allowed(self.run_ps(text))
+
+    def test_a_named_or_positional_destination_is_judged_alone(self):
+        for text in (r'Copy-Item a.txt {wt}\b.txt', r'Copy-Item a.txt -Destination {wt}\b.txt',
+                     r'Copy-Item -Destination {wt}\b.txt -Path a.txt'):
+            with self.subTest(text):
+                text = text.format(main=self.w.main, wt=self.w.wt)
+                self.allowed(decide(W.ps(text, self.w.main, True), self.w.ctx()))
+
+
 class Unchanged(Base):
     """What the fix leaves as it was."""
 

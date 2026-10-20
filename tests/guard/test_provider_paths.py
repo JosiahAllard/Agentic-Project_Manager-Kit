@@ -115,6 +115,40 @@ class FileWritesStillJudged(unittest.TestCase):
                 self.refused(text, self.w.main, 'unplaced')
 
 
+class ProviderAdvice(unittest.TestCase):
+    """A provider-aware cmdlet's literal item on a drive that holds no files, refused from a main
+    checkout only because its line is not plain calls (rules.ps_line_plain): the refusal says so
+    in one sentence and gives the same command run from the worktree, where it passes; never a
+    file name to write instead (rules.PROVIDER_ITEM_WHY)."""
+
+    def setUp(self):
+        self.w = W.World()
+        self.addCleanup(self.w.cleanup)
+
+    def test_provider_refusal_advice_one_line(self):
+        for text, run in (('Set-Content env:FOO $x', 'Set-Content env:FOO $x'),
+                          ('$v = 1; Set-Content -Path Env:\\FOO -Value $v', 'Set-Content -Path Env:\\FOO -Value $v'),
+                          ('Remove-Item HKCU:\\Software\\Demo -Recurse; $x = 1', 'Remove-Item HKCU:\\Software\\Demo -Recurse')):
+            with self.subTest(text):
+                d = decide(ps(text, self.w.main, sub=True), self.w.ctx())
+                self.assertIsNotNone(d, 'allowed')
+                self.assertEqual(d.rule, 'unplaced', d.reason)
+                self.assertNotIn('\n', d.reason)
+                self.assertIn('holds no files', d.reason)
+                self.assertNotIn('<file>', d.instead)
+                self.assertEqual(d.instead, 'cd "<worktree>"; if ($?) { %s }' % run)
+                # the Instead, run as it says, passes
+                again = d.instead.replace('<worktree>', W.fwd(self.w.wt))
+                self.assertIsNone(decide(ps(again, self.w.main, sub=True), self.w.ctx()), again)
+
+    def test_a_file_writer_keeps_the_file_advice(self):
+        # Out-File writes a file named env:x (no provider item): the advice names a file to write instead
+        d = decide(ps('$x = 1; Out-File -FilePath env:x', self.w.main, sub=True), self.w.ctx())
+        self.assertIsNotNone(d, 'allowed')
+        self.assertEqual(d.rule, 'unplaced', d.reason)
+        self.assertNotIn('holds no files', d.reason)
+
+
 class NativePrograms(unittest.TestCase):
     """A native program reads env:FOO as the stream FOO of a file named env in the directory it
     runs in: a file write, judged as one. Only a PowerShell cmdlet's item is skipped."""

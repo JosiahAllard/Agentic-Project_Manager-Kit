@@ -57,6 +57,19 @@ class LockedMain(unittest.TestCase):
     def allowed(self, d):
         self.assertIsNone(d, d and d.reason)
 
+    def test_start_process_git_dash_name_workdir(self):
+        # a git-* program (git-archive, git-sh-setup) gets no write targets of its own from its
+        # arguments; its -RedirectStandard* files are read from the command's directory, the main
+        # checkout here, whatever folder -WorkingDirectory names (rules.shell_writes)
+        for prog, args in (('git-archive', "'-o','x.zip','HEAD'"), ('git-sh-setup', "'x'"), ('git', "'status'")):
+            for workdir in (self.w.wt, self.w.main):
+                text = self.sp(workdir, prog, args) + ' -RedirectStandardOutput o.txt'
+                with self.subTest(text):
+                    self.assertIn('o.txt', self.denied(self.run_ps(text), 'main-checkout').reason)
+                # from a worktree the same file is the worktree's
+                self.allowed(self.run_ps(self.sp(workdir, prog, args) + ' -RedirectStandardOutput o.txt',
+                                         cwd=self.w.wt))
+
     def test_the_write_without_start_process_is_refused(self):
         # the baseline every row below must keep: this role may not write in main
         self.denied(self.run_ps('cmd /c "echo x > f.txt"'), 'main-checkout')
