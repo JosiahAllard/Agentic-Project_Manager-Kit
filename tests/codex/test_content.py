@@ -224,7 +224,7 @@ class Vendored(unittest.TestCase):
         boot.boot = slow_boot
         seen = {}
 
-        def fake_run(adapter, event, stdin, stdout, environ, entry, deadline, started, args):
+        def fake_run(adapter, event, stdin, stdout, environ, entry, deadline, started, args, kit):
             seen.update(deadline=deadline, started=started, args=args)
             return 0
         with unittest.mock.patch.dict(sys.modules, {'kitboot': boot}), \

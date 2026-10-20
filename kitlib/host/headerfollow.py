@@ -105,9 +105,10 @@ def text(kit):
             '<worktree>`; the folder your start header named may be removed.' % (k, k))
 
 
-def line(kit, payload, agent=None, environ=None, current=None):
+def line(kit, payload, agent=None, environ=None, current=None, write=True):
     """The header-update line for this session or agent, once per refresh, or None. `current`
-    (tests): the folder the guard names, instead of advice_kit's reading."""
+    (tests): the folder the guard names, instead of advice_kit's reading. `write` False: do not
+    rewrite the record (the caller calls again with True once the line has been shown)."""
     try:
         k = key(payload, agent)
         if not k or not kit:
@@ -127,7 +128,8 @@ def line(kit, payload, agent=None, environ=None, current=None):
             return None
         if not named or _norm(named) == _norm(current):
             return None
-        _write(path, os.path.normpath(current))
+        if write:
+            _write(path, os.path.normpath(current))
         return text(current)
     except Exception:
         return None

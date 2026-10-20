@@ -31,6 +31,8 @@ Each log base is `kitlib.gate.runner.log_base`:
 - with `"landing".log_dir` set, that folder under the checkout;
 - otherwise `<kit temp>/<repo name>-gate`, where the kit temp is `kitlib.config.user.work_temp` of the checkout and the repo name is `"repo".name`, else the checkout folder's name. Then `runner.fallback_log_base` (`<shared temp>/<repo name>-gate`) is read as well: a gate that could not make the default base writes there, and so did every gate before the kit temp moved. A machine config that cannot be read leaves only that base, with a `note` line.
 
+Known limits: only the bases of today's rule are read. A gate that ran while `work_temp` was still a session's TEMP (before it kept out of session temps: docs/test-tools.md "Temp folders") wrote its logs under that older kit temp, which is not read, so such a branch shows no verdict until it is gated again.
+
 The checkouts read are the one `-C` names, its main checkout, and every worktree that has the branch checked out.
 
 Under each base it reads two folders, recursively: `log_folder(<branch>)` (the branch gate's) and `log_folder('land-' + <branch>)` (the landing's merged gate's). When neither folder exists, it reads the files directly in the base whose name holds `log_folder(<branch>)`. The newest file that holds a verdict line decides, by its last such line.
