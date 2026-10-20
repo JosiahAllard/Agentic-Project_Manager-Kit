@@ -409,12 +409,15 @@ class HostConformance(object):
         text = header.text(self.KIT_ROOT)
         roles = kcontent.load(self.KIT_ROOT).role_names()
         start_parts = getattr(self.adapter, 'start_parts', None)
+        # a folder in no work tree: the agent-start block of a subagent start then costs one line, not a
+        # fake-git status of this checkout (minutes under the time fence's 600 s budget)
+        cwd = 'C:/kit-conformance-no-such-folder'
         for event in self.events_of('session_start') + self.events_of('subagent_start'):
             with self.subTest(event=event):
-                got = start_text(event, self.KIT_ROOT, {'cwd': self.KIT_ROOT}, {}, None)
+                got = start_text(event, self.KIT_ROOT, {'cwd': cwd}, {}, None)
                 self.assertTrue(got.startswith(text), 'an unmarked session gets the header first')
                 with self.assertRaises(ValueError):
-                    start_text(event, self.KIT_ROOT, {'cwd': self.KIT_ROOT}, {}, 'no-such-part')
+                    start_text(event, self.KIT_ROOT, {'cwd': cwd}, {}, 'no-such-part')
                 for role in roles if start_parts is not None else ():
                     parts = tuple(start_parts(event, role))
                     self.assertEqual(parts[:1], (None,), 'the plain hook first (%s)' % role)

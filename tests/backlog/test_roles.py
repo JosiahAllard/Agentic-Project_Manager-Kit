@@ -41,11 +41,12 @@ DESIGN = {
     'delete': ('medium', CPO, {}),
     'clear-review': ('medium', CPO, {}),
     'retarget': ('high', TOP, {}),
+    'catch-up': ('medium', CPO, {}),
     'raw-write': ('high', (), {}),
 }
 VERBS = {'next', 'show', 'list', 'check', 'stale', 'landable', 'add', 'set', 'block', 'unblock',
          'pull', 'release', 'close', 'retire', 'delete', 'clear-review', 'set-status', 'unpark',
-         'retarget', 'migrate'}
+         'retarget', 'migrate', 'catch-up'}
 
 
 class RolesTest(unittest.TestCase):
