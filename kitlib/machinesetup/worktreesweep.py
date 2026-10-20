@@ -12,8 +12,9 @@ registered again with `-Force`. With `worktree_sweep` false (--no-worktree-sweep
 stale task is a note carrying the line instead.
 
 The task runs the kit's live main checkout (`tool_root`): pluginsource.live_root, else the
-checkout an export's marker records, else the kit itself. A kit in a branch worktree registers
-nothing: its copy is unreviewed and goes away with the branch. Nothing here prints or exits.
+checkout an export's marker records, else the kit itself. A kit in a branch worktree, or an export
+with neither, registers nothing: the copy is unreviewed, or goes away with a later prune. Two
+repositories that take one task name get none. Nothing here prints or exits.
 """
 import os
 import re
@@ -34,18 +35,22 @@ from .common import Report
 TOOL = os.path.join('tools', 'worktree_remove.py')
 DRY_RUN_TIMEOUT = 600                     # a sweep reads every worktree's status: 100 trees take a while
 _FOLDER = re.compile(r'^[0-9a-f]{12}$')
+EXIT_MEANS = {1: 'refused, failed, or deferred by a held lock: run it again once the lock is free',
+              2: 'usage, or a refused .kit.json'}
 
 
 def tool_root(kit, environ=None):
     """The kit folder whose worktree_remove.py the task runs: the live root a tool pinned to an
     export runs for (pluginsource.live_root), else, for an export, the main checkout its marker
-    records (pluginsource.export_checkout), else `kit` itself."""
+    records (pluginsource.export_checkout), else `kit` itself when it is no export. None for an
+    export with neither: a task naming the export runs a folder a later prune removes."""
     kit = os.path.normpath(os.path.abspath(kit))
     live = pluginsource.live_root(kit, environ)
     if os.path.normcase(os.path.normpath(live)) != os.path.normcase(kit):
         return os.path.normpath(live)
     if is_export(kit):
-        return pluginsource.export_checkout(kit) or kit
+        checkout = pluginsource.export_checkout(kit)
+        return os.path.normpath(checkout) if checkout else None
     return kit
 
 
@@ -85,11 +90,13 @@ def dry_run(tool, main, python, timeout=DRY_RUN_TIMEOUT, run=None):
         r = run(dry_run_argv(tool, main, python), capture_output=True, encoding='utf-8', errors='replace',
                 env=env, timeout=timeout, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     except subprocess.TimeoutExpired:
-        raise RuntimeError('the worktree sweep dry run took over %s s' % timeout)
+        raise RuntimeError('the worktree sweep dry run of %s took over %s s, so the task is not registered'
+                           % (os.path.normpath(main), timeout))
     said = [l for l in ((r.stdout or '') + (r.stderr or '')).splitlines() if l.strip()]
     if r.returncode != 0:
-        raise RuntimeError('the worktree sweep dry run exit %d, so the task is not registered: %s'
-                           % (r.returncode, ' | '.join(said)[:400] or 'no output'))
+        raise RuntimeError('the worktree sweep dry run of %s exit %d (%s), so the task is not registered: %s'
+                           % (os.path.normpath(main), r.returncode, EXIT_MEANS.get(r.returncode, 'failed'),
+                              ' | '.join(said)[:400] or 'no output'))
     return said
 
 
@@ -142,17 +149,22 @@ def survey(plan, ctx):
     if not repos:
         return
     root = tool_root(ctx.kit)
+    if root is None or is_export(root):
+        plan.note('extras', 'worktree sweep tasks: the kit at %s is a plugin export with no live main checkout '
+                            '(no %s, and its marker records no checkout), so a task would run a folder a later '
+                            'prune removes; pass --kit <kit main checkout>; none planned'
+                            % (root or ctx.kit, pluginsource.LIVE_ROOT_ENV))
+        return
     tool = os.path.join(root, TOOL)
     if not os.path.isfile(tool):
         plan.note('extras', 'worktree sweep tasks: no %s; none planned' % tool)
         return
-    if not is_export(root):
-        place = gitrepo.classify(root)
-        if place.kind != gitrepo.MAIN:
-            plan.note('extras', 'worktree sweep tasks: the kit at %s is not a main checkout or a plugin export '
-                                '(%s), so a task would run an unreviewed copy; none planned'
-                                % (root, place.detail or place.kind))
-            return
+    place = gitrepo.classify(root)
+    if place.kind != gitrepo.MAIN:
+        plan.note('extras', 'worktree sweep tasks: the kit at %s is not a main checkout or a plugin export '
+                            '(%s), so a task would run an unreviewed copy; none planned'
+                            % (root, place.detail or place.kind))
+        return
     try:
         export = pluginsource.load(ctx.home, kit=ctx.kit).export_dir
     except (ConfigError, pluginsource.RefreshError) as e:
@@ -164,19 +176,51 @@ def survey(plan, ctx):
     except (OSError, RuntimeError, ValueError, SyntaxError) as e:   # ET.ParseError is a SyntaxError
         plan.note('extras', 'worktree sweep tasks: could not read the scheduled tasks (%s); none planned' % e)
         return
+    for label, main, name in _unique(plan, _resolved(plan, repos)):
+        _repo_step(plan, ctx, label, main, name, tool, tasks, export)
+
+
+def _resolved(plan, repos):
+    """[(label, main checkout, name)] of each launcher repository that can be read; a note for each
+    one that cannot."""
+    out = []
     for label in sorted(repos):
-        _repo_step(plan, ctx, label, repos[label], tool, tasks, export)
+        folder = repos[label]
+        if not os.path.isdir(folder):
+            plan.note('extras', 'worktree sweep task skipped for %s: no folder %s' % (label, folder))
+            continue
+        try:
+            main, name = repo_task(folder)
+        except (RuntimeError, ConfigError, OSError) as e:
+            plan.note('extras', 'worktree sweep task skipped for %s: %s' % (label, e))
+            continue
+        out.append((label, os.path.normpath(main), name))
+    return out
 
 
-def _repo_step(plan, ctx, label, folder, tool, tasks, export):
-    if not os.path.isdir(folder):
-        plan.note('extras', 'worktree sweep task skipped for %s: no folder %s' % (label, folder))
-        return
-    try:
-        main, name = repo_task(folder)
-    except (RuntimeError, ConfigError, OSError) as e:
-        plan.note('extras', 'worktree sweep task skipped for %s: %s' % (label, e))
-        return
+def _unique(plan, resolved):
+    """`resolved` with one entry per task name. Labels naming one main checkout are one repository
+    (the first label plans it); different checkouts that take one name (the same repo.name, or the
+    same remote's last part) share a task name, so none of them gets a task, and a note names them."""
+    groups = {}
+    for entry in resolved:
+        groups.setdefault(task_name(entry[2]).lower(), []).append(entry)
+    out = []
+    for entry in resolved:
+        group = groups[task_name(entry[2]).lower()]
+        if entry is not group[0]:
+            continue
+        mains = sorted(set(os.path.normcase(m) for _, m, _ in group))
+        if len(mains) == 1:
+            out.append(entry)
+            continue
+        plan.note('extras', 'worktree sweep task %s skipped: %s take that one name; give each its own '
+                            'repo.name in .kit.json and run again'
+                  % (task_name(entry[2]), ', '.join('%s (%s)' % (l, m) for l, m, _ in group)))
+    return out
+
+
+def _repo_step(plan, ctx, label, main, name, tool, tasks, export):
     task = task_name(name)
     have = find(tasks, task)
     gone = removed_export(have, export) if have and export else None

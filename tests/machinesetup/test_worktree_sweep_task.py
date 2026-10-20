@@ -131,9 +131,11 @@ class ToolRoot(unittest.TestCase):
         self.marker(checkout=self.live)
         self.assertEqual(W.tool_root(self.export, {}), self.live)
 
-    def test_an_export_with_neither_is_itself(self):
+    def test_an_export_with_neither_has_no_root(self):
         self.marker()
-        self.assertEqual(W.tool_root(self.export, {}), self.export)
+        self.assertIsNone(W.tool_root(self.export, {}))
+        self.marker(checkout=os.path.join(self.root, 'moved'))          # a checkout that is gone
+        self.assertIsNone(W.tool_root(self.export, {}))
 
     def test_a_checkout_is_itself(self):
         self.assertEqual(W.tool_root(self.live, {pluginsource.LIVE_ROOT_ENV: self.export}), self.live)
@@ -142,7 +144,8 @@ class ToolRoot(unittest.TestCase):
 class StepBase(MS.Base):
     """machine setup's worktree sweep step through M.run against FakeHost, in the old-kit switch
     (the default mode installs plugins, which the fake host does not), with the agent temp sweep
-    task off. The kit is an export with no live root; the machine config lists one repository."""
+    task off. The kit is an export with no live root whose marker records the kit's main checkout
+    (`self.checkout`, holding the tool `self.tool`); the machine config lists one repository."""
 
     def setUp(self):
         MS.Base.setUp(self)
@@ -151,8 +154,13 @@ class StepBase(MS.Base):
         env.start()
         self.addCleanup(env.stop)
         os.environ.pop(pluginsource.LIVE_ROOT_ENV, None)
+        kit_repo = gitfixture.TempRepo()                               # the kit's main checkout
+        self.addCleanup(kit_repo.cleanup)
+        self.checkout = os.path.realpath(kit_repo.root)
+        self.tool = os.path.join(self.checkout, 'tools', 'worktree_remove.py')
+        MS.touch(self.tool)
         MS.touch(os.path.join(self.kit, 'tools', 'worktree_remove.py'))
-        write_json(os.path.join(self.kit, pluginsource.MARKER), {'commit': 'x'})
+        write_json(os.path.join(self.kit, pluginsource.MARKER), {'commit': 'x', 'checkout': self.checkout})
         self.exports = os.path.join(self.root, 'exports')
         write_json(os.path.join(self.exports, THERE, pluginsource.MARKER), {'commit': 'y'})
         self.repo = gitfixture.TempRepo()
@@ -203,7 +211,7 @@ class Step(StepBase):
         code, out = self.go()
         self.assertEqual(code, M.EXIT_OK, out)
         self.assertIn('run the worktree sweep once without --apply for demo: %s -C %s --sweep-merged'
-                      % (os.path.join(self.kit, 'tools', 'worktree_remove.py'), self.main), out)
+                      % (self.tool, self.main), out)
         self.assertIn('register the scheduled task %s (daily 03:00, as you, not elevated): $py = ' % self.task, out)
         self.assertLess(out.index('run the worktree sweep once'), out.index('register the scheduled task %s' % self.task))
         self.assertEqual(self.events, [])
@@ -211,7 +219,7 @@ class Step(StepBase):
     def test_apply_runs_the_sweep_dry_run_first_then_registers(self):
         code, out = self.go(apply=True)
         self.assertEqual(code, M.EXIT_OK, out)
-        tool = os.path.join(self.kit, 'tools', 'worktree_remove.py')
+        tool = self.tool
         self.assertEqual(self.events, [('dry-run', tool, self.main), 'register'])
         self.assertIn('  worktree sweep dry run (nothing removed): would remove C:\\wt\\old  landed', out)
         line = self.regs[0]
@@ -221,7 +229,7 @@ class Step(StepBase):
         self.assertIn('done: register the scheduled task %s' % self.task, out)
 
     def test_a_current_task_gets_nothing(self):
-        self.tasks = [sweep_task(self.name, self.kit, self.main)]
+        self.tasks = [sweep_task(self.name, self.checkout, self.main)]
         code, out = self.go(apply=True)
         self.assertEqual(code, M.EXIT_OK, out)
         self.assertEqual(self.events, [])
@@ -273,9 +281,7 @@ class Step(StepBase):
         self.assertEqual(self.events, [])
 
     def test_each_repository_gets_its_own_task(self):
-        other = gitfixture.TempRepo()
-        self.addCleanup(other.cleanup)
-        self.config({'demo': self.repo.root, 'more': other.root})
+        self.config({'demo': self.repo.root, 'more': self.named('more')})
         code, out = self.go(apply=True)
         self.assertEqual(code, M.EXIT_OK, out)
         self.assertEqual(len(self.regs), 2, out)
@@ -317,6 +323,83 @@ class Step(StepBase):
         self.assertTrue(any('not a main checkout or a plugin export' in n for n in plan.notes['extras']),
                         plan.notes)
 
+    def test_an_export_with_no_live_main_checkout_plans_no_task(self):
+        write_json(os.path.join(self.kit, pluginsource.MARKER), {'commit': 'x'})
+        code, out = self.go(apply=True)
+        self.assertEqual(code, M.EXIT_OK, out)
+        self.assertIn('worktree sweep tasks: the kit at %s is a plugin export with no live main checkout'
+                      % os.path.normpath(os.path.abspath(self.kit)), out)
+        self.assertIn('pass --kit <kit main checkout>; none planned', out)
+        self.assertEqual(self.events, [])
+
+    def named(self, name):
+        repo = gitfixture.TempRepo()
+        self.addCleanup(repo.cleanup)
+        write_json(os.path.join(repo.root, '.kit.json'), {'repo': {'name': name}})
+        return repo.root
+
+    def test_two_repositories_with_one_name_get_no_task_and_a_note_naming_both(self):
+        one, two = self.named('same'), self.named('Same')
+        self.config({'demo': self.repo.root, 'one': one, 'two': two})
+        code, out = self.go(apply=True)
+        self.assertEqual(code, M.EXIT_OK, out)
+        self.assertIn('worktree sweep task same-worktree-sweep skipped: one (%s), two (%s) take that one name'
+                      % (os.path.normpath(os.path.realpath(one)), os.path.normpath(os.path.realpath(two))), out)
+        self.assertEqual(len(self.regs), 1, out)                        # demo's own task still goes in
+        self.assertIn(T.quoted(self.task), self.regs[0])
+
+    def test_two_labels_on_one_repository_get_one_task(self):
+        self.config({'demo': self.repo.root, 'again': self.repo.root})
+        code, out = self.go(apply=True)
+        self.assertEqual(code, M.EXIT_OK, out)
+        self.assertEqual(len(self.regs), 1, out)
+        self.assertNotIn('take that one name', out)
+
+
+class DryRun(unittest.TestCase):
+    """worktreesweep.dry_run with its run given: the sweep without --apply, and what stops it."""
+    TOOL, MAIN, PY = 'C:\\kit\\tools\\worktree_remove.py', 'C:\\repo', 'C:\\Py\\python.exe'
+
+    def go(self, code=0, out='', err='', timeout=False):
+        calls = []
+
+        def run(argv, **kw):
+            calls.append((argv, kw))
+            if timeout:
+                raise W.subprocess.TimeoutExpired(argv, kw.get('timeout'))
+            return mock.Mock(returncode=code, stdout=out, stderr=err)
+        return W.dry_run(self.TOOL, self.MAIN, self.PY, run=run), calls
+
+    def test_the_argv_is_the_sweep_without_apply(self):
+        said, calls = self.go(out='would remove C:\\wt\\a  landed\n\n')
+        self.assertEqual(said, ['would remove C:\\wt\\a  landed'])
+        argv, kw = calls[0]
+        self.assertEqual(argv, [self.PY, self.TOOL, '-C', self.MAIN, '--sweep-merged'])
+        self.assertNotIn('--apply', argv)
+        self.assertEqual(kw['timeout'], W.DRY_RUN_TIMEOUT)
+        self.assertEqual(kw['env']['PYTHONIOENCODING'], 'utf-8')
+
+    def test_exit_1_raises_naming_the_repository_and_the_lock(self):
+        with self.assertRaises(RuntimeError) as e:
+            self.go(code=1, err='deferred: the machine lock is held')
+        msg = str(e.exception)
+        self.assertIn(self.MAIN, msg)
+        self.assertIn('exit 1 (refused, failed, or deferred by a held lock', msg)
+        self.assertIn('deferred: the machine lock is held', msg)
+        self.assertIn('so the task is not registered', msg)
+
+    def test_exit_2_raises(self):
+        with self.assertRaises(RuntimeError) as e:
+            self.go(code=2)
+        self.assertIn('exit 2 (usage, or a refused .kit.json)', str(e.exception))
+        self.assertIn('no output', str(e.exception))
+
+    def test_a_timeout_raises(self):
+        with self.assertRaises(RuntimeError) as e:
+            self.go(timeout=True)
+        self.assertIn('took over %s s' % W.DRY_RUN_TIMEOUT, str(e.exception))
+        self.assertIn(self.MAIN, str(e.exception))
+
 
 class Tool(StepBase):
     """tools/machine_setup.py's --no-worktree-sweep."""
@@ -326,7 +409,7 @@ class Tool(StepBase):
         sys.path.insert(0, os.path.dirname(MS.TOOL))
         self.addCleanup(sys.path.remove, os.path.dirname(MS.TOOL))
 
-    def tool(self, *flags):
+    def cli(self, *flags):
         import machine_setup
         argv = ['--old-kit', self.old, '--kit', self.kit, '--home', self.home, '--agent-temp',
                 os.path.join(self.root, 'new-agent-temp'), '--desktop', self.desk, '--no-sweep-task'] + list(flags)
@@ -336,16 +419,16 @@ class Tool(StepBase):
         return code, out.getvalue()
 
     def test_registered_by_default_and_the_flag_opts_out(self):
-        code, out = self.tool('--no-worktree-sweep', '--apply')
+        code, out = self.cli('--no-worktree-sweep', '--apply')
         self.assertEqual(code, 0, out)
         self.assertEqual(self.regs, [])
         self.assertIn('(--no-worktree-sweep)', out)
-        code, out = self.tool('--apply')
+        code, out = self.cli('--apply')
         self.assertEqual(code, 0, out)
         self.assertEqual(len(self.regs), 1, out)
 
     def test_the_flag_is_machine_only(self):
-        code, out = self.tool('--repo', self.repo.root, '--no-worktree-sweep')
+        code, out = self.cli('--repo', self.repo.root, '--no-worktree-sweep')
         self.assertNotEqual(code, 0)
 
 
