@@ -337,8 +337,8 @@ class HeaderFollow(unittest.TestCase):
     event, told with the verdict of a later tool event."""
 
     class Tells(Dispatch.Starts):
-        def tool_context(self, event_name, text):
-            return '<ctx %s> %s\n' % (event_name, text)
+        def tool_context(self, event_name, text, rendered):
+            return rendered + '<ctx %s> %s\n' % (event_name, text)
 
     def test_the_header_part_notes_the_kit_with_the_payloads_agent(self):
         seen = []
@@ -350,11 +350,12 @@ class HeaderFollow(unittest.TestCase):
         self.assertEqual(seen, [('C:/k', {'session_id': 's', 'who': 'a1'}, 'a1', 'Begin')])
 
     def tool(self, adapter, verdict, line='LINE', reason=None, boom=False):
+        """(exit code, stdout, the calls to headerfollow.line as (write flag, ...))."""
         out, seen = io.StringIO(), []
         reason = ('' if verdict == 'allow' else 'why') if reason is None else reason
 
-        def told(*a):
-            seen.append(a)
+        def told(kit, payload, agent=None, environ=None, current=None, write=True):
+            seen.append((write, kit, payload, agent, environ))
             if boom:
                 raise RuntimeError('record unreadable')
             return line
@@ -364,21 +365,25 @@ class HeaderFollow(unittest.TestCase):
                                 environ={'X': '1'}, entry='C:/k/boot/hook.py', kit='C:/k')
         return code, out.getvalue(), seen
 
-    def test_an_allow_tells_the_line_through_tool_context(self):
+    def test_an_allow_tells_the_line_through_tool_context_and_settles_the_record_after(self):
         code, out, seen = self.tool(self.Tells(), 'allow')
         self.assertEqual((code, out), (0, '<ctx PreToolUse> LINE\n'))
-        self.assertEqual(seen, [('C:/k', {'session_id': 's', 'who': 'a1'}, 'a1', {'X': '1'})])
+        args = ('C:/k', {'session_id': 's', 'who': 'a1'}, 'a1', {'X': '1'})
+        self.assertEqual(seen, [(False,) + args, (True,) + args])
         self.assertEqual(self.tool(self.Tells(), 'allow', None)[:2], (0, ''))
 
-    def test_a_deny_carries_the_line_in_its_reason(self):
-        a = self.Tells()
-        self.assertEqual(self.tool(a, 'deny')[:2], (3, 'deny r\n'))
-        self.assertEqual(a.last.reason, 'why\nLINE')
+    def test_a_deny_and_an_ask_keep_their_reason_and_get_the_line_as_context(self):
+        for verdict, code in (('deny', 3), ('ask', 0)):
+            a = self.Tells()
+            got = self.tool(a, verdict)
+            self.assertEqual(got[:2], (code, '%s r\n<ctx PreToolUse> LINE\n' % verdict), verdict)
+            self.assertEqual(a.last.reason, 'why', verdict)
+            self.assertEqual([w for w, *_ in got[2]], [False, True], verdict)
 
-    def test_a_warned_allow_carries_the_line_in_its_reason(self):
+    def test_a_warned_allow_keeps_its_reason_and_gets_the_line_as_context(self):
         a = self.Tells()
-        self.assertEqual(self.tool(a, 'allow', reason='warn')[:2], (0, ''))
-        self.assertEqual(a.last.reason, 'warn\nLINE')
+        self.assertEqual(self.tool(a, 'allow', reason='warn')[:2], (0, '<ctx PreToolUse> LINE\n'))
+        self.assertEqual(a.last.reason, 'warn')
 
     def test_a_raising_headerfollow_changes_neither_the_decision_nor_the_output(self):
         for verdict in ('allow', 'ask', 'deny'):
@@ -389,11 +394,24 @@ class HeaderFollow(unittest.TestCase):
             self.assertEqual(a.last, base.last, verdict)
             self.assertTrue(got[2], verdict)            # it was reached, and swallowed
 
-    def test_a_raising_tool_context_changes_nothing(self):
+    def test_a_raising_tool_context_changes_nothing_and_leaves_the_record_unspent(self):
         class Bad(self.Tells):
-            def tool_context(self, event_name, text):
+            def tool_context(self, event_name, text, rendered):
                 raise RuntimeError('x')
-        self.assertEqual(self.tool(Bad(), 'allow')[:2], (0, ''))
+        for verdict in ('allow', 'deny'):
+            code, out, seen = self.tool(Bad(), verdict)
+            self.assertEqual(out, '' if verdict == 'allow' else 'deny r\n')
+            self.assertEqual([w for w, *_ in seen], [False], verdict)
+
+    def test_an_adapter_without_tool_context_reads_no_record_for_any_verdict(self):
+        """Codex prints nothing for an allow and has no context channel: its record is not spent
+        into a reason nobody sees, nor appended to a deny's tag."""
+        for verdict, reason, want in (('allow', '', ''), ('allow', 'warn', ''), ('ask', 'why', 'ask r\n'),
+                                      ('deny', 'why', 'deny r\n')):
+            a = FakeAdapter()
+            code, out, seen = self.tool(a, verdict, reason=reason)
+            self.assertEqual((out, seen), (want, []), (verdict, reason))
+            self.assertEqual(a.last.reason, reason)
 
     def test_a_raising_note_does_not_fail_a_start_event(self):
         out = io.StringIO()
@@ -401,10 +419,6 @@ class HeaderFollow(unittest.TestCase):
             code = hookmain.dispatch(self.Tells(), 'Begin', 'C:/k', '{"session_id": "s"}', out)
         self.assertEqual(code, 0)
         self.assertTrue(out.getvalue())
-
-    def test_an_adapter_without_tool_context_reads_no_record_on_an_allow(self):
-        code, out, seen = self.tool(FakeAdapter(), 'allow')
-        self.assertEqual((code, out, seen), (0, '', []))
 
     def test_no_kit_no_line(self):
         out = io.StringIO()
