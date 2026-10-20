@@ -614,7 +614,7 @@ def end_run(actor, rid, store=None):
             raise ApiError("not_found", "no live run %s" % rid, "id")
         _check(me, "end_run", d)
         by = "owner" if is_owner(me) else me.get("name") or me.get("session")
-        if not request_stop(store, rid, by):
+        if not request_stop(store, rid, by, me.get("session")):
             raise ApiError("not_found", "no live run %s" % rid, "id")
         return {"id": rid, "requested": True}
     return _write(store, go)

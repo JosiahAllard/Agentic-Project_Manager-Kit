@@ -9,6 +9,7 @@ A line holds FIELDS, never the command's text: the verb, the record id, the sess
 tool's own check reads it (kitlib.backlog.policy.cli_role), the session's name (`--session`, else
 the launcher's PM_KIT_SESSION_NAME), the UTC time, and the store commit the write published.
 MISSING stands for a value that is absent, and for a role the map does not list.
+tools/backlog_audit.py (kitlib.backlog.audit_check) reads the log against the store's history.
 
   audited(rows)                      true when a row of `rows` (policy.sort's names) is AUDITED
   role_of(environ)                   the session's role for the line

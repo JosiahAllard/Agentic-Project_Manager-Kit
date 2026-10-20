@@ -314,6 +314,9 @@ class Run:
     def finish(self, code, how):
         """The record moves to the ended folder; returns it."""
         self.ended = dict(self.rec, state="ended", code=code, how=how, ended=iso())
+        stop, _ = read_record(self.store.path("active", self.id + ".stop"))
+        if stop:
+            self.ended["stopped_by"] = {"by": stop.get("by"), "session": stop.get("session")}
         with contextlib.suppress(OSError):
             write_json(self.store.path("ended", self.id + ".json"), self.ended)
         remove(self.store.path("active", self.id + ".json"))
@@ -1564,12 +1567,13 @@ def expected_end(since, expect_s, max_s=10 * 365 * 86400):
         return None
 
 
-def request_stop(store, rid, by):
-    """Writes run rid's stop request (active/<id>.stop: {by_pid, at, by}). False when no such
-    run is live."""
+def request_stop(store, rid, by, session=None):
+    """Writes run rid's stop request (active/<id>.stop: {by_pid, at, by, session}; session is the
+    asker's session id or None). False when no such run is live."""
     if not os.path.exists(store.path("active", rid + ".json")):
         return False
-    write_json(store.path("active", rid + ".stop"), {"by_pid": os.getpid(), "at": iso(), "by": by})
+    write_json(store.path("active", rid + ".stop"), {"by_pid": os.getpid(), "at": iso(), "by": by,
+                                                     "session": session})
     store.bump()
     return True
 

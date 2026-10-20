@@ -4,7 +4,7 @@ import datetime
 import os
 import unittest
 
-from tests.lock.helpers import StoreCase
+from tests.lock.helpers import StoreCase, agent, claude_of
 
 try:
     from kitlib.lock import api
@@ -75,6 +75,39 @@ class History(StoreCase):
                          ["2026-09.jsonl", "2026-10.jsonl"])
         got = api.history(self.store, since="2026-09-30T23:00:00Z", until="2026-10-01T01:00:00Z")
         self.assertEqual([r["id"] for r in got], ["r-20260930T233000Z-aaaa", "r-20261001T003000Z-bbbb"])
+
+    def test_a_history_line_names_who_started_and_who_stopped_the_run(self):
+        from kitlib.lock import run as rm
+        r = rm.Run(self.store, self.layout(), "kit", "g", "engine-test", "n", ["x"], "running",
+                   env={"CLAUDE_CODE_SESSION_ID": "sess-start"})
+        r.save(held_since=iso(utc_now()))
+        self.assertTrue(rm.request_stop(self.store, r.id, "agent-b", "sess-stop"))
+        self.store.history_append(r.finish(0, "stopped"))
+        row = api.history(self.store)[0]
+        self.assertEqual(row["session"], "sess-start")
+        self.assertIn(row["role"], ("owner", "agent"))
+        self.assertEqual(row["stopped_by"], {"by": "agent-b", "session": "sess-stop"})
+
+    def test_a_run_nobody_stopped_has_a_null_stopped_by_and_a_missing_session_is_null(self):
+        from kitlib.lock import run as rm
+        r = rm.Run(self.store, self.layout(), "kit", "g", "engine-test", "n", ["x"], "running",
+                   env={})
+        r.save(held_since=iso(utc_now()))
+        self.store.history_append(r.finish(0, "done"))
+        row = api.history(self.store)[0]
+        self.assertIsNone(row["stopped_by"])
+        self.assertIsNone(row["session"])
+
+    def test_end_run_carries_the_askers_session_to_the_stop_file_and_the_history_line(self):
+        from kitlib.lock import run as rm
+        r = rm.Run(self.store, self.layout(), "kit", "g", "engine-test", "n", ["x"], "running",
+                   env={})
+        r.save(held_since=iso(utc_now()), ancestors=[claude_of("sess-A")])
+        self.assertTrue(api.end_run(agent("sess-A"), r.id, self.store)["ok"])
+        self.assertEqual(self.store.read("active/%s.stop" % r.id)["session"], "sess-A")
+        self.store.history_append(r.finish(0, "stopped"))
+        self.assertEqual(api.history(self.store)[0]["stopped_by"],
+                         {"by": "test-agent", "session": "sess-A"})
 
 
 if __name__ == "__main__":

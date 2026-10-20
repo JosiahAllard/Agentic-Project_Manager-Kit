@@ -45,6 +45,7 @@ import kitlib.config as kconfig
 from kitlib.config import policy
 from kitlib.config import user as kuser
 from kitlib.config.types import ConfigError
+from kitlib.gate import budget
 from kitlib.gate import detect
 from kitlib.gate import gatecap
 from kitlib.gate import gitstatus
@@ -496,7 +497,7 @@ def plan_lines(chosen, why, all_steps, base_text, changed):
 
 
 def gated(cfg, root, base, changed, chosen, kind, name, slug, log_dir, say, book_kw, merged=False,
-          checks_rev=None, gate=None, slot=None, seen=None, capped=False):
+          checks_rev=None, gate=None, slot=None, seen=None, capped=False, budget_branch=None):
     """Runs `chosen` in a slot of `kind`: `(results, None)`, or `(None, Outcome)` when the hook
     module or the booking refuses. The hook module's checks come from the work tree, or from
     commit `checks_rev` when given (a landing: --expect-main). `chosen` is never empty. The slot
@@ -514,7 +515,10 @@ def gated(cfg, root, base, changed, chosen, kind, name, slug, log_dir, say, book
     The lock run records the tree it tests (tested_tree; book's `tree`, Slot.note_tree for a held
     slot): a branch's HEAD tree, a landing's merge tree, the daily full run's commit's tree.
     `capped`: a branch gate's booking first waits for the session gate cap (kitlib.gate.gatecap,
-    in the store it books in); a landing and the daily full run leave it False and never wait."""
+    in the store it books in); a landing and the daily full run leave it False and never wait.
+    `budget_branch`: with `capped`, the branch whose gate budget (kitlib.gate.budget) is asked
+    first, before the cap is waited for or anything is booked: `(None, REFUSED Outcome)` when it
+    is spent. None: not asked (a detached HEAD)."""
     checks, options = {}, {}
     if any(s.check for s in chosen):
         try:
@@ -552,7 +556,12 @@ def gated(cfg, root, base, changed, chosen, kind, name, slug, log_dir, say, book
         slot.end_tree()
         return results, None
     if capped:
-        gatecap.wait_turn((book_kw or {}).get('store') or Store(), name, say)
+        store = (book_kw or {}).get('store') or Store()
+        over = budget.refusal(root, store, name, slug, budget_branch, say)
+        if over:
+            return None, G.Outcome(G.REFUSED, over, record=None,
+                                   no_record='the branch gate budget')
+        gatecap.wait_turn(store, name, say)
     try:
         slot = lockrun.book(kind, name, slug, **dict(book_kw or {}, gate=True, tree=tree))
     except LockError as e:
@@ -769,11 +778,13 @@ def _gate_checkout(top, cfg, seen, base=None, full=False, only=None, plan=False,
     run = _to_run(chosen, reused)
     results, watched = [], {}
     if run:
-        # capped: the session gate cap (kitlib.gate.gatecap) is a branch gate's only; a landing
-        # and the daily full run book through gated() without it.
+        # capped and budget_branch: the session gate cap (kitlib.gate.gatecap) and the branch
+        # gate budget (kitlib.gate.budget) are a branch gate's only; a landing and the daily full
+        # run book through gated() without them, and a fully reused gate never gets here.
         results, refused = gated(cfg, top, mb, changed, run, gate['kind'], name,
                                  slug or slug_of(branch or head[:10]), logs, say, book_kw,
-                                 gate=gate, seen=watched, capped=True)
+                                 gate=gate, seen=watched, capped=True,
+                                 budget_branch=branch or None)
         if refused is not None:
             return refused
     results = _with_reused(results, chosen, reused)
