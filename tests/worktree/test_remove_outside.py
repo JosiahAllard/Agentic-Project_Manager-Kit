@@ -142,11 +142,9 @@ class Refused(OutsideCase):
         rc, out = self.run_remove(path)
         self.assertKept(path, rc, out, 'ignored files that are not build output')
 
-    def test_a_tree_on_a_branch_is_refused(self):
+    def test_a_tree_on_a_branch_is_refused_by_abandon(self):
         path = os.path.join(self.outside, 'onbranch')
         self.git('worktree', 'add', '-q', path, '-b', 'kit/onbranch')
-        rc, out = self.run_remove(path)
-        self.assertKept(path, rc, out, 'only a detached tree')
         rc, out = self.run_abandon(path)
         self.assertKept(path, rc, out, 'only a detached tree')
         self.assertEqual(self.git('rev-parse', '--verify', 'refs/heads/kit/onbranch').strip(),
@@ -495,6 +493,76 @@ class SlugRedirect(OutsideCase):
         self.assertIn('nothing   ', out)
 
 
+class BranchByPath(OutsideCase):
+    """Owner ruling R-2343: the plain verb, named by its PATH, removes a registered, unlocked tree
+    on a branch outside the worktree folders once that branch has landed; every later check runs.
+    `--abandon`, the slug form and the landing cleanup still refuse it."""
+
+    def branch_tree(self, name='landed', commit=None):
+        path = os.path.join(self.outside, name)
+        self.git('worktree', 'add', '-q', path, '-b', 'kit/%s' % name, commit or self.base)
+        return path
+
+    def branch(self, name):
+        return self.git('rev-parse', '-q', '--verify', 'refs/heads/kit/%s' % name,
+                        check=False).strip()
+
+    def test_a_landed_branch_tree_named_by_path_is_removed_with_its_branch(self):
+        path = self.branch_tree()
+        rc, out = self.run_remove(path)
+        self.assertRemoved(path, rc, out)
+        self.assertIn('merged    kit/landed is in', out)
+        self.assertIn('deleted   branch kit/landed', out)
+        self.assertEqual(self.branch('landed'), '')
+
+    def test_keep_branch_keeps_the_branch(self):
+        path = self.branch_tree()
+        got = remove.remove(self.repo, path, keep_branch=True, cwd=self.repo)
+        out = '\n'.join(got.lines)
+        self.assertRemoved(path, got.code, out)
+        self.assertEqual(self.branch('landed'), self.base)
+
+    def test_an_unlanded_branch_tree_is_refused(self):
+        path = self.branch_tree('unlanded', self.topic_tip)
+        rc, out = self.run_remove(path)
+        self.assertKept(path, rc, out, 'holds UNLANDED work')
+        self.assertIn('git branch -D kit/unlanded', out)
+        self.assertEqual(self.branch('unlanded'), self.topic_tip)
+
+    def test_a_locked_branch_tree_is_refused(self):
+        path = self.branch_tree()
+        self.git('worktree', 'lock', path)
+        rc, out = self.run_remove(path)
+        self.assertKept(path, rc, out, 'is locked')
+        self.assertEqual(self.branch('landed'), self.base)
+
+    def test_a_dirty_branch_tree_is_refused(self):
+        path = self.branch_tree()
+        self.fx.write('work.txt', 'work\n', root=path)
+        rc, out = self.run_remove(path)
+        self.assertKept(path, rc, out, 'uncommitted or untracked files')
+        self.assertEqual(self.branch('landed'), self.base)
+
+    def test_an_unlanded_detached_tree_is_still_refused(self):
+        path = self.tree(commit=self.topic_tip)
+        rc, out = self.run_remove(path)
+        self.assertKept(path, rc, out, 'holds UNLANDED work')
+
+    def test_abandon_still_refuses_a_landed_branch_tree(self):
+        path = self.branch_tree()
+        rc, out = self.run_abandon(path)
+        self.assertKept(path, rc, out, 'only a detached tree')
+        self.assertEqual(self.branch('landed'), self.base)
+        self.assertEqual(self.tag('archive/landed'), '')
+
+    def test_the_slug_form_still_refuses_a_landed_branch_tree(self):
+        path = self.branch_tree()
+        rc, out = self.run_remove('landed')
+        self.assertKept(path, rc, out, 'a slug never names one')
+        self.assertIn(' "%s"\n' % path, out)
+        self.assertEqual(self.branch('landed'), self.base)
+
+
 class Unchanged(OutsideCase):
 
     def test_the_landing_cleanup_entry_still_refuses_an_outside_tree_on_a_branch(self):
@@ -503,6 +571,7 @@ class Unchanged(OutsideCase):
         ctx = remove.Ctx(self.repo, load(self.repo), cwd=self.repo)
         code = remove._remove(ctx, path, False)
         self.assertEqual(code, remove.REFUSED, ctx.out)
+        self.assertIn('only a detached tree', '\n'.join(ctx.out))
         self.assertTrue(os.path.isdir(path))
         self.assertIn(os.path.normcase(path), self.registered())
 
