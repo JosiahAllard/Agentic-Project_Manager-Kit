@@ -26,7 +26,8 @@ class Placeable(unittest.TestCase):
     def test_forms_it_places(self):
         for text in ('Z:' + BS, 'Z:/', 'Z:' + BS + 'repo', 'z:/repo/sub', 'repo', '.', '..' + BS + 'repo',
                      BS + 'repo', '/repo', '~', '~' + BS + 'x', BS * 2 + 'server' + BS + 'share' + BS + 'x',
-                     'FileSystem::Z:' + BS + 'repo', 'Microsoft.PowerShell.Core' + BS + 'FileSystem::Z:' + BS + 'r'):
+                     'FileSystem::Z:' + BS + 'repo', 'Microsoft.PowerShell.Core' + BS + 'FileSystem::Z:' + BS + 'r',
+                     BS + 'FileSystem::Z:' + BS + 'repo'):
             with self.subTest(text=text):
                 self.assertFalse(commands.sp_workdir_unplaceable(text))
 

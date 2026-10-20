@@ -228,6 +228,31 @@ class LookalikeWrappers(unittest.TestCase):
             with self.subTest(text):
                 self.assertEqual(self.judge(text), ('deny', 'heavy'))
 
+    def test_a_start_process_script_is_read_from_its_working_directory(self):
+        # python reads a relative script from the folder Start-Process starts it in, not the call's
+        kit = W.fwd(self.w.kit_dir)
+        sp = "Start-Process python -WorkingDirectory %s -ArgumentList '%s','--full'"
+        self.assertEqual(verdict(claude_decide(ps(sp % ("'%s'" % kit, 'tools/gate.py'), self.w.wt), self.w.ctx())),
+                         ('allow', None))
+        for workdir in ('$k', "'%s'" % W.fwd(self.w.temp), "'%s'" % W.fwd(self.w.wt)):
+            text = sp % (workdir, 'tools/gate.py')
+            with self.subTest(text):
+                self.assertEqual(verdict(claude_decide(ps(text, self.w.wt), self.w.ctx())), ('deny', 'heavy'))
+        # an absolute script is the kit's wherever it starts
+        text = sp % ('$k', '%s/tools/gate.py' % kit)
+        self.assertEqual(verdict(claude_decide(ps(text, self.w.wt), self.w.ctx())), ('allow', None))
+
+    def test_a_start_process_script_elsewhere_is_not_the_kit_s(self):
+        # the same call from the kit's folder, started in temp, runs temp's tools/gate.py
+        from kitlib.guard import commands as cm
+        from kitlib.guard import rules
+        from kitlib.guard import shell as sh
+        text = "Start-Process python -WorkingDirectory '%s' -ArgumentList 'tools/gate.py','--full'" % W.fwd(self.w.temp)
+        c = cm.read(text, sh.PS, self.w.kit_dir).commands[0]
+        self.assertIsNone(rules.kit_wrapper(self.w.ctx(), c, cm.invocation(c), self.w.kit_dir))
+        c = cm.read(text.replace(W.fwd(self.w.temp), W.fwd(self.w.kit_dir)), sh.PS, self.w.wt).commands[0]
+        self.assertTrue(rules.kit_wrapper(self.w.ctx(), c, cm.invocation(c), self.w.wt))
+
 
 class Alternatives(unittest.TestCase):
     """What the guard tells an agent to run names the kit's tool with -C, never `tools/<x>.py`."""

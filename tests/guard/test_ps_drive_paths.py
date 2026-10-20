@@ -68,6 +68,26 @@ class IntoMain(Base):
                         'main-checkout')
         self.assertIn('is in the main checkout', d.reason)
 
+    def test_a_provider_path_after_a_leading_separator(self):
+        # PowerShell reads \FileSystem::<abs> as the provider path, not a folder at the drive's root
+        for text in (r'New-Item \FileSystem::{main}\x.txt', r'Set-Content -Path \FileSystem::{main}\x.txt -Value y',
+                     r'New-Item /FileSystem::{main}\x.txt', r'New-Item \Microsoft.PowerShell.Core\FileSystem::{main}\x.txt'):
+            with self.subTest(text):
+                d = self.denied(self.run_ps(text), 'main-checkout')
+                self.assertIn('is in the main checkout', d.reason)
+        self.allowed(self.run_ps(r'New-Item \FileSystem::{wt}\x.txt'))
+        # another provider after the separator is a place the guard cannot tell: refused outside a worktree
+        d = decide(W.ps(r'New-Item \Registry::HKCU\x', self.w.main, True), self.w.ctx())
+        self.denied(d, 'unplaced')
+
+    def test_a_stream_of_a_file_in_the_location(self):
+        # .\x.txt::$DATA is the data stream of the file x.txt in the location, never a provider named x.txt
+        for text in (r"cd {main}; Set-Content '.\x.txt::$DATA' y", r"Set-Content '{main}\x.txt::$DATA' y",
+                     r"cd {main}\sub; Set-Content '..\x.txt::$DATA' y"):
+            with self.subTest(text):
+                self.denied(self.run_ps(text), 'main-checkout')
+        self.allowed(self.run_ps(r"Set-Content '.\x.txt::$DATA' y"))
+
     def test_cd_filesystem_provider_then_relative_write(self):
         d = self.denied(self.run_ps(r'cd FileSystem::{main}; New-Item x.txt'), 'main-checkout')
         self.assertIn('is in the main checkout', d.reason)
@@ -786,6 +806,15 @@ class ResolvePath(unittest.TestCase):
             'x.txt': 'C:\\w\\wt\\x.txt',
             '.\\a:b': 'C:\\w\\wt\\a:b',
             '\\\\srv\\share\\x': '\\\\srv\\share\\x',
+            # a separator before the provider: still the provider path
+            '\\FileSystem::C:\\m\\x': 'C:\\m\\x',
+            '/FileSystem::C:/m/x': 'C:\\m\\x',
+            '\\Microsoft.PowerShell.Core\\FileSystem::C:\\m\\x': 'C:\\m\\x',
+            '\\FileSystem::x.txt': None,
+            '\\Registry::HKCU\\x': None,
+            # the stream of a file in a folder the text names: a file, not a provider
+            '.\\x.txt::$DATA': 'C:\\w\\wt\\x.txt::$DATA',
+            '..\\x.txt::$DATA': 'C:\\w\\x.txt::$DATA',
         }
         for text, want in cases.items():
             with self.subTest(text):
@@ -793,11 +822,13 @@ class ResolvePath(unittest.TestCase):
 
     def test_unplaceable(self):
         for text in ('Main:\\x', 'Main:x', 'Registry::x', 'Foo\\Bar::x', 'FileSystem::rel', 'env:FOO',
-                     '1:\\x', '_:x', 'é:\\x', '12:\\x'):
+                     '1:\\x', '_:x', 'é:\\x', '12:\\x', '\\Registry::x', '\\FileSystem::rel',
+                     'x.txt::$DATA', 'sub\\x.txt::$DATA'):
             with self.subTest(text):
                 self.assertTrue(sh.ps_unplaceable(text))
         for text in ('', 'C:\\x', 'C:x', 'x.txt', '.\\a:b', '\\\\srv\\s', '//srv/s',
-                     'FileSystem::C:\\x', 'Microsoft.PowerShell.Core\\FileSystem::\\\\srv\\s'):
+                     'FileSystem::C:\\x', 'Microsoft.PowerShell.Core\\FileSystem::\\\\srv\\s',
+                     '\\FileSystem::C:\\x', '.\\x.txt::$DATA', '..\\x.txt::$DATA'):
             with self.subTest(text):
                 self.assertFalse(sh.ps_unplaceable(text))
 

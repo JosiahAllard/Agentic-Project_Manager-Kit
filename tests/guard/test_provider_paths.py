@@ -118,25 +118,30 @@ class FileWritesStillJudged(unittest.TestCase):
 class ProviderAdvice(unittest.TestCase):
     """A provider-aware cmdlet's literal item on a drive that holds no files, refused from a main
     checkout only because its line is not plain calls (rules.ps_line_plain): the refusal says so
-    in one sentence and gives the same command run from the worktree, where it passes; never a
-    file name to write instead (rules.PROVIDER_ITEM_WHY)."""
+    in one sentence and gives the whole line run from the worktree, where it passes (a statement
+    that sets what the call reads stays with it); never a file name to write instead
+    (rules.PROVIDER_ITEM_WHY)."""
 
     def setUp(self):
         self.w = W.World()
         self.addCleanup(self.w.cleanup)
 
     def test_provider_refusal_advice_one_line(self):
-        for text, run in (('Set-Content env:FOO $x', 'Set-Content env:FOO $x'),
-                          ('$v = 1; Set-Content -Path Env:\\FOO -Value $v', 'Set-Content -Path Env:\\FOO -Value $v'),
-                          ('Remove-Item HKCU:\\Software\\Demo -Recurse; $x = 1', 'Remove-Item HKCU:\\Software\\Demo -Recurse')):
+        for text in ('Set-Content env:FOO $x', '$v = 1; Set-Content -Path Env:\\FOO -Value $v',
+                     'Remove-Item HKCU:\\Software\\Demo -Recurse; $x = 1',
+                     '$v = 1; Set-Content -Path Env:\\FOO -Value $v; Get-Item Env:\\FOO'):
             with self.subTest(text):
                 d = decide(ps(text, self.w.main, sub=True), self.w.ctx())
                 self.assertIsNotNone(d, 'allowed')
                 self.assertEqual(d.rule, 'unplaced', d.reason)
                 self.assertNotIn('\n', d.reason)
                 self.assertIn('holds no files', d.reason)
+                self.assertIn('run the whole line from your worktree', d.reason)
+                # one sentence: no full stop before the Instead
+                self.assertNotIn('. ', d.reason.split(' Instead:')[0])
                 self.assertNotIn('<file>', d.instead)
-                self.assertEqual(d.instead, 'cd "<worktree>"; if ($?) { %s }' % run)
+                # the whole line, so `$v = 1` still sets the value the call reads
+                self.assertEqual(d.instead, 'cd "<worktree>"; if ($?) { %s }' % text)
                 # the Instead, run as it says, passes
                 again = d.instead.replace('<worktree>', W.fwd(self.w.wt))
                 self.assertIsNone(decide(ps(again, self.w.main, sub=True), self.w.ctx()), again)

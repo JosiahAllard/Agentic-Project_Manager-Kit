@@ -1368,9 +1368,19 @@ class UnplacedGit(MainGit):
     def test_a_worker_still_reads_a_checkout_it_cannot_place(self):
         m = self.main
         for text in ('git --git-dir="%s/.git" log --oneline -3' % m, 'GIT_DIR="%s/.git" git rev-parse HEAD' % m,
-                     'git -C "$M" status', 'git --git-dir="%s/.git" branch --show-current' % m):
+                     'git -C "$M" status', 'git --git-dir="%s/.git" branch --show-current' % m,
+                     # a computed git directory: a read is a read wherever it points
+                     'git --git-dir="$D" log --oneline -3', 'git --git-dir=$D show HEAD',
+                     'git --git-dir "$D" status', 'git --git-dir="$D" branch --show-current'):
             with self.subTest(text):
                 self.allowed(self.git(text, 'worker'))
+        for text in ('git --git-dir $d log -1', 'git --git-dir (Join-Path $a .git) show HEAD'):
+            with self.subTest(text):
+                self.allowed(self.git(text, 'worker', tool='PowerShell'))
+        # and a write through it is still refused
+        for text in ('git --git-dir="$D" tag v9', 'git --git-dir="$D" branch -m main old'):
+            with self.subTest(text):
+                self.jailed(self.git(text, 'worker'))
 
     # ---------------------------------------------------------------- every jailed role, not only a worker
 
