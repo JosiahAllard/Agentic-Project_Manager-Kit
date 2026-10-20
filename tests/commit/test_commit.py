@@ -419,6 +419,62 @@ class AnOrdinaryCommit(LinkedCase):
         self.assertIn('nothing to commit in: seed.txt', out)
 
 
+class AnEmptyCommit(LinkedCase):
+    """--allow-empty: a commit of no paths, only its message and trailers (a branch that needs only
+    a `Closes:` line), with the checks of any other commit."""
+
+    def test_it_commits_no_file_with_the_trailers(self):
+        head, tree = self.head(), self.git('rev-parse', 'HEAD^{tree}')
+        code, out = self.commit('close it', allow_empty=True, b='Closes: KIT-X')
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.git('log', '-1', '--format=%P'), head)
+        self.assertEqual(self.git('rev-parse', 'HEAD^{tree}'), tree)
+        self.assertEqual(self.message(), 'close it\n\nCloses: KIT-X\n' + COAUTHOR)
+        self.assertIn('files     none (--allow-empty)', out)
+
+    def test_no_paths_without_the_flag_is_not_an_empty_commit(self):
+        head = self.head()
+        code, out = self.commit('nothing')
+        self.assertEqual(code, 1, out)
+        self.assertEqual(self.head(), head)
+
+    def test_anything_staged_is_refused(self):
+        self.put('a.py', 'a = 1\n')
+        self.git('add', '--', 'a.py')
+        head = self.head()
+        code, out = self.commit('close it', allow_empty=True)
+        self.assertEqual(code, 1, out)
+        self.assertIn('--allow-empty commits nothing staged', out)
+        self.assertIn('a.py', out)
+        self.assertEqual(self.head(), head)
+        self.assertEqual(self.git('diff', '--cached', '--name-only'), 'a.py')
+
+    def test_paths_with_the_flag_are_a_usage_error(self):
+        self.put('a.py', 'a = 1\n')
+        head = self.head()
+        code, out = self.commit('s', 'a.py', allow_empty=True)
+        self.assertEqual(code, 2, out)
+        self.assertIn('--allow-empty takes no paths', out)
+        self.assertEqual(self.head(), head)
+
+    def test_the_message_checks_still_run(self):
+        head = self.head()
+        code, out = self.commit('s', allow_empty=True, model=None, env={})
+        self.assertEqual(code, 2, out)
+        self.assertIn('--model is required', out)
+        code, out = self.commit('see %sUsers\\someone\\x' % ('C:' + '\\'), allow_empty=True)
+        self.assertEqual(code, 1, out)
+        self.assertIn('carries a machine path', out)
+        self.assertEqual(self.head(), head)
+
+    def test_the_main_checkout_is_still_refused(self):
+        head = self.t.git('rev-parse', 'HEAD')
+        code, out = self.commit('s', allow_empty=True, root=self.t.root, cwd=self.t.root)
+        self.assertEqual(code, 2, out)
+        self.assertIn('main checkout', out)
+        self.assertEqual(self.t.git('rev-parse', 'HEAD'), head)
+
+
 class UsageMistakesAreUsageErrors(LinkedCase):
 
     def assert_usage(self, text, *paths, **kw):
@@ -1867,6 +1923,18 @@ class TheCommandLine(LinkedCase):
         self.assertIn('USAGE:', out)
         self.assertIn('-b or --body-file', out)
         self.assertEqual(self.git('rev-parse', 'HEAD'), before)
+
+    def test_allow_empty_commits_with_no_paths(self):
+        head = self.head()
+        code, out = self.cli('-m', 'close it', '--model', 'M', '--allow-empty')
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.git('log', '-1', '--format=%P'), head)
+        self.assertEqual(self.git('show', '--name-only', '--format=', 'HEAD'), '')
+
+    def test_no_paths_without_allow_empty_is_still_a_usage_error(self):
+        code, out = self.in_process('-m', 's', '--model', 'M')
+        self.assertEqual(code, 2, out)
+        self.assertIn('required: paths', out)
 
     def test_a_refusal_exits_1(self):
         code, out = self.in_process('-m', 's', '--model', 'M', 'missing.txt')
