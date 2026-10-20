@@ -1,5 +1,7 @@
 """kitlib.gate.steps: selection by what changed, and judging a step by its log."""
+import builtins
 import unittest
+from unittest import mock
 
 from kitlib.gate import steps as S
 
@@ -327,6 +329,36 @@ class ZeroCountPasses(unittest.TestCase):
     def test_a_pattern_it_cannot_read_gives_no_line(self):
         self.assertEqual(self.warned(r'(?P<a>x)(?(a)y|z) OK'), [])
         self.assertEqual(S.zero_count_passes({}), [])
+
+    def test_a_count_that_may_be_empty_warns(self):
+        (line,) = self.warned(r'Passed: \d*')                 # matches 'Passed: 0' too
+        self.assertIn("'Passed: 0'", line)
+        self.assertEqual(self.warned(r'Passed: [1-9]\d*'), [])
+        self.assertEqual(self.warned(r'(?m)^Ran [1-9]\d* tests? in'), [])
+
+    def without(self, *blocked):
+        """builtins.__import__ that refuses kitlib.gate.steps the modules `blocked`: a module
+        name, or 're' to refuse `from re import _parser` (before Python 3.11 the stdlib regex
+        parser was only sre_parse, and a later Python may drop both). Only steps' own imports:
+        sre_parse itself reads re._parser on 3.11 on."""
+        real = builtins.__import__
+
+        def imp(name, globals=None, locals=None, fromlist=(), level=0):
+            if (name in blocked and (globals or {}).get('__name__') == S.__name__
+                    and (name != 're' or {'_parser', '_constants'} & set(fromlist or ()))):
+                raise ImportError('blocked: %s' % name)
+            return real(name, globals, locals, fromlist, level)
+        return mock.patch.object(builtins, '__import__', imp)
+
+    def test_the_older_parser_modules_serve_when_re_has_none(self):
+        with self.without('re'):
+            (line,) = self.warned(r'Passed: \d+')
+        self.assertIn("'Passed: 0'", line)
+
+    def test_no_regex_parser_gives_no_line_and_never_raises(self):
+        with self.without('re', 'sre_parse', 'sre_constants'):
+            self.assertEqual(self.warned('UNIT TESTS OK', zero_tests=r'\bUNIT TESTS OK 0\b'), [])
+            self.assertEqual(self.warned(r'(?m)^Ran \d+ tests? in'), [])
 
 
 if __name__ == '__main__':

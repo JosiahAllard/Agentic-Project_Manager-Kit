@@ -41,8 +41,7 @@ import fnmatch
 import os
 import re
 import sys
-from re import _constants as _C     # stdlib regex parser: zero_count_passes reads a pattern's
-from re import _parser as _sre      # shape; any construct it does not know gives no sample
+import warnings
 
 from kitlib.config.load import CONFIG_NAME, PLACEHOLDERS
 
@@ -104,8 +103,29 @@ def unsupported(gate):
 ZERO_RAN = 'Ran 0 tests in 0.000s'     # the zero-count line judge() fails on (RAN)
 
 
-def _class_has(items, c):
-    """True when the parsed character class `items` (re._parser IN) holds `c`."""
+def _regex_parser():
+    """(constants, parser) of the stdlib regex parser that zero_count_passes reads a pattern's
+    shape with: re._constants and re._parser (Python 3.11 on), else sre_constants and sre_parse
+    (before 3.11, deprecated after), else None. Private modules: imported here, when called, so
+    a Python without them loses only the warning, never the gate."""
+    try:
+        from re import _constants, _parser
+        return _constants, _parser
+    except ImportError:
+        pass
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', DeprecationWarning)
+            import sre_constants
+            import sre_parse
+        return sre_constants, sre_parse
+    except ImportError:
+        return None
+
+
+def _class_has(_C, items, c):
+    """True when the parsed character class `items` (an IN of parser constants `_C`) holds
+    `c`."""
     cats = {_C.CATEGORY_DIGIT: c.isdigit(), _C.CATEGORY_NOT_DIGIT: not c.isdigit(),
             _C.CATEGORY_SPACE: c.isspace(), _C.CATEGORY_NOT_SPACE: not c.isspace(),
             _C.CATEGORY_WORD: c.isalnum() or c == '_',
@@ -125,38 +145,47 @@ def _class_has(items, c):
     return hit != negate
 
 
-def _walk(items, out):
+def _walk(_C, items, out):
     """Append to `out` one (char, free) per character of a shortest text the parsed pattern
-    `items` matches, taking '0' wherever a digit may stand; `free` is True for a character a
-    digit class chose (`\\d`, `[0-9]`: a count), False for a literal or a class that takes
-    letters too (`\\S`, `.`)."""
+    `items` (parser constants `_C`) matches, taking '0' wherever a digit may stand; `free` is
+    True for a character a digit class chose (`\\d`, `[0-9]`: a count), False for a literal or
+    a class that takes letters too (`\\S`, `.`). A repeat is walked its minimum times, except
+    that one which may be empty and holds a count is walked once (`\\d*` gives '0')."""
+    repeats = (_C.MAX_REPEAT, _C.MIN_REPEAT, getattr(_C, 'POSSESSIVE_REPEAT', None))
     for op, av in items:
         if op is _C.LITERAL:
             out.append((chr(av), False))
         elif op is _C.NOT_LITERAL or op is _C.ANY:
             out.append(('y' if op is _C.NOT_LITERAL and av == ord('x') else 'x', False))
         elif op is _C.IN:
-            out.append((next(c for c in '0aA 1x_-' if _class_has(av, c)),
-                        not _class_has(av, 'a')))
-        elif op in (_C.MAX_REPEAT, _C.MIN_REPEAT, _C.POSSESSIVE_REPEAT):
-            for _ in range(av[0]):
-                _walk(av[2], out)
+            out.append((next(c for c in '0aA 1x_-' if _class_has(_C, av, c)),
+                        not _class_has(_C, av, 'a')))
+        elif op in repeats:
+            if av[0]:
+                for _ in range(av[0]):
+                    _walk(_C, av[2], out)
+            else:
+                once = []
+                _walk(_C, av[2], once)
+                if any(free for _, free in once):
+                    out.extend(once)
         elif op is _C.SUBPATTERN:
-            _walk(av[-1], out)
-        elif op is _C.ATOMIC_GROUP:
-            _walk(av, out)
+            _walk(_C, av[-1], out)
+        elif op is getattr(_C, 'ATOMIC_GROUP', None):
+            _walk(_C, av, out)
         elif op is _C.BRANCH:
-            _walk(av[1][0], out)
+            _walk(_C, av[1][0], out)
         elif op is not _C.AT:
             raise ValueError(op)
 
 
-def _sample(pattern):
+def _sample(parser, pattern):
     """`[(char, free)]` of a short text `pattern` matches (re.M), each count 0 where it may be,
-    or None when none could be built (an unhandled construct, or a text it does not match)."""
+    or None when none could be built (an unhandled construct, or a text it does not match).
+    `parser` is _regex_parser()'s pair."""
     out = []
     try:
-        _walk(_sre.parse(pattern), out)
+        _walk(parser[0], parser[1].parse(pattern), out)
         text = ''.join(c for c, _ in out)
         return out if re.search(pattern, text, re.M) else None
     except (ValueError, StopIteration, KeyError, re.error, TypeError, IndexError):
@@ -180,11 +209,15 @@ def zero_count_passes(gate):
     `Ran 0 tests` line judge() fails on, or a line a gate `zero_tests` pattern matches (each
     pattern's shortest text, counts 0), or its own first count may be 0 (`\\d+`). judge()
     still fails such a run when it says zero (`Ran 0 tests` or zero_tests); a pattern with a
-    floor (`[1-9]\\d*`) needs no backstop. A warning only: nothing refuses on it. No caller yet:
-    the gate run's WARNING line is a follow-up (kitlib.gate.runner)."""
+    floor (`[1-9]\\d*`) needs no backstop. A warning only: nothing refuses on it, and with no
+    stdlib regex parser (_regex_parser) it gives []. No caller yet: the gate run's WARNING
+    line is a follow-up (kitlib.gate.runner)."""
+    parser = _regex_parser()
+    if parser is None:
+        return []
     zero_lines = [ZERO_RAN]
     for z in _list(gate.get('zero_tests')):
-        s = _sample(z)
+        s = _sample(parser, z)
         if s:
             zero_lines.append(''.join(c for c, _ in s))
     out = []
@@ -194,7 +227,7 @@ def zero_count_passes(gate):
                 hit = next((z for z in zero_lines if re.search(p, z, re.M)), None)
             except re.error:
                 continue
-            own = _sample(p) if hit is None else None
+            own = _sample(parser, p) if hit is None else None
             if own and _first_count_zero(own):
                 hit = ''.join(c for c, _ in own)
             if hit is not None:
