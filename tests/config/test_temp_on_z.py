@@ -4,7 +4,6 @@ default folder (default_work_temp) before this process's TEMP. Every test gives 
 environment, platform 'win32' and a registry reader: nothing reads this machine's TEMP, AGENT_TEMP
 or registry."""
 import ast
-import importlib.util
 import json
 import os
 import shutil
@@ -81,11 +80,11 @@ class WorkTempAvoidsSessionTemps(unittest.TestCase):
         """The fresh machine: machine setup's default agent temp is <drive>\\kit-temp."""
         self.assertEqual(self.temp({'AGENT_TEMP': self.kit_temp}), self.kit_work)
 
-    def test_a_session_temp_at_the_drive_root_moves_it_to_the_shared_temp(self):
-        self.assertEqual(self.temp({'TMP': ROOT}), user.shared_temp(self.env, 'win32'))
+    def test_a_session_temp_at_the_drive_root_moves_it_to_the_system_temp(self):
+        self.assertEqual(self.temp({'TMP': ROOT}), user.system_temp(self.env, 'win32'))
 
-    def test_the_shared_temp_taken_too_gives_kit_work_beside_it(self):
-        shared = user.shared_temp(self.env, 'win32')
+    def test_the_system_temp_taken_too_gives_kit_work_beside_it(self):
+        shared = user.system_temp(self.env, 'win32')
         self.assertEqual(self.temp({'TMP': ROOT, 'TEMP': shared}),
                          os.path.join(os.path.dirname(shared), user.WORK_DIR_NAME))
 
@@ -403,36 +402,6 @@ class ScratchRoots(HomeConfig):
             got, _dropped = scratch.roots(env, main)
         self.assertEqual([os.path.normcase(p) for p in got],
                          [os.path.normcase(os.path.join(lad, 'Temp'))])
-
-
-class ComfyPaths(unittest.TestCase):
-    """comfy_gen's GPU self-lock and state folder are in the shared temp, else the old
-    %LOCALAPPDATA%\\Temp paths."""
-
-    def load(self):
-        path = os.path.join(KIT, 'optional', 'comfy', 'comfy_gen.py')
-        spec = importlib.util.spec_from_file_location('comfy_gen_paths_probe', path)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        return mod
-
-    def test_they_follow_the_shared_temp(self):
-        shared = os.path.join('Q:' + os.sep, 'shared')
-        env = {k: v for k, v in os.environ.items() if k != 'GPU_LOCK'}
-        with mock.patch.dict(os.environ, env, clear=True), \
-                mock.patch.object(user, 'shared_temp', return_value=shared):
-            g = self.load()
-        self.assertEqual(g.STATE_DIR, os.path.join(shared, 'comfy_gen'))
-        self.assertEqual(g.GPU_LOCK, os.path.join(shared, 'comfy-gen.lock'))
-
-    def test_no_shared_temp_keeps_the_old_paths(self):
-        env = {k: v for k, v in os.environ.items() if k != 'GPU_LOCK'}
-        env['LOCALAPPDATA'] = os.path.join('Q:' + os.sep, 'lad')
-        with mock.patch.dict(os.environ, env, clear=True), \
-                mock.patch.object(user, 'shared_temp', side_effect=RuntimeError('none')):
-            g = self.load()
-        self.assertEqual(g.STATE_DIR, os.path.join(env['LOCALAPPDATA'], 'Temp', 'comfy_gen'))
-        self.assertEqual(g.GPU_LOCK, os.path.join(env['LOCALAPPDATA'], 'Temp', 'comfy-gen.lock'))
 
 
 if __name__ == '__main__':

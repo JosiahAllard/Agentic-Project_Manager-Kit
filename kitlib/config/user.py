@@ -40,7 +40,7 @@ BAD = 'bad'      # DIR_NAME's folder or file cannot be read as present or absent
 # the machine config's `temp_dir` overrides.
 TEMP_DIR_NAME = 'kit-temp'
 # The kit's temp folder when TEMP_DIR_NAME (or the configured `temp_dir`) is a session's TEMP
-# (work_temp): at the drive root, or beside the shared temp folder.
+# (work_temp): at the drive root, or beside the system temp folder.
 WORK_DIR_NAME = 'kit-work'
 # The user environment values (HKCU\Environment) that name a folder sessions use as TEMP
 # (session_temps): the agents' temp folder the launcher points TEMP at, and the desktop's own.
@@ -151,9 +151,9 @@ SCHEMA = {
     'launcher': Field(Owned('kitlib.launcher'), None, 'the session launcher settings: state folder, repos, account folders (docs/launcher.md "Settings")'),
     'backlog_lint': Field(Owned('kitlib.backloglint'), None, 'the backlog lint repositories'),
     'machine_lock': Field(Owned('kitlib.lock.site'), None, 'the machine lock settings: build daemons at release, lock-window notices'),
-    'temp_dir': Field(AbsPath(), None, "the folder the kit's own temp files go in (test run folders, gate logs); on Windows it is skipped when it is, holds or sits inside a session temp (`agent_temp_sweep` `dir`, or the user environment's AGENT_TEMP, TEMP or TMP); unset or skipped: the first of these clear of every session temp: `kit-temp`, then `kit-work`, at the root of the checkout's drive (not the shared temp folder's drive), the shared temp folder, `kit-work` beside it (docs/test-tools.md \"Temp folders\"); older kit copies reject the key"),
+    'temp_dir': Field(AbsPath(), None, "the folder the kit's own temp files go in (test run folders, gate logs), and the shared temp folder (gate fallback logs, the worktree sweep log, comfy_gen's lock and state, private index folders) while its drive is there; on Windows, as the test and gate folder, it is skipped when it is, holds or sits inside a session temp (`agent_temp_sweep` `dir`, or the user environment's AGENT_TEMP, TEMP or TMP); unset or skipped: the first of these clear of every session temp: `kit-temp`, then `kit-work`, at the root of the checkout's drive (not the system temp folder's drive), the system temp folder (%LOCALAPPDATA%\\Temp), `kit-work` beside it (docs/test-tools.md \"Temp folders\"); older kit copies reject the key"),
     'machine_path_folders': Field(ListOf(Str(pattern=r'[^\\/:*?"<>|\s]+', what='a folder name')), None, 'the drive-rooted folder names the machine-paths check refuses besides a user profile (docs/commit.md "machine_paths.py"); unset: none, so only drive-rooted user-profile paths are refused and tools/machine_paths.py prints a NOTE saying so; older kit copies reject the key; set it only after every folder runs a kit that knows it'),
-    'agent_temp_sweep': Field(Owned('optional/agenttemp/agent_temp_sweep.py'), None, "the agents' temp folder to sweep (`dir`), the age past which an unused entry goes (`max_age_days`, default 3) and the entries it never removes (`keep`, relative paths such as `claude/<project>/<session>`); `tools/machine_setup.py` adds it when absent (docs/machine-setup.md \"Extras\")"),
+    'agent_temp_sweep': Field(Owned('optional/agenttemp/agent_temp_sweep.py'), None, "the agents' temp folder to sweep (`dir`), the age past which an unused entry goes (`max_age_days`, default 3), the entries it never removes (`keep`, relative paths such as `claude/<project>/<session>`) and whether it also sweeps the session folders under the user's own temp, HKCU\\Environment TEMP's `claude` folder (`user_temp`, true or false, default false; older sweeps refuse the key); `tools/machine_setup.py` adds it when absent (docs/machine-setup.md \"Extras\")"),
     'plugin': Field(Owned('kitlib.pluginsource'), None, 'where the plugin export of pushed kit main lives, and whether pm_watch refreshes it on its own (docs/plugin-source.md); older kit copies reject the key; set it only after every folder is migrated'),
 }
 
@@ -309,20 +309,61 @@ def home_dir():
     return h
 
 
-def shared_temp(environ=None, platform=None):
-    """The temp folder every process on the machine shares, whatever TEMP/TMP it inherited.
+def system_temp(environ=None, platform=None):
+    """The system's own per-user temp folder, whatever TEMP/TMP this process inherited.
     Windows: %LOCALAPPDATA%/Temp, and a RuntimeError when LOCALAPPDATA is
     unset or empty: falling back to TEMP would split logs between processes. Elsewhere there is
-    one TEMP, so tempfile.gettempdir() is kept."""
+    one TEMP, so tempfile.gettempdir() is kept. No machine config is read."""
     env = os.environ if environ is None else environ
     if (sys.platform if platform is None else platform) != 'win32':
         return tempfile.gettempdir()
     lad = env.get('LOCALAPPDATA')
     if not lad:
-        raise RuntimeError('LOCALAPPDATA is unset or empty: the shared temp folder '
+        raise RuntimeError('LOCALAPPDATA is unset or empty: the system temp folder '
                            '(%LOCALAPPDATA%/Temp) cannot be resolved, and following TEMP instead '
                            'would split logs between processes')
     return os.path.join(lad, 'Temp')
+
+
+def temp_parent(home=None):
+    """The machine config's `temp_dir`, or None: unset, a machine config that cannot be read, a
+    folder whose drive (or share) root is not there, or a fenced process (fenced()) given no
+    `home`, so the tests never see this machine's config. Never raises for the config."""
+    if home is None and fenced():
+        return None
+    try:
+        configured = user_config(home)['temp_dir']
+    except ConfigError:
+        return None
+    if not configured:
+        return None
+    root = os.path.splitdrive(os.path.abspath(configured))[0]
+    if root and not os.path.isdir(root + os.sep):
+        return None
+    return configured
+
+
+def shared_temp(environ=None, platform=None, home=None):
+    """The temp folder every process on the machine shares, whatever TEMP/TMP it inherited, for
+    the kit's few small files there (gate fallback logs, the worktree sweep log, comfy_gen's lock
+    and state, private index folders): the machine config's `temp_dir` (temp_parent), even when
+    it is a session's TEMP, else system_temp(). Only work_temp keeps the heavy churn out of
+    session temps. RuntimeError as system_temp, when `temp_dir` is not used."""
+    return temp_parent(home) or system_temp(environ, platform)
+
+
+def mkdtemp(prefix, home=None):
+    """A new folder (tempfile.mkdtemp, `prefix`) in temp_parent(home), that folder made if
+    missing; with no temp_parent, or one that cannot be made or written, in this process's temp
+    folder. For short-lived private folders (a private git index). Never a config error."""
+    parent = temp_parent(home)
+    if parent:
+        try:
+            os.makedirs(parent, exist_ok=True)
+            return tempfile.mkdtemp(prefix=prefix, dir=parent)
+        except OSError:
+            pass
+    return tempfile.mkdtemp(prefix=prefix)
 
 
 def _drive(path):
@@ -399,11 +440,11 @@ def session_temps(home=None, reg=None):
 
 def _default_candidates(near, environ, plat):
     """work_temp's candidates after the configured `temp_dir`, on Windows: TEMP_DIR_NAME and
-    WORK_DIR_NAME at the root of `near`'s drive when that root exists and is not the shared temp
-    folder's drive, then the shared temp folder and WORK_DIR_NAME beside it (when LOCALAPPDATA is
+    WORK_DIR_NAME at the root of `near`'s drive when that root exists and is not the system temp
+    folder's drive, then the system temp folder and WORK_DIR_NAME beside it (when LOCALAPPDATA is
     set)."""
     try:
-        shared = shared_temp(environ, plat)
+        shared = system_temp(environ, plat)
     except RuntimeError:
         shared = None
     out = []
@@ -435,9 +476,9 @@ def work_temp(near, home=None, environ=None, platform=None, reg=None):
     session temp:
     - the machine config's `temp_dir` when set;
     - TEMP_DIR_NAME, then WORK_DIR_NAME, at the root of the drive (or UNC share) `near` is on,
-      when that root exists and is not the drive the shared temp folder is on;
-    - shared_temp(), then WORK_DIR_NAME beside it;
-    and the first of them when every one overlaps. Elsewhere: `temp_dir`, else shared_temp().
+      when that root exists and is not the drive the system temp folder is on;
+    - system_temp(), then WORK_DIR_NAME beside it;
+    and the first of them when every one overlaps. Elsewhere: `temp_dir`, else system_temp().
     It reads `near`, the machine config, LOCALAPPDATA and the user environment (`reg`, as
     session_temps), never this process's TEMP, TMP or AGENT_TEMP, so a gate writing logs and a
     reader in another shell agree. It makes nothing: a caller that cannot make its folder here
@@ -447,10 +488,10 @@ def work_temp(near, home=None, environ=None, platform=None, reg=None):
     configured = cfg['temp_dir']
     plat = sys.platform if platform is None else platform
     if plat != 'win32':
-        return configured or shared_temp(environ, plat)
+        return configured or system_temp(environ, plat)
     candidates = ([configured] if configured else []) + _default_candidates(near, environ, plat)
     if not candidates:
-        return shared_temp(environ, plat)       # raises, saying why
+        return system_temp(environ, plat)       # raises, saying why
     return _pick(candidates, _sessions(cfg['agent_temp_sweep'], reg))
 
 
@@ -458,13 +499,13 @@ def default_work_temp(near, environ=None, platform=None, reg=None, sessions=()):
     """work_temp(near) without the machine config's `temp_dir`: the kit's default folder, for a
     caller whose work_temp cannot be used or read (make_temp, tests/gitfixture.py). It keeps out
     of session_temps(reg=reg) (no config: under the fence that is nothing) and of the extra
-    folders `sessions`. Elsewhere than Windows: shared_temp(). RuntimeError as work_temp."""
+    folders `sessions`. Elsewhere than Windows: system_temp(). RuntimeError as work_temp."""
     plat = sys.platform if platform is None else platform
     if plat != 'win32':
-        return shared_temp(environ, plat)
+        return system_temp(environ, plat)
     candidates = _default_candidates(near, environ, plat)
     if not candidates:
-        return shared_temp(environ, plat)       # raises, saying why
+        return system_temp(environ, plat)       # raises, saying why
     avoid = [_norm(s) for s in sessions if s] + session_temps(None, reg)
     return _pick(candidates, avoid)
 
@@ -472,7 +513,8 @@ def default_work_temp(near, environ=None, platform=None, reg=None, sessions=()):
 def make_temp(near, prefix, home=None):
     """(folder, note): a new folder (tempfile.mkdtemp, `prefix`) in work_temp(near), that parent
     made if missing; else, with a note saying why, one in default_work_temp(near) when that is
-    another folder and can be used, else one in this process's temp folder."""
+    another folder and can be used, else one from mkdtemp (the machine config's `temp_dir`, else
+    this process's temp folder)."""
     parent = None
     try:
         parent = work_temp(near, home)
@@ -488,8 +530,11 @@ def make_temp(near, prefix, home=None):
             return folder, '%s is in %s: %s' % (folder, fallback, why)
     except (OSError, RuntimeError):
         pass
-    folder = tempfile.mkdtemp(prefix=prefix)
-    return folder, '%s is in this process\'s temp folder: %s' % (folder, why)
+    folder = mkdtemp(prefix, home=home)
+    where = os.path.dirname(folder)
+    if _norm(where) == _norm(tempfile.gettempdir()):
+        return folder, '%s is in this process\'s temp folder: %s' % (folder, why)
+    return folder, '%s is in %s: %s' % (folder, where, why)
 
 
 class Location(collections.namedtuple('Location', 'state path new old error home')):

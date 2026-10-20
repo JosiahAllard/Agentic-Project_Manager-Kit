@@ -84,13 +84,13 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 import uuid
 
 from kitlib import config as kconfig
 from kitlib import attribution, machinepaths, verdict
 from kitlib.docs import callers as doc_callers
 from kitlib.config import owner as ownermod
+from kitlib.config import user as kuser
 from kitlib.content import oncommit
 from kitlib.git import checkout, cmd, refs, repo
 from kitlib.proc import spawn
@@ -853,7 +853,7 @@ def commit_only(root, head, snap, msg, allow_empty=False):
     tree is the private index's and its message is `msg`; then it is undone as above. Anything
     else is refused without undoing anything: a commit that is not this call's is never undone."""
     tag = reflog_tag()
-    tmp = tempfile.mkdtemp(prefix='kit-commit-')
+    tmp = kuser.mkdtemp('kit-commit-')
     try:
         env, why = private_index(root, tmp, head, snap)
         if env is None:

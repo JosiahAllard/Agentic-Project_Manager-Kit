@@ -5,8 +5,8 @@ tools/worktree_remove.py `<path> --scratch` is the entry point. Nothing here pri
 `remove_scratch(top, argument)` removes the tree only when every one of these holds, checked in
 this order before anything is touched:
 
-- the path is under a scratch root (`roots`: AGENT_TEMP, TEMP, TMP and the shared temp folder of
-  kitlib.config.user, read from the environment at run time; a root that is not an absolute
+- the path is under a scratch root (`roots`: AGENT_TEMP, TEMP, TMP and the system temp folder
+  (kitlib.config.user.system_temp, never the machine config's `temp_dir`), read from the environment at run time; a root that is not an absolute
   existing folder, is reached through a link, is a drive root, the home folder or above it, or
   holds the main checkout is no root), no link or junction is on the way, and it is not inside
   the main checkout or a worktree folder (a workstream worktree keeps the slug form and its own
@@ -53,7 +53,7 @@ def roots(environ, main):
     env = os.environ if environ is None else environ
     named = [(k, env.get(k)) for k in ROOT_VARS]
     try:
-        named.append(('shared temp', kuser.shared_temp(env)))
+        named.append(('system temp', kuser.system_temp(env)))
     except RuntimeError:
         pass
     home = env.get('USERPROFILE') or os.path.expanduser('~')
@@ -102,7 +102,7 @@ def target(ctx, argument, rts, dropped):
                 ' scratch one; use the slug form without --scratch; %s' % (path, home, NOTHING))
         return REFUSED
     if not rts:
-        ctx.say('refused   %s: no scratch root (AGENT_TEMP, TEMP, TMP or the shared temp folder)'
+        ctx.say('refused   %s: no scratch root (AGENT_TEMP, TEMP, TMP or the system temp folder)'
                 ' is usable%s; %s' % (path, ': ' + '; '.join(dropped) if dropped else '', NOTHING))
         return REFUSED
     if not any(_strictly_under(path, r) for r in rts):
