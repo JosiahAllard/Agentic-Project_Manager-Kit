@@ -330,7 +330,16 @@ class SessionDirs(Case):
             self.assertTrue(os.path.isfile(os.path.join(self.dir, name, 'notes.md')), name)
         for name in ('kit-coordinator-old', 'consultant', 'coordinator', 'claude/proj/x-consultant'):
             self.assertEqual(got[name], 'removed', name)    # a top-level <name>-coordinator/-consultant only
-        self.assertEqual(S.BUILT_IN_KEEP, ('*-coordinator', '*-consultant'))
+        self.assertEqual(S.BUILT_IN_KEEP, ('*-coordinator', '*-consultant', 'shared'))
+
+    def test_shared_folder_is_kept_with_no_keep_list(self):
+        # the agents' cross-session files live in <dir>/shared; it outlives any age, whatever the config says.
+        for name in ('shared', 'shared-old'):
+            put(os.path.join(self.dir, name, 'f.txt'))
+        got = self.sweep(apply=True)
+        self.assertEqual(got['shared'], 'kept')
+        self.assertEqual(got['shared-old'], 'removed')    # the name alone, not a prefix
+        self.assertTrue(os.path.isfile(os.path.join(self.dir, 'shared', 'f.txt')))
 
     def test_keep_is_case_insensitive_and_matches_by_relpath_not_basename(self):
         put(os.path.join(self.dir, 'Work-Notes', 'a.txt'))
