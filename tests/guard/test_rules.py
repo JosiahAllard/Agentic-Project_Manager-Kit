@@ -147,7 +147,7 @@ ROWS = [
                                                       'old_string': 'a', 'new_string': 'b'}, w.wt, sub=True),
      'deny', 'main-checkout', 'Edit(file_path="{wt}/src/a.py")'),
     ('subagent Write in main from the main checkout', lambda w: event('Write', {'file_path': os.path.join(w.main, 'b.md'), 'content': 'x'}, w.main, sub=True),
-     'deny', 'main-checkout', 'git -C "{main}" worktree add .claude/worktrees/<slug> -b <branch>'),
+     'deny', 'main-checkout', 'Write(file_path="<worktree>/b.md")'),
     ('subagent NotebookEdit in main', lambda w: event('NotebookEdit', {'notebook_path': os.path.join(w.main, 'n.ipynb'), 'new_source': ''}, w.wt, sub=True),
      'deny', 'main-checkout', None),
     ('subagent Edit in its worktree', lambda w: event('Edit', {'file_path': os.path.join(w.wt, 'a.py'), 'old_string': 'a', 'new_string': 'b'}, w.wt, sub=True),

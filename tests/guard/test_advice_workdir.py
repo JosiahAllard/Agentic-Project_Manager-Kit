@@ -267,6 +267,63 @@ class UnreadPython(unittest.TestCase):
                                  self.w.ctx()))
 
 
+class WorktreeAdvice(unittest.TestCase):
+    """A write refused in a main checkout is offered in the session's worktree: its own path when
+    the call runs there, else <worktree>; a new worktree only in a clause for a session with none,
+    never as the Instead (docs/guard.md "Main checkout")."""
+
+    ONLY = 'only a session with no worktree makes one, first (git -C "%s" worktree add'
+
+    def setUp(self):
+        self.w = W.World()
+        self.addCleanup(self.w.cleanup)
+        self.main, self.wt, self.kit = W.fwd(self.w.main), W.fwd(self.w.wt), W.fwd(self.w.kit_dir)
+
+    def refused(self, payload, rule):
+        d = decide(payload, self.w.ctx())
+        self.assertEqual(verdict(d), ('deny', rule), d and d.reason)
+        self.assertNotIn('worktree add', d.instead)
+        return d
+
+    def test_an_unplaced_target_from_main_never_offers_a_new_worktree(self):
+        d = self.refused(bash('cp a "$X"', self.w.main, sub=True), 'unplaced')
+        self.assertEqual(d.instead, 'cp a "<worktree>/<file>"')
+        self.assertIn(self.ONLY % self.main, d.reason)
+
+    def test_an_unplaced_target_with_no_word_to_aim_shows_the_worktrees(self):
+        d = self.refused(bash('tar -xf a.tar -C"$X"', self.w.main, sub=True), 'unplaced')
+        self.assertEqual(d.instead, 'git -C "%s" worktree list' % self.main)
+        self.assertIn(self.ONLY % self.main, d.reason)
+
+    def test_a_main_target_from_main_is_aimed_at_the_worktree(self):
+        for payload, instead in (
+                (bash('cp a b', self.w.main, sub=True), 'cp a "<worktree>/b"'),
+                (W.event('Write', {'file_path': os.path.join(self.w.main, 'd', 'b.md'), 'content': 'x'},
+                         self.w.main, sub=True), 'Write(file_path="<worktree>/d/b.md")'),
+                (ps("python %s/tools/commit.py -C '%s' -m 'a \"b\" c' x.py" % (self.kit, self.main), self.w.main,
+                    sub=True), 'python %s/tools/commit.py -C "<worktree>" -m \'a "b" c\' x.py' % self.kit)):
+            with self.subTest(instead):
+                rule = 'unplaced' if instead.startswith('python') else 'main-checkout'
+                d = self.refused(payload, rule)
+                self.assertEqual(d.instead, instead)
+                self.assertIn(self.ONLY % self.main, d.reason)
+                self.assertNotIn('(. there)', d.reason)
+
+    def test_main_checkout_advice_in_worktree_names_own_worktree_path(self):
+        commit = "python %s/tools/commit.py -C%s -m 'a \"b\" c' x.py"
+        for payload, rule, instead in (
+                (bash('cp a %s/b' % self.main, self.w.wt, sub=True), 'main-checkout', 'cp a "%s/b"' % self.wt),
+                (ps('"x" > $env:OUT', self.w.wt, sub=True), 'unplaced', '"x" > "%s/<file>"' % self.wt),
+                (ps(commit % (self.kit, " '%s'" % self.main), self.w.wt, sub=True), 'unplaced',
+                 commit % (self.kit, ' "%s"' % self.wt)),
+                (ps(commit % (self.kit, "'%s'" % self.main), self.w.wt, sub=True), 'unplaced',
+                 commit % (self.kit, ' "%s"' % self.wt))):
+            with self.subTest(payload['tool_input']['command']):
+                d = self.refused(payload, rule)
+                self.assertEqual(d.instead, instead)
+                self.assertNotIn('worktree add', d.reason)
+
+
 setUpModule = W.deny_softened           # these pin what the guard cannot place and the dropped rules (world.deny_softened)
 tearDownModule = W.allow_unplaced
 

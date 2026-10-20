@@ -540,5 +540,53 @@ class TarFolders(ArchiveWorld):
                     self.assertIsNone(self.pm(shell(text % self.scratch, self.w.main)))
 
 
+class TarToStandardOutput(ArchiveWorld):
+    """tar -x with -O or --to-stdout (GNU tar and bsdtar alike) prints each file and writes none: a
+    read, wherever it runs. The O is read only where tar reads it as that option: a letter of a
+    cluster after letters that take no value, a word that is no option's value, or a letter of the
+    old-style first word; anywhere else (-xfO: a file named O) the extraction writes as before."""
+
+    def test_tar_x_to_stdout_is_read(self):
+        for text in ('tar -xOf a.tar f', 'tar -xvOf a.tar', 'tar xOf a.tar f', 'tar -x -O -f a.tar',
+                     'tar -xf a.tar -O f', 'tar --to-stdout -xf a.tar f', 'tar -xf a.tar --to-stdout',
+                     'git archive HEAD | tar -xO f', 'tar -xO -C %s -f a.tar' % self.main):
+            with self.subTest(text):
+                self.assertIsNone(self.sub(bash(text, self.w.main, sub=True)))
+                self.assertIsNone(self.pm(bash('cd %s && %s' % (self.main, text), self.w.plain)))
+        self.assertIsNone(self.sub(ps('tar.exe -xOf a.tar f', self.w.main, sub=True)))
+
+    def test_tar_x_still_writes_cwd(self):
+        for text in ('tar -xf a.tar', 'tar -xfO a.tar', 'tar -xf O', 'tar -xqO -f a.tar', 'tar xf a.tar',
+                     'tar -xf a.tar --exclude -O', 'tar -xf a.tar --to-command=cat'):
+            with self.subTest(text):
+                self.refused_by(self.sub(bash(text, self.w.main, sub=True)), 'main-checkout', 'tar')
+
+
+class ArchiveAdviceNamesTheCheckout(ArchiveWorld):
+    """A refused git archive's alternative names the checkout it reads with -C: an agent's shell
+    does not keep a cd between calls, so a bare `git archive` run again from the main checkout
+    archives main, not the branch. From a worktree it names that worktree literally; from a main
+    checkout, the worktree the agent works in (`<worktree>`); a -C the line gave is kept."""
+
+    def outside(self):
+        return W.fwd(os.path.join(self.w.base, 'a.tar'))
+
+    def test_archive_refusal_advice_names_literal_worktree(self):
+        d = self.sub(bash('git archive -o %s HEAD' % self.outside(), self.w.wt, sub=True))
+        self.assertEqual('write-jail', d.rule, d.reason)
+        self.assertTrue(d.instead.startswith('git -C "%s" archive -o "' % self.wt), d.instead)
+
+    def test_from_the_main_checkout_it_names_the_worktree(self):
+        d = self.sub(bash('git archive -o %s HEAD' % self.outside(), self.w.main, sub=True))
+        self.assertEqual('write-jail', d.rule, d.reason)
+        self.assertTrue(d.instead.startswith('git -C "<worktree>" archive -o "<worktree>/a.tar"'), d.instead)
+
+    def test_a_given_c_is_kept(self):
+        d = self.sub(bash('git -C %s archive -o %s HEAD' % (self.wt, self.outside()), self.w.main, sub=True))
+        self.assertEqual('write-jail', d.rule, d.reason)
+        self.assertTrue(d.instead.startswith('git -C %s archive -o "' % self.wt), d.instead)
+        self.assertEqual(1, d.instead.count(' -C '), d.instead)
+
+
 if __name__ == '__main__':
     unittest.main()

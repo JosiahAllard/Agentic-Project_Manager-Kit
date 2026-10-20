@@ -124,6 +124,45 @@ class KitToolsMayBePiped(unittest.TestCase):
                                          want)
 
 
+class KitToolChecked(unittest.TestCase):
+    """A kit tool PowerShell may hand other words than the guard read (rules.python_unread) acts on
+    the checkout its one literal absolute -C names, so that folder is judged in place of the one
+    the call runs in. Not when an unsure word comes before the -C value or may split into a word
+    that starts with a dash, the script is not the kit's, or Start-Process runs it."""
+
+    def setUp(self):
+        self.w = W.World()
+        self.addCleanup(self.w.cleanup)
+        W.deny_softened()                       # unplaced warns by default (test_cheap.py)
+        self.addCleanup(W.allow_unplaced)
+        self.kit, self.wt, self.main = W.fwd(self.w.kit_dir), W.fwd(self.w.wt), W.fwd(self.w.main)
+
+    def judge(self, text, cwd):
+        return claude_decide(ps(text, cwd, sub=True), self.w.ctx())
+
+    def test_kit_tool_dash_c_main_checkout_judged_at_c_folder(self):
+        for c in ("-C '%s'", '-C %s', "-C'%s'"):
+            for tail in ("-m 'a \"b\" c' x.py", "-m '' x.py", "-m 'fix \"x\"' -b 'Part-of: y' x.py"):
+                text = "python %s/tools/commit.py %s %s" % (self.kit, c % self.wt, tail)
+                with self.subTest(text):
+                    self.assertIsNone(self.judge(text, self.w.main))
+        d = self.judge("python %s/tools/commit.py -C '%s' -m 'a \"b\" c' x.py" % (self.kit, self.main), self.w.wt)
+        self.assertEqual(verdict(d), ('deny', 'unplaced'))
+        self.assertIn(self.main, W.fwd(d.reason))
+        self.assertIn(self.wt, d.instead)
+
+    def test_where_the_c_may_not_be_python_s_the_working_directory_is_judged(self):
+        for text in ("python %s/tools/commit.py -m '' -C '%s' x.py" % (self.kit, self.wt),
+                     "python %s/tools/commit.py -C '%s' -m 'a \"b -C c\"' x.py" % (self.kit, self.wt),
+                     "python %s/tools/commit.py -C '%s' -C '%s' -m '' x.py" % (self.kit, self.wt, self.wt),
+                     "python %s/tools/x.py -C '%s' -m '' x.py" % (self.wt, self.wt),
+                     "python tools/commit.py -C '%s' -m '' x.py" % self.wt,
+                     "python %s/tools/commit.py -C wt -m '' x.py" % self.kit,
+                     "Start-Process python -ArgumentList '%s/tools/commit.py','-C','%s'" % (self.kit, self.wt)):
+            with self.subTest(text):
+                self.assertEqual(verdict(self.judge(text, self.w.main)), ('deny', 'unplaced'))
+
+
 class RolePolicy(unittest.TestCase):
     def setUp(self):
         self.w = W.World(kit=policy_kit())
