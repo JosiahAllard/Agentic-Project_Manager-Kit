@@ -343,6 +343,19 @@ class ZeroCountPasses(unittest.TestCase):
         self.assertIn("'Passed: 0'", line)
         self.assertEqual(self.warned(r'Passed: [1-9][0-9]?'), [])          # still floored
 
+    def test_each_optional_digit_shape_that_matches_zero_warns(self):
+        table = {r'Passed: [1-9]{0,2}\d': "'Passed: 0'", r'Passed: [1-9]??\d': "'Passed: 0'",
+                 r'Passed: (?:[1-9]\d*)?\d': "'Passed: 0'", r'\b[1-9]?\d+ passed': "'0 passed'",
+                 r'Passed: [1-9]?[0-9]': "'Passed: 0'"}
+        for pattern, zero in table.items():
+            with self.subTest(pattern=pattern):
+                (line,) = self.warned(pattern)
+                self.assertIn(zero, line)
+
+    def test_a_non_string_pass_is_skipped_and_the_others_still_warn(self):
+        (line,) = self.warned([5, r'Passed: \d+'])
+        self.assertIn("'Passed: 0'", line)
+
     def test_an_optional_group_holding_a_count_is_left_out(self):
         # walked once it would read '0 skipped, 10 passed': the 0 is not the pass count
         self.assertEqual(self.warned(r'(?:\d+ skipped, )?[1-9]\d* passed'), [])

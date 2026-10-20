@@ -69,6 +69,18 @@ class FlooredPass(_Case):
         self.assertIn('could not run', warned[0])
         self.assertIn('TypeError', warned[0])
 
+    def test_a_non_ascii_warning_is_said_as_ascii(self):
+        """A warning reaches say() escaped to ASCII: a console that cannot encode the pattern
+        (a cp1252 stdout) never raises out of the gate."""
+        lines = ['step unit "pass" \'✓ \\\\d+\' accepts a zero-test run']
+        with mock.patch.object(runner.S, 'zero_count_passes', return_value=lines):
+            (line,) = runner.zero_count_warnings({})
+        self.assertEqual(line, line.encode('ascii').decode('ascii'))
+        self.assertIn('\\u2713', line)
+        with mock.patch.object(runner.S, 'zero_count_passes', side_effect=ValueError('✓')):
+            (line,) = runner.zero_count_warnings({})
+        self.assertIn('\\u2713', line)
+
     def test_a_non_string_pass_is_refused_by_the_config_before_the_check(self):
         """A `pass` that is no string never reaches zero_count_passes: kitlib.config refuses it
         (schema Regexes), so the gate is REFUSED, never a crash."""
