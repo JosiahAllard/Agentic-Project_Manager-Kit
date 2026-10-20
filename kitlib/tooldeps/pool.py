@@ -25,7 +25,11 @@ A worker is ended and the next unit gets a new one (started on demand) when:
 An idle worker found ended when it is next taken is replaced before the unit is sent, so no unit
 is blamed for it. A worker not ready READY_TIMEOUT seconds after it started is ended and its
 unit FAILS, not run.
-`stats` counts the workers started and why each was ended. `close` ends them all: stdin closed so
+`stats` counts the workers started and why each was ended. `starts` gives each unit's process
+starts: the processes started in its worker's job while it ran, read once per unit from the job's
+accounting (Job.processes), so conhosts and processes in nested jobs (each git kitlib.git.cmd
+starts) count, and a process the unit's tests start counts however it was started.
+`close` ends them all: stdin closed so
 each exits, and its job closed (KILL_ON_JOB_CLOSE) after CLOSE_WAIT seconds at the latest.
 Ending a worker returns once every process in its job has ended, GONE_WAIT seconds at most:
 terminating a job only starts each process's end, and the worker's can come first.
@@ -104,6 +108,17 @@ class Worker:
             self.end()
             raise WorkerError('could not list the processes in a pool worker\'s job (%s); '
                               'ended it' % e)
+        self.counted = self.job.processes()     # starts() counts from here: the worker's own
+
+    def starts(self):
+        """The process starts in the worker's job since the last call (the first time, since it
+        was ready): what the unit it just ran started, conhosts and processes in jobs nested in
+        it included (Job.processes). None when the job cannot be asked. One query."""
+        now = self.job.processes()
+        before, self.counted = self.counted, now
+        if now is None or before is None:
+            return None
+        return now - before
 
     def _read(self):
         try:
@@ -219,11 +234,25 @@ class WorkerPool:
         self.started = 0
         self.ended = {}             # why -> workers ended before the pool closed
         self.replaced = []          # (unit, why) for each of them, in order
+        self.spawned = {}           # unit -> the process starts in its worker's job while it ran
 
     def stats(self):
         """(workers started, {why: workers ended early})."""
         with self.lock:
             return self.started, dict(self.ended)
+
+    def starts(self, unit=None):
+        """{unit: the processes started in its worker's job while it ran, conhosts and processes
+        in nested jobs included (Worker.starts)}; a unit whose job could not be asked is not in
+        it. With `unit`, that unit's count or None."""
+        with self.lock:
+            return dict(self.spawned) if unit is None else self.spawned.get(unit)
+
+    def _count(self, w, name):
+        n = w.starts()
+        if n is not None:
+            with self.lock:
+                self.spawned[name] = n
 
     def why_replaced(self):
         """[(unit, why)]: the unit each early-ended worker was running, and why it ended."""
@@ -276,11 +305,13 @@ class WorkerPool:
                 status = 'TIMEOUT'
                 notes.append('pytests: TIMEOUT - %s still running after %ds; killed it and every '
                              'process it started' % (name, timeout))
+                self._count(w, name)
                 self._retire(w, 'timeout', name)
                 w = None
             else:
                 if msg is None or 'rc' not in msg:
                     lived = time.time() - t
+                    self._count(w, name)
                     self._retire(w, 'ended during a unit', name)
                     notes.append('kit_tests: the pool worker (pid %d) running %s ended %.2fs '
                                  'into it, before it reported: %s' % (
@@ -304,6 +335,7 @@ class WorkerPool:
                 retire.append('its job could not be queried')
             elif left:
                 retire.append('processes it started still running')
+            self._count(w, name)    # after the grace: a leftover's late children count too
             if retire:
                 for why in retire:
                     with self.lock:

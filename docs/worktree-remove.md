@@ -24,9 +24,10 @@ Remove a workstream's worktree only when its work has landed and nothing holds i
   - To make red evidence without leaving such a tree, use `tools/redfirst.py` (docs/redfirst.md).
 - `... --check`: lists stumps and orphans (exit 1 if any) and, for information, landed worktrees.
 - `... --sweep-merged [--apply]`: the nightly sweep. Without `--apply` it is a dry run. It refuses anywhere but the main checkout.
+- `... --classify [--json]`: read-only. Sorts every registered worktree but the main checkout into one class (A, B, C, E or L; see "Classify"). `--json` prints the data instead of the lines. It takes no other flag, and `--apply` is refused (exit 2).
 - `tools/worktree_sweep_task.py [-C <main checkout>] [--register --owner-confirmed]`: prints the scheduled-task line. With both flags it runs it in PowerShell. A bare `--register` is refused, and agents never type `--owner-confirmed`.
 
-Exit codes: 0 done, 1 refused or failed (or the sweep deferred), 2 usage or a refused `.kit.json`, 130 Ctrl+C.
+Exit codes: 0 done, 1 refused or failed (or the sweep deferred, or `--classify` found a tree in A, B, C or E), 2 usage or a refused `.kit.json`, 130 Ctrl+C.
 
 ## Code
 
@@ -35,6 +36,7 @@ Exit codes: 0 done, 1 refused or failed (or the sweep deferred), 2 usage or a re
 | `kitlib/worktree/holders.py` | Windows holder probes (`blockers`, `cwd_holders`, `describe`), link and keeper walks, `path_glob`, `is_build_output` |
 | `kitlib/worktree/remove.py` | `remove`, `remove_branch`, `abandon`, `abandon_branch`, `check`, merge check, `dirty`, `last_look`, `git_remove`, `delete_branch`, `pulled_by` |
 | `kitlib/worktree/scratch.py` | `remove_scratch` (`--scratch`), `roots`, `target`, `reflog`, `reachable`, `preserved`, `restore`, `unmoved` |
+| `kitlib/worktree/classify.py` | `classify` (`--classify`), `live_reason`, `judge`, `process_cwds`, `activity`, `gate_state`, `DEAD_AFTER_S`, `EVIDENCE_GLOBS` |
 | `kitlib/worktree/sweep.py` | `sweep`, `sweep_skip`, `last_activity`, `landing_hold`, `machine_lock_entries` |
 | `kitlib/worktree/task.py` | the PowerShell registration line, `parse`, `resolve`, `run` |
 
@@ -45,6 +47,24 @@ A landing's branch cleanup and `land.py --sweep-landed` (kitlib/gate/cleanup.py;
 Each verb returns `Outcome(code, lines)` and prints nothing; the tools print the lines. Settings come from `.kit.json`: `repo.main_branch`, `repo.remote`, `repo.worktrees_dir`, `repo.name`, `backlog.store`, `landing.lock_file` and `landing.lanes`, and the `worktree_remove` section (docs/kit-json.md).
 
 A `worktree_remove.build_output` entry `{"piece": "<id>", "path": "<folder>/"}` is the literal folder `kitlib.pieces` puts at that piece's dir: an ignored entry that is that folder or lies under it is build output (compared case-sensitively, so a folder git prints in another case is refused), and when the pieces table is missing or malformed, the id is unknown, the piece or path is not a string, the path is empty, a glob or climbs out, or the piece's dir has an empty or `.` part, the entry holds nothing and the removal refuses (`kitlib.worktree.remove.piece_dirs`; tests in `tests/worktree/test_piece_build_output.py`).
+
+## Classify
+
+`kitlib/worktree/classify.py` `classify` deletes, moves, fetches and writes nothing. Every git call is a read, and the status is read with `--no-optional-locks`. The base (`origin/main`) is read as it stands and never fetched, so the header says `(as it stands, not fetched)`. The backlog store is opened with `fetch=False`. Each tree gets the first class that matches, in this order:
+
+| Class | Rule | Next step the output names |
+|---|---|---|
+| L live or kept | Locked with `git worktree lock`; exempt; the landing tree (`_landing`); its folder missing; or held. Held means one of: the landing lock names its branch; a machine lock record names it (`sweep.machine_lock_holder`); a process has its current directory in it; or its last activity is newer than the dead bar. A tree whose status or last activity cannot be read is L too. | reported only |
+| A landed | The tip is in the base and off its first-parent chain (`merged_worktrees`' rule), and the tree is clean. | `worktree_remove.py <slug>` |
+| E evidence | The folder name matches `EVIDENCE_GLOBS` (`agent-*`, `*-red`, `redcheck`, `mutant*`), or a detached tree outside every worktree folder. | `--scratch` or `--abandon "evidence"` |
+| B finished | Clean, ahead of the base, and its tip has a gate-OK record git still agrees with (`gate_ok.verify`). | land it or record why not |
+| C half-done | Anything else: dirty, no gate-OK record, a record that cannot be read, or no commit of its own. | take it up, or block or release its record; then `--abandon` |
+
+- The dead bar is `DEAD_AFTER_S`, 24 h. Last activity is `sweep.last_activity` for a tree on a branch. For a detached tree it is the newest of: the tree, its git dir (the index left out) and the HEAD commit's date.
+- A run-wide probe that cannot be read makes every tree L, and a `note` line says why. The run-wide probes are the landing lock, the machine lock and the process list. A process the scan cannot open (another user's, or a protected one) is counted on the `processes` line and not searched; it does not make a tree L.
+- Each tree's line shows the backlog records its branch pulled (`claim:`). This is shown only and never used to classify.
+- Each B and C tree gets a `next` line with its `--abandon "<why>"` command. That line is for after the tree has been taken up or recorded.
+- Exit codes: 0 when every tree is L, 1 when any tree is A, B, C or E (or a run-wide read failed: `failed ... nothing was classified`), 2 for a refused `.kit.json`.
 
 ## The last status read
 
@@ -84,6 +104,7 @@ Tests: `tests/worktree/test_remove_snapshot.py` (`IgnoredAfterTheLastStatusRead`
 - `tests/worktree/test_worktree_remove.py` (`AbandonLandedDirty`, on real git since the fake lacks `git clean`: a landed tree's uncommitted work saved under the tag, then removed; a clashing tag touches nothing)
 - `tests/worktree/test_remove_outside.py` (a detached tree outside the worktree folders by path: removed, abandoned, each refusal; the slug redirect; the landing cleanup unchanged; the reflog cases in `ReflogOnly` run on real git; `Spelling` takes a relative path and an 8.3 short name)
 - `tests/worktree/test_worktree_scratch.py` (`--scratch`: what is removed, each refusal, the same-path rule, failed reads and steps, the usage errors; the reflog cases run on real git)
+- `tests/worktree/test_classify.py` (`--classify`: each class, each liveness probe, the first-match order, the tool's arguments and `--json`, and a run that leaves the worktree list, refs and files unchanged; the real process scan runs on Windows only)
 - `tests/worktree/test_worktree_sweep.py`
 - `tests/worktree/test_worktree_sweep_task.py`
 - `tests/worktree/test_remove_snapshot.py` (what appears inside the window before git, after `clear_disposable` and after `last_look`; a failing git)

@@ -8,7 +8,10 @@ from tests.shipped import scan
 AGENTS = Path(__file__).resolve().parents[2] / "hosts" / "claude" / "shell" / "agents"
 EXPECTED = {"pm", "coordinator", "weak-worker", "worker", "senior-worker", "strong-worker", "deep-worker", "consultant", "reviewer",
             "lander", "records", "researcher", "spec-writer", "test-runner", "asset-smith",
-            "sound-smith", "tech-artist"}
+            "sound-smith", "tech-artist", "helper"}
+BULK_RULE = "Bulk work to the helper"
+BULK_PARENTS = ("worker", "strong-worker", "senior-worker", "deep-worker", "tech-artist", "asset-smith",
+                "sound-smith")
 BASE_FORBIDDEN = [(re.compile(r"\bR-\d+"), "ruling id"),
                   (re.compile(r"[A-Za-z]:[\/]+Users[\/]", re.I), "Windows user path")]
 
@@ -159,6 +162,22 @@ class AgentFilesTest(unittest.TestCase):
 
     def test_set_is_complete(self):
         self.assertEqual({p.stem for p in AGENTS.glob("*.md")}, EXPECTED)
+
+    def test_helper_is_light_and_has_no_shell(self):
+        """The helper runs on the light tier's model with read and edit tools only: no shell, so it
+        cannot commit, gate, land, pull or run a kit tool, and no dispatch."""
+        fm = frontmatter((AGENTS / "helper.md").read_text(encoding="utf-8"))
+        self.assertEqual(fm.get("model"), "haiku")
+        self.assertEqual([t.strip() for t in fm.get("tools", "").split(",")],
+                         ["Read", "Edit", "Write", "Grep", "Glob"])
+
+    def test_builder_roles_point_to_the_bulk_helper_rule(self):
+        """Each role that may hand bulk work to the helper names the rule, and the rule exists."""
+        skill = AGENTS.parents[3] / "content" / "skills" / "subagent-dispatch" / "SKILL.md"
+        self.assertIn("## " + BULK_RULE, skill.read_text(encoding="utf-8").splitlines())
+        for name in BULK_PARENTS:
+            with self.subTest(agent=name):
+                self.assertIn('"%s"' % BULK_RULE, (AGENTS / (name + ".md")).read_text(encoding="utf-8"))
 
     def test_no_chatgpt_fallback_in_agents_or_knowledge(self):
         """A generator outage stops the run; an external-prompt fallback is a repo choice, not the kit's."""

@@ -79,6 +79,7 @@ a fix to something that exists skips to How to work.
   light count - and say what your change costs when you cannot measure it.
 - **Headless and server paths must still work.** Anything that exists only when a
   window does needs a guard; the project's headless runs are the check.
+- Bulk menial reads or mechanical bulk writes: the helper role (section "Bulk work to the helper" under `<kit>/content/skills/`); small jobs stay direct.
 
 ## Look at what you made
 

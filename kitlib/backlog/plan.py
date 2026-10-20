@@ -655,6 +655,9 @@ def _branch_changes(ctx, branch, tip, base=None, mb=None):
 
 # --- set ------------------------------------------------------------------------------------------
 
+# The form a pulled record's widening takes with a ruling, named by every message about it.
+WIDEN_FORM = 'set %s --scope <path> [--scope <path> ...] --ruling R-nnnn'
+
 def plan_set(snap, ctx, rid, changes, unset=(), ruling=None, body=None, hold_ruling=None):
     """Edit fields and/or the body. `changes` is `[(key, [values])]`.
 
@@ -670,7 +673,9 @@ def plan_set(snap, ctx, rid, changes, unset=(), ruling=None, body=None, hold_rul
       with a live pull, or overlap a path another live pull's branch changed (the fold-in guard,
       `_pull_fold_hits`, the record's own branch aside), need `--ruling` (the commit's `Ruling:`
       line), and that ruling covers the widening alone. Narrowing, and widening into free scope,
-      are free.
+      are free; a ruling given on a free widening is still recorded (the collision a refusal
+      named may have cleared), and one given on a narrowing is USAGE. Each `--scope` value is
+      checked first: a malformed member is USAGE, not a collision.
     - `scope` replaces the whole list; the output names each member it removed.
     """
     for key, vals in changes:
@@ -696,6 +701,11 @@ def plan_set(snap, ctx, rid, changes, unset=(), ruling=None, body=None, hold_rul
             raise Refusal('`%s` is written only by %s' % (key, WRITTEN_BY[key]))
         if key in rmod.SINGLE_VALUED and len(vals) > 1:
             raise Usage('`%s` takes one value and was given %d' % (key, len(vals)))
+    for s in dict(changes).get('scope', []):
+        # Before the widening check, which counts a member it cannot compare as a collision.
+        bad = smod.scope_member_error(s)
+        if bad:
+            raise Usage('bad `--scope %s`: %s; give one `--scope <path>` per path' % (s, bad))
 
     keys = [k for k, _ in changes]
     pairs = [(k, v) for k, v in rec.pairs() if k not in unset]
@@ -730,7 +740,8 @@ def plan_set(snap, ctx, rid, changes, unset=(), ruling=None, body=None, hold_rul
     released_minus_one = rec.get('priority') == rmod.OWNER_PRIORITY and \
         get('priority') != [rmod.OWNER_PRIORITY]
     releases = unheld or released_minus_one
-    widen_hits, folds, notes = [], [], []
+    widen_hits, folds, notes, added = [], [], [], []
+    form = WIDEN_FORM % rid
     if 'scope' in keys and was_pulled:
         added = widened_members(rec.all('scope'), get('scope'))
         if added:
@@ -738,15 +749,19 @@ def plan_set(snap, ctx, rid, changes, unset=(), ruling=None, body=None, hold_rul
             widen_hits = live_hits(added, holding, skip=rid, branch=rec.get('pulled_by'))
             # The fold-in guard, as `pull` runs it.
             folds, notes = _pull_fold_hits(ctx, added, holding, rec.get('pulled_by'))
-    if widen_hits or folds:
+    # A ruling on a widening that collides with nothing now is still recorded: the collision a
+    # refusal named may have cleared before the retry. With a price move or a hold release it
+    # stays theirs, since free scope needs none.
+    free_widen = bool(added) and ruling is not None and not widen_hits and not folds \
+        and not priced and not releases
+    if widen_hits or folds or free_widen:
         if ruling is None:
             if widen_hits:
                 raise Refusal('`%s` is pulled, and this widens its scope into a live pull: %s. '
-                              'Narrowing is free; widening into a live pull takes `--ruling '
-                              'R-nnnn`, citing the PM\'s ruling that allows it'
-                              % (rid, '; '.join(widen_hits)))
-            raise Refusal(_fold_message(rid, folds, 'set %s --scope ... --ruling R-nnnn' % rid,
-                                        'widen'))
+                              'Narrowing is free; widening into a live pull takes `%s` (the '
+                              'whole new list), citing the PM\'s ruling that allows it'
+                              % (rid, '; '.join(widen_hits), form))
+            raise Refusal(_fold_message(rid, folds, form, 'widen'))
         if priced or releases:
             raise Usage('`--ruling %s` would allow both this scope widening and %s. One ruling, '
                         'one change: widen the scope in its own `set`'
@@ -754,8 +769,10 @@ def plan_set(snap, ctx, rid, changes, unset=(), ruling=None, body=None, hold_rul
         _check_ruling(rid, rec, ruling, 'set', hold_only=True)
     elif ruling is not None:
         if not priced and not releases:
-            raise Usage('`--ruling %s` was given, and this write moves no price and releases no '
-                        'owner hold: there is nothing for it to record' % ruling)
+            raise Usage('`--ruling %s` was given, and this write moves no price, releases no '
+                        'owner hold and widens no pulled scope: there is nothing for it to '
+                        'record. A widening of a pulled record takes `%s`; narrowing is free, so '
+                        'drop `--ruling`' % (ruling, form))
         if released_minus_one:
             lmod.refuse_unnamed_release(rid, rec, ruling, 'set')
         _check_ruling(rid, rec, ruling, 'set', hold_only=not priced)
@@ -787,6 +804,9 @@ def plan_set(snap, ctx, rid, changes, unset=(), ruling=None, body=None, hold_rul
     if body is not None:
         lines.append('  body:       replaced (%d bytes)' % len(body.encode('utf-8')))
     lines += ['  widened into a live pull on %s: %s' % (ruling, h) for h in widen_hits]
+    if free_widen:
+        lines.append('  widened on %s: no live pull collides now; the ruling is recorded: %s'
+                     % (ruling, ', '.join(added)))
     lines += ['  folds into the work of %s on %s: %s'
               % (h.rpartition('(changed on ')[2].partition(')')[0], ruling, h) for h in folds]
     if 'scope' in keys:

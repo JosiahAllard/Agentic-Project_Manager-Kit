@@ -4,6 +4,8 @@ the machine setup's plugin install uses them too.
   account_folders(home)          every Claude account folder on this machine, each once
   installed_path(folder)         the folder that account's Claude Code loads the kit plugin from
   installs(folders)              [(that folder, the account folder)] for each account with an install
+  marketplace_mismatches(export_dir, folders, managed)
+                                 lines where a marketplace path is not the export (read only)
   Runner(home, claude=None)      run `claude <args>` against one folder: .run(args, folder) -> (rc, text)
 
 A folder's claude runs with CLAUDE_CONFIG_DIR=<folder>, except Claude Code's own ~/.claude, for
@@ -25,6 +27,7 @@ from kitlib import machinesetup
 TIMEOUT = 300
 _NOWIN = 0x08000000 if sys.platform == 'win32' else 0      # CREATE_NO_WINDOW
 INSTALLED = ('plugins', 'installed_plugins.json')   # Claude Code's install record, in an account folder
+KNOWN_MARKETPLACES = ('plugins', 'known_marketplaces.json')   # its marketplaces, in an account folder
 USER_SCOPE = 'user'
 
 
@@ -75,6 +78,61 @@ def installs(folders=None):
         path = installed_path(f)
         if path is not None:
             out.append((path, f))
+    return out
+
+
+def _same_path(a, b):
+    return (os.path.normcase(os.path.normpath(os.path.abspath(a)))
+            == os.path.normcase(os.path.normpath(os.path.abspath(b))))
+
+
+def _read_json(path):
+    """The parsed JSON at `path`; None when the file does not exist. OSError or ValueError when it
+    cannot be read or parsed."""
+    if not os.path.lexists(path):
+        return None
+    with open(path, encoding='utf-8-sig') as fh:
+        return json.load(fh)
+
+
+def _check_one(path, keys, what, where, export_dir, out):
+    """The pm-kit marketplace path in the JSON file `path`, reached by `keys` from its top object,
+    against `export_dir`: a line in `out` when it differs or cannot be read. A missing file, or no
+    entry at keys[:-1] (no pm-kit marketplace there), adds nothing."""
+    try:
+        node = _read_json(path)
+        if node is None:
+            return
+        for i, k in enumerate(keys):
+            if not isinstance(node, dict):
+                raise ValueError('%s is not a JSON object' % ('the file' if i == 0 else keys[i - 1]))
+            if k not in node and i < len(keys) - 1:
+                return
+            node = node.get(k)
+        if not isinstance(node, str) or not node:
+            raise ValueError('%s is not a path' % what)
+        if not _same_path(node, export_dir):
+            out.append('pm-kit marketplace %s is %s, not the export %s (%s: %s)'
+                       % (where, node, export_dir, path, what))
+    except (OSError, ValueError) as e:
+        out.append('could not check the pm-kit marketplace path in %s: %s' % (path, e))
+
+
+def marketplace_mismatches(export_dir, folders, managed=None):
+    """Lines for each place that points the pm-kit marketplace somewhere other than `export_dir`
+    (docs/plugin-source.md "Refresh"): each account folder's plugins/known_marketplaces.json
+    installLocation, and the managed settings file `managed` (its path; None: not checked)
+    extraKnownMarketplaces source path. Reads only, never writes, never raises: a missing file or
+    entry adds nothing, one that cannot be read or has the wrong shape adds a 'could not check'
+    line."""
+    from kitlib.pluginsource import NAME
+    out = []
+    for f in folders:
+        _check_one(os.path.join(f, *KNOWN_MARKETPLACES), (NAME, 'installLocation'),
+                   'installLocation', 'in %s' % f, export_dir, out)
+    if managed:
+        _check_one(managed, ('extraKnownMarketplaces', NAME, 'source', 'path'),
+                   'extraKnownMarketplaces source path', 'in the managed settings', export_dir, out)
     return out
 
 

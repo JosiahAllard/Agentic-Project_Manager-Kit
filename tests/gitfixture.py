@@ -1,9 +1,17 @@
-"""Throwaway git repositories for kitlib tests (real git, a temp folder, removed after).
+"""Throwaway git repositories for kitlib tests (a temp folder, removed after).
 
 The fixture's own git calls ignore the user's global and system git config (no hooks, no
 signing, no default-branch surprises) and turn off auto gc and maintenance. The identity is a
 fake one: tests never carry a real person's name or address, so an inherited GIT_AUTHOR_* or
 GIT_COMMITTER_* name or email (an agent's identity) is dropped and the repo's user.* config wins.
+
+The fixture's own steps (building a repository, refreshing a copy's index, commit(), worktree())
+run in this process on the fake git (kitlib.git.fake) whatever git the test runs on: the fake
+writes the real on-disk repository, so a @real_git class's real git carries on from it, and the
+class pays a process only for the git it tests. The fake writes no reflog entry and runs no hook
+for those steps. A class that checks either for a fixture step, or checks the fixture's real-git
+build itself, is marked real_fixture(reason): its fixture runs real git too. TempRepo.git() is
+the test's own git and runs what the test runs on (kitlib.git.cmd: the fake under KIT_FAKE_GIT=1).
 """
 import atexit
 import os
@@ -13,6 +21,7 @@ import tempfile
 
 from kitlib.git import batch, cmd as gitcmd
 from kitlib.git import cache as gitcache
+from kitlib.git import fake as gitfake
 from kitlib.tooldeps import selfrun
 
 # A test process keeps kitlib.git.cache's answers; this module forgets them whenever its own git
@@ -58,17 +67,71 @@ def rmtree(path):
         selfrun.rmtree_force(path)
 
 
-# Built repositories this process copies instead of building again: {key: TempRepo}. Starting a
-# process is the dear part of a fixture on Windows (hundreds of ms each under load); a fresh
-# TempRepo costs 4 git processes (init, add, commit, its one index refresh; its config and its
-# HEAD are written and read as files), 6 with a bare remote, and a copy costs none on Windows.
+# Set (to 1) while a real_fixture class runs: the fixture's own steps then start real git.
+REAL_FIXTURE_ENV = 'KIT_FIXTURE_REAL_GIT'
+REASONS = {}        # 'module.Class' -> why its fixture needs real git
+
+
+def real_fixture(reason):
+    """Class decorator: the fixture's own steps start real git while the class runs (setUpClass
+    to its last class cleanup), for a class that checks what only real git leaves after a fixture
+    step (a reflog entry, a hook run) or checks the real-git build itself. `reason` says which.
+    It does not put the class on real git: that is tests.realgit.real_git."""
+    def mark(cls):
+        REASONS['%s.%s' % (cls.__module__, cls.__qualname__)] = reason
+        own = cls.__dict__.get('setUpClass')
+
+        def setUpClass(klass):
+            old = os.environ.get(REAL_FIXTURE_ENV)
+            os.environ[REAL_FIXTURE_ENV] = '1'
+            klass.addClassCleanup(_restore_env, REAL_FIXTURE_ENV, old)
+            if own is not None:
+                own.__func__(klass)
+            else:
+                super(cls, klass).setUpClass()
+        cls.setUpClass = classmethod(setUpClass)
+        return cls
+    return mark
+
+
+def _restore_env(name, old):
+    if old is None:
+        os.environ.pop(name, None)
+    else:
+        os.environ[name] = old
+
+
+def in_process():
+    """True when the fixture's own steps run on the fake git in this process: always, but in a
+    real_fixture class."""
+    return os.environ.get(REAL_FIXTURE_ENV) != '1'
+
+
+def own_git(args, cwd):
+    """The CompletedProcess (text) of a fixture step's `git <args>` in `cwd`, under fixture_env():
+    the fake git in this process (in_process()), else git as kitlib.git.cmd starts it. What
+    kitlib.git.cache kept is forgotten either way (a repository may be replaced)."""
+    gitcache.clear()
+    kw = dict(cwd=cwd, capture_output=True, text=True, encoding='utf-8', errors='replace',
+              env=fixture_env())
+    argv = ('git',) + tuple(args)
+    if in_process():
+        return gitfake.completed(argv, **kw)
+    return gitcmd.subprocess_run(argv, **kw)
+
+
+# Built repositories this process copies instead of building again: {key: TempRepo}. A fresh
+# TempRepo's own steps run in process (see the top); in a real_fixture class it costs 4 git
+# processes (init, add, commit, its one index refresh; its config and its HEAD are written and
+# read as files), 6 with a bare remote. A copy costs none on Windows.
 _TEMPLATES = {}
 _REMOTE_URL = re.compile(r'^(\s*url\s*=)(.*)$', re.M)
 
 
 def _template_key(branch, bare_remote, object_format, prepare_key=None):
-    """What a built repository depends on: its arguments and the environment its git ran in."""
-    return (branch, bool(bare_remote), object_format, prepare_key,
+    """What a built repository depends on: its arguments, which git built it (in_process()) and
+    the environment its git ran in."""
+    return (branch, bool(bare_remote), object_format, prepare_key, in_process(),
             tuple(sorted(fixture_env().items())))
 
 
@@ -101,9 +164,7 @@ def built_copy(key, dest, build, repos=('',)):
     shutil.copytree(src, dest, dirs_exist_ok=True)
     gitcache.clear()
     for rel in repos:
-        r = gitcmd.subprocess_run(('git', 'update-index', '-q', '--refresh'),
-                                  cwd=os.path.join(dest, rel), capture_output=True, text=True,
-                                  encoding='utf-8', errors='replace', env=fixture_env())
+        r = own_git(('update-index', '-q', '--refresh'), os.path.join(dest, rel))
         if r.returncode != 0:
             raise AssertionError('gitfixture: index refresh failed in %s: %s'
                                  % (dest, r.stderr.strip()))
@@ -165,6 +226,12 @@ def head_from_files(top):
     return head if head and _SHA.match(head) else None
 
 
+def _checked(args, r, check):
+    if check and r.returncode != 0:
+        raise AssertionError('git %s failed: %s' % (' '.join(args), r.stderr.strip()))
+    return r.stdout.strip()
+
+
 class TempRepo:
     """A git repository in a fresh temp folder: `main` with one commit. `object_format` (sha1 or
     sha256; None: git's default) applies to the repository and its bare remote.
@@ -209,7 +276,7 @@ class TempRepo:
             # removed, so the next TempRepo of its kind builds (and is refused) again instead of
             # copying it.
             try:
-                tpl.git('update-index', '--refresh')
+                tpl._own('update-index', '--refresh')
             except BaseException:
                 tpl.cleanup()
                 self.cleanup()
@@ -222,7 +289,7 @@ class TempRepo:
         # also compares a file's inode, which a copy changes, so the copy's index is refreshed.
         shutil.copytree(tpl.root, self.root)
         if os.name != 'nt':
-            self.git('update-index', '-q', '--refresh')
+            self._own('update-index', '-q', '--refresh')
         if bare_remote:
             shutil.copytree(tpl.remote, self.remote)
             cfg = os.path.join(self.root, '.git', 'config')
@@ -244,17 +311,17 @@ class TempRepo:
     def _build(self, branch, bare_remote, object_format):
         os.makedirs(self.root)
         fmt = ['--object-format=%s' % object_format] if object_format else []
-        self.git('init', '-q', '-b', branch, *fmt)
+        self._own('init', '-q', '-b', branch, *fmt)
         # The repository config `git config` would set one process per key, written in one go.
         self._add_config(BUILD_CONFIG)
         self.write('README.md', 'hello\n')
         self.initial = self.commit('initial', 'README.md')
         if bare_remote:
-            self.git('init', '-q', '--bare', *fmt, self.remote, cwd=self.base)
+            self._own('init', '-q', '--bare', *fmt, self.remote, cwd=self.base)
             # What `git remote add origin <remote>` writes.
             self._add_config((('remote "origin"', 'url', self.remote),
                               ('remote "origin"', 'fetch', '+refs/heads/*:refs/remotes/origin/*')))
-            self.git('push', '-q', 'origin', branch)
+            self._own('push', '-q', 'origin', branch)
 
     def _add_config(self, entries):
         """Append `(section, key, value)` entries to the repository's .git/config, one section
@@ -270,6 +337,8 @@ class TempRepo:
             fh.write(''.join(out))
 
     def git(self, *args, cwd=None, check=True):
+        """The test's own `git <args>` in `cwd` (default root), stdout stripped: the git the test
+        runs on. AssertionError when it fails and `check`."""
         if args == ('rev-parse', 'HEAD'):
             sha = head_from_files(cwd or self.root)
             if sha:
@@ -278,9 +347,12 @@ class TempRepo:
         gitcache.clear()
         r = gitcmd.subprocess_run(('git',) + args, cwd=cwd or self.root, capture_output=True,
                                   text=True, encoding='utf-8', errors='replace', env=fixture_env())
-        if check and r.returncode != 0:
-            raise AssertionError('git %s failed: %s' % (' '.join(args), r.stderr.strip()))
-        return r.stdout.strip()
+        return _checked(args, r, check)
+
+    def _own(self, *args, cwd=None):
+        """A fixture step's `git <args>` (own_git) in `cwd` (default root), stdout stripped;
+        AssertionError when it fails."""
+        return _checked(args, own_git(args, cwd or self.root), True)
 
     def path(self, *parts):
         return os.path.join(self.root, *parts)
@@ -293,8 +365,10 @@ class TempRepo:
         return full
 
     def commit(self, message, *paths, cwd=None):
-        self.git('add', '--', *paths, cwd=cwd)
-        self.git('commit', '-q', '-m', message, cwd=cwd)
+        """Stage `paths` and commit them with `message` in the work tree at `cwd` (default root),
+        a fixture step; returns the new HEAD."""
+        self._own('add', '--', *paths, cwd=cwd)
+        self._own('commit', '-q', '-m', message, cwd=cwd)
         return self.head(cwd)
 
     def head(self, cwd=None):
@@ -307,7 +381,7 @@ class TempRepo:
     def worktree(self, name, branch=None):
         """A linked worktree at <root>/.claude/worktrees/<name> on a new branch (default kit/<name>)."""
         path = os.path.join(self.root, '.claude', 'worktrees', name)
-        self.git('worktree', 'add', '-q', path, '-b', branch or 'kit/%s' % name)
+        self._own('worktree', 'add', '-q', path, '-b', branch or 'kit/%s' % name)
         return path
 
     def common_dir(self):

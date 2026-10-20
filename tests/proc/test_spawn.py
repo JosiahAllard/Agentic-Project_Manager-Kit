@@ -108,11 +108,14 @@ class PythonwBesideTest(unittest.TestCase):
 
 @unittest.skipUnless(os.name == "nt", "Windows only")
 class CarryTest(unittest.TestCase):
-    """carry(argv): start the program with no console window, wait, its exit code."""
+    """carry(argv): start the program with no console window, wait, its exit code. No AGENT_TEMP
+    here (agent_temp_env gives None); the environment carry passes is AgentTempEnvTest's, in
+    tests/proc/test_no_window.py."""
 
     def carried(self, argv, console=False, python="C:\\py\\python.exe", **fake):
         with mock.patch.object(job, "has_console", return_value=console), \
                 mock.patch.object(spawn, "console_python", return_value=python), \
+                mock.patch.object(spawn, "agent_temp_env", return_value=None), \
                 mock.patch.object(spawn.subprocess, "call", **fake) as call:
             return spawn.carry(argv), call
 

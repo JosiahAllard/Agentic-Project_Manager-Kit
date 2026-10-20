@@ -10,6 +10,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+from kitlib.proc import spawn
+
 if os.name == "nt":
     from kitlib.proc import job, win32
 
@@ -253,6 +255,7 @@ class CarrierTest(_Folder):
             self.skipTest("no pythonw.exe beside %s" % sys.executable)
         self.log = os.path.join(self.dir, "incidents.log")       # never the kit's own log
         self.env = dict(os.environ, KIT_CONSOLE_INCIDENT_LOG=self.log)
+        self.env.pop(spawn.AGENT_TEMP, None)          # never the machine's own agent temp folder
 
     def carry(self, *argv):
         return subprocess.run([self.pythonw, self.CARRIER] + list(argv), timeout=120, env=self.env,
@@ -273,6 +276,29 @@ class CarrierTest(_Folder):
         self.assertEqual(child["window"], 0, child)                     # no console window
         self.assertIn(child["pid"], child["console_pids"], child)       # yet a console
         self.assertEqual(os.path.normcase(child["exe"]), os.path.normcase(python_exe()), child)
+
+    def test_the_program_gets_agent_temp_as_temp_and_tmp(self):
+        """Under pythonw, as a task runs it: AGENT_TEMP (missing, so the carrier makes it) is the
+        carried program's TEMP and TMP, though the carrier's own TEMP is elsewhere."""
+        agent_temp = os.path.join(self.dir, "agent-temp")
+        self.env.update(AGENT_TEMP=agent_temp, TEMP=self.dir, TMP=self.dir)
+        out = os.path.join(self.dir, "temp.json")
+        code = ("import json, os, sys, tempfile; json.dump({'TEMP': os.environ.get('TEMP'), "
+                "'TMP': os.environ.get('TMP'), 'gettempdir': tempfile.gettempdir()}, "
+                "open(sys.argv[1], 'w'))")
+        self.assertEqual(self.carry("python", "-c", code, out), 0)
+        seen = self.read(out)
+        self.assertEqual((seen["TEMP"], seen["TMP"]), (agent_temp, agent_temp), seen)
+        self.assertEqual(os.path.normcase(seen["gettempdir"]), os.path.normcase(agent_temp), seen)
+        self.assertTrue(os.path.isdir(agent_temp))
+
+    def test_with_no_agent_temp_the_program_keeps_the_carriers_temp(self):
+        self.env.update(TEMP=self.dir, TMP=self.dir)
+        out = os.path.join(self.dir, "temp.json")
+        code = ("import json, os, sys; json.dump([os.environ.get('TEMP'), os.environ.get('TMP')], "
+                "open(sys.argv[1], 'w'))")
+        self.assertEqual(self.carry("python", "-c", code, out), 0)
+        self.assertEqual(self.read(out), [self.dir, self.dir])
 
     def test_a_program_named_by_path_is_carried_too(self):
         out = os.path.join(self.dir, "carried.json")
@@ -316,6 +342,86 @@ class CarrierTest(_Folder):
                                         stderr=subprocess.DEVNULL).returncode
                 self.assertEqual(direct, code)        # the program does end with it
                 self.assertEqual(self.carry("python", ender, str(code)), code)
+
+
+class AgentTempEnvTest(_Folder):
+    """kitlib.proc.spawn.agent_temp_env and the environment carry hands the program: AGENT_TEMP
+    as TEMP and TMP, else the environment unchanged; never a change to the one given, never an
+    exception. Every folder is under the test's own temp folder."""
+
+    def test_temp_and_tmp_become_agent_temp_which_is_made(self):
+        agent_temp = os.path.join(self.dir, "a", "b")
+        given = {"AGENT_TEMP": agent_temp, "TEMP": r"C:\elsewhere", "TMP": r"C:\elsewhere", "X": "1"}
+        before = dict(given)
+        env = spawn.agent_temp_env(given)
+        self.assertEqual(env, dict(before, TEMP=agent_temp, TMP=agent_temp))
+        self.assertTrue(os.path.isdir(agent_temp))
+        self.assertEqual(given, before)                       # the one given is never changed
+        self.assertIsNot(env, given)
+
+    def test_an_existing_folder_is_used_as_it_is(self):
+        env = spawn.agent_temp_env({"AGENT_TEMP": self.dir})
+        self.assertEqual((env["TEMP"], env["TMP"]), (self.dir, self.dir))
+
+    def test_no_usable_agent_temp_keeps_the_environment(self):
+        a_file = self.write("a-file", "x")
+        made = []
+        for value in (None, "", "   ", "relative\\temp", "\\no-drive\\temp", a_file, 7):
+            with self.subTest(value=value):
+                given = {"TEMP": r"C:\t"} if value is None else {"AGENT_TEMP": value, "TEMP": r"C:\t"}
+                before = dict(given)
+                self.assertIsNone(spawn.agent_temp_env(given, makedirs=lambda p, **kw: made.append(p)
+                                                       if value != a_file else os.makedirs(p, **kw)))
+                self.assertEqual(given, before)
+        self.assertEqual(made, [])                            # nothing made for a value refused
+
+    def test_a_folder_that_cannot_be_made_keeps_the_environment(self):
+        def refuse(path, exist_ok=False):
+            raise PermissionError(5, "Access is denied", path)
+
+        def broken(path, exist_ok=False):
+            raise ValueError("embedded null character")
+        target = os.path.join(self.dir, "never")
+        for makedirs in (refuse, broken):
+            with self.subTest(makedirs.__name__):
+                self.assertIsNone(spawn.agent_temp_env({"AGENT_TEMP": target}, makedirs=makedirs))
+        # made, yet no folder there (a makedirs that does nothing): not a folder, so unchanged
+        self.assertIsNone(spawn.agent_temp_env({"AGENT_TEMP": target}, makedirs=lambda p, **kw: None))
+        self.assertFalse(os.path.exists(target))
+
+    def test_an_environment_that_cannot_be_read_never_raises(self):
+        class Bad(dict):
+            def get(self, *a):
+                raise RuntimeError("unreadable")
+        self.assertIsNone(spawn.agent_temp_env(Bad()))
+
+    def test_carry_hands_the_program_agent_temp_and_leaves_os_environ_alone(self):
+        agent_temp = os.path.join(self.dir, "agent-temp")
+        seen = []
+
+        def fake_call(argv, **kw):
+            seen.append(kw)
+            return 0
+        with mock.patch.dict(os.environ, {"AGENT_TEMP": agent_temp}), \
+                mock.patch.object(spawn, "call", fake_call):
+            before = dict(os.environ)
+            self.assertEqual(spawn.carry(["prog.exe", "x"]), 0)
+            self.assertEqual(dict(os.environ), before)        # the carrier's own environment
+        self.assertEqual((seen[0]["env"]["TEMP"], seen[0]["env"]["TMP"]), (agent_temp, agent_temp))
+
+    def test_carry_with_no_usable_agent_temp_passes_no_environment(self):
+        seen = []
+
+        def fake_call(argv, **kw):
+            seen.append(kw)
+            return 0
+        for value in ("relative", os.path.join(self.write("f", "x"), "under-a-file")):
+            with self.subTest(value=value), mock.patch.dict(os.environ, {"AGENT_TEMP": value}), \
+                    mock.patch.object(spawn, "call", fake_call):
+                before = dict(os.environ)
+                self.assertEqual(spawn.carry(["prog.exe"]), 0)
+                self.assertEqual(dict(os.environ), before)
+                self.assertNotIn("env", seen[-1])               # inherits this one, unchanged
 
 
 if __name__ == "__main__":

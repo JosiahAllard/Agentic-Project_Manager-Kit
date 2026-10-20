@@ -270,10 +270,56 @@ class SetScopeWidening(StoreCase):
         self.verb('set', 'MINE', [('scope', ['kitlib/backlog/plan.py', 'docs/backlog.md'])])
         self.assertEqual(self.get('MINE').all('scope'), ['kitlib/backlog/plan.py', 'docs/backlog.md'])
 
-    def test_a_ruling_on_a_widening_that_collides_with_nothing_is_usage(self):
+    def test_the_widen_refusal_names_the_repeatable_scope_form(self):
         self.seed(hold(scope='kitlib/backlog/offer.py'), mine('kitlib/backlog/plan.py'))
-        with self.assertRaises(Usage):
-            self.verb('set', 'MINE', [('scope', ['docs/backlog.md'])], ruling='R-9001')
+        with self.assertRaises(Refusal) as cm:
+            self.verb('set', 'MINE', [('scope', ['kitlib/backlog/plan.py', 'kitlib/backlog/**'])])
+        self.assertIn('`set MINE --scope <path> [--scope <path> ...] --ruling R-nnnn`',
+                      str(cm.exception))
+
+    def test_a_ruling_on_a_free_widening_of_a_pulled_record_is_recorded(self):
+        # The collision a refusal named can clear before the retry with `--ruling` (the holder
+        # landed, or the refused member was malformed): the retry is written, not USAGE.
+        self.seed(hold(scope='kitlib/backlog/offer.py'), mine('kitlib/backlog/plan.py'))
+        change = self.verb('set', 'MINE', [('scope', ['kitlib/backlog/plan.py', 'docs/backlog.md'])],
+                           ruling='R-9001')
+        self.assertEqual(self.get('MINE').all('scope'), ['kitlib/backlog/plan.py', 'docs/backlog.md'])
+        self.assertEqual(change.ruling, 'R-9001')
+        self.assertTrue(any('widened on R-9001' in line and 'no live pull collides' in line
+                            and 'docs/backlog.md' in line for line in change.lines), change.lines)
+
+    def test_a_ruling_with_a_free_widening_and_a_price_move_records_the_price(self):
+        # Free scope needs no ruling, so the one given stays the price's, as before.
+        self.seed(mine('kitlib/backlog/plan.py'))
+        change = self.verb('set', 'MINE', [('scope', ['kitlib/backlog/plan.py', 'docs/backlog.md']),
+                                           ('priority', ['1']), ('priority_by', ['pm'])],
+                           ruling='R-9001')
+        r = self.get('MINE')
+        self.assertEqual((r.get('priority'), r.get('priority_ruling')), ('1', 'R-9001'))
+        self.assertFalse(any('widened on' in line for line in change.lines), change.lines)
+
+    def test_a_ruling_on_a_narrowing_or_an_unchanged_scope_is_usage_naming_the_form(self):
+        self.seed(mine('kitlib/backlog/**'))
+        for new in (['kitlib/backlog/plan.py'], ['kitlib/backlog/**']):
+            with self.subTest(scope=new):
+                with self.assertRaises(Usage) as cm:
+                    self.verb('set', 'MINE', [('scope', new)], ruling='R-9001')
+                msg = str(cm.exception)
+                self.assertIn('there is nothing for it to record', msg)
+                self.assertIn('`set MINE --scope <path> [--scope <path> ...] --ruling R-nnnn`', msg)
+                self.assertIn('narrowing is free', msg)
+                self.assertEqual(self.get('MINE').all('scope'), ['kitlib/backlog/**'])
+
+    def test_a_comma_joined_scope_is_usage_naming_one_scope_per_path(self):
+        # Not a collision with every live pull: a malformed member is the caller's mistake.
+        self.seed(hold(scope='kitlib/backlog/offer.py'), mine('kitlib/backlog/plan.py'))
+        with self.assertRaises(Usage) as cm:
+            self.verb('set', 'MINE', [('scope', ['kitlib/backlog/plan.py,docs/backlog.md'])])
+        msg = str(cm.exception)
+        self.assertIn('bad `--scope kitlib/backlog/plan.py,docs/backlog.md`', msg)
+        self.assertIn('one `--scope <path>` per path', msg)
+        self.assertNotIn('live pull', msg)
+        self.assertEqual(self.get('MINE').all('scope'), ['kitlib/backlog/plan.py'])
 
     def test_narrowing_stays_free_even_when_the_old_scope_collides(self):
         self.seed(hold(scope='kitlib/backlog/offer.py'), mine('kitlib/backlog/**'))

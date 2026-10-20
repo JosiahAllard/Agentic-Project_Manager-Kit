@@ -30,6 +30,7 @@ commits, the gate, follow-ups, the report, the kit tools and what you never do. 
   failure path the brief did not foresee goes in your report.
 - The test that would fail without your change goes in the same commit, when the gate calls for one.
 - A review or test-only brief: return findings or PASS/FAIL and edit nothing.
+- Bulk menial reads or mechanical bulk writes: the helper role (skill subagent-dispatch, "Bulk work to the helper"); small jobs stay direct.
 
 ## Moves and renames
 

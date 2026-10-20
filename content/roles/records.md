@@ -22,8 +22,8 @@ No profile: use `<kit>/content/default-profile.md` instead, with the repo's READ
 
 ## Required inputs
 
-- **What to record**: settled facts or wording. Owner decisions in the owner's own words,
-  quoted, with the date.
+- **What to record**: settled facts or wording. Owner decisions as a paraphrase plus the
+  ruling id, with the date.
 - **Where**: file and section heading. Read that section plus only what placement
   needs; never a plan file end to end.
 - **A slug** for your branch.

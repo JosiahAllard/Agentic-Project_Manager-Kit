@@ -965,6 +965,8 @@ class AnotherWriterStagesDuringTheCallRealGit(AnotherWriterStagesDuringTheCall):
     pass
 
 
+@gitfixture.real_fixture('appends to the linked worktree\'s reflog (logs/HEAD), which only real '
+                         'git\'s `worktree add` writes')
 @real_git('hooks, and the reflog entry `git commit` writes under this call\'s tag: the fake runs '
           'no hooks and writes no reflog')
 class HooksAndTheReflog(LinkedCase):
