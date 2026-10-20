@@ -291,6 +291,25 @@ class Refs(Base):
     def test_a_mirror_push_writes_it(self):
         self.denied(self.git('push --mirror origin'))
 
+    def test_update_ref_from_its_input_may_write_it(self):
+        """`update-ref --stdin` reads the refs it writes from its input, which the guard does not
+        read, so it may write the store's ref: refused for every session but the owner's (fail
+        closed). git-shared-ref holds an agent session's first; the PM and a plain mark meet this."""
+        for text, tool in (('echo "update refs/backlog/main %s" | git -C "%s" update-ref --stdin' % (OID, self.wt),
+                            'Bash'),
+                           ('git -C "%s" update-ref --stdin < cmds.txt' % self.wt, 'Bash'),
+                           ('git -C "%s" update-ref -z --stdin < cmds.txt' % self.wt, 'Bash'),
+                           ('"update refs/backlog/main %s" | git -C "%s" update-ref --stdin' % (OID, self.wt),
+                            'PowerShell')):
+            for env in (PM, {context.ROLE_ENV: 'plain'}):
+                with self.subTest(text=text, env=env):
+                    d = self.refused(self.cmd(text, tool=tool, sub=False, env=env), 'backlog-raw-write')
+                    self.assertIn('input', d.reason.split('Instead:')[0])
+            with self.subTest(text=text, who='subagent'):
+                self.denied(self.cmd(text, tool=tool, env={}))
+            with self.subTest(text=text, who='owner'):
+                self.allowed(self.cmd(text, tool=tool, sub=False, env={}))
+
     def test_a_subagent_is_refused_too(self):
         for args in ('update-ref refs/backlog/main %s' % OID, 'push origin refs/backlog/main'):
             with self.subTest(args):
