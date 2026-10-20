@@ -1298,6 +1298,13 @@ def within_of(L, within, kind, need, own, parent, machine):
     return text, slots
 
 
+def check_resource(resource):
+    """book()'s resource rule: None, or a non-empty string; anything else is LockError usage
+    (exit 2). The CLI calls it before a detach, so a refusal is never left in a detached log."""
+    if resource is not None and not (isinstance(resource, str) and resource):
+        raise LockError(EXIT_USAGE, "usage: a resource is a non-empty string, not %r" % (resource,))
+
+
 def book(kind, repo, slug, cores=None, hold=None, gpu_share=None, wait_s=None, no_wait=False,
          expect_s=None, note=None, on_release_cmd=None, cmd=None, store=None, kinds_table=None,
          env=None, rid=None, detached=False, log=None, gate=False, resource=None, priority=None,
@@ -1317,9 +1324,9 @@ def book(kind, repo, slug, cores=None, hold=None, gpu_share=None, wait_s=None, n
     holds for its whole life: it does not start while another run holding it is alive (the queue
     entry and record carry it). A nested run naming one its parent does not hold joins the queue
     for it even when the parent covers all it needs. priority "land": its entry plans ahead of
-    every ordinary waiting run (kitlib.lock.queue.plan). Library callers only: neither is on the
-    CLI or the MCP server. within: the threads the run must stay inside (the CLI's --within: a
-    Linux cpuset list such as '8-15', or global thread ids), e.g. a container's cpuset; it takes
+    every ordinary waiting run (kitlib.lock.queue.plan), for library callers only. The CLI takes
+    resource (`machine_lock.py run --resource`), not priority; the MCP server takes neither.
+    within: the threads the run must stay inside (the CLI's --within: a Linux cpuset list such as '8-15', or global thread ids), e.g. a container's cpuset; it takes
     only cpu slots whose threads all lie inside (within_of), and waits for those while others are
     free. The record carries `within` (the list) and `within_slots`; its queue entry `within`.
     tree: the git tree hash the run tests (a gate's: kitlib.gate.runner.gated), recorded as `tree`
@@ -1349,8 +1356,7 @@ def book(kind, repo, slug, cores=None, hold=None, gpu_share=None, wait_s=None, n
     if priority is not None and priority not in qm.PRIORITIES:
         raise LockError(EXIT_USAGE, "usage: unknown priority %r (known: %s)"
                         % (priority, ", ".join(qm.PRIORITIES)))
-    if resource is not None and not (isinstance(resource, str) and resource):
-        raise LockError(EXIT_USAGE, "usage: a resource is a non-empty string, not %r" % (resource,))
+    check_resource(resource)
     check_run_id(rid)
     L = lay.in_force(store)["layout"]
     try:                            # a size the layout cannot give fails closed
