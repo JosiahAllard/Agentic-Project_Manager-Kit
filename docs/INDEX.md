@@ -100,6 +100,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `tools/doc_budget.py` | doc size budgets (`docs/doc-tools.md`) | kw: doc_budget
 - `tools/codemap.py` | where code lives (`docs/doc-tools.md`) | kw: codemap
 - `tools/backlog.py` | backlog store (`docs/backlog.md`) | kw: backlog
+- `tools/backlog_audit.py` | backlog audit check (`docs/backlog.md` "Audit log") | kw: backlog_audit
 - `tools/backlog_lint.py` | backlog lint (`docs/backlog-lint.md`) | kw: backlog_lint
 - `tools/review_pack.py` | review pack (`docs/review-pack.md`) | kw: review_pack
 - `tools/land.py` | land a reviewed branch (`docs/shipping.md`) | kw: land

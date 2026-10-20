@@ -429,7 +429,9 @@ their commands: docs/hub-mcp.md "To-do steps"). `hub.py todos add --steps F` rea
 a UTF-8 JSON file. The server refuses, as `invalid` naming the field: a bad step (`steps`), a
 `commands` entry holding a lone surrogate (U+D800 to U+DFFF, `commands`), and, on an agent's to-do,
 text the owner's to-do rules forbid (`todosteps.check`: plain Notepad, a hand edit described in
-prose, coordinator work). The owner's own to-dos are not judged by those rules.
+prose, coordinator work). The owner's own to-dos are not judged by those rules. A raw worktree,
+branch, tag or ref delete has no carve-out: its refusal names `worktree_remove.py <slug> --abandon
+"<why>"`, which the coordinator runs on a ruling (docs/worktree-remove.md "Tools").
 
 While a to-do is open its creator may change it (`POST /api/v1/todos/{id}/edit` with the agent's
 token: `hub.py todos edit`, the MCP tool `hub_todo_edit`) or withdraw it (`POST

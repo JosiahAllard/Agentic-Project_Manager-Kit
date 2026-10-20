@@ -339,15 +339,18 @@ def merge_check(ctx, key, registered_path, seen=None):
     named = handle(ctx, registered_path)
     lines = ['refused   %s holds UNLANDED work: %s has %s commit(s) not in %s %s;'
              ' nothing was removed' % (registered_path, name, count, up, base[:10]),
-             '  owner    removing unlanded work is the owner\'s standing rule that deleting data'
-             ' is his, and this verb has no override. If he chooses to discard it, he runs,',
+             '  abandon  the supported route, run on the owner\'s or the PM\'s ruling: it keeps the'
+             ' commits under the tag %s%s (--tag %s<name> for the tag a ruling names), then'
+             ' removes the tree:' % (ARCHIVE, slug, ARCHIVE),
+             '             %s %s --abandon "<why>"' % (s['tool'], named),
+             '  owner    removing unlanded work outright is the owner\'s standing rule that'
+             ' deleting data is the owner\'s, and this verb has no override. To discard it, the'
+             ' owner runs, in the owner\'s own terminal only (the Action Hub refuses these as a'
+             ' to-do),',
              '           from %s:' % main,
              '             git worktree remove "%s"' % registered_path]
     if branch:
         lines.append('             git branch -D %s' % branch)
-    lines.append('  abandon  to drop it but keep its commits under the tag %s%s, run instead:'
-                 % (ARCHIVE, slug))
-    lines.append('             %s %s --abandon "<why>"' % (s['tool'], named))
     lines.append('  note     %s was read as it stands, not fetched: if the branch has'
                  ' landed since, `git fetch %s` and run this again.' % (up, s['remote']))
     return lines
@@ -1181,8 +1184,13 @@ def _remove_branch(ctx, branch):
         ctx.say('refused   branch %s holds UNLANDED work: %s commit(s) not in %s %s; nothing was'
                 ' deleted' % (branch, count if rc == 0 and count else 'an unknown number of',
                               up, base[:10]),
-                '  abandon  to drop it but keep its commits under a tag, run instead:',
+                '  abandon  the supported route, run on the owner\'s or the PM\'s ruling: it keeps'
+                ' the commits under the tag %s%s (--tag %s<name> for the tag a ruling names),'
+                ' then deletes the branch:' % (ARCHIVE, branch_slug(ctx, branch), ARCHIVE),
                 '             %s %s --branch --abandon "<why>"' % (s['tool'], branch),
+                '  owner    deleting unlanded work outright is the owner\'s own act, in the owner\'s'
+                ' own terminal only: the Action Hub refuses it as a to-do, and this verb has no'
+                ' override.',
                 '  note     %s was read as it stands, not fetched: if the branch has landed'
                 ' since, `git fetch %s` and run this again.' % (up, s['remote']))
         return REFUSED
@@ -1222,10 +1230,26 @@ def make_tag(main, tag, tip, message):
     return rc, err or out
 
 
-def pick_tag(ctx, slug, tip, same=None):
+def tag_name_refusal(main, tag):
+    """None when `tag` (an --abandon --tag) is an archive/ tag name git accepts, else why not."""
+    if not tag.startswith(ARCHIVE) or len(tag) == len(ARCHIVE):
+        return '--tag %s does not start with %s and name a tag after it' % (tag, ARCHIVE)
+    args = ('check-ref-format', 'refs/tags/' + tag)
+    rc, _, err = git(main, *args)
+    if rc != 0:
+        return '--tag %s is not a tag name git accepts (%s)' % (tag, failure(args, rc, err))
+    return None
+
+
+def pick_tag(ctx, slug, tip, same=None, named=None):
     """`(tag, commit it holds or '', None)`: archive/<slug>; with archive_next_free the first of
     archive/<slug>, -2, -3, ... that is free or already on `tip` (or on a commit `same` accepts).
-    `(tag, None, why)` when git cannot tell what `tag` holds: never taken for a free name."""
+    `named` (--tag) is taken as it is, never the next free one: the caller refuses it when it
+    holds another commit. `(tag, None, why)` when git cannot tell what `tag` holds: never taken
+    for a free name."""
+    if named:
+        held, why = tag_tip(ctx.main, named)
+        return named, held, why
     tag = ARCHIVE + slug
     held, why = tag_tip(ctx.main, tag)
     if held is None or not ctx.s['archive_next_free']:
@@ -1369,15 +1393,22 @@ def drop_branch(ctx, path, branch, tip, tag, keep):
     return OK
 
 
-def abandon(top, argument, why, keep_branch=False, cwd=None, today=None):
-    """`--abandon <why>`: drop UNLANDED work, keeping it as the annotated tag archive/<slug>."""
+def abandon(top, argument, why, keep_branch=False, cwd=None, today=None, tag=None):
+    """`--abandon <why>`: drop UNLANDED work, keeping it as the annotated tag archive/<slug>, or
+    as `tag` (--tag archive/<name>, the tag a ruling names): made when absent, reused when it
+    already holds the work, refused on any other commit."""
     ctx, refused = open_ctx(top, cwd)
     if refused:
         return refused
-    return ctx.outcome(_abandon(ctx, argument, why, keep_branch, today))
+    if tag is not None:
+        bad = tag_name_refusal(ctx.main, tag)
+        if bad:
+            ctx.say('refused   %s; nothing was tagged or removed' % bad)
+            return ctx.outcome(REFUSED)
+    return ctx.outcome(_abandon(ctx, argument, why, keep_branch, today, tag))
 
 
-def _abandon(ctx, argument, why, keep_branch, today):
+def _abandon(ctx, argument, why, keep_branch, today, named=None):
     found = registered_target(ctx, argument)
     if not isinstance(found, tuple):
         return found
@@ -1413,7 +1444,7 @@ def _abandon(ctx, argument, why, keep_branch, today):
         work = dirty(ctx, path)[0]
         if work:
             return _abandon_landed_dirty(ctx, path, registered_path, slug, branch, tip, name,
-                                         len(work), why, keep_branch, today)
+                                         len(work), why, keep_branch, today, named)
         ctx.say('refused   %s: %s is already in %s %s - nothing to abandon. Remove it'
                 ' with `%s %s`; nothing was tagged or removed'
                 % (path, name, up, base[:10], s['tool'], handle(ctx, registered_path)))
@@ -1427,8 +1458,9 @@ def _abandon(ctx, argument, why, keep_branch, today):
     logged = kept_reflog(ctx, path, tip, True) if logs else None
     if logs and logged is None:
         return REFUSED
-    rerun = '%s %s --abandon "<why>"%s' % (s['tool'], handle(ctx, registered_path),
-                                           ' --keep-branch' if keep_branch else '')
+    rerun = '%s %s --abandon "<why>"%s%s' % (s['tool'], handle(ctx, registered_path),
+                                             ' --tag %s' % named if named else '',
+                                             ' --keep-branch' if keep_branch else '')
     if dirty_refusal(ctx, path, 'nothing was tagged or removed', rerun):
         return REFUSED
     why_link = holders.link_reason(path)
@@ -1440,7 +1472,7 @@ def _abandon(ctx, argument, why, keep_branch, today):
         ctx.say('refused   %s is held; nothing was tagged and git was NOT run' % path)
         ctx.describe(path, held)
         return REFUSED
-    tag, existing, why_tag = pick_tag(ctx, slug, tip)
+    tag, existing, why_tag = pick_tag(ctx, slug, tip, named=named)
     if existing is None:
         ctx.say('refused   %s: cannot read tag %s (%s); nothing was tagged or removed'
                 % (path, tag, why_tag))
@@ -1450,7 +1482,8 @@ def _abandon(ctx, argument, why, keep_branch, today):
                 ' removed' % (tag, existing[:10], tip[:10], name))
         return REFUSED
     if existing:
-        ctx.say('reused    tag %s already holds %s (a previous run made it)' % (tag, tip[:10]))
+        ctx.say('reused    tag %s already holds %s (%s)'
+                % (tag, tip[:10], 'the tag --tag names' if named else 'a previous run made it'))
     else:
         message = 'abandoned: %s\n\n%s at %s\nworktree %s\ndate %s\n' % (
             why, ('branch ' + branch) if branch else 'detached HEAD', tip,
@@ -1503,7 +1536,7 @@ def saved_work(main, commit, tree, tip):
 
 
 def _abandon_landed_dirty(ctx, path, registered_path, slug, branch, tip, name, count, why,
-                          keep_branch, today):
+                          keep_branch, today, named=None):
     """`--abandon` on a LANDED tree that holds uncommitted work (the plain verb refuses the work,
     and the commits are in the base: each verb used to name the other). Every check of the plain
     verb runs first; then the work is saved as a commit on `tip` under the annotated tag
@@ -1524,8 +1557,9 @@ def _abandon_landed_dirty(ctx, path, registered_path, slug, branch, tip, name, c
     if ignored:
         ctx.say('refused   %s has %s. %s.' % (path, ignored_reason(ignored, path),
                                              nothing[0].upper() + nothing[1:]),
-                '  rerun    %s %s --abandon "<why>"%s' % (
+                '  rerun    %s %s --abandon "<why>"%s%s' % (
                     s['tool'], handle(ctx, registered_path),
+                    ' --tag %s' % named if named else '',
                     ' --keep-branch' if keep_branch else ''))
         return REFUSED
     why_link = holders.link_reason(path)
@@ -1548,7 +1582,7 @@ def _abandon_landed_dirty(ctx, path, registered_path, slug, branch, tip, name, c
     def same(commit):
         return saved_work(main, commit, tree, tip)
 
-    tag, existing, why_tag = pick_tag(ctx, slug, None, same)
+    tag, existing, why_tag = pick_tag(ctx, slug, None, same, named=named)
     if existing is None:
         ctx.say('refused   %s: cannot read tag %s (%s); %s' % (path, tag, why_tag, nothing))
         return REFUSED
@@ -1558,7 +1592,8 @@ def _abandon_landed_dirty(ctx, path, registered_path, slug, branch, tip, name, c
         return REFUSED
     if existing:
         commit = existing
-        ctx.say('reused    tag %s already holds this work (a previous run made it)' % tag)
+        ctx.say('reused    tag %s already holds this work (%s)'
+                % (tag, 'the tag --tag names' if named else 'a previous run made it'))
     else:
         message = 'abandoned: %s\n\nuncommitted work on %s at %s\nworktree %s\ndate %s\n' % (
             why, ('branch ' + branch) if branch else 'detached HEAD', tip,
@@ -1619,16 +1654,22 @@ def branch_slug(ctx, branch):
     return branch
 
 
-def abandon_branch(top, branch, why, cwd=None, today=None):
+def abandon_branch(top, branch, why, cwd=None, today=None, tag=None):
     """`<branch> --branch --abandon <why>`: drop an UNLANDED local branch that has no worktree,
-    keeping its commits as the annotated tag archive/<slug>. The remote branch is not touched."""
+    keeping its commits as the annotated tag archive/<slug>, or as `tag` (--tag, as abandon).
+    The remote branch is not touched."""
     ctx, refused = open_ctx(top, cwd)
     if refused:
         return refused
-    return ctx.outcome(_abandon_branch(ctx, branch, why, today))
+    if tag is not None:
+        bad = tag_name_refusal(ctx.main, tag)
+        if bad:
+            ctx.say('refused   %s; nothing was tagged or deleted' % bad)
+            return ctx.outcome(REFUSED)
+    return ctx.outcome(_abandon_branch(ctx, branch, why, today, tag))
 
 
-def _abandon_branch(ctx, branch, why, today):
+def _abandon_branch(ctx, branch, why, today, named=None):
     main, s = ctx.main, ctx.s
     up = s['upstream']
     if same_name(branch, s['base']):
@@ -1668,7 +1709,7 @@ def _abandon_branch(ctx, branch, why, today):
         ctx.say('refused   %s: the merge check failed (%s); nothing was tagged or deleted'
                 % (branch, why_not))
         return REFUSED
-    tag, existing, why_tag = pick_tag(ctx, branch_slug(ctx, branch), tip)
+    tag, existing, why_tag = pick_tag(ctx, branch_slug(ctx, branch), tip, named=named)
     if existing is None:
         ctx.say('refused   %s: cannot read tag %s (%s); nothing was tagged or deleted'
                 % (branch, tag, why_tag))
@@ -1678,7 +1719,8 @@ def _abandon_branch(ctx, branch, why, today):
                 ' deleted' % (tag, existing[:10], tip[:10], branch))
         return REFUSED
     if existing:
-        ctx.say('reused    tag %s already holds %s (a previous run made it)' % (tag, tip[:10]))
+        ctx.say('reused    tag %s already holds %s (%s)'
+                % (tag, tip[:10], 'the tag --tag names' if named else 'a previous run made it'))
     else:
         message = 'abandoned: %s\n\nbranch %s at %s\nno worktree\ndate %s\n' % (
             why, branch, tip, (today or datetime.date.today()).isoformat())

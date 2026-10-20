@@ -314,6 +314,9 @@ class Run:
     def finish(self, code, how):
         """The record moves to the ended folder; returns it."""
         self.ended = dict(self.rec, state="ended", code=code, how=how, ended=iso())
+        stop, _ = read_record(self.store.path("active", self.id + ".stop"))
+        if stop:
+            self.ended["stopped_by"] = {"by": stop.get("by"), "session": stop.get("session")}
         with contextlib.suppress(OSError):
             write_json(self.store.path("ended", self.id + ".json"), self.ended)
         remove(self.store.path("active", self.id + ".json"))
@@ -1308,7 +1311,7 @@ def check_resource(resource):
 def book(kind, repo, slug, cores=None, hold=None, gpu_share=None, wait_s=None, no_wait=False,
          expect_s=None, note=None, on_release_cmd=None, cmd=None, store=None, kinds_table=None,
          env=None, rid=None, detached=False, log=None, gate=False, resource=None, priority=None,
-         within=None, tree=None):
+         within=None, tree=None, branch=None):
     """Waits for a run of kind `kind` for repo/slug to hold its slots and returns its Slot.
     Raises LockError (the CLI's exit code) when it does not. cores: fewer cpu slots than the
     kind's size, 1..that size, never more; the kind's size is its whole number of cores
@@ -1331,7 +1334,9 @@ def book(kind, repo, slug, cores=None, hold=None, gpu_share=None, wait_s=None, n
     free. The record carries `within` (the list) and `within_slots`; its queue entry `within`.
     tree: the git tree hash the run tests (a gate's: kitlib.gate.runner.gated), recorded as `tree`
     and kept in its history line, so a gate's run is matched to the exact tree it tested;
-    Slot.note_tree records it on a run already held."""
+    Slot.note_tree records it on a run already held. branch: the git branch the run is for (a
+    branch gate's, which kitlib.gate.budget counts its runs by), recorded as `branch` and kept in
+    its history line."""
     store = store or Store()
     env = dict(os.environ if env is None else env)
     try:
@@ -1419,6 +1424,7 @@ def book(kind, repo, slug, cores=None, hold=None, gpu_share=None, wait_s=None, n
                        parent=parent["id"] if parent else None, gpu_share=gpu_share,
                        **({"gate": True} if gate else {}),
                        **({"tree": tree} if tree else {}),
+                       **({"branch": branch} if branch else {}),
                        **({"resource": resource} if resource else {}),
                        **({"priority": priority} if priority else {}),
                        **({"within": wtext, "within_slots": {"cpu": wslots}} if wtext else {}))
@@ -1564,12 +1570,13 @@ def expected_end(since, expect_s, max_s=10 * 365 * 86400):
         return None
 
 
-def request_stop(store, rid, by):
-    """Writes run rid's stop request (active/<id>.stop: {by_pid, at, by}). False when no such
-    run is live."""
+def request_stop(store, rid, by, session=None):
+    """Writes run rid's stop request (active/<id>.stop: {by_pid, at, by, session}; session is the
+    asker's session id or None). False when no such run is live."""
     if not os.path.exists(store.path("active", rid + ".json")):
         return False
-    write_json(store.path("active", rid + ".stop"), {"by_pid": os.getpid(), "at": iso(), "by": by})
+    write_json(store.path("active", rid + ".stop"), {"by_pid": os.getpid(), "at": iso(), "by": by,
+                                                     "session": session})
     store.bump()
     return True
 

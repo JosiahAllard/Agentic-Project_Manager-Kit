@@ -571,7 +571,8 @@ class Store:
     HISTORY_KEYS = ("id", "repo", "slug", "kind", "need", "cores", "gpus", "expect_s",
                     "expect_from", "since", "held_since", "ended", "code", "how", "cpu_s",
                     "peak_cpu_cores", "peak_mem_mb", "peak_commit_mb", "hold", "parent",
-                    "pinned", "given_back", "tree")
+                    "pinned", "given_back", "tree", "gate", "priority", "session", "role",
+                    "stopped_by", "branch")
     DOCKER_EXEC_RE = re.compile(r"\bdocker(\.exe)?\b.*\bexec\b", re.I)
 
     def history_append(self, d):

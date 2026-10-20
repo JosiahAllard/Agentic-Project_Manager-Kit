@@ -122,6 +122,18 @@ class Remove(RemoveCase):
         self.assertTrue(os.path.isdir(path))
         self.assertIn('kit/open', self.branches())
 
+    def test_unlanded_refusal_names_abandon_as_the_route_and_raw_git_as_owner_terminal_only(self):
+        """The refusal sent the owner raw git, which the hub refuses as a to-do; --abandon on a
+        ruling is the route, raw git the owner's own terminal only."""
+        self.workstream('open', commits=1)
+        rc, out = self.run_verb('remove', 'open')
+        self.assertEqual(rc, 1, out)
+        self.assertIn("abandon  the supported route, run on the owner's or the PM's ruling", out)
+        self.assertIn('--tag archive/<name>', out)
+        self.assertIn("in the owner's own terminal only (the Action Hub refuses these as a"
+                      " to-do)", out)
+        self.assertLess(out.index('--abandon "<why>"'), out.index('git worktree remove'))
+
     def test_landed_locally_but_not_pushed_is_unlanded(self):
         path = self.workstream('local')
         self.git('merge', '-q', '--no-ff', '-m', 'Merge', 'kit/local')
@@ -436,6 +448,59 @@ class Abandon(RemoveCase):
         self.assertIn('reused    tag archive/again', out)
         self.assertFalse(os.path.exists(path))
 
+    def test_a_named_tag_that_is_absent_is_made(self):
+        path = self.workstream('named')
+        tip = self.git('rev-parse', 'kit/named')
+        rc, out = self.abandon('named', tag='archive/api-named')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('tagged    archive/api-named -> %s' % tip[:10], out)
+        self.assertEqual(self.git('rev-parse', 'archive/api-named^{commit}'), tip)
+        self.assertEqual(self.git('tag', '-l', 'archive/named'), '')
+        self.assertFalse(os.path.exists(path))
+        self.assertNotIn('kit/named', self.branches())
+
+    def test_a_named_tag_on_the_tip_is_reused(self):
+        """The ruling's tag already holds the work, under another name than archive/<slug>."""
+        path = self.workstream('errand')
+        self.git('tag', 'archive/api-errand', 'kit/errand')
+        rc, out = self.abandon('errand', tag='archive/api-errand')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('reused    tag archive/api-errand', out)
+        self.assertEqual(self.git('tag', '-l', 'archive/errand'), '')
+        self.assertFalse(os.path.exists(path))
+
+    def test_a_named_tag_on_another_commit_refuses(self):
+        path = self.workstream('elsewhere')
+        self.git('tag', 'archive/other', 'main')
+        rc, out = self.abandon('elsewhere', tag='archive/other')
+        self.assertEqual(rc, 1, out)
+        self.assertIn('tag archive/other already exists on', out)
+        self.assertTrue(os.path.isdir(path))
+        self.assertIn('kit/elsewhere', self.branches())
+
+    def test_a_named_tag_outside_archive_refuses(self):
+        path = self.workstream('outside')
+        for tag in ('v1', 'archive/', 'archive/a..b'):
+            with self.subTest(tag=tag):
+                rc, out = self.abandon('outside', tag=tag)
+                self.assertEqual(rc, 1, out)
+                self.assertIn('--tag %s' % tag, out)
+        self.assertTrue(os.path.isdir(path))
+        self.assertEqual(self.git('tag', '-l'), '')
+
+    def test_the_rerun_line_keeps_a_named_tag(self):
+        self.fx.write('.gitignore', '*.local.md\n')
+        self.fx.commit('ignore', '.gitignore')
+        self.fx.git('push', '-q', 'origin', 'main')
+        path = self.workstream('ri')
+        self.fx.write('notes.local.md', 'mine\n', root=path)
+        rc, out = self.abandon('ri', tag='archive/api-ri', keep_branch=True)
+        self.assertEqual(rc, 1, out)
+        self.assertRegex(
+            out, r'(?m)^  rerun    .* ri --abandon "<why>" --tag archive/api-ri --keep-branch$')
+        self.assertEqual(self.git('tag', '-l', 'archive/*'), '')
+        self.assertTrue(os.path.isfile(os.path.join(path, 'notes.local.md')))
+
     def test_keep_branch(self):
         self.workstream('kb')
         rc, out = self.abandon('kb', keep_branch=True)
@@ -500,6 +565,51 @@ class AbandonLandedDirty(RemoveCase):
             self.assertEqual(f.read(), 'changed\n')
         self.assertTrue(os.path.exists(os.path.join(path, 'new', 'wip.txt')))
         self.assertIn('kit/lc', self.branches())
+
+    def saved(self, path, tip):
+        """A commit of the uncommitted work at `path` on `tip`, as a previous run saved it."""
+        tree, why = remove.snapshot_tree(path)
+        self.assertIsNotNone(tree, why)
+        return self.git('commit-tree', tree, '-p', tip, '-m', 'saved')
+
+    def test_a_named_tag_on_the_saved_work_is_reused(self):
+        path = self.landed_dirty('lr')
+        tip = self.git('rev-parse', 'kit/lr')
+        commit = self.saved(path, tip)
+        self.git('tag', 'archive/api-lr', commit)
+        rc, out = self.abandon('lr', tag='archive/api-lr')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('reused    tag archive/api-lr already holds this work (the tag --tag names)',
+                      out)
+        self.assertEqual(self.git('rev-parse', 'archive/api-lr^{commit}'), commit)
+        self.assertEqual(self.git('tag', '-l', 'archive/lr'), '')
+        self.assertFalse(os.path.exists(path))
+
+    def test_a_named_tag_on_the_bare_tip_refuses_and_touches_nothing(self):
+        path = self.landed_dirty('lt')
+        tip = self.git('rev-parse', 'kit/lt')
+        self.git('tag', 'archive/api-lt', tip)
+        rc, out = self.abandon('lt', tag='archive/api-lt')
+        self.assertEqual(rc, 1, out)
+        self.assertIn('tag archive/api-lt already exists on %s, not on the uncommitted work of'
+                      % tip[:10], out)
+        self.assertEqual(self.git('rev-parse', 'archive/api-lt^{commit}'), tip)
+        with open(os.path.join(path, 'lt-0.txt'), encoding='utf-8') as f:
+            self.assertEqual(f.read(), 'changed\n')
+        self.assertTrue(os.path.exists(os.path.join(path, 'new', 'wip.txt')))
+        self.assertIn('kit/lt', self.branches())
+
+    def test_the_rerun_line_keeps_a_named_tag(self):
+        self.fx.write('.gitignore', '*.local.md\n')
+        self.fx.commit('ignore', '.gitignore')
+        self.fx.git('push', '-q', 'origin', 'main')
+        path = self.landed_dirty('li')
+        self.fx.write('notes.local.md', 'mine\n', root=path)
+        rc, out = self.abandon('li', tag='archive/api-li')
+        self.assertEqual(rc, 1, out)
+        self.assertRegex(out, r'(?m)^  rerun    .* li --abandon "<why>" --tag archive/api-li$')
+        self.assertEqual(self.git('tag', '-l', 'archive/*'), '')
+        self.assertTrue(os.path.isfile(os.path.join(path, 'notes.local.md')))
 
 
 @real_git('git reflog: the fake writes no reflog')
@@ -908,8 +1018,27 @@ class AbandonBranch(RemoveCase):
 
     TODAY = datetime.date(2026, 10, 9)
 
-    def drop(self, branch, why='superseded'):
-        return self.run_verb('abandon_branch', branch, why, today=self.TODAY)
+    def drop(self, branch, why='superseded', **kw):
+        return self.run_verb('abandon_branch', branch, why, today=self.TODAY, **kw)
+
+    def test_a_named_tag_is_made_reused_or_refused(self):
+        tip = self.orphan('made')
+        rc, out = self.drop('kit/made', tag='archive/ruled-made')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('tagged    archive/ruled-made -> %s' % tip[:10], out)
+        self.assertNotIn('kit/made', self.branches())
+        tip = self.orphan('kept')
+        self.git('tag', 'archive/ruled-kept', tip)
+        rc, out = self.drop('kit/kept', tag='archive/ruled-kept')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('reused    tag archive/ruled-kept', out)
+        self.assertNotIn('kit/kept', self.branches())
+        self.orphan('clash')
+        self.git('tag', 'archive/ruled-clash', 'main')
+        rc, out = self.drop('kit/clash', tag='archive/ruled-clash')
+        self.assertEqual(rc, 1, out)
+        self.assertIn('already exists', out)
+        self.assertIn('kit/clash', self.branches())
 
     def test_an_unlanded_branch_is_tagged_then_deleted(self):
         tip = self.orphan('gone', commits=2)
@@ -1027,6 +1156,15 @@ class RemoveBranch(RemoveCase):
         self.assertIn('refused   branch kit/open holds UNLANDED work: 2 commit(s) not in origin/main',
                       out)
         self.assertIn('kit/open --branch --abandon "<why>"', out)
+        self.assertIn('kit/open', self.branches())
+
+    def test_unlanded_branch_refusal_names_abandon_as_the_route(self):
+        self.orphan('open')
+        rc, out = self.run_verb('remove_branch', 'kit/open')
+        self.assertEqual(rc, 1, out)
+        self.assertIn("abandon  the supported route, run on the owner's or the PM's ruling", out)
+        self.assertIn('the Action Hub refuses it as a to-do', out)
+        self.assertNotIn('git branch -D', out)
         self.assertIn('kit/open', self.branches())
 
     def test_landed_locally_but_not_pushed_is_unlanded(self):
@@ -1289,6 +1427,24 @@ class Cli(RemoveCase):
             rc, out = self.cli(*args)
             self.assertEqual(rc, 2, (args, out))
             self.assertIn('USAGE: ', out)
+
+    def test_tag_without_abandon_is_usage(self):
+        self.workstream('t')
+        for args in (['t', '--tag', 'archive/x'], ['t', '--branch', '--tag', 'archive/x'],
+                     ['--check', '--tag=archive/x'], ['t', '--abandon', 'w', '--tag'],
+                     ['t', '--abandon', 'w', '--tag', 'archive/a', '--tag', 'archive/b']):
+            rc, out = self.cli(*args)
+            self.assertEqual(rc, 2, (args, out))
+            self.assertIn('USAGE: ', out)
+            self.assertIn('--tag', out.rpartition('USAGE: ')[2])
+        self.assertIn('kit/t', self.branches())
+
+    def test_abandon_with_tag_through_the_cli(self):
+        self.workstream('clitag')
+        rc, out = self.cli('clitag', '--abandon', 'ruled', '--tag', 'archive/api-clitag')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('tagged    archive/api-clitag', out)
+        self.assertNotIn('kit/clitag', self.branches())
 
     def test_branch_abandon_through_the_cli(self):
         path = self.workstream('cli')

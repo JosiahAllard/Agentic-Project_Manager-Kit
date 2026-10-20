@@ -13,6 +13,9 @@ holds it (docs/worktree-remove.md).
   worktree_remove.py [-C DIR] <branch> --branch --abandon "<why>"
                                                                  UNLANDED local branch with NO worktree:
                                                                  tag archive/<name>, then delete it
+  ... --abandon "<why>" --tag archive/<name>                     either abandon, under the tag a
+                                                                 ruling names: made when absent,
+                                                                 reused on the tip, else refused
   worktree_remove.py [-C DIR] <path> --scratch                   a DETACHED tree under a temp folder
                                                                  whose dirt git already holds: restore,
                                                                  then remove
@@ -73,6 +76,26 @@ def split_root(argv):
         rest.append(a)
         i += 1
     return (root or '.'), rest
+
+
+def split_tag(args):
+    """`(tag or None, rest)`, or `(False, why)` when --tag is repeated or has no name."""
+    tag, rest, i = None, [], 0
+    while i < len(args):
+        a = args[i]
+        if a == '--tag' or a.startswith('--tag='):
+            if tag is not None:
+                return False, '--tag is given twice'
+            value = a[len('--tag='):] if a != '--tag' else (
+                args[i + 1] if i + 1 < len(args) else None)
+            if not value or value.startswith('-'):
+                return False, '--tag needs a tag name, archive/<name>'
+            tag = value
+            i += 1 if a != '--tag' else 2
+            continue
+        rest.append(a)
+        i += 1
+    return tag, rest
 
 
 def parse(args):
@@ -136,10 +159,16 @@ def main(argv=None):
     root, rest = split_root(argv)
     if root is None:
         return usage(rest)
+    tag, rest = split_tag(rest)
+    if tag is False:
+        return usage(rest)
     got = parse(rest)
     if isinstance(got, str):
         return usage(got)
     verb, target, why, keep, apply = got
+    if tag is not None and verb not in ('abandon', 'abandon-branch'):
+        return usage('--tag goes only with --abandon "<why>" (the tag the abandon keeps the work'
+                     ' under)')
     top, err = gitrepo.toplevel(root)
     if top is None:
         return usage('-C: %s' % err)
@@ -156,11 +185,11 @@ def main(argv=None):
         elif verb == 'scratch':
             outcome = scratch.remove_scratch(top, target)
         elif verb == 'abandon-branch':
-            outcome = remove.abandon_branch(top, target, why)
+            outcome = remove.abandon_branch(top, target, why, tag=tag)
         elif verb == 'remove-branch':
             outcome = remove.remove_branch(top, target)
         elif verb == 'abandon':
-            outcome = remove.abandon(top, target, why, keep_branch=keep)
+            outcome = remove.abandon(top, target, why, keep_branch=keep, tag=tag)
         else:
             outcome = remove.remove(top, target, keep_branch=keep)
     except KeyboardInterrupt:
