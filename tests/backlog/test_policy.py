@@ -75,7 +75,9 @@ class Sort(unittest.TestCase):
         self.assertEqual(policy.sort('set', {'unknown': True}),
                          ['set-text', 'set-price', 'set-price-owner', 'set-hold', 'set-other'])
         self.assertEqual(policy.sort('show', {'unknown': True}), ['read'])
-        self.assertEqual(policy.sort('catch-up'), [])          # no row names it: refused nowhere
+        self.assertEqual(policy.sort('catch-up'), ['read'])
+        self.assertEqual(policy.sort('catch-up', {'apply': True}), ['catch-up'])
+        self.assertEqual(policy.sort('frobnicate'), [])        # no row names it
 
 
 class Refusal(unittest.TestCase):
@@ -90,6 +92,8 @@ class Refusal(unittest.TestCase):
         self.assertTrue(text.endswith("this session's role is unlisted (only risk none)"), text)
         self.assertIn('`raw-write` (risk high) is for nobody', policy.refusal('owner', ['raw-write']))
         self.assertIsNone(policy.refusal(None, ['read']))
+        for role in ('owner', 'coordinator', 'worker', None):      # no row names it: fail closed
+            self.assertIn('no backlog action names this command', policy.refusal(role, []))
 
     def test_own_pull_is_the_record_pulled_by_that_branch(self):
         pulled = record(state='pulled', pulled_by='kit/wk')
@@ -234,6 +238,19 @@ class CliRole(unittest.TestCase):
         self.assertIn('FOO', self.ok('plain', 'show', 'FOO'))
         self.refused('coordinator', 'migrate', '--to', 'branch')
         self.assertIn('scope:', self.ok(None, 'show', 'FOO'))
+
+    def test_catch_up_apply_is_for_the_leads_and_the_plain_listing_for_everyone(self):
+        self.seed()
+        for mark in ('worker', 'deep-worker', 'plain'):
+            out = self.refused(mark, 'catch-up', '--apply', 'FOO.md')
+            self.assertIn('`catch-up` (risk medium)', out)
+            _, out = self.run_tool(mark, 'catch-up')
+            self.assertNotIn('REFUSED', out)
+        for mark in ('coordinator', 'pm', None):
+            _, out = self.run_tool(mark, 'catch-up', '--apply', 'FOO.md')
+            self.assertNotIn('the backlog action', out)            # past the role check
+            _, out = self.run_tool(mark, 'catch-up')
+            self.assertNotIn('REFUSED', out)
 
     def test_a_builder_may_edit_the_text_of_its_own_pull_only(self):
         self.seed()

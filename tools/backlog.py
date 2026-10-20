@@ -462,6 +462,8 @@ def main(argv=None):
         if args.verb == 'retarget':
             return do_retarget_dry(args, ctx)
         if args.verb == 'catch-up':
+            if args.apply is not None:
+                policy.check(args, ctx, None)    # the commit takes the `catch-up` row (roles.py)
             return do_catch_up(args, store)
         if args.verb == 'check':
             snap, note = checkmod.load_for_check(store)

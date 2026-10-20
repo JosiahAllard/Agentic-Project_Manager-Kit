@@ -70,13 +70,15 @@ def _narrow(names):
 
 def sort(verb, given=None, rec=None):
     """The ACTIONS rows (names) the command `verb` with `given` takes on the record `rec` (None: not
-    read, so the strictest the record could make it), narrowed by `over`. A verb no row names
-    (catch-up) takes none; a dry run (retarget without --apply, migrate --dry-run) is a read."""
+    read, so the strictest the record could make it), narrowed by `over`. A verb no row names takes
+    none, and refusal() refuses that for every role; a dry run (retarget without --apply,
+    migrate --dry-run, catch-up without --apply) is a read."""
     given = given or {}
     if verb is None:
         return [n for n in roles.ACTIONS if n != 'read']
     if verb in READS or (verb == 'retarget' and not given.get('apply')) or \
-            (verb == 'migrate' and given.get('dry_run')):
+            (verb == 'migrate' and given.get('dry_run')) or \
+            (verb == 'catch-up' and not given.get('apply')):
         return ['read']
     if given.get(UNKNOWN):
         return _verb_rows(verb)
@@ -123,7 +125,10 @@ def _who(row):
 
 def refusal(role, rows, facts=()):
     """The text for the first of `rows` (sort's names) `role` (role_of's answer, None: unlisted)
-    may not take with `facts`, or None when it may take each."""
+    may not take with `facts`, or None when it may take each. No row at all (a verb no row names)
+    is refused for every role: a role fails closed."""
+    if not rows:
+        return 'no backlog action names this command; it is refused for every role'
     for name in rows:
         if roles.allows(name, role, facts):
             continue
@@ -164,7 +169,8 @@ def given_of(args):
             'ruling': getattr(args, 'ruling', None) is not None,
             'owner_ask': getattr(args, 'owner_ask', None) is not None,
             'on': on if isinstance(on, list) else [on] if on else [],
-            'apply': bool(getattr(args, 'apply', None)),
+            'apply': (getattr(args, 'apply', None) is not None if args.verb == 'catch-up'
+                      else bool(getattr(args, 'apply', None))),     # `catch-up --apply` alone counts
             'dry_run': bool(getattr(args, 'dry_run', None))}
 
 
