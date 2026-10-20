@@ -348,6 +348,28 @@ class Pure(unittest.TestCase):
                                                     author=author)))
         self.assertFalse(land.is_author(dict(REVIEWER, author='Kit Test (agent), strong-worker')))
 
+    def test_is_author_finds_the_reviewer_type_as_a_word_anywhere_in_the_author(self):
+        for author in ('Kit Test (agent) (pm-kit:strong-worker)', 'Kit Test | strong-worker',
+                       'Kit Test & strong-worker', 'Kit Test strong-worker',
+                       'Kit Test (agent) other-plugin:Strong-Worker.', 'strong-worker'):
+            with self.subTest(author=author):
+                self.assertTrue(land.is_author(dict(REVIEWER, reviewer='pm-kit:strong-worker',
+                                                    author=author)))
+
+    def test_is_author_never_matches_part_of_a_longer_type(self):
+        for reviewer, author in (('pm-kit:worker', 'Kit Test | strong-worker'),
+                                 ('pm-kit:worker', 'Kit Test (agent) (pm-kit:strong-worker)'),
+                                 ('worker', 'Kit Test & weak-worker'),
+                                 ('pm-kit:worker', 'Kit Test workers'),
+                                 ('pm-kit:strong-worker', 'Kit Test | worker'),
+                                 ('pm-kit:strong-worker', 'Kit Test (pm-kit:worker)'),
+                                 ('pm-kit:strong-worker', 'Kit Test strong-worker-2'),
+                                 ('pm-kit:strong-worker', 'Kit Test strong-worker_x'),
+                                 ('pm-kit:reviewer', 'Kit Test | strong-worker')):
+            with self.subTest(reviewer=reviewer, author=author):
+                self.assertFalse(land.is_author(dict(REVIEWER, reviewer=reviewer,
+                                                     author=author)))
+
     def test_strong_alias_maps_a_full_model_id_and_refuses_the_rest(self):
         strong, weak = {'opus'}, {'haiku', 'sonnet', 'account-default'}
         for model, alias in (('opus', 'opus'), (' Opus ', 'opus'),
