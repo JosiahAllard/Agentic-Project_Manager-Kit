@@ -603,15 +603,15 @@ read; they are disabled unless the snapshot says `strong`, and a refusal (a 403 
 on the card in the server's words (`DomTest` in `tests/hubsite/test_page.py`).
 
 ## Machine lock routes
-The hub server reads the machine lock in-process through `kitlib.lock.api` (R-2295), for the
+The hub server reads the machine lock in-process through `kitlib.lock.api` (the owner's decision), for the
 schedule view the page will show. `kitlib/hubsite/api.py` docstring "Machine lock" is the
 source; the server's door to the lock is `kitlib/hubsite/lockdoor.py`, made by
 `serve.machine_sources` and first opening the lock on its first read.
 - Three routes, all the owner's: `GET /api/v1/lock/view`, `GET /api/v1/lock/stats` and
   `GET /api/v1/lock/wait`. An agent token, or no token, is refused every one with 403
   `forbidden` (field `role`) on the local and the tunnel listener alike, before the lock is
-  read. The lock's writes are not hub routes, and the lock MCP server keeps no write path
-  (R-2222).
+  read. The lock's writes are not hub routes, and the lock MCP server keeps no write path,
+  by the owner's decision.
 - `lock/view` answers `{lock_revision, view}`: the schedule window's view as JSON
   (`kitlib.lockui.model.to_json`): holds, runs, the strip, lanes, details, cores, memory,
   warnings, the game slots and the CPU division. One allow-list of keys serves both

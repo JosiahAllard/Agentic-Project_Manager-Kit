@@ -273,7 +273,7 @@ class RolesCase(unittest.TestCase):
                 ('POST', '/approvals/{id}/consume'): AGENT,
                 ('GET', '/approvals/{id}/verify'): AGENT,
                 # the machine lock's reads are the owner's: an agent reads the lock through its
-                # own MCP server, never through the hub (R-2295)
+                # own MCP server, never through the hub (the owner's decision)
                 ('GET', '/lock/view'): OWNER, ('GET', '/lock/stats'): OWNER,
                 ('GET', '/lock/wait'): OWNER}
         have = {key(r): r.role for r in api.ROUTES}

@@ -127,7 +127,7 @@ Both are read now, never cached, and neither is part of GET snapshot.
 They raise HubErrors as the record views do; a `store` one carries the store's text, which only
 the local owner is given. POST records/{repo}/{id}/delete takes `confirm`, which must repeat the id.
 
-Machine lock (R-2295). The hub reads the machine lock in-process, through `lock`: a door object
+Machine lock. By the owner's decision the hub reads the machine lock in-process, through `lock`: a door object
 (kitlib.hubsite.lockdoor.LockDoor on the machine's server; this module never imports it) with
   revision()                     the lock store's revision
   view(remote=False)             {lock_revision, view}: kitlib.lockui.model to_json's view

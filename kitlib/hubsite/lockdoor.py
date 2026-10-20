@@ -1,5 +1,5 @@
 """kitlib.hubsite.lockdoor: the hub server's door to the machine lock, which it calls in-process
-through kitlib.lock.api (R-2295). The Api's GET lock/view, lock/stats and lock/wait read the lock
+through kitlib.lock.api, by the owner's decision. The Api's GET lock/view, lock/stats and lock/wait read the lock
 only through a door (kitlib.hubsite.api, "Machine lock"); kitlib.hubsite.serve gives the machine's
 server this one.
 

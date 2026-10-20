@@ -1,5 +1,5 @@
 """The hub's machine lock routes (GET lock/view, lock/stats, lock/wait) and
-kitlib.hubsite.lockdoor, the door they read the lock through, in-process (R-2295). The routes are
+kitlib.hubsite.lockdoor, the door they read the lock through, in-process. The routes are
 the owner's: an agent is refused every one. Listeners bind port 0 on the loopback address; the
 real door reads a scratch lock store (tests.lock.helpers), never this machine's."""
 import json
