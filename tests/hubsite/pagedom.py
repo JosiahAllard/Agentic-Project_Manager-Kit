@@ -145,8 +145,9 @@ globalThis.fetch = (url, init) => {
   const own = server.route ? server.route(call) : undefined;
   if (own instanceof Error) return Promise.reject(own);
   if (own) return Promise.resolve(answer(own.status, own.body, own.headers, own.cut));
-  // A long-poll hangs until the test answers it, or until the page gives up on it through its signal.
-  if (path.startsWith("/wait")) return new Promise((done, fail) => {
+  // A long-poll (the hub's, or the machine lock's) hangs until the test answers it, or until the page gives up on it
+  // through its signal.
+  if (/^\/(lock\/)?wait/.test(path)) return new Promise((done, fail) => {
     waits.push(done);
     if (init.signal) init.signal.addEventListener("abort", () => { const i = waits.indexOf(done); if (i >= 0) waits.splice(i, 1); fail(new Error("aborted")); });
   });
