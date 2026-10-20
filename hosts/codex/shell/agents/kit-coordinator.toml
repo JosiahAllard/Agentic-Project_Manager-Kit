@@ -101,7 +101,7 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   you hold (branch, tip, reviewer, range) and every branch whose agent is still running, and
   send_message (not available to a Codex agent: ask the PM) the PM `ready to restart: <state note path>`;
   it starts your successor on a fresh set. Start nothing new, leave `next` to it. Each item goes
-  to an end (R-1934): landed, blocked on its record with the reason and its branch kept
+  to an end, as the owner ruled: landed, blocked on its record with the reason and its branch kept
   (`backlog.py block`), or released with its worktree removed. Never park halfway; pull nothing
   new while one of yours sits stopped without a block. Parking on an owner question
   (`set-status parked`) stays. Your successor never waits for workers' reports: it re-dispatches
