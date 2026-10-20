@@ -25,6 +25,9 @@
       wait for BRANCH's result record at SHA, print it; 0 pass, 1 any other verdict, 7 no record
       at that tip within S seconds. Its one write: a running record at SHA whose process died is
       finished `error` (kitlib.gate.result.finish_dead)
+  gate.py allow BRANCH --runs N --why TEXT [-C DIR]
+      allow BRANCH N gate runs in all, past the branch gate budget (kitlib.gate.budget; a branch
+      gate is refused (4) before booking one more): the coordinator's call, never the builder's
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.gate, prints and exits.
 Exit codes (kitlib.gate): 0 OK, 1 FAILED, 2 USAGE, 3 STUCK, 4 REFUSED, 5 BUSY; 9 LANDED_UNGATED
@@ -53,7 +56,7 @@ from kitlib import gate as G                                       # noqa: E402
 from kitlib import pluginsource                                    # noqa: E402
 from kitlib.config import policy                                  # noqa: E402
 from kitlib.gate import land as landmod                            # noqa: E402
-from kitlib.gate import caller, measure, runner                    # noqa: E402
+from kitlib.gate import budget, caller, measure, runner            # noqa: E402
 from kitlib.gate import result as resultmod                       # noqa: E402
 from kitlib.gate import submit as submitmod                        # noqa: E402
 from kitlib.lock import layout as lay                              # noqa: E402
@@ -212,6 +215,33 @@ def do_wait(argv):
     return G.OK if rec.get('verdict') == 'pass' else G.FAILED
 
 
+def allow_parser():
+    p = Parser(prog='gate.py allow',
+               description='Allow BRANCH more gate runs than the branch gate budget gives '
+                           '(docs/gate.md "The branch gate budget"). Its coordinator runs it.')
+    p.add_argument('branch')
+    p.add_argument('--runs', required=True, type=int, metavar='N',
+                   help='the new total of gate runs, a whole number above %d' % budget.RUNS)
+    p.add_argument('--why', required=True, help='what the runs found and why more are needed')
+    p.add_argument('-C', dest='root', default='.', help='any checkout of the repository')
+    return p
+
+
+def do_allow(argv):
+    a = allow_parser().parse_args(argv)
+    root = os.path.abspath(a.root)
+    try:
+        path, used = budget.allow(root, a.branch, a.runs, a.why, Store(say=say))
+    except ValueError as e:
+        print('USAGE: %s' % e, file=sys.stderr)
+        return G.USAGE
+    except budget.BudgetError as e:
+        print('REFUSED: %s; nothing written' % e)
+        return G.REFUSED
+    print('ALLOWED %s: %d gate runs (%d used); %s' % (a.branch, a.runs, used, path))
+    return G.OK
+
+
 def emit(outcome):
     for line in outcome.lines:
         print(line, flush=True)
@@ -282,6 +312,8 @@ def main(argv):
             return do_wait(argv[1:])
         if argv[:1] == ['land']:
             return do_land(argv[1:])
+        if argv[:1] == ['allow']:
+            return do_allow(argv[1:])
         a = gate_parser().parse_args(argv)
         if a.measure:
             if a.only or a.full or a.plan or a.base:
