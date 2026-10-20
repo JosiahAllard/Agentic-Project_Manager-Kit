@@ -1491,12 +1491,37 @@ def slot(kind, repo, slug, **kw):
         yield s.launcher
 
 
+NO_CWD_ENV = "NoDefaultCurrentDirectoryInExePath"
+
+
+def bare_hint(cmd, err):
+    """The text that follows a failed start of a list command whose first item is a bare name
+    (no folder part) that is a file in this process's folder while NoDefaultCurrentDirectoryInExePath
+    is set: Windows then does not look in the current folder for a bare name (agent hosts set it),
+    so the hint names the folder and the .\\<name> form that runs. "" in every other case,
+    including a current folder that cannot be read (removed under us)."""
+    if not isinstance(err, FileNotFoundError) or isinstance(cmd, str) or not cmd:
+        return ""
+    name = str(cmd[0])
+    if not name or os.path.dirname(name) or not os.environ.get(NO_CWD_ENV):
+        return ""
+    try:
+        here = os.getcwd()
+    except OSError:
+        return ""
+    if not os.path.isfile(os.path.join(here, name)):
+        return ""
+    return ("; %s is in %s, but %s is set, so Windows does not look in the current folder for a "
+            "bare name: run it as .\\%s" % (name, here, NO_CWD_ENV, name))
+
+
 def run_command(cmd, kind, repo, slug, **kw):
     """`machine_lock.py run`: book, run cmd in the run's job, release, then say the run's window
     report (Slot.window_lines). Returns the command's exit code (130 on Ctrl+C, 1 when it could
     not start or stop cancelled it). Raises LockError when the run is refused or gives up
     waiting. A bare bash with no Git Bash to run it (kitlib.proc.bash) is refused before the run
-    books: 1, no record."""
+    books: 1, no record. The command starts in this process's folder; a bare name there that does
+    not start is said with the .\\<name> form that runs (bare_hint)."""
     store = kw.get("store") or Store()
     kw["store"] = store
     try:
@@ -1510,7 +1535,7 @@ def run_command(cmd, kind, repo, slug, **kw):
         try:
             p = s.start(cmd, give_back=True)
         except OSError as e:
-            store.say("could not start the command: %s" % e)
+            store.say("could not start the command: %s%s" % (e, bare_hint(cmd, e)))
             return 1
         store.say(s.held_text())
         code, how = s.wait(p)
