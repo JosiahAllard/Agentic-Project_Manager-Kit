@@ -28,6 +28,7 @@ body{background:var(--bg);color:var(--fg);font:15px/1.55 var(--f-body);margin:0}
 header{display:grid;gap:4px}
 h1{font-size:1.6rem;margin:0;font-weight:700;letter-spacing:-.01em;text-wrap:balance}
 .sub{color:var(--muted);margin:0;max-width:62ch}
+.links{margin:0;font-size:.9rem}.links a{color:var(--accent)}
 .tabs{display:flex;flex-wrap:wrap;gap:6px}
 .tab{font:600 .85rem var(--f-body);border:1px solid var(--line);background:var(--surface);color:var(--fg);padding:6px 12px;border-radius:999px;cursor:pointer;display:inline-flex;gap:6px;align-items:center}
 .tab[aria-selected="true"]{background:var(--accent);border-color:var(--accent);color:var(--surface)}
@@ -168,6 +169,7 @@ button.danger{color:var(--warn)}
   <header>
     <h1>Action Hub</h1>
     <p class="sub">Questions from the PM and the coordinators, the PM's answers to what you ask, the steps only you can do, and your backlogs. Answer and tick off whenever you like; nothing waits on you.</p>
+    <p class="links"><a href="/lock.html">Machine schedule</a>: who holds this PC's slots, the week ahead and what ran.</p>
     <div class="status" id="pmseen" role="status"></div>
     <div class="status err" id="loaderr" role="alert" hidden></div>
   </header>

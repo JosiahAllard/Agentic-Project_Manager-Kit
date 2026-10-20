@@ -1,5 +1,6 @@
-"""The hub's machine lock routes (GET lock/view, lock/stats, lock/wait) and
-kitlib.hubsite.lockdoor, the door they read the lock through, in-process. The routes are
+"""The hub's machine lock reads (GET lock/view, lock/stats, lock/wait) and
+kitlib.hubsite.lockdoor, the door they read the lock through, in-process (its writes:
+tests.hubsite.test_lock_writes). The routes are
 the owner's: an agent is refused every one. Listeners bind port 0 on the loopback address; the
 real door reads a scratch lock store (tests.lock.helpers), never this machine's."""
 import json
@@ -19,7 +20,8 @@ LOCK_PATHS = ('/lock/stats', '/lock/view', '/lock/wait')
 
 
 def lock_routes():
-    return [r for r in api.ROUTES if roles.key(r)[1].startswith('/lock/')]
+    """The lock's read routes (its writes: tests.hubsite.test_lock_writes)."""
+    return [r for r in api.ROUTES if roles.key(r)[1].startswith('/lock/') and r.method == 'GET']
 
 
 def with_query(route, role=OWNER):
@@ -79,7 +81,7 @@ class RoutesCase(httpfix.ListenerCase):
         self.api = api.Api(self.store, views=httpfix.Views(), clock=httpfix.CLOCK, lock=self.door)
         self.api.lock_poll_s = 0.02
 
-    def test_the_lock_routes_are_three_and_all_the_owners(self):
+    def test_the_lock_reads_are_three_and_all_the_owners(self):
         self.assertEqual(sorted(roles.key(r)[1] for r in lock_routes()), list(LOCK_PATHS))
         for route in lock_routes():
             self.assertEqual((route.method, route.role), ('GET', OWNER), route.pattern)
