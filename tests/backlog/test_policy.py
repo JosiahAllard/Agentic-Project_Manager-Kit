@@ -131,6 +131,7 @@ class ReadArgv(unittest.TestCase):
         """The tool's parser drops a `--` right before the verb, so the verb's options after it are
         still options: each such command sorts as it does without the `--`."""
         parser = BACKLOG.build_parser()
+        rec = record()                                    # read, so a price sorts by its value
         rows = ((('retarget', 'A', 'B', '--apply'), ['retarget']),
                 (('set', 'FOO', '--priority', '1'), ['set-price-owner']),
                 (('pull', 'FOO', '--ruling', 'R'), ['pull-collision']),
@@ -141,7 +142,7 @@ class ReadArgv(unittest.TestCase):
                 parser.parse_args(list(line))            # the tool takes it
                 a = policy.read_argv(words(*line))
                 self.assertEqual((a.verb, a.rid), (argv[0], argv[1]), line)
-                self.assertEqual(policy.sort(a.verb, a.given), want, line)
+                self.assertEqual(policy.sort(a.verb, a.given, rec), want, line)
                 self.assertEqual(a.given, policy.read_argv(words(*argv)).given, line)
 
     def test_a_word_it_cannot_read_counts_as_unknown(self):

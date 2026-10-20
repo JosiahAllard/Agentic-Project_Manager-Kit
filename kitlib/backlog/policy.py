@@ -251,7 +251,7 @@ def read_argv(words):
     root = branch = verb = rid = None
     given = {'fields': [], 'priority': [], 'on': []}
     k, n = 0, len(words)
-    plain = False                               # after `--`: every word is an operand
+    plain = False                               # after `--` past the verb: every word is an operand
     while k < n:
         text, ok = words[k]
         if not ok:
@@ -284,7 +284,7 @@ def read_argv(words):
                     branch = value
                 k += 1
                 continue
-            verb = text
+            verb, plain = text, False           # the parser drops a `--` right before the verb
             if verb not in OPTIONS:
                 return Argv(root, branch, verb, None, {UNKNOWN: True}, False)
             k += 1
