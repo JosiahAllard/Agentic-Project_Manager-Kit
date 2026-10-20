@@ -9,7 +9,7 @@ lines). Nothing here prints. The checks, in order, are the PM tool's:
 - the target: under `"repo".worktrees_dir` or another registered host's worktree folder
   (kitlib.worktree.hostdirs; homes_of: a folder reached through a junction is not one), not
   `"worktree_remove".exempt`, present, registered (a stump is named and never deleted), and on
-  one of `branch_template`'s branches when one is set, unless it is detached (R-2365); or, named
+  one of `branch_template`'s branches when one is set, unless it is detached; or, named
   by its PATH, a registered DETACHED tree outside those folders (`outside_target`: not the main
   checkout nor in it, no link on the way, not locked, holding no other registered tree); the plain
   verb (`remove`) alone also takes such a tree on a branch (the owner's rule: only that deliberate
@@ -909,7 +909,7 @@ def registered_target(ctx, argument, branch_ok=False):
                 '           Clearing it is a human decision; this tool never deletes a leftover.')
         return REFUSED
     registered_path, branch = known[canon(path)]
-    # R-2365: a detached tree has no branch to hold to a template; the HEAD reflog check
+    # A detached tree has no branch to hold to a template; the HEAD reflog check
     # (kept_reflog) still guards what it made.
     if s['branch_template'] and branch != '(detached)':
         slug = os.path.basename(os.path.normpath(registered_path))

@@ -681,7 +681,7 @@ class ReadOnly(ClassifyCase):
 @real_git('git reflog: the fake writes no reflog, and an orphan is read from its admin folder')
 class Orphans(ClassifyCase):
     """O: a registered tree whose folder is gone. Its admin folder (`git worktree remove` deletes
-    it) may keep a commit no ref reaches; then it is left for the owner (KIT-WORKTREE-LEFTOVERS)."""
+    it) may keep a commit no ref reaches; then it is left for the owner."""
 
     def detached_orphan(self, slug):
         """A detached tree that made a commit, checked out main again and lost its folder: only

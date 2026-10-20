@@ -398,7 +398,7 @@ class Outcomes(ApplyCase):
 
 class Orphans(ApplyCase):
     """O: --apply drops a stale registration and keeps its branch, unless its admin folder keeps a
-    commit no ref reaches (KIT-WORKTREE-LEFTOVERS)."""
+    commit no ref reaches."""
 
     def test_a_stale_registration_is_dropped_and_its_branch_kept(self):
         path = self.workstream('gone')

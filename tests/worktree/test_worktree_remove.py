@@ -506,7 +506,7 @@ class AbandonLandedDirty(RemoveCase):
 class DetachedReflog(RemoveCase):
     """A DETACHED tree in a worktree folder: a commit made there and left by a checkout lives only
     in its HEAD reflog, which `git worktree remove` deletes, so both verbs check that reflog as
-    they do an outside tree's (KIT-WORKTREE-LEFTOVERS)."""
+    they do an outside tree's."""
 
     TODAY = datetime.date(2026, 10, 20)
 
@@ -575,7 +575,7 @@ class DetachedReflog(RemoveCase):
 
 @real_git('git reflog: the fake writes no reflog, and a detached tree here is checked by it')
 class DetachedTemplate(RemoveCase):
-    """R-2365: `branch_template` holds a tree on a branch to its template; a DETACHED tree in the
+    """`branch_template` holds a tree on a branch to its template; a DETACHED tree in the
     worktree folder has no branch, so the template is not asked of it, and the HEAD reflog check
     still runs."""
 
@@ -622,8 +622,7 @@ class DetachedTemplate(RemoveCase):
 @real_git('git worktree remove of a missing folder: the fake does not model it, nor a reflog')
 class PruneOrphan(RemoveCase):
     """remove.prune_orphan (`--classify --apply` on an O tree): drops one stale registration and
-    keeps its branch; refuses whatever could lose a commit or is not stale
-    (KIT-WORKTREE-LEFTOVERS)."""
+    keeps its branch; refuses whatever could lose a commit or is not stale."""
 
     def prune(self, path):
         ctx, refused = remove.open_ctx(self.repo)
