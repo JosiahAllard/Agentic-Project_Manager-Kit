@@ -12,9 +12,10 @@ whatever they are (a crash's 0xC0000005 too: kitlib.proc.spawn.exit_code). Run f
 (python.exe) it changes nothing: PROGRAM shares that console.
 
 A thin entry point (ARCHITECTURE.md, Layers): kitlib.proc.spawn.carry does the work. It prints one
-thing, USAGE on stderr when no PROGRAM is named, and only when it has a stderr (pythonw has none
-unless whoever started it gave it one; a scheduled task gives none). Exit codes: PROGRAM's own;
-2 no PROGRAM named; 127 PROGRAM could not be started.
+thing, USAGE on stderr when no PROGRAM is named, and only when it has a stderr it can write to
+(pythonw has none unless whoever started it gave it one; a scheduled task is expected to give none,
+not measured). Exit codes: PROGRAM's own; 2 no PROGRAM named, also when the stderr is a closed pipe;
+127 PROGRAM could not be started.
 
 So that a failure is not silent with no stderr, an exit of 127 and an exception out of the carry
 each append one JSON line (PROGRAM's file name, never its arguments; for an exception, its type
@@ -51,7 +52,11 @@ def main(argv):
     if argv and code == spawn.EXIT_NO_START:
         note(argv, 'exit %d (it could not be started, or it exited %d itself)' % (code, code))
     if not argv and sys.stderr is not None:
-        sys.stderr.write(USAGE + '\n')
+        try:
+            sys.stderr.write(USAGE + '\n')
+            sys.stderr.flush()
+        except OSError:                   # a closed pipe: the exit stays 2
+            sys.stderr = None             # else the flush at interpreter exit fails and exits 120
     return code
 
 

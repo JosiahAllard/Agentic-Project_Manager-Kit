@@ -73,9 +73,10 @@ listener's word and no client's: a header that says exactly it is read as no hea
 a listener that reads the header records its own `via` then (the local one: `api`) and only
 the tunnel listener ever records `tunnel`.
 
-Waits. GET wait blocks in the Api for up to api.WAIT_MAX_S. At most max_waits requests may be in
-it at once on one listener: the next is refused at once with 429 `busy` and a Retry-After, and
-takes no slot. The counters are guarded by one lock that is held for a few statements and never
+Waits. GET wait and GET lock/wait (api.WAIT_HANDLERS) block in the Api for up to
+api.WAIT_MAX_S. At most max_waits requests may be in them at once on one listener: the next is
+refused at once with 429 `busy` and a Retry-After, and takes no slot. A caller the route refuses
+(an agent on lock/wait) takes no slot either: it gets the Api's 403, never a 429. The counters are guarded by one lock that is held for a few statements and never
 across a wait, a body read or a response.
 
 Closing. A read on a connection waits for bytes in slices of POLL_S seconds, for at most
@@ -721,7 +722,9 @@ class _Handler(http.server.BaseHTTPRequestHandler):
     def _api(self, listener, request):
         api = listener.api
         found = _api.match(request.method, request.path)
-        waits = found is not None and found[0].handler is _api.wait and request.role is not None
+        # a wait takes a slot only when its route lets this caller in: the Api refuses the rest
+        waits = (found is not None and found[0].handler in _api.WAIT_HANDLERS
+                 and request.role is not None and found[0].role in (_api.ANY, request.role))
         if waits and not listener._wait_enter():
             return refusal(429, BUSY, 'this server already holds its %d waits: ask again in a '
                            'moment' % listener.max_waits, 'wait',

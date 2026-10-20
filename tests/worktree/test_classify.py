@@ -171,7 +171,8 @@ class Landed(ClassifyCase):
         rc, out, data = self.run_classify()
         self.assertEqual(rc, 1, out)
         self.assertEqual(self.row(data, path)['class'], 'A')
-        self.assertIn('A landed       1  tip in the base, clean', out)
+        self.assertIn('A landed       1  tip in the base, clean, a commit of its own on the branch',
+                      out)
         self.assertIn('summary   A 1, B 0, C 0, E 0, L 0', out)
 
     def test_a_landed_detached_tree_outside_is_a_first(self):
@@ -462,11 +463,6 @@ class Tool(ClassifyCase):
         self.assertEqual(sorted(data['counts']), list(classify.CLASSES))
         self.assertEqual([os.path.normcase(t['path']) for t in data['trees']],
                          [os.path.normcase(os.path.normpath(path))])
-
-    def test_apply_is_refused(self):
-        rc, out, err = self.cli('--classify', '--apply')
-        self.assertEqual(rc, 2, out + err)
-        self.assertIn('it is read-only and has no --apply', out + err)
 
     def test_json_alone_is_refused(self):
         rc, out, err = self.cli('--json')

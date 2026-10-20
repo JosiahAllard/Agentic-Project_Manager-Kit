@@ -1,4 +1,4 @@
-# Flaky tests: a time fence (design, not built)
+# Flaky tests: a time fence (design; first step built)
 
 A flaky test is a test whose result the machine's speed can decide. The kit already fences two
 of the three ways that happens: git (docs/test-tools.md "Fake git": the fake answers in-process,
@@ -13,6 +13,10 @@ asserts `checkout  NOT CHECKED`. It reaches `kitlib.agentstart.text` through the
 (kitlib/agentstart/__init__.py). On a loaded machine the start block took 1128 ms, so the
 output was `NOT CHECKED - the rest: over the 1.0 s budget` and a full gate went red. The test
 holds no time token at all: the wall-clock budget is a production default it cannot see.
+
+A stopgap later wrapped `agentstart.text` in that test to pass `budget=60.0`, so the test no
+longer checked the hook's own default. The first build step (below) replaced the wrapper: the
+test now runs the default, under the fence.
 
 Evidence from other runs (facts as reported; the pattern is one: a fixed short timeout measures machine load, not correctness):
 
@@ -52,6 +56,8 @@ something hangs or the machine is many times slower than expected.
 
 ## Recommendation: B, the time fence
 
+Steps 1 to 3 are built (see "First build step"); step 4 is how the fence behaves.
+
 1. `kitlib/clock.py`: `budget(seconds)` returns `seconds`, or `CEILING` (600 s, past
    `kitlib.tooldeps.selfrun.UNIT_TIMEOUT`) in a fenced process (`KIT_TIME_FENCE=1`).
 2. tests/__init__.py sets `KIT_TIME_FENCE=1` beside `KIT_FAKE_GIT`; tools/kit_tests.py
@@ -81,9 +87,9 @@ nothing until it fails twice); `test_selfrun.py:326` (`< 4.5` s) is the likelies
 ## Fit with the gate, redfirst and the known-flake list
 
 - Gate: no new step. The fence lives in the test process, as the fake git does; a
-  `tests/clock` test proves a fenced process gets the ceiling and an explicit budget passes
-  through, and that a child started with the test's environment is fenced while one built
-  without the marker is not. A file directly in `kitlib/` is a `full` glob in
+  `tests/clock` test proves a fenced process gets the ceiling, and a child started with the
+  test's environment is fenced while one built without the marker is not; tests/agentstart
+  `test_the_budget_cuts_what_is_left` proves an explicit budget passes through. A file directly in `kitlib/` is a `full` glob in
   tests/selection.json, so the build branch runs the whole suite; later changes there do too.
 - Redfirst: the first build's test is the case itself, made to fail at will: the agentview
   start test with a git stub that takes 1.2 s. At the base it reads `over the 1.0 s budget`
@@ -95,8 +101,38 @@ nothing until it fails twice); `test_selfrun.py:326` (`< 4.5` s) is the likelies
   real until the same tip passes a rerun" reads as a rerun for every failure; it should say
   a failure is real, with no rerun unless listed.
 
-## First build step
+## First build step (built)
 
 One branch: `kitlib/clock.py` (`budget`, `CEILING`, `fenced`), the two lines of wiring,
 `kitlib.agentstart` routed through it, its `tests/clock` test, and the 1.2 s agentview
 redfirst test above. The Codex hook `DEADLINE` stays out of it (the open question above).
+
+What it built:
+
+- `kitlib/clock.py`: `FENCE_ENV` (`KIT_TIME_FENCE`), `CEILING` (600 s), `fenced(environ=None)`
+  and `budget(seconds)`. Both read the environment at each call, so a test that patches it is
+  seen at once.
+- Wiring: tests/__init__.py sets the marker unless it is set; tools/kit_tests.py `child_env`
+  does the same for every unit. A pool worker replaces its environment for each unit, which is
+  why kit_tests marks the units itself, as it does the home fence's marker. kit_tests' own
+  process stays unmarked.
+- `kitlib.agentstart`: `text` and `lines` take `budget=None`, resolved in `lines` with
+  `clock.budget(BUDGET)`. A budget passed in is used as is.
+- tests/clock/test_clock.py:
+  - the test process is fenced and an unmarked one gets the budget;
+  - only `1` fences, and the ceiling is past the unit timeout;
+  - a kit child started with the test's environment is fenced, and one built without the
+    marker is not;
+  - `child_env` marks the units and keeps an outer value;
+  - outside tests/, in a file of any kind, only kitlib/clock.py, tools/kit_tests.py and this doc name the marker.
+- tests/agentview/test_agentview.py `Start`:
+  - `test_a_dispatched_role_on_claude_shows_the_agent_start_block` runs the hook's default
+    budget with a `repo.classify` stub that takes 1.2 s, and asserts `NOT CHECKED` and no
+    `over the` line. It is red without the fence.
+  - `test_a_real_run_keeps_the_one_second_budget` pops the marker, blocks the stub on an
+    Event, and asserts `over the 1.0 s budget`.
+
+The reviewer rule: a budget whose expiry is a normal output (a degrade) goes through
+`clock.budget` with `budget=None` as its default. A ceiling that only ends a hang does not. A
+test of the over-budget path passes an explicit budget, or pops the marker as the real-run test
+does. Nothing outside the test runner sets the marker, and the tests/clock scan holds that.
