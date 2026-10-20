@@ -16,6 +16,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `.claude/agent-profile.md` | stub: the profile moved to docs/agent-profile.md | an agent names the old path | kw: profile
 - `.codex/agent-profile.md` | stub: the profile is docs/agent-profile.md | an agent names the host's profile path | kw: profile
 - `docs/ROSTER.md` | agent roster | choosing an agent | kw: roster, agents
+- `docs/allow-rules.md` | allow rules for landing: the permission lines allow_rules.py prints, what each lets through | letting an agent submit a landing without a prompt | kw: allow-rules, allow_rules, permissions
 - `docs/action-hub.md` | Action Hub | the PM action list | kw: action-hub, hub
 - `docs/hub-mcp.md` | hub MCP server: the Action Hub's api as MCP tools, the owner's tools pinned | the hub from an agent | kw: hub-mcp, hub, mcp
 - `docs/hub-remote-access.md` | Hub remote access | reaching the hub from a phone | kw: hub, remote-access, tunnel, cloudflared
@@ -102,6 +103,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `tools/backlog_lint.py` | backlog lint (`docs/backlog-lint.md`) | kw: backlog_lint
 - `tools/review_pack.py` | review pack (`docs/review-pack.md`) | kw: review_pack
 - `tools/land.py` | land a reviewed branch (`docs/shipping.md`) | kw: land
+- `tools/allow_rules.py` | print the land permission rules for a repository (`docs/allow-rules.md`) | kw: allow_rules, permissions
 - `tools/landed.py` | has a branch landed (`docs/landed.md`) | kw: landed
 - `tools/branch_overlap.py` | unmerged branches that change files in a set (`docs/branch-overlap.md`) | kw: branch_overlap, overlap
 - `tools/machine_lock.py` | machine lock (`docs/lock-api.md`) | kw: machine_lock, lock

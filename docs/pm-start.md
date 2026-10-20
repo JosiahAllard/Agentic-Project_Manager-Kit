@@ -110,13 +110,36 @@ aside), or one line says what to set it to. Claude Code ignores the key without 
 `blockReadsOutsideWorkingDirectories` is set or the workspace is not trusted. Code:
 `kitlib/pmstart` `memory`; tests: `tests/pmstart/test_pmstart.py` `MemoryTest`.
 
+## Allow rules (`allow_rules`)
+
+After `memory`, the `allow_rules` check reads the same two settings files of each repository in
+`launcher.repos` and of the PM repository. It looks for permission rules (`allow`, `deny`, `ask`)
+whose path names a folder under the plugin export root (`plugin.export_dir`, any case, either slash)
+other than the current export. Each file and state gets one line:
+
+`allow rules (<repo>): <file> names plugin export <folder> (gone|not current) in <n> rule(s); the
+current export is <folder>: python "<kit>/tools/allow_rules.py" -C "<repo>" prints the land lines to paste; any other rule naming the old export needs its hash
+changed by hand (owner)`
+
+`allow_rules.py` prints only the land lines. The check flags any rule that names an old export, so
+the owner edits the folder name in the others (a rule for another kit tool, say) by hand.
+
+- `gone`: the folder holds no export marker.
+- `not current`: an older export that is still there, so the allow runs an old `land.py`.
+- A file it cannot read gives `could not check allow_rules (<repo>): <file>: ...`.
+- A missing file prints nothing.
+- With no repository, nothing is read.
+
+The settings are the owner's, so the line names the command and writes nothing (docs/allow-rules.md).
+Code: `kitlib/pmstart` `allow_rules`; tests: `tests/pmstart/test_allow_rules_check.py`.
+
 ## Repo prep (`repo_prep`)
 
-After `memory`, the `repo_prep` check runs the first-use repo prep (`kitlib.git.prep.run`; docs/new-worktree.md "First-use prep") on each repository in `launcher.repos`. The prep adds each host's worktree folder to the repository's `info/exclude` and sets the local `core.hooksPath` to the kit's `githooks/` when none is set and `.git/hooks` holds no hook. It prints a `repo prep: <folder>: ...` line only for what it did or could not do, so a repository already prepared prints nothing. A folder that is not there gives a `could not prep <repo>: ...` line. Code: `kitlib/pmstart` `repo_prep`; tests: `tests/pmstart/test_repo_prep.py`.
+After `allow_rules`, the `repo_prep` check runs the first-use repo prep (`kitlib.git.prep.run`; docs/new-worktree.md "First-use prep") on each repository in `launcher.repos`. The prep adds each host's worktree folder to the repository's `info/exclude` and sets the local `core.hooksPath` to the kit's `githooks/` when none is set and `.git/hooks` holds no hook. It prints a `repo prep: <folder>: ...` line only for what it did or could not do, so a repository already prepared prints nothing. A folder that is not there gives a `could not prep <repo>: ...` line. Code: `kitlib/pmstart` `repo_prep`; tests: `tests/pmstart/test_repo_prep.py`.
 
 ## Agent temp (`agent_temp`)
 
-After `memory`, the `agent_temp` check prints one line for each part of the agents' temp folder set-up
+After `repo_prep`, the `agent_temp` check prints one line for each part of the agents' temp folder set-up
 (docs/machine-setup.md "Extras") that is missing: "AGENT_TEMP is not set (machine_setup.py plans
 it)" when neither the process nor the user environment has `AGENT_TEMP`; "agent_temp_sweep is not
 set in the machine config (machine_setup.py plans it)"; and "agent temp sweep task agent-temp-sweep
