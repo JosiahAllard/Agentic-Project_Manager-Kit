@@ -244,6 +244,7 @@ HAZARD_EXEMPT = {
      'LookalikeWrappers.test_a_drive_less_script_in_a_computed_working_directory_is_not_the_kit_s',
      'Start-Process'): (1, GUARD_TEST),
     ('tests/guard/test_backlog_role.py', 'Spellings.test_start_process', 'Start-Process'): (4, GUARD_TEST),
+    ('tests/guard/test_gaterole.py', 'GateAllow.ps_spellings', 'Start-Process'): (2, GUARD_TEST),
     ('tests/guard/test_rules_hub.py', 'OwnerVerbs.test_launchers', 'Start-Process'): (2, GUARD_TEST),
     ('tests/guard/test_rules_hub.py', 'OwnerVerbs.test_review_rows_for_owner_verbs', 'Start-Process'): (1, GUARD_TEST),
     ('tests/guard/test_rules.py', 'OwnerLockTools', 'Start-Process'): (3, GUARD_TEST),
