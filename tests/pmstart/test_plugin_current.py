@@ -1,6 +1,7 @@
 """kitlib.pmstart.plugin_current: the session-start line when the pm-kit plugin export is behind
 kit main, a folder's last refresh failed, or the state cannot be read (docs/plugin-source.md)."""
 import datetime
+import json
 import os
 import unittest
 
@@ -58,6 +59,36 @@ class PluginCurrentTest(unittest.TestCase):
         got = self.check()
         self.assertEqual(len(got), 1)
         self.assertIn("behind kit main", got[0])
+
+    def export_kit(self, checkout):
+        """A folder shaped like the plugin export the PM's tools run from: a marker, no .git."""
+        folder = os.path.join(self.k.base, "export-kit")
+        os.makedirs(folder)
+        with open(os.path.join(folder, P.MARKER), "w", encoding="utf-8") as fh:
+            json.dump({"checkout": checkout}, fh)
+        return folder
+
+    def test_a_kit_that_is_an_export_reads_the_ref_from_its_source_checkout(self):
+        os.makedirs(self.k.root)
+        P.write_state(self.k.root, {"sha": self.k.repo.git("rev-parse", "refs/remotes/origin/main"),
+                                    "folders": {}})
+        export = self.export_kit(self.k.kit)
+        self.assertEqual(pmstart.plugin_current(settings=self.s, kit=export, folders=[]), [])
+        self.k.repo.write("later.txt", "z\n")
+        self.k.repo.commit("later", "later.txt")
+        self.k.repo.git("push", "-q", "origin", "main")
+        got = pmstart.plugin_current(settings=self.s, kit=export, folders=[])
+        self.assertEqual(len(got), 1)
+        self.assertIn("behind kit main", got[0])
+
+    def test_an_export_with_no_source_checkout_is_a_could_not_check_line(self):
+        os.makedirs(self.k.root)
+        P.write_state(self.k.root, {"sha": "0" * 40, "folders": {}})
+        export = self.export_kit(os.path.join(self.k.base, "gone"))
+        got = pmstart.plugin_current(settings=self.s, kit=export, folders=[])
+        self.assertEqual(len(got), 1)
+        self.assertIn("could not check the pm-kit plugin", got[0])
+        self.assertIn("source checkout", got[0])
 
     def test_unreadable_state(self):
         os.makedirs(self.k.root)
