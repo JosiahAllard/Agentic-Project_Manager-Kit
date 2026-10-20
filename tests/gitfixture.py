@@ -19,6 +19,7 @@ import re
 import shutil
 import tempfile
 
+from kitlib.config import user as kuser
 from kitlib.git import batch, cmd as gitcmd
 from kitlib.git import cache as gitcache
 from kitlib.git import fake as gitfake
@@ -65,6 +66,43 @@ def rmtree(path):
     which the test runner also removes its kit-tests-* folders with)."""
     if os.path.isdir(path):
         selfrun.rmtree_force(path)
+
+
+KIT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_DIRECT = []        # this process's kit-direct-* folder, once made
+
+
+def fixture_parent():
+    """The folder fixture repositories and copies are made in. Under tools/kit_tests.py a unit's
+    TEMP is its own `<run folder>/<n>` in the kit's temp folder, and that is kept. A direct
+    `python -m unittest` run's TEMP is the session's, where a fixture's churn slows every session
+    watching it, so this process gets one selfrun.DIRECT_PREFIX folder in the kit's default temp
+    folder (kitlib.config.user.default_work_temp, kept out of this TEMP and AGENT_TEMP too),
+    removed at exit and otherwise by the next run's selfrun.prune_stale when that is its run
+    folder's parent; this TEMP when that folder cannot be made."""
+    t = tempfile.gettempdir()
+    if os.path.basename(os.path.dirname(os.path.abspath(t))).startswith(selfrun.RUN_PREFIX):
+        return t
+    if _DIRECT and os.path.isdir(_DIRECT[0]):
+        return _DIRECT[0]
+    try:
+        parent = kuser.default_work_temp(KIT, sessions=(t, os.environ.get('AGENT_TEMP')))
+        os.makedirs(parent, exist_ok=True)
+        folder = tempfile.mkdtemp(prefix=selfrun.DIRECT_PREFIX, dir=parent)
+    except (OSError, RuntimeError):
+        return t
+    _DIRECT[:] = [folder]
+    return folder
+
+
+def _drop_direct():
+    for folder in _DIRECT:
+        selfrun.rmtree_force(folder, ignore_errors=True)
+    del _DIRECT[:]
+
+
+# Registered before _drop_templates, so it runs after it (atexit runs last-registered first).
+atexit.register(_drop_direct)
 
 
 # Set (to 1) while a real_fixture class runs: the fixture's own steps then start real git.
@@ -157,7 +195,7 @@ def built_copy(key, dest, build, repos=('',)):
     path) and must run its git under fixture_env(), so the copy is the repository it built."""
     src = _BUILT.get(key)
     if src is None or not os.path.isdir(src):
-        src = os.path.join(tempfile.mkdtemp(prefix='kit-tpl-'), 'built')
+        src = os.path.join(tempfile.mkdtemp(prefix='kit-tpl-', dir=fixture_parent()), 'built')
         os.makedirs(src)
         build(src)
         _BUILT[key] = src
@@ -252,7 +290,7 @@ class TempRepo:
                  prepare_key=None, _build=False):
         if (prepare is None) != (prepare_key is None):
             raise ValueError('gitfixture: prepare and prepare_key go together')
-        self.base = tempfile.mkdtemp(prefix='kit-git-')
+        self.base = tempfile.mkdtemp(prefix='kit-git-', dir=fixture_parent())
         self.root = os.path.join(self.base, 'repo')
         self.remote = os.path.join(self.base, 'remote.git') if bare_remote else None
         self.prepared = None

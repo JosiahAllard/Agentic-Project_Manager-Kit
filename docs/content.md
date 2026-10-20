@@ -42,7 +42,7 @@ renderer).
 | `model.<host>` | optional: that host runs the role on this model instead of the tier's. None is in use. |
 | `mode` | optional: the role policy mode, `controller`, `write`, `read`, `test` or `lander` (`kitlib.host.content.MODES`). Every kit role names one. The guard reads it (`kitlib.content.role_modes`) where a repository sets `guard.role_policy` (docs/guard.md "Role policy"); no host's file carries it, so a change to it renders nothing |
 | `writes` | optional: `[path, ...]`, repo-relative posix paths or globs (no `..`, no drive, no `\`) a `read`, `test` or `lander` role may still edit in its checkout (docs/guard.md "Role policy"). The consultant names its notes file. Not rendered either |
-| `group` | optional: the role's group in the backlog policy (`kitlib/backlog/roles.py`) where its `mode` alone does not give it. Without it the group is the mode's: `controller` lead, `write` builder, `read` and `test` read-only, `lander` lander. The one value in use is `docs` (records, spec-writer: `write` roles that add records but never pull them), and it needs mode `write` (`kitlib.host.content.GROUP_MODES`). Not rendered |
+| `group` | optional: the role's group in the backlog policy (`kitlib/backlog/roles.py`) where its `mode` alone does not give it. Without it the group is the mode's: `controller` lead, `write` builder, `read` and `test` read-only, `lander` lander. The one value in use is `docs` (docs-writer: a `write` role that adds records but never pulls them), and it needs mode `write` (`kitlib.host.content.GROUP_MODES`). Not rendered |
 | `run` | optional: `session`, a role started only as its own launched session, never dispatched as a subagent (pm, coordinator, deep-worker, consultant). The backlog policy holds such a role only from a launcher session mark (`SESSION_ONLY`); pm, which the policy names for its owner-level rows, is held so whatever its file says. Role files are not owner paths, so a `mode`, `group` or `run` change moves a role between backlog groups once it lands. Not rendered |
 | `summary` | optional: one line, the role's "use for" cell in docs/ROSTER.md (its description when absent). Not in any host's file |
 
@@ -67,7 +67,7 @@ code that names no role file.
 
 A skill is not rendered, so it has no tokens and says nothing only one host understands
 (docs/multi-host-plan.md section 5, form C): a numbered checklist, one line per step with its
-command, a "Never" list, then "Details:" pointers. It names a role bare (the reviewer role), the
+command, a "Never" list, then "Details:" pointers. It names a role bare (the analyst role), the
 kit's folder as `<kit>` (`<kit>/docs/gate.md`), and an edit as "your file-edit tool"; commits go
 through `python <kit>/tools/commit.py -C <worktree>`, which takes the host from `PM_KIT_HOST`. The
 coordinator, PM and worker role files say what a bare role name and `<kit>` are on their host.

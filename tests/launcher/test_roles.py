@@ -19,14 +19,14 @@ class RoleFor(unittest.TestCase):
         self.assertEqual(window.role_for('lead', 'lead'), 'coordinator')
         self.assertEqual(window.role_for('deep-worker'), 'deep-worker')
         self.assertEqual(window.role_for('consultant'), 'consultant')
-        self.assertEqual(window.role_for('reviewer'), 'reviewer')
+        self.assertEqual(window.role_for('analyst'), 'analyst')
 
     def test_the_plugin_prefixed_agent_gets_the_bare_agents_mark(self):
         # docs/guard.md "Agent names": the mark never carries the prefix
         self.assertEqual(window.role_for(P + 'deep-worker'), 'deep-worker')
         self.assertEqual(window.role_for(P + 'consultant'), 'consultant')
         self.assertEqual(window.role_for(P + 'conductor'), 'coordinator')
-        self.assertEqual(window.role_for(P + 'reviewer'), 'reviewer')
+        self.assertEqual(window.role_for(P + 'analyst'), 'analyst')
         self.assertEqual(window.role_for(P + 'coordinator', P + 'coordinator'), 'coordinator')
         self.assertEqual(window.role_for('lead', P + 'lead'), 'coordinator')
         self.assertEqual(window.role_for(P + 'lead', 'lead'), 'coordinator')
@@ -67,15 +67,15 @@ class EveryKind(unittest.TestCase):
         self.assertIn('--agent conductor', text)
 
     def test_start_with_another_agent_marks_that_agent(self):
-        start.start(self.h.settings, self.host, repo='alpha', account='2', agent='reviewer')
-        self.assertEqual(role_of(self.only_window()), 'reviewer')
+        start.start(self.h.settings, self.host, repo='alpha', account='2', agent='analyst')
+        self.assertEqual(role_of(self.only_window()), 'analyst')
 
     def test_start_with_a_plugin_prefixed_agent_marks_the_bare_agent(self):
-        out = start.start(self.h.settings, self.host, repo='alpha', account='2', agent=P + 'reviewer')
+        out = start.start(self.h.settings, self.host, repo='alpha', account='2', agent=P + 'analyst')
         text = self.only_window()
-        self.assertEqual(role_of(text), 'reviewer')
-        self.assertIn('--agent %sreviewer ' % P, text)       # started as given
-        self.assertIn('alpha-reviewer-a2', out[0])            # named without the prefix
+        self.assertEqual(role_of(text), 'analyst')
+        self.assertIn('--agent %sanalyst ' % P, text)       # started as given
+        self.assertIn('alpha-analyst-a2', out[0])            # named without the prefix
 
     def test_start_without_an_agent_is_plain(self):
         start.start(self.h.settings, self.host, repo='alpha', account='1', no_agent=True)
@@ -125,10 +125,10 @@ class EveryKind(unittest.TestCase):
 
     def test_a_start_from_a_sessions_entry_with_a_named_agent(self):
         self.h.write_state('sessions.json', {
-            'rev': {'repo': 'alpha', 'agent': 'reviewer', 'stem': 'alpha-rev', 'state': 's.md', 'account': 2,
+            'rev': {'repo': 'alpha', 'agent': 'analyst', 'stem': 'alpha-rev', 'state': 's.md', 'account': 2,
                     'name': 'alpha-rev-a2'}})
         out = start.start_entry(self.h.settings, self.host, 'rev')
-        self.assertEqual(role_of(self.only_window()), 'reviewer')
+        self.assertEqual(role_of(self.only_window()), 'analyst')
         self.assertIn('alpha-rev-a2', out[0])
 
 

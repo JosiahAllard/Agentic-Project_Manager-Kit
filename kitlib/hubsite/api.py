@@ -3,7 +3,7 @@ hub site design, section 2 "HTTP API" and section 9).
 
   ROUTES     the table every transport iterates: Route(method, pattern, role, handler). A pattern
              is a full path under BASE; a `{name}` segment takes one path segment. role is OWNER,
-             AGENT, ANY or APPROVER: who may call it ("Roles").
+             AGENT, ANY, APPROVER or LOCK_WRITE: who may call it ("Roles", "Machine lock").
   Api(store, views=None, clock=None, session_keys=None, now=None, approval_key=None,
       checkout=None, lock=None)
              .call(method, path, role, body=None, query=None, via='', raise_unexpected=False,
@@ -27,7 +27,9 @@ that request, kitlib.hubsite.httpd passes it on). Every other caller is refused 
 field `role`, with NOT_STRONG: the owner token, a browser session paired from it and an agent are
 never strong. strong is a call argument, never a field of the body or the query, and it opens no
 other route: on OWNER, AGENT and ANY routes the role alone decides. A handler reads it as
-Request.strong. POST approvals/{id}/decide is the APPROVER route ("Approvals").
+Request.strong. POST approvals/{id}/decide is an APPROVER route ("Approvals"), and so are the
+lock's reservation and division writes. LOCK_WRITE is a route role too: OWNER, and strong as
+well when the call came over the tunnel ("Machine lock").
 
 Approvals (kitlib.hubsite.approvals holds the rules; these routes only carry them). POST approvals
 (AGENT) adds a pending request: the base of each file is read with git from this machine's
@@ -127,23 +129,51 @@ Both are read now, never cached, and neither is part of GET snapshot.
 They raise HubErrors as the record views do; a `store` one carries the store's text, which only
 the local owner is given. POST records/{repo}/{id}/delete takes `confirm`, which must repeat the id.
 
-Machine lock. By the owner's decision the hub reads the machine lock in-process, through `lock`: a door object
-(kitlib.hubsite.lockdoor.LockDoor on the machine's server; this module never imports it) with
+Machine lock. By the owner's decision the hub reads and changes the machine lock in-process,
+through `lock`: a door object (kitlib.hubsite.lockdoor.LockDoor on the machine's server; this
+module never imports it) with
   revision()                     the lock store's revision
-  view(remote=False)             {lock_revision, view}: kitlib.lockui.model to_json's view
+  view(remote=False)             {lock_revision, view, writer}: kitlib.lockui.model to_json's view,
+                                 and 'owner' or 'agent': who the lock takes this hub for
   stats(days, since, until)      kitlib.lock.api stats
-Its three routes are OWNER's: an agent is refused all of them (`forbidden`, field role), on every
-listener; the lock's writes are not routes here. GET lock/view gives the view; `remote` is true
-only for the tunnel listener's calls (via TUNNEL_VIA), whose warnings that can name a file are
-fixed phrases (model.REMOTE_SAYS); every listener gets the same allow-listed keys. GET lock/stats
-takes days (1 to 366), since and until (ISO times with their offset). GET lock/wait takes since (a
-lock revision; default the one now) and timeout (seconds, at most WAIT_MAX_S) and answers the view
-plus `changed` once the lock's revision differs from since, or at the timeout with changed false.
-The lock store has no wake of its own, so the wait looks at its revision every LOCK_POLL_S,
-sleeping in Store.wait so that a close of the hub store ends it at once (`store`). It is a wait
-for the listener (WAIT_HANDLERS): it takes one of the listener's wait slots. With no door every
-route is `unavailable`, field lock; a door that raises anything but a HubError is `unavailable`
-with only the exception's class name (_reason), never its text.
+  reserve, hold, edit, end_hold, end_run, move_to_top, game_mode, games, division
+                                 the writes (lockdoor's docstring), each one lock api call, each
+                                 taking remote; a refusal is a HubError
+Every lock route is closed to an agent (`forbidden`, field role), on every listener: an agent
+reads the lock through its own MCP server and changes it with the lock's tools. The reads (GET
+lock/view, lock/stats, lock/wait) are OWNER's. The writes, by the owner's decision: on this
+machine the owner's login is enough, over the tunnel every lock write needs the strong owner. A
+write the decision does not name (a reservation: any hold write; the division) is the strong
+owner's on every listener, APPROVER; the others (end a run, move one to the top, game mode, the
+games list) are LOCK_WRITE: OWNER with strong, or OWNER on a listener that is not the tunnel
+(via is not TUNNEL_VIA), refused with NOT_LOCK_WRITER. A future relay that reaches the local
+listener for a remote browser must close that local owner path for its callers.
+  POST lock/holds            APPROVER  {kind: reserve, scope: whole|half, start, end (ISO with
+                                       offset), note} or {kind: hold, scope, start, end, note,
+                                       cpu, gpu} (the Hold dialog's text, read in the PC's zone)
+  POST lock/holds/{id}/edit  APPROVER  {start, end, note}: the Edit dialog's text; no note keeps it
+  POST lock/holds/{id}/end   APPROVER  {}
+  POST lock/division         APPROVER  {fields: {key: text}} or {defaults: true}
+  POST lock/runs/{id}/end    LOCK_WRITE {confirm}: confirm repeats the run id
+  POST lock/runs/{id}/top    LOCK_WRITE {}
+  POST lock/game_mode        LOCK_WRITE {enabled}
+  POST lock/games            LOCK_WRITE {text}: the Games dialog's text
+A write answers {ok, result} plus the view after it (as GET lock/view; view null when the lock
+cannot be read then). The page makes owner holds only; there is no `owner` field. A busy lock is
+`conflict` (409). The view answers of the lock routes carry `writes`: {lock, strong, why}, what
+this caller may change (lock: the LOCK_WRITE routes, strong: the APPROVER ones too) and, when
+one is false, why (WRITES_WHY); a hub the lock takes for an agent may change nothing.
+GET lock/view gives the view; `remote` is true only for the tunnel listener's calls (via
+TUNNEL_VIA), whose warnings and refusals that can name a file are fixed phrases
+(model.REMOTE_SAYS, lockdoor.REMOTE_SAYS); every listener gets the same allow-listed keys. GET
+lock/stats takes days (1 to 366), since and until (ISO times with their offset). GET lock/wait
+takes since (a lock revision; default the one now) and timeout (seconds, at most WAIT_MAX_S) and
+answers the view plus `changed` once the lock's revision differs from since, or at the timeout
+with changed false. The lock store has no wake of its own, so the wait looks at its revision
+every LOCK_POLL_S, sleeping in Store.wait so that a close of the hub store ends it at once
+(`store`). It is a wait for the listener (WAIT_HANDLERS): it takes one of the listener's wait
+slots. With no door every route is `unavailable`, field lock; a door that raises anything but a
+HubError is `unavailable` with only the exception's class name (_reason), never its text.
 
 Nothing here opens a socket, starts a thread, prints, parses arguments or exits. GET wait (and GET
 lock/wait) blocks in Store.wait for at most WAIT_MAX_S; how many may wait at once is the listener's
@@ -204,11 +234,22 @@ BASE = '/api/v1'
 API_VERSION = 'v1'
 OWNER, AGENT, ANY = 'owner', 'agent', 'any'
 APPROVER = 'approver'               # a route for the strong owner alone ("Roles")
-ROLES = (OWNER, AGENT, ANY, APPROVER)   # what a route may ask for
+LOCK_WRITE = 'lock-write'           # a lock write: the owner here, the strong owner remotely
+ROLES = (OWNER, AGENT, ANY, APPROVER, LOCK_WRITE)   # what a route may ask for
 CALLERS = (OWNER, AGENT)            # what a caller may be
 # why a route of role APPROVER refused a caller who is not the strong owner
 NOT_STRONG = ('%s %s needs the owner logged in through Cloudflare Access: the owner token, a '
               'browser paired from it and an agent are not enough')
+# why a route of role LOCK_WRITE refused a caller
+NOT_LOCK_WRITER = ('%s %s is the owner\'s; over the tunnel it needs the owner logged in through '
+                   'Cloudflare Access')
+# why the page may not write the lock (GET lock/view's `writes`)
+WRITES_WHY = {
+    'agent': 'the machine lock takes this hub for an agent (it was started under an agent '
+             'session): restart the hub from your own console or its scheduled task',
+    'tunnel': 'over the tunnel a lock change needs the owner logged in through Cloudflare Access',
+    'strong': 'reservations and the division need the strong owner login (a browser paired as '
+              'the strong owner, or Cloudflare Access)'}
 STATUS = {'invalid': 400, 'forbidden': 403, 'not_found': 404, 'conflict': 409, 'store': 503,
           'unavailable': 503, 'internal': 500}
 WAIT_MAX_S = 55
@@ -511,6 +552,10 @@ class Api(object):
         if route.role == APPROVER:
             if not (role == OWNER and strong is True):
                 raise HubError('forbidden', NOT_STRONG % (route.method, route.pattern), 'role')
+        elif route.role == LOCK_WRITE:
+            if not (role == OWNER and (strong is True or via != TUNNEL_VIA)):
+                raise HubError('forbidden', NOT_LOCK_WRITER % (route.method, route.pattern),
+                               'role')
         elif route.role != ANY and route.role != role:
             raise HubError('forbidden', '%s %s is for the %s, not the %s'
                            % (route.method, route.pattern, route.role, role), 'role')
@@ -1497,7 +1542,7 @@ def _remote(req):
 
 
 def _lock(api, read, *args, **kw):
-    """read(door, ...) on the Api's lock door ("Machine lock"). No door, or a door that raises
+    """read(door, ...) on the Api's lock door ("Machine lock"), a read or a write. No door, or a door that raises
     anything but a HubError, is `unavailable` (field lock), named by the exception's class
     only. HomeFenced and other BaseExceptions pass."""
     door = api.lock
@@ -1508,12 +1553,118 @@ def _lock(api, read, *args, **kw):
     except HubError:
         raise
     except Exception as e:          # noqa: BLE001 - any lock failure is the lock being unavailable
-        raise HubError('unavailable', 'the machine lock could not be read (%s)' % _reason(e),
+        raise HubError('unavailable', 'the machine lock could not be reached (%s)' % _reason(e),
                        'lock')
 
 
+def _writes(req, view):
+    """What this caller may change from the page ("Machine lock"): {lock, strong, why}. lock: the
+    LOCK_WRITE routes; strong: the APPROVER ones as well; why: the reason one is false, or ''."""
+    if not isinstance(view, dict) or view.get('writer') != 'owner':
+        return {'lock': False, 'strong': False, 'why': WRITES_WHY['agent']}
+    strong = req.role == OWNER and req.strong is True
+    lock = strong or (req.role == OWNER and not _remote(req))
+    why = '' if strong else WRITES_WHY['strong'] if lock else WRITES_WHY['tunnel']
+    return {'lock': lock, 'strong': strong, 'why': why}
+
+
+def _viewed(api, req):
+    """The lock door's view for this caller, with `writes`."""
+    out = dict(_lock(api, lambda door: door.view(remote=_remote(req))))
+    out['writes'] = _writes(req, out)
+    return out
+
+
 def lock_view(api, req):
-    return _lock(api, lambda door: door.view(remote=_remote(req)))
+    return _viewed(api, req)
+
+
+def _wrote(api, req, write):
+    """write(door, remote) -> its result; the answer {ok, result} plus the view after it (view
+    null, writes all false, when the lock cannot be read after the write)."""
+    remote = _remote(req)
+    result = _lock(api, write, remote)
+    try:
+        out = _viewed(api, req)
+    except HubError:
+        out = {'lock_revision': None, 'view': None, 'writer': None,
+               'writes': {'lock': False, 'strong': False, 'why': ''}}
+    out.update(ok=True, result=result)
+    return out
+
+
+def _confirmed(req, b):
+    if b.get('confirm') != req.params['id']:
+        raise _invalid('confirm must repeat the run id %s' % req.params['id'], 'confirm')
+
+
+def _strs(b, names):
+    return [_text(b, n) for n in names]
+
+
+def lock_hold_add(api, req):
+    b = _fields(req, ('kind', 'scope', 'start', 'end', 'note', 'cpu', 'gpu'), ('kind', 'scope'))
+    kind = _text(b, 'kind')
+    if kind == 'reserve':
+        scope, start, end, note = _strs(b, ('scope', 'start', 'end', 'note'))
+        if b.get('cpu') or b.get('gpu'):
+            raise _invalid('a reserve takes no slots: it is a whole or half hold', 'cpu')
+        return _wrote(api, req, lambda door, remote: door.reserve(scope, start, end, note,
+                                                                  remote=remote))
+    if kind == 'hold':
+        scope, start, end, note, cpu, gpu = _strs(b, ('scope', 'start', 'end', 'note', 'cpu',
+                                                      'gpu'))
+        return _wrote(api, req, lambda door, remote: door.hold(scope, start, end, note, cpu, gpu,
+                                                               remote=remote))
+    raise _invalid('kind is reserve or hold, not %r' % (kind,), 'kind')
+
+
+def lock_hold_edit(api, req):
+    b = _fields(req, ('start', 'end', 'note'))
+    start, end, note = _strs(b, ('start', 'end', 'note'))
+    hid = req.params['id']
+    return _wrote(api, req, lambda door, remote: door.edit(hid, start, end, note, remote=remote))
+
+
+def lock_hold_end(api, req):
+    _fields(req, ())
+    hid = req.params['id']
+    return _wrote(api, req, lambda door, remote: door.end_hold(hid, remote=remote))
+
+
+def lock_division(api, req):
+    b = _fields(req, ('fields', 'defaults'), flags=('defaults',))
+    defaults = _flag(b, 'defaults', False)
+    fields = _typed(b, 'fields', (dict,), 'an object')
+    if defaults == (fields is not None):
+        raise _invalid('give the division fields, or defaults true, not both', 'fields')
+    return _wrote(api, req, lambda door, remote: door.division(None if defaults else fields,
+                                                               remote=remote))
+
+
+def lock_run_end(api, req):
+    b = _fields(req, ('confirm',), ('confirm',))
+    _confirmed(req, b)
+    rid = req.params['id']
+    return _wrote(api, req, lambda door, remote: door.end_run(rid, remote=remote))
+
+
+def lock_run_top(api, req):
+    _fields(req, ())
+    rid = req.params['id']
+    return _wrote(api, req, lambda door, remote: door.move_to_top(rid, remote=remote))
+
+
+def lock_game_mode(api, req):
+    b = _fields(req, ('enabled',), ('enabled',), flags=('enabled',))
+    enabled = b['enabled']
+    return _wrote(api, req, lambda door, remote: door.game_mode(enabled, remote=remote))
+
+
+def lock_games(api, req):
+    b = _fields(req, ('text',), blank=('text',))
+    text = _text(b, 'text') or ''
+    return _wrote(api, req, lambda door, remote: door.games(text, remote=remote))
 
 
 def lock_stats(api, req):
@@ -1537,8 +1688,8 @@ def lock_wait(api, req):
             break
         api.store.wait(api.store.revision, min(api.lock_poll_s, left))
         api.store.check_open()
-    out = _lock(api, lambda door: door.view(remote=_remote(req)))
-    out = dict(out, changed=out.get('lock_revision') != since)
+    out = _viewed(api, req)
+    out['changed'] = out.get('lock_revision') != since
     return out
 
 
@@ -1597,6 +1748,14 @@ ROUTES = (
     _r('GET', '/lock/view', OWNER, lock_view),
     _r('GET', '/lock/stats', OWNER, lock_stats),
     _r('GET', '/lock/wait', OWNER, lock_wait),
+    _r('POST', '/lock/holds', APPROVER, lock_hold_add),
+    _r('POST', '/lock/holds/{id}/edit', APPROVER, lock_hold_edit),
+    _r('POST', '/lock/holds/{id}/end', APPROVER, lock_hold_end),
+    _r('POST', '/lock/division', APPROVER, lock_division),
+    _r('POST', '/lock/runs/{id}/end', LOCK_WRITE, lock_run_end),
+    _r('POST', '/lock/runs/{id}/top', LOCK_WRITE, lock_run_top),
+    _r('POST', '/lock/game_mode', LOCK_WRITE, lock_game_mode),
+    _r('POST', '/lock/games', LOCK_WRITE, lock_games),
 )
 # the handlers that block: the listener counts each call to one as a wait (kitlib.hubsite.httpd)
 WAIT_HANDLERS = (wait, lock_wait)

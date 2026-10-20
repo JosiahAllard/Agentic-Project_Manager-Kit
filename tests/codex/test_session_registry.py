@@ -19,7 +19,7 @@ class RegistryTests(unittest.TestCase):
         self.repository = path_key(str(Path('fixture-main/.git').resolve()))
         self.classify = mock.Mock(return_value=SimpleNamespace(kind=repo.LINKED, common=self.repository))
         self.first = SessionIdentity('one', 'root-one', self.cwd, 'worker', None)
-        self.second = SessionIdentity('two', 'root-two', self.cwd, 'reviewer', None)
+        self.second = SessionIdentity('two', 'root-two', self.cwd, 'analyst', None)
         self.bindings = {value.thread: value for value in (self.first, self.second)}
         self.leases = tuple(RuntimeLease(value, 'generation-one', 1050, 'live')
                             for value in self.bindings.values())
@@ -74,7 +74,7 @@ class RegistryTests(unittest.TestCase):
     def test_changes_after_registration_become_unknown(self):
         self.registry.register(self.first)
         for changed in (replace(self.first, cwd=path_key(str(Path('other').resolve()))),
-                        replace(self.first, role='reviewer'), replace(self.first, session='other')):
+                        replace(self.first, role='analyst'), replace(self.first, session='other')):
             with self.subTest(changed=changed):
                 self.bindings['one'] = changed
                 self.assertEqual(self.registry.status('one')['liveness'], 'unknown')

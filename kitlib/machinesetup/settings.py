@@ -153,9 +153,9 @@ def _wants_guard(plan, path, data, ctx):
     return not here and not where
 
 
-def _note_plugin_twins(plan, path, data, ctx):
+def _note_plugin_twins(plan, path, data, ctx, skip=()):
     rel, plugin = plugin_hooks(ctx.kit, ctx.home)
-    for event in sorted(plugin):
+    for event in sorted(e for e in plugin if e not in skip):
         seen = set()
         for sig in _signatures(data, event, ctx.home):
             if sig in plugin[event] and sig not in seen:
@@ -196,7 +196,9 @@ def _plan_write(plan, ctx, path, raw, layout, data, did):
 
 # Fresh mode (--fresh): append only. No entry is removed, re-pointed or reshaped, except a hook path
 # the hosts/ move changed (repoint_moved); a missing file is created in NEW_LAYOUT; the PM
-# SessionStart hook goes to --pm-settings alone.
+# SessionStart hook goes to --pm-settings alone. The kit SessionStart entries the kit plugin also
+# runs are the plugin step's (plugin.py, plugin_edit), not this one's: in a folder that step owns
+# they get no twin note here.
 NEW_LAYOUT = {'bom': False, 'crlf': False, 'final': True, 'indent': 2, 'ascii': False, 'exact': True}
 PM_HOOK = ENTRY
 PM_MATCHER = 'startup|resume|compact'
@@ -212,7 +214,9 @@ def _survey_fresh(plan, path, ctx):
     except ValueError as e:
         plan.refuse('%s: %s' % (path, e))
         return
-    _note_plugin_twins(plan, path, data, ctx)
+    from . import plugin                                             # it reads this module
+    owned = plugin.owns_settings(os.path.dirname(path), path, ctx)
+    _note_plugin_twins(plan, path, data, ctx, skip=(REPLACED_EVENT,) if owned else ())
     if _wants_guard(plan, path, data, ctx):
         try:
             entry = ctx.host.guard_entry(ctx.kit)
@@ -767,10 +771,9 @@ def _hook_paths(data, event, home):
                     yield p
 
 
-def plugin_hooks(kit, home):
-    """(the hooks file the kit's plugin manifest names, {event: the _signature of each of its hooks}),
-    with ${CLAUDE_PLUGIN_ROOT} read as `kit`; ('', {}) when the manifest names no hooks file this can
-    read."""
+def _plugin_data(kit):
+    """(the hooks file the kit's plugin manifest names, its parsed JSON with ${CLAUDE_PLUGIN_ROOT}
+    read as `kit`); ('', None) when the manifest names no hooks file this can read."""
     try:
         with open(os.path.join(kit, *PLUGIN_MANIFEST.split('/')), encoding='utf-8-sig') as f:
             manifest = json.load(f)
@@ -780,9 +783,9 @@ def plugin_hooks(kit, home):
         with open(os.path.join(kit, os.path.normpath(rel)), encoding='utf-8-sig') as f:
             data = json.load(f)
     except (OSError, ValueError):
-        return '', {}
+        return '', None
     if not isinstance(data, dict):
-        return '', {}
+        return '', None
     root = kit.replace('\\', '/')
 
     def sub(v):
@@ -793,14 +796,141 @@ def plugin_hooks(kit, home):
         if isinstance(v, dict):
             return dict((k, sub(x)) for k, x in v.items())
         return v
-    data = sub(data)
+    return (rel[2:] if rel.startswith('./') else rel), sub(data)
+
+
+def plugin_hooks(kit, home):
+    """(the hooks file the kit's plugin manifest names, {event: the _signature of each of its hooks}),
+    with ${CLAUDE_PLUGIN_ROOT} read as `kit`; ('', {}) when the manifest names no hooks file this can
+    read."""
+    rel, data = _plugin_data(kit)
+    if data is None:
+        return '', {}
     hooks = data.get('hooks')
     out = {}
     for event in hooks if isinstance(hooks, dict) else []:
         sigs = set(_signatures(data, event, home))
         if sigs:
             out[event] = sigs
-    return (rel[2:] if rel.startswith('./') else rel), out
+    return rel, out
+
+
+# The sources a SessionStart hook group's matcher picks from. A matcher that is absent, empty or `*`
+# is all of them; plain words joined by `|` are those words; anything else (a regular expression)
+# is unknown, so nothing is ever assumed covered.
+SESSION_SOURCES = frozenset(('startup', 'resume', 'clear', 'compact'))
+
+
+def matcher_sources(matcher):
+    """The sources a hook group's `matcher` covers (SESSION_SOURCES when absent, empty or `*`), or None
+    when it is not a plain `a|b` list of words."""
+    if matcher is None or (isinstance(matcher, str) and matcher.strip() in ('', '*')):
+        return SESSION_SOURCES
+    if not isinstance(matcher, str):
+        return None
+    words = [w.strip() for w in matcher.split('|')]
+    if not all(re.match(r'^\w+$', w) for w in words):
+        return None
+    return frozenset(words)
+
+
+def _group_signatures(data, event, home):
+    """(the group's matcher, the _signature) of each `type: command` hook of `event` that runs a file."""
+    hooks = data.get('hooks')
+    groups = hooks.get(event) if isinstance(hooks, dict) else None
+    for g in groups if isinstance(groups, list) else []:
+        for h in (g.get('hooks') or []) if isinstance(g, dict) else []:
+            if isinstance(h, dict) and h.get('type') == 'command':
+                sig = _signature(h, home)
+                if sig is not None:
+                    yield g.get('matcher'), sig
+
+
+def plugin_sources(kit, home, event):
+    """{the _signature of each of the kit plugin's `event` hooks: the sources its groups' matchers
+    cover, joined}; a matcher that is not a plain list (matcher_sources None) adds none."""
+    out = {}
+    data = _plugin_data(kit)[1]
+    for matcher, sig in _group_signatures(data, event, home) if data is not None else ():
+        out[sig] = out.get(sig, frozenset()) | (matcher_sources(matcher) or frozenset())
+    return out
+
+
+# The kit plugin's machine-lock tools an account's settings allow once the plugin is enabled
+# (plugin.edit_settings): exactly these three; lock_wait_change and lock_stats stay out. Only the owner
+# widens a permissions grant.
+LOCK_ALLOW = ('mcp__plugin_pm-kit_machine-lock__lock_snapshot', 'mcp__plugin_pm-kit_machine-lock__lock_run',
+              'mcp__plugin_pm-kit_machine-lock__lock_hold')
+REPLACED_EVENT = 'SessionStart'
+
+
+def plugin_edit(data, kit, home):
+    """(a copy of the settings `data` with the plugin's changes, [the allow rules added], [the hooks
+    removed, each as describe() names it], [(the name of a hook kept for its matcher, that matcher as
+    written or None when absent, [the sources it covers that the plugin's does not, sorted] or None
+    when the matcher is not a plain list)]); `data` itself is not changed.
+
+    Allow rules: each LOCK_ALLOW rule not already an exact string in permissions.allow is appended
+    (permissions and allow are made when absent). ValueError when permissions is not an object or
+    allow not a list.
+
+    Hooks: only under hooks.SessionStart, only a `type: command` entry whose _signature (the script
+    it runs, normalised, and the words after it) is the signature of one of the kit plugin's own
+    SessionStart hooks (plugin_hooks: ${CLAUDE_PLUGIN_ROOT} read as `kit`) and whose script is this
+    kit's ENTRY. Today that is `boot/hook.py claude SessionStart` and `... SessionStart coordinator`;
+    the PM hook (`... SessionStart pm`, not in the plugin), another kit's hook and every other event
+    stay. Such an entry goes only when the plugin's matchers for that hook cover every source its own
+    group's matcher does (matcher_sources: absent or empty is every source); otherwise it is kept, so
+    a session source the plugin does not run it on (the coordinator hook on `clear`) still runs it.
+    A group's hooks list emptied by this step goes, and SessionStart when this step emptied it;
+    `hooks` stays."""
+    new = json.loads(json.dumps(data))
+    added = []
+    perms = new.get('permissions')
+    if perms is None:
+        perms = new['permissions'] = {}
+    if not isinstance(perms, dict):
+        raise ValueError('"permissions" is not a JSON object')
+    allow = perms.get('allow')
+    if allow is None:
+        allow = perms['allow'] = []
+    if not isinstance(allow, list):
+        raise ValueError('"permissions.allow" is not a list')
+    for rule in LOCK_ALLOW:
+        if rule not in allow:
+            allow.append(rule)
+            added.append(rule)
+    dropped, kept = [], []
+    entry = norm(kit_file(kit, ENTRY))
+    sigs = dict((s, c) for s, c in plugin_sources(kit, home, REPLACED_EVENT).items() if s[0] == entry)
+    hooks = new.get('hooks')
+    groups = hooks.get(REPLACED_EVENT) if isinstance(hooks, dict) else None
+    if not sigs or not isinstance(groups, list):
+        return new, added, dropped, kept
+    emptied = 0
+    for g in list(groups):
+        hs = g.get('hooks') if isinstance(g, dict) else None
+        if not isinstance(hs, list):
+            continue
+        gone = 0
+        wants = matcher_sources(g.get('matcher'))
+        for h in list(hs):
+            sig = _signature(h, home) if isinstance(h, dict) and h.get('type') == 'command' else None
+            if sig is None or sig not in sigs:
+                continue
+            if wants is None or not wants <= sigs[sig]:
+                kept.append((describe(sig), g.get('matcher'),
+                             None if wants is None else sorted(wants - sigs[sig])))
+            else:
+                hs.remove(h)
+                dropped.append(describe(sig))
+                gone += 1
+        if gone and not hs:                                          # only a group this step emptied
+            groups.remove(g)
+            emptied += 1
+    if emptied and not groups:                                       # only an event this step emptied
+        del hooks[REPLACED_EVENT]
+    return new, added, dropped, kept
 
 
 def read(raw):

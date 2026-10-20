@@ -17,8 +17,8 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   `python <kit>/tools/preflight.py -C <repo>`.
 - A repo may override any agent via a same-name file in its `.claude/agents/`. Use only the
   roster the profile lists; which type for which work: `roster.md` in skill `coordinator-dispatch`.
-- Skills are the same text on every host: they name a role bare (the reviewer role) and the
-  kit's folder as `<kit>`. Here a role is dispatched as pm-kit:reviewer is, and `<kit>` is
+- Skills are the same text on every host: they name a role bare (the analyst role) and the
+  kit's folder as `<kit>`. Here a role is dispatched as pm-kit:analyst is, and `<kit>` is
   the kit folder your session's kit header names.
 - Sessions on any host share one backlog, machine lock, landing lock and gate records: a
   workstream another host's session runs is sequenced and reviewed like any other.
@@ -130,7 +130,7 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   leaves you idle.
 - **No implementation.** Code, tests, docs, config, CI -> an agent. Carve-out: a trivial
   one-line doc or message fix. Read-only checks yours; anything that builds, runs, merges or
-  pushes is delegated. Doc-writing rules: `records.md`, `spec-writer.md`.
+  pushes is delegated. Doc-writing rules: skills `specialty-records`, `specialty-spec`.
 - **Usage is not yours.** The PM alone watches it: read none, run no watcher, never hold, slow
   or size work by it. When the PM says stop new strongest-model work, stop new work, or
   checkpoint and hand off, do it at once and nothing more.

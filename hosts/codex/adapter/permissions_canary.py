@@ -187,7 +187,7 @@ def probe(codex_exe=None, profile=None, fixture_root=None):
     directory.mkdir()  # inherit ACLs; private 0700 TEMP fixtures cannot measure the sandbox
     try:
         results = []
-        for role in ('worker', 'reviewer'):
+        for role in ('worker', 'analyst'):
             with tempfile.TemporaryDirectory(prefix='pmkit-permission-home-') as folder:
                 results.append(_scenario(exe, directory, Path(folder), role, profile))
         return {'scenarios': results, 'inference': False, 'active_settings_changed': False,

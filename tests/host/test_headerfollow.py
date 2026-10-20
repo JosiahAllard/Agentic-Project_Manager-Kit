@@ -38,6 +38,13 @@ class Follow(unittest.TestCase):
         self.assertEqual(self.record(), os.path.normpath(self.kit(NEW)))
         self.assertIn(NEWER, headerfollow.line('C:/kit', self.payload, current=self.kit(NEWER)))
 
+    def test_write_false_gives_the_line_and_leaves_the_record_for_the_next_call(self):
+        headerfollow.note(self.kit(OLD), self.payload, event='SessionStart')
+        first = headerfollow.line('C:/kit', self.payload, current=self.kit(NEW), write=False)
+        self.assertEqual(self.record(), os.path.normpath(self.kit(OLD)))
+        self.assertEqual(headerfollow.line('C:/kit', self.payload, current=self.kit(NEW)), first)
+        self.assertEqual(self.record(), os.path.normpath(self.kit(NEW)))
+
     def test_a_session_whose_header_named_the_current_folder_is_told_nothing(self):
         headerfollow.note(self.kit(NEW), self.payload, event='SessionStart')
         self.assertIsNone(headerfollow.line('C:/kit', self.payload, current=self.kit(NEW)))
