@@ -284,6 +284,11 @@ ROWS = [
         'echo "print(1)" | python -I -', w.main, sub=True), 'deny', 'unplaced', None),
     ('main-checkout: python -I -c with no quote or backslash, PowerShell', lambda w: ps(
         "python -I -c 'print(1)'", w.main, sub=True), 'deny', 'unplaced', None),
+    # a script decides what it writes, but PowerShell drops the empty word after the bash -c text,
+    # so the words bash, and then python, gets are not the ones read: python_unread walks out
+    # through every shell around python (nested_in) to that PowerShell word
+    ('main-checkout: python script in a bash -c text with an empty word, PowerShell', lambda w: ps(
+        "bash -c 'python x.py' ''", w.main, sub=True), 'deny', 'unplaced', None),
     ('main-checkout: python -I -c in a bash -c text, PowerShell', lambda w: ps(
         "bash -c 'python -I -c print(1)'", w.main, sub=True), 'deny', 'unplaced', None),
     ('main-checkout: python -I -c through cmd and then bash', lambda w: bash(
