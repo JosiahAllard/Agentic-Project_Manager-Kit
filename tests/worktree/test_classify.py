@@ -160,6 +160,8 @@ class Classes(ClassifyCase):
 
 
 @real_git('git reflog: the fake writes no reflog, and A reads it')
+@gitfixture.real_fixture('A reads the reflog entry a fixture commit() writes, which only real '
+                         'git writes')
 class Landed(ClassifyCase):
     """A needs a commit of the branch's own in its reflog (classify.own_commit)."""
 
@@ -393,6 +395,8 @@ class Live(ClassifyCase):
 
 
 @real_git('git reflog: the fake writes no reflog, and A reads it')
+@gitfixture.real_fixture('A reads the reflog entry a fixture commit() writes, which only real '
+                         'git writes')
 class ReadOnly(ClassifyCase):
 
     def test_a_run_changes_nothing_on_disk(self):
