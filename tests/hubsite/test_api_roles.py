@@ -68,6 +68,20 @@ class Views(object):
         return {}
 
 
+class LockDoor(object):
+    """A stand-in for kitlib.hubsite.lockdoor.LockDoor: the machine lock's reads, answered at
+    once, with no lock store."""
+
+    def revision(self):
+        return 7
+
+    def view(self, remote=False):
+        return {'lock_revision': 7, 'view': {'remote': remote}}
+
+    def stats(self, days=None, since=None, until=None):
+        return {'range': {'since': since, 'until': until}, 'rows': []}
+
+
 def seed_question(store, status='open'):
     return store.add('questions', {'status': status, 'title': 't', 'options': OPTIONS}).id
 
@@ -179,6 +193,9 @@ ROWS = {
     ('GET', '/wait'): (None, None, {'timeout': '0'}),
     ('GET', '/snapshot'): (None, None, None),
     ('GET', '/health'): (None, None, None),
+    ('GET', '/lock/view'): (None, None, None),
+    ('GET', '/lock/stats'): (None, None, {'days': '7'}),
+    ('GET', '/lock/wait'): (None, None, {'since': '6', 'timeout': '0'}),
 }
 
 
@@ -208,7 +225,7 @@ class RolesCase(unittest.TestCase):
         self.addCleanup(store.close)
         doc_id = seed(store) if seed else 'X-1'
         return store, api.Api(store, views=Views(), clock=CLOCK, approval_key=lambda: KEY,
-                              checkout=lambda repo: GIT[0].root), doc_id
+                              checkout=lambda repo: GIT[0].root, lock=LockDoor()), doc_id
 
     def test_every_route_has_a_role_and_a_row(self):
         self.assertTrue(api.ROUTES)
@@ -254,7 +271,11 @@ class RolesCase(unittest.TestCase):
                 ('POST', '/records/{repo}/{id}/delete'): OWNER,
                 ('POST', '/approvals'): AGENT, ('POST', '/approvals/{id}/decide'): APPROVER,
                 ('POST', '/approvals/{id}/consume'): AGENT,
-                ('GET', '/approvals/{id}/verify'): AGENT}
+                ('GET', '/approvals/{id}/verify'): AGENT,
+                # the machine lock's reads are the owner's: an agent reads the lock through its
+                # own MCP server, never through the hub (R-2295)
+                ('GET', '/lock/view'): OWNER, ('GET', '/lock/stats'): OWNER,
+                ('GET', '/lock/wait'): OWNER}
         have = {key(r): r.role for r in api.ROUTES}
         for k, role in sorted(want.items()):
             with self.subTest(route=k):
