@@ -2,6 +2,7 @@
 reads from git's files is what `git rev-parse HEAD` prints."""
 import os
 import subprocess
+import sys
 import unittest
 from unittest import mock
 
@@ -117,6 +118,82 @@ class Copies(unittest.TestCase):
         self.assertFalse(any(k[3] == key for k in gitfixture._TEMPLATES))
         self.assertEqual([b for b in built if os.path.exists(b)], [],
                          'a refused template was left behind')
+
+
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# A child on real git (KIT_FAKE_GIT=0) that builds a TempRepo, copies it, commits a file and
+# commits in a linked worktree: the fixture's own steps, each of which was a git process.
+FIXTURE_STEPS = '\n'.join([
+    'from tests import gitfixture',
+    'gitfixture.TempRepo().cleanup()',
+    'r = gitfixture.TempRepo()',
+    'r.write("a.txt", "a\\n")',
+    'r.commit("a", "a.txt")',
+    'wt = r.worktree("w")',
+    'r.write("b.txt", "b\\n", root=wt)',
+    'r.commit("b", "b.txt", cwd=wt)',
+    'r.cleanup()',
+])
+
+
+@unittest.skipUnless(os.name == 'nt', 'Windows only')
+class InProcess(unittest.TestCase):
+    """The fixture's own git (building a repository, commit, worktree) runs in this process on
+    the fake git even on real git, so a @real_git class pays processes only for what it tests."""
+
+    def starts(self, extra_env=None):
+        """Processes started in a job by a child that runs FIXTURE_STEPS, the child (and the
+        conhost a child with no console of its parent's gets) not counted."""
+        from kitlib.proc import console, job
+        env = dict(os.environ, PYTHONPATH=ROOT, KIT_FAKE_GIT='0')
+        env.pop('KIT_FIXTURE_REAL_GIT', None)
+        env.update(extra_env or {})
+        j = job.Job()
+        try:
+            p = j.start([sys.executable, '-c', FIXTURE_STEPS], cwd=ROOT, env=env,
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            out, err = p.communicate(timeout=120)
+            self.assertEqual(p.returncode, 0, err.decode('utf-8', 'replace'))
+            return j.processes() - (1 if console.has_console() else 2)
+        finally:
+            j.end(kill=True)
+
+    def test_a_fixture_on_real_git_starts_no_process(self):
+        self.assertEqual(self.starts(), 0)
+
+    def test_a_real_fixture_class_s_fixture_starts_real_git(self):
+        self.assertGreater(self.starts({gitfixture.REAL_FIXTURE_ENV: '1'}), 0)
+
+
+class RealFixtureMark(unittest.TestCase):
+
+    def test_the_mark_holds_from_setupclass_to_the_last_class_cleanup(self):
+        seen = []
+
+        @gitfixture.real_fixture('checks the mark')
+        class Marked(unittest.TestCase):
+            @classmethod
+            def setUpClass(cls):
+                seen.append(gitfixture.in_process())
+
+        with mock.patch.dict(os.environ):
+            os.environ.pop(gitfixture.REAL_FIXTURE_ENV, None)
+            self.assertTrue(gitfixture.in_process())
+            Marked.setUpClass()
+            self.assertEqual(seen, [False])
+            self.assertFalse(gitfixture.in_process())
+            Marked.doClassCleanups()
+            self.assertTrue(gitfixture.in_process())
+            self.assertNotIn(gitfixture.REAL_FIXTURE_ENV, os.environ)
+        self.assertIn('%s.%s' % (Marked.__module__, Marked.__qualname__), gitfixture.REASONS)
+
+    def test_a_template_built_in_process_is_not_copied_for_a_real_fixture(self):
+        with mock.patch.dict(os.environ):
+            os.environ.pop(gitfixture.REAL_FIXTURE_ENV, None)
+            fake_key = gitfixture._template_key('main', False, None)
+            os.environ[gitfixture.REAL_FIXTURE_ENV] = '1'
+            self.assertNotEqual(gitfixture._template_key('main', False, None), fake_key)
 
 
 HOME_X =os.path.join(os.sep, 'nohome')
