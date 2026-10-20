@@ -9,9 +9,10 @@ commit(Request) -> Outcome(code, lines). Nothing here prints or exits; tools/com
 - Explicit paths only: a directory, `.`, `-A` or a glob is a usage error. A named path already
   staged as a deletion is committed as that deletion; nothing unnamed is added.
 - --allow-empty (Request.allow_empty) is the one commit of no paths: HEAD's tree unchanged, only
-  the message and its trailers (a `Closes:` line). It refuses anything staged and a merge in
-  progress; with a path, --owner-approval or --consume it is a usage error. Every other check
-  runs as for any commit. No paths without it is never an empty commit.
+  the message and its trailers (a `Closes:` line). It refuses anything staged, a merge in
+  progress and an unborn branch (no HEAD to keep); a hook that changes the commit's tree has it
+  undone and refused (commit_only); with a path, --owner-approval or --consume it is a usage
+  error. Every other check runs as for any commit. No paths without it is never an empty commit.
 - The body: `-b` is the TEXT (a typed `\n` becomes a newline); --body-file reads it from a file
   (UTF-8, a BOM dropped, CRLF made LF; empty, unreadable or not UTF-8 is a usage error). A `-b`
   whose whole value is one line naming an existing file, or shaped like an absolute path, is a
@@ -831,7 +832,8 @@ def tagged_entry(root, tag):
 def commit_only(root, head, snap, msg, allow_empty=False):
     """`git commit` of exactly `snap` (index_snapshot) on `head` (head_commit) through
     private_index; `(rc, out, err, commit id, note lines, trees)`. `allow_empty` (--allow-empty):
-    git commits `head`'s tree unchanged. `trees` is None when the commit
+    git commits `head`'s tree unchanged; this call's commit whose tree a hook changed is undone
+    (undo_commit) and refused. `trees` is None when the commit
     holds exactly the tree built, else `(tree built, tree committed)`: a hook changed it, and
     align_index brings the real index's entries for the paths that differ into line. Every other
     staged entry stays staged.
@@ -887,6 +889,10 @@ def commit_only(root, head, snap, msg, allow_empty=False):
         return 0, gout, r.err, now, [], None
     entry = tagged_entry(root, tag)
     if base == head and (entry is None or entry[1] == now):
+        if allow_empty and now_tree != tree:
+            raise _Stop(REFUSED, 'refused: --allow-empty, but a hook changed the commit\'s tree '
+                        '(it staged or removed a file), so it is not an empty commit.',
+                        *undo_commit(root, now, base, saved, len(parents) > 1))
         return 0, gout, r.err, now, [], (tree, now_tree)
     if not parents:
         raise _Stop(REFUSED, 'refused: after git commit, HEAD is %s, a commit with no parent, '
@@ -1237,6 +1243,9 @@ def _commit(req, lines):
     if req.allow_empty and (heads or merge_heads(root)):
         raise _Stop(REFUSED, 'refused: --allow-empty during a merge in progress; commit the merge '
                     'by naming its resolved files. Nothing was committed.')
+    if req.allow_empty and not head_commit(root):
+        raise _Stop(REFUSED, 'refused: --allow-empty on an unborn branch: there is no HEAD to keep, '
+                    'so it would make an empty root commit. Nothing was committed.')
     if foreign:
         raise _Stop(REFUSED, foreign_refusal(foreign, merge_why, len(heads) == 1))
     if hub:

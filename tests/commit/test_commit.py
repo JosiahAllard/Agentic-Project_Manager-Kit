@@ -485,7 +485,7 @@ class AnEmptyCommit(LinkedCase):
         code, out = self.commit('close it', allow_empty=True)
         self.assertEqual(code, 1, out)
         self.assertIn('no HEAD to keep', out)
-        self.assertNotEqual(self.git('rev-parse', '--abbrev-ref', 'HEAD'), 'HEAD')
+        self.assertEqual(self.git('symbolic-ref', 'HEAD'), 'refs/heads/kit/unborn')
         r = cmd.subprocess_run(('git', 'rev-parse', '-q', '--verify', 'HEAD'), cwd=self.wt,
                                capture_output=True, text=True, env=gitfixture.fixture_env())
         self.assertNotEqual(r.returncode, 0, r.stdout)

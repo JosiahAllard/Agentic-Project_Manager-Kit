@@ -11,7 +11,7 @@
   commit.py [-C DIR] -m SUBJECT [-b BODY | --body-file FILE] [--model NAME] [--host NAME]
             [--owner-authored] --allow-empty
       commit no paths, only the message and its trailers (a `Closes:` line); refused when
-      anything is staged or a merge is in progress
+      anything is staged, a merge is in progress or the branch is unborn
   commit.py [-C DIR] --owner-approval hub:A-<n> --consume COMMIT
       consume the approval for COMMIT, made already, when the consume after the commit failed
 
