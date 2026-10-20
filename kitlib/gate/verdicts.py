@@ -186,6 +186,13 @@ def entry_path(common_dir, branch):
     return os.path.join(queue_dir(common_dir), file_name(branch))
 
 
+def reviewer_types(text):
+    """The agent types a verdict's `reviewer` names, casefolded: each part split on '/', ',' or
+    ';', stripped, a `plugin:` prefix dropped, empty ones left out (`pm-kit:` names none). Pure."""
+    return set(p.strip().rpartition(':')[2].strip().casefold()
+               for p in re.split(r'[/,;]', text)) - {''}
+
+
 def check(entry, stored=True):
     """Why `entry` is not a well-formed entry, or None. `stored`: it must carry add()'s keys too
     (an entry read back; it may hold `carried`); False: only the keys the coordinator states (an
@@ -219,6 +226,10 @@ def check(entry, stored=True):
         v = entry[k]
         if not isinstance(v, str) or not v.strip() or '\n' in v or '\r' in v:
             return '%s is a non-empty one-line text, not %r' % (k, v)
+    if not reviewer_types(entry['reviewer']):
+        # Fail closed: with no type, land.is_author could not tell the reviewer from the author.
+        return ('reviewer names no agent type: it is the reviewer\'s agent type '
+                '(pm-kit:analyst), not %r' % entry['reviewer'])
     rng = entry['range']
     base, sep, right = rng.partition('..') if isinstance(rng, str) else ('', '', '')
     if (not sep or not base or base.startswith('-') or any(c.isspace() for c in rng)

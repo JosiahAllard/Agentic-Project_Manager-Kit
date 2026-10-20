@@ -280,11 +280,27 @@ class LogPath(unittest.TestCase):
         self.tool = os.path.join(self.tmp.name, "tool")
         os.makedirs(self.tool)
         self.default = os.path.join(self.home, ".claude", "logs", "procwatch.log")
+        self._faked_agent_temp(None)                    # the machine's own AGENT_TEMP must not leak in
 
     def tearDown(self):
         self.tmp.cleanup()
 
     def test_bare_flag_uses_the_logs_folder(self):
+        self.assertEqual(PW.log_path(None, home=self.home, here=self.tool), self.default)
+
+    def _faked_agent_temp(self, value):
+        import kitlib.pmstart as PS
+        old = PS.agent_temp_env
+        PS.agent_temp_env = lambda: value
+        self.addCleanup(setattr, PS, "agent_temp_env", old)
+
+    def test_bare_flag_uses_the_agent_temp_folder(self):
+        folder = os.path.join(self.tmp.name, "agenttemp")
+        self._faked_agent_temp(folder)
+        self.assertEqual(PW.log_path(None, home=self.home, here=self.tool), os.path.join(folder, "procwatch.log"))
+
+    def test_bare_flag_falls_back_without_an_agent_temp_folder(self):
+        self._faked_agent_temp(None)
         self.assertEqual(PW.log_path(None, home=self.home, here=self.tool), self.default)
 
     def test_a_path_in_the_tool_folder_is_moved(self):
@@ -452,7 +468,19 @@ class Live(unittest.TestCase):
         self.assertIn(r.returncode, (0, 1), r.stderr)
         self.assertIn("processes", r.stdout)
 
+    def test_bare_log_flag_writes_in_the_agent_temp_folder(self):
+        with tempfile.TemporaryDirectory() as home:
+            env = dict(os.environ, USERPROFILE=home, HOME=home, AGENT_TEMP=home)
+            r = subprocess.run([sys.executable, os.path.join(CODE, "procwatch.py"), "--sample", "0.2", "--log"],
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120, env=env)
+            self.assertIn(r.returncode, (0, 1), r.stderr)
+            with open(os.path.join(home, "procwatch.log"), encoding="utf-8") as f:
+                self.assertIn(" procs=", f.read())
+
     def test_bare_log_flag_writes_under_the_profile_logs_folder(self):
+        import kitlib.pmstart as PS
+        if PS.agent_temp_env():
+            self.skipTest("an agent temp folder is set here; the fallback is covered by LogPath")
         with tempfile.TemporaryDirectory() as home:
             env = dict(os.environ, USERPROFILE=home, HOME=home)
             r = subprocess.run([sys.executable, os.path.join(CODE, "procwatch.py"), "--sample", "0.2", "--log"],

@@ -3,8 +3,9 @@
     python procwatch.py                 report (the default; changes nothing)
     python procwatch.py --json          the full classification as JSON
     python procwatch.py --log [FILE]    also append a one-line summary to FILE (for a scheduled run);
-                                        no FILE = ~/.claude/logs/procwatch.log (folder made); a FILE
-                                        inside this tool's folder is moved there too
+                                        no FILE = procwatch.log in the agent temp folder, else
+                                        ~/.claude/logs/procwatch.log (folder made); a FILE inside this
+                                        tool's folder is moved there too
     python procwatch.py --kill          ALSO terminate the kill-allowlisted suspects (see RULES)
     python procwatch.py --kill --only msys-follow,msbuild-node   narrow the kill to these rules
 
@@ -441,7 +442,18 @@ def kill(procs, only=None, terminate=None):
 
 
 def default_log(home=None):
-    """The scheduled run's log: <home>/.claude/logs/procwatch.log (home = the user's profile)."""
+    """The log a hand --log writes: procwatch.log in the agent temp folder (kitlib.pmstart.agent_temp_env);
+    with none set or readable, <home>/.claude/logs/procwatch.log (home = the user's profile)."""
+    try:
+        root = os.path.normpath(os.path.join(HERE, "..", ".."))
+        if root not in sys.path:
+            sys.path.append(root)
+        from kitlib.pmstart import agent_temp_env
+        temp = agent_temp_env()
+    except (ImportError, OSError):
+        temp = None
+    if temp:
+        return os.path.join(temp, "procwatch.log")
     return os.path.join(home or os.path.expanduser("~"), ".claude", "logs", "procwatch.log")
 
 
@@ -467,7 +479,7 @@ def main(argv=None):
     ap.add_argument("--sample", type=float, default=3.0, help="CPU sampling window in seconds")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--log", nargs="?", const="", default=None,
-                    help="append a one-line summary to this file (no file: ~/.claude/logs/procwatch.log)")
+                    help="append a one-line summary to this file (no file: procwatch.log in the agent temp folder, else ~/.claude/logs/procwatch.log)")
     ap.add_argument("--kill", action="store_true", help="terminate kill-allowlisted suspects")
     ap.add_argument("--only", help="comma list of rule ids --kill may act on: " + ",".join(RULE_IDS))
     a = ap.parse_args(argv)
