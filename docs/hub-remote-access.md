@@ -372,12 +372,18 @@ The PC's browser can be made strong from the Access login (the owner's choice):
   key a strong link pairs nothing. The key is meant to sign the owner's approvals
   (`kitlib/hubsite/approvals.py`).
 
-The one route of role `approver` is POST `/api/v1/approvals/{id}/decide`
-(`kitlib.hubsite.api.ROUTES`): the owner's Approve or Deny of a pending approval, which the server
-signs with the approval key on an approve. The page's Approvals card
+The routes of role `approver` are POST `/api/v1/approvals/{id}/decide`
+(`kitlib.hubsite.api.ROUTES`), the owner's Approve or Deny of a pending approval, which the server
+signs with the approval key on an approve; and, by the owner's decision, the machine lock's hold
+writes and its division (docs/action-hub.md "Machine lock routes"). The page's Approvals card
 (`kitlib/hubsite/web/index.html`, `approvalCard`) enables its Approve and Deny only when GET
 `/api/v1/snapshot` says `strong: true`, which it says only to the strong owner; a refusal is shown
 in the server's words (docs/action-hub.md "approvals/A-NNN").
+
+The machine lock's other writes (end a run, move one to the top, game mode, the games list) are of
+role `lock-write` (`kitlib.hubsite.api.LOCK_WRITE`): the owner on the PC's listener, and through
+the tunnel only the strong owner. An owner that is not strong on the tunnel listener gets 403
+`forbidden`, field `role`.
 
 ## Checked against Cloudflare's documentation
 

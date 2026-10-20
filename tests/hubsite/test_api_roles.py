@@ -9,7 +9,7 @@ from unittest import mock
 
 from kitlib.hubsite import api
 from kitlib.hubsite import approvals as ap
-from kitlib.hubsite.api import AGENT, ANY, APPROVER, BASE, OWNER
+from kitlib.hubsite.api import AGENT, ANY, APPROVER, BASE, LOCK_WRITE, OWNER
 from kitlib.hubsite.store import Store
 from tests.gitfixture import TempRepo
 
@@ -69,17 +69,53 @@ class Views(object):
 
 
 class LockDoor(object):
-    """A stand-in for kitlib.hubsite.lockdoor.LockDoor: the machine lock's reads, answered at
-    once, with no lock store."""
+    """A stand-in for kitlib.hubsite.lockdoor.LockDoor: the machine lock's reads and writes,
+    answered at once, with no lock store. Each write is recorded in self.wrote as (verb, args,
+    remote)."""
+    writer = 'owner'
+
+    def __init__(self):
+        self.wrote = []
 
     def revision(self):
         return 7
 
     def view(self, remote=False):
-        return {'lock_revision': 7, 'view': {'remote': remote}}
+        return {'lock_revision': 7, 'view': {'remote': remote}, 'writer': self.writer}
 
     def stats(self, days=None, since=None, until=None):
         return {'range': {'since': since, 'until': until}, 'rows': []}
+
+    def _w(self, verb, args, remote):
+        self.wrote.append((verb, args, remote))
+        return {'verb': verb}
+
+    def reserve(self, scope, start, end, note, remote=False):
+        return self._w('reserve', (scope, start, end, note), remote)
+
+    def hold(self, scope, start, end, note, cpu, gpu, remote=False):
+        return self._w('hold', (scope, start, end, note, cpu, gpu), remote)
+
+    def edit(self, hold_id, start, end, note, remote=False):
+        return self._w('edit', (hold_id, start, end, note), remote)
+
+    def end_hold(self, hold_id, remote=False):
+        return self._w('end_hold', (hold_id,), remote)
+
+    def end_run(self, run_id, remote=False):
+        return self._w('end_run', (run_id,), remote)
+
+    def move_to_top(self, run_id, remote=False):
+        return self._w('move_to_top', (run_id,), remote)
+
+    def game_mode(self, enabled, remote=False):
+        return self._w('game_mode', (enabled,), remote)
+
+    def games(self, text, remote=False):
+        return self._w('games', (text,), remote)
+
+    def division(self, fields, remote=False):
+        return self._w('division', (fields,), remote)
 
 
 def seed_question(store, status='open'):
@@ -196,6 +232,16 @@ ROWS = {
     ('GET', '/lock/view'): (None, None, None),
     ('GET', '/lock/stats'): (None, None, {'days': '7'}),
     ('GET', '/lock/wait'): (None, None, {'since': '6', 'timeout': '0'}),
+    ('POST', '/lock/holds'): (None, {'kind': 'reserve', 'scope': 'whole',
+                                     'start': '2026-10-08T12:00:00Z',
+                                     'end': '2026-10-08T13:00:00Z'}, None),
+    ('POST', '/lock/holds/{id}/edit'): (None, {'note': 'n'}, None),
+    ('POST', '/lock/holds/{id}/end'): (None, {}, None),
+    ('POST', '/lock/division'): (None, {'defaults': True}, None),
+    ('POST', '/lock/runs/{id}/end'): (None, {'confirm': 'X-1'}, None),
+    ('POST', '/lock/runs/{id}/top'): (None, {}, None),
+    ('POST', '/lock/game_mode'): (None, {'enabled': True}, None),
+    ('POST', '/lock/games'): (None, {'text': 'Game.exe'}, None),
 }
 
 
@@ -210,6 +256,17 @@ def row(route, role):
     """(seed, body, query) of route for the caller role."""
     r = ROWS[key(route)]
     return r.get(role, r[OWNER]) if isinstance(r, dict) else r
+
+
+def allowed(route, role, via='', strong=False):
+    """Whether a caller of role (via that listener, strong or not) passes route's role."""
+    if route.role == ANY:
+        return True
+    if route.role == APPROVER:
+        return role == OWNER and strong is True
+    if route.role == LOCK_WRITE:
+        return role == OWNER and (strong is True or via != api.TUNNEL_VIA)
+    return route.role == role
 
 
 def path(route, doc_id):
@@ -231,7 +288,7 @@ class RolesCase(unittest.TestCase):
         self.assertTrue(api.ROUTES)
         for route in api.ROUTES:
             with self.subTest(route=route.method + ' ' + route.pattern):
-                self.assertIn(route.role, (OWNER, AGENT, ANY, APPROVER))
+                self.assertIn(route.role, (OWNER, AGENT, ANY, APPROVER, LOCK_WRITE))
                 self.assertTrue(route.pattern.startswith(BASE + '/'))
                 self.assertTrue(callable(route.handler))
                 self.assertIn(key(route), ROWS, 'a route with no row in the role table')
@@ -247,7 +304,7 @@ class RolesCase(unittest.TestCase):
                     store, a, doc_id = self.fresh(seed)
                     before = store.snapshot()
                     status, obj = a.call(route.method, path(route, doc_id), role, body, query)
-                    if route.role in (role, ANY):
+                    if allowed(route, role):
                         self.assertEqual((status, obj.get('error')), (200, None))
                     else:
                         self.assertEqual(status, 403)
@@ -275,7 +332,15 @@ class RolesCase(unittest.TestCase):
                 # the machine lock's reads are the owner's: an agent reads the lock through its
                 # own MCP server, never through the hub (the owner's decision)
                 ('GET', '/lock/view'): OWNER, ('GET', '/lock/stats'): OWNER,
-                ('GET', '/lock/wait'): OWNER}
+                ('GET', '/lock/wait'): OWNER,
+                # the lock's writes: on this machine the owner's login, over the tunnel the
+                # strong owner's; a reservation (any hold write) and the division, which that
+                # decision does not name, are the strong owner's everywhere
+                ('POST', '/lock/holds'): APPROVER, ('POST', '/lock/holds/{id}/edit'): APPROVER,
+                ('POST', '/lock/holds/{id}/end'): APPROVER, ('POST', '/lock/division'): APPROVER,
+                ('POST', '/lock/runs/{id}/end'): LOCK_WRITE,
+                ('POST', '/lock/runs/{id}/top'): LOCK_WRITE,
+                ('POST', '/lock/game_mode'): LOCK_WRITE, ('POST', '/lock/games'): LOCK_WRITE}
         have = {key(r): r.role for r in api.ROUTES}
         for k, role in sorted(want.items()):
             with self.subTest(route=k):
