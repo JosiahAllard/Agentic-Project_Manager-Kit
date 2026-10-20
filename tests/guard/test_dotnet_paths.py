@@ -396,6 +396,55 @@ class LockedMain(Base):
         self.allowed(self.run_ps(text, cwd=self.w.wt, sub=False))
 
 
+class LoosenedEdges(Base):
+    """Pins on the B17 loosening (a relative .NET path judged where the PowerShell location puts
+    it): a path that climbs out of the worktree is judged where it lands, and one written after a
+    move to a location the line computes is a write the guard cannot place, never a plain allow."""
+
+    CLIMBS = (r"[IO.File]::WriteAllText('..\..\..\x.txt', 'y')", r"[IO.File]::WriteAllText('../../../x.txt', 'y')",
+              r"[IO.File]::WriteAllText('sub\..\..\..\..\x.txt', 'y')", r"[IO.File]::WriteAllText('..\x.txt', 'y')",
+              r"[IO.Directory]::CreateDirectory('..\..\..\d')", r"[IO.File]::Copy('a.txt', '..\..\..\b.txt')",
+              r"$s = [IO.StreamWriter]::new('..\..\..\x.txt')",
+              r"Set-Location ..\..\..; [IO.File]::WriteAllText('x.txt', 'y')")
+    UNKNOWN = (r"cd $x; [IO.File]::WriteAllText('x.txt', 'y')", r"Set-Location $x; [IO.File]::WriteAllText('x.txt', 'y')",
+               r"Push-Location $x; [IO.File]::WriteAllText('x.txt', 'y')",
+               r"cd $x; [IO.File]::WriteAllText('..\..\..\x.txt', 'y')",
+               r"cd $x; $s = [IO.StreamWriter]::new('x.txt')", r"cd $x; [IO.File]::WriteAllText.Invoke('x.txt', 'y')")
+
+    def test_climbing_out_of_the_worktree_into_the_main_checkout(self):
+        for text in self.CLIMBS:
+            with self.subTest(text=text):
+                self.denied(self.run_ps(text), 'main-checkout')
+                self.denied(self.run_ps(text, env=COORDINATOR, sub=False), 'write-jail')
+
+    def test_climbing_out_of_the_repository(self):
+        text = r"[IO.File]::WriteAllText('..\..\..\..\x.txt', 'y')"
+        self.denied(self.run_ps(text), 'write-jail')
+        self.denied(self.run_ps(text, env=COORDINATOR, sub=False), 'write-jail')
+
+    def test_after_a_move_to_an_unknown_location(self):
+        for text in self.UNKNOWN:
+            with self.subTest(text=text):
+                d = self.denied(self.run_ps(text), 'unplaced')
+                if 'Invoke' not in text:
+                    self.assertIn('cannot tell where it writes', d.reason)
+
+    def test_after_a_move_to_an_unknown_location_by_default(self):
+        """At the rule's default mode (unplaced warns) the call goes ahead with the refusal as a
+        warning, as a cmdlet write there does; never a silent allow."""
+        from unittest import mock
+        from kitlib import guard
+        from kitlib.guard import modes, rules
+        from .claudehost import action
+        with mock.patch.dict(modes.DEFAULTS, {rules.UNPLACED: modes.WARN}):
+            for text in self.UNKNOWN + (r"cd $x; Set-Content x.txt y",):
+                with self.subTest(text=text):
+                    d = guard.decide(action(W.ps(text, self.w.wt, True)), self.w.ctx(environ={}))
+                    self.assertEqual((d.verdict, d.rule), ('allow', rules.WARNED), d.reason)
+                    self.assertIn('the guard cannot tell where it writes' if 'Invoke' not in text
+                                  else 'whose path the guard does not read', d.reason)
+
+
 setUpModule = W.deny_unplaced           # these pin what the guard cannot place (world.deny_unplaced)
 tearDownModule = W.allow_unplaced
 
