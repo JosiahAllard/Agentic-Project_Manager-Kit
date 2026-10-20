@@ -439,10 +439,10 @@ The Action Hub (`kitlib/hubsite`) keeps its tokens in a folder named `hub` besid
 - **Fast-forward only, in every repo:** a push that is not a fast-forward of the remote's main is refused, and so is deleting main. A remote main sha this clone lacks cannot be an ancestor of the pushed commit, so that push is refused too ("cannot tell"; fetch first). Git hands the hook such a ref only on a forced push (`--force`, `+`, `--force-with-lease`). A branch other than main may still be rewritten.
 - **Gate-OK record:** the pushed sha must have one, read as in "State". Only when `repo.push_block` is set; checked after the fast-forward rule.
 - **Owner-only paths:** after the gate-OK check, and also only under `repo.push_block`, a push to main is refused when a commit it adds fails "Owner-only commits" below, record or not. A branch gate records its own tip, so without this a gated agent branch could go straight to main. "Adds" means not in the remote main it replaces when this clone has it, else not in `<remote>/<main>` as last fetched, else the whole history. Other remote-tracking refs are never subtracted: a pushed agent branch would hide its own commits.
-- **Order:** the PM data stage for every line (tests/guard/test_prepush.py `test_leak_stage_runs_before_main_rules`), then per line delete or fast-forward, then gate-OK, then owner-only paths; the first that refuses is the one reported (`test_the_rules_refuse_in_order`).
+- **Order:** the PM data stage for every line (tests/guard/test_prepush_pmdata_private.py `PmDataPrivateTest.test_leak_stage_runs_before_main_rules`), then per line delete or fast-forward, then gate-OK, then owner-only paths; the first that refuses is the one reported (`test_the_rules_refuse_in_order`).
 - **Base config:** `push_block` and the main branch's name are read from the remote main commit being replaced when this clone has it, else from the default branch's committed `.kit.json` (the first of `<remote>/HEAD`, `<remote>/main`, `<remote>/master`, local `main`, local `master`). The working tree is never the base, and a pushed commit cannot turn the block off.
 - **Broken config:** a `.kit.json` that does not load refuses the push.
-- **Tests:** tests/guard/test_prepush.py pushes to a bare scratch remote with `core.hooksPath` set to the kit's githooks; `PmDataTest` adds a second bare remote as the private one, `PrivateTest` covers `_private` and `_norm_url`.
+- **Tests:** tests/guard/test_prepush.py pushes to a bare scratch remote with `core.hooksPath` set to the kit's githooks; tests/guard/test_prepush_pmdata.py and test_prepush_pmdata_private.py add a second bare remote as the private one, `PrivateTest` covers `_private` and `_norm_url`.
 
 ## Owner-only commits
 
@@ -453,7 +453,7 @@ The Action Hub (`kitlib/hubsite`) keeps its tokens in a folder named `hub` besid
 - **What a commit changes:** a commit with one parent or none, its diff. A two-parent merge, what differs from the clean merge of its parents (`git merge-tree --write-tree`) plus every path that merge conflicts on: a merge that only joins histories changes nothing, and an edit or conflict resolution inside a merge is judged by the merge's author. More parents: the union of the diffs against each. Renames count as a delete and an add.
 - **Trailers** play no part here: the author email decides. `tools/commit.py` writes the `Owner-Approved` trailer and refuses an owner-only path without `--owner-authored` (docs/commit.md).
 - **Git failure:** refuses (the landing or the push).
-- **Tests:** tests/guard/test_ownercommits.py, tests/gate/test_land_owner.py, tests/guard/test_prepush.py `OwnerTest`.
+- **Tests:** tests/guard/test_ownercommits.py, tests/gate/test_land_owner.py, tests/guard/test_prepush_owner.py `OwnerTest`.
 
 Known limits:
 
