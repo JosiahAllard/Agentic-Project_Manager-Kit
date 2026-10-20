@@ -165,6 +165,18 @@ class SecretShell(Hub):
                                       'print(len(json.load(sys.stdin)))"', self.w.wt, sub))
         self.allowed(lambda sub: bash('python tools/hub.py questions list | head', self.w.wt, sub))
 
+    def test_an_agent_verb_piped_into_code_is_its_data(self):
+        # R-2363 (W3): a parsed hub tool run of an agent verb piped into python -c is the code's
+        # data, so a token file's name in its words is not read as code; piped into code read
+        # from standard input (`python -`) it is the code, and still refused
+        head = 'python "%s" questions add --title "owner.token" --json | ' % self.hub
+        self.allowed(lambda sub: bash(head + 'python -c "import sys; print(sys.stdin.read())"', self.w.wt, sub))
+        self.allowed(lambda sub: ps(head + 'python -c "import sys; print(sys.stdin.read())"', self.w.wt, sub))
+        self.denied(lambda sub: bash(head + 'python -', self.w.wt, sub), 'hub-secrets')
+        # a program that is not the hub tool is still read as the code's input
+        self.denied(lambda sub: bash('echo owner.token | python -c "import sys; print(sys.stdin.read())"',
+                                     self.w.wt, sub), 'hub-secrets')
+
     def test_the_alternative_runs_the_hub_tool_of_the_kit_the_hook_runs_from(self):
         # the kit whose kitlib the guard loaded (ctx.kit, kitlib.kitroot.root), not a copy elsewhere
         d = decide(bash('cat "%s/owner.token"' % W.fwd(self.secrets), self.w.wt, True), self.ctx(OWNER))

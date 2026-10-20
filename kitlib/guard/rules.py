@@ -719,10 +719,13 @@ def glob_folder(text):
     return text[:cut] if cut > 0 else None
 
 
-def inline_code(cmd, inv):
+def inline_code(cmd, inv, skip_pipe=None):
     """The code python or node runs from its own command line (-c, -e) or from standard input
     (a heredoc, a here-string, the command piped in), as texts; [] for a script run or another
-    program. The command line's texts are every argument (a path the code is given counts)."""
+    program. The command line's texts are every argument (a path the code is given counts).
+    `skip_pipe(c)` true leaves out the text of the command `c` piped in when the code is on the
+    command line (it is then the code's data, not code); code read from standard input always
+    counts what is piped in."""
     if inv is None:
         return []
     py, node = PY_RUN_RE.match(inv.name or '') is not None, inv.name == 'node'
@@ -751,7 +754,7 @@ def inline_code(cmd, inv):
         for c in (cmd, cmd.pipe_from):
             if c is None:
                 continue
-            if c is not cmd:
+            if c is not cmd and not (code and skip_pipe is not None and skip_pipe(c)):
                 texts.append(c.text)
             texts.extend(r.target.text for r in c.redirects
                          if r.target is not None and (r.body or r.op == '<<<'))
@@ -762,7 +765,8 @@ def hub_secret_shell(ctx, cmd, inv, places):
     """What the command `cmd` names of the hub's secrets, as text, or None: a literal path in
     the token folder (R-2363: a word that only names a token file or looks like the folder, with
     no path into it, passes), and python or node code that names a token file or the folder
-    (kitlib.guard.hub.INLINE_RE). A wildcard path is read as the literal folder before its first
+    (kitlib.guard.hub.INLINE_RE; R-2363, W3: a parsed hub tool run of an agent verb piped into
+    code given on the command line is that code's data, hub_run_verb). A wildcard path is read as the literal folder before its first
     wildcard (glob_folder); the store and the word hub are not refused (the guard blocks only
     what it can place; an edit tool's write into the store is still hub_secret_edit's).
     A path may start with the home folder as `~` or a home variable ($HOME, $env:USERPROFILE,
@@ -786,7 +790,7 @@ def hub_secret_shell(ctx, cmd, inv, places):
             p_ = places()
             if p_.where(p) == 'secret':
                 return 'reaches %s (%s)' % (p_.label('secret'), w.text)
-    for text in inline_code(cmd, inv):
+    for text in inline_code(cmd, inv, lambda c: hub_run_verb(c) == ''):
         m = hubg.INLINE_RE.search(text)
         if m:
             return 'runs code that names %s' % m.group(0)
@@ -814,14 +818,21 @@ def hub_owner_run(parsed):
     read counts as unreadable there, and so does a PowerShell word holding a double quote, which
     Windows PowerShell 5.1 passes on unescaped (it can split into --owner)."""
     for cmd in parsed.commands:
-        args = hub_run_args(cm.invocation(cmd))
-        if args is None:
-            continue
-        ps = cmd.shell == sh.PS
-        verb = hubg.owner_verb([hubg.Word(w.text, w.dyn or (ps and '"' in w.text)) for w in args])
+        verb = hub_run_verb(cmd)
         if verb:
             return verb
     return None
+
+
+def hub_run_verb(cmd):
+    """For the command `cmd`: None when it is not a parsed hub tool run (hub_run_args), else the
+    owner verb it runs (kitlib.guard.hub.owner_verb, read as hub_owner_run reads it), or '' for
+    an agent verb."""
+    args = hub_run_args(cm.invocation(cmd))
+    if args is None:
+        return None
+    ps = cmd.shell == sh.PS
+    return hubg.owner_verb([hubg.Word(w.text, w.dyn or (ps and '"' in w.text)) for w in args]) or ''
 
 
 def hub_line(text):
