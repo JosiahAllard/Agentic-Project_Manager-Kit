@@ -114,11 +114,13 @@ The kit temp folder for a checkout is `kitlib.config.user.work_temp`. It holds k
 
 - the machine config's `temp_dir` (docs/kit-json.md), when set;
 - `kit-temp` (`kitlib.config.user.TEMP_DIR_NAME`, the kit's default), then `kit-work` (`WORK_DIR_NAME`), at the root of the checkout's drive, when the checkout is not on the drive of the user's temp folder (a Dev Drive, say);
-- the shared temp folder (`shared_temp`: `%LOCALAPPDATA%/Temp`), then `kit-work` beside it (`%LOCALAPPDATA%/kit-work`).
+- the system temp folder (`system_temp`: `%LOCALAPPDATA%/Temp`), then `kit-work` beside it (`%LOCALAPPDATA%/kit-work`).
 
-When every one of them overlaps a session temp it is the first, so a gate is slow, never broken. Elsewhere than Windows it is `temp_dir`, else the shared temp folder.
+When every one of them overlaps a session temp it is the first, so a gate is slow, never broken. Elsewhere than Windows it is `temp_dir`, else the system temp folder.
 
-The session temps (`kitlib.config.user.session_temps`) are the machine config's `agent_temp_sweep` `dir` (the agents' temp folder, docs/machine-setup.md "Extras") and the user environment's `AGENT_TEMP`, `TEMP` and `TMP` (HKCU\Environment, expanded). With `temp_dir` set to the agents' temp folder, the kit temp folder is `kit-temp` at the drive root; on a machine whose agents' temp folder is that `kit-temp` (machine setup's default), it is `kit-work`. Where the user environment's `TEMP` is the shared temp folder (Windows' default), a checkout on the system drive gets `%LOCALAPPDATA%/kit-work`.
+The shared temp folder (`kitlib.config.user.shared_temp`) holds the kit's few small files every process must find whatever TEMP it inherited: the gate's fallback log base, the worktree sweep log and private index folders (`kitlib.config.user.mkdtemp`). It is `temp_dir` when set and its drive (or share) is there, even when that is a session temp, else the system temp folder. The tests never see this machine's `temp_dir` there: under the home fence with no `home` it is the system temp folder.
+
+The session temps (`kitlib.config.user.session_temps`) are the machine config's `agent_temp_sweep` `dir` (the agents' temp folder, docs/machine-setup.md "Extras") and the user environment's `AGENT_TEMP`, `TEMP` and `TMP` (HKCU\Environment, expanded). With `temp_dir` set to the agents' temp folder, the kit temp folder is `kit-temp` at the drive root; on a machine whose agents' temp folder is that `kit-temp` (machine setup's default), it is `kit-work`. Where the user environment's `TEMP` is the system temp folder (Windows' default), a checkout on the system drive gets `%LOCALAPPDATA%/kit-work`.
 
 It never reads the process's TEMP, TMP or AGENT_TEMP, so every process and shell gets the same folder. Folders that cannot be made, or a machine config that cannot be read, fall back with a note: run folders to `default_work_temp` (the same rule without `temp_dir`) when that is another folder, else to the process's temp folder; gate logs to `fallback_log_base`.
 

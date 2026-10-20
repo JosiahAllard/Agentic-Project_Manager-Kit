@@ -29,9 +29,9 @@ When the branch has not landed, it prints three more lines:
 Each log base is `kitlib.gate.runner.log_base`:
 
 - with `"landing".log_dir` set, that folder under the checkout;
-- otherwise `<kit temp>/<repo name>-gate`, where the kit temp is `kitlib.config.user.work_temp` of the checkout and the repo name is `"repo".name`, else the checkout folder's name. Then `runner.fallback_log_base` (`<shared temp>/<repo name>-gate`) is read as well: a gate that could not make the default base writes there, and so did every gate before the kit temp moved. A machine config that cannot be read leaves only that base, with a `note` line.
+- otherwise `<kit temp>/<repo name>-gate`, where the kit temp is `kitlib.config.user.work_temp` of the checkout and the repo name is `"repo".name`, else the checkout folder's name. Then `runner.fallback_log_base` (`<shared temp>/<repo name>-gate`, the shared temp being the machine config's `temp_dir`, else `%LOCALAPPDATA%/Temp`: `kitlib.config.user.shared_temp`) is read as well: a gate that could not make the default base writes there, and so did every gate before the kit temp moved. A machine config that cannot be read leaves only that base, with a `note` line.
 
-Known limits: only the bases of today's rule are read. A gate that ran while `work_temp` was still a session's TEMP (before it kept out of session temps: docs/test-tools.md "Temp folders") wrote its logs under that older kit temp, which is not read, so such a branch shows no verdict until it is gated again.
+Known limits: only the bases of today's rule are read. A gate that ran while `work_temp` was still a session's TEMP (before it kept out of session temps: docs/test-tools.md "Temp folders") wrote its logs under that older kit temp, which is not read, so such a branch shows no verdict until it is gated again. Likewise fallback logs written under `%LOCALAPPDATA%/Temp` before the shared temp followed `temp_dir` are not read on a machine that sets `temp_dir`.
 
 The checkouts read are the one `-C` names, its main checkout, and every worktree that has the branch checked out.
 
