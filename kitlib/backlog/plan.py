@@ -1084,9 +1084,12 @@ def plan_pull(snap, ctx, rid, reason=None, ruling=None, blocker=None):
     here. In the offer means in `next`'s offer as the caller's branch prints it (its own pulls
     left out, so a record overlapping only them is offered) or as `next` prints it without a
     branch (current_offer).
-    A `priority: -1` record needs `--ruling` (a hold release). One whose scope collides with
-    a live pull on another branch (one on the caller's branch is no collision) needs `--reason` and `--ruling` (the PM's ruling, cited in `preempt`); one ruling
-    covers a `-1` record that also collides. An unmet `requires:` refuses.
+    A `priority: -1` record needs `--ruling` here (a hold release), but tools/backlog.py's role
+    check sorts a pull of a held record as `pull-held`, which no role may take: its hold is
+    released first (`set ID --priority N --ruling R-nnnn`, the owner or the PM), then it is
+    pulled. One whose scope collides with a live pull on another branch (one on the caller's
+    branch is no collision) needs `--reason` and `--ruling` (the PM's ruling, cited in
+    `preempt`). An unmet `requires:` refuses.
     The fold-in guard (`_pull_fold_hits`): one whose scope overlaps a path another live pull's
     branch changed needs `--reason` and `--ruling` too, and records `preempt`; `next` passes
     such a record over, so its refusal comes before the not-offered one.
