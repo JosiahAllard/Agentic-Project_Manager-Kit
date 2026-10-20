@@ -467,6 +467,29 @@ class AnEmptyCommit(LinkedCase):
         self.assertIn('carries a machine path', out)
         self.assertEqual(self.head(), head)
 
+    def test_owner_approval_or_consume_with_the_flag_are_usage_errors(self):
+        head = self.head()
+        for kw in ({'owner_approval': 'hub:A-1'}, {'owner_approval': 'hub:A-1', 'consume': 'HEAD'}):
+            code, out = self.commit('s', allow_empty=True, **kw)
+            self.assertEqual(code, 2, (kw, out))
+            self.assertIn('USAGE:', out)
+        code, out = self.commit(None, allow_empty=True, owner_approval='hub:A-1', consume='HEAD')
+        self.assertEqual(code, 2, out)
+        self.assertIn('USAGE:', out)
+        self.assertEqual(self.head(), head)
+
+    def test_an_unborn_branch_is_refused(self):
+        self.git('checkout', '-q', '--orphan', 'kit/unborn')
+        self.git('rm', '-r', '-q', '--cached', '--', '.')
+        self.assertEqual(self.git('ls-files'), '')
+        code, out = self.commit('close it', allow_empty=True)
+        self.assertEqual(code, 1, out)
+        self.assertIn('no HEAD to keep', out)
+        self.assertNotEqual(self.git('rev-parse', '--abbrev-ref', 'HEAD'), 'HEAD')
+        r = cmd.subprocess_run(('git', 'rev-parse', '-q', '--verify', 'HEAD'), cwd=self.wt,
+                               capture_output=True, text=True, env=gitfixture.fixture_env())
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+
     def test_the_main_checkout_is_still_refused(self):
         head = self.t.git('rev-parse', 'HEAD')
         code, out = self.commit('s', allow_empty=True, root=self.t.root, cwd=self.t.root)
@@ -1076,6 +1099,17 @@ class HooksAndTheReflog(LinkedCase):
         self.assertEqual(self.git('show', 'HEAD:extra.txt'), 'hook')
         self.assertEqual(self.git('rev-parse', 'HEAD^'), start)
 
+    def test_an_allow_empty_commit_a_pre_commit_hook_adds_a_file_to_is_undone(self):
+        self.hook('pre-commit', 'printf "hook\\n" > extra.txt && git add extra.txt')
+        start = self.head()
+        code, out = self.commit('close it', allow_empty=True)
+        self.assertEqual(code, 1, out)
+        self.assertIn('refused: --allow-empty, but a hook changed the commit', out)
+        self.assertIn('Undone', out)
+        self.assertNotIn('NOT undone', out)
+        self.assertEqual(self.head(), start)
+        self.assertEqual(self.git('diff', '--cached', '--name-only'), '')
+
     def test_head_moved_under_a_hooked_commit_is_still_undone(self):
         self.hook('commit-msg', 'printf "Change-Id: I0123\\n" >> "$1"')
         seen = self.around_commit(before=self.other_writer_commits)
@@ -1539,6 +1573,18 @@ class MergeCase(LinkedCase):
 
 
 class MergeInProgress(MergeCase):
+
+    def test_allow_empty_during_a_merge_with_nothing_staged_is_refused(self):
+        # A side commit with HEAD's own tree: merged with --no-ff --no-commit, MERGE_HEAD is set
+        # and nothing is staged, so only the merge check can refuse it.
+        side = self.git('commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-m', 'side')
+        self.git('merge', '-q', '--no-ff', '--no-commit', side)
+        self.assertEqual(self.git('diff', '--cached', '--name-only'), '')
+        head = self.head()
+        code, out = self.commit('close it', allow_empty=True)
+        self.assertEqual(code, 1, out)
+        self.assertIn('--allow-empty during a merge in progress', out)
+        self.assertEqual(self.head(), head)
 
     def test_a_merge_commits_with_its_auto_staged_files(self):
         tip, base = self.start_merge()
