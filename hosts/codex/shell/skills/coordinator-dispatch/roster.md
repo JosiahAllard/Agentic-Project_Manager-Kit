@@ -17,7 +17,7 @@ coordinator profile lists the roles it actually has; use only those. Roles are n
 - docs-writer: the docs type - settled facts into docs (skill `specialty-records`) and specs extended from the owner's answers (skill `specialty-spec`). Docs only.
 - test-runner: runs test tiers in a given worktree; reports PASS/FAIL plus failing lines.
 - helper: light, read+edit only; dispatched by builders for bulk menial reads and mechanical bulk writes, never by a coordinator for a story.
-- Specialty skills, loaded by the role the brief names: `specialty-review`, `specialty-research` (analyst); `specialty-records`, `specialty-spec` (docs-writer); `specialty-tech-art`, `specialty-3d-assets`, `specialty-sound` (a worker type, see "Creative dispatches" in the skill).
+- Specialty skills, loaded by the role the brief names: `specialty-review`, `specialty-research` (analyst); `specialty-records`, `specialty-spec` (docs-writer); `specialty-tech-art`, `specialty-3d-assets`, `specialty-rigging`, `specialty-sound` (a worker type, see "Creative dispatches" in the skill).
 - consultant: a long-lived launched session per repository that answers engineering questions.
 
 ## Choosing
