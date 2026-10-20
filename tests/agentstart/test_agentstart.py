@@ -211,7 +211,7 @@ class Text(unittest.TestCase):
 
 class Dispatched(unittest.TestCase):
     def test_a_dispatched_kit_role_is_one(self):
-        for role in ('worker', 'pm-kit:worker', 'reviewer', 'senior-worker', 'opus-worker', 'test-runner'):
+        for role in ('worker', 'pm-kit:worker', 'analyst', 'senior-worker', 'opus-worker', 'test-runner'):
             self.assertTrue(agentstart.is_dispatched(role, KIT), role)
 
     def test_a_session_role_a_host_agent_or_nothing_is_not(self):

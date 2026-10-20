@@ -15,16 +15,19 @@ The classes, decided first-match in this order:
   When the scan could not read some process, a tree is L unless every folder in it opens for
   DELETE (holders.held_folder): a process we could not read may hold it.
 - A landed: the tip is in the base AND off its first-parent chain (remove.merged_worktrees's
-  rule), the tree is clean, and a branch's reflog shows a commit made on it (own_commit: a
-  branch made at a landed commit and never worked on is C; a reflog that cannot be read, C).
+  rule), the tree is clean, and a branch's reflog shows a commit made on it (own_commit; a
+  reflog that cannot be read, C). Also A, empty: clean, tip in the base, nothing of its own, and
+  no commit to lose (unsaved_reflog), when the live backlog stores can be read and none claims
+  it (live_claims; empty_keep says why one stays C). The PM data worktree is never empty-A.
 - E evidence: the folder name matches EVIDENCE_GLOBS, or a detached tree outside every worktree
   folder.
 - B finished: clean, ahead of the base (tip not in it), and the tip has a gate-OK record from a
   --full gate that git still agrees with (kitlib.records.gate_ok.verify_full).
-- C half-done: everything else (dirty, no gate-OK record, a record that cannot be read, or no
-  commit of its own).
+- C half-done: everything else (dirty, no gate-OK record, a record that cannot be read, or an
+  empty tree a record claims, whose claims cannot be read, or whose reflogs hold a commit).
 
-Who the tree belongs to (a backlog record pulled by its branch) is shown, never used to classify.
+Who the tree belongs to (a backlog record pulled by its branch) is shown; it decides only whether
+an empty tree is A or C. Each claim on a B or C tree gets a `next` release line.
 `classify` returns Result(code, lines, data): 0 when no tree is A, B, C or E; 1 when one is, or a
 run-wide read failed; 2 for a refused kit configuration. With `apply`: 0 when every A and E tree
 was removed and no B or C tree is left; 1 when the run was refused (not the main checkout, the
@@ -37,6 +40,7 @@ import fnmatch
 import os
 import time
 
+from kitlib import kitroot
 from kitlib.records import gate_ok
 
 from kitlib.git import refs
@@ -46,17 +50,28 @@ from .holders import WALK_MAX, canon, extended, plain, prune
 from .remove import OK, REFUSED, failure, git
 
 Result = collections.namedtuple('Result', 'code lines data')
+# live_claims: {lower-cased branch: sorted ids pulled by it}, {id: the checkout whose backlog.py
+# writes it, or None for a main or folder store named in .kit.json (it writes only from a linked
+# worktree whose branch holds the record, never the main checkout)}, and the PM data worktree's
+# canon path (None when there is none).
+Claims = collections.namedtuple('Claims', 'index stores pm_root')
+
+
+def claimed(got, branch):
+    """The ids `got` (Claims) holds pulled by `branch`, matched without regard to case as
+    backlog.py matches `pulled_by` (plan.py)."""
+    return got.index.get(branch.lower(), []) if branch else []
 
 DEAD_AFTER_S = 24 * 3600                       # owner answer Q3: 24 h, the sweep's idle bar
 EVIDENCE_GLOBS = ('agent-*', '*-red', 'redcheck', 'mutant*')
 LANDING_TREE = '_landing'                      # kitlib/gate/land.py TREE_NAME
 CLASSES = ('A', 'B', 'C', 'E', 'L')
 HEADINGS = {
-    'A': ('landed', 'tip in the base, clean, a commit of its own on the branch',
+    'A': ('landed', 'tip in the base, clean, a commit of its own or empty and unclaimed',
           'removable: worktree_remove.py <slug>'),
     'B': ('finished', 'clean, ahead of the base, gate-OK record, dead',
           'take up: land it or record why not'),
-    'C': ('half-done', 'dirty, no gate-OK record, or nothing of its own; dead',
+    'C': ('half-done', 'dirty, no gate-OK record, or empty and claimed or unknown; dead',
           'take up, or block/release its record; then --abandon'),
     'E': ('evidence', 'agent-*/red/mutant name, or detached outside the worktree folder; dead',
           'removable: --scratch or --abandon "evidence"'),
@@ -262,8 +277,103 @@ def live_reason(ctx, entry, run_wide, landing, machine, cwds, now, dead_after_s)
     return None, got
 
 
-def judge(ctx, entry, base, chain, ancestors):
-    """`(class, fields)` for a dead tree: A, E, B or C, first match."""
+def live_claims(ctx, base):
+    """`(Claims, None)`, or `(None, why)` when "no claim" would prove nothing: the pulls of every
+    live backlog store of this repository, the store its `.kit.json` names (read as
+    remove.pulled_index reads it) and the PM data worktree's (store.pm_data_live_store) when that
+    names one, its records read as backlog.py there reads them. `why` when neither names a store
+    (the implicit default ref is read-only: no pull is written there) or a named one cannot be
+    read."""
+    from kitlib.backlog import opener
+    from kitlib.backlog import store as smod
+    from kitlib.backlog.errors import Refusal
+    from kitlib.config import ConfigError
+    index, stores, read = {}, {}, 0
+    if ctx.cfg.written('backlog', 'store') is not None:
+        got, why = remove.pulled_index(ctx, base)
+        if got is None:
+            return None, why
+        # A main or folder store (open_backend: neither `ref` nor `branch`) writes only from a
+        # linked worktree (MainBackend.publish): no -C line can name the main checkout.
+        main_kind = ctx.cfg.written('backlog', 'store') not in ('ref', 'branch')
+        for branch, ids in got.items():
+            index.setdefault(branch.lower(), set()).update(ids)
+            stores.update((i, None if main_kind else ctx.main) for i in ids)
+        read += 1
+    pm_root, named, why = smod.pm_data_live_store(ctx.main)
+    if why:
+        return None, ('the PM data worktree\'s backlog store cannot be read (%s)'
+                      % (smod.unreadable_kit_json(pm_root, why) if pm_root else why))
+    if pm_root and named is not None:
+        try:
+            top, cfg, rules = opener.open_repo(pm_root)
+            snap = smod.Store(smod.open_backend(top, cfg, fetch=False), rules).load()
+        except (Refusal, ConfigError, OSError, KeyError) as e:
+            return None, 'the backlog store in %s cannot be read (%s)' % (pm_root, e)
+        if snap.unreadable:
+            return None, 'unreadable backlog record(s) in %s: %s' % (
+                snap.where, ', '.join(r.stem for r in snap.unreadable))
+        for r in snap.records:
+            if r.get('state') == 'pulled' and r.get('pulled_by'):
+                index.setdefault(r.get('pulled_by').lower(), set()).add(r.id)
+                stores[r.id] = pm_root
+        read += 1
+    if not read:
+        return None, ('no backlog store is named: this repository\'s .kit.json names no'
+                      ' "backlog".store (the implicit default is read-only, so no pull is'
+                      ' written there) and no PM data worktree names one')
+    return Claims({b: sorted(ids) for b, ids in index.items()}, stores,
+                  canon(pm_root) if pm_root else None), None
+
+
+def unsaved_reflog(ctx, entry):
+    """Why an empty tree must stay C (judge): a commit its HEAD reflog or its branch's reflog holds
+    that no ref and not its tip reaches, `git worktree remove` and `git branch -d` deleting both
+    reflogs; or a reflog that cannot be read. None when they hold none."""
+    path, branch, head = entry['path'], entry['branch'], entry['head']
+    logged, why = scratch.reflog(path)
+    if logged is None:
+        return 'its HEAD reflog cannot be read (%s)' % why
+    if branch:
+        args = ('reflog', 'show', '--format=%H', 'refs/heads/%s' % branch, '--')
+        rc, out, err = git(ctx.main, *args)
+        if rc != 0:
+            return 'its branch reflog cannot be read (%s)' % failure(args, rc, err)
+        logged += [oid for oid in out.split() if oid not in logged]
+    if not logged:
+        return None
+    lost, why = unsaved_count(ctx, logged, (head,))
+    if lost is None:
+        return 'its reflogs cannot be checked (%s)' % why
+    if lost:
+        return 'its reflogs hold %d commit(s) no ref and not its tip reaches' % lost
+    return None
+
+
+def empty_keep(ctx, entry, own, claims):
+    """Why a clean tree whose tip is in the base and that has nothing of its own stays C; None
+    when it is A (no commit can be lost and no backlog record claims it). `own`: own_commit's
+    answer when judge read it, else None (read here). `claims`: `(Claims, why)` (live_claims)."""
+    got, why = claims
+    if got is None:
+        return 'whether a backlog record claims it is unknown: %s' % why
+    if got.pm_root and (entry.get('canon') or canon(entry['path'])) == got.pm_root:
+        return 'the PM data worktree'
+    branch = entry['branch']
+    if claimed(got, branch):
+        return 'claimed by %s' % ', '.join(claimed(got, branch))
+    if branch and own is None:
+        own, why = own_commit(ctx.main, branch)
+        if own is None:
+            return why
+    if own:
+        return 'its branch reflog shows a commit of its own'
+    return unsaved_reflog(ctx, entry)
+
+
+def judge(ctx, entry, base, chain, ancestors, claims=(None, 'not read')):
+    """`(class, fields)` for a dead tree: A, E, B or C, first match. `claims`: `(Claims, why)`
+    (live_claims): an empty tree is A only when it is readable and names no claim."""
     path, branch, head = entry['path'], entry['branch'], entry['head']
     work, disposable, ignored, why = remove.dirty(ctx, path)
     if work is None:
@@ -271,6 +381,7 @@ def judge(ctx, entry, base, chain, ancestors):
     dirt = len(work) + len(disposable) + len(ignored)
     fields = {'dirty': dirt}
     landed = head in ancestors and head not in chain
+    own = None
     if landed and not dirt:
         own, why = (True, None) if not branch else own_commit(ctx.main, branch)
         if own is None:
@@ -284,8 +395,12 @@ def judge(ctx, entry, base, chain, ancestors):
     if evidence_name(path) or (branch is None and outside):
         return 'E', fields
     if head in ancestors:
-        fields['note'] = 'landed, not clean' if landed and dirt else 'nothing of its own'
-        return 'C', fields
+        if dirt:
+            fields['note'] = 'landed, not clean' if landed else 'nothing of its own'
+            return 'C', fields
+        keep = empty_keep(ctx, entry, own, claims)
+        fields['note'] = 'nothing of its own' + ('; kept: %s' % keep if keep else '')
+        return ('C' if keep else 'A'), fields
     rc, count, err = git(ctx.main, 'rev-list', '--count', '%s..%s' % (base, head))
     fields['ahead'] = int(count) if rc == 0 and count.isdigit() else None
     fields['gate'] = gate_state(ctx.main, head)
@@ -406,8 +521,7 @@ def _classify(ctx, now, machine, procs, dead_after_s, act=None):
     run_wide = probes[0]
     if run_wide:
         ctx.say('note      %s: every tree is L' % run_wide)
-    claims, claims_why = (remove.pulled_index(ctx, base) if any(e['branch'] for e in entries)
-                          else ({}, None))
+    claims = live_claims(ctx, base) if entries else (None, 'no tree to claim')
     trees, acted = [], []
     for entry in entries:
         path = os.path.normpath(entry['path'])
@@ -418,12 +532,12 @@ def _classify(ctx, now, machine, procs, dead_after_s, act=None):
         if reason:
             row.update({'class': 'L', 'reason': reason})
         else:
-            klass, fields = judge(ctx, entry, base, chain, ancestors)
+            klass, fields = judge(ctx, entry, base, chain, ancestors, claims)
             row['class'] = klass
             row.update(fields)
         if entry['branch']:
-            row['claims'] = (claims.get(entry['branch'], []) if claims is not None
-                             else 'unknown: %s' % claims_why)
+            row['claims'] = (claimed(claims[0], entry['branch']) if claims[0] is not None
+                             else 'unknown: %s' % claims[1])
         trees.append(row)
         if row['class'] in ('A', 'E'):
             acted.append((entry, row))
@@ -454,6 +568,18 @@ def _classify(ctx, now, machine, procs, dead_after_s, act=None):
             ctx.say('  %s  %s' % (klass, describe(t, base)))
     for t in trees:
         if t['class'] in ('B', 'C'):
+            for rid in t['claims'] if isinstance(t.get('claims'), list) else ():
+                writer = claims[0].stores[rid]
+                if writer is None:
+                    ctx.say('next      release %s or block it (%s): its store is in the main'
+                            ' checkout, which takes no backlog write; run `backlog.py release %s'
+                            ' --reason "<why>"` (or `block %s --on <M> --reason "<why>"` to keep'
+                            ' the branch) from a worktree whose branch holds the record'
+                            % (rid, t['class'], rid, rid))
+                    continue
+                ctx.say('next      %s release %s --reason "<why>"   (%s, or `block %s --on <M>'
+                        ' --reason "<why>"` to keep the branch)' % (
+                            kitroot.command('backlog', writer), rid, t['class'], rid))
             ctx.say('next      %s %s --abandon "<why>"   (%s, after it is taken up or'
                     ' recorded)' % (s['tool'], remove.handle(ctx, t['path']), t['class']))
     ctx.say('summary   %s' % ', '.join('%s %d' % (k, counts[k]) for k in CLASSES))

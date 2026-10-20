@@ -492,7 +492,7 @@ def to_json(view, snap, remote=False):
                     reason=hc["reason"] if "reason" in hc else st.pending_reason(hc.get("pending")))
     g = snap.get("game") or {}
     game = _pick(g, GAME_KEYS)
-    game["games"] = [_pick(x, ("name", "exe", "anti_cheat")) for x in g.get("games") or []
+    game["games"] = [_pick(x, ("name", "exe", "anti_cheat", "pin")) for x in g.get("games") or []
                      if isinstance(x, dict)]
     game["running"] = (_pick(g["running"], ("name", "exe")) if isinstance(g.get("running"), dict)
                        else None)

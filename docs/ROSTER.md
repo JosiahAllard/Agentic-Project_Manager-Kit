@@ -29,21 +29,16 @@ standard tier (Claude: `model: sonnet`).
 <!-- rendered: roles -->
 | role | tier | effort | use for |
 |---|---|---|---|
-| asset-smith | strong | high | 3D assets as Blender Python scripts against a decided art direction, validated against budgets, with a contact sheet for the owner. No rigging or animation. |
+| analyst | light | high | The read type - branch review (skill specialty-review) and research (skill specialty-research); builds and edits nothing. Raised to the strong tier per dispatch only by the "Reviewer model" rule in the dispatch skill's roster file. |
 | consultant | deep | high | Own long-lived launched session per repository (never dispatched; 1M via launcher). Answers engineering questions from coordinators and workers; never edits, lands or dispatches builds; idle until asked. |
 | coordinator | strong | medium | Main session, never a subagent. Splits work, dispatches agents, reviews branches, queues every LAND verdict for landing at once, brings decisions to the owner. Writes no code. |
 | deep-worker | deep | xhigh | Own launched session (never dispatched; 1M via launcher). Root cause or concurrency work senior-worker failed at or plainly cannot do; never builds or plans. |
+| docs-writer | standard | medium | The docs type - records (skill specialty-records) and specs (skill specialty-spec). Docs only. |
 | helper | light | medium | Bulk menial reads and mechanical bulk writes, dispatched by a builder into its own worktree; read and edit work only, runs no shell command. Never dispatched by a coordinator for a story. |
 | lander | light | medium | Optional wrapper: submits one reviewed branch (or a batch) for landing, waits for the result, reports. Never edits code. Dispatched with no model override, and never overridden. |
 | pm | strong | high | The project manager: the owner's one main session (the after-reboot resume starts it so), never a subagent. Keeps every repository's coordinator running and briefed, records owner decisions in the ledger, schedules the machine, runs the Action Hub. Builds and lands nothing itself. |
-| records | standard | low | Writes settled facts into docs only: decisions, landing notes, plan ticks. |
-| researcher | standard | high | Read-only ideas and prior art; proposes concepts for the owner to choose from, builds nothing. |
-| reviewer | light | high | Read-only review of one branch against its brief; reports defects, scope creep and untested changes. Raised to the strong tier per dispatch only by the "Reviewer model" rule in the dispatch skill's roster file. |
 | senior-worker | strong | high | High-risk changes: networking, concurrency, simulation or ordering, landing, gate or lock tools, build-cache and codegen design, migrations, CI config, known-area crash fixes. |
-| sound-smith | standard | medium | Sound effects from synthesis, free libraries, text-to-speech and local music generation; measures clips, the owner judges. Mechanical work at this tier; design dispatches override to the strong tier at high effort (upward only). |
-| spec-writer | standard | high | Extends a named design or spec document from the owner's answers. Docs only. |
 | strong-worker | strong | medium | High-risk build and fix work on standard paths: public API changes, live-behaviour fixes, ordinary tool features, generated-data wiring. Not plan-only or sync/prep work (worker). The one role with a one-hour prompt cache (see "The one-hour prompt cache" below). |
-| tech-artist | strong | high | Art that is code: shaders, materials, palettes, UI themes, procedural meshes and textures, lighting; checked by rendering. |
 | test-runner | light | - | Runs test tiers in a given worktree and reports only PASS/FAIL plus failing lines. |
 | weak-worker | light | high | Small, well-defined, low-risk changes expected under 100k tokens: named edits to named files, doc lines, small additive changes with their test. Escalates to worker when the task is bigger or less clear than briefed. |
 | worker | standard | medium | Default coder for routine low and medium risk work: additive content, UI, pure logic with tests, small fixes with a known cause, behaviour-neutral moves and renames; plan-only and sync or prep work (merging main into a branch, rebasing, conflict-free syncs, preparation). |
@@ -105,7 +100,7 @@ Source: the files in the project manager's `kit/agents/` at the time of the copy
 The live files held no ruling id, no repo name and no owner path, so the scrub changed only two files.
 
 - **coordinator.md**, startup step 3 (check in with the project manager): the id of the newest ruling in the state note was replaced by plain words, and later the step stopped asking for an id at all: it asks for "owner decisions since your last check-in". Reason: the ids were the project manager's own numbering.
-- **researcher.md**, end of "Repo tools": removed one line, a research exclusion for a single repository. Reason: it named a repo, and is a repo-specific research exclusion. It belongs in that repo's `.claude/agent-profile.md`; the agent already reads the profile. Until a repo's profile carries it, an agent could research those topics.
+- **researcher.md**, end of "Repo tools": removed one line, a research exclusion for a single repository. Reason: it named a repo, and is a repo-specific research exclusion. It belongs in that repo's `.claude/agent-profile.md`; the agent already reads the profile. Until a repo's profile carries it, an agent could research those topics. The researcher role has since merged into the analyst (docs/specialty-skills.md); the exclusion stays out of it.
 
 Left as is, on purpose:
 - Role words "PM" and "project manager" and the launcher commands `launch.py deep` (coordinator, deep-worker) and `launch.py consultant` (consultant; `launcher\start-*.ps1` paths before the launcher moved into the kit, docs/launcher.md): the kit's own roles and launcher, not owner-specific.

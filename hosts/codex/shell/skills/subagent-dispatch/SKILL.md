@@ -7,7 +7,7 @@ description: Use as a coordinator or any agent about to dispatch a subagent (a k
 
 1. Dispatch only where the task, the repo's rules or your role allow it; name the role, scope, worktree, branch, shared resources and validation in the brief.
 2. A writer gets the worktree you prepared and owns it: dispatch it into that worktree, never into a second checkout the host creates on its own (the host would confine its writes there and deny its first edit).
-3. Reviewer, researcher and the host's built-in explorer or planner stay read-only. A built-in planner may have no file-write tool at all: brief it to return the plan in its report body.
+3. The analyst and the host's built-in explorer or planner stay read-only. A built-in planner may have no file-write tool at all: brief it to return the plan in its report body.
 4. Ask for the report in the agent's result, plus a file the agent writes itself in its scratch folder when the report is long or must survive; name that path in the brief.
 5. A host's own task-output file is not a rescue path for a lost report (it can come back 0 bytes).
 6. Before resuming or replacing a failed agent, look at what it left running: jobs, lock runs, ports, its worktree's state.

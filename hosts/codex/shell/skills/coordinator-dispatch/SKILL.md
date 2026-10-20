@@ -39,12 +39,12 @@ Dispatch traps (built-in planners that cannot write, output files are no rescue 
   to look up, never a pasted rule. Where the repo has a brief template (`--find brief`), follow it.
 - Every agent starts with `python <kit>/tools/preflight.py -C <worktree>`. Briefs point at `python <kit>/tools/codemap.py -C <worktree>`
   and `python <kit>/tools/doc_index.py -C <worktree> --section "<heading>"` before any search; agents use their search
-  and file-read tools, not shell grep, cat or sed. Reviewer and lander briefs name
+  and file-read tools, not shell grep, cat or sed. Review (analyst) and lander briefs name
   `python <kit>/tools/review_pack.py -C <repo> <branch>` as their first call.
 - In a large file the brief names the sections or line ranges to read; the agent reads ranges (codemap or a search first), never the whole file, unless it is rewriting all of it.
 - Every coding brief states its risk level and why (path in the risk map, or the reason it is
   higher); unlisted is not a reason - list routine paths at their real level.
-- Briefs to the records and spec-writer roles give facts as keyword lines in the entry format
+- Briefs to the docs-writer role give facts as keyword lines in the entry format
   `ID | status | area | keywords | ref`, 300 chars at most, not paragraphs to transcribe. Decision
   logs split into more per-area files as they fill.
 
@@ -52,16 +52,22 @@ Dispatch traps (built-in planners that cannot write, output files are no rescue 
 
 Read `roster.md` in this skill's folder (beside this file): the roles and what each is for, the
 cheap/strong split, the coding ladder, tier and effort rules, deep-worker requests, the
-consultant, researcher and pass/fail-check routing. The kit's roster table (each role's tier, and
+consultant, research and pass/fail-check routing. The kit's roster table (each role's tier, and
 each host's tier-to-model map) is `<kit>/docs/ROSTER.md`.
+
+A task matching a specialty skill (a `specialty-*` folder in `<kit>/content/skills/`): the brief names the skill
+("Load skill `specialty-sound` first") and the role, at least the minimum tier the skill's
+`Dispatch:` line gives. The skill carries the know-how; the role still sets model, effort and
+permissions.
 
 ## Creative dispatches
 
-- The tech-artist (art that is code), asset-smith (scripted 3D) and sound-smith (sound; it cannot
-  hear, so its report ends in a question you put to the owner) roles: via the owner's local models,
-  against an art direction the owner has decided or, where none exists, the tech-artist proposes
-  strongly different looks for the owner to pick; none hand-sculpts, rigs or animates. An asset
-  generation cannot supply -> the owner, not another agent.
+- Art that is code (skill `specialty-tech-art`) and scripted 3D (skill `specialty-3d-assets`) go
+  to senior-worker at least; sound (skill `specialty-sound`; the agent cannot hear, so its report
+  ends in a question you put to the owner) to worker at least, senior-worker for design; never
+  weak-worker. They work via the owner's local models, against an art direction the owner has
+  decided or, where none exists, by proposing strongly different looks for the owner to pick; none
+  hand-sculpts, rigs or animates. An asset generation cannot supply -> the owner, not another agent.
 - Every creative brief carries this block, filled in:
 
   > FEEL: one sentence. REFERENCES: one to three (a game and what specifically, or an image path,
@@ -96,7 +102,7 @@ each host's tier-to-model map) is `<kit>/docs/ROSTER.md`.
 - Review a hand-back at once and continue the same agent while its prompt cache is warm (the
   host's cache window; `<kit>/docs/ROSTER.md` names the role that asks for a longer one); later,
   continue anyway unless its context is above about 150k tokens (strong- and deep-tier coders) or
-  it is a reviewer, then start fresh from a short written summary; never park a large-context
+  it is an analyst on a review, then start fresh from a short written summary; never park a large-context
   agent to resume later for a small fix.
 - A background run dies with its agent: tell its replacement to check logs first.
 - Few long-running agents: each notification costs a turn over your whole context.
@@ -109,7 +115,7 @@ each host's tier-to-model map) is `<kit>/docs/ROSTER.md`.
 ## Upkeep
 
 - **Prune daily.** Start each day with `python <kit>/tools/doc_index.py -C <repo> --stale`: confirm (touch it),
-  rewrite or delete each line, in ONE records-role commit. A new `.md`, shard or section adds its
+  rewrite or delete each line, in ONE docs-writer commit. A new `.md`, shard or section adds its
   index line in the same commit, or the doc-budget check refuses the branch.
 - Durable facts -> the repo's docs, landed like any docs change, never in the host's config
   folder; session state -> your state note (`<agent temp>/<repo slug>-coordinator/state-<session>.md`). Worktrees are created and removed as the

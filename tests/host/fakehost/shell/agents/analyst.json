@@ -1,5 +1,5 @@
 {
   "model": "fake-small",
-  "name": "reviewer",
+  "name": "analyst",
   "sandbox": "read-only"
 }

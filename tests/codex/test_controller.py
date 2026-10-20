@@ -62,18 +62,18 @@ class Controller(unittest.TestCase):
         self.assertEqual(before, set(Path(self.world.wt).iterdir()))
         self.assertNotIn('Exact assigned brief', ' '.join(planned.argv))
 
-    def test_dedicated_reviewer_plan_has_no_writable_roots(self):
-        planned = self.build('reviewer')
+    def test_dedicated_analyst_plan_has_no_writable_roots(self):
+        planned = self.build('analyst')
         self.assertEqual(planned.permission.extends, ':read-only')
         self.assertEqual(planned.permission.write_roots, ())
         parsed = tomllib.loads(planned.permission.toml())
         self.assertTrue(all(value == 'read' for value in parsed['permissions']['pmkit_reviewed']['filesystem'].values()))
         with self.assertRaisesRegex(ValueError, 'writable stores'):
-            self.build('reviewer', store_write_roots=(self.world.data,))
+            self.build('analyst', store_write_roots=(self.world.data,))
 
     def test_exact_linked_gitdir_entry_survives_recursive_common_grant(self):
         git_dir = str(Path(self.world.classify(self.world.wt).git_dir).resolve()).replace('\\', '/')
-        for role, access in (('worker', 'write'), ('reviewer', 'read')):
+        for role, access in (('worker', 'write'), ('analyst', 'read')):
             planned = self.build(role)
             entries = tomllib.loads(planned.permission.toml())['permissions']['pmkit_reviewed']['filesystem']
             self.assertEqual(entries[git_dir], access)
@@ -165,7 +165,7 @@ class Controller(unittest.TestCase):
         self.assertEqual(request.call_args_list[2].args[1]['cursor'], 'next')
 
     def test_dedicated_root_cannot_gain_writer_permissions_from_profile_name(self):
-        planned = self.build('reviewer')
+        planned = self.build('analyst')
         value = {'thread': {'id': 'root', 'sessionId': 'session', 'cwd': planned.cwd},
                  'cwd': planned.cwd, 'model': 'actual-model', 'runtimeWorkspaceRoots': [planned.cwd],
                  'activePermissionProfile': {'id': planned.permission.profile_id},
@@ -255,13 +255,13 @@ class Controller(unittest.TestCase):
 
     @unittest.skipUnless(os.name == 'nt', 'Windows path comparison')
     def test_matching_native_checkout_case_preserves_the_controller_assignment(self):
-        planned = self.build('reviewer', model='gpt-6.1-sol')
+        planned = self.build('analyst', model='gpt-6.1-sol')
         value = {'thread': {'id': 'root', 'sessionId': 'session', 'cwd': planned.cwd.upper()},
                  'cwd': planned.cwd.upper(), 'model': 'gpt-6.1-sol', 'runtimeWorkspaceRoots': [planned.cwd],
                  'activePermissionProfile': {'id': planned.permission.profile_id},
                  'sandbox': {'type': 'readOnly'}}
         bindings = RoleBindings(mock.Mock(), classify=lambda _: SimpleNamespace(kind=repo.LINKED))
-        self.assertEqual(bind_started(planned, value, bindings).role, 'reviewer')
+        self.assertEqual(bind_started(planned, value, bindings).role, 'analyst')
 
 
 @real_git('native permission regression uses actual Git linked-worktree administration paths')
@@ -279,12 +279,12 @@ class ActualGitPermissions(unittest.TestCase):
         self.assertEqual(actual.kind, repo.LINKED)
         git_dir = str(Path(actual.git_dir).resolve()).replace('\\', '/')
         common = str(Path(actual.common).resolve()).replace('\\', '/')
-        for role, access in (('worker', 'write'), ('reviewer', 'read')):
+        for role, access in (('worker', 'write'), ('analyst', 'read')):
             planned = plan(role, assigned, 'actual-paths', brief, 'pmkit_reviewed', codex_exe=executable)
             entries = tomllib.loads(planned.permission.toml())['permissions']['pmkit_reviewed']['filesystem']
             self.assertEqual(entries[git_dir], access)
             self.assertEqual(entries[common], access)
             for child in ('AGENTS.md', '.codex'):
                 self.assertEqual(entries[str(assigned / child).replace('\\', '/')], 'read')
-            if role == 'reviewer':
+            if role == 'analyst':
                 self.assertEqual(planned.permission.write_roots, ())

@@ -12,6 +12,7 @@ import time
 import unittest
 from unittest import mock
 
+from kitlib import kitroot, pmdata
 from kitlib.records import gate_ok
 from kitlib.worktree import classify, holders, remove, sweep
 from tests import gitfixture
@@ -19,6 +20,9 @@ from tests.realgit import real_git
 from tests.worktree.test_worktree_remove import TOOL, WINDOWS, RemoveCase
 
 LATER = 3 * 24 * 3600
+NO_STORE = ('no backlog store is named: this repository\'s .kit.json names no "backlog".store'
+            ' (the implicit default is read-only, so no pull is written there) and no PM data'
+            ' worktree names one')
 
 
 def free():
@@ -106,11 +110,15 @@ class Classes(ClassifyCase):
         row = self.row(data, path)
         self.assertEqual((row['class'], row['note']), ('C', 'landed, not clean'), row)
 
-    def test_a_fresh_tree_with_nothing_of_its_own_is_c(self):
+    def test_a_fresh_tree_is_c_when_no_backlog_store_is_named(self):
+        """No "backlog".store and no PM data worktree: "no claim" proves nothing, so it stays C."""
         path = self.workstream('fresh', commits=0)
         rc, out, data = self.run_classify()
         row = self.row(data, path)
-        self.assertEqual((row['class'], row['note']), ('C', 'nothing of its own'), row)
+        self.assertEqual(row['class'], 'C', row)
+        self.assertEqual(row['note'], 'nothing of its own; kept: whether a backlog record claims'
+                         ' it is unknown: ' + NO_STORE, row)
+        self.assertEqual(row['claims'], 'unknown: ' + NO_STORE)
 
     def test_an_evidence_name_is_e(self):
         path = self.workstream('agent-1234')
@@ -136,6 +144,7 @@ class Classes(ClassifyCase):
                           % head), row)
 
     def test_the_backlog_store_is_opened_once_for_every_tree(self):
+        self.configure({'backlog': {'store': 'main'}})
         for slug in ('one', 'two', 'three'):
             self.workstream(slug)
         with mock.patch.object(remove.backlog_store, 'open_backend',
@@ -171,8 +180,8 @@ class Landed(ClassifyCase):
         rc, out, data = self.run_classify()
         self.assertEqual(rc, 1, out)
         self.assertEqual(self.row(data, path)['class'], 'A')
-        self.assertIn('A landed       1  tip in the base, clean, a commit of its own on the branch',
-                      out)
+        self.assertIn('A landed       1  tip in the base, clean, a commit of its own or empty and'
+                      ' unclaimed', out)
         self.assertIn('summary   A 1, B 0, C 0, E 0, L 0', out)
 
     def test_a_landed_detached_tree_outside_is_a_first(self):
@@ -183,16 +192,30 @@ class Landed(ClassifyCase):
         rc, out, data = self.run_classify()
         self.assertEqual(self.row(data, path)['class'], 'A')
 
-    def test_a_fresh_branch_at_a_landed_commit_is_c_nothing_of_its_own(self):
+    def fresh_at_landed(self):
         work = self.workstream('side')
         tip = self.git('rev-parse', 'HEAD', cwd=work)
         self.land('kit/side')
         self.git('worktree', 'remove', '--force', work)
         path = os.path.join(self.home, 'fresh')
         self.git('worktree', 'add', '-q', path, '-b', 'kit/fresh', tip)
+        return path
+
+    def test_a_fresh_branch_at_a_landed_commit_is_c_when_no_store_is_named(self):
+        path = self.fresh_at_landed()
         rc, out, data = self.run_classify()
         row = self.row(data, path)
-        self.assertEqual((row['class'], row['note']), ('C', 'nothing of its own'), row)
+        self.assertEqual(row['class'], 'C', row)
+        self.assertIn('nothing of its own; kept: whether a backlog record claims it is unknown',
+                      row['note'])
+
+    def test_a_fresh_branch_at_a_landed_commit_and_no_claim_is_a(self):
+        self.configure({'backlog': {'store': 'main'}})
+        path = self.fresh_at_landed()
+        rc, out, data = self.run_classify()
+        row = self.row(data, path)
+        self.assertEqual((row['class'], row['note'], row['claims']),
+                         ('A', 'nothing of its own', []), row)
 
     def test_a_landed_tree_whose_reflog_is_gone_is_c(self):
         path = self.workstream('done')
@@ -202,6 +225,177 @@ class Landed(ClassifyCase):
         row = self.row(data, path)
         self.assertEqual((row['class'], row['note']),
                          ('C', 'nothing of its own shown: its reflog is missing or expired'), row)
+
+
+@real_git('git reflog: the fake writes no reflog, and an empty tree is A only when it is read')
+@gitfixture.real_fixture('an empty tree is A only when its branch reflog, which only real git '
+                         'writes, shows nothing of its own')
+class EmptyTrees(ClassifyCase):
+    """A clean tree with its tip in the base and nothing of its own is A only when every live
+    backlog store can be read and no record claims its branch, and its reflogs lose nothing."""
+
+    CONFIG = {'backlog': {'store': 'main'}}
+
+    def record(self, text, name='T-001.md'):
+        """A record committed to the configured store on main and pushed (the base)."""
+        full = os.path.join(self.repo, 'docs', 'backlog', name)
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        with open(full, 'wb') as f:
+            f.write(text if isinstance(text, bytes) else text.encode('utf-8'))
+        self.fx.commit('record', 'docs/backlog/' + name)
+        self.fx.git('push', '-q', 'origin', 'main')
+
+    def pm_worktree(self, store):
+        """The PM data worktree (kitlib.pmdata), outside the worktree folder, its `.kit.json`
+        naming `store` uncommitted (the tree is dirty, so C itself)."""
+        pmdata.write(self.fx.common_dir(), 'pmdata', 'private', self.git('rev-parse', 'HEAD'))
+        path = os.path.join(os.path.realpath(self.fx.base), 'pm')
+        self.git('worktree', 'add', '-q', '-b', 'pmdata', path, 'HEAD')
+        self.fx.write('.kit.json', json.dumps({'backlog': {'store': store}}) + '\n', root=path)
+        return path
+
+    def test_an_empty_unclaimed_tree_is_a(self):
+        path = self.workstream('fresh', commits=0)
+        rc, out, data = self.run_classify()
+        row = self.row(data, path)
+        self.assertEqual((row['class'], row['note'], row['claims']),
+                         ('A', 'nothing of its own', []), row)
+        self.assertNotIn('next ', out)
+
+    def test_a_claim_in_the_configured_store_keeps_it_c(self):
+        self.record('id: T-001\nstate: pulled\npulled_by: kit/fresh\n')
+        path = self.workstream('fresh', commits=0)
+        rc, out, data = self.run_classify()
+        row = self.row(data, path)
+        self.assertEqual((row['class'], row['note'], row['claims']),
+                         ('C', 'nothing of its own; kept: claimed by T-001', ['T-001']), row)
+        # A main store takes no write in the main checkout (MainBackend.publish): no -C line.
+        self.assertNotIn('%s release' % kitroot.command('backlog', self.repo), out)
+        self.assertIn('next      release T-001 or block it (C): its store is in the main checkout,'
+                      ' which takes no backlog write; run `backlog.py release T-001 --reason'
+                      ' "<why>"` (or `block T-001 --on <M> --reason "<why>"` to keep the branch)'
+                      ' from a worktree whose branch holds the record', out)
+        self.assertLess(out.index('release T-001'), out.index('fresh --abandon'))
+
+    def test_a_claim_is_matched_without_regard_to_case(self):
+        self.record('id: T-001\nstate: pulled\npulled_by: Kit/Fresh\n')
+        path = self.workstream('fresh', commits=0)
+        rc, out, data = self.run_classify()
+        row = self.row(data, path)
+        self.assertEqual((row['class'], row['claims']), ('C', ['T-001']), row)
+        self.assertIn('kept: claimed by T-001', row['note'])
+
+    def test_both_stores_named_a_claim_in_the_pm_store_alone_keeps_it_c(self):
+        self.record('id: T-001\nstate: pulled\npulled_by: kit/other\n')
+        pm = self.pm_worktree('main')
+        self.fx.write('docs/backlog/T-002.md', 'id: T-002\nstate: pulled\npulled_by: kit/fresh\n',
+                      root=pm)
+        path = self.workstream('fresh', commits=0)
+        rc, out, data = self.run_classify()
+        row = self.row(data, path)
+        self.assertEqual((row['class'], row['claims']), ('C', ['T-002']), row)
+        self.assertIn('%s release T-002' % kitroot.command('backlog', pm), out)
+        self.assertNotIn('T-001', out)
+
+    def test_both_stores_named_a_claim_in_the_main_store_alone_keeps_it_c(self):
+        pm = self.pm_worktree('main')             # made first: its store never holds T-001
+        self.fx.write('docs/backlog/T-002.md', 'id: T-002\nstate: pulled\npulled_by: kit/other\n',
+                      root=pm)
+        self.record('id: T-001\nstate: pulled\npulled_by: kit/fresh\n')
+        path = self.workstream('fresh', commits=0)
+        rc, out, data = self.run_classify()
+        row = self.row(data, path)
+        self.assertEqual((row['class'], row['claims']), ('C', ['T-001']), row)
+        self.assertIn('next      release T-001 or block it (C): its store is in the main', out)
+        self.assertNotIn('%s release' % kitroot.command('backlog', pm), out)
+        self.assertNotIn('T-002', out)
+
+    def test_an_unreadable_record_in_the_pm_data_store_keeps_it_c(self):
+        self.configure({})
+        pm = self.pm_worktree('main')
+        os.makedirs(os.path.join(pm, 'docs', 'backlog'), exist_ok=True)
+        with open(os.path.join(pm, 'docs', 'backlog', 'T-009.md'), 'wb') as f:
+            f.write(b'id: T-009\nstate: pulled\ntitle: \xff\xfe\n')
+        path = self.workstream('fresh', commits=0)
+        rc, out, data = self.run_classify()
+        row = self.row(data, path)
+        self.assertEqual(row['class'], 'C', row)
+        self.assertIn('kept: whether a backlog record claims it is unknown: unreadable backlog'
+                      ' record(s)', row['note'])
+        self.assertIn('T-009', row['note'])
+
+    def test_a_pm_data_kit_json_that_fails_to_parse_keeps_it_c(self):
+        self.configure({})
+        pm = self.pm_worktree('main')
+        self.fx.write('.kit.json', '{not json\n', root=pm)
+        path = self.workstream('fresh', commits=0)
+        rc, out, data = self.run_classify()
+        row = self.row(data, path)
+        self.assertEqual(row['class'], 'C', row)
+        self.assertIn("kept: whether a backlog record claims it is unknown: the PM data"
+                      " worktree's backlog store cannot be read (the .kit.json of the PM data"
+                      " worktree", row['note'])
+
+    def test_a_pm_data_branch_with_no_worktree_keeps_it_c(self):
+        self.configure({})
+        pmdata.write(self.fx.common_dir(), 'pmdata', 'private', self.git('rev-parse', 'HEAD'))
+        path = self.workstream('fresh', commits=0)
+        rc, out, data = self.run_classify()
+        row = self.row(data, path)
+        self.assertEqual(row['class'], 'C', row)
+        self.assertIn("kept: whether a backlog record claims it is unknown: the PM data"
+                      " worktree's backlog store cannot be read", row['note'])
+
+    def test_an_unreadable_store_keeps_it_c(self):
+        self.record(b'id: T-009\nstate: pulled\npulled_by: kit/x\ntitle: \xff\xfe\n', 'T-009.md')
+        path = self.workstream('fresh', commits=0)
+        rc, out, data = self.run_classify()
+        row = self.row(data, path)
+        self.assertEqual(row['class'], 'C', row)
+        self.assertIn('kept: whether a backlog record claims it is unknown: unreadable backlog'
+                      ' record(s)', row['note'])
+        self.assertIn('T-009', row['note'])
+
+    def test_an_unsaved_commit_in_its_head_reflog_keeps_it_c(self):
+        path = self.workstream('fresh', commits=0)
+        self.git('checkout', '-q', '--detach', cwd=path)
+        self.fx.write('lost.txt', 'lost\n', root=path)
+        self.fx.commit('lost', 'lost.txt', cwd=path)
+        self.git('checkout', '-q', 'kit/fresh', cwd=path)
+        rc, out, data = self.run_classify()
+        row = self.row(data, path)
+        self.assertEqual((row['class'], row['note']), (
+            'C', 'nothing of its own; kept: its reflogs hold 1 commit(s) no ref and not its tip'
+            ' reaches'), row)
+
+    def test_a_claim_in_the_pm_data_worktrees_store_keeps_it_c(self):
+        self.configure({})
+        pm = self.pm_worktree('main')
+        self.fx.write('docs/backlog/T-002.md', 'id: T-002\nstate: pulled\npulled_by: kit/fresh\n',
+                      root=pm)
+        path = self.workstream('fresh', commits=0)
+        rc, out, data = self.run_classify()
+        row = self.row(data, path)
+        self.assertEqual((row['class'], row['claims']), ('C', ['T-002']), row)
+        self.assertIn('kept: claimed by T-002', row['note'])
+        self.assertIn('-C "%s" release T-002' % pm.replace('\\', '/'), out.replace('\\', '/'))
+
+    def test_the_pm_data_worktrees_store_with_no_claim_makes_it_a(self):
+        self.configure({})
+        self.pm_worktree('main')
+        path = self.workstream('fresh', commits=0)
+        rc, out, data = self.run_classify()
+        self.assertEqual(self.row(data, path)['class'], 'A')
+
+    def test_the_pm_data_worktree_itself_is_never_empty_a(self):
+        self.configure({'backlog': {'store': 'kit/backlog'}})
+        pm = os.path.join(os.path.realpath(self.fx.base), 'pm')
+        pmdata.write(self.fx.common_dir(), 'pmdata', 'private', self.git('rev-parse', 'HEAD'))
+        self.git('worktree', 'add', '-q', '-b', 'pmdata', pm, 'HEAD')
+        rc, out, data = self.run_classify()
+        row = self.row(data, pm)
+        self.assertEqual((row['class'], row['note']),
+                         ('C', 'nothing of its own; kept: the PM data worktree'), row)
 
 
 class Live(ClassifyCase):

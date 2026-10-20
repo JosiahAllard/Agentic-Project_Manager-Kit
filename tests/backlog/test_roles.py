@@ -11,10 +11,9 @@ from kitlib.backlog import record
 from kitlib.backlog import roles as R
 from kitlib.config import schema
 
-BUILDERS = ('weak-worker', 'worker', 'senior-worker', 'opus-worker', 'strong-worker', 'tech-artist', 'asset-smith', 'sound-smith',
-            'helper')
-READ_ONLY = ('reviewer', 'test-runner', 'researcher', 'consultant')
-ROLES = ('owner', 'pm', 'coordinator', 'deep-worker', 'lander', 'records', 'spec-writer') + \
+BUILDERS = ('weak-worker', 'worker', 'senior-worker', 'opus-worker', 'strong-worker', 'helper')
+READ_ONLY = ('analyst', 'test-runner', 'consultant')
+ROLES = ('owner', 'pm', 'coordinator', 'deep-worker', 'lander', 'docs-writer') + \
     BUILDERS + READ_ONLY
 CPO = ('coordinator', 'pm', 'owner')
 TOP = ('owner', 'pm')
@@ -53,7 +52,7 @@ class RolesTest(unittest.TestCase):
     def test_every_role_in_the_design_is_a_role(self):
         self.assertEqual(sorted(R.ROLES), sorted(ROLES))
         self.assertEqual((sorted(R.BUILDERS), sorted(R.READ_ONLY), sorted(R.DOCS), R.LANDERS),
-                         (sorted(BUILDERS + ('deep-worker',)), sorted(READ_ONLY), ['records', 'spec-writer'],
+                         (sorted(BUILDERS + ('deep-worker',)), sorted(READ_ONLY), ['docs-writer'],
                           ('lander',)))
         self.assertEqual(sorted(R.LEADS), sorted(CPO))
         self.assertEqual(sorted(R.SESSION_ONLY), ['consultant', 'coordinator', 'deep-worker', 'owner', 'pm'])

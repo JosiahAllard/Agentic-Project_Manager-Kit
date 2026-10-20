@@ -6,10 +6,12 @@ lives here once:
         boot/hook.py's work once the kit has booted and the adapter is imported. A start event
         (adapter.CONTEXT_EVENTS): the context text, adapter.start_text(event_name, kit, payload,
         environ, part) when the adapter has one, else the kit header (kitlib.host.header; no part
-        then), written through adapter.context; exit 0. Any other event: run() over the payload
-        `text`, the adapter's DEADLINE (None when it has none) for the whole call from `started`.
-        `entry` and `args` are the hook's own command line, for the reproduce line of a deny.
-  run(adapter, event_name, stdin, stdout, environ, entry, deadline, started, args)
+        then), written through adapter.context; exit 0. The header part (no part) also records
+        which kit folder the header named (kitlib.host.headerfollow.note). Any other event: run()
+        over the payload `text`, the adapter's DEADLINE (None when it has none) for the whole call
+        from `started`, with `kit`. `entry` and `args` are the hook's own command line, for the
+        reproduce line of a deny.
+  run(adapter, event_name, stdin, stdout, environ, entry, deadline, started, args, kit)
         the hook: stdin's JSON -> adapter.parse -> kitlib.guard.decide -> degrade -> adapter.render
         -> stdout; returns the exit code render gives. Fails closed: any exception on the way (a
         kitlib.guard that will not import, a payload parse refuses, a rule that raises) is a deny,
@@ -22,7 +24,11 @@ lives here once:
         that budget began, for an entry whose own work before run (a boot) counts against it; the
         timeout reason names the whole budget. On a host whose hooks carry no subagent identity, a call
         in a marked session is judged as an agent of its mark's role (unidentified()). `args`: the
-        entry's arguments, named in the reproduce line after `entry`.
+        entry's arguments, named in the reproduce line after `entry`. With `kit` (the kit the hook
+        booted), the header-update line of a session whose header named an older plugin export
+        (kitlib.host.headerfollow.line, once per refresh) goes with the verdict whatever it is, through
+        the adapter's optional tool_context(event_name, text, rendered) (none: no line), so a
+        reason keeps its format; the record is rewritten only after the answer is written.
   failure(e, role, entry, args)       that guard-error Decision
   command_line(script, executable)
         {"command", "args"} that starts `script` with no console window: the one place a hook
@@ -43,7 +49,10 @@ The adapter is kitlib.host.HostAdapter. Its parse may return one Action or a tup
 host whose one tool call acts on several targets (one patch that adds, deletes and renames files):
 each is judged, and the first deny decides, else the first ask, else allow (carrying every
 warning a warn-mode rule gave, kitlib.guard.modes, for the adapter to render). An empty tuple is
-refused (fail closed). run() also reads three optional attributes:
+refused (fail closed). run() also reads four optional attributes:
+`tool_context(event_name, text, rendered)` (the stdout text that is `rendered`, the adapter's own
+answer to the verdict, with `text` added to the agent's context, for the header-update line of any
+verdict; no tool_context: that host gets no line),
 `capabilities` (HostCapabilities: a verdict the host cannot show is lowered by kitlib.host.degrade),
 `agent(payload)` (the subagent a payload names, read even when parse refuses it, so a guard-error
 deny still carries the right role tag) and `screen(action, environ)` (the host's own policy, a
@@ -168,7 +177,40 @@ def _judge(adapter, guard, actions, environ, deadline, started=None):
     return Decision('allow', warned[0].rule, ' '.join(reasons))
 
 
-def run(adapter, event_name, stdin, stdout, environ=None, entry=None, deadline=None, started=None, args=()):
+def _agent(adapter, payload):
+    """The agent the adapter reads in `payload`, else None (no agent(), or it raised)."""
+    try:
+        return adapter.agent(payload) if hasattr(adapter, 'agent') else None
+    except Exception:
+        return None
+
+
+def _notice(adapter, event_name, kit, payload, environ, rendered):
+    """(stdout text, settle): the header-update line (kitlib.host.headerfollow.line) added to the
+    rendered answer through the adapter's tool_context, for any verdict, so the deny and ask reasons
+    keep their format. `settle()` rewrites the session's record: the caller runs it once the text is
+    written, so a line that never reached the agent is offered again. An adapter without
+    tool_context gets no line, and its record is not read: it cannot show one. Never raises and
+    never changes the verdict: the line is advice, so any failure is no line."""
+    try:
+        tell = getattr(adapter, 'tool_context', None)
+        if tell is None or not kit or not isinstance(payload, dict):
+            return rendered, None
+        from kitlib.host import headerfollow
+        agent = _agent(adapter, payload)
+        line = headerfollow.line(kit, payload, agent, environ, write=False)
+        if not line:
+            return rendered, None
+        out = tell(event_name, line, rendered)
+        if not out:
+            return rendered, None
+        return out, lambda: headerfollow.line(kit, payload, agent, environ)
+    except Exception:
+        return rendered, None
+
+
+def run(adapter, event_name, stdin, stdout, environ=None, entry=None, deadline=None, started=None, args=(),
+        kit=None):
     environ = os.environ if environ is None else environ
     entry = (entry or sys.argv[0] or 'hook').replace(os.sep, '/')
     payload = action = None
@@ -193,8 +235,14 @@ def run(adapter, event_name, stdin, stdout, environ=None, entry=None, deadline=N
     except Exception as e:                      # fail closed, every tool
         decision = failure(e, _role(adapter, payload, action), entry, args)
     text, code = adapter.render(event_name, decision)
+    text, settle = _notice(adapter, event_name, kit, payload, environ, text)
     if text:
         stdout.write(text)
+    if settle is not None:
+        try:
+            settle()
+        except Exception:
+            pass
     return code
 
 
@@ -213,12 +261,18 @@ def dispatch(adapter, event_name, kit, text, stdout, entry=None, args=(), part=N
             body = header.text(kit)
         else:
             raise ValueError('%s has no start check %r' % (adapter.name, part))
+        if part is None:                        # the header part: record the folder it names
+            try:
+                from kitlib.host import headerfollow
+                headerfollow.note(kit, payload, _agent(adapter, payload), event_name)
+            except Exception:                   # the record is advice: never fail a start for it
+                pass
         stdout.write(adapter.context(event_name, body)[0])
         return 0
     if part is not None:
         raise ValueError('%s takes no part (%r)' % (event_name, part))
     return run(adapter, event_name, io.StringIO(text), stdout, environ, entry, getattr(adapter, 'DEADLINE', None),
-               started, args)
+               started, args, kit)
 
 
 def windowless(executable=None):

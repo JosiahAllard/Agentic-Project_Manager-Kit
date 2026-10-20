@@ -45,6 +45,27 @@ class ClaudeContext(unittest.TestCase):
         with self.assertRaises(ValueError):
             ADAPTER.context('PreToolUse', 'x')
 
+    def test_a_tool_event_carries_context_beside_the_rendered_answer(self):
+        from kitlib.host import Decision
+        text = ADAPTER.tool_context('PreToolUse', 'hello', '')
+        self.assertEqual(json.loads(text), {'hookSpecificOutput': {'hookEventName': 'PreToolUse',
+                                                                   'additionalContext': 'hello'}})
+        self.assertTrue(text.endswith('\n'))
+        self.assertEqual(ADAPTER.tool_context('PreToolUse', '', ''), '')
+        with self.assertRaises(ValueError):
+            ADAPTER.tool_context('SessionStart', 'x', '')
+        for verdict in ('deny', 'ask'):         # the decision and the reason stay as render wrote them
+            d = Decision(verdict, 'r', 'why Instead: x [kit guard: rule=r role=main]')
+            rendered = ADAPTER.render('PreToolUse', d)[0]
+            got = json.loads(ADAPTER.tool_context('PreToolUse', 'hello', rendered))['hookSpecificOutput']
+            want = json.loads(rendered)['hookSpecificOutput']
+            self.assertEqual(got.pop('additionalContext'), 'hello')
+            self.assertEqual(got, want)
+        warned = '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": "warn"}}\n'
+        self.assertEqual(json.loads(ADAPTER.tool_context('PreToolUse', 'hello', warned)),
+                         {'hookSpecificOutput': {'hookEventName': 'PreToolUse',
+                                                 'additionalContext': 'warn\nhello'}})
+
 
 class Entry(unittest.TestCase):
     def run_entry(self, *args, payload=None, **env):

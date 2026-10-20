@@ -1696,7 +1696,7 @@ class TunnelLockTest(TunnelCase):
 
     def test_every_lock_route_is_the_access_owners_alone(self):
         self.assertEqual(sorted(r.pattern for r in api.ROUTES if r.pattern.startswith(
-            api.BASE + '/lock/')), sorted(p.split('?')[0] for p in self.LOCK))
+            api.BASE + '/lock/') and r.method == 'GET'), sorted(p.split('?')[0] for p in self.LOCK))
         for path in self.LOCK:
             with self.subTest(path=path):
                 # no token, and the local listener's bearer tokens (agent and owner alike)
@@ -1721,6 +1721,61 @@ class TunnelLockTest(TunnelCase):
         r = get(self.lport, api.BASE + '/lock/view', self.owner)
         self.assertEqual((r.status, r.json()['view']), (200, {'remote': False}))
 
+
+
+class TunnelLockWriteTest(TunnelCase):
+    """The machine lock's writes over both listeners: the Access owner (strong) reaches every
+    one through the tunnel; on the local listener the owner token reaches the LOCK_WRITE ones
+    and no reservation or division write; an agent reaches none on either."""
+
+    def setUp(self):
+        from tests.hubsite import test_api_roles as roles
+        self.roles = roles
+        TunnelCase.setUp(self)
+        self.door = roles.LockDoor()
+        self.build(lock=self.door)
+        self.good = ak.token(ak.KEY_A)
+
+    def writes(self):
+        out = []
+        for route in api.ROUTES:
+            if route.method == 'POST' and route.pattern.startswith(api.BASE + '/lock/'):
+                _seed, body, _query = self.roles.row(route, api.OWNER)
+                out.append((route, self.roles.path(route, 'X-1'), body))
+        return out
+
+    def test_every_lock_write_over_the_tunnel_is_the_access_owners(self):
+        writes = self.writes()
+        self.assertEqual(len(writes), 8)
+        for route, path, body in writes:
+            with self.subTest(route=route.pattern):
+                self.refused('POST', path, obj=body)
+                self.refused('POST', path, obj=body, headers=[bearer(self.agent)])
+                self.refused('POST', path, obj=body, headers=[bearer(self.owner)])
+                before = len(self.door.wrote)
+                r = self.ask('POST', path, token=self.good, obj=body)
+                self.assertEqual((r.status, r.json().get('error')), (200, None))
+                self.assertEqual(len(self.door.wrote), before + 1)
+                self.assertIs(self.door.wrote[-1][2], True, 'a tunnel write that is not remote')
+                self.assertEqual(r.json()['writes'], {'lock': True, 'strong': True, 'why': ''})
+
+    def test_on_the_local_listener_the_owner_token_is_not_strong(self):
+        for route, path, body in self.writes():
+            with self.subTest(route=route.pattern):
+                before = len(self.door.wrote)
+                r = post(self.lport, path, body, self.agent)
+                self.assertEqual((r.status, r.code()), (403, 'forbidden'))
+                # a local client that names the tunnel is still the local listener's
+                r = post(self.lport, path, body, self.owner, via=httpd.TUNNEL_VIA)
+                if route.role == api.LOCK_WRITE:
+                    self.assertEqual((r.status, r.json().get('error')), (200, None))
+                    self.assertIs(self.door.wrote[-1][2], False)
+                    self.assertEqual(r.json()['writes']['lock'], True)
+                    self.assertEqual(r.json()['writes']['strong'], False)
+                else:
+                    self.assertEqual(route.role, api.APPROVER)
+                    self.assertEqual((r.status, r.code()), (403, 'forbidden'))
+                    self.assertEqual(len(self.door.wrote), before)
 
 if __name__ == '__main__':
     unittest.main()

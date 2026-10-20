@@ -501,7 +501,7 @@ def _empty_tree(top):
     exist (an empty index) in a folder of its own, so the repository's own index is never read or
     written. The same id as EMPTY_TREE (the literal docs/pm-data-branch.md names), and stored, so
     nothing depends on git knowing it without an object."""
-    folder = tempfile.mkdtemp(prefix='kit-pmdata-')
+    folder = user.mkdtemp('kit-pmdata-')
     try:
         env = cmd.scrubbed_env()
         env['GIT_INDEX_FILE'] = os.path.join(folder, 'index')

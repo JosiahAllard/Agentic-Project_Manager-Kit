@@ -46,9 +46,9 @@ class Start(unittest.TestCase):
     def test_with_no_subagent_identity_the_session_mark_names_the_role(self):
         # tools/agent_view.py asks for a dispatched role this way: the cwd, and the role as the mark
         with mock.patch.object(agentstart, 'text', return_value='BLOCK') as block:
-            got = ADAPTER.start_text('SubagentStart', KIT, {'cwd': 'C:/r'}, {'PM_KIT_ROLE': 'reviewer'})
+            got = ADAPTER.start_text('SubagentStart', KIT, {'cwd': 'C:/r'}, {'PM_KIT_ROLE': 'analyst'})
         self.assertEqual(got, HEAD + '\nBLOCK')
-        block.assert_called_once_with('C:/r', KIT, 'reviewer')
+        block.assert_called_once_with('C:/r', KIT, 'analyst')
 
     def test_a_block_that_fails_is_a_line_after_the_header(self):
         payload = {'cwd': 'C:/r', 'agent_id': 'a1', 'agent_type': 'worker'}

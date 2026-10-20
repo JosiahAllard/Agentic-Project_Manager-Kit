@@ -28,7 +28,7 @@ Rules of thumb that have held up. Add a rule only once a lesson has repeated in 
 - **Pipeline:** a concept on a plain background (Z-Image if the mesh may ship, Krea 2 for
   reference), then **show the owner the candidate images and wait for a pick** (owner's
   rule), then `to3d --engine trellis2` on the chosen image, then
-  render with `render_glb.py` and look, then clean up in Blender (asset-smith: scale, pivot,
+  render with `render_glb.py` and look, then clean up in Blender (skill `specialty-3d-assets`: scale, pivot,
   budget, separate materials for glowing parts).
 - **TRELLIS.2 first.** Hunyuan3D gives a clean untextured shape but is **reference only**
   (licence region exclusions). Pixal3D only as a third opinion.

@@ -43,13 +43,13 @@ import json
 import os
 import re
 import shutil
-import tempfile
 
 from kitlib import kitroot
 from kitlib import pieces
 from kitlib.backlog import store as backlog_store
 from kitlib.backlog.errors import Failure as BacklogFailure
 from kitlib.config import ConfigError, load
+from kitlib.config import user as kuser
 from kitlib.git import cmd, refs
 from kitlib.host.registry import RegistryError
 
@@ -1267,7 +1267,7 @@ def snapshot_tree(path):
     """`(tree, None)`: the tree of the worktree at `path` as it stands (tracked changes, staged or
     not, and untracked files that are not ignored), written through a throwaway index so neither
     the files nor the worktree's own index change; `(None, why)` when git fails."""
-    folder = tempfile.mkdtemp(prefix='kit-abandon-')
+    folder = kuser.mkdtemp('kit-abandon-')
     env = dict(git_env(), GIT_INDEX_FILE=os.path.join(folder, 'index'))
     try:
         for args in (('read-tree', 'HEAD'), ('add', '-A', '--', '.'), ('write-tree',)):

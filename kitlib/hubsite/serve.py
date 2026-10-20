@@ -218,6 +218,7 @@ import json
 import os
 import re
 import threading
+import time
 
 from kitlib import hubbacklog, pmdata, pmstart, pmwatch
 from kitlib.config import user
@@ -231,6 +232,9 @@ from .store import HubError, Store, StoreBusy
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'web')
 CLOSE_TIMEOUT_S = 10            # each step of the clean close
+STALE_CODE = ('this hub server is running older code than the hub code now on disk: restart the '
+              'hub (hub.py stop, then start it again) to use the landed change')
+CODE_LOOK_S = 30                # at most one look at the hub code's files in this many seconds
 POLL_S = 0.5                    # run()'s wait between two looks at `stop` (and at Ctrl+C)
 ASK_TIMEOUT_S = 10
 MAX_ANSWER = 16 << 20           # bytes of one answer ask() reads
@@ -951,6 +955,18 @@ def build(settings, sources, log=None):
         raise
 
 
+def code_stamp():
+    """What the hub package's code is now: the name, modified time and size of each .py file in
+    this folder, sorted. A server that started on a different stamp runs older code (watch)."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    out = []
+    for name in sorted(os.listdir(here)):
+        if name.endswith('.py'):
+            st = os.stat(os.path.join(here, name))
+            out.append((name, st.st_mtime_ns, st.st_size))
+    return tuple(out)
+
+
 class Hub(object):
     """One built server (build): its parts, start() and close(). `notes` are start-up lines for
     the console; `port` and `url` are the local listener's; `tunnel` is what the local listener's
@@ -982,6 +998,12 @@ class Hub(object):
         self._closed = False
         self._clean = None
         self._seen = ('', '')               # the sync failure watch() last logged
+        self._stale = False                 # watch() said the code is newer than this process
+        try:
+            self._code = code_stamp()
+        except Exception:                   # noqa: BLE001 - no stamp, no stale look
+            self._code = None
+        self._looked = time.monotonic()     # when watch() last took the stamp
 
     @property
     def port(self):
@@ -1010,8 +1032,11 @@ class Hub(object):
     def watch(self):
         """Look at the git sync once and log what is new (module docstring, "The git sync's
         failures"): an 'error' line when its last pass failed at another step or for another
-        reason than the last look saw, a 'note' when it works again. Never waits for a pass
-        and never raises. One caller at a time: run() is it."""
+        reason than the last look saw, a 'note' when it works again. Also an 'error' line, once,
+        when the hub package's code on disk is no longer what this process started on
+        (STALE_CODE: nothing is restarted for the owner). Never waits for a pass and never
+        raises. One caller at a time: run() is it."""
+        self._watch_code()
         if self.sync is None:
             return
         try:
@@ -1025,6 +1050,21 @@ class Hub(object):
             self._say('the git sync failed at %s: %s' % (seen[0], seen[1] or '-'))
         else:
             self._say('the git sync works again', 'note')
+
+    def _watch_code(self):
+        if self._stale or self._code is None:
+            return
+        at = time.monotonic()
+        if at - self._looked < CODE_LOOK_S:
+            return
+        self._looked = at
+        try:
+            now = code_stamp()
+        except Exception:           # noqa: BLE001 - a look that fails is tried again next turn
+            return
+        if now != self._code:
+            self._stale = True
+            self._say(STALE_CODE)
 
     def start(self):
         """Start the git sync, the backlog timer, the push-notification worker and every

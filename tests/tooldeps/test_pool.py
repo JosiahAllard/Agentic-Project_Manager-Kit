@@ -18,7 +18,7 @@ import unittest
 from unittest import mock
 
 from kitlib.tooldeps import pool
-from tests.gitfixture import rmtree
+from tests.gitfixture import fixture_parent, rmtree
 
 DIRTY = r'''import atexit
 import os
@@ -133,7 +133,7 @@ def write(root, files):
 @unittest.skipUnless(os.name == 'nt', 'workers run in Windows job objects')
 class Pool(unittest.TestCase):
     def setUp(self):
-        self.root = tempfile.mkdtemp(prefix='kit-pool-')
+        self.root = tempfile.mkdtemp(prefix='kit-pool-', dir=fixture_parent())
         self.addCleanup(rmtree, self.root)
         self.out = os.path.join(self.root, 'out')
         self.folder = os.path.join(self.root, 'work')

@@ -333,7 +333,7 @@ The strict paths are the list in strict_defaults.py, which is owner-authored: th
 
 The coordinator queues the verdict, for every landing and not only a strict one (Landing, step 4), with `tools/verdict.py add` (its arguments are all required, except `--record`):
 
-`python <kit>/tools/verdict.py add -C <repo> --branch <branch> --tip <full sha> --verdict LAND --risk High --reviewer pm-kit:reviewer --reviewer-model opus --reviewer-id <reviewer agent id> --author "<commit author> / <author agent type>" --range <base>..<tip> --session <coordinator session>`
+`python <kit>/tools/verdict.py add -C <repo> --branch <branch> --tip <full sha> --verdict LAND --risk High --reviewer pm-kit:analyst --reviewer-model opus --reviewer-id <reviewer agent id> --author "<commit author> / <author agent type>" --range <base>..<tip> --session <coordinator session>`
 
 - `--verdict` is `LAND` or `LAND WITH FOLLOW-UP`, `--risk` is `Low`, `Medium` or `High` (`verdicts.VERDICTS`, `verdicts.RISKS`).
 - `--reviewer-model` takes the tier model hosts.json names (`opus`), or a full model id naming it as above.

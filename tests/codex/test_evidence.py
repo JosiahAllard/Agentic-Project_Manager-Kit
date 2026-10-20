@@ -12,7 +12,7 @@ class HookIdentityEvidence(unittest.TestCase):
     def setUp(self):
         self.registry = RoleBindings(mock.Mock(), classify=lambda _: SimpleNamespace(kind=repo.LINKED))
         self.root = self.registry.add_root(snapshot(), 'worker')
-        self.child = self.registry._capture(snapshot('kit-reviewer', True, 'readOnly'), 'reviewer', 'parent')
+        self.child = self.registry._capture(snapshot('kit-analyst', True, 'readOnly'), 'analyst', 'parent')
 
     def event(self, **extra):
         return dict(hook_event_name='PreToolUse', session_id='session', cwd=ROOT, model='gpt-6.1-sol', **extra)
@@ -49,14 +49,14 @@ class HookIdentityEvidence(unittest.TestCase):
     def test_exact_child_field_is_structural_evidence_without_activation(self):
         result = inspect(self.event(agent_id='child'), self.child)
         self.assertTrue(result.identity_matches)
-        self.assertEqual(result.role, 'reviewer')
+        self.assertEqual(result.role, 'analyst')
         self.assertEqual(len(result.blockers), 1)
         self.assertIn('authenticated runtime-to-hook', result.blockers[0])
 
     def test_mismatch_never_uses_profile_name_or_inherited_worker_mark(self):
-        result = inspect(self.event(agent_id='parent', agent_type='kit-reviewer', PM_KIT_ROLE='worker'), self.child)
+        result = inspect(self.event(agent_id='parent', agent_type='kit-analyst', PM_KIT_ROLE='worker'), self.child)
         self.assertFalse(result.identity_matches)
-        self.assertEqual(result.role, 'reviewer')
+        self.assertEqual(result.role, 'analyst')
 
     def test_evidence_report_does_not_retain_sensitive_tool_arguments(self):
         event = self.event(agent_id='child', tool_input={'secret': 'do not retain'}, transcript_path='private-path')

@@ -52,7 +52,7 @@ class Safety(unittest.TestCase):
                     mock.patch.object(canary, 'KitOperationExecutor'), \
                     mock.patch.object(canary, '_provider', return_value=mock.Mock(server_port=12345)), \
                     mock.patch.object(canary, '_persist'):
-                canary._start(stack, 'native', root, 'reviewer', str(root), mock.Mock(), {})
+                canary._start(stack, 'native', root, 'analyst', str(root), mock.Mock(), {})
             self.assertIs(native.call_args.kwargs['owned_job'], True)
             bind.assert_called_once()
             self.assertNotIn('turn/start', [call.args[0] for call in client.request.call_args_list])
@@ -70,7 +70,7 @@ class Safety(unittest.TestCase):
                     mock.patch.object(canary, 'inspect_runtime', return_value={'permission_allowed': False}), \
                     mock.patch.object(canary, '_provider', return_value=mock.Mock(server_port=12345)):
                 with self.assertRaisesRegex(RuntimeError, 'unavailable'):
-                    canary._start(stack, 'native', Path(folder), 'reviewer', folder, mock.Mock(), {})
+                    canary._start(stack, 'native', Path(folder), 'analyst', folder, mock.Mock(), {})
             client.request.assert_not_called()
 
     def test_bounded_native_commands_preserve_argv_permissions_and_original_input(self):
