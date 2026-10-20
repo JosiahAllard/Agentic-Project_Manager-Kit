@@ -62,7 +62,11 @@ rules of a second root, once the user's TEMP points elsewhere. The gate: while a
 (the CLI or the desktop app, name case-blind) started before HKCU\\Environment was last written, the
 drain removes nothing and exits 4, naming each such process; it also exits 4 when the process list
 or that time cannot be read (fail closed). The last write is never earlier than the TEMP change, so
-the gate can only hold back more. The dry run prints the gate and the list either way. It has
+the gate can only hold back more. An empty process list, or a TEMP that is missing, not absolute
+or still holds an unexpanded %VAR%, shuts it too. Known limits: the gate counts claude.exe only, so
+Claude Code run by node.exe (the npm install) is not counted; and a claude.exe started after the
+change by a parent started before it inherits the parent's old TEMP. Only the age and claim rules
+protect those sessions' folders. The dry run prints the gate and the list either way. It has
 nothing to drain (exit 0) when that folder is missing, is the current user temp's, or lies in dir.
 Owner steps, after a kit with this flag is the one the scheduled task runs:
   1. add "user_temp": true to agent_temp_sweep in the machine config (an older sweep refuses the key);
@@ -730,6 +734,8 @@ def drain_blockers(lister):
         procs = list(lister() or ())
     except Exception as e:
         return ["%s (%s: %s)" % (UNREADABLE, type(e).__name__, e)]
+    if not procs:                       # a real list holds this python at least
+        return ["%s (it came back empty)" % UNREADABLE]
     when = datetime.datetime.fromtimestamp(changed).isoformat(timespec="seconds")
     out = []
     for p in procs:
@@ -755,7 +761,7 @@ def drain(cfg, apply, now, home, lister, out):
         nothing = "LOCALAPPDATA is not set"
     elif not os.path.isdir(root):
         nothing = "%s is not there" % root
-    elif u and overlaps(os.path.join(u, SESSIONS), root):
+    elif u and os.path.isabs(u) and overlaps(os.path.join(u, SESSIONS), root):
         nothing = "%s is the current user temp's (HKCU\\Environment TEMP %s)" % (root, u)
     elif overlaps(root, cfg.dir):
         nothing = "%s is %s, in it or holds it (the daily run sweeps it)" % (root, cfg.dir)
@@ -767,6 +773,9 @@ def drain(cfg, apply, now, home, lister, out):
     blockers = drain_blockers(lister)
     if not u:
         blockers.insert(0, "HKCU\\Environment has no TEMP or TMP, so %s may still be in use" % root)
+    elif not os.path.isabs(u):          # unexpanded %VAR% or relative: which folder it is cannot be told
+        blockers.insert(0, "HKCU\\Environment TEMP %r is not absolute, so %s may still be in use"
+                        % (u, root))
     for b in blockers:
         print("drain: held: %s" % b, file=out)
     if blockers and apply:
