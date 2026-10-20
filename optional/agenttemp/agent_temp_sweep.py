@@ -10,7 +10,7 @@ name, or claude/<project>/<session>; * and ? match within one name; case-insensi
 is kept when an item names it, a folder holding it, or anything inside it: the sweep never enters a
 unit, so "kit-coordinator/r2" keeps all of kit-coordinator, and "*/x" keeps every top-level folder.
 Built in, whatever the config says (BUILT_IN_KEEP): a top-level "<name>-coordinator" or
-"<name>-consultant" folder is always kept, since the launcher keeps a consultant's notes file
+"<name>-consultant" folder, and the top-level "shared" folder, is always kept, since the launcher keeps a consultant's notes file
 there and a coordinator its state note (kitlib.launcher.start CONSULTANT_FOLDER, COORDINATOR_FOLDER).
 
 The units are the top-level files and folders of dir, except a folder named "claude": Claude Code
@@ -490,8 +490,9 @@ def is_kept(rel, keep):
 
 
 # kept whatever "keep" says: the launcher's <repo>-consultant notes folder and a coordinator's
-# <repo>-coordinator state-note folder (kitlib.launcher.start CONSULTANT_FOLDER, COORDINATOR_FOLDER)
-BUILT_IN_KEEP = ("*-coordinator", "*-consultant")
+# <repo>-coordinator state-note folder (kitlib.launcher.start CONSULTANT_FOLDER, COORDINATOR_FOLDER),
+# and the top-level "shared" folder the agents keep their cross-session files in
+BUILT_IN_KEEP = ("*-coordinator", "*-consultant", "shared")
 
 
 LIST_TIMEOUT = 30       # seconds for the process list; the session start's 4 s is too short at 04:00
