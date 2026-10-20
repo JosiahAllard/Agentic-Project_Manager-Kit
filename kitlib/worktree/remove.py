@@ -1592,7 +1592,8 @@ def _abandon_landed_dirty(ctx, path, registered_path, slug, branch, tip, name, c
         return REFUSED
     if existing:
         commit = existing
-        ctx.say('reused    tag %s already holds this work (a previous run made it)' % tag)
+        ctx.say('reused    tag %s already holds this work (%s)'
+                % (tag, 'the tag --tag names' if named else 'a previous run made it'))
     else:
         message = 'abandoned: %s\n\nuncommitted work on %s at %s\nworktree %s\ndate %s\n' % (
             why, ('branch ' + branch) if branch else 'detached HEAD', tip,

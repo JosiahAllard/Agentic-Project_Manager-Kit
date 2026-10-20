@@ -70,13 +70,14 @@ _PROSE_RES = (
 )
 _SEGMENT_RE = re.compile(r'&&|\|\||[;|\n]')
 _GIT = r'(?i)(?<![\w-])git(?:\.exe)?\b.*?\s'
-# the route a removal of unlanded work takes instead (docs/worktree-remove.md "--abandon")
+# the route a removal of unlanded work takes instead (docs/worktree-remove.md "Tools"); only the
+# destructive forms (worktree remove, branch or tag delete, ref delete) carry it
 _ABANDON_ROUTE = ('; unlanded work leaves by worktree_remove.py <slug> --abandon "<why>" (or '
                   '<branch> --branch --abandon "<why>"), which keeps its commits under an '
                   'archive/ tag and which the coordinator runs on the owner\'s or the PM\'s ruling')
 _COORDINATOR_RES = (
-    ('git worktree add/remove', re.compile(_GIT + r'worktree\s+(?:add|remove|move|prune)\b'),
-     _ABANDON_ROUTE),
+    ('git worktree add/remove', re.compile(_GIT + r'worktree\s+remove\b'), _ABANDON_ROUTE),
+    ('git worktree add/remove', re.compile(_GIT + r'worktree\s+(?:add|move|prune)\b'), ''),
     ('a kit landing, gate or worktree tool',
      re.compile(r'(?i)(?<![\w-])(?:gate|land|new_worktree|worktree_remove|sync_base)\.py\b'), ''),
     ('a branch or tag delete',

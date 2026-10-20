@@ -488,6 +488,19 @@ class Abandon(RemoveCase):
         self.assertTrue(os.path.isdir(path))
         self.assertEqual(self.git('tag', '-l'), '')
 
+    def test_the_rerun_line_keeps_a_named_tag(self):
+        self.fx.write('.gitignore', '*.local.md\n')
+        self.fx.commit('ignore', '.gitignore')
+        self.fx.git('push', '-q', 'origin', 'main')
+        path = self.workstream('ri')
+        self.fx.write('notes.local.md', 'mine\n', root=path)
+        rc, out = self.abandon('ri', tag='archive/api-ri', keep_branch=True)
+        self.assertEqual(rc, 1, out)
+        self.assertRegex(
+            out, r'(?m)^  rerun    .* ri --abandon "<why>" --tag archive/api-ri --keep-branch$')
+        self.assertEqual(self.git('tag', '-l', 'archive/*'), '')
+        self.assertTrue(os.path.isfile(os.path.join(path, 'notes.local.md')))
+
     def test_keep_branch(self):
         self.workstream('kb')
         rc, out = self.abandon('kb', keep_branch=True)
@@ -552,6 +565,51 @@ class AbandonLandedDirty(RemoveCase):
             self.assertEqual(f.read(), 'changed\n')
         self.assertTrue(os.path.exists(os.path.join(path, 'new', 'wip.txt')))
         self.assertIn('kit/lc', self.branches())
+
+    def saved(self, path, tip):
+        """A commit of the uncommitted work at `path` on `tip`, as a previous run saved it."""
+        tree, why = remove.snapshot_tree(path)
+        self.assertIsNotNone(tree, why)
+        return self.git('commit-tree', tree, '-p', tip, '-m', 'saved')
+
+    def test_a_named_tag_on_the_saved_work_is_reused(self):
+        path = self.landed_dirty('lr')
+        tip = self.git('rev-parse', 'kit/lr')
+        commit = self.saved(path, tip)
+        self.git('tag', 'archive/api-lr', commit)
+        rc, out = self.abandon('lr', tag='archive/api-lr')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('reused    tag archive/api-lr already holds this work (the tag --tag names)',
+                      out)
+        self.assertEqual(self.git('rev-parse', 'archive/api-lr^{commit}'), commit)
+        self.assertEqual(self.git('tag', '-l', 'archive/lr'), '')
+        self.assertFalse(os.path.exists(path))
+
+    def test_a_named_tag_on_the_bare_tip_refuses_and_touches_nothing(self):
+        path = self.landed_dirty('lt')
+        tip = self.git('rev-parse', 'kit/lt')
+        self.git('tag', 'archive/api-lt', tip)
+        rc, out = self.abandon('lt', tag='archive/api-lt')
+        self.assertEqual(rc, 1, out)
+        self.assertIn('tag archive/api-lt already exists on %s, not on the uncommitted work of'
+                      % tip[:10], out)
+        self.assertEqual(self.git('rev-parse', 'archive/api-lt^{commit}'), tip)
+        with open(os.path.join(path, 'lt-0.txt'), encoding='utf-8') as f:
+            self.assertEqual(f.read(), 'changed\n')
+        self.assertTrue(os.path.exists(os.path.join(path, 'new', 'wip.txt')))
+        self.assertIn('kit/lt', self.branches())
+
+    def test_the_rerun_line_keeps_a_named_tag(self):
+        self.fx.write('.gitignore', '*.local.md\n')
+        self.fx.commit('ignore', '.gitignore')
+        self.fx.git('push', '-q', 'origin', 'main')
+        path = self.landed_dirty('li')
+        self.fx.write('notes.local.md', 'mine\n', root=path)
+        rc, out = self.abandon('li', tag='archive/api-li')
+        self.assertEqual(rc, 1, out)
+        self.assertRegex(out, r'(?m)^  rerun    .* li --abandon "<why>" --tag archive/api-li$')
+        self.assertEqual(self.git('tag', '-l', 'archive/*'), '')
+        self.assertTrue(os.path.isfile(os.path.join(path, 'notes.local.md')))
 
 
 @real_git('git reflog: the fake writes no reflog')
