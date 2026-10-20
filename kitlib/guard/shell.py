@@ -1145,7 +1145,9 @@ def cd_target(cmd, cwd, home=None, home_vars=False):
     read too, bash cd's own options and a `--` are passed over, and a bash or PowerShell cd with
     no place goes home (bash's cd, and PowerShell 7's; Windows PowerShell's stays put, but only a
     deny reads it). A bash cd behind `builtin` or `command` is the cd itself (cd_words), and
-    PowerShell's `cd $null` is a cd with no place."""
+    PowerShell's `cd $null` is a cd with no place. A PowerShell cd to a relative FileSystem:: path
+    (ps_filesystem_relative: FileSystem::., FileSystem::sub) goes where the text cannot tell:
+    PowerShell reads it from the process's directory, which no cd before it moved."""
     words = cd_words(cmd)
     if not words:
         return False, cwd
@@ -1177,6 +1179,8 @@ def cd_target(cmd, cwd, home=None, home_vars=False):
             return True, None
     if p in ('-', '+') or p.startswith('-') or any(ch in p for ch in '*?'):
         return True, None
+    if cmd.shell == PS and ps_filesystem_relative(p) is not None:
+        return True, None                       # read from the process's directory, not the location
     return True, resolve_path(p, cwd, cmd.shell, home)
 
 
