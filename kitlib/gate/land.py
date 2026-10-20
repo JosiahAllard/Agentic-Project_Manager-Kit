@@ -400,22 +400,30 @@ def light_rule():
 
 
 def _who(text):
-    """`text` (an agent type or an author line) as the parts it names, casefolded: each part
-    split on '/', ',' or ';', stripped, a `plugin:` prefix dropped."""
+    """`text` (the reviewer's agent type) as the types it names, casefolded: each part split on
+    '/', ',' or ';', stripped, a `plugin:` prefix dropped."""
     return set(p.strip().rpartition(':')[2].strip().casefold()
                for p in re.split(r'[/,;]', text)) - {''}
 
 
+def _word_in(word, text):
+    """True when `word` appears in `text` as a word of its own: no letter, digit, '_' or '-' on
+    either side, so `worker` is not found in `strong-worker` nor `strong-worker` in
+    `strong-worker-2`. A ':' before it (a `plugin:` prefix) is a boundary."""
+    return bool(re.search(r'(?<![\w-])%s(?![\w-])' % re.escape(word), text))
+
+
 def is_author(entry):
-    """True when the verdict entry's reviewer may be the branch's author: its reviewer_id appears
-    in `author` as a word of its own, or its reviewer agent type is one of the parts `author`
-    names, split on '/', ',' or ';' (`Kit Test / strong-worker` and
-    `Kit Test (agent), strong-worker` name strong-worker). Pure."""
-    rid = entry['reviewer_id'].strip().casefold()
+    """True when the verdict entry's reviewer may be the branch's author: its reviewer_id, or an
+    agent type its reviewer names (`plugin:` prefix dropped), appears anywhere in `author` as a
+    word of its own (_word_in), whatever separates it from the rest: `Kit Test / strong-worker`,
+    `Kit Test (agent) (pm-kit:strong-worker)`, `x | strong-worker` and `x strong-worker` all name
+    strong-worker; `x / strong-worker` does not name worker. Pure."""
     author = entry['author'].casefold()
-    if rid and re.search(r'(?<![\w-])%s(?![\w-])' % re.escape(rid), author):
+    rid = entry['reviewer_id'].strip().casefold()
+    if rid and _word_in(rid, author):
         return True
-    return bool(_who(entry['reviewer']) & _who(entry['author']))
+    return any(_word_in(t, author) for t in _who(entry['reviewer']))
 
 
 class _Held(object):
