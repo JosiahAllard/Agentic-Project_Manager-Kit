@@ -18,7 +18,7 @@ installs from (docs/plugin-source.md).
   installs(folders)                [(install path, account folder)] of each account's kit install
   marketplace_mismatches(export_dir, folders, managed)
                                    lines where a marketplace path is not the export (read only)
-  current_lines(kit, s, folders)   the pm_start warning lines (no export, not migrated, behind, failed)
+  current_lines(kit, s, folders)   the pm_start warning lines (no export, not migrated, behind, failed, marketplace off the export)
   poll(kit, s, last, ...)          the pm_watch check: an event line per new main, and the spawn
                                    of a refresh when plugin.auto_refresh is on
 
@@ -1108,12 +1108,33 @@ def unmigrated(state, folders):
     return [f for f in folders if not migrated(state, f)]
 
 
-def current_lines(kit, s, folders=None):
-    """pm_start lines: none when the export is at the kit's refs/remotes/<remote>/main and every
+_MACHINE = object()
+
+
+def _marketplace_lines(export_dir, folders, managed):
+    """marketplace_mismatches for current_lines: `managed` _MACHINE is the default host's managed
+    settings file (kitlib.machinesetup.extras Host.managed_path). Never raises: a session start
+    must not break over a report, so any failure is one 'could not check' line."""
+    try:
+        if managed is _MACHINE:
+            from kitlib.machinesetup.extras import Host
+            managed = Host().managed_path()
+        return marketplace_mismatches(export_dir, folders, managed=managed)
+    except Exception as e:                       # never break a session start over a report
+        return ['could not check the pm-kit marketplace paths: %s: %s' % (type(e).__name__, e)]
+
+
+def current_lines(kit, s, folders=None, managed=_MACHINE):
+    """pm_start lines: none when the export is at the kit's refs/remotes/<remote>/main, every
     account folder (`folders`, default claude.account_folders()) is migrated and its last refresh
-    succeeded. Reads the export state only, never an account folder's contents: a folder's last
-    refresh result stands in for what it has installed. No export yet, or a folder not migrated:
-    the line names the migrate command, not --apply alone (which refuses such a folder)."""
+    succeeded, and the pm-kit marketplace points at the export. The refresh checks read the export
+    state only: a folder's last refresh result stands in for what it has installed. No export yet,
+    or a folder not migrated: the line names the migrate command, not --apply alone (which refuses
+    such a folder). The marketplace check (marketplace_mismatches) reads each migrated folder's
+    known marketplaces record and the managed settings file `managed` (default: the machine's when
+    `folders` is None, else not checked; None: not checked); it never raises."""
+    if managed is _MACHINE and folders is not None:
+        managed = None
     try:
         state = read_state(s.export_dir)
     except StateError as e:
@@ -1123,7 +1144,8 @@ def current_lines(kit, s, folders=None):
     main, why = tracking_main(kit, s.remote)
     if main is None:
         return ['could not check the pm-kit plugin: %s' % why]
-    todo = unmigrated(state, _folders(folders))
+    folders = _folders(folders)
+    todo = unmigrated(state, folders)
     cmd = refresh_cmd(bool(todo))
     lines = []
     if todo:
@@ -1142,6 +1164,7 @@ def current_lines(kit, s, folders=None):
         else:
             lines.append('pm-kit plugin refresh failed in %s (claude %s exited %s at %s): %s'
                          % (f, r.get('step') or '?', r.get('rc'), r.get('at') or '?', refresh_cmd()))
+    lines.extend(_marketplace_lines(s.export_dir, [f for f in folders if f not in todo], managed))
     return lines
 
 
