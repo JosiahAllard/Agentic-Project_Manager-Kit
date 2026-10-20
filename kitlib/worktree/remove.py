@@ -11,8 +11,10 @@ lines). Nothing here prints. The checks, in order, are the PM tool's:
   `"worktree_remove".exempt`, present, registered (a stump is named and never deleted), and on
   one of `branch_template`'s branches when one is set; or, named by its PATH, a registered DETACHED tree
   outside those folders (`outside_target`: not the main checkout nor in it, no link on the way,
-  not locked, holding no other registered tree). A slug never names an outside tree: one that
-  only matches such a tree is refused with its path-form command (`slug_redirect`);
+  not locked, holding no other registered tree); the plain verb (`remove`) alone also takes such a
+  tree on a branch (owner ruling R-2343), every later check still running. A slug never names
+  an outside tree: one that only matches such a tree is refused with its path-form command
+  (`slug_redirect`);
 - landed: the branch (or detached HEAD) is an ancestor of `<remote>/<main_branch>` AS IT STANDS,
   never fetched (`merge_check`); UNLANDED work is the owner's to remove and the refusal prints his
   commands and the `--abandon` verb, running none of them;
@@ -569,11 +571,13 @@ def unmoved(ctx, path, head, logged):
     return scratch.unmoved(ctx, path, head, logged)
 
 
-def outside_target(ctx, path):
+def outside_target(ctx, path, branch_ok=False):
     """`(path, registrations)` for a registered DETACHED worktree outside every worktree folder,
     named by its path (an agent's red-run tree in a scratchpad), or the exit status after saying
-    why not (a missing folder: OK). The scope is git's own registration list; a branch's tree is a
-    workstream's, so only a detached one is taken, and the landing cleanup never reaches here."""
+    why not (a missing folder: OK). The scope is git's own registration list. With `branch_ok`
+    (only the plain verb, `remove`: owner ruling R-2343) a tree on a branch is taken too, and
+    `merge_check` then judges that branch; `--abandon`, the landing cleanup and classify (which
+    call `_remove` directly) take only a detached one."""
     main, nothing = ctx.main, 'nothing was removed'
     where = ('is the main checkout' if canon(path) == canon(main) else
              'is inside the main checkout' if _under(path, main) else
@@ -615,9 +619,10 @@ def outside_target(ctx, path):
     if entry['locked'] is not None:
         ctx.say('refused   %s is locked (%s); %s' % (path, entry['locked'] or 'no reason', nothing))
         return REFUSED
-    if entry['branch']:
+    if entry['branch'] and not branch_ok:
         ctx.say('refused   %s is on branch %s: outside the worktree folders only a detached tree'
-                ' is removed (a branch\'s worktree is a workstream\'s, under %s); %s'
+                ' is removed here (a branch\'s worktree is a workstream\'s, under %s; the plain'
+                ' verb named by its path removes one whose branch has landed); %s'
                 % (path, entry['branch'], home_of(ctx), nothing))
         return REFUSED
     if not entry['head']:
@@ -661,16 +666,16 @@ def slug_redirect(ctx, argument, path):
     return REFUSED
 
 
-def registered_target(ctx, argument):
+def registered_target(ctx, argument, branch_ok=False):
     """`(path, registrations)` for the registered workstream worktree `argument` names, or, named
-    by its path, a detached one outside the worktree folders (`outside_target`); else the exit
-    status after saying why there is none (absent: 0)."""
+    by its path, a detached one outside the worktree folders (`outside_target`; also one on a
+    branch with `branch_ok`); else the exit status after saying why there is none (absent: 0)."""
     s = ctx.s
     path = target_path(ctx, argument)
     by_path = os.path.sep in argument or '/' in argument
     if not is_workstream(ctx, path):
         if by_path:
-            return outside_target(ctx, path)
+            return outside_target(ctx, path, branch_ok)
         ctx.say('refused   %s is not under %s; this tool removes workstream worktrees only'
                 % (path, home_of(ctx)))
         return REFUSED
@@ -863,11 +868,13 @@ def remove(top, argument, keep_branch=False, cwd=None):
     ctx, refused = open_ctx(top, cwd)
     if refused:
         return refused
-    return ctx.outcome(_remove(ctx, argument, keep_branch))
+    return ctx.outcome(_remove(ctx, argument, keep_branch, branch_ok=True))
 
 
-def _remove(ctx, argument, keep_branch):
-    found = registered_target(ctx, argument)
+def _remove(ctx, argument, keep_branch, branch_ok=False):
+    """The plain verb's checks. `branch_ok` (only `remove`) lets a tree on a branch outside the
+    worktree folders through `outside_target`; the landing cleanup and classify leave it False."""
+    found = registered_target(ctx, argument, branch_ok)
     if not isinstance(found, tuple):
         return found
     path, known = found
