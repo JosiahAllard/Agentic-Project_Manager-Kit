@@ -95,6 +95,53 @@ class Removes(ApplyCase):
         self.assertEqual(self.git('tag', '-l', 'archive/*'), '')
 
 
+class Empty(ApplyCase):
+    """R1: an empty, unclaimed tree is A and removed; a claimed one, or one whose reflog holds a
+    commit, stays on disk."""
+
+    CONFIG = {'backlog': {'store': 'main'}}
+
+    def test_an_empty_unclaimed_tree_is_removed_with_its_branch(self):
+        path = self.workstream('fresh', commits=0)
+        rc, out, data = self.run_apply()
+        self.assertEqual(rc, 0, out)
+        self.assertIn('removed   %s: A, ' % path, out)
+        self.gone(path)
+        self.assertNotIn('kit/fresh', self.branches())
+
+    def test_an_empty_claimed_tree_is_left(self):
+        self.fx.write('docs/backlog/T-001.md', 'id: T-001\nstate: pulled\npulled_by: kit/fresh\n')
+        self.fx.commit('claim', 'docs/backlog/T-001.md')
+        self.fx.git('push', '-q', 'origin', 'main')
+        path = self.workstream('fresh', commits=0)
+        rc, out, data = self.run_apply()
+        self.assertEqual(rc, 1, out)
+        self.assertEqual(self.row(data, path)['class'], 'C')
+        self.kept(path)
+        self.assertIn('kit/fresh', self.branches())
+
+    def test_an_empty_tree_whose_head_reflog_holds_an_unsaved_commit_is_left(self):
+        path = self.workstream('fresh', commits=0)
+        self.git('checkout', '-q', '--detach', cwd=path)
+        self.fx.write('lost.txt', 'lost\n', root=path)
+        self.fx.commit('lost', 'lost.txt', cwd=path)
+        lost = self.git('rev-parse', 'HEAD', cwd=path)
+        self.git('checkout', '-q', 'kit/fresh', cwd=path)
+        rc, out, data = self.run_apply()
+        self.assertEqual(rc, 1, out)
+        self.assertEqual(self.row(data, path)['class'], 'C')
+        self.kept(path)
+        self.assertIn(lost, self.git('reflog', '--format=%H', cwd=path).split())
+
+    def test_no_store_named_leaves_an_empty_tree(self):
+        self.configure({})
+        path = self.workstream('fresh', commits=0)
+        rc, out, data = self.run_apply()
+        self.assertEqual(rc, 1, out)
+        self.assertEqual(self.row(data, path)['class'], 'C')
+        self.kept(path)
+
+
 class Untouched(ApplyCase):
 
     def test_b_c_and_l_trees_are_left_on_disk(self):
