@@ -97,6 +97,7 @@ Each line is `kept <path> (<why>)`, `would remove <path>`, `removed <path>` or `
   - The event comes once per main sha. The sha is kept as `plugin_main` in the watcher's state file, so a relaunch does not repeat it.
   - An export that is already behind is reported on the first run.
   - A landing's push updates `refs/remotes/<remote>/main` (`kitlib/gate/land.py` `push`), so a kit landing is seen without a fetch.
+  - The ref is read in the kit's source checkout: when the kit running the check is itself an export (it holds the marker), `kitlib.pluginsource` `source_kit` names the main checkout its marker records; an export whose marker names none that still exists is a failed check (pm_start prints `could not check the pm-kit plugin: ...`).
   - With no tracking ref, it prints nothing. A tracking ref that cannot be read, or a `state.json` that cannot be read, is a failed check; a check that fails three times running gives `ERROR plugin check`.
 - **Auto refresh.** With `plugin.auto_refresh: true` (default false), that first event also starts `tools/plugin_refresh.py --apply` itself, detached and windowless, and appends `(auto_refresh: started)`. While a live process holds `refresh.pid`, it starts nothing and appends `(auto_refresh: a refresh is already running)`. With no export, or a folder not migrated, it starts nothing and appends `(auto_refresh: not started: no export yet)` or `(auto_refresh: not started: not migrated in <folders>)`.
 
