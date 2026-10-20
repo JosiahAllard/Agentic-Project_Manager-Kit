@@ -1,5 +1,6 @@
 """kitlib.gate.steps: selection by what changed, and judging a step by its log."""
 import builtins
+import time
 import unittest
 from unittest import mock
 
@@ -335,6 +336,26 @@ class ZeroCountPasses(unittest.TestCase):
         self.assertIn("'Passed: 0'", line)
         self.assertEqual(self.warned(r'Passed: [1-9]\d*'), [])
         self.assertEqual(self.warned(r'(?m)^Ran [1-9]\d* tests? in'), [])
+
+    def test_an_optional_group_holding_a_count_is_left_out(self):
+        # walked once it would read '0 skipped, 10 passed': the 0 is not the pass count
+        self.assertEqual(self.warned(r'(?:\d+ skipped, )?[1-9]\d* passed'), [])
+
+    def assertQuietAndFast(self, passes, **top):
+        start = time.monotonic()
+        self.assertEqual(self.warned(passes, **top), [])
+        self.assertLess(time.monotonic() - start, 5.0)
+
+    def test_a_huge_or_nested_repeat_gives_no_line_fast(self):
+        self.assertQuietAndFast(r'Passed: \d{2000000000}')
+        self.assertQuietAndFast(r'Passed: ((\d{1000}){1000}){1000}')
+        self.assertQuietAndFast(r'Passed: ((?:\b){1000}){1000000}')        # an empty body
+        self.assertQuietAndFast('UNIT TESTS OK', zero_tests=r'OK ((\d{1000}){1000}){1000}')
+
+    def test_deep_nesting_gives_no_line_and_never_raises(self):
+        deep = '(' * 3000 + r'\d+' + ')' * 3000
+        self.assertQuietAndFast(deep)
+        self.assertQuietAndFast('UNIT TESTS OK', zero_tests=deep)
 
     def without(self, *blocked):
         """builtins.__import__ that refuses kitlib.gate.steps the modules `blocked`: a module

@@ -101,6 +101,7 @@ def unsupported(gate):
 
 
 ZERO_RAN = 'Ran 0 tests in 0.000s'     # the zero-count line judge() fails on (RAN)
+SAMPLE_MAX = 256                        # _walk gives up on a longer sample (`\d{2000000000}`)
 
 
 def _regex_parser():
@@ -150,7 +151,9 @@ def _walk(_C, items, out):
     `items` (parser constants `_C`) matches, taking '0' wherever a digit may stand; `free` is
     True for a character a digit class chose (`\\d`, `[0-9]`: a count), False for a literal or
     a class that takes letters too (`\\S`, `.`). A repeat is walked its minimum times, except
-    that one which may be empty and holds a count is walked once (`\\d*` gives '0')."""
+    that one which may be empty and is the count itself (only digit classes: `\\d*`) is walked
+    once ('0'); an optional group (`(?:\\d+ skipped, )?`) is left out. A repeat whose text
+    would pass SAMPLE_MAX characters raises ValueError: no sample, never a hang."""
     repeats = (_C.MAX_REPEAT, _C.MIN_REPEAT, getattr(_C, 'POSSESSIVE_REPEAT', None))
     for op, av in items:
         if op is _C.LITERAL:
@@ -161,14 +164,14 @@ def _walk(_C, items, out):
             out.append((next(c for c in '0aA 1x_-' if _class_has(_C, av, c)),
                         not _class_has(_C, av, 'a')))
         elif op in repeats:
+            body = []                   # walked once: the walk gives the same text every time
+            _walk(_C, av[2], body)
             if av[0]:
-                for _ in range(av[0]):
-                    _walk(_C, av[2], out)
-            else:
-                once = []
-                _walk(_C, av[2], once)
-                if any(free for _, free in once):
-                    out.extend(once)
+                if len(out) + len(body) * av[0] > SAMPLE_MAX:
+                    raise ValueError('sample longer than %d' % SAMPLE_MAX)
+                out.extend(body * av[0])
+            elif body and all(free and c.isdigit() for c, free in body):
+                out.extend(body)
         elif op is _C.SUBPATTERN:
             _walk(_C, av[-1], out)
         elif op is getattr(_C, 'ATOMIC_GROUP', None):
@@ -188,7 +191,8 @@ def _sample(parser, pattern):
         _walk(parser[0], parser[1].parse(pattern), out)
         text = ''.join(c for c, _ in out)
         return out if re.search(pattern, text, re.M) else None
-    except (ValueError, StopIteration, KeyError, re.error, TypeError, IndexError):
+    except (ValueError, StopIteration, KeyError, re.error, TypeError, IndexError,
+            OverflowError, RecursionError, MemoryError):   # deep nesting: parse, re.search
         return None
 
 
@@ -225,7 +229,7 @@ def zero_count_passes(gate):
         for p in _list(step.get('pass')):
             try:
                 hit = next((z for z in zero_lines if re.search(p, z, re.M)), None)
-            except re.error:
+            except (re.error, OverflowError, RecursionError, MemoryError):
                 continue
             own = _sample(parser, p) if hit is None else None
             if own and _first_count_zero(own):
