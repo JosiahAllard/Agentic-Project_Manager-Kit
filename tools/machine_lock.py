@@ -149,6 +149,10 @@ def parser():
                         "container's): it takes only cpu slots whose threads all lie inside "
                         "and waits for those; exit 2 when they are too few for its size "
                         "(--cores) or it has --hold")
+    r.add_argument("--resource", metavar="NAME",
+                   help="an exclusive resource (any non-empty name, e.g. ports:e2e-a) the run "
+                        "holds for its whole life: while another live run holds it, a run naming "
+                        "it waits (exit 6 with --no-wait), however many slots are free")
     r.add_argument("--on-release", metavar="CMDLINE", help="a shell command run after the command "
                    "ends (MACHINE_LOCK_END says how) and before the slots are freed")
     w = r.add_mutually_exclusive_group()
@@ -311,7 +315,8 @@ def cmd_run(a, cmd, store, argv):
         return run_background(cmd, a.repo, a.slug, **common)
     return run_command(cmd, a.kind, a.repo, a.slug, cores=a.cores, hold=a.hold,
                        gpu_share=a.gpu_share, wait_s=a.wait_s, no_wait=a.no_wait,
-                       on_release_cmd=a.on_release, within=a.within, **common)
+                       on_release_cmd=a.on_release, within=a.within, resource=a.resource,
+                       **common)
 
 
 def cmd_status(a, store):

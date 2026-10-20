@@ -145,7 +145,13 @@ A held run can hand back cpu slots its command no longer needs, while the comman
 
 ## Run resources and landing priority
 
-`kitlib.lock.run.book` takes two keyword arguments for library callers: `resource=None` and `priority=None`. They are not on `machine_lock.py run` or `background` (argparse refuses `--resource` and `--priority`, exit 2: `tests/lock/test_cli.py`) and no MCP tool takes them (`tests/lockmcp/test_server.py`). The status text, `status --json` and the MCP snapshot show both (Snapshot: `runs`, `queue`).
+`kitlib.lock.run.book` takes two keyword arguments: `resource=None` and `priority=None`. `machine_lock.py run --resource NAME` passes `resource` through (`tools/machine_lock.py` `cmd_run`, `kitlib.lock.run.run_command`); `priority` stays for library callers (`kitlib.gate.land`). `background` takes neither: a background run does not book through `book()` (`kitlib.lock.background.run_background`). argparse refuses `--priority`, `background --resource` and an abbreviated `--res`, exit 2 (`tests/lock/test_cli.py`), and no MCP tool takes either (`tests/lockmcp/test_server.py`). The status text, `status --json` and the MCP snapshot show both (Snapshot: `runs`, `queue`).
+
+`run --resource NAME`, for example `--resource ports:e2e-a` so a repo's e2e runs that share a port block never overlap:
+
+- What it holds: the one name, exactly as given (one `--resource` per run; a second one replaces the first, as argparse does). The lock reads no meaning into it; two runs name the same resource only when the strings are equal, case included (`kitlib.lock.queue.resource_holders`). An empty name is usage, exit 2, before anything is booked.
+- For how long: from when the run holds its slots until it releases them, after its command and any `--on-release` command end, or until the lock finds its wrapper dead (below).
+- A second run naming the same resource while the first is live waits for it, however many slots are free: with no limit by default, exit 8 when `--max-wait` runs out, exit 6 at once with `--no-wait` (the message says `resource NAME is held by` the holding run). A run naming another resource, or none, is not kept out. Tests: `tests/lock/test_cli.py` (`test_run_resource_reaches_book_and_a_second_run_naming_it_waits`).
 
 - **`resource`** is a non-empty string naming something the run holds for its whole life, for example `"landing:" + os.path.normcase(os.path.abspath(<git common dir>))`. Anything else is a usage error (`LockError`, exit 2), raised before the store is written.
   - The run record and the queue entry carry `"resource"` (`kitlib.lock.queue.join`).

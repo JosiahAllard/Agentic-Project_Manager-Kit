@@ -1317,8 +1317,8 @@ def book(kind, repo, slug, cores=None, hold=None, gpu_share=None, wait_s=None, n
     holds for its whole life: it does not start while another run holding it is alive (the queue
     entry and record carry it). A nested run naming one its parent does not hold joins the queue
     for it even when the parent covers all it needs. priority "land": its entry plans ahead of
-    every ordinary waiting run (kitlib.lock.queue.plan). Library callers only: neither is on the
-    CLI or the MCP server. within: the threads the run must stay inside (the CLI's --within: a
+    every ordinary waiting run (kitlib.lock.queue.plan), for library callers only. The CLI takes
+    resource (`machine_lock.py run --resource`), not priority; the MCP server takes neither. within: the threads the run must stay inside (the CLI's --within: a
     Linux cpuset list such as '8-15', or global thread ids), e.g. a container's cpuset; it takes
     only cpu slots whose threads all lie inside (within_of), and waits for those while others are
     free. The record carries `within` (the list) and `within_slots`; its queue entry `within`.
