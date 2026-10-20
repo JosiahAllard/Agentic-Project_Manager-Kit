@@ -297,7 +297,8 @@ class Cli(unittest.TestCase):
     def test_install_autostart_what_if_with_no_pythonw_exits_1_as_the_install_does(self):
         d = tempfile.mkdtemp(prefix='kit-autostart-')                  # empty: no pythonw.exe
         self.addCleanup(shutil.rmtree, d, True)
-        with mock.patch.object(autostart, 'in_worktree', return_value=False),                 mock.patch.object(autostart.pythonw_mod, 'base_pythonw',
+        with mock.patch.object(autostart, 'in_worktree', return_value=False), \
+                mock.patch.object(autostart.pythonw_mod, 'base_pythonw',
                                   return_value=os.path.join(d, 'pythonw.exe')):
             seen = {}
             for argv in (['install-autostart', '--what-if'], ['install-autostart']):

@@ -343,7 +343,7 @@ class CarrierTest(_Folder):
 
     def test_no_program_with_a_closed_stderr_pipe_exits_2(self):
         """A stderr whose reading end is gone: the usage line cannot be written, and the exit is
-        still 2 (unguarded, the failed flush at interpreter exit made it 120)."""
+        still 2 (unguarded, it exited 120 on this machine's Python 3.14.7, as observed, not 2)."""
         r, w = os.pipe()
         os.close(r)
         try:
