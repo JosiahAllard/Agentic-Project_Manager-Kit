@@ -234,7 +234,8 @@ def env_changed_at():
         return None
 
 
-_ISO = re.compile(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d+))?(Z|[+-]\d\d:\d\d)?$")
+_ISO = re.compile(r"^([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}[:][0-9]{2}[:][0-9]{2})(?:[.]([0-9]+))?"
+                  r"(Z|[+-][0-9]{2}[:][0-9]{2})?$")
 
 
 def started_at(s):
