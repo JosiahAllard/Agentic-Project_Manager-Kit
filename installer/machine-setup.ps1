@@ -27,6 +27,8 @@
 # that prints what it would remove; -NoSweepTask leaves it unregistered (the plan prints the line
 # that registers it). A task already registered is left as is. -RegisterSweepTask, the old opt-in,
 # is still accepted and changes nothing.
+# Once the kit plugin is enabled in an account, its settings.json gets the 3 machine-lock tools'
+# allow rules and loses the kit SessionStart hooks the plugin runs (docs/machine-setup.md "Default mode").
 #
 # Dry run by default: prints every change it would make. -Apply makes them, writing a .bak beside
 # each settings.json and renaming any real folder aside (never deleting one). A second run reports
