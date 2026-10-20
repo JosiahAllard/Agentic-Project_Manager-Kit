@@ -6,6 +6,7 @@ turned live after it was classified. Throwaway repositories only (tests/gitfixtu
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -393,6 +394,51 @@ class Outcomes(ApplyCase):
         self.assertEqual(row['apply']['result'], 'skipped', out)
         self.assertIn('the machine lock cannot be read (tool gone)', row['apply']['why'])
         self.kept(path)
+
+
+class Orphans(ApplyCase):
+    """O: --apply drops a stale registration and keeps its branch, unless its admin folder keeps a
+    commit no ref reaches (KIT-WORKTREE-LEFTOVERS)."""
+
+    def test_a_stale_registration_is_dropped_and_its_branch_kept(self):
+        path = self.workstream('gone')
+        tip = self.git('rev-parse', 'kit/gone')
+        shutil.rmtree(path)
+        rc, out, data = self.run_apply()
+        self.assertEqual(rc, 0, out)
+        self.assertIn('removed   %s: O, its stale registration dropped' % path, out)
+        self.gone(path)
+        self.assertEqual(self.git('rev-parse', 'kit/gone'), tip)
+        self.assertEqual(data['applied'], {'removed': 1, 'failed': 0, 'skipped': 0})
+
+    def test_other_trees_are_untouched(self):
+        orphan = self.workstream('gone')
+        shutil.rmtree(orphan)
+        wip = self.workstream('wip')
+        self.fx.write('loose.txt', 'x\n', root=wip)
+        rc, out, data = self.run_apply()
+        self.assertEqual(rc, 1, out)
+        self.gone(orphan)
+        self.kept(wip)
+        self.assertTrue(os.path.isfile(os.path.join(wip, 'loose.txt')))
+        self.assertEqual(self.row(data, wip)['class'], 'C')
+
+    def test_one_keeping_an_unsaved_commit_is_skipped_for_the_owner(self):
+        path = os.path.join(self.home, 'lost')
+        self.git('worktree', 'add', '-q', '--detach', path, 'main')
+        path = os.path.realpath(path)
+        self.fx.write('left.txt', 'left\n', root=path)
+        left = self.fx.commit('left behind', 'left.txt', cwd=path)
+        self.git('checkout', '-q', '--detach', 'main', cwd=path)
+        shutil.rmtree(path)
+        rc, out, data = self.run_apply()
+        self.assertEqual(rc, 1, out)
+        self.assertIn('skipped   %s: O: 1 commit(s) only its registration keeps' % path, out)
+        self.assertIn(os.path.normcase(path), self.registered())
+        self.assertEqual(self.row(data, path)['apply']['result'], 'skipped', out)
+        with open(os.path.join(self.fx.common_dir(), 'worktrees', 'lost', 'logs', 'HEAD'),
+                  encoding='utf-8') as f:
+            self.assertIn(left, f.read())
 
 
 class Arguments(unittest.TestCase):

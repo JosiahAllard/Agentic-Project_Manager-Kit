@@ -553,12 +553,24 @@ class Live(ClassifyCase):
             procs=lambda: (([(1, 'x.exe', path)], 0, 1), None))
         self.assertEqual(self.row(data, path)['class'], 'L')
 
-    def test_a_missing_folder_is_l(self):
+    def test_a_missing_folder_is_o_and_exit_one(self):
         path = self.workstream('gone')
         shutil.rmtree(path)
         rc, out, data = self.run_classify()
-        self.assertEqual(self.row(data, path)['reason'],
-                         'its folder is missing (an orphan: `--check` reports it)')
+        self.assertEqual(rc, 1, out)
+        row = self.row(data, path)
+        self.assertEqual((row['class'], row['reason'], row['unsaved'], row['note']),
+                         ('O', 'its folder is missing (an orphan: `--check` reports it)', 0,
+                          'nothing only its registration keeps'))
+        self.assertIn('summary   A 0, B 0, C 0, E 0, L 0, O 1', out)
+
+    def test_a_locked_missing_folder_is_l(self):
+        path = self.workstream('gone')
+        self.git('worktree', 'lock', '--reason', 'on a drive', path)
+        shutil.rmtree(path)
+        rc, out, data = self.run_classify()
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.row(data, path)['class'], 'L')
 
     def test_no_head_is_l(self):
         path = self.workstream('nohead')
@@ -662,8 +674,70 @@ class ReadOnly(ClassifyCase):
         self.configure({'backlog': {'store': 'main'}})
         before = self.snapshot()
         rc, out, data = self.run_classify()
-        self.assertEqual(data['counts'], {'A': 1, 'B': 1, 'C': 1, 'E': 2, 'L': 0}, out)
+        self.assertEqual(data['counts'], {'A': 1, 'B': 1, 'C': 1, 'E': 2, 'L': 0, 'O': 0}, out)
         self.assertEqual(self.snapshot(), before)
+
+
+@real_git('git reflog: the fake writes no reflog, and an orphan is read from its admin folder')
+class Orphans(ClassifyCase):
+    """O: a registered tree whose folder is gone. Its admin folder (`git worktree remove` deletes
+    it) may keep a commit no ref reaches; then it is left for the owner (KIT-WORKTREE-LEFTOVERS)."""
+
+    def detached_orphan(self, slug):
+        """A detached tree that made a commit, checked out main again and lost its folder: only
+        its HEAD reflog keeps that commit. (its path, the commit)"""
+        path = os.path.join(self.home, slug)
+        self.git('worktree', 'add', '-q', '--detach', path, 'main')
+        path = os.path.realpath(path)
+        self.fx.write('left.txt', 'left\n', root=path)
+        left = self.fx.commit('left behind', 'left.txt', cwd=path)
+        self.git('checkout', '-q', '--detach', 'main', cwd=path)
+        shutil.rmtree(path)
+        return path, left
+
+    def test_an_orphan_whose_reflog_keeps_a_commit_is_left_for_the_owner(self):
+        path, left = self.detached_orphan('gone')
+        rc, out, data = self.run_classify()
+        self.assertEqual(rc, 1, out)
+        row = self.row(data, path)
+        self.assertEqual((row['class'], row['unsaved']), ('O', 1), out)
+        self.assertEqual(row['note'], '1 commit(s) only its registration keeps, which no ref'
+                                      ' reaches: left for the owner')
+
+    def test_a_per_worktree_ref_keeps_a_commit_too(self):
+        path = os.path.join(self.home, 'bisect')
+        self.git('worktree', 'add', '-q', '--detach', path, 'main')
+        path = os.path.realpath(path)
+        self.fx.write('b.txt', 'b\n', root=path)
+        kept = self.fx.commit('bisect only', 'b.txt', cwd=path)
+        self.git('update-ref', 'refs/bisect/bad', kept, cwd=path)
+        self.git('checkout', '-q', '--detach', 'main', cwd=path)
+        self.git('reflog', 'expire', '--expire=now', '--all', cwd=path)
+        shutil.rmtree(path)
+        rc, out, data = self.run_classify()
+        row = self.row(data, path)
+        self.assertEqual((row['class'], row['unsaved']), ('O', 1), out)
+
+    def test_a_reflog_a_ref_reaches_keeps_nothing(self):
+        path = self.workstream('gone')
+        shutil.rmtree(path)
+        rc, out, data = self.run_classify()
+        row = self.row(data, path)
+        self.assertEqual((row['class'], row['unsaved'], row['note']),
+                         ('O', 0, 'nothing only its registration keeps'), out)
+        self.assertIn('orphan', out)
+
+    def test_an_unreadable_admin_folder_is_left_for_the_owner(self):
+        path = self.workstream('gone')
+        shutil.rmtree(path)
+        with open(os.path.join(self.fx.common_dir(), 'worktrees', 'gone', 'ORIG_HEAD'), 'w',
+                  newline='\n') as f:
+            f.write('not an id\n')
+        rc, out, data = self.run_classify()
+        row = self.row(data, path)
+        self.assertEqual((row['class'], row['unsaved']), ('O', None), out)
+        self.assertIn('is unknown (', row['note'])
+        self.assertIn('has a line this verb cannot read', row['note'])
 
 
 class BranchLiveness(ClassifyCase):

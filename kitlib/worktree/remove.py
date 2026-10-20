@@ -576,6 +576,183 @@ def unmoved(ctx, path, head, logged):
     return scratch.unmoved(ctx, path, head, logged)
 
 
+def unsaved_count(ctx, commits, also_saved=()):
+    """How many commits reached from `commits` no branch, remote-tracking branch, tag or
+    `also_saved` commit reaches: `(n, None)`, or `(None, why)`."""
+    args = ('rev-list', '--count', *commits, '--not', *also_saved, '--branches', '--remotes',
+            '--tags')
+    rc, count, err = git(ctx.main, *args)
+    if rc != 0 or not count.isdigit():
+        return None, failure(args[:2], rc, err)
+    return int(count), None
+
+
+# The pseudo-refs a worktree's admin folder may hold besides its reflogs and per-worktree refs.
+ADMIN_HEADS = ('HEAD', 'ORIG_HEAD', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD')
+HEX = frozenset('0123456789abcdef')
+
+
+def _oid(word):
+    return len(word) in (40, 64) and set(word) <= HEX
+
+
+def admin_dir(ctx, path):
+    """`(the admin folder <git common dir>/worktrees/<id> whose gitdir file names `path`, None)`,
+    or `(None, why)`: none or more than one does, or a read failed."""
+    args = ('rev-parse', '--path-format=absolute', '--git-common-dir')
+    rc, common, err = git(ctx.main, *args)
+    if rc != 0 or not common:
+        return None, failure(args, rc, err)
+    top = os.path.join(common, 'worktrees')
+    try:
+        names = sorted(os.listdir(top))
+    except OSError as e:
+        return None, 'the admin folders in %s could not be listed (%s)' % (top, e)
+    found, key = [], canon(path)
+    for name in names:
+        gitdir = os.path.join(top, name, 'gitdir')
+        try:
+            with open(gitdir, encoding='utf-8', errors='replace') as fh:
+                named = fh.read().strip()
+        except FileNotFoundError:
+            continue
+        except OSError as e:
+            return None, '%s could not be read (%s)' % (gitdir, e)
+        if named and canon(os.path.dirname(named)) == key:
+            found.append(os.path.join(top, name))
+    if len(found) != 1:
+        return None, ('%s admin folder in %s names it%s' % (
+            'more than one' if found else 'no', top, ' (%s)' % ', '.join(found) if found else ''))
+    return found[0], None
+
+
+def admin_commits(ctx, admin):
+    """`([every commit id the admin folder `admin` alone may keep], None)` or `(None, why)`: its
+    HEAD and pseudo-refs (ADMIN_HEADS) when they hold an id, every id in its reflogs (`logs/`)
+    and the tips of its per-worktree refs (`refs/`). `git worktree remove` deletes them all. Read
+    from the files only for the files ref format; any other format, and a line that is not an id,
+    a symbolic ref or a reflog entry, refuses."""
+    args = ('rev-parse', '--show-ref-format')
+    rc, out, err = git(ctx.main, *args)
+    if rc != 0 or not out:
+        return None, failure(args, rc, err)
+    if out != 'files':
+        return None, 'its refs are stored as %s, whose admin folder this verb cannot read' % out
+    files, errors = [os.path.join(admin, n) for n in ADMIN_HEADS], []
+    for sub in ('refs', 'logs'):
+        root = os.path.join(admin, sub)
+        if os.path.isdir(root):
+            for folder, _, names in os.walk(root, onerror=errors.append):
+                files.extend(os.path.join(folder, n) for n in sorted(names))
+        elif os.path.lexists(root):
+            errors.append('%s is not a folder' % root)
+    if errors:
+        return None, 'its admin folder could not be read in full (%s)' % errors[0]
+    oids = []
+    for name in files:
+        try:
+            with open(name, encoding='utf-8', errors='replace') as fh:
+                text = fh.read()
+        except FileNotFoundError:
+            continue
+        except OSError as e:
+            return None, '%s could not be read (%s)' % (name, e)
+        log = os.path.relpath(name, admin).split(os.sep)[0] == 'logs'
+        for line in text.splitlines():
+            if not line.strip():
+                continue
+            words = line.split('\t', 1)[0].split(' ')[:2] if log else \
+                [] if line.startswith('ref: ') else line.split()[:1]
+            if (log and len(words) != 2) or not all(_oid(w) for w in words):
+                return None, '%s has a line this verb cannot read: %r' % (name, line)
+            oids.extend(w for w in words if w.strip('0') and w not in oids)
+    return oids, None
+
+
+def orphan_unsaved(ctx, path):
+    """`(how many commits only the admin folder of the missing tree at `path` keeps and no branch,
+    remote-tracking branch or tag reaches, None)`, or `(None, why)`. Reads only."""
+    admin, why = admin_dir(ctx, path)
+    if admin is None:
+        return None, why
+    oids, why = admin_commits(ctx, admin)
+    if oids is None:
+        return None, why
+    return unsaved_count(ctx, oids) if oids else (0, None)
+
+
+def prune_orphan(ctx, path):
+    """Drop the registration of the worktree at `path` whose folder is already gone (`--classify`
+    class O), keeping its branch: `git worktree remove <the registered path>`, never forced, never
+    `git worktree prune` (which drops every such registration). Refused, nothing changed: a path
+    that exists, an exempt folder, a locked tree, the main checkout, and a registration whose
+    admin folder keeps a commit no ref reaches (its HEAD reflog, a per-worktree ref or a
+    pseudo-ref: the owner's call) or cannot be read. The folder and the admin folder are read once
+    more just before git; a folder made inside that window is the window this narrows, not
+    closes. A path no longer registered is `nothing` (OK)."""
+    path = os.path.normpath(path)
+    nothing = 'nothing was removed'
+    if os.path.lexists(path):
+        ctx.say('refused   %s exists: its registration is not stale; %s' % (path, nothing))
+        return REFUSED
+    ruling = exemption(ctx.s, path)
+    if ruling:
+        ctx.say('refused   %s is exempt (%s); %s' % (path, ruling, nothing))
+        return REFUSED
+    try:
+        entries = worktree_entries(worktree_listing(ctx.main))
+    except GitReadError as e:
+        ctx.say('refused   %s: the worktree list could not be read (%s); %s' % (path, e, nothing))
+        return REFUSED
+    key = canon(path)
+    entry = next((e for e in entries if canon(e['path']) == key), None)
+    if entry is None:
+        ctx.say('nothing   %s is not registered' % path)
+        return OK
+    if key == canon(ctx.main):
+        ctx.say('refused   %s is the main checkout; %s' % (path, nothing))
+        return REFUSED
+    if entry['locked'] is not None:
+        ctx.say('refused   %s is locked (%s); %s' % (path, entry['locked'] or 'no reason', nothing))
+        return REFUSED
+    admin, why = admin_dir(ctx, path)
+    oids, why = admin_commits(ctx, admin) if admin else (None, why)
+    lost, why = (None, why) if oids is None else unsaved_count(ctx, oids) if oids else (0, None)
+    if lost is None:
+        ctx.say('refused   %s: whether its registration keeps a commit no ref reaches is unknown'
+                ' (%s); %s' % (path, why, nothing))
+        return REFUSED
+    if lost:
+        ctx.say('refused   %s: its folder is gone, but its registration (%s) keeps %d commit(s)'
+                ' no branch, remote-tracking branch or tag reaches (a HEAD reflog, per-worktree'
+                ' ref or pseudo-ref); whether to drop them is the owner\'s call; %s'
+                % (path, admin, lost, nothing))
+        return REFUSED
+    again, why = admin_commits(ctx, admin)
+    moved = ('its folder appeared after it was checked' if os.path.lexists(path) else
+             'its admin folder could not be read again (%s)' % why if again is None else
+             'its admin folder changed after it was checked' if again != oids else None)
+    if moved:
+        ctx.say('refused   %s: %s; %s' % (path, moved, nothing))
+        return REFUSED
+    rc, out, err = git(ctx.main, 'worktree', 'remove', entry['path'])
+    if rc != 0:
+        ctx.say('failed    git worktree remove exited %s: %s' % (rc, err or out))
+        return REFUSED
+    try:
+        still = key in registered(ctx.main)
+    except GitReadError as e:
+        ctx.say('failed    %s: whether its registration is gone is unknown: the worktree list'
+                ' could not be read again (%s)' % (path, e))
+        return REFUSED
+    if still:
+        ctx.say('failed    %s is still registered after git worktree remove exited 0' % path)
+        return REFUSED
+    ctx.say('removed   %s: its stale registration (the folder was already gone)%s'
+            % (path, '; branch %s kept' % entry['branch'] if entry['branch'] else ''))
+    return OK
+
+
 def outside_target(ctx, path, branch_ok=False):
     """`(path, registrations)` for a registered DETACHED worktree outside every worktree folder,
     named by its path (an agent's red-run tree in a scratchpad), or the exit status after saying

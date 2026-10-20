@@ -3,17 +3,22 @@ checkout into one class (docs/worktree-remove.md "Classify"). Without `apply` no
 deletes, moves, fetches or writes: every git call is a read (the status with
 `--no-optional-locks`), the base is read as it stands, never fetched, and the backlog store is
 opened with `fetch=False`. With `apply` (`apply_tree`), A and E trees then go through the existing
-remove paths, which make their own checks again; B, C and L are never touched.
+remove paths, which make their own checks again, and an O tree's stale registration is dropped
+(remove.prune_orphan); B, C and L are never touched.
 
 The classes, decided first-match in this order:
 
 - L live or kept (reported only): the main checkout's own worktree list says it is locked, it is
-  exempt, it is the landing tree, its folder is missing, or a liveness probe holds it: the landing
+  exempt, it is the landing tree, or a liveness probe holds it: the landing
   lock names its branch, a machine lock record names it, a process has its current directory in
   it, or its last activity is newer than the dead bar (DEAD_AFTER_S, 24 h). A probe that cannot be
   read in full makes the tree L too (`unreadable: ...`), as does a status that cannot be read.
   When the scan could not read some process, a tree is L unless every folder in it opens for
   DELETE (holders.held_folder): a process we could not read may hold it.
+- O orphan: registered, not locked, exempt or the landing tree, and its folder is missing (with a
+  run-wide read failed it is L, as every tree is). Its note says whether its admin folder keeps a
+  commit no ref reaches (remove.orphan_unsaved: its HEAD reflog, per-worktree refs and
+  pseudo-refs); one that does, or cannot be read, is left for the owner.
 - A landed: the tip is in the base AND off its first-parent chain (remove.merged_worktrees's
   rule), the tree is clean, and a branch's reflog shows a commit made on it (own_commit; a
   reflog that cannot be read, C). Also A, empty: clean, tip in the base, nothing of its own, and
@@ -29,10 +34,10 @@ The classes, decided first-match in this order:
 
 Who the tree belongs to (a backlog record pulled by its branch) is shown; it decides only whether
 an empty tree is A or C. Each claim on a B or C tree gets a `next` release line.
-`classify` returns Result(code, lines, data): 0 when no tree is A, B, C or E; 1 when one is, or a
-run-wide read failed; 2 for a refused kit configuration. With `apply`: 0 when every A and E tree
-was removed and no B or C tree is left; 1 when the run was refused (not the main checkout, the
-landing lock held), a tree failed or was skipped, or a B or C tree is left.
+`classify` returns Result(code, lines, data): 0 when every tree is L; 1 when one is A, B, C, E or
+O, or a run-wide read failed; 2 for a refused kit configuration. With `apply`: 0 when every A, E
+and O tree was removed and no B or C tree is left; 1 when the run was refused (not the main
+checkout, the landing lock held), a tree failed or was skipped, or a B or C tree is left.
 """
 import collections
 import copy
@@ -66,7 +71,9 @@ def claimed(got, branch):
 DEAD_AFTER_S = 24 * 3600                       # owner answer Q3: 24 h, the sweep's idle bar
 EVIDENCE_GLOBS = ('agent-*', '*-red', 'redcheck', 'mutant*')
 LANDING_TREE = '_landing'                      # kitlib/gate/land.py TREE_NAME
-CLASSES = ('A', 'B', 'C', 'E', 'L')
+CLASSES = ('A', 'B', 'C', 'E', 'L', 'O')
+ACTED = ('A', 'E', 'O')                        # the classes --apply acts on
+ORPHAN = 'its folder is missing (an orphan: `--check` reports it)'
 HEADINGS = {
     'A': ('landed', 'tip in the base, clean, a commit of its own or empty and unclaimed',
           'removable: worktree_remove.py <slug>'),
@@ -78,6 +85,8 @@ HEADINGS = {
           ' worktree folder; dead',
           'removable: --scratch or --abandon "evidence"'),
     'L': ('live/kept', 'locked, exempt, held, active or unreadable', 'reported only'),
+    'O': ('orphan', 'registered, its folder gone, not locked or exempt',
+          '--apply drops the registration (the branch stays) unless it keeps an unsaved commit'),
 }
 
 
@@ -244,7 +253,7 @@ def live_reason(ctx, entry, run_wide, landing, machine, cwds, now, dead_after_s)
         return 'locked with `git worktree lock`%s' % (
             ': ' + entry['locked'] if entry['locked'] else ''), None
     if not os.path.isdir(path):
-        return 'its folder is missing (an orphan: `--check` reports it)', None
+        return ORPHAN, None
     if not entry['head'] or not entry['head'].strip('0'):
         # git lists an unborn branch's HEAD as forty zeros.
         return 'unreadable: git reported no HEAD for it', None
@@ -450,7 +459,7 @@ def classify(top, now=None, machine=sweep.machine_lock_entries, procs=process_cw
     """`--classify` on the repository `top` is in. `now` (epoch seconds), `machine` (a
     sweep.machine_lock_entries-like callable) and `procs` (a process_cwds-like callable) are test
     seams. Read-only unless `apply`: then `top` must be the main checkout, a held landing lock
-    refuses the run before anything is read, and each A and E tree goes through `apply_tree`
+    refuses the run before anything is read, and each A, E and O tree goes through `apply_tree`
     (`environ`: the scratch roots' environment, scratch.roots; `today`: the abandon tag's date)."""
     ctx, refused = remove.open_ctx(top, cwd)
     if refused:
@@ -565,7 +574,16 @@ def _classify(ctx, now, machine, procs, dead_after_s, act=None):
         reason, seen = live_reason(ctx, entry, *probes, now=now, dead_after_s=dead_after_s)
         if seen is not None:
             row['idle_s'] = round(max(now - seen[0], 0))
-        if reason:
+        if reason == ORPHAN:
+            row.update({'class': 'O', 'reason': reason})
+            lost, why = remove.orphan_unsaved(ctx, path)
+            row['unsaved'] = lost
+            row['note'] = ('nothing only its registration keeps' if lost == 0 else
+                           '%d commit(s) only its registration keeps, which no ref reaches:'
+                           ' left for the owner' % lost if lost else
+                           'whether its registration keeps an unsaved commit is unknown (%s):'
+                           ' left for the owner' % why)
+        elif reason:
             row.update({'class': 'L', 'reason': reason})
         else:
             klass, fields = judge(ctx, entry, base, chain, ancestors, claims)
@@ -575,7 +593,7 @@ def _classify(ctx, now, machine, procs, dead_after_s, act=None):
             row['claims'] = (claimed(claims[0], entry['branch']) if claims[0] is not None
                              else 'unknown: %s' % claims[1])
         trees.append(row)
-        if row['class'] in ('A', 'E'):
+        if row['class'] in ACTED:
             acted.append((entry, row))
     counts = {k: sum(1 for t in trees if t['class'] == k) for k in CLASSES}
     applied = None
@@ -595,7 +613,7 @@ def _classify(ctx, now, machine, procs, dead_after_s, act=None):
             applied[row['apply']['result']] += 1
             ctx.say('%-9s %s: %s' % (row['apply']['result'], row['path'], row['apply']['why']))
     for klass in CLASSES:
-        if act is not None and klass in ('A', 'E'):
+        if act is not None and klass in ACTED:
             continue
         rows = [t for t in trees if t['class'] == klass]
         name, rule, action = HEADINGS[klass]
@@ -619,7 +637,7 @@ def _classify(ctx, now, machine, procs, dead_after_s, act=None):
             ctx.say('next      %s %s --abandon "<why>"   (%s, after it is taken up or'
                     ' recorded)' % (s['tool'], remove.handle(ctx, t['path']), t['class']))
     ctx.say('summary   %s' % ', '.join('%s %d' % (k, counts[k]) for k in CLASSES))
-    code = REFUSED if any(counts[k] for k in ('A', 'B', 'C', 'E')) else OK
+    code = REFUSED if any(counts[k] for k in CLASSES if k != 'L') else OK
     if applied is not None:
         ctx.say('applied   %s' % ', '.join('%s %d' % (k, applied[k])
                                            for k in ('removed', 'failed', 'skipped')))
@@ -645,14 +663,8 @@ def machine_hold(machine, entry):
 
 
 def unsaved_count(ctx, commits, also_saved=()):
-    """How many commits reached from `commits` no branch, remote-tracking branch, tag or
-    `also_saved` commit reaches: `(n, None)`, or `(None, why)`."""
-    args = ('rev-list', '--count', *commits, '--not', *also_saved, '--branches', '--remotes',
-            '--tags')
-    rc, count, err = git(ctx.main, *args)
-    if rc != 0 or not count.isdigit():
-        return None, failure(args[:2], rc, err)
-    return int(count), None
+    """remove.unsaved_count (a seam the tests replace)."""
+    return remove.unsaved_count(ctx, commits, also_saved)
 
 
 def scratch_route(ctx, entry, environ):
@@ -694,18 +706,23 @@ def reflog_skip(ctx, path, head):
 
 
 def apply_tree(ctx, entry, row, base, environ=None, today=None):
-    """Send one A or E tree through an existing remove path, each making its own checks again (a
-    tree held or changed since it was classified is refused there): A plain; E `--scratch` when
+    """Send one A, E or O tree through an existing remove path, each making its own checks again
+    (a tree held or changed since it was classified is refused there): A plain; E `--scratch` when
     scratch_route says so, plain when its tip is in the base, else `--abandon "evidence"` (tag
-    archive/<slug>). An A tree, or an E tree not for --scratch, whose HEAD reflog holds a commit
-    no ref and not its tip reaches is skipped instead (reflog_skip): the remove deletes that
-    reflog, and the tag holds only the tip. Returns
+    archive/<slug>); O remove.prune_orphan, unless classify found its registration keeps a commit
+    no ref reaches or could not tell (skipped: left for the owner). An A tree, or an E tree not
+    for --scratch, whose HEAD reflog holds a commit no ref and not its tip reaches is skipped
+    instead (reflog_skip): the remove deletes that reflog, and the tag holds only the tip. Returns
     {'result': removed|failed|skipped, 'why', 'lines': the path's own}. A tree removed whose
     branch then stayed (or any other later refusal) is failed."""
     path, head = row['path'], entry['head']
     sub = copy.copy(ctx)
     sub.out = []
-    if row['class'] == 'A':
+    if row['class'] == 'O':
+        if row.get('unsaved') != 0:
+            return {'result': 'skipped', 'why': 'O: %s' % row['note'], 'lines': []}
+        how, verb = 'O, its stale registration dropped', 'orphan'
+    elif row['class'] == 'A':
         how, verb = 'A, plain remove', 'plain'
         held = reflog_skip(ctx, path, head)
         if held:
@@ -727,7 +744,9 @@ def apply_tree(ctx, entry, row, base, environ=None, today=None):
             held = reflog_skip(ctx, path, head)
             if held:
                 return held
-    if verb == 'plain':
+    if verb == 'orphan':
+        code = remove.prune_orphan(sub, path)
+    elif verb == 'plain':
         code = remove._remove(sub, path, False)
     elif verb == 'scratch':
         code = scratch._remove_scratch(sub, path, environ)
@@ -759,6 +778,8 @@ def describe(t, base):
     if t['class'] == 'L':
         bits.append(t['reason'])
     else:
+        if t['class'] == 'O':
+            bits.append(t['reason'])
         if t['class'] == 'A':
             bits.append('in %s' % base[:10])
         if t.get('ahead') is not None:

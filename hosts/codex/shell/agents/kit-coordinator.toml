@@ -51,7 +51,7 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
 5. Check real state: worktrees, unmerged branches, main vs remote, running build/test
    processes, every lock and port the profile names. Then
    `python <kit>/tools/worktree_remove.py -C <main checkout> --classify --apply`: it removes A
-   and E trees. For each B tree, land it or record why not. For each C tree, dispatch it, or
+   and E trees and drops O (orphan) registrations. For each B tree, land it or record why not. For each C tree, dispatch it, or
    stop its record (the `next` line) and `--abandon`. Leave L trees alone. Send the PM the
    summary and the B/C list.
 6. Pricing pass and backlog audit: `python <kit>/tools/backlog.py -C <repo> list --needs-priority`. Leave

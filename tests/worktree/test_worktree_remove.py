@@ -7,6 +7,7 @@ Every removal here is of a worktree or branch the test itself made in a temp fol
 import datetime
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -549,6 +550,125 @@ class DetachedReflog(RemoveCase):
         rc, out = self.run_verb('remove', 'red')
         self.assertEqual(rc, 0, out)
         self.assertFalse(os.path.exists(path), out)
+
+
+@real_git('git worktree remove of a missing folder: the fake does not model it, nor a reflog')
+class PruneOrphan(RemoveCase):
+    """remove.prune_orphan (`--classify --apply` on an O tree): drops one stale registration and
+    keeps its branch; refuses whatever could lose a commit or is not stale
+    (KIT-WORKTREE-LEFTOVERS)."""
+
+    def prune(self, path):
+        ctx, refused = remove.open_ctx(self.repo)
+        self.assertIsNone(refused)
+        code = remove.prune_orphan(ctx, path)
+        return code, '\n'.join(ctx.out)
+
+    def admin(self, slug):
+        return os.path.join(self.fx.common_dir(), 'worktrees', slug)
+
+    def test_a_stale_registration_is_dropped_and_its_branch_kept(self):
+        path = self.workstream('gone')
+        tip = self.git('rev-parse', 'kit/gone')
+        shutil.rmtree(path)
+        rc, out = self.prune(path)
+        self.assertEqual(rc, 0, out)
+        self.assertIn('removed   %s: its stale registration (the folder was already gone);'
+                      ' branch kit/gone kept' % path, out)
+        self.assertNotIn(os.path.normcase(path), self.registered())
+        self.assertEqual(self.git('rev-parse', 'kit/gone'), tip)
+        self.assertFalse(os.path.exists(self.admin('gone')))
+
+    def test_only_that_registration_is_dropped(self):
+        path = self.workstream('gone')
+        other = self.workstream('other')
+        shutil.rmtree(other)
+        shutil.rmtree(path)
+        rc, out = self.prune(path)
+        self.assertEqual(rc, 0, out)
+        self.assertIn(os.path.normcase(other), self.registered())
+
+    def test_a_folder_that_exists_is_refused(self):
+        path = self.workstream('here')
+        rc, out = self.prune(path)
+        self.assertEqual(rc, 1, out)
+        self.assertIn('its registration is not stale; nothing was removed', out)
+        self.assertTrue(os.path.isdir(path))
+        self.assertIn(os.path.normcase(path), self.registered())
+
+    def test_a_locked_one_is_refused(self):
+        path = self.workstream('gone')
+        self.git('worktree', 'lock', '--reason', 'on a drive', path)
+        shutil.rmtree(path)
+        rc, out = self.prune(path)
+        self.assertEqual(rc, 1, out)
+        self.assertIn('is locked (on a drive); nothing was removed', out)
+        self.assertIn(os.path.normcase(path), self.registered())
+
+    def test_one_whose_reflog_keeps_a_commit_no_ref_reaches_is_refused(self):
+        path = os.path.join(self.home, 'lost')
+        self.git('worktree', 'add', '-q', '--detach', path, 'main')
+        path = os.path.realpath(path)
+        self.fx.write('left.txt', 'left\n', root=path)
+        self.fx.commit('left behind', 'left.txt', cwd=path)
+        self.git('checkout', '-q', '--detach', 'main', cwd=path)
+        shutil.rmtree(path)
+        rc, out = self.prune(path)
+        self.assertEqual(rc, 1, out)
+        self.assertIn('keeps 1 commit(s) no branch, remote-tracking branch or tag reaches', out)
+        self.assertIn("whether to drop them is the owner's call; nothing was removed", out)
+        self.assertIn(os.path.normcase(path), self.registered())
+        self.assertTrue(os.path.isfile(os.path.join(self.admin('lost'), 'logs', 'HEAD')))
+
+    def test_an_unreadable_admin_folder_is_refused(self):
+        path = self.workstream('gone')
+        shutil.rmtree(path)
+        with open(os.path.join(self.admin('gone'), 'ORIG_HEAD'), 'w', newline='\n') as f:
+            f.write('not an id\n')
+        rc, out = self.prune(path)
+        self.assertEqual(rc, 1, out)
+        self.assertIn('whether its registration keeps a commit no ref reaches is unknown', out)
+        self.assertIn(os.path.normcase(path), self.registered())
+
+    def test_a_folder_made_after_the_check_is_refused(self):
+        path = self.workstream('gone')
+        shutil.rmtree(path)
+        real, calls = remove.admin_commits, []
+
+        def admin_commits(ctx, admin):
+            calls.append(admin)
+            if len(calls) == 2:
+                os.makedirs(path)
+            return real(ctx, admin)
+
+        with mock.patch.object(remove, 'admin_commits', admin_commits):
+            rc, out = self.prune(path)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(rc, 1, out)
+        self.assertIn('its folder appeared after it was checked; nothing was removed', out)
+        self.assertIn(os.path.normcase(path), self.registered())
+
+    def test_an_admin_folder_that_changed_after_the_check_is_refused(self):
+        path = self.workstream('gone')
+        shutil.rmtree(path)
+        real, calls = remove.admin_commits, []
+
+        def admin_commits(ctx, admin):
+            calls.append(admin)
+            oids, why = real(ctx, admin)
+            return (oids + ['f' * 40] if len(calls) == 2 else oids), why
+
+        with mock.patch.object(remove, 'admin_commits', admin_commits):
+            rc, out = self.prune(path)
+        self.assertEqual(rc, 1, out)
+        self.assertIn('its admin folder changed after it was checked; nothing was removed', out)
+        self.assertIn(os.path.normcase(path), self.registered())
+
+    def test_a_path_no_longer_registered_is_nothing(self):
+        path = os.path.join(self.home, 'never')
+        rc, out = self.prune(path)
+        self.assertEqual(rc, 0, out)
+        self.assertIn('nothing   %s is not registered' % os.path.normpath(path), out)
 
 
 class NoAncestryAnswer(RemoveCase):
