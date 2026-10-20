@@ -97,7 +97,6 @@ class SecretShell(Hub):
             ('type absolute', lambda sub: ps('type "%s\\agent.token"' % self.secrets, self.w.wt, sub)),
             ('Get-Content env', lambda sub: ps('Get-Content "$env:USERPROFILE\\.pm-kit\\hub\\agent.token"',
                                                self.w.wt, sub)),
-            ('Join-Path', lambda sub: ps("$d = 'x'; Get-Content (Join-Path $d 'owner.token')", self.w.wt, sub)),
             ('approval key', lambda sub: bash('cat "%s/approval.key"' % sec, self.w.wt, sub)),
             ('list the folder', lambda sub: bash('ls "%s"' % sec, self.w.wt, sub)),
             ('cd then read', lambda sub: bash('cd "%s" && cat agent.token' % sec, self.w.wt, sub)),
@@ -108,6 +107,16 @@ class SecretShell(Hub):
         for name, make in rows:
             with self.subTest(name):
                 self.denied(make, 'hub-secrets')
+
+    def test_a_token_name_with_no_path_into_the_folder_passes(self):
+        # docs/guard-v2.md A2: only a real path into the token folder is refused; a word that only names
+        # a token file, or looks like the folder, and is placed elsewhere passes
+        for shell, line in ((ps, "$d = 'x'; Get-Content (Join-Path $d 'owner.token')"),
+                            (bash, 'echo owner.token'), (bash, 'cat x/owner.token'),
+                            (bash, 'cat foo.pm-kit/hub-x'),
+                            (bash, 'grep -n "agent.token in .pm-kit/hub" notes.txt')):
+            with self.subTest(line):
+                self.allowed(lambda sub, line=line, shell=shell: shell(line, self.w.wt, sub))
 
     def test_writes_of_the_token_files(self):
         sec = W.fwd(self.secrets)
@@ -156,6 +165,18 @@ class SecretShell(Hub):
                                       'print(len(json.load(sys.stdin)))"', self.w.wt, sub))
         self.allowed(lambda sub: bash('python tools/hub.py questions list | head', self.w.wt, sub))
 
+    def test_an_agent_verb_piped_into_code_is_its_data(self):
+        # docs/guard-v2.md W3: a parsed hub tool run of an agent verb piped into python -c is the code's
+        # data, so a token file's name in its words is not read as code; piped into code read
+        # from standard input (`python -`) it is the code, and still refused
+        head = 'python "%s" questions add --title "owner.token" --json | ' % self.hub
+        self.allowed(lambda sub: bash(head + 'python -c "import sys; print(sys.stdin.read())"', self.w.wt, sub))
+        self.allowed(lambda sub: ps(head + 'python -c "import sys; print(sys.stdin.read())"', self.w.wt, sub))
+        self.denied(lambda sub: bash(head + 'python -', self.w.wt, sub), 'hub-secrets')
+        # a program that is not the hub tool is still read as the code's input
+        self.denied(lambda sub: bash('echo owner.token | python -c "import sys; print(sys.stdin.read())"',
+                                     self.w.wt, sub), 'hub-secrets')
+
     def test_the_alternative_runs_the_hub_tool_of_the_kit_the_hook_runs_from(self):
         # the kit whose kitlib the guard loaded (ctx.kit, kitlib.kitroot.root), not a copy elsewhere
         d = decide(bash('cat "%s/owner.token"' % W.fwd(self.secrets), self.w.wt, True), self.ctx(OWNER))
@@ -191,7 +212,7 @@ class SecretShell(Hub):
         self.allowed(lambda sub: ps('Select-String -Path docs\\*.md -Pattern owner.token', self.w.wt, sub))
 
     def test_unclean_lines_are_judged_on_what_was_read(self):
-        # the fallback has no hub pattern; the hub rules run on what the parser did read
+        # the hub rules run on what the parser did read, before the fallback's name pattern
         rows = (
             ('unclosed quote', lambda sub: bash('cat ~/.pm-kit/hub/owner.token "', self.w.wt, sub), 'hub-secrets'),
             ('after eval', lambda sub: bash('eval "$c"; cat ~/.pm-kit/hub/agent.token', self.w.wt, sub),
@@ -204,6 +225,41 @@ class SecretShell(Hub):
         for name, make, rule in rows:
             with self.subTest(name):
                 self.denied(make, rule)
+
+    def test_an_unclean_line_naming_the_hub_tool_is_refused(self):
+        # docs/guard.md "Fallback": any hub tool call on a line the parser cannot read, read
+        # verbs included, is refused as hub-owner-verb; the owner's own session is not held
+        hub = self.hub
+        rows = (
+            ('read verb after eval', lambda sub: bash('eval "$c"; python "%s" questions' % hub, self.w.wt, sub)),
+            ('module after eval', lambda sub: bash('eval "$c"; python -m tools.hub todos --json', self.w.wt, sub)),
+            ('-m hub', lambda sub: bash('eval "$c"; python -m hub questions', self.w.wt, sub)),
+            # the forms the parsed rule reads: -m ending a flag cluster, and a quoted module
+            ('-Im hub', lambda sub: bash('eval "$c"; python -Im hub questions', self.w.wt, sub)),
+            ("-m 'hub'", lambda sub: bash("eval \"$c\"; python -m 'hub' questions", self.w.wt, sub)),
+            ('-m "hub"', lambda sub: ps('iex $c; python -m "hub" questions', self.w.wt, sub)),
+            ('-BIm"hub"', lambda sub: bash('eval "$c"; python -BIm"hub" questions', self.w.wt, sub)),
+            ('unclosed quote', lambda sub: bash('python "%s" questions add --title "x' % hub, self.w.wt, sub)),
+            ('PowerShell iex', lambda sub: ps('iex $c; python "%s" questions' % hub, self.w.wt, sub)),
+            ('owner verb unread', lambda sub: bash('echo \'x ; python "%s" answer Q-1' % hub, self.w.wt, sub)),
+        )
+        for name, make in rows:
+            with self.subTest(name):
+                self.denied(make, 'hub-owner-verb')
+                self.owner_allowed(make)
+                d = decide(make(True), self.ctx(OWNER))
+                self.assertIn('could not read this command', d.reason)
+                self.assertIn('names the hub tool', d.reason)
+
+    def test_an_unclean_line_naming_another_hub_file_is_not_held(self):
+        # test_rules_hub.py, a hub.pyw or a word holding hub are not the hub tool
+        for cmd in ('eval "$c"; python -m unittest tests/guard/test_rules_hub.py',
+                    'eval "$c"; cat docs/hub.pyw', 'eval "$c"; ls kitlib/hub',
+                    'eval "$c"; python -Im hubble x', "eval \"$c\"; python -m 'hub.x' y"):
+            with self.subTest(cmd):
+                for label, sub, environ in HELD:
+                    d = decide(bash(cmd, self.w.wt, sub), self.ctx(environ))
+                    self.assertTrue(d is None or d.rule != 'hub-owner-verb', d and d.reason)
 
     def test_hub_tool_with_the_store_passes(self):
         st = W.fwd(self.store)
@@ -227,8 +283,8 @@ class HomeAndWildcards(Hub):
             with self.subTest(line=line):
                 self.allowed(lambda sub, shell=shell, line=line: shell(line, self.w.wt, sub))
 
-    # a wildcard path is not read, so each wildcard row below passes and
-    # the same place spelled literally is still refused. A literal relative path after a cd into
+    # a wildcard path is read only as far as the literal folder before its first wildcard, so
+    # each wildcard row below passes and the same place spelled literally is still refused. A literal relative path after a cd into
     # the home's .pm-kit folder (`hub\\x`) names neither the folder nor a token file by itself:
     # those rows show the cd is followed.
 
@@ -375,6 +431,13 @@ class HomeAndWildcards(Hub):
         self.rows_denied((
             (bash, 'ls %s/.pm-kit/hub' % home),
             (ps, 'gc %s\\.pm-kit\\hub\\x' % self.w.home),
+            # the folder before the first wildcard is the token folder (glob_folder)
+            (bash, 'cat %s/.pm-kit/hub/*' % home),
+            (ps, 'gc %s\\.pm-kit\\hub\\o*' % self.w.home),
+            # a search program's wildcard path into the token folder too (grep, sls)
+            (bash, 'grep x ~/.pm-kit/hub/*'),
+            (bash, 'grep x %s/.pm-kit/hub/*' % home),
+            (ps, 'sls x ~\\.pm-kit\\hub\\o*'),
         ))
 
     def test_option_values_are_read_as_paths(self):
@@ -517,8 +580,15 @@ class BareWordsInTheDataFolder(Hub):
             (bash, 'python -Bm http.server --session hub'),
             (bash, 'python -Im http.server --session hub'),
             (bash, 'python -um tools.x --session hub'),
-            (bash, 'python -Ic pass --session hub'),
         ), deny=False)
+
+    def test_code_given_on_the_line_is_refused_as_a_write_not_as_the_store(self):
+        # python -c writes the directory it runs in (docs/guard.md "Shell writes"), and the data
+        # folder is a main checkout: a subagent is refused that write, never by the store's rule,
+        # and the sessions that may edit a main checkout pass
+        make = lambda sub: bash('python -Ic pass --session hub', self.w.data, sub)
+        self.denied(make, 'unplaced', HELD[:1])
+        self.allowed(make, HELD[1:])
 
     def test_the_token_folder_is_still_refused(self):
         # from the home's .pm-kit folder a bare `hub` is the token folder
@@ -678,7 +748,7 @@ class OwnerVerbs(Hub):
     def test_hub_code_reads_imports_of_hub_only(self):
         # the guard's own kitlib.guard.hub is not tools/hub.py; a from-import of another module
         # does not import hub, and python's arguments after the -c code are not code
-        for line in ('python -c "from kitlib.guard import hub; print(hub.NAME_ONLY_PROGRAMS)"',
+        for line in ('python -c "from kitlib.guard import hub; print(hub.SECRET_FILES)"',
                      'python -c "from kitlib.guard import hub as h, os; print(h)"',
                      'python -c "from kitlib.guard import (hub)"',
                      'python -c "import kitlib.guard.hub"'):

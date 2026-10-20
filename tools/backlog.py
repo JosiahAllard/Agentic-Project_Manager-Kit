@@ -20,6 +20,11 @@
                                           run lists them, --apply commits the paths it names)
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.backlog, prints and exits.
+Every write first meets the session's role (kitlib.backlog.policy: the session mark, unmarked is
+the owner, against kitlib/backlog/roles.py; docs/backlog.md "Roles"): a row it may not take is
+REFUSED before the write plans. A published write of a MEDIUM or HIGH row appends its line to the
+audit log, <pm_data>/audit/backlog.jsonl (kitlib.backlog.audit; docs/backlog.md "Audit log"); no
+pm_data is a NOTE and a log that cannot be written a WARNING, on standard error, after the write.
 Exit codes: 0 OK, 1 NOT FOUND / ERROR / a red check / a landable that cannot tell, 2 USAGE /
 REFUSED / NOT LANDABLE.
 """
@@ -30,11 +35,13 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from kitlib import kitroot                                         # noqa: E402
+from kitlib.backlog import audit                                    # noqa: E402
 from kitlib.backlog import check as checkmod                        # noqa: E402
 from kitlib.backlog import landable as landmod                      # noqa: E402
 from kitlib.backlog import migrate as mmod                          # noqa: E402
 from kitlib.backlog import offer as omod                            # noqa: E402
 from kitlib.backlog import plan as pmod                             # noqa: E402
+from kitlib.backlog import policy                                   # noqa: E402
 from kitlib.backlog import record as rmod                           # noqa: E402
 from kitlib.backlog import stale as stalemod                        # noqa: E402
 from kitlib.backlog import store as smod                            # noqa: E402
@@ -45,6 +52,20 @@ from kitlib.backlog.opener import (FIELD_FLAGS, WRITES, open_repo, open_store, p
 
 def say(line=''):
     print(line, flush=True)
+
+
+def audit_line(verb, rid, rows, tip, session):
+    """After a published write: its audit line (kitlib.backlog.audit), and on standard error the
+    note or warning when there is none. Never a refusal: the write stands, so any failure here,
+    one after_write does not catch too, is a warning and the exit code is the write's."""
+    try:
+        said = audit.after_write(verb, rid, rows, tip, session)
+    except Exception as exc:                    # noqa: BLE001 - the write is published; say, never fail it
+        said = (audit.WARNING, 'the write stands, but its audit line was not written: %s: %s'
+                % (type(exc).__name__, ' '.join(str(exc).split())))
+    if said:
+        sys.stderr.write('%s: %s\n' % said)
+        sys.stderr.flush()
 
 
 class Parser(argparse.ArgumentParser):
@@ -309,9 +330,10 @@ def index_stale(exc):
 
 
 def do_write(args, ctx, store):
-    made = []
+    made, rows = [], []
 
     def plan(snap):                              # the change, kept for an IndexStale report
+        rows[:] = policy.check(args, ctx, snap)  # the session's role may take it (roles.py)
         made[:] = [planner(args, ctx)(snap)]
         return made[0]
     stale = None
@@ -331,6 +353,7 @@ def do_write(args, ctx, store):
     say('  %s' % change.subject)
     if stale is not None:
         index_stale(stale)
+    audit_line(args.verb, getattr(args, 'id', None), rows, tip, args.session)
     return 0
 
 
@@ -410,6 +433,8 @@ def do_migrate(args, top, cfg, rules):
         say('DRY RUN: nothing was written')
     else:
         say('MIGRATED -> %s at %s' % (backend.describe(), res.tip[:10]))
+        audit_line(args.verb, None, policy.sort(args.verb, policy.given_of(args)), res.tip,
+                   args.session)
     return 0
 
 
@@ -426,6 +451,8 @@ def main(argv=None):
                 raise Usage(err)
         root = os.path.abspath(args.root or os.getcwd())
         if args.verb == 'migrate':
+            if not args.dry_run:
+                policy.check(args, None, None)
             top, cfg, rules = open_repo(root)
             return do_migrate(args, top, cfg, rules)
         ctx = open_store(root, fetch=not args.no_fetch, session=args.session, branch=args.branch)
@@ -435,6 +462,8 @@ def main(argv=None):
         if args.verb == 'retarget':
             return do_retarget_dry(args, ctx)
         if args.verb == 'catch-up':
+            if args.apply is not None:
+                policy.check(args, ctx, None)    # the commit takes the `catch-up` row (roles.py)
             return do_catch_up(args, store)
         if args.verb == 'check':
             snap, note = checkmod.load_for_check(store)

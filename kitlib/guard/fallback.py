@@ -5,11 +5,17 @@ unclosed quote, an encoded command, a program named by a variable, a word the sh
 The rules have already run on what it did read; check() then looks at the raw text, so an
 unreadable line is never a way around a rule, and a plain line is never denied by it:
 
+  - the owner's tools by name (NAMED), first, in every session but the owner's own: text naming
+    the hub tool (hub.py, tools.hub, -m hub) is refused as `hub-owner-verb`, text naming the lock
+    CLI (machine_lock.py, tools.machine_lock) as `owner-tool`, read verbs included. The part of
+    the line holding the name is read again first (named_reread): a hub owner verb or a lock
+    owner-only write there gives that rule's own refusal; otherwise the reason says the line
+    names the tool and the alternative is plainly()'s.
   - a git or root-search pattern that matches: the text from the match to the next ; | & or
     newline is read again as a command of its own and the rules run on it. A rule that denies it
-    gives the deny, its real alternative included; none: the `unreadable` deny, which shows the
-    line written plainly, or a script file's run when plain() cannot rewrite it or its rewrite
-    does not read cleanly either (plainly()).
+    gives the deny, its real alternative included; none: the `unreadable` deny, whose advice is
+    to write the names literally or run a script file (plainly(): advice only, the line is never
+    rewritten).
     The location-dependent git patterns are checked when the call's directory is a main checkout or one git cannot place; the push --no-verify pattern when that
     directory's repository has a PM data record (or git cannot place it), in every session but
     the owner's own. The update-ref pattern (git-shared-ref) is checked wherever the call runs, in a
@@ -101,10 +107,23 @@ ANYWHERE = (
     ('root-search', r'(?i)\bdir\s+(?:/\w+\s+)*["\']?[A-Za-z]:\\?["\']?\s*(?:/\w+\s+)*/s\b'),
     ('root-search', r'(?i)\bdir\b[^|;&]*/s\b[^|;&]*\s["\']?[A-Za-z]:\\?["\']?(?=\s|$)'),
 )
+# the owner's tools by name (docs/guard.md "Fallback"): a line the guard cannot read that names one
+# is refused whole under that tool's rule, in every session but the owner's own, read verbs included
+# python's -m, alone or ending a cluster of its no-value flags (-Im) as rules.PY_FLAG_RE reads it, the
+# module joined or not, and maybe quoted
+PY_M = r'(?<![\w-])-[bBdEiIOPqsSuvx]*m\s*[\'"]?'
+NAMED = (
+    ('hub-owner-verb', re.compile(r'(?i)(?<![\w.-])hub\.py\b|\btools\.hub(?![\w.])|' + PY_M + r'hub(?![\w.])'),
+     'names the hub tool, and a part of it the guard cannot read may run one of its owner verbs: %s'
+     % rules.HUB_OWNER_WHY),
+    ('owner-tool', re.compile(r'(?i)(?<![\w.-])machine_lock\.py\b|\btools\.machine_lock(?![\w.])|' + PY_M
+                              + r'machine_lock(?![\w.])'),
+     'names the lock CLI, and a part of it the guard cannot read may run one of its owner-only writes, which '
+     'the owner runs, not agents.'),
+)
 PARSED_RULES = ('owner_tool', 'wrapped_gate', 'root_search', 'heavy', 'git_rules', 'shell_writes')
 WHY = 'The guard could not read this command; write the program name literally. Why: %s.'
-PLAIN = ' Write it plainly:'
-# when plain() cannot rewrite the line, the alternative is a script file, never the line again
+# the alternative is a script file, never the line again nor a rewrite of it
 SCRIPT = (' Make every program name and nested shell text literal (a nested bash -c in single quotes; a '
           'variable it needs exported), or write the commands to a script file with the Write tool, then run it:')
 SCRIPT_RUNS = {'bash': ('script.sh', 'bash "%s"'),
@@ -146,36 +165,9 @@ def named_run(cmd, inv):
     return ' '.join(['<the program %s names>' % inv.path] + [w.text for w in inv.args])
 
 
-def plain(parsed, text):
-    """The line written so the guard can read it, as far as the text tells."""
-    dyn = _dyn_commands(parsed)
-    if dyn:
-        c, inv = dyn[0]
-        return named_run(c, inv)
-    for c in parsed.commands:
-        if any(w.synth or w.alt is not None for w in c.words):
-            return ' '.join(w.alt if w.alt is not None else w.text for w in c.words)
-    t = text.rstrip()
-    if t.count("'") % 2:
-        return t + "'"
-    if t.count('"') % 2:
-        return t + '"'
-    return t
-
-
-def plainly(ctx, parsed, text, cwd):
-    """(the reason's last sentence, the alternative): the line written plainly when plain() can
-    rewrite it and the rewrite reads cleanly (read again in `cwd`), else a run of a script file
-    in the temp folder: never the refused line itself, nor a rewrite the guard would refuse as
-    unreadable too."""
-    p = plain(parsed, text)
-    if p.strip() != text.strip():
-        try:
-            readable = cm.read(p, parsed.shell, cwd, home=getattr(ctx, 'home', None)).clean
-        except Exception:                       # a rewrite the reader cannot take: offer the script
-            readable = False
-        if readable:
-            return PLAIN, p
+def plainly(ctx, parsed):
+    """(the reason's last sentence, the alternative): advice only, a run of a script file in the
+    temp folder for the line's shell; the guard never rewrites the refused line."""
     name, run = SCRIPT_RUNS['powershell' if parsed.shell == sh.PS else 'bash']
     return SCRIPT, run % rules.fwd(os.path.join(ctx.tempdir, name))
 
@@ -209,6 +201,29 @@ def runs_hidden(inv):
     return None
 
 
+def named_reread(event, ctx, text, shell, parsed, pos, cwd, role, rule):
+    """The NAMED rule's own deny of the part of the line holding text position `pos` (from the
+    last ; | & or newline before it to the next), read again as a command of its own: a hub tool
+    run there that runs an owner verb (rules.hub_owner_run), or a lock CLI owner-only write
+    (rules.owner_tool); None when the part runs neither."""
+    start = max(text.rfind(c, 0, pos) for c in ';|&\n') + 1
+    where = cwd_at(parsed, pos, cwd) or cwd
+    p = cm.read(segment(text, start), shell, where, home=getattr(ctx, 'home', None))
+    if rule == 'hub-owner-verb':
+        verb = rules.hub_owner_run(p)
+        if not verb:
+            return None
+        return rules.refuse(rule, role, 'Its text names the hub tool and runs its owner verb (%s): %s This session '
+                            'is %s. Ask the owner through a question:' % (verb, rules.HUB_OWNER_WHY,
+                                                                         rules.hub_session(event, ctx)),
+                            rules.hub_ask_alternative(ctx))
+    for c in p.commands:
+        d = rules.owner_tool(event, ctx, c, cm.invocation(c), cwd, role)
+        if d:
+            return d
+    return None
+
+
 def check(event, ctx, text, cwd, role, parsed):
     why = WHY % ('; '.join(parsed.unclean) or 'the parser gave no reason')
     shell = parsed.shell
@@ -226,8 +241,24 @@ def check(event, ctx, text, cwd, role, parsed):
     def answer(d, rule):
         if d is not None:
             return rules.reworded(d, '%s %s' % (why, d.reason))
-        last, alt = plainly(ctx, parsed, text, cwd)
+        last, alt = plainly(ctx, parsed)
         return rules.refuse('unreadable', role, '%s Its text matches the %s rule.%s' % (why, rule, last), alt)
+
+    owner = rules.is_owner_session(event, ctx)
+    for rule, pat, what in () if owner else NAMED:
+        if modes.mode(rule) == modes.OFF:
+            continue
+        m = pat.search(text)
+        if not m:
+            continue
+        d = named_reread(event, ctx, text, shell, parsed, m.start(), cwd, role, rule)
+        if d is not None:
+            return rules.reworded(d, '%s %s' % (why, d.reason))
+        last, alt = plainly(ctx, parsed)
+        d = rules.refuse(rule, role, '%s Its text %s This session is %s.%s' % (
+            why, what, rules.hub_session(event, ctx), last), alt)
+        if d:
+            return d                            # set to warn by the owner: the checks below still run
 
     main_rules = set(r for r, _p in MAIN_ONLY + SUBAGENT_MAIN)
     for rule, pat in list(ANYWHERE) + list(MAIN_ONLY) + list(SUBAGENT_MAIN):
@@ -282,7 +313,7 @@ def check(event, ctx, text, cwd, role, parsed):
         d = reread(m.start(), cwd_at(parsed, m.start(), cwd) or cwd)
         if d is not None:
             return answer(d, 'heavy')
-    last, alt = plainly(ctx, parsed, text, cwd)
+    last, alt = plainly(ctx, parsed)
     if role == 'subagent':
         d = rules.refuse('unreadable', role, why + last, alt)
         if d:
@@ -292,7 +323,6 @@ def check(event, ctx, text, cwd, role, parsed):
                          'cannot place; run the git in its own call.%s' % (why, last), alt)
         if d:
             return d                            # warned: the PM data and main-checkout checks below still run
-    owner = rules.is_owner_session(event, ctx)
     for c in parsed.commands:
         inv = cm.invocation(c)
         hidden = runs_hidden(inv)

@@ -13,6 +13,7 @@ The universal gate: `tools/gate.py` (entry) over `kitlib/gate` (library). ARCHIT
 | `gate.py land BRANCH --expect-tip SHA [--expect-main SHA] [-C DIR] [--lane L] [--summary T] [--full] [--fresh] [--wait S] [--log-dir D] [--keep-branch] [--submit]` | The same landing for one branch, with `--wait` defaulting to 0, or to `"landing".wait_s` with `--submit` (see Landing). |
 | `gate.py wait-result BRANCH --tip SHA [--kind gate\|land] [--timeout S] [-C DIR]` | Reads only, except that it finishes a running record whose process died as `error`. Waits until BRANCH's final result record names a tip starting with SHA (7 to 40 hex digits), prints it and exits 0 when its verdict is `pass`, 1 for any other verdict, 7 when no such record appears within S seconds (default: no limit). See Result record. |
 | `gate.py --measure --out PATH [--days N]` | Writes a proposed kinds table from the lock's run history (kitlib/gate/measure.py). It never writes the live kitlib/lock/kinds.json. Every kind's cpu in the proposal is a whole number 1..the layout's agent_cap: the p90 peak busy cpu slots rounded up, or agent_cap when the runs fill what they booked (pinned runs cannot show more). The lock measures a run's job object only, so a finished run counts as a cpu sample only when its history line shows work in the job (kitlib/gate/measure.py `skip_reason`): not `partial`, held `MIN_HELD_S` (10 s) or more, with `cpu_s` and a peak above 0, and `cpu_s` at least `MIN_BUSY_THREADS` (0.1) x `held_s`. A kind with too few runs or too few cpu samples is kept whole, warn_min included, written as the size it books on this layout now. It prints one line per kind; the line counts the skipped runs by reason. Not caught: a wrapper that itself keeps a tenth of a thread busy while its work runs outside the job. |
+| `gate.py allow BRANCH --runs N --why TEXT [-C DIR]` | The coordinator's call (`tools/gate.py` `do_allow`, over `kitlib/gate/budget.py` `allow`): allows BRANCH N gate runs in all, past the branch gate budget (The branch gate budget). N is a whole number above 5; `--why` is required. Prints `ALLOWED <branch>: N gate runs (<used> used); <file>`; REFUSED (exit `G.REFUSED`) when BRANCH is not a branch of the repository or the file cannot be written. |
 
 ## Default base
 
@@ -201,6 +202,17 @@ Monitor({description: "gate result kit/x", timeout_ms: 1800000,
 ### Waiting on a gate: who arms what
 
 Your own gate: run it in the foreground with `timeout` 600000 when it fits; otherwise `run_in_background` and end the turn. The exit notice wakes you. No Monitor, no polling the log, no sleep. Never `tail -f` or `-F` a log in Monitor or a background call: on Windows the tail outlives its Monitor and keeps reading the file every second. A gate another session runs: `gate.py wait-result` (above); a run of your own: `run_in_background` and its exit notice. A branch gate stays attached until its verdict, waiting for the machine lock included (`runner.branch_gate`), so its exit code is the verdict. The exit notice is a message the host sends you, never text in your own turn. While the log holds only its `result record:` line, the gate is still queued or running; `gate.py wait-result <branch> --tip <sha> --timeout 0 -C <repo>` says whether a final record exists yet. Monitor with `wait-result` is only for a gate another session runs: one arm at `timeout_ms` 1800000, re-armed only on exit 7. Never re-arm a wait because a turn ended with nothing new: each Monitor fire wakes the session for a full cache read.
+
+### The branch gate budget
+
+`kitlib/gate/budget.py`, asked by `runner.gated` just before the session gate cap, for a branch gate only (`capped=True`, with `budget_branch` the checked-out branch). Skill builder, step 8, tells the worker the rule: after 5 gate runs on one branch, stop before the 6th, report to the coordinator and ask.
+
+- A run counted: a history line of the machine lock with `gate` true, a priority other than `land`, the gated repository (case aside) and the branch gate's slug, that ended at or after the branch was made (the first entry of its reflog, so a branch made again under an old name starts at 0). A fully reused gate books nothing and counts nothing. A landing, the daily full run and redfirst never ask. History lines written before they kept `gate` never count.
+- At the limit (`budget.RUNS`, 5) a branch gate prints `REFUSED: the branch gate budget: ...` naming the counted run ids, with an `Instead:` line, and runs nothing. Below it the gate says `gate budget: run <k> of <n> on <branch>`.
+- `gate.py allow BRANCH --runs N --why TEXT` is the coordinator's: it writes `<git common dir>/kit-gate-budget/<branch stem>.json` (`branch`, `runs` the new total, `why`, `at`, `by`), replacing any earlier one. The limit is the larger of 5 and `runs`. An allowance written before the branch was last made is not read.
+- The owner is never refused. Anything the check cannot read (reflog, history, allowance) is one `WARNING: the branch gate budget is not applied: ...` and the gate runs (fail open).
+
+Tests: tests/gate/test_gate_budget.py.
 
 ### The session gate cap
 

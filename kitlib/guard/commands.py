@@ -33,6 +33,7 @@ GIT_ENV_NAMES = (r'GIT_(?:DIR|WORK_TREE|COMMON_DIR|INDEX_FILE|CONFIG_COUNT|CONFI
                  r'|CONFIG_PARAMETERS)')
 GIT_ENV_NET_RE = re.compile(r'(?i)SetEnvironmentVariable\s*\(\s*[\'"](' + GIT_ENV_NAMES + r')[\'"]')
 EXPORTERS = {'export', 'declare', 'typeset', 'local', 'readonly', 'set', 'setx'}
+EXPORT_LISTERS = ('export', 'declare', 'typeset', 'local', 'readonly')     # -p lists, sets nothing
 SOURCED_STDIN = ('/dev/stdin', '/dev/fd/0', '/proc/self/fd/0')     # source / . of these reads standard input
 # wrappers whose options take a value: the option words to step over before the program
 WRAPPER_VALUES = {'time': ('-f', '-o', '--format', '--output'), 'stdbuf': ('-i', '-o', '-e'),
@@ -661,10 +662,10 @@ def run_dir(inv):
 
 def _sp_shell_text(inv, parsed):
     """_nested_text for a shell Start-Process starts. Start-Process hands the program one command
-    line, its -ArgumentList elements joined with spaces; a computed element, or a computed
-    -WorkingDirectory, makes the text unreadable. A literal -WorkingDirectory the guard cannot
-    place exactly (sp_workdir_unplaceable) gives the nested line no directory (None), so a write
-    there is refused as one whose directory is unknown. cmd runs the rest of that line after its
+    line, its -ArgumentList elements joined with spaces; a computed element makes the text
+    unreadable. A computed -WorkingDirectory, or a literal one the guard cannot place exactly
+    (sp_workdir_unplaceable), gives the nested line no directory (None, run_dir), so a write there
+    is refused as one whose directory is unknown. cmd runs the rest of that line after its
     /c (/k, /r), read with its outer quotes kept and dropped (cmd keeps or drops them by what lies
     between); bash and powershell read the words _split_list made of each element."""
     if any(w.dyn for w in inv.listed):
@@ -672,9 +673,6 @@ def _sp_shell_text(inv, parsed):
         return None
     where = ()
     if inv.workdir is not None:
-        if inv.workdir.dyn:
-            parsed.flag('a shell Start-Process starts in a working directory that is not literal (%s)' % inv.path)
-            return None
         where = (run_dir(inv),)
     if inv.name != 'cmd':
         found = _shell_text(inv, parsed)
@@ -783,13 +781,22 @@ def _shell_text(inv, parsed):
                     if [w.text for w in rest] == ['-']:
                         if unknown is None:
                             return (STDIN,)
+                        # the script comes from the pipe; the words from the unknown switch on
+                        # are still judged as powershell.exe's command
                         parsed.flag(lit)
-                        return None
+                        return nested(lit, first)
                     return nested('a nested powershell -Command whose text is not literal', first, rest)
                 if unknown is None and t.startswith('-') and t != '-' and not _ps51_known(t):
                     # a value switch included: powershell.exe never takes its value
                     unknown = k
                 if t.startswith('-') and len(t) > 1 and 'file'.startswith(t[1:]):
+                    if k + 1 < len(a) and not a[k + 1].dyn and a[k + 1].text == '-':
+                        # `-File -` reads the script from standard input, as `-Command -` does;
+                        # the words after it, if any, never make it a file
+                        if unknown is None:
+                            return (STDIN,)
+                        parsed.flag(lit)
+                        return nested(lit, first)
                     return nested(lit, first) if first else None
                 if t.startswith('-') and _ps_value_either(t) and k + 1 < len(a):
                     if forks < PS_FORKS_MAX:
@@ -958,6 +965,34 @@ def _assigned(c, words, name_re):
     return out
 
 
+def exporter_args(c, inv):
+    """The words an exporter (EXPORTERS) may set a variable by. None when a -p before the first
+    name of declare, typeset or local lists the variables named (declare -p GIT_DIR: bash then
+    ignores every other option); export -p and readonly -p list only with no name, and with one
+    still export, mark or set it (export -p GIT_DIR=x), so their words are read. None for set
+    outside cmd: bash's set takes options and positional parameters
+    (set -- GIT_DIR, set GIT_DIR=x sets $1) and PowerShell's is Set-Variable, a variable of its
+    own. The option words before the first name, or before --, are passed over."""
+    if inv.name == 'set':
+        return list(inv.args) if c.shell == sh.CMD else []
+    if inv.name not in EXPORT_LISTERS:
+        return list(inv.args)
+    out, opts = [], True
+    for w in inv.args:
+        t = said(c, w)
+        if opts and not w.dyn:
+            if t == '--':
+                opts = False
+                continue
+            if len(t) > 1 and t[0] in '-+' and '=' not in t:
+                if t[0] == '-' and 'p' in t[1:] and inv.name in ('declare', 'typeset', 'local'):
+                    return []
+                continue
+        opts = False
+        out.append(w)
+    return out
+
+
 def env_assignments(c, names):
     """[(variable, value text)] of the environment variables matching the regex `names` (case
     ignored) that the command sets: an assignment before the program (FOO=1 prog, env FOO=1 prog),
@@ -997,7 +1032,7 @@ def env_assignments(c, names):
         return out
     args = inv.args
     if inv.name in EXPORTERS:
-        out += _assigned(c, args, name_re)
+        out += _assigned(c, exporter_args(c, inv), name_re)
         if inv.name == 'setx' and len(args) > 1 and name_re.match(args[0].text):
             out.append((args[0].text, args[1].text))
     elif inv.name in PS_ENV_SETTERS:
@@ -1046,14 +1081,20 @@ def git_env_set(c):
         for name in ps_env_targets(c):          # $env:A, $env:GIT_DIR = 1, 'x' and $a = $env:GIT_DIR = 'x'
             if GIT_ENV_NAME_RE.match(name):
                 return name
-        m = GIT_ENV_NET_RE.search(c.source[c.start:c.end]) if 0 <= c.start <= c.end <= len(c.source) else None
-        if m:
-            return m.group(1)
+        src = c.source or ''
+        for w in words:
+            # the call, not a string that names it (a commit message, Write-Host "..."): read the
+            # source from an unquoted word that names SetEnvironmentVariable, as env_assignments does
+            if w.start is None or quoted(c, w) or 'setenvironmentvariable' not in w.text.lower():
+                continue
+            m = GIT_ENV_NET_RE.search(src, w.start)
+            if m and m.start() < (w.end if w.end is not None else len(src)):
+                return m.group(1)
     inv = cmd_invocation(c, invocation(c))
     if inv is None:
         return None
     if inv.name in EXPORTERS:
-        for w in inv.args:
+        for w in exporter_args(c, inv):
             name = said(c, w).split('=', 1)[0]
             name = name[:-1] if name.endswith('+') else name
             if GIT_ENV_NAME_RE.match(name):
@@ -1156,23 +1197,57 @@ def mapfile_callback(c, args):
     return None
 
 
+GIT_ENV_SCOPED = 'GIT_INDEX_FILE'
+# a line that may define a function or an alias: a git word there may run other commands
+LINE_DEFINES_RE = re.compile(r'\(\s*\)|\b(?:function|alias)\b')
+
+
+def git_env_prefix(c):
+    """GIT_INDEX_FILE when that is the one variable of GIT_ENV_NAMES the command sets, as an
+    assignment before the git it runs (GIT_INDEX_FILE=<tmp> git read-tree, env GIT_INDEX_FILE=<tmp>
+    git ...): bash hands it to that git and what it runs alone, not to the line's other commands.
+    Else None."""
+    if c.shell != sh.BASH:
+        return None
+    inv = cmd_invocation(c, invocation(c))
+    if inv is None or inv.name != 'git':
+        return None
+    names = {n.upper() for n, _v in env_assignments(c, GIT_ENV_NAMES)}
+    return GIT_ENV_SCOPED if names == {GIT_ENV_SCOPED} else None
+
+
 def mark_git_env(parsed):
     """When any command of the line sets GIT_DIR or the like (git_env_set), every git of the
     line acts on a place the text does not say: c.git_env is that variable's name, else False.
     The whole line, not the commands after the setter: expand appends nested text (eval, bash
     -c, Invoke-Expression, a sourced here-string) after the line's own commands, so order says
-    nothing about which runs first. A line with no git is not affected. c.home_env is the first
+    nothing about which runs first. One setter reaches less: GIT_INDEX_FILE set before a git
+    alone (git_env_prefix, the temp-index pattern) marks that git and the commands nested in it,
+    unless the line may define a function or an alias (LINE_DEFINES_RE). A line with no git is
+    not affected. c.home_env is the first
     of HOME_ENV_NAMES the line sets literally (line_env_names), else False: git then reads
     another user config (rules.home_config judges git with it). c.path_env is True when the line
     sets PATH literally: git then finds a filter's bare program name (git-lfs) elsewhere
     (rules.archive_filter_set). A name the text computes is not read (honest mistakes only)."""
     cmds = parsed.commands
     sets = line_env_names(cmds)
-    name = next((n for n in map(git_env_set, cmds) if n), None)
+    defines = any(LINE_DEFINES_RE.search(c.source or '') for c in cmds)
+    name, scoped = None, {}
+    for c in cmds:
+        n = git_env_set(c)
+        if not n:
+            continue
+        if not defines and git_env_prefix(c):
+            scoped[id(c)] = n
+        elif name is None:
+            name = n
     home = next((n for n in HOME_ENV_NAMES if n in sets), None)
     path = 'PATH' in sets
     for c in cmds:
-        c.git_env = name or False
+        own, o = None, c
+        while o is not None and own is None:
+            own, o = scoped.get(id(o)), o.nested_in
+        c.git_env = name or own or False
         c.home_env = home or False
         c.path_env = path
 

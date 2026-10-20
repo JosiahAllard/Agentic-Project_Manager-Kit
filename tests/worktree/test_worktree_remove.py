@@ -7,6 +7,7 @@ Every removal here is of a worktree or branch the test itself made in a temp fol
 import datetime
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -499,6 +500,253 @@ class AbandonLandedDirty(RemoveCase):
             self.assertEqual(f.read(), 'changed\n')
         self.assertTrue(os.path.exists(os.path.join(path, 'new', 'wip.txt')))
         self.assertIn('kit/lc', self.branches())
+
+
+@real_git('git reflog: the fake writes no reflog')
+class DetachedReflog(RemoveCase):
+    """A DETACHED tree in a worktree folder: a commit made there and left by a checkout lives only
+    in its HEAD reflog, which `git worktree remove` deletes, so both verbs check that reflog as
+    they do an outside tree's."""
+
+    TODAY = datetime.date(2026, 10, 20)
+
+    def detached(self, slug):
+        """A detached tree at <worktree folder>/<slug> on main's tip."""
+        path = os.path.join(self.home, slug)
+        self.git('worktree', 'add', '-q', '--detach', path, 'main')
+        return os.path.realpath(path)
+
+    def left_behind(self, path):
+        """A commit made in the tree at `path`, then left by a checkout of main. Its oid."""
+        self.fx.write('left.txt', 'left\n', root=path)
+        left = self.fx.commit('left behind', 'left.txt', cwd=path)
+        self.git('checkout', '-q', '--detach', 'main', cwd=path)
+        return left
+
+    def assertKept(self, path, rc, out, left):
+        self.assertEqual(rc, 1, out)
+        self.assertIn('which no ref reaches', out)
+        self.assertIn(left[:10], out)
+        self.assertTrue(os.path.isdir(path), out)
+        self.assertIn(os.path.normcase(path), self.registered())
+
+    def test_the_plain_verb_refuses_a_reflog_only_commit(self):
+        path = self.detached('red')
+        left = self.left_behind(path)
+        rc, out = self.run_verb('remove', 'red')
+        self.assertKept(path, rc, out, left)
+
+    def test_abandon_refuses_a_reflog_only_commit_and_tags_nothing(self):
+        path = self.detached('red')
+        left = self.left_behind(path)
+        self.fx.write('tip.txt', 'tip\n', root=path)
+        self.fx.commit('unlanded tip', 'tip.txt', cwd=path)
+        rc, out = self.run_verb('abandon', 'red', 'superseded', today=self.TODAY)
+        self.assertKept(path, rc, out, left)
+        self.assertEqual(self.git('tag', '-l', 'archive/*'), '')
+
+    def test_a_reflog_a_ref_reaches_is_removed(self):
+        path = self.detached('red')
+        rc, out = self.run_verb('remove', 'red')
+        self.assertEqual(rc, 0, out)
+        self.assertFalse(os.path.exists(path), out)
+
+    def test_abandon_of_a_landed_dirty_tree_refuses_a_reflog_only_commit(self):
+        # Landed (HEAD is main's tip) with uncommitted work: --abandon takes the landed-dirty
+        # path (_abandon_landed_dirty), which must check the reflog before saving anything.
+        path = self.detached('red')
+        left = self.left_behind(path)
+        self.fx.write('wip.txt', 'wip\n', root=path)
+        rc, out = self.run_verb('abandon', 'red', 'superseded', today=self.TODAY)
+        self.assertKept(path, rc, out, left)
+        self.assertNotIn('saved     ', out)
+        self.assertEqual(self.git('tag', '-l', 'archive/*'), '')
+        self.assertTrue(os.path.isfile(os.path.join(path, 'wip.txt')))
+
+    def test_abandon_of_a_landed_dirty_tree_whose_reflog_a_ref_reaches_saves_and_removes(self):
+        path = self.detached('red')
+        self.fx.write('wip.txt', 'wip\n', root=path)
+        rc, out = self.run_verb('abandon', 'red', 'superseded', today=self.TODAY)
+        self.assertEqual(rc, 0, out)
+        self.assertIn('saved     uncommitted work (1)', out)
+        self.assertEqual(self.git('show', 'archive/red:wip.txt'), 'wip')
+        self.assertFalse(os.path.exists(path), out)
+
+
+@real_git('git reflog: the fake writes no reflog, and a detached tree here is checked by it')
+class DetachedTemplate(RemoveCase):
+    """`branch_template` holds a tree on a branch to its template; a DETACHED tree in the
+    worktree folder has no branch, so the template is not asked of it, and the HEAD reflog check
+    still runs."""
+
+    CONFIG = {'worktree_remove': {'branch_template': 'phase/{slug}'}}
+    TODAY = DetachedReflog.TODAY
+    detached = DetachedReflog.detached
+    left_behind = DetachedReflog.left_behind
+    assertKept = DetachedReflog.assertKept
+
+    def test_a_detached_tree_is_removed_by_its_slug(self):
+        path = self.detached('det')
+        rc, out = self.run_verb('remove', 'det')
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn('not phase/det', out)
+        self.assertFalse(os.path.exists(path), out)
+        self.assertNotIn(os.path.normcase(path), self.registered())
+
+    def test_a_detached_tree_is_abandoned_by_its_slug(self):
+        path = self.detached('det')
+        self.fx.write('tip.txt', 'tip\n', root=path)
+        tip = self.fx.commit('unlanded tip', 'tip.txt', cwd=path)
+        rc, out = self.run_verb('abandon', 'det', 'superseded', today=self.TODAY)
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn('not phase/det', out)
+        self.assertEqual(self.git('rev-parse', 'archive/det^{commit}'), tip)
+        self.assertFalse(os.path.exists(path), out)
+
+    def test_the_reflog_check_still_refuses_a_commit_only_it_keeps(self):
+        path = self.detached('det')
+        left = self.left_behind(path)
+        rc, out = self.run_verb('remove', 'det')
+        self.assertNotIn('not phase/det', out)
+        self.assertKept(path, rc, out, left)
+
+    def test_a_tree_on_a_branch_off_its_template_is_still_refused(self):
+        path = self.workstream('one')
+        self.land('kit/one')
+        rc, out = self.run_verb('remove', 'one')
+        self.assertEqual(rc, 1, out)
+        self.assertIn('is on kit/one, not phase/one', out)
+        self.assertTrue(os.path.isdir(path), out)
+
+
+@real_git('git worktree remove of a missing folder: the fake does not model it, nor a reflog')
+class PruneOrphan(RemoveCase):
+    """remove.prune_orphan (`--classify --apply` on an O tree): drops one stale registration and
+    keeps its branch; refuses whatever could lose a commit or is not stale."""
+
+    def prune(self, path):
+        ctx, refused = remove.open_ctx(self.repo)
+        self.assertIsNone(refused)
+        code = remove.prune_orphan(ctx, path)
+        return code, '\n'.join(ctx.out)
+
+    def admin(self, slug):
+        return os.path.join(self.fx.common_dir(), 'worktrees', slug)
+
+    def test_a_stale_registration_is_dropped_and_its_branch_kept(self):
+        path = self.workstream('gone')
+        tip = self.git('rev-parse', 'kit/gone')
+        shutil.rmtree(path)
+        rc, out = self.prune(path)
+        self.assertEqual(rc, 0, out)
+        self.assertIn('removed   %s: its stale registration (the folder was already gone);'
+                      ' branch kit/gone kept' % path, out)
+        self.assertNotIn(os.path.normcase(path), self.registered())
+        self.assertEqual(self.git('rev-parse', 'kit/gone'), tip)
+        self.assertFalse(os.path.exists(self.admin('gone')))
+
+    def test_only_that_registration_is_dropped(self):
+        path = self.workstream('gone')
+        other = self.workstream('other')
+        shutil.rmtree(other)
+        shutil.rmtree(path)
+        rc, out = self.prune(path)
+        self.assertEqual(rc, 0, out)
+        self.assertIn(os.path.normcase(other), self.registered())
+
+    def test_a_folder_that_exists_is_refused(self):
+        path = self.workstream('here')
+        rc, out = self.prune(path)
+        self.assertEqual(rc, 1, out)
+        self.assertIn('its registration is not stale; nothing was removed', out)
+        self.assertTrue(os.path.isdir(path))
+        self.assertIn(os.path.normcase(path), self.registered())
+
+    def test_one_outside_the_worktree_folders_and_scratch_roots_is_refused(self):
+        path = os.path.join(os.path.realpath(self.fx.base), 'elsewhere', 'gone')
+        self.git('worktree', 'add', '-q', '-b', 'kit/elsewhere', path, 'main')
+        shutil.rmtree(path)
+        ctx, refused = remove.open_ctx(self.repo)
+        self.assertIsNone(refused)
+        rc = remove.prune_orphan(ctx, path, environ={})
+        out = '\n'.join(ctx.out)
+        self.assertEqual(rc, 1, out)
+        self.assertIn('outside every worktree folder and scratch root', out)
+        self.assertIn(os.path.normcase(path), self.registered())
+
+    def test_a_locked_one_is_refused(self):
+        path = self.workstream('gone')
+        self.git('worktree', 'lock', '--reason', 'on a drive', path)
+        shutil.rmtree(path)
+        rc, out = self.prune(path)
+        self.assertEqual(rc, 1, out)
+        self.assertIn('is locked (on a drive); nothing was removed', out)
+        self.assertIn(os.path.normcase(path), self.registered())
+
+    def test_one_whose_reflog_keeps_a_commit_no_ref_reaches_is_refused(self):
+        path = os.path.join(self.home, 'lost')
+        self.git('worktree', 'add', '-q', '--detach', path, 'main')
+        path = os.path.realpath(path)
+        self.fx.write('left.txt', 'left\n', root=path)
+        self.fx.commit('left behind', 'left.txt', cwd=path)
+        self.git('checkout', '-q', '--detach', 'main', cwd=path)
+        shutil.rmtree(path)
+        rc, out = self.prune(path)
+        self.assertEqual(rc, 1, out)
+        self.assertIn('keeps 1 commit(s) no branch, remote-tracking branch or tag reaches', out)
+        self.assertIn("whether to drop them is the owner's call; nothing was removed", out)
+        self.assertIn(os.path.normcase(path), self.registered())
+        self.assertTrue(os.path.isfile(os.path.join(self.admin('lost'), 'logs', 'HEAD')))
+
+    def test_an_unreadable_admin_folder_is_refused(self):
+        path = self.workstream('gone')
+        shutil.rmtree(path)
+        with open(os.path.join(self.admin('gone'), 'ORIG_HEAD'), 'w', newline='\n') as f:
+            f.write('not an id\n')
+        rc, out = self.prune(path)
+        self.assertEqual(rc, 1, out)
+        self.assertIn('whether its registration keeps a commit no ref reaches is unknown', out)
+        self.assertIn(os.path.normcase(path), self.registered())
+
+    def test_a_folder_made_after_the_check_is_refused(self):
+        path = self.workstream('gone')
+        shutil.rmtree(path)
+        real, calls = remove.admin_commits, []
+
+        def admin_commits(ctx, admin):
+            calls.append(admin)
+            if len(calls) == 2:
+                os.makedirs(path)
+            return real(ctx, admin)
+
+        with mock.patch.object(remove, 'admin_commits', admin_commits):
+            rc, out = self.prune(path)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(rc, 1, out)
+        self.assertIn('its folder appeared after it was checked; nothing was removed', out)
+        self.assertIn(os.path.normcase(path), self.registered())
+
+    def test_an_admin_folder_that_changed_after_the_check_is_refused(self):
+        path = self.workstream('gone')
+        shutil.rmtree(path)
+        real, calls = remove.admin_commits, []
+
+        def admin_commits(ctx, admin):
+            calls.append(admin)
+            oids, why = real(ctx, admin)
+            return (oids + ['f' * 40] if len(calls) == 2 else oids), why
+
+        with mock.patch.object(remove, 'admin_commits', admin_commits):
+            rc, out = self.prune(path)
+        self.assertEqual(rc, 1, out)
+        self.assertIn('its admin folder changed after it was checked; nothing was removed', out)
+        self.assertIn(os.path.normcase(path), self.registered())
+
+    def test_a_path_no_longer_registered_is_nothing(self):
+        path = os.path.join(self.home, 'never')
+        rc, out = self.prune(path)
+        self.assertEqual(rc, 0, out)
+        self.assertIn('nothing   %s is not registered' % os.path.normpath(path), out)
 
 
 class NoAncestryAnswer(RemoveCase):

@@ -373,8 +373,8 @@ class InlineAliasJudged(unittest.TestCase):
 
 class HubKept(World):
     """Item 5 keeps the owner-only hub tools: with the kit's default modes, a parsed run of the hub
-    tool's owner verb is denied to any session but the owner's; a line the parser cannot read is
-    not run, so its text naming the hub tool only warns as unreadable."""
+    tool's owner verb is denied to any session but the owner's, and so is a line the parser cannot
+    read whose text names the hub tool, read verbs included (docs/guard.md "Fallback")."""
 
     def setUp(self):
         super().setUp()
@@ -399,12 +399,10 @@ class HubKept(World):
         self.assertEqual(self.decide(W.bash('python "%s" questions' % self.hub, self.w.wt, sub=True)),
                          Decision('allow'))
 
-    def test_a_verb_on_a_line_the_parser_cannot_read_only_warns(self):
+    def test_a_verb_on_a_line_the_parser_cannot_read_is_denied(self):
         for verb in ('questions', 'answer Q-1 --choice 1'):
             with self.subTest(verb):
-                d = self.decide(W.bash("echo 'x ; python \"%s\" %s" % (self.hub, verb), self.w.wt, sub=True))
-                self.assertEqual((d.verdict, d.rule), ('allow', rules.WARNED), d.reason)
-                self.assertIn('rule=unreadable', d.reason)
+                self.denied("echo 'x ; python \"%s\" %s" % (self.hub, verb), 'hub-owner-verb')
 
     def test_the_owner_runs_an_owner_verb_on_such_a_line(self):
         d = self.decide(W.bash("echo 'x ; python \"%s\" answer Q-1 --choice 1" % self.hub, self.w.wt))

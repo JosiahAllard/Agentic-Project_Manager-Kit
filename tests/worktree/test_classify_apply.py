@@ -6,6 +6,7 @@ turned live after it was classified. Throwaway repositories only (tests/gitfixtu
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -30,6 +31,9 @@ def load_tool():
 @gitfixture.real_fixture('A reads the reflog entry a fixture commit() writes, which only real '
                          'git writes')
 class ApplyCase(ClassifyCase):
+    """A backlog store is named, so whether a record claims an evidence-named tree can be read."""
+
+    CONFIG = {'backlog': {'store': 'main'}}
 
     def setUp(self):
         super().setUp()
@@ -92,6 +96,32 @@ class Removes(ApplyCase):
         self.assertEqual(rc, 0, out)
         self.assertIn('removed   %s: E, plain remove' % path, out)
         self.gone(path)
+        self.assertEqual(self.git('tag', '-l', 'archive/*'), '')
+
+
+class EvidenceKept(ApplyCase):
+    """An evidence-named tree that is dirty, or whose branch a record claims, is C: left."""
+
+    def test_a_claimed_evidence_tree_is_left_with_its_branch_and_no_tag(self):
+        self.record('id: T-001\nstate: pulled\npulled_by: kit/agent-7\n')
+        path = self.workstream('agent-7')
+        rc, out, data = self.run_apply()
+        self.assertEqual(rc, 1, out)
+        row = self.row(data, path)
+        self.assertEqual(row['class'], 'C', out)
+        self.assertNotIn('apply', row)
+        self.kept(path)
+        self.assertIn('kit/agent-7', self.branches())
+        self.assertEqual(self.git('tag', '-l', 'archive/*'), '')
+
+    def test_a_dirty_evidence_tree_is_left_with_its_files(self):
+        path = self.workstream('agent-3')
+        self.fx.write('loose.txt', 'not committed\n', root=path)
+        rc, out, data = self.run_apply()
+        self.assertEqual(rc, 1, out)
+        self.assertEqual(self.row(data, path)['class'], 'C', out)
+        self.kept(path)
+        self.assertTrue(os.path.isfile(os.path.join(path, 'loose.txt')))
         self.assertEqual(self.git('tag', '-l', 'archive/*'), '')
 
 
@@ -364,6 +394,75 @@ class Outcomes(ApplyCase):
         self.assertEqual(row['apply']['result'], 'skipped', out)
         self.assertIn('the machine lock cannot be read (tool gone)', row['apply']['why'])
         self.kept(path)
+
+
+class Orphans(ApplyCase):
+    """O: --apply drops a stale registration and keeps its branch, unless its admin folder keeps a
+    commit no ref reaches."""
+
+    def test_a_stale_registration_is_dropped_and_its_branch_kept(self):
+        path = self.workstream('gone')
+        tip = self.git('rev-parse', 'kit/gone')
+        shutil.rmtree(path)
+        rc, out, data = self.run_apply()
+        self.assertEqual(rc, 0, out)
+        self.assertIn('removed   %s: O, its stale registration dropped' % path, out)
+        self.gone(path)
+        self.assertEqual(self.git('rev-parse', 'kit/gone'), tip)
+        self.assertEqual(data['applied'], {'removed': 1, 'failed': 0, 'skipped': 0})
+
+    def test_other_trees_are_untouched(self):
+        orphan = self.workstream('gone')
+        shutil.rmtree(orphan)
+        wip = self.workstream('wip')
+        self.fx.write('loose.txt', 'x\n', root=wip)
+        rc, out, data = self.run_apply()
+        self.assertEqual(rc, 1, out)
+        self.gone(orphan)
+        self.kept(wip)
+        self.assertTrue(os.path.isfile(os.path.join(wip, 'loose.txt')))
+        self.assertEqual(self.row(data, wip)['class'], 'C')
+
+    def test_one_keeping_an_unsaved_commit_is_skipped_for_the_owner(self):
+        path = os.path.join(self.home, 'lost')
+        self.git('worktree', 'add', '-q', '--detach', path, 'main')
+        path = os.path.realpath(path)
+        self.fx.write('left.txt', 'left\n', root=path)
+        left = self.fx.commit('left behind', 'left.txt', cwd=path)
+        self.git('checkout', '-q', '--detach', 'main', cwd=path)
+        shutil.rmtree(path)
+        rc, out, data = self.run_apply()
+        self.assertEqual(rc, 1, out)
+        self.assertIn('skipped   %s: O: 1 commit(s) only its registration keeps' % path, out)
+        self.assertIn(os.path.normcase(path), self.registered())
+        self.assertEqual(self.row(data, path)['apply']['result'], 'skipped', out)
+        with open(os.path.join(self.fx.common_dir(), 'worktrees', 'lost', 'logs', 'HEAD'),
+                  encoding='utf-8') as f:
+            self.assertIn(left, f.read())
+
+    def test_one_outside_the_worktree_folders_and_scratch_roots_is_reported_only(self):
+        # Its folder may be on a drive that is not mounted now, or was remapped: only a
+        # registration in a worktree folder or under a scratch root is the kit's to drop.
+        path = os.path.join(os.path.realpath(self.fx.base), 'elsewhere', 'gone')
+        self.git('worktree', 'add', '-q', '-b', 'kit/elsewhere', path, 'main')
+        shutil.rmtree(path)
+        rc, out, data = self.run_apply()
+        self.assertEqual(rc, 1, out)
+        row = self.row(data, path)
+        self.assertEqual(row['class'], 'O', out)
+        self.assertEqual(row['apply']['result'], 'skipped', out)
+        self.assertIn('outside every worktree folder and scratch root', row['apply']['why'])
+        self.assertIn('reported only', row['apply']['why'])
+        self.assertIn(os.path.normcase(path), self.registered())
+        self.assertTrue(os.path.isdir(os.path.join(self.fx.common_dir(), 'worktrees', 'gone')))
+
+    def test_one_under_a_scratch_root_is_dropped(self):
+        path = self.outside('gone', self.git('rev-parse', 'HEAD'))
+        shutil.rmtree(path)
+        rc, out, data = self.run_apply()
+        self.assertEqual(rc, 0, out)
+        self.assertIn('removed   %s: O, its stale registration dropped' % path, out)
+        self.assertNotIn(os.path.normcase(path), self.registered())
 
 
 class Arguments(unittest.TestCase):

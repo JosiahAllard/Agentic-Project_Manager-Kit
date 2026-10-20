@@ -9,16 +9,19 @@ lines). Nothing here prints. The checks, in order, are the PM tool's:
 - the target: under `"repo".worktrees_dir` or another registered host's worktree folder
   (kitlib.worktree.hostdirs; homes_of: a folder reached through a junction is not one), not
   `"worktree_remove".exempt`, present, registered (a stump is named and never deleted), and on
-  one of `branch_template`'s branches when one is set; or, named by its PATH, a registered DETACHED tree
-  outside those folders (`outside_target`: not the main checkout nor in it, no link on the way,
-  not locked, holding no other registered tree); the plain verb (`remove`) alone also takes such a
-  tree on a branch (the owner's rule: only that deliberate by-path call clears one), every later
-  check still running. A slug never names
-  an outside tree: one that only matches such a tree is refused with its path-form command
-  (`slug_redirect`);
+  one of `branch_template`'s branches when one is set, unless it is detached; or, named
+  by its PATH, a registered DETACHED tree outside those folders (`outside_target`: not the main
+  checkout nor in it, no link on the way, not locked, holding no other registered tree); the plain
+  verb (`remove`) alone also takes such a tree on a branch (the owner's rule: only that deliberate
+  by-path call clears one), every later check still running. A slug never names an outside tree:
+  one that only matches such a tree is refused with its path-form command (`slug_redirect`);
 - landed: the branch (or detached HEAD) is an ancestor of `<remote>/<main_branch>` AS IT STANDS,
   never fetched (`merge_check`); UNLANDED work is the owner's to remove and the refusal prints his
   commands and the `--abandon` verb, running none of them;
+- on a tree outside the worktree folders or a DETACHED one anywhere, every commit in its HEAD
+  reflog is reached by a ref (`kept_reflog`; a commit left there by a checkout lives only in that
+  log, which `git worktree remove` deletes), and HEAD and the log are read again just before git
+  (`unmoved`);
 - holders (`holders.blockers`), then work (`dirty`: anything uncommitted or untracked, and any
   git-IGNORED file outside `build_output` or a keeper inside it; a `{piece, path}` entry is the
   folder the pieces table puts there, and one that cannot be resolved holds nothing), then links
@@ -521,9 +524,9 @@ def link_on_the_way(path):
 
 
 def kept_reflog(ctx, path, head, tagged):
-    """The outside tree's HEAD reflog (kitlib.worktree.scratch.reflog) when every commit in it is
-    kept: reached by a branch, remote-tracking branch or tag, and with `tagged` (--abandon) also
-    by `head`, which the tag is about to hold. Else None after saying why: a commit made in the tree
+    """The HEAD reflog (kitlib.worktree.scratch.reflog) of a tree outside every worktree folder or
+    detached anywhere, when every commit in it is kept: reached by a branch, remote-tracking
+    branch or tag, and with `tagged` (--abandon) also by `head`, which the tag is about to hold. Else None after saying why: a commit made in the tree
     and left by a checkout lives only in `logs/HEAD`, which `git worktree remove` deletes, and a
     commit no ref reaches is the owner's call (the --scratch verb's rule). Reads only."""
     from . import scratch           # scratch imports this module
@@ -567,9 +570,206 @@ def kept_reflog(ctx, path, head, tagged):
 
 def unmoved(ctx, path, head, logged):
     """kitlib.worktree.scratch.unmoved: HEAD and its reflog read once more just before git, so a
-    commit made while the verb ran is not removed with an outside tree."""
+    commit made while the verb ran is not removed with an outside or detached tree."""
     from . import scratch
     return scratch.unmoved(ctx, path, head, logged)
+
+
+def unsaved_count(ctx, commits, also_saved=()):
+    """How many commits reached from `commits` no branch, remote-tracking branch, tag or
+    `also_saved` commit reaches: `(n, None)`, or `(None, why)`."""
+    args = ('rev-list', '--count', *commits, '--not', *also_saved, '--branches', '--remotes',
+            '--tags')
+    rc, count, err = git(ctx.main, *args)
+    if rc != 0 or not count.isdigit():
+        return None, failure(args[:2], rc, err)
+    return int(count), None
+
+
+# The pseudo-refs a worktree's admin folder may hold besides its reflogs and per-worktree refs.
+ADMIN_HEADS = ('HEAD', 'ORIG_HEAD', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD')
+HEX = frozenset('0123456789abcdef')
+
+
+def _oid(word):
+    return len(word) in (40, 64) and set(word) <= HEX
+
+
+def admin_dir(ctx, path):
+    """`(the admin folder <git common dir>/worktrees/<id> whose gitdir file names `path`, None)`,
+    or `(None, why)`: none or more than one does, or a read failed."""
+    args = ('rev-parse', '--path-format=absolute', '--git-common-dir')
+    rc, common, err = git(ctx.main, *args)
+    if rc != 0 or not common:
+        return None, failure(args, rc, err)
+    top = os.path.join(common, 'worktrees')
+    try:
+        names = sorted(os.listdir(top))
+    except OSError as e:
+        return None, 'the admin folders in %s could not be listed (%s)' % (top, e)
+    found, key = [], canon(path)
+    for name in names:
+        gitdir = os.path.join(top, name, 'gitdir')
+        try:
+            with open(gitdir, encoding='utf-8', errors='replace') as fh:
+                named = fh.read().strip()
+        except FileNotFoundError:
+            continue
+        except OSError as e:
+            return None, '%s could not be read (%s)' % (gitdir, e)
+        if named and canon(os.path.dirname(named)) == key:
+            found.append(os.path.join(top, name))
+    if len(found) != 1:
+        return None, ('%s admin folder in %s names it%s' % (
+            'more than one' if found else 'no', top, ' (%s)' % ', '.join(found) if found else ''))
+    return found[0], None
+
+
+def admin_commits(ctx, admin):
+    """`([every commit id the admin folder `admin` alone may keep], None)` or `(None, why)`: its
+    HEAD and pseudo-refs (ADMIN_HEADS) when they hold an id, every id in its reflogs (`logs/`)
+    and the tips of its per-worktree refs (`refs/`). `git worktree remove` deletes them all. Read
+    from the files only for the files ref format; any other format, and a line that is not an id,
+    a symbolic ref or a reflog entry, refuses."""
+    args = ('rev-parse', '--show-ref-format')
+    rc, out, err = git(ctx.main, *args)
+    if rc != 0 or not out:
+        return None, failure(args, rc, err)
+    if out != 'files':
+        return None, 'its refs are stored as %s, whose admin folder this verb cannot read' % out
+    files, errors = [os.path.join(admin, n) for n in ADMIN_HEADS], []
+    for sub in ('refs', 'logs'):
+        root = os.path.join(admin, sub)
+        if os.path.isdir(root):
+            for folder, _, names in os.walk(root, onerror=errors.append):
+                files.extend(os.path.join(folder, n) for n in sorted(names))
+        elif os.path.lexists(root):
+            errors.append('%s is not a folder' % root)
+    if errors:
+        return None, 'its admin folder could not be read in full (%s)' % errors[0]
+    oids = []
+    for name in files:
+        try:
+            with open(name, encoding='utf-8', errors='replace') as fh:
+                text = fh.read()
+        except FileNotFoundError:
+            continue
+        except OSError as e:
+            return None, '%s could not be read (%s)' % (name, e)
+        log = os.path.relpath(name, admin).split(os.sep)[0] == 'logs'
+        for line in text.splitlines():
+            if not line.strip():
+                continue
+            words = line.split('\t', 1)[0].split(' ')[:2] if log else \
+                [] if line.startswith('ref: ') else line.split()[:1]
+            if (log and len(words) != 2) or not all(_oid(w) for w in words):
+                return None, '%s has a line this verb cannot read: %r' % (name, line)
+            oids.extend(w for w in words if w.strip('0') and w not in oids)
+    return oids, None
+
+
+def orphan_unsaved(ctx, path):
+    """`(how many commits only the admin folder of the missing tree at `path` keeps and no branch,
+    remote-tracking branch or tag reaches, None)`, or `(None, why)`. Reads only."""
+    admin, why = admin_dir(ctx, path)
+    if admin is None:
+        return None, why
+    oids, why = admin_commits(ctx, admin)
+    if oids is None:
+        return None, why
+    return unsaved_count(ctx, oids) if oids else (0, None)
+
+
+def orphan_outside(ctx, path, environ=None):
+    """Why the stale registration at `path` is reported only, or None when it is the kit's to
+    drop: in a worktree folder (is_workstream) or under a scratch root (kitlib.worktree.scratch
+    roots, from `environ`). A folder anywhere else may be on a drive that is not mounted now or
+    was remapped: gone from this view only."""
+    if is_workstream(ctx, path):
+        return None
+    from . import scratch           # scratch imports this module
+    rts, _ = scratch.roots(environ, ctx.main)
+    if any(scratch._strictly_under(path, r) for r in rts):
+        return None
+    return ('it is outside every worktree folder and scratch root (a drive not mounted now, or'
+            ' remapped, looks the same): reported only')
+
+
+def prune_orphan(ctx, path, environ=None):
+    """Drop the registration of the worktree at `path` whose folder is already gone (`--classify`
+    class O), keeping its branch: `git worktree remove <the registered path>`, never forced, never
+    `git worktree prune` (which drops every such registration). Refused, nothing changed: a path
+    that exists, a path outside the worktree folders and scratch roots (orphan_outside; `environ`
+    names the roots), an exempt folder, a locked tree, the main checkout, and a registration whose
+    admin folder keeps a commit no ref reaches (its HEAD reflog, a per-worktree ref or a
+    pseudo-ref: the owner's call) or cannot be read. The folder and the admin folder are read once
+    more just before git; a folder made inside that window is the window this narrows, not
+    closes. A path no longer registered is `nothing` (OK)."""
+    path = os.path.normpath(path)
+    nothing = 'nothing was removed'
+    if os.path.lexists(path):
+        ctx.say('refused   %s exists: its registration is not stale; %s' % (path, nothing))
+        return REFUSED
+    outside = orphan_outside(ctx, path, environ)
+    if outside:
+        ctx.say('refused   %s: %s; %s' % (path, outside, nothing))
+        return REFUSED
+    ruling = exemption(ctx.s, path)
+    if ruling:
+        ctx.say('refused   %s is exempt (%s); %s' % (path, ruling, nothing))
+        return REFUSED
+    try:
+        entries = worktree_entries(worktree_listing(ctx.main))
+    except GitReadError as e:
+        ctx.say('refused   %s: the worktree list could not be read (%s); %s' % (path, e, nothing))
+        return REFUSED
+    key = canon(path)
+    entry = next((e for e in entries if canon(e['path']) == key), None)
+    if entry is None:
+        ctx.say('nothing   %s is not registered' % path)
+        return OK
+    if key == canon(ctx.main):
+        ctx.say('refused   %s is the main checkout; %s' % (path, nothing))
+        return REFUSED
+    if entry['locked'] is not None:
+        ctx.say('refused   %s is locked (%s); %s' % (path, entry['locked'] or 'no reason', nothing))
+        return REFUSED
+    admin, why = admin_dir(ctx, path)
+    oids, why = admin_commits(ctx, admin) if admin else (None, why)
+    lost, why = (None, why) if oids is None else unsaved_count(ctx, oids) if oids else (0, None)
+    if lost is None:
+        ctx.say('refused   %s: whether its registration keeps a commit no ref reaches is unknown'
+                ' (%s); %s' % (path, why, nothing))
+        return REFUSED
+    if lost:
+        ctx.say('refused   %s: its folder is gone, but its registration (%s) keeps %d commit(s)'
+                ' no branch, remote-tracking branch or tag reaches (a HEAD reflog, per-worktree'
+                ' ref or pseudo-ref); whether to drop them is the owner\'s call; %s'
+                % (path, admin, lost, nothing))
+        return REFUSED
+    again, why = admin_commits(ctx, admin)
+    moved = ('its folder appeared after it was checked' if os.path.lexists(path) else
+             'its admin folder could not be read again (%s)' % why if again is None else
+             'its admin folder changed after it was checked' if again != oids else None)
+    if moved:
+        ctx.say('refused   %s: %s; %s' % (path, moved, nothing))
+        return REFUSED
+    rc, out, err = git(ctx.main, 'worktree', 'remove', entry['path'])
+    if rc != 0:
+        ctx.say('failed    git worktree remove exited %s: %s' % (rc, err or out))
+        return REFUSED
+    try:
+        still = key in registered(ctx.main)
+    except GitReadError as e:
+        ctx.say('failed    %s: whether its registration is gone is unknown: the worktree list'
+                ' could not be read again (%s)' % (path, e))
+        return REFUSED
+    if still:
+        ctx.say('failed    %s is still registered after git worktree remove exited 0' % path)
+        return REFUSED
+    ctx.say('removed   %s: its stale registration (the folder was already gone)%s'
+            % (path, '; branch %s kept' % entry['branch'] if entry['branch'] else ''))
+    return OK
 
 
 def outside_target(ctx, path, branch_ok=False):
@@ -708,8 +908,10 @@ def registered_target(ctx, argument, branch_ok=False):
         ctx.say('           git cannot remove it (`not a working tree`) and neither will this tool.',
                 '           Clearing it is a human decision; this tool never deletes a leftover.')
         return REFUSED
-    if s['branch_template']:
-        registered_path, branch = known[canon(path)]
+    registered_path, branch = known[canon(path)]
+    # A detached tree has no branch to hold to a template; the HEAD reflog check
+    # (kept_reflog) still guards what it made.
+    if s['branch_template'] and branch != '(detached)':
         slug = os.path.basename(os.path.normpath(registered_path))
         wants = [t.replace('{slug}', slug) for t in s['branch_template']]
         if branch not in wants:
@@ -894,8 +1096,10 @@ def _remove(ctx, argument, keep_branch, branch_ok=False):
             ctx.say('  note     release every holder first: his `git worktree remove` above fails'
                     ' the same destructive way this tool refuses to risk.')
         return REFUSED
-    outside = not is_workstream(ctx, path)
-    if outside:
+    # An outside tree, and a detached one anywhere: a commit made there and left by a checkout
+    # lives only in its HEAD reflog, which `git worktree remove` deletes.
+    logs = not is_workstream(ctx, path) or known[key][1] == '(detached)'
+    if logs:
         # The HEAD merge_check found in the base: the reflog check and `unmoved` hold the tree to
         # it, so a HEAD moved since (to an unlanded tip) is refused, never judged afresh.
         head = seen.get('head')
@@ -921,7 +1125,7 @@ def _remove(ctx, argument, keep_branch, branch_ok=False):
         return REFUSED
     if not clear_disposable(ctx, path):
         return REFUSED
-    if outside and not unmoved(ctx, path, head, logged):
+    if logs and not unmoved(ctx, path, head, logged):
         return REFUSED
     registered_path, branch = known[key]
     if not git_remove(ctx, path, registered_path):
@@ -1218,9 +1422,10 @@ def _abandon(ctx, argument, why, keep_branch, today):
         ctx.say('refused   %s: the merge check failed (%s); nothing was tagged or removed'
                 % (path, why_not))
         return REFUSED
-    outside = not is_workstream(ctx, path)
-    logged = kept_reflog(ctx, path, tip, True) if outside else None
-    if outside and logged is None:
+    # An outside tree, and a detached one anywhere (the plain verb's rule).
+    logs = not is_workstream(ctx, path) or not branch
+    logged = kept_reflog(ctx, path, tip, True) if logs else None
+    if logs and logged is None:
         return REFUSED
     rerun = '%s %s --abandon "<why>"%s' % (s['tool'], handle(ctx, registered_path),
                                            ' --keep-branch' if keep_branch else '')
@@ -1263,7 +1468,7 @@ def _abandon(ctx, argument, why, keep_branch, today):
             return REFUSED
         ctx.say('tagged    %s -> %s (%s): abandoned: %s' % (tag, tip[:10], name, why))
     if (not clear_disposable(ctx, path)
-            or (outside and not unmoved(ctx, path, tip, logged))
+            or (logs and not unmoved(ctx, path, tip, logged))
             or not git_remove(ctx, path, registered_path)):
         ctx.say('  kept     tag %s stays on %s%s. Once the cause is cleared, the same command'
                 ' reruns and reuses the tag.' % (tag, tip[:10],
@@ -1308,9 +1513,9 @@ def _abandon_landed_dirty(ctx, path, registered_path, slug, branch, tip, name, c
     the reset is lost: the window is narrowed, not closed."""
     main, s = ctx.main, ctx.s
     nothing = 'nothing was tagged or removed'
-    outside = not is_workstream(ctx, path)
-    logged = kept_reflog(ctx, path, tip, False) if outside else None
-    if outside and logged is None:
+    logs = not is_workstream(ctx, path) or not branch
+    logged = kept_reflog(ctx, path, tip, False) if logs else None
+    if logs and logged is None:
         return REFUSED
     _, _, ignored, why_not = dirty(ctx, path)
     if ignored is None:
@@ -1380,7 +1585,7 @@ def _abandon_landed_dirty(ctx, path, registered_path, slug, branch, tip, name, c
                                         tip[:10], tag))
     kept = ('  kept     tag %s holds the saved work%s. Nothing was forced.'
             % (tag, ', and branch %s' % branch if branch else ''))
-    if outside and not unmoved(ctx, path, tip, logged):
+    if logs and not unmoved(ctx, path, tip, logged):
         ctx.say(kept)
         return REFUSED
     now, why_now = snapshot_tree(path)

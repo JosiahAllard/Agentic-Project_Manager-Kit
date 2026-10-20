@@ -16,6 +16,13 @@ from .world import bash, event, ps
 from kitlib.guard import decide as guard_decide
 from kitlib.host import Action
 
+
+def _isabs_before_313(p):
+    """os.path.isabs as Windows Pythons before 3.13 read it: a rooted path with no drive (\\x) is
+    absolute too."""
+    s = os.fspath(p)[:3].replace('/', '\\')
+    return s.startswith('\\') or s[1:3] == ':\\'
+
 # (name, tool, -C?, the arguments after the tool and its -C, shell, cwd attribute, subagent)
 SHARED = [
     ('gate piped to tail', 'gate', True, '--full 2>&1 | tail -5', 'bash', 'wt', False),
@@ -95,6 +102,74 @@ class SharedRules(unittest.TestCase):
         self.assertIn('in the background', d.reason)
 
 
+# (name, tool, -C?, the arguments after the tool and its -C, the verdict): a kit tool's output may be
+# piped like any program's, except a run that holds the machine or waits on it (docs/guard.md
+# "Rules", wrapped-gate)
+PIPED = [
+    ('gate help piped', 'gate', True, '--help | head', ('allow', None)),
+    ('gate plan piped', 'gate', True, '--plan | head', ('allow', None)),
+    ('backlog list piped', 'backlog', True, 'list | head', ('allow', None)),
+    ('hub questions list piped', 'hub', False, 'questions list | head', ('allow', None)),
+    ('gate full piped', 'gate', True, '--full | tail', ('deny', 'wrapped-gate')),
+    ('gate land piped', 'gate', True, 'land kit/wt | tail', ('deny', 'wrapped-gate')),
+]
+
+
+class KitToolsMayBePiped(unittest.TestCase):
+    def setUp(self):
+        self.w = W.World()
+        self.addCleanup(self.w.cleanup)
+        W.deny_softened()                       # wrapped-gate is off by default (test_cheap.py)
+        self.addCleanup(W.allow_unplaced)
+
+    def test_a_kit_tool_is_piped_unless_its_run_holds_the_machine(self):
+        for sub in (False, True):
+            for name, tool, takes_c, args, want in PIPED:
+                for text in forms(self.w, tool, takes_c, args, self.w.wt):
+                    with self.subTest(name, sub=sub, text=text):
+                        self.assertEqual(verdict(claude_decide(bash(text, self.w.wt, sub=sub), self.w.ctx())),
+                                         want)
+
+
+class KitToolChecked(unittest.TestCase):
+    """A kit tool PowerShell may hand other words than the guard read (rules.python_unread) acts on
+    the checkout its one literal absolute -C names, so that folder is judged in place of the one
+    the call runs in. Not when an unsure word comes before the -C value or may split into a word
+    that starts with a dash, the script is not the kit's, or Start-Process runs it."""
+
+    def setUp(self):
+        self.w = W.World()
+        self.addCleanup(self.w.cleanup)
+        W.deny_softened()                       # unplaced warns by default (test_cheap.py)
+        self.addCleanup(W.allow_unplaced)
+        self.kit, self.wt, self.main = W.fwd(self.w.kit_dir), W.fwd(self.w.wt), W.fwd(self.w.main)
+
+    def judge(self, text, cwd):
+        return claude_decide(ps(text, cwd, sub=True), self.w.ctx())
+
+    def test_kit_tool_dash_c_main_checkout_judged_at_c_folder(self):
+        for c in ("-C '%s'", '-C %s', "-C'%s'"):
+            for tail in ("-m 'a \"b\" c' x.py", "-m '' x.py", "-m 'fix \"x\"' -b 'Part-of: y' x.py"):
+                text = "python %s/tools/commit.py %s %s" % (self.kit, c % self.wt, tail)
+                with self.subTest(text):
+                    self.assertIsNone(self.judge(text, self.w.main))
+        d = self.judge("python %s/tools/commit.py -C '%s' -m 'a \"b\" c' x.py" % (self.kit, self.main), self.w.wt)
+        self.assertEqual(verdict(d), ('deny', 'unplaced'))
+        self.assertIn(self.main, W.fwd(d.reason))
+        self.assertIn(self.wt, d.instead)
+
+    def test_where_the_c_may_not_be_python_s_the_working_directory_is_judged(self):
+        for text in ("python %s/tools/commit.py -m '' -C '%s' x.py" % (self.kit, self.wt),
+                     "python %s/tools/commit.py -C '%s' -m 'a \"b -C c\"' x.py" % (self.kit, self.wt),
+                     "python %s/tools/commit.py -C '%s' -C '%s' -m '' x.py" % (self.kit, self.wt, self.wt),
+                     "python %s/tools/x.py -C '%s' -m '' x.py" % (self.wt, self.wt),
+                     "python tools/commit.py -C '%s' -m '' x.py" % self.wt,
+                     "python %s/tools/commit.py -C wt -m '' x.py" % self.kit,
+                     "Start-Process python -ArgumentList '%s/tools/commit.py','-C','%s'" % (self.kit, self.wt)):
+            with self.subTest(text):
+                self.assertEqual(verdict(self.judge(text, self.w.main)), ('deny', 'unplaced'))
+
+
 class RolePolicy(unittest.TestCase):
     def setUp(self):
         self.w = W.World(kit=policy_kit())
@@ -159,6 +234,44 @@ class LookalikeWrappers(unittest.TestCase):
                      'python "%s/kit/../tools/gate.py" --full' % W.fwd(self.w.base)):
             with self.subTest(text):
                 self.assertEqual(self.judge(text), ('deny', 'heavy'))
+
+    def test_a_start_process_script_is_read_from_its_working_directory(self):
+        # python reads a relative script from the folder Start-Process starts it in, not the call's
+        kit = W.fwd(self.w.kit_dir)
+        sp = "Start-Process python -WorkingDirectory %s -ArgumentList '%s','--full'"
+        self.assertEqual(verdict(claude_decide(ps(sp % ("'%s'" % kit, 'tools/gate.py'), self.w.wt), self.w.ctx())),
+                         ('allow', None))
+        for workdir in ('$k', "'%s'" % W.fwd(self.w.temp), "'%s'" % W.fwd(self.w.wt)):
+            text = sp % (workdir, 'tools/gate.py')
+            with self.subTest(text):
+                self.assertEqual(verdict(claude_decide(ps(text, self.w.wt), self.w.ctx())), ('deny', 'heavy'))
+        # an absolute script is the kit's wherever it starts
+        text = sp % ('$k', '%s/tools/gate.py' % kit)
+        self.assertEqual(verdict(claude_decide(ps(text, self.w.wt), self.w.ctx())), ('allow', None))
+
+    def test_a_drive_less_script_in_a_computed_working_directory_is_not_the_kit_s(self):
+        # \<kit>\tools\gate.py is on the drive of the folder Start-Process starts in, which the guard
+        # cannot tell here: only a drive or share path is read then, on every Python (before 3.13,
+        # os.path.isabs took a rooted path with no drive; the patch holds that reading)
+        from unittest import mock
+        kit = self.w.kit_dir[2:]
+        sp = "Start-Process python -WorkingDirectory $k -ArgumentList '%s','--full'"
+        with mock.patch('os.path.isabs', _isabs_before_313):
+            for script in (kit + '\\tools\\gate.py', W.fwd(kit) + '/tools/gate.py'):
+                text = sp % script
+                with self.subTest(text):
+                    self.assertEqual(verdict(claude_decide(ps(text, self.w.wt), self.w.ctx())), ('deny', 'heavy'))
+
+    def test_a_start_process_script_elsewhere_is_not_the_kit_s(self):
+        # the same call from the kit's folder, started in temp, runs temp's tools/gate.py
+        from kitlib.guard import commands as cm
+        from kitlib.guard import rules
+        from kitlib.guard import shell as sh
+        text = "Start-Process python -WorkingDirectory '%s' -ArgumentList 'tools/gate.py','--full'" % W.fwd(self.w.temp)
+        c = cm.read(text, sh.PS, self.w.kit_dir).commands[0]
+        self.assertIsNone(rules.kit_wrapper(self.w.ctx(), c, cm.invocation(c), self.w.kit_dir))
+        c = cm.read(text.replace(W.fwd(self.w.temp), W.fwd(self.w.kit_dir)), sh.PS, self.w.wt).commands[0]
+        self.assertTrue(rules.kit_wrapper(self.w.ctx(), c, cm.invocation(c), self.w.wt))
 
 
 class Alternatives(unittest.TestCase):

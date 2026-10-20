@@ -6,6 +6,7 @@ import sys
 import unittest
 from unittest import mock
 
+from kitlib import sessionmark
 from tests import gitfixture
 from tests.home import temp_home
 from tests.realgit import real_git as on_real_git
@@ -218,6 +219,26 @@ class PowerShellCacheEnv(unittest.TestCase):
     def test_temp_home_sets_the_cache_path_under_the_home(self):
         home = temp_home(self)
         self.assertTrue(self.under(os.environ['PSModuleAnalysisCachePath'], home))
+
+
+class SessionMarkEnv(unittest.TestCase):
+    """A test run from a marked session (a coordinator's shell) must not hand its mark to the
+    fixture's tools: tools/backlog.py reads its role from it (policy.cli_role). A test that wants a
+    mark sets it through `extra`."""
+
+    MARK = {sessionmark.ENV: 'coordinator', sessionmark.SESSION_NAME_ENV: 'kit-x'}
+
+    def test_fixture_env_drops_the_callers_session_mark(self):
+        with mock.patch.dict(os.environ, self.MARK):
+            env = gitfixture.fixture_env()
+        self.assertEqual([n for n in env if n.upper() in self.MARK], [])
+
+    def test_a_mark_given_in_extra_stands(self):
+        with mock.patch.dict(os.environ, self.MARK):
+            env = gitfixture.fixture_env({sessionmark.ENV: 'pm'})
+        # names only, never the environment itself: a failure must not print the caller's variables
+        self.assertEqual(env.get(sessionmark.ENV), 'pm')
+        self.assertEqual([n for n in env if n.upper() == sessionmark.SESSION_NAME_ENV], [])
 
 
 if __name__ == '__main__':

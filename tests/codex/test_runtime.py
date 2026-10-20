@@ -357,6 +357,19 @@ class BoundGuard(unittest.TestCase):
             with self.subTest(child=child):
                 self.assertIn('rule=main-checkout', self.judge('worker', target, child=child))
 
+    def backlog(self, role, args, child=False):
+        return self.run_bound(role, {'tool_name': 'PowerShell', 'tool_input': {
+            'command': 'python tools/backlog.py ' + args}}, child)
+
+    def test_a_bound_root_meets_the_backlog_tools_own_check(self):
+        """A root binding is a marked session, judged as an agent of its mark (hookmain.UNIDENTIFIED):
+        the backlog's role check is the tool's own, run under the bound mark, so a coordinator root
+        may claim its item. A child bound to a session-only role is unlisted, as on Claude."""
+        pull = '--session s --as kit/x pull X-1'
+        self.assertIsNone(self.backlog('coordinator', pull))
+        self.assertIn('rule=backlog-role', self.backlog('coordinator', pull, child=True) or '')
+        self.assertIn('rule=backlog-role', self.backlog('worker', 'close X-1', child=True) or '')
+
     def test_bound_guard_role_policy_checks_run_with_the_policy_off(self):
         self.assertIn('rule=role-shell', self.shell('worker', 'powershell.exe'))
         self.assertIn('rule=role-workdir', self.shell('worker', 'Get-Location', workdir=self.w.plain))

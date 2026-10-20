@@ -1,13 +1,17 @@
 """preflight's `config` line: which machine config file is read (kitlib.config.user.locate), and
 a machine that has the file in both the new and the retired folder (docs/kit-json.md "Moving the
 machine config folder"). It names files and keys, never a value.
+
+The `pointer` line (pointer_line) names the PM repository the PM-repo pointer gives
+(kitlib.config.pointer), or why it gives none.
 """
 import json
 
 from kitlib.config import ConfigError
-from kitlib.config import migration, user
+from kitlib.config import migration, pointer, user
 
 PREFIX = 'config    '
+POINTER_PREFIX = 'pointer   '
 
 
 def _read(path):
@@ -75,3 +79,16 @@ def line(home=None):
     return PREFIX + ('WARN both %s (read) and %s (ignored) exist, %s - retire the old folder '
                      '(docs/kit-json.md "Moving the machine config folder")'
                      % (loc.display(loc.new), loc.display(loc.old), how))
+
+
+def pointer_line():
+    """The one `pointer` line: the PM-repo pointer (kitlib.config.pointer) and the PM repository
+    it names, none, or why it is BROKEN."""
+    p = pointer.read()
+    if p.state == pointer.OK:
+        return POINTER_PREFIX + p.path.replace('\\', '/')
+    if p.state == pointer.NONE:
+        return POINTER_PREFIX + ('none - no PM-repo pointer (%s %s); an administrator sets it with '
+                                 'machine_setup.py --pm-repo (docs/machine-setup.md "PM repo pointer")'
+                                 % (pointer.KEY_NAME, pointer.VALUE))
+    return POINTER_PREFIX + 'BROKEN %s %s: %s' % (pointer.KEY_NAME, pointer.VALUE, p.error)

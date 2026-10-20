@@ -88,12 +88,14 @@ class FileWritesStillJudged(unittest.TestCase):
                           ('New-Item -Path %s -Name x.txt' % m, self.w.wt),
                           ('Set-Content -Path %s\\x.txt -Value 1' % m, self.w.wt),
                           ('New-Item -Path x.txt', self.w.main),
-                          ('New-Item -Path .\\env\\x.txt', self.w.main)):
+                          ('New-Item -Path .\\env\\x.txt', self.w.main),
+                          # a relative FileSystem:: path is read from the location (shell.ps_filesystem_relative)
+                          ('New-Item -Path FileSystem::x.txt', self.w.main)):
             with self.subTest(text, cwd=cwd):
                 self.refused(text, cwd)
         # a drive or provider the guard cannot place: unplaced
         for text in ('New-Item -Path envx:\\x.txt', 'New-Item -Path C:x.txt', 'New-Item -Path Temp:\\x.txt',
-                     'New-Item -Path FileSystem::x.txt'):
+                     'New-Item -Path FileSystem::C:x.txt'):
             with self.subTest(text):
                 self.refused(text, self.w.main, 'unplaced')
 
@@ -113,6 +115,92 @@ class FileWritesStillJudged(unittest.TestCase):
                      '. .\\setup.ps1; New-Item -Path env:\\x.txt'):
             with self.subTest(text):
                 self.refused(text, self.w.main, 'unplaced')
+
+
+class ProviderAdvice(unittest.TestCase):
+    """A provider-aware cmdlet's literal item on a drive that holds no files, refused from a main
+    checkout only because its line is not plain calls (rules.ps_line_plain): the refusal says so
+    in one sentence and gives the whole line run from the worktree, where it passes (a statement
+    that sets what the call reads stays with it); never a file name to write instead
+    (rules.PROVIDER_ITEM_WHY)."""
+
+    def setUp(self):
+        self.w = W.World()
+        self.addCleanup(self.w.cleanup)
+
+    def test_provider_refusal_advice_one_line(self):
+        for text in ('Set-Content env:FOO $x', '$v = 1; Set-Content -Path Env:\\FOO -Value $v',
+                     'Remove-Item HKCU:\\Software\\Demo -Recurse; $x = 1',
+                     '$v = 1; Set-Content -Path Env:\\FOO -Value $v; Get-Item Env:\\FOO'):
+            with self.subTest(text):
+                d = decide(ps(text, self.w.main, sub=True), self.w.ctx())
+                self.assertIsNotNone(d, 'allowed')
+                self.assertEqual(d.rule, 'unplaced', d.reason)
+                self.assertNotIn('\n', d.reason)
+                self.assertIn('holds no files', d.reason)
+                self.assertIn('run the whole line from your worktree', d.reason)
+                # one sentence: no full stop before the Instead
+                self.assertNotIn('. ', d.reason.split(' Instead:')[0])
+                self.assertNotIn('<file>', d.instead)
+                # the whole line, so `$v = 1` still sets the value the call reads
+                self.assertEqual(d.instead, 'cd "<worktree>"; if ($?) { %s }' % text)
+                # the Instead, run as it says, passes
+                again = d.instead.replace('<worktree>', W.fwd(self.w.wt))
+                self.assertIsNone(decide(ps(again, self.w.main, sub=True), self.w.ctx()), again)
+
+    def runs(self, instead):
+        """The Instead, run as it says from the main checkout, passes."""
+        again = instead.replace('<worktree>', W.fwd(self.w.wt))
+        self.assertIsNone(decide(ps(again, self.w.main, sub=True), self.w.ctx()), again)
+
+    def test_a_leading_cd_into_the_main_checkout_is_left_out(self):
+        # run from the worktree, the cd would take the line back into the main checkout, refused again
+        m, item = W.fwd(self.w.main), '$v = 1; Set-Content -Path Env:\\FOO -Value $v'
+        for pre in ('cd "%s"; ' % m, 'Set-Location -Path %s; ' % m, "Push-Location '%s'\n" % m,
+                    'cd "%s"; sl %s; ' % (m, self.w.main)):
+            for cwd, where in ((self.w.main, '<worktree>'), (self.w.wt, W.fwd(self.w.wt))):
+                text = pre + item
+                with self.subTest(text, cwd=cwd):
+                    d = decide(ps(text, cwd, sub=True), self.w.ctx())
+                    self.assertIsNotNone(d, 'allowed')
+                    self.assertEqual(d.rule, 'unplaced', d.reason)
+                    self.assertEqual(d.instead, 'cd "%s"; if ($?) { %s }' % (where, item))
+                    self.runs(d.instead.replace(W.fwd(self.w.wt), '<worktree>'))
+
+    def test_a_line_that_moves_elsewhere_gives_the_call_alone(self):
+        # any other move of the location (a subfolder, a cd later in the line, popd) would run the
+        # line somewhere else from the worktree: the Instead is the call itself, as for a plain line
+        m = W.fwd(self.w.main)
+        for text in ('cd "%s/docs"; $v = 1; Set-Content env:FOO $v' % m,
+                     '$v = 1; cd sub; Set-Content env:FOO $v',
+                     '$v = 1; Set-Content env:FOO $v; Pop-Location'):
+            with self.subTest(text):
+                d = decide(ps(text, self.w.main, sub=True), self.w.ctx())
+                self.assertIsNotNone(d, 'allowed')
+                self.assertEqual(d.rule, 'unplaced', d.reason)
+                self.assertEqual(d.instead, 'cd "<worktree>"; if ($?) { Set-Content env:FOO $v }')
+                self.runs(d.instead)
+
+    def test_a_trailing_comment_is_left_out(self):
+        # the closing } of the Instead would sit inside a # comment, and the line would not parse
+        for text, run in (('$v = 1; Set-Content env:FOO $v # set FOO', '$v = 1; Set-Content env:FOO $v'),
+                          ('$v = 1; Set-Content env:FOO $v  <# set FOO #>', '$v = 1; Set-Content env:FOO $v'),
+                          ('$v = 1; Set-Content env:FOO $v # one\n# two', '$v = 1; Set-Content env:FOO $v'),
+                          ("$v = '#1'; Set-Content env:FOO $v #c", "$v = '#1'; Set-Content env:FOO $v"),
+                          ('$v = 1 # c\nSet-Content env:FOO $v', '$v = 1 # c\nSet-Content env:FOO $v')):
+            with self.subTest(text):
+                d = decide(ps(text, self.w.main, sub=True), self.w.ctx())
+                self.assertIsNotNone(d, 'allowed')
+                self.assertEqual(d.rule, 'unplaced', d.reason)
+                self.assertEqual(d.instead, 'cd "<worktree>"; if ($?) { %s }' % run)
+                self.runs(d.instead)
+
+    def test_a_file_writer_keeps_the_file_advice(self):
+        # Out-File writes a file named env:x (no provider item): the advice names a file to write instead
+        d = decide(ps('$x = 1; Out-File -FilePath env:x', self.w.main, sub=True), self.w.ctx())
+        self.assertIsNotNone(d, 'allowed')
+        self.assertEqual(d.rule, 'unplaced', d.reason)
+        self.assertNotIn('holds no files', d.reason)
 
 
 class NativePrograms(unittest.TestCase):

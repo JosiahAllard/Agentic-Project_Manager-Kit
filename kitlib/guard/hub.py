@@ -51,15 +51,10 @@ OWNER_MCP_TOOLS = OWNER_ONLY
 OWNER_MCP_WORDS = ('decide', 'approve')
 HUB_SERVER = 'hub'
 
-# the token folder named in a command's text: `.pm-kit` then `hub` with only separators and
-# quotes between (`.pm-kit/hub`, `'.pm-kit', 'hub'`); hub.json beside it is not it
-FOLDER_RE = re.compile(r'(?i)\.pm-kit\W{1,8}hub(?![\w.-])')
-# python or node code that names a token file or the token folder literally; a name the code
+# python or node code that names a token file or the token folder literally (`.pm-kit` then
+# `hub` with only separators and quotes between; hub.json beside it is not it); a name the code
 # builds or reaches through a library is not read
 INLINE_RE = re.compile(r'(?i)owner\.token|agent\.token|approval\.key|\.pm-kit\W{1,8}hub(?![\w.-])')
-# programs whose words often name the files without touching them: a search pattern, a commit
-# message. Their words are not name-read; a literal path of theirs into the folder still is.
-NAME_ONLY_PROGRAMS = frozenset(('grep', 'egrep', 'fgrep', 'rg', 'findstr', 'select-string', 'sls', 'git'))
 
 # the browser and computer-use MCP servers: a page they open or a key they type reaches the hub
 BROWSER_SERVER_RE = re.compile(r'(?i)chrome|browser|playwright|puppeteer|computer[-_]?use')

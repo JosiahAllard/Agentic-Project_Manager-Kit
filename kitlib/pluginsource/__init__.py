@@ -217,6 +217,19 @@ def remote_main(kit, remote):
     return sha
 
 
+def source_kit(kit):
+    """The checkout git runs against for `kit`: `kit` itself, or, when `kit` is an export (it holds
+    MARKER; the plugin's own code runs from one), the main checkout its marker records
+    (export_checkout). RefreshError when an export names no checkout that still exists."""
+    if not os.path.isfile(os.path.join(kit, MARKER)):
+        return kit
+    checkout = export_checkout(kit)
+    if not checkout:
+        raise RefreshError('%s is a plugin export and its marker names no source checkout that '
+                           'still exists, so its refs cannot be read' % kit)
+    return checkout
+
+
 def tracking_main(kit, remote):
     """(sha of the kit's refs/remotes/<remote>/main, None), ('', None) without one, (None, why)."""
     return refs.ref_commit('refs/remotes/%s/%s' % (remote, MAIN), kit)
@@ -1146,7 +1159,10 @@ def current_lines(kit, s, folders=None, managed=_MACHINE):
         return ['could not check the pm-kit plugin: %s' % e]
     if state is None:
         return ['pm-kit plugin: no export at %s yet: %s' % (s.export_dir, refresh_cmd(True))]
-    main, why = tracking_main(kit, s.remote)
+    try:
+        main, why = tracking_main(source_kit(kit), s.remote)
+    except RefreshError as e:
+        return ['could not check the pm-kit plugin: %s' % e]
     if main is None:
         return ['could not check the pm-kit plugin: %s' % why]
     folders = _folders(folders)
@@ -1195,7 +1211,7 @@ def poll(kit, s, last, spawn=None, alive=None, folders=None):
     starts a refresh (`spawn(kit, root)`), unless one holds refresh.pid already. No tracking ref:
     nothing. Raises RefreshError when the tracking ref cannot be read and StateError when
     state.json cannot, so pm_watch counts the failure."""
-    main, why = tracking_main(kit, s.remote)
+    main, why = tracking_main(source_kit(kit), s.remote)
     if main is None:
         raise RefreshError('cannot read %s/%s: %s' % (s.remote, MAIN, why))
     if not main:

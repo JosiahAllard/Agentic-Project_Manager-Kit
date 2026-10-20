@@ -30,17 +30,20 @@ FALLBACK_MAINS = ('main', 'master')
 
 def refusal(rid, branch, main_branch, session=None):
     """Why `rid` may not be pulled as `branch`, or None. `main_branch`: one name, or the names
-    (main_branches) a pull may not record. `session`: the caller's `--session`, filled into the
-    `--as` form when known. The `--as` form comes first: a coordinator pulling at dispatch, from
-    this checkout, can run it as it stands. Pure."""
+    (main_branches) a pull may not record. `session`: the record's own `session:` field, if it has
+    one: it is named in the `--as` form as `--session <s>`, and left out otherwise, because
+    `--session` narrows `next` to session-owned records and a record with none would then be
+    refused as not in next's offer. The `--as` form comes first: a coordinator pulling at dispatch,
+    from this checkout, can run it as it stands. Pure."""
     mains = (main_branch,) if isinstance(main_branch, str) else tuple(main_branch)
     if branch not in mains:
         return None
+    flag = '--session %s ' % session if session else ''
     return ('a pull of %s here would record pulled_by: %s, and the main branch never lands, so '
             'no landing would close %s: name the branch with --as <branch> (backlog.py -C <store> '
-            '--session %s --as <branch> pull %s), or pull it from the branch\'s worktree '
+            '%s--as <branch> pull %s), or pull it from the branch\'s worktree '
             '(backlog.py -C <worktree> pull %s)'
-            % (rid, branch, rid, session or '<session>', rid, rid))
+            % (rid, branch, rid, flag, rid, rid))
 
 
 def _main_checkout(root):
@@ -109,12 +112,18 @@ def main_branches(ctx):
     return out
 
 
+def change_session(snap, rid):
+    """The `session:` field of record `rid`, or None."""
+    rec = snap.get(rid)
+    return rec.get('session') if rec else None
+
+
 def plan_pull(snap, ctx, rid, reason=None, ruling=None, blocker=None):
     """plan.plan_pull, refused when the branch it records is a main branch (main_branches). The
     record's own refusals come first: an unpullable record says why before where it is pulled
     from."""
     change = pmod.plan_pull(snap, ctx, rid, reason, ruling, blocker)
-    why = refusal(rid, ctx.current_branch(), main_branches(ctx), ctx.session)
+    why = refusal(rid, ctx.current_branch(), main_branches(ctx), change_session(snap, rid))
     if why:
         raise Refusal(why)
     return change

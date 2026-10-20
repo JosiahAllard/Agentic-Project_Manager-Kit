@@ -11,19 +11,21 @@ GODOT_SKILL = ROOT / "templates" / "stacks" / "godot" / ".claude" / "skills"
 EXPECTED = {"backlog-ops", "branch-review", "branch-sync", "builder", "coordinator-dispatch", "doc-claims-discipline",
             "flaky-test-triage", "hub-ops", "land-branch", "machine-lock-run", "mutation-testing", "session-handoff",
             "shell-and-worktree-traps", "subagent-dispatch",
-            "specialty-3d-assets", "specialty-tech-art", "specialty-sound", "specialty-review",
-            "specialty-research", "specialty-records", "specialty-spec"}
+            "specialty-3d-assets", "specialty-rigging", "specialty-tech-art", "specialty-sound",
+            "specialty-review", "specialty-research", "specialty-records", "specialty-spec"}
 # a task specialty a generic agent loads because its brief names it (docs/specialty-skills.md
 # "Specialty skills"): the agent type its Dispatch line names as the minimum
-SPECIALTY_MIN = {"specialty-3d-assets": "senior-worker", "specialty-tech-art": "senior-worker",
+SPECIALTY_MIN = {"specialty-3d-assets": "senior-worker", "specialty-rigging": "senior-worker",
+                 "specialty-tech-art": "senior-worker",
                  "specialty-sound": "worker", "specialty-review": "analyst",
                  "specialty-research": "analyst", "specialty-records": "docs-writer",
                  "specialty-spec": "docs-writer"}
-CREATIVE = ("specialty-3d-assets", "specialty-tech-art", "specialty-sound")
+CREATIVE = ("specialty-3d-assets", "specialty-rigging", "specialty-tech-art", "specialty-sound")
 # companion files written once in meaning and carried byte for byte by each skill that needs them
 SHARED_COMPANIONS = {"creative.md": CREATIVE, "doc-writing.md": ("specialty-records", "specialty-spec")}
 # reference files a skill carries beside its SKILL.md
 EXTRA_FILES = {"coordinator-dispatch": ["roster.md"], "specialty-3d-assets": ["creative.md"],
+               "specialty-rigging": ["creative.md"],
                "specialty-tech-art": ["creative.md"], "specialty-sound": ["creative.md", "measuring.md"],
                "specialty-records": ["doc-writing.md"], "specialty-spec": ["doc-writing.md"]}
 # one repo's own: never shipped in the plugin (docs/shipping.md, "Stays repo-local")
