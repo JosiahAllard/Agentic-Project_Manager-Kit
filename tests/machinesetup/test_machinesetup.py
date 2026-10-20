@@ -1022,7 +1022,8 @@ class PluginSettings(unittest.TestCase):
         diff = [l.strip() for l in out.splitlines()]                 # the diff on the file as it is now
         self.assertTrue([l for l in diff if l.startswith('+') and LOCK_RULES[0] in l], out)
         self.assertTrue([l for l in diff if l.startswith('-') and 'SessionStart coordinator' in l], out)
-        self.assertNotIn('runs twice', out)                          # the change replaces the note
+        self.assertNotIn('the SessionStart hook', out)               # the change replaces its twin note
+        self.assertIn('the SubagentStart hook hook.py claude SubagentStart is also the kit plugin\'s hook', out)
 
     def test_a_folder_with_the_plugin_off_is_left_alone(self):
         self.doc['enabledPlugins'] = {self.F.PID: False}

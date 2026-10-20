@@ -22,9 +22,11 @@ Only folders in the refresh set (kitlib.pluginsource.claude.account_folders) are
 --config-dir folder outside it would never be updated by tools/plugin_refresh.py or pm_start, so it
 is a note giving the hand commands, and the export change is still made for them.
 """
+import difflib
 import json
 import os
 
+from . import settings
 from .common import free_name
 
 ABSENT = object()
@@ -83,11 +85,15 @@ def survey(plan, ctx):
         todo.append((d, path))
     runner = ctx.host.plugin_runner(ctx.home) if todo else None
     if todo and (runner is None or not runner.available()):
-        for d, _path in todo:
+        for d, path in todo:
+            wait = '' if enabled(path, pid) is True else ('; the lock tools\' allow rules and the kit '
+                                                         'SessionStart hook drop wait for it')
             plan.note('plugin', '%s: the kit plugin is not enabled and no claude CLI is on PATH; once it '
-                                'is, run %s' % (d, ps.migrate_cmd(d)))
+                                'is, run %s%s' % (d, ps.migrate_cmd(d), wait))
         todo = []
+    edits = [(d, path) for d, path, have in candidates if have is True or (d, path) in todo]
     if not todo and not outside:                 # an outside folder's hand steps need the export
+        _plan_settings(plan, ctx, edits, pid)
         return
     sha, _why = ps.tracking_main(ctx.kit, s.remote)
     at = sha[:12] if sha else 'not fetched yet'
@@ -107,6 +113,83 @@ def survey(plan, ctx):
                  lambda d=d, path=path, bak=bak: _install(ctx, s, runner, d, path, pid, bak),
                  undo='copy "%s" over "%s"; to run it again: %s (it removes the marketplace first, its '
                       'failure tolerated)' % (bak, path, ps.migrate_cmd(d)))
+    _plan_settings(plan, ctx, edits, pid)
+
+
+def owns_settings(d, path, ctx):
+    """True when this step owns the kit SessionStart entries in `d`'s settings.json at `path`: `d` is
+    in the refresh set and enabledPlugins[pm-kit] there is absent or true (the settings step then
+    leaves them a twin note of its own)."""
+    from kitlib import pluginsource as ps
+    have = enabled(path, ps.PLUGIN_ID)
+    if have is not ABSENT and have is not True:
+        return False
+    return bool(_split([(d, path, have)], ctx.home)[0])
+
+
+def _plan_settings(plan, ctx, folders, pid):
+    """Per folder of `folders` ((config folder, settings.json), each enabled before this run or by its
+    install change), one change after the installs: settings.plugin_edit's allow rules and kit
+    SessionStart drop (edit_settings, re-read when it runs). Nothing to change is no change; a
+    symbolic or hard link is a note; a wrong-shaped permissions is a refusal."""
+    for d, path in folders:
+        data = {}
+        raw = None
+        if os.path.isfile(path):
+            with open(path, 'rb') as f:
+                raw = f.read()
+            try:
+                layout, data = settings.read(raw)
+            except ValueError:
+                continue                                             # the settings step refuses it
+            if not isinstance(data, dict):
+                continue
+        else:
+            layout = dict(settings.NEW_LAYOUT)
+        try:
+            new, added, dropped = settings.plugin_edit(data, ctx.kit, ctx.home)
+        except ValueError as e:
+            plan.refuse('%s: %s' % (path, e))
+            continue
+        if not added and not dropped:
+            continue
+        what = []
+        if added:
+            what.append('add %d allow rules for the lock tools (%s)' % (len(added), ', '.join(added)))
+        if dropped:
+            what.append('remove %d kit %s entries the plugin runs (%s)'
+                        % (len(dropped), settings.REPLACED_EVENT, '; '.join(sorted(set(dropped)))))
+        shared = settings.shared_link(path)
+        if shared:
+            plan.note('plugin', '%s is %s; replacing it would split it from the file it shares, so by hand: '
+                                '%s' % (path, shared, ' and '.join(what)))
+            continue
+        old_text = raw.decode('utf-8-sig') if raw is not None else ''
+        new_text = settings.write(layout, new).decode('utf-8-sig')
+        diff = [l.rstrip('\r\n') for l in difflib.unified_diff(
+            old_text.splitlines(True), new_text.splitlines(True), path, path + ' (after)', n=1)]
+        bak = free_name('%s.machine-setup-%s-plugin-settings.bak' % (path, ctx.today))
+        plan.add('plugin', '%s: after the kit plugin is enabled, %s (recomputed on the file as it is then; '
+                           'backup: %s)' % (path, ' and '.join(what), os.path.basename(bak)),
+                 lambda path=path, bak=bak: edit_settings(ctx.kit, ctx.home, path, bak, pid),
+                 undo='copy "%s" over "%s"' % (bak, path), detail=diff)
+
+
+def edit_settings(kit, home, path, bak, pid):
+    """The settings change _plan_settings planned, on settings.json at `path` as it is now (the CLI
+    may have rewritten it): refused (RuntimeError, nothing written) unless it is a plain file holding
+    a JSON object whose enabledPlugins[pid] is true; settings.plugin_edit's result is written through
+    settings._write (`bak` first, then a replace), or nothing when it changes nothing."""
+    if enabled(path, pid) is not True:
+        raise RuntimeError('enabledPlugins["%s"] in %s is not true; the lock tools\' allow rules and the kit '
+                           '%s entries are left' % (pid, path, settings.REPLACED_EVENT))
+    with open(path, 'rb') as f:
+        raw = f.read()
+    layout, data = settings.read(raw)
+    new, added, dropped = settings.plugin_edit(data, kit, home)
+    if not added and not dropped:
+        return
+    settings._write(path, raw, settings.write(layout, new), bak)
 
 
 def _split(candidates, home):

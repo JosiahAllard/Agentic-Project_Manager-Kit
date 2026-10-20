@@ -698,6 +698,33 @@ def plugin_current(settings=None, kit=None, folders=None):
     return pluginsource.current_lines(kit or pluginsource.kit_root(), s, folders=folders)
 
 
+def plugin_enabled(settings=None, folders=None):
+    """One line naming the account folders whose settings.json does not enable the pm-kit plugin
+    (enabledPlugins["pm-kit@pm-kit"] absent), with the machine setup command that installs it
+    (docs/machine-setup.md "Default mode"); false is the owner's choice and is silent. A settings.json
+    that is not a JSON object is its own "could not check" line. None for `settings` reads the machine
+    config (plugin_settings); a loader that gives None checks nothing. None for `folders`: this
+    machine's account folders (kitlib.pluginsource.claude.account_folders)."""
+    from kitlib import pluginsource
+    from kitlib.machinesetup import plugin
+    from kitlib.pluginsource import claude as pclaude
+    s = plugin_settings() if settings is None else settings
+    if s is None:
+        return []
+    lines, absent = [], []
+    for d in pclaude.account_folders() if folders is None else folders:
+        have = plugin.enabled(os.path.join(d, "settings.json"), pluginsource.PLUGIN_ID)
+        if have is None:
+            lines.append("could not check the pm-kit plugin in %s: its settings.json is not a JSON object" % d)
+        elif have is plugin.ABSENT:
+            absent.append(d)
+    if absent:
+        lines.insert(0, 'pm-kit plugin: not enabled in %s: python "%s/tools/machine_setup.py" --apply '
+                        '(docs/machine-setup.md "Default mode")'
+                     % (", ".join(absent), pluginsource.live_root().replace("\\", "/")))
+    return lines
+
+
 AGENT_TEMP_ENV = "AGENT_TEMP"
 AGENT_TEMP_TASK = "agent-temp-sweep"
 
@@ -783,6 +810,9 @@ def checklist(cfg, now=None, procs=None, **fakes):
         ("liveness", lambda: liveness(cfg, procs_once(), **fakes.get("liveness", {}))),
         ("kit_sync", lambda: kit_sync(fakes.get("pm_data", pm_data_settings)())),
         ("plugin_current", lambda: plugin_current(**fakes.get("plugin_current", {}))),
+        # A plugin_current fake's settings and folders stand for this check's too.
+        ("plugin_enabled", lambda: plugin_enabled(**fakes.get("plugin_enabled", {
+            k: v for k, v in fakes.get("plugin_current", {}).items() if k in ("settings", "folders")}))),
         ("stubs", lambda: stubs(**fakes.get("stubs", {}))),
         # A stubs fake's repos stand for launcher.repos here too.
         ("memory", lambda: memory(cfg, **fakes.get("memory", {k: v for k, v in fakes.get("stubs", {}).items()
