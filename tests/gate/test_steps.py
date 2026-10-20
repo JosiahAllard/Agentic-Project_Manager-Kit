@@ -337,6 +337,12 @@ class ZeroCountPasses(unittest.TestCase):
         self.assertEqual(self.warned(r'Passed: [1-9]\d*'), [])
         self.assertEqual(self.warned(r'(?m)^Ran [1-9]\d* tests? in'), [])
 
+    def test_an_optional_digit_that_cannot_be_zero_is_left_out(self):
+        # walked once `[1-9]?` reads '1' and the sample 'Passed: 10'; left out, 'Passed: 0'
+        (line,) = self.warned(r'Passed: [1-9]?\d+')
+        self.assertIn("'Passed: 0'", line)
+        self.assertEqual(self.warned(r'Passed: [1-9][0-9]?'), [])          # still floored
+
     def test_an_optional_group_holding_a_count_is_left_out(self):
         # walked once it would read '0 skipped, 10 passed': the 0 is not the pass count
         self.assertEqual(self.warned(r'(?:\d+ skipped, )?[1-9]\d* passed'), [])
