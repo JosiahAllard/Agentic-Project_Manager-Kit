@@ -2,7 +2,7 @@
 
   gate-allow   a run of tools/gate.py allow (kitlib/gate/budget.py `allow`: it raises the gate
                runs a branch may make; docs/gate.md "The branch gate budget") by any session but
-               the owner's own or a main session marked coordinator (its old name conductor) or
+               the owner's own or a main session marked coordinator (or its old mark, MARKS) or
                pm. Every subagent is refused, whatever role its payload names, and so is any
                other marked main session (deep-worker, consultant, plain).
 
@@ -67,7 +67,7 @@ def session_mark(event, ctx):
 
 
 def may_allow(event, ctx):
-    """True for the owner's own session and a session marked coordinator, conductor or pm (case
+    """True for the owner's own session and a session marked with one of MARKS (case
     ignored); a subagent the host told apart never."""
     if rules.is_owner_session(event, ctx):
         return True
