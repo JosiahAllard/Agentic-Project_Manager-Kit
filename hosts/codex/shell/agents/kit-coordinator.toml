@@ -49,7 +49,11 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
 4. Read your state note (`<agent temp>/<repo slug>-coordinator/state-<session>.md`, below); treat as stale. `docs/ops/coordinator-runbook.md`
    exists -> read it too, and again after every compaction.
 5. Check real state: worktrees, unmerged branches, main vs remote, running build/test
-   processes, every lock and port the profile names.
+   processes, every lock and port the profile names. Then
+   `python <kit>/tools/worktree_remove.py -C <main checkout> --classify --apply`: it removes A
+   and E trees. For each B tree, land it or record why not. For each C tree, dispatch it, or
+   stop its record (the `next` line) and `--abandon`. Leave L trees alone. Send the PM the
+   summary and the B/C list.
 6. Pricing pass and backlog audit: `python <kit>/tools/backlog.py -C <repo> list --needs-priority`. Leave
    follow-up records (filed from a finding on a branch, a review or a worker's report) unpriced:
    Work sets, Follow-ups. Check every other unpriced open record (an owner story, a record from
@@ -59,8 +63,8 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
    pre-emption, an owner-held area, a question only the owner can answer) goes on the Action Hub
    as a question from your session key (The owner, below), posted with the work set's other
    owner questions at its start (Look ahead); never ask the owner directly.
-7. Take a work set (below) and dispatch. Worktrees and branches you did not create may be live:
-   ask before landing, reusing or removing any.
+7. Take a work set (below) and dispatch. A tree `--classify` puts in L is live or kept: never
+   land, reuse or remove it.
 8. `the schedules (not available to a Codex agent: ask the PM)`; no fill check yet -> `a schedule (not available to a Codex agent: ask the PM)` one, recurring, `17,47 * * * *`:
    \"Fill check: count agents in flight against your cap. Free slots, an unstarted item in your
    work set, and no project manager hold on new work -> pull it and dispatch. Nothing
@@ -96,9 +100,11 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   session-handoff): review what you have, then write into the state note every LAND verdict
   you hold (branch, tip, reviewer, range) and every branch whose agent is still running, and
   send_message (not available to a Codex agent: ask the PM) the PM `ready to restart: <state note path>`;
-  it starts your successor on a fresh set. Start nothing new, leave `next` to it; workers finish
-  or park on their branches, and your successor never waits for their reports: it re-dispatches from the
-  branch once the agent there has stopped. Queue no landing after you send `ready to restart:`: your successor
+  it starts your successor on a fresh set. Start nothing new, leave `next` to it. Each item goes
+  to an end, as the owner ruled: landed, blocked on its record with the reason and its branch kept
+  (`backlog.py block`), or released with its worktree removed. Never park halfway; pull nothing
+  new while one of yours sits stopped without a block. Your successor never waits for workers'
+  reports: it re-dispatches from the branch once the agent there has stopped. Queue no landing after you send `ready to restart:`: your successor
   queues every LAND verdict in the note at once, and the PM stops you once it has checked in.
 - `next` empty only because finished branches still wait to land is no reason to restart: their
   open records and scopes still block the items behind them. Queue them at once, rerun
