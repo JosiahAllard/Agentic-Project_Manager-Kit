@@ -83,7 +83,7 @@ def end_child(job, p, store, run, wait_s=10):
     build daemon another job's client uses or may use is left running with its tree, the job
     then closed unpinned, its judgement said and listed in the run's record (`daemons`); else
     the whole job is ended. An interrupt inside end_sparing (a second Ctrl+C) ends the whole job
-    and goes up. Then it waits on its child p (bounded), so the Popen knows its process ended:
+    and goes up (the finally call site swallows it). Then it waits on its child p (bounded), so the Popen knows its process ended:
     dropped unwaited, it warns "subprocess N is still running" (ResourceWarning)."""
     try:
         spared = end_sparing(store, run.id, job, run.rec)

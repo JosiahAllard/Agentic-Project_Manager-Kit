@@ -8,6 +8,7 @@ arguments (plus the git probes it names: branch liveness, the `Context.liveness`
 pulled branch's worktree, `requires: commit:`, and the diff of the branch `add --found-on` names).
 """
 import datetime
+import re
 
 from kitlib import kitroot
 from kitlib.git import cmd, refs
@@ -1148,6 +1149,9 @@ def plan_pull(snap, ctx, rid, reason=None, ruling=None, blocker=None):
         _check_ruling(rid, rec, ruling, 'pull', hold_only=True)
     lines = offer_notes + notes + ['PULLED %s - state: open -> pulled' % rid, '  pulled_at:  %s' % ctx.date(),
                      '  pulled_by:  %s' % branch]
+    resume = resume_line(rec.body)
+    if resume:
+        lines.append(resume)
     today = ctx.date()
     changes = [('state', ['pulled']), ('pulled_at', [today]), ('pulled_by', [branch])]
     subject = 'backlog: pull %s onto %s' % (rid, branch)
@@ -1317,6 +1321,9 @@ def _plan_takeover(snap, ctx, rec, reason, ruling, blocker):
     lines = notes + ['PULLED %s - took over a dead pull from %s (it has no branch)' % (rid, old),
                      '  pulled_at:  %s -> %s' % (rec.get('pulled_at'), today),
                      '  pulled_by:  %s -> %s' % (old, branch)]
+    resume = resume_line(rec.body)
+    if resume:
+        lines.append(resume)
     lines += _collisions(rec, holding)
     lines += ['warning: %s' % f for f in folds]
     return Change({rid: _text(pairs, rec.body)},
@@ -1370,7 +1377,24 @@ def stop_pull(ctx, rid, holder, live, kept=True):
     if not tip:
         return '', lines
     lines.append('  branch kept: %s at %s' % (holder, tip[:10]))
-    return 'Stopped on branch %s at %s, branch kept.\n' % (holder, tip[:10]), lines
+    return STOPPED_NOTE % (holder, tip[:10]) + '\n', lines
+
+
+# The body line stop_pull writes, and the pattern resume_line reads it back with, made from it.
+STOPPED_NOTE = 'Stopped on branch %s at %s, branch kept.'
+STOPPED_RE = re.compile('^%s$' % r'(\S+)'.join(re.escape(p) for p in STOPPED_NOTE.split('%s')),
+                        re.M)
+
+
+def resume_line(body):
+    """The line `pull` prints for a record whose body carries stop_pull's note (STOPPED_NOTE),
+    naming the branch and tip the work stopped on (the latest note when there are several); None
+    when there is none."""
+    found = STOPPED_RE.findall(body or '')
+    if not found:
+        return None
+    branch, tip = found[-1]
+    return '  resume on %s? Work stopped there at %s, branch kept' % (branch, tip)
 
 
 def plan_release(snap, ctx, rid, reason, kept=True):
