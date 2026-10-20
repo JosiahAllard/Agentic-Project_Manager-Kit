@@ -215,6 +215,10 @@ The earlier draft would have weakened these. This revision keeps each one, so no
 
 - **O1. Count `python -c` as a read.** It cuts the same code and every one of the 36 refusals, but lets a `python -c` write into a main checkout (guard.md:157; rules.py `py_reads_only` 3400 proves some reads today). This design does not take it. It would be a weakening that needs the owner's go, if the owner wants it.
 
+### Known limits
+
+- **Backlog roles are a speed bump, not a credential.** The guard's backlog roles (docs/guard.md "Backlog roles") and the tool's own role check read a role the session states, so they hold an honest agent to its role; a write boundary that an agent cannot step around (a credential the writer must hold) stays with its own record, outside this design.
+
 ## Kit tools may be piped
 
 The open record that asked for this is closed into this design. Its ask: a kit tool's output may be piped or redirected like any program's (`backlog.py list | head`, `doc_index.py ... > <file in worktree>`, `machine_lock.py run --help | head`).
