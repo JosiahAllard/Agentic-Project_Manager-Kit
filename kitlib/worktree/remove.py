@@ -9,13 +9,12 @@ lines). Nothing here prints. The checks, in order, are the PM tool's:
 - the target: under `"repo".worktrees_dir` or another registered host's worktree folder
   (kitlib.worktree.hostdirs; homes_of: a folder reached through a junction is not one), not
   `"worktree_remove".exempt`, present, registered (a stump is named and never deleted), and on
-  one of `branch_template`'s branches when one is set; or, named by its PATH, a registered DETACHED tree
-  outside those folders (`outside_target`: not the main checkout nor in it, no link on the way,
-  not locked, holding no other registered tree); the plain verb (`remove`) alone also takes such a
-  tree on a branch (the owner's rule: only that deliberate by-path call clears one), every later
-  check still running. A slug never names
-  an outside tree: one that only matches such a tree is refused with its path-form command
-  (`slug_redirect`);
+  one of `branch_template`'s branches when one is set, unless it is detached (R-2365); or, named
+  by its PATH, a registered DETACHED tree outside those folders (`outside_target`: not the main
+  checkout nor in it, no link on the way, not locked, holding no other registered tree); the plain
+  verb (`remove`) alone also takes such a tree on a branch (the owner's rule: only that deliberate
+  by-path call clears one), every later check still running. A slug never names an outside tree:
+  one that only matches such a tree is refused with its path-form command (`slug_redirect`);
 - landed: the branch (or detached HEAD) is an ancestor of `<remote>/<main_branch>` AS IT STANDS,
   never fetched (`merge_check`); UNLANDED work is the owner's to remove and the refusal prints his
   commands and the `--abandon` verb, running none of them;
@@ -889,8 +888,10 @@ def registered_target(ctx, argument, branch_ok=False):
         ctx.say('           git cannot remove it (`not a working tree`) and neither will this tool.',
                 '           Clearing it is a human decision; this tool never deletes a leftover.')
         return REFUSED
-    if s['branch_template']:
-        registered_path, branch = known[canon(path)]
+    registered_path, branch = known[canon(path)]
+    # R-2365: a detached tree has no branch to hold to a template; the HEAD reflog check
+    # (kept_reflog) still guards what it made.
+    if s['branch_template'] and branch != '(detached)':
         slug = os.path.basename(os.path.normpath(registered_path))
         wants = [t.replace('{slug}', slug) for t in s['branch_template']]
         if branch not in wants:

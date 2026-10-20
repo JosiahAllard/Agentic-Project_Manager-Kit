@@ -552,6 +552,52 @@ class DetachedReflog(RemoveCase):
         self.assertFalse(os.path.exists(path), out)
 
 
+@real_git('git reflog: the fake writes no reflog, and a detached tree here is checked by it')
+class DetachedTemplate(RemoveCase):
+    """R-2365: `branch_template` holds a tree on a branch to its template; a DETACHED tree in the
+    worktree folder has no branch, so the template is not asked of it, and the HEAD reflog check
+    still runs."""
+
+    CONFIG = {'worktree_remove': {'branch_template': 'phase/{slug}'}}
+    TODAY = DetachedReflog.TODAY
+    detached = DetachedReflog.detached
+    left_behind = DetachedReflog.left_behind
+    assertKept = DetachedReflog.assertKept
+
+    def test_a_detached_tree_is_removed_by_its_slug(self):
+        path = self.detached('det')
+        rc, out = self.run_verb('remove', 'det')
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn('not phase/det', out)
+        self.assertFalse(os.path.exists(path), out)
+        self.assertNotIn(os.path.normcase(path), self.registered())
+
+    def test_a_detached_tree_is_abandoned_by_its_slug(self):
+        path = self.detached('det')
+        self.fx.write('tip.txt', 'tip\n', root=path)
+        tip = self.fx.commit('unlanded tip', 'tip.txt', cwd=path)
+        rc, out = self.run_verb('abandon', 'det', 'superseded', today=self.TODAY)
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn('not phase/det', out)
+        self.assertEqual(self.git('rev-parse', 'archive/det^{commit}'), tip)
+        self.assertFalse(os.path.exists(path), out)
+
+    def test_the_reflog_check_still_refuses_a_commit_only_it_keeps(self):
+        path = self.detached('det')
+        left = self.left_behind(path)
+        rc, out = self.run_verb('remove', 'det')
+        self.assertNotIn('not phase/det', out)
+        self.assertKept(path, rc, out, left)
+
+    def test_a_tree_on_a_branch_off_its_template_is_still_refused(self):
+        path = self.workstream('one')
+        self.land('kit/one')
+        rc, out = self.run_verb('remove', 'one')
+        self.assertEqual(rc, 1, out)
+        self.assertIn('is on kit/one, not phase/one', out)
+        self.assertTrue(os.path.isdir(path), out)
+
+
 @real_git('git worktree remove of a missing folder: the fake does not model it, nor a reflog')
 class PruneOrphan(RemoveCase):
     """remove.prune_orphan (`--classify --apply` on an O tree): drops one stale registration and
