@@ -83,6 +83,17 @@ class LockedMain(unittest.TestCase):
         self.denied(self.run_ps("Start-Process cmd -WorkingDirectory: %s '/c','echo x > f.txt'" % drive),
                     'unplaced')
 
+    def test_a_computed_folder_is_no_place(self):
+        # read as a literal folder the guard cannot place is: the nested line has no directory
+        for workdir in ('$x', '"$x"', '(Join-Path $a b)'):
+            text = "Start-Process cmd -WorkingDirectory %s -ArgumentList '/c','echo x > f.txt'" % workdir
+            with self.subTest(text=text):
+                d = self.denied(self.run_ps(text), 'unplaced')
+                self.assertIn('the directory it runs in is unknown', d.reason)
+        d = self.denied(self.run_ps("Start-Process powershell -WorkingDirectory $x -ArgumentList "
+                                    "'-Command','Set-Content x.txt y'"), 'unplaced')
+        self.assertIn('the directory it runs in is unknown', d.reason)
+
     def test_a_wildcard_is_no_place(self):
         for workdir in (self.w.main[:-1] + '?', self.w.main[:-1] + '*', self.w.main[:-4] + '[r]epo',
                         '..' + BS + 'rep?', self.w.main[:-1] + '`o'):
