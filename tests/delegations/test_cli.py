@@ -54,7 +54,7 @@ class Cli(unittest.TestCase):
         return code, out.getvalue(), err.getvalue(), calls
 
     def test_an_arg_without_a_value_is_a_usage_error(self):
-        code, _, err, calls = self.main('run', 'D-001', '--arg', 'alpha', '--trigger', 'R-0001')
+        code, _, err, calls = self.main('run', 'D-001', '--arg', 'alpha', '--trigger', 'H-kit-0001')
         self.assertEqual(code, 2)
         self.assertIn('--arg takes NAME=VALUE', err)
         self.assertEqual(calls, [])
@@ -64,58 +64,58 @@ class Cli(unittest.TestCase):
 
     def test_an_abbreviated_flag_is_a_usage_error(self):
         self.write_list()
-        code, _, _, calls = self.main('run', 'D-001', '--arg', 'name=alpha', '--trig', 'R-0001')
+        code, _, _, calls = self.main('run', 'D-001', '--arg', 'name=alpha', '--trig', 'H-kit-0001')
         self.assertEqual(code, 2)
         self.assertEqual(calls, [])
 
     def test_no_delegation_list_is_refused(self):
-        code, _, err, calls = self.main('run', 'D-001', '--trigger', 'R-0001')
+        code, _, err, calls = self.main('run', 'D-001', '--trigger', 'H-kit-0001')
         self.assertEqual(code, 1)
         self.assertIn('nothing is delegated', err)
         self.assertEqual(calls, [])
 
     def test_an_operation_not_listed_is_refused(self):
         self.write_list()
-        code, _, err, calls = self.main('run', 'D-007', '--trigger', 'R-0001')
+        code, _, err, calls = self.main('run', 'D-007', '--trigger', 'H-kit-0001')
         self.assertEqual(code, 1)
         self.assertIn('D-007 is not in the delegation list', err)
         self.assertEqual(calls, [])
 
     def test_a_refused_run_exits_1(self):
         self.write_list()
-        code, out, err, _ = self.main('run', 'D-001', '--arg', 'name=alpha', '--trigger', 'R-0001',
-                                      refuse='R-0001 is retired')
+        code, out, err, _ = self.main('run', 'D-001', '--arg', 'name=alpha', '--trigger', 'H-kit-0001',
+                                      refuse='H-kit-0001 is retired')
         self.assertEqual((code, out), (1, ''))
-        self.assertIn('refused: R-0001 is retired', err)
+        self.assertIn('refused: H-kit-0001 is retired', err)
 
     def test_a_ruling_trigger_gets_no_hub(self):
         self.write_list()
-        res = drun.Result('R-0002', ['C:\\bin\\tool.exe', 'alpha'], 0, None)
-        code, out, _, calls = self.main('run', 'D-001', '--arg', 'name=alpha', '--trigger', 'R-0001',
+        res = drun.Result('H-kit-0002', ['C:\\bin\\tool.exe', 'alpha'], 0, None)
+        code, out, _, calls = self.main('run', 'D-001', '--arg', 'name=alpha', '--trigger', 'H-kit-0001',
                                         result=res)
         self.assertEqual(code, 0)
-        self.assertEqual(calls, [('D-001', [('name', 'alpha')], 'R-0001', None)])
-        self.assertIn('logged R-0002; ran: C:\\bin\\tool.exe alpha', out)
+        self.assertEqual(calls, [('D-001', [('name', 'alpha')], 'H-kit-0001', None)])
+        self.assertIn('logged H-kit-0002; ran: C:\\bin\\tool.exe alpha', out)
         self.assertIn('done: exit code 0', out)
 
     def test_a_question_trigger_gets_the_hub(self):
         self.write_list()
-        res = drun.Result('R-0002', ['tool.exe'], 0, None)
+        res = drun.Result('H-kit-0002', ['tool.exe'], 0, None)
         calls = self.main('run', 'D-001', '--arg', 'name=alpha', '--trigger', 'Q-1001', result=res)[3]
         self.assertEqual(calls[0][3], 'HUB')
 
     def test_a_failed_command_exits_4(self):
         self.write_list()
-        res = drun.Result('R-0002', ['tool.exe'], 3, None)
-        code, _, err, _ = self.main('run', 'D-001', '--arg', 'name=alpha', '--trigger', 'R-0001',
+        res = drun.Result('H-kit-0002', ['tool.exe'], 3, None)
+        code, _, err, _ = self.main('run', 'D-001', '--arg', 'name=alpha', '--trigger', 'H-kit-0001',
                                     result=res)
         self.assertEqual(code, delegated.FAILED)
         self.assertIn('failed: exit code 3', err)
 
     def test_a_command_that_cannot_start_exits_4(self):
         self.write_list()
-        res = drun.Result('R-0002', ['tool.exe'], None, 'could not start tool.exe: no')
-        self.assertEqual(self.main('run', 'D-001', '--arg', 'name=alpha', '--trigger', 'R-0001',
+        res = drun.Result('H-kit-0002', ['tool.exe'], None, 'could not start tool.exe: no')
+        self.assertEqual(self.main('run', 'D-001', '--arg', 'name=alpha', '--trigger', 'H-kit-0001',
                                    result=res)[0], delegated.FAILED)
 
 

@@ -86,7 +86,7 @@ The loader does not check these; the runner owns them:
 ## Running
 
 ```
-python <kit>/tools/delegated.py run D-nnn [--arg NAME=VALUE]... --trigger Q-nnnn|LEDGER-ID
+python <kit>/tools/delegated.py run D-nnn [--arg NAME=VALUE]... --trigger Q-nnnn|<ruling id>
 ```
 
 The PM runs it after the owner has ordered the run. The run line is `run D-nnn name=value ...`, with the arguments sorted by name. The owner orders one run in one of two ways:

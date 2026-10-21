@@ -69,24 +69,26 @@ class Hub(object):
 
 
 class Fixture(unittest.TestCase):
-    """A one-file ledger (ledger_path) and a program folder holding tool.exe."""
+    """A split ledger (ledger_dir: kit.md and pm.md) and a program folder holding tool.exe."""
 
     def setUp(self):
         self.dir = tempfile.mkdtemp(prefix='kit-delegated-')
         self.addCleanup(shutil.rmtree, self.dir, True)
-        self.ledger = os.path.join(self.dir, 'LEDGER.md')
+        self.folder = os.path.join(self.dir, 'ledger')
+        self.ledger = os.path.join(self.folder, 'kit.md')
         self.bin = os.path.join(self.dir, 'bin')
         os.makedirs(self.bin)
         self.exe = os.path.join(self.bin, 'tool.exe')
         open(self.exe, 'wb').close()
-        self.cfg = {'ledger_path': self.ledger, 'ledger_repos': ['kit', 'pm']}
+        self.cfg = {'ledger_dir': self.folder, 'ledger_repos': ['kit', 'pm']}
         self.environ = {'PATH': self.bin, 'SYSTEMROOT': 'C:\\Windows'}
         self.spawn = Spawn()
 
     def add(self, decides='run D-001 name=alpha', prov='typed', age=datetime.timedelta(hours=1),
             repo='kit', source='the owner, in session'):
-        return lwrite.add(self.ledger, repo, prov, 'Run it?', 'yes', decides, source,
-                          when=stamp(age), repos=self.cfg['ledger_repos']).id
+        return lwrite.add(os.path.join(self.folder, repo + '.md'), repo, prov, 'Run it?', 'yes',
+                          decides, source, when=stamp(age), repos=self.cfg['ledger_repos'],
+                          split=True).id
 
     def text(self):
         with open(self.ledger, encoding='utf-8') as fh:
@@ -136,7 +138,7 @@ class Arguments(Fixture):
                               True, 'none', ('owner-session',))
         self.assertEqual(schema.check_arg(op.args[0], 'Get-Process'), [])
         self.add(decides='run D-009 a=Get-Process')
-        self.refused('hits a hard exclusion', op=op, pairs=(('a', 'Get-Process'),), trigger='R-0002')
+        self.refused('hits a hard exclusion', op=op, pairs=(('a', 'Get-Process'),), trigger='H-kit-0002')
 
     def test_a_filled_precondition_that_hits_an_exclusion_is_refused(self):
         # 'aude/x' alone hits nothing; in its place the path is under .claude/ (E2).
@@ -144,7 +146,7 @@ class Arguments(Fixture):
                        preconditions=[{'kind': 'file-exists', 'path': 'C:/x/.cl{name}'}])
         self.assertEqual(schema.check_arg(op.args[0], 'aude/x'), [])
         self.add(decides='run D-001 name=aude/x')
-        self.refused('preconditions[0]', op=op, pairs=(('name', 'aude/x'),), trigger='R-0002')
+        self.refused('preconditions[0]', op=op, pairs=(('name', 'aude/x'),), trigger='H-kit-0002')
 
     def test_the_run_line_sorts_the_arguments_by_name(self):
         op = operation(command='tool {b} {a}', args=[{'name': 'b', 'pattern': '[a-z]+'},
@@ -192,17 +194,17 @@ class Program(Fixture):
         open(bat, 'wb').close()
         self.add(decides='run D-002 name=alpha')
         self.refused('is not an .exe', op=operation(id='D-002', command='tool.bat {name}'),
-                     trigger='R-0002')
+                     trigger='H-kit-0002')
 
     def test_a_relative_path_is_refused(self):
         self.add(decides='run D-002 name=alpha')
         self.refused('is a relative path', op=operation(id='D-002', command='bin/tool.exe {name}'),
-                     trigger='R-0002')
+                     trigger='H-kit-0002')
 
     def test_an_absolute_exe_is_started_as_it_is(self):
         self.add(decides='run D-002 name=alpha')
         self.run_op(op=operation(id='D-002', command=self.exe.replace('\\', '/') + ' {name}'),
-                    trigger='R-0002', environ={'PATH': ''})
+                    trigger='H-kit-0002', environ={'PATH': ''})
         self.assertEqual(self.spawn.calls[0][1]['executable'], os.path.normpath(self.exe))
 
     def test_kit_is_the_kit_folder(self):
@@ -210,7 +212,7 @@ class Program(Fixture):
         kit = os.path.join(self.dir, 'kit')
         os.makedirs(kit)
         open(os.path.join(kit, 'tool.exe'), 'wb').close()
-        self.run_op(op=operation(id='D-002', command='<kit>/tool.exe {name}'), trigger='R-0002',
+        self.run_op(op=operation(id='D-002', command='<kit>/tool.exe {name}'), trigger='H-kit-0002',
                     kit_root=kit)
         argv, kw = self.spawn.calls[0]
         self.assertEqual(argv, [os.path.normpath(os.path.join(kit, 'tool.exe')), 'alpha'])
@@ -221,7 +223,7 @@ class Program(Fixture):
         res = self.run_op(trigger=self.rid)
         self.assertIsNone(res.returncode)
         self.assertIn('could not start', res.error)
-        self.assertIn('## R-0002 |', self.text())
+        self.assertIn('## H-kit-0002 |', self.text())
 
 
 class Triggers(Fixture):
@@ -257,12 +259,12 @@ class Triggers(Fixture):
         rid = self.add()
         lwrite.add(self.ledger, 'kit', 'delegated', 'q', 'a', 'run D-001 name=alpha',
                    'under %s: by the PM' % rid, when=stamp(datetime.timedelta(minutes=30)),
-                   repos=self.cfg['ledger_repos'])
-        self.refused("is not the owner's", trigger='R-0002')
+                   repos=self.cfg['ledger_repos'], split=True)
+        self.refused("is not the owner's", trigger='H-kit-0002')
 
     def test_a_retired_entry_is_no_order(self):
         rid = self.add()
-        lwrite.retire(self.ledger, rid, 'spent', 'done', repos=self.cfg['ledger_repos'])
+        lwrite.retire(self.ledger, rid, 'spent', 'done', repos=self.cfg['ledger_repos'], split=True)
         self.refused('is retired', trigger=rid)
 
     def test_an_owner_entry_of_another_repo_is_refused(self):
@@ -270,7 +272,7 @@ class Triggers(Fixture):
         self.refused('is a ruling of repo pm', trigger=rid)
 
     def test_an_unknown_entry_is_refused(self):
-        self.refused('R-0042 is not in the ledger', trigger='R-0042')
+        self.refused('H-kit-0042 is not in the ledger', trigger='H-kit-0042')
 
     def test_no_ledger_is_refused(self):
         rid = self.add()
@@ -278,7 +280,7 @@ class Triggers(Fixture):
 
 
 class HubTrigger(Fixture):
-    """A question Q-1001 the owner answered with the run line, logged as R-0001."""
+    """A question Q-1001 the owner answered with the run line, logged as H-kit-0001."""
 
     LINE = 'run D-001 name=alpha'
 
@@ -286,7 +288,7 @@ class HubTrigger(Fixture):
         Fixture.setUp(self)
         self.add(decides='the owner chose run D-001 name=alpha', prov='selected',
                  source='hub Q-1001 and Q-1002')
-        self.q = {'id': 'Q-1001', 'status': 'logged', 'repo': 'kit', 'ruling': 'R-0001',
+        self.q = {'id': 'Q-1001', 'status': 'logged', 'repo': 'kit', 'ruling': 'H-kit-0001',
                   'options': [{'label': self.LINE}, {'label': 'not now'}],
                   'answer': {'choice': 0, 'label': self.LINE, 'note': '', 'via': 'web',
                              'at': (NOW - datetime.timedelta(hours=1)).astimezone().isoformat()}}
@@ -302,9 +304,9 @@ class HubTrigger(Fixture):
 
     def test_a_logged_answer_runs_once_and_is_logged(self):
         res = self.go()
-        self.assertEqual(res.entry, 'R-0002')
-        self.assertIn('## R-0002 | 2026-10-20 12:00Z | kit | delegated', self.text())
-        self.assertIn('Source: under R-0001: D-001 Q-1001', self.text())
+        self.assertEqual(res.entry, 'H-kit-0002')
+        self.assertIn('## H-kit-0002 | 2026-10-20 12:00Z | kit | delegated', self.text())
+        self.assertIn('Source: under H-kit-0001: D-001 Q-1001', self.text())
         self.assertIn('Decides: run D-001 name=alpha', self.text())
         self.assertEqual(self.hub.roles, ['agent'])
 
@@ -340,14 +342,14 @@ class HubTrigger(Fixture):
         self.deny('has no offset')
 
     def test_a_ruling_that_is_not_the_owners_is_refused(self):
-        lwrite.add(self.ledger, 'kit', 'delegated', 'q', 'a', 'd', 'under R-0001: hub Q-1001',
-                   when=stamp(datetime.timedelta(minutes=30)), repos=self.cfg['ledger_repos'])
-        self.q['ruling'] = 'R-0002'
+        lwrite.add(self.ledger, 'kit', 'delegated', 'q', 'a', 'd', 'under H-kit-0001: hub Q-1001',
+                   when=stamp(datetime.timedelta(minutes=30)), repos=self.cfg['ledger_repos'], split=True)
+        self.q['ruling'] = 'H-kit-0002'
         self.deny("is not the owner's")
 
     def test_a_ruling_whose_source_does_not_name_the_question_is_refused(self):
         self.add(decides='x', prov='typed', source='hub Q-10012')
-        self.q['ruling'] = 'R-0002'
+        self.q['ruling'] = 'H-kit-0002'
         self.deny('does not name Q-1001')
 
     def test_a_ruling_that_is_no_id_is_refused(self):
@@ -418,26 +420,30 @@ class UseOnce(Fixture):
         b.start()
         a.join(30)
         b.join(30)
-        self.assertEqual(out['a'], 'R-0002', out)
+        self.assertEqual(out['a'], 'H-kit-0002', out)
         self.assertIn('already ran', out['b'], out)
         self.assertEqual(self.text().count('| delegated'), 1)
         self.assertEqual(len(self.spawn.calls), 1)
 
     def test_a_ledger_refusal_starts_nothing(self):
         with open(self.ledger, 'a', encoding='utf-8') as fh:
-            fh.write('\n## R-0009 | broken\n')
+            fh.write('\n## H-kit-0009 | broken\n')
         self.refused('the ledger refused the run entry', trigger=self.rid)
 
-    def test_a_split_ledger_logs_in_the_repo_file(self):
-        folder = os.path.join(self.dir, 'split')
-        cfg = {'ledger_dir': folder, 'ledger_repos': ['kit', 'pm']}
-        rid = lwrite.add(os.path.join(folder, 'kit.md'), 'kit', 'typed', 'q', 'a',
-                         'run D-001 name=alpha', 'the owner', when=stamp(datetime.timedelta(hours=1)),
-                         repos=cfg['ledger_repos'], split=True).id
+    def test_a_one_file_ledger_logs_in_it(self):
+        path = os.path.join(self.dir, 'LEDGER.md')
+        cfg = {'ledger_path': path, 'ledger_repos': ['kit', 'pm']}
+        rid = lwrite.add(path, 'kit', 'typed', 'q', 'a', 'run D-001 name=alpha', 'the owner',
+                         when=stamp(datetime.timedelta(hours=1)), repos=cfg['ledger_repos']).id
         res = self.run_op(trigger=rid, cfg=cfg)
-        self.assertEqual(res.entry, 'H-kit-0002')
-        with open(os.path.join(folder, 'kit.md'), encoding='utf-8') as fh:
-            self.assertIn('Source: under H-kit-0001: D-001 H-kit-0001', fh.read())
+        self.assertNotEqual(res.entry, rid)
+        with open(path, encoding='utf-8') as fh:
+            text = fh.read()
+        self.assertIn('## %s | 2026-10-20 12:00Z | kit | delegated' % res.entry, text)
+        self.assertIn('Source: under %s: D-001 %s' % (rid, rid), text)
+        self.assertNotIn('delegated', self.text())
+        self.spawn.calls.clear()
+        self.refused('already ran', trigger=rid, cfg=cfg)
 
     def test_a_repo_with_no_ledger_file_is_refused(self):
         self.add(decides='run D-001 name=alpha', repo='kit')

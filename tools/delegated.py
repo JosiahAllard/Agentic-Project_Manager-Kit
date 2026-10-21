@@ -1,6 +1,6 @@
 """delegated.py: run one operation of the owner's delegation list (docs/delegations.md "Running").
 
-  delegated.py run ID [--arg NAME=VALUE]... --trigger Q-nnnn|LEDGER-ID
+  delegated.py run ID [--arg NAME=VALUE]... --trigger Q-nnnn|<ruling id>
       check the trigger, the arguments and the preconditions, log the run in the ledger
       (provenance delegated, not committed), then start the command as an argument list.
 

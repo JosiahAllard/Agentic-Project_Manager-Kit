@@ -43,6 +43,7 @@ from kitlib.ledger import read as lread
 from kitlib.ledger import write as lwrite
 from kitlib.ledger.errors import Refused as LedgerRefused
 from kitlib.ledger.errors import Usage as LedgerUsage
+from kitlib.proc import spawn as procspawn
 
 from . import schema
 
@@ -446,7 +447,7 @@ def _claim(op, order, line, found, cfg, now, lock_wait, pause):
     return added.id
 
 
-def run(op, pairs, trigger, cfg, hub=None, now=None, spawn=subprocess.run, checks=None,
+def run(op, pairs, trigger, cfg, hub=None, now=None, spawn=procspawn.run, checks=None,
         environ=None, kit_root=KIT_ROOT, pause=None, lock_wait=LOCK_WAIT):
     """Run the Operation `op` with the arguments `pairs` [(name, value)] on `trigger`; the module
     docstring gives the order. `cfg`: the machine config (kitlib.config.user.user_config). `hub`:
