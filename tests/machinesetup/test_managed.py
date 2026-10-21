@@ -154,6 +154,63 @@ class ManagedMode(ManagedBase):
         self.assertIn('add them to the template', out)
         self.assertEqual(T.readb(self.target), before)
 
+    def test_nested_keys_the_template_lacks_are_refused_by_path_and_kept(self):
+        have = self.rendered()
+        have['autoMode'] = {'allow': ['x'], 'environment': ['e'], 'soft_deny': ['s']}
+        dump(self.target, have)
+        before = T.readb(self.target)
+        code, out = self.run_it(apply=True)
+        self.assertEqual(code, M.EXIT_REFUSED, out)
+        self.assertIn('autoMode.environment, autoMode.soft_deny', out)
+        self.assertIn('add them to the template', out)
+        self.assertEqual(T.readb(self.target), before)
+
+    def test_a_nested_key_the_overlay_holds_is_not_refused(self):
+        self.overlay({'autoMode': {'environment': ['here']}})
+        have = self.rendered()
+        have['autoMode'] = {'allow': ['x'], 'environment': ['e']}
+        dump(self.target, have)
+        code, out = self.run_it(apply=True)
+        self.assertEqual(code, M.EXIT_OK, out)
+        self.assertEqual(load(self.target)['autoMode']['environment'], ['here'])
+
+    def test_a_subtree_under_a_template_value_that_is_no_object_is_refused_at_its_key(self):
+        dump(self.target, dict(self.rendered(), permissions={'allow': {'deep': 1}}))
+        code, out = self.run_it(apply=True)
+        self.assertEqual(code, M.EXIT_REFUSED, out)
+        self.assertIn(': permissions.allow;', out)
+
+    def test_extra_paths_walk_objects_but_not_lists(self):
+        data = {'a': {'b': 1}, 'l': [{'x': 1}], 's': 1}
+        have = {'a': {'b': 2, 'c': {'d': 1}}, 'l': [{'x': 1, 'y': 2}], 's': {'t': 1}, 'z': 0}
+        self.assertEqual(managed._extra_paths(have, data), ['a.c', 's', 'z'])
+
+    def test_a_file_differing_only_in_key_order_is_in_sync(self):
+        have = self.rendered()
+        dump(self.target, dict(reversed(list(have.items()))))
+        code, out = self.run_it()
+        self.assertEqual(code, M.EXIT_OK, out)
+        self.assertIn('in sync', out)
+        self.assertIn('managed-settings: nothing to do', out)
+
+    def test_a_block_the_merge_only_moved_is_not_a_removed_line_in_the_diff(self):
+        env = {'GIT_AUTHOR_NAME': 'Agent'}
+        self.overlay({'env': env})
+        have = dict(self.rendered(), env=env)
+        have = dict([('env', have.pop('env'))] + list(have.items()))     # env first, as the old file had it
+        have['permissions'] = {'allow': ['Bash']}
+        dump(self.target, have)
+        code, out = self.run_it()
+        self.assertEqual(code, M.EXIT_OK, out)
+        self.assertIn('-      "Bash"', out.replace('\r', ''))
+        self.assertNotIn('GIT_AUTHOR_NAME', '\n'.join(l for l in out.splitlines() if l.startswith(('-', '+'))))
+
+    def test_ordered_like_follows_the_old_order_and_appends_new_keys(self):
+        got = managed._ordered_like({'b': {'y': 1, 'x': 2, 'n': 3}, 'a': 1, 'new': 2, 'l': [{'q': 1}]},
+                                    {'a': 0, 'b': {'x': 0, 'y': 0}, 'gone': 1})
+        self.assertEqual(list(got), ['a', 'b', 'new', 'l'])
+        self.assertEqual(list(got['b']), ['x', 'y', 'n'])
+
     def test_a_key_the_overlay_holds_is_not_dropped(self):
         self.overlay({'model': 'opus'})
         dump(self.target, {'model': 'sonnet'})
