@@ -3854,13 +3854,22 @@ def git_stash_shared(event, ctx, cmd, gc, role, place):
     stack, so a bare `pop` can take another session's entry, and while the stack holds any entry
     the gate's stash guard refuses every gate and landing (docs/gate.md "The stash guard").
     Passes: list, show, create, a tagged push (-m/--message), apply or drop naming the entry,
-    branch <name> <stash>. A main checkout's stash is git-stash's (git_main_rules)."""
+    branch <name> <stash>. git reads a verb only as the first word after `stash`: a line that
+    starts with an option or `--` is a push (`git stash -- show` stashes the path `show`), so
+    only the first word is taken as the verb. An entry or branch name the shell computes
+    (`drop $E`) fails closed: empty, it leaves a bare drop of the top entry. A main checkout's
+    stash is git-stash's (git_main_rules)."""
     if not agent_session(event, ctx):
         return None
-    short, longs, pos = _opts('stash', gc.rest)
-    verb = pos[0] if pos else None
+    first = gc.rest[0] if gc.rest else None
+    if first is not None and (first.dyn or not first.text.startswith('-')):
+        verb, args = first, gc.rest[1:]
+    else:
+        verb, args = None, gc.rest              # no verb, or an option or `--` first: a push
+    short, longs, pos = _opts('stash', args)
     if verb is not None and not verb.dyn:
-        named = len(pos) >= (3 if verb.text == 'branch' else 2)
+        need = 2 if verb.text == 'branch' else 1
+        named = len(pos) >= need and not any(w.dyn for w in pos[:need])
         if verb.text in STASH_READS or (verb.text in STASH_NAMED + ('branch',) and named):
             return None
     if (verb is None or (verb.text == 'push' and not verb.dyn)) and \
