@@ -619,7 +619,10 @@ def hub_secret_folders(ctx):
     twice is listed once, and one jail.real cannot take is left out."""
     out = []
     pointer = jail.pointer_config_dir(ctx)
-    for p in [hubg.secret_folder(ctx.config_location().new)] +             ([os.path.join(pointer, hubg.FOLDER_NAME)] if pointer else []):
+    folders = [hubg.secret_folder(ctx.config_location().new)]
+    if pointer:
+        folders.append(os.path.join(pointer, hubg.FOLDER_NAME))
+    for p in folders:
         r = hub_real(p)
         if r and r not in [x[1] for x in out]:
             out.append((p, r))
@@ -1118,7 +1121,8 @@ def edit_target(event, ctx, target, cwd, role, what, unknown_why=None, rewrite=N
     d = ledger_rule(ctx, target, role, what) or pm_data_unknown(ctx, target, cwd, role, what) or \
         lock_state(event, ctx, target, role, what) or hub_secret_edit(event, ctx, target, role, what) or \
         delegations_edit(event, ctx, target, role, what, stand_in) or \
-        machine_config(event, ctx, target, role, what) or kit_json(event, ctx, target, role, what) or gate_result(event, ctx, target, role, what) or \
+        machine_config(event, ctx, target, role, what) or kit_json(event, ctx, target, role, what) or \
+        gate_result(event, ctx, target, role, what) or \
         generated_file(ctx, target, role, what) or backlog_edit(event, ctx, target, role, what)
     if d:
         return d
