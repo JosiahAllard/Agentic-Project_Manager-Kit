@@ -24,6 +24,15 @@ from kitlib.proc.process import close,open_process,own_ctime,proc_ctime
 from tests.bridge.test_pairing import chat
 
 RUNTIME_SOURCE='optional/bridge/hosts/claude/runtime.py'
+# The real hook, frontend and service processes run between a hook and its tools/call; under a
+# loaded gate their start-up has used most of production's 5 s HOOK_TTL (KIT-BRIDGE-CLAUDE-RUNTIME-FLAKE).
+LOADED_HOOK_TTL=120
+
+
+def long_hook_context(test):
+    """Give the hook context a bounded load-proof lifetime for one end-to-end test."""
+    patcher=patch('optional.bridge.hosts.claude.terminal.HOOK_TTL',LOADED_HOOK_TTL)
+    patcher.start();test.addCleanup(patcher.stop)
 
 
 class ClaudeRuntimeTests(unittest.TestCase):
@@ -102,7 +111,14 @@ class ClaudeRuntimeTests(unittest.TestCase):
 
     def start_service(self):
         inspector=FrontendInspector(self.kit,self.marker,sys.executable,{'claude':sys.executable})
-        self.service=BrokerService(self.controller,inspector,source_factory=self.sources,hook_sink=self.sources.hook_sink)
+        self.sink_calls=[]
+        def sink(peer,payload):
+            # Records each delivery: the hook swallows every error, so a lost one leaves no other trace.
+            try:result=self.sources.hook_sink(peer,payload)
+            except Exception as error:
+                self.sink_calls.append(getattr(error,'code',repr(error)));raise
+            self.sink_calls.append('ok');return result
+        self.service=BrokerService(self.controller,inspector,source_factory=self.sources,hook_sink=sink)
         self.service_thread=threading.Thread(target=self.service.run,args=(self.stop,),daemon=True)
         self.service_thread.start()
         child,native=self.frontend(actual=True)
@@ -178,6 +194,7 @@ class ClaudeRuntimeTests(unittest.TestCase):
         self.assertEqual(self.controller.pairs.registered(),())
 
     def test_actual_hook_sink_enrolls_cli_once_and_native_source_queues_selected_operation(self):
+        long_hook_context(self)  # a real hook then a call under load; expiry is unit-tested in test_claude_terminal: test_expired_hook_context_never_admits_a_later_request, test_hook_tool_use_replay_and_expired_capture_are_rejected
         self.cli_mode();self.start_service()
         target=chat('fixture-target')
         self.controller.enroll(target,lambda item:item==target)
@@ -188,6 +205,7 @@ class ClaudeRuntimeTests(unittest.TestCase):
         self.controller.owner.change(sender.reference,target.reference,enabled=True)
         result=self.call({'jsonrpc':'2.0','id':2,'method':'tools/call','params':{
             'name':'bridge_send','arguments':args,'_meta':{'sender':'fake','owner':True}}})
+        self.assertIn('result',result,result)
         self.assertFalse(result['result']['isError'],result)
         message=self.controller.outbox.message('runtime-operation')
         self.assertEqual(message.sender,sender)
@@ -226,7 +244,8 @@ class ClaudeRuntimeTests(unittest.TestCase):
             child.terminate();child.wait(timeout=3)
             self.start_service()
             self.hook('bridge_connections',{})
-            self.assertEqual([item.identity.native_session_id for item in self.controller.pairs.registered()],[self.cli])
+            self.assertEqual([item.identity.native_session_id for item in self.controller.pairs.registered()],[self.cli],
+                'hook sink calls: %r'%(self.sink_calls,))
         finally:close(held)
 
     def test_exited_frontend_held_open_by_another_handle_is_refused_and_dropped_from_cache(self):

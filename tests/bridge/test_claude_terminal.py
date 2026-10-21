@@ -180,9 +180,16 @@ class TerminalTests(unittest.TestCase):
             self.calls.observe_hook(peer,envelope)
         metadata=self.calls.metadata('mcp__kit__bridge_send',self.args,ticket=ticket)
         self.now[0]+=5
-        with self.assertRaises(TerminalError): self.calls.observe(metadata)
+        with self.assertRaisesRegex(TerminalError,'hook-context-expired-or-mismatched'): self.calls.observe(metadata)
         with self.assertRaisesRegex(TerminalError,'hook-replay'):
             self.calls.observe_hook(peer,envelope)
+
+    def test_expired_hook_context_never_admits_a_later_request(self):
+        _,peer,envelope=self.capture()
+        self.calls.observe_hook(peer,envelope)
+        request={'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':'bridge_send','arguments':self.args}}
+        self.now[0]+=5
+        with self.assertRaisesRegex(TerminalError,'hook-context-required'): self.calls.prepare_request(request)
 
     def test_private_request_can_observe_twice_but_consume_only_one_native_tool_call(self):
         _,peer,envelope=self.capture()

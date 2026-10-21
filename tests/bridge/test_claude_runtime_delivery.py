@@ -30,11 +30,14 @@ class ClaudeRuntimeDeliveryTests(unittest.TestCase):
     hook=fixture.ClaudeRuntimeTests.hook
 
     def recipient(self):
+        # Setup, discovery and the helper's start all fall between 'ready' and the write's connect;
+        # a loaded gate took longer than 5 s there (KIT-BRIDGE-CLAUDE-RUNTIME-FLAKE). The child is
+        # killed with the job at tearDown, so a test that never writes does not wait out the 30 s.
         pipe=r'\\.\pipe\LOCAL\cc-msg-runtime-recipient-'+uuid.uuid4().hex
         code=("import sys; sys.path.insert(0,"+repr(str(self.kit))+" ); "
             "import json,os; from urllib.parse import unquote; from kitlib.proc.pipe import PrivateListener,connect; from tests.bridge.pipes import send,frames_until_close; "
             "listener=PrivateListener("+repr(pipe)+"); print('ready',flush=True); "
-            "listener.accept(timeout=5); frames,closed=frames_until_close(listener,5); "
+            "listener.accept(timeout=30); frames,closed=frames_until_close(listener,5); "
             "print(json.dumps({'frames':frames,'closed':closed}),flush=True); "
             "status=json.loads(sys.stdin.readline()); "
             "connection=connect(status['pipe'],status['pid'],status['creation']); "
