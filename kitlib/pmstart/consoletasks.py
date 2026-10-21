@@ -7,8 +7,9 @@ tools/no_window.py as its first argument (kitlib.proc.spawn.CARRIER), which open
 registered by hand, or before the carrier, may not.
 
 A kit task is one whose name is a name the kit registers (`kit_names`) or one with an action that
-names a path inside a kit folder (`kit_roots`: this kit, the live checkout an export runs for, and
-the folder of every export of the plugin when this kit is one). A file named like a kit tool in
+names a path inside a kit folder (`kit_roots`: this kit, the live checkout an export runs for
+(KIT_LIVE_ROOT, else the main checkout the export's marker records), and the folder of every
+export of the plugin when this kit is one). A file named like a kit tool in
 another folder (another repository's tools\\gate.py) is not the kit's. Its program is judged by
 file name only: a console program in `CONSOLE` is flagged; pythonw.exe and anything else is not.
 `read_tasks` reads every task's actions from `schtasks /Query /XML ONE` (`xml_input` says how its
@@ -49,7 +50,8 @@ def _norm(path):
 
 def kit_roots(kit=KIT, environ=None):
     """The folders a kit task's action may name, normalised: `kit`; the live kit checkout when
-    `kit` is an export run for one (kitlib.pluginsource.live_root: KIT_LIVE_ROOT); and, when `kit`
+    `kit` is an export (kitlib.pluginsource.live_root: KIT_LIVE_ROOT, else the main checkout its
+    marker records when that holds kit.json and a tools folder); and, when `kit`
     is a plugin export (it holds pluginsource.MARKER), the folder that holds it, so a task line
     naming an export of another version is the kit's too."""
     from kitlib import pluginsource
