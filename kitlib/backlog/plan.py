@@ -935,9 +935,10 @@ def plan_block(snap, ctx, rid, members, owner_ask=None, ruling=None, reason=None
             raise Failure('`%s` is pulled with no `pulled_by`; `check` names it' % rid)
 
         def live(why):
-            return ('`%s` is in flight (pulled by %s), and %s. Its holder blocks or releases it, '
-                    'from that branch' % (rid, holder, 'its tree is live: %s' % why if why else
-                                         'a branch or worktree by that name exists'))
+            return ('`%s` is in flight (pulled by %s), and %s. Its holder blocks or releases it: %s'
+                    % (rid, holder, 'its tree is live: %s' % why if why else
+                       'a branch or worktree by that name exists',
+                       holder_form(rec, holder, 'block %s --on <member> --reason "<why>"' % rid)))
         stop = stop_pull(ctx, rid, holder, live)
     old =[m for m in rec.all('blocked_on') if m != '-']
     after = list(old)
@@ -1357,6 +1358,16 @@ def branch_name_error(name, root):
     return None
 
 
+def holder_form(rec, holder, verb):
+    """How a live pull's holder stops it, for stop_pull's refusals: from the branch's worktree, or
+    from any checkout with `--as <holder>` (a coordinator that pulled with `--as` is the holder;
+    a worker on that branch did not pull it). The record's `session:` is named as `--session S`
+    when it has one, as pull_branch.refusal does."""
+    session = rec.get('session')
+    return ('from that branch, or as that branch from any checkout (backlog.py -C <store> '
+            '%s--as %s %s)' % ('--session %s ' % session if session else '', holder, verb))
+
+
 def stop_pull(ctx, rid, holder, live, kept=True):
     """Whether the caller may stop `rid`'s pull by `holder` (block or release it): its holder (the
     caller's branch) may; anybody may when the pull is dead (no local branch, remote-tracking
@@ -1437,8 +1448,9 @@ def plan_release(snap, ctx, rid, reason, kept=True):
         raise Failure('`%s` is pulled with no `pulled_by`; `check` names it' % rid)
     def live(why):
         return ('the pull of `%s` by `%s` is live (a branch or worktree by that name exists)%s. '
-                'Its holder releases it, from that branch'
-                % (rid, holder, '; its tree is live: %s' % why if why else ''))
+                'Its holder releases it: %s'
+                % (rid, holder, '; its tree is live: %s' % why if why else '',
+                   holder_form(rec, holder, 'release %s --reason "<why>"' % rid)))
     stopped, found = stop_pull(ctx, rid, holder, live, kept)
     changes = [('state', ['open'])] + [(k, []) for k in rmod.PULL_KEYS + rmod.PREEMPT_KEYS]
     pairs = rmod.apply_changes(rec.pairs(), changes)
