@@ -26,7 +26,7 @@ Exit 0 OK; 1 `NOT FOUND:`, `ERROR:` or a RED check; 2 `USAGE:` or `REFUSED:`. `U
 The kit's one statement of the refusal rule; every other role and skill points here.
 
 - A classifier refusal or a permission denial is final: it ends that action. Send your caller the exact command, directory and verbatim message (a coordinator sends it to the PM, the PM to the owner) and continue other work. Never retry, reword, add a pre-emption flag, or route it through another tool, agent, shell or session.
-- A tool's `REFUSED:` on substance is final the same way. A refusal of the form only, whose message names the literal form, may be retried once, by a fresh agent, on the PM's word (R-0892).
+- A tool's `REFUSED:` on substance is final the same way. A refusal of the form only, whose message names the literal form, may be retried once, by a fresh agent, on the PM's word.
 - A kit-guard (hook) refusal is neither: fix the form its Instead: line gives, then retry.
 
 ## Never
