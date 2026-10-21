@@ -278,6 +278,9 @@ def shell_command(event, ctx, text, shell, cwd, role):
             d = rule(event, ctx, cmd, inv, cwd, role)
             if d:
                 return d
+    d = brace_limit(parsed, role)
+    if d:
+        return d
     d = busy_wait(event, ctx, parsed, cwd, role)
     if d:
         return d
@@ -285,6 +288,28 @@ def shell_command(event, ctx, text, shell, cwd, role):
         from . import fallback
         return fallback.check(event, ctx, text, cwd, role, parsed)
     return None
+
+
+def brace_limit(parsed, role):
+    """A line with a bash word whose brace groups give more than shell.BRACE_LIMIT words (rule
+    brace-limit, every session): the guard does not write that word out, so no path rule sees the
+    words bash makes from it, and the line is refused rather than read as a computed word. The
+    alternative is the word's shell text with the word replaced by a placeholder (docs/guard.md
+    "Rules")."""
+    if parsed.brace_over is None:
+        return None
+    text, start, end = parsed.brace_over
+    word = text[start:end]
+    if len(word) > 80:
+        word = word[:77] + '...'
+    alt = (text[:start] + BRACE_NAMES % sh.BRACE_LIMIT + text[end:]).strip()
+    return refuse('brace-limit', role, 'The guard could not read this command: its word %s gives more than %d '
+                  'words by brace expansion, and the guard writes out at most %d, so it cannot tell what the '
+                  'command names. Write the names out, or split them into words that give at most %d each.'
+                  % (word, sh.BRACE_LIMIT, sh.BRACE_LIMIT, sh.BRACE_LIMIT), alt)
+
+
+BRACE_NAMES = '<its names, written out or in brace words of at most %d each>'
 
 
 def backlog_shell(event, ctx, cmd, inv, cwd, role):

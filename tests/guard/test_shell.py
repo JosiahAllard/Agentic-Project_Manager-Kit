@@ -75,8 +75,8 @@ class Tokeniser(unittest.TestCase):
 
 class BraceExpansion(unittest.TestCase):
     """bash writes out every unquoted {a,b} group of a word, in its own order, nested groups too
-    (docs/guard.md "Arguments the shell rewrites"); past BRACE_LIMIT words the word is computed
-    and the parse unclean."""
+    (docs/guard.md "Arguments the shell rewrites"); past BRACE_LIMIT words the word is computed,
+    the parse unclean and the word kept as brace_over, which rule brace-limit refuses."""
 
     def words(self, word):
         p, c = cmds('rm ' + word, s.BASH)
@@ -122,6 +122,7 @@ class BraceExpansion(unittest.TestCase):
         self.assertEqual(s.BRACE_LIMIT, 256)
         p, ws = self.words('{a,b,c,d}{a,b,c,d}{a,b,c,d}{a,b,c,d}')
         self.assertEqual(p.unclean, [])
+        self.assertIsNone(p.brace_over)
         self.assertEqual(len(ws), 256)
         self.assertEqual((ws[0].text, ws[1].text, ws[-1].text), ('aaaa', 'aaab', 'dddd'))
 
@@ -135,6 +136,13 @@ class BraceExpansion(unittest.TestCase):
                 self.assertEqual(len(ws), 1)
                 self.assertTrue(ws[0].dyn)
                 self.assertEqual(ws[0].text, word)
+                text, start, end = p.brace_over
+                self.assertEqual(text[start:end], word)
+        # the first such word is the one kept
+        p, _c = cmds('echo {a,b}; rm x/{%s} y/{%s}' % (','.join(str(n) for n in range(257)),
+                                                     ','.join(str(n) for n in range(300))), s.BASH)
+        text, start, end = p.brace_over
+        self.assertTrue(text[start:end].startswith('x/{0,1,2,'), text[start:start + 20])
 
 
 ROUTED = 'C:\\routed-home'

@@ -119,7 +119,8 @@ def _brace_group(s, i):
     return None
 
 
-# bash: the most words one word's brace groups may give together; past it the word is computed
+# bash: the most words one word's brace groups may give together; past it the word is computed and
+# rule brace-limit refuses the line (kitlib.guard.rules.brace_limit)
 BRACE_LIMIT = 256
 BRACE_STOP = '\'"$`\\;|&()<>'      # ends a brace group's reading: quotes, expansions, operators
 _ANSI = {'n': '\n', 't': '\t', 'r': '\r', '\\': '\\', "'": "'", '"': '"', '?': '?', 'a': '\a',
@@ -210,6 +211,8 @@ class Parsed(object):
         self.commands = []
         self.unclean = []
         self.nests = 0              # nested shell texts parsed into it (commands._nest, MAX_NESTS)
+        self.brace_over = None      # (text, start, end) of the first word whose brace groups give more
+                                    # than BRACE_LIMIT words; text is that word's shell text, nested or not
 
     @property
     def clean(self):
@@ -726,8 +729,11 @@ class _Scan(object):
             words = [list(out)]
             for k, alts in self._braces:
                 if alts is None or len(words) * len(alts) > BRACE_LIMIT:
-                    # more words than the guard writes out: computed, as a variable would be
+                    # more words than the guard writes out: computed, as a variable would be, and
+                    # kept for rule brace-limit, which refuses the line (rules.brace_limit)
                     self.flag('a brace expansion of more than %d words' % BRACE_LIMIT)
+                    if self.parsed.brace_over is None:
+                        self.parsed.brace_over = (s, start, self.i)
                     self.toks.append(('w', Word(s[start:self.i], True, start, self.i, synth=True), subs))
                     return
                 words = [w[:k] + [a] + w[k + 1:] for w in words for a in alts]

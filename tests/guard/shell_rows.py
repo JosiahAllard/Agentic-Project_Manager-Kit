@@ -52,6 +52,12 @@ ROWS = [
      heavy('wt', 'godot --headless')),
     ('brace expansion as the program', lambda w: bash('{godot,x} --headless', w.wt), 'deny', 'heavy',
      heavy('wt', 'godot x --headless')),
+    ('brace expansion past 256 words', lambda w: bash('rm -f x/{%s}.txt; ls' % ','.join(str(n) for n in range(257)),
+                                                      w.wt), 'deny', 'brace-limit',
+     'rm -f <its names, written out or in brace words of at most 256 each>; ls'),
+    ('brace expansion past 256 words in a nested bash, subagent',
+     lambda w: ps("bash -c 'rm x/{%s}'" % ','.join(str(n) for n in range(257)), w.wt, sub=True), 'deny', 'brace-limit',
+     'rm <its names, written out or in brace words of at most 256 each>'),
 
     # ---------------------------------------------------------------- git spellings
     ('GIT_DIR prefix hiding a checkout', lambda w: bash('GIT_DIR=%s/.git git checkout main' % W.fwd(w.main), w.wt), 'deny', 'git-checkout', None),
