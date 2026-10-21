@@ -62,13 +62,9 @@ class SameDecisions(unittest.TestCase):
     def setUp(self):
         self.w = RealWorld()
         self.addCleanup(lambda: shutil.rmtree(self.w.base, True) if os.path.isdir(self.w.base) else None)
-        # Some rows have the rules place a relative path (the `<main checkout>` placeholder), which
-        # resolves against this process's folder: run from the world's base, not from a checkout
-        # whose config another program may be rewriting. Restored before the base is removed.
-        here = os.getcwd()
-        os.chdir(self.w.base)
-        self.addCleanup(os.chdir, here)
-        W.deny_softened()                      # the rows are test_rules.py's, judged with the softened rules at deny
+        # The rules place absolute paths only (the `<main checkout>` placeholder is text, never a
+        # path: test_place_placeholder.py), so the rows run from whatever folder the suite runs in.
+        W.deny_softened()                     # the rows are test_rules.py's, judged with the softened rules at deny
         self.addCleanup(W.allow_unplaced)
         self.w.git.ancestors.add((W.SHA_WT, 'main'))
         common = os.path.join(self.w.main, '.git')

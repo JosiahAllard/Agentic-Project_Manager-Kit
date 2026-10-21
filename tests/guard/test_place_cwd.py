@@ -1,11 +1,11 @@
 """test_place_decisions' rows decided from inside a checkout the filesystem reader hands to git.
 
 The gate runs the suite from a live worktree, whose common config other programs rewrite (the
-desktop app turning extensions.worktreeConfig on and off). Rows that make the rules place a
-relative path (the `<main checkout>` placeholder) resolve it against this process's folder, so
-SameDecisions runs from its own world's base: the checkout the suite started in is never read and
-nothing falls back to git. Here that checkout's config has extensions.objectformat, which the
-reader always hands to git (kitlib.guard.place)."""
+desktop app turning extensions.worktreeConfig on and off). The rules place absolute paths only
+(the `<main checkout>` placeholder is text, never a path), so the folder the suite runs in is never
+read and nothing falls back to git. Here that folder is a checkout whose config has
+extensions.objectformat, which the reader always hands to git (kitlib.guard.place): a relative
+path placed against it would count as a fallback."""
 import os
 import shutil
 import subprocess
