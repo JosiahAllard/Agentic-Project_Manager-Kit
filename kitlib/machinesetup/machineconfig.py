@@ -1,7 +1,9 @@
 """The keys machine setup writes to the machine config (kitlib.config.user): the agents' temp sweep
 key (kitlib.machinesetup.agenttemp) and the owner's email (kitlib.machinesetup.owner).
 
-A survey reads the file once per run (snapshot(): one Snapshot per file, kept on the context), and
+A survey reads the file once per run (snapshot(): one Snapshot per file, kept on the context;
+with a PM-repo pointer the owner's email goes to the PM repository's local.json and the sweep key
+to its config.json, kitlib.config.user.writable_file), and
 every change that writes a key checks the file still holds what the run last saw. Each write moves
 the snapshot on to the bytes it wrote, so two keys planned in one run both land, while a file
 another program changed since the survey refuses the write. The file's other keys and its layout
@@ -26,12 +28,13 @@ class Snapshot(object):
         self.path, self.raw = path, raw
 
 
-def snapshot(ctx):
-    """(Snapshot, None) of the machine config file a write would change, read once per context;
-    (None, why) when it cannot be written or read (kitlib.config.user.writable_file: a machine
-    config only in the retired folder, say)."""
+def snapshot(ctx, key):
+    """(Snapshot, None) of the machine config file a write of `key` would change (the PM
+    repository's config.json or local.json, or the home file with no pointer), read once per
+    context; (None, why) when it cannot be written or read (kitlib.config.user.writable_file: a
+    machine config still in the home folder with a pointer set, say)."""
     try:
-        path = kuser.writable_file(ctx.home)
+        path = kuser.writable_file(ctx.home, key)
     except ConfigError as e:
         return None, str(e)
     kept = ctx.__dict__.setdefault('_machine_config_snapshots', {})

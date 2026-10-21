@@ -1,14 +1,16 @@
-"""preflight's `config` line: which machine config file is read (kitlib.config.user.locate), and
-a machine that has the file in both the new and the retired folder (docs/kit-json.md "Moving the
-machine config folder"). It names files and keys, never a value.
+"""preflight's `config` line: which machine config files are read (kitlib.config.user.locate: the
+PM repository's `.pm-kit` folder with a good PM-repo pointer), a machine config still in the home
+folder (docs/kit-json.md "Moving the machine config into the PM repo"), and why the config cannot
+be read. It names files and keys, never a value.
 
 The `pointer` line (pointer_line) names the PM repository the PM-repo pointer gives
 (kitlib.config.pointer), or why it gives none.
 """
 import json
+import os
 
 from kitlib.config import ConfigError
-from kitlib.config import migration, pointer, user
+from kitlib.config import pointer, user
 
 PREFIX = 'config    '
 POINTER_PREFIX = 'pointer   '
@@ -22,10 +24,14 @@ def _read(path):
         return e
 
 
-def _fault(path):
-    """Why the strict reader refuses the file at `path`, in words and top-level key names only:
-    its own message quotes the refused values (`not %r`), and this line never shows a value."""
+def _fault(path, own, other, pm):
+    """Why the strict reader refuses the PM repository's file `path` (holding the keys `own`; the
+    keys `other` belong in the other file), in words and top-level key names only: its own message
+    quotes the refused values (`not %r`), and this line never shows a value. None when it is absent
+    or nothing in it alone is refused."""
     text = _read(path)
+    if isinstance(text, FileNotFoundError):
+        return None
     if isinstance(text, Exception):
         return 'cannot be read (%s)' % type(text).__name__
     seen = {'twice': False}
@@ -44,8 +50,16 @@ def _fault(path):
         return 'a key written twice in one object'
     if not isinstance(data, dict):
         return 'not a JSON object'
-    keys = user.failing_keys(data)
-    return 'bad key(s): %s' % ', '.join(keys) if keys else 'refused by the strict reader'
+    placed = [k for k in data if k in other or k in user.DROPPED_KEYS]
+    rest = {k: v for k, v in data.items() if k not in placed}
+    if own is user.POLICY_KEYS:
+        rest = user.resolved(rest, pm)
+    keys = sorted(set(placed) | set(user.failing_keys(rest)))
+    return 'bad key(s): %s' % ', '.join(keys) if keys else None
+
+
+def _shown(path):
+    return path.replace('\\', '/')
 
 
 def line(home=None):
@@ -54,31 +68,27 @@ def line(home=None):
     if loc.error:
         return PREFIX + 'BROKEN %s' % loc.error
     if loc.state == user.NONE:
-        return PREFIX + 'none - no machine config; the kit reads and writes %s' % loc.display(loc.new)
+        return PREFIX + ('none - no PM-repo pointer and no machine config in the home folder: every '
+                         'key has its default')
+    names = [os.path.basename(f) for f in (loc.path, loc.local) if os.path.isfile(f)]
     try:
         user.user_config(home, location=loc)
     except ConfigError:
-        return PREFIX + 'BROKEN %s: %s' % (loc.display(), _fault(loc.path))
-    if loc.state == user.OLD:
-        return PREFIX + ('FALLBACK %s is read: %s is absent. Move it (docs/kit-json.md "Moving the '
-                         'machine config folder")' % (loc.display(loc.old), loc.display(loc.new)))
-    if loc.state == user.NEW:
-        return PREFIX + loc.display(loc.new)
-    new_text, old_text = _read(loc.new), _read(loc.old)
-    if isinstance(old_text, Exception):
-        how = 'the old one unreadable (%s)' % old_text
-    elif new_text == old_text:
-        how = 'same content'
-    else:
-        keys = migration.differing_keys(new_text, old_text)
-        if keys == []:
-            how = 'same values, laid out differently'
-        else:
-            how = 'DIFFERENT (%s)' % ('keys: ' + ', '.join(keys) if keys is not None
-                                      else 'the old one is not a JSON object')
-    return PREFIX + ('WARN both %s (read) and %s (ignored) exist, %s - retire the old folder '
-                     '(docs/kit-json.md "Moving the machine config folder")'
-                     % (loc.display(loc.new), loc.display(loc.old), how))
+        faults = []
+        for path, own, other in ((loc.path, user.POLICY_KEYS, user.LOCAL_KEYS),
+                                 (loc.local, user.LOCAL_KEYS, user.POLICY_KEYS)):
+            why = _fault(path, own, other, loc.pm)
+            if why:
+                faults.append('%s: %s' % (_shown(path), why))
+        return PREFIX + 'BROKEN %s' % ('; '.join(faults) or '%s: refused by the strict reader'
+                                       % _shown(loc.path))
+    shown = '%s (%s)' % (_shown(loc.folder), ', '.join(names) if names else
+                         'no file yet: every key has its default')
+    if loc.leftover:
+        return PREFIX + ('WARN %s is read; %s is still in the home folder and ignored - retire it '
+                         'once the move is checked (%s)' % (shown, loc.display(loc.leftover),
+                                                             user.MOVE_DOC))
+    return PREFIX + shown
 
 
 def pointer_line():

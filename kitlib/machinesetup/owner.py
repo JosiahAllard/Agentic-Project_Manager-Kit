@@ -99,7 +99,7 @@ def survey(plan, ctx):
                   % ('git config user.email is not an email address (%r)' % git if git
                      else 'git config user.email is unset'))
         return
-    snap, why = machineconfig.snapshot(ctx)
+    snap, why = machineconfig.snapshot(ctx, KEY)
     if snap is None:
         plan.refuse('cannot write %s to the machine config: %s' % (KEY, why))
         return
@@ -119,7 +119,7 @@ def write_owner_email(home, snap, email, replace=False):
     if bad:
         raise ValueError(bad)
     if snap is None:
-        path = kuser.writable_file(home)
+        path = kuser.writable_file(home, KEY)
         try:
             with open(path, 'rb') as f:
                 raw = f.read()

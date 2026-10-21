@@ -421,7 +421,8 @@ def plan(root, path, branch=pmdata.DEFAULT_BRANCH, remote=pmdata.DEFAULT_REMOTE,
         raise _Refused('cannot find the git common dir: %s' % why)
     record = pmdata.read(common)
     machine = pmdata.machine_settings(home)
-    user.writable_file(home)                     # a config still only in the old folder: refused now
+    user.writable_file(home, pmdata.KEY)         # a config that cannot be read, or a pointer set
+                                                 # (pm_data is derived from it): refused now
     remote_exists, _urls = _check_remote(top, cfg, remote, url)
     rc, out, err = _git(top, 'for-each-ref', '--format=%(refname)', 'refs/heads/%s' % branch)
     if rc != 0:
@@ -466,11 +467,12 @@ def plan(root, path, branch=pmdata.DEFAULT_BRANCH, remote=pmdata.DEFAULT_REMOTE,
 
 def write_machine(home, settings):
     """Set the machine config's `pm_data` to `settings`, keeping every other key; the file is
-    replaced whole. It writes the new folder's file only (kitlib.config.user.writable_file), so a
-    machine whose config is still only in the old folder is refused. ConfigError (from reading or
-    that refusal) or OSError."""
+    replaced whole. It writes the home file only, with no PM-repo pointer
+    (kitlib.config.user.writable_file): with a pointer set pm_data is derived and the write is
+    refused, as is a machine config that cannot be read. ConfigError (from reading or that
+    refusal) or OSError."""
     user.user_config(home)                       # a file that does not check is never rewritten
-    path = user.writable_file(home)
+    path = user.writable_file(home, pmdata.KEY)
     try:
         with open(path, encoding='utf-8-sig') as f:
             data = parse_json(f.read(), path)
