@@ -252,6 +252,8 @@ get a stub, because they act on the machine, the owner's files or the kit itself
   docs/backlog-lint.md, docs/ROSTER.md, docs/content.md).
 - `launch.py`, `machine_setup.py`, `pm_data.py`, `pm_watch.py`, `hub.py`, `hub_mirror.py`, `pending.py`,
   `worktree_sweep_task.py`: the owner's and the PM's, on the machine config and the machine.
+- `delegated.py`: the PM's, to run one operation of the owner's delegation list on the owner's
+  order (docs/delegations.md "Running").
 - `no_window.py`: the carrier a scheduled task runs under `pythonw` so that no console window
   opens (docs/daily-full.md "The schedule").
 

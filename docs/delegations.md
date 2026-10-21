@@ -1,6 +1,6 @@
 # The owner's delegation list
 
-`kitlib.delegations` reads the list of operations the owner lets the PM run for them. It only reads and checks the list. It runs, grants and writes nothing. A runner is a later record (`kitlib/delegations/run.py`, `tools/delegated.py`).
+`kitlib.delegations` reads the list of operations the owner lets the PM run for them. `load()` only reads and checks the list; it runs, grants and writes nothing. The runner, `kitlib/delegations/run.py` with its entry point `tools/delegated.py`, runs one listed operation on the owner's order ("Running" below).
 
 ## Where it is
 
@@ -50,7 +50,7 @@ The command is split on whitespace only. Each token is passed as it stands, so t
 
 - these characters anywhere: `` " ' ` ; | & < > $ % ( ) { } [ ] @ , * ? # `` and a line break or NUL;
 - a `{name}` token that is not the whole token, or that names no declared argument;
-- any `<...>` other than `<kit>`. `<kit>` is allowed as a whole token or as a `<kit>/...` prefix, and a runner fills it in. Precondition strings follow the same placeholder rules.
+- any `<...>` other than `<kit>`. `<kit>` is allowed as a whole token or as a `<kit>/...` prefix, and the runner fills it in with the kit folder. Precondition strings follow the same placeholder rules.
 
 `check_arg(arg, value)` lists the problems of one argument value; an empty list means the value may be used. The value must pass all of these:
 
@@ -62,7 +62,7 @@ The command is split on whitespace only. Each token is passed as it stands, so t
 
 ## The hard exclusions
 
-These are fixed in `kitlib/delegations/schema.py`, and the file cannot lift them. They are checked against every command token, every precondition token and every argument value. Tokens are compared in lower case, with `\` read as `/` and the `.exe` dropped from an executable's name. A runner must check the filled-in command line again with `exclusion_hits`.
+These are fixed in `kitlib/delegations/schema.py`, and the file cannot lift them. They are checked against every command token, every precondition token and every argument value. Tokens are compared in lower case, with `\` read as `/` and the `.exe` dropped from an executable's name. The runner checks the filled-in command and precondition strings again with `exclusion_hits`, before it fills in `<kit>`.
 
 | Id | What is refused |
 |---|---|
@@ -74,13 +74,46 @@ These are fixed in `kitlib/delegations/schema.py`, and the file cannot lift them
 
 A refusal names the operation, the field, the token and the exclusion. For example: `operations[3] (D-004).command: 'runas' is elevation (E1, never delegable)`.
 
-## Not enforced here
+## Not enforced by the loader
 
-These are not enforced by the loader:
+The loader does not check these; the runner owns them:
 
-- `repo`: whether the named repository exists.
-- `shell`: whether the shell matches the command.
+- `repo`: the runner refuses an order for another repo, and logs the run in that repo's ledger. Whether the repository exists is never checked.
+- `shell`: informational. The runner never starts a shell (see "Running").
 - `trigger`: when an operation may run.
 - `preconditions`: whether they hold.
 
-The runner owns all four.
+## Running
+
+```
+python <kit>/tools/delegated.py run D-nnn [--arg NAME=VALUE]... --trigger Q-nnnn|LEDGER-ID
+```
+
+The PM runs it after the owner has ordered the run. The run line is `run D-nnn name=value ...`, with the arguments sorted by name. The owner orders one run in one of two ways:
+
+- On the hub: the PM asks a question with the run line as one option's label, the owner chooses it, and the PM logs the answer (an owner ledger entry whose Source names the question, then `hub.py questions log` with that ruling id). `--trigger Q-nnnn`. The operation must list `hub-answer` and be reversible.
+- In a session: the PM logs the owner's ruling with the run line as its Decides. `--trigger <that ledger id>`. The operation must list `owner-session`.
+
+`run(op, pairs, trigger, cfg)` checks, in this order, and refuses at the first failure with nothing run and nothing written:
+
+1. The trigger is a question id or a ledger id. The literal `session` and the standing triggers are refused.
+2. The arguments are exactly the declared ones, each given once and passing `check_arg`. The filled-in command and precondition strings hit no exclusion.
+3. The program, `argv[0]`, is an absolute `.exe` path, or a bare name found as `<name>.exe` in an absolute PATH folder. The working folder and relative PATH entries are never searched. A `.bat`, a `.cmd` or a script is refused, because Windows runs those through `cmd.exe`.
+4. The order:
+   - A question must be logged on the hub (read with the agent token). Its chosen option's label must be the run line, chosen in the last 24 h. The question's repo, when it has one, must be the operation's; an operation of repo `*` takes any. Its ruling must be a live owner entry (provenance `typed`, `selected` or `relayed-from-terminal`) whose Source names the question.
+   - A ledger id must be a live owner entry of the operation's repo (any repo for `*`), written in the last 24 h, whose Decides is the run line.
+5. The preconditions hold. `file-exists` needs an absolute path to a file. `branch-landed` needs the branch's tip, local or remote-tracking, to have landed (`kitlib.landed.look`). `checklist-line` needs a line of the PM start checklist that holds the text and is not a failed check.
+6. The claim, under the runner lock (`delegated-runs`, beside the ledger file). No live entry of provenance `delegated` may name this anchor or this trigger. Then one entry is added: provenance `delegated`, Decides the run line, Source `under <anchor>: D-nnn <trigger>`. The anchor is the owner entry: the question's ruling, or the ledger id itself. The entry is not committed, as with `ledger.py add`. So each question and each owner entry orders one run, and a failed run still uses up its order.
+7. The child: the argument list with `shell=False`, stdin closed, the kit folder as its working folder, and every `PYTHON*` variable dropped from its environment.
+
+Exit codes: 0 the command ran and exited 0; 1 refused, nothing run or written; 2 usage; 4 logged, and the command failed or could not start.
+
+## Known limits
+
+- D-003 is not runnable yet: its only trigger, `standing:pm-start-checklist`, is a standing trigger, and the runner refuses both standing triggers.
+- D-001 cannot run: its command is a PowerShell cmdlet, and the runner starts only an `.exe` from an argument list, never a shell.
+- A `branch-landed` branch deleted after it landed fails closed: with neither a local nor a remote-tracking branch, its tip cannot be told from a branch never pushed.
+- Retiring a run's `delegated` entry re-arms its trigger and anchor. The 24 h bound on the order limits how long that lasts.
+- The order check trusts the ledger and the hub ruling the PM writes. The runner checks that an owner entry names the run, not who wrote it.
+- Whether an agent can read the hub owner token, and that an unmarked window counts as the owner, are not settled here.
+- The preconditions are checked before the claim and the run, so one can stop holding in between.
