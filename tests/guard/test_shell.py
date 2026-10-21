@@ -73,6 +73,78 @@ class Tokeniser(unittest.TestCase):
                 self.assertEqual(p.unclean, ['an unclosed quote'])
 
 
+class BraceExpansion(unittest.TestCase):
+    """bash writes out every unquoted {a,b} group of a word, in its own order, nested groups too
+    (docs/guard.md "Arguments the shell rewrites"); past BRACE_LIMIT words the word is computed,
+    the parse unclean and the word kept as brace_over, which rule brace-limit refuses."""
+
+    def words(self, word):
+        p, c = cmds('rm ' + word, s.BASH)
+        return p, c[0].words[1:]
+
+    def assert_words(self, word, expected):
+        p, ws = self.words(word)
+        self.assertEqual(p.unclean, [], word)
+        self.assertEqual([w.text for w in ws], expected, word)
+        self.assertFalse(any(w.dyn for w in ws), word)
+
+    def test_every_group_in_bash_order(self):
+        self.assert_words('{a,b}{1,2}', ['a1', 'a2', 'b1', 'b2'])
+        self.assert_words('~/.pm-kit/{owner,x}-{delegations,y}.json',
+                          ['~/.pm-kit/owner-delegations.json', '~/.pm-kit/owner-y.json',
+                           '~/.pm-kit/x-delegations.json', '~/.pm-kit/x-y.json'])
+        self.assert_words('a{b,c}{d,e}{f,g}', ['abdf', 'abdg', 'abef', 'abeg', 'acdf', 'acdg', 'acef', 'aceg'])
+        self.assert_words('x{a,b}y{c}z', ['xay{c}z', 'xby{c}z'])
+
+    def test_nested_groups(self):
+        self.assert_words('~/.pm-kit/{x,{owner-delegations,y}}.json',
+                          ['~/.pm-kit/x.json', '~/.pm-kit/owner-delegations.json', '~/.pm-kit/y.json'])
+        self.assert_words('{a,b{c,d}}e', ['ae', 'bce', 'bde'])
+        self.assert_words('{{a,b}}', ['{a}', '{b}'])
+        self.assert_words('{a,{b}}', ['a', '{b}'])
+
+    def test_an_empty_alternative(self):
+        self.assert_words('a{,x}b', ['ab', 'axb'])
+
+    def test_what_bash_leaves_as_written(self):
+        for word, text in (("'{a,b}'", '{a,b}'), ('"{a,b}"', '{a,b}'), ('{a}', '{a}'), ('{}', '{}'),
+                           ('\\{a,b}', '{a,b}')):
+            with self.subTest(word):
+                self.assert_words(word, [text])
+        self.assert_words('{a,b}\\{c,d}', ['a{c,d}', 'b{c,d}'])
+
+    def test_powershell_has_no_brace_expansion(self):
+        p, c = cmds('Remove-Item "x/{b,c}{d,e}" \'y{b,c}\'', s.PS)
+        self.assertEqual(p.unclean, [])
+        self.assertEqual(c[0].argv, ['Remove-Item', 'x/{b,c}{d,e}', 'y{b,c}'])
+
+    def test_up_to_the_limit_every_word_is_written_out(self):
+        self.assertEqual(s.BRACE_LIMIT, 256)
+        p, ws = self.words('{a,b,c,d}{a,b,c,d}{a,b,c,d}{a,b,c,d}')
+        self.assertEqual(p.unclean, [])
+        self.assertIsNone(p.brace_over)
+        self.assertEqual(len(ws), 256)
+        self.assertEqual((ws[0].text, ws[1].text, ws[-1].text), ('aaaa', 'aaab', 'dddd'))
+
+    def test_past_the_limit_the_word_is_computed(self):
+        for word in ('x/{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}',     # 512 across groups
+                     'x/{a,b{1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16}{1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16}}',
+                     'x/{' + ','.join(str(n) for n in range(257)) + '}'):    # 257 in one group
+            with self.subTest(word[:40]):
+                p, ws = self.words(word)
+                self.assertEqual(p.unclean, ['a brace expansion of more than 256 words'])
+                self.assertEqual(len(ws), 1)
+                self.assertTrue(ws[0].dyn)
+                self.assertEqual(ws[0].text, word)
+                text, start, end = p.brace_over
+                self.assertEqual(text[start:end], word)
+        # the first such word is the one kept
+        p, _c = cmds('echo {a,b}; rm x/{%s} y/{%s}' % (','.join(str(n) for n in range(257)),
+                                                     ','.join(str(n) for n in range(300))), s.BASH)
+        text, start, end = p.brace_over
+        self.assertTrue(text[start:end].startswith('x/{0,1,2,'), text[start:start + 20])
+
+
 ROUTED = 'C:\\routed-home'
 GIVEN = 'C:\\given-home'
 

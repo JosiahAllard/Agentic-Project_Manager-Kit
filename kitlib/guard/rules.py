@@ -69,6 +69,8 @@ Rules, in the order they are checked:
                    ref or a repository the text does not name is refused too
   git-hooks-path   a change of core.hooksPath (git config, git -c, clone -c, GIT_CONFIG_*), in
                    any session
+  git-stash-shared git stash in a linked worktree by an agent session that adds an untagged
+                   entry or takes one it does not name (bare stash, pop, save, clear)
   owner-identity   the owner's email given to a commit, in any session but the owner's own
   kill-by-name     an agent session ending processes by name (taskkill /IM, Stop-Process -Name)
   busy-wait        (off by default) a foreground sleep loop with no counter, clock or timeout bounding it
@@ -278,6 +280,9 @@ def shell_command(event, ctx, text, shell, cwd, role):
             d = rule(event, ctx, cmd, inv, cwd, role)
             if d:
                 return d
+    d = brace_limit(parsed, role)
+    if d:
+        return d
     d = busy_wait(event, ctx, parsed, cwd, role)
     if d:
         return d
@@ -285,6 +290,28 @@ def shell_command(event, ctx, text, shell, cwd, role):
         from . import fallback
         return fallback.check(event, ctx, text, cwd, role, parsed)
     return None
+
+
+def brace_limit(parsed, role):
+    """A line with a bash word whose brace groups give more than shell.BRACE_LIMIT words (rule
+    brace-limit, every session): the guard does not write that word out, so no path rule sees the
+    words bash makes from it, and the line is refused rather than read as a computed word. The
+    alternative is the word's shell text with the word replaced by a placeholder (docs/guard.md
+    "Rules")."""
+    if parsed.brace_over is None:
+        return None
+    text, start, end = parsed.brace_over
+    word = text[start:end]
+    if len(word) > 80:
+        word = word[:77] + '...'
+    alt = (text[:start] + BRACE_NAMES % sh.BRACE_LIMIT + text[end:]).strip()
+    return refuse('brace-limit', role, 'The guard could not read this command: its word %s gives more than %d '
+                  'words by brace expansion, and the guard writes out at most %d, so it cannot tell what the '
+                  'command names. Write the names out, or split them into words that give at most %d each.'
+                  % (word, sh.BRACE_LIMIT, sh.BRACE_LIMIT, sh.BRACE_LIMIT), alt)
+
+
+BRACE_NAMES = '<its names, written out or in brace words of at most %d each>'
 
 
 def backlog_shell(event, ctx, cmd, inv, cwd, role):
@@ -386,7 +413,7 @@ def agent_session(event, ctx):
     """True for a subagent, or a session whose mark is one of guard_agent_marks (default
     AGENT_MARKS: coordinator, its old name conductor, deep-worker, consultant and pm), case
     ignored; a guard_agent_marks value replaces the default list. The rules only agents are held to (kill by name, lock state,
-    kit-json, the write jail) use it. The mark is compared without the kit plugin's prefix
+    kit-json, the write jail, git-stash-shared) use it. The mark is compared without the kit plugin's prefix
     (kitlib.agentname.bare_mark), so a role_resolver that does not strip it fails closed too."""
     if subagent(event):
         return True
@@ -3810,6 +3837,8 @@ def git_rules(event, ctx, cmd, inv, cwd, role):
     placed = gc.dir and not gc.unknown
     place = ctx.place(gc.dir) if placed else \
         repo.Place(repo.UNKNOWN, None, 'the directory git runs in is unknown', None, None)
+    if place.kind == repo.LINKED and sub == 'stash':
+        return git_stash_shared(event, ctx, cmd, gc, role, place)
     if place.kind not in (repo.MAIN, repo.UNKNOWN):
         return None
     d = git_main_rules(event, ctx, cmd, inv, gc, cwd, role, place)
@@ -3818,6 +3847,46 @@ def git_rules(event, ctx, cmd, inv, cwd, role):
     # gc.blind (GIT_DIR and the like, --git-dir, --work-tree, core.worktree) re-points git on
     # purpose, at a place the line nearly always names literally: its refusal stands
     return d
+
+
+STASH_READS = ('list', 'show', 'create')        # no entry added or taken
+STASH_NAMED = ('apply', 'drop')                 # pass with the entry named: `apply <sha>`, `drop stash@{1}`
+
+
+def git_stash_shared(event, ctx, cmd, gc, role, place):
+    """git stash in a linked worktree by an agent session (agent_session), when it adds an entry
+    with no tag or takes one it does not name: every worktree of the repository shares the stash
+    stack, so a bare `pop` can take another session's entry, and while the stack holds any entry
+    the gate's stash guard refuses every gate and landing (docs/gate.md "The stash guard").
+    Passes: list, show, create, a tagged push (-m/--message), apply or drop naming the entry,
+    branch <name> <stash>. git reads a verb only as the first word after `stash`: a line that
+    starts with an option or `--` is a push (`git stash -- show` stashes the path `show`), so
+    only the first word is taken as the verb. An entry or branch name the shell computes
+    (`drop $E`) fails closed: empty, it leaves a bare drop of the top entry. A main checkout's
+    stash is git-stash's (git_main_rules)."""
+    if not agent_session(event, ctx):
+        return None
+    first = gc.rest[0] if gc.rest else None
+    if first is not None and (first.dyn or not first.text.startswith('-')):
+        verb, args = first, gc.rest[1:]
+    else:
+        verb, args = None, gc.rest              # no verb, or an option or `--` first: a push
+    short, longs, pos = _opts('stash', args)
+    if verb is not None and not verb.dyn:
+        need = 2 if verb.text == 'branch' else 1
+        named = len(pos) >= need and not any(w.dyn for w in pos[:need])
+        if verb.text in STASH_READS or (verb.text in STASH_NAMED + ('branch',) and named):
+            return None
+    if (verb is None or (verb.text == 'push' and not verb.dyn)) and \
+            ('m' in short or any(n and 'message'.startswith(n) for n in longs)):
+        return None                             # a tagged push: its owner finds it again by the tag
+    top = quote(place.top)
+    return refuse('git-stash-shared', role, '`%s` adds to or takes from the stash stack every worktree of this '
+                  'repository shares; while it holds an entry every gate and landing refuses (docs/gate.md "The '
+                  'stash guard"). Set the work aside as a WIP commit on your branch: stage each path you changed, '
+                  'a new file too, then commit them with git -C %s commit -m "WIP: <what>" -- <each path you '
+                  'changed>, each in its own call. To stage:' % (bare(cmd), top),
+                  'git -C %s add -- <each path you changed>' % top)
 
 
 def git_main_rules(event, ctx, cmd, inv, gc, cwd, role, place):

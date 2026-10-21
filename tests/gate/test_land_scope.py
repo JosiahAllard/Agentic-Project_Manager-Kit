@@ -9,6 +9,7 @@ from unittest import mock
 
 from kitlib import gate as G
 from kitlib.backlog import record as rmod
+from kitlib.backlog import scope as scmod
 from kitlib.gate import land
 from tests.gate import test_land
 from tests.gate import test_land_store as tls
@@ -50,6 +51,15 @@ class ScopeCase(StoreLandCase):
         for rel, text in files.items():
             self.repo.write(rel, text, root=wt)
         return self.repo.commit(message, *files, cwd=wt)
+
+    def literal_branch(self, name, files):
+        """self.branch, each path staged by its top component: `[x]` in a pathspec is a glob to
+        git add, and the fake git takes no `:(literal)` magic."""
+        wt = self.repo.worktree(name)
+        for rel, text in files.items():
+            self.repo.write(rel, text, root=wt)
+        tops = sorted({p.split('/')[0] for p in files})
+        return wt, self.repo.commit('work on %s' % name, *tops, cwd=wt)
 
     def on_main(self, files, message='main work'):
         for rel, text in files.items():
@@ -166,13 +176,45 @@ class Refuses(ScopeCase):
         tip = self.repo.head(wt)
         self.assertIn('(FOO): b/x.py;', self.refused(self.land(tip)))
 
+    def test_a_comma_or_wildcard_path_is_covered_by_its_folder(self):
+        # NTFS forbids `*?` in a file name; `[]{}` and the comma reach the same code
+        self.seed(pulled('FOO', scope=['a/**', 'B']))
+        _, tip = self.literal_branch('feature', {'a/x,y.py': 'x\n', 'a/[x]{y}.py': 'y\n',
+                                                 'b/q,[r].py': 'q\n'})
+        self.assertEqual(self.scope_lines(self.landed(self.land(tip))), [])
+
+    def test_a_comma_path_in_tests_is_always_allowed(self):
+        self.seed(pulled('FOO', scope=['a/**']))
+        _, tip = self.branch('feature', {'a/x.py': 'x\n', 'tests/q,r.py': 'q\n'})
+        self.assertEqual(self.scope_lines(self.landed(self.land(tip))), [])
+
     def test_a_path_a_scope_cannot_name_is_outside_and_left_out_of_the_command(self):
         self.seed(pulled('FOO', scope=['a/**']))
-        _, tip = self.branch('feature', {'a/x,y.py': 'x\n'})
+        _, tip = self.literal_branch('feature', {'b/x,y.py': 'x\n', 'b/[z].py': 'z\n',
+                                                 'c.py': 'c\n'})
         line = self.refused(self.land(tip))
-        self.assertIn('(FOO): a/x,y.py (undecidable: a comma in a path', line)
-        self.assertNotIn('--scope "a/x,y.py"', line)
-        self.assertIn(OUTSIDE, line)
+        self.assertIn('(FOO): b/[z].py (no scope member can name it), b/x,y.py (no scope member '
+                      'can name it), c.py;', line)
+        self.assertNotIn('undecidable', line)
+        self.assertIn('set FOO --scope "a/**" --scope "c.py"; or land them on their own branch',
+                      line)
+
+    def test_an_undecidable_path_is_outside_and_left_out_of_the_command(self):
+        self.seed(pulled('FOO', scope=['a/**']))
+        _, tip = self.branch('feature', {'None': 'n\n'})        # NTFS allows the name
+        line = self.refused(self.land(tip))
+        self.assertIn('(FOO): None (undecidable: a path that reads as the', line)
+        self.assertNotIn('--scope "None"', line)
+        self.assertTrue(line.endswith('; land them on their own branch; nothing was merged'),
+                        line)
+
+    def test_only_paths_no_member_can_name_say_land_them_on_their_own_branch(self):
+        self.seed(pulled('FOO', scope=['a/**']))
+        _, tip = self.branch('feature', {'x,y.py': 'x\n'})
+        line = self.refused(self.land(tip))
+        self.assertIn('(FOO): x,y.py (no scope member can name it); land them on their own '
+                      'branch', line)
+        self.assertNotIn('--scope', line)
 
     def test_a_branch_holding_no_record_lands_with_a_note_before_landed(self):
         self.seed(pulled('QUX', by='kit/other'))
@@ -334,6 +376,11 @@ class Warns(ScopeCase):
         _, tip = self.branch('feature', {'a/x.py': 'x\n'})
         self.assert_warned(self.land(tip), 'cannot read the backlog store to check')
 
+    def test_a_comma_path_its_folder_covers_lands_without_a_warning(self):
+        self.seed(pulled('FOO', scope=['a/**']))
+        _, tip = self.branch('feature', {'a/x,y.py': 'x\n'})
+        self.assertEqual(self.scope_lines(self.landed(self.land(tip))), [])
+
     def test_a_check_that_stops_lands_with_a_warning(self):
         _, tip = self.branch('feature', {'a/x.py': 'x\n'})
         with mock.patch.object(land.Lander, '_scope_of', side_effect=RuntimeError('boom')):
@@ -345,6 +392,43 @@ class Default(unittest.TestCase):
     def test_the_scope_check_warns_for_now(self):
         self.assertIs(land.SCOPE_REFUSES, False)
         self.assertEqual(land.SCOPE_ALWAYS, ('tests/**', 'docs/INDEX.md'))
+
+
+class LiteralPaths(unittest.TestCase):
+    """A changed path is literal: only the scope member is read in the scope grammar
+    (land._covers), while kitlib.backlog.scope keeps reading a comma or a wildcard in a member as
+    a parse error."""
+
+    def test_a_folder_member_covers_a_comma_or_wildcard_path(self):
+        for path in ('a/x,y.py', 'a/[x].py', 'a/{x}.py', 'a/*.py', 'a/x?.py', 'a/b,c/d.py'):
+            self.assertTrue(land._covers(['a/**'], path), path)
+            self.assertTrue(land._covers(['A'], path), path)      # components, casefolded
+            self.assertFalse(land._covers(['b/**'], path), path)
+            self.assertIsNone(land._path_error(path), path)
+            self.assertTrue(land._unnamed(path), path)
+
+    def test_a_member_holding_a_wildcard_or_comma_still_covers_nothing(self):
+        self.assertFalse(land._covers(['a/[x].py'], 'a/[x].py'))
+        self.assertFalse(land._covers(['a/x,y.py'], 'a/x,y.py'))
+        self.assertFalse(land._covers(['none'], 'none'))
+
+    def test_a_path_a_member_can_name_compares_as_before(self):
+        self.assertTrue(land._covers(['src/foo.py'], 'SRC/Foo.py'))
+        self.assertFalse(land._covers(['src/Foo.py'], 'src/Foobar.py'))
+        self.assertFalse(land._unnamed('src/foo.py'))
+
+    def test_an_undecidable_path_stays_undecidable_and_covered_by_nothing(self):
+        for path in ('a\\b.py', 'c:x', 'a//b', '../a', ' a', 'None', 'a/b\nc'):
+            self.assertIsNotNone(land._path_error(path), path)
+            self.assertFalse(land._covers(['a/**', 'tests/**', 'c:x'], path), path)
+
+    def test_the_backlog_scope_grammar_is_unchanged(self):
+        self.assertIn('comma', scmod.path_shape_error('a/x,y.py'))
+        self.assertIsNotNone(scmod.scope_member_error('a/x,y.py'))
+        self.assertIsNotNone(scmod.scope_member_error('a/[x].py'))
+        for path in ('a/x,y.py', 'a/[x].py'):
+            with self.assertRaises(scmod.UndecidableScope):
+                scmod.members_collide('a/**', path)
 
 
 if __name__ == '__main__':

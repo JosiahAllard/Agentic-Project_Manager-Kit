@@ -17,6 +17,7 @@ from optional.bridge.win.leader import ServiceLeader
 from optional.bridge.win.service import BrokerService
 from kitlib.proc.job import Job
 from kitlib.proc.process import close,handle_ctime,open_process,own_ctime
+from tests.bridge.test_claude_runtime import long_hook_context
 from tests.bridge.test_pairing import chat
 
 FRONTEND_SOURCE='optional/bridge/mcp_frontend.py'
@@ -242,6 +243,7 @@ class PrivateFrontendTests(unittest.TestCase):
         self.assertFalse(self.service.frontends)
 
     def test_executable_claude_hook_and_frontend_share_private_native_context(self):
+        long_hook_context(self)  # a real hook then a call under load; expiry is unit-tested in test_claude_terminal: test_expired_hook_context_never_admits_a_later_request, test_hook_tool_use_replay_and_expired_capture_are_rejected
         from optional.bridge.hosts.claude.sessions import ClaudeDirectory
         from optional.bridge.hosts.claude.terminal import ClaudeTerminal,TerminalCalls
         from optional.bridge.hosts.claude.hook import entry_command
@@ -292,6 +294,7 @@ class PrivateFrontendTests(unittest.TestCase):
             self.assertEqual((child.returncode,stdout,stderr),(0,b'',b''))
             result=self.call({'jsonrpc':'2.0','id':2,'method':'tools/call','params':{
                 'name':'bridge_send','arguments':arguments,'_meta':{'sender':'fabricated'}}})
+            self.assertIn('result',result,result)
             self.assertFalse(result['result']['isError'],result)
             message=self.controller.outbox.message('native-hook-send')
             self.assertEqual(message.sender.identity.native_session_id,session)

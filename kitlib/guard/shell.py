@@ -78,7 +78,51 @@ def _ps_keyword_led(words, src):
         if w.text in _PS_ASSIGN and bare(w):
             first = words[k + 1]
     return first.text.lower() in PS_PAREN_KEYWORDS and bare(first)
-_BRACE = re.compile(r'\{([^\s{}\'"$`\\;|&()<>]*,[^\s{}\'"$`\\;|&()<>]*)\}')
+
+
+def _brace_group(s, i):
+    """(alternatives, end) of the bash brace group `{a,b}` that starts at s[i], groups nested in
+    it written out (`{a,b{c,d}}`: a, bc, bd); alternatives None when it gives more than
+    BRACE_LIMIT words. None when s[i] starts no group bash expands as read here: no comma at its
+    own level, or a space, quote, expansion, backslash or operator before its `}` (left literal:
+    docs/guard.md "Known limits")."""
+    alts, cur, over, comma, j = [], [''], False, False, i + 1
+    while j < len(s):
+        c = s[j]
+        if c == '{':
+            g = _brace_group(s, j)
+            if g is None:
+                k = s.find('}', j)
+                plain = s[j + 1:k] if k > j else None
+                if plain is None or any(ch.isspace() or ch in BRACE_STOP + '{,' for ch in plain):
+                    return None
+                g = [s[j:k + 1]], k + 1         # `{a,{b}}`: the inner `{b}` is text (a, {b})
+            sub, j = g
+            over = over or sub is None or len(cur) * len(sub) > BRACE_LIMIT
+            cur = [''] if over else [a + b for a in cur for b in sub]
+            continue
+        if c == ',' or c == '}':
+            alts.extend(cur)
+            over = over or len(alts) > BRACE_LIMIT
+            cur, alts = [''], ([] if over else alts)
+            if c == '}':
+                if not comma:
+                    return None                 # `{a}`: bash leaves it as written
+                return (None if over else alts), j + 1
+            comma = True
+            j += 1
+            continue
+        if c.isspace() or c in BRACE_STOP:
+            return None
+        cur = [a + c for a in cur]
+        j += 1
+    return None
+
+
+# bash: the most words one word's brace groups may give together; past it the word is computed and
+# rule brace-limit refuses the line (kitlib.guard.rules.brace_limit)
+BRACE_LIMIT = 256
+BRACE_STOP = '\'"$`\\;|&()<>'      # ends a brace group's reading: quotes, expansions, operators
 _ANSI = {'n': '\n', 't': '\t', 'r': '\r', '\\': '\\', "'": "'", '"': '"', '?': '?', 'a': '\a',
          'b': '\b', 'f': '\f', 'v': '\v', 'e': '\x1b', 'E': '\x1b'}
 _ANSI_NUM = re.compile(r'x[0-9A-Fa-f]{1,2}|[0-7]{1,3}|u[0-9A-Fa-f]{1,4}|U[0-9A-Fa-f]{1,8}|c.')
@@ -167,6 +211,8 @@ class Parsed(object):
         self.commands = []
         self.unclean = []
         self.nests = 0              # nested shell texts parsed into it (commands._nest, MAX_NESTS)
+        self.brace_over = None      # (text, start, end) of the first word whose brace groups give more
+                                    # than BRACE_LIMIT words; text is that word's shell text, nested or not
 
     @property
     def clean(self):
@@ -526,7 +572,7 @@ class _Scan(object):
         sh, s = self.shell, self.s
         self._kept = []             # bash: indexes in out of backslashes bash would drop
         self._synth = False
-        self._brace = None          # bash: (index in out, [alternatives]) of an unquoted {a,b}
+        self._braces = []           # bash: (index in out, [alternatives] or None) of each unquoted {a,b}
         if sh == PS and (self.startswith("@'") or self.startswith('@"')):
             rest = s[self.i + 2:self.i + 4]
             if rest[:1] == '\n' or rest == '\r\n':
@@ -588,12 +634,12 @@ class _Scan(object):
                         out.append('\\')
                         self.i += 1
                     continue
-                if c == '{' and self._brace is None:
-                    m = _BRACE.match(s, self.i)
-                    if m:
-                        self._brace = (len(out), m.group(1).split(','))
+                if c == '{':
+                    g = _brace_group(s, self.i)
+                    if g:
+                        self._braces.append((len(out), g[0]))
                         out.append('')
-                        self.i = m.end()
+                        self.i = g[1]
                         continue
                 if c == "'":
                     j = s.find("'", self.i + 1)
@@ -677,12 +723,21 @@ class _Scan(object):
             # a character no rule consumed (a stray > in PowerShell): a word of its own
             out.append(s[self.i])
             self.i += 1
-        if self._brace is not None:
-            # bash expands {a,b} into one word per alternative
-            k, alts = self._brace
-            for a in alts:
-                parts = list(out)
-                parts[k] = a
+        if self._braces:
+            # bash expands each {a,b} in turn: one word per alternative of the first group, each
+            # of them one per alternative of the next, and so on (`{a,b}{1,2}`: a1 a2 b1 b2)
+            words = [list(out)]
+            for k, alts in self._braces:
+                if alts is None or len(words) * len(alts) > BRACE_LIMIT:
+                    # more words than the guard writes out: computed, as a variable would be, and
+                    # kept for rule brace-limit, which refuses the line (rules.brace_limit)
+                    self.flag('a brace expansion of more than %d words' % BRACE_LIMIT)
+                    if self.parsed.brace_over is None:
+                        self.parsed.brace_over = (s, start, self.i)
+                    self.toks.append(('w', Word(s[start:self.i], True, start, self.i, synth=True), subs))
+                    return
+                words = [w[:k] + [a] + w[k + 1:] for w in words for a in alts]
+            for parts in words:
                 self.toks.append(('w', Word(''.join(parts), dyn, start, self.i, synth=True), subs))
                 subs = []
             return
