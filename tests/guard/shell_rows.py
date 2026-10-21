@@ -437,7 +437,8 @@ ROWS = [
      'deny', 'git-stash-shared', WIP),
     ('subagent stash branch of a variable name', lambda w: bash('git stash branch $B stash@{1}', w.wt, sub=True),
      'deny', 'git-stash-shared', WIP),
-    # git takes a verb only as the first word after `stash`; an option or `--` first makes the line a push
+    # git takes a verb only as the first word after `stash`; an option or `--` first makes the line a
+    # push (`stash -- show` stashes the path `show`), or one git refuses (`stash -q list` exits 128)
     ('subagent stash -q list is a push', lambda w: bash('git stash -q list', w.wt, sub=True), 'deny', 'git-stash-shared', WIP),
     ('subagent stash -- show is a push', lambda w: bash('git stash -- show', w.wt, sub=True), 'deny', 'git-stash-shared', WIP),
     ('subagent stash -u create is a push', lambda w: bash('git stash -u create', w.wt, sub=True), 'deny', 'git-stash-shared', WIP),
@@ -470,4 +471,30 @@ ROWS = [
                                                              sub=True), None, None, None),
     ('owner session bare stash in a worktree', lambda w: bash('git stash', w.wt), None, None, None),
     ('owner session stash pop in a worktree', lambda w: ps('git stash pop', w.wt), None, None, None),
+
+    # ---------------------------------------------------------------- stash's verb in a main checkout and the jail
+    # the verb is the first word after `stash` there too (rules.stash_reads): an option or `--` first
+    # is a push or a line git refuses, never a list or show
+    ('stash -- show in main is a push', lambda w: bash('git stash -- show', w.main), 'deny', 'git-stash',
+     'git -C "{main}" worktree add .claude/worktrees/<slug> -b <branch>'),
+    ('subagent stash -- list in main is a push', lambda w: bash('git stash -- list', w.main, sub=True),
+     'deny', 'git-stash', 'git -C "{main}" worktree add .claude/worktrees/<slug> -b <branch>'),
+    ('stash -q list in main, PowerShell', lambda w: ps('git stash -q list', w.main), 'deny', 'git-stash', None),
+    ('subagent stash --quiet show in main', lambda w: bash('git stash --quiet show', w.main, sub=True),
+     'deny', 'git-stash', None),
+    ('stash show -p in main reads', lambda w: bash('git stash show -p', w.main), None, None, None),
+    ('subagent stash list in main reads', lambda w: bash('git stash list --oneline', w.main, sub=True), None, None, None),
+    ('subagent stash -- show in another checkout is a push',
+     lambda w: bash('git -C "%s" stash -- show' % W.fwd(w.plain), w.wt, sub=True), 'deny', 'write-jail',
+     'git -C "{wt}" stash -- show'),
+    ('subagent stash -- show where -C is computed', lambda w: bash('git -C $x stash -- show', w.wt, sub=True),
+     'deny', 'unplaced', 'git -C "<main checkout>" worktree add .claude/worktrees/<slug> -b <branch>'),
+    ('subagent stash -- list in a place git cannot tell',
+     lambda w: bash('git -C "%s" stash -- list' % W.fwd(w.unknown), w.wt, sub=True), 'deny', 'unplaced', None),
+    ('subagent stash list in another checkout reads',
+     lambda w: bash('git -C "%s" stash list' % W.fwd(w.plain), w.wt, sub=True), None, None, None),
+    ('subagent stash list where -C is computed reads', lambda w: bash('git -C $x stash list', w.wt, sub=True),
+     None, None, None),
+    ('subagent notes list after an option reads',
+     lambda w: bash('git -C "%s" notes --ref=x list' % W.fwd(w.plain), w.wt, sub=True), None, None, None),
 ]

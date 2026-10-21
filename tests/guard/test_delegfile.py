@@ -280,6 +280,7 @@ class OwnerDelegations(unittest.TestCase):
         'checkout-index -a -f', 'checkout-index -f .pm-kit/owner-delegations.json',
         'reset --hard', 'reset --hard HEAD~1', 'reset --merge', 'reset --keep HEAD~1',
         'clean -fdx', 'clean -f .pm-kit', 'stash', 'stash push', 'stash pop', 'stash drop',
+        'stash -- show', 'stash -- list', 'stash -q list',     # a verb is only the first word: these push
         'read-tree -u -m HEAD',
         'sparse-checkout set docs', 'sparse-checkout disable', 'sparse-checkout reapply',
         'bisect start', 'bisect bad HEAD~3', 'bisect reset',
@@ -292,7 +293,7 @@ class OwnerDelegations(unittest.TestCase):
         'checkout main', 'reset --hard', 'clean -fdx', 'stash',
     )
     GIT_OPEN = (
-        'status', 'log', 'diff', 'show HEAD', 'stash list', 'stash show', 'clean -n', 'clean -fn',
+        'status', 'log', 'diff', 'show HEAD', 'stash list', 'stash show', 'stash show -p', 'clean -n', 'clean -fn',
         'clean --dry-run -f', 'clean -f docs', 'rm docs/x.md', 'mv docs/a.md docs/b.md',
         'restore --staged .pm-kit/owner-delegations.json', 'restore docs/x.md',
         'checkout -- docs/x.md', 'checkout-index -f docs/x.md', 'reset', 'reset --soft HEAD~1',

@@ -4,7 +4,7 @@ kill-by-name does; a main checkout's stash stays git-stash's. The command rows a
 tests/guard/shell_rows.py."""
 import unittest
 
-from kitlib.guard import context, rules
+from kitlib.guard import commands as cm, context, rules, shell as sh
 
 from . import world as W
 from .claudehost import decide
@@ -67,6 +67,29 @@ class MainCheckoutUnchanged(unittest.TestCase):
                 self.assertEqual((d.verdict, d.rule), ('deny', 'git-stash'), d.reason)
         d = decide(bash('git stash', self.w.wt, True), self.w.ctx())
         self.assertNotEqual(d.rule, 'git-stash')
+
+
+class VerbIsTheFirstWord(unittest.TestCase):
+    """git reads a stash verb only as the first word after `stash` (git 2.55, observed: `stash --
+    show` and `stash -- list` push the path, `stash -q list` exits 128), so rules.git_reads, which
+    the write jail asks, counts only `list` or `show` there as a read (rules.stash_reads)."""
+
+    @staticmethod
+    def call(*words):
+        return cm.GitCall(None, 'stash', [sh.Word(t, False, 0, 0) for t in words], None, False)
+
+    def test_an_option_or_dashes_first_is_no_read(self):
+        for words in (('--', 'show'), ('--', 'list'), ('-q', 'list'), ('--quiet', 'show'), ('-q', '--', 'show'),
+                      ('-m', 'x', 'list'), ()):
+            for strict in (False, True):
+                with self.subTest(words=words, strict=strict):
+                    self.assertFalse(rules.git_reads(self.call(*words), strict))
+
+    def test_list_and_show_first_read(self):
+        for words in (('list',), ('show',), ('show', '-p'), ('list', '--oneline'), ('show', 'stash@{1}')):
+            for strict in (False, True):
+                with self.subTest(words=words, strict=strict):
+                    self.assertTrue(rules.git_reads(self.call(*words), strict))
 
 
 if __name__ == '__main__':
