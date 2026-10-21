@@ -314,13 +314,21 @@ def mark(top, branch, why, cwd=None, liveness=None, environ=None, now=None):
     if merged:
         return _refuse(ctx, '%s is already in %s %s: landed work needs no mark (the plain verb or'
                             ' the nightly sweep removes it)' % (branch, s['upstream'], base[:10]))
-    work, _, ignored, err = remove.dirty(ctx, path)
+    work, disposable, ignored, err = remove.dirty(ctx, path)
     if work is None:
         return _refuse(ctx, '%s: its status could not be read (%s)' % (path, err))
     if work:
         return _refuse(ctx, '%s has uncommitted or untracked files (%d): %s%s - `--abandon` keeps'
                             ' commits only and refuses it' % (
                                 path, len(work), '; '.join(work[:5]), ' ...' if len(work) > 5 else ''))
+    if disposable:
+        # The sweep counts these as dirt (sweep.sweep_status), so a mark would never be acted on.
+        lines = ['?? ' + rel for rel in disposable]
+        return _refuse(ctx, '%s has untracked files (%d): %s%s - they match'
+                            ' worktree_remove.disposable_untracked, but the nightly sweep counts'
+                            ' them as dirt and never abandons the tree; delete them first' % (
+                                path, len(lines), '; '.join(lines[:5]),
+                                ' ...' if len(lines) > 5 else ''))
     if ignored:
         return _refuse(ctx, '%s has %s' % (path, remove.ignored_reason(ignored, path)))
     link = holders.link_reason(path)

@@ -193,6 +193,30 @@ class MarkExempt(MarkCase):
         self.assert_refused(rc, out, 'is exempt (kept by ruling X)')
 
 
+class MarkDisposable(MarkCase):
+
+    CONFIG = {'worktree_remove': {'disposable_untracked': ['*.tmp']}}
+
+    def test_a_tree_holding_a_disposable_file_is_refused(self):
+        """The sweep counts a disposable_untracked file as dirt (sweep.sweep_status), so a mark on
+        such a tree would promise an abandon the sweep never makes."""
+        path = self.workstream('a')
+        self.fx.write('scratch.tmp', 'x\n', root=path)
+        self.assertIn('uncommitted or untracked files (1): ?? scratch.tmp',
+                      sweep.sweep_status(remove.open_ctx(self.repo, None)[0], path))
+        rc, out = self.mark('kit/a')
+        self.assert_refused(rc, out, 'has untracked files (1): ?? scratch.tmp - they match'
+                                     ' worktree_remove.disposable_untracked')
+        self.assertTrue(os.path.exists(os.path.join(path, 'scratch.tmp')))
+
+    def test_once_they_are_deleted_it_is_marked(self):
+        path = self.workstream('a')
+        self.fx.write('scratch.tmp', 'x\n', root=path)
+        os.remove(os.path.join(path, 'scratch.tmp'))
+        rc, out = self.mark('kit/a')
+        self.assertEqual(rc, 0, out)
+
+
 class MarkTemplate(MarkCase):
 
     CONFIG = {'worktree_remove': {'branch_template': 'phase/{slug}'}}
