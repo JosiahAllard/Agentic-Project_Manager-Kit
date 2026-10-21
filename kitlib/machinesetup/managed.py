@@ -21,9 +21,10 @@ hook or statusLine path through `<config>/tools/<link>` is re-pointed to the kit
 
 The written file keeps the layout the managed file has (BOM, line ends, indent); a new one is
 written in settings.NEW_LAYOUT. An existing file is replaced whole, so the run is refused when it
-is not a JSON object or has a top-level key the rendered template lacks (the key is named: add it
-to the template). A replaced file is copied to a .bak beside it first, and the write is refused
-when the file changed since the survey or is a link.
+is not a JSON object or has a key at any depth the rendered template lacks (named by its dotted
+path: add it to the template; values inside lists are not walked). The write keeps the key order
+the existing file has, so the diff shows only real changes. A replaced file is copied to a .bak
+beside it first, and the write is refused when the file changed since the survey or is a link.
 
 survey_live() reads the managed file as it is, for the default mode and the older-kit switch: when
 it carries this kit's guard entry, no account settings.json gains one (settings). The plugin step
@@ -177,11 +178,12 @@ def guard_where(data, kit, home):
 
 
 def _target(plan, path, data):
-    """(raw, layout) of the managed file at `path`; (None, NEW_LAYOUT) when there is none; None
-    after a refusal. An existing file is replaced whole, so it is refused when it is no JSON object
-    or holds a top-level key that `data` (the rendered template, overlay included) lacks."""
+    """(raw, layout, parsed) of the managed file at `path`; (None, NEW_LAYOUT, None) when there is
+    none; None after a refusal. An existing file is replaced whole, so it is refused when it is no
+    JSON object or holds a key at any depth that `data` (the rendered template, overlay included)
+    lacks (_extra_paths)."""
     if not os.path.lexists(path):
-        return None, dict(settings.NEW_LAYOUT)
+        return None, dict(settings.NEW_LAYOUT), None
     if is_link(path) or not os.path.isfile(path):
         plan.refuse('%s is a link or not a file; this step replaces only a plain file' % path)
         return None
@@ -199,13 +201,44 @@ def _target(plan, path, data):
     if not isinstance(have, dict):
         plan.refuse('%s does not hold a JSON object' % path)
         return None
-    extra = sorted(k for k in have if k not in data)
+    extra = _extra_paths(have, data)
     if extra:
         plan.refuse('%s has keys that are neither in the kit template nor in the overlay, and replacing '
                     'the file would drop them: %s; add them to the template (%s)'
                     % (path, ', '.join(extra), source()))
         return None
-    return raw, layout
+    return raw, layout, have
+
+
+def _extra_paths(have, data, prefix=''):
+    """The dotted paths of the keys `have` holds that `data` lacks, sorted. Objects are walked key
+    by key, as merge() does; an object where `data` has a non-object is lost whole and named at
+    its own path. Lists are replaced values and are not walked."""
+    out = []
+    for k, v in have.items():
+        here = prefix + k
+        if k not in data:
+            out.append(here)
+        elif isinstance(v, dict):
+            if isinstance(data[k], dict):
+                out.extend(_extra_paths(v, data[k], here + '.'))
+            else:
+                out.append(here)
+    return sorted(out)
+
+
+def _ordered_like(data, have):
+    """A copy of `data` whose objects list their keys in the order `have` does, keys `have` lacks
+    last in `data`'s order: the written file moves nothing the old one had, so a diff shows real
+    changes only."""
+    if not isinstance(data, dict):
+        return data
+    old = have if isinstance(have, dict) else {}
+    out = dict((k, _ordered_like(data[k], old[k])) for k in old if k in data)
+    for k in data:
+        if k not in out:
+            out[k] = data[k]
+    return out
 
 
 class ManagedContext(object):
@@ -223,7 +256,8 @@ class ManagedContext(object):
 
 
 def survey(ctx, apply=False):
-    """The --managed-settings plan: one write of the rendered template, or nothing."""
+    """The --managed-settings plan: one write of the rendered template (in the existing file's key
+    order), or nothing."""
     plan = Plan((SECTION,))
     if not os.path.isfile(kit_file(ctx.kit, settings.GUARD)):
         plan.refuse('%s is not a kit checkout (no %s)' % (ctx.kit, settings.GUARD))
@@ -252,8 +286,8 @@ def survey(ctx, apply=False):
     got = _target(plan, path, data)
     if got is None:
         return plan
-    raw, layout = got
-    new = settings.write(layout, data)
+    raw, layout, have = got
+    new = settings.write(layout, _ordered_like(data, have))
     if new == raw:
         plan.note(SECTION, '%s is in sync with the kit template' % path)
         return plan
