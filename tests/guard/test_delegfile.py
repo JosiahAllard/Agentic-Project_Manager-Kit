@@ -125,6 +125,10 @@ class OwnerDelegations(unittest.TestCase):
             (ps, 'Remove-Item ~\\.pm-kit\\owner-delegations.json'),
             (bash, 'cd ~ && rm .pm-kit/owner-delegations.json'),
             (bash, 'cd "$HOME" && echo {} > .pm-kit/owner-delegations.json'),
+            # brace groups bash writes out: every group, nested ones too
+            (bash, 'rm ~/.pm-kit/{owner,x}-{delegations,y}.json'),
+            (bash, 'rm ~/.pm-kit/{x,{owner-delegations,y}}.json'),
+            (bash, 'rm %s/.pm-kit/owner{-x,}{-delegations,}.json' % data),
             # a folder that holds it
             (bash, 'rm -rf %s' % hdir), (bash, 'rm -rf ~/.pm-kit'), (ps, 'Remove-Item -Recurse -Force "%s"' % data),
             (bash, 'mv %s/.pm-kit %s/old' % (data, data)),
@@ -158,6 +162,39 @@ class OwnerDelegations(unittest.TestCase):
                 (bash, 'git -C %s show HEAD:.pm-kit/owner-delegations.json' % W.fwd(self.w.data)),
                 (bash, 'git -C %s log -- .pm-kit/owner-delegations.json' % W.fwd(self.w.data))):
             self.assert_not_refused(lambda sub, s=shell, t=text: s(t, self.w.wt, sub), text)
+
+    def test_an_ordinary_brace_line_gets_no_refusal(self):
+        """Every brace group written out leaves a line inside the worktree as open as before: no
+        rule refuses or warns."""
+        for folder in ('a', 'b', os.path.join('b', 'a')):
+            os.makedirs(os.path.join(self.w.wt, folder), exist_ok=True)
+        for name in ('x.py', 'y.py', 'x1.txt', 'y2.txt'):
+            with open(os.path.join(self.w.wt, 'a', name), 'w', encoding='utf-8') as fh:
+                fh.write('x\n')
+        for text in ('cp a/{x,y}.py b/', 'cp a/{x,y}{1,2}.txt b/a/', 'mkdir -p src/{a,b{c,d}}'):
+            for environ, sub in (({context.ROLE_ENV: 'senior-worker'}, False), ({}, True)):
+                with self.subTest(text, environ=environ, sub=sub):
+                    d = self.run_one(lambda sub, t=text: bash(t, self.w.wt, sub), environ, sub)
+                    self.assertIsNone(d, d and (d.verdict, d.rule, d.reason))
+
+    def test_a_brace_line_past_the_limit_is_refused(self):
+        """A word whose brace groups give more than 256 words is not written out, so no path rule
+        sees the words bash makes from it: rule brace-limit refuses the line in every session, the
+        owner's included (docs/guard.md "Rules"). At 256 words every word is read, and the list's
+        own rule refuses the line."""
+        many = ','.join('a%d' % n for n in range(1, 257))
+        over = ('rm ~/.pm-kit/owner-{delegations,%s}.json' % many,
+                'rm -rf ~/{.pm-kit,%s}' % ','.join('x%d' % n for n in range(1, 257)),
+                "bash -c 'rm ~/.pm-kit/owner-{delegations,%s}.json'" % many)
+        for text in over:
+            for environ, sub in SESSIONS + (OWNER,):
+                with self.subTest(text[:50], environ=environ, sub=sub):
+                    d = self.run_one(lambda sub, t=text: bash(t, self.w.wt, sub), environ, sub)
+                    self.assertIsNotNone(d, 'allowed')
+                    self.assertEqual((d.verdict, d.rule), ('deny', 'brace-limit'), d.reason)
+                    self.assertIn('more than 256 words', d.reason)
+        at = 'rm ~/.pm-kit/owner-{delegations,%s}.json' % ','.join('a%d' % n for n in range(1, 256))
+        self.assert_refused(lambda sub: bash(at, self.w.wt, sub), at[:50])
 
     # ------------------------------------------------------------------ wildcards, the pipeline, stand-ins
 

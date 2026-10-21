@@ -545,6 +545,48 @@ class LockVerbs(Base):
                         self.allowed(self.shell(text, role, shell=shell))
 
 
+class FreeTextNamesTheLock(Base):
+    """A free-text option value (a record's --summary or --why-not-folded, a commit message) that
+    names the lock CLI, one of its owner verbs or a whole
+    lock command line is text, not a lock call, from any folder (not only the kit's export): the
+    policy reads only what a command runs (rules.tool_run). The defect was the pre-cut word scan,
+    gone since 861d77da9; these rows hold it gone, and every real lock call is still refused."""
+
+    def test_a_free_text_value_naming_the_lock_is_no_lock_call(self):
+        tools, data = self.w.base.replace('\\', '/') + '/tools', self.w.data.replace('\\', '/')
+        lock = 'python tools/machine_lock.py'
+        rows = ('python %s/backlog.py -C %s --session kit add EX-LOCK-TOP --summary '
+                '"%s top r-1 and %s hold whole refuse a pm" --scope kitlib/lock/api.py '
+                '--found-on none --why-not-folded "machine_lock.py run --force is the owner\'s"'
+                % (tools, data, lock, lock),
+                'python %s/backlog.py -C %s --session kit add EX-LOCK-HOLD --summary "machine_lock.py hold whole" '
+                '--why-not-folded "python -m tools.machine_lock top; run --force"' % (tools, data),
+                'python %s/commit.py -m "lock: %s top r-1 is the owner\'s" tools/machine_lock.py' % (tools, lock),
+                'git commit -m "lock: machine_lock.py run --force and hold whole stay the owner\'s"',
+                'echo "%s stop 42 --force"' % lock)
+        for shell in ('bash', 'powershell'):
+            for role in ('reviewer', 'pm'):
+                for text in rows:
+                    with self.subTest(shell=shell, role=role, text=text):
+                        self.assertIsNone(rolepolicy.check(self.shell(text, role, shell=shell), self.w.ctx()))
+
+    def test_a_real_lock_call_beside_the_free_text_is_still_refused(self):
+        tools, data = self.w.base.replace('\\', '/') + '/tools', self.w.data.replace('\\', '/')
+        lock = '%s/machine_lock.py' % tools
+        add = 'python %s/backlog.py -C %s --session kit add EX-X --summary "machine_lock.py top"' % (tools, data)
+        rows = (('bash', 'python %s top' % lock), ('powershell', 'python %s top' % lock),
+                ('bash', 'python -m tools.machine_lock top'), ('powershell', 'py -3 -m tools.machine_lock top'),
+                ('powershell', ('Start-' + "Process python -ArgumentList '%s top'") % lock),
+                ('bash', '%s; python %s top' % (add, lock)), ('powershell', '%s; python %s top' % (add, lock)),
+                ('bash', 'git commit -m "x" && python %s hold whole' % lock))
+        for shell, text in rows:
+            for role in ('reviewer', 'pm'):
+                with self.subTest(shell=shell, role=role, text=text):
+                    d = rolepolicy.check(self.shell(text, role, shell=shell), self.w.ctx())
+                    self.assertIsNotNone(d, text)
+                    self.assertEqual((d.verdict, d.rule), ('deny', 'role-lock'), d.reason)
+
+
 SHA = 'b85318db49bd'
 
 
