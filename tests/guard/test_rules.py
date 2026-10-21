@@ -11,14 +11,14 @@ import unittest
 from kitlib import lockmcp as lockmcp_names, pmdata
 from kitlib.config import user as kuser
 from kitlib.git import repo
-from kitlib.guard import context, rules
+from kitlib.guard import commands as cm, context, rules, shell as sh
 from kitlib.lockmcp import server as lockmcp
 
 from . import world as W
 from .claudehost import MCP_PREFIX, decide
 from .extra_rows import ROWS as EXTRA_ROWS
 from .review_rows import ROWS as REVIEW_ROWS
-from .shell_rows import LOCK, ROWS as SHELL_ROWS
+from .shell_rows import COMMIT, LOCK, ROWS as SHELL_ROWS
 from .world import bash, event, ps
 
 ROWS = [
@@ -95,7 +95,7 @@ ROWS = [
     ('add by path in main', lambda w: bash('git add -- docs/a.md', w.main), None, None, None),
     ('add -A in a worktree', lambda w: bash('git add -A', w.wt), None, None, None),
     ('commit -am in main', lambda w: bash('git commit -am "x"', w.main), 'deny', 'git-commit-all',
-     'git -C "{main}" add -- <each path you changed>'),
+     'python "{kit}/tools/commit.py" -C "{main}" -m "<subject>" --lander-main-checkout <each path you changed>'),
     ('commit whose message starts -a', lambda w: bash('git commit -m "-a note"', w.main), None, None, None),
     ('git in a place git cannot tell', lambda w: bash('git checkout x', w.unknown), 'deny', 'unplaced', None),
     ('git after a cd it cannot follow', lambda w: bash('cd "$WT" && git stash', w.wt), 'deny', 'unplaced', None),
@@ -127,7 +127,8 @@ ROWS = [
     ('subagent revert in main', lambda w: bash('git revert abc123', w.main, sub=True), 'deny', 'git-main-history', None),
     ('subagent am in main', lambda w: bash('git am x.patch', w.main, sub=True), 'deny', 'git-main-history', None),
     ('main-role commit in main', lambda w: bash('git commit -m "x"', w.main), None, None, None),
-    ('subagent commit in its worktree', lambda w: bash('git commit -m "x"', w.wt, sub=True), None, None, None),
+    ('subagent commit in its worktree', lambda w: bash('git commit -m "x"', w.wt, sub=True), 'deny', 'git-plain-commit',
+     COMMIT),
     ('subagent log in main', lambda w: bash('git log -1', w.main, sub=True), None, None, None),
 
     # ---------------------------------------------------------------- push to main (push_block on)
@@ -410,7 +411,7 @@ class PmDataPlace(unittest.TestCase):
         self.assertFalse(ctx.is_pm_data(self.w.wt))
         self.assertEqual(ctx.main_top(self.w.wt), self.w.main)
         self.assertIsNone(decide(self.write(os.path.join(self.w.wt, 'a.py'), self.w.wt), self.w.ctx()))
-        self.assertIsNone(decide(bash('git commit -m x', self.w.wt, sub=True), self.w.ctx()))
+        self.assertIsNone(decide(bash('git add a.py', self.w.wt, sub=True), self.w.ctx()))
 
     def test_without_pm_data_the_worktree_stays_linked(self):
         ctx = self.w.ctx()
@@ -724,7 +725,7 @@ class OwnerLockTools(unittest.TestCase):
         ('bash', 'git diff -- %s' % UI_REL),
         ('ps', 'git show HEAD:%s' % UI_REL),
         ('bash', 'git log --oneline -- %s' % UI_REL),
-        ('bash', 'git commit -m "port reserve_ui.pyw" -- %s' % UI_REL),
+        ('bash', 'git commit --dry-run -m "port reserve_ui.pyw" -- %s' % UI_REL),
         # python -m of another module that only names reserve_ui
         ('bash', 'python -m py_compile %s' % UI_REL),
         ('ps', 'python -m pytest -k reserve_ui'),
@@ -1266,6 +1267,61 @@ class OtherTools(unittest.TestCase):
                    event('Glob', {'pattern': '**/*'}, w.main, sub=True),
                    bash('', w.main), event('Bash', {}, w.main)):
             self.assertIsNone(decide(ev, w.ctx()))
+
+
+class PlainCommit(unittest.TestCase):
+    """git verbs that make a commit in a linked worktree are commit.py's for every agent session
+    (rules.git_plain_commit): plain git writes no Co-Authored-By trailer."""
+
+    def setUp(self):
+        self.w = W.World()
+        self.addCleanup(self.w.cleanup)
+
+    def decide(self, text, environ=None, sub=False, shell=bash):
+        return decide(shell(text, self.w.wt, sub), self.w.ctx(environ=environ or {}))
+
+    def test_every_marked_session_is_held(self):
+        for mark in ('coordinator', 'pm', 'deep-worker', 'conductor', 'consultant'):
+            with self.subTest(mark):
+                d = self.decide('git commit -m x -- a.py', {context.ROLE_ENV: mark})
+                self.assertEqual(d and d.rule, 'git-plain-commit', d and d.reason)
+                self.assertIn('writes no Co-Authored-By trailer', d.reason)
+                self.assertIn('/tools/commit.py" -C "%s" -m "<subject>" <each path you changed>' % W.fwd(self.w.wt),
+                              d.reason)
+
+    def test_an_unmarked_main_session_is_the_owners(self):
+        for text in ('git commit -m x', 'git merge main', 'git revert HEAD', 'git am x.patch', 'git pull'):
+            with self.subTest(text):
+                self.assertIsNone(self.decide(text))
+
+    def test_a_nested_shell_is_read(self):
+        d = self.decide("bash -c 'git commit -m x'", sub=True)
+        self.assertEqual(d and d.rule, 'git-plain-commit', d and d.reason)
+
+    def test_the_main_checkout_keeps_its_own_rules(self):
+        d = decide(bash('git commit -m x', self.w.main, True), self.w.ctx())
+        self.assertEqual(d and d.rule, 'git-main-history', d and d.reason)
+
+    def test_the_held_form_in_the_alternative_passes(self):
+        for text in ('git revert HEAD~2', 'git cherry-pick abc123', 'git am fix.patch'):
+            with self.subTest(text):
+                d = self.decide(text, sub=True)
+                self.assertEqual(d and d.rule, 'git-plain-commit', d and d.reason)
+                held = d.instead.replace('<patch>', 'fix.patch')      # the placeholder is no shell word
+                self.assertIsNone(self.decide(held, sub=True), held)
+
+    def test_scan(self):
+        for sub, argv, makes in (
+                ('commit', ['-m', 'x'], True), ('commit', ['--dry-run'], False), ('commit', ['--dry-r'], True),
+                ('revert', ['-n', 'HEAD'], False), ('revert', ['-mn', 'HEAD'], True), ('revert', ['-nm', '1', 'HEAD'], False),
+                ('revert', ['--no-commit', '--co', 'HEAD'], True), ('revert', ['--', '--no-commit'], True),
+                ('merge', ['--no-commit', '--no-ff', 'main'], False), ('merge', ['--squash', '--no-squash'], True),
+                ('merge', ['--ff-only', '--ff'], True), ('merge', ['--no-commit=x'], True),
+                ('merge', ['-X', '--no-commit', 'main'], True), ('pull', ['--no-commit'], False),
+                ('am', ['--abort'], False), ('am', ['--3way', 'x.patch'], True)):
+            with self.subTest(sub=sub, argv=argv):
+                cmd = cm.read('git %s %s' % (sub, ' '.join(argv)), sh.BASH, W.fwd(self.w.wt)).commands[0]
+                self.assertEqual(rules.commit_scan(sub, cm.git_call(cm.invocation(cmd)).rest)[0], makes)
 
 
 if __name__ == '__main__':

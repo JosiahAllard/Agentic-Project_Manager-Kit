@@ -113,7 +113,7 @@ class Rule(unittest.TestCase):
     def test_git_that_restores_or_removes_rendered_files_is_not_judged_by_it(self):
         """A checkout, merge or `git rm` writes what a commit holds, never a hand edit."""
         for text in ('git checkout -- hosts/claude/shell/agents/worker.md', 'git rm hosts/claude/shell/agents/worker.md',
-                     'git restore --source main hosts/claude/shell/agents', 'git merge main'):
+                     'git restore --source main hosts/claude/shell/agents', 'git merge --no-commit main'):
             with self.subTest(text):
                 self.assertIsNone(decide(bash(text, self.w.wt, True), self.w.ctx()))
 

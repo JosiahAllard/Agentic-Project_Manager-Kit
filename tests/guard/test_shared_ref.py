@@ -383,7 +383,7 @@ class SharedRefSessions(SharedRefBase):
         kit = W.fwd(self.w.kit_dir)
         for text in ('python "%s/tools/sync_base.py" -C "%s"' % (kit, self.wt),
                      'python "%s/tools/land.py" -C "%s" kit/wt --expect-tip %s' % (kit, self.main, W.SHA_WT),
-                     'git commit -m "guard: refuse git update-ref refs/heads/main"',
+                     'git commit --dry-run -m "guard: refuse git update-ref refs/heads/main"',
                      'echo "git update-ref -d refs/heads/main"',
                      'git log --grep update-ref'):
             with self.subTest(text):
