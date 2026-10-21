@@ -31,7 +31,7 @@ class ClaudeRuntimeDeliveryTests(unittest.TestCase):
 
     def recipient(self):
         # Setup, discovery and the helper's start all fall between 'ready' and the write's connect;
-        # a loaded gate took longer than 5 s there (KIT-BRIDGE-CLAUDE-RUNTIME-FLAKE). The child is
+        # a loaded gate took longer than 5 s there. The child is
         # killed with the job at tearDown, so a test that never writes does not wait out the 30 s.
         pipe=r'\\.\pipe\LOCAL\cc-msg-runtime-recipient-'+uuid.uuid4().hex
         code=("import sys; sys.path.insert(0,"+repr(str(self.kit))+" ); "

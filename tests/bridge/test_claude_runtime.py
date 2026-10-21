@@ -25,7 +25,7 @@ from tests.bridge.test_pairing import chat
 
 RUNTIME_SOURCE='optional/bridge/hosts/claude/runtime.py'
 # The real hook, frontend and service processes run between a hook and its tools/call; under a
-# loaded gate their start-up has used most of production's 5 s HOOK_TTL (KIT-BRIDGE-CLAUDE-RUNTIME-FLAKE).
+# loaded gate their start-up has used most of production's 5 s HOOK_TTL.
 LOADED_HOOK_TTL=120
 
 
