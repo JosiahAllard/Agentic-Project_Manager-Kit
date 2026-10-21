@@ -129,7 +129,11 @@ Every gate run's lock run watches for console windows while its steps run: `kitl
 ```
 windows opened: 1 - WARNING: a console window opened (the verdict does not count it)
   12:20:05 window pid 56324 python.exe via windowsterminal.exe CASCADIA_HOSTING_WINDOW_CLASS title "<python folder>\python.exe" [this run]
+    cmd: "<python folder>\python.exe" -c "import sys; sys.stdin.read()"
+    parent: pid 4410: python -m unittest tests.proc.test_x
 ```
+
+- `cmd:` and `parent:` say what spawned the window: the program's command line, its parent pid and the parent's command line, read when the window's event arrives (`winwatch.proc_info`). A process gone or unreadable by then shows `(unreadable)`.
 
 - N counts the windows the run opened (`[this run]`: the program was in the run's job, `Slot.window_owner`) and those it cannot place (`[run unknown]`: the program had exited, or could not be opened, when the window was read). A window whose program is outside the job is listed under `also seen, another run's: M` and not counted. A console host window shown and gone before it could be read is listed under `also seen: K console host window(s) ...` and not counted.
 - A window warns: the verdict, the exit code and the gate-OK record do not change. `WINDOWS_FAIL = True` in `kitlib/gate/runner.py` is the one change that makes a counted window fail the gate: `window_results` then adds a FAIL result named `windows` (`GATE FAILED: windows (windows: N console window(s) opened)`), the report line reads `- FAILED: a console window opened`, and the lock run records code 1. `windows` is a reserved step name (`kitlib/gate/steps.py` `RESERVED`), so no configured step shares that result's name.
