@@ -8,6 +8,7 @@ from .world import bash, ps
 
 BS = chr(92)
 LOCK = 'python "{kit}/tools/machine_lock.py" run'
+WIP = 'git -C "{wt}" commit -m "WIP: <what>" -- <each path you changed>'     # git-stash-shared's alternative
 
 
 def win(*parts):
@@ -407,4 +408,42 @@ ROWS = [
     ('cd || then git', lambda w: bash('cd %s || true; git stash' % W.fwd(w.wt), w.main), 'deny', 'unplaced', None),
     ('variable cd in a subshell stays unknown', lambda w: bash('(cd "$WT" && git stash)', w.wt), 'deny', 'unplaced', None),
     ('Push-Location chain', lambda w: ps('Push-Location %s; git checkout -b kit/x; Pop-Location' % w.wt, w.main), None, None, None),
+
+    # ---------------------------------------------------------------- stash in a linked worktree (git-stash-shared)
+    ('subagent bare stash in its worktree', lambda w: bash('git stash', w.wt, sub=True), 'deny', 'git-stash-shared', WIP),
+    ('subagent stash pop in its worktree', lambda w: bash('git stash pop', w.wt, sub=True), 'deny', 'git-stash-shared', WIP),
+    ('subagent stash pop naming its entry', lambda w: bash('git stash pop stash@{1}', w.wt, sub=True),
+     'deny', 'git-stash-shared', WIP),
+    ('subagent untagged stash push -u', lambda w: bash('git stash push -u', w.wt, sub=True), 'deny', 'git-stash-shared', WIP),
+    ('subagent untagged stash -u', lambda w: bash('git stash -u', w.wt, sub=True), 'deny', 'git-stash-shared', WIP),
+    ('subagent stash save', lambda w: bash('git stash save x', w.wt, sub=True), 'deny', 'git-stash-shared', WIP),
+    ('subagent stash store', lambda w: bash('git stash store -m x ' + W.SHA_WT, w.wt, sub=True), 'deny', 'git-stash-shared', WIP),
+    ('subagent stash clear', lambda w: bash('git stash clear', w.wt, sub=True), 'deny', 'git-stash-shared', WIP),
+    ('subagent stash drop with no entry', lambda w: bash('git stash drop', w.wt, sub=True), 'deny', 'git-stash-shared', WIP),
+    ('subagent stash apply with no entry', lambda w: bash('git stash apply --index', w.wt, sub=True),
+     'deny', 'git-stash-shared', WIP),
+    ('subagent stash branch with no entry', lambda w: bash('git stash branch kit/x', w.wt, sub=True),
+     'deny', 'git-stash-shared', WIP),
+    ('subagent stash with a computed verb', lambda w: bash('git stash "$VERB"', w.wt, sub=True), 'deny', 'git-stash-shared', WIP),
+    ('subagent stash, PowerShell', lambda w: ps('git stash', w.wt, sub=True), 'deny', 'git-stash-shared', WIP),
+    ('subagent stash pop, PowerShell', lambda w: ps('git stash pop', w.wt, sub=True), 'deny', 'git-stash-shared', WIP),
+    ('subagent git -C worktree stash from elsewhere', lambda w: bash('git -C "%s" stash' % W.fwd(w.wt), w.plain, sub=True),
+     'deny', 'git-stash-shared', WIP),
+    ('subagent bash -c stash pop', lambda w: bash("bash -c 'git stash pop'", w.wt, sub=True), 'deny', 'git-stash-shared', WIP),
+    ('subagent powershell -Command stash', lambda w: ps("powershell -NoProfile -Command 'git stash'", w.wt, sub=True),
+     'deny', 'git-stash-shared', WIP),
+    ('subagent stash list in its worktree', lambda w: bash('git stash list', w.wt, sub=True), None, None, None),
+    ('subagent stash show in its worktree', lambda w: bash('git stash show -p stash@{0}', w.wt, sub=True), None, None, None),
+    ('subagent stash create', lambda w: bash('git stash create', w.wt, sub=True), None, None, None),
+    ('subagent tagged stash push', lambda w: bash('git stash push -u -m tag-1', w.wt, sub=True), None, None, None),
+    ('subagent tagged stash, attached', lambda w: bash('git stash -um tag-1', w.wt, sub=True), None, None, None),
+    ('subagent tagged stash push --message', lambda w: bash('git stash push --message=tag-1 -- a.py', w.wt, sub=True),
+     None, None, None),
+    ('subagent stash apply by sha', lambda w: bash('git stash apply ' + W.SHA_WT, w.wt, sub=True), None, None, None),
+    ('subagent stash drop by name', lambda w: bash('git stash drop stash@{1}', w.wt, sub=True), None, None, None),
+    ('subagent stash branch naming the entry', lambda w: bash('git stash branch kit/x stash@{1}', w.wt, sub=True),
+     None, None, None),
+    ('subagent tagged stash push, PowerShell', lambda w: ps('git stash push -u -m tag-1', w.wt, sub=True), None, None, None),
+    ('owner session bare stash in a worktree', lambda w: bash('git stash', w.wt), None, None, None),
+    ('owner session stash pop in a worktree', lambda w: ps('git stash pop', w.wt), None, None, None),
 ]
