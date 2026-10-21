@@ -743,9 +743,12 @@ def plan_set(snap, ctx, rid, changes, unset=(), ruling=None, body=None, hold_rul
                       'owner|pm%s`, or a release from `-1` to `-`%s'
                       % (rid, rmod.owner_hold_label(rec), '' if top else ' --ruling R-nnnn',
                          '' if top else ' with `--ruling`'))
-    if new_by == 'pm' and ruling is None:
-        raise Refusal('`--priority-by pm` needs `--ruling R-nnnn`, the ruling the PM priced `%s` on'
-                      % rid)
+    # A price that ends at `priority_by: pm`, from the flag or kept from the record, names the
+    # PM's ruling: one given with no ruling would keep a ruling about the old price.
+    if ruling is None and get('priority_by') == ['pm'] and (new_by == 'pm' or prices):
+        raise Refusal('%s needs `--ruling R-nnnn`, the ruling the PM priced `%s` on'
+                      % ('`--priority-by pm`' if new_by == 'pm' else
+                         'a price on `%s` that keeps `priority_by: pm`' % rid, rid))
 
     moved = [k for k in rmod.PRIORITY_KEYS if rec.all(k) != get(k)]
     priced = [k for k in moved if k != 'priority_ruling']

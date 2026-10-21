@@ -143,6 +143,25 @@ class Price(TopCase):
         self.gated(lambda: self.checked('set', 'FOO', [('priority', ['3']),
                                                        ('priority_by', ['pm'])]))
 
+    def test_a_reprice_that_keeps_a_records_pm_price_still_needs_its_ruling(self):
+        # no `--priority-by`: the record's own `priority_by: pm` stays, so its ruling must too
+        self.seed(rec('FOO', priority='2', priority_by='pm', priority_ruling='R-9001'))
+        exc = self.gated(lambda: self.checked('set', 'FOO', [('priority', ['3'])]))
+        self.assertIn('priority_by: pm', str(exc))
+        foo = self.get('FOO')
+        self.assertEqual((foo.get('priority'), foo.get('priority_ruling')), ('2', 'R-9001'))
+        self.checked('set', 'FOO', [('priority', ['3'])], (), 'R-9002')
+        self.assertEqual(self.get('FOO').get('priority_ruling'), 'R-9002')
+
+    def test_an_owner_priced_owner_blocked_record_is_repriced_without_a_ruling(self):
+        # set-price-owner (TOP): only the agent-priced owner-blocked case keeps the ruling
+        self.seed(rec('BLK', **dict(OWNER_PRICED, **OWNER_BLOCKED)))
+        change = self.checked('set', 'BLK', [('priority', ['4']), ('priority_by', ['owner'])])
+        blk = self.get('BLK')
+        self.assertEqual((blk.get('priority'), blk.get('priority_by')), ('4', 'owner'))
+        self.assertEqual(blk.get('blocked_on'), 'owner')
+        self.assertIsNone(change.ruling)
+
     def test_a_minus_one_release_beside_a_live_hold_ruling_still_names_it(self):
         self.seed(rec('FOO', hold_ruling='R-9005', **MINUS_ONE))
         exc = self.gated(lambda: self.checked('set', 'FOO', [('priority', ['-'])],
