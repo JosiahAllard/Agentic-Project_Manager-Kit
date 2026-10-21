@@ -122,7 +122,7 @@ class LocationTest(_Case):
 class TolerantReadTest(_Case):
     def test_each_key_comes_from_its_own_file(self):
         write(self.policy, {'ledger_path': 'Q:\\ledger.md', 'owner_email': 'misplaced@example.invalid'})
-        write(self.local, {'owner_email': 'owner@example.invalid', 'standing_delegation': 'R-0009'})
+        write(self.local, {'owner_email': 'owner@example.invalid', 'standing_delegation': 'R-' + '9009'})
         u = self.ctx().user()
         self.assertEqual((u['ledger_path'], u['owner_email']), ('Q:\\ledger.md', 'owner@example.invalid'))
         self.assertIsNone(u['standing_delegation'])
