@@ -89,7 +89,7 @@ The loader does not check these; the runner owns them:
 python -I <kit>/tools/delegated.py run D-nnn [--arg NAME=VALUE]... --trigger Q-nnnn|<ruling id>
 ```
 
-`-I` keeps every `PYTHON*` variable and the user site folder out of the runner's own interpreter. Without `-I` (or `-E`), `tools/delegated.py` refuses when any `PYTHON*` variable is set, before it imports anything but `os` and `sys`: a `PYTHONPATH` folder could otherwise put its own `argparse` or `subprocess` in place before any check runs.
+Only `-I` protects the runner's own interpreter: it keeps every `PYTHON*` variable and the user site folder out before any code runs. Without `-I` (or `-E`), `tools/delegated.py` also refuses when any `PYTHON*` variable is set, before it imports anything but `os` and `sys`. That refusal is a backstop, not the guard: `site` has already run by then (Known limits).
 
 The PM runs it after the owner has ordered the run. The run line is `run D-nnn name=value ...`, with the arguments sorted by name. The owner orders one run in one of two ways:
 
@@ -129,3 +129,5 @@ Exit codes: 0 the command ran and exited 0; 1 refused, nothing run or written; 2
 - `USERNAME`, `USERDOMAIN`, `COMPUTERNAME`, `TEMP`, `TMP`, `NUMBER_OF_PROCESSORS`, `PROCESSOR_ARCHITECTURE` and `OS` come from the caller as they are, so a caller can still set them for the child (a `TEMP` folder it writes, for example).
 - The child and the runner's own Python load files from the owner's profile: `~/.gitconfig`, the PowerShell profile, the user site folder's `usercustomize.py` (when the runner is not started with `-I`). Anything that can write those, or HKCU `Volatile Environment`, which names the profile folders, steers the run.
 - The preconditions are checked before the claim and the run, so one can stop holding in between.
+- Without `-I`, `sitecustomize.py` or `usercustomize.py` on `PYTHONPATH`, and `PYTHONHOME`, run before the `PYTHON*` refusal; only `-I` protects.
+- Not proven: under a logon that is not interactive (a service, a scheduled task or SSH), HKCU `Volatile Environment` may be missing. The child then gets no `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `HOMEDRIVE` or `HOMEPATH`. That fails safe, but git and PowerShell then behave differently.
