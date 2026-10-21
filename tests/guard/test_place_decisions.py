@@ -62,7 +62,13 @@ class SameDecisions(unittest.TestCase):
     def setUp(self):
         self.w = RealWorld()
         self.addCleanup(lambda: shutil.rmtree(self.w.base, True) if os.path.isdir(self.w.base) else None)
-        W.deny_softened()                       # the rows are test_rules.py's, judged with the softened rules at deny
+        # Some rows have the rules place a relative path (the `<main checkout>` placeholder), which
+        # resolves against this process's folder: run from the world's base, not from a checkout
+        # whose config another program may be rewriting. Restored before the base is removed.
+        here = os.getcwd()
+        os.chdir(self.w.base)
+        self.addCleanup(os.chdir, here)
+        W.deny_softened()                      # the rows are test_rules.py's, judged with the softened rules at deny
         self.addCleanup(W.allow_unplaced)
         self.w.git.ancestors.add((W.SHA_WT, 'main'))
         common = os.path.join(self.w.main, '.git')
@@ -88,8 +94,8 @@ class SameDecisions(unittest.TestCase):
                 if a:
                     rules_seen.add(a.rule)
         if MINE:     # an elevated run's files are Administrators': the owner check hands them to git
-            self.assertEqual(fell_back.calls, 0,
-                             'the filesystem reader handed %d place(s) to git' % fell_back.calls)
+            self.assertEqual(fell_back.calls, 0, 'the filesystem reader handed %d place(s) to git: %s'
+                             % (fell_back.calls, ', '.join(sorted(fell_back.seen))))
         self.assertGreater(by_git.calls, 0)
         for rule in ('root-search', 'main-checkout', 'heavy', 'git-checkout'):
             self.assertIn(rule, rules_seen)
