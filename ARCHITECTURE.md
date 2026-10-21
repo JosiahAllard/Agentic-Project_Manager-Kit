@@ -27,7 +27,7 @@ The shape every kit tool follows. Change this file only with the owner's approva
 
 ## Details
 
-- The ledger path comes only from the user-profile machine config (`ledger_path`; docs/kit-json.md "Machine config keys"), which the installer writes once. Nothing overrides it, not `.kit.json` and not env, and guard.py denies agent edits to it. The kit holds no machine paths.
+- The ledger location comes only from the user-profile machine config (`ledger_dir` with `ledger_repos`, or `ledger_path` for one file; docs/kit-json.md "Machine config keys"), which the installer writes once. Nothing overrides it, not `.kit.json` and not env, and guard.py denies agent edits to it. The kit holds no machine paths.
 - `slot()` takes the lock's Win32 mutex on the thread that releases it (the owning thread). It prints nothing; entry points print.
 - Tests live in `tests/<pkg>/` as unittest tests and target the library directly; the entry-point tests cover only arguments and exit codes.
 - Tests run on an in-process fake git (kitlib/git/fake), except the classes marked `real_git` (docs/test-tools.md "Fake git").
