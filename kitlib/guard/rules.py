@@ -1038,8 +1038,10 @@ PM_DATA_WHY = ('Agents do not work in the PM data worktree %s (a worktree made f
 
 def new_worktree(ctx, top):
     """(sentence or None, command): the worktree to make of the main checkout `top`; for the PM
-    data worktree no worktree is offered (ctx.is_pm_data): a sentence saying so, and a read."""
-    if top and ctx.is_pm_data(top):
+    data worktree no worktree is offered (ctx.is_pm_data): a sentence saying so, and a read. The
+    `<main checkout>` placeholder (git_main_rules, where git cannot place the checkout) is text,
+    never a path: placed, it would resolve against the folder the hook runs in."""
+    if top and os.path.isabs(top) and ctx.is_pm_data(top):
         return PM_DATA_WHY % quote(top), 'git -C %s status' % quote(top)
     return None, WT_ADD % (quote(top) if top else '"<main checkout>"')
 
@@ -3848,6 +3850,14 @@ STASH_READS = ('list', 'show', 'create')        # no entry added or taken
 STASH_NAMED = ('apply', 'drop')                 # pass with the entry named: `apply <sha>`, `drop stash@{1}`
 
 
+def stash_reads(args):
+    """True when git stash with arguments `args` (the Words after `stash`) only reads: `list` or
+    `show` as the first word. git reads a verb only there: a line that starts with an option or
+    `--` is a push (`git stash -- show` stashes the path `show`) or one git refuses (`git stash -q
+    list` exits 128), never a list or show (git 2.55, observed)."""
+    return bool(args) and args[0].text in ('list', 'show')
+
+
 def git_stash_shared(event, ctx, cmd, gc, role, place):
     """git stash in a linked worktree by an agent session (agent_session), when it adds an entry
     with no tag or takes one it does not name: every worktree of the repository shares the stash
@@ -3855,8 +3865,8 @@ def git_stash_shared(event, ctx, cmd, gc, role, place):
     the gate's stash guard refuses every gate and landing (docs/gate.md "The stash guard").
     Passes: list, show, create, a tagged push (-m/--message), apply or drop naming the entry,
     branch <name> <stash>. git reads a verb only as the first word after `stash`: a line that
-    starts with an option or `--` is a push (`git stash -- show` stashes the path `show`), so
-    only the first word is taken as the verb. An entry or branch name the shell computes
+    starts with an option or `--` is a push (`git stash -- show` stashes the path `show`) or one
+    git refuses (`git stash -q list`), so only the first word is taken as the verb. An entry or branch name the shell computes
     (`drop $E`) fails closed: empty, it leaves a bare drop of the top entry. A main checkout's
     stash is git-stash's (git_main_rules)."""
     if not agent_session(event, ctx):
@@ -3865,7 +3875,7 @@ def git_stash_shared(event, ctx, cmd, gc, role, place):
     if first is not None and (first.dyn or not first.text.startswith('-')):
         verb, args = first, gc.rest[1:]
     else:
-        verb, args = None, gc.rest              # no verb, or an option or `--` first: a push
+        verb, args = None, gc.rest              # no verb, or an option or `--` first: a push (or a refused line)
     short, longs, pos = _opts('stash', args)
     if verb is not None and not verb.dyn:
         need = 2 if verb.text == 'branch' else 1
@@ -3926,8 +3936,7 @@ def git_main_rules(event, ctx, cmd, inv, gc, cwd, role, place):
         return refuse('git-clean', role, '`%s` deletes untracked files in %s. Remove what must go one named path at a '
                       'time; to list them:' % (text, where), 'git -C %s clean -n' % quote(top))
     if sub == 'stash':
-        verb = pos[:1]
-        if verb and verb[0].text in ('list', 'show'):
+        if stash_reads(args):
             return None
         return refuse('git-stash', role, '`%s` moves work in %s into a stash every worktree shares. %s' % (
             text, where, no_wt or 'Commit the change by explicit path on a branch in a worktree:'), wt)
@@ -3979,8 +3988,9 @@ GIT_READS = {'status', 'log', 'diff', 'show', 'rev-parse', 'ls-files', 'ls-tree'
 APPLY_REPORTS = ('--check', '--stat', '--numstat', '--summary')
 APPLY_CHECK_OPTS = set(APPLY_REPORTS) | {'-v', '--verbose', '-R', '--reverse', '--'}
 APPLY_STRIP_RE = re.compile(r'-p\d+$')
-# subcommands that only read when their first word is one of these (None: when they have no word)
-GIT_READ_VERBS = {'stash': ('list', 'show'), 'worktree': ('list',), 'remote': (None, 'show', 'get-url'),
+# subcommands that only read when their first word that is no option is one of these (None: when
+# they have none); stash's verb is its first word of all (stash_reads)
+GIT_READ_VERBS = {'worktree': ('list',), 'remote': (None, 'show', 'get-url'),
                   'reflog': (None, 'show', 'exists'), 'notes': (None, 'list', 'show'),
                   'submodule': (None, 'status', 'summary')}
 GIT_LIST_FLAGS = {'-l', '--list', '--show-current', '--merged', '--no-merged', '--contains', '--no-contains',
@@ -4330,6 +4340,8 @@ def git_reads(gc, strict=False):
         return read and not (strict and outs) and not archive_filter_set(gc)
     if sub in GIT_READS:
         return True
+    if sub == 'stash':
+        return stash_reads(gc.rest)
     pos = [t for t in words if not t.startswith('-')]
     if sub in GIT_READ_VERBS:
         return (pos[0] if pos else None) in GIT_READ_VERBS[sub]

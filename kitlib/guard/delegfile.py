@@ -346,7 +346,7 @@ def git(event, ctx, cmd, inv, role):
         why = 'may overwrite it'
     elif sub == 'clean' and not ('n' in short or 'dry-run' in longs) and (hit or not pos):
         why = 'may delete it'
-    elif sub == 'stash' and not (pos[:1] and pos[0].text in ('list', 'show')):
+    elif sub == 'stash' and not rules.stash_reads(args):
         why = 'may take it away or overwrite it'
     elif sub == 'sparse-checkout' and not (pos[:1] and pos[0].text in SPARSE_READS):
         why = 'may take it out of the work tree'
