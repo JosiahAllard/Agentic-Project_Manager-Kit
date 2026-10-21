@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from kitlib import pmstart
+from kitlib import pmdata, pmstart
 from kitlib.config import user as kuser
 from kitlib.config.types import ConfigError
 from kitlib.pmstart import fglock
@@ -361,6 +361,26 @@ class RealSettingsTest(unittest.TestCase):
                     self.assertIn("pm_data is derived", hub_lines[0])
                 else:
                     self.assertEqual(hub_lines[0], "- hub: the machine config could not be read (ConfigError)")
+                for word in ("SECRET", "7654321", ", not "):
+                    self.assertNotIn(word, txt)
+
+    def test_a_bad_pm_data_value_fails_the_kit_sync_check_naming_the_rule_and_never_the_value(self):
+        # the kit_sync check reads pm_data through kitlib.pmdata's own check (check_settings), whose
+        # PmDataError echoes the rejected value: the "could not check" line takes it out
+        # (pmstart._failure_text)
+        down = dict(make_client=lambda port: FakeClient(error=serve.NotRunning(port)))
+        for bad, rule in (({"path": "C:\\SECRETPATH", "branch": "SECRET BR", "remote": 7654321},
+                           "pm_data: branch must be a branch or remote name; "
+                           "remote must be a branch or remote name"),
+                          ({"path": ["SECRETPATH"]}, "pm_data: path must be an absolute path")):
+            with self.subTest(bad=bad):
+                def settings():
+                    return pmdata.check_settings(bad, "pm_data")
+                with self.assertRaises(pmdata.PmDataError) as cm:
+                    settings()
+                self.assertIn("SECRET", str(cm.exception))    # the value the line must not show
+                txt = pmstart.checklist({}, NOW, procs=[], pm_data=settings, hub_site=down, **FAKES)
+                self.assertIn("- could not check kit_sync: PmDataError: %s\n" % rule, txt + "\n")
                 for word in ("SECRET", "7654321", ", not "):
                     self.assertNotIn(word, txt)
 
