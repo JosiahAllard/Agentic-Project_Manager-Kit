@@ -109,10 +109,41 @@ def run_words(inv):
 def argv_words(cmd, words):
     """read_argv's (text, readable) pairs: a computed word is unreadable, and so is a PowerShell
     word holding a double quote (Windows PowerShell 5.1 passes it on unescaped, so it can split).
+    A bash word that is all one double-quoted string (`"$PWD"`, `"$M/x"`; not `"$@"` or
+    `${a[@]}`, which split) is policy.ONE: one word, its text unknown.
     A Start-Process -ArgumentList string comes already split as Windows splits it
     (commands._split_list): a double-quoted segment is one word, spaces and all."""
+    from kitlib.backlog import policy
     ps = cmd.shell == rules.sh.PS
-    return [(w.text, not w.dyn and not (ps and '"' in w.text)) for w in words]
+    out = []
+    for w in words:
+        if not w.dyn:
+            out.append((w.text, not (ps and '"' in w.text)))
+        else:
+            out.append((w.text, policy.ONE if _one_word(cmd, w) else False))
+    return out
+
+
+def _one_word(cmd, w):
+    """True when the bash word `w` is written as one double-quoted string holding no `"` or `@`."""
+    src = cmd.source or ''
+    if cmd.shell != rules.sh.BASH or w.synth or w.start is None or w.end is None or \
+            not 0 <= w.start < w.end <= len(src):
+        return False
+    return '"' not in w.text and '@' not in w.text and src[w.start:w.end] == '"%s"' % w.text
+
+
+def _unread(pairs, argv):
+    """The refusal's sentence naming the words read_argv could not read when they decided it (no
+    verb read, an unread option or operand, an unread -C or --as), else ''."""
+    from kitlib.backlog import policy
+    words = [t for t, ok in pairs if ok is not True]
+    if not words or (argv.verb is not None and not argv.given.get(policy.UNKNOWN) and
+                     policy.UNREAD not in (argv.root, argv.branch)):
+        return ''
+    return ' The guard cannot read %s (computed, or a word that can split), so it judged the run ' \
+           'as the strictest those words could make it; write them out.' \
+           % ', '.join('`%s`' % t for t in words)
 
 
 def role_run(event, ctx, cmd, inv, cwd, role):
@@ -125,7 +156,8 @@ def role_run(event, ctx, cmd, inv, cwd, role):
     if words is None:
         return None
     from kitlib.backlog import policy, roles
-    argv = policy.read_argv(argv_words(cmd, words))
+    pairs = argv_words(cmd, words)
+    argv = policy.read_argv(pairs)
     if argv.help:
         return None
     who = roles.role_of(agentname.bare(getattr(event, 'agent_role', None) or ''), True)
@@ -139,15 +171,25 @@ def role_run(event, ctx, cmd, inv, cwd, role):
     # the rows were sorted as if the record were held (not read: the strictest); when the role
     # may not take the unheld row either, that row is the one to name
     text = policy.refusal(who, policy.sort(argv.verb, argv.given, _Unheld())) or text
-    return rules.refuse(ROLE_RULE, role, '`%s`: %s (kitlib/backlog/roles.py). %s'
-                        % (rules.bare(cmd), text, ASK), read_alternative(ctx, cmd, cwd, argv))
+    return rules.refuse(ROLE_RULE, role, '`%s`: %s (kitlib/backlog/roles.py).%s %s'
+                        % (rules.bare(cmd), text, _unread(pairs, argv), ASK),
+                        read_alternative(ctx, cmd, cwd, argv))
+
+
+def _root(cmd, cwd, argv):
+    """The folder the run names (its -C, else the command's directory); None when -C is a word
+    the guard cannot read (policy.UNREAD) or no folder is known."""
+    from kitlib.backlog import policy
+    base = cmd.cwd or cwd
+    if argv.root is policy.UNREAD:
+        return None
+    return rules.sh.resolve_path(argv.root, base, cmd.shell) if argv.root is not None else base
 
 
 def read_alternative(ctx, cmd, cwd, argv):
     """The tool's read of the record the run names (`show <ID>`; `list` when it names none), at
     the folder it runs on (its -C, else the command's directory)."""
-    base = cmd.cwd or cwd
-    root = rules.sh.resolve_path(argv.root, base, cmd.shell) if argv.root is not None else base
+    root = _root(cmd, cwd, argv)
     where = rules.quote(root) if root else '<worktree>'
     what = 'show %s' % argv.rid if argv.rid and re.match(r'^[\w.-]+$', argv.rid) else 'list'
     return 'python %s -C %s %s' % (rules.kit_tool(ctx, TOOL), where, what)
@@ -168,8 +210,7 @@ def own_pull_refusal(ctx, cmd, cwd, argv, who):
     tool runs (its -C folder, else the command's directory), its pull compared with the branch
     checked out there; an --as naming another branch is not this session's."""
     from kitlib.backlog import policy, roles
-    base = cmd.cwd or cwd
-    root = rules.sh.resolve_path(argv.root, base, cmd.shell) if argv.root is not None else base
+    root = _root(cmd, cwd, argv)
     rec, branch = None, None
     if root:
         try:

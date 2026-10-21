@@ -33,6 +33,12 @@ from .errors import Refusal
 
 READS = roles.ACTIONS['read'].verbs
 UNKNOWN = 'unknown'
+# read_argv's readable mark for a word the shell passes as one word whose text the line does not
+# show (a double-quoted variable): read only as the value of an option whose value sorts nothing
+# (not DECIDING), which then reads as UNREAD; anywhere else it is unreadable
+ONE = 'one'
+DECIDING = ('--priority', '--unset', '--on')
+UNREAD = object()
 
 
 def _held(rec):
@@ -264,16 +270,24 @@ def verb_options(verb):
 
 
 def read_argv(words):
-    """What the backlog.py command line `words` (each (text, readable)) gives: Argv with -C's
-    folder, --as's branch, the verb (None: not read), the record id (None: none or not read),
-    sort's `given` and `help` (true: -h or --help, so nothing runs)."""
+    """What the backlog.py command line `words` (each (text, readable: True, False or ONE)) gives:
+    Argv with -C's folder, --as's branch (UNREAD: a ONE word), the verb (None: not read), the
+    record id (None: none or not read), sort's `given` and `help` (true: -h or --help, so nothing
+    runs)."""
     root = branch = verb = rid = None
     given = {'fields': [], 'priority': [], 'on': []}
     k, n = 0, len(words)
     plain = False                               # after `--` past the verb: every word is an operand
+
+    def value_at(j, name):
+        """The value word `j` gives option `name`, or None when it gives none that reads."""
+        if j >= n or not (words[j][1] is True or (words[j][1] == ONE and name not in DECIDING)):
+            return None
+        return words[j][0] if words[j][1] is True else UNREAD
+
     while k < n:
         text, ok = words[k]
-        if not ok:
+        if ok is not True:
             if verb is None:
                 return Argv(root, branch, None, None, {UNKNOWN: True}, False)
             given[UNKNOWN] = True
@@ -294,9 +308,10 @@ def read_argv(words):
                 if name not in GLOBAL:
                     return Argv(root, branch, None, None, {UNKNOWN: True}, False)
                 if GLOBAL[name] and not eq:
-                    if k + 1 >= n or not words[k + 1][1]:
+                    value = value_at(k + 1, name)
+                    if value is None:
                         return Argv(root, branch, None, None, {UNKNOWN: True}, False)
-                    value, k = words[k + 1][0], k + 1
+                    k += 1
                 if name == '-C':
                     root = value
                 elif name == '--as':
@@ -320,11 +335,12 @@ def read_argv(words):
             k += 1
             continue
         if opts[name] and not eq:
-            if k + 1 >= n or not words[k + 1][1]:
+            value = value_at(k + 1, name)
+            if value is None:
                 given[UNKNOWN] = True
                 k += 1
                 continue
-            value, k = words[k + 1][0], k + 1
+            k += 1
         _given_add(given, verb, name, value)
         k += 1
     return Argv(root, branch, verb, rid, given, False)
