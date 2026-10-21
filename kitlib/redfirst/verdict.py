@@ -61,7 +61,9 @@ def module_of(path, pythonpath):
 
 def parse_selector(text, runners):
     """A Selector for `--tests` text, or Usage."""
+    text = text.strip()                      # a CRLF list leaves a CR on each value
     path, _, filt = text.partition('::')
+    filt = filt.strip()
     path = path.replace('\\', '/').strip()
     if not path or path.startswith('/') or '..' in path.split('/') or re.match(r'^[A-Za-z]:', path):
         raise Usage('usage: --tests %r: a repo-relative file path, then optionally ::<filter>' % text)
@@ -188,7 +190,8 @@ def python_verdict(rc, log):
     # unittest reports both a module that will not import and a filter naming nothing as one
     # errored `unittest.loader._FailedTest`; only the first is red. Matched at a line start: a
     # failing test's traceback may quote either string.
-    if re.search(r'^ERROR: \S+ \(unittest\.loader\._FailedTest\.', log, re.M):
+    # The name may hold stray whitespace (a CR from a CRLF selector), so it is not matched as \S+.
+    if re.search(r'^ERROR: .*? \(unittest\.loader\._FailedTest\.', log, re.M):
         if re.search(r'^ImportError: Failed to import test module:', log, re.M):
             why = [l.strip() for l in re.findall(
                 r'^(?:ImportError|ModuleNotFoundError): .*$', log, re.M)
