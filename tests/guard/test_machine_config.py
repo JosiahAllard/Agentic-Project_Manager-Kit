@@ -6,13 +6,14 @@ on or inside the PM repository's folder but keeps the PM repository's own checko
 import os
 import unittest
 
-from kitlib.guard import context, delegfile, jail, rules
+from kitlib.config import migration
+from kitlib.guard import context, delegfile, jail
 
 from . import world as W
 from .claudehost import decide
 from .world import bash, event, ps
 
-RULE = rules.MACHINE_CONFIG
+RULE = 'machine-config'                 # rules.MACHINE_CONFIG
 # (environ, subagent) of every session the rule holds: the pm, a coordinator, a plain-marked
 # session (one the write jail does not hold), a worker's mark, and a subagent
 SESSIONS = (({context.ROLE_ENV: 'pm'}, False), ({context.ROLE_ENV: 'coordinator'}, False),
@@ -141,8 +142,8 @@ class PointerFolder(Base):
         # T12
         self.pointer = os.path.join('relative', 'pm')
         ctx = self.ctx()
-        self.assertIsNone(jail.pointer_config_dir(ctx))
-        self.assertEqual(jail.config_dirs(ctx), jail.home_config_dirs(ctx))
+        self.assertEqual(jail.config_dirs(ctx), [os.path.join(self.w.home, '.pm-kit'),
+                                                 os.path.join(self.w.home, migration.OLD_DIR_NAME)])
         self.assert_refused(self.writes(os.path.join(self.w.wt, '.pm-kit', 'config.json'), self.w.wt), 'by name')
 
 
