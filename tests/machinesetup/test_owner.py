@@ -22,6 +22,14 @@ TOOL = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.absp
 OWNER = 'owner@example.invalid'
 
 
+def no_pointer(case):
+    """No PM-repo pointer for the rest of the test `case`."""
+    patch = mock.patch.dict(os.environ, {PM_REPO_FENCE_ENV: ''})
+    patch.start()
+    case.addCleanup(patch.stop)
+    kuser.forget()
+
+
 class Host(object):
     def __init__(self, email=None):
         self.email = email
@@ -119,6 +127,21 @@ class Survey(OwnerCase):
         self.assertEqual((plan.changes, plan.refusals), ([], []))
         self.assertTrue(any('is not an email address' in n for n in plan.notes['owner']))
 
+    def test_with_no_pointer_a_given_email_is_refused_and_no_home_file_is_made(self):
+        no_pointer(self)
+        home_dir = os.path.join(self.home, kuser.DIR_NAME)
+        plan = self.plan(self.ctx(given=OWNER))
+        self.assertEqual(plan.changes, [])
+        self.assertEqual(len(plan.refusals), 1, plan.lines())
+        self.assertIn('cannot write owner_email to the machine config: no PM repo pointer is set',
+                      plan.refusals[0])
+        self.assertIn('tools/machine_setup.py --pm-repo', plan.refusals[0])
+        self.assertFalse(owner.needs_prompt(self.ctx(found=OWNER)))    # nothing to store it in: no question
+        with self.assertRaises(RuntimeError) as cm:
+            owner.write_owner_email(self.home, None, OWNER)
+        self.assertIn('--pm-repo', str(cm.exception))
+        self.assertFalse(os.path.exists(home_dir))
+
     def test_an_unreadable_machine_config_refuses(self):
         self.config(raw=b'{not json')
         plan = self.plan(self.ctx(given=OWNER))
@@ -156,16 +179,15 @@ class SharedWrites(OwnerCase):
             'dir': folder, 'max_age_days': agenttemp.MAX_AGE_DAYS}})
         self.assertEqual(kuser.owner_email(self.home), OWNER)
 
-    def test_with_no_pointer_both_keys_snapshot_the_home_file(self):
-        # the old layout, kept until the writer refuses agent sessions (B3a-2)
-        patch = mock.patch.dict(os.environ, {PM_REPO_FENCE_ENV: ''})
-        patch.start()
-        self.addCleanup(patch.stop)
-        kuser.forget()
+    def test_with_no_pointer_no_key_has_a_snapshot_naming_the_pointer_step(self):
+        no_pointer(self)
         ctx = self.ctx()
-        snap, why = machineconfig.snapshot(ctx, owner.KEY)
-        self.assertEqual((snap.path, why), (os.path.join(self.home, kuser.DIR_NAME, kuser.FILE_NAME), None))
-        self.assertIs(machineconfig.snapshot(ctx, agenttemp.KEY)[0], snap)
+        for key in (owner.KEY, agenttemp.KEY):
+            snap, why = machineconfig.snapshot(ctx, key)
+            self.assertIsNone(snap, key)
+            self.assertIn('no PM repo pointer is set', why)
+            self.assertIn('tools/machine_setup.py --pm-repo', why)
+        self.assertFalse(os.path.exists(os.path.join(self.home, kuser.DIR_NAME)))
 
     def test_a_pm_data_write_has_no_snapshot(self):
         snap, why = machineconfig.snapshot(self.ctx(), 'pm_data')

@@ -16,7 +16,6 @@ from unittest import mock
 from kitlib import backloglint, coordinatorstart, pmstart, pmwatch
 from kitlib.config import ConfigError, migration, user
 from kitlib.machinesetup import default_config_dirs
-from kitlib.pmdata import init as pminit
 from tests.home import machine_config, pm_repo
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'optional', 'agenttemp'))
@@ -244,8 +243,13 @@ class LocateTest(_Home):
 
 class WritableTest(_Home):
 
-    def test_no_pointer_and_no_home_file_writes_the_home_file(self):
-        self.assertEqual(user.writable_file(self.home), self.new)
+    def test_no_pointer_refuses_naming_the_pointer_step_for_every_key(self):
+        for key in (None, 'owner_email', 'agent_temp_sweep'):
+            with self.assertRaises(ConfigError, msg=key) as cm:
+                user.writable_file(self.home, key)
+            self.assertIn('no PM repo pointer is set', str(cm.exception))
+            self.assertIn('tools/machine_setup.py --pm-repo', str(cm.exception))
+        self.assertFalse(os.path.exists(self.new))
 
     def test_a_home_file_refuses_with_the_move(self):
         for path in (self.new, self.old):
@@ -261,30 +265,6 @@ class WritableTest(_Home):
         self.put(self.pm_dir, 'not a folder')
         with self.assertRaises(ConfigError):
             user.writable_file(self.home)
-
-    def test_write_machine_writes_the_home_file_when_there_is_no_pointer(self):
-        pminit.write_machine(self.home, {'path': os.path.join(self.home, 'data')})
-        with open(self.new, encoding='utf-8') as f:
-            self.assertEqual(json.load(f)['pm_data']['path'], os.path.join(self.home, 'data'))
-        self.assertFalse(os.path.exists(self.old_dir))
-
-    def test_write_machine_refuses_a_home_file_and_writes_nothing(self):
-        self.put(self.old, {'ledger_path': self.ledger})
-        before = self.read_bytes(self.old)
-        with self.assertRaises(ConfigError):
-            pminit.write_machine(self.home, {'path': os.path.join(self.home, 'data')})
-        self.assertFalse(os.path.exists(self.new))
-        self.assertEqual(self.read_bytes(self.old), before)
-
-    def test_write_machine_refuses_a_pointer_as_derived_and_writes_nothing(self):
-        self.pointed()
-        self.put(self.pm_file, {'ledger_path': self.ledger})
-        before = self.read_bytes(self.pm_file)
-        with self.assertRaises(ConfigError) as cm:
-            pminit.write_machine(self.home, {'path': os.path.join(self.home, 'data')})
-        self.assertIn('pm_data is derived', str(cm.exception))
-        self.assertEqual(self.read_bytes(self.pm_file), before)
-        self.assertFalse(os.path.exists(self.new))
 
 
 class ReadersTest(_Home):

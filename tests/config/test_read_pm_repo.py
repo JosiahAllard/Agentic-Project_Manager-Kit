@@ -175,13 +175,17 @@ class FileByKeyTest(_PmRepo):
         self.assertIn('pm_data is derived', str(cm.exception))
         self.assertEqual(user.key_file(self.home, 'pm_data'), self.policy)
 
-    def test_none_names_the_home_file_for_every_key(self):
+    def test_none_names_the_home_file_to_readers_and_refuses_every_writer(self):
         with mock.patch.dict(os.environ, {PM_REPO_FENCE_ENV: ''}):
             user.forget()
             home_file = os.path.join(self.home, user.DIR_NAME, user.FILE_NAME)
             for key in ('owner_email', 'standing_delegation', None):
                 self.assertEqual(user.key_file(self.home, key), home_file)
-                self.assertEqual(user.writable_file(self.home, key), home_file)
+                with self.assertRaises(ConfigError, msg=key) as cm:
+                    user.writable_file(self.home, key)
+                self.assertIn('no PM repo pointer is set', str(cm.exception))
+                self.assertIn('tools/machine_setup.py --pm-repo', str(cm.exception))
+                self.assertIn(user.POINTER_DOC, str(cm.exception))
             self.assertEqual(user.readable_file(self.home), home_file)
             self.assertFalse(os.path.exists(home_file))
         user.forget()

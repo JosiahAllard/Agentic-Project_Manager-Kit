@@ -802,9 +802,10 @@ def key_file(home=None, key=None):
 
 def writable_file(home=None, key=None):
     """The file a writer of the machine config key `key` writes: for OK the PM repository's
-    LOCAL_FILE_NAME when `key` is a LOCAL_KEYS key, else its FILE_NAME; for NONE the home file.
-    ConfigError when the config cannot be read (UNMOVED, BAD), and for OK when `key` is one the
-    PM repository's config never holds (DROPPED_KEYS: `pm_data` is derived)."""
+    LOCAL_FILE_NAME when `key` is a LOCAL_KEYS key, else its FILE_NAME. ConfigError when the
+    config cannot be read (UNMOVED, BAD), for OK when `key` is one the PM repository's config
+    never holds (DROPPED_KEYS: `pm_data` is derived), and for NONE: with no pointer there is no
+    file to write, and the home file is never made again (it would be a leftover, UNMOVED)."""
     loc = locate(home)
     if loc.error:
         raise ConfigError(loc.error)
@@ -812,7 +813,9 @@ def writable_file(home=None, key=None):
         if key in DROPPED_KEYS:
             raise ConfigError(_dropped(key, loc.folder))
         return loc.local if key in LOCAL_KEYS else loc.path
-    return loc.path
+    raise ConfigError('no PM repo pointer is set, so the machine config has no file to write%s '
+                      'to: set the pointer first (tools/machine_setup.py --pm-repo <PM repository>, '
+                      'an elevated owner step, %s)' % (' ' + key if key else '', POINTER_DOC))
 
 
 def _dropped(key, where):

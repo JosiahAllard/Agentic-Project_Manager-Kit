@@ -30,9 +30,9 @@ class Snapshot(object):
 
 def snapshot(ctx, key):
     """(Snapshot, None) of the machine config file a write of `key` would change (the PM
-    repository's config.json or local.json, or the home file with no pointer), read once per
-    context; (None, why) when it cannot be written or read (kitlib.config.user.writable_file: a
-    machine config still in the home folder with a pointer set, say)."""
+    repository's config.json or local.json), read once per context; (None, why) when it cannot
+    be written or read (kitlib.config.user.writable_file: no PM repo pointer, or a machine config
+    still in the home folder, say)."""
     try:
         path = kuser.writable_file(ctx.home, key)
     except ConfigError as e:

@@ -13,7 +13,7 @@ from kitlib.config import user
 from kitlib.git import cmd
 from kitlib.pmdata import init as pminit
 from tests import gitfixture
-from tests.home import pm_repo
+from tests.home import PM_REPO_FENCE_ENV, pm_repo
 from tests.realgit import real_git
 
 EMPTY_TREE = pminit.EMPTY_TREE['sha1']
@@ -59,18 +59,42 @@ class _Base(unittest.TestCase):
         path = kw.pop('path', self.data)
         return pminit.init(root, path, **kw)
 
-    def home_pm_data(self):
-        """The `pm_data` init wrote into the home folder's machine config. The kit reads that
-        file only as the move's source now (kitlib.config.user.locate: UNMOVED), so it is read
-        here as JSON."""
-        with open(user.config_file(self.home), encoding='utf-8') as f:
-            return json.load(f)['pm_data']
+    def point_at(self, path):
+        """The PM-repo pointer fenced to `path` for the rest of the test, as the owner's
+        `machine_setup.py --pm-repo` sets the real one (tests.home.pm_repo would git-init a
+        folder whose .git is a worktree's file)."""
+        patch = mock.patch.dict(os.environ, {PM_REPO_FENCE_ENV: path})
+        patch.start()
+        self.addCleanup(patch.stop)
+        user.forget()
+        self.addCleanup(user.forget)
 
-    def init_with_no_home_file(self, **kw):
-        """init with the machine config write left out: a home folder machine config would read
-        UNMOVED and refuse the next init (kitlib.config.user.locate)."""
-        with mock.patch.object(pminit, 'write_machine'):
-            return self.init(**kw)
+    def assertPointerStep(self, out, path=None, branch='pmdata', remote='private'):
+        """init wrote no machine config, in the home folder or anywhere the loader reads; its last
+        line is the owner's pointer step for the data worktree `path`; and `pm_data`, read through
+        the loader, is none until that pointer is set and the derived value after."""
+        path = path or self.data
+        self.assertEqual(out.code, pminit.OK, out.lines)
+        self.assertFalse(os.path.exists(os.path.dirname(user.config_file(self.home))))
+        self.assertFalse(os.path.exists(os.path.join(path, '.pm-kit')))
+        self.assertEqual(out.lines[-1], pminit.pointer_line(path))
+        self.assertIn('machine_setup.py" --pm-repo "%s" --apply' % path, out.lines[-1])
+        self.assertIn('elevated', out.lines[-1])
+        self.assertIsNone(pmdata.machine_settings(self.home))
+        self.point_at(path)
+        self.assertEqual(pmdata.machine_settings(self.home),
+                         {'path': path, 'branch': branch, 'remote': remote})
+
+    def late_failure(self, error, step=('worktree', 'lock')):
+        """A patch of init's git writes: the write `step` (its first argv words) raises `error`,
+        after the root, branch and record are made."""
+        real = pminit._write
+
+        def write(p, *args):
+            if args[:len(step)] == step:
+                raise error
+            return real(p, *args)
+        return mock.patch.object(pminit, '_write', write)
 
     def config_text(self):
         with open(os.path.join(self.repo.common_dir(), 'config'), encoding='utf-8') as f:
@@ -149,20 +173,28 @@ class InitTest(_Base):
                          ['remote.private.fetch +refs/heads/*:refs/remotes/private/*',
                           'remote.private.url %s' % self.private])
         self.assertEqual(sorted(set(before_remotes) - set(after)), [])
-        # record, machine config, push
+        # record, push, and no machine config: the pointer step instead
         self.assertEqual(pmdata.read(self.repo.common_dir()),
                          pmdata.Record('pmdata', 'private', root))
-        self.assertEqual(self.home_pm_data(),
-                         {'path': self.data, 'branch': 'pmdata', 'remote': 'private'})
         self.assertEqual(self.remote_ref(self.private, 'refs/heads/pmdata'), root)
+        self.assertEqual(out.lines[-2], 'push      refs/heads/pmdata:refs/heads/pmdata to private')
+        self.assertPointerStep(out)
         self.assertEqual(self.remote_ref(self.repo.remote, 'refs/heads/pmdata'), '')
         self.assertTrue(any(l.startswith('kit.json') and '"store": "main"' in l
                             for l in out.lines), out.lines)
 
+    def test_with_no_pointer_init_writes_no_machine_config_and_ends_with_the_pointer_step(self):
+        self.assertEqual(user.locate(self.home).state, user.NONE)
+        out = self.init(url=self.private)
+        user.forget()
+        self.assertEqual(user.locate(self.home).state, user.NONE)
+        self.assertPointerStep(out)
+
     def test_without_a_private_remote_the_branch_is_made_and_the_push_is_not_done(self):
         out = self.init()
         self.assertEqual(out.code, pminit.OK, out.lines)
-        self.assertTrue(any(l.startswith('push      not done') for l in out.lines), out.lines)
+        self.assertTrue(out.lines[-2].startswith('push      not done'), out.lines)
+        self.assertPointerStep(out)
         self.assertEqual(self.git_value('branch.pmdata.remote'), 'private')
         self.assertEqual(self.remote_config(), ['remote.origin.fetch +refs/heads/*:refs/remotes/origin/*',
                                                 'remote.origin.url %s' % self.repo.remote])
@@ -329,14 +361,15 @@ class AdoptTest(_Base):
         self.assertEqual(out.code, pminit.REFUSED, out.lines)
 
     def test_adopt_keeps_the_worktree_and_record_of_a_finished_init(self):
-        self.assertEqual(self.init_with_no_home_file().code, pminit.OK)
+        self.assertEqual(self.init().code, pminit.OK)
         out = self.init(adopt=True)
         self.assertEqual(out.code, pminit.OK, out.lines)
         self.assertIn('worktree  %s kept (already locked)' % self.data, out.lines)
         self.assertTrue(any(l.startswith('record') and l.endswith('kept') for l in out.lines))
+        self.assertPointerStep(out)
 
     def test_adopt_refuses_the_branch_checked_out_elsewhere(self):
-        self.assertEqual(self.init_with_no_home_file().code, pminit.OK)
+        self.assertEqual(self.init().code, pminit.OK)
         other = os.path.join(self.repo.base, 'other')
         out = self.init(adopt=True, path=other)
         self.assertEqual(out.code, pminit.REFUSED, out.lines)
@@ -454,10 +487,10 @@ class ReviewFixTest(_Base):
         self.assertFalse(os.path.exists(self.data))
 
     def test_an_unexpected_error_after_a_write_is_partial(self):
-        with mock.patch.object(pminit, 'write_machine', side_effect=ValueError('odd home')):
+        with self.late_failure(ValueError('odd lock')):
             out = self.init()
         self.assertEqual(out.code, pminit.PARTIAL, out.lines)
-        self.assertIn('FAILED: unexpected ValueError: odd home', out.lines)
+        self.assertIn('FAILED: unexpected ValueError: odd lock', out.lines)
         self.assertNotIn('nothing was changed', out.lines)
         self.assertIn('--adopt', out.lines[-1])
 
@@ -483,24 +516,26 @@ class ReviewFixTest(_Base):
         self.assertIn('public', out.lines[0])
 
     def test_ctrl_c_reports_the_lines_made_so_far(self):
-        with mock.patch.object(pminit, 'write_machine', side_effect=KeyboardInterrupt):
+        with self.late_failure(KeyboardInterrupt()):
             out = self.init()
         self.assertEqual(out.code, pminit.INTERRUPTED, out.lines)
         self.assertTrue(out.lines[0].startswith('root      '), out.lines)
         self.assertIn('INTERRUPTED', out.lines)
         self.assertTrue(out.lines[-1].startswith('stopped part-way'))
 
-    def test_a_failed_machine_config_write_is_partial_and_adopt_finishes_it(self):
-        with mock.patch.object(pminit, 'write_machine', side_effect=OSError('read-only')):
+    def test_the_last_write_failing_is_partial_and_adopt_finishes_it(self):
+        failed = pminit._Failed('git remote add failed: read-only')
+        with self.late_failure(failed, step=('remote', 'add')):
             out = self.init(url=self.private)
         self.assertEqual(out.code, pminit.PARTIAL, out.lines)
-        self.assertIn('FAILED: cannot write the machine config: read-only', out.lines)
+        self.assertIn('FAILED: git remote add failed: read-only', out.lines)
+        self.assertNotIn(pminit.pointer_line(self.data), out.lines)     # only once it is all made
         self.assertEqual(self.remote_ref(self.private, 'refs/heads/pmdata'), '')   # no push yet
         again = self.init(adopt=True, url=self.private)
         self.assertEqual(again.code, pminit.OK, again.lines)
         root = self.repo.git('rev-parse', 'refs/heads/pmdata')
         self.assertEqual(self.remote_ref(self.private, 'refs/heads/pmdata'), root)
-        self.assertEqual(self.home_pm_data()['path'], self.data)
+        self.assertPointerStep(again)
 
     def test_an_unreadable_machine_config_is_config(self):
         os.makedirs(os.path.dirname(user.config_file(self.home)))
@@ -510,15 +545,6 @@ class ReviewFixTest(_Base):
         out = self.init()
         self.assertEqual(out.code, pminit.CONFIG, out.lines)
         self.assertEqual((self.refs(), self.config_text()), (refs, cfg))
-
-    def test_write_machine_syncs_before_replacing(self):
-        with mock.patch.object(pminit.os, 'fsync', wraps=os.fsync) as sync, \
-                mock.patch.object(pminit.os, 'replace', wraps=os.replace) as replace:
-            order = []
-            sync.side_effect = lambda fd: order.append('fsync')
-            replace.side_effect = lambda a, b: (order.append('replace'), os.rename(a, b))
-            pminit.write_machine(self.home, {'path': self.data})
-        self.assertEqual(order, ['fsync', 'replace'])
 
 
 class KilledReadsTest(_Base):
@@ -631,14 +657,14 @@ class SpacedPathTest(_Base):
         wts = self.repo.git('worktree', 'list', '--porcelain').replace('\\', '/')
         block = wts.split('worktree %s' % spaced.replace('\\', '/'))[1]
         self.assertIn('locked PM data', block)
-        self.assertEqual(self.home_pm_data()['path'], spaced)
+        self.assertPointerStep(out, path=spaced)
 
 
 @real_git('git worktree remove of a missing folder and a failed push to a missing remote')
 class RealGitAdoptTest(_Base):
 
     def test_adopt_adds_a_deleted_worktree_folder_again(self):
-        self.assertEqual(self.init_with_no_home_file().code, pminit.OK)
+        self.assertEqual(self.init().code, pminit.OK)
         gitfixture.rmtree(self.data)
         out = self.init(adopt=True)
         self.assertEqual(out.code, pminit.OK, out.lines)

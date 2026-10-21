@@ -17,6 +17,7 @@ from kitlib import machinesetup as M
 from kitlib.machinesetup import extras
 from kitlib.config import user as kuser
 from kitlib.config.migration import OLD_DIR_NAME
+from tests.home import PM_REPO_FENCE_ENV
 from tests.machinesetup import test_machinesetup as T
 
 
@@ -254,6 +255,22 @@ class Init(T.Base):
                 self.assertFalse(os.path.exists(self.new))
                 self.assertFalse(os.path.exists(self.cfg_dir))
                 shutil.rmtree(folder)
+
+    def test_no_pm_repo_pointer_refuses_naming_the_pointer_step_and_makes_no_home_file(self):
+        patch = mock.patch.dict(os.environ, {PM_REPO_FENCE_ENV: ''})
+        patch.start()
+        self.addCleanup(patch.stop)
+        kuser.forget()
+        before = self.snapshot()
+        code, out = self.run_new(apply=True)
+        self.assertEqual(code, M.EXIT_REFUSED, out)
+        self.assertIn('REFUSED - cannot write agent_temp_sweep to the machine config: no PM repo '
+                      'pointer is set', out)
+        self.assertIn('tools/machine_setup.py --pm-repo', out)
+        self.assertIn('nothing changed', out)
+        self.assertEqual(self.snapshot(), before)
+        self.assertFalse(os.path.exists(os.path.join(self.home, kuser.DIR_NAME)))
+        self.assertFalse(os.path.exists(self.new))
 
     def test_a_folder_inside_a_git_checkout_refuses(self):
         os.makedirs(os.path.join(self.root, 'repo', '.git'))
