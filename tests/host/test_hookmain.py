@@ -243,6 +243,116 @@ class NoIdentity(unittest.TestCase):
         self.assertIn('within 7 s', a.last.reason)
 
 
+class RefusalLog(unittest.TestCase):
+    """Every deny run() answers is logged after the answer is written: one line in
+    <pm_data>/audit/refusals.jsonl (kitlib.guard.refusal_log; docs/guard-v2.md "Refusal log"),
+    whatever made it (the guard, a guard error, the deadline, the host's screen). Nothing else is
+    logged, and the log never changes the answer or the exit code."""
+
+    def setUp(self):
+        from tests.gitfixture import rmtree
+        from tests.home import machine_config, temp_home
+        home = temp_home(self)
+        self.data = tempfile.mkdtemp(prefix='kit-pmdata-')
+        self.addCleanup(rmtree, self.data)
+        machine_config(home, {'pm_data': {'path': self.data}})
+        self.log = os.path.join(self.data, 'audit', 'refusals.jsonl')
+
+    def rows(self):
+        if not os.path.exists(self.log):
+            return []
+        with open(self.log, encoding='utf-8') as fh:
+            return [json.loads(line) for line in fh]
+
+    def test_a_deny_writes_one_line_with_its_rule_and_role(self):
+        deny = lambda *x, **k: Decision('deny', 'some-rule', 'why: rm -rf C:/x', 'do this')   # noqa: E731
+        self.assertEqual(run(FakeAdapter(), {'kind': 'shell', 'who': 'a1'}, deny), (3, 'deny some-rule\n'))
+        rows = self.rows()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0]['host'], rows[0]['rule'], rows[0]['role'], rows[0]['agent'], rows[0]['kind'],
+                          rows[0]['instead_given']), ('fake', 'some-rule', 'subagent', 'a1', 'shell', True))
+        self.assertNotIn('rm -rf', json.dumps(rows[0]))
+
+    def test_allow_ask_and_a_warning_write_nothing(self):
+        for d in (Decision('allow'), Decision('ask', 'r', 'why', 'cmd'), Decision('allow', 'w', 'a warning')):
+            with self.subTest(d=d):
+                run(FakeAdapter(), {'kind': 'shell'}, lambda *x, **k: d)
+        self.assertEqual(self.rows(), [])
+
+    def test_a_guard_error_and_a_timeout_are_logged(self):
+        def boom(*x, **k):
+            raise RuntimeError('boom')
+        self.assertEqual(run(FakeAdapter(), {'kind': 'mcp'}, boom), (3, 'deny guard-error\n'))
+        self.assertEqual(run(FakeAdapter(parse_error=ValueError('bad')), {}, boom), (3, 'deny guard-error\n'))
+        gate = threading.Event()
+        self.addCleanup(gate.set)
+
+        def slow(*x, **k):
+            gate.wait(5)
+            return Decision('allow')
+        self.assertEqual(run(FakeAdapter(), {'who': 'a1'}, slow, deadline=0.05), (3, 'deny guard-timeout\n'))
+        self.assertEqual([(r['rule'], r['role']) for r in self.rows()],
+                         [('guard-error', 'main'), ('guard-error', 'main'), ('guard-timeout', 'subagent')])
+
+    def test_a_host_screen_deny_is_logged_once_for_a_call_of_several_actions(self):
+        a = Several.Multi(('a', 'b', 'c'), screen=lambda act: Decision('deny', 'host-rule', 'no') if act.path != 'a' else None)
+        self.assertEqual(run(a, {}, lambda *x, **k: Decision('allow')), (3, 'deny host-rule\n'))
+        self.assertEqual([(r['rule'], r['kind']) for r in self.rows()], [('host-rule', 'edit')])
+
+    def test_a_log_that_fails_leaves_the_answer_unchanged(self):
+        deny = lambda *x, **k: Decision('deny', 'r', 'why')                            # noqa: E731
+        with mock.patch('kitlib.guard.refusal_log.append', side_effect=OSError('disk full')):
+            self.assertEqual(run(FakeAdapter(), {}, deny), (3, 'deny r\n'))
+        with mock.patch('kitlib.guard.refusal_log.record', side_effect=RuntimeError('broken')):
+            self.assertEqual(run(FakeAdapter(), {}, deny), (3, 'deny r\n'))
+        self.assertEqual(self.rows(), [])
+
+    def test_the_line_is_written_after_the_answer(self):
+        order = []
+
+        class Out(io.StringIO):
+            def write(self, text):
+                order.append('answer')
+                return super().write(text)
+        with mock.patch('kitlib.guard.decide', lambda *x, **k: Decision('deny', 'r', 'why')), \
+                mock.patch('kitlib.guard.refusal_log.record', side_effect=lambda *a, **k: order.append('log')):
+            hookmain.run(FakeAdapter(), 'PreToolUse', io.StringIO('{}'), Out(), environ={}, entry='h')
+        self.assertEqual(order, ['answer', 'log'])
+
+    def test_a_marked_call_on_a_host_without_identity_logs_the_role_the_guard_judged(self):
+        a = FakeAdapter()
+        a.capabilities = HostCapabilities(('PreToolUse',), True, False, True, True, 'x')
+        tags = []
+
+        def deny(action, ctx=None, environ=None, profile=None):
+            role = 'subagent' if action.agent else 'main'
+            tags.append(role)
+            return Decision('deny', 'r', 'why [kit guard: rule=r role=%s]' % role)
+        with mock.patch('kitlib.guard.decide', deny):
+            code = hookmain.run(a, 'PreToolUse', io.StringIO('{"kind": "edit"}'), io.StringIO(),
+                                environ={'PM_KIT_ROLE': 'worker'}, entry='h.py')
+        self.assertEqual((code, tags), (3, ['subagent']))
+        self.assertEqual([(r['role'], r['agent'], r['agent_role']) for r in self.rows()],
+                         [('subagent', hookmain.UNIDENTIFIED, 'worker')])
+
+    def test_a_hung_git_cannot_hold_the_deny_up(self):
+        from kitlib.guard import refusal_log
+        started = []
+
+        def hung(*a, **k):
+            started.append(a)
+            time.sleep(5)
+            raise OSError('hung')
+        deny = lambda *x, **k: Decision('deny', 'r', 'why')                            # noqa: E731
+        with mock.patch('kitlib.git.cmd.call', side_effect=hung), \
+                mock.patch('subprocess.Popen', side_effect=hung), mock.patch('subprocess.run', side_effect=hung):
+            began = time.monotonic()
+            self.assertEqual(run(FakeAdapter(), {'kind': 'shell'}, deny), (3, 'deny r\n'))
+            took = time.monotonic() - began
+        self.assertEqual((len(self.rows()), started), (1, []))
+        self.assertLess(took, refusal_log.BOUND)
+
+
 class CommandLine(unittest.TestCase):
     def test_the_one_hook_command_line_is_exec_form(self):
         line = hookmain.command_line(os.path.join('k', 'hook.py'))

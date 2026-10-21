@@ -13,7 +13,8 @@ This adapter does not expose process/spawn, shellCommand, stdin writes or permis
                         payload parsed as a hook's (events.parse), held by Codex's screen and
                         kitlib.guard as an agent of the BOUND role (its identity is native metadata
                         the broker verified, not a hook payload's), the role policy on for it
-                        whatever .kit.json says (PolicyOn); None for an allow, else Codex's deny JSON
+                        whatever .kit.json says (PolicyOn); None for an allow, else Codex's deny JSON,
+                        logged first (kitlib.guard.refusal_log)
   KitOperationExecutor, BoundKitHost, KitToolBroker   run one kit tool for a fresh-checked binding
   RuntimeAppServer      an owned app-server connection
 """
@@ -150,11 +151,30 @@ def evaluate_bound(event, binding, ctx=None, profile=None, environ=None):
             if d is None or d.verdict == 'allow':
                 d = guard.decide(action, held)
             if d.verdict != 'allow':        # Codex has no ask: an ask is refused with its reason
+                _log(d, action, env)
                 return _deny(d.reason)
         return None
     except Exception as error:
+        _log(None, None, environ)
         return _deny('The Codex kit broker cannot clear this call (%s: %s). Report the event and error to '
                      'the PM. [kit guard: rule=host-runtime-error role=subagent]' % (type(error).__name__, error))
+
+
+def _log(decision, action, environ):
+    """The refusal log's line for a broker deny (kitlib.guard.refusal_log; docs/guard-v2.md
+    "Refusal log"): `decision` refused `action` (an ask too: Codex refuses it), or None for the
+    broker's own error (rule host-runtime-error, no Action). The role tag is 'subagent', as the
+    deny's reason tags it: every bound call is judged as an agent. Never raises."""
+    try:
+        from kitlib.guard import refusal_log
+        from kitlib.host import Decision
+        if decision is None:
+            decision = Decision('deny', 'host-runtime-error', '')
+        elif decision.verdict != 'deny':
+            decision = Decision('deny', decision.rule, decision.reason, decision.instead)
+        refusal_log.record(decision, action, HOST, 'subagent', environ)
+    except Exception:
+        pass
 
 
 def _parent(thread):
