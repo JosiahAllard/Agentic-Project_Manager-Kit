@@ -109,7 +109,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `tools/branch_overlap.py` | unmerged branches that change files in a set (`docs/branch-overlap.md`) | kw: branch_overlap, overlap
 - `tools/machine_lock.py` | machine lock (`docs/lock-api.md`) | kw: machine_lock, lock
 - `tools/lock_release_check.py` | lock release pre-check (`docs/lock-release.md`) | kw: lock_release_check
-- `tools/worktree_remove.py` | remove a worktree (`docs/worktree-remove.md`) | kw: worktree_remove
+- `tools/worktree_remove.py` | remove a worktree, or mark one stale for the nightly sweep (`docs/worktree-remove.md`) | kw: worktree_remove, mark-stale, stale-mark
 - `tools/ledger.py` | rulings ledger (`docs/ledger.md`) | kw: ledger
 - `tools/pending.py` | pending steps (`docs/pending.md`) | kw: pending
 - `tools/launch.py` | launcher (`docs/launcher.md`) | kw: launch, launcher

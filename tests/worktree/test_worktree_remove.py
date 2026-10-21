@@ -1409,6 +1409,44 @@ class KeepersInBuildOutput(unittest.TestCase):
         self.assertEqual(len(self.keepers('App.DB', 'Server.PEM')), 2)
 
 
+class AbandonExpect(RemoveCase):
+    """remove._abandon's `expect` (the sweep's stale mark): held to the checked commit, and never
+    for work already in the base."""
+
+    def abandon(self, path, expect):
+        ctx, refused = remove.open_ctx(self.repo)
+        self.assertIsNone(refused)
+        code = remove._abandon(ctx, path, 'stale', False, None, expect=expect)
+        return code, '\n'.join(ctx.out)
+
+    def test_a_tree_at_another_commit_is_refused(self):
+        path = self.workstream('moved')
+        rc, out = self.abandon(path, '0' * 40)
+        self.assertEqual(rc, remove.REFUSED, out)
+        self.assertIn('not the 0000000000 it was checked at; nothing was tagged or removed', out)
+        self.assertTrue(os.path.isdir(path))
+        self.assertIn('kit/moved', self.branches())
+        self.assertEqual(self.git('tag', '-l'), '')
+
+    def test_work_already_in_the_base_is_refused(self):
+        path = self.workstream('landed')
+        self.land('kit/landed')
+        self.fx.write('wip.txt', 'x\n', root=path)       # landed-dirty: --abandon alone would take it
+        rc, out = self.abandon(path, self.git('rev-parse', 'kit/landed'))
+        self.assertEqual(rc, remove.REFUSED, out)
+        self.assertIn('so it is no longer stale work; nothing was tagged or removed', out)
+        self.assertTrue(os.path.isfile(os.path.join(path, 'wip.txt')))
+        self.assertEqual(self.git('tag', '-l'), '')
+
+    def test_the_checked_commit_is_abandoned(self):
+        path = self.workstream('held')
+        tip = self.git('rev-parse', 'kit/held')
+        rc, out = self.abandon(path, tip)
+        self.assertEqual(rc, remove.OK, out)
+        self.assertFalse(os.path.exists(path))
+        self.assertEqual(self.git('rev-parse', 'archive/held^{commit}'), tip)
+
+
 class Cli(RemoveCase):
 
     def cli(self, *args, cwd=None):
@@ -1427,6 +1465,30 @@ class Cli(RemoveCase):
             rc, out = self.cli(*args)
             self.assertEqual(rc, 2, (args, out))
             self.assertIn('USAGE: ', out)
+
+    def test_stale_mark_usage_errors_are_exit_2(self):
+        for args in (['--mark-stale', 'w'], ['b', '--mark-stale'], ['b', '--mark-stale', '  '],
+                     ['b', '--mark-stale', '--apply'], ['b', 'c', '--mark-stale', 'w'],
+                     ['b', '--mark-stale', 'w', '--keep-branch'],
+                     ['b', '--mark-stale', 'w', '--mark-stale', 'v'],
+                     ['b', '--mark-stale=w', '--unmark-stale'], ['--unmark-stale'],
+                     ['b', 'c', '--unmark-stale'], ['b', '--unmark-stale', '--unmark-stale'],
+                     ['b', '--unmark-stale', '--check'], ['b', '--mark-stale', 'w', '--tag', 'archive/x'],
+                     ['b', '--unmark-stale', '--tag=archive/x']):
+            rc, out = self.cli(*args)
+            self.assertEqual(rc, 2, (args, out))
+            self.assertIn('USAGE: ', out)
+        self.assertFalse(os.path.exists(os.path.join(self.fx.common_dir(), 'kit-stale-marks.json')))
+
+    def test_mark_and_unmark_through_the_cli(self):
+        self.workstream('m')
+        rc, out = self.cli('kit/m', '--mark-stale', 'superseded')
+        self.assertEqual(rc, 1, out)            # just worked in: the real liveness probe holds it
+        self.assertIn("kit/m is live by --classify's L rule", out)
+        self.assertIn('nothing was marked', out)
+        rc, out = self.cli('kit/m', '--unmark-stale')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('nothing   kit/m has no stale mark', out)
 
     def test_tag_without_abandon_is_usage(self):
         self.workstream('t')
