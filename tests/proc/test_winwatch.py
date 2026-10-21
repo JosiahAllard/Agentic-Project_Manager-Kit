@@ -378,6 +378,35 @@ class ProcInfo(unittest.TestCase):
         self.assertEqual(cmd, "x" * winwatch.CMDLINE_CAP + "...")
 
 
+@unittest.skipUnless(os.name == "nt", "Windows only")
+class ReadOrder(unittest.TestCase):
+    """Whose a window is (ours) is read before proc_info, so the extra reads never widen the time
+    in which the program can exit before ours() sees it."""
+
+    def events(self, cls):
+        calls = []
+        mon = winwatch.Monitor(ours=lambda pid: calls.append("ours") or True, classes=(cls,))
+        fakes = {"class_name": lambda h: cls, "window_text": lambda h: "t",
+                 "window_pid": lambda h: 5, "thread_pid": lambda t: 6,
+                 "exe_of": lambda pid: calls.append("exe") or "x.exe",
+                 "proc_info": lambda pid: calls.append("info") or ("c", 4, "p")}
+        with mock.patch.multiple(winwatch, **fakes):
+            mon._event(winwatch.EVENT_OBJECT_SHOW, 1, 2)
+        return mon, calls
+
+    def test_console_window(self):
+        mon, calls = self.events(winwatch.CONSOLE)
+        self.assertLess(calls.index("ours"), calls.index("info"), calls)
+        self.assertLess(calls.index("exe"), calls.index("info"), calls)
+        w = mon._new[1]
+        self.assertEqual((w.ours, w.cmdline, w.parent_pid), (True, "c", 4))
+
+    def test_pseudo_window(self):
+        mon, calls = self.events(winwatch.PSEUDO)
+        self.assertEqual(calls, ["exe", "ours", "info"])
+        self.assertEqual(mon.pseudos()[0].info, ("c", 4, "p"))
+
+
 class LooksLaunched(unittest.TestCase):
     def test_paths_and_names(self):
         for t in (r"C:\Python\python.exe", r'"C:\Program Files\Git\bin\bash.exe" --login',

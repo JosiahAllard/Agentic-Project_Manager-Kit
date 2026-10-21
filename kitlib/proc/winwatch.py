@@ -541,10 +541,10 @@ class Monitor:
             title, pid = window_text(hwnd), window_pid(hwnd)
             if cls != TERMINAL:
                 host = thread_pid(thread)
-                cmd, ppid, pcmd = proc_info(pid)
-                w = Window(cls, "window", title, pid, exe_of(pid), host, exe_of(host),
-                           self._owner(pid), hwnd=hwnd, cmdline=cmd, parent_pid=ppid,
-                           parent_cmdline=pcmd)
+                exe, owner = exe_of(pid), self._owner(pid)     # before proc_info: whose
+                cmd, ppid, pcmd = proc_info(pid)                # it is is read first
+                w = Window(cls, "window", title, pid, exe, host, exe_of(host), owner, hwnd=hwnd,
+                           cmdline=cmd, parent_pid=ppid, parent_cmdline=pcmd)
             else:
                 w = Window(cls, "window", title, None, None, pid, exe_of(pid), hwnd=hwnd)
             with self._lock:
