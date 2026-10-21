@@ -1,6 +1,6 @@
 """Nothing cites a ruling id any more; the ledger is the PM's private record.
 
-No tracked file has a line matching PATTERN (an `R-` id of 3 or more digits, the `R-nnnn` and `R-<id>`
+No tracked file has a line matching PATTERN (an `R-` or `H-<repo>-` id of 3 or more digits, the `R-nnnn` and `R-<id>`
 placeholders, the `<PM_LEDGER_PATH>` placeholder, `PM R-`, or the `--ruling` flag), unless the file is on
 ALLOWED, by path or by folder prefix (ending in `/`).
 - PRIVATE: the ledger itself, which is the PM's record and may name its own ids.
@@ -13,7 +13,7 @@ import unittest
 
 from tests.scrub.test_scrub import read_text, tracked_files
 
-PATTERN = re.compile(r'\bR-[0-9]{3,}\b|\bR-nnn|\bR-<id>|<PM_LEDGER_PATH>|\bPM R-|--ruling\b')
+PATTERN = re.compile(r'\bR-[0-9]{3,}\b|\bH-[a-z0-9][a-z0-9-]*-[0-9]{3,}\b|\bR-nnn|\bR-<id>|<PM_LEDGER_PATH>|\bPM R-|--ruling\b')
 
 PRIVATE = 'the ledger, the PM\'s private record'
 SELF = 'spells the pattern to test it'
@@ -41,6 +41,7 @@ ALLOWED = (
 )
 
 RID = 'R-' + '1234'     # built, so this file holds no id for test_scrub to flag
+HID = 'H-kit-' + '0001'
 
 
 def allowed_by(rel, allowed):
@@ -81,12 +82,14 @@ class NoCitesTest(unittest.TestCase):
     def test_the_check_catches_a_new_line_and_a_stale_entry(self):
         files = {'AGENTS.md': 'Rulings are cited as PM ' + RID + '.\n', 'a/b.md': 'fine\n',
                  'templates/x.md': 'R-<id> | text\n', 'docs/ledger.md': RID + ' private\n',
-                 'kitlib/ledger/x.py': 'R-nnnn\n', 'docs/near.md': 'PR-2026 and ERR-1000 and XR-nnn\n'}
+                 'kitlib/ledger/x.py': 'R-nnnn\n', 'docs/h.md': 'see ' + HID + '\n',
+                 'docs/hn.md': 'H-<repo>-nnnn and H-kit-12\n',
+                 'docs/near.md': 'PR-2026 and ERR-1000 and XR-nnn\n'}
         bad, stale = findings(sorted(files), files.get,
                               (('docs/ledger.md', PRIVATE), ('kitlib/ledger/', PRIVATE),
                                ('docs/gone.md', GOING), ('kitlib/gone/', GOING)))
         self.assertEqual(bad, ['AGENTS.md:1: Rulings are cited as PM ' + RID + '.',
-                               'templates/x.md:1: R-<id> | text'])
+                               'docs/h.md:1: see ' + HID, 'templates/x.md:1: R-<id> | text'])
         self.assertEqual(stale, ['docs/gone.md', 'kitlib/gone/'])
 
 
