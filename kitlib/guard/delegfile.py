@@ -38,6 +38,13 @@ What counts as a change (the guard catches honest mistakes, not evasion):
                  cherry-pick, revert, am and apply are left to the owner-only commit check
                  (docs/guard.md "Owner-only commits").
 
+Two shell forms the edit rules cannot place are judged here for the machine config folder too
+(rules.machine_config, docs/guard.md "Owner machine setup"), each after the list's own check: a
+wildcard write target whose literal folder is or lies in a machine config folder
+(rules.machine_config_folder: <pointer>/.pm-kit, or a .pm-kit folder at a checkout's top), and
+git in the pointer's work tree whose pathspec lands in <pointer>/.pm-kit (rm, mv, restore,
+checkout-index, checkout with paths after --, clean).
+
 Reads stay open: a Read or Grep, cat, Get-Content, git show, python that only reads, a copy of the
 list to elsewhere (its source is not written).
 """
@@ -131,9 +138,11 @@ def shell_paths(event, ctx, cmd, inv, role):
     a path, a wildcard path that can match the list or a folder above it (glob_reaches), the
     folder a program that writes there runs in (a stand-in, rules.here: tar -x, unzip, curl -O),
     and the paths the command before a | gives a writer that takes them from the pipeline or from
-    xargs (upstream)."""
+    xargs (upstream). With none of those, a wildcard target that starts in a machine config
+    folder (glob_config) is refused as machine-config."""
     into = rules.copy_into(cmd, inv)
     where = cmd.cwd_home or cmd.cwd
+    config = None                               # (Word, folder): a wildcard in a machine config folder
     for w in rules.write_targets(cmd, inv):
         f, what = None, None
         if rules.pipe_stand_in_word(cmd, w) or (here_word(cmd, w) and inv is not None and
@@ -150,9 +159,27 @@ def shell_paths(event, ctx, cmd, inv, role):
         else:
             f = word_reaches(ctx, w, where, cmd.shell, into)
             what = '`%s` writes %s' % (rules.bare(cmd), w.text)
+            if f is None and config is None:
+                folder = glob_config(ctx, w, where, cmd.shell)
+                config = (w, folder) if folder else None
         if f is not None:
             return refusal(event, ctx, role, what, f)
+    if config is not None:
+        w, folder = config
+        return rules.machine_config_refusal(event, ctx, role, '`%s` writes %s, a wildcard in %s' % (
+            rules.bare(cmd), w.text, rules.quote(folder)), folder)
     return None
+
+
+def glob_config(ctx, w, where, shell):
+    """The machine config folder (rules.machine_config_folder) the wildcard write target Word `w`,
+    read from `where`, starts in: its literal folder is that folder or lies in it. None for a word
+    with no wildcard, or one the guard cannot place."""
+    text = sh.home_text(w.text, ctx.home, w.dyn)
+    if not text or not hubg.has_glob(text):
+        return None
+    base = glob_base(ctx, text, where, shell)[0]
+    return rules.machine_config_folder(ctx, base) if base else None
 
 
 def here_word(cmd, w):
@@ -181,12 +208,9 @@ def word_reaches(ctx, w, where, shell, into=None):
     return None
 
 
-def glob_reaches(ctx, text, where, shell):
-    """The copy of the list the wildcard path `text`, read from `where`, can name: the file or a
-    folder above it, each part of the wildcard matched (case folded, a leading dot like any
-    other character: fail closed) against the matching part of the copy's path below the literal
-    folder the wildcard starts in; `**` or `..` after the wildcard, any copy below that folder.
-    None when it can name none, or the guard cannot place that folder."""
+def glob_base(ctx, text, where, shell):
+    """(folder, rest) of the wildcard path `text` read from `where`: the literal folder it starts
+    in, resolved (None when the guard cannot place it), and the text after it."""
     first = min(text.index(c) for c in hubg.GLOB_CHARS if c in text)
     cut = max(text.rfind('/', 0, first), text.rfind('\\', 0, first))
     lit, rest = (text[:cut + 1], text[cut + 1:]) if cut >= 0 else ('.', text)
@@ -194,6 +218,16 @@ def glob_reaches(ctx, text, where, shell):
         base = sh.resolve_path(lit, where, shell, ctx.home)
     except (OSError, ValueError):
         base = None
+    return base, rest
+
+
+def glob_reaches(ctx, text, where, shell):
+    """The copy of the list the wildcard path `text`, read from `where`, can name: the file or a
+    folder above it, each part of the wildcard matched (case folded, a leading dot like any
+    other character: fail closed) against the matching part of the copy's path below the literal
+    folder the wildcard starts in; `**` or `..` after the wildcard, any copy below that folder.
+    None when it can name none, or the guard cannot place that folder."""
+    base, rest = glob_base(ctx, text, where, shell)
     if not base:
         return None
     b = jail.real(base)
@@ -318,9 +352,38 @@ def git(event, ctx, cmd, inv, role):
         why = 'may take it out of the work tree'
     elif sub == 'bisect' and not (pos[:1] and pos[0].text in BISECT_READS):
         why = 'may check out another commit\'s version'
-    if why is None:
+    if why is not None:
+        return refusal(event, ctx, role, '%s runs in the PM repository %s and %s' % (text, rules.fwd(top), why),
+                       copy)
+    return git_config(event, ctx, role, text, top, gc.dir, sub, short, longs, args, pos)
+
+
+def git_config(event, ctx, role, text, top, base, sub, short, longs, args, pos):
+    """machine-config for git run in the pointer's work tree `top`: a pathspec that lands in
+    <pointer>/.pm-kit (lands_in) given to rm, mv, restore (not --staged alone), checkout-index,
+    checkout after --, or clean (not -n)."""
+    folder = jail.pointer_config_dir(ctx)
+    if folder is None:
         return None
-    return refusal(event, ctx, role, '%s runs in the PM repository %s and %s' % (text, rules.fwd(top), why), copy)
+    folder_real = jail.real(folder)
+
+    def lands(words):
+        return any(lands_in(ctx, w, base, top, folder_real) for w in words or ())
+
+    if sub in ('rm', 'mv', 'checkout-index'):
+        hit = lands(pos)
+    elif sub == 'restore':
+        hit = lands(pos) and not (('S' in short or 'staged' in longs) and not ('W' in short or 'worktree' in longs))
+    elif sub == 'checkout':
+        hit = lands(after_dashes(args))
+    elif sub == 'clean':
+        hit = not ('n' in short or 'dry-run' in longs) and lands(pos)
+    else:
+        hit = False
+    if not hit:
+        return None
+    return rules.machine_config_refusal(event, ctx, role, '%s runs in the PM repository %s and changes a file in %s'
+                                        % (text, rules.fwd(top), rules.quote(folder)), folder)
 
 
 def tree_top(ctx, where, pointer):
@@ -346,6 +409,26 @@ def covers(ctx, w, base, top, file_real):
     file whose real path is `file_real`: the file, a folder above it, a glob whose literal folder
     is above it, `:/` and `:(top)` paths from the top; an exclusion (`:!`, `:^`) never; any other
     magic, and a computed word, always (fail closed)."""
+    r = spec_real(ctx, w, base, top)
+    if r is True or r is False:
+        return r
+    return r == file_real or jail.inside(file_real, r)
+
+
+def lands_in(ctx, w, base, top, folder_real):
+    """True when the git pathspec Word `w` (read as covers reads it) names the folder whose real
+    path is `folder_real` or a path in it: a glob by its literal folder; an exclusion never; any
+    other magic, and a computed word, always (fail closed)."""
+    r = spec_real(ctx, w, base, top)
+    if r is True or r is False:
+        return r
+    return jail.inside(r, folder_real)
+
+
+def spec_real(ctx, w, base, top):
+    """The real path the git pathspec Word `w`, read from `base` (`top` the work tree), names (a
+    glob: its literal folder); False for an exclusion (`:!`, `:^`, `:(exclude)`); True when it
+    cannot be read (a computed word, other magic, a path that does not resolve)."""
     if w.dyn:
         return True
     t = w.text
@@ -371,5 +454,4 @@ def covers(ctx, w, base, top, file_real):
     p = sh.resolve_path(t or '.', base, home=ctx.home)
     if not p:
         return True
-    r = jail.real(p)
-    return r == file_real or jail.inside(file_real, r)
+    return jail.real(p)
