@@ -273,7 +273,7 @@ class Records(unittest.TestCase):
     def test_finish_dead_judges_a_record_written_after_its_read_never_overwrites_it(self):
         """A new run starts the record after finish_dead read the dead run's and before it
         replaced it: the record's lock holds the new run's write until finish_dead's is done, so
-        the new run's record is the one left (KIT-GATE-RESULT-RECORD-WRITE-LOCK)."""
+        the new run's record is the one left."""
         dead = result.Run(self.repo.root, 'land', 'kit/x', self.tip)
         dead.pid = self.dead_pid()
         dead.start()

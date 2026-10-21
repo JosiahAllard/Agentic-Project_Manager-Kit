@@ -538,7 +538,7 @@ class Resubmit(SubmitCase):
         """The window inside the timeout write itself: the landing finishes its record after
         claim() read it (unclaimed) and before claim() replaces it. The record's lock holds the
         landing's write until claim()'s is done, so the landing's `pass` is the record left, not
-        claim()'s `running` over it (KIT-GATE-RESULT-RECORD-WRITE-LOCK)."""
+        claim()'s `running` over it."""
         _, tip = self.branch('feature', {'a.py': 'a\n'})
         rr = result.Run(self.repo.root, 'land', BRANCH, tip, base=self.main)
         rr.pid, rr.ctime = None, None       # as submit writes it: not claimed yet

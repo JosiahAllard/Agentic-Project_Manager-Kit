@@ -415,7 +415,7 @@ class TrailerValues(unittest.TestCase):
 
 class BatchBase(unittest.TestCase):
     """Lander.close_pulled: the base each batch branch's Closes and Part-of lines are read down
-    to, and the WARNING a batch not merged as a stack gets (KIT-LAND-BATCH-PARTOF-BASE)."""
+    to, and the WARNING a batch not merged as a stack gets."""
 
     def close(self, branches, merges):
         tips = [c * 40 for c in 'abc'[:len(branches)]]
