@@ -256,7 +256,8 @@ class ManagedContext(object):
 
 
 def survey(ctx, apply=False):
-    """The --managed-settings plan: one write of the rendered template, or nothing."""
+    """The --managed-settings plan: one write of the rendered template (in the existing file's key
+    order), or nothing."""
     plan = Plan((SECTION,))
     if not os.path.isfile(kit_file(ctx.kit, settings.GUARD)):
         plan.refuse('%s is not a kit checkout (no %s)' % (ctx.kit, settings.GUARD))
