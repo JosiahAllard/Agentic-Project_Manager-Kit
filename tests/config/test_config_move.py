@@ -1,8 +1,10 @@
-"""The machine config folder's move (docs/kit-json.md "Moving the machine config folder"):
-kitlib.config.user.locate reads the new folder (user.DIR_NAME), falls back to the old one
-(kitlib.config.migration.OLD_DIR_NAME) only while the new config file is absent, fails closed
-when the new one cannot be told, and writers write the new folder only. Every case uses a
-scratch home folder, never the user's."""
+"""The machine config's move into the PM repository (docs/kit-json.md "Moving the machine config
+into the PM repo"). kitlib.config.user.home_location is the move's source: the home folder's file,
+the new folder's (user.DIR_NAME) before the retired one's (kitlib.config.migration.OLD_DIR_NAME),
+failing closed when the new one cannot be told. kitlib.config.user.locate is what the kit reads:
+the PM repository's `.pm-kit` with a good PM-repo pointer, and a machine config still in the home
+folder is an error (UNMOVED), never read and never "no config". Every case uses a scratch home
+folder and the fenced pointer, never the user's."""
 import json
 import os
 import shutil
@@ -15,9 +17,13 @@ from kitlib import backloglint, coordinatorstart, pmstart, pmwatch
 from kitlib.config import ConfigError, migration, user
 from kitlib.machinesetup import default_config_dirs
 from kitlib.pmdata import init as pminit
+from tests.home import machine_config, pm_repo
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'optional', 'agenttemp'))
 import agent_temp_sweep as sweep                                   # noqa: E402
+
+READER_KEYS = {'pm_start': {'hub_url': 'u'}, 'coordinator_start': {'k': 1}, 'pm_watch': {'w': 1},
+               'backlog_lint': {'repos': {}}}
 
 
 class _Home(unittest.TestCase):
@@ -32,6 +38,13 @@ class _Home(unittest.TestCase):
         self.ledger = os.path.join(self.home, 'ledger', 'rulings.md')
         self.other_ledger = os.path.join(self.home, 'ledger', 'other.md')
 
+    def pointed(self):
+        """A PM repository the fenced pointer names; its `.pm-kit` folder is not made."""
+        self.pm = pm_repo(self)
+        self.pm_dir = os.path.join(self.pm, user.DIR_NAME)
+        self.pm_file = os.path.join(self.pm_dir, user.FILE_NAME)
+        return self.pm
+
     def put(self, path, body):
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, 'w', encoding='utf-8') as f:
@@ -42,46 +55,45 @@ class _Home(unittest.TestCase):
             return f.read()
 
 
-class LocateTest(_Home):
+class HomeLocationTest(_Home):
+    """The move's source: the home folder's one file, read as it is."""
+
+    def read(self):
+        return user.user_config(location=user.home_location(self.home))
 
     def test_the_names_differ_and_the_old_one_is_the_retired_folder(self):
         self.assertNotEqual(user.DIR_NAME, migration.OLD_DIR_NAME)
         self.assertFalse(user.DIR_NAME.startswith('.claude'))
 
-    def test_neither_present_is_an_empty_config_named_at_the_new_folder(self):
-        loc = user.locate(self.home)
-        self.assertEqual((loc.state, loc.error), (user.NONE, None))
-        self.assertEqual(user.config_file(self.home), self.new)
-        self.assertEqual(user.config_dir(self.home), self.new_dir)
-        self.assertIsNone(user.ledger_path(self.home))
+    def test_neither_present_is_none_named_at_the_new_folder(self):
+        loc = user.home_location(self.home)
+        self.assertEqual((loc.state, loc.path, loc.error), (user.NONE, self.new, None))
+        self.assertIsNone(self.read()['ledger_path'])
 
     def test_the_new_file_alone_is_read(self):
         self.put(self.new, {'ledger_path': self.ledger})
-        self.assertEqual(user.locate(self.home).state, user.NEW)
-        self.assertEqual(user.ledger_path(self.home), self.ledger)
-        self.assertEqual(user.config_file(self.home), self.new)
+        self.assertEqual(user.home_location(self.home).state, user.NEW)
+        self.assertEqual(self.read()['ledger_path'], self.ledger)
 
     def test_the_old_file_is_read_while_the_new_one_is_absent(self):
         self.put(self.old, {'ledger_path': self.ledger})
-        loc = user.locate(self.home)
+        loc = user.home_location(self.home)
         self.assertEqual((loc.state, loc.path, loc.error), (user.OLD, self.old, None))
-        self.assertEqual(user.ledger_path(self.home), self.ledger)
-        self.assertEqual(user.config_dir(self.home), self.old_dir)
+        self.assertEqual(self.read()['ledger_path'], self.ledger)
 
     def test_a_new_folder_without_its_config_file_still_reads_the_old_file(self):
-        # another writer (a state file, say) made the new folder first: the ledger stays known
-        os.makedirs(self.new_dir)
+        # another writer (a state file, say) made the new folder first: the old file stays the source
         self.put(os.path.join(self.new_dir, 'some_state.json'), {})
         self.put(self.old, {'ledger_path': self.ledger})
-        self.assertEqual(user.locate(self.home).state, user.OLD)
-        self.assertEqual(user.ledger_path(self.home), self.ledger)
+        self.assertEqual(user.home_location(self.home).state, user.OLD)
+        self.assertEqual(self.read()['ledger_path'], self.ledger)
 
     def test_both_present_reads_the_new_file_only(self):
         self.put(self.new, {'ledger_path': self.ledger})
         self.put(self.old, {'ledger_path': self.other_ledger, 'pending_path': self.other_ledger})
-        loc = user.locate(self.home)
+        loc = user.home_location(self.home)
         self.assertEqual((loc.state, loc.path), (user.BOTH, self.new))
-        cfg = user.user_config(self.home)
+        cfg = self.read()
         self.assertEqual(cfg['ledger_path'], self.ledger)
         self.assertIsNone(cfg['pending_path'])           # never merged from the old file
 
@@ -92,25 +104,22 @@ class LocateTest(_Home):
             with self.subTest(body):
                 self.put(self.new, body)
                 with self.assertRaises(ConfigError) as cm:
-                    user.user_config(self.home)
+                    self.read()
                 self.assertIn(self.new, str(cm.exception))
 
     def test_a_new_folder_that_is_a_file_is_bad(self):
         self.put(self.new_dir, 'not a folder')
         self.put(self.old, {'ledger_path': self.ledger})
-        loc = user.locate(self.home)
-        self.assertEqual(loc.state, user.BAD)
+        loc = user.home_location(self.home)
+        self.assertEqual((loc.state, loc.path), (user.BAD, self.new))
         self.assertIn(self.new_dir, loc.error)
-        self.assertEqual(user.config_file(self.home), self.new)     # never raises
         with self.assertRaises(ConfigError):
-            user.ledger_path(self.home)
+            self.read()
 
     def test_a_new_config_file_that_is_a_folder_is_bad(self):
         os.makedirs(self.new)
         self.put(self.old, {'ledger_path': self.ledger})
-        self.assertEqual(user.locate(self.home).state, user.BAD)
-        with self.assertRaises(ConfigError):
-            user.user_config(self.home)
+        self.assertEqual(user.home_location(self.home).state, user.BAD)
 
     def test_a_new_path_that_cannot_be_examined_is_bad_not_absent(self):
         self.put(self.old, {'ledger_path': self.ledger})
@@ -122,48 +131,144 @@ class LocateTest(_Home):
                 raise PermissionError(13, 'Access is denied', p)
             return real_stat(p, *a, **kw)
         with mock.patch.object(user.os, 'stat', stat), mock.patch.object(user.os, 'lstat', stat):
+            loc = user.home_location(self.home)
+        self.assertEqual(loc.state, user.BAD)
+        self.assertIn('Access is denied', loc.error)
+
+    def test_display_names_the_file_that_is_read(self):
+        self.assertEqual(user.home_location(self.home).display(), '~/%s/%s' % (user.DIR_NAME, user.FILE_NAME))
+        self.put(self.old, {})
+        self.assertEqual(user.home_location(self.home).display(),
+                         '~/%s/%s' % (migration.OLD_DIR_NAME, user.FILE_NAME))
+
+
+class LocateTest(_Home):
+    """What the kit reads: the PM repository's file, or nothing, or an error."""
+
+    def test_no_pointer_and_no_home_file_is_an_empty_config_named_at_the_home_file(self):
+        loc = user.locate(self.home)
+        self.assertEqual((loc.state, loc.error), (user.NONE, None))
+        self.assertEqual(user.config_file(self.home), self.new)
+        self.assertEqual(user.config_dir(self.home), self.new_dir)
+        self.assertEqual(user.readable_file(self.home), self.new)
+        self.assertIsNone(user.ledger_path(self.home))
+        self.assertEqual(user.display(self.home), '~/%s/%s' % (user.DIR_NAME, user.FILE_NAME))
+
+    def test_a_home_file_with_no_pointer_is_unmoved_never_read(self):
+        for path in (self.new, self.old):
+            with self.subTest(path):
+                self.put(path, {'ledger_path': self.ledger})
+                loc = user.locate(self.home)
+                self.assertEqual((loc.state, loc.path, loc.leftover), (user.UNMOVED, path, path))
+                self.assertIn('set the PM repo pointer', loc.error)
+                self.assertIn('config_move.py', loc.error)
+                with self.assertRaises(ConfigError):
+                    user.ledger_path(self.home)
+                with self.assertRaises(ConfigError):
+                    user.readable_file(self.home)
+                shutil.rmtree(os.path.dirname(path))
+
+    def test_the_pm_repositorys_file_is_read(self):
+        self.pointed()
+        self.put(self.pm_file, {'ledger_path': self.ledger})
+        loc = user.locate(self.home)
+        self.assertEqual((loc.state, loc.path, loc.folder, loc.leftover), (user.OK, self.pm_file, self.pm_dir, None))
+        self.assertEqual(user.ledger_path(self.home), self.ledger)
+        self.assertEqual(user.config_file(self.home), self.pm_file)
+        self.assertEqual(user.config_dir(self.home), self.pm_dir)
+
+    def test_a_pointer_with_no_pm_file_and_no_home_file_is_an_empty_config(self):
+        self.pointed()
+        loc = user.locate(self.home)
+        self.assertEqual((loc.state, loc.path, loc.error), (user.OK, self.pm_file, None))
+        self.assertIsNone(user.ledger_path(self.home))
+
+    def test_a_home_file_beside_the_pm_repositorys_is_a_leftover_and_ignored(self):
+        self.pointed()
+        self.put(self.pm_file, {'ledger_path': self.ledger})
+        self.put(self.new, {'ledger_path': self.other_ledger, 'pending_path': self.other_ledger})
+        loc = user.locate(self.home)
+        self.assertEqual((loc.state, loc.leftover), (user.OK, self.new))
+        cfg = user.user_config(self.home)
+        self.assertEqual(cfg['ledger_path'], self.ledger)
+        self.assertIsNone(cfg['pending_path'])
+
+    def test_a_home_file_and_no_pm_file_is_unmoved_naming_both(self):
+        self.pointed()
+        self.put(self.old, {'ledger_path': self.ledger})
+        loc = user.locate(self.home)
+        self.assertEqual((loc.state, loc.leftover), (user.UNMOVED, self.old))
+        self.assertIn(self.old, loc.error)
+        self.assertIn(self.pm_file, loc.error)
+        with self.assertRaises(ConfigError):
+            user.user_config(self.home)
+
+    def test_a_pm_folder_that_is_a_file_is_bad(self):
+        self.pointed()
+        self.put(self.pm_dir, 'not a folder')
+        self.put(self.new, {'ledger_path': self.ledger})
+        loc = user.locate(self.home)
+        self.assertEqual(loc.state, user.BAD)
+        self.assertIn(self.pm_dir, loc.error)
+        self.assertEqual(user.config_file(self.home), self.pm_file)     # never raises
+        with self.assertRaises(ConfigError):
+            user.ledger_path(self.home)
+
+    def test_a_pm_config_file_that_is_a_folder_is_bad(self):
+        self.pointed()
+        for path in (self.pm_file, os.path.join(self.pm_dir, user.LOCAL_FILE_NAME)):
+            with self.subTest(path):
+                shutil.rmtree(self.pm_dir, True)
+                os.makedirs(path)
+                self.assertEqual(user.locate(self.home).state, user.BAD)
+                with self.assertRaises(ConfigError):
+                    user.user_config(self.home)
+
+    def test_a_pm_folder_that_cannot_be_examined_is_bad_not_absent(self):
+        self.pointed()
+        self.put(self.new, {'ledger_path': self.ledger})
+        real_stat = os.stat
+        pm_dir = os.path.normcase(self.pm_dir)
+
+        def stat(p, *a, **kw):
+            if os.path.normcase(os.fspath(p)).startswith(pm_dir):
+                raise PermissionError(13, 'Access is denied', p)
+            return real_stat(p, *a, **kw)
+        with mock.patch.object(user.os, 'stat', stat), mock.patch.object(user.os, 'lstat', stat):
             loc = user.locate(self.home)
             self.assertEqual(loc.state, user.BAD)
             self.assertIn('Access is denied', loc.error)
             with self.assertRaises(ConfigError):
                 user.ledger_path(self.home)
 
-    def test_display_names_the_file_that_is_read(self):
-        self.assertEqual(user.display(self.home), '~/%s/%s' % (user.DIR_NAME, user.FILE_NAME))
-        self.put(self.old, {})
-        self.assertEqual(user.display(self.home), '~/%s/%s' % (migration.OLD_DIR_NAME, user.FILE_NAME))
-
 
 class WritableTest(_Home):
 
-    def test_neither_present_writes_the_new_folder(self):
+    def test_no_pointer_and_no_home_file_writes_the_home_file(self):
         self.assertEqual(user.writable_file(self.home), self.new)
 
-    def test_the_new_file_or_both_write_the_new_folder(self):
-        self.put(self.new, {})
-        self.assertEqual(user.writable_file(self.home), self.new)
-        self.put(self.old, {})
-        self.assertEqual(user.writable_file(self.home), self.new)
+    def test_a_home_file_refuses_with_the_move(self):
+        for path in (self.new, self.old):
+            with self.subTest(path):
+                self.put(path, {'ledger_path': self.ledger})
+                with self.assertRaises(ConfigError) as cm:
+                    user.writable_file(self.home)
+                self.assertIn(path, str(cm.exception))
+                os.remove(path)
 
-    def test_the_old_file_alone_refuses_with_the_move(self):
-        self.put(self.old, {'ledger_path': self.ledger})
-        with self.assertRaises(ConfigError) as cm:
-            user.writable_file(self.home)
-        self.assertIn(self.old, str(cm.exception))
-        self.assertIn(self.new, str(cm.exception))
-
-    def test_a_bad_new_folder_refuses(self):
-        self.put(self.new_dir, 'not a folder')
+    def test_a_bad_pm_folder_refuses(self):
+        self.pointed()
+        self.put(self.pm_dir, 'not a folder')
         with self.assertRaises(ConfigError):
             user.writable_file(self.home)
 
-    def test_write_machine_writes_the_new_folder_when_there_is_none(self):
+    def test_write_machine_writes_the_home_file_when_there_is_no_pointer(self):
         pminit.write_machine(self.home, {'path': os.path.join(self.home, 'data')})
         with open(self.new, encoding='utf-8') as f:
             self.assertEqual(json.load(f)['pm_data']['path'], os.path.join(self.home, 'data'))
         self.assertFalse(os.path.exists(self.old_dir))
 
-    def test_write_machine_refuses_an_old_only_machine_and_writes_nothing(self):
+    def test_write_machine_refuses_a_home_file_and_writes_nothing(self):
         self.put(self.old, {'ledger_path': self.ledger})
         before = self.read_bytes(self.old)
         with self.assertRaises(ConfigError):
@@ -171,16 +276,15 @@ class WritableTest(_Home):
         self.assertFalse(os.path.exists(self.new))
         self.assertEqual(self.read_bytes(self.old), before)
 
-    def test_write_machine_with_both_keeps_the_new_keys_and_leaves_the_old_file(self):
-        self.put(self.new, {'ledger_path': self.ledger})
-        self.put(self.old, {'ledger_path': self.other_ledger})
-        before = self.read_bytes(self.old)
-        pminit.write_machine(self.home, {'path': os.path.join(self.home, 'data')})
-        with open(self.new, encoding='utf-8') as f:
-            data = json.load(f)
-        self.assertEqual(data['ledger_path'], self.ledger)
-        self.assertIn('pm_data', data)
-        self.assertEqual(self.read_bytes(self.old), before)
+    def test_write_machine_refuses_a_pointer_as_derived_and_writes_nothing(self):
+        self.pointed()
+        self.put(self.pm_file, {'ledger_path': self.ledger})
+        before = self.read_bytes(self.pm_file)
+        with self.assertRaises(ConfigError) as cm:
+            pminit.write_machine(self.home, {'path': os.path.join(self.home, 'data')})
+        self.assertIn('pm_data is derived', str(cm.exception))
+        self.assertEqual(self.read_bytes(self.pm_file), before)
+        self.assertFalse(os.path.exists(self.new))
 
 
 class ReadersTest(_Home):
@@ -189,10 +293,10 @@ class ReadersTest(_Home):
     def env(self):
         return mock.patch.dict(os.environ, {'USERPROFILE': self.home, 'HOME': self.home})
 
-    def test_each_reader_falls_back_to_the_old_file(self):
-        self.put(self.old, {'pm_start': {'hub_url': 'u'}, 'coordinator_start': {'k': 1},
-                            'pm_watch': {'w': 1}, 'machine_lock': {'notice': {'dir': self.home}},
-                            'backlog_lint': {'repos': {}}})
+    def test_each_reader_reads_the_pm_repositorys_file(self):
+        self.pointed()
+        machine_config(self.home, dict(READER_KEYS, machine_lock={'notice': {'dir': self.home}}), case=self)
+        self.put(self.new, {'pm_start': {'hub_url': 'home'}})          # a leftover, ignored
         with self.env():
             self.assertEqual(pmstart.load_config(), {'hub_url': 'u'})
             self.assertEqual(coordinatorstart.load_config(), {'k': 1})
@@ -200,27 +304,23 @@ class ReadersTest(_Home):
             self.assertEqual(pmwatch.configured_notice_dir(), self.home)
             self.assertEqual(backloglint.load_config(), {})
 
-    def test_each_reader_prefers_the_new_file(self):
-        self.put(self.old, {'pm_start': {'hub_url': 'old'}})
-        self.put(self.new, {'pm_start': {'hub_url': 'new'}})
-        with self.env():
-            self.assertEqual(pmstart.load_config(), {'hub_url': 'new'})
-
-    def test_each_reader_takes_a_bad_location_for_a_config_error_never_no_config(self):
-        # the old file holds every key, so a reader that fell back or read "absent" would answer
-        self.put(self.old, {'pm_start': {'hub_url': 'u'}, 'coordinator_start': {'k': 1},
-                            'pm_watch': {'w': 1}, 'machine_lock': {'notice': {'dir': self.home}},
-                            'backlog_lint': {'repos': {}}, 'agent_temp_sweep': {'dir': self.home}})
-        for bad in ('folder is a file', 'config is a folder'):
+    def test_each_reader_takes_a_home_file_or_a_bad_location_for_a_config_error_never_no_config(self):
+        # the home file holds every key, so a reader that read it or read "absent" would answer
+        body = dict(READER_KEYS, machine_lock={'notice': {'dir': self.home}},
+                    agent_temp_sweep={'dir': self.home})
+        self.put(self.old, body)
+        cases = (('home file, no pointer', self.old_dir), ('home file, empty PM repository', self.old_dir),
+                 ('PM folder is a file', None), ('PM config is a folder', None))
+        for bad, named in cases:
             with self.subTest(bad):
-                shutil.rmtree(self.new_dir, True)
-                if os.path.isfile(self.new_dir):
-                    os.remove(self.new_dir)
-                if bad == 'folder is a file':
-                    self.put(self.new_dir, 'not a folder')
-                else:
-                    os.makedirs(self.new)
-                self.assertEqual(user.locate(self.home).state, user.BAD)
+                if bad != 'home file, no pointer':
+                    self.pointed()
+                    if bad == 'PM folder is a file':
+                        self.put(self.pm_dir, 'not a folder')
+                    elif bad == 'PM config is a folder':
+                        os.makedirs(self.pm_file)
+                    named = named or self.pm_dir
+                self.assertIn(user.locate(self.home).state, (user.UNMOVED, user.BAD))
                 with self.env():
                     for name, read, error in (
                             ('pmstart', pmstart.load_config, ConfigError),
@@ -232,10 +332,11 @@ class ReadersTest(_Home):
                         with self.subTest(name):
                             with self.assertRaises(error) as cm:
                                 read()
-                            self.assertIn(self.new_dir, str(cm.exception))
+                            self.assertIn(named, str(cm.exception))
 
     def test_the_coordinator_start_says_it_could_not_check_the_config(self):
-        self.put(self.new_dir, 'not a folder')
+        self.pointed()
+        self.put(self.pm_dir, 'not a folder')
         with self.env():
             text = coordinatorstart.render(env={coordinatorstart.ROLE_VAR: coordinatorstart.ROLE})
         self.assertIn('could not check config: ConfigError', text)
@@ -259,8 +360,9 @@ class BadLocationCliTest(_Home):
         if d not in sys.path:
             sys.path.append(d)
         import pm_watch
-        self.put(self.new_dir, 'not a folder')
-        self.put(self.old, {'pm_start': {'sessions_file': 's.json'},
+        self.pointed()
+        self.put(self.pm_dir, 'not a folder')
+        self.put(self.new, {'pm_start': {'sessions_file': 's.json'},
                             'machine_lock': {'notice': {'dir': self.home}}})
         for name, main in (('pm_watch', pm_watch.main),):
             with self.subTest(name):

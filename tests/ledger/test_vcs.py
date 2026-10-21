@@ -6,7 +6,7 @@ import os
 import unittest
 from unittest import mock
 
-from kitlib.config import user as kuser
+from tests.home import PM_REPO_FENCE_ENV, machine_config
 from kitlib.ledger import vcs, write
 from kitlib.ledger.errors import Refused, Usage
 from tests.gitfixture import TempRepo, fixture_env
@@ -236,10 +236,9 @@ class VcsTest(unittest.TestCase):
 
     def test_two_cli_adds_with_commit_at_once_give_one_commit_per_entry(self):
         home = os.path.join(self.repo.base, 'home')
-        os.makedirs(kuser.config_dir(home))
-        with open(kuser.config_file(home), 'w', encoding='utf-8') as f:
-            json.dump({'ledger_path': self.path, 'ledger_repos': ['alpha']}, f)
-        self.one_commit_per_entry('cli', dict(self.env, USERPROFILE=home, HOME=home))
+        os.makedirs(home)
+        pm = os.path.dirname(machine_config(home, {'ledger_path': self.path, 'ledger_repos': ['alpha']}, case=self))
+        self.one_commit_per_entry('cli', dict(self.env, USERPROFILE=home, HOME=home, **{PM_REPO_FENCE_ENV: pm}))
 
     def one_commit_per_entry(self, mode, env):
         self.seed_rulings()

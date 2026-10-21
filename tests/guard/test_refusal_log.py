@@ -21,7 +21,7 @@ from kitlib.fs import treelock
 from kitlib.guard import refusal_log
 from kitlib.host import Action, Decision
 from tests.gitfixture import TempRepo, fixture_parent, rmtree
-from tests.home import machine_config, temp_home
+from tests.home import machine_config, pm_repo, temp_home
 
 NOW = datetime.datetime(2026, 10, 20, 9, 8, 7, tzinfo=datetime.timezone.utc)
 SECRET_PATH = 'D:\\private\\notes\\journal.txt'
@@ -156,6 +156,7 @@ class Record(unittest.TestCase):
         self.assertFalse(os.path.exists(self.log))
 
     def test_no_pm_data_or_an_unreadable_config_is_no_line(self):
+        pm_repo(self, record=False)              # a PM repository with no PM data record
         machine_config(self.home, {})
         self.assertIsNone(refusal_log.record(DENY, ACTION, 'claude', 'main', {}))
         machine_config(self.home, '{nope')

@@ -10,6 +10,7 @@ from unittest import mock
 from kitlib import config, pmdata
 from kitlib.config import user
 from tests import gitfixture
+from tests.home import PM_REPO_FENCE_ENV, machine_config, pm_repo
 
 ROOT = 'a' * 40
 
@@ -128,47 +129,73 @@ class LocateTest(unittest.TestCase):
 
 
 class MachineConfigTest(unittest.TestCase):
+    """machine_settings: pm_data is derived from the PM-repo pointer's repository and its record
+    (kitlib.config.user.locate), never read from a file."""
 
     def setUp(self):
         self.home = tempfile.mkdtemp(prefix='kit-home-')
         self.addCleanup(shutil.rmtree, self.home, True)
         self.data = os.path.join(self.home, 'pm')
 
-    def write(self, body):
-        os.makedirs(os.path.join(self.home, user.DIR_NAME), exist_ok=True)
-        with open(user.config_file(self.home), 'w', encoding='utf-8') as f:
-            f.write(json.dumps(body))
+    def no_pointer(self):
+        patch = mock.patch.dict(os.environ, {PM_REPO_FENCE_ENV: ''})
+        patch.start()
+        self.addCleanup(patch.stop)
+        user.forget()
+        self.addCleanup(user.forget)
 
-    def test_unset_is_none(self):
+    def test_no_pointer_or_no_record_is_none(self):
+        self.no_pointer()
         self.assertIsNone(pmdata.machine_settings(self.home))
-        self.write({})
+        pm_repo(self, record=False)
+        self.assertIsNone(pmdata.machine_settings(self.home))
+        machine_config(self.home, {}, case=self)
         self.assertIsNone(pmdata.machine_settings(self.home))
 
-    def test_the_schema_accepts_pm_data_and_the_settings_default_branch_and_remote(self):
-        self.write({'pm_data': {'path': self.data}})
+    def test_it_is_the_pointers_repository_and_its_record(self):
+        pm = pm_repo(self)
         self.assertIn('pm_data', user.SCHEMA)
         self.assertEqual(pmdata.machine_settings(self.home),
-                         {'path': self.data, 'branch': 'pmdata', 'remote': 'private'})
-        self.write({'pm_data': {'path': self.data, 'branch': 'd', 'remote': 'vault'}})
+                         {'path': os.path.normpath(pm), 'branch': 'main', 'remote': 'origin'})
+        pmdata.write(os.path.join(pm, '.git'), 'main', 'vault', ROOT)   # the pointer needs its branch
+        user.forget()
         self.assertEqual(pmdata.machine_settings(self.home),
-                         {'path': self.data, 'branch': 'd', 'remote': 'vault'})
+                         {'path': os.path.normpath(pm), 'branch': 'main', 'remote': 'vault'})
 
-    def test_the_path_is_normalised(self):
-        self.write({'pm_data': {'path': self.data + os.sep + 'a' + os.sep + '..'}})
-        self.assertEqual(pmdata.machine_settings(self.home)['path'], self.data)
-
-    def test_a_pm_data_that_is_not_an_object_is_a_config_error(self):
-        self.write({'pm_data': 'x'})
+    def test_a_pm_data_key_in_a_file_is_a_config_error(self):
+        pm_repo(self)
+        machine_config(self.home, '{"pm_data": {"path": "%s"}}' % self.data.replace('\\', '/'), case=self)
         with self.assertRaises(config.ConfigError) as cm:
             user.user_config(self.home)
+        self.assertIn('pm_data is derived', str(cm.exception))
+
+    def test_a_home_folder_file_with_no_pointer_is_a_config_error(self):
+        self.no_pointer()
+        os.makedirs(os.path.join(self.home, user.DIR_NAME))
+        with open(user.config_file(self.home), 'w', encoding='utf-8') as f:
+            json.dump({'pm_data': {'path': self.data}}, f)
+        with self.assertRaises(config.ConfigError) as cm:
+            pmdata.machine_settings(self.home)
+        self.assertIn('still in the home folder', str(cm.exception))
+
+    def test_the_home_folder_file_read_as_the_moves_source_checks_pm_data(self):
+        os.makedirs(os.path.join(self.home, user.DIR_NAME))
+        with open(user.config_file(self.home), 'w', encoding='utf-8') as f:
+            json.dump({'pm_data': 'x'}, f)
+        with self.assertRaises(config.ConfigError) as cm:
+            user.user_config(location=user.home_location(self.home))
         self.assertIn('pm_data', str(cm.exception))
 
+    def test_check_settings_defaults_and_normalises(self):
+        self.assertIsNone(pmdata.check_settings(None, 'w'))
+        self.assertEqual(pmdata.check_settings({'path': self.data + os.sep + 'a' + os.sep + '..'}, 'w'),
+                         {'path': self.data, 'branch': 'pmdata', 'remote': 'private'})
+
     def test_bad_settings_raise(self):
-        for body in ({}, {'path': 'rel'}, {'path': self.data, 'branch': 'a b'},
+        for body in ('x', {}, {'path': 'rel'}, {'path': self.data, 'branch': 'a b'},
                      {'path': self.data, 'remote': ''}, {'path': self.data, 'x': 1}):
-            self.write({'pm_data': body})
             with self.assertRaises(pmdata.PmDataError, msg=repr(body)):
-                pmdata.machine_settings(self.home)
+                pmdata.check_settings(body, 'w')
 
 
 if __name__ == '__main__':

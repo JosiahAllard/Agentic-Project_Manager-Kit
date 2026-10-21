@@ -18,9 +18,8 @@ from unittest import mock
 
 from kitlib import machinepaths as M
 from kitlib.git import cmd
-from kitlib.config import user
 from tests import gitfixture
-from tests.home import TempHomeCase
+from tests.home import TempHomeCase, machine_config as write_machine_config
 
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 TOOL = os.path.join(KIT, 'tools', 'machine_paths.py')
@@ -75,9 +74,13 @@ class PlantedTree(TempHomeCase):
             self.machine_config(json.dumps({'machine_path_folders': list(self.folders)}))
 
     def machine_config(self, body):
-        os.makedirs(os.path.join(self.home, user.DIR_NAME), exist_ok=True)
-        with open(user.config_file(self.home), 'w', encoding='utf-8') as fh:
-            fh.write(body)
+        """The machine config text `body`: a JSON object split between the fenced PM repository's
+        two files, anything else written as its config.json."""
+        try:
+            data = json.loads(body)
+        except ValueError:
+            data = None
+        write_machine_config(self.home, data if isinstance(data, dict) else body, case=self)
 
     def set_config(self, section, top=None):
         data = dict(top or {})

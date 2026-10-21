@@ -3,7 +3,6 @@ waits while its agent session has the cap's number of gate runs of the repositor
 landing, the daily full run and the owner never wait. Every in-flight run here is a scratch-store
 record (StoreCase.live_record) whose ancestors hold a made-up agent host."""
 import functools
-import json
 import os
 import shutil
 import tempfile
@@ -17,6 +16,7 @@ from kitlib.gate import gatecap, runner
 from kitlib.gate import steps as S
 from kitlib.proc import process
 from tests.gate import fixtures
+from tests.home import machine_config
 
 HOST = [912345, 77]
 OTHER_HOST = [912346, 78]
@@ -37,12 +37,11 @@ def never(_s):
 
 class TempHome(unittest.TestCase):
     def home(self, data):
-        """A temp home whose machine config is `data` (kitlib.config.user DIR_NAME/FILE_NAME)."""
+        """A temp home whose machine config is `data`, in the fenced PM repository the pointer
+        names (tests.home.machine_config); a later call replaces it."""
         h = tempfile.mkdtemp(prefix='gatecap-home-')
         self.addCleanup(shutil.rmtree, h, True)
-        os.makedirs(os.path.join(h, kuser.DIR_NAME))
-        with open(os.path.join(h, kuser.DIR_NAME, kuser.FILE_NAME), 'w', encoding='utf-8') as f:
-            json.dump(data, f)
+        machine_config(h, data, case=self)
         return h
 
 

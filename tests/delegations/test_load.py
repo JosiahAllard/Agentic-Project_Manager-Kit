@@ -9,7 +9,9 @@ import stat
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
+from tests.home import PM_REPO_FENCE_ENV, pm_repo
 from kitlib import delegations
 from kitlib.config import migration, user
 from kitlib.delegations import schema
@@ -65,8 +67,10 @@ class Home(unittest.TestCase):
     def setUp(self):
         self.home = tempfile.mkdtemp(prefix='kit-home-')
         self.addCleanup(shutil.rmtree, self.home, True)
-        self.dir = os.path.join(self.home, user.DIR_NAME)
+        self.pm = pm_repo(self)
+        self.dir = os.path.join(self.pm, user.DIR_NAME)
         self.path = os.path.join(self.dir, delegations.FILE_NAME)
+        self.home_copy = os.path.join(self.home, user.DIR_NAME, delegations.FILE_NAME)
 
     def write_text(self, text, encoding='utf-8'):
         os.makedirs(self.dir, exist_ok=True)
@@ -91,9 +95,38 @@ class Home(unittest.TestCase):
 
 class Location(Home):
 
-    def test_the_file_is_in_the_machine_config_folder(self):
-        self.assertEqual(delegations.delegations_file(self.home), self.path)
+    def test_the_file_is_in_the_pm_repositorys_machine_config_folder(self):
+        self.write(DRAFT)
+        self.assertEqual(self.load().path, self.path)
         self.assertEqual(os.path.basename(os.path.dirname(self.path)), '.pm-kit')
+        # delegations_file names the home folder's copy, the move's source, never read by load
+        self.assertEqual(delegations.delegations_file(self.home), self.home_copy)
+
+    def test_the_home_folders_copy_is_never_read(self):
+        os.makedirs(os.path.dirname(self.home_copy))
+        with open(self.home_copy, 'w', encoding='utf-8') as f:
+            json.dump(DRAFT, f)
+        with self.assertRaises(delegations.DelegationMissing):
+            self.load()
+
+    def test_no_pointer_means_nothing_is_delegated(self):
+        with mock.patch.dict(os.environ, {PM_REPO_FENCE_ENV: ''}):
+            user.forget()
+            self.addCleanup(user.forget)
+            with self.assertRaises(delegations.DelegationMissing) as cm:
+                self.load()
+        self.assertIn('no PM repo pointer', str(cm.exception))
+
+    def test_a_machine_config_that_cannot_be_read_refuses(self):
+        # still in the home folder with the pointer set: UNMOVED, an error, never "nothing"
+        self.write(DRAFT)
+        os.makedirs(os.path.join(self.home, user.DIR_NAME))
+        with open(os.path.join(self.home, user.DIR_NAME, user.FILE_NAME), 'w', encoding='utf-8') as f:
+            f.write('{}')
+        with self.assertRaises(delegations.DelegationError) as cm:
+            self.load()
+        self.assertNotIsInstance(cm.exception, delegations.DelegationMissing)
+        self.assertIn('the machine config cannot be read', str(cm.exception))
 
     def test_missing_means_nothing_is_delegated(self):
         with self.assertRaises(delegations.DelegationMissing) as cm:
@@ -117,7 +150,8 @@ class Location(Home):
             os.environ[name] = other
             self.addCleanup(lambda n=name, v=old: os.environ.pop(n) if v is None
                             else os.environ.__setitem__(n, v))
-        self.assertEqual(delegations.delegations_file(self.home), self.path)
+        self.write(DRAFT)
+        self.assertEqual(self.load().path, self.path)
 
     def test_a_folder_in_its_place_refuses(self):
         os.makedirs(self.path)

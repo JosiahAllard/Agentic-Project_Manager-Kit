@@ -4,7 +4,6 @@ default folder (default_work_temp) before this process's TEMP. Every test gives 
 environment, platform 'win32' and a registry reader: nothing reads this machine's TEMP, AGENT_TEMP
 or registry."""
 import ast
-import json
 import os
 import shutil
 import tempfile
@@ -15,6 +14,7 @@ from unittest import mock
 from kitlib.config import user
 from kitlib.config.types import ConfigError
 from kitlib.worktree import sweep
+from tests.home import machine_config
 from tests.worktree import test_worktree_sweep
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -49,9 +49,7 @@ class WorkTempAvoidsSessionTemps(unittest.TestCase):
         self.kit_work = os.path.join(ROOT, user.WORK_DIR_NAME)
 
     def write(self, body):
-        os.makedirs(os.path.join(self.home, user.DIR_NAME), exist_ok=True)
-        with open(user.config_file(self.home), 'w', encoding='utf-8') as f:
-            json.dump(body, f)
+        machine_config(self.home, body, case=self)   # the PM repository's two files
 
     def temp(self, reg, env=None):
         return user.work_temp(HERE, home=self.home, environ=self.env if env is None else env,
@@ -132,9 +130,7 @@ class SessionTemps(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.home, True)
 
     def write(self, body):
-        os.makedirs(os.path.join(self.home, user.DIR_NAME), exist_ok=True)
-        with open(user.config_file(self.home), 'w', encoding='utf-8') as f:
-            json.dump(body, f)
+        machine_config(self.home, body, case=self)   # the PM repository's two files
 
     def test_the_sweeps_folder_then_the_user_environment_normalised_once(self):
         a = os.path.join(self.home, 'Agent')
@@ -243,9 +239,7 @@ class HomeConfig(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.home, True)
 
     def write(self, body):
-        os.makedirs(os.path.join(self.home, user.DIR_NAME), exist_ok=True)
-        with open(user.config_file(self.home), 'w', encoding='utf-8') as f:
-            json.dump(body, f)
+        machine_config(self.home, body, case=self)   # the PM repository's two files
 
 
 class SharedTempFollowsTempDir(HomeConfig):
@@ -353,10 +347,8 @@ class SweepLogInSharedTemp(test_worktree_sweep.SweepCase):
     def test_the_sweep_log_is_written_into_a_missing_temp_dir(self):
         khome = tempfile.mkdtemp(prefix='kit-home-')
         self.addCleanup(shutil.rmtree, khome, True)
-        os.makedirs(os.path.join(khome, user.DIR_NAME))
         configured = os.path.join(khome, 'not-yet', 'kit')
-        with open(user.config_file(khome), 'w', encoding='utf-8') as f:
-            json.dump({'temp_dir': configured}, f)
+        machine_config(khome, {'temp_dir': configured}, case=self)
         self.landed('done')
         real = user.shared_temp
         with mock.patch.object(user, 'shared_temp', lambda: real(home=khome)):

@@ -13,6 +13,7 @@ from kitlib.config import user
 from kitlib.git import cmd
 from kitlib.pmdata import init as pminit
 from tests import gitfixture
+from tests.home import pm_repo
 from tests.realgit import real_git
 
 EMPTY_TREE = pminit.EMPTY_TREE['sha1']
@@ -57,6 +58,19 @@ class _Base(unittest.TestCase):
         root = kw.pop('root', self.repo.root)
         path = kw.pop('path', self.data)
         return pminit.init(root, path, **kw)
+
+    def home_pm_data(self):
+        """The `pm_data` init wrote into the home folder's machine config. The kit reads that
+        file only as the move's source now (kitlib.config.user.locate: UNMOVED), so it is read
+        here as JSON."""
+        with open(user.config_file(self.home), encoding='utf-8') as f:
+            return json.load(f)['pm_data']
+
+    def init_with_no_home_file(self, **kw):
+        """init with the machine config write left out: a home folder machine config would read
+        UNMOVED and refuse the next init (kitlib.config.user.locate)."""
+        with mock.patch.object(pminit, 'write_machine'):
+            return self.init(**kw)
 
     def config_text(self):
         with open(os.path.join(self.repo.common_dir(), 'config'), encoding='utf-8') as f:
@@ -138,7 +152,7 @@ class InitTest(_Base):
         # record, machine config, push
         self.assertEqual(pmdata.read(self.repo.common_dir()),
                          pmdata.Record('pmdata', 'private', root))
-        self.assertEqual(pmdata.machine_settings(self.home),
+        self.assertEqual(self.home_pm_data(),
                          {'path': self.data, 'branch': 'pmdata', 'remote': 'private'})
         self.assertEqual(self.remote_ref(self.private, 'refs/heads/pmdata'), root)
         self.assertEqual(self.remote_ref(self.repo.remote, 'refs/heads/pmdata'), '')
@@ -175,17 +189,19 @@ class InitTest(_Base):
         self.assertIsNone(why)
         self.assertIn(('kit.multi', 'one\ntwo'), pairs)
 
-    def test_other_machine_config_keys_are_kept(self):
+    def test_a_machine_config_still_in_the_home_folder_is_config(self):
+        # the kit reads the machine config from the PM repository now: a home folder file is
+        # one to move first (kitlib.config.user.locate, UNMOVED), never rewritten here
         os.makedirs(os.path.dirname(user.config_file(self.home)))
         with open(user.config_file(self.home), 'w', encoding='utf-8') as f:
             json.dump({'temp_dir': self.repo.base}, f)
+        refs, cfg = self.refs(), self.config_text()
         out = self.init()
-        self.assertEqual(out.code, pminit.OK, out.lines)
+        self.assertEqual(out.code, pminit.CONFIG, out.lines)
+        self.assertIn('still in the home folder', out.lines[0])
+        self.assertEqual((self.refs(), self.config_text()), (refs, cfg))
         with open(user.config_file(self.home), encoding='utf-8') as f:
-            data = json.load(f)
-        self.assertEqual(data, {'temp_dir': self.repo.base,
-                                'pm_data': {'path': self.data, 'branch': 'pmdata',
-                                            'remote': 'private'}})
+            self.assertEqual(json.load(f), {'temp_dir': self.repo.base})
 
 
 class RefusalTest(_Base):
@@ -252,14 +268,16 @@ class RefusalTest(_Base):
     def test_a_relative_path_is_refused(self):
         self.refused(path='data')
 
-    def test_a_set_machine_key_without_adopt_is_refused(self):
-        os.makedirs(os.path.dirname(user.config_file(self.home)))
-        with open(user.config_file(self.home), 'w', encoding='utf-8') as f:
-            json.dump({'pm_data': {'path': self.data}}, f)
+    def test_a_pm_repo_pointer_is_refused_as_pm_data_is_derived_from_it(self):
+        pm_repo(self)
         refs, cfg = self.refs(), self.config_text()
-        out = self.init()
-        self.assertEqual(out.code, pminit.REFUSED, out.lines)
-        self.assertEqual((self.refs(), self.config_text()), (refs, cfg))
+        for adopt in (False, True):
+            with self.subTest(adopt=adopt):
+                out = self.init(adopt=adopt)
+                self.assertEqual(out.code, pminit.CONFIG, out.lines)
+                self.assertIn('derived', out.lines[0])
+                self.assertEqual((self.refs(), self.config_text()), (refs, cfg))
+                self.assertFalse(os.path.exists(user.config_file(self.home)))
 
 
 class AdoptTest(_Base):
@@ -311,14 +329,14 @@ class AdoptTest(_Base):
         self.assertEqual(out.code, pminit.REFUSED, out.lines)
 
     def test_adopt_keeps_the_worktree_and_record_of_a_finished_init(self):
-        self.assertEqual(self.init().code, pminit.OK)
+        self.assertEqual(self.init_with_no_home_file().code, pminit.OK)
         out = self.init(adopt=True)
         self.assertEqual(out.code, pminit.OK, out.lines)
         self.assertIn('worktree  %s kept (already locked)' % self.data, out.lines)
         self.assertTrue(any(l.startswith('record') and l.endswith('kept') for l in out.lines))
 
     def test_adopt_refuses_the_branch_checked_out_elsewhere(self):
-        self.assertEqual(self.init().code, pminit.OK)
+        self.assertEqual(self.init_with_no_home_file().code, pminit.OK)
         other = os.path.join(self.repo.base, 'other')
         out = self.init(adopt=True, path=other)
         self.assertEqual(out.code, pminit.REFUSED, out.lines)
@@ -482,7 +500,7 @@ class ReviewFixTest(_Base):
         self.assertEqual(again.code, pminit.OK, again.lines)
         root = self.repo.git('rev-parse', 'refs/heads/pmdata')
         self.assertEqual(self.remote_ref(self.private, 'refs/heads/pmdata'), root)
-        self.assertIsNotNone(pmdata.machine_settings(self.home))
+        self.assertEqual(self.home_pm_data()['path'], self.data)
 
     def test_an_unreadable_machine_config_is_config(self):
         os.makedirs(os.path.dirname(user.config_file(self.home)))
@@ -613,14 +631,14 @@ class SpacedPathTest(_Base):
         wts = self.repo.git('worktree', 'list', '--porcelain').replace('\\', '/')
         block = wts.split('worktree %s' % spaced.replace('\\', '/'))[1]
         self.assertIn('locked PM data', block)
-        self.assertEqual(pmdata.machine_settings(self.home)['path'], spaced)
+        self.assertEqual(self.home_pm_data()['path'], spaced)
 
 
 @real_git('git worktree remove of a missing folder and a failed push to a missing remote')
 class RealGitAdoptTest(_Base):
 
     def test_adopt_adds_a_deleted_worktree_folder_again(self):
-        self.assertEqual(self.init().code, pminit.OK)
+        self.assertEqual(self.init_with_no_home_file().code, pminit.OK)
         gitfixture.rmtree(self.data)
         out = self.init(adopt=True)
         self.assertEqual(out.code, pminit.OK, out.lines)

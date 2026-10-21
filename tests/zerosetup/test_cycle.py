@@ -24,8 +24,9 @@ What stands in for the machine (the rest is the kit's code as it runs):
     the landing's one booking included, so it has its turn at once; OnWindows books a scratch store on fake hardware
     (tests/lock/helpers.StoreCase, as tests/gate/test_auto_gate.py's gates do), so the steps run
     in the lock's real job objects, Windows only;
-  - the home folder is a temp folder (tests/home.py), and the user's global git identity a temp
-    global config file;
+  - the home folder is a temp folder (tests/home.py), the PM-repo pointer names a temp PM
+    repository (tests.home.pm_repo) whose .pm-kit holds the machine config, and the user's global
+    git identity is a temp global config file;
   - the session's own GIT_CONFIG_* entries (a sandbox's url rewrites, say) are dropped: they are
     not part of the machine a user runs the kit on.
 """
@@ -53,7 +54,7 @@ from kitlib.machinesetup.common import Plan
 from kitlib.worktree import new as wtnew
 from tests import gitfixture
 from tests.gate.fixtures import queue_review, test_env
-from tests.home import temp_home
+from tests.home import pm_repo, temp_home
 from tests.lock.helpers import StoreCase
 from tests.realgit import real_git
 
@@ -100,6 +101,7 @@ class Cycle(object):
         patch.start()
         self.addCleanup(patch.stop)
         self.home = temp_home(self)
+        self.pm = pm_repo(self)
         self.base = os.path.realpath(tempfile.mkdtemp(prefix='kit-zero-'))
         self.addCleanup(gitfixture.rmtree, self.base)
         # The user's own git identity, as a machine has it: global, never in the repository.

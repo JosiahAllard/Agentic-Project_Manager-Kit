@@ -13,6 +13,7 @@ from unittest import mock
 
 from kitlib.config import user as kuser
 from kitlib.delegations import run as drun
+from tests.home import pm_repo
 from tools import delegated
 
 TOOL = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
@@ -32,9 +33,10 @@ class Cli(unittest.TestCase):
         patch = mock.patch.object(kuser, 'home_dir', return_value=self.home)
         patch.start()
         self.addCleanup(patch.stop)
+        self.pm = pm_repo(self)
 
     def write_list(self, ops=(OP,)):
-        folder = os.path.join(self.home, kuser.DIR_NAME)
+        folder = os.path.join(self.pm, kuser.DIR_NAME)
         os.makedirs(folder, exist_ok=True)
         with open(os.path.join(folder, 'owner-delegations.json'), 'w', encoding='utf-8') as fh:
             json.dump({'schema': 1, 'operations': list(ops)}, fh)
