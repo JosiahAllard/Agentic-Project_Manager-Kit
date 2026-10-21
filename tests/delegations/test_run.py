@@ -192,10 +192,52 @@ class Program(Fixture):
         self.reg.values[('HKLM', drun.MACHINE_ENV, 'PSModulePath')] = ('C:/mods', False)
         self.run_op(trigger=self.rid, environ=env)
         child = self.spawn.calls[0][1]['env']
-        self.assertEqual(child, {'SystemRoot': 'C:\\Windows', 'TEMP': 'C:/t', 'ComSpec': 'C:/c',
-                                 'PATH': self.bin, 'PATHEXT': '.COM;.EXE',
+        self.assertEqual(child, {'TEMP': 'C:/t', 'PATH': self.bin, 'PATHEXT': '.COM;.EXE',
                                  'PSModulePath': 'C:/mods'})
         self.assertNotIn(decoy, ''.join(child.values()))
+
+    def test_the_system_and_profile_folders_come_from_the_registry_not_the_caller(self):
+        # git finds its global config through the profile names, cmd.exe is ComSpec, PowerShell
+        # builds its module path from ProgramFiles: a caller's value would steer the child.
+        names = ('SystemRoot', 'windir', 'SystemDrive', 'ComSpec', 'ProgramFiles',
+                 'ProgramFiles(x86)', 'ProgramW6432', 'CommonProgramFiles',
+                 'CommonProgramFiles(x86)', 'ProgramData', 'ALLUSERSPROFILE', 'PUBLIC',
+                 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA')
+        env = dict({n: 'C:\\evil' for n in names}, USERNAME='someone')
+        hklm, vol = 'HKLM', ('HKCU', drun.VOLATILE_ENV)
+        self.reg.values.update({
+            (hklm, drun.NT_CURRENT, 'SystemRoot'): ('C:\\Windows', False),
+            (hklm, drun.MACHINE_ENV, 'ComSpec'): ('%SystemRoot%\\system32\\cmd.exe', True),
+            (hklm, drun.WIN_CURRENT, 'ProgramFilesDir'): ('C:\\Program Files', False),
+            (hklm, drun.WIN_CURRENT, 'ProgramFilesDir (x86)'): ('C:\\Program Files (x86)', False),
+            (hklm, drun.WIN_CURRENT, 'ProgramW6432Dir'): ('C:\\Program Files', False),
+            (hklm, drun.WIN_CURRENT, 'CommonFilesDir'): ('C:\\Program Files\\Common Files', False),
+            (hklm, drun.WIN_CURRENT, 'CommonFilesDir (x86)'): ('C:\\x86\\Common Files', False),
+            (hklm, drun.PROFILE_LIST, 'ProgramData'): ('%SystemDrive%\\ProgramData', True),
+            (hklm, drun.PROFILE_LIST, 'Public'): ('%SystemDrive%\\pub', True),
+            vol + ('USERPROFILE',): ('D:\\home\\owner', False),
+            vol + ('HOMEDRIVE',): ('D:', False),
+            vol + ('HOMEPATH',): ('\\home\\owner', False),
+            vol + ('APPDATA',): ('D:\\home\\owner\\roaming', False),
+            vol + ('LOCALAPPDATA',): ('D:\\home\\owner\\local', False),
+        })
+        self.run_op(trigger=self.rid, environ=env)
+        child = self.spawn.calls[0][1]['env']
+        self.assertEqual(child, {
+            'SystemRoot': 'C:\\Windows', 'windir': 'C:\\Windows', 'SystemDrive': 'C:',
+            'ComSpec': 'C:\\Windows\\system32\\cmd.exe', 'ProgramFiles': 'C:\\Program Files',
+            'ProgramFiles(x86)': 'C:\\Program Files (x86)', 'ProgramW6432': 'C:\\Program Files',
+            'CommonProgramFiles': 'C:\\Program Files\\Common Files',
+            'CommonProgramFiles(x86)': 'C:\\x86\\Common Files',
+            'ProgramData': 'C:\\ProgramData', 'ALLUSERSPROFILE': 'C:\\ProgramData',
+            'PUBLIC': 'C:\\pub', 'USERPROFILE': 'D:\\home\\owner', 'HOMEDRIVE': 'D:',
+            'HOMEPATH': '\\home\\owner', 'APPDATA': 'D:\\home\\owner\\roaming',
+            'LOCALAPPDATA': 'D:\\home\\owner\\local', 'USERNAME': 'someone',
+            'PATH': self.bin})
+
+    def test_a_folder_the_registry_lacks_is_left_out_not_taken_from_the_caller(self):
+        self.run_op(trigger=self.rid, environ={'USERPROFILE': 'C:\\evil', 'ComSpec': 'C:\\evil'})
+        self.assertEqual(self.spawn.calls[0][1]['env'], {'PATH': self.bin})
 
     def test_a_folder_on_the_callers_path_is_never_searched(self):
         decoy = os.path.join(self.dir, 'decoy')
@@ -630,6 +672,24 @@ class RegistryEnv(unittest.TestCase):
     def test_the_registry_is_not_read_under_the_tests(self):
         self.assertTrue(kuser.fenced())
         self.assertIsNone(drun.read_registry('HKLM', drun.MACHINE_ENV, 'Path'))
+
+    def test_the_real_registry_read_tells_plain_from_expandable(self):
+        # Read only, and only values every Windows has: the fence is lifted for this read alone.
+        with mock.patch.object(kuser, 'fenced', return_value=False):
+            root = drun.read_registry('HKLM', drun.NT_CURRENT, 'SystemRoot')
+            comspec = drun.read_registry('HKLM', drun.MACHINE_ENV, 'ComSpec')
+            pf = drun.read_registry('HKLM', drun.WIN_CURRENT, 'ProgramFilesDir')
+            pf64 = drun.read_registry('HKLM', drun.WIN_CURRENT, 'ProgramW6432Dir')
+            dword = drun.read_registry('HKLM', drun.NT_CURRENT, 'CurrentMajorVersionNumber')
+            missing = drun.read_registry('HKLM', drun.NT_CURRENT, 'kit-no-such-value')
+        self.assertIs(root[1], False)
+        self.assertTrue(os.path.isdir(root[0]), root)
+        self.assertIs(comspec[1], True)
+        self.assertIn('%SystemRoot%', comspec[0])
+        if pf64 is not None:                # a 64-bit Windows: the 64-bit view is read
+            self.assertEqual(pf, pf64)
+        self.assertIsNone(dword)            # a REG_DWORD is no string
+        self.assertIsNone(missing)
 
 
 if __name__ == '__main__':

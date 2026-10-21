@@ -24,8 +24,8 @@ nothing run and nothing written. In this order:
      <trigger>`) has this anchor or this trigger, then one ledger entry, provenance delegated,
      is added (not committed). Each trigger and each owner entry orders one run.
   7. the child: the argv list with shell=False, stdin closed, in the kit folder. Its environment
-     is only the FROM_CALLER names of the caller's and the registry's PATH, PATHEXT and
-     PSModulePath.
+     is only the FROM_CALLER names of the caller's and the registry's PATH, PATHEXT,
+     PSModulePath and FROM_SYSTEM names (the system and profile folders).
 
 Nothing here prints, parses arguments or exits (ARCHITECTURE.md, Layers); tools/delegated.py is
 the entry point.
@@ -181,21 +181,32 @@ PROFILE_LIST = NT_CURRENT + r'\ProfileList'
 SYSTEM_NAMES = {
     'SYSTEMROOT': ('HKLM', NT_CURRENT, 'SystemRoot'),
     'WINDIR': ('HKLM', NT_CURRENT, 'SystemRoot'),
+    'COMSPEC': ('HKLM', MACHINE_ENV, 'ComSpec'),
     'PROGRAMFILES': ('HKLM', WIN_CURRENT, 'ProgramFilesDir'),
     'PROGRAMFILES(X86)': ('HKLM', WIN_CURRENT, 'ProgramFilesDir (x86)'),
+    'PROGRAMW6432': ('HKLM', WIN_CURRENT, 'ProgramW6432Dir'),
     'COMMONPROGRAMFILES': ('HKLM', WIN_CURRENT, 'CommonFilesDir'),
+    'COMMONPROGRAMFILES(X86)': ('HKLM', WIN_CURRENT, 'CommonFilesDir (x86)'),
     'PROGRAMDATA': ('HKLM', PROFILE_LIST, 'ProgramData'),
+    'ALLUSERSPROFILE': ('HKLM', PROFILE_LIST, 'ProgramData'),
+    'PUBLIC': ('HKLM', PROFILE_LIST, 'Public'),
 }
 SYSTEM_NAMES.update((n.upper(), ('HKCU', VOLATILE_ENV, n)) for n in (
     'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA', 'USERNAME', 'USERDOMAIN'))
 EXPAND_DEPTH = 8
 VAR_RE = re.compile(r'%([^%]+)%')
-# The child's variables taken from the caller as they are. PATH, PATHEXT and PSModulePath come
-# from the registry (registry_env). Nothing else reaches the child.
-FROM_CALLER = ('SystemRoot', 'windir', 'ComSpec', 'SystemDrive', 'ProgramData', 'ProgramFiles',
-               'ProgramFiles(x86)', 'CommonProgramFiles', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA',
-               'HOMEDRIVE', 'HOMEPATH', 'USERNAME', 'USERDOMAIN', 'COMPUTERNAME', 'TEMP', 'TMP',
-               'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE', 'OS')
+# The child's system and profile folders, filled from the registry as a %NAME% is (_named), never
+# from the caller: git finds its global config through the profile names, PowerShell its modules
+# through ProgramFiles. A name with no registry value is left out.
+FROM_SYSTEM = ('SystemRoot', 'windir', 'SystemDrive', 'ComSpec', 'ProgramFiles',
+               'ProgramFiles(x86)', 'ProgramW6432', 'CommonProgramFiles', 'CommonProgramFiles(x86)',
+               'ProgramData', 'ALLUSERSPROFILE', 'PUBLIC', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH',
+               'APPDATA', 'LOCALAPPDATA')
+# The child's variables taken from the caller as they are (docs/delegations.md "Known limits").
+# PATH, PATHEXT, PSModulePath and FROM_SYSTEM come from the registry (registry_env). Nothing else
+# reaches the child.
+FROM_CALLER = ('USERNAME', 'USERDOMAIN', 'COMPUTERNAME', 'TEMP', 'TMP', 'NUMBER_OF_PROCESSORS',
+               'PROCESSOR_ARCHITECTURE', 'OS')
 
 
 def read_registry(hive, key, name):
@@ -265,12 +276,17 @@ def _entries(got, read):
 
 
 def registry_env(read=None):
-    """The child's PATH, PATHEXT and PSModulePath, from the registry only. PATH and PSModulePath
-    are the machine's value then the user's (MACHINE_ENV, USER_ENV); PATHEXT is the user's, or
-    else the machine's. An entry whose %NAME% has no registry value is dropped, and a name with
-    no value is left out. `read` is read_registry's stand-in for tests."""
+    """The child's PATH, PATHEXT, PSModulePath and FROM_SYSTEM names, from the registry only. PATH
+    and PSModulePath are the machine's value then the user's (MACHINE_ENV, USER_ENV); PATHEXT is
+    the user's, or else the machine's; a FROM_SYSTEM name is filled as a %NAME% is. An entry whose
+    %NAME% has no registry value is dropped, and a name with no value is left out. `read` is
+    read_registry's stand-in for tests."""
     read = read or read_registry
     out = {}
+    for name in FROM_SYSTEM:
+        value = _named(name, read, 0)
+        if value:
+            out[name] = value
     for name, value in (('PATH', 'Path'), ('PSModulePath', 'PSModulePath')):
         parts = (_entries(read('HKLM', MACHINE_ENV, value), read)
                  + _entries(read('HKCU', USER_ENV, value), read))
@@ -318,8 +334,8 @@ def program(name, dirs):
 
 def child_env(environ, system):
     """The child's environment: the FROM_CALLER names of the caller's `environ`, and the
-    registry's PATH, PATHEXT and PSModulePath (`system`, registry_env). Nothing else: no GIT_*,
-    no PYTHON*, no PATH of the caller's."""
+    registry's PATH, PATHEXT, PSModulePath and FROM_SYSTEM names (`system`, registry_env). Nothing
+    else: no GIT_*, no PYTHON*, no PATH or profile folder of the caller's."""
     upper = {k.upper(): v for k, v in environ.items()}
     env = {n: upper[n.upper()] for n in FROM_CALLER if n.upper() in upper}
     env.update(system)
