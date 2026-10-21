@@ -157,7 +157,7 @@ class ByName(Base):
     def test_a_pm_kit_folder_at_a_checkout_top_is_held(self):
         # T2: a linked worktree and a main checkout; the case is ignored
         for target in (os.path.join(self.w.wt, '.pm-kit', 'config.json'),
-                       os.path.join(self.w.wt, '.PM-KIT', 'Local.json'),
+                       os.path.join(self.w.wt, '.Pm-Kit', 'Local.json'),
                        os.path.join(self.w.wt, '.pm-kit', 'hub', 'agent.token'),
                        os.path.join(self.w.main, '.pm-kit', 'config.json'),
                        os.path.join(self.w.data, '.pm-kit', 'config.json')):
@@ -195,7 +195,7 @@ class Wildcards(Base):
     def test_a_wildcard_in_a_checkout_top_folder_is_held(self):
         payloads = (
             ('rm', lambda sub: bash('rm .pm-kit/c*', self.w.wt, sub)),
-            ('rm -r', lambda sub: bash('rm -rf .PM-KIT/hub/*', self.w.wt, sub)),
+            ('rm -r', lambda sub: bash('rm -rf .Pm-Kit/hub/*', self.w.wt, sub)),
             ('Remove-Item', lambda sub: ps('Remove-Item .pm-kit\\*', self.w.wt, sub)),
         )
         for name, payload in payloads:
@@ -275,7 +275,7 @@ class PointerGit(Base):
 @real_git('git log --remotes=<name>: the fake lacks it')
 class PrePushSecrets(pc.PrePushCase):
     """The pre-push check refuses a push whose commits add or change a file of a top .pm-kit/hub/
-    folder or .pm-kit/local.json, on any remote (T13-T15)."""
+    folder or .pm-kit/local.json, on any remote (T13 to T15)."""
 
     ZERO = '0' * 40
 
@@ -300,7 +300,7 @@ class PrePushSecrets(pc.PrePushCase):
 
     def test_a_case_spelling_of_the_folder_is_refused(self):
         # T13
-        self.assert_secret_refused('.PM-KIT/Hub/owner.token')
+        self.assert_secret_refused('.Pm-Kit/Hub/owner.token')
 
     def test_local_json_is_refused_on_every_remote_and_ref(self):
         # T14
