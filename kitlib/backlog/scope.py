@@ -13,10 +13,12 @@ class UndecidableScope(Exception):
     """A comparison against a member this grammar cannot parse, or an empty scope set."""
 
 
-def path_shape_error(p, what='path', tab_ok=False):
+def path_shape_error(p, what='path', tab_ok=False, comma_ok=False):
     """None if `p` is a repo-root-relative forward-slash path, else why not. `tab_ok`: a tab inside
     the path is an ordinary character - for reading members a record already holds (collision,
-    the offer), so an old tab blocks no session; a write's new tab is still a `check` finding."""
+    the offer), so an old tab blocks no session; a write's new tab is still a `check` finding.
+    `comma_ok`: a comma is an ordinary character - for a literal changed path that is never
+    written as a record line (kitlib.gate.land's scope check)."""
     if not p:
         return 'an empty %s' % what
     if p != p.strip():
@@ -24,7 +26,7 @@ def path_shape_error(p, what='path', tab_ok=False):
     if any((ord(ch) < 32 and not (tab_ok and ch == '\t')) or ord(ch) == 127 for ch in p):
         return ('a control character in the %s %r - a line break would split a record line'
                 % (what, p))
-    if ',' in p:
+    if ',' in p and not comma_ok:
         return 'a comma in a %s - a set is one `%s:` line per member' % (what, what)
     if '\\' in p:
         return 'a backslash in a %s - paths are forward-slash, repo-root relative' % what

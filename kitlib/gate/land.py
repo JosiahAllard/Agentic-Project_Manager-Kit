@@ -258,28 +258,42 @@ def _not_landed(lines):
 
 
 def _covers(members, path):
-    """True when a scope member in `members` covers `path` (kitlib.backlog.scope.members_collide:
-    whole components, casefolded). A member the grammar cannot read covers nothing. Pure."""
+    """True when a scope member in `members` covers `path`: one's components a prefix of the
+    other's, casefolded (the comparison of kitlib.backlog.scope.members_collide). Only the member
+    is read in the scope grammar; the path is a literal changed path, so a comma or a wildcard
+    character in it is an ordinary character. A member the grammar cannot read, and a path
+    _path_error refuses, cover nothing. Pure."""
+    if _path_error(path):
+        return False
+    have = path.casefold().split('/')
     for m in members:
         try:
-            if scmod.members_collide(m, path):
-                return True
+            want = scmod.scope_components(m)
         except scmod.UndecidableScope:
             continue
+        n = min(len(want), len(have))
+        if want[:n] == have[:n]:
+            return True
     return False
 
 
 def _path_error(path):
-    """None when a scope member can name `path` as itself, else why not: the scope check cannot
-    decide such a path, so it is outside every scope and left out of the widening command. Pure."""
-    why = scmod.path_shape_error(path, 'path', tab_ok=True)
+    """None when the scope check can decide `path`, else why not: such a path is outside every
+    scope and left out of the widening command. A comma or a wildcard character is decidable
+    (_unnamed). Pure."""
+    why = scmod.path_shape_error(path, 'path', tab_ok=True, comma_ok=True)
     if why:
         return why
-    if any(ch in scmod.WILDCARD_CHARS for ch in path):
-        return 'a wildcard character in a path - a scope member cannot name it'
     if path.casefold() == scmod.NONE:
         return 'a path that reads as the `none` sentinel'
     return None
+
+
+def _unnamed(path):
+    """True when no scope member can name `path` as itself: a comma or a wildcard character is a
+    parse error in the scope grammar (kitlib.backlog.scope). A folder member that holds it covers
+    it; it is left out of the widening command. Pure."""
+    return ',' in path or any(ch in scmod.WILDCARD_CHARS for ch in path)
 
 
 def parse_strict(text):
@@ -1118,9 +1132,10 @@ class Lander(object):
         members = found.members()
         outside = []
         for p in rest:
-            err = _path_error(p)
-            if err or not _covers(members, p):
-                outside.append((p, err))
+            if not _covers(members, p):
+                err = _path_error(p)
+                outside.append((p, 'undecidable: %s' % err if err else
+                                'no scope member can name it' if _unnamed(p) else None))
         if not outside:
             return None
         if found.unread:            # a record it could not read may cover them
@@ -1133,8 +1148,7 @@ class Lander(object):
 
     def _scope_miss(self, b, t, mb, found, outside):
         ids = sorted(found.held)
-        shown = ['%s (undecidable: %s)' % (p, err) if err else p
-                 for p, err in outside[:SCOPE_SHOWN]]
+        shown = ['%s (%s)' % (p, err) if err else p for p, err in outside[:SCOPE_SHOWN]]
         more = len(outside) - len(shown)
         listed = ', '.join(shown) + (', and %d more (git diff --name-only --no-renames %s %s)'
                                      % (more, mb, t) if more else '')
