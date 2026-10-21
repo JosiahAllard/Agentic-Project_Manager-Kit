@@ -326,6 +326,13 @@ class Runs(Case):
         self.assertIn('GREEN  src/test_add.py', out)
         self.assertEqual(self.throwaways(), [])
 
+    def test_a_selector_ending_in_a_carriage_return_runs_as_written_without_it(self):
+        """A CRLF list left a CR on the filter: the test never loaded and counted as RED."""
+        self.commit({'src/test_add.py': TEST_ADD})
+        rc, out = self.run_tool('--tests', 'src/test_add.py::T.test_add\r')
+        self.assertEqual(rc, V.EXIT_GREEN, out)
+        self.assertEqual(self.throwaways(), [])
+
     def test_filter_naming_nothing_is_undecided(self):
         # the module imports at the base (calc.add is there), so only the filter can miss
         self.commit({'tests/test_add.py': TEST_ADD})

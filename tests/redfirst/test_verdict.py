@@ -20,6 +20,10 @@ class Selectors(unittest.TestCase):
         s = V.parse_selector('tests/pkg/test_x.py::Case.test_a', RUNNERS)
         self.assertEqual((s.kind, s.target, s.filter), ('python', 'tests.pkg.test_x', 'Case.test_a'))
 
+    def test_surrounding_whitespace_is_stripped(self):
+        s = V.parse_selector('tests/pkg/test_x.py::Case.test_a\r', RUNNERS)
+        self.assertEqual((s.text, s.filter), ('tests/pkg/test_x.py::Case.test_a', 'Case.test_a'))
+
     def test_python_module_under_pythonpath(self):
         s = V.parse_selector('tools/test_y.py', RUNNERS)
         self.assertEqual((s.target, s.filter), ('test_y', ''))
@@ -105,6 +109,13 @@ class Verdicts(unittest.TestCase):
                          "does not import against the base: ModuleNotFoundError: No module "
                          "named 'x'")
         nofilter = 'ERROR: x (unittest.loader._FailedTest.x)\nAttributeError\nRan 1 test in 0s'
+        self.assertEqual(V.python_verdict(1, nofilter)[0], V.NONE)
+
+    def test_a_load_failure_with_a_cr_in_the_name_is_not_red(self):
+        """A CRLF selector puts a CR in the name unittest prints; the load failure must still
+        count as the filter naming nothing, never as a red test."""
+        nofilter = ('ERROR: T.test_x\r (unittest.loader._FailedTest.T.test_x\r)\r\n'
+                    'AttributeError\r\nRan 1 test in 0s\r\n')
         self.assertEqual(V.python_verdict(1, nofilter)[0], V.NONE)
 
     def test_names_copied(self):
