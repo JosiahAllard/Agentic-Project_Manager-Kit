@@ -256,6 +256,97 @@ class OwnPull(Base):
             self.refused(self.cmd(self.bl('set X-1 --scope s')))
 
 
+class QuotedWords(Base):
+    """A bash word that is all one double-quoted string (`"$PWD"`) is one word whose text the line
+    does not show (backlogrole.argv_words: policy.ONE): read as the value of an option whose value
+    sorts nothing, never as the verb, the record or a value that decides a row."""
+
+    def test_a_double_quoted_folder_still_reads(self):
+        # a worker's `-C "$PWD" landable <branch>` was refused as set-text: no verb read
+        for args in ('landable scripts/gearup-clean', 'show X-1', '--session "$S" next'):
+            with self.subTest(args):
+                self.allowed(self.cmd('python "%s" -C "$PWD" %s' % (self.tool, args),
+                                      agentname.PREFIX + 'worker'))
+
+    def test_a_double_quoted_value_on_its_own_pull(self):
+        # a strong-worker's `-C . set <its pull> --scope "$M/..."` was refused: the own pull went unread
+        self.rec = pulled_by('kit/wt')
+        for where in ('.', '"%s"' % self.wt):
+            with self.subTest(where):
+                self.allowed(self.cmd('cd "%s"; M=a; T=b; python "%s" -C %s set X-1 --scope "$M/x" '
+                                      '--scope "$T/y"' % (self.wt, self.tool, where),
+                                      agentname.PREFIX + 'strong-worker'))
+        self.assertIn((self.wt, 'X-1'), self.reads)
+
+    def test_its_own_pull_by_dot_or_the_absolute_folder(self):
+        self.rec = pulled_by('kit/wt')
+        for text in ('python "%s" -C . set X-1 --scope s' % self.tool,
+                     'python "%s" -C "%s" set X-1 --scope s' % (self.tool, self.wt),
+                     'python "%s" -C %s set X-1 --scope s' % (self.tool, self.wt)):
+            with self.subTest(text):
+                self.allowed(self.cmd(text, agentname.PREFIX + 'strong-worker', cwd=self.w.wt))
+
+    def test_a_word_that_can_split_or_decides_stays_unread(self):
+        self.rec = pulled_by('kit/wt')
+        for args in ('-C . set X-1 --scope $M/x', '-C . set X-1 --scope "$@"',
+                     '-C . set X-1 --scope "${a[@]}"', '-C . set X-1 --scope "a"$M',
+                     '-C . set X-1 --priority "$P"', '-C . set X-1 --unset "$F"',
+                     '-C . block X-1 --on "$B" --reason r', '-C "$PWD" set X-1 --scope s',
+                     '-C . --as "$B" set X-1 --scope s', '-C . set "$ID" --scope s', '-C . "$VERB" X-1',
+                     '-C "$PWD" close X-1'):
+            with self.subTest(args):
+                self.refused(self.cmd('python "%s" %s' % (self.tool, args), 'strong-worker', cwd=self.w.wt))
+
+    def test_the_refusal_names_the_words_it_could_not_read(self):
+        self.rec = pulled_by('kit/wt')
+        d = self.refused(self.cmd('python "%s" -C . set X-1 --scope $M/x' % self.tool, 'strong-worker',
+                                  cwd=self.w.wt))
+        self.assertIn('`$M/x`', d.reason)
+        self.assertIn('write them out', d.reason)
+        d = self.refused(self.cmd(self.bl('close X-1')))
+        self.assertNotIn('write them out', d.reason)
+
+    def test_an_unread_word_that_decides_nothing_is_not_named(self):
+        # `close` is a lead row whatever -C names: the unread folder did not decide it (an unquoted
+        # `-C $W` can split into a verb, so there no verb reads and the words do decide)
+        for args in ('-C "$PWD" close X-1', '-C . close X-1 $R', '-C . close X-1 --reason $R'):
+            with self.subTest(args):
+                d = self.refused(self.cmd('python "%s" %s' % (self.tool, args), agentname.PREFIX + 'worker',
+                                          cwd=self.w.wt))
+                self.assertNotIn('write them out', d.reason)
+
+    def test_a_price_or_unset_is_refused_whatever_its_value(self):
+        # no value of --priority or --unset gives a row a builder takes, so the unread word decided
+        # nothing; an unread --on could name a member a builder may block on, so it did
+        self.rec = pulled_by('kit/wt')
+        for args, named in (('set X-1 --scope s --priority "$P"', False),
+                            ('set X-1 --scope s --unset "$F"', False),
+                            ('set X-1 --scope s --priority $P', False),
+                            ('block X-1 --on "$B" --reason r', True)):
+            with self.subTest(args):
+                d = self.refused(self.cmd('python "%s" -C . %s' % (self.tool, args), 'strong-worker',
+                                          cwd=self.w.wt))
+                (self.assertIn if named else self.assertNotIn)('write them out', d.reason)
+
+
+class DryRuns(Base):
+    """A dry run is a read only when every word reads: an unread word could be the --apply."""
+
+    def test_an_unread_word_on_a_dry_run_is_not_a_read(self):
+        for args in ('retarget A B $X', 'retarget A B "$X"', 'catch-up $X p', 'catch-up "$X" p',
+                     'migrate --to main --dry-run $X', 'migrate --to main --dry-run "$X"'):
+            with self.subTest(args):
+                d = self.refused(self.cmd('python "%s" -C . %s' % (self.tool, args), agentname.PREFIX + 'worker',
+                                          cwd=self.w.wt))
+                self.assertIn('write them out', d.reason)
+
+    def test_a_written_dry_run_still_reads(self):
+        for args in ('retarget A B', 'catch-up p', 'migrate --to main --dry-run'):
+            with self.subTest(args):
+                self.allowed(self.cmd('python "%s" -C . %s' % (self.tool, args), agentname.PREFIX + 'worker',
+                                      cwd=self.w.wt))
+
+
 class RawCode(Base):
     def test_code_that_imports_the_backlog_package(self):
         for text in ('python -c "from kitlib.backlog import store"',
