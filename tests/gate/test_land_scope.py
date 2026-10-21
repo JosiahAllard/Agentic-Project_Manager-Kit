@@ -199,6 +199,15 @@ class Refuses(ScopeCase):
         self.assertIn('set FOO --scope "a/**" --scope "c.py"; or land them on their own branch',
                       line)
 
+    def test_an_undecidable_path_is_outside_and_left_out_of_the_command(self):
+        self.seed(pulled('FOO', scope=['a/**']))
+        _, tip = self.branch('feature', {'None': 'n\n'})        # NTFS allows the name
+        line = self.refused(self.land(tip))
+        self.assertIn('(FOO): None (undecidable: a path that reads as the', line)
+        self.assertNotIn('--scope "None"', line)
+        self.assertTrue(line.endswith('; land them on their own branch; nothing was merged'),
+                        line)
+
     def test_only_paths_no_member_can_name_say_land_them_on_their_own_branch(self):
         self.seed(pulled('FOO', scope=['a/**']))
         _, tip = self.branch('feature', {'x,y.py': 'x\n'})
