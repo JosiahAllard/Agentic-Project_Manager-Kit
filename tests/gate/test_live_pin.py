@@ -155,10 +155,27 @@ class LiveRoot(unittest.TestCase):
         with open(os.path.join(self.export, pluginsource.MARKER), 'w', encoding='utf-8') as fh:
             json.dump({'checkout': checkout}, fh)
 
-    def main_checkout(self):
+    def main_checkout(self, kit_json=True, tools=True):
         main = temp_dir(self, 'kit-pin-main-')
         os.makedirs(os.path.join(main, '.git'))
+        if kit_json:
+            with open(os.path.join(main, 'kit.json'), 'w', encoding='utf-8') as fh:
+                fh.write('{}\n')
+        if tools:
+            os.makedirs(os.path.join(main, 'tools'))
         return main
+
+    def test_a_marker_checkout_that_is_no_kit_names_the_export(self):
+        """A marker checkout without kit.json or a tools folder is not taken: the export names
+        itself, so kitlib.stubs.live_kit still sees the export and refuses it."""
+        for kw in ({'kit_json': False}, {'tools': False}):
+            self.marker(self.main_checkout(**kw))
+            self.assertEqual(pluginsource.live_root(self.export, {}), self.export, kw)
+
+    def test_the_marker_checkout_is_named_in_windows_form(self):
+        main = self.main_checkout()
+        self.marker(main.replace('\\', '/'))
+        self.assertEqual(pluginsource.live_root(self.export, {}), os.path.normpath(main))
 
     def test_an_export_without_the_variable_names_the_checkout_its_marker_records(self):
         """The plugin's export run with no KIT_LIVE_ROOT (a session start hook, pm_start): a

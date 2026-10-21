@@ -587,6 +587,10 @@ class RunByPath(unittest.TestCase):
         checkout is that checkout, so the own-copy refusal treats the export's gate.py as the main
         checkout's own: from a linked worktree with no -C it is refused."""
         from kitlib import pluginsource
+        # live_root takes the marker checkout only when it looks like a kit
+        with open(os.path.join(self.main, 'kit.json'), 'w', encoding='utf-8') as fh:
+            fh.write('{}\n')
+        os.makedirs(os.path.join(self.main, 'tools'), exist_ok=True)
         export = os.path.join(self.repo.base, 'plugin', '0123456789ab')
         os.makedirs(os.path.join(export, 'tools'))
         with open(os.path.join(export, pluginsource.MARKER), 'w', encoding='utf-8') as fh:
