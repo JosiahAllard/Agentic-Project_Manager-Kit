@@ -169,10 +169,12 @@ task is one with a name the kit registers (the launcher's sign-in task, `agent-t
 ending `-worktree-sweep` or `-daily-full`) or an action with a word (its program, or an argument,
 quoted or not, with a leading `&`, quotes and an option's `-opt:` / `--opt=` taken off, `words`)
 that is an absolute path inside a kit folder (`is_kit`, `kit_roots`): this kit; the
-live checkout an export runs for (`KIT_LIVE_ROOT`); and, when this kit is a plugin export, the
-folder that holds every export. A file named like a kit tool in another folder, another
+live checkout an export runs for (`KIT_LIVE_ROOT`, else the main checkout the export's marker
+records when that holds `kit.json` and a `tools` folder); and, when this kit is a plugin export,
+the folder that holds every export. A file named like a kit tool in another folder, another
 repository's `<repo>\tools\gate.py`, is not the kit's. A task that names the kit's checkout while
-the session start runs from the plugin export is matched by its name only. A `pythonw.exe` program
+the session start runs from a plugin export whose marker names no usable checkout is matched by
+its name only. A `pythonw.exe` program
 is never flagged, with or without the carrier. `schtasks` writes bytes: UTF-16 output (a byte order
 mark, or NULs) goes to the XML parser as bytes, which reads the declaration itself; single-byte
 output is read in the OEM code page, its declaration dropped unless it names a single-byte encoding,

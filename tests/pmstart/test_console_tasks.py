@@ -5,6 +5,7 @@ and fake schtasks output; one read-only `schtasks /Query /XML ONE` (RealRead) is
 this machine's task scheduler, and it skips when schtasks cannot answer."""
 import codecs
 import datetime
+import json
 import os
 import subprocess
 import sys
@@ -133,6 +134,20 @@ class KitRoots(unittest.TestCase):
         self.assertEqual(roots, {self.norm(self.export), self.norm(self.top), self.norm(self.live)})
         other = os.path.join(self.top, "0.4.0-main.9", "tools", "daily_full.py")
         self.assertEqual(len(ct.judge([task(r"\x", "python.exe", '"%s"' % other)], roots=roots)), 1)
+
+    def test_an_export_with_no_variable_adds_the_main_checkout_its_marker_records(self):
+        """The session start run from the plugin export with no KIT_LIVE_ROOT: a task naming the
+        main checkout the export's marker records is the kit's too."""
+        main = os.path.join(self.top, "main")
+        os.makedirs(os.path.join(main, ".git"))
+        os.makedirs(os.path.join(main, "tools"))
+        open(os.path.join(main, "kit.json"), "w").close()
+        with open(os.path.join(self.export, pluginsource.MARKER), "w", encoding="utf-8") as fh:
+            json.dump({"checkout": main.replace("\\", "/")}, fh)
+        roots = ct.kit_roots(self.export, environ={})
+        self.assertEqual(roots, {self.norm(self.export), self.norm(self.top), self.norm(main)})
+        line = '"%s"' % os.path.join(main, "tools", "daily_full.py")
+        self.assertEqual(len(ct.judge([task(r"\x", "python.exe", line)], roots=roots)), 1)
 
 
 XML = """

@@ -179,14 +179,23 @@ LIVE_ROOT_ENV = 'KIT_LIVE_ROOT'      # set by kitlib.gate.pin for a tool it runs
 
 
 def live_root(kit=None, environ=None):
-    """The kit checkout a printed command names: KIT_LIVE_ROOT when `kit` (default: this checkout)
-    is an export (it holds MARKER) and the variable names a folder, else `kit`. A tool pinned to
-    an export of pushed main (kitlib.gate.pin) runs from a folder a later prune may remove."""
+    """The kit checkout a printed command names. A checkout (`kit`, default: this one, holding no
+    MARKER) names itself. An export (it holds MARKER) names KIT_LIVE_ROOT when the variable names
+    a folder, else the main checkout its marker records (export_checkout) when that holds kit.json
+    and a tools folder (the test kitlib.stubs.live_kit makes), else itself. A tool pinned to an
+    export of pushed main (kitlib.gate.pin), or run from the plugin's export with no KIT_LIVE_ROOT
+    (the session start hook, pm_start), runs from a folder a later prune may remove."""
     kit = kit or kit_root()
+    if not os.path.isfile(os.path.join(kit, MARKER)):
+        return kit
     env = os.environ if environ is None else environ
     live = env.get(LIVE_ROOT_ENV)
-    if live and os.path.isdir(live) and os.path.isfile(os.path.join(kit, MARKER)):
+    if live and os.path.isdir(live):
         return live
+    checkout = export_checkout(kit)
+    if checkout and os.path.isfile(os.path.join(checkout, 'kit.json')) \
+            and os.path.isdir(os.path.join(checkout, 'tools')):
+        return os.path.normpath(checkout)
     return kit
 
 
