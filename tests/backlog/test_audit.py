@@ -193,18 +193,6 @@ class Tool(unittest.TestCase):
         self.assertIn('an odd failure', err)
         self.assertNotIn('Traceback', err)
 
-    def test_migrate_is_audited(self):
-        self.repo.write('docs/backlog/FOO.md', 'id: FOO\narea: xx\npriority: 2\npriority_by: agent\n'
-                        'effort: s\nstate: open\nblocked_on: -\nscope: tools/x.py\n'
-                        'summary: a thing to do\n')
-        self.repo.commit('records', 'docs/backlog/FOO.md')
-        self.repo.git('push', '-q', 'origin', 'main')
-        self.ok('migrate', '--dry-run')
-        self.assertEqual(self.lines(), [])
-        self.ok('migrate')
-        self.assertEqual([(x['verb'], x['id'], x['store_sha']) for x in self.lines()],
-                         [('migrate', '-', self.tip())])
-
 
 AUDIT = inproc.load_tool('backlog_audit')
 

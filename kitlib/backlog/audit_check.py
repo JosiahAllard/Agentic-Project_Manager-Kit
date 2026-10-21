@@ -50,7 +50,9 @@ OK, FINDINGS, NOT_CHECKED = 0, 1, 2
 # holds them equal).
 BY_DESIGN = ('gate-land', 'owner-hub', 'daily-full')
 
-# (subject prefix, verb): kitlib.backlog.plan's, migrate's, retarget's and store.catch_up's subjects.
+# (subject prefix, verb): kitlib.backlog.plan's, retarget's and store.catch_up's subjects, and the
+# removed `backlog.py migrate`'s, a store's first commit in old store history (docs/backlog-store.md
+# "Migration").
 SUBJECTS = (
     ('closes ', 'close'), ('retires ', 'retire'), ('deletes ', 'delete'),
     ('migrate: ', 'migrate'),

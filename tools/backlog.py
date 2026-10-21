@@ -15,7 +15,6 @@
           close ID --reason T [--ruling R]                   retire ID --why T [--ruling R]
           delete ID --why T [--ruling R]                     clear-review ID --reason T
           set-status ID parked --q Q-nnn                     unpark ID --ruling R
-  start   migrate [--dry-run] [--to ref|branch] [--dir D]   (main's records -> a new store)
   repair  catch-up [--apply PATH...]     (the PM data worktree's uncommitted record paths; a dry
                                           run lists them, --apply commits the paths it names)
 
@@ -38,7 +37,6 @@ from kitlib import kitroot                                         # noqa: E402
 from kitlib.backlog import audit                                    # noqa: E402
 from kitlib.backlog import check as checkmod                        # noqa: E402
 from kitlib.backlog import landable as landmod                      # noqa: E402
-from kitlib.backlog import migrate as mmod                          # noqa: E402
 from kitlib.backlog import offer as omod                            # noqa: E402
 from kitlib.backlog import plan as pmod                             # noqa: E402
 from kitlib.backlog import policy                                   # noqa: E402
@@ -46,7 +44,7 @@ from kitlib.backlog import record as rmod                           # noqa: E402
 from kitlib.backlog import stale as stalemod                        # noqa: E402
 from kitlib.backlog import store as smod                            # noqa: E402
 from kitlib.backlog.errors import Failure, IndexStale, Refusal, Usage  # noqa: E402
-from kitlib.backlog.opener import (FIELD_FLAGS, WRITES, open_repo, open_store, planner,  # noqa: E402
+from kitlib.backlog.opener import (FIELD_FLAGS, WRITES, open_store, planner,  # noqa: E402
                                    retarget_dry)
 
 
@@ -171,10 +169,6 @@ def build_parser():
     v = sub.add_parser('unpark')
     v.add_argument('id')
     v.add_argument('--ruling', required=True)
-    v = sub.add_parser('migrate')
-    v.add_argument('--dry-run', action='store_true')
-    v.add_argument('--to', default=None, choices=('ref', 'branch'))
-    v.add_argument('--dir', default=None)
     v = sub.add_parser('catch-up')
     v.add_argument('--apply', nargs='+', default=None, metavar='PATH',
                    help='commit these record paths, each named; without it a dry run')
@@ -404,40 +398,6 @@ def do_catch_up(args, store):
     return 0
 
 
-# --- start a store --------------------------------------------------------------------------------
-
-def do_migrate(args, top, cfg, rules):
-    """`<dir>/*.md` at main's tip (the remote's, fetched) -> the new store's root commit
-    (kitlib.backlog.migrate; docs/backlog-store.md "Migration")."""
-    configured = cfg.section('backlog')['store']
-    to = args.to or (configured if configured in ('ref', 'branch') else None)
-    if not to:
-        raise Usage('the configured store is `%s`, not a `ref` or `branch` store; name the store '
-                    'to start with `--to ref` or `--to branch`' % configured)
-    rel = args.dir or ('docs/backlog' if configured in ('ref', 'branch', 'main') else configured)
-    backend = smod.open_backend(top, cfg, fetch=False, store=args.to)   # the default: implicit
-    if getattr(backend, 'implicit', False):      # a dry run says so too, not only the real run
-        raise Refusal(smod.default_store_refusal(top))
-    label, src = mmod.main_tip(top, backend.remote, cfg.main_branch)
-    res = mmod.migrate(backend, rules, top, src, rel, dry_run=args.dry_run, label=label,
-                       session=args.session)
-    say('MIGRATE %s/*.md at %s %s -> %s' % (rel.strip('/'), label, src, backend.describe()))
-    for line in mmod.summary_lines(res.plan):
-        say('  ' + line)
-    for f in res.findings:
-        say('    FAIL %s:%s %s' % (f.path, f.line, f.message))
-    if res.findings:
-        say('%d FAIL finding(s) copied as they are; `check` shows them, and ordinary writes fix '
-            'them' % len(res.findings))
-    if res.tip is None:
-        say('DRY RUN: nothing was written')
-    else:
-        say('MIGRATED -> %s at %s' % (backend.describe(), res.tip[:10]))
-        audit_line(args.verb, None, policy.sort(args.verb, policy.given_of(args)), res.tip,
-                   args.session)
-    return 0
-
-
 def main(argv=None):
     args = build_parser().parse_args(argv)
     try:
@@ -450,11 +410,6 @@ def main(argv=None):
             if err:
                 raise Usage(err)
         root = os.path.abspath(args.root or os.getcwd())
-        if args.verb == 'migrate':
-            if not args.dry_run:
-                policy.check(args, None, None)
-            top, cfg, rules = open_repo(root)
-            return do_migrate(args, top, cfg, rules)
         ctx = open_store(root, fetch=not args.no_fetch, session=args.session, branch=args.branch)
         store = ctx.store
         if args.verb in WRITES or (args.verb == 'retarget' and args.apply):

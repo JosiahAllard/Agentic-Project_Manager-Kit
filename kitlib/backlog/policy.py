@@ -20,7 +20,7 @@ as the store holds it locally.
 
 `given` is a dict: 'fields' (the set fields given or unset, `body` for --body-file), 'priority'
 (each priority value given; '-' for --unset priority), 'hold_ruling', 'ruling', 'owner_ask',
-'apply', 'dry_run' (each true when given), 'on' (the --on members), and 'unknown' (true when a
+'apply' (each true when given), 'on' (the --on members), and 'unknown' (true when a
 word could not be read: every row the verb can take counts). A verb of None (not read) counts as
 every row but `read`.
 """
@@ -82,12 +82,11 @@ def sort(verb, given=None, rec=None):
     """The ACTIONS rows (names) the command `verb` with `given` takes on the record `rec` (None: not
     read, so the strictest the record could make it), narrowed by `over`. A verb no row names takes
     none, and refusal() refuses that for every role; a dry run (retarget without --apply,
-    migrate --dry-run, catch-up without --apply) is a read."""
+    catch-up without --apply) is a read."""
     given = given or {}
     if verb is None:
         return [n for n in roles.ACTIONS if n != 'read']
     if verb in READS or (verb == 'retarget' and not given.get('apply')) or \
-            (verb == 'migrate' and given.get('dry_run')) or \
             (verb == 'catch-up' and not given.get('apply')):
         return ['read']
     if given.get(UNKNOWN):
@@ -180,13 +179,12 @@ def given_of(args):
             'owner_ask': getattr(args, 'owner_ask', None) is not None,
             'on': on if isinstance(on, list) else [on] if on else [],
             'apply': (getattr(args, 'apply', None) is not None if args.verb == 'catch-up'
-                      else bool(getattr(args, 'apply', None))),     # `catch-up --apply` alone counts
-            'dry_run': bool(getattr(args, 'dry_run', None))}
+                      else bool(getattr(args, 'apply', None)))}     # `catch-up --apply` alone counts
 
 
 def check(args, ctx, snap, environ=None):
     """tools/backlog.py's own check before a write plans: Refusal when the session's role
-    (cli_role) may not take a row the write sorts into. `snap` (None for migrate) gives the
+    (cli_role) may not take a row the write sorts into. `snap` (None for catch-up) gives the
     record; OWN_PULL holds when the record is pulled by the branch the write acts as. Returns the
     rows it sorted (sort's names), for the audit log (kitlib.backlog.audit)."""
     role = cli_role(environ)
@@ -250,7 +248,6 @@ OPTIONS = {
     'clear-review': {'--reason': True},
     'set-status': {'--q': True},
     'unpark': {'--ruling': True},
-    'migrate': {'--dry-run': False, '--to': True, '--dir': True},
     'catch-up': {'--apply': False},             # its paths are positionals here
 }
 GLOBAL = {'-C': True, '--session': True, '--as': True, '--no-fetch': False}
@@ -332,7 +329,7 @@ def read_argv(words):
 
 def _given_add(given, verb, name, value):
     key = name[2:].replace('-', '_')
-    if key in ('ruling', 'hold_ruling', 'owner_ask', 'apply', 'dry_run'):
+    if key in ('ruling', 'hold_ruling', 'owner_ask', 'apply'):
         given[key] = True
     elif key == 'on':
         given['on'].append(value)
