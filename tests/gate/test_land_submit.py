@@ -11,6 +11,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest import mock
@@ -309,8 +310,8 @@ class TheDetachedLanding(SubmitCase):
         lander, running = self.detached(branches, [t1, t2])
         write, seen = result.write, []
 
-        def spy(root, rec):
-            path = write(root, rec)
+        def spy(root, rec, when=None):
+            path = write(root, rec, when=when)
             if rec['branch'] == waited and rec['verdict'] != result.RUNNING:
                 seen.append([self.record(b)['verdict'] for b in branches])
             return path
@@ -532,6 +533,44 @@ class Resubmit(SubmitCase):
                 self.assertEqual((rec['verdict'], rec['run_id'], rec['pid']),
                                  ('running' if code is None else 'pass', rr.run_id,
                                   os.getpid()))
+
+    def test_a_landing_that_finishes_while_the_timeout_write_is_under_way_keeps_its_record(self):
+        """The window inside the timeout write itself: the landing finishes its record after
+        claim() read it (unclaimed) and before claim() replaces it. The record's lock holds the
+        landing's write until claim()'s is done, so the landing's `pass` is the record left, not
+        claim()'s `running` over it (KIT-GATE-RESULT-RECORD-WRITE-LOCK)."""
+        _, tip = self.branch('feature', {'a.py': 'a\n'})
+        rr = result.Run(self.repo.root, 'land', BRANCH, tip, base=self.main)
+        rr.pid, rr.ctime = None, None       # as submit writes it: not claimed yet
+        rr.start(log='out.txt')
+        done = result.Run(self.repo.root, 'land', BRANCH, tip, base=self.main)
+        done.run_id, done.started_at = rr.run_id, rr.started_at
+        timed_out, landing = [], []
+        read = result.read_path
+
+        def alive(pid, ctime):              # the last check before the timeout write
+            timed_out.append(True)
+            return True
+
+        def read_then_land(path):           # claim()'s last read of the record: then the landing
+            rec = read(path)
+            if timed_out and not landing and threading.current_thread() is main:
+                t = threading.Thread(target=done.finish,
+                                     args=(G.Outcome(G.OK, ['LANDED kit/feature']),))
+                landing.append(t)
+                t.start()
+                t.join(1.0)                 # it writes now, or waits on the record's lock
+            return rec
+        main = threading.current_thread()
+        with mock.patch.object(result, 'read_path', read_then_land):
+            self.assertIsNone(submit.claim(self.repo.root, [rr], 4242, 'out.txt', wait_s=0,
+                                           clock=lambda: 0.0, sleep=lambda s: None, alive=alive))
+        self.assertEqual(len(landing), 1)
+        landing[0].join(30)
+        self.assertFalse(landing[0].is_alive())
+        rec = self.record(BRANCH)
+        self.assertEqual((rec['verdict'], rec['run_id'], rec['pid']),
+                         ('pass', rr.run_id, os.getpid()))
 
     def test_the_claim_watches_and_records_the_landing_not_its_carrier(self):
         """A carrier that is gone (killed) while the landing it started runs: the claim neither
