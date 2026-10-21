@@ -420,8 +420,9 @@ def claim(root, runs, pid, output, wait_s=CLAIM_WAIT_S, poll_s=CLAIM_POLL_S, clo
     (restore writes its pid into them). Once every record is claimed, or finished: None. When
     the process died first: its unclaimed records are finished `error` and the reason is
     returned. When the wait ends with the process alive: its pid (and creation time) is written
-    into the records still unclaimed, each read again just before, so one the landing claimed or
-    finished meanwhile is kept, and a death after this is seen by result.wait."""
+    into the records still unclaimed, each read again under its lock (result.write's `when`), so
+    one the landing claimed or finished meanwhile, even between that read and the write, is
+    kept, and a death after this is seen by result.wait."""
     alive = alive or process.alive
     try:
         ctime = process.proc_ctime(pid)
@@ -450,20 +451,24 @@ def claim(root, runs, pid, output, wait_s=CLAIM_WAIT_S, poll_s=CLAIM_POLL_S, clo
             return why
         if clock() >= end:
             for rr, _rec in open_:
-                if _unclaimed(root, rr):
-                    rr.pid, rr.ctime = pid, ctime
-                    rr.start(log=output)
+                rr.pid, rr.ctime = pid, ctime
+                path, _line = rr.start(log=output, when=lambda now, rr=rr: _open(now, rr))
+                if path is None:
+                    rr.pid = rr.ctime = None
             return None
         sleep(max(0.0, min(poll_s, end - clock())))
+
+
+def _open(rec, rr):
+    """True when the land record `rec` is still `rr`'s run, running and with no pid."""
+    return (isinstance(rec, dict) and rec.get('verdict') == result.RUNNING
+            and rec.get('run_id') == rr.run_id and rec.get('pid') is None)
 
 
 def _unclaimed(root, rr):
     """The land record of `rr` when it is still `rr`'s run, running and with no pid; else None."""
     rec, _ = result.read(root, rr.branch, 'land')
-    if (isinstance(rec, dict) and rec.get('verdict') == result.RUNNING
-            and rec.get('run_id') == rr.run_id and rec.get('pid') is None):
-        return rec
-    return None
+    return rec if _open(rec, rr) else None
 
 
 def _note(path, line):
@@ -573,7 +578,9 @@ def _same_path(a, b):
 def abandon(root, payload, why):
     """The detached landing could not read its payload: finish the running land records of the
     submission (every branch's record with the run_id the payload is named by, run_id_of) as
-    `refused`, note it in the submission's output file, and return the REFUSED Outcome."""
+    `refused`, note it in the submission's output file, and return the REFUSED Outcome. Each
+    record is finished only while it is still that run's and running, judged under its lock
+    (result.write's `when`): one finished meanwhile is left as it is."""
     out = G.Outcome(G.REFUSED, ['REFUSED: %s; nothing was changed' % why])
     lines = []
     rid = run_id_of(payload)
@@ -581,7 +588,9 @@ def abandon(root, payload, why):
         for rec in result.running_records(root, 'land', rid):
             rr = result.Run(root, 'land', rec.get('branch'), rec.get('tip'), base=rec.get('base'))
             rr.run_id, rr.started_at = rid, rec.get('started_at')
-            lines.append(rr.finish(out, log=rec.get('log'))[1])
+            lines.append(rr.finish(out, log=rec.get('log'), when=lambda now: (
+                isinstance(now, dict) and now.get('verdict') == result.RUNNING
+                and now.get('run_id') == rid))[1])
         _note(payload[:-len(PAYLOAD_EXT)] + OUTPUT_EXT, out.lines[-1])
     return G.Outcome(G.REFUSED, lines + out.lines)
 

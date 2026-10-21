@@ -2073,12 +2073,24 @@ class Lander(object):
         every failure, Ctrl+C included, is a WARNING line and never reaches recover().
         Each branch's `Closes:` lines are read from its tip down to the main it was merged onto
         (the batch's previous merge, else the base), so a stacked branch never re-reads the
-        lines of the branch merged before it; the batch's other branches are no holder to tell."""
+        lines of the branch merged before it; the batch's other branches are no holder to tell.
+        A batch not merged as a stack (fewer merges than branches) reads every branch's lines down
+        to the base, which takes in an earlier batch branch's lines when the tip carries them: a
+        WARNING says so for each branch after the first (its Part-of line can release what this
+        branch would close), and nothing else changes."""
         self.phase = 'landed'
         lines = []
         stacked = len(self.merges) == len(self.pairs)
         for i, (b, t) in enumerate(self.pairs):
             base = self.merges[i - 1] if stacked and i else self.expect_main
+            if i and not stacked:
+                lines.append(
+                    'WARNING: the batch was not merged as a stack (%d merge(s) for %d branches), '
+                    'so %s\'s Closes and Part-of lines are read from its tip down to the base %s, '
+                    'which takes in the lines of a batch branch before it that its tip carries: a '
+                    'Part-of line of that branch can release records %s holds instead of closing '
+                    'them; see the lines read with: git log --format=%%B %s --not %s'
+                    % (len(self.merges), len(self.pairs), b, str(base)[:10], b, t, base))
             try:
                 lines.extend(at_landing.close_landed(
                     self.root, self.cfg, b, self.merge, tip=t, base=base,
