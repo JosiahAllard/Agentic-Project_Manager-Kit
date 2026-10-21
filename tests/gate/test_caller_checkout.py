@@ -574,11 +574,27 @@ class RunByPath(unittest.TestCase):
         code, out = self.gate(self.wt, export, '-C', self.wt, extra_env=env)
         self.assertEqual(code, 0, out)
         self.assertIn('RUN   unit (always)', out)
-        # the control: with no KIT_LIVE_ROOT (an export whose marker names no checkout runs live)
-        # the export is in no repository, so it runs
+        # the control: an export whose marker names no checkout, with no KIT_LIVE_ROOT, is its
+        # own live root (pluginsource.live_root); it is in no repository, so it runs
+        with open(os.path.join(export, pluginsource.MARKER), 'w', encoding='utf-8') as fh:
+            json.dump({'sha': '0123456789ab' * 3 + 'abcd'}, fh)
         code, out = self.gate(self.wt, export)
         self.assertEqual(code, 0, out)
         self.assertIn('RUN   unit (always)', out)
+
+    def test_the_plugins_gate_py_with_no_live_root_is_the_marker_checkouts_own(self):
+        """With no KIT_LIVE_ROOT, pluginsource.live_root of an export whose marker names the main
+        checkout is that checkout, so the own-copy refusal treats the export's gate.py as the main
+        checkout's own: from a linked worktree with no -C it is refused."""
+        from kitlib import pluginsource
+        export = os.path.join(self.repo.base, 'plugin', '0123456789ab')
+        os.makedirs(os.path.join(export, 'tools'))
+        with open(os.path.join(export, pluginsource.MARKER), 'w', encoding='utf-8') as fh:
+            json.dump({'sha': '0123456789ab' * 3 + 'abcd', 'checkout': self.main}, fh)
+        code, out = self.gate(self.wt, export)
+        self.assertEqual(code, G.REFUSED, out)
+        self.assertIn(advice(self.wt, RAN_FROM).lower(), out.lower())
+        self.assertNotIn('RUN   unit', out)
 
 
 class TheStepsEnvironment(fixtures.GateRepoCase):
