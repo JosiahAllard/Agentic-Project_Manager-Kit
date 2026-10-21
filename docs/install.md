@@ -355,9 +355,9 @@ tracked file); without one it refuses (docs/backlog.md). It also needs `--found-
 `--found-on none` when found on no branch, or on one that landed and was removed) and `--why-not-folded "<reason>"` (docs/backlog.md
 "The fold-in guard").
 
-The rulings ledger is once per machine: set `ledger_path` (and optionally `ledger_repos`) in
+The rulings ledger is once per machine: set `ledger_dir` and `ledger_repos` (or `ledger_path` alone for one file) in
 the machine config (docs/kit-json.md "Machine config keys"). The first `<kit>/tools/ledger.py add` creates the file from
-`templates/common/LEDGER.md` (docs/ledger.md "A new ledger").
+`templates/common/LEDGER.md` (docs/ledger.md "A new ledger"). Every ledger write needs git to run, since it places the write lock (docs/ledger.md "Write lock").
 
 ## Stubs: tools/kit_stubs.py
 
