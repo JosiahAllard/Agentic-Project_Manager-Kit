@@ -5,10 +5,14 @@ is hub-secrets' and the owner's delegation list keeps its own rule; the write ja
 on or inside the PM repository's folder but keeps the PM repository's own checkout."""
 import os
 import unittest
+from unittest import mock
 
 from kitlib.config import migration
-from kitlib.guard import context, delegfile, jail
+from kitlib.guard import context, delegfile, jail, prepush
 
+from tests.realgit import real_git
+
+from . import prepush_case as pc
 from . import world as W
 from .claudehost import decide
 from .world import bash, event, ps
@@ -266,6 +270,91 @@ class PointerGit(Base):
     def test_other_git_in_the_pointer_tree_is_not_this_rule(self):
         for rest in self.OPEN:
             self.assert_not_this_rule(lambda sub, r=rest: bash('git %s' % r, self.w.data, sub), rest)
+
+
+@real_git('git log --remotes=<name>: the fake lacks it')
+class PrePushSecrets(pc.PrePushCase):
+    """The pre-push check refuses a push whose commits add or change a file of a top .pm-kit/hub/
+    folder or .pm-kit/local.json, on any remote (T13-T15)."""
+
+    ZERO = '0' * 40
+
+    def check(self, sha, remote_sha=None, ref='refs/heads/b'):
+        line = '%s %s %s %s' % (ref, sha, ref, remote_sha or self.ZERO)
+        return prepush.check(self.repo.root, [line], gate_ok=lambda r, s: (None, 'none'))
+
+    def add(self, rel, text='x\n'):
+        self.repo.write(rel, text)
+        return self.repo.commit('add %s' % rel, rel)
+
+    def assert_secret_refused(self, rel):
+        sha = self.add(rel)
+        ok, msg = self.check(sha)
+        self.assertFalse(ok)
+        self.assertIn('sends %s, added or changed in commit %s' % (rel, sha[:12]), msg)
+        self.assertIn('docs/guard.md "Pre-push"', msg)
+
+    def test_a_hub_token_is_refused(self):
+        # T13
+        self.assert_secret_refused('.pm-kit/hub/agent.token')
+
+    def test_a_case_spelling_of_the_folder_is_refused(self):
+        # T13
+        self.assert_secret_refused('.PM-KIT/Hub/owner.token')
+
+    def test_local_json_is_refused_on_every_remote_and_ref(self):
+        # T14
+        sha = self.add('.pm-kit/local.json', '{}\n')
+        for ref in ('refs/heads/b', 'refs/heads/main', 'refs/tags/v1'):
+            with self.subTest(ref):
+                ok, msg = self.check(sha, ref=ref)
+                self.assertFalse(ok)
+                self.assertIn('.pm-kit/local.json', msg)
+        ok, msg = prepush.check(self.repo.root, ['refs/heads/b %s refs/heads/b %s' % (sha, self.ZERO)],
+                                gate_ok=lambda r, s: (None, 'none'), remote='https://example.invalid/x.git')
+        self.assertFalse(ok)
+
+    def test_a_secret_a_later_commit_deletes_is_still_refused(self):
+        # T15: the content is in the commit that added it
+        added = self.add('.pm-kit/hub/agent.token')
+        self.repo.git('rm', '-q', '.pm-kit/hub/agent.token')
+        self.repo.git('commit', '-q', '-m', 'drop it')
+        ok, msg = self.check(self.repo.head())
+        self.assertFalse(ok)
+        self.assertIn(added[:12], msg)
+
+    def test_a_deletion_of_a_secret_the_remote_has_and_other_files_pass(self):
+        # T15: only the deletion is sent; the rest of the folder and a deeper .pm-kit are not secrets
+        added = self.add('.pm-kit/hub/agent.token')
+        self.repo.git('push', '-q', 'origin', '%s:refs/heads/b' % added)
+        self.repo.git('rm', '-q', '.pm-kit/hub/agent.token')
+        self.repo.git('commit', '-q', '-m', 'drop it')
+        self.assertEqual(self.check(self.repo.head(), remote_sha=added), (True, None))
+        for rel in ('.pm-kit/config.json', 'sub/.pm-kit/hub/x.token', 'sub/.pm-kit/local.json', '.pm-kit/hub.md'):
+            self.add(rel)
+        self.assertEqual(self.check(self.repo.head(), remote_sha=added), (True, None))
+
+    def test_a_secret_the_remote_tracks_is_not_sent_again(self):
+        # a new ref: its commits the remote's tracking refs hold are not sent, by tip or by pattern
+        added = self.add('.pm-kit/hub/agent.token')
+        self.repo.git('push', '-q', 'origin', '%s:refs/heads/b' % added)
+        self.repo.git('rm', '-q', '.pm-kit/hub/agent.token')
+        self.repo.git('commit', '-q', '-m', 'drop it')
+        for most in (prepush.MAX_TRACKING_ARGS, 0):
+            with self.subTest(most), mock.patch.object(prepush, 'MAX_TRACKING_ARGS', most):
+                self.assertEqual(self.check(self.repo.head(), ref='refs/heads/c'), (True, None))
+                ok, msg = prepush.check(self.repo.root, ['refs/heads/c %s refs/heads/c %s'
+                                                         % (self.repo.head(), self.ZERO)],
+                                        gate_ok=lambda r, s: (None, 'none'), remote='https://example.invalid/x.git')
+                self.assertFalse(ok)            # a URL has no tracking refs: everything is sent
+                self.assertIn(added[:12], msg)
+
+    def test_a_deletion_line_and_an_unknown_sha_pass(self):
+        sha = self.add('.pm-kit/local.json')
+        self.assertEqual(prepush.secrets_refusal(self.repo.root, ['refs/heads/b %s refs/heads/b %s'
+                                                                  % (self.ZERO, sha)], 'origin'), None)
+        self.assertEqual(prepush.secrets_refusal(self.repo.root, ['refs/heads/b %s refs/heads/b %s'
+                                                                  % ('1' * 40, self.ZERO)], 'origin'), None)
 
 
 if __name__ == '__main__':
