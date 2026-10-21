@@ -95,7 +95,7 @@ ROWS = [
     ('add by path in main', lambda w: bash('git add -- docs/a.md', w.main), None, None, None),
     ('add -A in a worktree', lambda w: bash('git add -A', w.wt), None, None, None),
     ('commit -am in main', lambda w: bash('git commit -am "x"', w.main), 'deny', 'git-commit-all',
-     'python "{kit}/tools/commit.py" -C "{main}" -m "<subject>" --lander-main-checkout <each path you changed>'),
+     'git -C "{main}" add -- <each path you changed>'),
     ('commit whose message starts -a', lambda w: bash('git commit -m "-a note"', w.main), None, None, None),
     ('git in a place git cannot tell', lambda w: bash('git checkout x', w.unknown), 'deny', 'unplaced', None),
     ('git after a cd it cannot follow', lambda w: bash('cd "$WT" && git stash', w.wt), 'deny', 'unplaced', None),
@@ -1303,12 +1303,34 @@ class PlainCommit(unittest.TestCase):
         self.assertEqual(d and d.rule, 'git-main-history', d and d.reason)
 
     def test_the_held_form_in_the_alternative_passes(self):
-        for text in ('git revert HEAD~2', 'git cherry-pick abc123', 'git am fix.patch'):
+        for text in ('git revert HEAD~2', 'git cherry-pick abc123', 'git am fix.patch', 'git revert -m 1 HEAD',
+                     'git cherry-pick --mainline=2 abc123', 'git revert --skip', 'git cherry-pick --skip'):
             with self.subTest(text):
                 d = self.decide(text, sub=True)
                 self.assertEqual(d and d.rule, 'git-plain-commit', d and d.reason)
                 held = d.instead.replace('<patch>', 'fix.patch')      # the placeholder is no shell word
                 self.assertIsNone(self.decide(held, sub=True), held)
+
+    def test_a_sequence_step_names_what_commit_py_leaves(self):
+        for text in ('git cherry-pick --continue', 'git revert --continue', 'git am --continue'):
+            with self.subTest(text):
+                d = self.decide(text, sub=True)
+                self.assertEqual(d and d.rule, 'git-plain-commit', d and d.reason)
+                self.assertIn('commits only the change in progress', d.reason)
+                self.assertIn('--quit', d.reason)
+        d = self.decide('git merge --continue', sub=True)
+        self.assertNotIn('commits only the change in progress', d.reason)
+
+    def test_a_skip_drops_the_change_in_progress(self):
+        d = self.decide('git revert --skip', sub=True)
+        self.assertEqual(d and d.rule, 'git-plain-commit', d and d.reason)
+        self.assertIn('reset --merge', d.reason)
+        self.assertNotIn('Commit with the kit tool', d.reason)
+
+    def test_the_main_checkout_commit_all_names_no_lander_flag(self):
+        d = decide(bash('git commit -am x', self.w.main), self.w.ctx())
+        self.assertEqual(d and d.rule, 'git-commit-all', d and d.reason)
+        self.assertNotIn('--lander-main-checkout', d.reason + d.instead)
 
     def test_scan(self):
         for sub, argv, makes in (
@@ -1318,7 +1340,14 @@ class PlainCommit(unittest.TestCase):
                 ('merge', ['--no-commit', '--no-ff', 'main'], False), ('merge', ['--squash', '--no-squash'], True),
                 ('merge', ['--ff-only', '--ff'], True), ('merge', ['--no-commit=x'], True),
                 ('merge', ['-X', '--no-commit', 'main'], True), ('pull', ['--no-commit'], False),
-                ('am', ['--abort'], False), ('am', ['--3way', 'x.patch'], True)):
+                ('am', ['--abort'], False), ('am', ['--3way', 'x.patch'], True),
+                ('revert', ['-n', '--commit', 'HEAD'], True), ('cherry-pick', ['-n', '--commit', 'x'], True),
+                ('cherry-pick', ['-xn', '--comm', 'x'], True), ('merge', ['--mess', '--no-commit', 'main'], True),
+                ('merge', ['--frob', 'main', '--no-commit'], True), ('revert', ['-Sn', 'HEAD'], True),
+                ('cherry-pick', ['-Skey', '-n', 'x'], False), ('revert', ['-wn', 'HEAD'], True),
+                ('revert', ['--no-edit', '--no-commit', 'HEAD'], False),
+                ('merge', ['--no-ff', '--no-edit', '--no-commit', 'main'], False),
+                ('merge', ['--no-commit', '--frob', 'main'], False), ('revert', ['-n', '--', 'HEAD'], False)):
             with self.subTest(sub=sub, argv=argv):
                 cmd = cm.read('git %s %s' % (sub, ' '.join(argv)), sh.BASH, W.fwd(self.w.wt)).commands[0]
                 self.assertEqual(rules.commit_scan(sub, cm.git_call(cm.invocation(cmd)).rest)[0], makes)

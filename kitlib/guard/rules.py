@@ -3848,42 +3848,78 @@ def git_rules(event, ctx, cmd, inv, cwd, role):
 
 # git verbs that make a commit, each refused for an agent session in a linked worktree
 # (git_plain_commit): plain git writes no Co-Authored-By trailer, so the gate's trailer check fails
-# the branch. Known limits: a git alias from git's config files (an inline -c alias.<name> is
-# expanded), a verb the shell computes or a script runs, commit-tree and rebase are not read.
+# the branch. Known limits, none read here:
+# - a git alias from git's config files (an inline -c alias.<name> is expanded);
+# - a verb the shell computes or a script runs;
+# - commit-tree and rebase;
+# - a computed -C, --git-dir or --work-tree: no place is known, so the unplaced handling and
+#   git-main-history judge the line, not this rule;
+# - a --continue of a revert or cherry-pick sequence started with --no-commit makes no commit, but
+#   it is refused like any other: git keeps that mode in the sequence's state, which is not read;
+# - commit.py commits only the change in progress of a revert, cherry-pick or am sequence: it does
+#   not go on with the commits or patches left, so the refusal says to end the sequence (--quit).
 COMMIT_VERBS = ('commit', 'merge', 'revert', 'cherry-pick', 'am', 'pull')
 # the words after which a verb makes no commit, spelled exactly
 COMMIT_STOPS = {'commit': ('--dry-run',), 'merge': ('--abort', '--quit'), 'revert': ('--abort', '--quit'),
                 'cherry-pick': ('--abort', '--quit'), 'am': ('--abort', '--quit', '--show-current-patch')}
 # the options, spelled exactly, that leave the verb's change uncommitted; an abbreviation is none
+# (revert's and cherry-pick's -n is read as --no-commit)
 COMMIT_HOLDS = {'merge': ('--no-commit', '--squash', '--ff-only'), 'pull': ('--no-commit', '--squash', '--ff-only'),
                 'revert': ('--no-commit',), 'cherry-pick': ('--no-commit',)}
 # the long options that undo a hold (a prefix of one counts): the last of --commit and --no-commit
-# wins, of --squash and --no-squash, and of --ff, --no-ff and --ff-only
+# (or -n) wins, of --squash and --no-squash, and of --ff, --no-ff and --ff-only
 COMMIT_UNDOES = {'commit': '--no-commit', 'no-squash': '--squash', 'ff': '--ff-only', 'no-ff': '--ff-only'}
 # the words that go on with a sequence: the commit is made by commit.py, not by the verb again
 COMMIT_STEPS = ('--continue', '--skip', '--resolved')
 # the short options that take a value (attached, or the next word), per verb (git 2.5x)
 COMMIT_SHORT_VALUES = {'commit': 'mFcCt', 'merge': 'mFsX', 'pull': 'sXj', 'revert': 'mX', 'cherry-pick': 'mX',
                        'am': 'pSC'}
+# the short options whose value, if any, is attached only (-S<key>, commit's -u<mode>): each ends
+# its cluster and takes no next word
+COMMIT_SHORT_ATTACHED = {'commit': 'Su', 'merge': 'S', 'pull': 'S', 'revert': 'S', 'cherry-pick': 'S'}
+# the short options that take no value, per verb: any other letter may take the rest of its cluster
+# or the next word, so a hold after it is not counted (commit_scan)
+COMMIT_SHORT_FLAGS = {'commit': 'apsnevqzio', 'merge': 'nqve', 'pull': 'nqvrfkpa46t', 'revert': 'ens',
+                      'cherry-pick': 'enxs', 'am': 'skcq3i'}
 # the long options that take a value in the next word when no `=` gives it
 COMMIT_LONG_VALUES = {'message', 'file', 'strategy', 'strategy-option', 'cleanup', 'into-name', 'mainline',
                       'depth', 'deepen', 'shallow-since', 'shallow-exclude', 'upload-pack', 'jobs',
                       'negotiation-tip', 'server-option', 'refmap', 'reuse-message', 'reedit-message',
                       'fixup', 'squash', 'author', 'date', 'template', 'trailer', 'pathspec-from-file',
                       'directory', 'exclude', 'include', 'patch-format'}
+# the long options, spelled in full, that take no next word; any other long option without `=`
+# (one git does not know, or an abbreviation, which may be of one that takes a value) may take the
+# next word, so a hold after it is not counted (commit_scan)
+COMMIT_LONG_FLAGS = {
+    'commit', 'no-commit', 'squash', 'no-squash', 'ff', 'no-ff', 'ff-only', 'edit', 'no-edit', 'signoff',
+    'no-signoff', 'stat', 'no-stat', 'summary', 'no-summary', 'log', 'no-log', 'verbose', 'quiet', 'progress',
+    'no-progress', 'verify', 'no-verify', 'verify-signatures', 'no-verify-signatures', 'gpg-sign', 'no-gpg-sign',
+    'allow-unrelated-histories', 'autostash', 'no-autostash', 'rerere-autoupdate', 'no-rerere-autoupdate',
+    'overwrite-ignore', 'no-overwrite-ignore', 'rebase', 'no-rebase', 'all', 'append', 'force', 'keep', 'prune',
+    'tags', 'no-tags', 'unshallow', 'update-shallow', 'ipv4', 'ipv6', 'recurse-submodules',
+    'no-recurse-submodules', 'allow-empty', 'allow-empty-message', 'keep-redundant-commits', 'no-reference',
+    'amend', 'no-post-rewrite', 'reset-author', 'short', 'branch', 'porcelain', 'long', 'null', 'only',
+    'interactive', 'patch', 'status', 'no-status', '3way', 'no-3way', 'keep-cr', 'no-keep-cr', 'scissors',
+    'no-scissors', 'utf8', 'no-utf8', 'keep-non-patch', 'ignore-space-change', 'ignore-whitespace',
+    'committer-date-is-author-date', 'ignore-date', 'message-id', 'no-message-id', 'quoted-cr'}
 
 
 def commit_scan(sub, args):
-    """(makes, revs): whether git `sub` (COMMIT_VERBS) with the Words `args` after it makes a
-    commit, and the words that are neither options nor their values (a revert's or cherry-pick's
-    commits). Read left to right as git reads them: a stop word (COMMIT_STOPS) makes none; a hold
-    (COMMIT_HOLDS, or -n in a short cluster of revert or cherry-pick; merge's and pull's -n is
-    --no-stat) holds until a long option that undoes it (COMMIT_UNDOES), or a prefix of one, comes
-    after it; a sequence's next step (COMMIT_STEPS) commits. Option values are skipped, so
-    `-m --no-commit` is a message; `--` ends the options."""
+    """(makes, revs, mainline): whether git `sub` (COMMIT_VERBS) with the Words `args` after it
+    makes a commit, the words that are neither options nor their values (a revert's or
+    cherry-pick's commits), and the -m/--mainline value given, or None. Read left to right as git
+    reads them: a stop word (COMMIT_STOPS) makes none; a hold (COMMIT_HOLDS, or -n in a short
+    cluster of revert or cherry-pick; merge's and pull's -n is --no-stat) holds until a long option
+    that undoes it (COMMIT_UNDOES), or a prefix of one, comes after it; a sequence's next step
+    (COMMIT_STEPS) commits. Option values are skipped, so `-m --no-commit` is a message; `--` ends
+    the options. It fails closed: after a word it cannot place (a computed word, a long option
+    without `=` that COMMIT_LONG_FLAGS and COMMIT_LONG_VALUES do not name, or a short letter
+    COMMIT_SHORT_FLAGS does not), no later hold or stop word counts, since that word may have taken
+    it as its value."""
     stops, holds = COMMIT_STOPS.get(sub, ()), COMMIT_HOLDS.get(sub, ())
-    values = COMMIT_SHORT_VALUES.get(sub, '')
-    held, revs = set(), []
+    values, attached = COMMIT_SHORT_VALUES.get(sub, ''), COMMIT_SHORT_ATTACHED.get(sub, '')
+    flags = COMMIT_SHORT_FLAGS.get(sub, '')
+    held, revs, mainline, unsure = set(), [], None, False
     k = 0
     while k < len(args):
         w = args[k]
@@ -3891,32 +3927,51 @@ def commit_scan(sub, args):
         k += 1
         if w.dyn or not t.startswith('-') or t == '-':
             revs.append(t)
+            unsure = unsure or w.dyn
             continue
         if t == '--':
             revs.extend(x.text for x in args[k:])
             break
         if t.startswith('--'):
-            body, eq, _v = t[2:].partition('=')
-            if t in stops:
-                return False, revs
+            body, eq, val = t[2:].partition('=')
+            if t in stops and not unsure:
+                return False, revs, mainline
             if t in COMMIT_STEPS:
-                return True, revs
+                return True, revs, mainline
             if t in holds:
-                held.add(t)
+                if not unsure:
+                    held.add(t)
                 continue
             if len(body) >= 2:
                 held -= {h for n, h in COMMIT_UNDOES.items() if n.startswith(body)}
-            if not eq and body in COMMIT_LONG_VALUES:
+            if eq:
+                if body == 'mainline':
+                    mainline = val
+                continue
+            if body in COMMIT_LONG_VALUES:
+                if body == 'mainline' and k < len(args):
+                    mainline = args[k].text
                 k += 1
+            elif body not in COMMIT_LONG_FLAGS:
+                unsure = True
             continue
         for j, c in enumerate(t[1:]):
-            if c == 'n' and sub in ('revert', 'cherry-pick'):
-                held.add('-n')
             if c in values:
-                if not t[j + 2:]:
+                rest = t[j + 2:]
+                if not rest:
+                    rest = args[k].text if k < len(args) else ''
                     k += 1
+                if c == 'm' and sub in ('revert', 'cherry-pick'):
+                    mainline = rest
                 break
-    return sub in ('commit', 'am') or not held, revs
+            if c in attached:
+                break
+            if c not in flags:
+                unsure = True
+                break
+            if c == 'n' and sub in ('revert', 'cherry-pick') and not unsure:
+                held.add('--no-commit')
+    return sub in ('commit', 'am') or not held, revs, mainline
 
 
 def git_plain_commit(event, ctx, cmd, inv, cwd, role):
@@ -3925,8 +3980,10 @@ def git_plain_commit(event, ctx, cmd, inv, cwd, role):
     trailer check fails the branch. It runs after every other shell rule, so a refusal another
     rule owns (owner-identity, write-jail and the rest) stands. The alternative is the kit tool
     that does the job with the trailer: commit.py for a commit or a sequence's next step,
-    sync_base.py for a merge or pull, the verb's --no-commit form and then commit.py for a revert
-    or cherry-pick, git apply --index and then commit.py for am."""
+    sync_base.py for a merge or pull, the verb's --no-commit form (its -m kept) and then commit.py
+    for a revert or cherry-pick, git apply --index and then commit.py for am. A --skip drops the
+    change in progress and goes on with plain commits: the alternative ends the sequence, drops the
+    change and takes what is left one at a time."""
     gc = git_call_judged(inv)
     if gc is None or gc.sub not in COMMIT_VERBS or not gc.dir or gc.unknown or gc.blind:
         return None
@@ -3936,16 +3993,29 @@ def git_plain_commit(event, ctx, cmd, inv, cwd, role):
     if place.kind != repo.LINKED or not place.top:
         return None
     sub = gc.sub
-    makes, revs = commit_scan(sub, gc.rest)
+    makes, revs, mainline = commit_scan(sub, gc.rest)
     if not makes:
         return None
     top = quote(place.top)
     commit = 'python %s -C %s -m "<subject>" <each path you changed>' % (kit_tool(ctx, 'commit'), top)
     why = '`%s` makes a commit with plain git, which writes no Co-Authored-By trailer: the gate\'s trailer check ' \
           'then fails the branch. ' % bare(cmd)
-    if sub == 'commit' or any(w.text in COMMIT_STEPS or (sub == 'am' and w.text == '-r') for w in gc.rest):
+    words = {w.text for w in gc.rest}
+    one = 'git -C %s apply --index <patch>' % top if sub == 'am' else \
+        'git -C %s %s --no-commit <commit>' % (top, sub)
+    if sub in ('revert', 'cherry-pick', 'am') and '--skip' in words:
+        return refuse('git-plain-commit', role, why + '--skip drops the change in progress and goes on with the rest '
+                      'as plain commits. End the sequence here, then in their own calls drop the change in progress '
+                      'with git -C %s reset --merge and take each one left with %s, then %s:' % (top, one, commit),
+                      'git -C %s %s --quit' % (top, sub))
+    if sub == 'commit' or words & set(COMMIT_STEPS) or (sub == 'am' and '-r' in words):
+        rest = ''
+        if sub in ('revert', 'cherry-pick', 'am'):
+            rest = ' The kit tool commits only the change in progress: it does not go on with the rest of the ' \
+                   'sequence. After it, end the sequence with git -C %s %s --quit and take each one left with %s, ' \
+                   'then commit.py.' % (top, sub, one)
         return refuse('git-plain-commit', role, why + 'Commit with the kit tool, which stages the paths you name '
-                      'and adds the trailer:', commit)
+                      'and adds the trailer.%s The commit:' % rest, commit)
     if sub in ('merge', 'pull'):
         return refuse('git-plain-commit', role, why + 'Sync with the commit your coordinator named; the tool merges '
                       'exactly it and adds the trailer (to merge anything else, run git -C %s merge --no-commit '
@@ -3954,9 +4024,12 @@ def git_plain_commit(event, ctx, cmd, inv, cwd, role):
     if sub == 'am':
         return refuse('git-plain-commit', role, why + 'Apply the patch to the index, then in its own call commit it '
                       'with %s:' % commit, 'git -C %s apply --index <patch>' % top)
+    keep = ''
+    if mainline is not None:
+        keep = ' -m %s' % (mainline if mainline.isdigit() else '<n>')
     return refuse('git-plain-commit', role, why + 'Run it with --no-commit, then in its own call commit what it '
                   'changed with %s:' % commit,
-                  'git -C %s %s --no-commit %s' % (top, sub, ' '.join(revs) or '<commit>'))
+                  'git -C %s %s --no-commit%s %s' % (top, sub, keep, ' '.join(revs) or '<commit>'))
 
 
 STASH_READS = ('list', 'show', 'create')        # no entry added or taken
@@ -4061,11 +4134,8 @@ def git_main_rules(event, ctx, cmd, inv, gc, cwd, role, place):
     if sub == 'commit':
         if 'a' in short or 'all' in longs:
             return refuse('git-commit-all', role, '`%s` commits every tracked change in %s, other sessions\' work '
-                          'included. Commit by explicit path with the kit tool, which stages the paths you name and adds '
-                          'the trailer:' % (text, where),
-                          'python %s -C %s -m "<subject>"%s <each path you changed>' % (
-                              kit_tool(ctx, 'commit'), quote(top),
-                              ' --lander-main-checkout' if place.kind == repo.MAIN else ''))
+                          'included. Stage by explicit path, then commit with git -C %s commit -m "<message>":' %
+                          (text, where, quote(top)), 'git -C %s add -- <each path you changed>' % quote(top))
     return None
 
 
