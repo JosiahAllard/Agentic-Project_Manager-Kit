@@ -12,6 +12,7 @@ from kitlib import gate as G
 from kitlib import pmdata
 from kitlib.backlog import at_landing, offer
 from kitlib.backlog import store as smod
+from kitlib.gate import land
 from kitlib.git import refs
 
 from tests.backlog.helpers import priced
@@ -409,6 +410,42 @@ class TrailerValues(unittest.TestCase):
                    'Co-Authored-By: someone\n')
         self.assertEqual(at_landing.closes_values(message), ['EX-1 and more', 'EX-2'])
         self.assertEqual(at_landing.closes_values(''), [])
+
+
+
+class BatchBase(unittest.TestCase):
+    """Lander.close_pulled: the base each batch branch's Closes and Part-of lines are read down
+    to, and the WARNING a batch not merged as a stack gets (KIT-LAND-BATCH-PARTOF-BASE)."""
+
+    def close(self, branches, merges):
+        tips = [c * 40 for c in 'abc'[:len(branches)]]
+        lander = land.Lander('.', branches, 'm' * 40, tips)
+        lander.expect_main, lander.merges = 'm' * 40, list(merges)
+        lander.merge = merges[-1] if merges else None
+        with mock.patch.object(at_landing, 'close_landed', return_value=['closed']) as cl:
+            lines = lander.close_pulled()
+        return lines, [c.kwargs['base'] for c in cl.call_args_list]
+
+    def test_a_stacked_batch_reads_down_to_the_previous_merge_and_warns_nothing(self):
+        lines, bases = self.close(['kit/one', 'kit/two'], ['1' * 40, '2' * 40])
+        self.assertEqual(bases, ['m' * 40, '1' * 40])
+        self.assertEqual(lines, ['closed', 'closed'])
+
+    def test_one_branch_warns_nothing(self):
+        lines, bases = self.close(['kit/one'], ['1' * 40])
+        self.assertEqual((lines, bases), (['closed'], ['m' * 40]))
+
+    def test_a_batch_not_merged_as_a_stack_warns_for_each_branch_after_the_first(self):
+        lines, bases = self.close(['kit/one', 'kit/two', 'kit/three'], ['1' * 40])
+        self.assertEqual(bases, ['m' * 40] * 3)             # unchanged: the base for each
+        warn = [l for l in lines if l.startswith('WARNING')]
+        self.assertEqual(len(warn), 2, lines)
+        self.assertEqual(lines[0], 'closed')                # the first branch: no warning
+        for w, b, t in zip(warn, ['kit/two', 'kit/three'], ['b' * 40, 'c' * 40]):
+            self.assertIn('not merged as a stack (1 merge(s) for 3 branches)', w)
+            self.assertIn("so %s's Closes and Part-of lines" % b, w)
+            self.assertTrue(w.endswith('git log --format=%%B %s --not %s' % (t, 'm' * 40)), w)
+        self.assertEqual(lines[1:3], [warn[0], 'closed'])   # each before its branch's lines
 
 
 if __name__ == '__main__':
