@@ -11,10 +11,31 @@ is that line (the operation must list owner-session). Each orders one run.
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.delegations.run, prints and
 exits. Exit codes: 0 the command ran and exited 0; 1 refused, nothing run and nothing logged;
 2 usage error; 4 logged and started (or failed to start), and it failed.
+
+Run it as `python -I`. Without -I (or -E) it refuses when any PYTHON* variable is set, before it
+imports anything but os and sys: PYTHONPATH can shadow argparse or subprocess before any check runs.
 """
-import argparse
 import os
 import sys
+
+
+def python_vars(environ, flags):
+    """The PYTHON* names of `environ` that steer this interpreter: none when `flags` (sys.flags)
+    say it ignores them (-I or -E)."""
+    if flags.ignore_environment:
+        return []
+    return sorted(k for k in environ if k.upper().startswith('PYTHON'))
+
+
+if __name__ == '__main__':
+    _steering = python_vars(os.environ, sys.flags)
+    if _steering:
+        sys.stderr.write('delegated.py: refused: %s set, and a PYTHON* variable steers this '
+                         'interpreter before any check runs: run it as python -I '
+                         '(docs/delegations.md "Running")\n' % ', '.join(_steering))
+        sys.exit(1)
+
+import argparse                                                    # noqa: E402
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 

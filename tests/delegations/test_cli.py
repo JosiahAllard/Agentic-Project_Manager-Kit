@@ -5,6 +5,8 @@ import io
 import json
 import os
 import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -12,6 +14,9 @@ from unittest import mock
 from kitlib.config import user as kuser
 from kitlib.delegations import run as drun
 from tools import delegated
+
+TOOL = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                    'tools', 'delegated.py')
 
 OP = {'id': 'D-001', 'what': 'say a name', 'repo': 'kit', 'shell': 'PowerShell',
       'command': 'tool {name}', 'args': [{'name': 'name', 'pattern': '[a-z]+'}],
@@ -117,6 +122,42 @@ class Cli(unittest.TestCase):
         res = drun.Result('H-kit-0002', ['tool.exe'], None, 'could not start tool.exe: no')
         self.assertEqual(self.main('run', 'D-001', '--arg', 'name=alpha', '--trigger', 'H-kit-0001',
                                    result=res)[0], delegated.FAILED)
+
+
+class PythonVars(unittest.TestCase):
+    """Run by path, the tool refuses a PYTHON* variable before it imports argparse: a PYTHONPATH
+    folder holding argparse.py would run first. Under -I the interpreter ignores them."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix='kit-delegated-pyvars-')
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        self.marker = os.path.join(self.dir, 'shadow-ran')
+        with open(os.path.join(self.dir, 'argparse.py'), 'w', encoding='utf-8') as fh:
+            fh.write('open(%r, "w").close()\nraise SystemExit(7)\n' % self.marker)
+
+    def tool(self, *flags):
+        env = {k: v for k, v in os.environ.items() if not k.upper().startswith('PYTHON')}
+        env['PYTHONPATH'] = self.dir
+        return subprocess.run([sys.executable] + list(flags) + [TOOL], env=env, cwd=self.dir,
+                              stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120)
+
+    def test_a_python_variable_is_refused_before_argparse_is_imported(self):
+        done = self.tool()
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn('refused: PYTHONPATH set', done.stderr)
+        self.assertIn('python -I', done.stderr)
+        self.assertFalse(os.path.exists(self.marker), 'the shadow argparse ran')
+
+    def test_under_isolation_the_variables_are_ignored(self):
+        done = self.tool('-I')
+        self.assertEqual(done.returncode, 2, done.stderr)  # no subcommand: argparse's usage error
+        self.assertFalse(os.path.exists(self.marker), 'the shadow argparse ran')
+
+    def test_python_vars_names_them_unless_the_interpreter_ignores_them(self):
+        env = {'PYTHONPATH': 'x', 'PythonHome': 'y', 'PATH': 'z'}
+        self.assertEqual(delegated.python_vars(env, mock.Mock(ignore_environment=0)),
+                         ['PYTHONPATH', 'PythonHome'])
+        self.assertEqual(delegated.python_vars(env, mock.Mock(ignore_environment=1)), [])
 
 
 if __name__ == '__main__':

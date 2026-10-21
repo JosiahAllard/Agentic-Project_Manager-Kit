@@ -86,8 +86,10 @@ The loader does not check these; the runner owns them:
 ## Running
 
 ```
-python <kit>/tools/delegated.py run D-nnn [--arg NAME=VALUE]... --trigger Q-nnnn|<ruling id>
+python -I <kit>/tools/delegated.py run D-nnn [--arg NAME=VALUE]... --trigger Q-nnnn|<ruling id>
 ```
+
+`-I` keeps every `PYTHON*` variable and the user site folder out of the runner's own interpreter. Without `-I` (or `-E`), `tools/delegated.py` refuses when any `PYTHON*` variable is set, before it imports anything but `os` and `sys`: a `PYTHONPATH` folder could otherwise put its own `argparse` or `subprocess` in place before any check runs.
 
 The PM runs it after the owner has ordered the run. The run line is `run D-nnn name=value ...`, with the arguments sorted by name. The owner orders one run in one of two ways:
 
@@ -100,15 +102,15 @@ The PM runs it after the owner has ordered the run. The run line is `run D-nnn n
 2. The arguments are exactly the declared ones, each given once and passing `check_arg`. The filled-in command and precondition strings hit no exclusion.
 3. The program, `argv[0]`, is an absolute `.exe` path, or a bare name found as `<name>.exe` in an absolute folder of the registry PATH. The working folder and relative PATH entries are never searched. A `.bat`, a `.cmd` or a script is refused, because Windows runs those through `cmd.exe`.
    - The registry PATH is the machine's `Path` (HKLM `SYSTEM\CurrentControlSet\Control\Session Manager\Environment`) followed by the user's (HKCU `Environment`). The caller's PATH is never read.
-   - A `%NAME%` in it is filled from the registry, never from the caller's environment: `SystemRoot`, `windir`, `SystemDrive`, `ProgramFiles`, `ProgramFiles(x86)`, `CommonProgramFiles` and `ProgramData` from the machine's Windows keys; `USERPROFILE`, `HOMEDRIVE`, `HOMEPATH`, `APPDATA`, `LOCALAPPDATA`, `USERNAME` and `USERDOMAIN` from HKCU `Volatile Environment`; any other name from the user's, then the machine's, environment value. An entry with a name that has no registry value is dropped.
+   - A `%NAME%` in it is filled from the registry, never from the caller's environment: `SystemRoot`, `windir`, `SystemDrive`, `ProgramFiles`, `ProgramFiles(x86)`, `ProgramW6432`, `CommonProgramFiles`, `CommonProgramFiles(x86)`, `ProgramData`, `ALLUSERSPROFILE` and `PUBLIC` from the machine's Windows keys; `ComSpec` from the machine's environment value; `USERPROFILE`, `HOMEDRIVE`, `HOMEPATH`, `APPDATA`, `LOCALAPPDATA`, `USERNAME` and `USERDOMAIN` from HKCU `Volatile Environment`; any other name from the user's, then the machine's, environment value. An entry with a name that has no registry value is dropped.
 4. The order:
    - A question must be logged on the hub (read with the agent token). Its chosen option's label must be the run line, chosen in the last 24 h. The question's repo, when it has one, must be the operation's; an operation of repo `*` takes any. Its ruling must be a live owner entry (provenance `typed`, `selected` or `relayed-from-terminal`) whose Source names the question.
    - A ledger id must be a live owner entry of the operation's repo (any repo for `*`), written in the last 24 h, whose Decides is the run line.
 5. The preconditions hold. `file-exists` needs an absolute path to a file. `branch-landed` needs the branch's tip, local or remote-tracking, to have landed (`kitlib.landed.look`). `checklist-line` needs a line of the PM start checklist that holds the text and is not a failed check.
 6. The claim, under the runner lock (`delegated-runs`, beside the ledger file). No live entry of provenance `delegated` may name this anchor or this trigger. Then one entry is added: provenance `delegated`, Decides the run line, Source `under <anchor>: D-nnn <trigger>`. The anchor is the owner entry: the question's ruling, or the ledger id itself. The entry is not committed, as with `ledger.py add`. So each question and each owner entry orders one run, and a failed run still uses up its order.
 7. The child: the argument list with `shell=False`, stdin closed, and the kit folder as its working folder. Its environment is built from an allowlist, and nothing else reaches it (no `GIT_*`, no `PYTHON*`, no PATH of the caller's):
-   - from the registry: `PATH` (as in step 3), `PSModulePath` (the machine's value, then the user's) and `PATHEXT` (the user's, or else the machine's);
-   - from the caller, as they are: `SystemRoot`, `windir`, `ComSpec`, `SystemDrive`, `ProgramData`, `ProgramFiles`, `ProgramFiles(x86)`, `CommonProgramFiles`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `HOMEDRIVE`, `HOMEPATH`, `USERNAME`, `USERDOMAIN`, `COMPUTERNAME`, `TEMP`, `TMP`, `NUMBER_OF_PROCESSORS`, `PROCESSOR_ARCHITECTURE` and `OS`.
+   - from the registry: `PATH` (as in step 3), `PSModulePath` (the machine's value, then the user's), `PATHEXT` (the user's, or else the machine's), and the system and profile folders, each filled as a `%NAME%` is in step 3 (`FROM_SYSTEM` in `kitlib/delegations/run.py`): `SystemRoot`, `windir`, `SystemDrive`, `ComSpec`, `ProgramFiles`, `ProgramFiles(x86)`, `ProgramW6432`, `CommonProgramFiles`, `CommonProgramFiles(x86)`, `ProgramData`, `ALLUSERSPROFILE`, `PUBLIC`, `USERPROFILE`, `HOMEDRIVE`, `HOMEPATH`, `APPDATA` and `LOCALAPPDATA`. A name the registry has no value for is left out, never taken from the caller;
+   - from the caller, as they are: `USERNAME`, `USERDOMAIN`, `COMPUTERNAME`, `TEMP`, `TMP`, `NUMBER_OF_PROCESSORS`, `PROCESSOR_ARCHITECTURE` and `OS`.
 
 Exit codes: 0 the command ran and exited 0; 1 refused, nothing run or written; 2 usage; 4 logged, and the command failed or could not start.
 
@@ -124,5 +126,6 @@ Exit codes: 0 the command ran and exited 0; 1 refused, nothing run or written; 2
 - Whether an agent can read the hub owner token, and that an unmarked window counts as the owner, are not settled here.
 - An agent that can write the user's registry `Path` (HKCU `Environment`, or the `Volatile Environment` values it is filled from), or a folder already on the machine or user PATH, can still put its own `.exe` in place of the operation's program.
 - The `.exe` is found and checked before the order check, the preconditions and the claim, and started after them. Anything that can write its folder can swap it in between.
-- The allowlisted variables come from the caller as they are, so a caller can still set them for the child (`ComSpec` or `TEMP`, for example).
+- `USERNAME`, `USERDOMAIN`, `COMPUTERNAME`, `TEMP`, `TMP`, `NUMBER_OF_PROCESSORS`, `PROCESSOR_ARCHITECTURE` and `OS` come from the caller as they are, so a caller can still set them for the child (a `TEMP` folder it writes, for example).
+- The child and the runner's own Python load files from the owner's profile: `~/.gitconfig`, the PowerShell profile, the user site folder's `usercustomize.py` (when the runner is not started with `-I`). Anything that can write those, or HKCU `Volatile Environment`, which names the profile folders, steers the run.
 - The preconditions are checked before the claim and the run, so one can stop holding in between.
