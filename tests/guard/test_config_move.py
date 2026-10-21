@@ -73,6 +73,20 @@ class ConfigMove(unittest.TestCase):
         self.assertEqual(d.rule, 'ledger', d.reason)
         self.assertIsNone(self.edit_ledger(other))      # the known limit docs/guard.md states
 
+    def test_with_a_pointer_the_home_ledger_stays_protected_and_the_pm_folder_is_held(self):
+        # the PM repository's machine config folder (docs/guard.md "Owner machine setup") beside
+        # the home one: the home config's ledger_path is still the ledger rule's, and a write into
+        # <pointer>/.pm-kit is machine-config's
+        self.put(self.new_dir, {'ledger_path': self.w.ledger})
+        ctx = lambda: self.w.ctx(pointer=lambda: self.w.data)
+        d = decide(event('Write', {'file_path': self.w.ledger, 'content': ''}, self.w.plain, sub=True), ctx())
+        self.assertIsNotNone(d)
+        self.assertEqual(d.rule, 'ledger', d.reason)
+        pm = os.path.join(self.w.data, kuser.DIR_NAME, kuser.FILE_NAME)
+        d = decide(event('Write', {'file_path': pm, 'content': ''}, self.w.wt, sub=True), ctx())
+        self.assertIsNotNone(d)
+        self.assertEqual(d.rule, 'machine-config', d.reason)
+
     def test_one_hook_call_reads_one_located_file(self):
         self.put(self.old_dir, {'ledger_path': self.w.ledger, 'a_key_this_kit_does_not_know': 1})
         ctx = self.w.ctx()
