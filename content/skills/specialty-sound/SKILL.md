@@ -20,10 +20,6 @@ Read `creative.md` and `measuring.md` beside this file first.
 7. Prepare and measure every clip, before and after, against the whole existing set (`measuring.md`); look at each spectrogram.
 8. Critique from the numbers and spectrograms (`creative.md`), deliver the page (each clip playable, before and after, spectrogram and numbers beside the ones it replaces), commit (skill builder).
 
-## Never
-
-- Add a runtime dependency for a build-time convenience.
-
 ## Report
 
 Page path or URL first. Then the sound and its sound brief; the options, each with intent, source and why a cheaper source could not; measurements before and after as a table; what you saw in the spectrograms; the critique's three weaknesses; **what the owner should listen for, as a question the owner can answer** ("does the impact still read at distance?"); licence and where you recorded it; branch and commit. For a shortlist, end with "Which of these three, or none?"

@@ -19,7 +19,6 @@ Harness traps, each scored wrong silently:
 - Stale `.pyc`: CPython keys `__pycache__` on source mtime (whole seconds) plus size, so a same-size rewrite within a second measures the previous version. Delete `__pycache__`, vary the size, or run with `-B`.
 - A test filter containing `|` handed to a shell is a pipe to cmd.exe: no result line, every guard untested. Pass argv as a list, no `shell=True`.
 - A missing result line fails loudly; it is never a pass or a catch.
-- `["cmd","/c","gradlew.bat",...]` with a relative name gives "not recognized", exit 1, every mutant red with no test failing. Use the absolute `gradlew.bat` path and read failing names from `build/test-results/**.xml`, never the exit code alone.
 
 ## Never
 

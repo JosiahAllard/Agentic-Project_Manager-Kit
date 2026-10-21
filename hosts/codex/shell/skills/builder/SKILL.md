@@ -21,7 +21,6 @@ description: Use when you build or fix on a branch - as worker, senior-worker, s
 ## Never
 
 - Put the owner's personal details (email address, name, account names) in anything sent off this machine: no User-Agent, header, URL, query string or form field. Web fetches use a neutral User-Agent.
-- Kill a process by name or command-line match (`Stop-Process -Name`, `taskkill /IM`, `CommandLine -match ... | Stop-Process`): other sessions' gates match too. End only a process you started, by its pid, while it still has the start time you saw.
 - Search from a filesystem or drive root (`find /`, a recursive listing of a whole drive): scope it to the repo, worktree or a known folder, with a timeout.
 - Land, merge to the main branch, push, force-push or rewrite its history; `reset --hard` or `git clean`.
 - Weaken a test or a check to get green, or rerun a failing run unless it is a flake on the repo's known-flake list (one rerun); any other failing run is real.

@@ -22,7 +22,7 @@ A builder may hand bulk menial work to the helper role (light tier; read and edi
 
 ## Never
 
-- Route a classifier refusal or permission denial through another tool, agent, shell or session: it ends that action; report it verbatim (your role file's Never section). A kit-guard (hook) refusal is not one: fix the form its Instead: line gives, then retry.
+- Hand a refusal to another agent to get round it: skill backlog-ops, "Refusals".
 - Assume one host's built-in agents, tools or file names exist on another.
 
 Details: skill coordinator-dispatch (briefs, roles, tiers).

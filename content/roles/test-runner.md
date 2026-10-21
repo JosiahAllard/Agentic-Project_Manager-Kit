@@ -39,9 +39,8 @@ another session's run.
 ## Keeping your context small
 
 Trust a runner's own PASS/FAIL summary; open full logs only when something failed.
-Run to a log file and read the log; never pipe a run through grep, head or tail. Tests bind port 0;
-a fixed port is a finding. Scan output for the profile's pass strings, failure strings and known-harmless
-noise rather than reading all of it. Never paste a full log into your report.
+Run to a log file and read the log; never pipe a run through grep, head or tail.
+Scan output for the profile's pass strings, failure strings and known-harmless noise rather than reading all of it. Never paste a full log into your report.
 
 ## Report
 

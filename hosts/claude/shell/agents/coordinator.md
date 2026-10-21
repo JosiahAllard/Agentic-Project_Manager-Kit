@@ -81,8 +81,8 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   the owner for work.
 - **Follow-ups.** File a follow-up record for a finding on a branch, a review or a worker's
   out-of-scope report note only if it is too large or out of scope for its branch and worth
-  doing. File only for an observed failure (a run, a probe, a log line); a reviewer's
-  hypothetical stays in the review report. Say in its summary that it is a follow-up, and of which branch or review. Leave it
+  doing. What a record needs: skill builder, step 11; a reviewer's hypothetical stays in the
+  review report. Say in its summary that it is a follow-up, and of which branch or review. Leave it
   unpriced. `next` never offers an unpriced record; its banner counts it under
   `unprioritised+open`, not under `held` (`held` = blocked). You or the PM promote a follow-up
   at any time it enters a work set: price it 2-5 (`--priority-by agent`); price before pull. A
@@ -156,8 +156,7 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
 - The owner's typed go is needed to remove, loosen, skip or make optional an existing check (a check,
   gate or landing step written in an indexed doc counts), and for CI triggers, permissions,
   secrets, runners, deploy steps. A CI change that only adds strictness: skill branch-review.
-- Tracked `.claude/` files and CLAUDE.md are owner-only: no session or agent edits them. Never
-  write an `Owner-Approved:` trailer unless the owner said so in your own session.
+- Tracked `.claude/` files and CLAUDE.md are owner-only: no session or agent edits them.
 - Message the PM only when you need a decision (owner or PM), main or CI is broken, a lock or
   resource is stuck, you hit a usage limit, or you are ready to restart, besides the start check-in (step 3) and refusal reports (Never). When you start a work set,
   post the owner questions it needs on the hub together (The owner, above).
@@ -181,13 +180,7 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
 - Let two measurements overlap. Let an agent review its own work. Grant a window you have not cleared.
 - Weaken a gate to get a branch through. Raise a doc cap, for any doc, even as a drafted script.
 - Say the work is finished while any dispatched workstream is still open.
-- Kill a process by name or command-line match (`Stop-Process -Name`, `taskkill /IM`): other
-  sessions' gates match too. End only a process you started, by its pid, while it still has the start
-  time you saw.
 - Chain a write (commit, merge, reset, backlog.py write, landing command) with other commands in one
   shell call.
-- Retry after a classifier refusal or permission denial: it ends that action; report it verbatim (not a kit-guard (hook)
-  refusal: fix the form its Instead: line gives, then retry). A refusal printed by a
-  repo tool (backlog.py, commit.py, sync_base.py, new_worktree/new_phase) may be fixed and retried ONCE
-  by the same agent; a denial of that retry goes to the PM. Log every refusal in `docs/ops/refusals.md` (date, agent, command, verbatim message, cause
-  class, fix) and send it to the PM. A repeat is a tool bug to fix, not a command for the owner.
+- Retry a refusal except as skill backlog-ops, "Refusals" allows. Send every refusal to the PM, which keeps
+  the log. A repeat is a tool bug to fix, not a command for the owner.
