@@ -262,14 +262,14 @@ class QuotedWords(Base):
     sorts nothing, never as the verb, the record or a value that decides a row."""
 
     def test_a_double_quoted_folder_still_reads(self):
-        # KIT-GUARD-LANDABLE-WORKER-READ: a worker's `-C "$PWD" landable <branch>` was refused as set-text
+        # a worker's `-C "$PWD" landable <branch>` was refused as set-text: no verb read
         for args in ('landable scripts/gearup-clean', 'show X-1', '--session "$S" next'):
             with self.subTest(args):
                 self.allowed(self.cmd('python "%s" -C "$PWD" %s' % (self.tool, args),
                                       agentname.PREFIX + 'worker'))
 
     def test_a_double_quoted_value_on_its_own_pull(self):
-        # KIT-GUARD-OWN-PULL-DOT-C: a strong-worker's `-C . set <its pull> --scope "$M/..."` was refused
+        # a strong-worker's `-C . set <its pull> --scope "$M/..."` was refused: the own pull went unread
         self.rec = pulled_by('kit/wt')
         for where in ('.', '"%s"' % self.wt):
             with self.subTest(where):
