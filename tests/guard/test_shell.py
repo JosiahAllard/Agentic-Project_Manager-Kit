@@ -75,7 +75,8 @@ class Tokeniser(unittest.TestCase):
 
 class BraceExpansion(unittest.TestCase):
     """bash writes out every unquoted {a,b} group of a word, in its own order, nested groups too
-    (KIT-GUARD-BRACE-MULTI); past BRACE_LIMIT words the word is computed and the parse unclean."""
+    (docs/guard.md "Arguments the shell rewrites"); past BRACE_LIMIT words the word is computed
+    and the parse unclean."""
 
     def words(self, word):
         p, c = cmds('rm ' + word, s.BASH)

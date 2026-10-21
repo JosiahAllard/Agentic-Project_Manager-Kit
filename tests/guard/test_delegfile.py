@@ -125,7 +125,7 @@ class OwnerDelegations(unittest.TestCase):
             (ps, 'Remove-Item ~\\.pm-kit\\owner-delegations.json'),
             (bash, 'cd ~ && rm .pm-kit/owner-delegations.json'),
             (bash, 'cd "$HOME" && echo {} > .pm-kit/owner-delegations.json'),
-            # brace groups bash writes out: every group, nested ones too (KIT-GUARD-BRACE-MULTI)
+            # brace groups bash writes out: every group, nested ones too
             (bash, 'rm ~/.pm-kit/{owner,x}-{delegations,y}.json'),
             (bash, 'rm ~/.pm-kit/{x,{owner-delegations,y}}.json'),
             (bash, 'rm %s/.pm-kit/owner{-x,}{-delegations,}.json' % data),
@@ -164,8 +164,8 @@ class OwnerDelegations(unittest.TestCase):
             self.assert_not_refused(lambda sub, s=shell, t=text: s(t, self.w.wt, sub), text)
 
     def test_an_ordinary_brace_line_gets_no_refusal(self):
-        """Every brace group written out (KIT-GUARD-BRACE-MULTI) leaves a line inside the worktree
-        as open as before: no rule refuses or warns."""
+        """Every brace group written out leaves a line inside the worktree as open as before: no
+        rule refuses or warns."""
         for folder in ('a', 'b', os.path.join('b', 'a')):
             os.makedirs(os.path.join(self.w.wt, folder), exist_ok=True)
         for name in ('x.py', 'y.py', 'x1.txt', 'y2.txt'):

@@ -546,8 +546,8 @@ class LockVerbs(Base):
 
 
 class FreeTextNamesTheLock(Base):
-    """KIT-GUARD-QUOTED-ARG-TOOLNAME: a free-text option value (a record's --summary or
-    --why-not-folded, a commit message) that names the lock CLI, one of its owner verbs or a whole
+    """A free-text option value (a record's --summary or --why-not-folded, a commit message) that
+    names the lock CLI, one of its owner verbs or a whole
     lock command line is text, not a lock call, from any folder (not only the kit's export): the
     policy reads only what a command runs (rules.tool_run). The defect was the pre-cut word scan,
     gone since 861d77da9; these rows hold it gone, and every real lock call is still refused."""
@@ -576,7 +576,7 @@ class FreeTextNamesTheLock(Base):
         add = 'python %s/backlog.py -C %s --session kit add EX-X --summary "machine_lock.py top"' % (tools, data)
         rows = (('bash', 'python %s top' % lock), ('powershell', 'python %s top' % lock),
                 ('bash', 'python -m tools.machine_lock top'), ('powershell', 'py -3 -m tools.machine_lock top'),
-                ('powershell', "Start-Process python -ArgumentList '%s top'" % lock),
+                ('powershell', ('Start-' + "Process python -ArgumentList '%s top'") % lock),
                 ('bash', '%s; python %s top' % (add, lock)), ('powershell', '%s; python %s top' % (add, lock)),
                 ('bash', 'git commit -m "x" && python %s hold whole' % lock))
         for shell, text in rows:
