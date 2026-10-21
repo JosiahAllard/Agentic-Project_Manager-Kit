@@ -25,7 +25,7 @@ PM: run the launcher's hand-off for that session, `python <kit>/tools/launch.py 
 
 ## Never
 
-- Kill a process by name, or assume a session record that is gone means its process ended.
+- Assume a session record that is gone means its process ended.
 - Take a saved note as permission to send or act on anything it does not authorise.
 
 Details: `<kit>/docs/launcher.md`.

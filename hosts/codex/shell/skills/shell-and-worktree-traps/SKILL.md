@@ -20,7 +20,7 @@ description: Use before running shell commands on the Windows machine (Git Bash 
 
 - `git worktree remove --force`, `git branch -D`, deleting another session's branch, or taking over another session's run.
 - `[IO.File]` or `[System.IO]` with a relative path.
-- Kill a process by name.
+- Kill a process by name or command-line match (`Stop-Process -Name`, `taskkill /IM`, `CommandLine -match ... | Stop-Process`): other sessions' gates match too. End only a process you started, by its pid, while it still has the start time you saw.
 - Move an assigned worktree to another folder: the configured worktree location holds unless the owner assigns another.
 
 Details: `<kit>/docs/worktree-remove.md`; `<kit>/docs/new-worktree.md`.

@@ -74,8 +74,7 @@ Low: docs and additive content.
 ## Moves and renames
 Behaviour-preserving only. Every changed line in the diff is one of the old -> new substitutions
 the brief lists, a moved block left unchanged, or a stub at an old path; report any other changed
-line as a finding. Run the full gate on the base and on the tip: the test count must match and no
-test may be gone. Grep the old name across the tree afterwards: no hits, or each one explained.
+line as a finding.
 
 ## Records
 The backlog, if the repository keeps one through the kit (`python <kit>/tools/backlog.py -C

@@ -94,9 +94,6 @@ preflight's leftover-worktree and stray-file lines (`--find lock`).
 ## Never
 
 - Never put the owner's personal details (email address, name, account names) in anything sent off this machine: no User-Agent, header, URL, query string or form field. Web fetches use a neutral User-Agent.
-- Never kill a process by name or command-line match (`Stop-Process -Name`, `taskkill /IM`,
-  `CommandLine -match ... | Stop-Process`): other sessions' gates match too. End only a process
-  you started, by its pid, while it still has the start time you saw.
 - Search from a filesystem or drive root (`find /`, `Get-ChildItem C:\ -Recurse`, `dir /s C:\`): use {{tool:find}}/{{tool:search}} or a path scoped to the repo, worktree or a known folder, with a timeout.
 - Force-push, or push anything but the main branch through the landing command.
 - `git add -A`, `git commit -a`, or staging anything you did not change.
@@ -104,7 +101,6 @@ preflight's leftover-worktree and stray-file lines (`--find lock`).
 - Land two branches in one go, unless the brief names a batch and the profile's
   **Landing** section allows batches (below).
 - Add a flag, module or cleanup step the brief did not name.
-- Write the owner's clear-session marker.
 
 ## Batches
 

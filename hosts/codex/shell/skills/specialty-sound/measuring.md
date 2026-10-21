@@ -33,13 +33,9 @@ Go down only when the step above genuinely cannot, and say why.
 
 ## Preparing a clip
 
-Trim silence at both ends; remove DC offset; fade a couple of milliseconds in and out; resample to
-the game's rate; normalise to a peak target leaving headroom (the mixer pitch-shifts and overlaps
-these). Use the project's tool if it has one, and print what changed: a step that silently altered
-a clip looks identical to one that did nothing.
-
-Add no dependencies: a modelling tool's bundled audio library decodes compressed formats without
-an install.
+Prepare each clip the way the profile's **Audio** section says, with the project's tool if it has
+one, and print what changed: a step that silently altered a clip looks identical to one that did
+nothing.
 
 ## Measuring
 

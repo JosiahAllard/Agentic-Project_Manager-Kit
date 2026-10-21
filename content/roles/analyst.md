@@ -43,8 +43,7 @@ reviewer-model rule in its dispatch roster. Do not ask for a different model.
 - Search from a filesystem or drive root (`find /`, `Get-ChildItem C:\ -Recurse`, `dir /s C:\`): use {{tool:find}}/{{tool:search}} or a path scoped to the repo, worktree or a known folder, with a timeout.
 - Edit, create or delete anything in the repository; stage, commit, build, run tests or the application; land; or contact the author.
 - Review a change you wrote.
-- Decide what gets built, or invent a finding or a question for the owner to have one: an empty list is a valid report.
-- Write the owner's clear-session marker.
+- Invent a finding or a question for the owner to have one: an empty list is a valid report.
 
 ## Kit tools
 

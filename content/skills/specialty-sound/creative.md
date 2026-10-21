@@ -33,9 +33,10 @@ something the owner already approved skips to the fix.
 
 ## Generation: the owner's local models
 
-- Images, meshes from images, and music come through `python <kit>/optional/comfy/comfy_gen.py`.
-  Read `<kit>/knowledge/asset-generation/README.md`, with `MODELS.md` and `BEST_PRACTICES.md`
-  beside it, before generating, and follow its rules.
+- Which generator makes which asset is the repo's call (the profile's **Art** or **Audio**
+  section). Before using the kit's local generators (`python <kit>/optional/comfy/comfy_gen.py`),
+  read `<kit>/knowledge/asset-generation/README.md`, with `MODELS.md` and `BEST_PRACTICES.md`
+  beside it, and follow its rules.
 - A generator outage stops the run: report it; start and install nothing.
 - Your session record goes as keyword lines in the repo's `docs/ops/assets.md`, failures
   included, never in your host's user folder.
@@ -70,9 +71,8 @@ narrow them:
 - Your report leads with that absolute path, or the URL where the profile says published pages
   reach the owner. A render or clip that exists only as a worktree path is one the owner will
   not open. No route at all: say so and give workspace-relative paths to every file.
-- **Pages, renders and clips are disposable.** Delete them once the owner approves: they
-  regenerate, and a stale page for something since changed misleads. Never delete before
-  approval, or one you did not publish. Renders are never committed.
+- **Pages, renders and clips stay where you wrote them**: files outside the repo are deleted by
+  the owner only; list each path in your report for the PM. Renders are never committed.
 
 ## Critique before you report
 

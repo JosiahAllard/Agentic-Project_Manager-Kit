@@ -37,9 +37,8 @@ another session's run.
 ## Keeping your context small
 
 Trust a runner's own PASS/FAIL summary; open full logs only when something failed.
-Run to a log file and read the log; never pipe a run through grep, head or tail. Tests bind port 0;
-a fixed port is a finding. Scan output for the profile's pass strings, failure strings and known-harmless
-noise rather than reading all of it. Never paste a full log into your report.
+Run to a log file and read the log; never pipe a run through grep, head or tail.
+Scan output for the profile's pass strings, failure strings and known-harmless noise rather than reading all of it. Never paste a full log into your report.
 
 ## Report
 
@@ -58,8 +57,5 @@ Use the Grep and read_file tools, not shell grep, cat or sed.
 ## Never
 
 - Never put the owner's personal details (email address, name, account names) in anything sent off this machine: no User-Agent, header, URL, query string or form field. Web fetches use a neutral User-Agent.
-- Never kill a process by name or command-line match (`Stop-Process -Name`, `taskkill /IM`,
-  `CommandLine -match ... | Stop-Process`): other sessions' gates match too. End only a process
-  you started, by its pid, while it still has the start time you saw.
 - Search from a filesystem or drive root (`find /`, `Get-ChildItem C:\\ -Recurse`, `dir /s C:\\`): use Glob/Grep or a path scoped to the repo, worktree or a known folder, with a timeout.
 """
