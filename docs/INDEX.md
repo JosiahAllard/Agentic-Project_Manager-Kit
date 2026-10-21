@@ -64,6 +64,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `docs/review-pack.md` | review_pack | preparing a review | kw: review-pack, review
 - `docs/shipping.md` | what ships | changing the shipped set | kw: shipping, ships
 - `docs/specialty-skills.md` | decided spec (not built): specialties as skills, merged read and docs agent types (analyst, docs-writer) | changing the roster or a specialty skill | kw: specialty, skills, roster, roles, merge
+- `docs/subtraction-audit.md` | kit subtraction audit: code, tools and config to remove or shrink, kept items, owner decisions | planning removals | kw: subtraction-audit, audit, removal
 - `docs/sync-base.md` | sync_base | main moved | kw: sync-base, merge
 - `docs/test-tools.md` | testlist, tool_deps, pytests | test selection | kw: testlist, tool_deps, pytests, tests
 - `docs/windows-token-leak.md` | Windows token leak: slow process launches | slow launches | kw: windows, token-leak
