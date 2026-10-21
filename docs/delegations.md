@@ -98,13 +98,17 @@ The PM runs it after the owner has ordered the run. The run line is `run D-nnn n
 
 1. The trigger is a question id or a ledger id. The literal `session` and the standing triggers are refused.
 2. The arguments are exactly the declared ones, each given once and passing `check_arg`. The filled-in command and precondition strings hit no exclusion.
-3. The program, `argv[0]`, is an absolute `.exe` path, or a bare name found as `<name>.exe` in an absolute PATH folder. The working folder and relative PATH entries are never searched. A `.bat`, a `.cmd` or a script is refused, because Windows runs those through `cmd.exe`.
+3. The program, `argv[0]`, is an absolute `.exe` path, or a bare name found as `<name>.exe` in an absolute folder of the registry PATH. The working folder and relative PATH entries are never searched. A `.bat`, a `.cmd` or a script is refused, because Windows runs those through `cmd.exe`.
+   - The registry PATH is the machine's `Path` (HKLM `SYSTEM\CurrentControlSet\Control\Session Manager\Environment`) followed by the user's (HKCU `Environment`). The caller's PATH is never read.
+   - A `%NAME%` in it is filled from the registry, never from the caller's environment: `SystemRoot`, `windir`, `SystemDrive`, `ProgramFiles`, `ProgramFiles(x86)`, `CommonProgramFiles` and `ProgramData` from the machine's Windows keys; `USERPROFILE`, `HOMEDRIVE`, `HOMEPATH`, `APPDATA`, `LOCALAPPDATA`, `USERNAME` and `USERDOMAIN` from HKCU `Volatile Environment`; any other name from the user's, then the machine's, environment value. An entry with a name that has no registry value is dropped.
 4. The order:
    - A question must be logged on the hub (read with the agent token). Its chosen option's label must be the run line, chosen in the last 24 h. The question's repo, when it has one, must be the operation's; an operation of repo `*` takes any. Its ruling must be a live owner entry (provenance `typed`, `selected` or `relayed-from-terminal`) whose Source names the question.
    - A ledger id must be a live owner entry of the operation's repo (any repo for `*`), written in the last 24 h, whose Decides is the run line.
 5. The preconditions hold. `file-exists` needs an absolute path to a file. `branch-landed` needs the branch's tip, local or remote-tracking, to have landed (`kitlib.landed.look`). `checklist-line` needs a line of the PM start checklist that holds the text and is not a failed check.
 6. The claim, under the runner lock (`delegated-runs`, beside the ledger file). No live entry of provenance `delegated` may name this anchor or this trigger. Then one entry is added: provenance `delegated`, Decides the run line, Source `under <anchor>: D-nnn <trigger>`. The anchor is the owner entry: the question's ruling, or the ledger id itself. The entry is not committed, as with `ledger.py add`. So each question and each owner entry orders one run, and a failed run still uses up its order.
-7. The child: the argument list with `shell=False`, stdin closed, the kit folder as its working folder, and every `PYTHON*` variable dropped from its environment.
+7. The child: the argument list with `shell=False`, stdin closed, and the kit folder as its working folder. Its environment is built from an allowlist, and nothing else reaches it (no `GIT_*`, no `PYTHON*`, no PATH of the caller's):
+   - from the registry: `PATH` (as in step 3), `PSModulePath` (the machine's value, then the user's) and `PATHEXT` (the user's, or else the machine's);
+   - from the caller, as they are: `SystemRoot`, `windir`, `ComSpec`, `SystemDrive`, `ProgramData`, `ProgramFiles`, `ProgramFiles(x86)`, `CommonProgramFiles`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `HOMEDRIVE`, `HOMEPATH`, `USERNAME`, `USERDOMAIN`, `COMPUTERNAME`, `TEMP`, `TMP`, `NUMBER_OF_PROCESSORS`, `PROCESSOR_ARCHITECTURE` and `OS`.
 
 Exit codes: 0 the command ran and exited 0; 1 refused, nothing run or written; 2 usage; 4 logged, and the command failed or could not start.
 
@@ -114,6 +118,11 @@ Exit codes: 0 the command ran and exited 0; 1 refused, nothing run or written; 2
 - D-001 cannot run: its command is a PowerShell cmdlet, and the runner starts only an `.exe` from an argument list, never a shell.
 - A `branch-landed` branch deleted after it landed fails closed: with neither a local nor a remote-tracking branch, its tip cannot be told from a branch never pushed.
 - Retiring a run's `delegated` entry re-arms its trigger and anchor. The 24 h bound on the order limits how long that lasts.
-- The order check trusts the ledger and the hub ruling the PM writes. The runner checks that an owner entry names the run, not who wrote it.
+- The run's `delegated` entry is not committed. Discarding the ledger file's change (a checkout, a restore or a stash of it) removes the entry and re-arms its trigger and anchor; the 24 h bound on the order still applies. Until the entry is committed, the ledger file has an uncommitted change, so the PM's next `ledger.py add --commit` refuses.
+- The PM writes `typed` entries with `ledger.py add`, so an agent the PM runs can write an owner-session order and run it itself. Only the 24 h bound and the one run per order limit that. The runner checks that an owner entry names the run, not who wrote it.
+- The hub order check trusts whatever listens on `127.0.0.1:<port>`. With the hub down, an agent's own listener there could serve a forged logged answer; the check that the ruling is a live owner ledger entry naming the question is then all that is left.
 - Whether an agent can read the hub owner token, and that an unmarked window counts as the owner, are not settled here.
+- An agent that can write the user's registry `Path` (HKCU `Environment`, or the `Volatile Environment` values it is filled from), or a folder already on the machine or user PATH, can still put its own `.exe` in place of the operation's program.
+- The `.exe` is found and checked before the order check, the preconditions and the claim, and started after them. Anything that can write its folder can swap it in between.
+- The allowlisted variables come from the caller as they are, so a caller can still set them for the child (`ComSpec` or `TEMP`, for example).
 - The preconditions are checked before the claim and the run, so one can stop holding in between.

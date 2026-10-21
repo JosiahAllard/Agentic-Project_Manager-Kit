@@ -11,7 +11,8 @@ nothing run and nothing written. In this order:
      kit folder. The filled command and precondition strings are checked again with
      schema.exclusion_hits.
   3. the program: argv[0] is an absolute `.exe` path or a bare name found as `<name>.exe` in an
-     absolute PATH folder. The working folder is never searched; nothing else (a .bat, a .cmd, a
+     absolute folder of the machine and user PATH read from the registry, never the caller's
+     PATH. The working folder is never searched; nothing else (a .bat, a .cmd, a
      script) is started, so no shell ever runs.
   4. the order: the run line `run D-nnn k=v ...` (arguments sorted by name) must be what the owner
      chose. A hub trigger: the logged question's chosen option label is the run line, chosen in
@@ -22,8 +23,9 @@ nothing run and nothing written. In this order:
   6. the claim, under the runner lock: no live runner entry (Source `under <anchor>: D-nnn
      <trigger>`) has this anchor or this trigger, then one ledger entry, provenance delegated,
      is added (not committed). Each trigger and each owner entry orders one run.
-  7. the child: the argv list with shell=False, stdin closed, in the kit folder, every PYTHON*
-     variable dropped from its environment.
+  7. the child: the argv list with shell=False, stdin closed, in the kit folder. Its environment
+     is only the FROM_CALLER names of the caller's and the registry's PATH, PATHEXT and
+     PSModulePath.
 
 Nothing here prints, parses arguments or exits (ARCHITECTURE.md, Layers); tools/delegated.py is
 the entry point.
@@ -34,6 +36,7 @@ import os
 import re
 import subprocess
 
+from kitlib.config import user as kuser
 from kitlib.fs import writelock
 from kitlib.hubsite import client as hubclient
 from kitlib.hubsite import serve as hubserve
@@ -166,11 +169,123 @@ def filled(op, values, kit_root):
 
 # --- The program ------------------------------------------------------------------------------
 
-def path_dirs(environ=None):
-    """The PATH folders of `environ` (default os.environ), quotes dropped."""
-    env = os.environ if environ is None else environ
-    path = next((v for k, v in env.items() if k.upper() == 'PATH'), '')
-    return [d.strip().strip('"') for d in path.split(os.pathsep)]
+MACHINE_ENV = r'SYSTEM\CurrentControlSet\Control\Session Manager\Environment'
+USER_ENV = 'Environment'
+VOLATILE_ENV = 'Volatile Environment'
+NT_CURRENT = r'SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+WIN_CURRENT = r'SOFTWARE\Microsoft\Windows\CurrentVersion'
+PROFILE_LIST = NT_CURRENT + r'\ProfileList'
+# The %NAME% values a registry value may use, read from the registry and never from the caller:
+# name (upper case) -> (hive, key, value name). SYSTEMDRIVE is the drive of SYSTEMROOT; any other
+# name is the user's, then the machine's, environment value of that name.
+SYSTEM_NAMES = {
+    'SYSTEMROOT': ('HKLM', NT_CURRENT, 'SystemRoot'),
+    'WINDIR': ('HKLM', NT_CURRENT, 'SystemRoot'),
+    'PROGRAMFILES': ('HKLM', WIN_CURRENT, 'ProgramFilesDir'),
+    'PROGRAMFILES(X86)': ('HKLM', WIN_CURRENT, 'ProgramFilesDir (x86)'),
+    'COMMONPROGRAMFILES': ('HKLM', WIN_CURRENT, 'CommonFilesDir'),
+    'PROGRAMDATA': ('HKLM', PROFILE_LIST, 'ProgramData'),
+}
+SYSTEM_NAMES.update((n.upper(), ('HKCU', VOLATILE_ENV, n)) for n in (
+    'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA', 'USERNAME', 'USERDOMAIN'))
+EXPAND_DEPTH = 8
+VAR_RE = re.compile(r'%([^%]+)%')
+# The child's variables taken from the caller as they are. PATH, PATHEXT and PSModulePath come
+# from the registry (registry_env). Nothing else reaches the child.
+FROM_CALLER = ('SystemRoot', 'windir', 'ComSpec', 'SystemDrive', 'ProgramData', 'ProgramFiles',
+               'ProgramFiles(x86)', 'CommonProgramFiles', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA',
+               'HOMEDRIVE', 'HOMEPATH', 'USERNAME', 'USERDOMAIN', 'COMPUTERNAME', 'TEMP', 'TMP',
+               'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE', 'OS')
+
+
+def read_registry(hive, key, name):
+    """`(value, expandable)` of the string value `name` of `key` under `hive` ('HKLM' or 'HKCU',
+    the 64-bit view), or None when there is none or it is not a string. Under the kit's tests
+    (kitlib.config.user.fenced) the registry is not read: None."""
+    if kuser.fenced():
+        return None
+    try:
+        import winreg
+    except ImportError:
+        return None
+    root = winreg.HKEY_LOCAL_MACHINE if hive == 'HKLM' else winreg.HKEY_CURRENT_USER
+    try:
+        with winreg.OpenKey(root, key, 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY) as k:
+            value, kind = winreg.QueryValueEx(k, name)
+    except OSError:
+        return None
+    if kind not in (winreg.REG_SZ, winreg.REG_EXPAND_SZ) or not isinstance(value, str):
+        return None
+    return value, kind == winreg.REG_EXPAND_SZ
+
+
+def _named(name, read, depth):
+    upper = name.upper()
+    if upper == 'SYSTEMDRIVE':
+        root = _named('SystemRoot', read, depth)
+        return (os.path.splitdrive(root)[0] or None) if root else None
+    if upper in SYSTEM_NAMES:
+        got = read(*SYSTEM_NAMES[upper])
+    else:
+        got = read('HKCU', USER_ENV, name) or read('HKLM', MACHINE_ENV, name)
+    if got is None:
+        return None
+    value, expandable = got
+    return expand(value, read, depth + 1) if expandable else value
+
+
+def expand(text, read, depth=0):
+    """`text` with each %NAME% filled from the registry (SYSTEM_NAMES, then the user's and the
+    machine's environment values), never from the caller's environment. None when a name has no
+    value, or the values nest past EXPAND_DEPTH."""
+    if depth > EXPAND_DEPTH:
+        return None
+    missing = []
+
+    def fill(m):
+        v = _named(m.group(1), read, depth)
+        if v is None:
+            missing.append(m.group(1))
+            return m.group(0)
+        return v
+    out = VAR_RE.sub(fill, text)
+    return None if missing else out
+
+
+def _entries(got, read):
+    if got is None:
+        return []
+    value, expandable = got
+    out = []
+    for part in value.split(os.pathsep):
+        part = expand(part, read) if expandable else part
+        if part is not None and part.strip():
+            out.append(part)
+    return out
+
+
+def registry_env(read=None):
+    """The child's PATH, PATHEXT and PSModulePath, from the registry only. PATH and PSModulePath
+    are the machine's value then the user's (MACHINE_ENV, USER_ENV); PATHEXT is the user's, or
+    else the machine's. An entry whose %NAME% has no registry value is dropped, and a name with
+    no value is left out. `read` is read_registry's stand-in for tests."""
+    read = read or read_registry
+    out = {}
+    for name, value in (('PATH', 'Path'), ('PSModulePath', 'PSModulePath')):
+        parts = (_entries(read('HKLM', MACHINE_ENV, value), read)
+                 + _entries(read('HKCU', USER_ENV, value), read))
+        if parts:
+            out[name] = os.pathsep.join(parts)
+    ext = (_entries(read('HKCU', USER_ENV, 'PATHEXT'), read)
+           or _entries(read('HKLM', MACHINE_ENV, 'PATHEXT'), read))
+    if ext:
+        out['PATHEXT'] = os.pathsep.join(ext)
+    return out
+
+
+def path_dirs(system):
+    """The folders of the registry PATH, `system['PATH']` (registry_env), quotes dropped."""
+    return [d.strip().strip('"') for d in system.get('PATH', '').split(os.pathsep)]
 
 
 def program(name, dirs):
@@ -201,9 +316,14 @@ def program(name, dirs):
     raise RunRefused('%s is in no absolute PATH folder' % exe)
 
 
-def child_env(environ):
-    """`environ` without any PYTHON* variable: the child's Python is not steered from here."""
-    return {k: v for k, v in environ.items() if not k.upper().startswith('PYTHON')}
+def child_env(environ, system):
+    """The child's environment: the FROM_CALLER names of the caller's `environ`, and the
+    registry's PATH, PATHEXT and PSModulePath (`system`, registry_env). Nothing else: no GIT_*,
+    no PYTHON*, no PATH of the caller's."""
+    upper = {k.upper(): v for k, v in environ.items()}
+    env = {n: upper[n.upper()] for n in FROM_CALLER if n.upper() in upper}
+    env.update(system)
+    return env
 
 
 # --- The ledger -------------------------------------------------------------------------------
@@ -448,19 +568,21 @@ def _claim(op, order, line, found, cfg, now, lock_wait, pause):
 
 
 def run(op, pairs, trigger, cfg, hub=None, now=None, spawn=procspawn.run, checks=None,
-        environ=None, kit_root=KIT_ROOT, pause=None, lock_wait=LOCK_WAIT):
+        environ=None, kit_root=KIT_ROOT, pause=None, lock_wait=LOCK_WAIT, registry=None):
     """Run the Operation `op` with the arguments `pairs` [(name, value)] on `trigger`; the module
     docstring gives the order. `cfg`: the machine config (kitlib.config.user.user_config). `hub`:
     a kitlib.hubsite.client.Client for a question trigger. `spawn`, `checks` (the precondition
-    checks by kind, default CHECKS), `environ`, `now` (aware UTC) and `pause` (called between the
-    use-once scan and the ledger add) are for tests. Result, or RunRefused with nothing done."""
+    checks by kind, default CHECKS), `environ` (the caller's), `registry` (read_registry's
+    stand-in), `now` (aware UTC) and `pause` (called between the use-once scan and the ledger add)
+    are for tests. Result, or RunRefused with nothing done."""
     now = _utc(now)
     environ = dict(os.environ if environ is None else environ)
     kind = trigger_kind(trigger)
     values = fill_args(op, pairs)
     line = run_line(op, values)
     argv, pres = filled(op, values, kit_root)
-    exe = program(argv[0], path_dirs(environ))
+    system = registry_env(registry)
+    exe = program(argv[0], path_dirs(system))
     found = lfiles.of_config(cfg)
     if found is None:
         raise RunRefused('no ledger_dir or ledger_path in the machine config: a run is logged first')
@@ -474,8 +596,8 @@ def run(op, pairs, trigger, cfg, hub=None, now=None, spawn=procspawn.run, checks
     rid = _claim(op, order, line, found, cfg, now, lock_wait, pause)
     full = [exe] + argv[1:]
     try:
-        done = spawn(full, executable=exe, cwd=kit_root, env=child_env(environ), shell=False,
-                     stdin=subprocess.DEVNULL)
+        done = spawn(full, executable=exe, cwd=kit_root, env=child_env(environ, system),
+                     shell=False, stdin=subprocess.DEVNULL)
     except OSError as e:
         return Result(rid, full, None, 'could not start %s: %s' % (exe, e))
     return Result(rid, full, done.returncode, None)

@@ -68,6 +68,16 @@ class Hub(object):
         return [q for q in self.questions if status in (None, 'all') or q.get('status') == status]
 
 
+class Registry(object):
+    """A stand-in drun.read_registry: `values` maps (hive, key, name) to (value, expandable)."""
+
+    def __init__(self, values=None):
+        self.values = dict(values or {})
+
+    def __call__(self, hive, key, name):
+        return self.values.get((hive, key, name))
+
+
 class Fixture(unittest.TestCase):
     """A split ledger (ledger_dir: kit.md and pm.md) and a program folder holding tool.exe."""
 
@@ -81,7 +91,8 @@ class Fixture(unittest.TestCase):
         self.exe = os.path.join(self.bin, 'tool.exe')
         open(self.exe, 'wb').close()
         self.cfg = {'ledger_dir': self.folder, 'ledger_repos': ['kit', 'pm']}
-        self.environ = {'PATH': self.bin, 'SYSTEMROOT': 'C:\\Windows'}
+        self.environ = {'SYSTEMROOT': 'C:\\Windows'}
+        self.reg = Registry({('HKLM', drun.MACHINE_ENV, 'Path'): (self.bin, False)})
         self.spawn = Spawn()
 
     def add(self, decides='run D-001 name=alpha', prov='typed', age=datetime.timedelta(hours=1),
@@ -98,6 +109,7 @@ class Fixture(unittest.TestCase):
         kw.setdefault('now', NOW)
         kw.setdefault('spawn', self.spawn)
         kw.setdefault('environ', self.environ)
+        kw.setdefault('registry', self.reg)
         kw.setdefault('checks', {})
         return drun.run(op or operation(), list(pairs), trigger, kw.pop('cfg', self.cfg), **kw)
 
@@ -171,13 +183,31 @@ class Program(Fixture):
         self.assertEqual(kw['stdin'], subprocess.DEVNULL)
         self.assertEqual((res.returncode, res.error), (0, None))
 
-    def test_the_child_environment_has_no_python_variable(self):
+    def test_the_child_environment_is_the_allowlist_and_the_registry(self):
+        decoy = os.path.join(self.dir, 'decoy')
         env = dict(self.environ, PYTHONPATH='C:/evil', PythonHome='C:/evil', PYTHONSTARTUP='x.py',
-                   PYTHONINSPECT='1', PYTHONUTF8='1', KEEP='me')
+                   GIT_SSH_COMMAND='C:/evil/ssh.exe', GIT_DIR='C:/evil', KEEP='me',
+                   PATH=decoy, PathExt='.EVIL', PSModulePath='C:/evil', temp='C:/t', ComSpec='C:/c')
+        self.reg.values[('HKLM', drun.MACHINE_ENV, 'PATHEXT')] = ('.COM;.EXE', False)
+        self.reg.values[('HKLM', drun.MACHINE_ENV, 'PSModulePath')] = ('C:/mods', False)
         self.run_op(trigger=self.rid, environ=env)
         child = self.spawn.calls[0][1]['env']
-        self.assertEqual(sorted(k for k in child if k.upper().startswith('PYTHON')), [])
-        self.assertEqual(child['KEEP'], 'me')
+        self.assertEqual(child, {'SystemRoot': 'C:\\Windows', 'TEMP': 'C:/t', 'ComSpec': 'C:/c',
+                                 'PATH': self.bin, 'PATHEXT': '.COM;.EXE',
+                                 'PSModulePath': 'C:/mods'})
+        self.assertNotIn(decoy, ''.join(child.values()))
+
+    def test_a_folder_on_the_callers_path_is_never_searched(self):
+        decoy = os.path.join(self.dir, 'decoy')
+        os.makedirs(decoy)
+        open(os.path.join(decoy, 'tool.exe'), 'wb').close()
+        self.run_op(trigger=self.rid, environ=dict(self.environ, PATH=decoy))
+        self.assertEqual(self.spawn.calls[0][1]['executable'], os.path.normpath(self.exe))
+        self.spawn.calls.clear()
+        self.reg.values.clear()
+        self.add(decides='run D-001 name=beta')
+        self.refused('in no absolute PATH folder', pairs=(('name', 'beta'),), trigger='H-kit-0003',
+                     environ=dict(self.environ, PATH=decoy))
 
     def test_a_program_in_the_working_folder_is_never_started(self):
         here = os.path.join(self.dir, 'here')
@@ -186,8 +216,9 @@ class Program(Fixture):
         cwd = os.getcwd()
         os.chdir(here)
         self.addCleanup(os.chdir, cwd)
-        self.refused('in no absolute PATH folder', trigger=self.rid,
-                     environ={'PATH': os.pathsep.join(['', '.', 'here'])})
+        self.reg.values[('HKLM', drun.MACHINE_ENV, 'Path')] = (
+            os.pathsep.join(['', '.', 'here']), False)
+        self.refused('in no absolute PATH folder', trigger=self.rid)
 
     def test_a_bat_is_refused(self):
         bat = os.path.join(self.bin, 'tool.bat')
@@ -204,7 +235,7 @@ class Program(Fixture):
     def test_an_absolute_exe_is_started_as_it_is(self):
         self.add(decides='run D-002 name=alpha')
         self.run_op(op=operation(id='D-002', command=self.exe.replace('\\', '/') + ' {name}'),
-                    trigger='H-kit-0002', environ={'PATH': ''})
+                    trigger='H-kit-0002', registry=Registry())
         self.assertEqual(self.spawn.calls[0][1]['executable'], os.path.normpath(self.exe))
 
     def test_kit_is_the_kit_folder(self):
@@ -542,6 +573,63 @@ class BranchLanded(unittest.TestCase):
         self.fx.git('fetch', '-q', 'origin', cwd=self.root)
         self.fx.git('branch', '-q', '-D', 'topic', cwd=self.root)
         self.assertIsNone(self.check())
+
+
+class RegistryEnv(unittest.TestCase):
+    """registry_env: PATH, PATHEXT and PSModulePath from the registry, never the caller's."""
+
+    M, U, V = ('HKLM', drun.MACHINE_ENV), ('HKCU', drun.USER_ENV), ('HKCU', drun.VOLATILE_ENV)
+
+    def reg(self, where, name, value, expandable=False):
+        return {where + (name,): (value, expandable)}
+
+    def test_the_path_is_the_machines_then_the_users(self):
+        values = self.reg(self.M, 'Path', 'C:\\m1;C:\\m2') | self.reg(self.U, 'Path', 'C:\\u')
+        self.assertEqual(drun.registry_env(Registry(values))['PATH'], 'C:\\m1;C:\\m2;C:\\u')
+
+    def test_a_name_is_filled_from_the_registry_not_the_caller(self):
+        values = {}
+        values.update(self.reg(self.M, 'Path', '%SystemRoot%\\system32;%JAVA_HOME%\\bin', True))
+        values.update(self.reg(self.U, 'Path', '%USERPROFILE%\\bin;%SystemDrive%\\tools', True))
+        values[('HKLM', drun.NT_CURRENT, 'SystemRoot')] = ('C:\\Windows', False)
+        values[self.V + ('USERPROFILE',)] = ('C:\\profiles\\someone', False)
+        values.update(self.reg(self.M, 'JAVA_HOME', '%ProgramFiles%\\java', True))
+        values[('HKLM', drun.WIN_CURRENT, 'ProgramFilesDir')] = ('C:\\Program Files', False)
+        with mock.patch.dict(os.environ, {'SystemRoot': 'C:\\evil', 'USERPROFILE': 'C:\\evil',
+                                          'JAVA_HOME': 'C:\\evil', 'ProgramFiles': 'C:\\evil'}):
+            path = drun.registry_env(Registry(values))['PATH']
+        self.assertEqual(path, 'C:\\Windows\\system32;C:\\Program Files\\java\\bin;'
+                               'C:\\profiles\\someone\\bin;C:\\tools')
+
+    def test_an_entry_with_a_name_the_registry_lacks_is_dropped(self):
+        values = self.reg(self.M, 'Path', 'C:\\a;%NOPE%\\bin;C:\\%NOPE%;C:\\b', True)
+        with mock.patch.dict(os.environ, {'NOPE': 'C:\\evil'}):
+            self.assertEqual(drun.registry_env(Registry(values))['PATH'], 'C:\\a;C:\\b')
+
+    def test_a_loop_of_names_is_dropped(self):
+        values = self.reg(self.M, 'Path', 'C:\\a;%X%', True) | self.reg(self.M, 'X', '%X%', True)
+        self.assertEqual(drun.registry_env(Registry(values))['PATH'], 'C:\\a')
+
+    def test_a_plain_value_is_not_expanded(self):
+        values = self.reg(self.M, 'Path', 'C:\\%SystemRoot%', False)
+        self.assertEqual(drun.registry_env(Registry(values))['PATH'], 'C:\\%SystemRoot%')
+
+    def test_pathext_is_the_users_or_else_the_machines(self):
+        m = self.reg(self.M, 'PATHEXT', '.COM;.EXE')
+        self.assertEqual(drun.registry_env(Registry(m))['PATHEXT'], '.COM;.EXE')
+        both = m | self.reg(self.U, 'PATHEXT', '.EXE')
+        self.assertEqual(drun.registry_env(Registry(both))['PATHEXT'], '.EXE')
+
+    def test_psmodulepath_is_the_machines_then_the_users(self):
+        values = self.reg(self.M, 'PSModulePath', 'C:\\m') | self.reg(self.U, 'PSModulePath', 'C:\\u')
+        self.assertEqual(drun.registry_env(Registry(values))['PSModulePath'], 'C:\\m;C:\\u')
+
+    def test_no_values_give_no_names(self):
+        self.assertEqual(drun.registry_env(Registry()), {})
+
+    def test_the_registry_is_not_read_under_the_tests(self):
+        self.assertTrue(kuser.fenced())
+        self.assertIsNone(drun.read_registry('HKLM', drun.MACHINE_ENV, 'Path'))
 
 
 if __name__ == '__main__':
