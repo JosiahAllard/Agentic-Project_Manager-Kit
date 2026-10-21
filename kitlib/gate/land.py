@@ -17,7 +17,9 @@ tools/land.py).
                  and books nothing more
   4  lock        fetch <remote>, then the landing lock file (kitlib.records.landing), with what is
                  left of --wait; not had: BUSY. Held at phase stuck: BUSY at once; held by a
-                 process that is surely gone: broken and taken unless something is unpushed
+                 process that is surely gone: broken and taken unless something is unpushed (one
+                 gone at phase push with <remote>/<main> moved on since the take: BUSY naming the
+                 likely landed push, the fast-forward, the next landing and the break)
   5  follow      fetch again under the lock; HEAD still on main, or REFUSED. The base is <remote>/<main> as fetched: a local main
                  only behind it (nothing unpushed) is fast-forwarded first (`git merge --ff-only`,
                  HEAD on main, a clean checkout); a local main with commits the remote lacks, or
@@ -674,8 +676,17 @@ class Lander(object):
         if rec.get('lane') == '?' or self.lock.holder_state(rec) != 'dead':
             return landing.describe(rec), False         # alive, a token holder, or unreadable
         why = self.lock.unpushed()
-        hint = self.behind_hint(self.ref(self.main_ref), self.ref(self.origin_ref)) if why else ''
+        origin = self.ref(self.origin_ref)
+        hint = self.behind_hint(self.ref(self.main_ref), origin) if why else ''
         if hint and not os.path.exists(os.path.join(self.lock.common, 'MERGE_HEAD')):
+            took = rec.get('origin_at_take')
+            if rec.get('phase') == 'push' and took and origin != took:   # killed after its push
+                return ('%s, and its holder is gone after its push: %s/%s (%s) moved on from %s, '
+                        'where it took the lock, so its push most likely landed and only the main '
+                        'checkout\'s fast-forward was skipped. Not broken, because %s. Then land '
+                        'again: the next landing breaks it itself; or break it with: %s' % (
+                            landing.describe(rec), self.cfg.remote, self.cfg.main_branch,
+                            origin[:10], took[:10], hint[2:], self.break_command())), True
             return ('%s, and its holder is gone: not broken, because %s. The next landing breaks '
                     'it itself once main has caught up, or break it with: %s' % (
                         landing.describe(rec), hint[2:], self.break_command())), True
