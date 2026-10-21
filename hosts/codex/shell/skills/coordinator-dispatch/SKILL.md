@@ -124,7 +124,8 @@ permissions.
   profile says.
 - **Stale worktrees.** A B or C tree in `--classify` whose work is stale (superseded, ruled out, its
   record closed): mark it, `python <kit>/tools/worktree_remove.py -C <repo> <branch> --mark-stale
-  "<why>"`. The nightly sweep then abandons it under `archive/<slug>` once it is idle 24 h, unless
+  "<why>"` (only a clean, unlanded, unclaimed tree; `--classify` offers the line for those and
+  notes why the others take none). The nightly sweep then abandons it under `archive/<slug>` once it is idle 24 h, unless
   it changes first; `<branch> --unmark-stale` clears the mark. A branch with no worktree is
   abandoned by hand, `<branch> --branch --abandon "<why>"`, on the PM's word.
 - **Grow the tool set.** Weekly, run the repetition report on the repo

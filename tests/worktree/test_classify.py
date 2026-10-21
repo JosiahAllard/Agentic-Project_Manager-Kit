@@ -830,6 +830,35 @@ class StaleMarkShown(ClassifyCase):
         self.assertNotIn('--mark-stale', out)
         self.assertNotIn('--unmark-stale', out)
 
+    def assert_no_mark_offered(self, out, why):
+        self.assertNotIn('--mark-stale "<why>"', out)
+        self.assertIn('takes no --mark-stale (C): %s' % why, out)
+
+    def test_a_dirty_tree_is_told_why_it_takes_no_mark(self):
+        path = self.workstream('wip')
+        self.fx.write('loose.txt', 'not committed\n', root=path)
+        rc, out, data = self.run_classify()
+        self.assertEqual(self.row(data, path)['class'], 'C')
+        self.assert_no_mark_offered(out, '1 dirty file(s): it marks a clean tree only')
+        got = marks.mark(self.repo, 'kit/wip', 'stale', liveness=lambda m, b: (None, 'tip'))
+        self.assertEqual(got.code, remove.REFUSED, got.lines)    # the note agrees with the tool
+
+    def test_a_landed_dirty_tree_takes_no_mark(self):
+        path = self.workstream('after')
+        self.land('kit/after')
+        self.fx.write('loose.txt', 'x\n', root=path)
+        rc, out, data = self.run_classify()
+        self.assertEqual(self.row(data, path)['note'], 'landed, not clean')
+        self.assert_no_mark_offered(out, '1 dirty file(s)')
+
+    def test_a_tree_with_nothing_of_its_own_takes_no_mark(self):
+        path = self.workstream('fresh', commits=0)
+        rc, out, data = self.run_classify()
+        row = self.row(data, path)
+        self.assertEqual(row['class'], 'C', row)
+        self.assertIn('nothing of its own', row['note'])
+        self.assert_no_mark_offered(out, 'its tip is in the base: landed work needs no mark')
+
     def test_a_tree_outside_the_worktree_folder_is_offered_no_mark(self):
         path = self.outside('away', 'main')
         self.git('checkout', '-q', '-b', 'kit/away', cwd=path)

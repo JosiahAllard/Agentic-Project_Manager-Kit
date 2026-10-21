@@ -37,8 +37,9 @@ The classes, decided first-match in this order:
 Who the tree belongs to (a backlog record pulled by its branch) is shown; it decides only whether
 an empty tree is A or C. Each claim on a B or C tree gets a `next` release line. A stale mark
 (kitlib.worktree.marks) on a tree's branch is shown, void or not (`mark`); a B or C tree in a
-worktree folder gets a `next --mark-stale` line when its branch has no mark that holds, and a
-`next --unmark-stale` line when it has one. A marks file that cannot be read is a note, and no
+worktree folder gets a `next --unmark-stale` line when its branch has a mark that holds; else a
+`next --mark-stale` line, or, when `--mark-stale` would refuse it (dirty, its tip in the base, a
+claim shown: `mark_bar`), a note saying why. A marks file that cannot be read is a note, and no
 mark is shown.
 `classify` returns Result(code, lines, data): 0 when every tree is L; 1 when one is A, B, C, E or
 O, or a run-wide read failed; 2 for a refused kit configuration. With `apply`: 0 when every A, E
@@ -660,6 +661,9 @@ def _classify(ctx, now, machine, procs, dead_after_s, act=None, environ=None):
                 ctx.say('next      %s %s --unmark-stale   (%s, marked stale: the nightly sweep'
                         ' abandons it once idle; this clears the mark)' % (
                             s['tool'], t['branch'], t['class']))
+            elif mark_bar(t):
+                ctx.say('note      %s takes no --mark-stale (%s): %s' % (
+                    t['branch'], t['class'], mark_bar(t)))
             else:
                 ctx.say('next      %s %s --mark-stale "<why>"   (%s, so the nightly sweep abandons'
                         ' it once idle, if it is stale)' % (s['tool'], t['branch'], t['class']))
@@ -680,6 +684,18 @@ def _classify(ctx, now, machine, procs, dead_after_s, act=None, environ=None):
     if applied is not None:
         data['applied'] = applied
     return Result(code, list(ctx.out), data)
+
+
+def mark_bar(t):
+    """Why `--mark-stale` (marks.mark) would refuse the B or C row `t`, or None: a dirty tree, a
+    tip in the base (no `ahead`: landed, or nothing of its own) or a claim it shows."""
+    if t.get('dirty'):
+        return '%d dirty file(s): it marks a clean tree only' % t['dirty']
+    if 'ahead' not in t:
+        return 'its tip is in the base: landed work needs no mark'
+    if isinstance(t.get('claims'), list) and t['claims']:
+        return 'a backlog record still pulls it (%s): release it first' % ', '.join(t['claims'])
+    return None
 
 
 def read_marks(ctx):
