@@ -125,6 +125,10 @@ class OwnerDelegations(unittest.TestCase):
             (ps, 'Remove-Item ~\\.pm-kit\\owner-delegations.json'),
             (bash, 'cd ~ && rm .pm-kit/owner-delegations.json'),
             (bash, 'cd "$HOME" && echo {} > .pm-kit/owner-delegations.json'),
+            # brace groups bash writes out: every group, nested ones too (KIT-GUARD-BRACE-MULTI)
+            (bash, 'rm ~/.pm-kit/{owner,x}-{delegations,y}.json'),
+            (bash, 'rm ~/.pm-kit/{x,{owner-delegations,y}}.json'),
+            (bash, 'rm %s/.pm-kit/owner{-x,}{-delegations,}.json' % data),
             # a folder that holds it
             (bash, 'rm -rf %s' % hdir), (bash, 'rm -rf ~/.pm-kit'), (ps, 'Remove-Item -Recurse -Force "%s"' % data),
             (bash, 'mv %s/.pm-kit %s/old' % (data, data)),
@@ -158,6 +162,20 @@ class OwnerDelegations(unittest.TestCase):
                 (bash, 'git -C %s show HEAD:.pm-kit/owner-delegations.json' % W.fwd(self.w.data)),
                 (bash, 'git -C %s log -- .pm-kit/owner-delegations.json' % W.fwd(self.w.data))):
             self.assert_not_refused(lambda sub, s=shell, t=text: s(t, self.w.wt, sub), text)
+
+    def test_an_ordinary_brace_line_gets_no_refusal(self):
+        """Every brace group written out (KIT-GUARD-BRACE-MULTI) leaves a line inside the worktree
+        as open as before: no rule refuses or warns."""
+        for folder in ('a', 'b', os.path.join('b', 'a')):
+            os.makedirs(os.path.join(self.w.wt, folder), exist_ok=True)
+        for name in ('x.py', 'y.py', 'x1.txt', 'y2.txt'):
+            with open(os.path.join(self.w.wt, 'a', name), 'w', encoding='utf-8') as fh:
+                fh.write('x\n')
+        for text in ('cp a/{x,y}.py b/', 'cp a/{x,y}{1,2}.txt b/a/', 'mkdir -p src/{a,b{c,d}}'):
+            for environ, sub in (({context.ROLE_ENV: 'senior-worker'}, False), ({}, True)):
+                with self.subTest(text, environ=environ, sub=sub):
+                    d = self.run_one(lambda sub, t=text: bash(t, self.w.wt, sub), environ, sub)
+                    self.assertIsNone(d, d and (d.verdict, d.rule, d.reason))
 
     # ------------------------------------------------------------------ wildcards, the pipeline, stand-ins
 
