@@ -133,14 +133,19 @@ def _one_word(cmd, w):
     return '"' not in w.text and '@' not in w.text and src[w.start:w.end] == '"%s"' % w.text
 
 
-def _unread(pairs, argv):
-    """The refusal's sentence naming the words read_argv could not read when they decided it (no
-    verb read, an unread option or operand, an unread -C or --as), else ''."""
-    from kitlib.backlog import policy
+def _unread(pairs, argv, who):
+    """The refusal's sentence naming the words read_argv could not read when they decided it, else
+    '': no verb read, or the run without its unread words, as its own pull, would be allowed (an
+    unread `-C "$PWD"` on a `close` the role may never take decides nothing)."""
+    from kitlib.backlog import policy, roles
     words = [t for t, ok in pairs if ok is not True]
-    if not words or (argv.verb is not None and not argv.given.get(policy.UNKNOWN) and
-                     policy.UNREAD not in (argv.root, argv.branch)):
+    if not words:
         return ''
+    if argv.verb is not None:
+        given = dict(argv.given)
+        given.pop(policy.UNKNOWN, None)
+        if policy.refusal(who, policy.sort(argv.verb, given, _Unheld()), (roles.OWN_PULL,)):
+            return ''
     return ' The guard cannot read %s (computed, or a word that can split), so it judged the run ' \
            'as the strictest those words could make it; write them out.' \
            % ', '.join('`%s`' % t for t in words)
@@ -172,7 +177,7 @@ def role_run(event, ctx, cmd, inv, cwd, role):
     # may not take the unheld row either, that row is the one to name
     text = policy.refusal(who, policy.sort(argv.verb, argv.given, _Unheld())) or text
     return rules.refuse(ROLE_RULE, role, '`%s`: %s (kitlib/backlog/roles.py).%s %s'
-                        % (rules.bare(cmd), text, _unread(pairs, argv), ASK),
+                        % (rules.bare(cmd), text, _unread(pairs, argv, who), ASK),
                         read_alternative(ctx, cmd, cwd, argv))
 
 

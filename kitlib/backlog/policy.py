@@ -88,16 +88,19 @@ def sort(verb, given=None, rec=None):
     """The ACTIONS rows (names) the command `verb` with `given` takes on the record `rec` (None: not
     read, so the strictest the record could make it), narrowed by `over`. A verb no row names takes
     none, and refusal() refuses that for every role; a dry run (retarget without --apply,
-    migrate --dry-run, catch-up without --apply) is a read."""
+    migrate --dry-run, catch-up without --apply) is a read, but not with a word unread
+    (`given` UNKNOWN), which could be the --apply."""
     given = given or {}
     if verb is None:
         return [n for n in roles.ACTIONS if n != 'read']
-    if verb in READS or (verb == 'retarget' and not given.get('apply')) or \
+    if verb in READS:
+        return ['read']
+    if given.get(UNKNOWN):                      # an unread word may be the --apply a dry run lacks
+        return _verb_rows(verb)
+    if (verb == 'retarget' and not given.get('apply')) or \
             (verb == 'migrate' and given.get('dry_run')) or \
             (verb == 'catch-up' and not given.get('apply')):
         return ['read']
-    if given.get(UNKNOWN):
-        return _verb_rows(verb)
     rows = set()
     if verb == 'set':
         fields = list(given.get('fields') or ())
@@ -336,8 +339,9 @@ def read_argv(words):
             continue
         if opts[name] and not eq:
             value = value_at(k + 1, name)
-            if value is None:
+            if value is None:                   # the option counts, its value not read
                 given[UNKNOWN] = True
+                _given_add(given, verb, name, UNREAD)
                 k += 1
                 continue
             k += 1

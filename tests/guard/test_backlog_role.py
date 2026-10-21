@@ -306,6 +306,46 @@ class QuotedWords(Base):
         d = self.refused(self.cmd(self.bl('close X-1')))
         self.assertNotIn('write them out', d.reason)
 
+    def test_an_unread_word_that_decides_nothing_is_not_named(self):
+        # `close` is a lead row whatever -C names: the unread folder did not decide it (an unquoted
+        # `-C $W` can split into a verb, so there no verb reads and the words do decide)
+        for args in ('-C "$PWD" close X-1', '-C . close X-1 $R', '-C . close X-1 --reason $R'):
+            with self.subTest(args):
+                d = self.refused(self.cmd('python "%s" %s' % (self.tool, args), agentname.PREFIX + 'worker',
+                                          cwd=self.w.wt))
+                self.assertNotIn('write them out', d.reason)
+
+    def test_a_price_or_unset_is_refused_whatever_its_value(self):
+        # no value of --priority or --unset gives a row a builder takes, so the unread word decided
+        # nothing; an unread --on could name a member a builder may block on, so it did
+        self.rec = pulled_by('kit/wt')
+        for args, named in (('set X-1 --scope s --priority "$P"', False),
+                            ('set X-1 --scope s --unset "$F"', False),
+                            ('set X-1 --scope s --priority $P', False),
+                            ('block X-1 --on "$B" --reason r', True)):
+            with self.subTest(args):
+                d = self.refused(self.cmd('python "%s" -C . %s' % (self.tool, args), 'strong-worker',
+                                          cwd=self.w.wt))
+                (self.assertIn if named else self.assertNotIn)('write them out', d.reason)
+
+
+class DryRuns(Base):
+    """A dry run is a read only when every word reads: an unread word could be the --apply."""
+
+    def test_an_unread_word_on_a_dry_run_is_not_a_read(self):
+        for args in ('retarget A B $X', 'retarget A B "$X"', 'catch-up $X p', 'catch-up "$X" p',
+                     'migrate --to main --dry-run $X', 'migrate --to main --dry-run "$X"'):
+            with self.subTest(args):
+                d = self.refused(self.cmd('python "%s" -C . %s' % (self.tool, args), agentname.PREFIX + 'worker',
+                                          cwd=self.w.wt))
+                self.assertIn('write them out', d.reason)
+
+    def test_a_written_dry_run_still_reads(self):
+        for args in ('retarget A B', 'catch-up p', 'migrate --to main --dry-run'):
+            with self.subTest(args):
+                self.allowed(self.cmd('python "%s" -C . %s' % (self.tool, args), agentname.PREFIX + 'worker',
+                                      cwd=self.w.wt))
+
 
 class RawCode(Base):
     def test_code_that_imports_the_backlog_package(self):
