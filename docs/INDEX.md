@@ -27,7 +27,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `docs/commit.md` | commit.py and machine_paths.py | committing | kw: commit, machine_paths
 - `docs/content.md` | content/ and render_content: roles and skills written once, rendered per host with the plugin manifests (kit.json's version) and the kit header | editing an agent or a skill | kw: content, render_content, roles, render, kit.json, manifest, header
 - `docs/daily-full.md` | daily_full | the nightly full run | kw: daily-full, nightly
-- `docs/delegations.md` | the owner's delegation list: location, schema 1, the hard exclusions E1 to E5 | reading or changing what the PM may run for the owner | kw: delegations, owner-delegations, exclusions, delegated
+- `docs/delegations.md` | the owner's delegation list: location, schema 1, the hard exclusions E1 to E5, running one, known limits | reading or changing what the PM may run for the owner, or running it | kw: delegations, owner-delegations, exclusions, delegated, runner
 - `docs/doc-tools.md` | doc_budget, doc_index, codemap | finding or checking docs | kw: doc-tools, doc_index, doc_budget, codemap, find, section, stale
 - `docs/engineering-rulings.md` | engineering rulings | before a design choice | kw: rulings, engineering
 - `docs/flaky-tests.md` | flaky tests: the time fence design (first step built: kitlib.clock, agentstart's budget), survey of nondeterminism in tests/ | a test fails under load, adding a time budget | kw: flaky, flake, time-fence, clock, budget
@@ -111,6 +111,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `tools/lock_release_check.py` | lock release pre-check (`docs/lock-release.md`) | kw: lock_release_check
 - `tools/worktree_remove.py` | remove a worktree, or mark one stale for the nightly sweep (`docs/worktree-remove.md`) | kw: worktree_remove, mark-stale, stale-mark
 - `tools/ledger.py` | rulings ledger (`docs/ledger.md`) | kw: ledger
+- `tools/delegated.py` | run one operation of the owner's delegation list on the owner's order (`docs/delegations.md` "Running") | kw: delegated, delegations, run
 - `tools/pending.py` | pending steps (`docs/pending.md`) | kw: pending
 - `tools/launch.py` | launcher (`docs/launcher.md`) | kw: launch, launcher
 - `tools/pm_watch.py` | PM watcher (`docs/pm-watch.md`) | kw: pm_watch
