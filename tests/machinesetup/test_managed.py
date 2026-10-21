@@ -197,17 +197,18 @@ class ManagedMode(ManagedBase):
         env = {'GIT_AUTHOR_NAME': 'Agent'}
         self.overlay({'env': env})
         have = dict(self.rendered(), env=env)
-        have = dict([('env', have.pop('env'))] + list(have.items()))     # env first, as the old file had it
+        have = dict([('env', have.pop('env'))] + list(have.items()))     # env first, as before
         have['permissions'] = {'allow': ['Bash']}
         dump(self.target, have)
         code, out = self.run_it()
         self.assertEqual(code, M.EXIT_OK, out)
         self.assertIn('-      "Bash"', out.replace('\r', ''))
-        self.assertNotIn('GIT_AUTHOR_NAME', '\n'.join(l for l in out.splitlines() if l.startswith(('-', '+'))))
+        changed = [l for l in out.splitlines() if l.startswith(('-', '+'))]
+        self.assertNotIn('GIT_AUTHOR_NAME', '\n'.join(changed))
 
     def test_ordered_like_follows_the_old_order_and_appends_new_keys(self):
-        got = managed._ordered_like({'b': {'y': 1, 'x': 2, 'n': 3}, 'a': 1, 'new': 2, 'l': [{'q': 1}]},
-                                    {'a': 0, 'b': {'x': 0, 'y': 0}, 'gone': 1})
+        data = {'b': {'y': 1, 'x': 2, 'n': 3}, 'a': 1, 'new': 2, 'l': [{'q': 1}]}
+        got = managed._ordered_like(data, {'a': 0, 'b': {'x': 0, 'y': 0}, 'gone': 1})
         self.assertEqual(list(got), ['a', 'b', 'new', 'l'])
         self.assertEqual(list(got['b']), ['x', 'y', 'n'])
 

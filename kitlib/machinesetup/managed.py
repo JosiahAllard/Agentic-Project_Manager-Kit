@@ -23,8 +23,8 @@ The written file keeps the layout the managed file has (BOM, line ends, indent);
 written in settings.NEW_LAYOUT. An existing file is replaced whole, so the run is refused when it
 is not a JSON object or has a key at any depth the rendered template lacks (named by its dotted
 path: add it to the template; values inside lists are not walked). The write keeps the key order
-the existing file has, so the diff shows only real changes. A replaced file is copied to a .bak beside it first, and the write is refused
-when the file changed since the survey or is a link.
+the existing file has, so the diff shows only real changes. A replaced file is copied to a .bak
+beside it first, and the write is refused when the file changed since the survey or is a link.
 
 survey_live() reads the managed file as it is, for the default mode and the older-kit switch: when
 it carries this kit's guard entry, no account settings.json gains one (settings). The plugin step
@@ -211,9 +211,9 @@ def _target(plan, path, data):
 
 
 def _extra_paths(have, data, prefix=''):
-    """The dotted paths of the keys `have` holds that `data` lacks, sorted. Objects are walked key by
-    key, as merge() does; an object where `data` has a non-object is lost whole and named at its own
-    path. Lists are replaced values and are not walked."""
+    """The dotted paths of the keys `have` holds that `data` lacks, sorted. Objects are walked key
+    by key, as merge() does; an object where `data` has a non-object is lost whole and named at
+    its own path. Lists are replaced values and are not walked."""
     out = []
     for k, v in have.items():
         here = prefix + k
