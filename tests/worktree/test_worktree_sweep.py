@@ -2,6 +2,7 @@
 skips and why, and every run-wide check failing closed. Throwaway repositories only
 (tests/gitfixture.py); the machine lock is a seam, never the real one.
 """
+import datetime
 import json
 import os
 import subprocess
@@ -229,6 +230,291 @@ class SweepOpenClaim(SweepCase):
         rc, out = self.sweep(apply=True)
         self.assertEqual(rc, 0, out)
         self.assertFalse(os.path.exists(path))
+
+
+MARKS_FILE = 'kit-stale-marks.json'      # kitlib.worktree.marks.FILE_NAME, spelled out: see StaleMarkCase
+
+
+def stamp(when):
+    return datetime.datetime.fromtimestamp(when, datetime.timezone.utc).strftime(
+        '%Y-%m-%dT%H:%M:%S.%fZ')
+
+
+class StaleMarkCase(SweepCase):
+    """The marks file is written here as JSON, not through kitlib.worktree.marks, so the invariant
+    test runs (and fails on its assertions) against a kit without stale marks: red-first."""
+
+    def marks_path(self):
+        return os.path.join(self.fx.common_dir(), MARKS_FILE)
+
+    def record(self, slug, path, why='superseded by kit/other', at=None):
+        return {'branch': 'kit/' + slug, 'tip': self.git('rev-parse', 'kit/' + slug),
+                'path': path, 'why': why, 'at': stamp(time.time() if at is None else at),
+                'by': 'coord-test (coordinator)'}
+
+    def write_marks(self, *records, text=None):
+        with open(self.marks_path(), 'w', encoding='utf-8', newline='\n') as f:
+            f.write(text if text is not None else json.dumps(
+                {'version': 1, 'marks': list(records)}, indent=2) + '\n')
+
+    def read_marks(self):
+        with open(self.marks_path(), encoding='utf-8') as f:
+            return json.load(f)['marks']
+
+    def tag_tip(self, tag):
+        return self.git('rev-parse', '-q', '--verify', 'refs/tags/%s^{commit}' % tag, check=False)
+
+
+class StaleMarks(StaleMarkCase):
+
+    def test_only_the_marked_unlanded_tree_is_abandoned(self):
+        """The invariant: an UNLANDED tree is abandoned only when a stale mark names it; its
+        unmarked neighbour, as idle and as unlanded, stays as it is."""
+        gone = self.workstream('gone', commits=2)
+        kept = self.workstream('kept')
+        tip, kept_tip = self.git('rev-parse', 'kit/gone'), self.git('rev-parse', 'kit/kept')
+        self.write_marks(self.record('gone', gone))
+        rc, out = self.sweep(apply=True)
+        self.assertEqual(rc, 0, out)
+        self.assertFalse(os.path.exists(gone), out)
+        self.assertNotIn(os.path.normcase(gone), self.registered(), out)
+        self.assertNotIn('kit/gone', self.branches(), out)
+        self.assertEqual(self.tag_tip('archive/gone'), tip, out)
+        message = self.git('cat-file', 'tag', 'archive/gone')
+        self.assertIn('stale (marked ', message)
+        self.assertIn('by coord-test (coordinator)): superseded by kit/other', message)
+        self.assertEqual(self.read_marks(), [], out)
+        self.assertIn('UNLANDED: kit/kept has 1 commit(s)', out)
+        self.assertTrue(os.path.isdir(kept), out)
+        self.assertIn('kit/kept', self.branches(), out)
+        self.assertEqual(self.git('rev-parse', 'kit/kept'), kept_tip)
+        self.assertEqual(self.tag_tip('archive/kept'), '', out)
+
+    def test_a_dry_run_names_the_abandon_and_changes_nothing(self):
+        path = self.workstream('gone')
+        mark = self.record('gone', path)
+        self.write_marks(mark)
+        rc, out = self.sweep()
+        self.assertEqual(rc, 0, out)
+        self.assertIn('would     abandon %s under archive/gone (marked stale ' % path, out)
+        self.assertIn('would abandon 1', out)
+        self.assertTrue(os.path.isdir(path))
+        self.assertIn('kit/gone', self.branches())
+        self.assertEqual(self.tag_tip('archive/gone'), '')
+        self.assertEqual(self.read_marks(), [mark])
+
+    def test_a_moved_tip_voids_the_mark(self):
+        path = self.workstream('gone')
+        mark = self.record('gone', path, at=time.time() + 60)
+        self.write_marks(mark)
+        self.fx.write('more.txt', 'more\n', root=path)
+        self.fx.commit('more', 'more.txt', cwd=path)
+        rc, out = self.sweep(apply=True)
+        self.assertEqual(rc, 0, out)
+        self.assertIn('UNLANDED: kit/gone has 2 commit(s)', out)
+        self.assertIn('its stale mark is void: the tip moved from %s' % mark['tip'][:10], out)
+        self.assertTrue(os.path.isdir(path))
+        self.assertEqual(self.read_marks(), [mark])
+
+    def test_activity_after_the_mark_voids_it(self):
+        path = self.workstream('gone')
+        mark = self.record('gone', path)
+        self.write_marks(mark)
+        later = time.time() + 120
+        os.utime(os.path.join(path, 'gone-0.txt'), (later, later))
+        rc, out = self.sweep(apply=True)
+        self.assertEqual(rc, 0, out)
+        self.assertIn('its stale mark is void: ', out)
+        self.assertIn('gone-0.txt changed at ', out)
+        self.assertTrue(os.path.isdir(path))
+        self.assertIn('kit/gone', self.branches())
+        self.assertEqual(self.read_marks(), [mark])
+
+    def test_a_mark_naming_another_tree_is_void(self):
+        path = self.workstream('gone')
+        self.write_marks(self.record('gone', os.path.join(self.home, 'elsewhere')))
+        rc, out = self.sweep(apply=True)
+        self.assertIn('its stale mark is void: it names the worktree', out)
+        self.assertTrue(os.path.isdir(path))
+
+    def test_under_the_idle_bar_it_waits(self):
+        path = self.workstream('gone')
+        self.write_marks(self.record('gone', path))
+        rc, out = self.sweep(apply=True, now=time.time())
+        self.assertEqual(rc, 0, out)
+        self.assertIn('under the 24 h idle bar', out)
+        self.assertTrue(os.path.isdir(path))
+        self.assertEqual(len(self.read_marks()), 1)
+
+    def test_a_machine_lock_record_keeps_it(self):
+        path = self.workstream('gone')
+        self.write_marks(self.record('gone', path))
+
+        def machine():
+            return [{'repo': 'r', 'slug': 'x', 'id': 7, 'note': 'run in .claude/worktrees/gone'}], None
+        rc, out = self.sweep(apply=True, machine=machine)
+        self.assertEqual(rc, 0, out)
+        self.assertIn('machine lock holder: r/x run 7', out)
+        self.assertTrue(os.path.isdir(path))
+
+    def test_a_git_worktree_lock_keeps_it(self):
+        path = self.workstream('gone')
+        self.write_marks(self.record('gone', path))
+        self.git('worktree', 'lock', '--reason', 'kept', path)
+        self.addCleanup(self.git, 'worktree', 'unlock', path, check=False)
+        rc, out = self.sweep(apply=True)
+        self.assertEqual(rc, 0, out)
+        self.assertIn('locked with `git worktree lock`: kept', out)
+        self.assertTrue(os.path.isdir(path))
+
+    def test_dirt_keeps_it(self):
+        path = self.workstream('gone')
+        self.write_marks(self.record('gone', path, at=time.time() + 60))
+        self.fx.write('wip.txt', 'x\n', root=path)
+        os.utime(os.path.join(path, 'wip.txt'), (time.time() - 60, time.time() - 60))
+        rc, out = self.sweep(apply=True)
+        self.assertIn('uncommitted or untracked files (1): ?? wip.txt', out)
+        self.assertTrue(os.path.isdir(path))
+
+    def test_a_landing_that_starts_mid_sweep_stops_the_abandon(self):
+        path = self.workstream('gone')
+        mark = self.record('gone', path)
+        self.write_marks(mark)
+        lock = os.path.join(self.fx.common_dir(), 'kit-landing.lock')
+
+        def machine():
+            with open(lock, 'w') as f:
+                f.write('{}')
+            return [], None
+        rc, out = self.sweep(apply=True, machine=machine)
+        self.assertEqual(rc, 1, out)
+        self.assertIn('a landing started during the sweep', out)
+        self.assertTrue(os.path.isdir(path))
+        self.assertEqual(self.tag_tip('archive/gone'), '')
+        self.assertEqual(self.read_marks(), [mark])
+
+    def test_an_unreadable_marks_file_abandons_nothing_and_the_landed_sweep_goes_on(self):
+        gone = self.workstream('gone')
+        done = self.landed('done')
+        self.write_marks(text='{"version": 1, "marks": [{"branch": "kit/gone"}]}\n')
+        rc, out = self.sweep(apply=True)
+        self.assertEqual(rc, 1, out)
+        self.assertIn('failed    the stale marks cannot be read (', out)
+        self.assertIn('no marked worktree is abandoned; the landed sweep goes on', out)
+        self.assertIn('UNLANDED: kit/gone', out)
+        self.assertTrue(os.path.isdir(gone))
+        self.assertFalse(os.path.exists(done), out)
+        self.assertIn('removed 1', out)
+
+    def test_a_mark_changed_after_it_was_read_is_skipped(self):
+        path = self.workstream('gone')
+        self.write_marks(self.record('gone', path))
+        real, seen = sweep.sweep_status, []
+
+        def status(ctx, p):
+            seen.append(p)
+            if len(seen) == 2:      # the read just before the abandon: the mark is re-written now
+                self.write_marks(self.record('gone', path, why='another reason'))
+            return real(ctx, p)
+        with mock.patch.object(sweep, 'sweep_status', status):
+            rc, out = self.sweep(apply=True)
+        self.assertEqual(rc, 0, out)
+        self.assertIn('its stale mark changed or was cleared since it was read', out)
+        self.assertTrue(os.path.isdir(path))
+        self.assertEqual(self.tag_tip('archive/gone'), '')
+        self.assertEqual(self.read_marks()[0]['why'], 'another reason')
+
+    def test_a_gone_branchs_mark_is_dropped_under_apply_only(self):
+        path = self.workstream('gone')
+        mark = self.record('gone', path)
+        self.write_marks(mark)
+        self.git('worktree', 'remove', '--force', path)
+        self.git('branch', '-D', 'kit/gone')
+        rc, out = self.sweep()
+        self.assertEqual(rc, 0, out)
+        self.assertIn('would     drop the stale mark of kit/gone: the branch is gone', out)
+        self.assertEqual(self.read_marks(), [mark])
+        rc, out = self.sweep(apply=True)
+        self.assertEqual(rc, 0, out)
+        self.assertIn('dropped   the stale mark of kit/gone: the branch is gone', out)
+        self.assertEqual(self.read_marks(), [])
+
+    def test_a_mark_on_a_branch_with_no_worktree_is_named_for_unmark(self):
+        path = self.workstream('gone')
+        mark = self.record('gone', path)
+        self.write_marks(mark)
+        self.git('worktree', 'remove', '--force', path)
+        rc, out = self.sweep(apply=True)
+        self.assertEqual(rc, 0, out)
+        self.assertIn('note      the stale mark of kit/gone names no worktree', out)
+        self.assertIn('kit/gone --unmark-stale', out)
+        self.assertIn('kit/gone', self.branches())
+        self.assertEqual(self.read_marks(), [mark])
+
+    def test_a_mark_made_from_another_session_and_temp_folder_is_read(self):
+        from kitlib.worktree import marks
+        path = self.workstream('gone')
+        other = tempfile.mkdtemp(prefix='kit-other-temp-')
+        self.addCleanup(gitfixture.rmtree, other)
+        with mock.patch.dict(os.environ, {'AGENT_TEMP': other, 'PM_KIT_SESSION_NAME': 'coord-a',
+                                          'PM_KIT_ROLE': 'coordinator'}):
+            got = marks.mark(path, 'kit/gone', 'superseded', liveness=lambda m, b: (None, 'tip'))
+        self.assertEqual(got.code, 0, got.lines)
+        with mock.patch.dict(os.environ, {'AGENT_TEMP': self.logs, 'PM_KIT_SESSION_NAME': 'sweep'}):
+            # Activity after the mark is judged against the mark's real time: none here.
+            rc, out = self.sweep(apply=True)
+        self.assertEqual(rc, 0, out)
+        self.assertFalse(os.path.exists(path), out)
+        self.assertIn('by coord-a (coordinator)', self.git('cat-file', 'tag',
+                                                           'archive/gone'))
+
+    def test_the_abandon_is_held_to_the_checked_tip(self):
+        path = self.workstream('gone')
+        self.write_marks(self.record('gone', path))
+        real, seen = sweep.sweep_status, []
+
+        def status(ctx, p):
+            seen.append(p)
+            if len(seen) == 2:      # a commit lands on the branch between the checks and the abandon
+                self.fx.write('late.txt', 'late\n', root=path)
+                self.fx.commit('late', 'late.txt', cwd=path)
+            return real(ctx, p)
+        with mock.patch.object(sweep, 'sweep_status', status):
+            rc, out = self.sweep(apply=True)
+        self.assertEqual(rc, 1, out)
+        self.assertIn('not the %s it was checked at' % self.read_marks()[0]['tip'][:10], out)
+        self.assertIn('the stale mark of kit/gone stays', out)
+        self.assertTrue(os.path.isdir(path))
+        self.assertEqual(self.tag_tip('archive/gone'), '')
+
+
+class StaleMarkExempt(StaleMarkCase):
+
+    CONFIG = {'worktree_remove': {'exempt': {'gone': 'kept by ruling X'}}}
+
+    def test_an_exempt_tree_is_never_abandoned(self):
+        path = self.workstream('gone')
+        self.write_marks(self.record('gone', path))
+        rc, out = self.sweep(apply=True)
+        self.assertEqual(rc, 0, out)
+        self.assertIn('exempt (kept by ruling X)', out)
+        self.assertTrue(os.path.isdir(path))
+
+
+class StaleMarkOpenClaim(StaleMarkCase):
+
+    CONFIG = {'backlog': {'store': 'main'}}
+
+    def test_a_claim_in_another_case_keeps_it(self):
+        path = self.workstream('gone')
+        self.fx.write('docs/backlog/T-002.md', 'id: T-002\nstate: pulled\npulled_by: KIT/Gone\n')
+        self.fx.commit('claim', 'docs/backlog/T-002.md')
+        self.fx.git('push', '-q', 'origin', 'main')
+        self.write_marks(self.record('gone', path))
+        rc, out = self.sweep(apply=True)
+        self.assertEqual(rc, 0, out)
+        self.assertIn('a backlog record is still pulled by kit/gone (an open claim): T-002', out)
+        self.assertTrue(os.path.isdir(path))
 
 
 class MachineLockEntries(unittest.TestCase):
