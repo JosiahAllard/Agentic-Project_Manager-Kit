@@ -71,7 +71,7 @@ class StartProcessWorkdir(unittest.TestCase):
         wt = self.w.wt
         self.assertIsNone(self.judge("Start-Process git -ArgumentList 'checkout','main' -WorkingDirectory %s" % wt, wt))
         # from the main checkout, a git started in a worktree acts on the worktree
-        self.assertIsNone(self.judge("Start-Process git -ArgumentList 'commit','-m','x' -WorkingDirectory %s" % wt,
+        self.assertIsNone(self.judge("Start-Process git -ArgumentList 'add','a.py' -WorkingDirectory %s" % wt,
                                      self.w.main))
         self.assertIsNone(self.judge("Start-Process git -ArgumentList 'status' -WorkingDirectory %s" % self.w.main, wt))
 
@@ -94,7 +94,7 @@ class StartProcessWorkdir(unittest.TestCase):
                            ("Start-Process cp -ArgumentList 'a','b' -WorkingDirectory %s" % wt, 'main-checkout')):
             with self.subTest(text):
                 self.assertEqual(verdict(self.judge(text, self.w.main)), ('deny', rule))
-        self.assertIsNone(self.judge("Start-Process git -ArgumentList 'commit','-m','x' -WorkingDirectory %s" % wt,
+        self.assertIsNone(self.judge("Start-Process git -ArgumentList 'add','a.py' -WorkingDirectory %s" % wt,
                                      self.w.main))
 
     def test_the_alternative_aims_the_workdir_at_the_worktree(self):

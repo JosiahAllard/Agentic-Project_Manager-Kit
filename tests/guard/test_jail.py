@@ -200,7 +200,11 @@ class Siblings(Base):
         for text in ('git -C "%s" commit -m x' % W.fwd(self.w.sib), 'git -C "%s" add a.py' % W.fwd(self.w.sib),
                      'cd "%s" && git commit -m x' % W.fwd(self.w.sib)):
             with self.subTest(text):
-                self.allowed(self.run_bash(text))
+                d = self.run_bash(text)
+                if 'commit' in text:
+                    self.jailed(d, 'git-plain-commit')      # the jail passes it; the commit is commit.py's
+                else:
+                    self.allowed(d)
 
     def test_the_main_checkout_stays_outside(self):
         self.jailed(self.write(os.path.join(self.w.main, 'README.md'), env=COORDINATOR, sub=False))
@@ -643,7 +647,7 @@ class ShellForms(Base):
                 self.allowed(self.run_bash(text))
 
     def test_git_in_own_worktree(self):
-        self.allowed(self.run_bash('git commit -m x'))
+        self.jailed(self.run_bash('git commit -m x'), 'git-plain-commit')     # the jail passes it
         self.allowed(self.run_bash('git -C "%s" add a.py' % W.fwd(self.w.wt)))
 
     def test_writes_inside_the_roots(self):
@@ -1160,8 +1164,8 @@ class UnplacedGit(MainGit):
         wt = W.fwd(self.w.wt)
         g = 'git -C "%s" branch -m main old' % wt
         self.judged_as_written([
-            'git -C "%s" commit -m "SetEnvironmentVariable(\'GIT_DIR\', 1)"' % wt,
-            "git -C \"%s\" commit -m 'SetEnvironmentVariable(\"GIT_DIR\", 1)'" % wt,
+            'git -C "%s" commit --dry-run -m "SetEnvironmentVariable(\'GIT_DIR\', 1)"' % wt,
+            "git -C \"%s\" commit --dry-run -m 'SetEnvironmentVariable(\"GIT_DIR\", 1)'" % wt,
             'Write-Host "[Environment]::SetEnvironmentVariable(\'GIT_DIR\',\'x\')"; %s' % g,
             '$s = "SetEnvironmentVariable(\'GIT_INDEX_FILE\'"; %s' % g], tool='PowerShell')
         # the call itself still sets one
@@ -1678,15 +1682,15 @@ class UnplacedGit(MainGit):
 
     def test_script_text_named_in_a_quoted_string_is_not_run(self):
         wt = W.fwd(self.w.wt)
-        for text in ('git -C "%s" commit -m "Handle InvokeScript in the guard"' % wt,
-                     "git -C \"%s\" commit -m 'Read [scriptblock]::Create and NewScriptBlock'" % wt,
-                     'git -C "%s" commit -m "Read [Environment]::SetEnvironmentVariable and InvokeProvider"' % wt):
+        for text in ('git -C "%s" commit --dry-run -m "Handle InvokeScript in the guard"' % wt,
+                     "git -C \"%s\" commit --dry-run -m 'Read [scriptblock]::Create and NewScriptBlock'" % wt,
+                     'git -C "%s" commit --dry-run -m "Read [Environment]::SetEnvironmentVariable and InvokeProvider"' % wt):
             with self.subTest(text):
                 self.allowed(self.git(text, 'worker', tool='PowerShell'))
                 self.allowed(self.marked(text, COORDINATOR, 'PowerShell'))
         # a string that runs a subexpression is code, but script text it builds is not read either
         # (honest mistakes only): the git after it is judged where -C places it
-        text = 'git -C "%s" commit -m "$([scriptblock]::Create($s).Invoke())"; git -C "%s" branch -m main old' % (wt, wt)
+        text = 'git -C "%s" commit --dry-run -m "$([scriptblock]::Create($s).Invoke())"; git -C "%s" branch -m main old' % (wt, wt)
         self.judged_as_written([text], tool='PowerShell')
 
     def test_find_execdir_and_a_filled_in_exec_word_leave_git_unplaceable(self):

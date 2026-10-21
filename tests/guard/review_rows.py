@@ -62,7 +62,8 @@ ROWS = [
     ('variable git subcommand, main role in main', lambda w: bash('git "$SUB" main', w.main), 'deny', 'unreadable', None),
     ('variable git option, main role in main', lambda w: bash('git reset $MODE', w.main), 'deny', 'unreadable', None),
     ('variable git subcommand, main role in no checkout', lambda w: bash('git $SUB', w.plain), None, None, None),
-    ('variable commit message is a value, subagent', lambda w: bash('git commit -m "$MSG"', w.wt, sub=True), None, None, None),
+    ('variable commit message is a value, subagent', lambda w: bash('git commit --dry-run -m "$MSG"', w.wt, sub=True), None, None,
+     None),
     ('variable path after --, main role in main', lambda w: bash('git add -- "$f"', w.main), None, None, None),
 
     # ---------------------------------------------------------------- 5: cmd //c, //k, for loops

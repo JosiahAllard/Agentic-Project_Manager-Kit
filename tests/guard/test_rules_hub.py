@@ -937,7 +937,7 @@ class ParsedRuns(Hub):
         # python's own -m the parser reads: a parsed run of an owner verb; commit.py's -m message
         # after its script word is not python's
         self.rows((
-            (bash, 'git commit -m "Hub store: import the todos"'),
+            (bash, 'git commit --dry-run -m "Hub store: import the todos"'),
             (bash, 'python Z:/k/tools/commit.py -C $PWD -m "Hub store: x" --model M kitlib/hubsite/store.py'),
         ), False)
         self.rows((
