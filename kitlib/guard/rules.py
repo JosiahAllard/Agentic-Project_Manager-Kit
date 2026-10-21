@@ -41,6 +41,10 @@ Rules, in the order they are checked:
                    another program) is not read
   ledger          an edit of the machine config's ledger_path, by anyone
   lock-state       an agent session's edit of a file in the machine lock's state folder
+  machine-config   an edit of a file in the PM repository's machine config folder
+                   (<pointer>/.pm-kit) or in a .pm-kit folder at the top of a checkout, in any
+                   session but the owner's own (its hub folder is hub-secrets', the owner's
+                   delegation list owner-delegations')
   kit-json         an agent session's edit of a .kit.json in a checkout
   generated-file   an edit of a file tools/render_content.py writes in a kit checkout (a host's
                    agents, skills copies, plugin manifests: kitlib.guard.generated), in any session
@@ -82,6 +86,7 @@ import re
 
 from kitlib import agentname
 from kitlib import config as kconfig
+from kitlib.config import user as kuser
 from kitlib import kitroot
 from kitlib import pmdata
 from kitlib.git import repo
@@ -606,29 +611,58 @@ def hub_real(path):
         return None
 
 
+def hub_secret_folders(ctx):
+    """[(path, real)]: the hub's token folders, each as written and as jail.real gives it. The
+    one beside the machine config the guard reads (kitlib.guard.hub.secret_folder), and `hub` in
+    the PM repository's machine config folder (jail.pointer_config_dir), where the owner's
+    machine setup copies the hub's files before the hub reads them from there; a folder named
+    twice is listed once, and one jail.real cannot take is left out."""
+    out = []
+    pointer = jail.pointer_config_dir(ctx)
+    folders = [hubg.secret_folder(ctx.config_location().new)]
+    if pointer:
+        folders.append(os.path.join(pointer, hubg.FOLDER_NAME))
+    for p in folders:
+        r = hub_real(p)
+        if r and r not in [x[1] for x in out]:
+            out.append((p, r))
+    return out
+
+
 class HubPlaces(object):
-    """The hub's folders for one guard call: `secret` the token folder and `stores` the store
-    folders (kitlib.guard.hub.stores), each as written and as jail.real gives it."""
+    """The hub's folders for one guard call: `secrets` the token folders (hub_secret_folders)
+    and `stores` the store folders (kitlib.guard.hub.stores), each as written and as jail.real
+    gives it."""
 
     def __init__(self, ctx):
-        self.secret_path = hubg.secret_folder(ctx.config_location().new)
-        self.secret = hub_real(self.secret_path)
+        self.secrets = hub_secret_folders(ctx)
         self.store_paths = hubg.stores(hub_config(ctx), ctx.pm_data_path())
         self.stores = [s for s in (hub_real(p) for p in self.store_paths) if s]
 
-    def where(self, path):
-        """'secret', 'store' or None for the absolute `path` (real()ed here)."""
+    def secret_of(self, path):
+        """The token folder (as written) the absolute `path` is in, or None."""
         here_ = hub_real(path)
         if here_ is None:
             return None
-        if self.secret and jail.inside(here_, self.secret):
+        for p, r in self.secrets:
+            if jail.inside(here_, r):
+                return p
+        return None
+
+    def where(self, path):
+        """'secret', 'store' or None for the absolute `path` (real()ed here)."""
+        if self.secret_of(path):
             return 'secret'
-        if any(jail.inside(here_, s) for s in self.stores):
+        here_ = hub_real(path)
+        if here_ is not None and any(jail.inside(here_, s) for s in self.stores):
             return 'store'
         return None
 
-    def label(self, where):
-        return 'the hub token folder %s' % quote(self.secret_path) if where == 'secret' else 'the hub store'
+    def label(self, where, path):
+        """What a refusal names for `path`, which where() placed at `where`."""
+        if where == 'secret':
+            return 'the hub token folder %s' % quote(self.secret_of(path))
+        return 'the hub store'
 
 
 def hub_session(event, ctx):
@@ -657,7 +691,7 @@ def hub_secret_edit(event, ctx, target, role, what):
     where = places.where(target)
     if where is None:
         return None
-    return hub_secrets_refusal(event, ctx, role, '%s is in %s' % (what, places.label(where)))
+    return hub_secrets_refusal(event, ctx, role, '%s is in %s' % (what, places.label(where, target)))
 
 
 def hub_secret_read(event, ctx, cwd, role):
@@ -667,13 +701,18 @@ def hub_secret_read(event, ctx, cwd, role):
     unless its file filter can take in none of the folder's files (hub.filter_reaches). A search
     with no filter is refused at every parent: any of its output modes, counts and file lists too,
     would answer for a token's text. A names search (Glob) is not hooked (it reads no token's text; docs/guard.md
-    "Hub secrets")."""
+    "Hub secrets"). Each token folder (hub_secret_folders) is held."""
     if is_owner_session(event, ctx):
         return None
-    secret_path = hubg.secret_folder(ctx.config_location().new)
-    secret = hub_real(secret_path)
-    if not secret:
-        return None
+    for secret_path, secret in hub_secret_folders(ctx):
+        d = hub_folder_read(event, ctx, cwd, role, secret_path, secret)
+        if d:
+            return d
+    return None
+
+
+def hub_folder_read(event, ctx, cwd, role, secret_path, secret):
+    """hub_secret_read for the one token folder `secret_path` (real()ed: `secret`)."""
     params = event.params if isinstance(event.params, dict) else None
     target = event.path if isinstance(event.path, str) else None
     tool = event.tool or 'a read'
@@ -808,7 +847,7 @@ def hub_secret_shell(ctx, cmd, inv, places):
                 continue
             p_ = places()
             if p_.where(p) == 'secret':
-                return 'reaches %s (%s)' % (p_.label('secret'), w.text)
+                return 'reaches %s (%s)' % (p_.label('secret', p), w.text)
     for text in inline_code(cmd, inv, lambda c: hub_run_verb(c) == ''):
         m = hubg.INLINE_RE.search(text)
         if m:
@@ -1082,7 +1121,8 @@ def edit_target(event, ctx, target, cwd, role, what, unknown_why=None, rewrite=N
     d = ledger_rule(ctx, target, role, what) or pm_data_unknown(ctx, target, cwd, role, what) or \
         lock_state(event, ctx, target, role, what) or hub_secret_edit(event, ctx, target, role, what) or \
         delegations_edit(event, ctx, target, role, what, stand_in) or \
-        kit_json(event, ctx, target, role, what) or gate_result(event, ctx, target, role, what) or \
+        machine_config(event, ctx, target, role, what) or kit_json(event, ctx, target, role, what) or \
+        gate_result(event, ctx, target, role, what) or \
         generated_file(ctx, target, role, what) or backlog_edit(event, ctx, target, role, what)
     if d:
         return d
@@ -1227,6 +1267,60 @@ def kit_json(event, ctx, target, role, what):
                   'write among them (guard.data_roots), and only the owner changes it (owner.paths). Ask the '
                   'coordinator to take the change to the owner. To read it:' % what,
                   'python -m json.tool %s' % quote(target))
+
+
+MACHINE_CONFIG = 'machine-config'
+MACHINE_CONFIG_WHY = ('a .pm-kit folder at the top of a checkout is the machine config folder the PM repository '
+                      'carries (docs/machine-setup.md): its config sets the guard\'s rules for every session on this '
+                      'machine and its hub folder holds the hub\'s tokens, so only the owner changes it.')
+
+
+def machine_config_folder(ctx, target):
+    """The machine config folder the write target `target` is or lies in, as written, or None:
+    the PM repository's, <pointer>/.pm-kit (jail.pointer_config_dir, compared as jail.real gives
+    both), else a folder named .pm-kit (kitlib.config.user.DIR_NAME, case ignored) at the top of
+    the checkout git places the target in (Ctx.place: a main checkout or a linked worktree),
+    whatever the pointer says. A .pm-kit folder deeper in a checkout, a folder that only holds
+    one, and one outside git are not: the home folders are the write jail's (jail.touches_config),
+    and a delete of a folder that holds the owner's delegation list is that rule's."""
+    t = hub_real(target)
+    if t is None:
+        return None
+    folder = jail.pointer_config_dir(ctx)
+    r = hub_real(folder) if folder else None
+    if r and jail.inside(t, r):
+        return folder
+    place = ctx.place(target)
+    if place.kind not in (repo.MAIN, repo.LINKED) or not place.top:
+        return None
+    top = hub_real(place.top)
+    if top is None or t == top or not jail.inside(t, top):
+        return None
+    first = t[len(top.rstrip('\\/')) + 1:].split(os.sep)[0]
+    if first.lower() != kuser.DIR_NAME.lower():
+        return None
+    return os.path.join(place.top, kuser.DIR_NAME)
+
+
+def machine_config(event, ctx, target, role, what):
+    """machine-config: an edit of a file in the PM repository's machine config folder, or in a
+    .pm-kit folder at the top of a checkout (machine_config_folder), in any session but the
+    owner's own. The hub's token folder in it is hub-secrets' and the owner's delegation list
+    its own rule's, both checked first (edit_target)."""
+    if not target or is_owner_session(event, ctx):
+        return None
+    folder = machine_config_folder(ctx, target)
+    if folder is None:
+        return None
+    return machine_config_refusal(event, ctx, role, '%s is in %s' % (what, quote(folder)), folder)
+
+
+def machine_config_refusal(event, ctx, role, what, folder):
+    """The machine-config refusal of `what`, a change in the machine config folder `folder`
+    (machine_config; kitlib.guard.delegfile's wildcard and git checks)."""
+    return refuse(MACHINE_CONFIG, role, '%s: %s This session is %s. Ask the owner (through the PM) to make the '
+                  'change. To list the folder:' % (what, MACHINE_CONFIG_WHY, hub_session(event, ctx)),
+                  'Get-ChildItem -Force %s' % quote(folder))
 
 
 def generated_file(ctx, target, role, what):
