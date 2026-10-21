@@ -446,9 +446,17 @@ class ArchiveHoles(ArchiveWorld):
                 self.refused_by(self.pm(bash(text, self.w.plain)), 'write-jail', 'tar')
 
     def test_a_relative_tar_folder_is_read_from_the_one_before_it(self):
-        # -C <base> -C repo extracts into <base>/repo, the main checkout; read against the cwd it was plain/repo
+        # -C <scratch> -C ../../repo extracts into <base>/repo, the main checkout; read against the
+        # cwd (<scratch>/a/b) it would be <scratch>/repo, and each -C alone passes there
+        deep = os.path.join(self.w.temp, 'x', 'a', 'b')
+        for alone in ('tar -x -C %s' % self.scratch, 'tar -x -C ../../repo'):
+            self.assertIsNone(self.pm(bash(alone, deep)), alone)
+        text = 'tar -x -C %s -C ../../repo' % self.scratch
+        self.refused_by(self.pm(bash(text, deep)), 'write-jail', 'tar')
+        # -C <base> also writes <base>, the folder that holds the fixture home and so the owner's
+        # delegation list: that rule refuses it first (docs/guard.md "Owner delegation list")
         text = 'tar -x -C %s -C repo' % W.fwd(self.w.base)
-        self.refused_by(self.pm(bash(text, self.w.plain)), 'write-jail', 'tar')
+        self.refused_by(self.pm(bash(text, self.w.plain)), 'owner-delegations', 'tar')
         self.assertIsNone(self.pm(bash('tar -x -C %s -C sub' % self.scratch, self.w.plain)))
 
     def test_archive_forms_the_guard_cannot_read_are_no_read(self):
