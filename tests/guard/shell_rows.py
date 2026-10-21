@@ -8,7 +8,7 @@ from .world import bash, ps
 
 BS = chr(92)
 LOCK = 'python "{kit}/tools/machine_lock.py" run'
-WIP = 'git -C "{wt}" commit -m "WIP: <what>" -- <each path you changed>'     # git-stash-shared's alternative
+WIP = 'git -C "{wt}" add -- <each path you changed>'     # git-stash-shared's alternative; the commit is in its prose
 
 
 def win(*parts):
@@ -463,6 +463,11 @@ ROWS = [
     ('subagent stash branch naming the entry', lambda w: bash('git stash branch kit/x stash@{1}', w.wt, sub=True),
      None, None, None),
     ('subagent tagged stash push, PowerShell', lambda w: ps('git stash push -u -m tag-1', w.wt, sub=True), None, None, None),
+    # the alternative's two steps pass in an agent's own worktree, a new file's path included
+    ('subagent stages a new file for a WIP commit', lambda w: bash('git -C "%s" add -- new.py' % W.fwd(w.wt), w.wt, sub=True),
+     None, None, None),
+    ('subagent WIP commit of the staged paths', lambda w: ps('git -C "%s" commit -m "WIP: x" -- new.py a.py' % w.wt, w.wt,
+                                                             sub=True), None, None, None),
     ('owner session bare stash in a worktree', lambda w: bash('git stash', w.wt), None, None, None),
     ('owner session stash pop in a worktree', lambda w: ps('git stash pop', w.wt), None, None, None),
 ]

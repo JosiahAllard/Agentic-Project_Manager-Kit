@@ -46,8 +46,11 @@ class Sessions(unittest.TestCase):
         d = self.stash({}, sub=True, cmd='git stash pop')
         self.assertIn('`git stash pop` adds to or takes from the stash stack every worktree', d.reason)
         self.assertIn('docs/gate.md "The stash guard"', d.reason)
-        self.assertIn('Instead: git -C "%s" commit -m "WIP: <what>" -- <each path you changed> [kit guard:'
-                      % W.fwd(self.w.wt), d.reason)
+        wt = W.fwd(self.w.wt)
+        # a WIP commit of a path git does not know fails, so the alternative stages first (a new file too)
+        self.assertIn('stage each path you changed, a new file too, then commit them with git -C "%s" commit -m '
+                      '"WIP: <what>" -- <each path you changed>, each in its own call.' % wt, d.reason)
+        self.assertIn('Instead: git -C "%s" add -- <each path you changed> [kit guard:' % wt, d.reason)
 
 
 class MainCheckoutUnchanged(unittest.TestCase):

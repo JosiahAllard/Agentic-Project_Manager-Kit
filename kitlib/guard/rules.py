@@ -3875,10 +3875,13 @@ def git_stash_shared(event, ctx, cmd, gc, role, place):
     if (verb is None or (verb.text == 'push' and not verb.dyn)) and \
             ('m' in short or any(n and 'message'.startswith(n) for n in longs)):
         return None                             # a tagged push: its owner finds it again by the tag
+    top = quote(place.top)
     return refuse('git-stash-shared', role, '`%s` adds to or takes from the stash stack every worktree of this '
                   'repository shares; while it holds an entry every gate and landing refuses (docs/gate.md "The '
-                  'stash guard"). Set the work aside as a WIP commit on your branch:' % bare(cmd),
-                  'git -C %s commit -m "WIP: <what>" -- <each path you changed>' % quote(place.top))
+                  'stash guard"). Set the work aside as a WIP commit on your branch: stage each path you changed, '
+                  'a new file too, then commit them with git -C %s commit -m "WIP: <what>" -- <each path you '
+                  'changed>, each in its own call. To stage:' % (bare(cmd), top),
+                  'git -C %s add -- <each path you changed>' % top)
 
 
 def git_main_rules(event, ctx, cmd, inv, gc, cwd, role, place):
