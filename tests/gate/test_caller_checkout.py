@@ -598,6 +598,10 @@ class RunByPath(unittest.TestCase):
         code, out = self.gate(self.wt, export)
         self.assertEqual(code, G.REFUSED, out)
         self.assertIn(advice(self.wt, RAN_FROM).lower(), out.lower())
+        # the printed command for "this gate.py" names the main checkout's gate.py, never the
+        # export's, which a later prune may remove
+        self.assertIn(advice(self.main, THIS_GATE).lower(), out.lower())
+        self.assertNotIn(os.path.join(export, 'tools', 'gate.py').lower(), out.lower())
         self.assertNotIn('RUN   unit', out)
 
 
