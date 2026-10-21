@@ -507,6 +507,35 @@ class ReviewFixTest(_Base):
         self.assertTrue(any('unexpected ValueError during git push' in l for l in out.lines),
                         out.lines)
 
+    def pushed(self, push):
+        """init with its git push replaced by `push()` (it may raise)."""
+        real = pminit._git
+
+        def git(cwd, *args, **kw):
+            return push() if args[:1] == ('push',) else real(cwd, *args, **kw)
+        with mock.patch.object(pminit, '_git', git):
+            return self.init(url=self.private)
+
+    def assertEndsWithThePointerStep(self, out):
+        # All else is made, so the owner's step that makes pm_data is named here too (ruling P).
+        self.assertEqual(out.lines[-1], pminit.pointer_line(self.data))
+        self.assertEqual(out.lines.count(out.lines[-1]), 1, out.lines)
+
+    def test_a_failed_push_ends_with_the_pointer_step_after_the_recover_steps(self):
+        out = self.pushed(lambda: (1, '', 'denied'))
+        self.assertEqual(out.code, pminit.PUSH_FAILED, out.lines)
+        self.assertEndsWithThePointerStep(out)
+        # init --adopt (step 6) refuses once a pointer is set, so the pointer step comes after
+        recover = [l for l in out.lines if l.startswith('recover   if ')]
+        self.assertIn('before the pointer step', recover[0])
+
+    def test_a_push_interrupted_by_ctrl_c_ends_with_the_pointer_step(self):
+        def interrupt():
+            raise KeyboardInterrupt
+        out = self.pushed(interrupt)
+        self.assertEqual(out.code, pminit.INTERRUPTED, out.lines)
+        self.assertEndsWithThePointerStep(out)
+
     def test_every_matching_insteadof_rule_is_compared(self):
         """Re-review 1: two rules with the same prefix; the second names the public remote."""
         harmless = os.path.join(self.repo.base, 'elsewhere.git')

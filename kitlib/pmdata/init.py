@@ -34,7 +34,7 @@
 
 Exit codes: OK 0; REFUSED 1 (nothing changed); CONFIG 2 (a kit or machine configuration that
 cannot be read); PUSH_FAILED 3 (all made locally, the push was tried and failed; the lines say
-how to recover); PARTIAL 4 (stopped part-way: the lines name what was made, and `--adopt`
+how to recover, then the pointer step); PARTIAL 4 (stopped part-way: the lines name what was made, and `--adopt`
 finishes it; a failure before anything was changed is REFUSED); INTERRUPTED 130 (Ctrl+C, with
 the lines made so far). An unexpected error (not a git failure this module names) in the writes or
 the push is caught like a failed write: PARTIAL once a write started, else REFUSED with its text;
@@ -570,10 +570,12 @@ def _apply(p, lines):
 def recover_steps(top, path, branch, remote, common):
     """The lines naming, for the owner to run (this tool runs none of them), how to drop the new
     local data branch and take the private remote's own instead, when the remote already holds a
-    different one."""
+    different one. They come before the owner's pointer step (pointer_line), which init refuses
+    after."""
     return [
         'recover   if %s holds the real %s, drop the new local one and adopt it (run these '
-        'yourself, in %s; the tool does not):' % (remote, branch, top),
+        'yourself, in %s; the tool does not; all of them before the pointer step, since init '
+        '--adopt refuses once a pointer is set):' % (remote, branch, top),
         '            1. git worktree unlock "%s"' % path,
         '            2. git worktree remove "%s"' % path,
         '            3. git branch -D %s' % branch,
@@ -625,6 +627,7 @@ def init(root, path, branch=pmdata.DEFAULT_BRANCH, remote=pmdata.DEFAULT_REMOTE,
         rc, _out, err = _git(p.top, 'push', p.remote, spec, timeout=PUSH_TIMEOUT)
     except KeyboardInterrupt:
         lines.append('INTERRUPTED during git push %s %s; everything else is made' % (p.remote, spec))
+        lines.append(pointer_line(p.path))
         return Outcome(INTERRUPTED, lines)
     except Exception as e:      # everything else is made; whether the push went is not known
         lines.append('FAILED: unexpected %s during git push %s %s: %s; everything else is made'
@@ -641,6 +644,7 @@ def init(root, path, branch=pmdata.DEFAULT_BRANCH, remote=pmdata.DEFAULT_REMOTE,
                      % (p.remote, spec, p.remote, p.branch, p.remote, p.branch, p.remote,
                         p.branch))
         lines.extend(recover_steps(p.top, p.path, p.branch, p.remote, p.common))
+        lines.append(pointer_line(p.path))
         return Outcome(PUSH_FAILED, lines)
     lines.append('push      %s to %s' % (spec, p.remote))
     lines.append(pointer_line(p.path))
