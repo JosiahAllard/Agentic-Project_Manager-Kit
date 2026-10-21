@@ -5137,8 +5137,8 @@ def data_copy(event, ctx, where, role, what):
     """A push or send-pack (`what`) from a repository without a PM data record of its own, when
     the machine config names pm_data but the guard cannot read the machine's record, in every
     session but the owner's own: it fails closed, so while the data worktree folder is deleted
-    every such push is denied until pm_data.py init --adopt re-adds it (docs/pm-data-branch.md
-    "Failure modes"). Whether the repository holds a copy of the data (its root commit, a shallow
+    every such push is denied until the owner re-adds it with git (docs/pm-data-branch.md
+    "Failure modes"; init refuses while the PM-repo pointer is set). Whether the repository holds a copy of the data (its root commit, a shallow
     clone) is not read: the guard catches honest mistakes, not evasion."""
     if is_owner_session(event, ctx) or not where:
         return None
@@ -5148,13 +5148,15 @@ def data_copy(event, ctx, where, role, what):
     if root is None and why is None:
         return None                             # the machine config names no pm_data
     if root is None:
-        path = ctx.pm_data_path()
+        path = ctx.pm_data_path() or ctx.pm_repo_pointer()
+        path = quote(path) if path else '"<pm_data.path>"'
         return refuse('git-push-pmdata', role, '%s: the repository %s has no %s of its own, and the guard cannot read '
                       'the machine\'s PM data record to tell whether it holds PM data (%s), so it fails closed. When '
-                      'the data worktree folder was deleted (docs/pm-data-branch.md "Failure modes"), pm_data.py init '
-                      '--adopt re-adds it:' % (what, fwd(where), pmdata.FILE_NAME, why),
-                      'python %s init --adopt --path %s' % (kit_tool(ctx, 'pm_data'),
-                                                            quote(path) if path else '"<pm_data.path>"'))
+                      'the data worktree folder was deleted (docs/pm-data-branch.md "Failure modes"), the owner '
+                      're-adds it from the PM repository\'s main checkout, one git command at a time (pm_data.py init '
+                      'refuses while the PM-repo pointer is set):' % (what, fwd(where), pmdata.FILE_NAME, why),
+                      'git -C "<PM repo main checkout>" worktree unlock %s, then worktree remove %s, worktree add '
+                      '%s <data branch>, worktree lock --reason "PM data" %s' % (path, path, path, path))
     return None
 
 
