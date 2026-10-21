@@ -586,16 +586,17 @@ HUB_OWNER_WHY = ('answering, closing, submitting, sending and approving on the A
 
 def hub_config(ctx):
     """The machine config's `hub` object: the strict read's, else (a config the strict read
-    refuses) the file's own JSON, else {}. Its store and ports are read even from a config with
-    a fault elsewhere."""
+    refuses) its file's own JSON (the PM repository's local.json, kitlib.config.user LOCAL_KEYS),
+    else {}. Its store and ports are read even from a config with a fault elsewhere."""
     user = ctx.user()
     obj = user.get('hub')
     if isinstance(obj, dict):
         return obj
     if not user.get('error'):
         return {}
+    loc = ctx.config_location()
     try:
-        with open(ctx.config_location().path, encoding='utf-8-sig') as f:
+        with open(loc.local or loc.path, encoding='utf-8-sig') as f:
             data = json.loads(f.read())
     except (OSError, ValueError, UnicodeDecodeError):
         return {}
@@ -612,14 +613,18 @@ def hub_real(path):
 
 
 def hub_secret_folders(ctx):
-    """[(path, real)]: the hub's token folders, each as written and as jail.real gives it. The
-    one beside the machine config the guard reads (kitlib.guard.hub.secret_folder), and `hub` in
-    the PM repository's machine config folder (jail.pointer_config_dir), where the owner's
-    machine setup copies the hub's files before the hub reads them from there; a folder named
-    twice is listed once, and one jail.real cannot take is left out."""
+    """[(path, real)]: the hub's token folders, each as written and as jail.real gives it. `hub`
+    in the home folder's machine config folder (kitlib.config.user.DIR_NAME), where the hub kept
+    them before the move and the move leaves its source; the one beside the machine config the
+    guard reads (kitlib.guard.hub.secret_folder of Location.new, where kitlib.hubsite.auth.folder
+    finds them); and `hub` in the PM repository's machine config folder
+    (jail.pointer_config_dir), where the owner's machine setup copies the hub's files before the
+    hub reads them from there. A folder named twice is listed once, and one jail.real cannot take
+    is left out."""
     out = []
     pointer = jail.pointer_config_dir(ctx)
-    folders = [hubg.secret_folder(ctx.config_location().new)]
+    folders = [os.path.join(ctx.home, kuser.DIR_NAME, hubg.FOLDER_NAME),
+               hubg.secret_folder(ctx.config_location().new)]
     if pointer:
         folders.append(os.path.join(pointer, hubg.FOLDER_NAME))
     for p in folders:
