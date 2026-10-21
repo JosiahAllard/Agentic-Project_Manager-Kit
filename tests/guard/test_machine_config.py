@@ -179,5 +179,94 @@ class ByName(Base):
             self.assert_refused(payload, name)
 
 
+class Wildcards(Base):
+    """A wildcard write target whose literal folder is a machine config folder (T9)."""
+
+    def assert_not_this_rule(self, payload_of, label, sessions=SESSIONS + (OWNER,)):
+        for environ, sub in sessions:
+            with self.subTest(label, environ=environ, sub=sub):
+                d = self.decide(payload_of(sub), environ)
+                self.assertTrue(d is None or d.rule != RULE, d and d.reason)
+
+    def test_a_wildcard_in_a_checkout_top_folder_is_held(self):
+        payloads = (
+            ('rm', lambda sub: bash('rm .pm-kit/c*', self.w.wt, sub)),
+            ('rm -r', lambda sub: bash('rm -rf .PM-KIT/hub/*', self.w.wt, sub)),
+            ('Remove-Item', lambda sub: ps('Remove-Item .pm-kit\\*', self.w.wt, sub)),
+        )
+        for name, payload in payloads:
+            self.assert_refused(payload, name)
+        self.assert_not_this_rule(payloads[0][1], 'owner', sessions=(OWNER,))
+
+    def test_a_wildcard_in_the_pointer_folder_is_held(self):
+        self.pointer = self.w.plain
+        folder = os.path.join(self.w.plain, '.pm-kit')
+        write(os.path.join(folder, 'config.json'))
+        self.assert_refused(lambda sub: bash('rm %s/c*.json' % W.fwd(folder), self.w.plain, sub), 'rm')
+        self.assert_refused(lambda sub: ps('Remove-Item "%s\\c*"' % folder, self.w.plain, sub), 'Remove-Item')
+        d = self.decide(bash('rm %s/c*.json' % W.fwd(folder), self.w.plain, True))
+        self.assertIn('a wildcard in', d.reason)
+        self.assertTrue(d.instead.startswith('Get-ChildItem -Force "'), d.instead)
+
+    def test_a_wildcard_elsewhere_is_not_this_rule(self):
+        for text in ('rm docs/*.md', 'rm sub/.pm-kit/*', 'rm .pm-kit*.json'):
+            self.assert_not_this_rule(lambda sub, t=text: bash(t, self.w.wt, sub), text)
+
+    def test_a_wildcard_that_can_match_the_delegation_list_keeps_its_rule(self):
+        self.pointer = self.w.data
+        write(os.path.join(self.w.data, '.pm-kit', 'owner-delegations.json'))
+        self.assert_refused(lambda sub: bash('rm .pm-kit/*', self.w.data, sub), 'rm', rule=delegfile.RULE)
+        self.assert_refused(lambda sub: bash('rm .pm-kit/c*', self.w.data, sub), 'rm c*')
+
+
+class PointerGit(Base):
+    """git run in the pointer's work tree whose pathspec lands in <pointer>/.pm-kit (T10)."""
+
+    REFUSED = (
+        'checkout HEAD~1 -- .pm-kit/config.json', 'rm .pm-kit/config.json', 'rm -r --cached .pm-kit/sub',
+        'mv .pm-kit/config.json x.json', 'restore .pm-kit/local.json', 'restore -s HEAD~1 -W .pm-kit/config.json',
+        'checkout-index -f .pm-kit/config.json', 'clean -f .pm-kit/sub', 'clean -fdx .pm-kit/sub',
+        'rm ":(top).pm-kit/config.json"',
+    )
+    OPEN = (
+        'restore --staged .pm-kit/config.json', 'clean -n .pm-kit', 'clean --dry-run -f .pm-kit',
+        'rm docs/x.md', 'checkout -- docs/x.md', 'checkout main', 'add .pm-kit/config.json',
+        'log -- .pm-kit', 'rm ":!.pm-kit" docs',
+    )
+
+    def setUp(self):
+        super(PointerGit, self).setUp()
+        self.pointer = self.w.data
+
+    def assert_not_this_rule(self, payload_of, label, sessions=SESSIONS + (OWNER,)):
+        for environ, sub in sessions:
+            with self.subTest(label, environ=environ, sub=sub):
+                d = self.decide(payload_of(sub), environ)
+                self.assertTrue(d is None or d.rule != RULE, d and d.reason)
+
+    def test_git_that_changes_a_file_of_the_folder_is_held(self):
+        data = W.fwd(self.w.data)
+        for rest in self.REFUSED:
+            self.assert_refused(lambda sub, r=rest: bash('git %s' % r, self.w.data, sub), 'in: ' + rest)
+            self.assert_refused(lambda sub, r=rest: bash('git -C %s %s' % (data, r), self.w.wt, sub), '-C: ' + rest)
+        d = self.decide(bash('git rm .pm-kit/config.json', self.w.data, True))
+        self.assertIn('changes a file in', d.reason)
+
+    def test_a_pathspec_the_other_rules_place_keeps_their_rule(self):
+        # the whole folder holds the delegation list; the hub folder is hub-secrets'
+        for rest, rule in (('rm -r --cached .pm-kit', delegfile.RULE), ('clean -fdx .pm-kit', delegfile.RULE),
+                           ('clean -f .pm-kit/hub', 'hub-secrets')):
+            self.assert_refused(lambda sub, r=rest: bash('git %s' % r, self.w.data, sub), rest, rule=rule)
+
+    def test_the_owner_may_run_it(self):
+        for rest in self.REFUSED:
+            self.assert_not_this_rule(lambda sub, r=rest: bash('git %s' % r, self.w.data, sub), rest,
+                                      sessions=(OWNER,))
+
+    def test_other_git_in_the_pointer_tree_is_not_this_rule(self):
+        for rest in self.OPEN:
+            self.assert_not_this_rule(lambda sub, r=rest: bash('git %s' % r, self.w.data, sub), rest)
+
+
 if __name__ == '__main__':
     unittest.main()

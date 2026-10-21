@@ -1308,9 +1308,14 @@ def machine_config(event, ctx, target, role, what):
     folder = machine_config_folder(ctx, target)
     if folder is None:
         return None
-    return refuse(MACHINE_CONFIG, role, '%s is in %s: %s This session is %s. Ask the owner (through the PM) to '
-                  'make the change. To list the folder:' % (what, quote(folder), MACHINE_CONFIG_WHY,
-                                                            hub_session(event, ctx)),
+    return machine_config_refusal(event, ctx, role, '%s is in %s' % (what, quote(folder)), folder)
+
+
+def machine_config_refusal(event, ctx, role, what, folder):
+    """The machine-config refusal of `what`, a change in the machine config folder `folder`
+    (machine_config; kitlib.guard.delegfile's wildcard and git checks)."""
+    return refuse(MACHINE_CONFIG, role, '%s: %s This session is %s. Ask the owner (through the PM) to make the '
+                  'change. To list the folder:' % (what, MACHINE_CONFIG_WHY, hub_session(event, ctx)),
                   'Get-ChildItem -Force %s' % quote(folder))
 
 
