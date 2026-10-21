@@ -83,7 +83,7 @@ def planner(args, ctx):
         body = pmod.read_body_file(args.body_file) if args.body_file else None
         changes = set_changes(args)
         return lambda s: pmod.plan_set(s, ctx, args.id, changes, args.unset, args.ruling, body,
-                                       args.hold_ruling)
+                                       args.hold_ruling, role_checked=True)
     if v == 'block':
         return lambda s: pmod.plan_block(s, ctx, args.id, args.on, args.owner_ask, args.ruling,
                                          reason=args.reason)
@@ -97,15 +97,18 @@ def planner(args, ctx):
     if v == 'release':
         return lambda s: pmod.plan_release(s, ctx, args.id, args.reason)
     if v == 'close':
-        return lambda s: pmod.plan_close(s, ctx, args.id, args.reason, args.ruling)
+        return lambda s: pmod.plan_close(s, ctx, args.id, args.reason, args.ruling,
+                                          role_checked=True)
     if v == 'set-status':
         return lambda s: pmod.plan_set_status(s, ctx, args.id, args.status, args.q)
     if v == 'unpark':
         return lambda s: pmod.plan_unpark(s, ctx, args.id, args.ruling)
     if v == 'retire':
-        return lambda s: pmod.plan_retire(s, ctx, args.id, args.why, args.ruling)
+        return lambda s: pmod.plan_retire(s, ctx, args.id, args.why, args.ruling,
+                                           role_checked=True)
     if v == 'delete':
-        return lambda s: pmod.plan_delete(s, ctx, args.id, args.why, args.ruling)
+        return lambda s: pmod.plan_delete(s, ctx, args.id, args.why, args.ruling,
+                                           role_checked=True)
     if v == 'clear-review':
         return lambda s: pmod.plan_clear_review(s, ctx, args.id, args.reason)
     # The caller's mistake, so Usage (errors.py); raised here, before any plan could run.

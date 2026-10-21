@@ -80,6 +80,28 @@ class Sort(unittest.TestCase):
         self.assertEqual(policy.sort('frobnicate'), [])        # no row names it
 
 
+class TopPrice(unittest.TestCase):
+    """policy.price_is_top: the price rows plan_set lifts its ruling gate for once the role check
+    ran are the ones only the owner and the PM may take."""
+
+    def test_the_lifted_rows_are_the_top_rows(self):
+        for name in policy.TOP_PRICE_ROWS:
+            self.assertEqual(roles.ACTIONS[name].allowed, roles.TOP, name)
+        self.assertNotIn(roles.ACTIONS['set-price'].allowed, (roles.TOP,))
+
+    def test_which_prices_are_top(self):
+        agent = record(priority='3', priority_by='agent')
+        owner = record(priority='3', priority_by='owner', priority_ruling='R-9001')
+        hold = record(priority='-1', priority_by='-', owner_ask='which one?')
+        self.assertFalse(policy.price_is_top(['2'], agent))
+        self.assertTrue(policy.price_is_top(['1'], agent))
+        self.assertTrue(policy.price_is_top(['-1'], agent))
+        self.assertTrue(policy.price_is_top(['4'], owner))
+        self.assertTrue(policy.price_is_top(['-'], hold))
+        self.assertTrue(policy.price_is_top(['2'], None))       # not read: the hold row
+        self.assertFalse(policy.price_is_top([], owner))
+
+
 class Refusal(unittest.TestCase):
     def test_the_text_names_the_row_its_risk_who_may_and_the_role(self):
         self.assertIsNone(policy.refusal('coordinator', ['set-text', 'set-other']))
