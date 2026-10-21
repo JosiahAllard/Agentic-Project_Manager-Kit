@@ -6,10 +6,12 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import unittest
 from unittest import mock
 
 from kitlib import gate as G
+from kitlib.fs import treelock
 from kitlib.gate import land, result, runner, steps
 from kitlib.proc import process
 from kitlib.records import landing
@@ -81,7 +83,8 @@ class Records(unittest.TestCase):
     def test_write_is_atomic_and_read_back(self):
         path = result.write(self.repo.root, self.rec())
         self.assertEqual(os.path.dirname(path), result.result_dir(self.repo.root))
-        self.assertEqual(os.listdir(os.path.dirname(path)), [os.path.basename(path)])  # no temp
+        self.assertEqual(sorted(os.listdir(os.path.dirname(path))),        # no temp, its lock
+                         ['.%s.lock' % os.path.basename(path), os.path.basename(path)])
         got, why = result.read(self.repo.root, 'kit/x')
         self.assertIsNone(why)
         self.assertEqual(sorted(got), sorted(FIELDS))
@@ -120,7 +123,8 @@ class Records(unittest.TestCase):
         with mock.patch.object(result, 'RETRY_SLEEP', 0), mock.patch('os.replace', held):
             with self.assertRaises(result.ResultError):
                 result.write(self.repo.root, self.rec())
-        self.assertEqual(os.listdir(result.result_dir(self.repo.root)), [])
+        self.assertEqual(os.listdir(result.result_dir(self.repo.root)),     # only the lock
+                         [os.path.basename(result.lock_path(result.result_path(self.repo.root, 'kit/x')))])
 
     def test_run_writes_running_then_final_with_one_run_id(self):
         run = result.Run(self.repo.root, 'gate', 'kit/x', self.tip)
@@ -265,6 +269,69 @@ class Records(unittest.TestCase):
         got = result.finish_dead(self.repo.root, rec)
         self.assertEqual((got['run_id'], got['verdict']), (newer.run_id, 'running'))
         self.assertEqual(result.read(self.repo.root, 'kit/x')[0], got)
+
+    def test_finish_dead_judges_a_record_written_after_its_read_never_overwrites_it(self):
+        """A new run starts the record after finish_dead read the dead run's and before it
+        replaced it: the record's lock holds the new run's write until finish_dead's is done, so
+        the new run's record is the one left."""
+        dead = result.Run(self.repo.root, 'land', 'kit/x', self.tip)
+        dead.pid = self.dead_pid()
+        dead.start()
+        rec = result.read(self.repo.root, 'kit/x', 'land')[0]
+        newer = result.Run(self.repo.root, 'land', 'kit/x', self.tip)
+        main, started, read = threading.current_thread(), [], result.read_path
+
+        def read_then_start(path):          # finish_dead's read: then the new run starts
+            got = read(path)
+            if not started and threading.current_thread() is main:
+                t = threading.Thread(target=newer.start)
+                started.append(t)
+                t.start()
+                t.join(1.0)                 # it writes now, or waits on the record's lock
+            return got
+        with mock.patch.object(result, 'read_path', read_then_start):
+            result.finish_dead(self.repo.root, rec)
+        self.assertEqual(len(started), 1)
+        started[0].join(30)
+        self.assertFalse(started[0].is_alive())
+        got = result.read(self.repo.root, 'kit/x', 'land')[0]
+        self.assertEqual((got['run_id'], got['verdict']), (newer.run_id, 'running'))
+
+    def test_a_write_whose_condition_fails_leaves_the_record(self):
+        result.write(self.repo.root, self.rec(verdict='running'))
+        seen = []
+
+        def when(now):
+            seen.append(now['verdict'])
+            return False
+        self.assertIsNone(result.write(self.repo.root, self.rec(), when=when))
+        self.assertEqual(seen, ['running'])
+        self.assertEqual(result.read(self.repo.root, 'kit/x')[0]['verdict'], 'running')
+        run = result.Run(self.repo.root, 'gate', 'kit/x', self.tip)
+        self.assertEqual(run.start(when=lambda now: False),
+                         (None, 'result record of gate kit/x left as it is: it changed before '
+                                'this write'))
+        self.assertEqual(result.read(self.repo.root, 'kit/x')[0]['verdict'], 'running')
+        self.assertEqual(result.write(self.repo.root, self.rec(), when=lambda now: True),
+                         result.result_path(self.repo.root, 'kit/x'))
+        self.assertEqual(result.read(self.repo.root, 'kit/x')[0]['verdict'], 'pass')
+
+    def test_a_record_whose_lock_stays_held_is_not_written(self):
+        path = result.write(self.repo.root, self.rec())
+        held = treelock.TreeLock(result.lock_path(path), what='test').acquire()
+        try:
+            with mock.patch.object(result, 'LOCK_WAIT_S', 0.1):
+                with self.assertRaises(result.ResultError) as cm:
+                    result.write(self.repo.root, self.rec(verdict='fail'))
+                self.assertIn('held by pid %d' % os.getpid(), str(cm.exception))
+                run = result.Run(self.repo.root, 'gate', 'kit/x', self.tip)
+                path2, line = run.start()
+                self.assertIsNone(path2)
+                self.assertTrue(line.startswith('WARNING: the result record could not be '
+                                                'written: cannot write %s' % path), line)
+        finally:
+            held.release()
+        self.assertEqual(result.read(self.repo.root, 'kit/x')[0]['verdict'], 'pass')
 
     def test_wait_sees_the_final_record_after_the_running_one(self):
         run = result.Run(self.repo.root, 'gate', 'kit/x', self.tip)
