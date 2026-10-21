@@ -56,6 +56,16 @@ def _price_rows(values, rec):
     return out
 
 
+TOP_PRICE_ROWS = ('set-price-owner', 'set-hold')
+
+
+def price_is_top(values, rec):
+    """True when a `set` of priority to each of `values` on `rec` takes a row only the owner and
+    the PM may take (TOP_PRICE_ROWS): kitlib/backlog/plan.py plan_set then needs no `--ruling`
+    for it, once the role check ran. False for no values."""
+    return bool(set(_price_rows(values, rec)) & set(TOP_PRICE_ROWS))
+
+
 def _verb_rows(verb):
     return [name for name, row in roles.ACTIONS.items() if verb in row.verbs]
 

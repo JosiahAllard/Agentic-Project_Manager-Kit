@@ -443,7 +443,7 @@ def main(argv=None):
     try:
         if args.verb in ('retire', 'delete') and args.owner_said is not None:
             raise Usage('`--owner-said` is gone: owner words are never copied into a record. '
-                        '%s an owner-held record takes `--ruling R-nnnn`'
+                        '%s an owner- or PM-priced record takes `--ruling R-nnnn`'
                         % ('Retiring' if args.verb == 'retire' else 'Deleting'))
         if args.verb == 'block':
             err = rmod.block_citation_error(args.on, args.reason, args.owner_ask)

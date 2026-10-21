@@ -780,7 +780,8 @@ class TheRefAndTheCheckout(StoreCase):
 
     def test_the_commit_names_verb_id_session_and_ruling(self):
         self.store.session = 'kit'
-        self.seed(priced('FOO', priority='-1', priority_by='-', owner_ask='may we?'))
+        # FOO is outside the offer (BAR ranks above it), so the pull takes --reason and --ruling
+        self.seed(priced('FOO', priority='5'), priced('BAR', priority='1'))
         self.verb('pull', 'FOO', reason='the owner said go', ruling='R-9001')
         msg = self.repo.git('log', '-1', '--format=%B', smod.STORE_REF)
         self.assertIn('backlog: pull FOO onto %s' % BRANCH, msg)

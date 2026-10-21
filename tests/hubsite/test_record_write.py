@@ -121,16 +121,26 @@ class Edit(Case):
                                                   [('pulled_by', ['kit/x'])]), 'invalid')
         self.assertIn('`pulled_by` is written only by', e.message)
 
-    def test_an_owner_priced_record_takes_the_ruling_the_store_asks_for(self):
+    def test_the_owner_reprices_an_owner_priced_record_with_no_ruling(self):
+        # an OWNER route: the store's set-price-owner row is the owner's, so no ruling is asked
+        # for; the old one, which named the old price, is dropped
         recordwrite.edit(self.repo.root, 'FOO', self.read('FOO')['version'],
                          [('priority', ['2']), ('priority_by', ['owner'])], ruling=FIRST)
-        version = self.read('FOO')['version']
-        e = self.refused(lambda: recordwrite.edit(self.repo.root, 'FOO', version,
-                                                  [('priority', ['3'])]), 'invalid')
-        self.assertIn(ASKS, e.message)
-        recordwrite.edit(self.repo.root, 'FOO', version, [('priority', ['3'])], ruling=SECOND)
+        out = recordwrite.edit(self.repo.root, 'FOO', self.read('FOO')['version'],
+                               [('priority', ['3'])])
         self.assertEqual(self.field('FOO', 'priority'), ['3'])
+        self.assertEqual(self.field('FOO', 'priority_ruling'), [])
+        self.assertTrue(any(FIRST + ' dropped' in line for line in out['lines']), out['lines'])
+        recordwrite.edit(self.repo.root, 'FOO', self.read('FOO')['version'],
+                         [('priority', ['4'])], ruling=SECOND)
+        self.assertEqual(self.field('FOO', 'priority'), ['4'])
         self.assertEqual(self.field('FOO', 'priority_ruling'), [SECOND])
+
+    def test_a_pm_price_still_takes_the_ruling_the_store_asks_for(self):
+        e = self.refused(lambda: recordwrite.edit(
+            self.repo.root, 'FOO', self.read('FOO')['version'],
+            [('priority', ['2']), ('priority_by', ['pm'])]), 'invalid')
+        self.assertIn(ASKS, e.message)
 
     def test_a_record_not_there_is_not_found(self):
         self.refused(lambda: recordwrite.edit(self.repo.root, 'BAR', 'x:y', [('effort', ['m'])]),

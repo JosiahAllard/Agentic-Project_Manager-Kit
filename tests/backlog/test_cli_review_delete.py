@@ -83,7 +83,7 @@ class Cli(unittest.TestCase):
         rc, out = self.run_tool('delete', 'FOO', '--why', 'the owner said', '--owner-said', 'x')
         self.assertEqual(rc, 2, out)
         self.assertRegex(out, r'^USAGE: ')
-        self.assertIn('Deleting an owner-held record takes `--ruling R-nnnn`', out)
+        self.assertIn('Deleting an owner- or PM-priced record takes `--ruling R-nnnn`', out)
         out = self.ok('delete', 'FOO', '--why', 'the owner says this should not exist')
         self.assertIn('DELETED FOO', out)
         log = self.repo.git('log', '--format=%s', smod.STORE_REF)

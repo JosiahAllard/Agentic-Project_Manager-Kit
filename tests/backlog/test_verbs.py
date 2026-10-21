@@ -240,12 +240,18 @@ class PullRelease(VerbCase):
         for rid in ('UNP', 'BLK', 'MIN', 'REQ'):
             with self.assertRaises(Refusal, msg=rid):
                 self.verb('pull', rid)
-        self.verb('pull', 'MIN', reason='the owner said go', ruling='R-9001')
+        # pull-held refuses every role, so a ruling never releases a -1 by pulling it
+        # (Owner gates): the owner or the PM releases the hold with `set` first
+        with self.assertRaises(Refusal) as cm:
+            self.verb('pull', 'MIN', reason='the owner said go', ruling='R-9001')
+        self.assertIn('set MIN --priority', str(cm.exception))
         r = self.get('MIN')
         self.assertEqual((r.get('priority'), r.get('hold_ruling'), r.get('owner_ask')),
-                         ('-', 'R-9001', None))
+                         ('-1', None, 'which?'))
+        self.seed(priced('NOW'))
+        self.verb('pull', 'NOW')
         with self.assertRaises(Refusal) as cm:
-            self.verb('pull', 'MIN', reason='twice is once too many')
+            self.verb('pull', 'NOW', reason='twice is once too many')
         self.assertIn('already in flight', str(cm.exception))
 
     def test_release_own_pull_clears_the_pull_and_the_preempt(self):

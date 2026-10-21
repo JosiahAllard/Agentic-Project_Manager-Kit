@@ -16,6 +16,7 @@ from kitlib import machinepaths
 
 from . import ledger as lmod
 from . import offer as omod
+from . import policy
 from . import record as rmod
 from . import scope as smod
 from .errors import Failure, NotFound, Refusal, Usage
@@ -663,12 +664,18 @@ def _branch_changes(ctx, branch, tip, base=None, mb=None):
 # The form a pulled record's widening takes with a ruling, named by every message about it.
 WIDEN_FORM = 'set %s --scope <path> [--scope <path> ...] --ruling R-nnnn'
 
-def plan_set(snap, ctx, rid, changes, unset=(), ruling=None, body=None, hold_ruling=None):
+def plan_set(snap, ctx, rid, changes, unset=(), ruling=None, body=None, hold_ruling=None,
+             role_checked=False):
     """Edit fields and/or the body. `changes` is `[(key, [values])]`.
 
     - Changing a price field on an owner-prioritised or owner-held record, or writing
       `priority_by: owner`, needs `--ruling` (its shape checked, written as `priority_ruling`);
       `priority_by: pm` always needs one. A ruling id is taken on its word.
+    - `role_checked` (the caller ran the role check: opener for tools/backlog.py, the hub's
+      owner routes): a price move whose rows only the owner and the PM may take
+      (policy.price_is_top: set-price-owner, set-hold) needs no `--ruling`, unless it ends at
+      `priority_by: pm` or releases a `-1` beside a live `hold_ruling`. Moved without one to
+      `priority_by: owner`, the record's `priority_ruling` is dropped (it named the old price).
     - Releasing an owner hold (dropping `owner` from `blocked_on`, moving `priority` off `-1`)
       needs `--ruling` (written as `hold_ruling`); `-1` -> `-` is a release with no price.
     - A result of `priority_by: agent` drops `priority_ruling`.
@@ -727,14 +734,21 @@ def plan_set(snap, ctx, rid, changes, unset=(), ruling=None, body=None, hold_rul
     new_priority = dict(changes).get('priority', [rec.get('priority')])[0]
     minus_one_release = rec.get('priority') == rmod.OWNER_PRIORITY and new_priority == '-'
     new_by = dict(changes).get('priority_by', [None])[0]
+    prices = list(dict(changes).get('priority', [])) + (['-'] if 'priority' in unset else [])
+    # the role check already held this price move to the owner and the PM (roles.py TOP)
+    top = role_checked and policy.price_is_top(prices, rec)
     if 'priority' in keys and rmod.is_owner_held(rec) and not minus_one_release \
             and new_by not in RULED_PRICE_BY:
         raise Refusal('`%s` is owner-held (%s), so its priority changes only with `--priority-by '
-                      'owner|pm --ruling R-nnnn`, or a release from `-1` to `-` with `--ruling`'
-                      % (rid, rmod.owner_hold_label(rec)))
-    if new_by == 'pm' and ruling is None:
-        raise Refusal('`--priority-by pm` needs `--ruling R-nnnn`, the ruling the PM priced `%s` on'
-                      % rid)
+                      'owner|pm%s`, or a release from `-1` to `-`%s'
+                      % (rid, rmod.owner_hold_label(rec), '' if top else ' --ruling R-nnnn',
+                         '' if top else ' with `--ruling`'))
+    # A price that ends at `priority_by: pm`, from the flag or kept from the record, names the
+    # PM's ruling: one given with no ruling would keep a ruling about the old price.
+    if ruling is None and get('priority_by') == ['pm'] and (new_by == 'pm' or prices):
+        raise Refusal('%s needs `--ruling R-nnnn`, the ruling the PM priced `%s` on'
+                      % ('`--priority-by pm`' if new_by == 'pm' else
+                         'a price on `%s` that keeps `priority_by: pm`' % rid, rid))
 
     moved = [k for k in rmod.PRIORITY_KEYS if rec.all(k) != get(k)]
     priced = [k for k in moved if k != 'priority_ruling']
@@ -788,16 +802,26 @@ def plan_set(snap, ctx, rid, changes, unset=(), ruling=None, body=None, hold_rul
     elif unheld:
         raise Refusal('`%s` is blocked on the owner, and this write clears that hold, so it needs '
                       '`--ruling R-nnnn`' % rid)
-    elif moved and (owners or new_by == 'owner'):
+    elif top and released_minus_one and lmod.hold_live(rec):
+        # ledger.refuse_unnamed_release, with no ruling given: the live hold_ruling is named
+        raise Refusal('`%s`\'s `priority: -1` was released by `hold_ruling: %s`, still live, so '
+                      'this set needs `--ruling %s`' % (rid, rec.get('hold_ruling'),
+                                                        rec.get('hold_ruling')))
+    elif moved and (owners or new_by == 'owner') and not top:
         raise Refusal('`%s` is %s, so changing %s needs `--ruling R-nnnn`: an owner\'s price is not '
                       'repriced on an agent\'s word'
                       % (rid, 'owner-held (%s)' % rmod.owner_hold_label(rec)
                          if rmod.is_owner_held(rec) else 'owner-prioritised (`priority_by: %s`)'
                          % rec.get('priority_by') if owners else 'given `priority_by: owner`',
                          ', '.join('`%s`' % k for k in moved)))
-    dropped = None
+    dropped = dropped_why = None
     if get('priority_by') == ['agent'] and get('priority_ruling'):
+        dropped, dropped_why = get('priority_ruling')[0], '`priority_by: agent` carries no ruling'
+    elif top and ruling is None and priced and get('priority_by') == ['owner'] \
+            and get('priority_ruling'):
         dropped = get('priority_ruling')[0]
+        dropped_why = 'it named the old price, and this one was set without a ruling'
+    if dropped is not None:
         pairs = [(k, v) for k, v in pairs if k != 'priority_ruling']
 
     lines = notes + ['SET %s' % rid]
@@ -821,7 +845,7 @@ def plan_set(snap, ctx, rid, changes, unset=(), ruling=None, body=None, hold_rul
             lines.append('  removed %d scope %s: %s' % (len(gone), 'entry' if len(gone) == 1
                                                          else 'entries', ', '.join(gone)))
     if dropped is not None:
-        lines.append('  priority_ruling %s dropped: `priority_by: agent` carries no ruling' % dropped)
+        lines.append('  priority_ruling %s dropped: %s' % (dropped, dropped_why))
     acts = [a for a, on in (('priority', priced), ('unblock', unheld),
                             ('hold release', released_minus_one and not priced)) if on]
     subject = ('backlog: %s %s' % (' and '.join(acts), rid) if acts and ruling
@@ -1084,12 +1108,11 @@ def plan_pull(snap, ctx, rid, reason=None, ruling=None, blocker=None):
     here. In the offer means in `next`'s offer as the caller's branch prints it (its own pulls
     left out, so a record overlapping only them is offered) or as `next` prints it without a
     branch (current_offer).
-    A `priority: -1` record needs `--ruling` here (a hold release), but tools/backlog.py's role
-    check sorts a pull of a held record as `pull-held`, which no role may take: its hold is
-    released first (`set ID --priority N --ruling R-nnnn`, the owner or the PM), then it is
-    pulled. One whose scope collides with a live pull on another branch (one on the caller's
-    branch is no collision) needs `--reason` and `--ruling` (the PM's ruling, cited in
-    `preempt`). An unmet `requires:` refuses.
+    A `priority: -1` record is refused whatever ruling is given, as tools/backlog.py's role
+    check refuses `pull-held` to every role: its hold is released first (`set ID --priority N`,
+    the owner or the PM), then it is pulled. One whose scope collides with a live pull on
+    another branch (one on the caller's branch is no collision) needs `--reason` and `--ruling`
+    (the PM's ruling, cited in `preempt`). An unmet `requires:` refuses.
     The fold-in guard (`_pull_fold_hits`): one whose scope overlaps a path another live pull's
     branch changed needs `--reason` and `--ruling` too, and records `preempt`; `next` passes
     such a record over, so its refusal comes before the not-offered one.
@@ -1113,14 +1136,15 @@ def plan_pull(snap, ctx, rid, reason=None, ruling=None, blocker=None):
         raise Refusal('`%s` is marked for review (review: %s); a coordinator clears it with '
                       '`clear-review %s --reason T` before anyone pulls it'
                       % (rid, rec.get('review'), rid))
-    minus_one = rec.get('priority') == rmod.OWNER_PRIORITY
-    if not minus_one and not rmod.is_band(rec.get('priority')):
+    if rec.get('priority') == rmod.OWNER_PRIORITY:
+        raise Refusal('`%s` is `priority: -1` - the owner\'s question (%s) - so it is not pulled: '
+                      'the owner or the PM releases the hold first (`set %s --priority N '
+                      '--priority-by owner`), then it is pulled'
+                      % (rid, rec.get('owner_ask'), rid))
+    if not rmod.is_band(rec.get('priority')):
         raise Refusal('`%s` is `priority: %s`, and `pull` takes a priced record (`1`-`5`). Price it '
                       'first: `set %s --priority N --priority-by agent`'
                       % (rid, rec.get('priority'), rid))
-    if minus_one and ruling is None:
-        raise Refusal('`%s` is `priority: -1` - the owner\'s question (%s) - so pulling it takes '
-                      '`--ruling R-nnnn`, a ruling that names it' % (rid, rec.get('owner_ask')))
     if blocker is not None:
         other = snap.get(blocker)
         if other is None or 'item:%s' % rid not in other.all('blocked_on'):
@@ -1146,9 +1170,7 @@ def plan_pull(snap, ctx, rid, reason=None, ruling=None, blocker=None):
         raise Refusal('`%s` collides with a live pull: %s. `--reason` alone never overrides a '
                       'collision with a live pull: `pull %s --reason "<why>" --ruling R-nnnn`, '
                       'citing the PM\'s ruling that allows it' % (rid, '; '.join(hits), rid))
-    if minus_one:
-        lmod.refuse_unnamed_release(rid, rec, ruling, 'pull')
-    if minus_one or hits or folds:
+    if hits or folds:
         _check_ruling(rid, rec, ruling, 'pull', hold_only=True)
     lines = offer_notes + notes + ['PULLED %s - state: open -> pulled' % rid, '  pulled_at:  %s' % ctx.date(),
                      '  pulled_by:  %s' % branch]
@@ -1162,7 +1184,7 @@ def plan_pull(snap, ctx, rid, reason=None, ruling=None, blocker=None):
         changes += [(k, []) for k in rmod.PREEMPT_KEYS]
     else:
         recorded = reason
-        if ruling is not None and (hits or folds or not minus_one):
+        if ruling is not None:
             recorded = '%s (PM %s)' % (reason, ruling)
         if blocker is not None:
             recorded += ' (unblocks %s)' % blocker
@@ -1173,18 +1195,12 @@ def plan_pull(snap, ctx, rid, reason=None, ruling=None, blocker=None):
                      for o in offers] or ['-']
         changes += [('preempt', [recorded]), ('preempt_by', [branch]), ('preempt_at', [today]),
                     ('displaced', displaced)]
-        if minus_one:
-            changes += [('hold_ruling', [ruling]), ('priority', ['-']), ('owner_ask', [])]
-            lines.append('  priority: -1 -> - (hold released; the question was: %s)'
-                         % rec.get('owner_ask'))
         lines.append('  preempt:    %s' % recorded)
         lines += ['  displaced:  %s' % d for d in displaced]
         subject += ', pre-empting %d offered item%s' % (len(offers), '' if len(offers) == 1 else 's')
-        if minus_one:
-            subject += ', releasing the owner hold'
     pairs = rmod.apply_changes(rec.pairs(), changes)
     return Change({rid: _text(pairs, rec.body)}, subject, lines,
-                  ruling=ruling if (minus_one or hits or folds or not offered) else None)
+                  ruling=ruling if (hits or folds or not offered) else None)
 
 
 def live_hits(scopes, holding, skip=None, branch=None):
@@ -1466,13 +1482,15 @@ def _claim_subject(verb, rid, reason, flag):
     return '%s %s: %s' % (verb, rid, ' '.join(reason.split()))
 
 
-def plan_close(snap, ctx, rid, reason, ruling=None):
+def plan_close(snap, ctx, rid, reason, ruling=None, role_checked=False):
     """The work is done: delete the record. An owner-held record takes `--ruling` (deleting it
-    ends his hold); its own live `hold_ruling` is accepted."""
+    ends his hold); its own live `hold_ruling` is accepted. With `role_checked` (opener: the role
+    check sorted the close of a held record as `close-held`, the owner's and the PM's alone) it
+    needs none; a landing's close (at_landing) runs no role check, so it keeps the gate."""
     rec = require(snap, rid)
     subject = _claim_subject('closes', rid, reason, '--reason')
     held = rmod.is_owner_held(rec)
-    if held and ruling is None:
+    if held and ruling is None and not role_checked:
         raise Refusal('`%s` is owner-held (%s), so closing it needs `--ruling R-nnnn`%s'
                       % (rid, rmod.owner_hold_label(rec),
                          '; its own `hold_ruling: %s` is live and accepted' % rec.get('hold_ruling')
@@ -1495,21 +1513,24 @@ def plan_close(snap, ctx, rid, reason, ruling=None):
     return Change(writes, subject, lines, ruling=ruling)
 
 
-def plan_retire(snap, ctx, rid, why, ruling=None):
+def plan_retire(snap, ctx, rid, why, ruling=None, role_checked=False):
     """The work should not be done: delete the record. An owner-prioritised or owner-held record
-    takes `--ruling`, a ruling id. A pull whose branch is live refuses, as `delete` does
-    (`_refuse_live_pulls`); a dead pull goes with the record."""
+    takes `--ruling`, a ruling id; with `role_checked` (the role check sorted a held record as
+    `close-held`, the owner's and the PM's alone) a held one that no owner or PM priced needs
+    none, and a ruling given on it is still recorded. A pull whose branch is live refuses, as
+    `delete` does (`_refuse_live_pulls`); a dead pull goes with the record."""
     rec = require(snap, rid)
     subject = _claim_subject('retires', rid, why, '--why')
     notes = _refuse_live_pulls(snap, ctx, [rec])
-    guarded = rmod.is_owner_prioritised(rec) or rmod.is_owner_held(rec)
+    gated = rmod.is_owner_prioritised(rec) or rmod.is_owner_held(rec)
+    guarded = rmod.is_owner_prioritised(rec) or (rmod.is_owner_held(rec) and not role_checked)
     if guarded and ruling is None:
         raise Refusal('`%s` is %s, so retiring it needs `--ruling R-nnnn`'
                       % (rid, 'owner-held (%s)' % rmod.owner_hold_label(rec)
                          if rmod.is_owner_held(rec)
                          else 'owner-prioritised (`priority_by: %s`)' % rec.get('priority_by')))
     if ruling is not None:
-        if not guarded:
+        if not gated:
             raise Usage('`--ruling %s` was given, and `%s` is neither owner-prioritised nor '
                         'owner-held: its retirement needs no ruling' % (ruling, rid))
         _check_ruling(rid, rec, ruling, 'retirement')
@@ -1559,13 +1580,13 @@ def _live_pull_refusal(building, retarget):
     return '%s; retarget after they land, or release them first (%s, each from its branch)'         % (where, releases)
 
 
-def plan_delete(snap, ctx, rid, why, ruling=None):
+def plan_delete(snap, ctx, rid, why, ruling=None, role_checked=False):
     """The record should not exist (the owner's delete from the Action Hub, or a coordinator's):
     delete it, with the subject `deletes ID: <why>`, which history reads as `closes`/`retires`
     are read (`add` again needs `--reopen`; a `requires: item:` on it never lands). The owner
-    gates are `retire`'s. A pull whose branch is live refuses: its holder releases it first. A
-    dead pull goes with the record; a parked record's kept branch is left for its owner to
-    remove."""
+    gates are `retire`'s, `role_checked` included. A pull whose branch is live refuses: its
+    holder releases it first. A dead pull goes with the record; a parked record's kept branch is
+    left for its owner to remove."""
     rec = require(snap, rid)
     subject = _claim_subject('deletes', rid, why, '--why')
     state = rec.get('state')
@@ -1573,14 +1594,15 @@ def plan_delete(snap, ctx, rid, why, ruling=None):
     if state == 'parked':
         notes.append('  parked on %s; a branch kept for it is not touched: remove it by hand'
                      % (rec.get('q') or 'no recorded question'))
-    guarded = rmod.is_owner_prioritised(rec) or rmod.is_owner_held(rec)
+    gated = rmod.is_owner_prioritised(rec) or rmod.is_owner_held(rec)
+    guarded = rmod.is_owner_prioritised(rec) or (rmod.is_owner_held(rec) and not role_checked)
     if guarded and ruling is None:
         raise Refusal('`%s` is %s, so deleting it needs `--ruling R-nnnn`'
                       % (rid, 'owner-held (%s)' % rmod.owner_hold_label(rec)
                          if rmod.is_owner_held(rec)
                          else 'owner-prioritised (`priority_by: %s`)' % rec.get('priority_by')))
     if ruling is not None:
-        if not guarded:
+        if not gated:
             raise Usage('`--ruling %s` was given, and `%s` is neither owner-prioritised nor '
                         'owner-held: deleting it needs no ruling' % (ruling, rid))
         _check_ruling(rid, rec, ruling, 'deletion')

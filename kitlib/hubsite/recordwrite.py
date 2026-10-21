@@ -80,9 +80,11 @@ def edit(root, rid, version, changes, unset=(), body=None, ruling=None):
                 now = rec.text.encode('utf-8')
             if hashlib.sha1(now).hexdigest() != want:
                 raise HubError('conflict', STALE, 'version')
-        return pmod.plan_set(s, ctx, rid, list(changes), list(unset), ruling, body)
+        return pmod.plan_set(s, ctx, rid, list(changes), list(unset), ruling, body,
+                             role_checked=True)     # an OWNER route (kitlib/hubsite/api.py)
     return _write(root, plan)
 
 
 def delete(root, rid, why, ruling=None):
-    return _write(root, lambda s, ctx: pmod.plan_delete(s, ctx, rid, why, ruling))
+    return _write(root, lambda s, ctx: pmod.plan_delete(s, ctx, rid, why, ruling,
+                                                        role_checked=True))   # an OWNER route

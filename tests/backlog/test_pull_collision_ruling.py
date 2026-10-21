@@ -70,16 +70,18 @@ class PullCollision(StoreCase):
         r = self.get('FOO')
         self.assertEqual((r.get('state'), r.get('preempt')), ('pulled', 'needed before the others'))
 
-    def test_one_ruling_covers_a_minus_one_record_that_also_collides(self):
+    def test_a_minus_one_record_that_also_collides_is_never_pulled(self):
+        # pull-held refuses every role: no ruling releases the hold by pulling it; the owner or
+        # the PM releases it with `set` first (docs/backlog.md "Owner gates")
         self.seed(hold(), rec('MIN', priority='-1', owner_ask='which?',
                               scope='kitlib/backlog/scope.py'))
-        with self.assertRaises(Refusal):
-            self.verb('pull', 'MIN', reason='the owner said go')
-        change = self.verb('pull', 'MIN', reason='the owner said go', ruling='R-9001')
-        r = self.get('MIN')
-        self.assertEqual((r.get('state'), r.get('hold_ruling'), r.get('preempt')),
-                         ('pulled', 'R-9001', 'the owner said go (PM R-9001)'))
-        self.assertEqual(change.ruling, 'R-9001')
+        for ruling in (None, 'R-9001'):
+            with self.assertRaises(Refusal) as cm:
+                self.verb('pull', 'MIN', reason='the owner said go', ruling=ruling)
+            self.assertIn('set MIN --priority', str(cm.exception))
+            r = self.get('MIN')
+            self.assertEqual((r.get('state'), r.get('priority'), r.get('hold_ruling')),
+                             ('open', '-1', None))
 
     def test_a_pull_that_overlaps_a_record_on_the_callers_own_branch_pulls_plainly(self):
         # Bundling overlapping records onto one branch is not a
