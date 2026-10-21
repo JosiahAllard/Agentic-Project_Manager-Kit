@@ -246,6 +246,47 @@ class GoneHolder(QueueCase):
         self.assertEqual(self.remote_main(), self.main)
         self.assertEqual(self.entries(), [])
 
+    def test_a_holder_gone_after_its_push_names_the_next_landing_and_the_break(self):
+        # A lander killed after its verified push, before the main checkout's fast-forward,
+        # leaves the lock at phase push and main only behind origin/main: the next landing says
+        # the push most likely landed, gives the fast-forward, and names the next landing and
+        # break_lock; once main is fast-forwarded, a landing breaks the lock itself and lands.
+        _, tip_a = self.branch('feature', {'a.py': 'a\n'})
+        _, tip_b = self.branch('bee', {'b.py': 'b\n'})
+
+        class Killed(BaseException):
+            pass
+
+        def no_recover(lander, e):          # killed outright: nothing recovers
+            raise e
+        with mock.patch.object(land.Lander, 'sync_main', side_effect=Killed), \
+                mock.patch.object(land.Lander, 'recover', no_recover):
+            with self.assertRaises(Killed):
+                self.lander(BRANCH, self.main, tip_a, pid=self.dead_pid()).run()
+        rec = self.lock().read()
+        self.assertEqual(rec['phase'], 'push')
+        pushed = self.remote_main()
+        self.assertNotEqual(pushed, self.main)
+        out = self.lander('kit/bee', self.main, tip_b).run()
+        self.assertEqual(out.code, G.BUSY, out.lines)
+        line = out.lines[0]
+        for want in ('its holder is gone after its push: origin/main (%s) moved on from %s, '
+                     'where it took the lock, so its push most likely landed and only the main '
+                     'checkout\'s fast-forward was skipped' % (pushed[:10], self.main[:10]),
+                     'Not broken, because main is only behind origin/main',
+                     'merge --ff-only origin/main. Then land again: the next landing breaks it '
+                     'itself; or break it with: ', 'break_lock()'):
+            self.assertIn(want, line)
+        self.assertEqual(self.lock().read()['token'], rec['token'])
+        self.assertEqual(self.main_now(), self.main)
+        self.repo.git('merge', '--ff-only', '--quiet', 'origin/main')     # as the hint says
+        said = []
+        out = self.lander('kit/bee', pushed, tip_b, say=said.append).run()
+        self.assertEqual(out.code, G.OK, out.lines)
+        self.assertTrue(any(s.startswith('broke the landing lock of a holder that is gone')
+                            for s in said), said)
+        self.assertIsNone(self.lock().read())
+
 
 class Batch(QueueCase):
     def three(self, last=None):
