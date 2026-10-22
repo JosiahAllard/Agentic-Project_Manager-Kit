@@ -85,11 +85,20 @@ def owner_paths_error(top, paths):
         named.append('%s (a render source: tools/commit.py --owner-approval refuses it, since '
                      'its rendered files would be committed unapproved)' % ', '.join(rendered))
     if ordinary:
-        named.append('%s (not owner-only: .kit.json "owner".paths does not lock it)'
+        named.append('%s (not owner-only: the repository\'s owner rules do not lock it)'
                      % ', '.join(ordinary))
-    return ('an owner approval carries owner-only files only, and this request names %s. Post '
-            'the owner-only files alone in the request; commit the rest in an ordinary commit '
-            '(tools/commit.py), before or after the approved one' % ' and '.join(named))
+    locked = [p for p in rendered if rules.is_locked(p)]
+    plain = [p for p in paths if p in ordinary or (p in rendered and p not in locked)]
+    advice = ['Post the other owner-only files alone in the request']
+    if plain:
+        advice.append('commit %s in an ordinary commit (tools/commit.py), before or after the '
+                      'approved one' % ', '.join(plain))
+    if locked:
+        advice.append('%s is owner-only as well, so it goes in a commit the owner authors '
+                      '(tools/commit.py --owner-authored), not in an ordinary commit'
+                      % ', '.join(locked))
+    return ('an owner approval carries owner-only files only, and this request names %s. %s'
+            % (' and '.join(named), '; '.join(advice)))
 
 
 def build(checkout, title, files, repo=None, head=None, reason=None, now=None, run=None,

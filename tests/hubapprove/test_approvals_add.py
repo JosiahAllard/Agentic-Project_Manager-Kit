@@ -280,9 +280,10 @@ class WhatIsRefusedBeforeAnyCall(Case):
             hubapprove.build(self.repo.root, title, [('README.md', self.content('x\n'))])
         self.assertEqual((got.exception.message, got.exception.field),
                          (want.exception.message, want.exception.field))
-        many = [('new%d.txt' % i, self.content('x\n', 'c%d.txt' % i))
+        # under a locked folder, so the owner-path check lets them through to the cap
+        many = [('docs/new%d.txt' % i, self.content('x\n', 'c%d.txt' % i))
                 for i in range(ap.MAX_FILES + 1)]
-        self.refused('files', '', many)
+        self.refused('files', 'at most %d files' % ap.MAX_FILES, many)
         self.refused('files', '', [('README.md', self.content('x\n')),
                                    ('README.md', self.content('y\n', 'y.txt'))])
         self.refused('reason', '', [('README.md', self.content('x\n'))],
@@ -338,8 +339,9 @@ class OnlyOwnerOnlyPathsAreRequested(Case):
             ('README.md', self.content('x\n')), ('src/app.py', self.content('a\n', 'a.txt')),
             ('notes.txt', self.content('n\n', 'n.txt'))])
         self.assertNotIn('README.md', said)
-        self.assertIn('Post the owner-only files alone', said)
-        self.assertIn('commit the rest in an ordinary commit', said)
+        self.assertIn('Post the other owner-only files alone', said)
+        self.assertIn('commit src/app.py, notes.txt in an ordinary commit', said)
+        self.assertNotIn('--owner-authored', said)
 
     def test_the_default_rules_lock_neither_a_readme_nor_docs(self):
         os.remove(self.repo.path('.kit.json'))
@@ -352,6 +354,10 @@ class OnlyOwnerOnlyPathsAreRequested(Case):
             ('README.md', self.content('x\n')),
             ('content/roles/coordinator.md', self.content('c\n', 'c.txt'))])
         self.assertNotIn('not owner-only', said)
+        # owner-only too: commit.py refuses it in an ordinary commit, so that is not the advice
+        self.assertIn('content/roles/coordinator.md is owner-only as well, so it goes in a commit '
+                      'the owner authors (tools/commit.py --owner-authored)', said)
+        self.assertNotIn('in an ordinary commit (tools', said)
 
     def test_render_sources_and_unlocked_paths_are_both_named(self):
         self.kit()
@@ -361,6 +367,17 @@ class OnlyOwnerOnlyPathsAreRequested(Case):
             ('kit.json', self.content('{}\n', 'k.txt')),
             ('hosts/claude/agents/coordinator.md', self.content('r\n', 'r.txt'))])
         self.assertIn(' and hosts/claude/agents/coordinator.md (not owner-only', said)
+        self.assertIn('commit hosts/claude/agents/coordinator.md in an ordinary commit', said)
+        self.assertIn('kit.json is owner-only as well, so it goes in a commit the owner authors',
+                      said)
+
+    def test_a_render_source_that_is_not_owner_only_goes_in_an_ordinary_commit(self):
+        self.kit()
+        own(self.repo.root, ['README.md'])
+        said = self.refused('files', 'kit.json (a render source', [
+            ('README.md', self.content('x\n')), ('kit.json', self.content('{}\n', 'k.txt'))])
+        self.assertIn('commit kit.json in an ordinary commit', said)
+        self.assertNotIn('--owner-authored', said)
 
     def test_outside_a_kit_checkout_content_is_no_render_source(self):
         body = hubapprove.build(self.repo.root, 't', [
