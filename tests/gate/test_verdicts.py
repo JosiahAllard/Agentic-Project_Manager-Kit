@@ -44,6 +44,7 @@ class SelfReviewWhy(unittest.TestCase):
         tip = 'a' * 40
         for over in ({'reviewer_id': 'coord-1'}, {'reviewer_id': ' Coord-1 '},
                      {'reviewer_id': 'agent-x / coord-1'},
+                     {'session': ' Coord-1 ', 'reviewer_id': 'coord-1'},
                      {'reviewer': 'pm-kit:coordinator'}, {'reviewer': 'Coordinator'},
                      {'reviewer': 'kit-coordinator'}, {'reviewer': 'pm-kit:analyst / pm-kit:coordinator'},
                      {'reviewer': 'pm-kit:coordinator', 'reviewer_id': 'coord-1'}):
