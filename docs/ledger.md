@@ -94,7 +94,11 @@ The keys are in the machine config (docs/kit-json.md "Machine config keys"):
 
 ## A new ledger
 
-Set `ledger_dir` and `ledger_repos` (or `ledger_path` alone for one file); the first `add` for a repository creates its file from `templates/common/LEDGER.md`. To commit the ledger, put its folder inside a git work tree whose `.kit.json` names the main branch.
+Set `ledger_dir` and `ledger_repos` (or `ledger_path` alone for one file); the first `add` for a repository creates its file from `templates/common/LEDGER.md`.
+
+**Moving from one file.** The owner edits the machine config: add `ledger_dir` and `ledger_repos`, and keep `ledger_path`, which is then the frozen file ("Files"). Nothing is copied. Run `tools/ledger.py check`; new rulings go to each repository's file, and the R-nnnn entries stay readable where they are.
+
+To commit the ledger, put its folder inside a git work tree whose `.kit.json` names the main branch.
 
 ## Commit and push
 
