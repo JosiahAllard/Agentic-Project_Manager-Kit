@@ -52,6 +52,18 @@ class ApiCost(unittest.TestCase):
         self.assertIn("no list price (left out of the totals): 2.0M tokens, mystery 2000000\n",
                       out.getvalue())
 
+    def test_a_synthetic_turn_is_skipped_not_reported_unpriced(self):
+        acct = os.path.join(self.tmp.name, "acct3")
+        zero = {"input_tokens": 0, "cache_creation_input_tokens": 0, "output_tokens": 0}
+        path = os.path.join(acct, "projects", "r", "u.jsonl")
+        F.write(path, [F.turn("m5", "2026-09-20T00:00:00Z", model="<synthetic>", usage=zero)])
+        lo, hi, toks, unpriced = AP.price([path], "2026-09-18")
+        self.assertEqual(dict(unpriced), {})
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            AP.main(["2026-09-18", "--config-dir", acct])
+        self.assertNotIn("no list price", out.getvalue())
+
     def test_main_reads_every_config_dir_given(self):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
