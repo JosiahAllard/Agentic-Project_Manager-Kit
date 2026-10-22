@@ -58,9 +58,11 @@ def costs(root, since):
             if d.get("type") != "assistant" or d.get("timestamp", "") < since:
                 continue
             msg = d.get("message") or {}
-            if msg.get("id") in seen:
+            mid = msg.get("id")
+            if mid is not None and mid in seen:
                 continue
-            seen.add(msg.get("id"))
+            if mid is not None:
+                seen.add(mid)
             cost += U.weighted(msg.get("usage"), msg.get("model"))
         rows.append((cost, at, desc))
     rows.sort(key=lambda r: r[0], reverse=True)
@@ -187,10 +189,12 @@ def attribute(paths, index, since):
                 tools[msg.get("id")].append(_tool_text(msg))
         for d in recs:
             msg = d.get("message") or {}
+            mid = msg.get("id")
             if d.get("type") != "assistant" or d.get("timestamp", "") < since \
-                    or msg.get("model") == "<synthetic>" or msg.get("id") in seen:
+                    or msg.get("model") == "<synthetic>" or (mid is not None and mid in seen):
                 continue
-            seen.add(msg.get("id"))
+            if mid is not None:
+                seen.add(mid)
             if d.get("gitBranch") in index.by_branch:
                 reason, cand, sure = None, frozenset([d["gitBranch"]]), "high"
             elif sub:

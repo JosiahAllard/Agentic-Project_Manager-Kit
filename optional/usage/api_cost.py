@@ -20,7 +20,7 @@ import _usage as U  # noqa: E402
 # USD per MTok (input, output, cache read): the Claude API list prices in the claude-api skill's
 # model table and shared/models.md, copied 2026-10-06. Cache reads are the skill's stated rates:
 # 0.025x input on Fable 5.1, 0.05x on Opus 5.5 and 0.1x on every other model (its
-# shared/model-migration.md); Haiku 5.5 alone has no stated cache price, so its 0.01 is that 0.1x.
+# shared/model-migration.md), Haiku 5.5 included: its 0.01 is 0.1x its 0.10 input.
 # Opus 4.5 and Sonnet 4.5 are listed there as active without prices; their rows are Anthropic's
 # published list prices for them. A model id is priced by the longest key it starts with, followed
 # by nothing, a date (-20251001) or a [..] tag; a model no key names has no list price (rates() is
@@ -100,9 +100,11 @@ def price(paths, since):
             m = d.get("message") or {}
             if m.get("model") == "<synthetic>":    # a placeholder turn with no usage
                 continue
-            if m.get("id") in seen:
+            mid = m.get("id")
+            if mid is not None and mid in seen:
                 continue
-            seen.add(m.get("id"))
+            if mid is not None:
+                seen.add(mid)
             fam, u = family(m.get("model")), m.get("usage") or {}
             low = turn_usd(m.get("model"), u, WRITE_5M)
             if fam is None or low is None:

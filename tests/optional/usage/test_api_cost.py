@@ -45,6 +45,16 @@ class ApiCost(unittest.TestCase):
         self.assertNotIn("mystery", toks)
         self.assertEqual(dict(unpriced), {"mystery": 2_000_000})
 
+    def test_two_turns_with_no_message_id_are_both_priced(self):
+        u = {"input_tokens": 1_000_000, "cache_creation_input_tokens": 1_000_000, "output_tokens": 0}
+        path = os.path.join(self.tmp.name, "noid", "projects", "p", "s.jsonl")
+        F.write(path, [
+            F.turn(None, "2026-09-20T00:00:00Z", model="claude-opus-5", usage=u),
+            F.turn(None, "2026-09-20T00:00:01Z", model="claude-opus-5", usage=u),
+        ])
+        lo, hi, toks, unpriced = AP.price([path], "2026-09-18")
+        self.assertEqual(toks["opus"], 4_000_000)
+
     def test_main_prints_the_tokens_it_could_not_price(self):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
