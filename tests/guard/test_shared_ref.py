@@ -232,8 +232,8 @@ class SharedRefsFromAWorktree(SharedRefBase):
 
 
 class StrayRefCleanup(SharedRefBase):
-    """A coordinator's main session deletes a stray ref (refs/ outside refs/heads, refs/tags and
-    refs/stash) in its own repository, when git deletes that ref itself; every other session is
+    """A coordinator's main session deletes a stray ref (refs/ outside refs/heads, refs/tags,
+    refs/stash and refs/backlog) in its own repository, when git deletes that ref itself; every other session is
     held as before, and its refusal names the coordinator."""
 
     def coordinator(self, text, cwd=None, env=tj.COORDINATOR, tool='Bash'):

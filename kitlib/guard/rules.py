@@ -67,8 +67,8 @@ Rules, in the order they are checked:
                    checkout, of a ref other than refs/tmp/<name>, a per-worktree ref, or in a linked
                    worktree its HEAD and the branch checked out there (never a guarded main); a
                    ref or a repository the text does not name is refused too. A coordinator's
-                   main session may also delete a stray ref (refs/ outside refs/heads, refs/tags
-                   and refs/stash) in its own repository
+                   main session may also delete a stray ref (refs/ outside refs/heads, refs/tags,
+                   refs/stash and refs/backlog) in its own repository
   git-hooks-path   a change of core.hooksPath (git config, git -c, clone -c, GIT_CONFIG_*), in
                    any session
   git-stash-shared git stash in a linked worktree by an agent session that adds an untagged
@@ -5191,7 +5191,8 @@ def ref_delete_hint(ctx, gc, top, cwd, short, longs, pos, cleanup=False):
     if name and stray_ref(name):
         who = 'you delete it in your own repository, naming the ref literally' if cleanup else \
             'your coordinator deletes it from its own session in its own repository, so send it the ref'
-        return ('%s A ref outside refs/heads and refs/tags is a coordinator\'s to delete: %s. To show it:' %
+        return ('%s A ref outside refs/heads, refs/tags, refs/stash and refs/backlog is a coordinator\'s '
+                'to delete: %s. To show it:' %
                 (shared, who), 'git -C %s show-ref %s' % (at, name))
     return ('%s A ref other than a branch is the PM\'s to delete; to show it:' % shared,
             'git -C %s show-ref %s' % (at, name or '<ref>'))
@@ -5232,12 +5233,13 @@ def scratch_ref(name):
 # old mark: AGENT_MARKS's first two), and the refs that are no stray ref, compared without case:
 # NTFS reads refs/HEADS/main as the loose file of refs/heads/main
 REF_CLEANUP_MARKS = AGENT_MARKS[:2]
-NOT_STRAY = ('refs/heads', 'refs/tags', 'refs/stash')
+NOT_STRAY = ('refs/heads', 'refs/tags', 'refs/stash', 'refs/backlog')
 
 
 def stray_ref(name):
     """True for a ref a coordinator may delete in its own repository: a ref_name_ok name under
-    refs/, outside refs/heads, refs/tags and refs/stash (every worktree's stash entries)."""
+    refs/, outside refs/heads, refs/tags, refs/stash (every worktree's stash entries) and
+    refs/backlog (the backlog store, in any case)."""
     low = (name or '').lower()
     return ref_name_ok(name) and low.startswith('refs/') and not low.startswith(NOT_STRAY)
 
@@ -5435,8 +5437,8 @@ def git_shared_ref(event, ctx, cmd, gc, cwd, role):
     shared = 'every worktree of this repository shares its refs, so a change made from any of them is made for all'
     allowed = 'An agent session writes refs/tmp/<name> (its scratch space), the per-worktree refs (refs/bisect/, ' \
               'refs/worktree/, refs/rewritten/, <NAME>_HEAD) and, in its own worktree, HEAD and the branch ' \
-              'checked out there; a coordinator deletes a ref outside refs/heads and refs/tags in its own ' \
-              'repository; any other ref is the PM\'s.'
+              'checked out there; a coordinator deletes a ref outside refs/heads, refs/tags, refs/stash and ' \
+              'refs/backlog in its own repository; any other ref is the PM\'s.'
     cleanup = cleanup_session(event, ctx)
     if unread:
         hint = ref_delete_hint(ctx, gc, top or at, cwd, short, longs, pos, cleanup) if 'd' in short else None

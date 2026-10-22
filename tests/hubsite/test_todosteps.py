@@ -268,8 +268,10 @@ class Check(unittest.TestCase):
         self.assertNotIn('--abandon', self.refused('commands', commands=['git push -f origin x']))
 
     def test_a_raw_ref_delete_also_names_the_coordinators_own_delete(self):
-        """A ref outside refs/heads and refs/tags is the coordinator's to delete itself."""
-        own = 'a ref outside refs/heads and refs/tags the coordinator deletes itself'
+        """A ref outside refs/heads, refs/tags, refs/stash and refs/backlog is the coordinator's to
+        delete itself."""
+        own = ('a ref outside refs/heads, refs/tags, refs/stash and refs/backlog the coordinator '
+               'deletes itself')
         for cmd in ('git update-ref -d refs/scratch/x', 'git update-ref -d refs/heads/x', 'git update-ref --stdin'):
             with self.subTest(cmd=cmd):
                 why = self.refused('commands', commands=[cmd])

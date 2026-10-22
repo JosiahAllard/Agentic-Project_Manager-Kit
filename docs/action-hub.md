@@ -432,8 +432,8 @@ text the owner's to-do rules forbid (`todosteps.check`: plain Notepad, a hand ed
 prose, coordinator work). The owner's own to-dos are not judged by those rules. A raw worktree,
 branch, tag or ref delete has no carve-out: its refusal names `worktree_remove.py <slug> --abandon
 "<why>"`, which the coordinator runs on a ruling (docs/worktree-remove.md "Tools"); a ref delete's
-also says a ref outside `refs/heads` and `refs/tags` the coordinator deletes itself, in its own
-repository (docs/guard.md "Rules", `git-shared-ref`).
+also says a ref outside `refs/heads`, `refs/tags`, `refs/stash` and `refs/backlog` the
+coordinator deletes itself, in its own repository (docs/guard.md "Rules", `git-shared-ref`).
 
 While a to-do is open its creator may change it (`POST /api/v1/todos/{id}/edit` with the agent's
 token: `hub.py todos edit`, the MCP tool `hub_todo_edit`) or withdraw it (`POST
