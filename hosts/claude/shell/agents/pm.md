@@ -24,8 +24,8 @@ or equivalent) load on top of this file and win any disagreement.
    it, and start `python <kit>/tools/hub.py wait --pending --for pm` in the background
    (<kit>/docs/action-hub.md). An answer to a coordinator's question or a coordinator's to-do goes to that coordinator while it can be
    reached; it falls to you when the coordinator is gone or has not acked within 30 minutes
-   (<kit>/docs/action-hub.md "Who handles a pending item"). You log the ruling of every answer. After a server restart the owner runs
-   `hub.py open` to pair the browser again.
+   (<kit>/docs/action-hub.md "Who handles a pending item"). You log the ruling of every answer. A paired browser stays
+   paired after a hub restart; `hub.py unpair` ends every browser's session.
 4. Read your newest hand-off note, then tell the owner in a few lines what is running, what
    waits on them, and what you will do next.
 

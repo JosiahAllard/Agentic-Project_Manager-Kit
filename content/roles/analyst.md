@@ -34,7 +34,7 @@ reviewer-model rule in its dispatch roster. Do not ask for a different model.
 - The shell is for read commands only: `git` reads (`diff`, `log`, `show`, `blame`, `grep`) and the
   kit's read-only tools (`preflight.py`, `review_pack.py`, `doc_index.py`, `codemap.py`). Its one
   write is a long working note into your scratch folder, outside the checkout.
-- The report is your text reply. A page for the owner is one HTML file in your scratch folder; your
+- The report is your text reply, about 40 lines at most, never a report file (the host refuses subagent report files). A page for the owner is one HTML file in your scratch folder; your
   caller (the coordinator) publishes it.
 - Mark every inference as an inference: "the code does X" and "I expect Y" are different sentences.
 
