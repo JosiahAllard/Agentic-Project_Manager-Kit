@@ -4,7 +4,8 @@
                      role its hook payload names (Action.agent_role), from the command's words
                      (kitlib.backlog.policy.read_argv). A PM_KIT_ROLE the line sets changes
                      nothing. A builder's own pull (roles.OWN_PULL) is read from the store, as it
-                     is locally, only when it alone would decide.
+                     is locally, only when it alone would decide; an --as branch is its own from
+                     that branch's linked worktree (own_pull_refusal).
   backlog-raw-write  a write of the backlog that skips the tool and its role check: a subagent's
                      python code importing kitlib.backlog (-c, standard input, -m, runpy) or naming
                      tools/backlog.py; any session's but the owner's git write of the store's ref
@@ -168,16 +169,17 @@ def role_run(event, ctx, cmd, inv, cwd, role):
     who = roles.role_of(agentname.bare(getattr(event, 'agent_role', None) or ''), True)
     rows = policy.sort(argv.verb, argv.given)
     text = policy.refusal(who, rows)
+    form = ''
     if text and argv.rid and not argv.given.get(policy.UNKNOWN) and \
             policy.refusal(who, rows, (roles.OWN_PULL,)) is None:
-        text = own_pull_refusal(ctx, cmd, cwd, argv, who)
+        text, form = own_pull_refusal(ctx, cmd, cwd, argv, who, cm.run_dir(inv))
     if not text:
         return None
     # the rows were sorted as if the record were held (not read: the strictest); when the role
     # may not take the unheld row either, that row is the one to name
     text = policy.refusal(who, policy.sort(argv.verb, argv.given, _Unheld())) or text
-    return rules.refuse(ROLE_RULE, role, '`%s`: %s (kitlib/backlog/roles.py).%s %s'
-                        % (rules.bare(cmd), text, _unread(pairs, argv, who), ASK),
+    return rules.refuse(ROLE_RULE, role, '`%s`: %s (kitlib/backlog/roles.py).%s%s %s'
+                        % (rules.bare(cmd), text, _unread(pairs, argv, who), form, ASK),
                         read_alternative(ctx, cmd, cwd, argv))
 
 
@@ -210,25 +212,64 @@ class _Unheld(object):
         return []
 
 
-def own_pull_refusal(ctx, cmd, cwd, argv, who):
-    """policy.refusal for a run only a builder's own pull would allow: the record read where the
-    tool runs (its -C folder, else the command's directory), its pull compared with the branch
-    checked out there; an --as naming another branch is not this session's."""
+def _branch_at(ctx, where):
+    """The branch checked out at `where` (ctx.git.current_branch), or None."""
+    try:
+        return ctx.git.current_branch(where)[0] or None
+    except Exception:                           # noqa: BLE001 - no branch: not its own
+        return None
+
+
+def _worktree_on(ctx, where, branch):
+    """True when the directory `where` is in a linked worktree whose checked-out branch is
+    `branch`, as written: the --as branch's own worktree. ctx.place reads the real path (a
+    junction or symlink on the way goes to git) and answers the main checkout, and the PM data
+    worktree, as MAIN, so neither is ever one."""
+    if not where or not isinstance(branch, str) or not branch:
+        return False
+    place = ctx.place(where)
+    if place.kind != repo.LINKED or not place.top:
+        return False
+    return _branch_at(ctx, place.top) == branch
+
+
+def own_pull_refusal(ctx, cmd, cwd, argv, who, here=None):
+    """(policy.refusal, the form sentence) for a run only a builder's own pull would allow: the
+    record read where the tool runs (its -C folder, else the command's directory), its pull
+    compared with the branch the run acts as. That is the branch checked out at that folder, or
+    an --as branch when `here`, the directory the tool runs in (commands.run_dir: as the line
+    leaves it, or a Start-Process -WorkingDirectory; None, never evidence, when the text cannot
+    tell), is that branch's linked worktree (_worktree_on): a builder in its worktree
+    runs `-C <store> --as <its branch>`, the form the tool's own refusal names
+    (plan.holder_form). Any other --as is not this session's. When the own pull alone would allow
+    the run, the form sentence names the accepted way, else it is ''."""
     from kitlib.backlog import policy, roles
     root = _root(cmd, cwd, argv)
     rec, branch = None, None
     if root:
-        try:
-            branch = ctx.git.current_branch(root)[0]
-        except Exception:                       # noqa: BLE001 - no branch: not its own
-            branch = None
+        branch = _branch_at(ctx, root)
+        if argv.branch is not None and argv.branch != branch and _worktree_on(ctx, here, argv.branch):
+            branch = argv.branch
         if branch and argv.branch in (None, branch):
             try:
                 rec = read_record(root, argv.rid)
             except Exception:                   # noqa: BLE001 - a store that does not read: not its own
                 rec = None
     facts = (roles.OWN_PULL,) if rec is not None and policy.own_pull(rec, branch) else ()
-    return policy.refusal(who, policy.sort(argv.verb, argv.given, rec), facts)
+    rows = policy.sort(argv.verb, argv.given, rec)
+    text = policy.refusal(who, rows, facts)
+    form = ''
+    if text and policy.refusal(who, rows, (roles.OWN_PULL,)) is None:
+        form = OWN_FORM % (rules.kit_tool(ctx, TOOL), rules.quote(root) if root else '<store>', argv.verb,
+                           argv.rid if re.match(r'^[\w.-]+$', argv.rid) else '<ID>')
+    return text, form
+
+
+# the form refusal sentence for a run its own pull would allow (own_pull_refusal)
+OWN_FORM = (' It is your own pull only when the record is pulled by the branch the run acts as: run it '
+            'from your branch\'s linked worktree as `python %s -C %s --as <your branch> %s %s ...`, or '
+            'with -C that worktree; a worktree on another branch, or a branch that does not hold the '
+            'pull, does not count.')
 
 
 # ---------------------------------------------------------------- code that skips the tool

@@ -256,6 +256,126 @@ class OwnPull(Base):
             self.refused(self.cmd(self.bl('set X-1 --scope s')))
 
 
+class AsFromItsWorktree(Base):
+    """`-C <store> --as <branch>` from that branch's linked worktree (backlogrole._worktree_on):
+    the form the tool's own refusal names (plan.holder_form). A builder blocking its own pull of a
+    store in another checkout was refused as not its own (role=subagent). The store here is the
+    main checkout, whose branch is main; read_record is patched, so any folder serves."""
+
+    def setUp(self):
+        super(AsFromItsWorktree, self).setUp()
+        self.store = W.fwd(self.w.main)
+        self.rec = pulled_by('kit/wt')
+
+    def run_as(self, branch, args='block X-1 --on Y-2 --reason r', cwd=None, prefix='', agent_type='worker'):
+        return self.cmd('%spython "%s" -C "%s" --as %s %s' % (prefix, self.tool, self.store, branch, args),
+                        agent_type, cwd=cwd)
+
+    def branches(self, table):
+        """FakeGit's current_branch, with `table` (folder -> branch) answered first."""
+        orig = self.w.git.current_branch
+
+        def current_branch(cwd):
+            for where, branch in table.items():
+                if os.path.normcase(os.path.abspath(cwd)).startswith(os.path.normcase(where)):
+                    return branch, None
+            return orig(cwd)
+        p = mock.patch.object(self.w.git, 'current_branch', current_branch)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_its_worktree_on_the_as_branch_is_its_own(self):
+        for args in ('block X-1 --on Y-2 --reason r', 'release X-1 --reason r', 'set X-1 --scope s',
+                     'unblock X-1 --on Y-2'):
+            with self.subTest(args):
+                self.allowed(self.run_as('kit/wt', args))
+        self.assertIn((self.store, 'X-1'), self.reads)              # read from the store, not the worktree
+        self.allowed(self.run_as('kit/wt', agent_type=agentname.PREFIX + 'senior-worker'))
+
+    def test_any_spelling_of_its_worktree(self):
+        sub = os.path.join(self.w.wt, 'kitlib')
+        os.makedirs(sub)
+        for cwd in (sub, self.w.wt.upper(), W.fwd(self.w.wt), self.w.wt + os.sep):
+            with self.subTest(cwd=cwd):
+                self.allowed(self.run_as('kit/wt', cwd=cwd))
+        for prefix in ('cd "%s" && ' % W.fwd(self.w.wt), 'cd "%s"; ' % self.w.wt.replace('/', '\\'),
+                       'cd "%s" && ' % W.fwd(sub)):
+            with self.subTest(prefix=prefix):
+                self.allowed(self.run_as('kit/wt', cwd=self.w.main, prefix=prefix))
+
+    def test_a_start_process_runs_where_its_working_directory_says(self):
+        def sp(workdir, cwd):
+            return self.cmd("Start-Process python -ArgumentList '%s -C %s --as kit/wt release X-1 --reason r' "
+                            "-WorkingDirectory %s" % (self.tool, self.store, workdir), tool='PowerShell', cwd=cwd)
+        self.allowed(sp('"%s"' % self.w.wt, self.w.main))
+        self.refused(sp('"%s"' % self.w.main, self.w.wt))
+        self.refused(sp('$X', self.w.wt))                           # a computed folder is none
+
+    def test_the_main_checkout_is_never_its_worktree(self):
+        self.refused(self.run_as('kit/wt', cwd=self.w.main))
+        self.refused(self.run_as('kit/wt', cwd=self.w.main, prefix='cd "%s" && ' % W.fwd(self.w.main)))
+        self.refused(self.run_as('kit/wt', prefix='cd "%s" && ' % W.fwd(self.w.main)))
+        # refused by its kind, not its branch: main checked out on the --as branch, the store elsewhere
+        self.store = W.fwd(self.w.plain)
+        self.branches({self.w.main: 'kit/wt', self.w.plain: 'main'})
+        self.refused(self.run_as('kit/wt', cwd=self.w.main))
+
+    def test_the_pm_data_worktree_is_never_its_worktree(self):
+        self.store = W.fwd(self.w.plain)
+        self.branches({self.w.data: 'kit/wt', self.w.plain: 'main'})
+        self.allowed(self.run_as('kit/wt', cwd=self.w.data))        # a plain linked worktree on kit/wt
+        self.w.user_config({'pm_data': {'path': self.w.data}})
+        self.refused(self.run_as('kit/wt', cwd=self.w.data))        # answered as MAIN
+
+    def test_no_checkout_or_an_unknown_one_is_not_its_worktree(self):
+        for cwd in (self.w.plain, self.w.unknown):
+            with self.subTest(cwd=cwd):
+                self.refused(self.run_as('kit/wt', cwd=cwd))
+
+    def test_a_directory_the_text_cannot_tell_is_not_its_worktree(self):
+        # the hook's directory is the worktree, but the line moves where the text cannot tell
+        for prefix in ('cd "$X" && ', 'cd $X; ', 'cd .. && cd "$X"; '):
+            with self.subTest(prefix=prefix):
+                self.refused(self.run_as('kit/wt', prefix=prefix))
+
+    def test_a_worktree_on_another_branch_is_not_its_own(self):
+        self.rec = pulled_by('kit/other')
+        self.refused(self.run_as('kit/other'))                      # in kit/wt's worktree
+        self.rec = pulled_by('kit/wt')
+        self.refused(self.run_as('kit/other'))
+        self.refused(self.run_as('Kit/WT'))                         # a branch is as written
+
+    def test_a_branch_that_does_not_hold_the_pull_is_not_its_own(self):
+        for rec in (pulled_by('kit/other'), Rec(id='X-1', state='open'), None,
+                    Rec(id='X-1', state='done', pulled_by='kit/wt')):
+            with self.subTest(rec=rec):
+                self.rec = rec
+                self.refused(self.run_as('kit/wt'))
+
+    def test_it_never_widens_to_a_lead_row(self):
+        for args in ('block X-1 --owner-ask q', 'close X-1', 'set X-1 --scope s --priority 3'):
+            with self.subTest(args):
+                self.refused(self.run_as('kit/wt', args))
+        self.refused(self.run_as('kit/wt', agent_type='reviewer'))
+
+    def test_the_refusal_names_the_accepted_form(self):
+        self.rec = pulled_by('kit/other')
+        d = self.refused(self.run_as('kit/wt', cwd=self.w.main))
+        self.assertIn('from your branch\'s linked worktree as `python %s -C "%s" --as <your branch> block X-1 ...`'
+                      % (backlogrole.rules.kit_tool(self.w.ctx(), backlogrole.TOOL), self.store), d.reason)
+        d = self.refused(self.cmd(self.bl('set X-1 --scope s')))
+        self.assertIn('--as <your branch> set X-1 ...', d.reason)
+        self.assertIn('a branch that does not hold the pull, does not count', d.reason)
+
+    def test_the_form_is_named_only_when_its_own_pull_would_allow_it(self):
+        for args in ('close X-1', 'block X-1 --owner-ask q', 'set X-1 --scope $S'):
+            with self.subTest(args):
+                d = self.refused(self.run_as('kit/wt', args, agent_type='worker'))
+                self.assertNotIn('--as <your branch>', d.reason)
+        d = self.refused(self.run_as('kit/wt', cwd=self.w.main, agent_type='reviewer'))
+        self.assertNotIn('--as <your branch>', d.reason)
+
+
 class QuotedWords(Base):
     """A bash word that is all one double-quoted string (`"$PWD"`) is one word whose text the line
     does not show (backlogrole.argv_words: policy.ONE): read as the value of an option whose value
