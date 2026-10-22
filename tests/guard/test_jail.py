@@ -585,7 +585,16 @@ class ShellForms(Base):
             with self.subTest(form):
                 self.jailed(self.run_bash(form % out))
                 self.allowed(self.run_bash(form % inside))
-        self.allowed(self.run_bash("gawk -i inplace '{print}' x=1 - a.txt"))   # an assignment and stdin are no files
+        # an assignment and stdin are no files: from the main checkout, where a relative x=1 or -
+        # would be a main-checkout write, the in-worktree file alone is judged
+        for extra in ('x=1', '-'):
+            with self.subTest(extra):
+                self.allowed(self.run_bash("gawk -i inplace '{print}' %s \"%s\"" % (extra, inside), cwd=self.w.main))
+        # -d, -o or -p with no file writes awkvars.out or awkprof.out where it runs
+        for opt in ('-d', '-o', '-p', '--dump-variables', '--profile'):
+            with self.subTest(opt):
+                self.jailed(self.run_bash("gawk %s '{print}' a.txt" % opt, cwd=self.w.main), 'main-checkout')
+                self.allowed(self.run_bash("gawk %s '{print}' a.txt" % opt))
 
     def test_awk_that_does_not_edit_in_place_writes_nothing(self):
         out = self.out()
@@ -625,6 +634,9 @@ class ShellForms(Base):
                 self.allowed(self.run_bash(form % inside))
         self.jailed(self.run_bash('ruby -C "%s" -i -pe 1 x.txt' % W.fwd(self.w.plain)))
         self.allowed(self.run_bash('ruby -C sub -i -pe 1 x.txt'))
+        self.jailed(self.run_bash('ruby -x%s -i -pe 1 x.txt' % W.fwd(self.w.plain)))
+        self.allowed(self.run_bash('ruby -xsub -i -pe 1 x.txt'))
+        self.jailed(self.run_bash('ruby tool.rb -i "%s"' % out))     # options after the script are read, as perl
         self.allowed(self.run_bash('ruby -pe 1 "%s"' % out))                # no -i: reads
         self.jailed(self.run_bash('vim -es -w "%s" -c q a.txt' % out))       # -w's script output
 
