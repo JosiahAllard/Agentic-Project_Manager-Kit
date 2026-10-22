@@ -215,36 +215,36 @@ class AgentCosts(unittest.TestCase):
                 self.assertEqual(self.printed_root(module, "~nobody/x"), "~nobody/x")
 
 
-# The store history as AC.PULL_LOG prints it. KIT-A is pulled onto kit/alpha, released, pulled
-# again onto kit/alpha-again and closed (its file deleted); KIT-C and KIT-D share kit/bundle; the
+# The store history as AC.PULL_LOG prints it. EX-A is pulled onto kit/alpha, released, pulled
+# again onto kit/alpha-again and closed (its file deleted); EX-C and EX-D share kit/bundle; the
 # slug "beta" is kit/beta's and launcher/beta's, both pulled from 13:00.
 PULL_LOG = """commit aaa1 2026-10-01T08:00:00-04:00
-diff --git a/kit/backlog/KIT-A.md b/kit/backlog/KIT-A.md
---- a/kit/backlog/KIT-A.md
-+++ b/kit/backlog/KIT-A.md
+diff --git a/kit/backlog/EX-A.md b/kit/backlog/EX-A.md
+--- a/kit/backlog/EX-A.md
++++ b/kit/backlog/EX-A.md
 +pulled_by: kit/alpha
-diff --git a/kit/backlog/KIT-B.md b/kit/backlog/KIT-B.md
+diff --git a/kit/backlog/EX-B.md b/kit/backlog/EX-B.md
 +pulled_by: kit/beta
-diff --git a/kit/backlog/KIT-C.md b/kit/backlog/KIT-C.md
+diff --git a/kit/backlog/EX-C.md b/kit/backlog/EX-C.md
 +pulled_by: kit/bundle
-diff --git a/kit/backlog/KIT-D.md b/kit/backlog/KIT-D.md
+diff --git a/kit/backlog/EX-D.md b/kit/backlog/EX-D.md
 +pulled_by: kit/bundle
 commit bbb2 2026-10-01T13:00:00Z
-diff --git a/launcher/backlog/LA-X.md b/launcher/backlog/LA-X.md
+diff --git a/launcher/backlog/EX-X.md b/launcher/backlog/EX-X.md
 +pulled_by: launcher/beta
 commit ccc3 2026-10-02T12:00:00Z
-diff --git a/kit/backlog/KIT-A.md b/kit/backlog/KIT-A.md
+diff --git a/kit/backlog/EX-A.md b/kit/backlog/EX-A.md
 -pulled_by: kit/alpha
 +pulled_by: -
 commit ddd4 2026-10-03T12:00:00Z
-diff --git a/kit/backlog/KIT-A.md b/kit/backlog/KIT-A.md
+diff --git a/kit/backlog/EX-A.md b/kit/backlog/EX-A.md
 +pulled_by: kit/alpha-again
 commit eee5 2026-10-04T12:00:00Z
-diff --git a/kit/backlog/KIT-A.md b/kit/backlog/KIT-A.md
+diff --git a/kit/backlog/EX-A.md b/kit/backlog/EX-A.md
 deleted file mode 100644
---- a/kit/backlog/KIT-A.md
+--- a/kit/backlog/EX-A.md
 +++ /dev/null
--id: KIT-A
+-id: EX-A
 -pulled_by: kit/alpha-again
 """
 OUT = {"output_tokens": 1000}                   # $0.025 on opus 5
@@ -325,20 +325,20 @@ class RecordCosts(unittest.TestCase):
 
     def test_parse_pull_log(self):
         self.assertEqual(sorted(AC.parse_pull_log(PULL_LOG)), sorted([
-            AC.Pull("KIT-A", "kit/alpha", "2026-10-01T12:00:00", "2026-10-02T12:00:00"),
-            AC.Pull("KIT-A", "kit/alpha-again", "2026-10-03T12:00:00", "2026-10-04T12:00:00"),
-            AC.Pull("KIT-B", "kit/beta", "2026-10-01T12:00:00", None),
-            AC.Pull("KIT-C", "kit/bundle", "2026-10-01T12:00:00", None),
-            AC.Pull("KIT-D", "kit/bundle", "2026-10-01T12:00:00", None),
-            AC.Pull("LA-X", "launcher/beta", "2026-10-01T13:00:00", None)]))
+            AC.Pull("EX-A", "kit/alpha", "2026-10-01T12:00:00", "2026-10-02T12:00:00"),
+            AC.Pull("EX-A", "kit/alpha-again", "2026-10-03T12:00:00", "2026-10-04T12:00:00"),
+            AC.Pull("EX-B", "kit/beta", "2026-10-01T12:00:00", None),
+            AC.Pull("EX-C", "kit/bundle", "2026-10-01T12:00:00", None),
+            AC.Pull("EX-D", "kit/bundle", "2026-10-01T12:00:00", None),
+            AC.Pull("EX-X", "launcher/beta", "2026-10-01T13:00:00", None)]))
 
     def test_a_subagent_in_a_worktree_goes_to_the_record_then_pulled_onto_it(self):
-        self.assertEqual(self.placed("w1"), ("KIT-A", None, "worker", "medium"))
-        self.assertEqual(self.placed("w3")[0], "KIT-A")
+        self.assertEqual(self.placed("w1"), ("EX-A", None, "worker", "medium"))
+        self.assertEqual(self.placed("w3")[0], "EX-A")
 
     def test_a_coordinator_session_is_placed_turn_by_turn(self):
-        self.assertEqual(self.placed("c1"), ("KIT-A", None, "coordinator", "medium"))
-        self.assertEqual(self.placed("c3")[0], "KIT-B")
+        self.assertEqual(self.placed("c1"), ("EX-A", None, "coordinator", "medium"))
+        self.assertEqual(self.placed("c3")[0], "EX-B")
         self.assertEqual(self.placed("c4"), (None, "coordination", "coordinator", None))
         self.assertEqual(self.placed("c5")[:2], (None, "several"))
         self.assertEqual(self.placed("c6")[:2], (None, "window"))          # kit/alpha released
@@ -348,12 +348,12 @@ class RecordCosts(unittest.TestCase):
         self.assertEqual(self.placed("c2")[:2], (None, "clash"))
 
     def test_a_bundle_branch_is_one_row(self):
-        self.assertEqual(self.placed("b1"), ("KIT-C + KIT-D", None, "worker", "high"))
+        self.assertEqual(self.placed("b1"), ("EX-C + EX-D", None, "worker", "high"))
 
     def test_a_subagent_is_placed_by_a_clear_majority_only(self):
         self.assertEqual(self.placed("r1")[:2], (None, "several"))
         self.assertEqual(self.placed("n1")[:2], (None, "none"))
-        self.assertEqual(self.placed("l1"), ("KIT-B", None, "lander", "medium"))
+        self.assertEqual(self.placed("l1"), ("EX-B", None, "lander", "medium"))
 
     def test_a_message_id_counts_once_across_transcripts_and_accounts(self):
         turns = self.turns()
@@ -384,12 +384,12 @@ class RecordCosts(unittest.TestCase):
     def test_report_by_record_role_and_reason(self):
         text = self.report()
         # calls, input, output, cache rd, wr 5m, wr 1h, USD, share, pulls, high: c1 w1 w2 w3.
-        a = self.row(text, "by record", "KIT-A")
+        a = self.row(text, "by record", "EX-A")
         self.assertEqual(a[:7], ["4", "0", "3.0k", "0", "1.0k", "2.0k", "0.08"])
         self.assertEqual(a[-2:], ["2", "0%"])
-        self.assertEqual(self.row(text, "by record", "KIT-C + KIT-D")[-1], "100%")
-        self.assertEqual(self.row(text, "by record x role", "KIT-A | worker")[0], "3")
-        self.assertEqual(self.row(text, "by record x role", "KIT-A | coordinator")[0], "1")
+        self.assertEqual(self.row(text, "by record", "EX-C + EX-D")[-1], "100%")
+        self.assertEqual(self.row(text, "by record x role", "EX-A | worker")[0], "3")
+        self.assertEqual(self.row(text, "by record x role", "EX-A | coordinator")[0], "1")
         self.assertEqual(self.row(text, "by role", "coordinator")[0], "6")
         self.assertEqual(self.row(text, "unattributed", AC.REASONS["coordination"])[0], "1")
         self.assertEqual(self.row(text, "unattributed", AC.REASONS["several"])[0], "2")
