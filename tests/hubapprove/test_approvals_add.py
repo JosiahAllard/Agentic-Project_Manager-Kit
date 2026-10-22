@@ -5,6 +5,7 @@ transport, decided by the owner, and then accepted by the consumer's own checks
 import contextlib
 import importlib.util
 import io
+import json
 import os
 import shutil
 import tempfile
@@ -27,6 +28,15 @@ KEY = 'k' * 64
 URL = 'https://git.example.invalid/owner/repo.git'
 OTHER = 'https://git.example.invalid/owner/other.git'
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# The checkout's owner-only paths (an untracked `.kit.json`, read as kitlib.commit reads it): an
+# owner approval carries owner-only files only, so the paths these tests request are locked.
+OWNER_PATHS = ['README.md', 'docs/', 'docs', 'loose.txt', 'content/']
+
+
+def own(root, paths=OWNER_PATHS):
+    """Write `root`'s `.kit.json` naming `paths` its owner-only paths."""
+    with open(os.path.join(root, '.kit.json'), 'w', encoding='utf-8') as f:
+        json.dump({'owner': {'paths': paths}}, f)
 
 
 def load():
@@ -80,6 +90,7 @@ class Case(unittest.TestCase):
         self.repo = TempRepo()
         self.addCleanup(self.repo.cleanup)
         self.repo.git('remote', 'add', 'origin', URL)
+        own(self.repo.root)
         self.hub = Hub(self, self.repo.root)
         self.dir = tempfile.mkdtemp(prefix='kit-hubapprove-content-')
         self.addCleanup(shutil.rmtree, self.dir, True)
@@ -310,6 +321,66 @@ class ContentGitWouldStageAsAnotherBlob(Case):
 
 
 @real_git(STAGED)
+class OnlyOwnerOnlyPathsAreRequested(Case):
+    """An owner approval carries owner-only files only: a render source (in a kit checkout,
+    which commit.py --owner-approval refuses) or a path the owner rules do not lock is refused
+    when the request is built, before the owner is asked, naming each such path."""
+
+    def kit(self):
+        """Give the checkout the kit's layout (kitlib.content.oncommit.is_kit)."""
+        os.makedirs(self.repo.path('content/roles'))
+        os.makedirs(self.repo.path('tools'))
+        with open(self.repo.path('tools/render_content.py'), 'w') as f:
+            f.write('')
+
+    def test_a_path_the_owner_rules_do_not_lock_is_refused_naming_it(self):
+        said = self.refused('files', 'src/app.py, notes.txt (not owner-only', [
+            ('README.md', self.content('x\n')), ('src/app.py', self.content('a\n', 'a.txt')),
+            ('notes.txt', self.content('n\n', 'n.txt'))])
+        self.assertNotIn('README.md', said)
+        self.assertIn('Post the owner-only files alone', said)
+        self.assertIn('commit the rest in an ordinary commit', said)
+
+    def test_the_default_rules_lock_neither_a_readme_nor_docs(self):
+        os.remove(self.repo.path('.kit.json'))
+        self.refused('files', 'README.md, docs/new.md (not owner-only', [
+            ('README.md', self.content('x\n')), ('docs/new.md', self.content('n\n', 'n.txt'))])
+
+    def test_a_render_source_in_a_kit_checkout_is_refused_though_owner_only(self):
+        self.kit()
+        said = self.refused('files', 'content/roles/coordinator.md (a render source', [
+            ('README.md', self.content('x\n')),
+            ('content/roles/coordinator.md', self.content('c\n', 'c.txt'))])
+        self.assertNotIn('not owner-only', said)
+
+    def test_render_sources_and_unlocked_paths_are_both_named(self):
+        self.kit()
+        own(self.repo.root, ['hosts/claude/managed-settings.json', 'kit.json'])
+        said = self.refused('files', 'kit.json (a render source', [
+            ('hosts/claude/managed-settings.json', self.content('{}\n')),
+            ('kit.json', self.content('{}\n', 'k.txt')),
+            ('hosts/claude/agents/coordinator.md', self.content('r\n', 'r.txt'))])
+        self.assertIn(' and hosts/claude/agents/coordinator.md (not owner-only', said)
+
+    def test_outside_a_kit_checkout_content_is_no_render_source(self):
+        body = hubapprove.build(self.repo.root, 't', [
+            ('content/roles/coordinator.md', self.content('c\n'))])
+        self.assertEqual([f['path'] for f in body['files']], ['content/roles/coordinator.md'])
+
+    def test_owner_only_paths_alone_are_posted(self):
+        self.kit()
+        got = hubapprove.request(self.hub.client, hubapprove.build(
+            self.repo.root, 't', [('README.md', self.content('x\n')),
+                                  ('docs/new.md', self.content('n\n', 'n.txt'))]))
+        self.assertEqual(self.hub.approvals()[got['id']]['status'], 'pending')
+
+    def test_a_refused_kit_configuration_posts_nothing(self):
+        with open(self.repo.path('.kit.json'), 'w') as f:
+            f.write('{"owner": {"paths": 5}}')
+        self.refused('checkout', 'the kit configuration of', [('README.md', self.content('x\n'))])
+
+
+@real_git(STAGED)
 class TheCommandLine(Case):
     def run_hub(self, *argv):
         out, err = io.StringIO(), io.StringIO()
@@ -340,6 +411,15 @@ class TheCommandLine(Case):
         self.assertEqual((code, out), (client.REFUSED, ''))
         self.assertTrue(err.startswith('REFUSED: README.md: the content is the file at head'),
                         err)
+        self.assertEqual((self.hub.asked, self.hub.approvals()), ([], {}))
+
+    def test_a_path_that_is_not_owner_only_is_refused_and_posts_nothing(self):
+        code, out, err = self.run_hub('approvals', 'add', '--checkout', self.repo.root, '--title', 't',
+                                      '--file', 'README.md', self.content('x\n'),
+                                      '--file', 'src/app.py', self.content('a\n', 'a.txt'))
+        self.assertEqual((code, out), (client.REFUSED, ''))
+        self.assertTrue(err.startswith('REFUSED: an owner approval carries owner-only files '
+                                       'only, and this request names src/app.py'), err)
         self.assertEqual((self.hub.asked, self.hub.approvals()), ([], {}))
 
     def test_the_hubs_refusal_is_printed_with_its_code(self):

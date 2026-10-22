@@ -10,7 +10,10 @@ never read for the proposed content: the consumer needs it still at the base.
 
 Refused here, with nothing posted (RequestError): a checkout that is not a git work tree, a repo
 the checkout's origin cannot name, a head that is not 40 hex digits or not a commit of the
-checkout, a path that is not a plain path of the repository, a path at head that is not a file, a
+checkout, a path that is not a plain path of the repository, a path that is not an owner approval's
+to carry (owner_paths_error: a render source in a kit checkout, which tools/commit.py
+--owner-approval refuses, or a path the checkout's owner rules do not lock, `.kit.json`
+"owner".paths as kitlib.commit reads them), a path at head that is not a file, a
 new file the work tree already has, a file at head whose work tree copy git does not hash to its
 base (the consumer's prewrite check would refuse either), a content file that cannot be read, is
 not UTF-8 or is over the size cap, a file whose content is its base (the consumer refuses a change
@@ -27,6 +30,8 @@ import datetime
 import os
 import re
 
+from kitlib import config as kconfig
+from kitlib.content import oncommit
 from kitlib.git import batch, cmd
 from kitlib.hubsite import approvals as ap
 
@@ -60,6 +65,33 @@ def read_content(path):
         raise RequestError('the content file %s is not UTF-8 text' % path, 'files')
 
 
+def owner_paths_error(top, paths):
+    """None when every one of `paths` (repo-relative, `/`) is one an owner approval may carry,
+    else the refusal naming the others: a render source when `top` is a kit checkout (the test
+    kitlib.commit._approval_first applies: oncommit.wants_render and oncommit.is_kit), and a path
+    the owner rules of `top`'s `.kit.json` (kconfig.load(top).owner_rules(), as kitlib.commit
+    reads them) do not lock. RequestError when the configuration is refused."""
+    try:
+        rules = kconfig.load(top).owner_rules()
+    except kconfig.ConfigError as e:
+        raise RequestError('the kit configuration of %s is refused: %s' % (top, e), 'checkout')
+    kit = oncommit.is_kit(top)
+    rendered = [p for p in paths if kit and oncommit.wants_render([p])]
+    ordinary = [p for p in paths if p not in rendered and not rules.is_locked(p)]
+    if not rendered and not ordinary:
+        return None
+    named = []
+    if rendered:
+        named.append('%s (a render source: tools/commit.py --owner-approval refuses it, since '
+                     'its rendered files would be committed unapproved)' % ', '.join(rendered))
+    if ordinary:
+        named.append('%s (not owner-only: .kit.json "owner".paths does not lock it)'
+                     % ', '.join(ordinary))
+    return ('an owner approval carries owner-only files only, and this request names %s. Post '
+            'the owner-only files alone in the request; commit the rest in an ordinary commit '
+            '(tools/commit.py), before or after the approved one' % ' and '.join(named))
+
+
 def build(checkout, title, files, repo=None, head=None, reason=None, now=None, run=None,
           cat=None):
     """The body of POST /approvals for the change `files`, a list of (path, content_file): path
@@ -89,6 +121,9 @@ def build(checkout, title, files, repo=None, head=None, reason=None, now=None, r
         why = ap.check_path(path)
         if why is not None:
             raise RequestError('%s: %s' % (path, why), 'files')
+    why = owner_paths_error(top, [path for path, _ in files])
+    if why is not None:
+        raise RequestError(why, 'files')
     commit = head + '^{commit}'
     specs = [commit] + [head + ':' + path for path, _ in files]
     got, why = cat(specs, top)
