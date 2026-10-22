@@ -199,6 +199,20 @@ class RepoNameCase(unittest.TestCase):
             self.assertEqual(serve._checkout(views)(REPO), 'root-kit')
         self.assertIsNone(serve._repo_name(None)(REPO))
 
+    def test_two_names_on_one_origin_name_the_session_key(self):
+        """The kit's folder name sorts before its coordinator's key and shares its remote: the
+        name that is a session key is the coordinator's; with none of them a key, the first."""
+        views = mock.Mock()
+        views.repos.return_value = [('Folder-Kit', 'root-kit'), ('kit', 'root-kit')]
+        with mock.patch.object(approvals, 'remote_id', return_value=(REPO, None)):
+            self.assertEqual(serve._repo_name(views, lambda: {'kit', 'zeta'})(REPO), 'kit')
+            self.assertEqual(serve._repo_name(views, lambda: {'zeta'})(REPO), 'Folder-Kit')
+            self.assertEqual(serve._repo_name(views)(REPO), 'Folder-Kit')
+
+            def broken():
+                raise OSError('unreadable')
+            self.assertEqual(serve._repo_name(views, broken)(REPO), 'Folder-Kit')
+
 
 if __name__ == '__main__':
     unittest.main()

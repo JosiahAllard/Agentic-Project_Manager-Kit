@@ -347,6 +347,9 @@ It is not the store's git push (the `push` setting).
 - Known limit: an answer made in the moments before the server closes that the worker had not
   yet seen is not pushed after a restart: the outbox holds only what the worker saw. The PM's
   wait still shows it.
+- Known limit: an approval's 20-hour reminder (`expiring`) is not sent when the server is down
+  across the 20-hour mark after its `decided` push was delivered. The approval stays pending
+  for its coordinator and the PM ("Who handles a pending item") until it is consumed or expires.
 
 Tests: tests/hubsite/test_push.py, tests/host/test_claude_peer.py, tests/launcher/test_pipes.py,
 tests/hubsite/test_hub_cli.py `PushCase`, tests/hubsite/test_pending_approvals.py.
