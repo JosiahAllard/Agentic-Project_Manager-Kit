@@ -511,7 +511,7 @@ class LandingWrites(fixtures.GateRepoCase):
         self.assertEqual(out.code, G.REFUSED, out.lines)
         self.assertIsNone(out.result_record)
         lock = landing.LandingLock(self.repo.root)
-        held = lock.take('full', ['kit/someone'], pid=os.getpid())
+        held = lock.take(['kit/someone'], pid=os.getpid())
         self.addCleanup(lock.release, held['token'])
         out = self.lander('kit/feature', self.main, tip).run()
         self.assertEqual(out.code, G.BUSY, out.lines)
