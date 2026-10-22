@@ -125,12 +125,12 @@ class OwnerApproval(OwnerLandCase):
                              check=False) or None
         doc = ap.new_doc(toc.REPO, 'owner-only edit', self.main, [
             {'path': 'CLAUDE.md', 'base_blob': base, 'content': 'approved\n'}], toc.NOW)
-        doc.update(ap.decide_fields(toc.KEY, 'A-1', doc, ap.APPROVE, toc.NOW))
-        self.hub.docs['A-1'] = doc
+        doc.update(ap.decide_fields(toc.KEY, 'A-001', doc, ap.APPROVE, toc.NOW))
+        self.hub.docs['A-001'] = doc
         _, tip = self.branch_as(AGENT, {'CLAUDE.md': content}, message='owner-approved edit',
-                                trailer='Owner-Approval: hub:A-1')
+                                trailer='Owner-Approval: hub:A-001')
         if consume:
-            doc.update(ap.consume_fields(toc.KEY, 'A-1', doc, tip, toc.NOW))
+            doc.update(ap.consume_fields(toc.KEY, 'A-001', doc, tip, toc.NOW))
         return tip
 
     def test_an_approved_agent_commit_lands(self):
@@ -138,19 +138,19 @@ class OwnerApproval(OwnerLandCase):
         out = self.lander(BRANCH, self.main, tip).run()
         self.assertEqual(out.code, G.OK, out.lines)
         self.assertEqual(self.remote_main(), out.merge)
-        self.assertEqual([a[0] for a in self.hub.asked], ['A-1'])
+        self.assertEqual([a[0] for a in self.hub.asked], ['A-001'])
 
     def test_a_forged_approval_is_refused_before_any_merge(self):
         tip = self.approve_and_commit('not what the owner approved\n')
         out = self.lander(BRANCH, self.main, tip).run()
-        self.assertIn('%s by %s changes CLAUDE.md (owner approval hub:A-1 refused: %s)'
+        self.assertIn('%s by %s changes CLAUDE.md (owner approval hub:A-001 refused: %s)'
                       % (tip[:10], AGENT, ap.WHY_FILES), out.lines[0])
         self.assert_untouched(out, G.REFUSED)
 
     def test_an_approval_never_consumed_is_refused(self):
         tip = self.approve_and_commit('approved\n', consume=False)
         out = self.lander(BRANCH, self.main, tip).run()
-        self.assertIn('owner approval hub:A-1 refused: %s' % ap.WHY_COMMIT, out.lines[0])
+        self.assertIn('owner approval hub:A-001 refused: %s' % ap.WHY_COMMIT, out.lines[0])
         self.assert_untouched(out, G.REFUSED)
 
 

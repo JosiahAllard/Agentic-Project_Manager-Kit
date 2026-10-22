@@ -38,7 +38,8 @@ VALUE = 'hub:A-<n>'
 
 
 def doc_id(value):
-    """The approval id (A-<n>) of an --owner-approval value, or None."""
+    """The approval id of an --owner-approval value, exactly as the hub issues it (A-001), or
+    None (oc.APPROVAL_RE)."""
     m = oc.APPROVAL_RE.match(value) if isinstance(value, str) else None
     return m.group(1) if m else None
 
@@ -68,8 +69,8 @@ def usage_error(req):
     if req.owner_approval is None:
         return None
     if not doc_id(req.owner_approval):
-        return ('--owner-approval takes %s, the approval\'s id on the hub (not %r)'
-                % (VALUE, req.owner_approval))
+        return ('--owner-approval takes %s, the approval\'s id as the hub shows it, as %s '
+                '(not %r)' % (VALUE, oc.EXAMPLE, req.owner_approval))
     if req.owner_authored:
         return ('--owner-approval and --owner-authored do not go together: the owner commits a '
                 'change of their own with --owner-authored, an agent the approved one with '
