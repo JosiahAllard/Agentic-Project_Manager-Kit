@@ -568,6 +568,78 @@ class ShellForms(Base):
             with self.subTest(text):
                 self.jailed(self.run_bash(text))
 
+    def test_awk_in_place_writes_its_files(self):
+        # gawk's inplace library in each spelling makes every file operand a target; so does a
+        # file -d, -o or -p names. -v inplace::enable=0 is not read: its files still count
+        out, inside = self.out(), W.fwd(os.path.join(self.w.wt, 'x.txt'))
+        forms = ("gawk -i inplace '{print}' \"%s\"", "awk -iinplace '{print}' \"%s\"",
+                 "gawk --include=inplace '{print}' \"%s\"", "gawk --include inplace '{print}' \"%s\"",
+                 "gawk --incl=inplace.awk '{print}' \"%s\"", "gawk -W include=inplace '{print}' \"%s\"",
+                 "gawk -W include inplace '{print}' \"%s\"", "gawk -ni inplace '{print}' \"%s\"",
+                 "gawk -f inplace -e '{print}' \"%s\"", "gawk -e '@include \"inplace\"' -e '{print}' \"%s\"",
+                 "gawk '@include \"inplace\"; {print}' \"%s\"", "gawk -i inplace -- '{print}' a.txt \"%s\"",
+                 "gawk -v inplace::enable=0 -i inplace '{print}' \"%s\"", "gawk -i \"$L\" '{print}' \"%s\"",
+                 "gawk -d\"%s\" '{print}' a.txt", "gawk --profile=\"%s\" '{print}' a.txt",
+                 "gawk -o\"%s\" '{print}' a.txt")
+        for form in forms:
+            with self.subTest(form):
+                self.jailed(self.run_bash(form % out))
+                self.allowed(self.run_bash(form % inside))
+        # an assignment and stdin are no files: from the main checkout, where a relative x=1 or -
+        # would be a main-checkout write, the in-worktree file alone is judged
+        for extra in ('x=1', '-'):
+            with self.subTest(extra):
+                self.allowed(self.run_bash("gawk -i inplace '{print}' %s \"%s\"" % (extra, inside), cwd=self.w.main))
+        # -d, -o or -p with no file writes awkvars.out or awkprof.out where it runs
+        for opt in ('-d', '-o', '-p', '--dump-variables', '--profile'):
+            with self.subTest(opt):
+                self.jailed(self.run_bash("gawk %s '{print}' a.txt" % opt, cwd=self.w.main), 'main-checkout')
+                self.allowed(self.run_bash("gawk %s '{print}' a.txt" % opt))
+
+    def test_awk_that_does_not_edit_in_place_writes_nothing(self):
+        out = self.out()
+        for text in ("awk '{print}' \"%s\"" % out, "gawk -F: -v x=1 '{print $1}' \"%s\"" % out,
+                     "gawk -f prog.awk \"%s\"" % out, "gawk -i lib '{print}' \"%s\"" % out,
+                     "gawk -v inplace::enable=0 '{print}' \"%s\"" % out, "gawk -E prog.awk -i inplace \"%s\"" % out):
+            with self.subTest(text):
+                self.allowed(self.run_bash(text))
+
+    def test_an_in_place_target_the_line_computes_is_unplaced(self):
+        # from a main checkout a computed target is a write the guard cannot place: rule unplaced,
+        # which warns by default (modes.DEFAULTS); from a worktree it is not judged
+        from unittest import mock
+        from kitlib import guard
+        from kitlib.guard import modes
+        from .claudehost import action
+        for text in ('gawk -i inplace \'{print}\' "$F"', 'sed -i s/a/b/ "$F"', 'ruby -i -pe 1 "$F"',
+                     'dos2unix "$F"'):
+            with self.subTest(text):
+                self.jailed(self.run_bash(text, cwd=self.w.main), 'unplaced')
+                with mock.patch.dict(modes.DEFAULTS, {'unplaced': modes.WARN}):
+                    d = guard.decide(action(bash(text, self.w.main, True)), self.w.ctx(environ={}))
+                self.assertEqual((d.verdict, d.rule), ('allow', rules.WARNED), d.reason)
+                self.allowed(self.run_bash(text))
+
+    def test_other_in_place_editors(self):
+        # ruby -i as perl -i, under its -C folder; dos2unix and its kin, sponge; vi, vim, ex and
+        # ed write every file operand (an operand-only read is refused too: accepted strictness)
+        out, inside = self.out(), W.fwd(os.path.join(self.w.wt, 'x.txt'))
+        forms = ('ruby -i -pe \'sub(/a/, "b")\' "%s"', 'ruby -pi.bak -e 1 "%s"', 'ruby -i edit.rb "%s"',
+                 'dos2unix "%s"', 'unix2dos -q "%s"', 'mac2unix "%s"', 'unix2mac "%s"', 'echo x | sponge "%s"',
+                 'vim -es -c \'%%s/a/b/|x\' "%s"', 'vi -c wq "%s"', 'ex -sc \'wq\' "%s"', 'nvim --cmd x +wq "%s"',
+                 'ed -s "%s"', 'ed -p ">" "%s"', 'vim -es -c q "%s"')
+        for form in forms:
+            with self.subTest(form):
+                self.jailed(self.run_bash(form % out))
+                self.allowed(self.run_bash(form % inside))
+        self.jailed(self.run_bash('ruby -C "%s" -i -pe 1 x.txt' % W.fwd(self.w.plain)))
+        self.allowed(self.run_bash('ruby -C sub -i -pe 1 x.txt'))
+        self.jailed(self.run_bash('ruby -x%s -i -pe 1 x.txt' % W.fwd(self.w.plain)))
+        self.allowed(self.run_bash('ruby -xsub -i -pe 1 x.txt'))
+        self.jailed(self.run_bash('ruby tool.rb -i "%s"' % out))     # options after the script are read, as perl
+        self.allowed(self.run_bash('ruby -pe 1 "%s"' % out))                # no -i: reads
+        self.jailed(self.run_bash('vim -es -w "%s" -c q a.txt' % out))       # -w's script output
+
     def test_copy_target_directory_forms_judge_the_directory(self):
         # the directory a -t cluster, -tDIR or --target-directory[=] (or an abbreviation) names is
         # what cp, mv, ln and install write, not the source
