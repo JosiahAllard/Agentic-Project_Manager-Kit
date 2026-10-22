@@ -96,7 +96,7 @@ The keys are in the machine config (docs/kit-json.md "Machine config keys"):
 
 Set `ledger_dir` and `ledger_repos` (or `ledger_path` alone for one file); the first `add` for a repository creates its file from `templates/common/LEDGER.md`.
 
-**Moving from one file.** The owner edits the machine config: add `ledger_dir` and `ledger_repos`, and keep `ledger_path`, which is then the frozen file ("Files"). Nothing is copied. Run `tools/ledger.py check`; new rulings go to each repository's file, and the R-nnnn entries stay readable where they are.
+**Moving from one file.** First retire, or supersede in the one file, each R-nnnn entry the owner means to end: after the split `retire R-nnnn` is refused, and `--supersedes` names only an earlier entry of the same file. Then the owner edits the machine config: add `ledger_dir` and `ledger_repos` (including `pm`, since `--repo all` is refused once `ledger_dir` is set), and keep `ledger_path`, which is then the frozen file ("Files"). Older kit copies reject `ledger_dir`, so set it only after every folder runs a kit that knows it. No entry is copied, but the standing digest moves: STANDING.md, beside the `ledger_path` file without `ledger_dir`, is read from `ledger_dir` with it, so move it there, with one `## <repo>` section per repository. Run `tools/ledger.py check`; new rulings go to each repository's file, and the R-nnnn entries stay readable in the frozen file for one release. The guard's ledger rule protects only the `ledger_path` file, so the files under `ledger_dir` are not guarded yet.
 
 To commit the ledger, put its folder inside a git work tree whose `.kit.json` names the main branch.
 
