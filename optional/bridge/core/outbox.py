@@ -410,10 +410,14 @@ class Outbox:
                 try:
                     if error is not None:raise error
                     self._native(db,row,outcome,now,reverse_reply)
-                except BeforeWriteError:
+                except BeforeWriteError as refused:
                     db.execute('ROLLBACK TO native_receipt')
                     self._release_reservation(db,operation)
-                    db.execute("UPDATE messages SET state='failed',last_confirmed='failed',reason='native-before-write' WHERE id=?",(operation,))
+                    # Keep the adapter's own fixed code (which check refused) when it is a
+                    # valid identifier; otherwise the generic reason.
+                    try:reason=identifier(refused.code)
+                    except Exception:reason='native-before-write'
+                    db.execute("UPDATE messages SET state='failed',last_confirmed='failed',reason=? WHERE id=?",(reason,operation))
                     self._event(db,operation,'failed')
                 except Exception:
                     db.execute('ROLLBACK TO native_receipt')
