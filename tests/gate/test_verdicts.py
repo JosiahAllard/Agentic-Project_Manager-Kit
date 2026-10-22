@@ -42,7 +42,7 @@ class SelfReviewWhy(unittest.TestCase):
 
     def test_a_high_risk_coordinator_self_review_is_refused_with_the_instead_line(self):
         tip = 'a' * 40
-        for over in ({'reviewer_id': 'coord-1'}, {'reviewer_id': ' COORD-1 '},
+        for over in ({'reviewer_id': 'coord-1'}, {'reviewer_id': ' Coord-1 '},
                      {'reviewer_id': 'agent-x / coord-1'},
                      {'reviewer': 'pm-kit:coordinator'}, {'reviewer': 'Coordinator'},
                      {'reviewer': 'kit-coordinator'}, {'reviewer': 'pm-kit:analyst / pm-kit:coordinator'},
