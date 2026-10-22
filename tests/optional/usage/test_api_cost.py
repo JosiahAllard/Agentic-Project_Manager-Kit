@@ -38,11 +38,19 @@ class ApiCost(unittest.TestCase):
 
     def test_price_low_and_high_cache_write(self):
         paths = [os.path.join(self.acct1, "projects", "p", "s.jsonl")]
-        lo, hi, toks = AP.price(paths, "2026-09-18")
+        lo, hi, toks, unpriced = AP.price(paths, "2026-09-18")
         self.assertAlmostEqual(lo["opus"], 5 + 5 * 1.25)    # 1 MTok input + 1 MTok cache write
         self.assertAlmostEqual(hi["opus"], 5 + 5 * 2.0)
         self.assertEqual(toks["opus"], 2_000_000)
         self.assertNotIn("mystery", toks)
+        self.assertEqual(dict(unpriced), {"mystery": 2_000_000})
+
+    def test_main_prints_the_tokens_it_could_not_price(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            AP.main(["2026-09-18", "--config-dir", self.acct1])
+        self.assertIn("no list price (left out of the totals): 2.0M tokens, mystery 2000000\n",
+                      out.getvalue())
 
     def test_main_reads_every_config_dir_given(self):
         out = io.StringIO()
@@ -67,7 +75,9 @@ class Rates(unittest.TestCase):
                             ("claude-opus-5-5[1m]", (4.0, 20.0, 0.20)), ("claude-sonnet-5-5", (2.0, 10.0, 0.20)),
                             ("claude-sonnet-4-6", (3.0, 15.0, 0.30)), ("claude-fable-5-1", (10.0, 50.0, 0.25)),
                             ("claude-haiku-4-5-20251001", (1.0, 5.0, 0.10)),
-                            ("claude-haiku-5-5", (0.10, 0.50, 0.01))):
+                            ("claude-haiku-5-5", (0.10, 0.50, 0.01)),
+                            ("claude-opus-4-5-20251101", (5.0, 25.0, 0.50)),
+                            ("claude-sonnet-4-5-20250929", (3.0, 15.0, 0.30))):
             with self.subTest(model):
                 self.assertEqual(AP.rates(model), want)
 

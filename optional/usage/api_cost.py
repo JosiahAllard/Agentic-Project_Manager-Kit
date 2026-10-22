@@ -18,8 +18,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _usage as U  # noqa: E402
 
 # USD per MTok (input, output, cache read): the Claude API list prices in the claude-api skill's
-# model table, copied 2026-10-06; Haiku 5.5's cache read is taken as 0.1x input, the table naming
-# none. A model id is priced by the longest key it starts with, followed by nothing, a date
+# model table, copied 2026-10-06; a cache read is 0.1x the input rate (the skill's
+# shared/model-migration.md), which gives Haiku 5.5's 0.01. A model id is priced by the longest key it starts with, followed by nothing, a date
 # (-20251001) or a [..] tag; a model no key names has no list price (rates() is None).
 RATES = {
     "claude-fable-5-1": (10.0, 50.0, 0.25),
@@ -29,9 +29,11 @@ RATES = {
     "claude-opus-4-8": (5.0, 25.0, 0.50),
     "claude-opus-4-7": (5.0, 25.0, 0.50),
     "claude-opus-4-6": (5.0, 25.0, 0.50),
+    "claude-opus-4-5": (5.0, 25.0, 0.50),
     "claude-sonnet-5-5": (2.0, 10.0, 0.20),
     "claude-sonnet-5": (2.0, 10.0, 0.20),
     "claude-sonnet-4-6": (3.0, 15.0, 0.30),
+    "claude-sonnet-4-5": (3.0, 15.0, 0.30),
     "claude-haiku-5-5": (0.10, 0.50, 0.01),
     "claude-haiku-4-5": (1.0, 5.0, 0.10),
 }
@@ -82,9 +84,10 @@ def family(model):
 
 
 def price(paths, since):
-    """(lo, hi, tokens): dicts by model family; models with no list price are left out. A message
-    id is counted once per transcript."""
-    lo, hi, toks = defaultdict(float), defaultdict(float), defaultdict(int)
+    """(lo, hi, tokens, unpriced): lo, hi and tokens are dicts by model family; unpriced is the
+    tokens of each model with no list price, left out of the others. A message id is counted
+    once per transcript."""
+    lo, hi, toks, unpriced = defaultdict(float), defaultdict(float), defaultdict(int), defaultdict(int)
     for p in paths:
         seen = set()
         for d in U.records(p):
@@ -97,11 +100,12 @@ def price(paths, since):
             fam, u = family(m.get("model")), m.get("usage") or {}
             low = turn_usd(m.get("model"), u, WRITE_5M)
             if fam is None or low is None:
+                unpriced[m.get("model") or "?"] += sum(u.get(k, 0) for k in TOKEN_KEYS)
                 continue
             lo[fam] += low
             hi[fam] += turn_usd(m.get("model"), u, WRITE_1H)
             toks[fam] += sum(u.get(k, 0) for k in TOKEN_KEYS)
-    return lo, hi, toks
+    return lo, hi, toks, unpriced
 
 
 def main(argv=None):
@@ -117,11 +121,14 @@ def main(argv=None):
         projects.setdefault(os.path.normcase(os.path.realpath(os.path.join(r, "projects"))),
                             os.path.join(r, "projects"))
     paths = [p for d in projects.values() for p in U.transcripts(d)]
-    lo, hi, toks = price(paths, since)
+    lo, hi, toks, unpriced = price(paths, since)
     print("since %s | %d transcripts | read: %s" % (since, len(paths), ", ".join(roots)))
     for f in FAMILIES:
         if toks[f]:
             print(f"{f:<7} {toks[f]/1e6:8.1f}M tokens   ${lo[f]:8.0f} - ${hi[f]:8.0f}")
+    if unpriced:
+        print("no list price (left out of the totals): %.1fM tokens, %s" % (
+            sum(unpriced.values()) / 1e6, ", ".join("%s %d" % kv for kv in sorted(unpriced.items()))))
     print(f"TOTAL                        ${sum(lo.values()):8.0f} - ${sum(hi.values()):8.0f}")
     return 0
 

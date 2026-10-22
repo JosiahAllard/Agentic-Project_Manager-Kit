@@ -180,6 +180,11 @@ def attribute(paths, index, since):
         recs = list(U.records(p))
         role, sub = U.session_role(p, recs), "subagents" in p
         whole = _whole(recs, index) if sub else None
+        tools = defaultdict(list)       # a turn's content blocks are written one record each
+        for d in recs:
+            if d.get("type") == "assistant":
+                msg = d.get("message") or {}
+                tools[msg.get("id")].append(_tool_text(msg))
         for d in recs:
             msg = d.get("message") or {}
             if d.get("type") != "assistant" or d.get("timestamp", "") < since \
@@ -191,7 +196,7 @@ def attribute(paths, index, since):
             elif sub:
                 (reason, cand), sure = whole, "medium"
             else:
-                c = named(_tool_text(msg), index)
+                c = named(" ".join(tools[msg.get("id")]), index)
                 cand, sure = (next(iter(c)) if len(c) == 1 else None), "medium"
                 reason = None if cand else ("several" if c else "coordination")
             key, ids = None, ()
@@ -297,6 +302,9 @@ def records_main(a):
     else:
         with open(a.pull_log, encoding="utf-8", errors="replace") as f:
             text = f.read()
+    if not text.strip():
+        print("warning: the pull log is empty, so no turn is placed on a record (pipe in "
+              "PULL_LOG's output or name it with --pull-log)", file=sys.stderr)
     paths = [("account %d" % (i + 1), p)
              for i, root in enumerate([a.root] + (a.extra_root or [])) for p in sorted(U.transcripts(root))
              if _touched_since(p, since)]

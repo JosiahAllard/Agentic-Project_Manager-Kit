@@ -344,6 +344,23 @@ class RecordCosts(unittest.TestCase):
         self.assertEqual(self.placed("c6")[:2], (None, "window"))          # kit/alpha released
         self.assertNotIn("c0", self.turns())                                # before since
 
+    def test_a_main_session_turn_written_as_several_records_is_placed_by_all_of_them(self):
+        F.write(os.path.join(self.root, "s3.jsonl"), [
+            F.turn("m7", "2026-10-01T13:30:00Z", usage=OUT, content=[{"type": "thinking", "thinking": "x"}]),
+            F.turn("m7", "2026-10-01T13:30:00Z", usage=OUT, content=[agent("t71", "build kit/alpha")]),
+            F.turn("m7", "2026-10-01T13:30:01Z", usage=OUT, content=[F.shell("t72", "git log kit/alpha")]),
+        ])
+        self.assertEqual(self.placed("m7"), ("EX-A", None, "main", "medium"))
+
+    def test_an_empty_pull_log_is_warned_about(self):
+        empty = os.path.join(self.tmp.name, "empty.log")
+        open(empty, "w").close()
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            self.assertEqual(AC.main([self.root, "2026-09-30", "--records", "--pull-log", empty]), 0)
+        self.assertIn("warning: the pull log is empty", err.getvalue())
+        self.assertNotIn("warning", self.report())
+
     def test_a_slug_two_pulled_branches_end_in_is_a_clash(self):
         self.assertEqual(self.placed("c2")[:2], (None, "clash"))
 
