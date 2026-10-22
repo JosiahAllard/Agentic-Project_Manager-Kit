@@ -806,6 +806,21 @@ class HubApproval(Fixture):
         self.assertEqual(drun.used(texts, None, 'hub:A-001'), 'H-kit-0001')
         self.assertIsNone(drun.used(texts, None, 'hub:A-002'))
 
+    def test_with_ledger_dir_both_entries_go_to_the_ops_repo_file_never_the_frozen_one(self):
+        frozen = os.path.join(self.dir, 'LEDGER.md')
+        with open(frozen, 'w', encoding='utf-8') as fh:
+            fh.write('frozen\n')
+        self.cfg = dict(self.cfg, ledger_path=frozen)
+        self.approve(op=self.op(repo='*', preconditions=[{'kind': 'file-exists', 'path': self.exe}]))
+        with open(os.path.join(self.folder, 'pm.md'), encoding='utf-8') as fh:
+            text = fh.read()
+        self.assertIn('## H-pm-0001 | 2026-10-20 12:00Z | pm | selected', text)
+        self.assertIn('## H-pm-0002 | 2026-10-20 12:00Z | pm | delegated', text)
+        self.assertIn('Source: under H-pm-0001: D-001 hub:A-001', text)
+        self.assertFalse(os.path.exists(self.ledger), 'the kit file was written')
+        with open(frozen, encoding='utf-8') as fh:
+            self.assertEqual(fh.read(), 'frozen\n')
+
     def test_a_source_naming_the_approval_itself_is_not_a_runner_entry(self):
         self.assertIsNone(drun.SOURCE_RE.match('under hub:A-001: D-001 hub:A-001'))
 
