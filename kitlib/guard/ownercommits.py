@@ -33,14 +33,14 @@ owner's email on the command line; an identity in the session's starting environ
 
 An owner approval (docs/commit.md "Owner approval"): a commit not authored by the owner that would
 be a violation is not one when it carries exactly one `Owner-Approval: hub:A-<n>` trailer
-(TRAILER; the id as the hub issues it, hub:A-001, APPROVAL_RE) and the hub server verifies that approval for exactly this commit
-(kitlib.hubsite.approvals, Verifier with the commit): the commit has one parent, the approval's
-base; every path it changes, with its blob at the commit (None when it deletes it), is the
-approval's, all of them; and the approval was consumed by this commit. A merge, a root commit, a
-path the commit holds as anything but a regular file (a symbolic link, a gitlink: blobs_at), a
-value that is not one hub:A-<n>, and any doubt of the hub (not running, no answer) keep the
-violation, with why in its `why`. `approvals` is the seam: an object with
-check(root, doc_id, head, blobs, commit) -> (ok, why); default_approvals() is the hub's.
+(TRAILER; the id as the hub issues it, hub:A-001, APPROVAL_RE) and the hub server verifies that
+approval for exactly this commit (kitlib.hubsite.approvals, Verifier with the commit): the
+commit has one parent, the approval's base; every path it changes, with its blob at the commit
+(None when it deletes it), is the approval's, all of them; and the approval was consumed by this
+commit. A merge, a root commit, a path the commit holds as anything but a regular file (a
+symbolic link, a gitlink: blobs_at), a value that is not one hub:A-<n>, and any doubt of the hub
+(not running, no answer) keep the violation, with why in its `why`. `approvals` is the seam: an
+object with check(root, doc_id, head, blobs, commit) -> (ok, why); default_approvals() is the hub's.
 """
 import collections
 import re

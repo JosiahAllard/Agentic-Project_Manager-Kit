@@ -519,6 +519,14 @@ class OwnerApprovals(ApprovalsCase):
                 self.assertIn('is not one hub:A-<n>', found[0].why)
         self.assertEqual(self.hub.asked, [])
 
+    def test_the_ids_the_hub_issues_are_read(self):
+        for value, did in (('hub:A-001', 'A-001'), ('hub:A-999', 'A-999'),
+                           ('hub:A-1000', 'A-1000')):
+            with self.subTest(value=value):
+                found = oc.APPROVAL_RE.match(value)
+                self.assertIsNotNone(found)
+                self.assertEqual(found.group(1), did)
+
     def test_a_merge_cannot_carry_an_approval(self):
         wt = self.repo.worktree('x')
         self.commit_as(AGENT, 'branch work', {'a.py': 'a\n'}, cwd=wt)
