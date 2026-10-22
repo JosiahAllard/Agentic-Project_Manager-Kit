@@ -652,7 +652,10 @@ blob is the one `commit.py --owner-approval` writes; the work tree is never read
 consumer needs the file still at its base. The base is PATH's blob at `--head` (default: the
 checkout's HEAD), none for a file absent there; `--repo` defaults to the checkout's origin.
 Refused before anything is posted, in the builder's or `approvals.new_doc`'s words: a head that is
-not 40 hex digits or not a commit of the checkout, a path at head that is not a file, a new file
+not 40 hex digits or not a commit of the checkout, a path an owner approval may not carry (a render
+source in a kit checkout, or a path the repository's owner rules do not lock, as `commit.py` reads
+them: `hubapprove.owner_paths_error`, whose refusal says where each named file is committed
+instead), a path at head that is not a file, a new file
 the work tree already has, a file at head whose work tree copy git does not hash to its base (the
 consumer's prewrite check refuses both), a content file that cannot be read, is not UTF-8 or is
 over `approvals.MAX_CONTENT_BYTES`, content that is the file at head, content git would store as
