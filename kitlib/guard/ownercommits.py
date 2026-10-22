@@ -33,7 +33,7 @@ owner's email on the command line; an identity in the session's starting environ
 
 An owner approval (docs/commit.md "Owner approval"): a commit not authored by the owner that would
 be a violation is not one when it carries exactly one `Owner-Approval: hub:A-<n>` trailer
-(TRAILER) and the hub server verifies that approval for exactly this commit
+(TRAILER; the id as the hub issues it, hub:A-001, APPROVAL_RE) and the hub server verifies that approval for exactly this commit
 (kitlib.hubsite.approvals, Verifier with the commit): the commit has one parent, the approval's
 base; every path it changes, with its blob at the commit (None when it deletes it), is the
 approval's, all of them; and the approval was consumed by this commit. A merge, a root commit, a
@@ -51,7 +51,11 @@ Violation = collections.namedtuple('Violation', 'sha author paths why', defaults
 NOREPLACE = ['--no-replace-objects']
 LIST_TIMEOUT = 120    # seconds
 TRAILER = 'Owner-Approval'          # the one key; kitlib.config.owner refuses it as its own trailer
-APPROVAL_RE = re.compile(r'hub:(A-[1-9][0-9]*)\Z')
+# The id exactly as the hub issues it ('A-%03d', kitlib.hubsite.store): A-001 to A-999, then
+# A-1000 on; A-1, A-01 and A-000 are no id it writes (tests/commit/test_commit_approval.py
+# TheIdTheHubIssues takes one from a real hub).
+APPROVAL_RE = re.compile(r'hub:(A-(?:(?!000)[0-9]{3}|[1-9][0-9]{3,}))\Z')
+EXAMPLE = 'hub:A-001'
 _SEP = '\x01'                       # between the trailer values of one commit in commits()
 REGULAR_MODES = ('100644', '100755')    # the tree modes of a regular file
 NOT_A_FILE = 'is not a regular file'    # blobs_at's text for any other entry
@@ -233,7 +237,8 @@ def approval_refusal(root, sha, parents, values, paths, approvals, env=None):
     if not values:
         return None, None
     if len(values) != 1 or not APPROVAL_RE.match(values[0]):
-        return 'its Owner-Approval %s is not one hub:A-<n>' % ', '.join(values), None
+        return ('its Owner-Approval %s is not one hub:A-<n> (as %s)'
+                % (', '.join(values), EXAMPLE)), None
     doc_id = APPROVAL_RE.match(values[0]).group(1)
     name = 'owner approval hub:%s' % doc_id
     if len(parents) != 1:
