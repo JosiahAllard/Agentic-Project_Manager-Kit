@@ -190,7 +190,7 @@ key put into and popped from a dict, which the interpreter does as one step each
 
 Push status. GET snapshot carries `push`: null when this hub runs no push-notification worker,
 else {"state", "last", "undelivered"} from PushWorker.status (kitlib.hubsite.push docstring
-"Status"): state 'up' or 'down', last the latest delivery's state (null before the first),
+"Status"): state 'up' or 'down', last the latest delivery to the PM's state (null before the first),
 undelivered the number of items some recipient has not yet had a written try of. The worker
 sets Api.push_status when it is made; the snapshot reads it on the request's thread.
 

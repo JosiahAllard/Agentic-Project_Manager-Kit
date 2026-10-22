@@ -75,11 +75,13 @@ stop flag is checked before each. poll() runs one round on the caller's thread, 
 while the thread runs).
 
 Status (the hub page's push line, Api.push_seen): status() -> {"state", "last", "undelivered"}.
-last is the state of the latest deliver (None before the first), undelivered the number of
-outbox items some recipient has not yet had a written try of. state is 'down' when the latest
-deliver was not WRITTEN or the started thread has ended, else 'up'. The worker builds a new dict
-after begin() and each round, on its own thread, and status() reads that one reference, so a
-caller on another thread never sees one half-built.
+last is the state of the latest deliver to the PM (PM_KEY; None before the first): another
+session's result never moves it, so a session that has ended (NO_SESSION, routine) does not
+make delivery look down. undelivered is the number of outbox items some recipient has not yet
+had a written try of. state is 'down' when start() has not finished, its thread has ended, or
+last is not WRITTEN; else 'up'. last and state change only when a deliver to the PM is tried.
+The worker builds a new dict after begin() and each round, on its own thread, and status()
+reads that one reference, so a caller on another thread never sees one half-built.
 """
 import collections
 import datetime
@@ -204,7 +206,8 @@ class PushWorker(object):
         self._fps = {}
         self._outbox = {}
         self._dirty = False
-        self._last = None               # the latest deliver's state
+        self._last = None               # the latest deliver's state to the PM
+        self._started = False           # start() finished: until then status() is 'down'
         self._status = {'state': 'up', 'last': None, 'undelivered': 0}
         if api is not None:
             api.push_status = self.status   # the snapshot's `push` (Api.push_seen)
@@ -215,6 +218,7 @@ class PushWorker(object):
         self.begin()
         self._thread = threading.Thread(target=self._run, name='hub-push', daemon=True)
         self._thread.start()
+        self._started = True
 
     def begin(self):
         """The baseline (every item's fingerprint now) and the outbox, with any outbox entry
@@ -274,7 +278,7 @@ class PushWorker(object):
         """{"state", "last", "undelivered"} (module docstring "Status"); any thread."""
         out = dict(self._status)
         t = self._thread
-        if t is not None and not t.is_alive():
+        if not self._started or t is None or not t.is_alive():
             out['state'] = 'down'
         return out
 
@@ -472,7 +476,8 @@ class PushWorker(object):
             self.log('push: deliver to %s failed: %s' % (field(recipient), type(e).__name__))
             sent = Sent(UNCERTAIN, None, None, False)
         state = sent.state if sent.state in (WRITTEN, NOT_WRITTEN, UNCERTAIN, NO_SESSION) else UNCERTAIN
-        self._last = state
+        if recipient == PM_KEY:
+            self._last = state
         for key in shown:
             entry = self._outbox[key]
             st = entry['recipients'][recipient]

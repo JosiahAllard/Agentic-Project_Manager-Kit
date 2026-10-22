@@ -2446,53 +2446,100 @@ class ApprovalRouteTest(ApiCase):
 
 
 class PushStatusTest(ApiCase):
-    """The snapshot carries the push worker's status: delivery up or down, and what is undelivered."""
+    """The snapshot carries the push worker's status: delivery up or down, and what is undelivered.
+    The worker runs on its own thread, as in a hub (state is 'down' until start() has finished)."""
 
     class Deliver(object):
         def __init__(self):
-            self.state = push.WRITTEN
+            self.states = {}
+            self.calls = []
 
         def deliver(self, recipient, text):
-            return push.Sent(self.state, None, None, False)
+            self.calls.append(recipient)
+            return push.Sent(self.states.get(recipient, push.WRITTEN), None, None, False)
 
         def is_pm(self, recipient):
             return False
 
     def setUp(self):
         super().setUp()
-        folder = tempfile.mkdtemp(prefix='kit-hubapi-push-')
-        self.addCleanup(shutil.rmtree, folder, True)
+        self.api = api.Api(self.store, clock=CLOCK, session_keys=lambda: {'kit'})
+        self.folder = tempfile.mkdtemp(prefix='kit-hubapi-push-')
+        self.addCleanup(shutil.rmtree, self.folder, True)
         self.fake = self.Deliver()
         self.t = [1000000.0]
-        self.worker = push.PushWorker(self.store, self.api, self.fake, folder, clock=lambda: self.t[0])
-        self.worker.begin()
+        self.worker = push.PushWorker(self.store, self.api, self.fake, self.folder, clock=lambda: self.t[0])
+
+    def run_worker(self):
+        self.worker.start()
+        self.addCleanup(self.worker.stop, 5)
 
     def status(self):
         return self.ok('GET', '/snapshot', OWNER)['push']
 
-    def answered(self):
-        qid = self.ok('POST', '/questions', AGENT, {'title': 't', 'options': OPTIONS})['id']
+    def until(self, want):
+        deadline = threading.Event()
+        for _ in range(200):
+            got = self.status()
+            if all(got.get(k) == v for k, v in want.items()):
+                return got
+            deadline.wait(0.05)
+        self.fail('push status never became %r: %r' % (want, self.status()))
+
+    def answered(self, **kw):
+        body = {'title': 't', 'options': OPTIONS}
+        body.update(kw)
+        qid = self.ok('POST', '/questions', AGENT, body)['id']
         self.ok('POST', '/questions/%s/answer' % qid, OWNER, {'choice': 0})
         return qid
 
     def test_no_worker_is_null(self):
         self.assertIsNone(api.Api(self.store, clock=CLOCK).push_seen())
 
-    def test_a_fresh_worker_is_up_with_nothing_undelivered(self):
+    def test_a_running_worker_is_up_with_nothing_undelivered(self):
+        self.run_worker()
         self.assertEqual(self.status(), {'state': 'up', 'last': None, 'undelivered': 0})
 
-    def test_a_delivery_not_written_is_down_and_counts_the_item(self):
-        self.fake.state = push.NO_SESSION
+    def test_a_worker_whose_start_failed_is_down(self):
+        self.assertEqual(self.status()['state'], 'down', 'made, not started')
+        with mock.patch.object(self.store, 'snapshot', side_effect=RuntimeError('no')):
+            with self.assertRaises(RuntimeError):
+                self.worker.start()
+        self.assertEqual(self.status(), {'state': 'down', 'last': None, 'undelivered': 0})
+
+    def test_a_delivery_to_the_pm_not_written_is_down_and_counts_the_item(self):
+        self.fake.states['pm'] = push.NO_SESSION
+        self.run_worker()
+        self.answered()
+        self.until({'state': 'down', 'last': push.NO_SESSION, 'undelivered': 1})
+        self.fake.states['pm'] = push.WRITTEN
+        self.t[0] += push.SCHEDULE_S[0]
+        self.until({'state': 'up', 'last': push.WRITTEN, 'undelivered': 0})
+
+    def test_an_ended_asking_session_does_not_make_delivery_down(self):
+        self.fake.states['kit'] = push.NO_SESSION
+        self.run_worker()
+        self.answered(**{'from': 'kit'})
+        got = self.until({'last': push.WRITTEN, 'undelivered': 1})
+        self.assertEqual(got['state'], 'up', 'the PM heard it; only the ended session did not')
+
+    def test_the_last_state_is_the_pms_whatever_order_the_round_tries(self):
+        # poll() on this thread, so the order is fixed: the PM's earlier item makes the PM the
+        # first recipient of the round, the ended session the last one tried
+        self.fake.states['kit'] = push.NO_SESSION
+        self.worker.begin()
         self.answered()
         self.worker.poll()
-        self.assertEqual(self.status(), {'state': 'down', 'last': push.NO_SESSION, 'undelivered': 1})
-        self.fake.state = push.WRITTEN
         self.t[0] += push.SCHEDULE_S[0]
+        self.answered(**{'from': 'kit'})
         self.worker.poll()
-        self.assertEqual(self.status(), {'state': 'up', 'last': push.WRITTEN, 'undelivered': 0})
+        self.assertEqual(self.fake.calls, ['pm', 'pm', 'kit'], 'the ended session was tried last')
+        got = self.status()
+        self.assertEqual((got['last'], got['undelivered']), (push.WRITTEN, 1), got)
 
     def test_a_worker_whose_thread_ended_is_down(self):
-        self.worker.start()
+        self.run_worker()
+        self.assertEqual(self.status()['state'], 'up')
         self.assertTrue(self.worker.stop(5))
         self.assertEqual(self.status()['state'], 'down')
 
@@ -2501,7 +2548,6 @@ class PushStatusTest(ApiCase):
             raise RuntimeError('no')
         self.api.push_status = broken
         self.assertEqual(self.status(), {'state': 'down', 'last': 'RuntimeError', 'undelivered': None})
-
 
 if __name__ == '__main__':
     unittest.main()
