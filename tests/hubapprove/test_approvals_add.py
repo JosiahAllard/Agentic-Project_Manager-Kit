@@ -339,14 +339,20 @@ class OnlyOwnerOnlyPathsAreRequested(Case):
             ('README.md', self.content('x\n')), ('src/app.py', self.content('a\n', 'a.txt')),
             ('notes.txt', self.content('n\n', 'n.txt'))])
         self.assertNotIn('README.md', said)
-        self.assertIn('Post the other owner-only files alone', said)
-        self.assertIn('commit src/app.py, notes.txt in an ordinary commit', said)
+        self.assertIn('Post the other owner-only files alone in the request; commit src/app.py, '
+                      'notes.txt in an ordinary commit (tools/commit.py), before or after the '
+                      'approved one', said)
         self.assertNotIn('--owner-authored', said)
 
     def test_the_default_rules_lock_neither_a_readme_nor_docs(self):
         os.remove(self.repo.path('.kit.json'))
-        self.refused('files', 'README.md, docs/new.md (not owner-only', [
+        said = self.refused('files', 'README.md, docs/new.md (not owner-only', [
             ('README.md', self.content('x\n')), ('docs/new.md', self.content('n\n', 'n.txt'))])
+        # nothing in it is owner-only, so there are no other files to post
+        self.assertIn('. No owner approval is needed for these files: commit README.md, '
+                      'docs/new.md in an ordinary commit (tools/commit.py)', said)
+        self.assertNotIn('Post the other', said)
+        self.assertNotIn('approved one', said)
 
     def test_a_render_source_in_a_kit_checkout_is_refused_though_owner_only(self):
         self.kit()
@@ -355,8 +361,10 @@ class OnlyOwnerOnlyPathsAreRequested(Case):
             ('content/roles/coordinator.md', self.content('c\n', 'c.txt'))])
         self.assertNotIn('not owner-only', said)
         # owner-only too: commit.py refuses it in an ordinary commit, so that is not the advice
-        self.assertIn('content/roles/coordinator.md is owner-only as well, so it goes in a commit '
-                      'the owner authors (tools/commit.py --owner-authored)', said)
+        self.assertIn('Post the other owner-only files alone in the request; '
+                      'content/roles/coordinator.md is owner-only as well, so it goes in a commit '
+                      'the owner authors (tools/commit.py --owner-authored --owner-approved '
+                      'content/roles/coordinator.md), not in an ordinary commit', said)
         self.assertNotIn('in an ordinary commit (tools', said)
 
     def test_render_sources_and_unlocked_paths_are_both_named(self):
@@ -368,8 +376,26 @@ class OnlyOwnerOnlyPathsAreRequested(Case):
             ('hosts/claude/agents/coordinator.md', self.content('r\n', 'r.txt'))])
         self.assertIn(' and hosts/claude/agents/coordinator.md (not owner-only', said)
         self.assertIn('commit hosts/claude/agents/coordinator.md in an ordinary commit', said)
-        self.assertIn('kit.json is owner-only as well, so it goes in a commit the owner authors',
-                      said)
+        self.assertIn('Post the other owner-only files alone in the request; commit '
+                      'hosts/claude/agents/coordinator.md in an ordinary commit (tools/commit.py), '
+                      'before or after the approved one; kit.json is owner-only as well, so it '
+                      'goes in a commit the owner authors (tools/commit.py --owner-authored '
+                      '--owner-approved kit.json), not in an ordinary commit', said)
+
+    def test_when_every_path_is_refused_no_approval_is_advised(self):
+        self.kit()
+        own(self.repo.root, ['content/', 'kit.json'])
+        said = self.refused('files', 'content/roles/a.md, kit.json (a render source', [
+            ('content/roles/a.md', self.content('a\n')),
+            ('kit.json', self.content('{}\n', 'k.txt')),
+            ('src/app.py', self.content('s\n', 's.txt'))])
+        self.assertIn('. No owner approval is needed for these files: commit src/app.py in an '
+                      'ordinary commit (tools/commit.py); content/roles/a.md, kit.json is '
+                      'owner-only as well, so it goes in a commit the owner authors '
+                      '(tools/commit.py --owner-authored --owner-approved content/roles/a.md '
+                      '--owner-approved kit.json), not in an ordinary commit', said)
+        self.assertNotIn('Post the other', said)
+        self.assertNotIn('approved one', said)
 
     def test_a_render_source_that_is_not_owner_only_goes_in_an_ordinary_commit(self):
         self.kit()

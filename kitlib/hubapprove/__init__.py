@@ -12,8 +12,8 @@ Refused here, with nothing posted (RequestError): a checkout that is not a git w
 the checkout's origin cannot name, a head that is not 40 hex digits or not a commit of the
 checkout, a path that is not a plain path of the repository, a path that is not an owner approval's
 to carry (owner_paths_error: a render source in a kit checkout, which tools/commit.py
---owner-approval refuses, or a path the checkout's owner rules do not lock, `.kit.json`
-"owner".paths as kitlib.commit reads them), a path at head that is not a file, a
+--owner-approval refuses, or a path the repository's owner rules do not lock, as commit.py
+reads them), a path at head that is not a file, a
 new file the work tree already has, a file at head whose work tree copy git does not hash to its
 base (the consumer's prewrite check would refuse either), a content file that cannot be read, is
 not UTF-8 or is over the size cap, a file whose content is its base (the consumer refuses a change
@@ -69,8 +69,8 @@ def owner_paths_error(top, paths):
     """None when every one of `paths` (repo-relative, `/`) is one an owner approval may carry,
     else the refusal naming the others: a render source when `top` is a kit checkout (the test
     kitlib.commit._approval_first applies: oncommit.wants_render and oncommit.is_kit), and a path
-    the owner rules of `top`'s `.kit.json` (kconfig.load(top).owner_rules(), as kitlib.commit
-    reads them) do not lock. RequestError when the configuration is refused."""
+    the repository's owner rules (kconfig.load(top).owner_rules(), as commit.py reads them) do
+    not lock. RequestError when the configuration is refused."""
     try:
         rules = kconfig.load(top).owner_rules()
     except kconfig.ConfigError as e:
@@ -89,16 +89,19 @@ def owner_paths_error(top, paths):
                      % ', '.join(ordinary))
     locked = [p for p in rendered if rules.is_locked(p)]
     plain = [p for p in paths if p in ordinary or (p in rendered and p not in locked)]
-    advice = ['Post the other owner-only files alone in the request']
+    others = [p for p in paths if p not in rendered and p not in ordinary]
+    advice = []
     if plain:
-        advice.append('commit %s in an ordinary commit (tools/commit.py), before or after the '
-                      'approved one' % ', '.join(plain))
+        advice.append('commit %s in an ordinary commit (tools/commit.py)%s' % (
+            ', '.join(plain), ', before or after the approved one' if others else ''))
     if locked:
         advice.append('%s is owner-only as well, so it goes in a commit the owner authors '
-                      '(tools/commit.py --owner-authored), not in an ordinary commit'
-                      % ', '.join(locked))
-    return ('an owner approval carries owner-only files only, and this request names %s. %s'
-            % (' and '.join(named), '; '.join(advice)))
+                      '(tools/commit.py --owner-authored %s), not in an ordinary commit' % (
+                          ', '.join(locked), ' '.join('--owner-approved ' + p for p in locked)))
+    lead = ('Post the other owner-only files alone in the request; ' if others
+            else 'No owner approval is needed for these files: ')
+    return ('an owner approval carries owner-only files only, and this request names %s. %s%s'
+            % (' and '.join(named), lead, '; '.join(advice)))
 
 
 def build(checkout, title, files, repo=None, head=None, reason=None, now=None, run=None,
