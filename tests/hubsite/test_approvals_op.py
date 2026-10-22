@@ -76,12 +76,6 @@ class OpDocTest(unittest.TestCase):
                      'run D-001 =1', 'run D-001 a', 'run D-001 a=<dev-drive>', 'run D-001 a=b;c',
                      'run D-001 a=' + 'x' * 201, 'run D-001 ' + 'a' * 32 + '=1'):
             cases.append(((OP, REPO, line, 't'), 'line'))
-        for line in ('robocopy.exe dd/in dd/out', 'run', 'run D-002 a=1', 'run  D-001',
-                     'RUN D-001', 'run D-001 b=1 a=2', 'run D-001 a=1 a=2', 'run D-001  a=1',
-                     'run D-001 a=1 ', 'run D-001 a=x y', 'run D-001 A=1', 'run D-001 a=',
-                     'run D-001 =1', 'run D-001 a', 'run D-001 a=<dev-drive>', 'run D-001 a=b;c',
-                     'run D-001 a=' + 'x' * 201, 'run D-001 ' + 'a' * 32 + '=1'):
-            cases.append(((OP, REPO, line, 't'), 'line'))
         for args, field in cases:
             with self.assertRaises(ap.ApprovalError, msg=repr(args)) as cm:
                 ap.new_op_doc(*(args + (T0,)))
@@ -135,6 +129,26 @@ class SignTest(unittest.TestCase):
         doc['line'] = None
         self.assertEqual(ap.check_op(KEY, 'A-1', doc, OP, REPO, sha(), T0 + SECOND),
                          (False, ap.WHY_BAD))
+
+    def test_a_line_that_no_longer_hashes_to_its_args_is_neither_decided_nor_consumed(self):
+        # The stored line, not args_sha256, is what the owner reads on the page and the runner
+        # names: a document whose line was changed after the request must not be signed or used.
+        for line in ('run D-001 dest=dd/other mode=mirror src=dd/in', None):
+            doc = pending()
+            doc['line'] = line
+            with self.assertRaises(ap.ApprovalError, msg=repr(line)) as cm:
+                ap.decide_fields(KEY, 'A-1', doc, ap.APPROVE, T0)
+            self.assertEqual((cm.exception.code, cm.exception.message, cm.exception.field),
+                             ('conflict', ap.WHY_BAD, 'line'), repr(line))
+            doc = approved()
+            doc['line'] = line
+            with self.assertRaises(ap.ApprovalError, msg=repr(line)) as cm:
+                ap.consume_op_fields(KEY, 'A-1', doc, sha(), T0 + SECOND)
+            self.assertEqual((cm.exception.code, cm.exception.message, cm.exception.field),
+                             ('conflict', ap.WHY_BAD, 'line'), repr(line))
+        doc = pending()
+        doc['line'] = 'run D-001 dest=dd/other mode=mirror src=dd/in'
+        self.assertEqual(ap.decide_fields(KEY, 'A-1', doc, ap.DENY, T0)['status'], ap.DENIED)
 
     def test_an_unknown_kind_never_signs_or_verifies(self):
         doc = pending()

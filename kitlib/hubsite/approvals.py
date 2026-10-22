@@ -460,6 +460,8 @@ def decide_fields(key, doc_id, doc, decision, now):
     fields = {'status': APPROVED if decision == APPROVE else DENIED, 'decision': decision,
               'decided_at': _iso(now)}
     if decision == APPROVE:
+        if doc.get('kind') == KIND_OP and not _line_holds(doc):
+            raise ApprovalError(WHY_BAD, 'line', 'conflict')
         if not key:
             raise ApprovalError('there is no approval key to sign with', 'decision', 'conflict')
         signed = dict(doc, **fields)
@@ -468,6 +470,13 @@ def decide_fields(key, doc_id, doc, decision, now):
         except ValueError:
             raise ApprovalError(WHY_BAD, 'files', 'conflict')
     return fields
+
+
+def _line_holds(doc):
+    """True when the op document `doc` holds a line that hashes to its args_sha256: the line the
+    owner reads is the one the signature binds."""
+    line = doc.get('line')
+    return isinstance(line, str) and line_sha256(line) == doc.get('args_sha256')
 
 
 def _signed(key, doc_id, doc):
@@ -553,7 +562,7 @@ def check_op(key, doc_id, doc, op, repo, args_sha256, now):
     status = status_at(doc, now)
     if status != APPROVED:
         return False, WHY_STATUS % (status or 'malformed')
-    if not isinstance(doc.get('line'), str) or line_sha256(doc['line']) != doc['args_sha256']:
+    if not _line_holds(doc):
         return False, WHY_BAD
     if op != doc['op']:
         return False, WHY_OP
@@ -585,6 +594,8 @@ def consume_op_fields(key, doc_id, doc, args_sha256, now):
                             % (status or 'malformed'), 'status', 'conflict')
     if args_sha256 != doc.get('args_sha256'):
         raise ApprovalError(WHY_ARGS, 'args_sha256', 'conflict')
+    if not _line_holds(doc):
+        raise ApprovalError(WHY_BAD, 'line', 'conflict')
     return {'status': CONSUMED, 'consumed_at': _iso(now)}
 
 
