@@ -110,7 +110,7 @@ The PM runs it after the owner has ordered the run. The run line is `run D-nnn n
    - A ledger id must be a live owner entry of the operation's repo (any repo for `*`), written in the last 24 h, whose Decides is the run line.
    - A hub approval: the steps of "Hub approvals".
 5. The preconditions hold. `file-exists` needs an absolute path to a file. `branch-landed` needs the branch's tip, local or remote-tracking, to have landed (`kitlib.landed.look`). `checklist-line` needs a line of the PM start checklist that holds the text and is not a failed check.
-6. The claim, under the runner lock (`delegated-runs`, beside the ledger file). No live entry of provenance `delegated` may name this anchor or this trigger. Then one entry is added: provenance `delegated`, Decides the run line, Source `under <anchor>: D-nnn <trigger>`. The anchor is the owner entry: the question's ruling, or the ledger id itself. The entry is not committed, as with `ledger.py add`. So each question and each owner entry orders one run, and a failed run still uses up its order.
+6. The claim, under the runner lock (`delegated-runs`, beside the ledger file). No live entry of provenance `delegated` may name this anchor or this trigger. Then one entry is added: provenance `delegated`, Decides the run line, Source `under <anchor>: D-nnn <trigger>`. The anchor is the owner entry: the question's ruling, or the ledger id itself; for a hub approval, the approval itself ("Hub approvals"). The entry is not committed, as with `ledger.py add`. So each question, each owner entry and each approval orders one run, and a failed run still uses up its order.
 7. The child: the argument list with `shell=False`, stdin closed, and the kit folder as its working folder (a hub approval's: a new empty folder, "Hub approvals"). Its environment is built from an allowlist, and nothing else reaches it (no `GIT_*`, no `PYTHON*`, no PATH of the caller's):
    - from the registry: `PATH` (as in step 3), `PSModulePath` (the machine's value, then the user's), `PATHEXT` (the user's, or else the machine's), and the system and profile folders, each filled as a `%NAME%` is in step 3 (`FROM_SYSTEM` in `kitlib/delegations/run.py`): `SystemRoot`, `windir`, `SystemDrive`, `ComSpec`, `ProgramFiles`, `ProgramFiles(x86)`, `ProgramW6432`, `CommonProgramFiles`, `CommonProgramFiles(x86)`, `ProgramData`, `ALLUSERSPROFILE`, `PUBLIC`, `USERPROFILE`, `HOMEDRIVE`, `HOMEPATH`, `APPDATA` and `LOCALAPPDATA`. A name the registry has no value for is left out, never taken from the caller;
    - from the caller, as they are: `USERNAME`, `USERDOMAIN`, `COMPUTERNAME`, `TEMP`, `TMP`, `NUMBER_OF_PROCESSORS`, `PROCESSOR_ARCHITECTURE` and `OS`.
@@ -136,15 +136,14 @@ With no `dev_drive` set, every request and every approval run is refused.
 `run --approval hub:A-nnn` then takes, in place of step 4 of "Running":
 
 1. The operation lists `hub-approval`, and the scope above holds.
-2. No live ledger entry records the approval: neither one whose Source is `hub:A-nnn` nor a runner entry whose trigger it is.
+2. No live ledger entry names the approval as its anchor (`under hub:A-nnn`) or as a runner entry's trigger.
 3. The hub verifies the approval (GET `/approvals/A-nnn/verify`, kind `op`) for this operation, its repo and the run line's SHA-256, and answers its version. No hub, or a hub that cannot answer, refuses.
 
 After the preconditions (step 5), the runner makes a new empty folder under the machine's temp folder, then consumes the approval on the hub (POST `/approvals/A-nnn/consume`), pinned to the version it verified. Of two runners racing, one wins. A runner that cannot consume it, or that is answered with any status but `consumed`, runs nothing and logs nothing.
 
-The claim (step 6) then writes two entries, under the runner lock, not committed:
+The claim (step 6) then writes one entry, under the runner lock, not committed: the run entry, provenance `delegated`, Decides the run line, Source `under hub:A-nnn: D-nnn hub:A-nnn`. The approval is its own anchor: the owner signed it on the hub, and the hub verified and consumed it, so the ledger accepts a delegated entry under it with no owner entry (docs/ledger.md "Provenance"). The runner never writes an owner-provenance entry for an approval.
 
-- the approval's record, the owner's own entry: provenance `selected`, Decides the run line, Source `hub:A-nnn`. The owner signed the approval on the hub, and the hub verified and consumed it;
-- the run entry: provenance `delegated`, Source `under <the record's id>: D-nnn hub:A-nnn`.
+An approval is given only with `--approval`; `--trigger hub:...` is refused.
 
 The child runs in the empty folder, which is removed afterwards if it is still empty.
 
@@ -154,9 +153,9 @@ How `commit.py --owner-approval` uses an approval is different: it writes no led
 
 - An approved run's scope covers only the paths named on its command line. Where the program writes by default (an installer's own folder, a tool's cache or log) is not judged.
 - The scope is checked before the order, the preconditions and the claim, and the run starts after them. A checkout or a link made inside a judged folder in between is not seen.
-- An approval is consumed on the hub before its entries are written. If the ledger then refuses them (the lock is busy, the file cannot be written), the approval is used up and nothing ran: the agent asks for a new one. If the record is written and the run entry refused, the record stays, and it still refuses the approval.
-- The approval path trusts whatever listens on the hub's local port (`approvals.verify_op`, `approvals.consume_op`). With the hub down, an agent's own listener there that answers `valid` and then `consumed` makes the runner run the command, and the runner then writes the approval's record, an owner entry. That is weaker than the hub order check below, where a forged listener alone is not enough: an approval run has no owner ledger entry to check, so the listener's answers are all that stands.
-- The approval's record is an owner entry whose Decides is the run line. For an operation that also lists `owner-session`, `--trigger <the record's id>` passes the order check for 24 h, with no hub check. While the run entry lives, it is anchored on the record and refuses that ("already ran"). Once the run entry is retired or missing (the ledger refused it after the record was written), the record runs the same line once more as an owner-session order.
+- The scope check does not see everything: a bare repository (a folder that is a repository without `.git`), a hard link, and a junction made after the check are not found.
+- An approval is consumed on the hub before its entry is written. If the ledger then refuses it (the lock is busy, the file cannot be written), the approval is used up and nothing ran: the agent asks for a new one.
+- The approval path, like `commit.py --owner-approval`, trusts whatever answers on the hub's local port (`approvals.verify_op`, `approvals.consume_op`). With no hub there the runner refuses, but an agent's own listener on that port that answers `valid` and then `consumed` makes the runner run the command. It then gets only the run entry, a `delegated` entry under the approval, and never an owner entry. That is weaker than the hub order check below, where a forged listener alone is not enough: an approval run has no owner ledger entry to check, so the listener's answers are all that stands.
 
 - D-003 is not runnable yet: its only trigger, `standing:pm-start-checklist`, is a standing trigger, and the runner refuses both standing triggers.
 - D-001 cannot run: its command is a PowerShell cmdlet, and the runner starts only an `.exe` from an argument list, never a shell.
