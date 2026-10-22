@@ -1650,7 +1650,7 @@ PS_ALIASES = {'sc': 'set-content', 'ac': 'add-content', 'clc': 'clear-content', 
               'epal': 'export-alias', 'epsn': 'export-pssession',
               'gci': 'get-childitem', 'ls': 'get-childitem', 'dir': 'get-childitem', 'sp': 'set-itemproperty'}
 BASH_WRITERS = {'tee', 'touch', 'mkdir', 'rm', 'rmdir', 'cp', 'mv', 'truncate', 'install', 'ln',
-                'unlink', 'shred'}
+                'unlink', 'shred', 'dos2unix', 'unix2dos', 'mac2unix', 'unix2mac', 'sponge'}
 CMD_WRITERS = {'copy', 'xcopy', 'robocopy', 'move', 'del', 'erase', 'md', 'mkdir', 'rd', 'rmdir',
                'ren', 'rename', 'type'}
 COPIERS = {'robocopy', 'xcopy'}                 # Windows programs every shell runs
@@ -2205,6 +2205,215 @@ def _perl(args, cmd_word=None):
     if not in_place:
         return [here(cmd_word)] if script else []     # perl -e: as python -c
     return pos if script else pos[1:]
+
+
+# gawk 5's options (its getopt list "+F:f:v:W;bcCd::D::e:E:ghi:l:L::nNo::Op::MPrSstVYZ:", options
+# ending at the first operand): the short ones that take a value, the ones whose value is only the
+# rest of their word, and the long names (a unique prefix names one) that take a value, take one
+# only after `=`, or take none
+AWK_VALUE_SHORTS = 'FfvieElZ'
+AWK_OPTIONAL_SHORTS = 'dDLop'
+AWK_LONGS = {'assign': 'v', 'exec': 'E', 'field-separator': 'F', 'file': 'f', 'include': 'i', 'load': 'l',
+             'source': 'e', 'locale': 'Z'}
+AWK_OPTIONAL_LONGS = {'dump-variables': 'd', 'debug': 'D', 'lint': 'L', 'pretty-print': 'o', 'profile': 'p'}
+AWK_FLAG_LONGS = ('bignum', 'characters-as-bytes', 'copyright', 'csv', 'gen-pot', 'help', 'lint-old',
+                  'no-optimize', 'non-decimal-data', 'optimize', 'parsedebug', 'persist', 'posix',
+                  're-interval', 'sandbox', 'trace', 'traditional', 'use-lc-numeric', 'version')
+AWK_ASSIGN_RE = re.compile(r'^[A-Za-z_]\w*(?:::[A-Za-z_]\w*)?=')   # an operand gawk reads as var=value
+
+
+def _awk_inplace_lib(w):
+    """True when the -i/-f/-l value Word `w` may load gawk's inplace library: its name, or a value
+    the line computes (fail closed)."""
+    if w is None or w.dyn:
+        return w is not None
+    base = re.split(r'[\\/]', w.text)[-1].lower()
+    return base in ('inplace', 'inplace.awk')
+
+
+def _awk_inplace_text(w):
+    """True when the program text Word `w` may @include the inplace library."""
+    return w is not None and not w.dyn and '@include' in w.text and 'inplace' in w.text
+
+
+def _awk_long(name):
+    """The letter the long option `name` (without its dashes) stands for, or None when gawk does
+    not know it or it is ambiguous (gawk then runs nothing)."""
+    names = list(AWK_LONGS) + list(AWK_OPTIONAL_LONGS) + list(AWK_FLAG_LONGS)
+    if name in names:
+        hits = [name]
+    else:
+        hits = [n for n in names if n.startswith(name)]
+    if len(hits) != 1:
+        return None
+    return AWK_LONGS.get(hits[0]) or AWK_OPTIONAL_LONGS.get(hits[0]) or ''
+
+
+def _awk(args, cmd_word):
+    """What awk/gawk writes: every file operand under the inplace library (`-i inplace` in any
+    spelling, `-f inplace`, `-l inplace`, `@include "inplace"` in the program text; counted even
+    with -v inplace::enable=0), and the file -d, -o or -p names (else the directory it runs in,
+    for awkvars.out or awkprof.out). A run that is neither writes nothing."""
+    in_place, program_given, dumps = False, False, []
+    k = 0
+
+    def take(letter, value):
+        nonlocal in_place, program_given
+        if letter in 'ifl' and _awk_inplace_lib(value):
+            in_place = True
+        if letter in 'feE':
+            program_given = True
+        if letter == 'e' and _awk_inplace_text(value):
+            in_place = True
+        if letter in 'dop':
+            dumps.append(value if value is not None and value.text else here(cmd_word))
+
+    def word(t, w):
+        return sh.Word(t, w.dyn, w.start, w.end)
+
+    while k < len(args):
+        w = args[k]
+        t = w.text
+        if t == '--':
+            k += 1
+            break
+        if not t.startswith('-') or len(t) < 2:
+            break
+        k += 1
+        if t.startswith('--'):
+            spec = t[2:]
+        else:
+            body, spec = t[1:], None
+            for j, c in enumerate(body):
+                rest = body[j + 1:]
+                if c == 'W':
+                    if rest:
+                        spec = rest
+                    elif k < len(args):
+                        spec = args[k].text
+                        w = args[k]
+                        k += 1
+                    break
+                if c in AWK_VALUE_SHORTS:
+                    if rest:
+                        value = word(rest, w)
+                    else:
+                        value = args[k] if k < len(args) else None
+                        k += 1
+                    take(c, value)
+                    break
+                if c in AWK_OPTIONAL_SHORTS:
+                    take(c, word(rest, w) if rest else None)
+                    break
+            if spec is None:
+                if c == 'E':
+                    break                       # -E file: the rest are the program's arguments
+                continue
+        name, eq, val = spec.partition('=')     # --name[=value], or -W name[=value]
+        letter = _awk_long(name)
+        if letter is None or letter == '':
+            continue
+        if eq:
+            value = word(val, w)
+        elif letter in AWK_OPTIONAL_SHORTS:
+            value = None
+        else:
+            value = args[k] if k < len(args) else None
+            k += 1
+        take(letter, value)
+        if letter == 'E':
+            break
+    rest = args[k:]
+    if not program_given and rest:
+        if _awk_inplace_text(rest[0]):
+            in_place = True
+        rest = rest[1:]
+    if not in_place:
+        return dumps
+    files = [w for w in rest if w.dyn or (w.text != '-' and not AWK_ASSIGN_RE.match(w.text))]
+    return dumps + files
+
+
+def _ruby(args, cmd_word):
+    """ruby -i[ext]: the files it edits, as perl -i (after the script unless -e gives the code),
+    placed under each -C or -x folder in turn; without -i, code on the line (_evals)."""
+    code = _evals('ruby', args, cmd_word)
+    in_place, script, pos, dirs = False, False, [], []
+    k = 0
+    while k < len(args):
+        w = args[k]
+        t = w.text
+        if t == '--':
+            pos.extend(args[k + 1:])
+            break
+        if t.startswith('--') or t == '-':
+            if t == '-':
+                pos.append(w)
+            k += 1
+            continue                            # a long option: any value it takes is an operand (fail closed)
+        if t.startswith('-') and len(t) > 1:
+            body = t[1:]
+            k += 1
+            for j, c in enumerate(body):
+                rest = body[j + 1:]
+                if c == 'i':
+                    in_place = True
+                    break                       # -i.bak: the rest is the suffix
+                if c in 'eIrCE':
+                    script = script or c == 'e'
+                    value = sh.Word(rest, w.dyn, w.start, w.end) if rest else (args[k] if k < len(args) else None)
+                    if not rest:
+                        k += 1
+                    if c == 'C' and value is not None:
+                        dirs.append(value)
+                    break
+                if c == 'x':
+                    if rest:
+                        dirs.append(sh.Word(rest, w.dyn, w.start, w.end))
+                    break
+                if c in 'FWT0K':
+                    break                       # their value is the rest of the word
+            continue
+        pos.append(w)
+        k += 1
+    if not in_place:
+        return code
+    files = pos if script else pos[1:]
+    for d in reversed(dirs):
+        files = [_under(d, f) for f in files]
+    return code + files
+
+
+# vi, vim, nvim, ex and ed: a scripted run writes the files it is given, so every file operand
+# counts, an operand-only read too; the options whose value is the next word (a short one last in
+# its word, as `-sc <cmd>`) are passed over, bar -w/-W's script output file, which is written
+EDITORS = {'vi', 'vim', 'nvim', 'ex', 'ed'}
+EDITOR_VALUE_SHORTS = 'cuUiTtwW'
+
+
+def _editor(name, args):
+    out, k = [], 0
+    while k < len(args):
+        w = args[k]
+        t = w.text
+        if t == '--':
+            out.extend(args[k + 1:])
+            break
+        if name != 'ed' and t.startswith('+'):
+            k += 1                              # +cmd
+            continue
+        if t.startswith('-') and len(t) > 1:
+            short = not t.startswith('--')
+            if (t == '-p') if name == 'ed' else (t == '--cmd' or (short and t[-1] in EDITOR_VALUE_SHORTS)):
+                if short and t[-1] in 'wW' and k + 1 < len(args):
+                    out.append(args[k + 1])     # the script output file
+                k += 2
+            else:
+                k += 1
+            continue
+        out.append(w)
+        k += 1
+    return [w for w in out if w.dyn or w.text != '-']
 
 
 def _curl(args, cmd_word):
@@ -2763,6 +2972,8 @@ def write_targets(cmd, inv):
         return out + _wget(args, word) + grouped
     if cm.PYTHON_RE.match(name):
         return out + _python(cmd, name, args, word, inv.via)
+    if name == 'ruby' and cmd.shell != sh.PS:
+        return out + _ruby(args, word)
     if name in EVALS:
         return out + _evals(name, args, word)
     if name == 'tar':                           # Windows' own tar.exe runs from PowerShell too
@@ -2773,6 +2984,10 @@ def write_targets(cmd, inv):
         return out + _sed(args)
     if name == 'perl':
         return out + _perl(args, word)
+    if name in ('awk', 'gawk'):
+        return out + _awk(args, word)
+    if name in EDITORS:
+        return out + _editor(name, args)
     if name == 'unzip':
         return out + _unzip(args, word)
     if name == 'dd':
