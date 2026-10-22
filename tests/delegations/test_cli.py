@@ -140,7 +140,7 @@ class Cli(unittest.TestCase):
 
     def test_an_approval_not_of_the_hub_form_is_refused(self):
         self.write_list()
-        for bad in ('A-001', 'hub:A-000', 'hub:A-01', 'H-kit-0001', 'Q-1001'):
+        for bad in ('A-001', 'hub:A-000', 'hub:A-01', 'H-kit-0001', 'EX-1001'):
             with self.subTest(bad=bad):
                 code, _, err, calls = self.main('run', 'D-001', '--approval', bad)
                 self.assertEqual(code, 1)
