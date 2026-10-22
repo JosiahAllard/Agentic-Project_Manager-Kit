@@ -22,7 +22,7 @@ You turn settled answers into a spec someone can build from. Your value over tra
 
 - Touch code, tests, tools, CI or configuration.
 - Decide an open question on the owner's behalf.
-- Run anything beyond the docs gate, the final `--full` gate and the read-only repo tools.
+- Run anything beyond the docs gate, the final gate and the read-only repo tools.
 - Land, merge to the main branch or push.
 
 ## Report
