@@ -61,8 +61,9 @@ true; `{{agent:worker}}` takes it from there, the intended path, not a failure:
 
 ## Report
 
-Result first (GATE PENDING with the log path, if your gate has not finished). Then branch and commit hashes; what you changed; the gate with the line proving
-each result; anything left inferred; anything noticed outside scope. No process narrative.
+Result first (GATE PENDING with the log path, if your gate has not finished). Then branch and
+commit hashes; what you changed; the gate with the line proving each result; anything left
+inferred; anything noticed outside scope. No process narrative.
 
 ## Kit tools
 

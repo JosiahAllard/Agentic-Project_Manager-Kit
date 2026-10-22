@@ -16,7 +16,7 @@ coordinator profile lists the roles it actually has; use only those. Roles are n
 - lander: optional wrapper that submits one reviewed branch (or a batch) for landing, waits for the result and reports. Never edits code.
 - docs-writer: the docs type - settled facts into docs (skill `specialty-records`) and specs extended from the owner's answers (skill `specialty-spec`). Docs only.
 - test-runner: runs test tiers in a given worktree; reports PASS/FAIL plus failing lines.
-- helper: light, read+edit only; dispatched by builders for bulk menial reads and mechanical bulk writes (a scripted rename across 10 or more files included; weak-worker still never does renames), never by a coordinator for a story.
+- helper: light, read+edit only; dispatched by builders for bulk menial reads and mechanical bulk writes (a mechanical rename across 10 or more files included: the helper edits each listed file, any script stays with the builder; weak-worker still never does renames), never by a coordinator for a story.
 - Specialty skills, loaded by the role the brief names: `specialty-review`, `specialty-research` (analyst); `specialty-records`, `specialty-spec` (docs-writer); `specialty-tech-art`, `specialty-3d-assets`, `specialty-rigging`, `specialty-sound` (a worker type, see "Creative dispatches" in the skill).
 - consultant: a long-lived launched session per repository that answers engineering questions.
 
