@@ -171,9 +171,9 @@ class ResultFiles(unittest.TestCase):
         self.put('TEST-old.xml', '<testsuite tests="9" failures="9" errors="0"/>', age=3600)
         self.assertEqual(V.junit_counts(self.dir, time.time() - 60), (2, 1))
 
-    def gradle(self, rc, since):
+    def gradle(self, rc, since, tw=None):
         sel = V.parse_selector('engine/core/src/test/FooTest.java', RUNNERS)
-        return V.judge(sel, rc, '', self.dir, self.dir, 1, [sel.path], since)
+        return V.judge(sel, rc, '', tw or self.dir, self.dir, 1, [sel.path], since)
 
     def test_gradle_reads_a_test_task_not_named_test(self):
         """A module whose test task writes build/test-results/<task>/ is judged from that XML."""
@@ -181,30 +181,56 @@ class ResultFiles(unittest.TestCase):
                  '<testsuite tests="3" failures="1" errors="0"/>')
         self.assertEqual(self.gradle(1, time.time() - 60), (V.RED, '1 of 3 test(s) failed'))
 
-    def test_gradle_sums_every_task_folder_of_this_run_only(self):
-        """Fresh XML in two task folders adds up; XML older than the run, in any folder, and a
-        nested module's own build folder are not counted."""
+    def test_gradle_counts_the_own_class_and_its_nested_ones_of_this_run(self):
+        """The selector's class (any package, or none) and its nested classes add up across task
+        folders; its XML older than the run, and a class whose name only ends in it, do not."""
         base = 'engine/core/build/test-results/'
-        self.put(base + 'test/TEST-a.xml', '<testsuite tests="2" failures="0" errors="0"/>')
-        self.put(base + 'unitTest/TEST-b.xml', '<testsuite tests="1" failures="0" errors="1"/>')
-        self.put(base + 'otherTest/TEST-old.xml', '<testsuite tests="9" failures="0" errors="0"/>',
-                 age=3600)
-        self.put('engine/core/sub/build/test-results/test/TEST-n.xml',
-                 '<testsuite tests="5" failures="0" errors="0"/>')
-        self.assertEqual(self.gradle(1, time.time() - 60), (V.RED, '1 of 3 test(s) failed'))
+        self.put(base + 'test/TEST-a.FooTest.xml', '<testsuite tests="2" failures="0" errors="0"/>')
+        self.put(base + 'test/TEST-a.FooTest$Inner.xml',
+                 '<testsuite tests="1" failures="0" errors="1"/>')
+        self.put(base + 'unitTest/TEST-FooTest.xml', '<testsuite tests="1" failures="0" errors="0"/>')
+        self.put(base + 'otherTest/TEST-a.FooTest.xml',
+                 '<testsuite tests="9" failures="9" errors="0"/>', age=3600)
+        self.put(base + 'test/TEST-a.BarFooTest.xml', '<testsuite tests="5" failures="5" errors="0"/>')
+        self.assertEqual(self.gradle(1, time.time() - 60), (V.RED, '1 of 4 test(s) failed'))
+
+    def test_gradle_sibling_task_failure_of_another_class_is_not_red(self):
+        """`--tests` filters only the named task; a sibling test task in the same build runs its
+        whole suite, and its failures are no proof about the selector's test."""
+        base = 'engine/core/build/test-results/'
+        self.put(base + 'test/TEST-a.FooTest.xml', '<testsuite tests="2" failures="0" errors="0"/>')
+        self.put(base + 'integrationTest/TEST-a.OtherIT.xml',
+                 '<testsuite tests="3" failures="3" errors="0"/>')
+        self.assertEqual(self.gradle(0, time.time() - 60), (V.GREEN, '2 test(s) passed'))
+        self.assertEqual(self.gradle(1, time.time() - 60)[0], V.ERROR)
+
+    def test_gradle_sibling_task_passing_another_class_is_not_green(self):
+        self.put('engine/core/build/test-results/integrationTest/TEST-a.OtherIT.xml',
+                 '<testsuite tests="4" failures="0" errors="0"/>')
+        self.assertEqual(self.gradle(0, time.time() - 60), (V.NONE, 'no test ran'))
 
     def test_gradle_stale_failure_in_another_task_does_not_turn_green_red(self):
         base = 'engine/core/build/test-results/'
-        self.put(base + 'test/TEST-a.xml', '<testsuite tests="2" failures="0" errors="0"/>')
-        self.put(base + 'slowTest/TEST-old.xml', '<testsuite tests="4" failures="4" errors="0"/>',
-                 age=3600)
+        self.put(base + 'test/TEST-a.FooTest.xml', '<testsuite tests="2" failures="0" errors="0"/>')
+        self.put(base + 'slowTest/TEST-a.FooTest.xml',
+                 '<testsuite tests="4" failures="4" errors="0"/>', age=3600)
         self.assertEqual(self.gradle(0, time.time() - 60), (V.GREEN, '2 test(s) passed'))
 
-    def test_gradle_unparseable_xml_in_any_task_folder_is_error(self):
+    def test_gradle_unparseable_xml_of_any_class_in_any_task_folder_is_error(self):
+        """Fails closed: a broken file of the selector's class, or of another class."""
         base = 'engine/core/build/test-results/'
-        self.put(base + 'test/TEST-a.xml', '<testsuite tests="2" failures="0" errors="0"/>')
-        self.put(base + 'integrationTest/TEST-b.xml', '<testsuite tests="2"')
-        self.assertEqual(self.gradle(0, time.time() - 60)[0], V.ERROR)
+        self.put(base + 'test/TEST-a.FooTest.xml', '<testsuite tests="2" failures="0" errors="0"/>')
+        for name in ('integrationTest/TEST-a.FooTest$Inner.xml', 'otherTest/TEST-a.OtherIT.xml'):
+            p = self.put(base + name, '<testsuite tests="2"')
+            self.assertEqual(self.gradle(0, time.time() - 60)[0], V.ERROR, name)
+            os.remove(p)
+
+    def test_gradle_module_root_with_glob_characters(self):
+        """A tree whose path holds `[` is searched as a literal folder, not a glob pattern."""
+        tw = os.path.join(self.dir, 'm[1]')
+        self.put('m[1]/engine/core/build/test-results/test/TEST-a.FooTest.xml',
+                 '<testsuite tests="3" failures="1" errors="0"/>')
+        self.assertEqual(self.gradle(1, time.time() - 60, tw), (V.RED, '1 of 3 test(s) failed'))
 
     def test_junit_unparseable_is_none(self):
         self.put('TEST-a.xml', '<testsuite tests="2"')
