@@ -38,7 +38,15 @@ in the machine lock (the landing queue), merges onto the main it finds, gates th
 landing tree and pushes only when green (docs/gate.md "Landing"). Success: a `RESULT pass land` line
 with `LANDED `. `CONFLICT <branch> with main <sha>: the author merges main` goes back to the branch's
 author; any other verdict line (`NOT LANDED:`, `STUCK:`, `REFUSED:`, `BUSY:`, `NOT RUN:`) is reported as
-is, with the doc's recovery steps, and not retried. Batches: docs/gate.md.
+is, with the doc's recovery steps, and not retried. Batches allowed: up to
+`"landing".batch_max` branches (3), each with its own reviewer, range and LAND verdict; never a
+high-risk branch (docs/gate.md "Batch").
+
+## Review
+A coordinator reviews a branch itself when it is small (about 150 lines) and low or medium risk: read
+every hunk; skim docs and additive content. Larger or High: a fresh reviewer.
+Continue an agent 2-3 rounds per artefact, then reseed from a short written summary. Reseed a
+strong- or deep-tier coder whose context is above about 150k tokens.
 
 ## Shared resources that must be serialised
 The machine lock (docs/lock-api.md), through the live install only, never a copy on a branch.
