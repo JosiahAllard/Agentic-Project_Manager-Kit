@@ -1,9 +1,8 @@
 """The landing lock: one per repository, held from a landing's merge to its push or its end (ported
 from an earlier per-repository tools/landing_lock.py; made repo-neutral for the kit).
 
-The lock is the file `<git common dir>/<name>` (default `kit-landing.lock`; `lock_name(cfg)`
-honours a legacy `"landing".lock_file` of `git:<name>` and refuses any other value): inside the git dir, so the main checkout
-and every worktree see the same one, and it is never tracked. It is created with O_CREAT|O_EXCL -
+The lock is the file `<git common dir>/kit-landing.lock` (LOCK_NAME): inside the git dir, so the
+main checkout and every worktree see the same one, and it is never tracked. It is created with O_CREAT|O_EXCL -
 of two takers exactly one wins - and holds one JSON object:
 
   lane            always `full`, written for older kits' readers (they refuse a record without
@@ -46,11 +45,9 @@ import os
 import secrets
 import time
 
-from kitlib.config.types import ConfigError
 from kitlib.git import refs, repo
 
 LOCK_NAME = 'kit-landing.lock'
-GIT_PREFIX = 'git:'
 FULL = 'full'                  # the record's constant lane, kept for older kits' readers
 PHASES = ('merge', 'gate', 'push', 'undo', 'stuck')
 RETRIES = 5
@@ -103,23 +100,6 @@ def process_alive(pid, start):
         return True
 
 
-def lock_name(cfg=None):
-    """The lock's file name in the common dir: `"landing".lock_file` `git:<name>` when a repo still
-    names its own (one lock per repository whichever tool takes it), else LOCK_NAME. A lock_file
-    that is not `git:<name>` is a ConfigError: a lock elsewhere would not be the one every checkout
-    sees, and ignoring it would let two tools take two different locks."""
-    value = cfg.section('landing').get('lock_file') if cfg is not None else None
-    if value is None:
-        return LOCK_NAME
-    if not isinstance(value, str) or not value.startswith(GIT_PREFIX):
-        raise ConfigError('"landing".lock_file %r must be git:<name>, a file in the git common dir'
-                          % (value,))
-    name = value[len(GIT_PREFIX):].strip()
-    if not name or '/' in name.replace('\\', '/') or name in ('.', '..'):
-        raise LockError('"landing".lock_file %r must name one file in the git common dir' % value)
-    return name
-
-
 def describe(record):
     if not record:
         return 'landing lock: free'
@@ -153,7 +133,7 @@ class LandingLock(object):
 
     @classmethod
     def for_config(cls, root, cfg, **kw):
-        return cls(root, cfg.main_branch, cfg.remote, lock_name(cfg), **kw)
+        return cls(root, cfg.main_branch, cfg.remote, **kw)
 
     # ---------------------------------------------------------------- reading
 

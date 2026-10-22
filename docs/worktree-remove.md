@@ -51,7 +51,7 @@ preflight's `leftovers` line (kitlib/preflight/leftovers.py; docs/preflight.md) 
 
 A landing's branch cleanup and `land.py --sweep-landed` (kitlib/gate/cleanup.py; docs/gate.md "Branch cleanup") remove a landed branch's worktree with this module's `_remove` and delete a branch with no worktree with its `delete_branch`.
 
-Each verb returns `Outcome(code, lines)` and prints nothing; the tools print the lines. Settings come from `.kit.json`: `repo.main_branch`, `repo.remote`, `repo.worktrees_dir`, `repo.name`, `backlog.store`, `landing.lock_file`, and the `worktree_remove` section (docs/kit-json.md).
+Each verb returns `Outcome(code, lines)` and prints nothing; the tools print the lines. Settings come from `.kit.json`: `repo.main_branch`, `repo.remote`, `repo.worktrees_dir`, `repo.name`, `backlog.store`, and the `worktree_remove` section (docs/kit-json.md).
 
 A `worktree_remove.build_output` entry `{"piece": "<id>", "path": "<folder>/"}` is the literal folder `kitlib.pieces` puts at that piece's dir: an ignored entry that is that folder or lies under it is build output (compared case-sensitively, so a folder git prints in another case is refused), and when the pieces table is missing or malformed, the id is unknown, the piece or path is not a string, the path is empty, a glob or climbs out, or the piece's dir has an empty or `.` part, the entry holds nothing and the removal refuses (`kitlib.worktree.remove.piece_dirs`; tests in `tests/worktree/test_piece_build_output.py`).
 
@@ -113,7 +113,7 @@ Tests: `tests/worktree/test_remove_snapshot.py` (`IgnoredAfterTheLastStatusRead`
 ## Behaves differently from the PM copy
 
 - `-C` is a plain path option. There is no `checkout_guard` hand-off to the main checkout's copy, no `KIT_REPO_ROOT` and no `check_same_repo`; the kit has one copy. A relative path argument resolves against the process's own directory.
-- Landing lock: read through `kitlib.records.landing.LandingLock` (`<common dir>/kit-landing.lock` unless `landing.lock_file` names another). There is always a place, so "no lock configured, defer" is gone. A file there that is no lock record counts as held.
+- Landing lock: read through `kitlib.records.landing.LandingLock` (`<common dir>/kit-landing.lock`). There is always a place, so "no lock configured, defer" is gone. A file there that is no lock record counts as held.
 - Open claim (sweep) and pulled warnings (abandon) read the backlog store backend: a record with `state: pulled` and `pulled_by: <branch>`. The PM copy grepped the base for any `pulled_by:` line. A `ref` or `branch` store is read at its local ref as it stands (not fetched, not per revision); an absent ref holds no records. A store that cannot be read skips the worktree (sweep) or prints a note (abandon).
 - Machine lock: read through the kit's own `<kit>/tools/machine_lock.py status --json` only (the tool read beside the kit, `kitroot.lock_tool`). There is no `MACHINE_LOCK_TOOL` or `MACHINE_LOCK_TEST_ROOT`. Both the PM shape (`lock.held/waiting/background`) and the kit snapshot (`runs` plus `queue.entries`) are accepted; anything else defers the sweep.
 - Sweep task: `-C` replaces `--repo`. The task runs this kit's `tools/worktree_remove.py` by absolute path with `-C <main checkout>`. The kit-stub check is replaced by a check that the tool sits in a main checkout (not a branch worktree's copy).
