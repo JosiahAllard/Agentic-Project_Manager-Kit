@@ -38,7 +38,8 @@ text is for the owner's console (it may name a folder):
      and GET health says so in a fixed phrase (the reason itself names folders).
   4. the Api over the store and a SiteViews (with approval_key reading the approval key from
      the token folder on each use, and checkout matching a repo_id to the backlog's configured
-     repositories by their origin remote: _checkout), then the local listener on
+     repositories by their origin remote: _checkout, and repo_name giving that repository's
+     name, the coordinator a decided approval is for: _repo_name), then the local listener on
      settings.port with httpd.local_hosts, httpd.local_gate, httpd.pair_routes over an auth.Credentials made for
      the port that was really bound, httpd.stop_route (it sets Hub.stopping and answers this
      process's pid and creation time; the tunnel listener never has it) and health_route. The
@@ -854,16 +855,33 @@ def _checkout(backlog_views):
     repo_id (approvals.remote_id), read with git on each call; None when none is, when there is
     no backlog, or when the repositories cannot be listed, so a request fails closed."""
     def checkout(repo_id):
-        from . import approvals     # it imports kitlib.hubsite.client, which imports this module
-        try:
-            pairs = backlog_views.repos() if backlog_views is not None else []
-        except Exception:           # noqa: BLE001 - no list, no checkout: the request is refused
-            return None
-        for _name, root in pairs:
-            if approvals.remote_id(root)[0] == repo_id:
-                return root
-        return None
+        found = _configured(backlog_views, repo_id)
+        return found[1] if found is not None else None
     return checkout
+
+
+def _repo_name(backlog_views):
+    """Api's repo_name(repo_id) (kitlib.hubsite.api, "Routes"): the name of the configured
+    repository whose origin remote is that repo_id, found as _checkout finds its root; None when
+    none is, so a decided approval is the PM's alone."""
+    def repo_name(repo_id):
+        found = _configured(backlog_views, repo_id)
+        return found[0] if found is not None else None
+    return repo_name
+
+
+def _configured(backlog_views, repo_id):
+    """The (name, root) of backlog_views.repos() whose origin remote is repo_id, read with git;
+    None when none is, when there is no backlog, or when the repositories cannot be listed."""
+    from . import approvals         # it imports kitlib.hubsite.client, which imports this module
+    try:
+        pairs = backlog_views.repos() if backlog_views is not None else []
+    except Exception:               # noqa: BLE001 - no list: no repository
+        return None
+    for name, root in pairs:
+        if approvals.remote_id(root)[0] == repo_id:
+            return name, root
+    return None
 
 
 def _push_line(log, text):
@@ -910,7 +928,8 @@ def build(settings, sources, log=None):
             _follow_rounds(views_b, views)
         api = _api.Api(store, views,
                        approval_key=functools.partial(auth.read_approval_key, sources.tokens),
-                       checkout=_checkout(views_b), lock=sources.lock)
+                       checkout=_checkout(views_b), lock=sources.lock,
+                       repo_name=_repo_name(views_b))
         try:
             local = httpd.Listener((httpd.LOOPBACK, settings.port), api, None,
                                    static_dir=sources.static_dir, host_rule=httpd.local_hosts,
