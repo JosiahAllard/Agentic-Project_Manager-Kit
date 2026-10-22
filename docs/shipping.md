@@ -13,8 +13,11 @@ the install's own names stay with `tests/scrub/test_generic.py` and `scrub_patte
 
 - `gender`: the masculine subject, object, possessive and reflexive pronouns as whole words in
   any case, `\bh(?:e|is|im|imself)\b` (GENDER), and nothing else; the kit writes "the owner".
-- `record-id`: a backlog record id. STOP_IDS lists the acronyms and markers that only look like
-  one, and an invented id in a fixture starts with `EX-` (MADE_UP_ID_PREFIX).
+- `record-id`: a backlog record id, and also an owner question or ruling id: a one-letter `Q` or
+  `R`, a dash, then digits (written `Q-nnnn` here). Files where that shape is the hub's own data
+  are allowlisted in ID_SHAPE_FOLDERS (`tests/scrub/test_builtin.py`). STOP_IDS lists the acronyms
+  and markers that only look like one, and an invented id in a fixture starts with `EX-`
+  (MADE_UP_ID_PREFIX).
 - `provenance`: the kit this one replaced, called old, earlier, previous or legacy, or one of its
   files named; the bare title "PM kit" (AGENTS.md) passes.
 - `pinned-hash`: a commit hash, outside tests/ only; git's empty tree and the hex alphabet pass
