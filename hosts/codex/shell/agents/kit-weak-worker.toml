@@ -36,7 +36,7 @@ true; `kit-worker` takes it from there, the intended path, not a failure:
   <path> ...`, which adds the trailer for your host and model. Subject says what and why. Unsure
   of your model, say so; never amend to change a trailer.
 - Base moved: merge the exact commit the coordinator named, never the local main, never rebase;
-  re-run the gate with `--full`. Any conflict, or any merge the coordinator did not name: stop and report.
+  re-run the gate (`--full` for a strict path, else the default gate, `--full` until the base's gate config names smoke steps). Any conflict, or any merge the coordinator did not name: stop and report.
 - Run your brief's gate to a log and read the log; never pipe it through grep, head or tail.
   Waiting on it: <kit>/docs/gate.md \"Waiting on a gate: who arms what\" (your own gate: no Monitor).
   Wait for your own gate run to finish before you report. If you cannot wait, report GATE PENDING
