@@ -11,9 +11,12 @@ never read for the proposed content: the consumer needs it still at the base.
 Refused here, with nothing posted (RequestError): a checkout that is not a git work tree, a repo
 the checkout's origin cannot name, a head that is not 40 hex digits or not a commit of the
 checkout, a path that is not a plain path of the repository, a path at head that is not a file, a
-new file the work tree already has (the consumer would refuse it), a
-content file that cannot be read, is not UTF-8 or is over the size cap, a file whose content is its
-base (the consumer refuses a change that changes nothing), and whatever
+new file the work tree already has, a file at head whose work tree copy git does not hash to its
+base (the consumer's prewrite check would refuse either), a content file that cannot be read, is
+not UTF-8 or is over the size cap, a file whose content is its base (the consumer refuses a change
+that changes nothing), content git would store as another blob (`hash-object --path=<path>
+--stdin`: core.autocrlf or a text, eol or filter attribute changes it on staging, and the
+consumer's staged check would refuse it), and whatever
 kitlib.hubsite.approvals.new_doc refuses, in its words (its limits: MAX_FILES, MAX_CONTENT_BYTES,
 MAX_PATH, MAX_TITLE, MAX_REASON). A delete cannot be requested: every file has content.
 
@@ -99,14 +102,37 @@ def build(checkout, title, files, repo=None, head=None, reason=None, now=None, r
         if obj is not None and obj[0] != 'blob':
             raise RequestError('%s is a %s at head, not a file' % (path, obj[0]), 'files')
         base = None if obj is None else ap.blob_id(obj[1])
-        if base is None and os.path.lexists(os.path.join(top, *path.split('/'))):
+        full = os.path.join(top, *path.split('/'))
+        if base is None and os.path.lexists(full):
             # the consumer refuses a new file the work tree already has (another case of a
             # tracked name on Windows, or an untracked file)
             raise RequestError('%s is not at head but is in the work tree' % path, 'files')
+        if base is not None:
+            # the consumer's prewrite check: the work tree's file, as git would store it, is
+            # its base at head
+            hashed = None
+            if os.path.isfile(full) and not os.path.islink(full):
+                hashed, why = run(['hash-object', '--', path], top)
+            if hashed != base:
+                raise RequestError('%s in the work tree is not the file at head %s; the '
+                                   'consumer would refuse the approval. Put it back to head '
+                                   'first.' % (path, head[:12]), 'files')
         content = read_content(content_file)
-        if ap.blob_id(content) == base:
+        blob = ap.blob_id(content)
+        if blob == base:
             raise RequestError('%s: the content is the file at head; the request would change '
                                'nothing' % path, 'files')
+        r = cmd.call(['hash-object', '--path=' + path, '--stdin'], top,
+                     stdin=content.encode('utf-8'))
+        staged = cmd.text(r.out).strip() if r.rc == 0 else None
+        if staged != blob:
+            # the consumer's staged check compares the blob git stages (its clean filter,
+            # core.autocrlf, .gitattributes text or eol) with the approved one
+            raise RequestError('%s: git would not store the content as it is (%s); a line-'
+                               'ending or filter attribute changes it on staging, so the '
+                               'commit would be refused. Give the content as git stores it.'
+                               % (path, 'it would store %s' % staged[:12] if staged
+                                  else r.err or 'hash-object failed'), 'files')
         out.append({'path': path, 'base_blob': base, 'content': content})
     body = {'repo': repo, 'title': title, 'head': head, 'files': out}
     if reason is not None:

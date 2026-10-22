@@ -627,8 +627,12 @@ consumer needs the file still at its base. The base is PATH's blob at `--head` (
 checkout's HEAD), none for a file absent there; `--repo` defaults to the checkout's origin.
 Refused before anything is posted, in the builder's or `approvals.new_doc`'s words: a head that is
 not 40 hex digits or not a commit of the checkout, a path at head that is not a file, a new file
-the work tree already has, a content file that cannot be read, is not UTF-8 or is over
-`approvals.MAX_CONTENT_BYTES`, content that is the file at head, and what `new_doc` refuses (its
+the work tree already has, a file at head whose work tree copy git does not hash to its base (the
+consumer's prewrite check refuses both), a content file that cannot be read, is not UTF-8 or is
+over `approvals.MAX_CONTENT_BYTES`, content that is the file at head, content git would store as
+another blob (`git hash-object --path=PATH --stdin` differs from its blob: core.autocrlf or a
+text, eol or filter attribute changes it on staging, which the consumer's staged check refuses),
+and what `new_doc` refuses (its
 `MAX_FILES`, `MAX_PATH`, `MAX_TITLE` and `MAX_REASON` included). What the hub refuses comes back
 as the hub said it (`REFUSED <code>: <message>`).
 

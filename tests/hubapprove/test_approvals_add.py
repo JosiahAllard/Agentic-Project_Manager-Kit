@@ -19,6 +19,7 @@ from kitlib.hubsite import approvals as ap
 from kitlib.hubsite.api import AGENT, BASE, OWNER
 from kitlib.hubsite.store import Store
 from tests.gitfixture import TempRepo
+from tests.realgit import real_git
 
 NOW = '2026-01-02T03:04:05+00:00'
 CLOCK = lambda: NOW      # noqa: E731
@@ -110,6 +111,10 @@ class Case(unittest.TestCase):
         return got.exception.message
 
 
+STAGED = 'build hashes the content with hash-object --path --stdin: the fake takes no --path'
+
+
+@real_git(STAGED)
 class TheRequest(Case):
     def test_an_edit_is_posted_decided_and_accepted_by_the_consumer(self):
         body = hubapprove.build(self.repo.root, 'Edit the readme',
@@ -143,12 +148,17 @@ class TheRequest(Case):
         f = self.hub.approvals()[got['id']]['files'][0]
         self.assertEqual((f['content'], f['blob']), (text, ap.blob_id(text)))
 
-    def test_the_work_tree_is_never_read_for_the_content(self):
-        with open(self.repo.path('README.md'), 'w', encoding='utf-8', newline='\n') as f:
-            f.write('edited in the work tree\n')
-        body = hubapprove.build(self.repo.root, 't', [('README.md', self.content('x\n'))])
-        self.assertEqual((body['files'][0]['base_blob'], body['files'][0]['content']),
-                         (ap.blob_id('hello\n'), 'x\n'))
+    def test_a_head_before_HEAD_reads_each_base_at_that_head(self):
+        # README.md differs between the given head and HEAD; the work tree holds head's copy
+        first = self.repo.initial
+        self.repo.write('README.md', 'second\n')
+        self.repo.commit('second', 'README.md')
+        self.assertNotEqual(self.repo.head(), first)
+        self.repo.write('README.md', 'hello\n')
+        body = hubapprove.build(self.repo.root, 't', [('README.md', self.content('x\n'))],
+                                head=first)
+        self.assertEqual((body['head'], body['files'][0]['base_blob']),
+                         (first, ap.blob_id('hello\n')))
 
     def test_a_given_head_and_repo_are_used(self):
         body = hubapprove.build(self.repo.root, 't', [('README.md', self.content('x\n'))],
@@ -180,6 +190,7 @@ class TheRequest(Case):
         self.assertEqual(calls, [('/approvals', AGENT, body)])
 
 
+@real_git(STAGED)
 class WhatIsRefusedBeforeAnyCall(Case):
     def test_a_checkout_that_is_not_a_work_tree(self):
         self.refused('checkout', 'is not a git work tree',
@@ -219,6 +230,18 @@ class WhatIsRefusedBeforeAnyCall(Case):
         self.refused('files', 'is not at head but is in the work tree',
                      [('loose.txt', self.content('x\n'))])
 
+    def test_a_file_the_work_tree_changed_or_removed_since_head(self):
+        # the consumer's prewrite check would refuse the approval: the work tree is not its base
+        for change in ('edit', 'remove'):
+            with self.subTest(change=change):
+                if change == 'edit':
+                    self.repo.write('README.md', 'edited in the work tree\n')
+                else:
+                    os.remove(self.repo.path('README.md'))
+                self.refused('files', 'README.md in the work tree is not the file at head',
+                             [('README.md', self.content('x\n'))])
+                self.repo.write('README.md', 'hello\n')
+
     def test_a_content_file_that_cannot_be_read_is_not_utf8_or_is_too_big(self):
         for data, said in ((None, 'cannot read the content file'),
                            (b'\xff\xfe', 'is not UTF-8'),
@@ -255,6 +278,38 @@ class WhatIsRefusedBeforeAnyCall(Case):
                      reason='r' * (ap.MAX_REASON + 1))
 
 
+@real_git('hash-object --path applies a path\'s attributes: the fake reads no .gitattributes '
+          'and takes no --path')
+class ContentGitWouldStageAsAnotherBlob(Case):
+    """The consumer's staged check compares the blob git stages with the approved one, so content
+    git's clean filter would change is refused here, before the owner is asked."""
+
+    def setUp(self):
+        Case.setUp(self)
+        self.repo.write('.gitattributes', '* text=auto\n')
+        self.repo.git('add', '--', '.gitattributes')      # the test's git: the fixture's is fake
+        self.repo.git('commit', '-q', '-m', 'attributes')
+
+    def test_crlf_content_under_text_auto_is_refused(self):
+        self.refused('files', 'git would not store the content as it is',
+                     [('README.md', self.content(b'a\r\nb\r\n'))])
+
+    def test_crlf_content_under_core_autocrlf_is_refused(self):
+        os.remove(self.repo.path('.gitattributes'))
+        self.repo.git('rm', '-q', '--cached', '.gitattributes')
+        self.repo.git('commit', '-q', '-m', 'no attributes')
+        self.repo.git('config', 'core.autocrlf', 'true')
+        self.refused('files', 'git would not store the content as it is',
+                     [('README.md', self.content(b'a\r\nb\r\n'))])
+
+    def test_content_git_stores_as_it_is_is_posted_and_accepted(self):
+        got = hubapprove.request(self.hub.client, hubapprove.build(
+            self.repo.root, 't', [('README.md', self.content(b'a\nb\n'))]))
+        self.hub.decide(got['id'])
+        self.accepted(got['id'], ['README.md'])
+
+
+@real_git(STAGED)
 class TheCommandLine(Case):
     def run_hub(self, *argv):
         out, err = io.StringIO(), io.StringIO()

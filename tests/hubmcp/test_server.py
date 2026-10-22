@@ -19,6 +19,7 @@ from tests.gitfixture import TempRepo
 from tests.hubsite import httpfix
 from tests.lock.helpers import REPO, clean_env
 from tests.lockmcp.test_server import Client as Process
+from tests.realgit import real_git
 
 ENTRY = os.path.join(REPO, "mcp", "hub_server.py")
 PINNED = ("hub_answer", "hub_todo_done", "hub_story_submit", "hub_to_pm_send")
@@ -445,6 +446,8 @@ class Pages(Case):
         self.assertNotIn("hub_page_delete", hubmcp.OWNER_ONLY)
 
 
+@real_git("kitlib.hubapprove.build hashes the content with hash-object --path --stdin: the "
+          "fake takes no --path")
 class Approvals(Case):
     """hub_approval_request builds the request from a checkout (kitlib.hubapprove, whose own
     tests are tests/hubapprove) and posts it; what it refuses never reaches the hub, and a
