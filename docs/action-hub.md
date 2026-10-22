@@ -618,7 +618,7 @@ commit and verifies it with the commit; `gate land` and the pre-push hook verify
 not (`approvals.APPROVED_TTL_S`).
 
 An agent asks for one with `hub.py approvals add --title T --file PATH CONTENT_FILE [--file ...]
-[-C DIR] [--repo R] [--head SHA] [--reason TEXT]`, or the MCP tool `hub_approval_request`
+[--checkout DIR] [--repo R] [--head SHA] [--reason TEXT]`, or the MCP tool `hub_approval_request`
 (docs/hub-mcp.md); both build the body with `kitlib.hubapprove` and post it to POST `/approvals`,
 and neither decides or consumes a request. Each PATH (relative to the repository top, with `/`)
 gets CONTENT_FILE's exact bytes as its content, read as UTF-8 with its line endings kept, so the

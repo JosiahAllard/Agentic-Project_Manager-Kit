@@ -268,7 +268,7 @@ class TheCommandLine(Case):
         return code, out.getvalue(), err.getvalue()
 
     def test_add_posts_one_request_and_prints_its_id(self):
-        code, out, err = self.run_hub('approvals', 'add', '-C', self.repo.root, '--title', 't',
+        code, out, err = self.run_hub('approvals', 'add', '--checkout', self.repo.root, '--title', 't',
                                       '--file', 'README.md', self.content('x\n'),
                                       '--file', 'docs/new.md', self.content('n\n', 'n.txt'),
                                       '--reason', 'why')
@@ -280,7 +280,7 @@ class TheCommandLine(Case):
         self.assertEqual(self.hub.asked, [('POST', BASE + '/approvals')])
 
     def test_a_local_refusal_posts_nothing(self):
-        code, out, err = self.run_hub('approvals', 'add', '-C', self.repo.root, '--title', 't',
+        code, out, err = self.run_hub('approvals', 'add', '--checkout', self.repo.root, '--title', 't',
                                       '--file', 'README.md', self.content('hello\n'))
         self.assertEqual((code, out), (client.REFUSED, ''))
         self.assertTrue(err.startswith('REFUSED: README.md: the content is the file at head'),
@@ -288,7 +288,7 @@ class TheCommandLine(Case):
         self.assertEqual((self.hub.asked, self.hub.approvals()), ([], {}))
 
     def test_the_hubs_refusal_is_printed_with_its_code(self):
-        code, out, err = self.run_hub('approvals', 'add', '-C', self.repo.root, '--title', 't',
+        code, out, err = self.run_hub('approvals', 'add', '--checkout', self.repo.root, '--title', 't',
                                       '--repo', OTHER, '--file', 'README.md', self.content('x\n'))
         self.assertEqual(code, client.REFUSED)
         self.assertTrue(err.startswith('REFUSED invalid: '), err)

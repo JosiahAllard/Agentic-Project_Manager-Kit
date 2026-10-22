@@ -167,7 +167,7 @@ the server alone decides what a role may do.
                                                      kitlib.hubsite.approvals status_at)
   hub.py approvals show A-1                         its status, repo, head, title and reason,
                                                      then `<path> <base_blob> -> <blob>` per file
-  hub.py approvals add --title T --file PATH CONTENT_FILE [--file ...] [-C DIR] [--repo R]
+  hub.py approvals add --title T --file PATH CONTENT_FILE [--file ...] [--checkout DIR] [--repo R]
         [--head SHA] [--reason TEXT]                 `REQUESTED A-001`: asks the owner to approve
                                                      writing each PATH (relative to the repo top)
                                                      as CONTENT_FILE's exact UTF-8 bytes; its base
@@ -490,7 +490,7 @@ def _client_verbs(sub):
                 "for one", S['approvals'])
     _leaf(x, 'show', 'one request and its files').add_argument('id')
     y = _leaf(x, 'add', "ask the owner to approve writing these files")
-    y.add_argument('-C', dest='checkout', default='.', metavar='DIR',
+    y.add_argument('--checkout', default='.', metavar='DIR',
                    help='the git checkout the change is for (default: .)')
     y.add_argument('--title', required=True)
     y.add_argument('--file', dest='files', action='append', nargs=2, required=True,
