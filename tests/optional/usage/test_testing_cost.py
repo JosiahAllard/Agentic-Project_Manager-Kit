@@ -63,6 +63,15 @@ class Tally(unittest.TestCase):
         self.assertEqual(tot["test-runner"]["test_turns"], 1)
         self.assertEqual(sorted(a[3] for a in agents), ["coordinator", "test-runner"])
 
+    def test_two_turns_with_no_message_id_are_both_counted(self):
+        root = os.path.join(self.root, "noid")
+        F.write(os.path.join(root, "s.jsonl"), [
+            F.turn(None, "2026-09-20T00:00:00Z", usage=OUT),
+            F.turn(None, "2026-09-20T00:00:01Z", usage=OUT),
+        ])
+        tot, _ = TC.tally(TC.U.transcripts(root), "2026-09-18", TC.command_regex())
+        self.assertEqual(tot["coordinator"]["turns"], 2)
+
     def test_main_report(self):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):

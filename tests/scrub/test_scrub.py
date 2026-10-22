@@ -14,14 +14,16 @@ from kitlib.git import cmd as gitcmd
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Not a machine-lock run id (r-20261008T175145Z-f9cf22): eight digits, then T and a digit.
 RULING = re.compile(r'\bR-(?![0-9]{8}T[0-9])[0-9]{3,}', re.I)
-MADE_UP = re.compile(r'R-9[0-9]{3}')
+MADE_UP = re.compile('R' + r'-9[0-9]{3}')    # built, so this file holds no id itself
 
-# Tests of the tools that parse ruling ids need id-shaped strings in their fixtures.
-ALLOWED = (
-    'tests/backlog/',              # backlog pricing checks a ruling against a fixture ledger
-    'tests/backloglint/fixtures/', # a record's priority_ruling field
-    'tests/ledger/',               # kitlib/ledger parses ledger headers
+# The one list of folders whose tests need id-shaped strings in their fixtures: the tools that
+# parse ruling ids. test_no_cites and test_builtin read it too.
+FIXTURE_FOLDERS = (
+    ('tests/backlog/', 'backlog pricing checks a ruling against a fixture ledger'),
+    ('tests/backloglint/fixtures/', "a record's priority_ruling field"),
+    ('tests/ledger/', 'kitlib/ledger parses ledger headers'),
 )
+ALLOWED = tuple(p for p, _ in FIXTURE_FOLDERS)
 
 
 def tracked_files():

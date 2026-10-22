@@ -343,6 +343,18 @@ class StateTest(unittest.TestCase):
                          "No PM is listening; one last asked 3 h ago.")
         self.assertEqual(say(None), "")
 
+    def test_the_push_line_says_up_or_down_and_how_many_are_undelivered(self):
+        say = lambda p: js("pushText(items)", p)        # noqa: E731
+        self.assertEqual(say({"state": "up", "last": None, "undelivered": 0}), "Push delivery is up; nothing undelivered.")
+        self.assertEqual(say({"state": "up", "last": "written", "undelivered": 1}), "Push delivery is up; 1 item undelivered.")
+        self.assertEqual(say({"state": "down", "last": "no-live-session", "undelivered": 3}),
+                         "Push delivery is down (last try: no-live-session); 3 items undelivered.")
+        self.assertEqual(say({"state": "down", "last": None, "undelivered": None}), "Push delivery is down.")
+        self.assertEqual(say(None), "Push notifications are off on this hub server.")
+        got = js("hubState(items)", snapshot(push={"state": "down", "last": "uncertain", "undelivered": 2}))
+        self.assertEqual(got["push"], {"state": "down", "last": "uncertain", "undelivered": 2})
+        self.assertIsNone(js("hubState(items)", snapshot())["push"])
+
     def test_retry_honours_retry_after_and_backs_off(self):
         self.assertEqual(js("hubRetryMs(1, items)", 7), 7000)
         self.assertEqual(js("hubRetryMs(9, items)", 1), 1000)
@@ -1180,6 +1192,16 @@ class DomTest(unittest.TestCase):
         """, snapshot(collections=LISTS, pm_seen={"waited": NOW, "pulled": None, "waiting": 1}), hash="#topm")
         self.assertEqual(got["say"], "Sent 2. A PM is listening.")
         self.assertGreater(got["snapshots"], 1, "the page read the snapshot again after the send")
+
+    def test_the_push_line_is_drawn_under_the_pm_line(self):
+        body = """
+            await start();
+            return { pm: text($("#pmseen")), push: text($("#pushseen")) };
+        """
+        down = snapshot(collections=LISTS, push={"state": "down", "last": "not-written", "undelivered": 2})
+        self.assertEqual(dom(body, down), {"pm": "No PM is listening, and none has asked since the hub server started.",
+                                           "push": "Push delivery is down (last try: not-written); 2 items undelivered."})
+        self.assertEqual(dom(body, snapshot(collections=LISTS))["push"], "Push notifications are off on this hub server.")
 
     def test_an_empty_to_pm_queue_says_to_add_first(self):
         hint = "Nothing is queued. Write your message below and press Add, then Send all."

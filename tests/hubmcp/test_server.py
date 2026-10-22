@@ -460,6 +460,9 @@ class Approvals(Case):
         self.repo = TempRepo()
         self.addCleanup(self.repo.cleanup)
         self.repo.git("remote", "add", "origin", self.URL)
+        with open(self.repo.path(".kit.json"), "w", encoding="utf-8") as f:
+            # an owner approval carries owner-only files only (kitlib.hubapprove)
+            json.dump({"owner": {"paths": ["README.md"]}}, f)
         self.dir = tempfile.mkdtemp(prefix="kit-hubmcp-approval-")
         self.addCleanup(shutil.rmtree, self.dir, True)
         self.ask.answer = (200, {"ok": True, "id": "A-001", "version": 1})
@@ -505,6 +508,8 @@ class Approvals(Case):
         self.assertIn("would change nothing", said)
         self.refused("head", self.args(head="1" * 40))
         self.refused("files", self.args(files=[]))
+        self.assertIn("not owner-only", self.refused("files", self.args(files=[
+            {"path": "src/app.py", "content_file": self.content(b"a\n")}])))
 
     def test_a_relative_checkout_or_content_file_is_refused(self):
         self.assertIn("absolute", self.refused("checkout", self.args(checkout="repo")))

@@ -150,3 +150,25 @@ def agent_type(path):
         except (OSError, ValueError):
             pass
     return ("coordinator" if "subagents" not in path else "?"), ""
+
+
+def token_split(usage):
+    """A turn's tokens by kind: input, output, cache_read, write_5m and write_1h (the cache write
+    as the transcript splits it), and write_unsplit (the part of the cache write it does not)."""
+    u = usage or {}
+    split = u.get("cache_creation") or {}
+    w5, w1 = split.get("ephemeral_5m_input_tokens", 0) or 0, split.get("ephemeral_1h_input_tokens", 0) or 0
+    return {"input": u.get("input_tokens", 0) or 0, "output": u.get("output_tokens", 0) or 0,
+            "cache_read": u.get("cache_read_input_tokens", 0) or 0, "write_5m": w5, "write_1h": w1,
+            "write_unsplit": max((u.get("cache_creation_input_tokens", 0) or 0) - w5 - w1, 0)}
+
+
+def session_role(path, recs):
+    """The role a transcript ran as: a subagent's agent type (agent_type); for a main session the
+    agent its agent-setting record names, without its plugin prefix, else "main"."""
+    if "subagents" in path:
+        return agent_type(path)[0]
+    for d in recs:
+        if d.get("type") == "agent-setting" and d.get("agentSetting"):
+            return bare_type(d["agentSetting"])
+    return "main"

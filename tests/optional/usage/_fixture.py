@@ -3,9 +3,13 @@ import json
 import os
 
 
-def turn(mid, ts, model="claude-opus-5", usage=None, content=None):
-    return {"type": "assistant", "timestamp": ts,
-            "message": {"id": mid, "model": model, "usage": usage or {}, "content": content or []}}
+def turn(mid, ts, model="claude-opus-5", usage=None, content=None, branch=None):
+    """An assistant turn; `branch` sets its gitBranch."""
+    rec = {"type": "assistant", "timestamp": ts,
+           "message": {"id": mid, "model": model, "usage": usage or {}, "content": content or []}}
+    if branch:
+        rec["gitBranch"] = branch
+    return rec
 
 
 def user(ts, content):
@@ -14,6 +18,16 @@ def user(ts, content):
 
 def shell(tool_id, command, name="Bash"):
     return {"type": "tool_use", "id": tool_id, "name": name, "input": {"command": command}}
+
+
+def tool(tool_id, name, **inputs):
+    """A tool_use block of any tool, its input given as keywords (file_path=..., prompt=...)."""
+    return {"type": "tool_use", "id": tool_id, "name": name, "input": inputs}
+
+
+def setting(agent):
+    """The agent-setting record a main session started with `--agent <agent>` carries."""
+    return {"type": "agent-setting", "agentSetting": agent}
 
 
 def result(tool_id):
