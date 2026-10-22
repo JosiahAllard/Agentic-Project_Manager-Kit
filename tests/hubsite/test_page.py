@@ -1592,11 +1592,13 @@ class DomTest(unittest.TestCase):
             return { before, sent: calls.filter(r => r.method === "POST").map(r => [r.path, r.body]), tags: [...new Set(created)] };
         """, snapshot(strong=True, collections={"approvals": self.OP_APPROVALS}))
         b = got["before"]
-        for part in ("Run approval", "A-5", "any repository", "Copy the inputs", "asked for", "runs D-004: copies a folder <img src=x>"):
+        for part in ("Run approval", "A-5", "any repository", "Copy the inputs", "asked for", "runs D-004",
+                     "The agent's note, not signed: copies a folder <img src=x>"):
             self.assertIn(part, b["card"], part)
+        self.assertNotIn("runs D-004: copies", b["card"])                    # the note is never shown as part of the run
         self.assertNotIn("on ?", b["card"])
         self.assertNotIn("no diff stored", b["card"])
-        self.assertEqual(b["line"], "run D-004 dest=dd/out src=dd/in")
+        self.assertEqual(b["line"], "run D-004\ndest=dd/out\nsrc=dd/in")     # one NAME=VALUE a line
         self.assertEqual(got["sent"], [["/approvals/A-5/decide", {"decision": "approve", "if_version": 1}]])
         self.assertNotIn("img", got["tags"])
 

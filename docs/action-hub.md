@@ -640,7 +640,7 @@ approvals"), not a change. It has no `head`, `files` or `diff`, and holds instea
 | kind | agent | `op`; a document with no kind is a change |
 | op, repo | agent | the operation's id `D-nnn` and its repo name, or `*` |
 | line | agent | the run line `run D-nnn NAME=VALUE ...`, names sorted, each once (`approvals.new_op_doc`) |
-| what | agent | the operation's `what`, shown beside the line; optional |
+| what | agent | the operation's `what`, shown above the line as the agent's note, not signed; optional |
 | args_sha256 | server | the SHA-256 of `line`, computed by the server (`approvals.line_sha256`) |
 | consumed_at | server | once the runner consumes it; an op approval has no `commit` |
 
@@ -657,7 +657,9 @@ is bound through `args_sha256`. A pending op request expires after 24 hours
   `approved` verifies: a consumed op approval was used once.
 
 The change checks (`check`, `consume_fields`) refuse an op approval, and the op checks (`check_op`, `consume_op_fields`) a change approval. The
-page draws an op card with the operation, its `what` and its exact line, and no head or diff.
+page draws an op card with the operation, its `what` labelled as the agent's unsigned note, and its
+exact line, `run D-nnn` and then one `NAME=VALUE` a line; no head or diff. The signature does not
+cover `what`, `title` or `reason`: what the owner approves is the operation id, the repo and the line.
 `delegated.py request` asks for one, and `delegated.py run --approval` verifies and consumes it.
 
 The agent's side of an approval is `commit.py --owner-approval hub:A-<n>` (docs/commit.md "Owner

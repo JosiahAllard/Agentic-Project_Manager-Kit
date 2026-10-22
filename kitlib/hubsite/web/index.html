@@ -1236,16 +1236,19 @@ button.danger{color:var(--warn)}
 
   // ---- A pending approval (docs/action-hub.md "approvals/A-NNN"): the change an agent asks to make, as the diff the
   // server stored, or for kind "op" the one run of a delegated operation it asks for: the operation, what it does and the
-  // exact line it runs, with no base commit and no diff (docs/delegations.md "Hub approvals"); and the owner's Approve
+  // exact line it runs, `run D-nnn` and then one NAME=VALUE a line, with no base commit and no diff (docs/delegations.md
+  // "Hub approvals"); its `what` is the agent's note, which no signature covers, and is labelled so; and the owner's Approve
   // and Deny. They are usable only in a strong session (snapshot `strong`); the decide route checks that itself, and its
   // refusal is shown in the server's words.
   function approvalCard(d){
     const status = el("span", {class:"status", role:"status", text: state.strong ? "" : "Approve and Deny need a strong session: log in through Cloudflare Access and open its pairing link in this browser."});
     const op = d.kind === "op";
     const diff = (Array.isArray(d.diff) ? d.diff : []).map(l => String(l).replace(/\r?\n$/, "")).join("\n");
+    const words = typeof d.line === "string" && d.line ? d.line.split(" ") : [];
     const body = op
-      ? [el("div", {class:"refs", text: "runs " + String(d.op || "?") + (d.what ? ": " + String(d.what) : "")}),
-         el("div", {class:"cmd"}, el("pre", {class:"diff", text: typeof d.line === "string" && d.line ? d.line : "(no line stored)"}))]
+      ? [el("div", {class:"refs", text: "runs " + String(d.op || "?")}),
+         d.what ? el("p", {class:"ctx", text: "The agent's note, not signed: " + String(d.what)}) : null,
+         el("div", {class:"cmd"}, el("pre", {class:"diff", text: words.length ? [words.slice(0, 2).join(" "), ...words.slice(2)].join("\n") : "(no line stored)"}))]
       : [el("div", {class:"refs", text: "on " + String(d.head || "?")}),
          el("div", {class:"cmd"}, el("pre", {class:"diff", text: diff || "(no diff stored)"}))];
     const decide = decision => async () => {
