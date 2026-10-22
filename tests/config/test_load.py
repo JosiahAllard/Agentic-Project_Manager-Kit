@@ -320,6 +320,32 @@ class RetiredLedgerRepoUnchangedTest(TreeCase):
         self.assertIn('unknown key(s) ledger_repoz', why)
 
 
+class RetiredLandingLanesTest(TreeCase):
+    """`landing.lanes` named the landing lanes gate.py land --lane took, which are gone: the key is
+    retired, so a config that still carries it loads, whatever its value."""
+
+    def test_a_config_still_carrying_lanes_loads_without_it(self):
+        for value in ({'docs': {'branch_prefix': ['docs/'], 'paths': ['docs/*'], 'why': 'w'}},
+                      {}, 3, 'docs', {'bad name': {'no_such_key': 1}}):
+            with self.subTest(value=value):
+                cfg = self.load({'landing': {'batch_max': 2, 'lanes': value}})
+                self.assertEqual(cfg.section('landing')['batch_max'], 2)
+                self.assertNotIn('lanes', cfg.section('landing'))
+
+    def test_lanes_in_a_landing_section_file_loads_without_it(self):
+        cfg = self.load({'landing': 'l.json'}, {'l.json': {'lanes': {'docs': {}}}})
+        self.assertNotIn('lanes', cfg.section('landing'))
+
+    def test_lanes_is_retired_and_not_a_schema_field(self):
+        self.assertIn('lanes', schema.RETIRED['landing'])
+        self.assertNotIn('lanes', schema.SECTIONS['landing'])
+        self.assertFalse(any('`lanes`' in line for line in schema.doc_lines()))
+
+    def test_a_typo_beside_lanes_still_refuses(self):
+        why = self.refused({'landing': {'lanes': {}, 'lanez': {}}})
+        self.assertIn('unknown key(s) lanez', why)
+
+
 class RetiredSectionTest(TreeCase):
     """A whole section no tool reads any more (schema.RETIRED_SECTIONS): a config that still
     carries it loads, the section dropped unchecked."""

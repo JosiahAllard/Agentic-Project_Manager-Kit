@@ -838,7 +838,7 @@ def _gate_checkout(top, cfg, seen, base=None, full=False, only=None, plan=False,
 # ---------------------------------------------------------------- the merged-tree gate
 
 def merged_gate(root, cfg, base, full=False, slug='land', log_dir=None, say=None, book_kw=None,
-                lane_args=None, reuse=None, slot=None, tree=None, docs=False):
+                reuse=None, slot=None, tree=None, docs=False):
     """_merged_gate() with its source (kitlib.gate.detect) in facts['source'] and as the last
     line. With no "gate" section in `cfg` the gate is detected from the merged tree, plus the
     steps `base` owes (detect.effective). `slot`: the Slot the landing already holds; the steps
@@ -852,15 +852,14 @@ def merged_gate(root, cfg, base, full=False, slug='land', log_dir=None, say=None
     if eff.source == detect.AUTO:
         (say or _quiet)(detect.label(eff))
     out = _merged_gate(root, cfg, eff, base, full=full, slug=slug, log_dir=log_dir, say=say,
-                       book_kw=book_kw, lane_args=lane_args, reuse=reuse, slot=slot, tree=tree,
-                       docs=docs)
+                       book_kw=book_kw, reuse=reuse, slot=slot, tree=tree, docs=docs)
     out.facts['source'] = eff.source
     out.lines.append(detect.label(eff))
     return out
 
 
 def _merged_gate(root, cfg, eff, base, full=False, slug='land', log_dir=None, say=None,
-                 book_kw=None, lane_args=None, reuse=None, slot=None, tree=None, docs=False):
+                 book_kw=None, reuse=None, slot=None, tree=None, docs=False):
     """Gate the merged tree at HEAD of `tree` (a landing's merge, in its landing tree; default
     `root`) against `base` (the main it was merged into). The steps run in `tree`, and their hook
     checks get it as ctx['root']; the repository's name and its log folder are `root`'s (the main
@@ -869,7 +868,7 @@ def _merged_gate(root, cfg, eff, base, full=False, slug='land', log_dir=None, sa
     checkout's ignored caches, so a step the branch's paths would not select (an asset import)
     must still run. Each runs its cmd, or its full_cmd, when it has one, with `full` (a strict
     landing). Each step's
-    merged_args are appended, then `lane_args` (the landing lane's merged_args). Outcome codes:
+    merged_args are appended. Outcome codes:
     OK, FAILED, REFUSED (also when no step is selected: every step manual, or each dropped by
     another's skip_if_selected) or a machine lock code; facts verdict,
     results, log_dir, head, windows (as the branch gate's), docs. Check steps run the hook module
@@ -898,8 +897,7 @@ def _merged_gate(root, cfg, eff, base, full=False, slug='land', log_dir=None, sa
     from kitlib.gate import reuse as R     # reuse imports this module; `reuse` is the planner
     docs = bool(docs) and not (full or empty) and R.docs_only_change(cfg, gate, changed)
     try:
-        all_steps = S.build(gate, tree, base, cfg.tools_dir, merged=True, extra=lane_args,
-                            full=full)
+        all_steps = S.build(gate, tree, base, cfg.tools_dir, merged=True, full=full)
         chosen, _ = S.select(gate, all_steps, changed, full=not docs, docs=docs,
                              read=S.working_tree_reader(tree))
     except S.GateConfigError as e:

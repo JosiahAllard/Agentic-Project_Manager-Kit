@@ -49,7 +49,7 @@ The kit gate prints these lines to stdout and writes none of them into its step 
 ## Keys read
 
 - `.kit.json` "repo": `main_branch`, `remote`, `name`.
-- "landing": `log_dir`, `lock_file`, `lanes`.
+- "landing": `log_dir`, `lock_file`.
 
 ## Not ported
 

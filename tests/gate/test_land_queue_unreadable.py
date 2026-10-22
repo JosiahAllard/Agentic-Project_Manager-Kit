@@ -1,5 +1,5 @@
 """kitlib.gate.land.queue (land.py --queue) with a lock file that is not a record: shown as held by
-nobody named (lane ?), with the read error, and the queue still listed - the state in which
+nobody named (phase ?), with the read error, and the queue still listed - the state in which
 docs/gate.md "The landing queue" says to check --queue before a lock is cleared by hand."""
 import unittest
 from unittest import mock
@@ -24,7 +24,7 @@ class AnUnreadableLock(LandCase):
 
     def assert_held_by_nobody_named(self, out, error):
         self.assertEqual(out.code, G.OK, out.lines)
-        self.assertTrue(out.lines[0].startswith('landing lock: HELD - lane ?'), out.lines)
+        self.assertTrue(out.lines[0].startswith('landing lock: HELD - branches -, a token holder, phase ?'), out.lines)
         self.assertIn('unreadable', out.lines[0])
         self.assertIn(error, out.lines[0])
 
