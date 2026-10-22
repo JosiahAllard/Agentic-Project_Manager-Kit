@@ -841,6 +841,24 @@ class HubApproval(Fixture):
         self.assertIn('Retired: spent', self.text())
         self.assertIsNone(drun.used(texts, None, 'hub:A-001'))
 
+    def test_the_record_as_an_owner_session_order_is_refused_while_its_run_entry_lives(self):
+        # The record is an owner entry whose Decides is the run line, so for an op that also lists
+        # owner-session it passes the order check; the live run entry, anchored on it, refuses it.
+        op = self.op(trigger=['owner-session', 'hub-approval'],
+                     preconditions=[{'kind': 'file-exists', 'path': self.exe}])
+        self.approve(op=op)
+        record, ran = self.entries()
+        self.events.clear()
+        self.spawn.calls.clear()
+        with self.assertRaises(drun.RunRefused) as cm:
+            self.run_op(op=op, pairs=(('dest', self.dest),), trigger=record['id'],
+                        kit_root=self.kit, home=self.home, make_cwd=self.make_cwd,
+                        checks={'file-exists': self.check_pre})
+        self.assertIn('already ran on %s (%s): each order runs once' % (record['id'], ran['id']),
+                      str(cm.exception))
+        self.assertEqual(self.spawn.calls, [])
+        self.assertEqual(len(self.entries()), 2)
+
     def test_the_child_runs_in_a_new_empty_folder_removed_when_left_empty(self):
         self.approve()
         cwd = self.spawn.calls[0][1]['cwd']
