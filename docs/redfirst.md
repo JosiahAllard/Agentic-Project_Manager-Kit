@@ -21,7 +21,7 @@
 
 ## The machine lock
 
-A run whose command is heavy books the machine lock itself, so the caller does not wrap `redfirst.py` in `machine_lock.py run` (`kitlib/redfirst/run.py`: `lock_kind`, `one_lock`, `book_slot`, `locked_run`; tests: `tests/redfirst/test_lock.py`).
+A run whose command is heavy books the machine lock itself, so it is a kit wrapper (skill machine-lock-run, "Machine lock" step 2) and the caller does not wrap `redfirst.py` in `machine_lock.py run` (`kitlib/redfirst/run.py`: `lock_kind`, `one_lock`, `book_slot`, `locked_run`; tests: `tests/redfirst/test_lock.py`).
 
 - **Which kind.** A runner's `lock` (docs/kit-json.md, `redfirst.runners`) names the kinds-table kind. Without it the kind is that of the first heavy-list entry the runner's command matches (`kitlib.config.heavy_match` over `heavy_programs`: the kit defaults, then the repo's `heavy.programs`): `build` for `gradlew` and for `dotnet test`, none for the python runner. A run with no kind books nothing and runs as before (`run.py`, `default_run`).
 - **One booking a run.** The run books once, before the throwaway tree is made, as `<repo name>/redfirst-<base10>` (`kitlib.lock.run.book`; the repo name is `"repo".name`, else the main checkout's folder name), runs every command in the booked run's job, and releases before the cleanup. `--tests` values that need two different kinds are refused, exit 2, with the kind of each; run them in separate calls.

@@ -228,15 +228,20 @@ Notes on the table:
 - `questions add --story` is the story a follow-up belongs to; `stories set`, `questions log` and
   every `edit` and `withdraw` require `--if-version`.
 - `hub.py pending` lists the owner input not yet handled: questions answered and not logged,
-  stories submitted, To PM items sent, and to-dos done or added by the owner without `pm_ack`
-  (`kitlib.hubsite.store.pending_items`). Each item carries `from`, the session key it is for, and
+  stories submitted, To PM items sent, to-dos done or added by the owner without `pm_ack`, and
+  approvals the owner decided that are not consumed (`kitlib.hubsite.store.pending_items`; an
+  approved one until it is consumed or expires 24 hours after the decision, a denied one for 24
+  hours after it). Each item carries `from`, the session key it is for, and
   `route`, the key that is to handle it now (the line's `from=` and `to=`). A question or to-do is
   for the launcher session key it was posted `--from` while that key is still in sessions.json;
   everything else (a to-do's free-text `from`, the owner's own items, stories, To PM items, and a
-  question whose session has gone) is for `pm` (`kitlib.hubsite.api.Api.pending`). `pending --for
-  KEY` lists only KEY's items, and `pending --for pm` the items routed to `pm` and every answered
-  question; reading it marks nothing, so the item stays pending for every reader until it is
-  logged or acknowledged.
+  question whose session has gone) is for `pm` (`kitlib.hubsite.api.Api.pending`). An approval has
+  no `from`: it is for the coordinator of its repository, the configured repository whose origin
+  remote is the approval's `repo`, keyed by that repository's name while the name is in
+  sessions.json, and for `pm` otherwise. `pending --for KEY` lists only KEY's items, and
+  `pending --for pm` the items routed to `pm`, every answered question and every decided
+  approval; reading it marks nothing, so the item stays pending for every reader until it is
+  logged, acknowledged, consumed or past its window.
 - `hub.py wait --pending` waits until an item is pending (one already pending ends it at once) and
   prints `HUB <rev> <kind> <id> to=<route> from=<key> <title>` for each; with `--for KEY` it waits
   until an item for KEY is pending and other sessions' items do not end it. `--except ID ...`
@@ -268,7 +273,11 @@ the PM otherwise, so the PM is the fallback for a creator that is gone (`route`,
   that while it is still pending. The creator ends it by acting on it: `todos ack` for a to-do;
   an answered question stays pending until the PM logs it.
 - `--for pm` lists the PM's items and every answered question, whoever asked it, because the PM
-  logs each ruling. A PM wait is also woken when an item turns to the PM with no write.
+  logs each ruling, and every decided approval. A PM wait is also woken when an item turns to the
+  PM with no write.
+- A decided approval is for its repository's coordinator (`hub.py pending` above) and listed for
+  the PM too. It stops being pending with no write: once consumed, at its expiry, or 24 hours
+  after a denial.
 - This state lives in the server's memory only: after a restart every item is the PM's until
   its creator waits again. Older to-dos whose `from` is a free-text name are the PM's.
 
@@ -286,11 +295,17 @@ It is not the store's git push (the `push` setting).
   with one note line: `push notifications off: <why>`. A worker that fails to start leaves the
   server serving (`push notifications did not start: ...`).
 - What fires: a question answered (or answered again), a to-do done (or done again), a done to-do
-  reopened, and a to-do the owner added (to the PM only). Each item has a fingerprint (a
-  question's status, `answer.at` and a digest of the answer; a to-do's status and `done_at`), and
-  only a changed fingerprint fires, so `pm_ack` alone never does.
+  reopened, a to-do the owner added (to the PM only), an approval the owner approved or denied
+  (`decided`), and an approval still approved and not consumed 20 hours after the decision
+  (`expiring`, `push.EXPIRING_S`), the one reminder before it expires at 24 hours, so a missed
+  first push cannot lose the owner's approval. Each item has a fingerprint (a question's status,
+  `answer.at` and a digest of the answer; a to-do's status and `done_at`; an approval's status,
+  `decided_at` and phase, `decided` then `expiring`, read at the worker's clock each round), and
+  only a changed fingerprint fires, so `pm_ack` alone never does. An approval's phase ending
+  (consumed, expired, a denial's 24 hours past) drops what was still owed and sends nothing.
 - Who hears: the item's `from`, unless that is the PM's own (`pm`, the owner, empty), and the
-  PM, once. A launcher key is resolved through sessions.json; `pm` through coordinators.json's
+  PM, once; for an approval, the coordinator key its `repo` names ("Who handles a pending item")
+  and the PM. A launcher key is resolved through sessions.json; `pm` through coordinators.json's
   `pm_session_id`, then the names `Project Manager` and `pm-session`.
 - What it says: a fixed header, `[hub push] <kind> <id> <status> repo:<repo> from:<from>
   route:<recipient> attempt:<k>`, and one line of what to do; never a title, a note or an
@@ -300,7 +315,8 @@ It is not the store's git push (the `push` setting).
 - Until when: each recipient is sent each item until it is acknowledged. The asking session
   acknowledges by picking the item up (`pending --for` or `wait --pending --for` hands it over,
   "Who handles a pending item"), or by `todos ack`; the PM by `todos ack` for a to-do and by
-  `questions log` for a question. An item withdrawn, reopened or answered again replaces or
+  `questions log` for a question. An approval's push is sent once to each: the first written
+  try acknowledges it. An item withdrawn, reopened or answered again replaces or
   ends its push. A session that picked up a first answer or done mark before the worker saw it
   is not sent it. One message lists at most 20 items (`push.MAX_ITEMS`) and a `+N more` line;
   the rest wait for the next slot. Retries come 2, 5, 15, 30 and 60 minutes after a try, then hourly, and stop a
@@ -331,9 +347,12 @@ It is not the store's git push (the `push` setting).
 - Known limit: an answer made in the moments before the server closes that the worker had not
   yet seen is not pushed after a restart: the outbox holds only what the worker saw. The PM's
   wait still shows it.
+- Known limit: an approval's 20-hour reminder (`expiring`) is not sent when the server is down
+  across the 20-hour mark after its `decided` push was delivered. The approval stays pending
+  for its coordinator and the PM ("Who handles a pending item") until it is consumed or expires.
 
 Tests: tests/hubsite/test_push.py, tests/host/test_claude_peer.py, tests/launcher/test_pipes.py,
-tests/hubsite/test_hub_cli.py `PushCase`.
+tests/hubsite/test_hub_cli.py `PushCase`, tests/hubsite/test_pending_approvals.py.
 
 ## questions/Q-NNN
 | Field | Written by | Meaning |
@@ -616,6 +635,11 @@ approval"): it verifies, writes and commits the approved files, then consumes th
 commit and verifies it with the commit; `gate land` and the pre-push hook verify it again
 (`kitlib.guard.ownercommits`). An approval verifies for 24 hours after the decision, consumed or
 not (`approvals.APPROVED_TTL_S`).
+
+A decided approval that is not consumed is pending owner input ("Who handles a pending item"):
+for the coordinator of its repository and for the PM, until it is consumed or expires, and a
+denied one for 24 hours after the decision. The server pushes it to both at the decision and, if
+it is still approved and not consumed, once more 20 hours after it ("Push notifications").
 
 An agent asks for one with `hub.py approvals add --title T --file PATH CONTENT_FILE [--file ...]
 [--checkout DIR] [--repo R] [--head SHA] [--reason TEXT]`, or the MCP tool `hub_approval_request`

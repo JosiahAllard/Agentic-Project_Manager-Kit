@@ -46,15 +46,15 @@ class ALosingLookTest(LookCostCase):
     def test_a_held_lock_is_busy_with_no_git_call_and_no_process_lookup(self):
         self.write_raw(json.dumps(HELD))
         with self.assertRaises(landing.Busy) as got:
-            self.lock().take('full', ['kit/a'], pid=42)
+            self.lock().take(['kit/a'], pid=42)
         self.assertEqual(got.exception.record, HELD)
         self.assertEqual((self.starts, self.resolves), ([], []))
 
     def test_an_unreadable_lock_is_busy_by_nobody_named_with_no_git_call(self):
         self.write_raw('')          # a taker between its create and its write
         with self.assertRaises(landing.Busy) as got:
-            self.lock().take('full', ['kit/a'], pid=42)
-        self.assertEqual(got.exception.record['lane'], '?')
+            self.lock().take(['kit/a'], pid=42)
+        self.assertEqual(got.exception.record['phase'], '?')
         self.assertEqual((self.starts, self.resolves), ([], []))
 
     def test_a_lock_released_between_the_look_and_the_read_is_busy_released(self):
@@ -68,7 +68,7 @@ class ALosingLookTest(LookCostCase):
 
         with mock.patch.object(lk, 'read', released_first):
             with self.assertRaises(landing.Busy) as got:
-                lk.take('full', ['kit/a'], pid=42)
+                lk.take(['kit/a'], pid=42)
         self.assertEqual(got.exception.record['phase'], 'released while we looked')
         self.assertFalse(os.path.exists(lk.path))
 
@@ -76,7 +76,7 @@ class ALosingLookTest(LookCostCase):
         self.write_raw(json.dumps(HELD))
         with mock.patch.object(landing.os.path, 'exists', lambda p: False):
             with self.assertRaises(landing.Busy) as got:
-                self.lock().take('full', ['kit/a'], pid=42)
+                self.lock().take(['kit/a'], pid=42)
         self.assertEqual(got.exception.record, HELD)
         with open(self.lock().path, encoding='utf-8') as f:
             self.assertEqual(json.load(f), HELD)        # the holder's record is untouched
@@ -85,7 +85,7 @@ class ALosingLookTest(LookCostCase):
 class AWinningTakeTest(LookCostCase):
 
     def test_the_record_is_built_once_and_holds_what_it_held(self):
-        rec = self.lock().take('full', ['kit/a'], pid=42)
+        rec = self.lock().take(['kit/a'], pid=42)
         main = self.repo.git('rev-parse', 'main')
         with open(self.lock().path, encoding='utf-8') as f:
             self.assertEqual(json.load(f), rec)
@@ -101,11 +101,11 @@ class AWinningTakeTest(LookCostCase):
 
     def test_a_take_after_a_release_reads_main_where_it_is_now(self):
         lk = self.lock()
-        before = lk.take('full', ['kit/a'], pid=42)
+        before = lk.take(['kit/a'], pid=42)
         lk.release(before['token'])
         self.repo.write('moved.txt', 'x\n')
         main = self.repo.commit('main moves while nobody holds the lock', 'moved.txt')
-        rec = lk.take('full', ['kit/b'], pid=43)
+        rec = lk.take(['kit/b'], pid=43)
         self.assertNotEqual(before['main_at_take'], main)
         self.assertEqual(rec['main_at_take'], main)
         self.assertEqual(self.starts, [42, 43])

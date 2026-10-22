@@ -209,8 +209,7 @@ def look(root, ref):
     """Outcome(code, lines) of one look at `ref` (a branch name or a commit) in `root`'s repository."""
     try:
         cfg = load(root)
-        lanes = tuple(cfg.section('landing').get('lanes') or ())
-        lock = landing.LandingLock.for_config(root, cfg, lanes=lanes)
+        lock = landing.LandingLock.for_config(root, cfg)
     except (ConfigError, landing.LockError) as e:
         return Outcome(CANNOT, ['landed: refused: kit configuration: %s' % e])
     main_branch, remote = cfg.main_branch, cfg.remote

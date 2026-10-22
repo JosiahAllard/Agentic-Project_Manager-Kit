@@ -510,7 +510,7 @@ class LandingCase(MasterRepo):
     def hold(self, text=None):
         """Take the lock as a lander would (a token holder), or write `text` in its place."""
         if text is None:
-            return self.lock().take('full', ['feat/landing'])
+            return self.lock().take(['feat/landing'])
         with open(self.lock_path(), 'w', encoding='utf-8', newline='\n') as fh:
             fh.write(text)
 
