@@ -2445,5 +2445,120 @@ class ApprovalRouteTest(ApiCase):
                 self.assertIs(self.ok('GET', '/snapshot', role, strong=strong)['strong'], False)
 
 
+class OpApprovalRouteTest(ApiCase):
+    """The approvals routes for the op kind: one run of a delegated operation (docs/delegations.md
+    "Hub approvals"). No checkout is read for it. The rules are tests/hubsite/test_approvals_op.py."""
+
+    KEY = 'k' * 64
+    LINE = 'robocopy.exe <dev-drive>\\in <dev-drive>\\out /E'
+
+    def setUp(self):
+        super().setUp()
+        self.asked = []
+
+        def checkout(repo_id):
+            self.asked.append(repo_id)
+            return None
+        self.api = api.Api(self.store, clock=CLOCK, approval_key=lambda: self.KEY,
+                           checkout=checkout)
+
+    def add(self, **kw):
+        body = {'kind': 'op', 'op': 'D-001', 'repo': 'pm', 'line': self.LINE,
+                'title': 'Copy the inputs', 'reason': 'asked for', 'what': 'copies a folder'}
+        body.update(kw)
+        return self.ok('POST', '/approvals', AGENT, body)
+
+    def approved(self):
+        doc_id = self.add()['id']
+        self.ok('POST', '/approvals/%s/decide' % doc_id, OWNER,
+                {'decision': 'approve', 'if_version': 1}, strong=True)
+        return doc_id
+
+    def verify(self, doc_id, **query):
+        q = {'kind': 'op', 'op': 'D-001', 'repo': 'pm', 'args': approvals.line_sha256(self.LINE)}
+        q.update(query)
+        return self.ok('GET', '/approvals/%s/verify' % doc_id, AGENT, query=q)
+
+    def test_an_op_request_is_added_with_the_hash_and_no_checkout_or_diff(self):
+        doc = self.store.get('approvals', self.add()['id'])
+        self.assertEqual((doc['status'], doc['kind'], doc['op'], doc['repo'], doc['line'],
+                          doc['args_sha256'], doc['what'], doc['via']),
+                         ('pending', 'op', 'D-001', 'pm', self.LINE,
+                          approvals.line_sha256(self.LINE), 'copies a folder', 'api'))
+        self.assertNotIn('diff', doc)
+        self.assertEqual(self.asked, [])
+        self.assertEqual(self.store.get('approvals', self.add(repo='*')['id'])['repo'], '*')
+
+    def test_a_bad_op_request_is_refused(self):
+        for kw, field in (({'kind': 'other'}, 'kind'), ({'kind': 'OP'}, 'kind'),
+                          ({'kind': 7}, 'kind'), ({'op': 'D-1'}, 'op'), ({'repo': 'Pm'}, 'repo'),
+                          ({'line': ''}, 'line'), ({'line': 'a\nb'}, 'line'),
+                          ({'head': 'a' * 40}, 'head'), ({'files': []}, 'files'),
+                          ({'args_sha256': 'a' * 64}, 'args_sha256')):
+            body = {'kind': 'op', 'op': 'D-001', 'repo': 'pm', 'line': self.LINE, 'title': 't'}
+            body.update(kw)
+            with self.subTest(kw=kw):
+                self.refused('invalid', field, 'POST', '/approvals', AGENT, body)
+
+    def test_an_op_field_on_a_change_request_is_refused(self):
+        for name in ('op', 'line', 'what', 'args_sha256'):
+            self.refused('invalid', name, 'POST', '/approvals', AGENT,
+                         {'repo': 'https://github.com/o/r', 'title': 't', 'head': 'a' * 40,
+                          'files': [], name: 'x'})
+
+    def test_an_approved_op_verifies_with_its_version_and_never_the_sig(self):
+        doc_id = self.approved()
+        obj = self.verify(doc_id)
+        self.assertEqual(obj, {'ok': True, 'valid': True, 'why': '', 'version': 2,
+                               'revision': self.store.revision})
+        self.assertNotIn(self.store.get('approvals', doc_id)['sig'], json.dumps(obj))
+        for query, why in (({'op': 'D-002'}, approvals.WHY_OP),
+                           ({'repo': '*'}, approvals.WHY_REPO),
+                           ({'args': approvals.line_sha256('x')}, approvals.WHY_ARGS)):
+            obj = self.verify(doc_id, **query)
+            self.assertEqual((obj['valid'], obj['why']), (False, why), query)
+        obj = self.verify(self.add()['id'])
+        self.assertEqual((obj['valid'], obj['why']), (False, approvals.WHY_UNSIGNED))
+
+    def test_an_op_approval_is_not_a_change_and_a_change_query_does_not_pass_it(self):
+        doc_id = self.approved()
+        obj = self.ok('GET', '/approvals/%s/verify' % doc_id, AGENT,
+                      query={'repo': 'pm', 'head': 'a' * 40, 'files': '{}'})
+        self.assertEqual((obj['valid'], obj['why']), (False, approvals.WHY_KIND_OP))
+        self.refused('conflict', None, 'POST', '/approvals/%s/consume' % doc_id, AGENT,
+                     {'commit': 'c' * 40, 'if_version': 2})
+
+    def test_an_op_approval_is_consumed_once_by_its_own_arguments(self):
+        doc_id = self.approved()
+        args = approvals.line_sha256(self.LINE)
+        self.refused('conflict', None, 'POST', '/approvals/%s/consume' % doc_id, AGENT,
+                     {'args_sha256': approvals.line_sha256('x'), 'if_version': 2})
+        self.refused('invalid', 'args_sha256', 'POST', '/approvals/%s/consume' % doc_id, AGENT,
+                     {'args_sha256': args, 'commit': 'c' * 40, 'if_version': 2})
+        self.refused('conflict', 'if_version', 'POST', '/approvals/%s/consume' % doc_id, AGENT,
+                     {'args_sha256': args, 'if_version': 1})
+        obj = self.ok('POST', '/approvals/%s/consume' % doc_id, AGENT,
+                      {'args_sha256': args, 'if_version': 2})
+        self.assertEqual(obj['status'], 'consumed')
+        doc = self.store.get('approvals', doc_id)
+        self.assertEqual((doc['status'], doc['consumed_at']), ('consumed', NOW))
+        self.refused('conflict', None, 'POST', '/approvals/%s/consume' % doc_id, AGENT,
+                     {'args_sha256': args, 'if_version': 3})
+        self.assertEqual(self.verify(doc_id)['why'], approvals.WHY_STATUS % 'consumed')
+
+    def test_a_change_approval_is_not_consumed_by_arguments(self):
+        now = datetime.datetime.fromisoformat(NOW)
+        doc = approvals.new_doc('https://github.com/o/r', 't', 'a' * 40,
+                                [{'path': 'x.md', 'base_blob': None, 'content': 'x\n'}], now)
+        doc_id = self.store.add('approvals', doc).id
+        self.store.update('approvals', doc_id, approvals.decide_fields(
+            self.KEY, doc_id, self.store.get('approvals', doc_id), 'approve', now))
+        version = self.store.get('approvals', doc_id)['version']
+        self.refused('conflict', None, 'POST', '/approvals/%s/consume' % doc_id, AGENT,
+                     {'args_sha256': approvals.line_sha256(self.LINE), 'if_version': version})
+        obj = self.verify(doc_id)
+        self.assertEqual((obj['valid'], obj['why']), (False, approvals.WHY_KIND_FILES))
+
+
 if __name__ == '__main__':
     unittest.main()
