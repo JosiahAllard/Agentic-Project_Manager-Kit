@@ -1,6 +1,6 @@
 """The text of the land permission rules, and a reference matcher for them (docs/allow-rules.md).
 
-  allow_lines(kit, repo, lanes)  one PowerShell allow per script spelling and lane (plus the plain one)
+  allow_lines(kit, repo)         one PowerShell allow per script spelling
   deny_lines(kit, repo)          a second -C, --log-dir, a bare --, and each shell metacharacter,
                                  after the script
   decide(lines, shell, command)  'allow', 'deny' or None under the matching model in the doc
@@ -56,15 +56,10 @@ def scripts(kit):
     return (path, '"%s"' % path)
 
 
-def allow_lines(kit, repo, lanes):
-    """The allow rules: for each allowed shell and spelling, the plain submit and one per lane."""
-    out = []
-    for shell in ALLOW_SHELLS:
-        for script in scripts(kit):
-            base = 'python %s -C %s * --expect-tip * --submit' % (script, repo)
-            out.append('%s(%s)' % (shell, base))
-            out += ['%s(%s --lane %s)' % (shell, base, lane) for lane in lanes]
-    return out
+def allow_lines(kit, repo):
+    """The allow rules: for each allowed shell and spelling, the plain submit."""
+    return ['%s(python %s -C %s * --expect-tip * --submit)' % (shell, script, repo)
+            for shell in ALLOW_SHELLS for script in scripts(kit)]
 
 
 def deny_lines(kit, repo):

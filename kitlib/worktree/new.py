@@ -206,8 +206,7 @@ def create(root, branch, existing=False, base=None, wait=True, say=None, sleep=t
     main = main_checkout_of(common)
     try:
         cfg = load(main)
-        lanes = tuple(cfg.section('landing').get('lanes') or ())
-        lock = landing.LandingLock.for_config(main, cfg, lanes=lanes)
+        lock = landing.LandingLock.for_config(main, cfg)
         reader = inflight.reader(main, cfg, lock)
     except (ConfigError, landing.LockError) as e:
         return Outcome(CONFIG, ['new_worktree: refused: kit configuration: %s' % e])

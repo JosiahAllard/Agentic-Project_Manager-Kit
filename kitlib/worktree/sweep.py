@@ -76,8 +76,7 @@ def landing_hold(ctx):
     place unknown. The lock is kitlib.records.landing's (`<common dir>/<"landing".lock_file>`),
     the one every landing takes."""
     try:
-        lock = landing.LandingLock.for_config(
-            ctx.main, ctx.cfg, lanes=tuple(ctx.cfg.section('landing').get('lanes') or ()))
+        lock = landing.LandingLock.for_config(ctx.main, ctx.cfg)
     except (ConfigError, landing.LockError) as e:
         return 'the landing lock cannot be placed (%s)' % e
     try:

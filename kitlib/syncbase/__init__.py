@@ -237,8 +237,7 @@ def in_flight_reader(top, cfg):
     if not common:
         raise landing.LockError('no git common dir for %s: %s' % (top, why))
     main = os.path.realpath(os.path.abspath(os.path.dirname(common)))
-    lanes = tuple(cfg.section('landing').get('lanes') or ())
-    return inflight.reader(main, cfg, landing.LandingLock.for_config(main, cfg, lanes=lanes))
+    return inflight.reader(main, cfg, landing.LandingLock.for_config(main, cfg))
 
 
 def _size(cat, rev, path):

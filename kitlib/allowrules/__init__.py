@@ -1,11 +1,11 @@
 """The permission rules that let an agent submit a landing without a prompt, for one repository, and
 the scan for rules that name a plugin export other than the current one (docs/allow-rules.md).
 
-  derive(checkout, settings, toplevel, lanes_of)  Target: the current export, the repository's main
-                                                  checkout and its lanes, or AllowRulesError
-  lines(target)                                   {"allow": [...], "deny": [...]} (kitlib.allowrules.rules)
-  named_exports(path, root)                       {export folder: rules naming it} of a settings file
-  export_state(root, folder, current)             CURRENT, GONE or NOT_CURRENT
+  derive(checkout, settings, toplevel)  Target: the current export and the repository's main
+                                        checkout, or AllowRulesError
+  lines(target)                         {"allow": [...], "deny": [...]} (kitlib.allowrules.rules)
+  named_exports(path, root)             {export folder: rules naming it} of a settings file
+  export_state(root, folder, current)   CURRENT, GONE or NOT_CURRENT
 
 Nothing here writes a settings file: the owner pastes the lines (tools/allow_rules.py prints them).
 The export folder is always read from the export root's marketplace.json, never spelled here.
@@ -17,12 +17,10 @@ import re
 
 from kitlib.allowrules import rules
 
-Target = collections.namedtuple('Target', 'kit repo sha lanes root')
+Target = collections.namedtuple('Target', 'kit repo sha root')
 
 CURRENT, GONE, NOT_CURRENT = 'current', 'gone', 'not current'
-FULL = 'full'                         # kitlib.records.landing.FULL: the lane every repository has
 _FOLDER = re.compile(r'^[0-9a-f]{12}$')
-_LANE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.-]*$')
 # A path a rule cannot spell bare: a space, a quote, a rule or glob wildcard, a shell operator, a
 # control character, or any character a deny line names (that deny would refuse every submit).
 _UNSAFE = (frozenset(' "\'()*?[];&|$`%<>') | frozenset(rules.METACHARS)
@@ -45,17 +43,10 @@ def _safe(what, path):
                               % (what, path, ' '.join(repr(c) for c in bad)))
 
 
-def repo_lanes(top):
-    """The lanes besides full of `top`'s main branch config at HEAD ("landing".lanes, which
-    gate.py land --lane checks against)."""
-    from kitlib import config
-    return config.load_at(top, 'HEAD').section('landing')['lanes']
-
-
-def derive(checkout, settings=None, toplevel=None, lanes_of=None):
+def derive(checkout, settings=None, toplevel=None):
     """The Target for `checkout` (any worktree of the repository): the current export folder of
-    `settings` (kitlib.pluginsource.load() when None), the main checkout `toplevel` gives
-    (kitlib.git.repo.main_checkout_toplevel) and `lanes_of(main checkout)` (repo_lanes)."""
+    `settings` (kitlib.pluginsource.load() when None) and the main checkout `toplevel` gives
+    (kitlib.git.repo.main_checkout_toplevel)."""
     from kitlib import pluginsource
     from kitlib.config.types import ConfigError
     if settings is None:
@@ -82,21 +73,12 @@ def derive(checkout, settings=None, toplevel=None, lanes_of=None):
         raise AllowRulesError('git cannot place %s in a repository' % checkout)
     repo = _slashes(top)
     _safe('the main checkout path', repo)
-    try:
-        lanes = (lanes_of or repo_lanes)(top)
-    except ConfigError as e:
-        raise AllowRulesError('the lanes of %s: %s' % (repo, e))
-    bad = [l for l in lanes if not isinstance(l, str) or not _LANE.match(l)]
-    if bad:
-        raise AllowRulesError('lane name %s is not letters, digits, "_", "." and "-"'
-                              % ', '.join(repr(l) for l in bad))
-    return Target(kit, repo, folder, (FULL,) + tuple(sorted(l for l in lanes if l != FULL)),
-                  _slashes(root))
+    return Target(kit, repo, folder, _slashes(root))
 
 
 def lines(target):
     """The allow and deny lines for `target`, in a fixed order."""
-    return {'allow': rules.allow_lines(target.kit, target.repo, target.lanes),
+    return {'allow': rules.allow_lines(target.kit, target.repo),
             'deny': rules.deny_lines(target.kit, target.repo)}
 
 

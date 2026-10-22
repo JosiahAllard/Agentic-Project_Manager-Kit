@@ -113,7 +113,7 @@ class OneBooking(QueueCase):
                          {'gate': True, 'resource': self.key(), 'priority': 'land',
                           'store': self.store, 'wait_s': 0, 'no_wait': True, 'cores': 1,
                           'detached': None})
-        self.assertEqual(call['note'], 'landing full: kit/feature')
+        self.assertEqual(call['note'], 'landing: kit/feature')
         self.assertTrue([s for s in said
                          if s.startswith('the gate runs in the slot the landing holds (run ')], said)
         self.assertEqual(len(self.store.history_records(1)), 1)    # one run, ended
@@ -219,7 +219,7 @@ class GoneHolder(QueueCase):
 
     def test_a_gone_holder_with_nothing_unpushed_is_broken_and_the_landing_lands(self):
         _, tip = self.branch('feature', {'a.py': 'a\n'})
-        self.lock().take('full', ['kit/gone'], pid=self.dead_pid())
+        self.lock().take(['kit/gone'], pid=self.dead_pid())
         said = []
         out = self.lander(BRANCH, self.main, tip, say=said.append).run()
         self.assertEqual(out.code, G.OK, out.lines)
@@ -232,7 +232,7 @@ class GoneHolder(QueueCase):
         _, tip = self.branch('feature', {'a.py': 'a\n'})
         self.repo.write('u.py', 'unpushed\n')
         local = self.repo.commit('left unpushed by the gone lander', 'u.py')
-        rec = self.lock().take('full', ['kit/gone'], pid=self.dead_pid())
+        rec = self.lock().take(['kit/gone'], pid=self.dead_pid())
         said, slept = [], []
         with no_sleep(slept):
             out = self.lander(BRANCH, self.main, tip, wait_s=60, poll_s=0.05,
@@ -487,10 +487,10 @@ class Listing(QueueCase):
         self.assertEqual(out.lines, ['landing lock: free', 'landing queue: empty'])
 
     def test_the_lock_file_is_the_first_line(self):
-        rec = self.lock().take('full', ['kit/someone'], pid=os.getpid())
+        rec = self.lock().take(['kit/someone'], pid=os.getpid())
         self.addCleanup(self.lock().release, rec['token'])
         out = self.shown([])
-        self.assertTrue(out.lines[0].startswith('landing lock: HELD - lane full, branches '
+        self.assertTrue(out.lines[0].startswith('landing lock: HELD - branches '
                                                 'kit/someone, pid %d' % os.getpid()), out.lines)
 
     def test_a_queue_that_cannot_be_read_is_refused(self):

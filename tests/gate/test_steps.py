@@ -91,9 +91,6 @@ class Build(unittest.TestCase):
             with self.assertRaises(S.GateConfigError, msg=g) as cm:
                 S.build(g, ROOT, 'b', 't')
             self.assertIn(S.PID_HOLD_WHY, str(cm.exception))
-        with self.assertRaises(S.GateConfigError) as cm:      # a landing lane's merged_args
-            S.build(gate_of(cmd('a', cmd=kt)), ROOT, 'b', 't', merged=True, extra=[hold])
-        self.assertIn('landing lane', str(cm.exception))
         self.assertEqual(S.unsupported(gate_of(cmd('a', cmd=kt + ['--pid-holder']))), [])
 
 

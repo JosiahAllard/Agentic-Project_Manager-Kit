@@ -19,13 +19,14 @@ Verdict, area, what, why, size, risk. Risk: L low, M medium.
   `backlog.py migrate` verb, `policy.py:85-90` and `:253`, `roles.py:98`, `backlog/__init__.py:17`,
   `store.py:1362`. Why: all stores migrated. Size: ~256 + 324 test lines. Risk: L-M. Keep the
   `migrate: ` prefix in `audit_check.py:53-56` (old store history).
-- **Candidate 3, REMOVE** (kitlib/gate, records, allowrules, tools). `landing.lanes` and
+- **Candidate 3, DONE** (kitlib/gate, records, allowrules, tools). `landing.lanes` and
   `--lane`: `land.py` 7-33, 473-477, 591-613, 631-636, 761-772, 1623-1636, 2390-2399; the
   lane-keyed lock in `records/landing.py`; allowrules `repo_lanes`/`FULL`; `--lane` in `land.py`
   and `gate.py`. Why: no repo sets lanes. Size: ~150-250 code lines (estimate), ~80 test hits in
   19 files. Risk: M. Installed allow lines carry `--submit --lane full` (allowrules,
   `test_rules.py:47`); `lander.md:57` and the land-branch skill show `[--lane]`. Regenerate and
-  fix in one change.
+  fix in one change. Done: lanes, `--lane` and the lane-keyed lock are gone, the allow lines are
+  the plain submit only, and `landing.lanes` is a retired key that loads and is ignored.
 - **Candidate 4, REMOVE** (kitlib/gate, config schema). Gate keys `python_tests=='pytests'`,
   `python_tests_floor`, `trailers` (`schema.py:220-221`), and `steps.py:84-100` `unsupported()`.
   Why: they exist only to be refused; no `.kit.json` sets them. Size: ~25 lines + tests. Risk: L.
@@ -94,7 +95,7 @@ Verdict, area, what, why, size, risk. Risk: L low, M medium.
    from the machine config.
 4. Candidate 12: approve moving the other repo's landing lock to the default name, between
    landings.
-5. Candidate 3: confirm old lane rulings are superseded; removal changes installed allow lines.
+5. Candidate 3: done; installed allow lines lose their lane lines, so each repo prints its lines again (docs/allow-rules.md).
 
 ## Stale doc text
 

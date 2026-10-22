@@ -459,10 +459,10 @@ class TheLandingLock(Fixture):
 
     def test_a_held_lock_turns_a_failure_into_not_yet(self):
         self.log('topic/1/gate.log', 'GATE FAILED: x\n')
-        record = self.lock.take('full', ['topic'])
+        record = self.lock.take(['topic'])
         code, out = self.look()
         self.assertEqual(code, landed.NOT_YET, out)
-        self.assertIn('lock       landing lock: HELD - lane full, branches', out)
+        self.assertIn('lock       landing lock: HELD - branches topic', out)
         self.assertIn('NOT YET (a landing holds the lock)', out)
         self.lock.release(record['token'])
         code, out = self.look()
@@ -481,7 +481,7 @@ class TheLandingLock(Fixture):
         self.log('topic/1/gate.log', 'GATE FAILED: x\n')
         self.config(landing={'log_dir': LOGS, 'lock_file': 'git:repo-landing.lock'})
         lock = landing.LandingLock.for_config(self.root, load(self.root))
-        record = lock.take('full', ['topic'])
+        record = lock.take(['topic'])
         self.addCleanup(lock.release, record['token'])
         linked = os.path.join(self.tmp, 'linked')
         self.git('worktree', 'add', '-q', '--detach', linked)
@@ -490,7 +490,7 @@ class TheLandingLock(Fixture):
         for root in (self.root, linked):
             code, out = self.look(root=root)
             self.assertEqual(code, landed.NOT_YET, out)
-            self.assertIn('landing lock: HELD - lane full', out)
+            self.assertIn('landing lock: HELD - branches topic', out)
 
 
 class TheGateOkRecord(Fixture):

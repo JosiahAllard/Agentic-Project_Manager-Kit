@@ -120,14 +120,6 @@ DATA_ROOT = Obj({
     'why': Field(Str(), None, 'the reason, a ruling or a measurement'),
 }, required=('path', 'mode'), what='{path, mode, why}')
 
-# A landing lane (gate.py land --lane).
-LANE = Obj({
-    'branch_prefix': Field(Strs, None, 'a branch landing on the lane starts with one of these'),
-    'paths': Field(Strs, None, 'every path the branch changes matches one of these globs'),
-    'why': Field(Str(), None, 'the ruling that made the lane'),
-    'merged_args': Field(Strs, None, 'arguments added to every step command of a landing on this lane, after the step merged_args'),
-}, what='{branch_prefix, paths, why, merged_args}')
-
 # A red-first runner (tools/redfirst.py, kitlib/redfirst/verdict.py): the first whose glob matches.
 RUNNER = Obj({
     'glob': Field(Str(), None, 'repo-relative test files it takes (fnmatch, case-blind, * crosses /)'),
@@ -241,7 +233,6 @@ SECTIONS = {
     'landing': {
         'lock_file': Field(Str(), None, 'legacy landing lock: git:<name>, a file in the git common dir; any other value refuses'),
         'log_dir': Field(RelPath(), None, 'where gate logs live'),
-        'lanes': Field(MapOf(LANE, 'lane'), {}, 'lanes besides full that gate.py land --lane takes'),
         'wait_s': Field(Int(0, 86400), 21600, 'seconds tools/land.py waits for its turn (its machine-lock booking, then the landing lock) unless --wait says otherwise'),
         'batch_max': Field(Int(1, 20), 3, 'most branches one tools/land.py landing merges and gates together'),
         'reuse_max_age_h': Field(Int(0, 168), 24, 'hours a pass stored in the gate cache serves a branch gate rerun or a landing; 0: no gate reads or stores a step result'),
@@ -344,7 +335,7 @@ MAPS = {'roles': (ROLE, 'role', 'agent type (or main, subagent) -> permissions, 
 
 # Keys no tool reads any more, per section. A config that still carries one loads: the key is
 # dropped unchecked (not an unknown-key refusal), so an install written before the removal works.
-RETIRED = {'backlog': ('retired_docs', 'rename_script', 'ledger_repo')}
+RETIRED = {'backlog': ('retired_docs', 'rename_script', 'ledger_repo'), 'landing': ('lanes',)}
 # Whole sections no tool reads any more. A config that still carries one loads: the section is
 # dropped unchecked, whatever it holds. Any other unknown section still refuses.
 RETIRED_SECTIONS = ('ruling_cites',)

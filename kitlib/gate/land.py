@@ -4,11 +4,10 @@ tools/land.py).
 `land()` runs in the repository's MAIN checkout, on its main branch:
 
   1  usage       --expect-main (optional) and every --expect-tip are full hashes, one tip per
-                 branch, the branches distinct; the lane is `full` or one `.kit.json`
-                 "landing".lanes declares (read from the config at the main checkout's HEAD)
-  2  refusals    not the main checkout, HEAD not on main, no such branch, a branch is main, the
-                 lane's branch prefix does not match, more branches than "landing".batch_max:
-                 REFUSED, nothing changed
+                 branch, the branches distinct
+  2  refusals    not the main checkout, HEAD not on main, no such branch, a branch is main,
+                 more branches than "landing".batch_max (read from the config at the main
+                 checkout's HEAD): REFUSED, nothing changed
   3  turn        ONE booking in the machine lock (kitlib.lock.run.book): a gate run of the
                  config's "gate".kind for <repo>/<branch[+branch...]>, holding the resource
                  `landing:<git common dir>` at priority "land" ("The queue" below). At once, or
@@ -30,7 +29,7 @@ tools/land.py).
                  onto Y`; it never refuses for that. Then the locked checks: the branch tip ==
                  --expect-tip, a clean main checkout, an empty stash stack (kitlib.gate.stash: the
                  repository's, whichever checkout pushed), no merge in progress, the branch not
-                 already in main, (a lane) every changed path in the lane's globs, every branch
+                 already in main, every branch
                  commit that changes an owner-only path the landing would change authored by the owner
                  (kitlib.guard.ownercommits; rules of the base merged with the tip's), and the
                  branch's history free of the backlog store's root commit (`ref` and `branch`
@@ -470,11 +469,11 @@ class Lander(object):
     finishes them), `output` (the file this process's output goes to) and `replaced` (the land
     records those running records replaced)."""
 
-    def __init__(self, root, branch, expect_main, expect_tip, lane=landing.FULL, summary=None,
+    def __init__(self, root, branch, expect_main, expect_tip, summary=None,
                  full=False, wait_s=0, say=None, book_kw=None, git_env=None, lock_kw=None,
                  merged_gate=None, log_dir=None, poll_s=POLL_S, pid=None, keep_branch=False,
                  fresh=False, book=None, submitted=None, tree=None):
-        self.root, self.lane = root, lane
+        self.root = root
         self.tree_given = tree      # Lander(tree=), or None: the default place (tree_path)
         self.tree = None            # the landing tree's path, once prepare_tree placed it
         self.branches, self.tips = _as_list(branch), _as_list(expect_tip)
@@ -588,12 +587,8 @@ class Lander(object):
         return self.config_refusal()
 
     def config_refusal(self):
-        """The refusals self.cfg decides (lane, main branch checked out, batch_max, the branches
-        and their prefixes): None, a refusal, or 'USAGE: ...' for a lane the config lacks."""
-        lanes = self.cfg.section('landing')['lanes']
-        if self.lane != landing.FULL and self.lane not in lanes:
-            return 'USAGE: no lane %r (lanes: %s)' % (self.lane, ', '.join(
-                [landing.FULL] + sorted(lanes)))
+        """The refusals self.cfg decides (main branch checked out, batch_max, the branches):
+        None or a refusal."""
         current, why = refs.current_branch(self.root)
         if current != self.cfg.main_branch:
             return 'the main checkout is on %s, not %s' % (current or why or '(detached HEAD)',
@@ -602,15 +597,11 @@ class Lander(object):
         if len(self.branches) > most:
             return 'a batch of %d branches is more than "landing".batch_max (%d)' % (
                 len(self.branches), most)
-        prefixes = (lanes.get(self.lane) or {}).get('branch_prefix') or []
         for b in self.branches:
             if b == self.cfg.main_branch:
                 return 'the branch to land is %s itself' % b
             if not self.ref('refs/heads/%s' % b):
                 return 'no branch %s in this repository' % b
-            if self.lane != landing.FULL and prefixes and not any(b.startswith(p) for p in prefixes):
-                return 'lane %s lands branches starting %s; %s does not' % (
-                    self.lane, ' or '.join(prefixes), b)
         return None
 
     def queue_store(self):
@@ -628,12 +619,11 @@ class Lander(object):
         resource queue_key(<git common dir>) at priority "land". The merged gate runs in this
         slot (self.slot). Raises kitlib.lock.store.LockError when the lock does not give it, and
         landing.LockError when the landing lock's place cannot be worked out."""
-        lanes = sorted(self.cfg.section('landing')['lanes'])
-        self.lock = landing.LandingLock.for_config(self.root, self.cfg, lanes, **self.lock_kw)
+        self.lock = landing.LandingLock.for_config(self.root, self.cfg, **self.lock_kw)
         wait_s = self.wait_budget()
         kw = dict(self.book_kw or {}, store=self.queue_store(), gate=True,
                   resource=queue_key(self.lock.common), priority='land', wait_s=wait_s,
-                  no_wait=wait_s == 0, note='landing %s: %s' % (self.lane, self.branch))
+                  no_wait=wait_s == 0, note='landing: %s' % self.branch)
         if self.submitted:
             kw['detached'] = True   # its launcher's ancestry is in ORIGIN_ENV (kitlib.gate.submit)
         self.deadline = time.monotonic() + wait_s
@@ -662,7 +652,7 @@ class Lander(object):
     def try_take(self):
         """One look: `(None, False)` taken, `(why, final)` not; final: waiting cannot help."""
         try:
-            rec = self.lock.take(self.lane, self.branches, pid=self.pid)
+            rec = self.lock.take(self.branches, pid=self.pid)
         except landing.Busy as e:
             return self.held_by(e.record)
         self.token = rec['token']
@@ -673,8 +663,8 @@ class Lander(object):
         if rec.get('phase') == 'stuck':
             return ('%s: a stuck landing is cleared by hand, as its STUCK report says'
                     % landing.describe(rec)), True
-        if rec.get('lane') == '?' or self.lock.holder_state(rec) != 'dead':
-            return landing.describe(rec), False         # alive, a token holder, or unreadable
+        if not rec.get('token') or self.lock.holder_state(rec) != 'dead':
+            return landing.describe(rec), False         # unreadable, alive or a token holder
         why = self.lock.unpushed()
         origin = self.ref(self.origin_ref)
         hint = self.behind_hint(self.ref(self.main_ref), origin) if why else ''
@@ -700,7 +690,7 @@ class Lander(object):
         self.say('broke the landing lock of a holder that is gone, with nothing unpushed: %s'
                  % landing.describe(got))
         try:
-            rec = self.lock.take(self.lane, self.branches, pid=self.pid)
+            rec = self.lock.take(self.branches, pid=self.pid)
         except landing.Busy as e:
             return landing.describe(e.record), False
         self.token = rec['token']
@@ -758,18 +748,6 @@ class Lander(object):
             if inside is not False:
                 return why or '%s (%s) is already in %s (%s), in the same batch: land %s alone' % (
                     b, t[:10], b2, t2[:10], b2)
-        if self.lane != landing.FULL:
-            globs = self.cfg.section('landing')['lanes'][self.lane].get('paths') or []
-            for b, t in self.pairs:
-                who = 'the branch' if len(self.pairs) == 1 else b
-                mb, why = refs.merge_base(self.expect_main, t, self.root)
-                changed, why2 = runner.changed_between(self.root, mb, t) if mb else (None, why)
-                if changed is None:
-                    return 'git cannot list the paths of %s: %s' % (who, why2 or why)
-                outside = [p for p in changed if not S._match(p, globs)]
-                if outside:
-                    return 'lane %s takes only %s; %s changes %s' % (
-                        self.lane, ', '.join(globs) or 'nothing', who, ', '.join(outside[:10]))
         for t in self.tips:
             why = self.owner_refusal(t)
             if why:
@@ -1407,7 +1385,7 @@ class Lander(object):
         if why:
             self.cfg, self.expect_main = old, was
             return 'main moved on from %s to %s, and by its config: %s' % (
-                was[:10], base[:10], why[len('USAGE: '):] if why.startswith('USAGE: ') else why)
+                was[:10], base[:10], why)
         return None
 
     def behind_hint(self, main, origin):
@@ -1620,20 +1598,17 @@ class Lander(object):
     def gate(self):
         self.lock.set_phase(self.token, 'gate')
         self.phase = 'gate'
-        refusal = self.lock.gate_refusal(self.lane)
+        refusal = self.lock.gate_refusal()
         if refusal:
             return G.Outcome(G.REFUSED, ['REFUSED: %s' % refusal])
         if self.merged_gate_fn is not None:
             return self.merged_gate_fn(self)
-        lane_args = None
-        if self.lane != landing.FULL:
-            lane_args = self.cfg.section('landing')['lanes'][self.lane].get('merged_args')
         plan = reuse.planner(self.tree, self.cfg, self.branches[0], self.tips[0], self.expect_main,
                              self.merge, self.prior, fresh=self.fresh, full=self.full,
                              batch=len(self.branches))
         out = runner.merged_gate(self.root, self.cfg, self.expect_main, full=self.full,
                                  slug='+'.join(self.branches), log_dir=self.log_dir, say=self.say,
-                                 book_kw=self.book_kw, lane_args=lane_args, reuse=plan,
+                                 book_kw=self.book_kw, reuse=plan,
                                  slot=self.slot, tree=self.tree, docs=True)
         self.gate_logs = out.facts.get('log_dir')
         return out
@@ -1826,8 +1801,6 @@ class Lander(object):
             return G.Outcome(G.USAGE, ['USAGE: %s' % why])
         why = self.preconditions()
         if why:
-            if why.startswith('USAGE: '):
-                return G.Outcome(G.USAGE, [why])
             return G.Outcome(G.REFUSED, ['REFUSED: %s; nothing was changed' % why])
         if not self.submitted:      # joins the queue now: its records' started_at
             runs = (result.Run.maybe(self.root, 'land', b, t) for b, t in self.pairs)
@@ -2387,16 +2360,16 @@ def queue(root, store=None):
     (entries of priority "land"; kitlib.lock.queue), as an OK Outcome: one line for the lock file,
     then one per landing, holding first, then waiting in turn order. A landing of another
     repository is marked so: they share the machine lock's slots, not the turn. A lock file that
-    is not a record is shown held, lane ?, with the read error: that is when an operator checks
+    is not a record is shown held, phase ?, with the read error: that is when an operator checks
     here before clearing it by hand. REFUSED when the config, the lock's place or the queue cannot
     be read."""
     try:
         cfg = kconfig.load(root)
-        lock = landing.LandingLock.for_config(root, cfg, sorted(cfg.section('landing')['lanes']))
+        lock = landing.LandingLock.for_config(root, cfg)
         try:
             rec, unreadable = lock.read(), None
         except landing.LockError as e:
-            rec, unreadable = {'lane': '?', 'phase': '?'}, str(e)
+            rec, unreadable = {'phase': '?'}, str(e)
         q = lockqueue.load(store or Store())
     except (ConfigError, landing.LockError, OSError) as e:
         return G.Outcome(G.REFUSED, ['REFUSED: the landing queue of %s cannot be read: %s' % (
