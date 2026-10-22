@@ -398,6 +398,20 @@ class RecordCosts(unittest.TestCase):
         index = AC.PullIndex(AC.parse_pull_log(PULL_LOG))
         self.assertEqual(len(AC.attribute([("account 1", path)], index, "2026-09-30")), 2)
 
+    def test_turns_with_no_message_id_keep_their_own_tool_text(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        a = F.turn(None, "2026-10-01T13:00:00Z", usage=OUT, content=[F.shell("ta", "git log kit/alpha")])
+        b = F.turn(None, "2026-10-01T13:05:00Z", usage=OUT, content=[F.shell("tb", "git log kit/beta")])
+        c = F.turn(None, "2026-10-01T13:10:00Z", usage=OUT, content=[F.shell("tc", "git log kit/alpha")])
+        c["uuid"], b["uuid"] = "u-c", "u-b"       # some records carry a uuid, some are told by position
+        path = F.write(os.path.join(tmp.name, "s.jsonl"), [a, b, c])
+        index = AC.PullIndex(AC.parse_pull_log(PULL_LOG))
+        turns = AC.attribute([("account 1", path)], index, "2026-09-30")
+        self.assertEqual([t.reason for t in turns], [None, None, None])
+        self.assertEqual([t.key for t in turns], [turns[0].key, turns[1].key, turns[0].key])
+        self.assertNotEqual(turns[0].key, turns[1].key)
+
     def test_tokens_and_list_price_per_turn(self):
         turns = self.turns()
         self.assertAlmostEqual(turns["w1"].usd, 1000 * 25 / 1e6)

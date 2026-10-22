@@ -153,6 +153,14 @@ def _tool_text(msg):
                     if isinstance(c, dict) and c.get("type") == "tool_use")
 
 
+def _turn_key(msg, d, i):
+    """The key a turn's tool text is gathered under: its message id, or for a turn with none its
+    own record (the record's uuid, else its position `i` in the file)."""
+    if msg.get("id") is not None:
+        return msg["id"]
+    return ("uuid", d["uuid"]) if d.get("uuid") is not None else ("pos", i)
+
+
 def _prompt_text(recs):
     for d in recs:
         if d.get("type") == "user":
@@ -183,11 +191,11 @@ def attribute(paths, index, since):
         role, sub = U.session_role(p, recs), "subagents" in p
         whole = _whole(recs, index) if sub else None
         tools = defaultdict(list)       # a turn's content blocks are written one record each
-        for d in recs:
+        for i, d in enumerate(recs):
             if d.get("type") == "assistant":
                 msg = d.get("message") or {}
-                tools[msg.get("id")].append(_tool_text(msg))
-        for d in recs:
+                tools[_turn_key(msg, d, i)].append(_tool_text(msg))
+        for i, d in enumerate(recs):
             msg = d.get("message") or {}
             mid = msg.get("id")
             if d.get("type") != "assistant" or d.get("timestamp", "") < since \
@@ -200,7 +208,7 @@ def attribute(paths, index, since):
             elif sub:
                 (reason, cand), sure = whole, "medium"
             else:
-                c = named(" ".join(tools[msg.get("id")]), index)
+                c = named(" ".join(tools[_turn_key(msg, d, i)]), index)
                 cand, sure = (next(iter(c)) if len(c) == 1 else None), "medium"
                 reason = None if cand else ("several" if c else "coordination")
             key, ids = None, ()
