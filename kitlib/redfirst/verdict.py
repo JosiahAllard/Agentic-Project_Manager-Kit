@@ -6,7 +6,8 @@ case-blind, `*` crosses `/`). Kinds:
   python   `python -m unittest -v <module>[.<filter>]`, cwd the throwaway root, PYTHONPATH its
            `pythonpath` folder; the module is the path relative to that folder, dotted
   gradle   `<gradlew> <project>:test --offline --tests <filter>` (no filter: `*.<FileName>`); the
-           verdict from `<dir>/build/test-results/test/TEST-*.xml`
+           verdict from the file's own class's `TEST-<pkg>.<FileName>[$<Nested>].xml` under
+           `<dir>/build/test-results/` (any test task's folder) written in this run
   dotnet   `dotnet test <csproj> --filter <filter>` (a bare name is `FullyQualifiedName~<name>`; no
            filter: `FullyQualifiedName~<FileName>`); the verdict from its .trx
 A runner's `args` are appended to its command (a gradle or dotnet no-reuse switch, say).
@@ -203,12 +204,25 @@ def python_verdict(rc, log):
     return RED, 'failed (%d test(s) ran)' % ran
 
 
-def junit_counts(results_dir, since=0.0):
-    """(tests, failures + errors) over the TEST-*.xml files written at or after `since`, or None
-    when one would not parse or holds a count that is no integer (skipping it could turn a
-    failing suite into a GREEN made of the others)."""
+def is_class_of(path, name):
+    """Whether the Gradle JUnit file `path`, `TEST-<class>.xml`, is for the class `name` in any
+    package (`<pkg>.<name>`, or bare `<name>`) or one nested in it (`<pkg>.<name>$<Inner>`)."""
+    base = os.path.basename(path)
+    if not (base.startswith('TEST-') and base.endswith('.xml')):
+        return False
+    top = base[len('TEST-'):-len('.xml')].split('$', 1)[0]
+    return top == name or top.endswith('.' + name)
+
+
+def junit_counts(results_dir, since=0.0, cls=None):
+    """(tests, failures + errors) over the TEST-*.xml files at any depth under `results_dir`
+    (Gradle writes one folder per test task) written at or after `since`; with `cls`, only the
+    files of that class and its nested classes (is_class_of) count. None when a fresh file of any
+    class would not parse or holds a count that is no integer: skipping it could turn a failing
+    suite into a GREEN made of the others, and a broken file of another class fails closed too."""
     tests = bad = 0
-    for f in glob.glob(os.path.join(results_dir, 'TEST-*.xml')):
+    for f in sorted(set(glob.glob(os.path.join(glob.escape(results_dir), '**', 'TEST-*.xml'),
+                                  recursive=True))):
         try:
             if os.path.getmtime(f) < since:
                 continue
@@ -216,10 +230,13 @@ def junit_counts(results_dir, since=0.0):
             continue
         try:
             root = ET.parse(f).getroot()
-            tests += int(root.get('tests', 0))
-            bad += int(root.get('failures', 0)) + int(root.get('errors', 0))
+            n = int(root.get('tests', 0))
+            b = int(root.get('failures', 0)) + int(root.get('errors', 0))
         except (ET.ParseError, OSError, ValueError):
             return None
+        if cls is None or is_class_of(f, cls):
+            tests += n
+            bad += b
     return tests, bad
 
 
@@ -240,9 +257,12 @@ def trx_counts(path, since=0.0):
 
 def judge(sel, rc, log_text, tw, log_dir, n, copied, since=0.0):
     if sel.kind == 'gradle':
+        # Every task's folder (a module's test task may not be named `test`), but only the
+        # selector's own class: `--tests` filters the named task alone, so a sibling test task
+        # in the same build runs its whole suite. `since` keeps out an earlier run's XML.
         results = os.path.join(tw, *sel.runner['dir'].replace('\\', '/').split('/'),
-                               'build', 'test-results', 'test')
-        return gradle_verdict(rc, log_text, junit_counts(results, since), copied)
+                               'build', 'test-results')
+        return gradle_verdict(rc, log_text, junit_counts(results, since, stem(sel.path)), copied)
     if sel.kind == 'dotnet':
         return dotnet_verdict(rc, log_text, trx_counts(trx_path(sel, log_dir, n), since), copied)
     return python_verdict(rc, log_text)
