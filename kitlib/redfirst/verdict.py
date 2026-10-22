@@ -6,7 +6,8 @@ case-blind, `*` crosses `/`). Kinds:
   python   `python -m unittest -v <module>[.<filter>]`, cwd the throwaway root, PYTHONPATH its
            `pythonpath` folder; the module is the path relative to that folder, dotted
   gradle   `<gradlew> <project>:test --offline --tests <filter>` (no filter: `*.<FileName>`); the
-           verdict from `<dir>/build/test-results/test/TEST-*.xml`
+           verdict from every `TEST-*.xml` under `<dir>/build/test-results/` written in this
+           run (any test task's folder, not only `test/`)
   dotnet   `dotnet test <csproj> --filter <filter>` (a bare name is `FullyQualifiedName~<name>`; no
            filter: `FullyQualifiedName~<FileName>`); the verdict from its .trx
 A runner's `args` are appended to its command (a gradle or dotnet no-reuse switch, say).
@@ -204,11 +205,13 @@ def python_verdict(rc, log):
 
 
 def junit_counts(results_dir, since=0.0):
-    """(tests, failures + errors) over the TEST-*.xml files written at or after `since`, or None
-    when one would not parse or holds a count that is no integer (skipping it could turn a
-    failing suite into a GREEN made of the others)."""
+    """(tests, failures + errors) over the TEST-*.xml files at any depth under `results_dir`
+    (Gradle writes one folder per test task) written at or after `since`, or None when one would
+    not parse or holds a count that is no integer (skipping it could turn a failing suite into a
+    GREEN made of the others)."""
     tests = bad = 0
-    for f in glob.glob(os.path.join(results_dir, 'TEST-*.xml')):
+    for f in sorted(set(glob.glob(os.path.join(glob.escape(results_dir), '**', 'TEST-*.xml'),
+                                  recursive=True))):
         try:
             if os.path.getmtime(f) < since:
                 continue
@@ -240,8 +243,10 @@ def trx_counts(path, since=0.0):
 
 def judge(sel, rc, log_text, tw, log_dir, n, copied, since=0.0):
     if sel.kind == 'gradle':
+        # Every task's folder: a module's test task may not be named `test` (or `test` may
+        # depend on another), and `since` keeps out XML an earlier run or task left behind.
         results = os.path.join(tw, *sel.runner['dir'].replace('\\', '/').split('/'),
-                               'build', 'test-results', 'test')
+                               'build', 'test-results')
         return gradle_verdict(rc, log_text, junit_counts(results, since), copied)
     if sel.kind == 'dotnet':
         return dotnet_verdict(rc, log_text, trx_counts(trx_path(sel, log_dir, n), since), copied)

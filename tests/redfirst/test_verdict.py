@@ -157,7 +157,8 @@ class ResultFiles(unittest.TestCase):
         self.addCleanup(lambda: __import__('shutil').rmtree(self.dir, ignore_errors=True))
 
     def put(self, name, text, age=0):
-        p = os.path.join(self.dir, name)
+        p = os.path.join(self.dir, *name.split('/'))
+        os.makedirs(os.path.dirname(p), exist_ok=True)
         with open(p, 'w', encoding='utf-8') as f:
             f.write(text)
         if age:
@@ -169,6 +170,41 @@ class ResultFiles(unittest.TestCase):
         self.put('TEST-a.xml', '<testsuite tests="2" failures="1" errors="0"/>')
         self.put('TEST-old.xml', '<testsuite tests="9" failures="9" errors="0"/>', age=3600)
         self.assertEqual(V.junit_counts(self.dir, time.time() - 60), (2, 1))
+
+    def gradle(self, rc, since):
+        sel = V.parse_selector('engine/core/src/test/FooTest.java', RUNNERS)
+        return V.judge(sel, rc, '', self.dir, self.dir, 1, [sel.path], since)
+
+    def test_gradle_reads_a_test_task_not_named_test(self):
+        """A module whose test task writes build/test-results/<task>/ is judged from that XML."""
+        self.put('engine/core/build/test-results/integrationTest/TEST-a.FooTest.xml',
+                 '<testsuite tests="3" failures="1" errors="0"/>')
+        self.assertEqual(self.gradle(1, time.time() - 60), (V.RED, '1 of 3 test(s) failed'))
+
+    def test_gradle_sums_every_task_folder_of_this_run_only(self):
+        """Fresh XML in two task folders adds up; XML older than the run, in any folder, and a
+        nested module's own build folder are not counted."""
+        base = 'engine/core/build/test-results/'
+        self.put(base + 'test/TEST-a.xml', '<testsuite tests="2" failures="0" errors="0"/>')
+        self.put(base + 'unitTest/TEST-b.xml', '<testsuite tests="1" failures="0" errors="1"/>')
+        self.put(base + 'otherTest/TEST-old.xml', '<testsuite tests="9" failures="0" errors="0"/>',
+                 age=3600)
+        self.put('engine/core/sub/build/test-results/test/TEST-n.xml',
+                 '<testsuite tests="5" failures="0" errors="0"/>')
+        self.assertEqual(self.gradle(1, time.time() - 60), (V.RED, '1 of 3 test(s) failed'))
+
+    def test_gradle_stale_failure_in_another_task_does_not_turn_green_red(self):
+        base = 'engine/core/build/test-results/'
+        self.put(base + 'test/TEST-a.xml', '<testsuite tests="2" failures="0" errors="0"/>')
+        self.put(base + 'slowTest/TEST-old.xml', '<testsuite tests="4" failures="4" errors="0"/>',
+                 age=3600)
+        self.assertEqual(self.gradle(0, time.time() - 60), (V.GREEN, '2 test(s) passed'))
+
+    def test_gradle_unparseable_xml_in_any_task_folder_is_error(self):
+        base = 'engine/core/build/test-results/'
+        self.put(base + 'test/TEST-a.xml', '<testsuite tests="2" failures="0" errors="0"/>')
+        self.put(base + 'integrationTest/TEST-b.xml', '<testsuite tests="2"')
+        self.assertEqual(self.gradle(0, time.time() - 60)[0], V.ERROR)
 
     def test_junit_unparseable_is_none(self):
         self.put('TEST-a.xml', '<testsuite tests="2"')
