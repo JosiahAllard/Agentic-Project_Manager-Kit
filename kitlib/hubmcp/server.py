@@ -25,10 +25,11 @@ import json
 import os
 import traceback
 
-from kitlib import mcpwire
+from kitlib import hubapprove, mcpwire
 from kitlib.config.types import ConfigError
 from kitlib.hubmcp import OWNER_ONLY, SERVER_NAME
 from kitlib.hubsite import api as hubapi
+from kitlib.hubsite import approvals as hubapprovals
 from kitlib.hubsite import auth as hubauth
 from kitlib.hubsite import client as hubclient
 from kitlib.hubsite import pagecheck
@@ -232,6 +233,26 @@ TOOLS = {
                                                                "are publishing over (absent for "
                                                                "a new page)."}},
              ["id", "title", "html_file"]), "POST", "/pages", AGENT),
+    "hub_approval_request": (
+        "Asks the owner to approve a change to files (POST /approvals), built here from a git "
+        "checkout (kitlib.hubapprove): each file's base is its blob at head (none for a new "
+        "file), its new text the exact UTF-8 bytes of its content_file. Once approved, "
+        "tools/commit.py --owner-approval hub:A-<n> writes and commits it. It only asks: it never "
+        "approves, and it cannot ask for a delete. At most %d files, %d bytes each."
+        % (hubapprovals.MAX_FILES, hubapprovals.MAX_CONTENT_BYTES),
+        _obj({"checkout": {"type": "string", "description": "The absolute path of the git "
+                                                            "checkout the change is for."},
+              "title": {"type": "string"},
+              "files": {"type": "array", "items": {"type": "object"},
+                        "description": "The files: [{path, content_file}], path relative to the "
+                                       "repository top with /, content_file the absolute path of "
+                                       "the UTF-8 file holding its new text."},
+              "repo": {"type": "string", "description": "The repository's remote URL or id "
+                                                        "(default: the checkout's origin)."},
+              "head": {"type": "string", "description": "The base commit, 40 hex digits "
+                                                        "(default: the checkout's HEAD)."},
+              "reason": {"type": "string"}},
+             ["checkout", "title", "files"]), "POST", "/approvals", AGENT),
 }
 assert not set(TOOLS) & set(OWNER_ONLY)
 # a POST below no {id} that can still replace a document: publishing over a page
@@ -419,14 +440,27 @@ class Server:
         reads it outside the guard, so it reads only an .html or .htm file, judged by its real
         path (links and junctions followed), and never one inside the hub's token folder or its
         store: a token published as a page could be read back with hub_page."""
+        def suffix(real):
+            for p in (path, real):
+                if os.path.splitext(p)[1].lower() not in PAGE_SUFFIXES:
+                    return "must be an %s file (its real path is %s)" % (
+                        " or ".join(PAGE_SUFFIXES), real)
+            return None
+        return self._readable(path, "html_file", "a page", suffix)
+
+    def _readable(self, path, field, what, first=None):
+        """The real path of the file `path` (argument `field`) this process may read for `what`,
+        or ToolError (invalid, field): absolute, `first(real)` (a why or None) passed, and never
+        inside the hub's token folder or its store, judged by its real path (links and
+        junctions followed)."""
         def refuse(why):
-            raise ToolError("invalid", "html_file %s: %s" % (path, why), "html_file")
-        if not os.path.isabs(path):
+            raise ToolError("invalid", "%s %s: %s" % (field, path, why), field)
+        if not isinstance(path, str) or not os.path.isabs(path):
             refuse("must be an absolute path")
         real = os.path.realpath(path)
-        for p in (path, real):
-            if os.path.splitext(p)[1].lower() not in PAGE_SUFFIXES:
-                refuse("must be an %s file (its real path is %s)" % (" or ".join(PAGE_SUFFIXES), real))
+        why = first(real) if first else None
+        if why:
+            refuse(why)
         try:
             closed = [("the hub's token folder", self.tokens or hubauth.folder()),
                       ("the hub store", getattr(self.load_settings(), "store", None))]
@@ -435,7 +469,7 @@ class Server:
                    % type(e).__name__)
         for name, folder in closed:
             if folder and _inside(real, os.path.realpath(folder)):
-                refuse("is inside %s, which a page is never read from" % name)
+                refuse("is inside %s, which %s is never read from" % (name, what))
         return real
 
     def _t_hub_page_publish(self, a):
@@ -458,6 +492,27 @@ class Server:
         body = {k: v for k, v in a.items() if k != "html_file"}
         body["html"] = html
         return self.client().post("/pages", AGENT, body)
+
+    def _t_hub_approval_request(self, a):
+        """The request is built here from the checkout (kitlib.hubapprove.build: its defaults,
+        its refusals and the approvals module's limits), so one it refuses never reaches the
+        hub. This process reads each content_file outside the guard, so the checkout and every
+        content_file are absolute and judged as html_file is (_readable): never inside the hub's
+        token folder or its store, or a token could be read back from the request."""
+        checkout = self._readable(a["checkout"], "checkout", "an approval")
+        files = []
+        for f in a["files"]:
+            if (not isinstance(f, dict) or set(f) != {"path", "content_file"}
+                    or not all(isinstance(v, str) for v in f.values())):
+                raise ToolError("invalid", "each file is {path, content_file}, both strings",
+                                "files")
+            files.append((f["path"], self._readable(f["content_file"], "files", "an approval")))
+        try:
+            body = hubapprove.build(checkout, a["title"], files, repo=a.get("repo"),
+                                    head=a.get("head"), reason=a.get("reason"))
+        except hubapprove.RequestError as e:
+            raise ToolError("invalid", e.message, e.field)
+        return hubapprove.request(self.client(), body)
 
     # ---------------------------------------------------------------- JSON-RPC
     def handle(self, msg):
