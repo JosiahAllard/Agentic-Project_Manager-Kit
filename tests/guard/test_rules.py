@@ -1400,7 +1400,11 @@ class PlainCommit(unittest.TestCase):
                  'git -C "%s" revert --no-commit --strategy ort --strategy-option=theirs HEAD' % wt),
                 ('git cherry-pick -m 1 -X theirs abc', 'git -C "%s" cherry-pick --no-commit -m 1 -Xtheirs abc' % wt),
                 ('git cherry-pick --frob val abc', 'git -C "%s" cherry-pick --no-commit <commit>' % wt),
-                ('git revert -w HEAD', 'git -C "%s" revert --no-commit <commit>' % wt)):
+                ('git revert -w HEAD', 'git -C "%s" revert --no-commit <commit>' % wt),
+                ("git cherry-pick -X 'a;b' abc", 'git -C "%s" cherry-pick --no-commit \'-Xa;b\' abc' % wt),
+                ("git cherry-pick -X 'a b' abc", 'git -C "%s" cherry-pick --no-commit \'-Xa b\' abc' % wt),
+                ('git revert --strategy-option "it\'s" HEAD',
+                 'git -C "%s" revert --no-commit --strategy-option <value> HEAD' % wt)):
             with self.subTest(text):
                 d = self.decide(text, sub=True)
                 self.assertEqual(d and d.rule, 'git-plain-commit', d and d.reason)
@@ -1424,7 +1428,11 @@ class InterpreterGit(unittest.TestCase):
         self.assertIn('commit.py', d.reason)
         self.assertIn('sync_base.py', d.reason)
         self.assertIn('do not route it through a program or a script file', d.reason)
-        self.assertNotIn('.py <', d.instead)
+        # neither the advice nor the Instead may name a script file but the kit's own tools: a
+        # refused git command must never be routed through one
+        for said in (d.reason.split(' runs git from ', 1)[1], d.instead):
+            self.assertNotRegex(said.replace('commit.py', '').replace('sync_base.py', ''),
+                                r'(?i)\.(py|pyw|js|mjs|cjs|ts|ps1|sh|bat|cmd)\b', said)
 
     def test_code_running_git_is_refused(self):
         wt = W.fwd(self.w.wt)
@@ -1436,6 +1444,10 @@ class InterpreterGit(unittest.TestCase):
                 (bash, 'echo "import subprocess; subprocess.run([\'git\',\'push\'])" | python -', None),
                 (ps, "@'\nimport subprocess\nsubprocess.run(['git','push'])\n'@ | python -", None),
                 (bash, 'node -e "require(\'child_process\').execSync(\'git branch -D x\')"', None),
+                (bash, 'node -r x -e "require(\'child_process\').execSync(\'git commit -m y\')"',
+                 rules.kit_tool(self.w.ctx(), 'commit')),
+                (bash, 'node --require x --import y -e "require(\'child_process\').execSync(\'git push\')"',
+                 None),
                 (bash, 'python -c "import subprocess; subprocess.run([r\'C:/Program Files/Git/cmd/git.exe\', \'st\'])"',
                  None),
                 (bash, 'python -c "import subprocess as s; s.run(f\'git -C {w} cherry-pick {c}\', shell=True)"',

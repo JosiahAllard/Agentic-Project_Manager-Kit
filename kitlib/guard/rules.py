@@ -141,6 +141,15 @@ def quote(path):
     return '"%s"' % fwd(path)
 
 
+def shell_word(text):
+    """`text` as one word bash and PowerShell both read as written: bare when it holds only
+    characters neither shell treats specially, else single-quoted (literal in both); one that holds
+    a single quote too has no such word, so it is `<value>` for the agent to fill in."""
+    if text and re.fullmatch(r'[A-Za-z0-9_=.,:/@%+-]+', text):
+        return text
+    return "'%s'" % text if "'" not in text else '<value>'
+
+
 def literal_word(path):
     """`path` as one word that bash and PowerShell both read literally: single-quoted when it holds
     a `$` or a backtick (which expand inside double quotes) and no single quote; otherwise
@@ -604,6 +613,8 @@ def owner_tool(event, ctx, cmd, inv, cwd, role):
 # an adversary.
 HUB_SCRIPT = 'hub.py'
 NODE_EVAL = ('-e', '--eval', '-p', '--print')
+# node's options whose value is the next word (inline_code): a module it loads first, not a script
+NODE_VALUE_OPTS = ('-r', '--require', '--import')
 HUB_SECRETS_WHY = ('the Action Hub\'s token folder holds the owner\'s key to the hub (owner.token answers as the '
                    'owner) and its store is the hub server\'s to write; an agent reaches the hub only through its '
                    'tool and its MCP server, which read agent.token themselves (docs/guard.md "Hub secrets").')
@@ -820,7 +831,7 @@ def inline_code(cmd, inv, skip_pipe=None):
     code, stdin, k = False, True, 0
     while k < len(args):
         t = args[k]
-        if py and t in cm.PY_VALUE_OPTS:
+        if (py and t in cm.PY_VALUE_OPTS) or (node and t in NODE_VALUE_OPTS):
             k += 2
             continue
         if (py and re.match(r'^-[A-Za-z]*c', t)) or (node and t.split('=', 1)[0] in NODE_EVAL):
@@ -4055,7 +4066,7 @@ def git_plain_commit(event, ctx, cmd, inv, cwd, role):
     keep = ''
     if mainline is not None:
         keep = ' -m %s' % (mainline if mainline.isdigit() else '<n>')
-    keep += ''.join(' ' + (quote(w) if re.search(r'\s', w) else w) for w in kept)
+    keep += ''.join(' ' + shell_word(w) for w in kept)
     return refuse('git-plain-commit', role, why + 'Run it with --no-commit, then in its own call commit what it '
                   'changed with %s:' % commit,
                   'git -C %s %s --no-commit%s %s' % (top, sub, keep, ' '.join(revs or ()) or '<commit>'))
@@ -4071,7 +4082,12 @@ def git_plain_commit(event, ctx, cmd, inv, cwd, role):
 #   .NET's Process;
 # - a library that writes the repository itself (dulwich, pygit2, open('.git/refs/...'));
 # - a line the parser cannot read: the fallback does not run this rule;
-# - a git command that is not at the start of its string ('cd x && git commit', shell=True).
+# - a git command that is not at the start of its string ('cd x && git commit', shell=True);
+# - a git name the code is given from outside its text: an argument (python -c
+#   "...subprocess.run(sys.argv[1:])" git commit) or an environment variable (G=git python -c
+#   "...os.environ['G']...");
+# - python or node run by a launcher (uv run python -c ..., npx node -e ...): the line's program
+#   is the launcher, and its arguments are not read as code.
 # It refuses honest code in two ways, both kept: a git read (rev-parse, log) is refused like a
 # write, since a read allowance would pass a verb the code computes; and a 'git ...' string in code
 # whose launch runs another program is read as git.
