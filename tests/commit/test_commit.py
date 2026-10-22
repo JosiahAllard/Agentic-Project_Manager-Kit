@@ -469,11 +469,12 @@ class AnEmptyCommit(LinkedCase):
 
     def test_owner_approval_or_consume_with_the_flag_are_usage_errors(self):
         head = self.head()
-        for kw in ({'owner_approval': 'hub:A-1'}, {'owner_approval': 'hub:A-1', 'consume': 'HEAD'}):
+        for kw in ({'owner_approval': 'hub:A-001'},
+                   {'owner_approval': 'hub:A-001', 'consume': 'HEAD'}):
             code, out = self.commit('s', allow_empty=True, **kw)
             self.assertEqual(code, 2, (kw, out))
             self.assertIn('USAGE:', out)
-        code, out = self.commit(None, allow_empty=True, owner_approval='hub:A-1', consume='HEAD')
+        code, out = self.commit(None, allow_empty=True, owner_approval='hub:A-001', consume='HEAD')
         self.assertEqual(code, 2, out)
         self.assertIn('USAGE:', out)
         self.assertEqual(self.head(), head)
@@ -1855,7 +1856,7 @@ class MergeCarriesAnOwnerChange(MergeCase):
         self.assertNotIn('leave it out of your list', out)
 
     def merge_approved_main(self, why, landed=True):
-        """main's owner-only change is an agent's commit carrying `Owner-Approval: hub:A-1`, and
+        """main's owner-only change is an agent's commit carrying `Owner-Approval: hub:A-001`, and
         the hub now refuses it with `why` (the approval past its lifetime, or the hub down); with
         `landed`, <remote>/<main> as last fetched holds it. (branch tip, main tip, the approval
         ids the hub was asked about)."""
@@ -1869,7 +1870,7 @@ class MergeCarriesAnOwnerChange(MergeCase):
         p.start()
         self.addCleanup(p.stop)
         tip, main = self.merge('approved edit\n', main_author=AGENT,
-                               main_message='approved edit\n\nOwner-Approval: hub:A-1')
+                               main_message='approved edit\n\nOwner-Approval: hub:A-001')
         if landed:
             self.t.git('update-ref', 'refs/remotes/origin/main', main)
         return tip, main, asked
@@ -1890,7 +1891,7 @@ class MergeCarriesAnOwnerChange(MergeCase):
     def test_an_approved_change_not_on_the_remote_main_is_still_judged(self):
         tip, _, asked = self.merge_approved_main('the approval is past its lifetime', landed=False)
         self.assert_refused_naming(self.F, tip)
-        self.assertEqual(asked, ['A-1'])
+        self.assertEqual(asked, ['A-001'])
 
     def test_outside_a_merge_a_staged_owner_file_is_still_refused(self):
         self.t.write(self.F, 'owner base\n')

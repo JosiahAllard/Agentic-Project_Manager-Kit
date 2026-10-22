@@ -412,7 +412,7 @@ class ApprovalsCase(OwnerCommitsCase):
         out = self.repo.git('rev-parse', '--verify', '-q', '%s:%s' % (rev, path), check=False)
         return out or None
 
-    def approve(self, files, head=None, doc_id='A-1'):
+    def approve(self, files, head=None, doc_id='A-001'):
         head = head or self.main
         doc = ap.new_doc(REPO, 'owner-only edit', head, [
             {'path': p, 'base_blob': self.blob_at(head, p), 'content': c}
@@ -431,7 +431,7 @@ class ApprovalsCase(OwnerCommitsCase):
         self.assertIsNone(why)
         return found
 
-    def approved_commit(self, files=None, values=('hub:A-1',), consume=True):
+    def approved_commit(self, files=None, values=('hub:A-001',), consume=True):
         files = files or {'CLAUDE.md': 'approved\n'}
         doc_id = self.approve({'CLAUDE.md': 'approved\n'})
         sha = self.commit_as(AGENT, approval_message('owner-approved edit', *values), files)
@@ -448,14 +448,14 @@ class OwnerApprovals(ApprovalsCase):
     def test_an_approved_commit_that_consumed_its_approval_is_not_a_violation(self):
         sha = self.approved_commit()
         self.assertEqual(self.judge(sha), [])
-        self.assertEqual(self.hub.asked, [('A-1', self.main, {
+        self.assertEqual(self.hub.asked, [('A-001', self.main, {
             'CLAUDE.md': ap.blob_id('approved\n')}, sha)])
 
     def test_an_approved_delete_is_not_a_violation(self):
         doc_id = self.approve({'CLAUDE.md': None})
         self.repo.git('rm', '-q', 'CLAUDE.md')
         self.repo.git('-c', 'user.email=%s' % AGENT, 'commit', '-q', '-m',
-                      approval_message('owner-approved delete', 'hub:A-1'))
+                      approval_message('owner-approved delete', 'hub:A-001'))
         sha = self.repo.git('rev-parse', 'HEAD')
         self.consume(doc_id, sha)
         self.assertEqual(self.judge(sha), [])
@@ -464,15 +464,15 @@ class OwnerApprovals(ApprovalsCase):
         sha = self.approved_commit(consume=False)
         found = self.judge(sha)
         self.assertEqual([(v.sha, v.paths) for v in found], [(sha, ['CLAUDE.md'])])
-        self.assertIn('owner approval hub:A-1 refused: %s' % ap.WHY_COMMIT, found[0].why)
+        self.assertIn('owner approval hub:A-001 refused: %s' % ap.WHY_COMMIT, found[0].why)
 
     def test_an_approval_another_commit_consumed_is_refused(self):
         doc_id = self.approve({'CLAUDE.md': 'approved\n'})
-        first = self.commit_as(AGENT, approval_message('first', 'hub:A-1'),
+        first = self.commit_as(AGENT, approval_message('first', 'hub:A-001'),
                                {'CLAUDE.md': 'approved\n'})
         self.consume(doc_id, first)
         self.repo.git('reset', '-q', '--hard', self.main)       # the same change, made again
-        again = self.commit_as(AGENT, approval_message('again', 'hub:A-1'),
+        again = self.commit_as(AGENT, approval_message('again', 'hub:A-001'),
                                {'CLAUDE.md': 'approved\n'})
         self.assertEqual(self.judge(first), [])
         self.assertIn(ap.WHY_COMMIT, self.judge(again)[0].why)
@@ -499,7 +499,7 @@ class OwnerApprovals(ApprovalsCase):
         self.assertIn(ap.WHY_REPO, self.judge(sha)[0].why)
 
     def test_an_unknown_approval_is_refused(self):
-        sha = self.approved_commit(values=('hub:A-9',), consume=False)
+        sha = self.approved_commit(values=('hub:A-009',), consume=False)
         self.assertIn(ap.WHY_UNKNOWN, self.judge(sha)[0].why)
 
     def test_a_commit_without_the_trailer_is_judged_by_its_author_and_the_hub_is_not_asked(self):
@@ -508,7 +508,8 @@ class OwnerApprovals(ApprovalsCase):
         self.assertEqual(self.hub.asked, [])
 
     def test_a_value_that_is_not_one_hub_approval_is_refused_unasked(self):
-        for values in (('A-1',), ('hub:B-1',), ('hub:A-1', 'hub:A-2'), ('hub:A-1 extra',)):
+        for values in (('A-001',), ('hub:B-1',), ('hub:A-001', 'hub:A-002'), ('hub:A-001 extra',),
+                       ('hub:A-1',), ('hub:A-01',), ('hub:A-000',)):
             with self.subTest(values=values):
                 self.repo.git('reset', '-q', '--hard', self.main)
                 sha = self.commit_as(AGENT, approval_message('edit', *values),
@@ -517,6 +518,14 @@ class OwnerApprovals(ApprovalsCase):
                 self.assertEqual([v.sha for v in found], [sha])
                 self.assertIn('is not one hub:A-<n>', found[0].why)
         self.assertEqual(self.hub.asked, [])
+
+    def test_the_ids_the_hub_issues_are_read(self):
+        for value, did in (('hub:A-001', 'A-001'), ('hub:A-999', 'A-999'),
+                           ('hub:A-1000', 'A-1000')):
+            with self.subTest(value=value):
+                found = oc.APPROVAL_RE.match(value)
+                self.assertIsNotNone(found)
+                self.assertEqual(found.group(1), did)
 
     def test_a_merge_cannot_carry_an_approval(self):
         wt = self.repo.worktree('x')
@@ -527,7 +536,7 @@ class OwnerApprovals(ApprovalsCase):
         self.repo.write('CLAUDE.md', 'approved\n', root=wt)
         self.repo.git('add', 'CLAUDE.md', cwd=wt)
         self.repo.git('-c', 'user.email=%s' % AGENT, 'commit', '-q', '-m',
-                      approval_message('evil merge', 'hub:A-1'), cwd=wt)
+                      approval_message('evil merge', 'hub:A-001'), cwd=wt)
         merge = self.repo.git('rev-parse', 'HEAD', cwd=wt)
         found = self.judge(merge)
         self.assertIn('a merge cannot carry an owner approval', found[0].why)
@@ -543,7 +552,7 @@ class OwnerApprovals(ApprovalsCase):
         self.assertEqual(self.judge(sha, approvals=oc.HubApprovals(
             client=VerifyRoute(self.hub), repo=REPO)), [])
         self.assertEqual(self.hub.asked[-1][3], sha)
-        self.hub.docs['A-1']['commit'] = '0' * 40           # not this commit: the sig still holds
+        self.hub.docs['A-001']['commit'] = '0' * 40           # not this commit: the sig still holds
         found = self.judge(sha, approvals=oc.HubApprovals(client=VerifyRoute(self.hub), repo=REPO))
         self.assertIn(ap.WHY_COMMIT, found[0].why)
 
@@ -553,13 +562,13 @@ class OwnerApprovals(ApprovalsCase):
     def test_describe_names_why_an_approval_did_not_count(self):
         sha = self.approved_commit(consume=False)
         line = oc.describe(self.rules, self.judge(sha))
-        self.assertIn('%s by %s changes CLAUDE.md (owner approval hub:A-1 refused: %s)'
+        self.assertIn('%s by %s changes CLAUDE.md (owner approval hub:A-001 refused: %s)'
                       % (sha[:10], AGENT, ap.WHY_COMMIT), line)
 
     def test_a_root_commit_cannot_carry_an_approval(self):
         self.repo.git('checkout', '-q', '--orphan', 'other')
         self.repo.git('rm', '-q', '-r', '--cached', '.')
-        sha = self.commit_as(AGENT, approval_message('root', 'hub:A-1'),
+        sha = self.commit_as(AGENT, approval_message('root', 'hub:A-001'),
                              {'CLAUDE.md': 'approved\n'})
         found, why = oc.violations(self.repo.root, self.rules, sha, approvals=self.hub)
         self.assertIsNone(why)
@@ -577,7 +586,7 @@ class NotARegularFile(ApprovalsCase):
     def entry_commit(self, mode, oid, doc_id):
         self.repo.git('update-index', '--cacheinfo', '%s,%s,CLAUDE.md' % (mode, oid))
         self.repo.git('-c', 'user.email=%s' % AGENT, 'commit', '-q', '-m',
-                      approval_message('owner-approved edit', 'hub:A-1'))
+                      approval_message('owner-approved edit', 'hub:A-001'))
         sha = self.repo.git('rev-parse', 'HEAD')
         self.consume(doc_id, sha)
         return sha
@@ -585,7 +594,7 @@ class NotARegularFile(ApprovalsCase):
     def assert_refused_unasked(self, sha, mode):
         found = self.judge(sha)
         self.assertEqual([(v.sha, v.paths) for v in found], [(sha, ['CLAUDE.md'])])
-        self.assertIn('owner approval hub:A-1 refused: CLAUDE.md (mode %s) %s'
+        self.assertIn('owner approval hub:A-001 refused: CLAUDE.md (mode %s) %s'
                       % (mode, oc.NOT_A_FILE), found[0].why)
         self.assertEqual(self.hub.asked, [])
 

@@ -181,18 +181,18 @@ class OwnerApprovalTest(pc.PrePushCase):
         self.addCleanup(patcher.stop)
 
     def approved_commit(self, content):
-        """An agent commit of CLAUDE.md `content` on main, carrying hub:A-1, which the owner
+        """An agent commit of CLAUDE.md `content` on main, carrying hub:A-001, which the owner
         approved as 'approved' and the hub consumed for it: its id."""
         doc = ap.new_doc(toc.REPO, 'owner-only edit', self.with_kit, [
             {'path': 'CLAUDE.md', 'base_blob': None, 'content': 'approved\n'}], toc.NOW)
-        doc.update(ap.decide_fields(toc.KEY, 'A-1', doc, ap.APPROVE, toc.NOW))
-        self.hub.docs['A-1'] = doc
+        doc.update(ap.decide_fields(toc.KEY, 'A-001', doc, ap.APPROVE, toc.NOW))
+        self.hub.docs['A-001'] = doc
         self.repo.write('CLAUDE.md', content)
         self.repo.git('add', '--', 'CLAUDE.md')
         self.repo.git('-c', 'user.email=%s' % AGENT, 'commit', '-q', '-m',
-                      toc.approval_message('owner-approved edit', 'hub:A-1'))
+                      toc.approval_message('owner-approved edit', 'hub:A-001'))
         tip = self.repo.git('rev-parse', 'HEAD')
-        doc.update(ap.consume_fields(toc.KEY, 'A-1', doc, tip, toc.NOW))
+        doc.update(ap.consume_fields(toc.KEY, 'A-001', doc, tip, toc.NOW))
         return tip
 
     def check(self, tip):
@@ -202,14 +202,14 @@ class OwnerApprovalTest(pc.PrePushCase):
     def test_an_approved_agent_commit_is_pushed(self):
         tip = self.approved_commit('approved\n')
         self.assertEqual(self.check(tip), (True, None))
-        self.assertEqual([a[0] for a in self.hub.asked], ['A-1'])
+        self.assertEqual([a[0] for a in self.hub.asked], ['A-001'])
 
     def test_a_forged_approval_is_refused(self):
         tip = self.approved_commit('not what the owner approved\n')
         ok, msg = self.check(tip)
         self.assertFalse(ok)
         self.assertIn('pre-push: refused, owner-only paths changed by a commit not authored by '
-                      'the owner: %s by %s changes CLAUDE.md (owner approval hub:A-1 refused: %s)'
+                      'the owner: %s by %s changes CLAUDE.md (owner approval hub:A-001 refused: %s)'
                       % (tip[:10], AGENT, ap.WHY_FILES), msg)
 
 
