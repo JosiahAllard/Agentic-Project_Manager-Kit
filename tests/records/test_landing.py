@@ -6,6 +6,7 @@ import unittest
 from unittest import mock
 
 from kitlib import config
+from kitlib.config import schema
 from kitlib.records import landing
 from tests import gitfixture
 from tests.config.helpers import TempTree
@@ -293,29 +294,27 @@ class ConfigAndProcTest(unittest.TestCase):
         self.addCleanup(t.cleanup)
         return config.load(t.root)
 
-    def test_lock_name_honours_a_legacy_git_lock_file(self):
-        self.assertEqual(landing.lock_name(None), 'kit-landing.lock')
-        self.assertEqual(landing.lock_name(self.cfg({})), 'kit-landing.lock')
-        self.assertEqual(landing.lock_name(self.cfg({'landing': {'lock_file': 'git:alpha-landing.lock'}})),
-                         'alpha-landing.lock')
-        with self.assertRaises(landing.LockError):
-            landing.lock_name(self.cfg({'landing': {'lock_file': 'git:../x.lock'}}))
-
-    def test_a_lock_file_that_is_not_git_name_refuses(self):
-        for value in ('tools/landing.lock', 'alpha-landing.lock', 'GIT:x.lock'):
+    def test_a_config_still_setting_the_retired_lock_file_loads_without_it(self):
+        # `landing.lock_file` is retired (schema.RETIRED): any value, the old git:<name> form or
+        # one that form refused, is dropped unchecked, and no lock name is read from the config
+        for value in ('git:alpha-landing.lock', 'git:../x.lock', 'tools/landing.lock', 3):
             with self.subTest(value=value):
-                with self.assertRaises(config.ConfigError) as cm:
-                    landing.lock_name(self.cfg({'landing': {'lock_file': value}}))
-                self.assertIn('must be git:<name>', str(cm.exception))
+                cfg = self.cfg({'landing': {'batch_max': 2, 'lock_file': value}})
+                self.assertEqual(cfg.section('landing')['batch_max'], 2)
+                self.assertNotIn('lock_file', cfg.section('landing'))
+        self.assertIn('lock_file', schema.RETIRED['landing'])
+        self.assertNotIn('lock_file', schema.SECTIONS['landing'])
+        self.assertFalse(hasattr(landing, 'lock_name'))
 
-    def test_for_config_takes_main_remote_and_name_from_the_config(self):
+    def test_for_config_takes_main_and_remote_from_the_config_and_the_kit_lock_name(self):
         repo = gitfixture.TempRepo(branch='master', bare_remote=True)
         self.addCleanup(repo.cleanup)
         repo.write('.kit.json', json.dumps({'repo': {'main_branch': 'master'},
                                             'landing': {'lock_file': 'git:alpha-landing.lock'}}))
         lk = landing.LandingLock.for_config(repo.root, config.load(repo.root),
                                             start_of=lambda pid: None, is_alive=ALIVE)
-        self.assertEqual(os.path.basename(lk.path), 'alpha-landing.lock')
+        self.assertEqual(os.path.basename(lk.path), landing.LOCK_NAME)
+        self.assertEqual(landing.LOCK_NAME, 'kit-landing.lock')
         rec = lk.take(['kit/a'])
         self.assertEqual(rec['main_at_take'], repo.git('rev-parse', 'master'))
         self.assertEqual(rec['origin_at_take'], rec['main_at_take'])

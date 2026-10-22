@@ -73,7 +73,7 @@ def fetch_base(ctx, timeout=FETCH_TIMEOUT_S):
 
 def landing_hold(ctx):
     """None when the landing lock is free, else why the sweep defers: held, unreadable, or its
-    place unknown. The lock is kitlib.records.landing's (`<common dir>/<"landing".lock_file>`),
+    place unknown. The lock is kitlib.records.landing's (`<common dir>/kit-landing.lock`),
     the one every landing takes."""
     try:
         lock = landing.LandingLock.for_config(ctx.main, ctx.cfg)
