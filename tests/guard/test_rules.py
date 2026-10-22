@@ -205,6 +205,19 @@ ROWS = [
      'deny', 'backlog-raw-write', 'python "{kit}/tools/backlog.py" -C <worktree> <verb> <arguments>'),
     ('subagent push of the backlog store ref', lambda w: bash('git push origin HEAD:refs/backlog/main', w.wt, sub=True),
      'deny', 'backlog-raw-write', 'python "{kit}/tools/backlog.py" -C <worktree> <verb> <arguments>'),
+
+    # ---------------------------------------------------------------- git run by interpreter code
+    ('subagent heredoc python running git update-ref', lambda w: bash(
+        "python - <<'EOF'\nimport subprocess\nsubprocess.run(['git', '-C', w, 'update-ref', ref, c])\nEOF",
+        w.wt, sub=True), 'deny', 'interpreter-git', 'git -C "{wt}" <the git command your code ran>'),
+    ('subagent python -c committing through a shell string', lambda w: bash(
+        'python -c "import subprocess; subprocess.run(\'git commit -m x\', shell=True)"', w.wt, sub=True),
+     'deny', 'interpreter-git', COMMIT),
+    ('subagent python -c merging through an f-string', lambda w: bash(
+        'python -c "import subprocess; subprocess.run(f\'git -C {w} merge x\', shell=True)"', w.wt, sub=True),
+     'deny', 'interpreter-git', 'python "{kit}/tools/sync_base.py" -C "{wt}" <hash> --model "<your model>"'),
+    ('owner python -c running git', lambda w: bash(
+        'python -c "import subprocess; subprocess.run([\'git\', \'push\'])"', w.wt), None, None, None),
 ] + SHELL_ROWS + REVIEW_ROWS + EXTRA_ROWS
 
 # An alternative is a command to run as written: no closing full stop, no leading prose word
@@ -1351,6 +1364,116 @@ class PlainCommit(unittest.TestCase):
             with self.subTest(sub=sub, argv=argv):
                 cmd = cm.read('git %s %s' % (sub, ' '.join(argv)), sh.BASH, W.fwd(self.w.wt)).commands[0]
                 self.assertEqual(rules.commit_scan(sub, cm.git_call(cm.invocation(cmd)).rest)[0], makes)
+
+    def test_a_computed_word_after_a_hold_is_read_as_a_commit(self):
+        # a known limit (rules.py, above COMMIT_VERBS): `$X` may be --commit, but is read as a commit
+        cmd = cm.read('git cherry-pick -n $X', sh.BASH, W.fwd(self.w.wt)).commands[0]
+        self.assertFalse(rules.commit_scan('cherry-pick', cm.git_call(cm.invocation(cmd)).rest)[0])
+
+    def test_quit_advice_says_to_read_what_is_left_first(self):
+        for text, where in (('git cherry-pick --skip', 'sequencer/todo'), ('git revert --continue', 'sequencer/todo'),
+                            ('git am --skip', 'rebase-apply'), ('git am --continue', 'rebase-apply')):
+            with self.subTest(text):
+                d = self.decide(text, sub=True)
+                self.assertEqual(d and d.rule, 'git-plain-commit', d and d.reason)
+                self.assertIn('--quit forgets what is left, so read it first', d.reason)
+                self.assertIn('rev-parse --git-path %s' % where, d.reason)
+
+    def test_am_options_are_gits(self):
+        for argv, makes in ((['--show-current-patch=diff'], False), (['--show-current-patch=raw'], False),
+                            (['--show-current-patch'], False), (['-Skey', '--abort'], False),
+                            (['-S', '--abort'], False), (['--quoted-cr', 'strip', '--abort'], False),
+                            (['--whitespace', 'fix', '--abort'], False), (['-mun', '--abort'], False),
+                            (['--quoted-cr', '--abort'], True), (['-C', '--abort'], True),
+                            (['x.patch'], True)):
+            with self.subTest(argv=argv):
+                cmd = cm.read('git am %s' % ' '.join(argv), sh.BASH, W.fwd(self.w.wt)).commands[0]
+                self.assertEqual(rules.commit_scan('am', cm.git_call(cm.invocation(cmd)).rest)[0], makes)
+        self.assertIsNone(self.decide('git am --show-current-patch=diff', sub=True))
+
+    def test_held_form_keeps_strategy_and_drops_an_unplaced_value(self):
+        wt = W.fwd(self.w.wt)
+        for text, instead in (
+                ('git cherry-pick -X theirs abc', 'git -C "%s" cherry-pick --no-commit -Xtheirs abc' % wt),
+                ('git cherry-pick -Xours abc', 'git -C "%s" cherry-pick --no-commit -Xours abc' % wt),
+                ('git revert --strategy ort --strategy-option=theirs HEAD',
+                 'git -C "%s" revert --no-commit --strategy ort --strategy-option=theirs HEAD' % wt),
+                ('git cherry-pick -m 1 -X theirs abc', 'git -C "%s" cherry-pick --no-commit -m 1 -Xtheirs abc' % wt),
+                ('git cherry-pick --frob val abc', 'git -C "%s" cherry-pick --no-commit <commit>' % wt),
+                ('git revert -w HEAD', 'git -C "%s" revert --no-commit <commit>' % wt)):
+            with self.subTest(text):
+                d = self.decide(text, sub=True)
+                self.assertEqual(d and d.rule, 'git-plain-commit', d and d.reason)
+                self.assertEqual(d.instead, instead)
+
+
+class InterpreterGit(unittest.TestCase):
+    """git that python or node code given on the line runs is refused for every agent session
+    (rules.interpreter_git): the guard reads git only as a typed shell command."""
+
+    def setUp(self):
+        self.w = W.World()
+        self.addCleanup(self.w.cleanup)
+
+    def decide(self, text, cwd=None, environ=None, sub=True, shell=bash):
+        return decide(shell(text, cwd or self.w.wt, sub), self.w.ctx(environ=environ or {}))
+
+    def assert_refused(self, d, text):
+        self.assertEqual(d and (d.verdict, d.rule), ('deny', 'interpreter-git'), d and d.reason)
+        self.assertIn('reads git only as a typed shell command', d.reason)
+        self.assertIn('commit.py', d.reason)
+        self.assertIn('sync_base.py', d.reason)
+        self.assertIn('do not route it through a program or a script file', d.reason)
+        self.assertNotIn('.py <', d.instead)
+
+    def test_code_running_git_is_refused(self):
+        wt = W.fwd(self.w.wt)
+        for shell, text, instead in (
+                (bash, "python - <<'EOF'\nimport subprocess\nsubprocess.run(['git','-C',w,'update-ref',r,c])\nEOF",
+                 'git -C "%s" <the git command your code ran>' % wt),
+                (bash, 'py -3 -c "import os; os.system(\'git push\')"', None),
+                (bash, 'python3 <<< "import subprocess; subprocess.run([\'git\', \'status\'])"', None),
+                (bash, 'echo "import subprocess; subprocess.run([\'git\',\'push\'])" | python -', None),
+                (ps, "@'\nimport subprocess\nsubprocess.run(['git','push'])\n'@ | python -", None),
+                (bash, 'node -e "require(\'child_process\').execSync(\'git branch -D x\')"', None),
+                (bash, 'python -c "import subprocess; subprocess.run([r\'C:/Program Files/Git/cmd/git.exe\', \'st\'])"',
+                 None),
+                (bash, 'python -c "import subprocess as s; s.run(f\'git -C {w} cherry-pick {c}\', shell=True)"',
+                 rules.kit_tool(self.w.ctx(), 'commit')),
+                (bash, 'python -c "import shutil, subprocess; subprocess.run([shutil.which(\'git\'), \'log\'])"', None),
+                (bash, 'python -c "import subprocess; subprocess.run([\'git\', \'rev-parse\', \'HEAD\'])"', None)):
+            with self.subTest(text):
+                d = self.decide(text, shell=shell)
+                self.assert_refused(d, text)
+                if instead is not None:
+                    self.assertIn(instead, d.instead)
+
+    def test_every_marked_session_is_held_and_the_owner_is_not(self):
+        text = 'python -c "import subprocess; subprocess.run([\'git\', \'status\'])"'
+        for mark in ('coordinator', 'deep-worker', 'consultant', 'conductor', 'pm'):
+            with self.subTest(mark):
+                self.assert_refused(self.decide(text, environ={context.ROLE_ENV: mark}, sub=False), text)
+        self.assertIsNone(self.decide(text, sub=False))
+
+    def test_any_directory_is_held(self):
+        d = self.decide('python -c "import subprocess; subprocess.run([\'git\', \'status\'])"', cwd=self.w.temp)
+        self.assert_refused(d, 'temp')
+        self.assertEqual(d.instead, 'git -C "<worktree>" <the git command your code ran>')
+
+    def test_code_that_runs_no_git_passes(self):
+        for text in ('python -c "print(\'git\')"',
+                     'git log | python -c "import sys,subprocess; subprocess.run([\'python\',\'x.py\'], '
+                     'input=sys.stdin.read())"',
+                     'git show HEAD:x.py | python -',
+                     'python -c "import subprocess; subprocess.run([\'python\', \'-V\'])"',
+                     'python -c "import subprocess; subprocess.run([\'gitk\'])"',
+                     'python tools/x.py', 'python -m json.tool x.json'):
+            with self.subTest(text):
+                self.assertIsNone(self.decide(text))
+
+    def test_the_main_checkout_keeps_unplaced(self):
+        d = self.decide('python -c "import subprocess; subprocess.run([\'git\', \'status\'])"', cwd=self.w.main)
+        self.assertEqual(d and d.rule, 'unplaced', d and d.reason)
 
 
 if __name__ == '__main__':
