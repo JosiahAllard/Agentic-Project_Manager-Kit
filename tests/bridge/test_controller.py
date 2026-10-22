@@ -67,6 +67,41 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(self.controller.outbox.receipt('missing'),None)
         self.assertEqual(self.controller.dispatch_pending(),())
 
+    def test_writer_lease_is_never_persisted_and_a_restart_drops_it(self):
+        self.controller.owner.change(self.a.reference,self.b.reference,enabled=True)
+        self.controller.owner.lease(self.a.reference,self.b.reference,enabled=True)
+        self.assertEqual(self.controller.leases.writer(self.b),self.a)
+        self.assertEqual(self.controller.owner.writers(),((self.a.reference,self.b.reference),))
+        leases=self.controller.leases
+        self.controller.close()
+        self.assertEqual(leases.current(),())
+        self.controller=Controller(self.root,self.leader)
+        for peer in self.live.values():
+            self.controller.enroll(peer,lambda item:self.live.get(item.identity.session_id)==item)
+        # The owner's route survives the restart; the lease does not.
+        self.assertEqual(set(self.controller.owner.connections()),
+            {(self.a.reference,self.b.reference),(self.b.reference,self.a.reference)})
+        self.assertIsNone(self.controller.leases.writer(self.b))
+        self.assertEqual(self.controller.owner.writers(),())
+
+    def test_no_agent_tool_can_mint_or_renew_a_writer_lease(self):
+        server=self.server
+        self.assertIsNotNone(server.handle({'jsonrpc':'2.0','id':1,'method':'initialize','params':{}}))
+        server.handle({'jsonrpc':'2.0','method':'notifications/initialized'})
+        names=[tool['name'] for tool in server.handle({'jsonrpc':'2.0','id':2,'method':'tools/list'})['result']['tools']]
+        self.assertTrue(names)
+        self.assertFalse([name for name in names if 'lease' in name or 'writer' in name or 'owner' in name])
+        for name in ('bridge_writer_lease','bridge_lease','bridge_owner_lease'):
+            reply=server.handle({'jsonrpc':'2.0','id':3,'method':'tools/call','params':{'name':name,'arguments':{
+                'writer':self.a.reference,'recipient':self.b.reference}}})
+            self.assertIn('error',reply)
+        # The agent-facing server holds the broker and its caller proofs, never the owner or leases.
+        self.assertEqual(set(vars(server))&{'owner','leases','decisions'},set())
+        self.assertEqual(set(vars(server.core))&{'owner','leases','decisions'},set())
+        # A guard: it holds before leases exist, and after, the calls above left none.
+        leases=getattr(self.controller,'leases',None)
+        if leases is not None: self.assertEqual(leases.current(),())
+
     def _admit(self,operation,recipient):
         intent=MessageIntent(operation,recipient,hashlib.sha256(b'text').hexdigest())
         proof=self.server.calls.issue(intent,{})

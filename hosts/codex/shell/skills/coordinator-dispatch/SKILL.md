@@ -32,7 +32,7 @@ Dispatch traps (built-in planners that cannot write, output files are no rescue 
 
 ## The brief
 
-- Holds: role; the owner's decisions where they matter, as a paraphrase plus the ruling id; verified facts; **exact files and sections
+- Holds: role; the owner's decisions where they matter, as a paraphrase, no ruling id; verified facts; **exact files and sections
   to read**; scope + files *not* theirs + their owners; shared resources assigned; test gate (final: `gate.py --full` on the exact tip);
   report wanted; no land, merge or push; for code work the entry files and symbols you know
   (path:Symbol) - a brief with no paths costs the worker about 35 calls. Brief names doc topics

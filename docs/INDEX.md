@@ -37,6 +37,7 @@ Every tracked `.md` file is named in backticks on an entry line of this file; `t
 - `docs/guard-v2.md` | guard v2 design: keep/cut list, target size, open guard records | planning guard cuts | kw: guard-v2, guard, cuts, refusals
 - `docs/kitboot.md` | boot/kitboot.py: which kit a host entry runs, the pinned release check before kitlib | a hook or the lock server will not load the kit | kw: kitboot, boot, PM_KIT_ROOT, PM_KIT_RELEASE_ID, release
 - `docs/install.md` | installing the kit in a repository | setting up a repo | kw: install, installer, junctions, plugin
+- `docs/jev-fit-audit.md` | Jev fit audit step 1: the kit's routing and labelling decisions, cost and fit findings (desk study, no trial) | weighing a structured-decision model for kit decisions | kw: jev, fit-audit, audit, cost
 - `docs/kit-json.md` | `.kit.json` keys, types and defaults | configuring | kw: kit-json, config
 - `docs/landed.md` | landed: has a branch landed | checking a branch | kw: landed
 - `docs/launcher.md` | launcher | starting sessions | kw: launcher, launch

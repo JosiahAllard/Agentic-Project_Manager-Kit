@@ -314,21 +314,36 @@ class CodexSources:
         """Private bootstrap adapter; no SEND from a configured callback alone."""
         return _DirectDesktopAdapter(self,timeout=timeout,start_timeout=start_timeout)
 
+    def _leased_writer(self,message):
+        """The owner-leased Codex writer for another host's sender, or None.
+
+        A Codex sender never borrows a writer: it is its own executor or nothing.
+        """
+        if type(message) is not OutboundMessage or message.sender.identity.adapter_id.startswith('codex-'):
+            return None
+        leases=getattr(self.controller,'leases',None)
+        return leases.writer(message.recipient) if leases is not None else None
+
     @contextmanager
     def _delivery_lease(self,message):
         process=None
         try:
-            if (type(message) is not OutboundMessage or self.desktop_executable is None
-                    or message.sender.identity.adapter_id!='codex-desktop'
-                    or message.recipient.identity.adapter_id!='codex-desktop'
-                    or message.sender.identity.native_session_id==message.recipient.identity.native_session_id
-                    or message.sender.account_ref!=message.recipient.account_ref):
+            if type(message) is not OutboundMessage:
                 raise BeforeWriteError('codex-direct-route-unavailable')
-            source,source_capture=self._capture(message.sender)
+            leased=self._leased_writer(message)
+            # Without a lease the writer is the sender itself, exactly as before.
+            writer=message.sender if leased is None else leased
+            if (self.desktop_executable is None
+                    or writer.identity.adapter_id!='codex-desktop'
+                    or message.recipient.identity.adapter_id!='codex-desktop'
+                    or writer.identity.native_session_id==message.recipient.identity.native_session_id
+                    or writer.account_ref!=message.recipient.account_ref):
+                raise BeforeWriteError('codex-direct-route-unavailable')
+            source,source_capture=self._capture(writer)
             target,target_capture=self._capture(message.recipient)
             source_channel=getattr(source.native,'channel',None)
             target_channel=getattr(target.native,'channel',None)
-            source_endpoint=source.native_channel(message.sender)
+            source_endpoint=source.native_channel(writer)
             target_endpoint=target.native_channel(message.recipient)
             image=self.desktop_executable
             if (source_endpoint is None or source_endpoint!=target_endpoint or source_channel!=target_channel
@@ -342,8 +357,12 @@ class CodexSources:
                     self._runtime_list()
                     self.controller._require()
                     self.controller.pairs.require_selected(message.sender,message.recipient)
+                    # A leased writer must still hold the owner's lease and be live itself.
+                    if leased is not None and (not self.controller.leases.holds(writer,message.recipient)
+                            or not self.controller._live(writer)):
+                        return False
                     if (not self.controller._live(message.sender) or not self.controller._live(message.recipient)
-                            or not source.verify_active(message.sender,expected=source_capture)
+                            or not source.verify_active(writer,expected=source_capture)
                             or not target.verify(message.recipient,expected=target_capture)
                             or getattr(source.native,'channel',None)!=source_channel
                             or getattr(target.native,'channel',None)!=target_channel
@@ -357,13 +376,13 @@ class CodexSources:
                     # The helper pins/checks the actual pipe at connect/write;
                     # retained app identity and capture epochs fence this lease.
                     self.controller._require()
-                    return (source.snapshot(message.sender) is source_capture
+                    return (source.snapshot(writer) is source_capture
                         and target.snapshot(message.recipient) is target_capture)
                 except Exception:
                     return False
             if not recheck():
                 raise BeforeWriteError('codex-direct-context-unverified')
-            yield DesktopLease(message.recipient,source_capture.facts,source_endpoint,recheck)
+            yield DesktopLease(message.recipient,source_capture.facts,source_endpoint,recheck,writer=leased)
         finally:
             if process: close(process)
 
@@ -383,5 +402,5 @@ class _DirectDesktopAdapter(CodexDesktopAdapter):
         if not self.factory._has_desktop_facility():
             return AdapterDescription('codex-desktop',(),
                 'Requires a configured desktop executable and current verified app-owned channel; '
-                'direct distinct selected Codex sources only; cross-host delegation unavailable.')
+                'direct distinct selected Codex sources, or another host through an owner-granted writer lease.')
         return super().describe()

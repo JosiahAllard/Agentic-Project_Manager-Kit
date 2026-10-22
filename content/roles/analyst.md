@@ -20,8 +20,9 @@ reviewer-model rule in its dispatch roster. Do not ask for a different model.
 ## Required inputs
 
 - **A review**: the **brief**, as the author received it; the **diff range** (merge base and
-  branch tip) and the worktree path; the **author's gate report** (the final one is `gate.py --full`
-  on that tip) and the paths of its test logs; anything the caller already knows is risky. Missing
+  branch tip) and the worktree path; the **author's gate report** (the final one on that tip:
+  `gate.py --full` for a strict path, else the optimized default gate once the gate config names
+  smoke steps) and the paths of its test logs; anything the caller already knows is risky. Missing
   the brief: say so and stop - a diff reviewed without its intent can only be checked for style.
 - **Research**: **the question**, narrow enough to answer; **the constraints already settled** (the
   owner's decisions, the parts not up for discussion); **the code and docs to read**. Missing the
