@@ -231,6 +231,100 @@ class SharedRefsFromAWorktree(SharedRefBase):
         self.assertIn('worktree add', d.instead)
 
 
+class StrayRefCleanup(SharedRefBase):
+    """A coordinator's main session deletes a stray ref (refs/ outside refs/heads, refs/tags,
+    refs/stash and refs/backlog) in its own repository, when git deletes that ref itself; every other session is
+    held as before, and its refusal names the coordinator."""
+
+    def coordinator(self, text, cwd=None, env=tj.COORDINATOR, tool='Bash'):
+        return self.session(text, env, cwd or self.w.main, tool)
+
+    def test_a_coordinator_deletes_a_stray_ref_in_its_own_repository(self):
+        m, wt = self.main, self.wt
+        for text in ('git update-ref -d refs/scratch/a', 'git -C "%s" update-ref -d refs/scratch/a' % m,
+                     'git -C "%s" update-ref -d refs/scratch/a' % wt, 'git update-ref -m gone -d refs/scratch/a',
+                     'git update-ref -d refs/scratch/a 0123abc', 'git update-ref --no-deref -d refs/scratch/a',
+                     'git update-ref -d refs/remotes/origin/x', 'git update-ref -d refs/notes/commits',
+                     'git update-ref -d refs/Scratch/deep/er'):
+            with self.subTest(text):
+                self.allowed(self.coordinator(text))
+        self.allowed(self.coordinator('git update-ref -d refs/scratch/a', cwd=self.w.wt))
+        self.allowed(self.coordinator('git update-ref -d refs/scratch/a', env=tj.OLD_MARK))
+        self.allowed(self.coordinator('git update-ref -d refs/scratch/a', tool='PowerShell'))
+        put(os.path.join(self.common, 'refs', 'scratch', 'a'), '0123456789012345678901234567890123456789\n')
+        self.allowed(self.coordinator('git update-ref -d refs/scratch/a'))
+
+    def test_a_coordinator_still_may_not_delete_a_branch_tag_stash_or_store(self):
+        for text in ('git update-ref -d refs/heads/kit/x', 'git update-ref -d refs/heads/main',
+                     'git update-ref -d refs/HEADS/main', 'git update-ref -d refs/tags/v1',
+                     'git update-ref -d refs/TAGS/v1', 'git update-ref -d refs/stash', 'git update-ref -d refs/backlog/main',
+                     'git update-ref -d refs/BACKLOG/main', 'git update-ref -d refs/Backlog/store',   # one file on NTFS
+                     'git update-ref -d HEAD', 'git update-ref -d main', 'git update-ref -d refs/tmp/../heads/main',
+                     'git update-ref -d refs/scratch/a.lock', 'git update-ref -d refs/'):
+            with self.subTest(text):
+                d = self.coordinator(text)
+                self.assertIsNotNone(d, 'allowed')
+                self.assertEqual(d.verdict, 'deny', d.reason)
+
+    def test_a_coordinator_still_may_not_write_or_delete_an_unnamed_ref(self):
+        for text in ('git update-ref refs/scratch/a HEAD', 'git update-ref -d "$R"', 'git update-ref --stdin',
+                     'git update-ref -d refs/scratch/$X', 'echo refs/scratch/a | xargs git update-ref -d'):
+            with self.subTest(text):
+                d = self.coordinator(text)
+                self.assertIsNotNone(d, 'allowed')
+                self.assertEqual(d.verdict, 'deny', d.reason)
+
+    def test_an_unread_stray_ref_delete_tells_the_coordinator_to_name_it(self):
+        d = self.refused(self.coordinator('git update-ref --frobnicate -d refs/scratch/a'))
+        self.assertIn('you delete it in your own repository, naming the ref literally', d.reason)
+        self.assertIn('show-ref refs/scratch/a', d.instead)
+        self.allowed(self.coordinator(d.instead))
+
+    def test_a_coordinator_deletes_only_in_its_own_repository(self):
+        d = self.refused(self.coordinator('git -C "%s" update-ref -d refs/scratch/a' % W.fwd(self.w.foreign)))
+        self.assertIn('only in its own repository', d.reason)
+        self.assertIn('show-ref refs/scratch/a', d.instead)
+        self.allowed(self.coordinator(d.instead))
+
+    def test_a_symbolic_or_unreadable_ref_is_deleted_with_no_deref(self):
+        put(os.path.join(self.common, 'refs', 'scratch', 'link'), 'ref: refs/heads/main\n')
+        d = self.refused(self.coordinator('git update-ref -d refs/scratch/link'))
+        self.assertIn('symbolic ref to refs/heads/main', d.reason)
+        self.assertIn('update-ref --no-deref -d refs/scratch/link', d.instead)
+        self.allowed(self.coordinator(d.instead))
+        os.makedirs(os.path.join(self.common, 'refs', 'scratch', 'dir'))     # a folder git reads no ref from
+        self.refused(self.coordinator('git update-ref -d refs/scratch/dir'))
+        self.allowed(self.coordinator('git update-ref --no-deref -d refs/scratch/dir'))
+
+    def test_a_reftable_repository_needs_no_deref(self):
+        os.makedirs(os.path.join(self.common, 'reftable'))
+        d = self.refused(self.coordinator('git update-ref -d refs/scratch/a'))
+        self.assertIn('reftable', d.reason)
+        self.allowed(self.coordinator(d.instead))
+
+    def test_every_other_session_is_held_and_sent_to_its_coordinator(self):
+        text = 'git update-ref -d refs/scratch/a'
+        calls = [('worker', lambda: self.worker(text)),
+                 ('coordinator subagent', lambda: self.worker(text, agent_type='coordinator')),
+                 ('lander', lambda: self.worker(text, cwd=self.w.main, agent_type='lander'))]
+        calls += [(env[tj.context.ROLE_ENV], lambda env=env: self.session(text, env))
+                  for env in (tj.DEEP, tj.CONSULTANT)]
+        for label, call in calls:
+            with self.subTest(label):
+                d = self.refused(call())
+                self.assertIn('your coordinator deletes it', d.reason)
+                self.assertIn('show-ref refs/scratch/a', d.instead)
+        self.allowed(self.worker(self.refused(self.worker(text)).instead))
+        self.w.user_config({'guard_agent_marks': ['coordinator', 'plain']})     # a held plain mark
+        self.assertIn('your coordinator deletes it', self.refused(self.session(text, tj.PLAIN)).reason)
+
+    def test_the_pm_the_owner_and_an_unheld_mark_are_unchanged(self):
+        for env in (tj.PM, {}, tj.PLAIN):
+            with self.subTest(env=env):
+                self.allowed(self.session('git update-ref -d refs/scratch/a', env, self.w.main))
+                self.allowed(self.session('git update-ref -d refs/tags/v1', env, self.w.main))
+
+
 def junction(test, target, link):
     try:
         import _winapi

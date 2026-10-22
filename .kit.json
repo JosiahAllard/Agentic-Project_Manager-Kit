@@ -8,11 +8,14 @@
   "preflight": {"report_hooks": ["daily_full:summary_lines"]},
   "worktree_remove": {"build_output": ["__pycache__"]},
   "gate": {
+    "smoke_steps": ["kit-suite"],
     "steps": [
       {
         "name": "kit-suite",
         "always": true,
-        "cmd": ["{python}", "tools/kit_tests.py", "--select", "-C", "{root}"],
+        "globs": ["*"],
+        "reuse": true,
+        "cmd": ["{python}", "tools/kit_tests.py", "--select", "--smoke", "-C", "{root}"],
         "full_cmd": ["{python}", "tools/kit_tests.py", "--full", "-C", "{root}"],
         "daily_cmd": ["{python}", "tools/kit_tests.py", "--full", "--both-tiers", "-C", "{root}"],
         "pass": ["kit_tests: OK"]
