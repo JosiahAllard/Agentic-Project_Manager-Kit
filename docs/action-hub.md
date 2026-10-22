@@ -72,7 +72,10 @@ or after an unpair or a session that ran out) is told so on the page and to run
 
 Under the header a line says whether a PM is listening: "A PM is listening." while a PM holds a
 `wait` open, else when one last asked; another session's wait `--for` its own key does not
-count (`Api.seen` in `kitlib/hubsite/api.py`). The page reads everything at once
+count (`Api.seen` in `kitlib/hubsite/api.py`). A second line gives the push notifications'
+status from the snapshot's `push` field ("Push notifications"): "Push delivery is up" or "is
+down" (with the latest try's state), and how many items are undelivered, or "Push notifications
+are off on this hub server." when the server runs no push worker. The page reads everything at once
 (`GET /api/v1/snapshot`), then waits for the next change (`GET /api/v1/wait`, about 55 seconds on
 the server), so what the PM writes shows without a reload. A view the server cannot give says so
 at the top.
@@ -340,6 +343,12 @@ It is not the store's git push (the `push` setting).
   item is gone is dropped) and `push-undelivered.jsonl` (one line per try not written, per `ambiguous`
   pick and per give-up; never a token or any item text; rotated once to `.1` past 1 MiB,
   `push.LOG_MAX`).
+- Status: `GET /api/v1/snapshot` carries `push`, null when the server runs no worker, else
+  `PushWorker.status()`: `state` (`down` when the latest delivery was not `written` or the
+  worker's thread has ended, else `up`), `last` (that delivery's state, null before the first)
+  and `undelivered` (outbox items some recipient has not yet had a written try of). The page
+  shows it under the PM line ("Using the hub"). It is read again with each snapshot, so a retry's
+  outcome shows at the next change or wait timeout, not at once.
 - Stopping: `Hub.close` tells the worker to begin no further send before the store closes and
   joins it after, for at least `push.STOP_S` (15 s), longer than a host's delivery can take
   (Claude: `peer.WRITE_TIMEOUT_S` plus the helper's reap and pump joins), so the last outbox

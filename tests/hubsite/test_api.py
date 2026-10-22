@@ -12,7 +12,7 @@ import unittest
 from unittest import mock
 
 from kitlib import hubvalidate
-from kitlib.hubsite import api, approvals, todosteps
+from kitlib.hubsite import api, approvals, push, todosteps
 from kitlib.hubsite.api import AGENT, BASE, OWNER
 from kitlib.hubsite.store import HubError, Store
 from tests.gitfixture import TempRepo
@@ -2443,6 +2443,64 @@ class ApprovalRouteTest(ApiCase):
         for role, strong in ((OWNER, False), (AGENT, True), (AGENT, False), (OWNER, 'yes')):
             with self.subTest(role=role, strong=strong):
                 self.assertIs(self.ok('GET', '/snapshot', role, strong=strong)['strong'], False)
+
+
+class PushStatusTest(ApiCase):
+    """The snapshot carries the push worker's status: delivery up or down, and what is undelivered."""
+
+    class Deliver(object):
+        def __init__(self):
+            self.state = push.WRITTEN
+
+        def deliver(self, recipient, text):
+            return push.Sent(self.state, None, None, False)
+
+        def is_pm(self, recipient):
+            return False
+
+    def setUp(self):
+        super().setUp()
+        folder = tempfile.mkdtemp(prefix='kit-hubapi-push-')
+        self.addCleanup(shutil.rmtree, folder, True)
+        self.fake = self.Deliver()
+        self.t = [1000000.0]
+        self.worker = push.PushWorker(self.store, self.api, self.fake, folder, clock=lambda: self.t[0])
+        self.worker.begin()
+
+    def status(self):
+        return self.ok('GET', '/snapshot', OWNER)['push']
+
+    def answered(self):
+        qid = self.ok('POST', '/questions', AGENT, {'title': 't', 'options': OPTIONS})['id']
+        self.ok('POST', '/questions/%s/answer' % qid, OWNER, {'choice': 0})
+        return qid
+
+    def test_no_worker_is_null(self):
+        self.assertIsNone(api.Api(self.store, clock=CLOCK).push_seen())
+
+    def test_a_fresh_worker_is_up_with_nothing_undelivered(self):
+        self.assertEqual(self.status(), {'state': 'up', 'last': None, 'undelivered': 0})
+
+    def test_a_delivery_not_written_is_down_and_counts_the_item(self):
+        self.fake.state = push.NO_SESSION
+        self.answered()
+        self.worker.poll()
+        self.assertEqual(self.status(), {'state': 'down', 'last': push.NO_SESSION, 'undelivered': 1})
+        self.fake.state = push.WRITTEN
+        self.t[0] += push.SCHEDULE_S[0]
+        self.worker.poll()
+        self.assertEqual(self.status(), {'state': 'up', 'last': push.WRITTEN, 'undelivered': 0})
+
+    def test_a_worker_whose_thread_ended_is_down(self):
+        self.worker.start()
+        self.assertTrue(self.worker.stop(5))
+        self.assertEqual(self.status()['state'], 'down')
+
+    def test_a_status_that_raises_is_down_with_its_class_name(self):
+        def broken():
+            raise RuntimeError('no')
+        self.api.push_status = broken
+        self.assertEqual(self.status(), {'state': 'down', 'last': 'RuntimeError', 'undelivered': None})
 
 
 if __name__ == '__main__':

@@ -171,6 +171,7 @@ button.danger{color:var(--warn)}
     <p class="sub">Questions from the PM and the coordinators, the PM's answers to what you ask, the steps only you can do, and your backlogs. Answer and tick off whenever you like; nothing waits on you.</p>
     <p class="links"><a href="/lock.html">Machine schedule</a>: who holds this PC's slots, the week ahead and what ran.</p>
     <div class="status" id="pmseen" role="status"></div>
+    <div class="status" id="pushseen" role="status"></div>
     <div class="status err" id="loaderr" role="alert" hidden></div>
   </header>
 
@@ -368,7 +369,7 @@ button.danger{color:var(--warn)}
   }
 
   // What the server last knew of the PM, as information only: nothing here is a control.
-  const seenLine = () => { $("#pmseen").textContent = ready ? pmSeenText(state.seen, Date.now()) : ""; };
+  const seenLine = () => { $("#pmseen").textContent = ready ? pmSeenText(state.seen, Date.now()) : ""; $("#pushseen").textContent = ready ? pushText(state.push) : ""; };
   // A redraw gives the focus and the caret back to a field it rebuilt (a question's note, found by its id)
   // or moved.
   function render(){
@@ -589,6 +590,15 @@ button.danger{color:var(--warn)}
     const last = [seen.waited, seen.pulled].map(v => new Date(v || NaN).getTime()).filter(t => !isNaN(t)).sort((a, b) => a - b).pop();
     return last == null ? "No PM is listening, and none has asked since the hub server started." : "No PM is listening; one last asked " + pmAgo(now - last) + " ago.";
   }
+  // The snapshot's push (null: this hub server sends no push notifications) as one line: delivery up or down, and
+  // how many items still wait for a written delivery.
+  function pushText(p){
+    if (!p || typeof p !== "object") return "Push notifications are off on this hub server.";
+    const n = Number.isInteger(p.undelivered) ? p.undelivered : null;
+    const owed = n == null ? "" : n === 0 ? "; nothing undelivered." : "; " + n + (n === 1 ? " item" : " items") + " undelivered.";
+    if (p.state === "down") return "Push delivery is down" + (p.last ? " (last try: " + String(p.last) + ")" : "") + (owed || ".");
+    return "Push delivery is up" + (owed || ".");
+  }
   // A parked item is amber once it has been parked for more than 2 days. A bare day (2026-01-02) counts from its start.
   const PARKED_OLD_DAYS = 2;
   const parkedOld = (at, now) => { const t = new Date(at || NaN).getTime(); return !isNaN(t) && now - t > PARKED_OLD_DAYS * PM_DAY; };
@@ -640,6 +650,7 @@ button.danger{color:var(--warn)}
     const agents = list(a.agents).map(x => ({ id: String(x.name || ""), model: x.model, effort: x.effort === "-" ? "" : x.effort, role: x.description }));
     const pages = pageRows(col);
     return { pages, revision: Number.isInteger(s.revision) ? s.revision : 0, gone, partial, stale, seen: s.pm_seen && typeof s.pm_seen === "object" ? s.pm_seen : null,
+      push: s.push && typeof s.push === "object" ? s.push : null,
       docs: col("questions").map(d => ({ status: "open", ...d })), inbox: col("inbox"), todos: col("todos").map(d => ({ status: "open", ...d })),
       stories: col("stories").map(d => ({ status: "submitted", ...d })), topm: col("to_pm").map(d => ({ status: "queued", ...d })),
       repos: list(views.repos).map(r => ({ id: String(r.name || ""), ...r })), backlog, completed, parked: backlog.filter(b => b.status === "parked"), usage, agents,
@@ -1480,7 +1491,7 @@ button.danger{color:var(--warn)}
     if (ready && next.revision < rev) return;         // an older answer that arrived late
     rev = next.revision;
     const first = !ready; ready = true;
-    for (const k of ["docs", "inbox", "todos", "stories", "topm", "repos", "backlog", "completed", "parked", "usage", "agents", "pages", "gone", "partial", "stale", "seen", "approvals", "strong"]) state[k] = next[k];
+    for (const k of ["docs", "inbox", "todos", "stories", "topm", "repos", "backlog", "completed", "parked", "usage", "agents", "pages", "gone", "partial", "stale", "seen", "push", "approvals", "strong"]) state[k] = next[k];
     // An edit outlasts its item: one that is gone, or no longer the owner's to edit, keeps its card (loseEdit).
     for (const id of [...state.pmEdit.keys()]) if (!state.topm.some(x => x.id === id && x.status === "queued")) loseEdit(state.pmEdit, id);
     for (const id of [...state.todoEdit.keys()]) if (!state.todos.some(t => t.id === id && t.from === "you")) loseEdit(state.todoEdit, id);
@@ -1488,7 +1499,7 @@ button.danger{color:var(--warn)}
     // of a backlog or of the usage): when only those moved and the owner is typing, the lists are left alone.
     const untimed = rows => rows.map(r => ({ ...r, posted_at: null }));
     const unsince = Object.fromEntries(Object.entries(next.stale).map(([v, rows]) => [v, rows.map(o => ({ ...o, since: null }))]));
-    const key = JSON.stringify({ ...next, revision: 0, seen: null, stale: unsince, usage: next.usage.map(u => ({ ...u, measured_at: null })), backlog: untimed(next.backlog), completed: untimed(next.completed), parked: untimed(next.parked) });
+    const key = JSON.stringify({ ...next, revision: 0, seen: null, push: null, stale: unsince, usage: next.usage.map(u => ({ ...u, measured_at: null })), backlog: untimed(next.backlog), completed: untimed(next.completed), parked: untimed(next.parked) });
     const same = key === lastKey; lastKey = key;
     // A list that cannot be drawn: the counts drawn before it stay, the page is left as ready as it was before
     // this read (not ready on a first read, so its controls stay hidden and the next snapshot is drawn whatever

@@ -73,6 +73,13 @@ to end and joins it (False when it did not end in time: a deliver can block up t
 timeout). Only that thread touches the worker's state; at most one deliver is in flight, and the
 stop flag is checked before each. poll() runs one round on the caller's thread, for tests (never
 while the thread runs).
+
+Status (the hub page's push line, Api.push_seen): status() -> {"state", "last", "undelivered"}.
+last is the state of the latest deliver (None before the first), undelivered the number of
+outbox items some recipient has not yet had a written try of. state is 'down' when the latest
+deliver was not WRITTEN or the started thread has ended, else 'up'. The worker builds a new dict
+after begin() and each round, on its own thread, and status() reads that one reference, so a
+caller on another thread never sees one half-built.
 """
 import collections
 import datetime
@@ -197,6 +204,10 @@ class PushWorker(object):
         self._fps = {}
         self._outbox = {}
         self._dirty = False
+        self._last = None               # the latest deliver's state
+        self._status = {'state': 'up', 'last': None, 'undelivered': 0}
+        if api is not None:
+            api.push_status = self.status   # the snapshot's `push` (Api.push_seen)
 
     # ------------------------------------------------------------------ life
     def start(self):
@@ -221,6 +232,7 @@ class PushWorker(object):
                 kind, doc_id = key.split(':', 1)
                 self._fire(kind, doc_id, docs[_coll(kind)][doc_id], entry.get('fingerprint'), now)
         self._save()
+        self._summarize()
 
     def stop(self, timeout=STOP_S):
         """Ask the thread to end and join it; True when it ended (or never started)."""
@@ -240,6 +252,7 @@ class PushWorker(object):
                         break
                     self._round(changes)
                     self._save()                    # each round: an unclean exit loses no more
+                    self._summarize()
                 except HubError as e:
                     if e.code == 'store':
                         break                       # the store closed under us: the hub is closing
@@ -255,6 +268,21 @@ class PushWorker(object):
         """One round now, on the caller's thread (tests)."""
         self._round(self.store.changes_since(self._rev))
         self._save()
+        self._summarize()
+
+    def status(self):
+        """{"state", "last", "undelivered"} (module docstring "Status"); any thread."""
+        out = dict(self._status)
+        t = self._thread
+        if t is not None and not t.is_alive():
+            out['state'] = 'down'
+        return out
+
+    def _summarize(self):
+        owed = sum(1 for e in self._outbox.values()
+                   if any(st.get('last') != WRITTEN for st in e['recipients'].values()))
+        self._status = {'state': 'up' if self._last in (None, WRITTEN) else 'down',
+                        'last': self._last, 'undelivered': owed}
 
     # ------------------------------------------------------------------ one round
     def _round(self, changes):
@@ -444,6 +472,7 @@ class PushWorker(object):
             self.log('push: deliver to %s failed: %s' % (field(recipient), type(e).__name__))
             sent = Sent(UNCERTAIN, None, None, False)
         state = sent.state if sent.state in (WRITTEN, NOT_WRITTEN, UNCERTAIN, NO_SESSION) else UNCERTAIN
+        self._last = state
         for key in shown:
             entry = self._outbox[key]
             st = entry['recipients'][recipient]
