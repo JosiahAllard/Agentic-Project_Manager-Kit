@@ -349,7 +349,7 @@ class OnlyOwnerOnlyPathsAreRequested(Case):
         said = self.refused('files', 'README.md, docs/new.md (not owner-only', [
             ('README.md', self.content('x\n')), ('docs/new.md', self.content('n\n', 'n.txt'))])
         # nothing in it is owner-only, so there are no other files to post
-        self.assertIn('. No owner approval is needed for these files: commit README.md, '
+        self.assertIn('. No hub approval request is needed: commit README.md, '
                       'docs/new.md in an ordinary commit (tools/commit.py)', said)
         self.assertNotIn('Post the other', said)
         self.assertNotIn('approved one', said)
@@ -389,13 +389,25 @@ class OnlyOwnerOnlyPathsAreRequested(Case):
             ('content/roles/a.md', self.content('a\n')),
             ('kit.json', self.content('{}\n', 'k.txt')),
             ('src/app.py', self.content('s\n', 's.txt'))])
-        self.assertIn('. No owner approval is needed for these files: commit src/app.py in an '
-                      'ordinary commit (tools/commit.py); content/roles/a.md, kit.json is '
-                      'owner-only as well, so it goes in a commit the owner authors '
+        # two locked paths: plural, and no "as well" with no other owner-only file named
+        self.assertIn('. No hub approval request is needed: commit src/app.py in an '
+                      'ordinary commit (tools/commit.py); content/roles/a.md, kit.json are '
+                      'owner-only, so they go in a commit the owner authors '
                       '(tools/commit.py --owner-authored --owner-approved content/roles/a.md '
                       '--owner-approved kit.json), not in an ordinary commit', said)
         self.assertNotIn('Post the other', said)
         self.assertNotIn('approved one', said)
+        self.assertNotIn('as well', said)
+
+    def test_one_locked_render_source_alone_is_singular_with_no_as_well(self):
+        self.kit()
+        own(self.repo.root, ['content/'])
+        said = self.refused('files', 'content/roles/a.md (a render source', [
+            ('content/roles/a.md', self.content('a\n'))])
+        self.assertIn('. No hub approval request is needed: content/roles/a.md is owner-only, '
+                      'so it goes in a commit the owner authors (tools/commit.py --owner-authored '
+                      '--owner-approved content/roles/a.md), not in an ordinary commit', said)
+        self.assertNotIn('as well', said)
 
     def test_a_render_source_that_is_not_owner_only_goes_in_an_ordinary_commit(self):
         self.kit()

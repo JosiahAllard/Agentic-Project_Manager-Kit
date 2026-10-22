@@ -95,11 +95,14 @@ def owner_paths_error(top, paths):
         advice.append('commit %s in an ordinary commit (tools/commit.py)%s' % (
             ', '.join(plain), ', before or after the approved one' if others else ''))
     if locked:
-        advice.append('%s is owner-only as well, so it goes in a commit the owner authors '
+        many = len(locked) > 1
+        advice.append('%s %s owner-only%s, so %s in a commit the owner authors '
                       '(tools/commit.py --owner-authored %s), not in an ordinary commit' % (
-                          ', '.join(locked), ' '.join('--owner-approved ' + p for p in locked)))
+                          ', '.join(locked), 'are' if many else 'is',
+                          ' as well' if others else '', 'they go' if many else 'it goes',
+                          ' '.join('--owner-approved ' + p for p in locked)))
     lead = ('Post the other owner-only files alone in the request; ' if others
-            else 'No owner approval is needed for these files: ')
+            else 'No hub approval request is needed: ')
     return ('an owner approval carries owner-only files only, and this request names %s. %s%s'
             % (' and '.join(named), lead, '; '.join(advice)))
 
