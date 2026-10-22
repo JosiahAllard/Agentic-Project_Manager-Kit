@@ -82,7 +82,7 @@ Refused before anything is written (exit 1, `Nothing was written or committed.`)
 - The hub cannot be asked, has no such approval, or it is not `approved`: consumed already, pending, denied or expired (`fetch`, `state_error`).
 - A render source is named (the commit would carry rendered files nobody approved), or a merge is in progress (the commit would have two parents).
 - An approved path is staged already.
-- `prewrite_error`: the paths named are not exactly the approval's files; HEAD is not its `head`; a path is not a plain file of the work tree (`..`, absolute, a backslash, a colon, a `.git` part, a symlink, or a parent outside the tree); a file in the work tree is not its `base_blob`; a content is not its `blob`; or a file would not change.
+- `prewrite_error`: the paths named are not exactly the approval's files; HEAD is not its `head` (a worktree at that base: `new_worktree.py --approval hub:A-<n>`, docs/new-worktree.md "A base commit"); a path is not a plain file of the work tree (`..`, absolute, a backslash, a colon, a `.git` part, a symlink, or a parent outside the tree); a file in the work tree is not its `base_blob`; a content is not its `blob`; or a file would not change.
 - `preverify_error`: the hub's verify route does not verify the approval for this repository (its `origin` remote, `kitlib.hubsite.approvals.remote_id`), HEAD and the approved blobs.
 
 A staged file the call does not name refuses first, as for any commit.

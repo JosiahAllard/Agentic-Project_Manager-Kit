@@ -17,6 +17,7 @@ A folder other than `repo.worktrees_dir` must stay inside the main checkout and 
 python tools/new_worktree.py [-C DIR] <area>/<slug>                 a NEW branch off the main branch
 python tools/new_worktree.py [-C DIR] --existing <area>/<slug>      an EXISTING branch, resumed
                              [--base BRANCH]                        another base than the main branch
+                             [--base COMMIT | --approval hub:A-<n>] a NEW branch at a fixed commit
                              [--no-wait]                            do not wait for a landing in flight
 ```
 
@@ -27,6 +28,16 @@ Exit 0 made; 1 refused (nothing made, the lines say why); 2 usage, or the kit co
 - A new branch starts at the base's hash and tracks nothing.
 - The mode is what the caller said: the default refuses a branch that exists, `--existing` refuses one that does not.
 - Names: `<area>/<slug>`, ASCII letters, digits, `_ . -`, each part starting with a letter or digit, the area lowercase-first. A new slug is lowercase-first; `--existing` also takes a capital. A slug or branch that differs only in case from one already there is refused.
+
+## A base commit
+
+`--base <full hash>` (40 hex digits, any case) starts a NEW branch at that commit; `--approval hub:A-<n>` starts one at the owner approval's `head`, its base commit. Made for `commit.py --owner-approval`, which refuses unless HEAD is that base (docs/commit.md "Owner approval"): once the main branch moves, the approved change is committed from a worktree made this way. A shorter hash is a branch name, as before.
+
+- The approval is read as `commit.py` reads it (`approval_base` in `kitlib/worktree/new.py`, through `kitlib.commit.approval`'s `doc_id`, `hub_client`, `fetch` and `state_error`): a hub that cannot be asked, no such approval, one consumed already or not `approved`, or a `head` that is no full hash is refused (exit 1). The hub is asked only after the local branch checks.
+- It fetches `<remote>` and refuses unless the repository has the commit. No landing wait, landing lock or remote comparison applies: the start point is fixed. It prints `branch    <branch> from commit <hash>`, after `approval  hub:A-<n> is for base <hash>; this branch starts there`.
+- With `--existing`, or `--approval` with `--base`, it is a usage error (exit 2).
+
+Tests: `BaseCommit` and `UsageIsRejectedNotGuessed` in `tests/worktree/test_new_worktree.py`.
 
 ## First-use prep
 
