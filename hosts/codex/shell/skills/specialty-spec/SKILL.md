@@ -1,6 +1,6 @@
 ---
 name: specialty-spec
-description: Use when your brief says to load it - extending a named design or spec document from answers the owner already gave, reading the code the spec depends on so it stays buildable and reporting where code and spec disagree. Docs only; no machine time beyond the docs gate and the final `gate.py --full`.
+description: Use when your brief says to load it - extending a named design or spec document from answers the owner already gave, reading the code the spec depends on so it stays buildable and reporting where code and spec disagree. Docs only; no machine time beyond the docs gate and the final gate.
 ---
 
 # Specialty: spec writing
@@ -15,7 +15,7 @@ You turn settled answers into a spec someone can build from. Your value over tra
 4. Mark every inference: "the owner said X" and "I read X as implying Y" are different sentences.
 5. Never invent questions for the owner. A real gap gets a proposed default, labelled a default, under "open - needs the owner", each labelled by subject, not by letter. The coordinator decides what reaches the owner.
 6. Break the work into independently landable tasks: size (S/M/L), the gate or test tier it reaches (`--find gate`, `--find tiers`), what it waits for.
-7. Mechanics as any docs change: a docs-only worktree (`--find worktree`), edit, the docs gate (skipped only in a coordinator-announced measurement window, reported as "gate skipped: measurement window"), commit by explicit path with `python <kit>/tools/commit.py -C <worktree> -m "<subject>" <path> ...`, then `python <kit>/tools/gate.py -C <worktree> --full` on the committed tip (landing needs it; in a measurement window report that it has not run), report the hash. The coordinator lands it.
+7. Mechanics as any docs change: a docs-only worktree (`--find worktree`), edit, the docs gate (skipped only in a coordinator-announced measurement window, reported as "gate skipped: measurement window"), commit by explicit path with `python <kit>/tools/commit.py -C <worktree> -m "<subject>" <path> ...`, then the final gate on the committed tip, `python <kit>/tools/gate.py -C <worktree> --full` for a strict path (`STRICT_DEFAULTS`), else the optimized default gate (no flag) once the repo's gate config names smoke steps, `--full` until then (landing needs it; in a measurement window report that it has not run), report the hash. The coordinator lands it.
 8. The shell: the docs-writer role's Hard rules. When your context gets long, tell the caller and offer a summary to seed a fresh agent.
 
 ## Never
