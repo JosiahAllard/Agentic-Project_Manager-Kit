@@ -27,12 +27,11 @@ from tests import gitfixture
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 TOOL = os.path.join(KIT, 'tools', 'new_worktree.py')
 REFUSAL = new.REFUSAL
-LOCK_NAME = 'test-landing.lock'
 # the red-first command a `route` line names: the kit's own tool, quoted in forward slashes
 # (docs/multi-host-plan.md section 7 decision 21; step 15 "No stubs")
 REDFIRST = '`python "%s/tools/redfirst.py" -C <your worktree> --tests <test file>`' % (
     KIT.replace('\\', '/'))
-MASTER_CONFIG = {'repo': {'main_branch': 'master'}, 'landing': {'lock_file': 'git:' + LOCK_NAME}}
+MASTER_CONFIG = {'repo': {'main_branch': 'master'}}
 
 
 def kill_reads_of(spec, after=0):
@@ -922,7 +921,7 @@ class LocalMainBehindOrigin(LandingCase):
 
 
 class TheDefaultLock(LandingCase):
-    """No "landing".lock_file: the kit's own lock file (kitlib.records.landing.LOCK_NAME) is read.
+    """No `.kit.json` at all: the kit's own lock file (kitlib.records.landing.LOCK_NAME) is read.
     (The old tool read no lock at all then; the kit always has one.)"""
 
     BASE = 'main'
@@ -962,7 +961,7 @@ class FakeTime(object):
 
 def in_flight_config(**in_flight):
     return {'repo': {'main_branch': 'master'},
-            'landing': {'lock_file': 'git:' + LOCK_NAME, 'in_flight': in_flight}}
+            'landing': {'in_flight': in_flight}}
 
 
 class InFlightCase(LandingCase):
@@ -1201,8 +1200,7 @@ class ALocalOnlyBaseNamesTheRoute(LandingCase):
     def test_the_route_names_the_kit_tool_not_the_configured_tools_dir(self):
         # no repository holds a copy of the kit's tools, so "repo".tools_dir does not spell the
         # route (docs/multi-host-plan.md section 7 decision 21; step 15 "No stubs")
-        self.configure({'repo': {'main_branch': 'master', 'tools_dir': 'devtools'},
-                        'landing': {'lock_file': 'git:' + LOCK_NAME}})
+        self.configure({'repo': {'main_branch': 'master', 'tools_dir': 'devtools'}})
         self.make_dev()
         self.hold()
         out = self.tool('fix/fresh', '--base', 'dev')[1]
@@ -1301,7 +1299,7 @@ class ChooseBase(unittest.TestCase):
 
 class ConfigKeys(WorktreeCase):
     """The `.kit.json` keys it reads: "repo".remote / worktrees_dir / tools_dir / main_branch and
-    "landing".lock_file / in_flight. "new_worktree" takes no key. A refused configuration exits 2, nothing made."""
+    "landing".in_flight. "new_worktree" takes no key. A refused configuration exits 2, nothing made."""
 
     def assert_config_refused(self, data, why):
         self.configure(data)
@@ -1314,13 +1312,6 @@ class ConfigKeys(WorktreeCase):
     def test_the_dropped_landing_stale_minutes_refuses(self):
         self.assert_config_refused({'new_worktree': {'landing_stale_minutes': 90}},
                                    'landing_stale_minutes')
-
-    def test_a_lock_file_outside_the_git_dir_refuses(self):
-        self.assert_config_refused({'landing': {'lock_file': 'git:../escape.lock'}},
-                                   'must name one file in the git common dir')
-
-    def test_a_lock_file_that_is_not_in_the_git_dir_refuses(self):
-        self.assert_config_refused({'landing': {'lock_file': 'landing.lock'}}, 'must be git:<name>')
 
     def test_an_unknown_key_refuses(self):
         self.assert_config_refused({'new_worktree': {'landing_minutes': 90}}, 'landing_minutes')

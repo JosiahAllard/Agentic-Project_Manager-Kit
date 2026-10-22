@@ -1314,22 +1314,21 @@ class Lander(object):
 
     def follow(self, base):
         """The base <remote>/<main> is not the commit the config was read at: read the config at
-        `base`. None when it names the same main branch, remote and landing lock and still takes
-        this landing (config_refusal); then self.expect_main and self.cfg are the base's, so the
-        locked checks, the landing tree, the merged gate and the records all use it. Else why not
-        (REFUSED, nothing merged; self.cfg and self.expect_main unchanged)."""
+        `base`. None when it names the same main branch and remote and still takes this landing
+        (config_refusal); then self.expect_main and self.cfg are the base's, so the locked checks,
+        the landing tree, the merged gate and the records all use it. Else why not (REFUSED,
+        nothing merged; self.cfg and self.expect_main unchanged)."""
         was, main_b, remote = self.expect_main, self.cfg.main_branch, self.cfg.remote
         try:
             cfg = kconfig.load_at(self.root, base)
-            same = (cfg.main_branch, cfg.remote, landing.lock_name(cfg)) == (
-                main_b, remote, landing.lock_name(self.cfg))
-        except (ConfigError, landing.LockError) as e:
+            same = (cfg.main_branch, cfg.remote) == (main_b, remote)
+        except ConfigError as e:
             return 'main moved on from %s to %s, and the config there: %s' % (
                 was[:10], base[:10], e)
         if not same:
             return ('main moved on from %s to %s, and the config there names another main '
-                    'branch, remote or landing lock than this landing holds: land again (the '
-                    'next landing reads the config at %s)' % (was[:10], base[:10], base[:10]))
+                    'branch or remote than this landing holds: land again (the next landing '
+                    'reads the config at %s)' % (was[:10], base[:10], base[:10]))
         old = self.cfg
         self.cfg, self.expect_main = cfg, base
         why = self.config_refusal()
