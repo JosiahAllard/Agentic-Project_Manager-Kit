@@ -202,8 +202,8 @@ def landing_lock(entry, run=_run, read=_read, root=None, lock_file=None):
     except ValueError:
         return "landing lock (%s): HELD, record unreadable" % entry.get("repo")
     who = "pid %s" % r["pid"] if r.get("pid") is not None else "a token holder"
-    return "landing lock (%s): HELD - lane %s, branches %s, %s, phase %s, since %s" % (
-        entry.get("repo"), r.get("lane"), " ".join(r.get("branches") or ()) or "-", who,
+    return "landing lock (%s): HELD - branches %s, %s, phase %s, since %s" % (
+        entry.get("repo"), " ".join(r.get("branches") or ()) or "-", who,
         r.get("phase"), r.get("started_utc"))
 
 

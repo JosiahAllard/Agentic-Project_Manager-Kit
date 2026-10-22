@@ -124,7 +124,7 @@ class KitSyncTest(Base):
 
     def test_landing_held_left_alone(self):
         self.remote_ahead()
-        landing.LandingLock(self.repo.root).take('full', ['kit/x'])
+        landing.LandingLock(self.repo.root).take(['kit/x'])
         self.assertLeft(self.run_check(), 'landing lock is held')
         self.assertEqual(self.repo.git('rev-parse', 'refs/heads/main'), self.repo.initial)
 

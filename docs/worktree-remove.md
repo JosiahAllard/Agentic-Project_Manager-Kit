@@ -51,7 +51,7 @@ preflight's `leftovers` line (kitlib/preflight/leftovers.py; docs/preflight.md) 
 
 A landing's branch cleanup and `land.py --sweep-landed` (kitlib/gate/cleanup.py; docs/gate.md "Branch cleanup") remove a landed branch's worktree with this module's `_remove` and delete a branch with no worktree with its `delete_branch`.
 
-Each verb returns `Outcome(code, lines)` and prints nothing; the tools print the lines. Settings come from `.kit.json`: `repo.main_branch`, `repo.remote`, `repo.worktrees_dir`, `repo.name`, `backlog.store`, `landing.lock_file` and `landing.lanes`, and the `worktree_remove` section (docs/kit-json.md).
+Each verb returns `Outcome(code, lines)` and prints nothing; the tools print the lines. Settings come from `.kit.json`: `repo.main_branch`, `repo.remote`, `repo.worktrees_dir`, `repo.name`, `backlog.store`, `landing.lock_file`, and the `worktree_remove` section (docs/kit-json.md).
 
 A `worktree_remove.build_output` entry `{"piece": "<id>", "path": "<folder>/"}` is the literal folder `kitlib.pieces` puts at that piece's dir: an ignored entry that is that folder or lies under it is build output (compared case-sensitively, so a folder git prints in another case is refused), and when the pieces table is missing or malformed, the id is unknown, the piece or path is not a string, the path is empty, a glob or climbs out, or the piece's dir has an empty or `.` part, the entry holds nothing and the removal refuses (`kitlib.worktree.remove.piece_dirs`; tests in `tests/worktree/test_piece_build_output.py`).
 

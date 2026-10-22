@@ -210,8 +210,11 @@ its key has handed the item to that key (an agent call), the route is the key fo
 ACK_WINDOW_S after that first hand-over and `pm` from then on while it is still pending (the
 creator clears a to-do with its ack). Before any hand-over the route is the key while the key is
 reachable: a wait `for` it is blocked now, or one started or ended within REACH_GRACE_S. `for=pm`
-lists the items routed to `pm` and every answered question, whoever it is from (the PM logs each
-ruling); a wait `for=pm` is also woken when an item's route turns to `pm` with no write. All of
+lists the items routed to `pm`, every answered question, whoever it is from (the PM logs each
+ruling), and every decided approval. An approval has no `from`: it is for the coordinator of its
+repository, the session key named as the configured repository whose origin remote is the
+approval's `repo` (Api's repo_name), while that key is in sessions.json, else for `pm`. A wait
+`for=pm` is also woken when an item's route turns to `pm` with no write. All of
 this lives in this Api object: a new Api (a server restart) routes every item to `pm` until its
 creator waits again. As for PM seen, no lock is taken: each note is one dict step, a dict is
 copied before it is walked, and a key's map of blocked waits is never removed, so a wait that
@@ -458,12 +461,12 @@ def launcher_keys():
 
 def _for(d, for_key):
     """Whether pending item d (with `from` and `route`) is listed for for_key: every item with
-    none; for AGENT_FROM, the ones routed to it and every question (the PM logs each ruling);
-    for another key, its own."""
+    none; for AGENT_FROM, the ones routed to it, every question (the PM logs each ruling) and
+    every approval (the owner's decision); for another key, its own."""
     if not for_key:
         return True
     if for_key == AGENT_FROM:
-        return d['route'] == AGENT_FROM or d['kind'] == 'question'
+        return d['route'] == AGENT_FROM or d['kind'] in ('question', 'approval')
     return d['from'] == for_key
 
 
@@ -492,10 +495,12 @@ class Api(object):
     for the routes (default: time.monotonic). `approval_key()` gives the approval key or None,
     read on each decide and verify; `checkout(repo_id)` gives the root of this machine's checkout
     of that repository or None ("Approvals"); both default to None, which no approval passes.
+    `repo_name(repo_id)` gives the name of this machine's configured repository with that remote,
+    or None (default), which routes a decided approval to the PM alone ("Routes").
     `lock` is the machine lock's door or None ("Machine lock")."""
 
     def __init__(self, store, views=None, clock=None, session_keys=None, now=None,
-                 approval_key=None, checkout=None, lock=None):
+                 approval_key=None, checkout=None, lock=None, repo_name=None):
         self.store = store
         self.views = views
         self.lock = lock
@@ -503,6 +508,7 @@ class Api(object):
         self.clock = clock or store.clock
         self.approval_key = approval_key or (lambda: None)
         self.checkout = checkout or (lambda repo: None)
+        self.repo_name = repo_name or (lambda repo: None)
         self._session_keys = session_keys or launcher_keys
         self._seen = {'waited': None, 'pulled': None}
         self._waits = {}            # one key per agent wait that is blocked right now
@@ -657,12 +663,24 @@ class Api(object):
             keys = set()
         return keys | {AGENT_FROM}
 
+    def repo_key(self, repo):
+        """The session key of the coordinator of the repository whose remote is the repo_id
+        `repo`: the configured repository's name (a repo's main coordinator is keyed by its name
+        in sessions.json), '' when none is or repo_name fails. Not checked against the session
+        keys: the caller does that."""
+        try:
+            name = self.repo_name(repo) if isinstance(repo, str) and repo else None
+        except Exception:           # noqa: BLE001 - no name, no coordinator: the PM hears it
+            name = None
+        return name if isinstance(name, str) else ''
+
     def pending(self, for_key=''):
         """The pending items, each with the session key it is for as `from`: a question's or a
         to-do's own `from` when that is a session key, else AGENT_FROM (so the owner's to-dos,
         free-text names, stories and notes are the PM's), and the key that is to handle it now
         as `route` (module docstring "Routes"). With for_key, only the items for that key; for
-        AGENT_FROM, the items routed to it and every question. Reading never changes an item:
+        AGENT_FROM, the items routed to it, every question and every approval. An approval's
+        `from` is its repository's coordinator key (repo_key). Reading never changes an item:
         what a filtered read leaves out stays pending for every other reader."""
         return [d for d in self._routed()[0] if _for(d, for_key)]
 
@@ -679,6 +697,8 @@ class Api(object):
         for p in found:
             d = p._asdict()
             sender = d.pop('sender')
+            if d['kind'] == 'approval':
+                sender = self.repo_key(d['repo'])   # no `from`: its repository's coordinator
             mine = sender and sender not in (AGENT_FROM, OWNER_FROM)
             if mine and keys is None:
                 keys = self.session_keys()          # read once, and only when it can matter

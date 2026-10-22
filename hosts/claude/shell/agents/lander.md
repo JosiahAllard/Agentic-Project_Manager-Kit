@@ -52,7 +52,7 @@ Missing any: say what you need, do nothing.
    gate itself, and a lock you still hold deadlocks it or fails looking like a
    timeout or a test failure, not like a lock mistake.
 5. Submit the landing from the main checkout, as one bare call:
-   `python <kit>/tools/land.py -C <main checkout> <branch> --expect-tip <tip> --submit [--lane <lane>] [--summary <text>]`
+   `python <kit>/tools/land.py -C <main checkout> <branch> --expect-tip <tip> --submit [--summary <text>]`
    (the repo's stub; `<kit>/tools/land.py` where the repo has none).
    A detached process lands it: it waits as one entry in the machine-lock queue (landings go
    ahead of ordinary runs), merges the main it finds with `--no-ff`, gates the merged tree,
