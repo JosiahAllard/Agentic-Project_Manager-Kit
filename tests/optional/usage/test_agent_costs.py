@@ -188,6 +188,16 @@ class AgentCosts(unittest.TestCase):
         rows = AC.costs(self.root, "2026-09-18")
         self.assertEqual([(round(c), at) for c, at, _ in rows], [(500, "coordinator"), (300, "worker")])
 
+    def test_two_turns_with_no_message_id_are_both_counted(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        F.write(os.path.join(tmp.name, "s.jsonl"), [
+            F.turn(None, "2026-09-20T00:00:00Z", usage={"output_tokens": 100}),
+            F.turn(None, "2026-09-20T00:00:01Z", usage={"output_tokens": 100}),
+        ])
+        rows = AC.costs(tmp.name, "2026-09-18")
+        self.assertEqual(round(sum(c for c, _, _ in rows)), 1000)
+
     def test_main_prints_shares(self):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
@@ -377,6 +387,16 @@ class RecordCosts(unittest.TestCase):
         self.assertEqual(turns["w1"].account, "account 1")
         self.assertEqual(sorted(turns), sorted(["c1", "c2", "c3", "c4", "c5", "c6", "w1", "w2", "w3",
                                                 "b1", "r1", "n1", "l1"]))
+
+    def test_two_turns_with_no_message_id_are_both_attributed(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = F.write(os.path.join(tmp.name, "s.jsonl"), [
+            F.turn(None, "2026-10-01T13:00:00Z", usage=OUT),
+            F.turn(None, "2026-10-01T13:05:00Z", usage=OUT),
+        ])
+        index = AC.PullIndex(AC.parse_pull_log(PULL_LOG))
+        self.assertEqual(len(AC.attribute([("account 1", path)], index, "2026-09-30")), 2)
 
     def test_tokens_and_list_price_per_turn(self):
         turns = self.turns()
