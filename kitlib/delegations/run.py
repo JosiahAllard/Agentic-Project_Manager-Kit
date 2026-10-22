@@ -1,7 +1,9 @@
 """Run one operation of the owner's delegation list (docs/delegations.md "Running").
 
 `run(op, pairs, trigger, cfg, ...)` -> Result(entry, argv, returncode, error), or RunRefused with
-nothing run and nothing written. In this order:
+nothing run and nothing written. `request(op, pairs, cfg, hub, title, ...)` asks the owner on the
+hub to approve one run: steps 2 and 3 and the hub approval's scope of step 4, then the request;
+the new approval's id. Run in this order:
 
   1. the trigger: a hub question id (`Q-nnnn`, the op lists hub-answer and is reversible), an
      owner ledger id (the op lists owner-session) or a hub approval `hub:A-nnn` (the op lists
@@ -683,6 +685,30 @@ def _drop(folder):
         os.rmdir(folder)
     except OSError:
         pass
+
+
+def request(op, pairs, cfg, hub, title, reason=None, environ=None, kit_root=KIT_ROOT,
+            registry=None, home=None):
+    """Ask the owner on `hub` to approve one run of `op` with `pairs`: the arguments, the
+    program and the approval's scope (approval_scope) are checked as `run` checks them, then the
+    request is added with the run line. The new approval's id, `A-nnn`; RunRefused with nothing
+    asked."""
+    environ = dict(os.environ if environ is None else environ)
+    values = fill_args(op, pairs)
+    line = run_line(op, values)
+    argv, _ = filled(op, values, kit_root)
+    program(argv[0], path_dirs(registry_env(registry)))
+    approval_scope(op, 'a request', values, argv[1:], cfg, kit_root, home, environ)
+    if hub is None:
+        raise RunRefused('no hub to ask on')
+    try:
+        got = approvals.request_op(hub, op.id, op.repo, line, title, reason=reason, what=op.what)
+    except (hubserve.ServeError, OSError, ValueError) as e:
+        raise RunRefused('the hub did not take the request: %s' % (str(e) or type(e).__name__))
+    rid = got.get('id') if isinstance(got, dict) else None
+    if not isinstance(rid, str) or not rid:
+        raise RunRefused('the hub answered without the new approval\'s id: %r' % (got,))
+    return rid
 
 
 def run(op, pairs, trigger, cfg, hub=None, now=None, spawn=procspawn.run, checks=None,

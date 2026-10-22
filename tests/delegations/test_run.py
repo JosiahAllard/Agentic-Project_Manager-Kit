@@ -953,5 +953,88 @@ class HubApproval(Fixture):
         self.assertEqual(self.cwds, [])
 
 
+class RequestHub(object):
+    """A stand-in hub client for request: `post` answers `reply` (or raises `error`)."""
+
+    def __init__(self, reply=None, error=None):
+        self.reply = {'ok': True, 'id': 'A-007'} if reply is None else reply
+        self.error, self.calls = error, []
+
+    def post(self, path, role, body=None):
+        self.calls.append((path, role, body))
+        if self.error:
+            raise self.error
+        return self.reply
+
+
+class Request(Fixture):
+    """request: the owner is asked on the hub only for a run the runner could take."""
+
+    op = HubApproval.op
+
+    def ask(self, hub='default', pairs=None, **kw):
+        op = kw.pop('op', None) or self.op(what='copy the build out')
+        return drun.request(op, list(pairs or (('dest', self.dest),)),
+                            kw.pop('cfg', self.cfg), self.hub_r if hub == 'default' else hub,
+                            'Copy the build', reason=kw.pop('reason', 'for the demo'),
+                            environ=self.environ, kit_root=self.kit, registry=self.reg,
+                            home=self.home, **kw)
+
+    def setUp(self):
+        HubApproval.setUp(self)
+        self.hub_r = RequestHub()
+
+    def refused_request(self, needle, **kw):
+        with self.assertRaises(drun.RunRefused) as cm:
+            self.ask(**kw)
+        self.assertIn(needle, str(cm.exception))
+        return str(cm.exception)
+
+    def test_a_request_posts_the_run_line_and_answers_the_new_id(self):
+        self.assertEqual(self.ask(), 'A-007')
+        self.assertEqual(self.hub_r.calls, [('/approvals', hubclient.AGENT, {
+            'kind': 'op', 'op': 'D-001', 'repo': 'kit', 'line': self.line,
+            'title': 'Copy the build', 'reason': 'for the demo', 'what': 'copy the build out'})])
+        self.assertFalse(os.path.exists(self.ledger), 'a request wrote the ledger')
+        self.assertEqual(self.spawn.calls, [])
+
+    def test_a_request_off_the_dev_drive_is_never_asked(self):
+        off = os.path.join(self.dir, 'elsewhere')
+        why = self.refused_request('would act where no approved run may', pairs=(('dest', off),))
+        self.assertIn('not on the Dev Drive', why)
+        self.assertEqual(self.hub_r.calls, [])
+
+    def test_a_request_for_an_op_without_hub_approval_is_never_asked(self):
+        self.refused_request('does not list hub-approval',
+                             op=self.op(trigger=['owner-session']))
+        self.assertEqual(self.hub_r.calls, [])
+
+    def test_a_request_with_a_bad_argument_is_never_asked(self):
+        self.refused_request("dest: 'a b' does not match", pairs=(('dest', 'a b'),))
+        self.assertEqual(self.hub_r.calls, [])
+
+    def test_a_request_with_no_dev_drive_is_never_asked(self):
+        cfg = dict(self.cfg)
+        del cfg['dev_drive']
+        self.refused_request('sets no dev_drive', cfg=cfg)
+        self.assertEqual(self.hub_r.calls, [])
+
+    def test_no_hub_is_refused(self):
+        self.refused_request('no hub to ask on', hub=None)
+
+    def test_a_hub_refusal_is_refused(self):
+        for error in (hubserve.ServeError('409 invalid line'), OSError('down'),
+                      ValueError('not json')):
+            with self.subTest(error=type(error).__name__):
+                self.refused_request('the hub did not take the request',
+                                     hub=RequestHub(error=error))
+
+    def test_a_reply_without_an_id_is_refused(self):
+        for reply in ({'ok': True}, {'id': ''}, ['A-001']):
+            with self.subTest(reply=reply):
+                self.refused_request("answered without the new approval's id",
+                                     hub=RequestHub(reply=reply))
+
+
 if __name__ == '__main__':
     unittest.main()
