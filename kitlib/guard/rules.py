@@ -5229,9 +5229,9 @@ def scratch_ref(name):
 
 
 # the main sessions that may delete a stray ref in their own repository (the coordinator and its
-# old mark), and the refs that are no stray ref, compared without case: NTFS reads refs/HEADS/main
-# as the loose file of refs/heads/main
-REF_CLEANUP_MARKS = ('coordinator', 'conductor')
+# old mark: AGENT_MARKS's first two), and the refs that are no stray ref, compared without case:
+# NTFS reads refs/HEADS/main as the loose file of refs/heads/main
+REF_CLEANUP_MARKS = AGENT_MARKS[:2]
 NOT_STRAY = ('refs/heads', 'refs/tags', 'refs/stash')
 
 
