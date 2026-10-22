@@ -75,6 +75,10 @@ _GIT = r'(?i)(?<![\w-])git(?:\.exe)?\b.*?\s'
 _ABANDON_ROUTE = ('; unlanded work leaves by worktree_remove.py <slug> --abandon "<why>" (or '
                   '<branch> --branch --abandon "<why>"), which keeps its commits under an '
                   'archive/ tag and which the coordinator runs on the owner\'s or the PM\'s ruling')
+# a ref outside refs/heads and refs/tags holds no branch: the coordinator deletes it from its own
+# session (docs/guard.md "Rules", git-shared-ref)
+_STRAY_REF_ROUTE = ('; a ref outside refs/heads and refs/tags the coordinator deletes itself, in '
+                    'its own repository (git update-ref -d <ref>)')
 _COORDINATOR_RES = (
     ('git worktree add/remove', re.compile(_GIT + r'worktree\s+remove\b'), _ABANDON_ROUTE),
     ('git worktree add/remove', re.compile(_GIT + r'worktree\s+(?:add|move|prune)\b'), ''),
@@ -84,7 +88,7 @@ _COORDINATOR_RES = (
      re.compile(_GIT + r'(?:branch|tag)\b.*?\s(?:-[A-Za-z]*[dD][A-Za-z]*|--delete)(?![\w-])'),
      _ABANDON_ROUTE),
     ('a ref delete', re.compile(_GIT + r'update-ref\b.*?\s(?:-d|--stdin)(?![\w-])'),
-     _ABANDON_ROUTE),
+     _ABANDON_ROUTE + _STRAY_REF_ROUTE),
     ('a remote ref delete or forced push',
      re.compile(_GIT + r'push\b.*?\s(?:--delete|-d|--force(?:-with-lease|-if-includes)?(?:=\S*)?|'
                        r'-[A-Za-z]*f[A-Za-z]*|--mirror|--prune|:\S+|\+\S+)(?![\w-])'), ''),
