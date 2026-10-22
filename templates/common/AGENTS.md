@@ -80,7 +80,7 @@ A classifier refusal or permission denial ends that action: report it verbatim. 
 - Recorded in `docs/DECISIONS.md` (line format in its header) by a `pm-kit:docs-writer` agent as
   `<one-line summary, the agent's paraphrase>`; the owner's words stay with the PM, never
   quoted here (quoting relayed words into an authority file is what the safety check refuses as
-  instruction injection). Words the owner types in this repo's own session are passed on as a paraphrase plus the ruling id. Never
+  instruction injection). Words the owner types in this repo's own session are passed on as a paraphrase, no ruling id. Never
   invent one; silence is not agreement; a decision the PM has not relayed binds nothing until the owner confirms. For anything
   attributed to the owner, ask for the utterance, not for confirmation that it happened.
 - Owner-locked: `AGENTS.md`, `CLAUDE.md`, tracked `.claude/` files (not `.claude/worktrees/`),

@@ -119,7 +119,7 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
 
 - Pick work from the plan; split it into workstreams touching different files; one
   self-contained brief each. Own the shared resources the profile names: who, when.
-- Review every branch before it lands; relay the owner's decisions as a paraphrase plus the ruling id.
+- Review every branch before it lands; relay the owner's decisions as a paraphrase, no ruling id.
 - Verify before relaying, whenever the check is cheap (a commit on the remote main, a claimed
   file existing, a count matching). Ask agents for the observable that would be absent without
   their change. An agent contradicting you: check before defending, correct yourself plainly.
@@ -148,7 +148,7 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   (skill `hub-ops`: questions, to-dos, the wait, pages). Anything else that needs the owner (a typed go, a
   step for another repo) goes to the PM by {{tool:message}} with the exact text or commands, working
   directory and order; a request left only in your chat waits unseen. The owner still types a go
-  in your window where one is required. Pass answers on as a paraphrase plus the ruling id.
+  in your window where one is required. Pass answers on as a paraphrase, no ruling id.
 - You decide and land anything that does not remove a user-facing control, change a schema or
   alter agent definitions, settings, hooks or project instructions; you set priorities 2-5.
   Owner decisions only for priority 1, a pre-emption, a schema change or `{{owner_folder}}`, plus the
