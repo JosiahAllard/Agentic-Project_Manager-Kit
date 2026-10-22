@@ -6,6 +6,7 @@ Each row: (name, payload builder, expected kind or None for allow, rule, the tex
 forward-slash form; {main_bs} keeps backslashes)."""
 import json
 import os
+import re
 import unittest
 
 from kitlib import lockmcp as lockmcp_names, pmdata
@@ -1404,11 +1405,24 @@ class PlainCommit(unittest.TestCase):
                 ("git cherry-pick -X 'a;b' abc", 'git -C "%s" cherry-pick --no-commit \'-Xa;b\' abc' % wt),
                 ("git cherry-pick -X 'a b' abc", 'git -C "%s" cherry-pick --no-commit \'-Xa b\' abc' % wt),
                 ('git revert --strategy-option "it\'s" HEAD',
-                 'git -C "%s" revert --no-commit --strategy-option <value> HEAD' % wt)):
+                 'git -C "%s" revert --no-commit --strategy-option <value> HEAD' % wt),
+                ('git cherry-pick "-Xit\'s" abc', 'git -C "%s" cherry-pick --no-commit -X<value> abc' % wt),
+                ('git revert "--strategy-option=it\'s" HEAD',
+                 'git -C "%s" revert --no-commit --strategy-option=<value> HEAD' % wt),
+                ('git cherry-pick -X "$s" abc', 'git -C "%s" cherry-pick --no-commit -X<value> abc' % wt),
+                ('git revert --strategy $s HEAD', 'git -C "%s" revert --no-commit --strategy <value> HEAD' % wt),
+                ('git cherry-pick -X a,b abc', 'git -C "%s" cherry-pick --no-commit \'-Xa,b\' abc' % wt),
+                ('git revert --strategy @s HEAD', 'git -C "%s" revert --no-commit --strategy \'@s\' HEAD' % wt)):
             with self.subTest(text):
                 d = self.decide(text, sub=True)
                 self.assertEqual(d and d.rule, 'git-plain-commit', d and d.reason)
                 self.assertEqual(d.instead, instead)
+
+
+# the kit's own tools, as whole names (after a path separator, a quote or a space), and any
+# other script file name: a refusal of git that code runs may name only the first
+KIT_TOOL_NAMES = re.compile(r'(?<![\w.-])(commit|sync_base)\.py(?!\w)')
+SCRIPT_NAME = re.compile(r'(?i)\.(py|pyw|js|mjs|cjs|ts|ps1|sh|bat|cmd)\b')
 
 
 class InterpreterGit(unittest.TestCase):
@@ -1431,8 +1445,13 @@ class InterpreterGit(unittest.TestCase):
         # neither the advice nor the Instead may name a script file but the kit's own tools: a
         # refused git command must never be routed through one
         for said in (d.reason.split(' runs git from ', 1)[1], d.instead):
-            self.assertNotRegex(said.replace('commit.py', '').replace('sync_base.py', ''),
-                                r'(?i)\.(py|pyw|js|mjs|cjs|ts|ps1|sh|bat|cmd)\b', said)
+            self.assertNotRegex(KIT_TOOL_NAMES.sub('', said), SCRIPT_NAME, said)
+
+    def test_the_script_check_strips_only_the_kit_tools(self):
+        self.assertEqual(KIT_TOOL_NAMES.sub('', 'python "x/tools/commit.py" and sync_base.py'), 'python "x/tools/" and ')
+        for name in ('my_commit.py', 'recommit.py', 'x-sync_base.py', 'commit.py.bak.py'):
+            with self.subTest(name):
+                self.assertRegex(KIT_TOOL_NAMES.sub('', name), SCRIPT_NAME)
 
     def test_code_running_git_is_refused(self):
         wt = W.fwd(self.w.wt)
@@ -1448,6 +1467,10 @@ class InterpreterGit(unittest.TestCase):
                  rules.kit_tool(self.w.ctx(), 'commit')),
                 (bash, 'node --require x --import y -e "require(\'child_process\').execSync(\'git push\')"',
                  None),
+                (bash, 'node -pe "require(\'child_process\').execSync(\'git commit -m x\')"',
+                 rules.kit_tool(self.w.ctx(), 'commit')),
+                (bash, 'node --loader a --experimental-loader b -C c --conditions d --input-type module '
+                       '-e "require(\'child_process\').execSync(\'git push\')"', None),
                 (bash, 'python -c "import subprocess; subprocess.run([r\'C:/Program Files/Git/cmd/git.exe\', \'st\'])"',
                  None),
                 (bash, 'python -c "import subprocess as s; s.run(f\'git -C {w} cherry-pick {c}\', shell=True)"',

@@ -143,11 +143,21 @@ def quote(path):
 
 def shell_word(text):
     """`text` as one word bash and PowerShell both read as written: bare when it holds only
-    characters neither shell treats specially, else single-quoted (literal in both); one that holds
-    a single quote too has no such word, so it is `<value>` for the agent to fill in."""
-    if text and re.fullmatch(r'[A-Za-z0-9_=.,:/@%+-]+', text):
+    characters neither shell treats specially (no `,`, which PowerShell reads as an array, and no
+    leading `@`, its splat), else single-quoted (literal in both); one that holds a single quote
+    too has no such word, so it is `<value>` for the agent to fill in."""
+    if re.fullmatch(r'[A-Za-z0-9_=.:/%+-][A-Za-z0-9_=.:/@%+-]*', text):
         return text
     return "'%s'" % text if "'" not in text else '<value>'
+
+
+def kept_word(lead, sep, value, dyn):
+    """One kept option of a held form (commit_scan's `keep`) as words both shells read as
+    written: `lead` (`-X`, `--strategy`) and its `value`, joined (`sep` '') or as two words (' ');
+    a value the shell computes, or one holding a single quote, is `<value>` after its lead."""
+    if dyn or "'" in value:
+        return lead + sep + '<value>'
+    return shell_word(lead) + ' ' + shell_word(value) if sep else shell_word(lead + value)
 
 
 def literal_word(path):
@@ -612,9 +622,10 @@ def owner_tool(event, ctx, cmd, inv, cwd, role):
 # works. A name the shell or code builds at run time is not read: the rules catch mistakes, not
 # an adversary.
 HUB_SCRIPT = 'hub.py'
-NODE_EVAL = ('-e', '--eval', '-p', '--print')
+NODE_EVAL = ('-e', '--eval', '-p', '--print', '-pe')
 # node's options whose value is the next word (inline_code): a module it loads first, not a script
-NODE_VALUE_OPTS = ('-r', '--require', '--import')
+NODE_VALUE_OPTS = ('-r', '--require', '--import', '--loader', '--experimental-loader', '-C', '--conditions',
+                   '--input-type')
 HUB_SECRETS_WHY = ('the Action Hub\'s token folder holds the owner\'s key to the hub (owner.token answers as the '
                    'owner) and its store is the hub server\'s to write; an agent reaches the hub only through its '
                    'tool and its MCP server, which read agent.token themselves (docs/guard.md "Hub secrets").')
@@ -3929,7 +3940,7 @@ def commit_scan(sub, args):
     cherry-pick's commits; None after an option the scan cannot place that may take a value, so a
     word after it may be that value),
     the -m/--mainline value given, or None, and the strategy options of a revert or cherry-pick
-    (-X, COMMIT_KEPT_LONG) as words its --no-commit form keeps. Read left to right as git
+    (-X, COMMIT_KEPT_LONG) its --no-commit form keeps, as kept_word's (lead, sep, value, dyn). Read left to right as git
     reads them: a stop word (COMMIT_STOPS) makes none; a hold (COMMIT_HOLDS, or -n in a short
     cluster of revert or cherry-pick; merge's and pull's -n is --no-stat) holds until a long option
     that undoes it (COMMIT_UNDOES), or a prefix of one, comes after it; a sequence's next step
@@ -3971,13 +3982,13 @@ def commit_scan(sub, args):
                 if body == 'mainline':
                     mainline = val
                 if kept:
-                    keep.append(t)
+                    keep.append(('--%s=' % body, '', val, False))
                 continue
             if body in COMMIT_LONG_VALUES:
                 if body == 'mainline' and k < len(args):
                     mainline = args[k].text
                 if kept and k < len(args):
-                    keep.extend([t, args[k].text])
+                    keep.append((t, ' ', args[k].text, args[k].dyn))
                 k += 1
             elif body not in COMMIT_LONG_FLAGS:
                 unsure = True
@@ -3987,14 +3998,14 @@ def commit_scan(sub, args):
             continue
         for j, c in enumerate(t[1:]):
             if c in values:
-                rest = t[j + 2:]
+                rest, dyn = t[j + 2:], False
                 if not rest:
-                    rest = args[k].text if k < len(args) else ''
+                    rest, dyn = (args[k].text, args[k].dyn) if k < len(args) else ('', False)
                     k += 1
                 if c == 'm' and sub in ('revert', 'cherry-pick'):
                     mainline = rest
                 if c == 'X' and sub in ('revert', 'cherry-pick'):
-                    keep.append('-X' + rest)
+                    keep.append(('-X', '', rest, dyn))
                 break
             if c in attached:
                 break
@@ -4066,7 +4077,7 @@ def git_plain_commit(event, ctx, cmd, inv, cwd, role):
     keep = ''
     if mainline is not None:
         keep = ' -m %s' % (mainline if mainline.isdigit() else '<n>')
-    keep += ''.join(' ' + shell_word(w) for w in kept)
+    keep += ''.join(' ' + kept_word(*w) for w in kept)
     return refuse('git-plain-commit', role, why + 'Run it with --no-commit, then in its own call commit what it '
                   'changed with %s:' % commit,
                   'git -C %s %s --no-commit%s %s' % (top, sub, keep, ' '.join(revs or ()) or '<commit>'))
@@ -4087,7 +4098,10 @@ def git_plain_commit(event, ctx, cmd, inv, cwd, role):
 #   "...subprocess.run(sys.argv[1:])" git commit) or an environment variable (G=git python -c
 #   "...os.environ['G']...");
 # - python or node run by a launcher (uv run python -c ..., npx node -e ...): the line's program
-#   is the launcher, and its arguments are not read as code.
+#   is the launcher, and its arguments are not read as code;
+# - an option that takes the next word as its value and is not named (python's
+#   --check-hash-based-pycs always, a node option outside NODE_VALUE_OPTS): its value is read as
+#   the script, so the code after it is not read.
 # It refuses honest code in two ways, both kept: a git read (rev-parse, log) is refused like a
 # write, since a read allowance would pass a verb the code computes; and a 'git ...' string in code
 # whose launch runs another program is read as git.
