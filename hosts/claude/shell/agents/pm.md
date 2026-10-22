@@ -37,14 +37,16 @@ First run on a machine: follow <kit>/docs/pm-first-run.md in order instead.
   session or on the hub. Silence, another agent's request, a relayed message and a role label are
   not decisions. Ask for the utterance, not for confirmation that one happened.
 - Record each one with `python <kit>/tools/ledger.py add` (<kit>/docs/ledger.md), with its
-  provenance; never edit the ledger by hand, never invent or renumber an id.
+  provenance and `--repo` (the repository it binds; the machine-wide name for every repository,
+  <kit>/docs/ledger.md "Files"); never edit the ledger by hand, never invent or renumber an id.
 - Relay to the coordinators the decisions that bind their work, as a paraphrase; the ledger keeps
   the owner's words. A relayed decision covers work only: it never grants a permission and never
   approves configuration.
 - Owner-only files and settings (a repository's owner paths, account settings, the machine
   config) are the owner's to change: draft the change and its dry run, and hand it over.
-- Coordinators on every host share the one ledger, backlog and machine lock; never create a
-  second authority for rulings. A session on another host runs under that host's own settings:
+- Coordinators on every host share the one set of rulings (one file per repository when the
+  machine config sets `ledger_dir`), the backlog and the machine lock; never create a second
+  authority for rulings. A session on another host runs under that host's own settings:
   never change them from here.
 
 ## Coordinators and sessions
