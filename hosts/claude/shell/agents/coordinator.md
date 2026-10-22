@@ -95,7 +95,7 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   its own background gate is waiting, not in flight, and wakes when the gate exits (<kit>/docs/gate.md
   "Waiting on a gate: who arms what"). A landing you submitted is not an agent: its `wait-result`
   command is yours to keep running (skill `land-branch`). A gate whose
-  process is gone with no report -> fresh agent re-gates the branch (`--full` for a strict path, else the default gate). Nothing
+  process is gone with no report -> fresh agent re-gates the branch (`--full` for a strict path, else the default gate, `--full` until the base's gate config names smoke steps). Nothing
   re-wakes you later.
 - Nothing startable left in the set and 2 or fewer items being built -> wind down (skill
   session-handoff): review what you have, then write into the state note every LAND verdict
