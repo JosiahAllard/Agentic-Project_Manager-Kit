@@ -10,8 +10,9 @@
 --trigger is a hub question the owner answered by choosing the run line `run ID NAME=VALUE ...`
 (the operation must list hub-answer and be reversible), or the owner's ledger entry whose Decides
 is that line (the operation must list owner-session). --approval is the hub approval the owner
-gave to a request (the operation must list hub-approval; docs/delegations.md "Hub approvals").
-Each orders one run.
+gave to a request (the operation must list hub-approval; docs/delegations.md "Hub approvals");
+`--trigger hub:...` is refused, so an approval is only ever given as --approval. Each orders one
+run.
 
 A thin entry point (ARCHITECTURE.md, Layers): it parses, calls kitlib.delegations.run, prints and
 exits. Exit codes: 0 the command ran and exited 0, or the request was added; 1 refused, nothing
@@ -138,6 +139,8 @@ def main(argv=None):
     approval = getattr(a, 'approval', None)
     if approval is not None and not drun.APPROVAL_RE.match(approval):
         return fail('refused: --approval takes hub:A-nnn, not %r' % approval)
+    if approval is None and a.trigger.startswith('hub:'):
+        return fail('refused: a hub approval is given with --approval, not --trigger %r' % a.trigger)
     trigger = approval if approval is not None else a.trigger
     try:
         cfg = user.user_config()

@@ -30,8 +30,8 @@ the new approval's id. Run in this order:
   6. the claim, under the runner lock: no live runner entry (Source `under <anchor>: D-nnn
      <trigger>`) has this anchor or this trigger, then one ledger entry, provenance delegated,
      is added (not committed). Each trigger and each owner entry orders one run. A hub approval
-     is first recorded as the owner's own entry (provenance selected, Source `hub:A-nnn`,
-     Decides the run line: the owner signed it on the hub), and the run entry is `under` it.
+     is the run entry's own anchor (Source `under hub:A-nnn: D-nnn hub:A-nnn`): the runner never
+     writes an owner-provenance entry.
   7. the child: the argv list with shell=False, stdin closed, in the kit folder (a hub
      approval's: in a new empty folder under the machine's temp folder, removed after if still
      empty). Its environment
@@ -72,10 +72,9 @@ Q_ID = re.compile(r'Q-[0-9]+')
 APPROVAL_RE = re.compile(r'hub:(A-(?:(?!000)[0-9]{3}|[1-9][0-9]{3,}))\Z')
 APPROVAL_TRIGGER = 'hub-approval'
 CWD_PREFIX = 'kit-delegated-'
-# The provenance of the entry that records a verified hub approval: the owner chose it on the hub.
-APPROVAL_PROV = 'selected'
-# The Source of an entry this runner wrote: under <anchor>: <operation> <trigger>.
-SOURCE_RE = re.compile(r'^under (%s): (%s) (\S+)$' % (fmt.ID, schema.ID))
+# The Source of an entry this runner wrote: under <anchor>: <operation> <trigger>. The anchor is
+# an owner ledger id, or for a hub approval the approval itself (kitlib.ledger.fmt.HUB_ANCHOR).
+SOURCE_RE = re.compile(r'^under (%s|%s): (%s) (\S+)$' % (fmt.ID, fmt.HUB_ANCHOR, schema.ID))
 LOCK_NAME = 'delegated-runs'                 # the runner lock's file name, in the ledger folder
 LOCK_PREFIX = 'kit-delegated'
 LOCK_WAIT = 30.0
@@ -427,18 +426,21 @@ def _age(at, now, what):
 
 def used(texts, anchor, trigger):
     """The id of a live runner entry with this anchor or this trigger, or None. A hub approval
-    (`trigger` hub:A-nnn): also of a live entry whose Source is that approval (its record)."""
+    (`trigger` hub:A-nnn): also of any live entry whose Source is `under` that approval."""
+    approval = trigger if APPROVAL_RE.match(trigger or '') else None
     for _, text in texts:
         for rid, block in fmt.split_entries(text)[1]:
             e = fmt.parse_block(block)[0]
             if not e or e.get('retired'):
                 continue
-            if (APPROVAL_RE.match(trigger or '')
-                    and (e.get('Source') or '').strip() == trigger):
-                return rid
+            source = (e.get('Source') or '').strip()
+            if approval:
+                u = fmt.UNDER_RE.search(source)
+                if u and u.group(1) == approval:
+                    return rid
             if e.get('prov') != PROV:
                 continue
-            m = SOURCE_RE.match((e.get('Source') or '').strip())
+            m = SOURCE_RE.match(source)
             if m and (m.group(1) == anchor or m.group(3) == trigger):
                 return rid
     return None
@@ -520,8 +522,9 @@ def approval_scope(op, approval, values, tokens, cfg, kit_root, home, environ):
 
 
 def approval_order(op, approval, line, hub, texts):
-    """(Order, version) of a hub approval `hub:A-nnn`: no ledger entry records it, and the hub
-    verifies it for `op`, its repo and the run line's SHA-256 at that version. Fails closed: no
+    """(Order, version) of a hub approval `hub:A-nnn`, the anchor of its own run entry: no ledger
+    entry names it, and the hub verifies it for `op`, its repo and the run line's SHA-256 at that
+    version. Fails closed: no
     hub, or one that cannot answer, refuses."""
     prior = used(texts, None, approval)
     if prior:
@@ -535,7 +538,7 @@ def approval_order(op, approval, line, hub, texts):
         if why.startswith(approvals.WHY_SERVER.split('%')[0]):
             raise RunRefused('the hub cannot be reached: %s; nothing was run' % why)
         raise RunRefused('the hub refused %s: %s' % (approval, why))
-    return Order(APPROVAL, approval, None), version
+    return Order(APPROVAL, approval, approval), version
 
 
 def consume_approval(hub, order, line, version):
@@ -632,7 +635,9 @@ def _claim(op, order, line, found, cfg, now, lock_wait, pause):
     if order.kind == HUB:
         answer = "the owner chose this run on %s, logged as %s" % (order.trigger, order.anchor)
     elif order.kind == APPROVAL:
-        answer = None                   # it names the approval's record, written below
+        answer = ("the owner approved this run on the hub as %s: the hub verified the owner's "
+                  "signed approval for %s on %s and this run line, and recorded its use"
+                  % (order.trigger, op.id, op.repo))
     else:
         answer = "the owner's ruling %s orders this run" % order.anchor
     try:
@@ -651,19 +656,8 @@ def _claim(op, order, line, found, cfg, now, lock_wait, pause):
                     raise RunRefused('cannot read the other ledger files: %s' % '; '.join(whys))
             when, repos = now.strftime(LEDGER_WHEN), cfg.get('ledger_repos')
             q = 'Run delegated operation %s (%s)?' % (op.id, op.what)
-            anchor = order.anchor
-            if order.kind == APPROVAL:
-                anchor = lwrite.add(
-                    path, col, APPROVAL_PROV, q,
-                    'approved on the hub as %s: the hub verified the owner\'s signed approval '
-                    'for %s on %s and this run line, and recorded its use' % (
-                        order.trigger, op.id, op.repo),
-                    line, order.trigger, when=when, repos=repos, split=split,
-                    others=others).id
-                answer = "the owner approved this run on the hub as %s, logged as %s" % (
-                    order.trigger, anchor)
             added = lwrite.add(path, col, PROV, q, answer, line,
-                               'under %s: %s %s' % (anchor, op.id, order.trigger),
+                               'under %s: %s %s' % (order.anchor, op.id, order.trigger),
                                when=when, repos=repos, split=split, others=others)
     except writelock.WriteLockError as e:
         raise RunRefused('cannot take the runner lock: %s' % e)

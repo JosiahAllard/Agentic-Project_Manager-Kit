@@ -147,6 +147,17 @@ class Cli(unittest.TestCase):
                 self.assertIn('--approval takes hub:A-nnn, not %r' % bad, err)
                 self.assertEqual(calls, [])
 
+    def test_an_approval_given_as_a_trigger_is_refused(self):
+        self.write_list()
+        for bad in ('hub:A-001', 'hub:A-01', 'hub:'):
+            with self.subTest(bad=bad):
+                code, out, err, calls = self.main('run', 'D-001', '--arg', 'name=alpha',
+                                                  '--trigger', bad)
+                self.assertEqual((code, out), (1, ''))
+                self.assertIn('a hub approval is given with --approval, not --trigger %r' % bad,
+                              err)
+                self.assertEqual(calls, [])
+
     def test_a_request_prints_the_new_approval_and_how_to_run_it(self):
         self.write_list()
         code, out, _, calls = self.main('request', 'D-001', '--arg', 'name=alpha', '--title',

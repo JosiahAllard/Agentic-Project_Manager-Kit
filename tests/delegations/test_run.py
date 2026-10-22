@@ -791,22 +791,22 @@ class HubApproval(Fixture):
         self.assertEqual(drun.fmt.validate(text, repo='kit'), [])
         return [drun.fmt.parse_block(b)[0] for _, b in drun.fmt.split_entries(text)[1]]
 
-    def test_the_approval_is_recorded_as_the_owners_entry_and_the_run_is_under_it(self):
+    def test_the_run_entry_is_delegated_under_the_approval_and_no_owner_entry_is_written(self):
         res = self.approve()
-        record, ran = self.entries()
-        self.assertEqual((record['id'], record['prov'], record['Source']),
-                         ('H-kit-0001', 'selected', 'hub:A-001'))
-        self.assertEqual(record['Decides'], self.line)
-        self.assertIn('approved on the hub as hub:A-001', record['A'])
+        entries = self.entries()
+        self.assertEqual([e['prov'] for e in entries], ['delegated'], 'one entry, delegated')
+        self.assertEqual([e for e in entries if e['prov'] in drun.fmt.OWNER_PROVS], [])
+        ran = entries[0]
         self.assertEqual((ran['id'], ran['prov'], ran['Decides']), (res.entry, 'delegated', self.line))
-        self.assertEqual(ran['Source'], 'under H-kit-0001: D-001 hub:A-001')
-        self.assertEqual(ran['A'], 'the owner approved this run on the hub as hub:A-001, logged as '
-                                   'H-kit-0001')
+        self.assertEqual(ran['Source'], 'under hub:A-001: D-001 hub:A-001')
+        self.assertEqual(ran['A'], "the owner approved this run on the hub as hub:A-001: the hub "
+                                   "verified the owner's signed approval for D-001 on kit and this "
+                                   "run line, and recorded its use")
         texts = drun.ledger_texts(drun.lfiles.of_config(self.cfg))
         self.assertEqual(drun.used(texts, None, 'hub:A-001'), 'H-kit-0001')
         self.assertIsNone(drun.used(texts, None, 'hub:A-002'))
 
-    def test_with_ledger_dir_both_entries_go_to_the_ops_repo_file_never_the_frozen_one(self):
+    def test_with_ledger_dir_the_entry_goes_to_the_ops_repo_file_never_the_frozen_one(self):
         frozen = os.path.join(self.dir, 'LEDGER.md')
         with open(frozen, 'w', encoding='utf-8') as fh:
             fh.write('frozen\n')
@@ -814,15 +814,22 @@ class HubApproval(Fixture):
         self.approve(op=self.op(repo='*', preconditions=[{'kind': 'file-exists', 'path': self.exe}]))
         with open(os.path.join(self.folder, 'pm.md'), encoding='utf-8') as fh:
             text = fh.read()
-        self.assertIn('## H-pm-0001 | 2026-10-20 12:00Z | pm | selected', text)
-        self.assertIn('## H-pm-0002 | 2026-10-20 12:00Z | pm | delegated', text)
-        self.assertIn('Source: under H-pm-0001: D-001 hub:A-001', text)
+        self.assertEqual(drun.fmt.validate(text, repo='pm'), [])
+        self.assertIn('## H-pm-0001 | 2026-10-20 12:00Z | pm | delegated', text)
+        self.assertIn('Source: under hub:A-001: D-001 hub:A-001', text)
+        self.assertNotIn('H-pm-0002', text)
+        for prov in drun.fmt.OWNER_PROVS:
+            self.assertNotIn('| %s\n' % prov, text)
         self.assertFalse(os.path.exists(self.ledger), 'the kit file was written')
         with open(frozen, encoding='utf-8') as fh:
             self.assertEqual(fh.read(), 'frozen\n')
 
-    def test_a_source_naming_the_approval_itself_is_not_a_runner_entry(self):
-        self.assertIsNone(drun.SOURCE_RE.match('under hub:A-001: D-001 hub:A-001'))
+    def test_a_source_under_the_approval_is_a_runner_entry_and_a_malformed_one_is_not(self):
+        m = drun.SOURCE_RE.match('under hub:A-001: D-001 hub:A-001')
+        self.assertEqual(m.groups(), ('hub:A-001', 'D-001', 'hub:A-001'))
+        for bad in ('under hub:A-01: D-001 hub:A-01', 'under A-001: D-001 hub:A-001',
+                    'under hub:A-000: D-001 hub:A-000', 'under hub:A-0001: D-001 hub:A-0001'):
+            self.assertIsNone(drun.SOURCE_RE.match(bad), bad)
 
     def test_a_used_approval_is_refused_before_the_hub_is_asked(self):
         self.approve()
@@ -834,45 +841,46 @@ class HubApproval(Fixture):
         self.assertEqual(self.events, [])
         self.assertEqual(self.spawn.calls, [])
 
-    def test_a_record_without_its_run_entry_still_refuses_the_approval(self):
+    def add_under_approval(self):
         found = drun.lfiles.of_config(self.cfg)
         col, path, split = drun.target(found, 'kit')
-        drun.lwrite.add(path, col, 'selected', 'q', 'a', self.line, 'hub:A-001',
+        drun.lwrite.add(path, col, 'delegated', 'q', 'a', self.line, 'under hub:A-001 by hand',
                         when='2026-10-20 11:00Z', repos=self.cfg.get('ledger_repos'), split=split)
+        return found, path, split
+
+    def test_any_live_entry_under_the_approval_refuses_it(self):
+        self.add_under_approval()
         with self.assertRaises(drun.RunRefused) as cm:
             self.approve()
         self.assertIn('hub:A-001 was used already by H-kit-0001', str(cm.exception))
         self.assertEqual(self.events, [])
         self.assertEqual(self.spawn.calls, [])
 
-    def test_a_retired_record_does_not_count(self):
-        found = drun.lfiles.of_config(self.cfg)
-        col, path, split = drun.target(found, 'kit')
-        drun.lwrite.add(path, col, 'selected', 'q', 'a', self.line, 'hub:A-001',
-                        when='2026-10-20 11:00Z', repos=self.cfg.get('ledger_repos'), split=split)
+    def test_a_retired_entry_under_the_approval_does_not_count(self):
+        found, path, split = self.add_under_approval()
         drun.lwrite.retire(path, 'H-kit-0001', 'spent', 'done', repos=self.cfg['ledger_repos'],
                            split=split)
         texts = drun.ledger_texts(found)
         self.assertIn('Retired: spent', self.text())
         self.assertIsNone(drun.used(texts, None, 'hub:A-001'))
 
-    def test_the_record_as_an_owner_session_order_is_refused_while_its_run_entry_lives(self):
-        # The record is an owner entry whose Decides is the run line, so for an op that also lists
-        # owner-session it passes the order check; the live run entry, anchored on it, refuses it.
+    def test_the_run_entry_is_no_owner_order(self):
+        # The approval leaves no owner entry: the run entry it wrote is delegated, so it never
+        # passes as an owner-session order for an op that also lists owner-session.
         op = self.op(trigger=['owner-session', 'hub-approval'],
                      preconditions=[{'kind': 'file-exists', 'path': self.exe}])
         self.approve(op=op)
-        record, ran = self.entries()
+        ran, = self.entries()
         self.events.clear()
         self.spawn.calls.clear()
         with self.assertRaises(drun.RunRefused) as cm:
-            self.run_op(op=op, pairs=(('dest', self.dest),), trigger=record['id'],
+            self.run_op(op=op, pairs=(('dest', self.dest),), trigger=ran['id'],
                         kit_root=self.kit, home=self.home, make_cwd=self.make_cwd,
                         checks={'file-exists': self.check_pre})
-        self.assertIn('already ran on %s (%s): each order runs once' % (record['id'], ran['id']),
+        self.assertIn("%s is not the owner's: its provenance is delegated" % ran['id'],
                       str(cm.exception))
         self.assertEqual(self.spawn.calls, [])
-        self.assertEqual(len(self.entries()), 2)
+        self.assertEqual(len(self.entries()), 1)
 
     def test_the_child_runs_in_a_new_empty_folder_removed_when_left_empty(self):
         self.approve()
