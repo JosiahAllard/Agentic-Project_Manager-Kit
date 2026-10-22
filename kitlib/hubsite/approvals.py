@@ -133,6 +133,8 @@ MAX_LINE = 4000                     # an op's run line
 KIND_OP = 'op'
 OP_ID = re.compile(r'D-[0-9]{3,}\Z')                     # kitlib.delegations.schema.ID
 OP_REPO = re.compile(r'(?:[a-z0-9][a-z0-9-]*|\*)\Z')     # kitlib.delegations.schema.REPO
+# One NAME=VALUE of a run line: kitlib.delegations.schema.ARG_NAME and ARG_CHARS
+RUN_ARG = re.compile(r'(?:[a-z][a-z0-9_]{0,30})=(?:[A-Za-z0-9._:/\\-]{1,200})\Z')
 
 # what check() and Verifier answer when the change is not the approved one
 WHY_NO_KEY = 'no approval key'
@@ -346,7 +348,8 @@ def _is_op(doc):
 
 def new_op_doc(op, repo, line, title, now, reason=None, what=None):
     """The pending document of a request to run the delegated operation `op` (D-nnn) of `repo`
-    (its repo name or `*`) once, as the run line `line` (the arguments filled in). No id: the
+    (its repo name or `*`) once, as the run line `line`: `run D-nnn` and `name=value` for each
+    argument, sorted by name, as kitlib.delegations.run.run_line writes it. No id: the
     store gives it. `now` is an aware datetime. args_sha256 is computed here. ApprovalError names
     the field that is wrong."""
     if not isinstance(op, str) or not OP_ID.match(op):
@@ -354,9 +357,12 @@ def new_op_doc(op, repo, line, title, now, reason=None, what=None):
     if not isinstance(repo, str) or not OP_REPO.match(repo):
         raise ApprovalError("repo is the delegation's repo name or *", 'repo')
     line = _text(line, 'line', MAX_LINE, True)
-    if any(ord(c) < 32 or ord(c) == 127 for c in line) or line != line.strip():
-        raise ApprovalError('line is one line with no control character and no space at '
-                            'either end', 'line')
+    words = line.split(' ')
+    names = [w.split('=', 1)[0] for w in words[2:]]
+    if (words[:2] != ['run', op] or not all(RUN_ARG.match(w) for w in words[2:])
+            or names != sorted(set(names))):
+        raise ApprovalError('line is the run line `run %s NAME=VALUE ...`, one space apart, '
+                            'each name once and sorted' % op, 'line')
     title = _text(title, 'title', MAX_TITLE, True)
     reason = _text(reason, 'reason', MAX_REASON, False)
     what = _text(what, 'what', MAX_REASON, False)

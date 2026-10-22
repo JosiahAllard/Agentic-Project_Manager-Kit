@@ -1579,8 +1579,8 @@ class DomTest(unittest.TestCase):
     # A pending op approval as the add route stores it (kitlib.hubsite.approvals.new_op_doc): no head, files or diff.
     OP_APPROVALS = {
         "A-5": {"status": "pending", "kind": "op", "op": "D-004", "repo": "*", "title": "Copy the inputs",
-                "line": "robocopy.exe <dev-drive>\\in <dev-drive>\\out <img src=x>", "args_sha256": "d" * 64,
-                "what": "copies a folder", "reason": "asked for", "version": 1, "created_at": NOW}}
+                "line": "run D-004 dest=dd/out src=dd/in", "args_sha256": "d" * 64,
+                "what": "copies a folder <img src=x>","reason": "asked for", "version": 1, "created_at": NOW}}
 
     def test_a_pending_op_approval_shows_its_line_and_approve_posts_decide(self):
         got = dom("""
@@ -1592,11 +1592,11 @@ class DomTest(unittest.TestCase):
             return { before, sent: calls.filter(r => r.method === "POST").map(r => [r.path, r.body]), tags: [...new Set(created)] };
         """, snapshot(strong=True, collections={"approvals": self.OP_APPROVALS}))
         b = got["before"]
-        for part in ("Run approval", "A-5", "any repository", "Copy the inputs", "asked for", "runs D-004: copies a folder"):
+        for part in ("Run approval", "A-5", "any repository", "Copy the inputs", "asked for", "runs D-004: copies a folder <img src=x>"):
             self.assertIn(part, b["card"], part)
         self.assertNotIn("on ?", b["card"])
         self.assertNotIn("no diff stored", b["card"])
-        self.assertEqual(b["line"], "robocopy.exe <dev-drive>\\in <dev-drive>\\out <img src=x>")
+        self.assertEqual(b["line"], "run D-004 dest=dd/out src=dd/in")
         self.assertEqual(got["sent"], [["/approvals/A-5/decide", {"decision": "approve", "if_version": 1}]])
         self.assertNotIn("img", got["tags"])
 

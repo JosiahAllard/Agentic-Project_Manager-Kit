@@ -2450,7 +2450,7 @@ class OpApprovalRouteTest(ApiCase):
     "Hub approvals"). No checkout is read for it. The rules are tests/hubsite/test_approvals_op.py."""
 
     KEY = 'k' * 64
-    LINE = 'robocopy.exe <dev-drive>\\in <dev-drive>\\out /E'
+    LINE = 'run D-001 dest=dd/out src=dd/in'
 
     def setUp(self):
         super().setUp()
@@ -2493,6 +2493,7 @@ class OpApprovalRouteTest(ApiCase):
         for kw, field in (({'kind': 'other'}, 'kind'), ({'kind': 'OP'}, 'kind'),
                           ({'kind': 7}, 'kind'), ({'op': 'D-1'}, 'op'), ({'repo': 'Pm'}, 'repo'),
                           ({'line': ''}, 'line'), ({'line': 'a\nb'}, 'line'),
+                          ({'line': 'robocopy.exe a b'}, 'line'), ({'line': 'run D-002'}, 'line'),
                           ({'head': 'a' * 40}, 'head'), ({'files': []}, 'files'),
                           ({'args_sha256': 'a' * 64}, 'args_sha256')):
             body = {'kind': 'op', 'op': 'D-001', 'repo': 'pm', 'line': self.LINE, 'title': 't'}

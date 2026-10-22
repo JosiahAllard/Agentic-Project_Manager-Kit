@@ -19,7 +19,7 @@ KEY = 'k' * 64
 OTHER_KEY = 'q' * 64
 OP = 'D-001'
 REPO = 'pm'
-LINE = 'robocopy.exe <dev-drive>\\in <dev-drive>\\out /E'
+LINE = 'run D-001 dest=dd/out mode=mirror src=dd/in'
 T0 = datetime.datetime(2026, 1, 2, 3, 4, 5, tzinfo=datetime.timezone.utc)
 SECOND = datetime.timedelta(seconds=1)
 PENDING_LIFE = datetime.timedelta(seconds=ap.PENDING_OP_TTL_S)
@@ -70,6 +70,18 @@ class OpDocTest(unittest.TestCase):
                  ((OP, REPO, 'x\ny', 't'), 'line'), ((OP, REPO, 'x\ty', 't'), 'line'),
                  ((OP, REPO, 'x' * (ap.MAX_LINE + 1), 't'), 'line'), ((OP, REPO, 7, 't'), 'line'),
                  ((OP, REPO, LINE, ''), 'title'), ((OP, REPO, LINE, None), 'title')]
+        for line in ('robocopy.exe dd/in dd/out', 'run', 'run D-002 a=1', 'run  D-001',
+                     'RUN D-001', 'run D-001 b=1 a=2', 'run D-001 a=1 a=2', 'run D-001  a=1',
+                     'run D-001 a=1 ', 'run D-001 a=x y', 'run D-001 A=1', 'run D-001 a=',
+                     'run D-001 =1', 'run D-001 a', 'run D-001 a=<dev-drive>', 'run D-001 a=b;c',
+                     'run D-001 a=' + 'x' * 201, 'run D-001 ' + 'a' * 32 + '=1'):
+            cases.append(((OP, REPO, line, 't'), 'line'))
+        for line in ('robocopy.exe dd/in dd/out', 'run', 'run D-002 a=1', 'run  D-001',
+                     'RUN D-001', 'run D-001 b=1 a=2', 'run D-001 a=1 a=2', 'run D-001  a=1',
+                     'run D-001 a=1 ', 'run D-001 a=x y', 'run D-001 A=1', 'run D-001 a=',
+                     'run D-001 =1', 'run D-001 a', 'run D-001 a=<dev-drive>', 'run D-001 a=b;c',
+                     'run D-001 a=' + 'x' * 201, 'run D-001 ' + 'a' * 32 + '=1'):
+            cases.append(((OP, REPO, line, 't'), 'line'))
         for args, field in cases:
             with self.assertRaises(ap.ApprovalError, msg=repr(args)) as cm:
                 ap.new_op_doc(*(args + (T0,)))
@@ -78,6 +90,13 @@ class OpDocTest(unittest.TestCase):
     def test_the_op_and_repo_forms_are_the_delegation_lists(self):
         self.assertEqual(ap.OP_ID.pattern, dschema.ID + r'\Z')
         self.assertEqual(ap.OP_REPO.pattern, '(?:%s)\\Z' % dschema.REPO)
+        self.assertEqual(ap.RUN_ARG.pattern, '(?:%s)=(?:%s)\\Z' % (dschema.ARG_NAME,
+                                                                  dschema.ARG_CHARS.pattern))
+
+    def test_the_line_is_the_run_line_the_runner_writes(self):
+        self.assertEqual(ap.new_op_doc(OP, REPO, 'run D-001', 't', T0)['line'], 'run D-001')
+        line = 'run D-001 a=C:\\x/y.z-1 b_2=y'
+        self.assertEqual(ap.new_op_doc(OP, REPO, line, 't', T0)['args_sha256'], sha(line))
 
 
 class SignTest(unittest.TestCase):
