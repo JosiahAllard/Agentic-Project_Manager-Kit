@@ -3,8 +3,8 @@ reach (docs/test-tools.md "kit_tests").
 
   kit_tests.py [-C DIR] --select [--smoke] [--base B] [--changed PATH ...] [--plan] [--jobs N]
   kit_tests.py [-C DIR] --full [--base B] [--plan] [--jobs N]
-  kit_tests.py [-C DIR] --scrub [--plan] [--jobs N]: only tests/scrub, one pass (the docs-only
-  gate step)
+  kit_tests.py [-C DIR] --scrub [--plan] [--jobs N]: only tests/scrub, one pass (a cmd for a
+  repo's docs_only gate step; the kit's gate sets no docs_only, so no kit gate step runs it)
   --smoke adds tests/selection.json's "smoke" modules to the selection unless every changed
   path is prose (kitlib.tooldeps.selftree.smoke; the gate's smoke_steps, docs/gate.md); a
   smoke entry naming no test module refuses
@@ -106,7 +106,8 @@ def build_parser():
     g.add_argument('--list', dest='list_tests', action='store_true',
                    help='print every test id, sorted, and the decorator skips; run nothing')
     g.add_argument('--scrub', action='store_true',
-                   help='only the scrub test package (the docs-only gate step)')
+                   help='only the scrub test package, one pass (no kit gate step runs it: '
+                        'the kit sets no docs_only)')
     p.add_argument('--smoke', action='store_true',
                    help='--select: add the table\'s "smoke" modules unless every changed path '
                    'is prose')

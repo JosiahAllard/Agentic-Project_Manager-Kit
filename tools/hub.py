@@ -167,6 +167,14 @@ the server alone decides what a role may do.
                                                      kitlib.hubsite.approvals status_at)
   hub.py approvals show A-1                         its status, repo, head, title and reason,
                                                      then `<path> <base_blob> -> <blob>` per file
+  hub.py approvals add --title T --file PATH CONTENT_FILE [--file ...] [--checkout DIR] [--repo R]
+        [--head SHA] [--reason TEXT]                 `REQUESTED A-001`: asks the owner to approve
+                                                     writing each PATH (relative to the repo top)
+                                                     as CONTENT_FILE's exact UTF-8 bytes; its base
+                                                     is PATH's blob at --head (default: HEAD of
+                                                     the checkout DIR, default .), none for a new
+                                                     file; --repo defaults to DIR's origin. It only
+                                                     asks: no delete, no --from (kitlib.hubapprove)
   hub.py pending [--for KEY]                        `<kind> <id> [repo] to=R from=K title` for
                                                      each item of owner input not yet handled: R
                                                      is the session key to handle it now (pm
@@ -212,7 +220,7 @@ import webbrowser
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from kitlib import hubvalidate                                     # noqa: E402
+from kitlib import hubapprove, hubvalidate                         # noqa: E402
 from kitlib.config import copies, user                             # noqa: E402
 from kitlib.config.types import ConfigError                        # noqa: E402
 from kitlib.hubsite import access, api, auth, client, httpd, serve, settings, tunnel   # noqa: E402
@@ -478,9 +486,20 @@ def _client_verbs(sub):
     x.add_argument('id')
     x.add_argument('--out', metavar='F', help='write the HTML to this file instead')
 
-    x = _listed(sub, 'approvals', "list the requests for the owner's approval; show",
-                S['approvals'])
+    x = _listed(sub, 'approvals', "list the requests for the owner's approval; show; add: ask "
+                "for one", S['approvals'])
     _leaf(x, 'show', 'one request and its files').add_argument('id')
+    y = _leaf(x, 'add', "ask the owner to approve writing these files")
+    y.add_argument('--checkout', default='.', metavar='DIR',
+                   help='the git checkout the change is for (default: .)')
+    y.add_argument('--title', required=True)
+    y.add_argument('--file', dest='files', action='append', nargs=2, required=True,
+                   metavar=('PATH', 'CONTENT_FILE'),
+                   help='a path relative to the repo top and the UTF-8 file holding its new '
+                        'text (repeatable)')
+    _repo(y)
+    y.add_argument('--head', metavar='SHA', help="the base commit (default: the checkout's HEAD)")
+    y.add_argument('--reason')
 
     x = _asks(sub.add_parser('pending', help='the owner input the PM has not handled'))
     x.add_argument('--for', dest='for_key', metavar='KEY',
@@ -1135,7 +1154,16 @@ def _pages(a, stop):
 
 def _approvals(a, stop):
     """The requests from GET /snapshot (the api has no route that lists approvals), each with
-    its status read now: approvals.status_at applies the expiry, `malformed` for a bad document."""
+    its status read now: approvals.status_at applies the expiry, `malformed` for a bad document.
+    add posts one request (kitlib.hubapprove): it never decides or consumes one."""
+    if a.sub == 'add':
+        try:
+            body = hubapprove.build(a.checkout, a.title, [tuple(f) for f in a.files],
+                                    repo=getattr(a, 'repo', None), head=a.head, reason=a.reason)
+        except hubapprove.RequestError as e:
+            raise serve.ServeError(e.message)
+        got = hubapprove.request(_hub(a), body)
+        return _wrote(a, got, 'REQUESTED %s' % got.get('id'))
     docs = (_hub(a).get('/snapshot').get('collections') or {}).get('approvals') or {}
     now = datetime.datetime.now(datetime.timezone.utc)
     items = [dict(docs[k], id=k, status=approvals.status_at(docs[k], now) or 'malformed')
