@@ -410,7 +410,6 @@ class RealRepoShapeTest(TreeCase):
         self.assertEqual(cfg.section_file('tool_tests'), 'tools/tool_tests.json')
         self.assertEqual(cfg.section_file('pieces'), 'tools/pieces.json')
         self.assertEqual(cfg.owner()['email'], OWNER)
-        self.assertEqual(cfg.section('landing')['lock_file'], 'git:alpha-landing.lock')
         self.assertEqual(config.load_hook_module(cfg)[0].HOOKED, 'alpha')
         checks, options = config.load_gate_checks(cfg)
         self.assertEqual((sorted(checks), options), (['pin_check'], {'python_tests_audit': True}))

@@ -420,12 +420,11 @@ class Follow(QueueCase):
         self.assertEqual(self.entries(), [])
         self.assertEqual(self.records(), [])
 
-    def test_a_base_whose_config_names_another_main_remote_or_lock_is_refused(self):
+    def test_a_base_whose_config_names_another_main_or_remote_is_refused(self):
         _, tip = self.branch('feature', {'a.py': 'a\n'})
         changes = {
             'main': lambda c: c.setdefault('repo', {}).update(main_branch='trunk'),
             'remote': lambda c: c.setdefault('repo', {}).update(remote='upstream'),
-            'lock': lambda c: c.setdefault('landing', {}).update(lock_file='git:other.lock'),
         }
         for n, (what, change) in enumerate(sorted(changes.items())):
             with self.subTest(what=what):
@@ -435,8 +434,8 @@ class Follow(QueueCase):
                 out = self.lander(BRANCH, self.main, tip).run()
                 self.assertEqual(out.code, G.REFUSED, out.lines)
                 self.assertIn('main moved on from %s to %s, and the config there names another '
-                              'main branch, remote or landing lock than this landing holds: land '
-                              'again (the next landing reads the config at %s)' % (
+                              'main branch or remote than this landing holds: land again (the '
+                              'next landing reads the config at %s)' % (
                                   self.main[:10], moved[:10], moved[:10]), out.lines[0])
                 self.assertIn('nothing was merged', out.lines[0])
                 self.assertEqual(self.main_now(), moved)            # fast-forwarded, no more

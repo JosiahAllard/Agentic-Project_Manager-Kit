@@ -231,7 +231,6 @@ SECTIONS = {
         'role_policy': Field(Bool(), False, 'hold roles to their role policy mode (docs/guard.md "Role policy"); off: no role is held, whatever its mode; read from the main checkout only'),
     },
     'landing': {
-        'lock_file': Field(Str(), None, 'legacy landing lock: git:<name>, a file in the git common dir; any other value refuses'),
         'log_dir': Field(RelPath(), None, 'where gate logs live'),
         'wait_s': Field(Int(0, 86400), 21600, 'seconds tools/land.py waits for its turn (its machine-lock booking, then the landing lock) unless --wait says otherwise'),
         'batch_max': Field(Int(1, 20), 3, 'most branches one tools/land.py landing merges and gates together'),
@@ -335,7 +334,7 @@ MAPS = {'roles': (ROLE, 'role', 'agent type (or main, subagent) -> permissions, 
 
 # Keys no tool reads any more, per section. A config that still carries one loads: the key is
 # dropped unchecked (not an unknown-key refusal), so an install written before the removal works.
-RETIRED = {'backlog': ('retired_docs', 'rename_script', 'ledger_repo'), 'landing': ('lanes',)}
+RETIRED = {'backlog': ('retired_docs', 'rename_script', 'ledger_repo'), 'landing': ('lanes', 'lock_file')}
 # Whole sections no tool reads any more. A config that still carries one loads: the section is
 # dropped unchecked, whatever it holds. Any other unknown section still refuses.
 RETIRED_SECTIONS = ('ruling_cites',)
