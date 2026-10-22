@@ -1,4 +1,5 @@
-"""kitlib.hubsite.approvals: the owner's approval of an edit to an owner-only path.
+"""kitlib.hubsite.approvals: the owner's approval of an edit to an owner-only path, or of one
+run of a delegated operation (the op kind, below).
 
 An agent asks the owner to approve an exact change: the files it will commit, each with the blob
 it starts from and the content it will write. The owner decides it on the hub page, only as the
@@ -40,6 +41,22 @@ their change is the approved one (Verifier) and fail closed on any doubt.
   request(client, repo, title, head, files, reason=None) / consume(client, doc_id, commit,
   if_version)                     the agent's add and consume calls
 
+The op kind: one run of a delegated operation (docs/delegations.md "Hub approvals").
+  PENDING_OP_TTL_S                how long an op request waits for a decision (24 hours)
+  line_sha256(line)               the hex SHA-256 of a run line's UTF-8 bytes
+  new_op_doc(op, repo, line, title, now, reason=None, what=None)
+                                  the pending document of an op request; ApprovalError
+  check_op(key, doc_id, doc, op, repo, args_sha256, now)
+                                  (True, '') when `doc` approves this run of `op` and was not
+                                  consumed, else (False, why): the server's op verify, pure
+  consume_op_fields(key, doc_id, doc, args_sha256, now)
+                                  the fields an op consume writes; ApprovalError
+  request_op(client, op, repo, line, title, reason=None, what=None) / verify_op(client, doc_id,
+  op, repo, args_sha256) -> (ok, why, version) / consume_op(client, doc_id, args_sha256,
+  if_version)                     the agent's calls; verify_op fails closed
+check() and consume_fields() refuse an op document (WHY_KIND_OP), and check_op() and
+consume_op_fields() a file one (WHY_KIND_FILES).
+
 The document (collection `approvals`, ids A-<n>):
   status      pending, approved, denied, consumed or expired (STATUSES)
   repo        repo_id of the repository's remote (the owner's choice: the remote URL)
@@ -52,8 +69,20 @@ The document (collection `approvals`, ids A-<n>):
   decision, decided_at, sig      once decided (sig on an approval only)
   commit, consumed_at            once consumed
 
-The signature covers the id, repo, head, every file's (path, base_blob, blob), the decision and
-decided_at (canonical): editing any of them, the expiry included, voids it. The content is left
+An op document has no head, files or diff; it holds instead:
+  kind        'op' (a document with no kind is a file approval)
+  op          the delegation id D-nnn (OP_ID), and repo its repo name or `*` (OP_REPO)
+  line        the run line the runner will spawn, the arguments filled in; what, the
+              operation's `what`, shown beside it
+  args_sha256 line_sha256(line), computed here, never taken from the caller
+  consumed_at once consumed (an op consume writes no commit)
+Its signature covers the id, kind, op, repo, args_sha256, the decision and decided_at; the line
+is bound through args_sha256, and check_op refuses a line that no longer hashes to it. A pending
+op request expires PENDING_OP_TTL_S after created_at, an approval APPROVED_TTL_S after
+decided_at; only `approved` verifies: a consumed op approval was used once and is done.
+
+A file approval's signature covers the id, repo, head, every file's (path, base_blob, blob), the
+decision and decided_at (canonical): editing any of them, the expiry included, voids it. The content is left
 out, as blob binds it. The status is not covered: only `approved` and `consumed` can verify, and
 both need a signed approval.
 
@@ -84,6 +113,7 @@ from .client import part as _part
 # How long an approval counts, as the owner chose them.
 PENDING_TTL_S = 7 * 86400       # a request not decided within 7 days is expired
 APPROVED_TTL_S = 24 * 3600      # an approval, consumed or not, lasts 24 hours
+PENDING_OP_TTL_S = 24 * 3600    # an op request not decided within 24 hours is expired
 
 PENDING, APPROVED, DENIED = 'pending', 'approved', 'denied'
 CONSUMED, EXPIRED = 'consumed', 'expired'
@@ -98,6 +128,11 @@ MAX_CONTENT_BYTES = 256 * 1024      # one file's content, UTF-8
 MAX_PATH = 400
 MAX_TITLE = 200
 MAX_REASON = 4000
+MAX_LINE = 4000                     # an op's run line
+
+KIND_OP = 'op'
+OP_ID = re.compile(r'D-[0-9]{3,}\Z')                     # kitlib.delegations.schema.ID
+OP_REPO = re.compile(r'(?:[a-z0-9][a-z0-9-]*|\*)\Z')     # kitlib.delegations.schema.REPO
 
 # what check() and Verifier answer when the change is not the approved one
 WHY_NO_KEY = 'no approval key'
@@ -111,8 +146,13 @@ WHY_FILES = 'the files differ from the approved ones'
 WHY_COMMIT = 'the approval was not consumed by this commit'
 WHY_SERVER = 'the hub server cannot say: %s'     # % the error's class
 WHY_ANSWER = 'the hub server gave no verdict'
+WHY_KIND_OP = 'the approval is for an operation, not a change'
+WHY_KIND_FILES = 'the approval is for a change, not an operation'
+WHY_OP = 'the approval is for another operation'
+WHY_ARGS = 'the approval is for other arguments'
 
 _HEX40 = re.compile(r'[0-9a-f]{40}\Z')
+_HEX64 = re.compile(r'[0-9a-f]{64}\Z')
 _HOST = re.compile(r'[a-z0-9]([a-z0-9.-]*[a-z0-9])?\Z')
 _SCP = re.compile(r'(?:[^@/\s]+@)?([^:/\s]+):(?!//)(\S+)\Z')
 _SCHEMES = {'https': 443, 'http': 80, 'ssh': 22, 'git': 9418}
@@ -289,10 +329,59 @@ def new_doc(repo, title, head, files, now, reason=None):
     return doc
 
 
+def line_sha256(line):
+    """The hex SHA-256 of the run line `line` (text), as its UTF-8 bytes."""
+    return hashlib.sha256(line.encode('utf-8')).hexdigest()
+
+
+def _is_op(doc):
+    """True for an op document, False for a file one (no kind); ValueError for another kind."""
+    kind = doc.get('kind') if isinstance(doc, dict) else None
+    if kind is None:
+        return False
+    if kind == KIND_OP:
+        return True
+    raise ValueError('the approval is of no known kind')
+
+
+def new_op_doc(op, repo, line, title, now, reason=None, what=None):
+    """The pending document of a request to run the delegated operation `op` (D-nnn) of `repo`
+    (its repo name or `*`) once, as the run line `line` (the arguments filled in). No id: the
+    store gives it. `now` is an aware datetime. args_sha256 is computed here. ApprovalError names
+    the field that is wrong."""
+    if not isinstance(op, str) or not OP_ID.match(op):
+        raise ApprovalError('op is a delegation id D-nnn', 'op')
+    if not isinstance(repo, str) or not OP_REPO.match(repo):
+        raise ApprovalError("repo is the delegation's repo name or *", 'repo')
+    line = _text(line, 'line', MAX_LINE, True)
+    if any(ord(c) < 32 or ord(c) == 127 for c in line) or line != line.strip():
+        raise ApprovalError('line is one line with no control character and no space at '
+                            'either end', 'line')
+    title = _text(title, 'title', MAX_TITLE, True)
+    reason = _text(reason, 'reason', MAX_REASON, False)
+    what = _text(what, 'what', MAX_REASON, False)
+    doc = {'status': PENDING, 'kind': KIND_OP, 'op': op, 'repo': repo, 'title': title,
+           'line': line, 'args_sha256': line_sha256(line), 'created_at': _iso(now)}
+    if what is not None:
+        doc['what'] = what
+    if reason is not None:
+        doc['reason'] = reason
+    return doc
+
+
 def canonical(doc_id, doc):
     """The bytes sign() covers: JSON of the id, repo, head, each file's [path, base_blob, blob]
-    sorted by path, the decision and decided_at, with sorted keys and no spaces. ValueError for a
-    document that has not their shape, or that names a path twice."""
+    sorted by path, the decision and decided_at, with sorted keys and no spaces; for an op
+    document, of the id, kind, op, repo, args_sha256, the decision and decided_at. ValueError
+    for a document that has not their shape, that names a path twice or is of no known kind."""
+    if _is_op(doc):
+        if not all(isinstance(doc.get(k), str) for k in ('op', 'repo', 'args_sha256')):
+            raise ValueError('the op approval has no op, repo or args_sha256')
+        body = {'id': doc_id, 'kind': KIND_OP, 'op': doc['op'], 'repo': doc['repo'],
+                'args_sha256': doc['args_sha256'], 'decision': doc.get('decision'),
+                'decided_at': doc.get('decided_at')}
+        return json.dumps(body, sort_keys=True, separators=(',', ':'),
+                          ensure_ascii=True).encode('ascii')
     files = doc.get('files') if isinstance(doc, dict) else None
     if not isinstance(files, list) or not all(isinstance(f, dict) for f in files):
         raise ValueError('the approval has no files list')
@@ -315,13 +404,15 @@ def sign(key, doc_id, doc):
 
 
 def expires_at(doc):
-    """When `doc` stops counting: created_at + PENDING_TTL_S while pending, decided_at +
-    APPROVED_TTL_S when approved or consumed; None when it never expires (denied, expired) or a
-    time cannot be read (status_at then counts it expired)."""
+    """When `doc` stops counting: created_at + PENDING_TTL_S (PENDING_OP_TTL_S for an op
+    document) while pending, decided_at + APPROVED_TTL_S when approved or consumed; None when it
+    never expires (denied, expired) or a time cannot be read (status_at then counts it
+    expired)."""
     status = doc.get('status') if isinstance(doc, dict) else None
     if status == PENDING:
         t = _when(doc.get('created_at'))
-        return None if t is None else t + datetime.timedelta(seconds=PENDING_TTL_S)
+        life = PENDING_OP_TTL_S if doc.get('kind') == KIND_OP else PENDING_TTL_S
+        return None if t is None else t + datetime.timedelta(seconds=life)
     if status in (APPROVED, CONSUMED):
         t = _when(doc.get('decided_at'))
         return None if t is None else t + datetime.timedelta(seconds=APPROVED_TTL_S)
@@ -400,6 +491,8 @@ def consume_fields(key, doc_id, doc, commit, now):
     why = _signed(key, doc_id, doc)
     if why:
         raise ApprovalError(why, 'sig', 'conflict')
+    if doc.get('kind') is not None:      # signed, so of a known kind: an op
+        raise ApprovalError(WHY_KIND_OP, 'kind', 'conflict')
     if doc.get('commit'):
         raise ApprovalError('the approval was consumed already by %s' % doc['commit'],
                             'commit', 'conflict')
@@ -419,6 +512,8 @@ def check(key, doc_id, doc, repo, head, blobs, now, commit=None):
     why = _signed(key, doc_id, doc)
     if why:
         return False, why
+    if doc.get('kind') is not None:      # signed, so of a known kind: an op
+        return False, WHY_KIND_OP
     status = status_at(doc, now)
     if status not in (APPROVED, CONSUMED):
         return False, WHY_STATUS % (status or 'malformed')
@@ -435,6 +530,56 @@ def check(key, doc_id, doc, repo, head, blobs, now, commit=None):
     if not isinstance(blobs, dict) or blobs != approved:
         return False, WHY_FILES
     return True, ''
+
+
+def check_op(key, doc_id, doc, op, repo, args_sha256, now):
+    """(True, '') when `doc` is an op approval signed under `key`, approved and never consumed at
+    `now`, for the operation `op` of `repo` run as the line whose line_sha256 is `args_sha256`;
+    else (False, one of the WHY_ phrases). The signature is checked before any field is
+    compared."""
+    why = _signed(key, doc_id, doc)
+    if why:
+        return False, why
+    if doc.get('kind') != KIND_OP:
+        return False, WHY_KIND_FILES
+    if doc.get('consumed_at') is not None:
+        return False, WHY_STATUS % CONSUMED
+    status = status_at(doc, now)
+    if status != APPROVED:
+        return False, WHY_STATUS % (status or 'malformed')
+    if not isinstance(doc.get('line'), str) or line_sha256(doc['line']) != doc['args_sha256']:
+        return False, WHY_BAD
+    if op != doc['op']:
+        return False, WHY_OP
+    if repo != doc['repo']:
+        return False, WHY_REPO
+    if not isinstance(args_sha256, str) or args_sha256 != doc['args_sha256']:
+        return False, WHY_ARGS
+    return True, ''
+
+
+def consume_op_fields(key, doc_id, doc, args_sha256, now):
+    """The fields using the op approval `doc` once writes: status and consumed_at. Only an op
+    approval signed under `key`, approved now, never consumed and for the arguments
+    `args_sha256` is consumed. ApprovalError (code conflict for one that cannot be consumed
+    now)."""
+    if not isinstance(args_sha256, str) or not _HEX64.match(args_sha256):
+        raise ApprovalError('args_sha256 is 64 lowercase hex digits', 'args_sha256')
+    why = _signed(key, doc_id, doc)
+    if why:
+        raise ApprovalError(why, 'sig', 'conflict')
+    if doc.get('kind') != KIND_OP:
+        raise ApprovalError(WHY_KIND_FILES, 'kind', 'conflict')
+    if doc.get('consumed_at') is not None:
+        raise ApprovalError('the approval was consumed already at %s' % doc['consumed_at'],
+                            'status', 'conflict')
+    status = status_at(doc, now)
+    if status != APPROVED:
+        raise ApprovalError('only an approved approval is consumed; this one is %s'
+                            % (status or 'malformed'), 'status', 'conflict')
+    if args_sha256 != doc.get('args_sha256'):
+        raise ApprovalError(WHY_ARGS, 'args_sha256', 'conflict')
+    return {'status': CONSUMED, 'consumed_at': _iso(now)}
 
 
 def remote_id(checkout, remote='origin', run=None):
@@ -531,3 +676,39 @@ def consume(client, doc_id, commit, if_version):
     pinned to `if_version`; the client's errors propagate."""
     return client.post('%s/%s/consume' % (ROUTE, _part(doc_id)), AGENT,
                        {'commit': commit, 'if_version': if_version})
+
+
+def request_op(client, op, repo, line, title, reason=None, what=None):
+    """Add a request to run `op` once as `line` (POST ROUTE with kind op, the agent's) and answer
+    the server's reply; the client's errors propagate."""
+    body = {'kind': KIND_OP, 'op': op, 'repo': repo, 'line': line, 'title': title}
+    if reason is not None:
+        body['reason'] = reason
+    if what is not None:
+        body['what'] = what
+    return client.post(ROUTE, AGENT, body)
+
+
+def verify_op(client, doc_id, op, repo, args_sha256):
+    """(True, '', version) only when the server answers valid true for this run of `op` and
+    gives the document's version (a whole number); else (False, why, None). Fails closed as
+    Verifier does."""
+    try:
+        got = client.get('%s/%s/verify' % (ROUTE, _part(doc_id)), AGENT,
+                         {'kind': KIND_OP, 'op': op, 'repo': repo, 'args': args_sha256})
+    except Exception as e:      # fail closed: no answer is no approval
+        return False, WHY_SERVER % type(e).__name__, None
+    if not isinstance(got, dict) or got.get('valid') is not True:
+        why = got.get('why') if isinstance(got, dict) else None
+        return False, why if isinstance(why, str) and why else WHY_ANSWER, None
+    version = got.get('version')
+    if not isinstance(version, int) or isinstance(version, bool) or version < 0:
+        return False, WHY_ANSWER, None
+    return True, '', version
+
+
+def consume_op(client, doc_id, args_sha256, if_version):
+    """Mark the op approval `doc_id` used (POST ROUTE/<id>/consume, the agent's), pinned to
+    `if_version`; the client's errors propagate."""
+    return client.post('%s/%s/consume' % (ROUTE, _part(doc_id)), AGENT,
+                       {'args_sha256': args_sha256, 'if_version': if_version})
