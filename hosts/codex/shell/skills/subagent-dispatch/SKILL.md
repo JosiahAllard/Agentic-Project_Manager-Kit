@@ -16,7 +16,7 @@ description: Use as a coordinator or any agent about to dispatch a subagent (a k
 
 A builder may hand bulk menial work to the helper role (light tier; read and edit tools, no shell), only where `<kit>/docs/ROSTER.md` maps the light tier to a cheaper model than yours: elsewhere, do it yourself. Its start-up plus your check costs about 15-25k tokens (initial figure), so:
 - Bulk read: a log or file over about 1,000 lines you need summarised, a search expected to touch 20+ files, a whole-tree listing. One section, a known path or a single grep stays with you.
-- Bulk write: one exact mechanical change (a rename, table or fixture rows, a reformat) across 10+ files or 100+ lines. Anything smaller, or anything needing judgement, stays with you.
+- Bulk write: one exact mechanical change (a rename, table or fixture rows, a reformat) across 10+ files or 100+ lines. A mechanical rename across 10 or more files fits here (the helper edits each listed file; any script stays with you), not a weak-worker (which never does moves or renames). Anything smaller, or anything needing judgement, stays with you.
 - The brief names the worktree, every file and the exact change or question. One writer per file: leave the listed files alone while it runs.
 - You own the result: re-read every cited file:line a read claim you act on rests on, read the whole diff of a write, then gate and commit yourself. A test run is never handed to the helper; run it as builder step 8 says.
 
