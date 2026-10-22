@@ -69,11 +69,25 @@ Each calls a route the agent's token may call (`kitlib.hubsite.api.ROUTES`, role
 | `hub_to_pm_reply` | `id`; `reply`, `ruling`, `if_version` | `POST /to_pm/<id>/reply` |
 | `hub_inbox_post` | `text`; `title`, `ref`, `asked`, `repo`, `from`, `refs` | `POST /inbox` |
 | `hub_page_publish` | `id`, `title`, `html_file`; `summary`, `repo`, `from`, `refs`, `if_version` | `POST /pages` |
+| `hub_approval_request` | `checkout`, `title`, `files` (`[{path, content_file}]`); `repo`, `head`, `reason` | `POST /approvals` |
+
+`hub_approval_request` asks the owner to approve a change, as `tools/hub.py approvals add` does
+(docs/action-hub.md "approvals/A-NNN"): `kitlib.hubapprove.build` makes the body from the git
+checkout `checkout`, each file's base its blob at `head` (default: the checkout's HEAD; none for a
+new file) and its content the exact UTF-8 bytes of its `content_file`, and `repo` defaults to the
+checkout's origin. It only adds a request (no destructive hint): it never decides or consumes one,
+it cannot ask for a delete, and it takes no `from`, which the document has no field for. This
+process reads each `content_file` outside the guard, so `checkout` and every `content_file` must
+be absolute and are judged by their real path as `html_file` is (`Server._readable`): never inside
+the hub's token folder or its store, or a token could be read back from the request. Those, a file
+entry that is not exactly `{path, content_file}`, and whatever the builder refuses are `invalid`
+before any call, in the builder's words (`Server._t_hub_approval_request`;
+`tests/hubmcp/test_server.py` `Approvals`).
 
 `hub_page_publish` takes the page's HTML as a file, never inline: `html_file` is an absolute path
 to a UTF-8 file, read here (at most `pagecheck.MAX_BYTES` + 1 characters, line endings kept as the
 file has them) and posted as `html`. This process reads the file outside the guard, so
-`Server._page_file` judges it by its real path, symbolic links and junctions followed: it must end
+`Server._page_file` (through `Server._readable`) judges it by its real path, symbolic links and junctions followed: it must end
 in one of `server.PAGE_SUFFIXES` (`.html`, `.htm`), and it must not lie in the hub's token folder or
 its store, so no token can be posted as a page and read back with `hub_page`. Such a file, a
 relative path, a file that cannot be read or is not UTF-8 is `invalid`, field `html_file`, before

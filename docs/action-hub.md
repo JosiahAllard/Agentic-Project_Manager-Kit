@@ -617,6 +617,32 @@ commit and verifies it with the commit; `gate land` and the pre-push hook verify
 (`kitlib.guard.ownercommits`). An approval verifies for 24 hours after the decision, consumed or
 not (`approvals.APPROVED_TTL_S`).
 
+An agent asks for one with `hub.py approvals add --title T --file PATH CONTENT_FILE [--file ...]
+[--checkout DIR] [--repo R] [--head SHA] [--reason TEXT]`, or the MCP tool `hub_approval_request`
+(docs/hub-mcp.md); both build the body with `kitlib.hubapprove` and post it to POST `/approvals`,
+and neither decides or consumes a request. Each PATH (relative to the repository top, with `/`)
+gets CONTENT_FILE's exact bytes as its content, read as UTF-8 with its line endings kept, so the
+blob is the one `commit.py --owner-approval` writes; the work tree is never read for it, since the
+consumer needs the file still at its base. The base is PATH's blob at `--head` (default: the
+checkout's HEAD), none for a file absent there; `--repo` defaults to the checkout's origin.
+Refused before anything is posted, in the builder's or `approvals.new_doc`'s words: a head that is
+not 40 hex digits or not a commit of the checkout, a path at head that is not a file, a new file
+the work tree already has, a file at head whose work tree copy git does not hash to its base (the
+consumer's prewrite check refuses both), a content file that cannot be read, is not UTF-8 or is
+over `approvals.MAX_CONTENT_BYTES`, content that is the file at head, content git would store as
+another blob (`git hash-object --path=PATH --stdin` differs from its blob: core.autocrlf or a
+text, eol or filter attribute changes it on staging, which the consumer's staged check refuses),
+and what `new_doc` refuses (its
+`MAX_FILES`, `MAX_PATH`, `MAX_TITLE` and `MAX_REASON` included). What the hub refuses comes back
+as the hub said it (`REFUSED <code>: <message>`).
+
+Known limits:
+
+- `approvals add` (and `hub_approval_request`) cannot request a file delete: every file it names
+  gets content. A delete is asked for by a direct POST `/approvals` with a null `content`.
+- A request has no `from`: the document has no field for the session key that asked, and adding
+  one is a change to the document's schema, so neither the verb nor the tool takes `--from`.
+
 `GET /api/v1/snapshot` carries the collection whole, and `strong`: true only on the strong owner's
 call (`test_the_snapshot_says_strong_to_the_strong_owner_alone` in `tests/hubsite/test_api.py`).
 The page draws each pending request above the open questions in Inbox (`approvalCard` in
