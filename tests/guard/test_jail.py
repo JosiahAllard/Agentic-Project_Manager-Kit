@@ -1035,14 +1035,16 @@ class RefDeleteHint(MainGit):
 
     def test_another_ref_delete_shows_the_ref(self):
         m, wt = self.main, W.fwd(self.w.wt)
-        for text, ref in (('git -C "%s" update-ref -d refs/tags/v1' % m, 'refs/tags/v1'),
-                          ('git -C "%s" update-ref -d refs/remotes/origin/x' % m, 'refs/remotes/origin/x'),
-                          ('git -C "%s" update-ref -d "$R"' % m, '<ref>'),
-                          ('git -C "%s" update-ref -d refs/heads/' % m, 'refs/heads/')):
+        pm, coordinator = 'the PM\'s to delete', 'a coordinator\'s to delete'
+        for text, ref, who in (('git -C "%s" update-ref -d refs/tags/v1' % m, 'refs/tags/v1', pm),
+                               ('git -C "%s" update-ref -d refs/remotes/origin/x' % m, 'refs/remotes/origin/x',
+                                coordinator),
+                               ('git -C "%s" update-ref -d "$R"' % m, '<ref>', pm),
+                               ('git -C "%s" update-ref -d refs/heads/' % m, 'refs/heads/', pm)):
             with self.subTest(text):
                 d = self.jailed(self.git_at(text, self.w.wt), 'git-shared-ref')
                 self.assertIn('Instead: git -C "%s" show-ref %s [' % (wt, ref), d.reason)
-                self.assertIn('the PM\'s to delete', d.reason)
+                self.assertIn(who, d.reason)
 
     def test_a_shared_ref_update_shows_the_ref_and_never_a_worktree(self):
         # a worktree shares the ref, so running the update there moves the same ref: the Instead

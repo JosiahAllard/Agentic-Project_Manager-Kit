@@ -66,7 +66,9 @@ Rules, in the order they are checked:
   git-shared-ref   git update-ref by an agent session (a subagent or a jailed mark but pm) from any
                    checkout, of a ref other than refs/tmp/<name>, a per-worktree ref, or in a linked
                    worktree its HEAD and the branch checked out there (never a guarded main); a
-                   ref or a repository the text does not name is refused too
+                   ref or a repository the text does not name is refused too. A coordinator's
+                   main session may also delete a stray ref (refs/ outside refs/heads, refs/tags,
+                   refs/stash and refs/backlog) in its own repository
   git-hooks-path   a change of core.hooksPath (git config, git -c, clone -c, GIT_CONFIG_*), in
                    any session
   git-stash-shared git stash in a linked worktree by an agent session that adds an untagged
@@ -5162,13 +5164,15 @@ def git_in_worktree(ctx, cmd, gc, main_top, cwd):
     return 'Work in a worktree and run git %s there; the lander brings it to main:' % gc.sub, instead
 
 
-def ref_delete_hint(ctx, gc, top, cwd, short, longs, pos):
+def ref_delete_hint(ctx, gc, top, cwd, short, longs, pos, cleanup=False):
     """(sentence, command) for `git update-ref -d <ref>`, or None. Every worktree of a repository
     shares its refs, so neither a worktree nor the lander carries a ref delete to main: a branch
-    goes with git branch -d, which refuses an unmerged one; any other ref is shown, and the PM
-    deletes it; a guarded main is never offered to branch -d. Both run in the session's own
-    worktree of this main checkout when it has one. None too for a ref git_shared_ref lets any
-    session delete (scratch_ref): only where it runs is wrong, and git_in_worktree says so."""
+    goes with git branch -d, which refuses an unmerged one; a stray ref (stray_ref) is shown, and
+    a coordinator deletes it in its own repository (`cleanup`: the session is one); any other ref
+    is shown, and the PM deletes it; a guarded main is never offered to branch -d. Both run in
+    the session's own worktree of this main checkout when it has one. None too for a ref
+    git_shared_ref lets any session delete (scratch_ref): only where it runs is wrong, and
+    git_in_worktree says so."""
     if gc.sub != 'update-ref' or 'd' not in short or 'stdin' in longs or gc.blind:
         return None
     ref = pos[0] if pos else None
@@ -5184,6 +5188,12 @@ def ref_delete_hint(ctx, gc, top, cwd, short, longs, pos):
                     (shared, name), 'git -C %s show-ref %s' % (at, name))
         return ('%s Delete a branch with git branch -d, which refuses an unmerged one; unmerged work goes to '
                 'the PM, never deleted:' % shared, 'git -C %s branch -d %s' % (at, branch))
+    if name and stray_ref(name):
+        who = 'you delete it in your own repository, naming the ref literally' if cleanup else \
+            'your coordinator deletes it from its own session in its own repository, so send it the ref'
+        return ('%s A ref outside refs/heads, refs/tags, refs/stash and refs/backlog is a coordinator\'s '
+                'to delete: %s. To show it:' %
+                (shared, who), 'git -C %s show-ref %s' % (at, name))
     return ('%s A ref other than a branch is the PM\'s to delete; to show it:' % shared,
             'git -C %s show-ref %s' % (at, name or '<ref>'))
 
@@ -5217,6 +5227,41 @@ def scratch_ref(name):
     """True for a ref any agent session may write or delete from any checkout: refs/tmp/<name>
     and the per-worktree refs but HEAD."""
     return ref_name_ok(name) and name != 'HEAD' and (name.startswith('refs/tmp/') or per_worktree_ref(name))
+
+
+# the main sessions that may delete a stray ref in their own repository (the coordinator and its
+# old mark: AGENT_MARKS's first two), and the refs that are no stray ref, compared without case:
+# NTFS reads refs/HEADS/main as the loose file of refs/heads/main
+REF_CLEANUP_MARKS = AGENT_MARKS[:2]
+NOT_STRAY = ('refs/heads', 'refs/tags', 'refs/stash', 'refs/backlog')
+
+
+def stray_ref(name):
+    """True for a ref a coordinator may delete in its own repository: a ref_name_ok name under
+    refs/, outside refs/heads, refs/tags, refs/stash (every worktree's stash entries) and
+    refs/backlog (the backlog store, in any case)."""
+    low = (name or '').lower()
+    return ref_name_ok(name) and low.startswith('refs/') and not low.startswith(NOT_STRAY)
+
+
+def cleanup_session(event, ctx):
+    """True for a main session whose mark (session_mark: None for every subagent, a call a host
+    cannot tell apart included) is one of REF_CLEANUP_MARKS, case ignored."""
+    return str(session_mark(event, ctx) or '').lower() in REF_CLEANUP_MARKS
+
+
+def _deref_unsure(place, name):
+    """Why `git update-ref -d <name>` without --no-deref may delete another ref (git follows a
+    symbolic ref and deletes where it points), or None: a reftable repository, where the guard
+    reads no ref file, a loose ref file that does not read, or one that is a symbolic ref."""
+    if os.path.isdir(os.path.join(place.common, 'reftable')):
+        return 'its refs are in a reftable, where the guard cannot tell a symbolic ref'
+    text, why = _read_ref(os.path.join(place.common, *name.split('/')))
+    if text is None:
+        return why
+    if text.startswith('ref:'):
+        return 'it is a symbolic ref to %s, and git deletes that ref instead' % text[4:].strip()
+    return None
 
 
 def main_names(ctx, where):
@@ -5339,11 +5384,31 @@ def _update_ref_unread(gc, short, longs, pos):
     return None
 
 
+def _stray_delete(ctx, gc, cwd, place, name, longs, text, top, role):
+    """A coordinator's `git update-ref -d <stray_ref>`: None (allowed) in its own repository (the
+    main checkout `top` of the place git runs in is the one of its session's folder `cwd`) when
+    git deletes that ref itself (--no-deref, or _deref_unsure finds no other ref it may reach);
+    else the refusal."""
+    mine = ctx.main_top(cwd) if cwd else None
+    at = quote(top or gc.dir)
+    if not top or not mine or paths.norm(mine) != paths.norm(top):
+        return refuse('git-shared-ref', role, '`%s` deletes %s in a repository other than the one your session '
+                      'runs in (%s): a coordinator deletes a stray ref only in its own repository, and that '
+                      'repository\'s coordinator deletes this one. To show it:' % (text, name, fwd(mine or cwd or '?')),
+                      'git -C %s show-ref %s' % (at, name))
+    why = None if 'no-deref' in longs else _deref_unsure(place, name)
+    if why is None:
+        return None
+    return refuse('git-shared-ref', role, '`%s` may delete another ref than %s: %s. Delete the ref itself with '
+                  '--no-deref:' % (text, name, why), 'git -C %s update-ref --no-deref -d %s' % (at, name))
+
+
 def git_shared_ref(event, ctx, cmd, gc, cwd, role):
     """`git update-ref` by a held session (shared_ref_held), from any checkout: every worktree of a
     repository shares its refs, so a worktree reaches main as surely as the main checkout. It may
     write scratch_ref names, and in a linked worktree its HEAD and the branch checked out there
-    (never a guarded main); it deletes only scratch_ref names. A ref is judged by its name; HEAD
+    (never a guarded main); it deletes only scratch_ref names, and a coordinator's main session
+    (cleanup_session) a stray_ref in its own repository too (_stray_delete). A ref is judged by its name; HEAD
     (unless --no-deref) by the branch it is on too, so a worktree on a guarded main does not move
     it. A scratch repository (_scratch_repo: in a temp root, no
     link out of its git directory) is not judged. Neither the PM data worktree nor, while the
@@ -5372,9 +5437,11 @@ def git_shared_ref(event, ctx, cmd, gc, cwd, role):
     shared = 'every worktree of this repository shares its refs, so a change made from any of them is made for all'
     allowed = 'An agent session writes refs/tmp/<name> (its scratch space), the per-worktree refs (refs/bisect/, ' \
               'refs/worktree/, refs/rewritten/, <NAME>_HEAD) and, in its own worktree, HEAD and the branch ' \
-              'checked out there; any other ref is the PM\'s.'
+              'checked out there; a coordinator deletes a ref outside refs/heads, refs/tags, refs/stash and ' \
+              'refs/backlog in its own repository; any other ref is the PM\'s.'
+    cleanup = cleanup_session(event, ctx)
     if unread:
-        hint = ref_delete_hint(ctx, gc, top or at, cwd, short, longs, pos) if 'd' in short else None
+        hint = ref_delete_hint(ctx, gc, top or at, cwd, short, longs, pos, cleanup) if 'd' in short else None
         if hint:
             return refuse('git-shared-ref', role, '`%s`: %s, and %s. %s' % (text, unread, shared, hint[0]), hint[1])
         return refuse('git-shared-ref', role, '`%s`: the guard cannot tell which ref it writes: %s; %s. Name one '
@@ -5395,9 +5462,11 @@ def git_shared_ref(event, ctx, cmd, gc, cwd, role):
         bad = [r for r in chain if not _ref_ok(r, delete, linked, own)]
         if not bad:
             return None
+        if cleanup and 'd' in short and stray_ref(name):
+            return _stray_delete(ctx, gc, cwd, place, name, longs, text, top, role)
         why = '%s is not one it may %s' % (bad[0] if bad[0] == name else '%s, where %s points,' % (bad[0], name),
                                            'delete' if delete else 'write')
-    hint = ref_delete_hint(ctx, gc, top or at, cwd, short, longs, pos) if 'd' in short else None
+    hint = ref_delete_hint(ctx, gc, top or at, cwd, short, longs, pos, cleanup) if 'd' in short else None
     if hint:
         return refuse('git-shared-ref', role, '`%s` deletes %s: %s. %s' % (text, name, why, hint[0]), hint[1])
     return refuse('git-shared-ref', role, '`%s` %s %s: %s; %s. %s To show it:' % (
