@@ -7,7 +7,7 @@ coordinator profile lists the roles it actually has; use only those. Roles are n
 
 ## Roles and what each is for
 
-- weak-worker: small, well-defined, low-risk changes expected under 100k tokens (named edits to named files, doc lines, small additive changes with their test).
+- weak-worker: small, well-defined, low-risk changes the brief sizes by listing them: named files, named edits, a few files (doc lines, small additive changes with their test).
 - worker: routine coding, low and medium risk; plan-only and sync or prep work (merging main into a branch, rebasing, conflict-free syncs, preparation).
 - strong-worker: the default for High-risk build and fix work on standard paths (API changes, live fixes, ordinary tool features, generated-data wiring).
 - senior-worker: concurrency, networking, simulation or ordering, landing, gate or lock tools, build-cache and codegen design, migrations, CI config, known-area crash fixes.
@@ -16,7 +16,7 @@ coordinator profile lists the roles it actually has; use only those. Roles are n
 - lander: optional wrapper that submits one reviewed branch (or a batch) for landing, waits for the result and reports. Never edits code.
 - docs-writer: the docs type - settled facts into docs (skill `specialty-records`) and specs extended from the owner's answers (skill `specialty-spec`). Docs only.
 - test-runner: runs test tiers in a given worktree; reports PASS/FAIL plus failing lines.
-- helper: light, read+edit only; dispatched by builders for bulk menial reads and mechanical bulk writes, never by a coordinator for a story.
+- helper: light, read+edit only; dispatched by builders for bulk menial reads and mechanical bulk writes (a scripted rename across 10 or more files included; weak-worker still never does renames), never by a coordinator for a story.
 - Specialty skills, loaded by the role the brief names: `specialty-review`, `specialty-research` (analyst); `specialty-records`, `specialty-spec` (docs-writer); `specialty-tech-art`, `specialty-3d-assets`, `specialty-rigging`, `specialty-sound` (a worker type, see "Creative dispatches" in the skill).
 - consultant: a long-lived launched session per repository that answers engineering questions.
 
@@ -30,7 +30,7 @@ coordinator profile lists the roles it actually has; use only those. Roles are n
 - The worker = default coding, low/medium risk (`--find risk`): additive content, UI, pure logic
   with tests, known-cause fixes, behaviour-preserving moves and renames (brief names **Moves and
   renames**; its equivalence check is not optional). Coding ladder by need:
-  weak-worker (light/high: Low, small and well-defined, expected under 100k tokens) -> worker
+  weak-worker (light/high: Low, small and well-defined, sized by what the brief lists) -> worker
   (standard/medium: Low, Medium) -> strong-worker (strong/medium: High-risk build and fix work -
   API changes, live fixes, ordinary tool features, generated-data wiring; never plan-only or
   sync/prep) -> senior-worker (strong/high: concurrency, networking, simulation or ordering,

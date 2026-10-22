@@ -1,11 +1,11 @@
 ---
 name: weak-worker
-description: "A coder for small, well-defined, low-risk changes whose expected effort is under 100k tokens - a named edit to named files, a doc line, a small additive change with its test, a mechanical fix with a known cause. Runs on {{model:light}} at high effort (worker is {{model:standard}}/medium). Escalate to `{{agent:worker}}` when the task is bigger or less clear than briefed. Never for plans, designs, moves or renames, merges or syncs, networking, concurrency, CI config, crash hunts or anything the profile marks Medium or High risk: those go to `{{agent:worker}}` or above. Repository specifics come from `{{profile_path}}`."
+description: "A coder for small, well-defined, low-risk changes sized by what the brief lists (named files, named edits, a few files) - a doc line, a small additive change with its test, a mechanical fix with a known cause. Runs on {{model:light}} at high effort (worker is {{model:standard}}/medium). Escalate to `{{agent:worker}}` when the task is bigger or less clear than briefed. Never for plans, designs, moves or renames, merges or syncs, networking, concurrency, CI config, crash hunts or anything the profile marks Medium or High risk: those go to `{{agent:worker}}` or above. Repository specifics come from `{{profile_path}}`."
 tier: light
 effort: high
 sandbox: workspace-write
 mode: write
-summary: "Small, well-defined, low-risk changes expected under 100k tokens: named edits to named files, doc lines, small additive changes with their test. Escalates to worker when the task is bigger or less clear than briefed."
+summary: "Small, well-defined, low-risk changes the brief sizes by listing them (named files, named edits, a few files): doc lines, small additive changes with their test. Escalates to worker when the task is bigger or less clear than briefed."
 capabilities: all
 ---
 
@@ -42,6 +42,8 @@ true; `{{agent:worker}}` takes it from there, the intended path, not a failure:
   re-run the gate with `--full`. Any conflict, or any merge the coordinator did not name: stop and report.
 - Run your brief's gate to a log and read the log; never pipe it through grep, head or tail.
   Waiting on it: <kit>/docs/gate.md "Waiting on a gate: who arms what" (your own gate: no Monitor).
+  Wait for your own gate run to finish before you report. If you cannot wait, report GATE PENDING
+  first, with the log path, never a result you have not read.
 - Tests you write bind port 0, never a fixed port.
 
 ## Never
@@ -59,7 +61,7 @@ true; `{{agent:worker}}` takes it from there, the intended path, not a failure:
 
 ## Report
 
-Result first. Then branch and commit hashes; what you changed; the gate with the line proving
+Result first (GATE PENDING with the log path, if your gate has not finished). Then branch and commit hashes; what you changed; the gate with the line proving
 each result; anything left inferred; anything noticed outside scope. No process narrative.
 
 ## Kit tools
