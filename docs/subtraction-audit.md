@@ -54,9 +54,11 @@ Verdict, area, what, why, size, risk. Risk: L low, M medium.
 - **Candidate 11, SHRINK** (kitlib/config). The old config folder-name fallback at
   `migration.py:12`. Why: old folder absent. Risk: L. Covered by the existing record for reading
   config from the PM repo; no new record.
-- **Candidate 12, SHRINK** (kitlib/records/landing). `landing.lock_file` `git:<name>` path
+- **Candidate 12, DONE** (kitlib/records/landing). `landing.lock_file` `git:<name>` path
   (`landing.py:106-118`). Why: one other repo sets it, so it is live. Size: ~15 lines. Risk: M;
-  switch that repo to the default only with no landing in flight.
+  switch that repo to the default only with no landing in flight. Done: that repo dropped the
+  key, `lock_name` is gone, the lock is always `kit-landing.lock` (`LOCK_NAME`), and
+  `landing.lock_file` is a retired key that loads and is ignored.
 - **Candidate 13, REMOVE (owner)** (kitlib/backloglint, tools). `kitlib/backloglint`,
   `tools/backlog_lint.py`, tests. Why: needs machine key `backlog_lint`, set nowhere; never runs.
   Size: ~429 + 502 test lines. Risk: L. The owner decides configure or cut.
@@ -94,7 +96,7 @@ Verdict, area, what, why, size, risk. Risk: L low, M medium.
 3. Candidates 9 and 10: approve dropping the retired keys from two other repos' `.kit.json` and
    from the machine config.
 4. Candidate 12: approve moving the other repo's landing lock to the default name, between
-   landings.
+   landings. Done: approved, the key dropped there and the `git:<name>` form removed.
 5. Candidate 3: done; installed allow lines lose their lane lines, so each repo prints its lines again (docs/allow-rules.md).
 
 ## Stale doc text
