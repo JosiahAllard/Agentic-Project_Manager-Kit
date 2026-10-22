@@ -56,6 +56,14 @@ class CoordinatorProfile(unittest.TestCase):
         self.assertEqual(s["models"], {"claude-opus-5": 2, "claude-sonnet-5": 1})
         self.assertIsNone(CP.profile(os.path.join(self.root, "old.jsonl"), "2026-09-18"))
 
+    def test_two_turns_with_no_message_id_are_both_counted(self):
+        path = F.write(os.path.join(self.root, "noid.jsonl"), [
+            F.turn(None, "2026-09-20T00:00:00Z", usage={"output_tokens": 10}),
+            F.turn(None, "2026-09-20T00:00:01Z", usage={"output_tokens": 10}),
+        ])
+        s = CP.profile(path, "2026-09-18")
+        self.assertEqual((s["turns"], s["out"]), (2, 20))
+
     def test_main_reads_top_level_sessions_only(self):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):

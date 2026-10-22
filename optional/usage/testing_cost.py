@@ -73,9 +73,11 @@ def tally(paths, since, test_re):
                     if is_test_command(cmd, test_re):
                         is_test = True
                         pending.add(c.get("id"))
-            if msg.get("id") in seen:
+            mid = msg.get("id")
+            if mid is not None and mid in seen:
                 continue
-            seen.add(msg.get("id"))
+            if mid is not None:
+                seen.add(mid)
             cost = U.weighted(msg.get("usage"), msg.get("model"))
             t = tot[at]
             t["cost"] += cost

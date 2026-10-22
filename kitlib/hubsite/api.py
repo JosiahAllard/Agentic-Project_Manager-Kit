@@ -193,6 +193,12 @@ own calls never count, nor does a call with `for` a key other than `pm` (another
 wait for its own answers is not the PM listening). No lock is taken: each note is one assignment, and an open wait is one
 key put into and popped from a dict, which the interpreter does as one step each.
 
+Push status. GET snapshot carries `push`: null when this hub runs no push-notification worker,
+else {"state", "last", "undelivered"} from PushWorker.status (kitlib.hubsite.push docstring
+"Status"): state 'up' or 'down', last the latest delivery to the PM's state (null before the first),
+undelivered the number of items some recipient has not yet had a written try of. The worker
+sets Api.push_status when it is made; the snapshot reads it on the request's thread.
+
 Pending for one session. Every pending item carries `from`, the session key it is for
 (Api.pending). GET pending and GET wait (with pending=1) take `for=<key>`: only that key's
 items are listed (`for=pm`: see Routes), and such a wait is woken only by one of them, a reset or its timeout, so a
@@ -512,6 +518,7 @@ class Api(object):
         self._session_keys = session_keys or launcher_keys
         self._seen = {'waited': None, 'pulled': None}
         self._waits = {}            # one key per agent wait that is blocked right now
+        self.push_status = None     # PushWorker.status, set by the worker ("Push status")
         # routes (module docstring "Routes"): one dict step per note, no lock
         self.now = now or time.monotonic
         self.ack_window_s = ACK_WINDOW_S
@@ -789,6 +796,18 @@ class Api(object):
     def pm_seen(self):
         return {'waited': self._seen['waited'], 'pulled': self._seen['pulled'],
                 'waiting': len(self._waits)}
+
+    def push_seen(self):
+        """The push worker's status, or None when this hub runs none (module docstring "Push
+        status"). A status that raises is 'down' with its class name as `last`."""
+        fn = self.push_status
+        if fn is None:
+            return None
+        try:
+            got = fn()
+        except Exception as e:      # noqa: BLE001 - the snapshot answers whatever the worker does
+            return {'state': 'down', 'last': type(e).__name__, 'undelivered': None}
+        return got if isinstance(got, dict) else None
 
 
 # ------------------------------------------------------------------ handlers
@@ -1563,6 +1582,7 @@ def snapshot(api, req):
     return {'revision': revision, 'collections': docs,
             'pending': api.pending(),
             'views': views, 'unavailable': missing, 'pm_seen': api.pm_seen(),
+            'push': api.push_seen(),
             'strong': req.strong is True}
 
 
