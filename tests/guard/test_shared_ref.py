@@ -258,6 +258,7 @@ class StrayRefCleanup(SharedRefBase):
         for text in ('git update-ref -d refs/heads/kit/x', 'git update-ref -d refs/heads/main',
                      'git update-ref -d refs/HEADS/main', 'git update-ref -d refs/tags/v1',
                      'git update-ref -d refs/TAGS/v1', 'git update-ref -d refs/stash', 'git update-ref -d refs/backlog/main',
+                     'git update-ref -d refs/BACKLOG/main', 'git update-ref -d refs/Backlog/store',   # one file on NTFS
                      'git update-ref -d HEAD', 'git update-ref -d main', 'git update-ref -d refs/tmp/../heads/main',
                      'git update-ref -d refs/scratch/a.lock', 'git update-ref -d refs/'):
             with self.subTest(text):
@@ -272,6 +273,12 @@ class StrayRefCleanup(SharedRefBase):
                 d = self.coordinator(text)
                 self.assertIsNotNone(d, 'allowed')
                 self.assertEqual(d.verdict, 'deny', d.reason)
+
+    def test_an_unread_stray_ref_delete_tells_the_coordinator_to_name_it(self):
+        d = self.refused(self.coordinator('git update-ref --frobnicate -d refs/scratch/a'))
+        self.assertIn('you delete it in your own repository, naming the ref literally', d.reason)
+        self.assertIn('show-ref refs/scratch/a', d.instead)
+        self.allowed(self.coordinator(d.instead))
 
     def test_a_coordinator_deletes_only_in_its_own_repository(self):
         d = self.refused(self.coordinator('git -C "%s" update-ref -d refs/scratch/a' % W.fwd(self.w.foreign)))
@@ -304,12 +311,9 @@ class StrayRefCleanup(SharedRefBase):
                   for env in (tj.DEEP, tj.CONSULTANT)]
         for label, call in calls:
             with self.subTest(label):
-                d = call()
-                self.assertIsNotNone(d, 'allowed')
-                self.assertEqual(d.verdict, 'deny', d.reason)
-                if d.rule == RULE:
-                    self.assertIn('your coordinator deletes it', d.reason)
-                    self.assertIn('show-ref refs/scratch/a', d.instead)
+                d = self.refused(call())
+                self.assertIn('your coordinator deletes it', d.reason)
+                self.assertIn('show-ref refs/scratch/a', d.instead)
         self.allowed(self.worker(self.refused(self.worker(text)).instead))
         self.w.user_config({'guard_agent_marks': ['coordinator', 'plain']})     # a held plain mark
         self.assertIn('your coordinator deletes it', self.refused(self.session(text, tj.PLAIN)).reason)
