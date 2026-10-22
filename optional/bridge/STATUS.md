@@ -8,7 +8,8 @@ change is listed in "Changes from the source".
 **Claude and Codex are both served.** `hosts.json` registers both (plan step 9), so the service
 and `bridge_prepare.py` accept a Codex profile, and the MCP frontend reads Codex's channel variable.
 Being served is not being deliverable. The limits below still hold:
-- Claude to Codex cannot be delivered.
+- Claude to Codex is delivered only through an owner-granted writer lease (README "Writer
+  leases"). No live run has shown it.
 - Only the Codex desktop app can deliver to a Codex chat.
 - The Codex terminal adapter is dead.
 
@@ -19,6 +20,7 @@ Being served is not being deliverable. The limits below still hold:
 - The service, storage, routes, frontend and helpers are built and tested against owned pipes,
   processes and fixture records.
 - The live native checks were read-only probes and one Claude canary. No message was sent.
+- The writer lease is tested on fixtures only (limits under "Delivery").
 
 ## Senders: who can call the bridge
 
@@ -35,12 +37,22 @@ Being served is not being deliverable. The limits below still hold:
 |---|---|---|
 | any → Claude terminal or desktop | `claude-peer`. It writes Claude's protocol-1 peer packet into the recipient's own pipe and receives status packets on an owned return pipe. | Built. It writes once, and the outcome is **unknown** (`native-outcome-unconfirmed`) until a correlated `held`, `refused` or `expired` packet arrives. Neither acceptance nor a reply is confirmed natively. Return expectations live only for the endpoint's lifetime (512 at most). Waking an idle chat is unproved. |
 | Codex desktop → Codex desktop | `codex-desktop`, through the app's own tools pipe. Both chats must be in the same app, distinct, selected and on the same account, and the sender must have an active turn. | Built. A correlated success means "scheduled" only, never "ran" or "replied". The tools pipe uses a measured private protocol, not a public contract. |
-| Claude → Codex | none | **Not deliverable.** The Codex adapter accepts only a Codex desktop sender with an active turn as the native executor (`codex-direct-route-unavailable`). There is no writer lease for another host. |
+| Claude → Codex | `codex-desktop`, through an owner-granted **writer lease**: a Codex desktop chat in an active turn carries the message as the native executor | Built, fixtures only. The owner grants it in the window for one recipient and one hour; it lives in memory and a service restart drops it. The sender's own route must still be selected, and the writer must be live, in an active turn, on the recipient's account and not the recipient, at every write. Without a lease the adapter refuses before writing (`codex-direct-route-unavailable`). A reply return from another host to a Codex chat needs the lease too. Success means "scheduled" only, as for Codex to Codex. |
 | Codex terminal as recipient | `codex-terminal` (`CodexTerminalAdapter`) | **Dead.** It advertises no capability and every send refuses before writing. No verified control channel to the original terminal exists (the default control socket was absent; the experimental queue methods are unproved). The service never installs it. |
-| Codex chat's reply → a Codex sender | the return delivery over `codex-desktop` | Recorded and readable, but **no native bytes are sent**: a completed Codex reply author has no active executor authority. |
+| Codex chat's reply → a Codex sender | the return delivery over `codex-desktop` | Recorded and readable, but **no native bytes are sent**: a completed Codex reply author has no active executor authority. A writer lease does not change this: a Codex sender, a reply's author included, never uses one. |
 
 Routes, durable queueing, receipts, events, refusals, replies and the owner window work the same
 for every host. They are core and service mechanics, and they are tested.
+
+Writer lease limits:
+- The writer must be in an active turn at every write. A writer whose turn has ended writes
+  nothing, so in practice it waits inside a long-running turn.
+- The Codex app attributes the message to the writer's chat, and the writer's approval mode
+  governs the call, so a prompt may appear in the writer.
+- Only Codex desktop chats in the same app and on the same account qualify, never a terminal.
+- A restart drops every lease. Leases are capped at 32 at a time.
+- A correlated refusal still blocks the recipient's whole chat, which is its task root.
+- The owner window's lease buttons have no test.
 
 ## Install and operation
 
@@ -98,8 +110,8 @@ a relocated copy. Both need re-running against this layout before they count for
 1. Re-run the Claude hook canary and the relocated idle start on this layout.
 2. A live canary from an owner-selected Claude chat to a Claude chat: delivery, wake and a
    correlated reply.
-3. A writer lease that lets a non-Codex sender reach a Codex chat, or a documented decision that
-   it never will.
+3. A live canary of the writer lease: an owner-selected Claude chat to a Codex desktop chat,
+   carried by a leased Codex chat in an active turn. It is built and tested on fixtures only.
 4. A verified control channel to the original Codex terminal before `codex-terminal` advertises
    SEND.
 5. Precise task ancestry for incoming operations. Codex currently uses the chat as the task root,
