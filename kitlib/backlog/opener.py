@@ -18,14 +18,15 @@ from kitlib.config import ConfigError, load as load_config
 from kitlib.git import repo as gitrepo
 
 from . import plan as pmod
+from . import policy
 from . import pull_branch as pullmod
 from . import record as rmod
 from . import retarget as retmod
 from . import store as smod
 from .errors import Failure, Usage
 
-# `set --<field>` for every field but hold_ruling, whose `--hold-ruling` is the recite.
-FIELD_FLAGS = [k for k in rmod.FIELDS if k != 'hold_ruling']
+# `set --<field>` for every field; plan_set refuses the ones a verb writes (plan.WRITTEN_BY).
+FIELD_FLAGS = list(rmod.FIELDS)
 WRITES = ('add', 'set', 'block', 'unblock', 'pull', 'release', 'close', 'retire', 'delete',
           'set-status', 'unpark', 'clear-review')
 
@@ -82,33 +83,34 @@ def planner(args, ctx):
     if v == 'set':
         body = pmod.read_body_file(args.body_file) if args.body_file else None
         changes = set_changes(args)
-        return lambda s: pmod.plan_set(s, ctx, args.id, changes, args.unset, args.ruling, body,
-                                       args.hold_ruling, role_checked=True)
+        # A widening into a live pull is the plan's to find; the role decides whether it may.
+        may_collide = policy.may(pmod.WIDEN_ROW)
+        return lambda s: pmod.plan_set(s, ctx, args.id, changes, args.unset, None, body,
+                                       role_checked=True, may_collide=may_collide)
     if v == 'block':
-        return lambda s: pmod.plan_block(s, ctx, args.id, args.on, args.owner_ask, args.ruling,
+        return lambda s: pmod.plan_block(s, ctx, args.id, args.on, args.owner_ask,
                                          reason=args.reason)
     if v == 'retarget':
         return lambda s: retmod.plan_retarget(s, ctx, args.old, args.new)
     if v == 'unblock':
-        return lambda s: pmod.plan_unblock(s, ctx, args.id, args.ruling, args.on, args.reason)
+        return lambda s: pmod.plan_unblock(s, ctx, args.id, args.on, args.reason,
+                                           role_checked=True)
     if v == 'pull':
-        return lambda s: pullmod.plan_pull(s, ctx, args.id, args.reason, args.ruling,
+        may_collide = policy.may('pull-collision')
+        return lambda s: pullmod.plan_pull(s, ctx, args.id, args.reason, may_collide,
                                            args.blocker)
     if v == 'release':
         return lambda s: pmod.plan_release(s, ctx, args.id, args.reason)
     if v == 'close':
-        return lambda s: pmod.plan_close(s, ctx, args.id, args.reason, args.ruling,
-                                          role_checked=True)
+        return lambda s: pmod.plan_close(s, ctx, args.id, args.reason, role_checked=True)
     if v == 'set-status':
         return lambda s: pmod.plan_set_status(s, ctx, args.id, args.status, args.q)
     if v == 'unpark':
-        return lambda s: pmod.plan_unpark(s, ctx, args.id, args.ruling)
+        return lambda s: pmod.plan_unpark(s, ctx, args.id)
     if v == 'retire':
-        return lambda s: pmod.plan_retire(s, ctx, args.id, args.why, args.ruling,
-                                           role_checked=True)
+        return lambda s: pmod.plan_retire(s, ctx, args.id, args.why, role_checked=True)
     if v == 'delete':
-        return lambda s: pmod.plan_delete(s, ctx, args.id, args.why, args.ruling,
-                                           role_checked=True)
+        return lambda s: pmod.plan_delete(s, ctx, args.id, args.why, role_checked=True)
     if v == 'clear-review':
         return lambda s: pmod.plan_clear_review(s, ctx, args.id, args.reason)
     # The caller's mistake, so Usage (errors.py); raised here, before any plan could run.

@@ -7,14 +7,14 @@
           stale [--days N]
   writes  add ID --summary S --scope P... --found-on BRANCH|none --why-not-folded T
               [--effort s|m|l] [--ref R] [--reopen]
-          set ID [--<field> V]... [--unset K]... [--ruling R] [--body-file F] [--hold-ruling R]
+          set ID [--<field> V]... [--unset K]... [--body-file F]
           block ID --on M... [--reason T] [--owner-ask Q]   (adds; unblock removes)
           retarget OLD NEW [--apply]                (a moved path; a dry run without --apply)
-          unblock ID [--on M] [--reason T] [--ruling R]      (several blockers: --on and --reason)
-          pull ID [--reason T] [--ruling R] [--blocker ID]   release ID --reason T
-          close ID --reason T [--ruling R]                   retire ID --why T [--ruling R]
-          delete ID --why T [--ruling R]                     clear-review ID --reason T
-          set-status ID parked --q Q-nnn                     unpark ID --ruling R
+          unblock ID [--on M] [--reason T]      (several blockers: --on and --reason)
+          pull ID [--reason T] [--blocker ID]   release ID --reason T
+          close ID --reason T                   retire ID --why T
+          delete ID --why T                     clear-review ID --reason T
+          set-status ID parked --q Q-nnn        unpark ID
   start   migrate [--dry-run] [--to ref|branch] [--dir D]   (main's records -> a new store)
   repair  catch-up [--apply PATH...]     (the PM data worktree's uncommitted record paths; a dry
                                           run lists them, --apply commits the paths it names)
@@ -121,15 +121,12 @@ def build_parser():
         flags = sorted(set(['--' + key, '--' + key.replace('_', '-')]))
         v.add_argument(*flags, dest='f_' + key, action='append')
     v.add_argument('--unset', action='append', default=[])
-    v.add_argument('--ruling', default=None)
     v.add_argument('--body-file', default=None)
-    v.add_argument('--hold-ruling', default=None)
     v = sub.add_parser('block')
     v.add_argument('id')
     v.add_argument('--on', action='append', default=[])
     v.add_argument('--reason', default=None)
     v.add_argument('--owner-ask', default=None)
-    v.add_argument('--ruling', default=None)    # refused (plan_block): the message names unblock
     v = sub.add_parser('retarget')
     v.add_argument('old')
     v.add_argument('new')
@@ -138,11 +135,9 @@ def build_parser():
     v.add_argument('id')
     v.add_argument('--on', default=None)
     v.add_argument('--reason', default=None)
-    v.add_argument('--ruling', default=None)
     v = sub.add_parser('pull')
     v.add_argument('id')
     v.add_argument('--reason', default=None)
-    v.add_argument('--ruling', default=None)
     v.add_argument('--blocker', default=None)
     v = sub.add_parser('release')
     v.add_argument('id')
@@ -150,17 +145,12 @@ def build_parser():
     v = sub.add_parser('close')
     v.add_argument('id')
     v.add_argument('--reason', required=True)
-    v.add_argument('--ruling', default=None)
     v = sub.add_parser('retire')
     v.add_argument('id')
     v.add_argument('--why', required=True)
-    v.add_argument('--ruling', default=None)
-    v.add_argument('--owner-said', default=None)           # refused: kept so the message names --ruling
     v = sub.add_parser('delete')
     v.add_argument('id')
     v.add_argument('--why', required=True)
-    v.add_argument('--ruling', default=None)
-    v.add_argument('--owner-said', default=None)           # refused, as on retire
     v = sub.add_parser('clear-review')
     v.add_argument('id')
     v.add_argument('--reason', required=True)
@@ -170,7 +160,6 @@ def build_parser():
     v.add_argument('--q', required=True)
     v = sub.add_parser('unpark')
     v.add_argument('id')
-    v.add_argument('--ruling', required=True)
     v = sub.add_parser('migrate')
     v.add_argument('--dry-run', action='store_true')
     v.add_argument('--to', default=None, choices=('ref', 'branch'))
@@ -353,6 +342,8 @@ def do_write(args, ctx, store):
     say('  %s' % change.subject)
     if stale is not None:
         index_stale(stale)
+    # the row a plan found (a collision with a live pull, plan._collision_change) is audited too
+    rows.extend(r for r in getattr(change, 'rows', ()) if r not in rows)
     audit_line(args.verb, getattr(args, 'id', None), rows, tip, args.session)
     return 0
 
@@ -441,10 +432,6 @@ def do_migrate(args, top, cfg, rules):
 def main(argv=None):
     args = build_parser().parse_args(argv)
     try:
-        if args.verb in ('retire', 'delete') and args.owner_said is not None:
-            raise Usage('`--owner-said` is gone: owner words are never copied into a record. '
-                        '%s an owner- or PM-priced record takes `--ruling R-nnnn`'
-                        % ('Retiring' if args.verb == 'retire' else 'Deleting'))
         if args.verb == 'block':
             err = rmod.block_citation_error(args.on, args.reason, args.owner_ask)
             if err:
