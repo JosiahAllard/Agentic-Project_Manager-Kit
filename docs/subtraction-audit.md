@@ -33,15 +33,17 @@ Verdict, area, what, why, size, risk. Risk: L low, M medium.
   Done: the three keys are gone from the schema (`python_tests` whole, as `discover` ran
   nothing), so a config that sets one fails to load as an unknown key; `unsupported()` keeps
   only its `--pid-hold` refusal, which lines 84-100 also held.
-- **Candidate 5, REMOVE** (kitlib/machinepaths, schema). `machine_paths.piece_fixtures`. Why:
+- **Candidate 5, DONE** (kitlib/machinepaths, schema). `machine_paths.piece_fixtures`. Why:
   refuses any non-empty value; nothing sets it. Size: ~15 lines, 4 test hits. Risk: L.
+  Done: the key and its refusal are gone, so a config that sets it fails as an unknown key.
 - **Candidate 6, REMOVE** (kitlib/hubsite). `settings.py` relay (44, 57, 105-107, 142, 152) and
   the relay text at `user.py:146`. Why: only reader is `tests/hubsite/test_settings.py:62`; never
   built. Size: ~15 lines. Risk: L. Re-add with the existing hub relay lock-writes record if it
   ships.
-- **Candidate 7, REMOVE** (config schema). `schema.py:278` `'new_worktree': {}`. Why: a section
+- **Candidate 7, DONE** (config schema). `schema.py:278` `'new_worktree': {}`. Why: a section
   with no keys; no repo sets it (inference: kept so an old config loads). Size: ~2 lines + a
-  `docs/kit-json.md` line. Risk: L.
+  `docs/kit-json.md` line. Risk: L. Done: the section is gone, so a config that sets it fails
+  as an unknown section.
 - **Candidate 8, SHRINK** (launcher, coordinatorstart, guard). Shims for the former coordinator
   name: coordinatorstart `LEGACY_KEY`/`LEGACY_ROLE` (33-34); the former-name marks at guard
   `rules.py:427` and `gaterole.py:28`; launcher `OLD_COORDINATORS`/`OLD_TASK_NAME`; the
@@ -78,7 +80,8 @@ Verdict, area, what, why, size, risk. Risk: L low, M medium.
   record for moving machine config out of the home folder).
 - **Kept 20** kitlib/git/fake/*: unit-test git under `KIT_FAKE_GIT=1`.
 - **Kept 21** standing_delegation, worldgraph lock-kind alias: covered by two existing records
-  (ledger uncite leftovers; worldgraph lock-kind alias drop).
+  (ledger uncite leftovers; worldgraph lock-kind alias drop). The worldgraph alias is DONE: it
+  is gone from `kitlib/lock/kinds.json`, so `--kind worldgraph` is refused as an unknown kind.
 - **Kept 22** kitlib/guard: out of scope; guard items go to `docs/guard-v2.md`.
 
 ## Not checked
