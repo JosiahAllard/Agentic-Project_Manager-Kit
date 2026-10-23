@@ -916,6 +916,7 @@ def _checkout(backlog_views):
 
 
 REMOTE_TTL_S = 60.0     # the longest a remembered origin remote answers (_RemoteIds)
+REMOTE_MISS_TTL_S = 5.0     # the longest a remembered failure to read one answers
 
 
 class _RemoteIds(object):
@@ -924,28 +925,38 @@ class _RemoteIds(object):
     and asking git each time cost one `git remote get-url` per configured repository per
     approval (KIT-HUB-CLICK-LAG).
 
-    A remembered answer serves while both hold: the stat (mtime, size) of <root>/.git/config is
-    the one it was read under, so `git remote set-url` (which rewrites that file) is seen on the
-    next read; and it is younger than REMOTE_TTL_S. A failed read is remembered the same way.
-    Worst case, a stale answer: a checkout whose .git is a file (a linked worktree, a separate
-    git dir) has no .git/config here to stat, so a changed remote there is seen only when the
-    TTL runs out: for up to REMOTE_TTL_S a decided approval can be routed to the coordinator of
-    the repository the remote used to name (the wrong repository), or to the PM alone. Routing
-    only: the approval's verify (Api checkout, _checkout) reads git on each call.
+    A remembered answer serves while both hold: the stat (mtime, size) of the repository's
+    config is the one it was read under, so `git remote set-url` (which rewrites that file) is
+    seen on the next read; and it is younger than REMOTE_TTL_S, or REMOTE_MISS_TTL_S for a failed
+    read (a git timeout under load must not send every decision to the PM for long). The config
+    is <root>/.git/config, or for a checkout whose .git is a file (a linked worktree) the common
+    dir's config, found from its `gitdir:` line and `commondir` file
+    (kitlib.git.defaults.common_dir).
+
+    Worst case, a stale answer: when that config cannot be found (an unreadable .git file, say)
+    or a remote is set where it is not (a worktree's own config.worktree), a changed remote is
+    seen only when the TTL runs out. For up to REMOTE_TTL_S a decided approval can then be routed
+    to the coordinator of the repository the remote used to name (the wrong repository), or to
+    the PM alone, and so can the decision's one-time push (kitlib.hubsite.push, which names the
+    coordinator through the same Api.repo_key). The approval's verify (Api checkout, _checkout)
+    is not cached: it reads git on each call.
 
     `clock` gives monotonic seconds (tests). A lock guards the dict; git runs outside it, so two
     callers that miss at once both run git and the later answer is kept."""
 
-    def __init__(self, clock=time.monotonic, ttl_s=REMOTE_TTL_S):
+    def __init__(self, clock=time.monotonic, ttl_s=REMOTE_TTL_S, miss_ttl_s=REMOTE_MISS_TTL_S):
         self._clock = clock
         self._ttl_s = ttl_s
+        self._miss_ttl_s = miss_ttl_s
         self._got = {}              # root -> (stat key, clock when read, (repo_id, why))
         self._lock = threading.Lock()
 
     @staticmethod
     def _stat(root):
+        from kitlib.git import defaults
         try:
-            st = os.stat(os.path.join(root, '.git', 'config'))
+            common = defaults.common_dir(root)
+            st = os.stat(os.path.join(common or os.path.join(root, '.git'), 'config'))
         except (OSError, TypeError, ValueError):
             return None
         return (st.st_mtime_ns, st.st_size)
@@ -955,7 +966,8 @@ class _RemoteIds(object):
         key, now = self._stat(root), self._clock()
         with self._lock:
             got = self._got.get(root)
-        if got is not None and got[0] == key and now - got[1] < self._ttl_s:
+        if got is not None and got[0] == key and now - got[1] < (
+                self._ttl_s if got[2][0] else self._miss_ttl_s):
             return got[2]
         answer = approvals.remote_id(root)
         with self._lock:

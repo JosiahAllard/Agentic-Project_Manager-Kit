@@ -580,8 +580,9 @@ repo (`kitlib.hubsite.derived.findings` over `<pm_data>/maint-lint/<repo>/result
 filtered by `repo`, less every marked one, with `runs`: each repo's last run as {repo, started,
 ledger, skipped}, ledger its whole-number counts `stale_cites`, `superseded` and
 `superseded_live` or null, skipped the skip marker's {reason, at} only when `at` is later than
-`started` and both parse, else null (`_lint_runs`; from the server's optional `lint_runs` view,
-an empty list without one). `POST /api/v1/finding_marks` (owner) takes
+`started` and both parse, else null (`_lint_runs`; from the server's `lint_runs` view,
+`kitlib.hubsite.derived.lint_runs`, always there: an empty list when there is no lint folder).
+`POST /api/v1/finding_marks` (owner) takes
 {fingerprint, status, note?, if_version?}; a fingerprint the lint does not show is `not_found`,
 and marking again takes the mark's `if_version`, as for a schedule. `POST
 /api/v1/finding_marks/{fingerprint}/delete` (owner) takes the mark back; `GET

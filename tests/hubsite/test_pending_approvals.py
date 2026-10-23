@@ -331,8 +331,9 @@ class RoutingGitCase(unittest.TestCase):
 
 
 class RemoteIdsCase(unittest.TestCase):
-    """serve._RemoteIds: a remembered remote serves while <root>/.git/config is unchanged, and
-    for at most REMOTE_TTL_S."""
+    """serve._RemoteIds: a remembered remote serves while the repository's config (a linked
+    worktree's: the common dir's) is unchanged, and for at most REMOTE_TTL_S; a failure for at
+    most REMOTE_MISS_TTL_S."""
 
     def setUp(self):
         self.root = tempfile.mkdtemp(prefix='kit-hubremote-')
@@ -369,8 +370,8 @@ class RemoteIdsCase(unittest.TestCase):
         self.ids(self.root)
         self.assertEqual(len(self.asked), 2)
 
-    def test_with_a_git_file_only_the_ttl_sees_a_change(self):
-        # a linked worktree: its .git is a file, so no config is there to stat
+    def test_with_a_git_file_it_cannot_follow_only_the_ttl_sees_a_change(self):
+        # a .git file naming no git dir there: no config to stat
         with open(os.path.join(self.root, '.git'), 'w', encoding='utf-8') as f:
             f.write('gitdir: elsewhere\n')
         self.ids(self.root)
@@ -381,13 +382,40 @@ class RemoteIdsCase(unittest.TestCase):
         self.ids(self.root)
         self.assertEqual(len(self.asked), 2)
 
-    def test_a_failure_is_remembered_too(self):
+    def test_a_linked_worktree_sees_its_common_config_change_within_the_ttl(self):
+        main = os.path.join(self.root, 'main')
+        self.root = os.path.join(self.root, 'wt')
+        own = os.path.join(main, '.git', 'worktrees', 'wt')
+        os.makedirs(own)
+        os.makedirs(self.root)
+        with open(os.path.join(own, 'commondir'), 'w', encoding='utf-8') as f:
+            f.write('../..\n')
+        with open(os.path.join(self.root, '.git'), 'w', encoding='utf-8') as f:
+            f.write('gitdir: ../main/.git/worktrees/wt\n')
+        common = os.path.join(main, '.git', 'config')
+        with open(common, 'w', encoding='utf-8') as f:
+            f.write('[remote "origin"]\n\turl = a\n')
+        self.ids(self.root)
+        self.ids(self.root)
+        self.assertEqual(len(self.asked), 1)
+        with open(common, 'w', encoding='utf-8') as f:
+            f.write('[remote "origin"]\n\turl = a longer one\n')
+        self.now = 1.0
+        self.ids(self.root)
+        self.assertEqual(len(self.asked), 2)
+
+    def test_a_failure_is_remembered_for_a_short_while_only(self):
         self.config('[core]\n')
         with mock.patch.object(approvals, 'remote_id',
                                lambda root: self.asked.append(root) or (None, 'no origin')):
             self.assertEqual(self.ids(self.root), (None, 'no origin'))
+            self.now = serve.REMOTE_MISS_TTL_S - 0.1
             self.assertEqual(self.ids(self.root), (None, 'no origin'))
-        self.assertEqual(len(self.asked), 1)
+            self.assertEqual(len(self.asked), 1)
+            self.now = serve.REMOTE_MISS_TTL_S
+            self.ids(self.root)
+            self.assertEqual(len(self.asked), 2)
+        self.assertLess(serve.REMOTE_MISS_TTL_S, serve.REMOTE_TTL_S)
 
 
 if __name__ == '__main__':

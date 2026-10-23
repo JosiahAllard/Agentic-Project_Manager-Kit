@@ -302,6 +302,8 @@ class BuildCase(ServeCase):
         lists[0] = KeyError('no list')                  # a list that cannot be read: none
         self.assertIsNone(hub.api.checkout('github.com/team/beta'))
         hub.close()
+        # no backlog at all: no checkout
+        self.assertIsNone(self.build().api.checkout('github.com/team/beta'))
 
     def test_the_api_names_an_approvals_repo_by_the_launchers_session_keys(self):
         """build() hands _repo_name the launcher's session keys: of two names on one checkout
@@ -323,8 +325,6 @@ class BuildCase(ServeCase):
             self.assertEqual(hub.api.repo_name('github.com/team/kit'), 'kit')
         self.assertEqual(asked, ['X:\\kit'])
         hub.close()
-        # no backlog at all: no checkout
-        self.assertIsNone(self.build().api.checkout('github.com/team/beta'))
 
     def test_health_answers_on_the_bound_port_and_a_foreign_host_is_refused(self):
         hub = self.build()
