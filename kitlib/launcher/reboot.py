@@ -31,13 +31,13 @@ FRESH_MINUTES = 15
 PM_AGENT = 'pm'    # the kit's PM agent (content/roles/pm.md), resumed as --agent pm-kit:pm
 WAIT_SECONDS = 60
 PROMPT = ('Start up now: the machine restarted and after-reboot launched you. Run your start-up routine, read your '
-          'state note %s, check in with the PM (the session named %s) and say the machine restarted, then continue '
+          'state note %s, check in with %s and say the machine restarted, then continue '
           'your queue.')
 PM_PROMPT = ('The machine restarted and after-reboot relaunched the coordinators. Re-arm the usage watch and any '
              'dead-man checks, find the coordinators with ListAgents, and send each a sync (main state, what was in '
              'flight, anything from the owner). Then tell the owner briefly what came back and what did not, and that '
-             'this pm-session must be stopped before the %s is opened in the desktop app, so the conversation does '
-             'not fork.' % S.PM_NAME)
+             'this %s must be stopped before the Project Manager conversation is opened in the desktop app, so it '
+             'does not fork.' % S.PM_NAME)
 
 
 def why(e):
@@ -137,7 +137,7 @@ def run(settings, host, test=False, dry_run=False, say=None):
         if legacy:                                   # one-release guard, removed after the switch (W2b)
             log('%s already running under the old stem %s, skipped' % (key, legacy))
             continue
-        args = S.entry_start_args(settings, key, entry, acct, PROMPT % (entry.get('state'), S.PM_NAME),
+        args = S.entry_start_args(settings, key, entry, acct, PROMPT % (entry.get('state'), S.PM_REF),
                                   any_brief=True)
         if dry_run:
             tell('would start %s (%s): %s' % (args['name'], key, '; '.join(
