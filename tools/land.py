@@ -58,7 +58,7 @@ def safe_stdio():
 
 if __name__ == '__main__':      # from the kit's main checkout: run from pushed main (kitlib.gate.pin)
     safe_stdio()
-    from kitlib.gate import pin                                    # noqa: E402
+    from kitlib.gate import pin                                     # noqa: E402
     _code, _said = pin.run(__file__, sys.argv[1:])
     if _said:
         sys.stderr.write(_said + '\n')
