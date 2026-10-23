@@ -95,6 +95,19 @@ class ServedTest(httpfix.ListenerCase):
             self.assertEqual(r.header(name), [value])
         self.assertEqual(self.errors(), [])
 
+    def test_the_shared_stylesheet_is_served_as_css_and_loads_nothing(self):
+        """Both pages link hub.css (the tokens and shell rules they share); it is a static file of the page's folder."""
+        lis = self.listener(static_dir=serve.STATIC_DIR)
+        r = get(lis.port, "/hub.css")
+        self.assertEqual(r.status, 200)
+        self.assertEqual(r.header("Content-Type"), ["text/css; charset=utf-8"])
+        with open(os.path.join(WEB, "hub.css"), "rb") as f:
+            self.assertEqual(r.body, f.read())
+        css = r.body.decode("utf-8")
+        self.assertIn("--bg:", css)
+        self.assertIsNone(re.search(r"https?:|//[\w-]+\.[a-z]{2,}|@import|url\(|image-set\(|\\", css, re.I))
+        self.assertEqual(self.errors(), [])
+
     @unittest.skipUnless(NODE, "node is needed to run the page's logic")
     def test_the_page_reads_the_snapshot_the_server_gives(self):
         lis = self.listener(static_dir=serve.STATIC_DIR)
@@ -2062,7 +2075,7 @@ class PageTextTest(unittest.TestCase):
         # A property set: none, but the reader frame's one body (test_the_reader_is_one_locked_frame).
         self.assertEqual(re.findall(r"\.%s\s*=[^=]" % keys.replace("srcdoc|", ""), self.script), [])
         self.assertEqual(re.findall(r"\.srcdoc\s*=[^=]", self.script), [".srcdoc = "])
-        self.assertEqual(re.findall(r"<[^>]*\s%s\s*=[^>]*>" % keys, self.markup), ['<a href="/lock.html">'])
+        self.assertEqual(re.findall(r"<[^>]*\s%s\s*=[^>]*>" % keys, self.markup), ['<link rel="stylesheet" href="hub.css">', '<a href="/lock.html">'])
         self.assertNotIn("location.assign", self.script)
         self.assertNotIn("location.replace", self.script)
         self.assertNotIn("window.open", self.script)
@@ -2075,7 +2088,9 @@ class PageTextTest(unittest.TestCase):
     def test_nothing_outside_the_page_is_loaded(self):
         self.assertIsNone(re.search(r"https?:", self.p))
         self.assertIsNone(re.search(r"(?<![:\w])//[\w-]+\.[a-z]{2,}", self.markup))
-        for tag in ("<link", "<img", "<iframe", "<object", "<embed", "<base", "@import", "url("):
+        # The one stylesheet is the shared hub.css, served beside the page; any other link is refused.
+        self.assertEqual(re.findall(r"<link\b[^>]*>", self.p), ['<link rel="stylesheet" href="hub.css">'])
+        for tag in ("<img", "<iframe", "<object", "<embed", "<base", "@import", "url("):
             self.assertNotIn(tag, self.p, tag)
 
     def test_markup_fits_a_strict_content_policy(self):
