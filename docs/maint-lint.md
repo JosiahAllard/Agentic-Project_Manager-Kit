@@ -8,8 +8,10 @@ runs that command.
     python tools/maint_lint.py [-C DIR] [--dry-run] [--result FILE] [--out FILE]
 
 Exit codes: 0 no finding, 1 findings, 2 USAGE (`--dry-run` without `--out`, or no `--result` and
-no `pm_data` to put it under), 3 SKIPPED (the machine lock stayed busy; see "Schedule"), else the
-lock's own exit code when it refuses the run for another reason.
+no `pm_data` to put it under), 3 SKIPPED (the machine lock stayed busy or a strong hold reserves
+it; see "Schedule"), 4 when the lock refuses the run with its own exit 1 or 2 (mapped, so it cannot
+read as findings or USAGE), else the lock's own exit code when it refuses the run for another
+reason.
 
 ## Schedule
 
@@ -20,9 +22,17 @@ docs/action-hub.md "schedules/<task>-<repo>").
 
 A plain run holds the machine lock's `maint-lint` kind (`kitlib/lock/kinds.json`: 1 cpu slot, no
 gpu) for the whole run (`kitlib/maintlint/slot.py`, through `kitlib.lock.run.book`). It waits at
-most the kind's `warn_min` (15 min). When the lock stays busy that long, or an owner quiet-hours
-hold refuses it, the run is skipped: one `SKIPPED:` line, exit 3, nothing linted, and the previous
-`result.json` and page left as they were. `--dry-run` takes no slot.
+most 15 min, fixed in `slot.py` (`WAIT_MIN`), not the kind's `warn_min`, which `gate.py --measure`
+rewrites from run history. The run is skipped when the lock stays busy that long (lock exit 6 or
+8), or at once when a strong hold, the owner's (quiet hours) or a game's, reserves the machine
+(lock exit 11): one `SKIPPED:` line, exit 3, nothing linted, and the previous `result.json` and
+page left as they were. `--dry-run` takes no slot.
+
+A skipped run writes the skip marker `skipped.json` beside `result.json`, whole:
+`{"at": "<UTC time, %Y-%m-%dT%H:%M:%SZ>", "code": <lock exit>, "reason": "busy|timeout|hold"}`.
+`slot.read_skip(<result.json path>)` reads it as that dict, or None. A run that writes
+`result.json` removes the marker, so a marker present means the last scheduled run was skipped and
+`result.json` is older than it. There is no PM event and no retry before the next scheduled run.
 
 ## Evidence, never age
 

@@ -1,6 +1,7 @@
 """kitlib.maintlint.slot and tools/maint_lint.py's use of it: a plain run books one maint-lint slot,
-waiting at most the kind's warn_min; a busy lock skips the run (exit 3) and leaves the previous
-result.json as it was; --dry-run books nothing. The lock is stubbed: no test books the machine's."""
+waiting a fixed 15 min; a busy lock or a strong hold skips the run (exit 3), leaves the previous
+result.json as it was and writes the skip marker, which the next written result clears; the lock's
+exit 1 and 2 become 4; --dry-run books nothing. The lock is stubbed: no test books the machine's."""
 import io
 import os
 import tempfile
@@ -8,7 +9,8 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
-from kitlib.lock.store import EXIT_BUSY, EXIT_REQUIRE, EXIT_RESERVED, EXIT_TIMEOUT, LockError
+from kitlib.lock.store import (EXIT_BUSY, EXIT_FAIL, EXIT_HOLD, EXIT_REQUIRE, EXIT_RESERVED,
+                               EXIT_TIMEOUT, EXIT_USAGE, LockError)
 from kitlib.maintlint import slot
 from tests.gitfixture import rmtree
 from tools import maint_lint
@@ -36,7 +38,7 @@ def refusing(code):
 
 class Take(unittest.TestCase):
 
-    def test_books_one_maint_lint_run_waiting_the_kinds_warn_min(self):
+    def test_books_one_maint_lint_run_waiting_15_min(self):
         seen, held = [], FakeSlot()
 
         def book(kind, repo, slug, **kw):
@@ -46,13 +48,45 @@ class Take(unittest.TestCase):
         self.assertIs(got, held)
         self.assertEqual(seen, [('maint-lint', 'kit', 'maint-lint', 900, TABLE)])
 
+    def test_the_wait_is_fixed_whatever_the_kinds_warn_min_says(self):
+        # gate.py --measure rewrites warn_min from run history; the skip window must not follow it.
+        seen = []
+
+        def book(kind, repo, slug, **kw):
+            seen.append(kw['wait_s'])
+            return FakeSlot()
+        for warn in (1, 15, 60):
+            table = {'maint-lint': dict(TABLE['maint-lint'], warn_min=warn)}
+            slot.take('kit', store=object(), table=table, book=book)
+        self.assertEqual(seen, [900, 900, 900])
+
     def test_a_busy_lock_is_skipped_and_another_refusal_keeps_its_code(self):
-        for code in (EXIT_TIMEOUT, EXIT_BUSY, EXIT_RESERVED):
-            with self.assertRaisesRegex(slot.Skipped, r'^SKIPPED: .*within 15 min'):
+        for code, reason in ((EXIT_TIMEOUT, 'timeout'), (EXIT_BUSY, 'busy')):
+            with self.assertRaisesRegex(slot.Skipped, r'^SKIPPED: .*within 15 min') as cm:
                 slot.take('kit', store=object(), table=TABLE, book=refusing(code))
+            self.assertEqual((cm.exception.reason, cm.exception.code), (reason, code))
         with self.assertRaises(slot.Refused) as cm:
             slot.take('kit', store=object(), table=TABLE, book=refusing(EXIT_REQUIRE))
         self.assertEqual(cm.exception.code, EXIT_REQUIRE)
+
+    def test_a_strong_hold_is_skipped_at_once_and_says_no_wait(self):
+        with self.assertRaises(slot.Skipped) as cm:
+            slot.take('kit', store=object(), table=TABLE, book=refusing(EXIT_RESERVED))
+        msg = str(cm.exception)
+        self.assertTrue(msg.startswith('SKIPPED: '), msg)
+        self.assertNotIn('within', msg)
+        self.assertIn('owner or game hold', msg)
+        self.assertEqual((cm.exception.reason, cm.exception.code), ('hold', EXIT_RESERVED))
+
+    def test_the_locks_exit_1_and_2_are_mapped_off_maint_lints_own_codes(self):
+        for code in (EXIT_FAIL, EXIT_USAGE):
+            with self.assertRaises(slot.Refused) as cm:
+                slot.take('kit', store=object(), table=TABLE, book=refusing(code))
+            self.assertEqual(cm.exception.code, slot.EXIT_LOCK)
+            self.assertIn('lock exit %d' % code, str(cm.exception))
+        self.assertNotIn(slot.EXIT_LOCK, (0, 1, 2, slot.EXIT_SKIPPED, EXIT_FAIL, EXIT_USAGE,
+                                          EXIT_BUSY, EXIT_TIMEOUT, EXIT_REQUIRE, EXIT_RESERVED,
+                                          EXIT_HOLD))
 
     def test_a_table_with_no_maint_lint_kind_is_refused_before_booking(self):
         with self.assertRaises(slot.Refused) as cm:
@@ -93,7 +127,45 @@ class Tool(unittest.TestCase):
         with open(self.result, 'rb') as fh:
             self.assertEqual(fh.read(), b'{"findings": [], "previous": true}\n')
         self.assertEqual(os.stat(self.result).st_mtime_ns, before.st_mtime_ns)
-        self.assertEqual(sorted(os.listdir(self.dir)), ['result.json'])
+        self.assertEqual(sorted(os.listdir(self.dir)), ['result.json', 'skipped.json'])
+
+    def test_a_skipped_run_leaves_a_marker_with_its_reason_and_time(self):
+        for code, reason in ((EXIT_TIMEOUT, 'timeout'), (EXIT_BUSY, 'busy'),
+                             (EXIT_RESERVED, 'hold')):
+            with mock.patch.object(slot.lockrun, 'book', refusing(code)), \
+                    mock.patch.object(slot.kinds_mod, 'load', return_value=TABLE), \
+                    mock.patch.object(maint_lint.maintlint, 'run') as run:
+                got, out, err = self.main('-C', self.dir, '--result', self.result)
+            self.assertEqual(got, 3, err)
+            run.assert_not_called()
+            mark = slot.read_skip(self.result)
+            self.assertEqual(sorted(mark), ['at', 'code', 'reason'])
+            self.assertEqual((mark['reason'], mark['code']), (reason, code))
+            self.assertRegex(mark['at'], r'^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$')
+            self.assertEqual(slot.marker_path(self.result),
+                             os.path.join(self.dir, 'skipped.json'))
+
+    def test_a_run_that_writes_result_json_clears_the_skip_marker(self):
+        res = {'findings': [], 'notes': [], 'counts': {}, 'ledger': None, 'elapsed_s': 0.0}
+        with mock.patch.object(slot.lockrun, 'book', refusing(EXIT_TIMEOUT)), \
+                mock.patch.object(slot.kinds_mod, 'load', return_value=TABLE):
+            self.main('-C', self.dir, '--result', self.result)
+        self.assertIsNotNone(slot.read_skip(self.result))
+        with mock.patch.object(slot, 'take', return_value=FakeSlot()), \
+                mock.patch.object(maint_lint.maintlint, 'run', return_value=res):
+            code, out, err = self.main('-C', self.dir, '--result', self.result)
+        self.assertEqual(code, 0, err)
+        self.assertIsNone(slot.read_skip(self.result))
+        self.assertEqual(sorted(os.listdir(self.dir)), ['page.html', 'result.json'])
+
+    def test_read_skip_is_none_for_no_marker_or_one_of_another_shape(self):
+        self.assertIsNone(slot.read_skip(self.result))
+        mark = os.path.join(self.dir, 'skipped.json')
+        for body in ('not json', '[]', '{"reason": "late", "at": "x", "code": 8}',
+                     '{"reason": "busy", "code": 6}', '{"reason": "busy", "at": "x"}'):
+            with open(mark, 'w', encoding='utf-8') as fh:
+                fh.write(body)
+            self.assertIsNone(slot.read_skip(self.result), body)
 
     def test_another_refusal_exits_with_the_locks_code_and_runs_nothing(self):
         with mock.patch.object(slot.lockrun, 'book', refusing(EXIT_REQUIRE)), \

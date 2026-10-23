@@ -15,10 +15,13 @@ the two paths and the counts. With --dry-run (--out is then required) it writes 
 --out, never result.json, and prints the page's path and the counts. A finding that was not in the
 previous result.json is marked new.
 A plain run holds one cpu slot of the machine lock's maint-lint kind (kitlib.maintlint.slot) for
-the whole run, waiting at most the kind's warn_min; --dry-run takes no slot.
+the whole run, waiting at most 15 min; --dry-run takes no slot. A skipped run writes the skip
+marker skipped.json beside result.json (its reason and time); a run that writes result.json removes
+it.
 Exit codes: 0 no finding, 1 findings, 2 USAGE (--dry-run without --out, or no --result and no
-pm_data.path to put it under), 3 SKIPPED (the lock stayed busy: nothing ran, and result.json and
-the page are left as they were), else the lock's own exit code when it refuses the run otherwise.
+pm_data.path to put it under), 3 SKIPPED (the lock stayed busy, or a strong hold reserves the
+machine: nothing ran, and result.json and the page are left as they were), 4 the lock refused with
+its own exit 1 or 2, else the lock's own exit code when it refuses the run otherwise.
 """
 import argparse
 import os
@@ -72,6 +75,10 @@ def main(argv=None):
         held = slot.take(maintlint.repo_name(root))
     except slot.Skipped as e:
         print(e, flush=True)
+        try:
+            slot.write_skip(path, e)
+        except OSError as err:
+            print('note: the skip marker was not written: %s' % err, file=sys.stderr)
         return slot.EXIT_SKIPPED
     except slot.Refused as e:
         print(e, file=sys.stderr)
@@ -86,6 +93,10 @@ def _lint(root, path, out, write):
     res = maintlint.run(root, previous=rmod.read(path) if path else None)
     if write:
         print('result: %s' % rmod.write(path, res))
+        try:
+            slot.clear_skip(path)
+        except OSError as err:
+            print('note: the old skip marker was not removed: %s' % err, file=sys.stderr)
     out = os.path.abspath(out or os.path.join(os.path.dirname(os.path.abspath(path)), rmod.PAGE))
     os.makedirs(os.path.dirname(out), exist_ok=True)
     with open(out, 'w', encoding='utf-8', newline='\n') as fh:
