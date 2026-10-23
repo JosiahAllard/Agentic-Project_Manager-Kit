@@ -70,17 +70,17 @@ class HeavyTest(TreeCase):
     def test_repo_entries_follow_the_defaults_and_cannot_remove_them(self):
         cfg = self.load({'heavy': {'programs': [
             {'program': 'test.bat', 'kind': 'engine-test', 'why': 'runs Godot tests'},
-            {'program': 'worldgraph.bat', 'kind': 'worldgraph', 'unless_args': ['--help', '--dry-run'],
+            {'program': 'graphbuild.bat', 'kind': 'graph-build', 'unless_args': ['--help', '--dry-run'],
              'why': 'builds the world graph', '_note': 'dropped'}]}})
         entries = policy.heavy_programs(cfg)
         self.assertEqual([e['program'] for e in entries],
                          ['godot', 'godot.*', 'godot_*', 'blender*', 'dotnet', 'dotnet.exe', 'gradle', 'gradle.*',
-                          'gradlew', 'gradlew.*', 'test.bat', 'worldgraph.bat'])
+                          'gradlew', 'gradlew.*', 'test.bat', 'graphbuild.bat'])
         self.assertNotIn('_note', entries[-1])
         self.assertEqual(policy.heavy_match('.\\TEST.BAT', ['fast'], entries)['kind'], 'engine-test')
-        self.assertEqual(policy.heavy_match('worldgraph.bat', [], entries)['kind'], 'worldgraph')
-        self.assertIsNone(policy.heavy_match('worldgraph.bat', ['--dry-run'], entries))
-        self.assertIsNone(policy.heavy_match('worldgraph.bat', ['--help=all'], entries))
+        self.assertEqual(policy.heavy_match('graphbuild.bat', [], entries)['kind'], 'graph-build')
+        self.assertIsNone(policy.heavy_match('graphbuild.bat', ['--dry-run'], entries))
+        self.assertIsNone(policy.heavy_match('graphbuild.bat', ['--help=all'], entries))
 
     def test_a_heavy_entry_without_a_reason_refuses(self):
         t = TempTree({'heavy': {'programs': [{'program': 'x.bat', 'kind': 'build'}]}})
@@ -194,9 +194,9 @@ class KindsTableTest(unittest.TestCase):
 
     def test_aliases_map_a_retired_name_to_its_kind(self):
         data = {'kinds': {'graph-build': {'cpu': 'heavy'}},
-                'aliases': {'_note': 'n', 'worldgraph': {'to': 'graph-build', 'why': 'retired'}}}
+                'aliases': {'_note': 'n', 'old-name': {'to': 'graph-build', 'why': 'retired'}}}
         path = self.write(data)
-        self.assertEqual(policy.kinds_aliases(path), {'worldgraph': 'graph-build'})
+        self.assertEqual(policy.kinds_aliases(path), {'old-name': 'graph-build'})
         self.assertEqual(sorted(policy.kinds_table(path)), ['graph-build'])  # not a kind itself
 
     def test_no_aliases_or_no_file_is_none(self):
