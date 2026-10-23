@@ -1,8 +1,8 @@
 """Machine extras (docs/machine-setup.md "Extras"): the machine schedule shortcut (in the default mode
 only with `shortcut`), the agents' temp
 folder with its AGENT_TEMP variable, sweep config key and sweep task (kitlib.machinesetup.agenttemp),
-that folder's permissions, and the comfy entry point's lock tool (not in fresh mode: the plugin's
-lock tool is used). Each is read first and planned only when it differs; Host is the Windows side (also the
+that folder's permissions, the automatic tasks' tick task (AUTO_TASK), and the comfy entry point's
+lock tool (not in fresh mode: the plugin's lock tool is used). Each is read first and planned only when it differs; Host is the Windows side (also the
 `claude` runner that kitlib.machinesetup.plugin migrates each account with), and tests pass a fake.
 """
 import json
@@ -17,6 +17,7 @@ except ImportError:                                                  # not Windo
     winreg = None
 
 from kitlib.launcher import pythonw as pythonw_mod
+from kitlib.worktree.task import CARRIER, NOT_THE_STORE_ALIAS, PYTHONW_IS, quoted
 
 from . import agenttemp, procwatch
 from .common import kit_file, norm, under
@@ -26,6 +27,9 @@ LOCK_ENV = 'KIT_MACHINE_LOCK'
 SIDS = ('*S-1-5-18', '*S-1-5-32-544')                               # SYSTEM, Administrators
 GRANT = '(OI)(CI)F'
 _NOWIN = 0x08000000 if sys.platform == 'win32' else 0                # CREATE_NO_WINDOW
+AUTO_TASK = 'kit-automatic-tasks'
+AUTO_EVERY_MINUTES = 15
+AUTO_TOOL = os.path.join('tools', 'auto_tasks.py')
 
 
 def _ps_quote(s):
@@ -203,6 +207,7 @@ def survey(plan, ctx):
     if folder:
         acl_step(plan, ctx, folder, made)
     procwatch.task_step(plan, ctx, folder)
+    auto_task_step(plan, ctx)
     if ctx.fresh:
         plan.note('extras', '%s left as is in fresh mode: the plugin\'s lock tool is used' % LOCK_ENV)
     else:
@@ -215,6 +220,80 @@ def acl_step(plan, ctx, folder, made=False):
     kitlib.machinesetup.survey_agent_temp."""
     _acl(plan, ctx, folder, made)
     agenttemp.task_step(plan, ctx)
+
+
+def auto_argument(root):
+    """The tick task's argument string: the carrier, `python`, tools/auto_tasks.py, `tick`."""
+    root = os.path.normpath(root)
+    return '"%s" python "%s" tick' % (os.path.join(root, 'tools', CARRIER), os.path.join(root, AUTO_TOOL))
+
+
+def auto_task_line(root, pythonw=None):
+    """The one PowerShell line that registers AUTO_TASK (-Force: replaces one already there), every
+    AUTO_EVERY_MINUTES minutes as the registering user (-RunLevel Limited), one run at a time, ended
+    after 10 minutes: `pythonw` (a literal path, default the base install's; no window) running the
+    carrier, which runs tools/auto_tasks.py tick of the kit at `root` with the python.exe beside it.
+    The line throws, registering nothing, when that pythonw is not a file or is under WindowsApps."""
+    root = os.path.normpath(root)
+    pythonw = pythonw or pythonw_mod.base_pythonw()
+    return ("%s; %s; %s; Register-ScheduledTask -Force -TaskName %s"
+            " -Trigger (New-ScheduledTaskTrigger -Once -At (Get-Date)"
+            " -RepetitionInterval (New-TimeSpan -Minutes %d) -RepetitionDuration (New-TimeSpan -Days 3650))"
+            " -Action (New-ScheduledTaskAction -Execute $py -Argument %s -WorkingDirectory %s)"
+            " -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew"
+            " -ExecutionTimeLimit (New-TimeSpan -Minutes 10))"
+            " -User $env:USERNAME -RunLevel Limited -Description %s"
+            % (PYTHONW_IS % quoted(pythonw), NOT_THE_STORE_ALIAS, agenttemp.NOT_A_FILE, quoted(AUTO_TASK),
+               AUTO_EVERY_MINUTES, quoted(auto_argument(root)), quoted(root),
+               quoted('kit automatic tasks: starts what the Action Hub schedules (auto_tasks.py tick)')))
+
+
+def auto_task_same(task, pythonw, argument):
+    """Whether the registered `task` (consoletasks' form) runs `pythonw` with `argument` already."""
+    exe = os.path.normcase(os.path.normpath(pythonw))
+    for a in (task or {}).get('actions') or ():
+        have = os.path.normcase(os.path.normpath((a.get('exe') or '').strip().strip('"') or '.'))
+        if have == exe and (a.get('args') or '').strip() == argument:
+            return True
+    return False
+
+
+def auto_task_step(plan, ctx):
+    """Plan AUTO_TASK, the tick of the hub's automatic tasks, for the kit's live main checkout
+    (worktreesweep.tool_root, as the worktree sweep tasks take it): registered when missing,
+    registered again (-Force) when it runs another program or argument, nothing when it is already
+    as planned. A kit with no such checkout, or no tools/auto_tasks.py, is a note."""
+    from kitlib.git import repo as gitrepo
+    from . import worktreesweep
+    root = worktreesweep.tool_root(ctx.kit)
+    if root is None or worktreesweep.is_export(root):
+        plan.note('extras', '%s task: the kit at %s is a plugin export with no live main checkout; '
+                            'not planned' % (AUTO_TASK, root or ctx.kit))
+        return
+    if not os.path.isfile(os.path.join(root, AUTO_TOOL)):
+        plan.note('extras', '%s task: no %s; not planned' % (AUTO_TASK, os.path.join(root, AUTO_TOOL)))
+        return
+    place = gitrepo.classify(root)
+    if place.kind != gitrepo.MAIN:
+        plan.note('extras', '%s task: the kit at %s is not a main checkout (%s), so the task would run an '
+                            'unreviewed copy; not planned' % (AUTO_TASK, root, place.detail or place.kind))
+        return
+    pythonw = pythonw_mod.base_pythonw()
+    argument = auto_argument(root)
+    try:
+        tasks = ctx.host.task_list()
+    except (OSError, RuntimeError, ValueError, SyntaxError) as e:   # ET.ParseError is a SyntaxError
+        plan.note('extras', '%s task: could not read the scheduled tasks (%s); not planned' % (AUTO_TASK, e))
+        return
+    have = worktreesweep.find(tasks, AUTO_TASK)
+    if have and auto_task_same(have, pythonw, argument):
+        return
+    line = auto_task_line(root, pythonw)
+    plan.add('extras', '%s the scheduled task %s (every %d min, as you, not elevated, no window; starts what '
+                       'the Action Hub schedules): %s'
+             % ('update' if have else 'register', AUTO_TASK, AUTO_EVERY_MINUTES, line),
+             lambda: ctx.host.task_register(line),
+             undo='Unregister-ScheduledTask -TaskName "%s" -Confirm:$false' % AUTO_TASK)
 
 
 def _shortcut(plan, ctx):
