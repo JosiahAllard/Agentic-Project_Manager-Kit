@@ -1389,8 +1389,12 @@ button.danger{color:var(--warn)}
   const TASKS = [["maint-lint", "Maintenance lint"], ["worktree-sweep", "Worktree sweep"], ["agent-temp-sweep", "Agent temp sweep"]];
   const WEEK = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
   const taskName = t => (TASKS.find(x => x[0] === t) || [t, String(t)])[1];
-  // forms: the open form of each schedule by id ({node, save, version, dirty, ready}), kept across redraws once the
-  // owner touched it. said: what the last save of a schedule answered, by id.
+  // forms: the open form of each schedule by id ({node, save, st, version, dirty, ready, saving, until, edits}), kept
+  // across redraws once the owner touched it. said: what the last save of a schedule answered, by id, as {text, version}:
+  // shown only on a form drawn at that version, so a form drawn later from a newer one does not show an old answer.
+  // Every step after an await (a save's post, the read after it, the read after a refusal) changes a form, drops it or
+  // moves the selection only when nothing changed meanwhile: the form is still the one drawn, its edits count is the
+  // one read before the await, no save of it is in flight, and the owner is still on it.
   // reading: the read in flight. A read asked for meanwhile is not dropped: it makes that read go round once more, and
   // the caller waits for the round, so what it then sees was read after it asked (a save's own row and first run).
   // carry: what the owner picked on a new form that was refused because the schedule exists, by that schedule's id; its
@@ -1457,6 +1461,8 @@ button.danger{color:var(--warn)}
     // until: the version a save of this form wrote. The form is kept until the list read holds that version, so a
     // redraw before the read after the save lands shows what was saved, not the row as it stood before.
     const isNew = d.id === "new";
+    const told = sched.said.get(d.id);
+    if (told && told.version != null && d.version != null && Number(d.version) !== told.version) sched.said.delete(d.id);
     let old = sched.forms.get(d.id);
     if (old && old.until != null && !old.saving && Number(d.version) >= old.until) { sched.forms.delete(d.id); old = null; }
     if (old && (old.dirty || (old.version === d.version && old.ready === ready))) {
@@ -1466,8 +1472,12 @@ button.danger{color:var(--warn)}
     // what the owner picked on a new form refused because this schedule exists: drawn here, unsaved, at this version
     const carried = sched.carry.get(d.id); sched.carry.delete(d.id);
     const v0 = carried || d;
-    const f = { version: d.version, dirty: !!carried, ready, saving: false, until: null }; sched.forms.set(d.id, f);
-    const touch = () => { f.dirty = true; f.until = null; };
+    const f = { version: d.version, dirty: !!carried, ready, saving: false, until: null, edits: 0 }; sched.forms.set(d.id, f);
+    const touch = () => { f.dirty = true; f.until = null; f.edits++; };
+    // nothing changed on this form since `edits` was read: still the form drawn, not touched, no save of it in flight
+    const still = edits => sched.forms.get(d.id) === f && f.edits === edits && !f.saving;
+    // the owner is still on this form: the section shown and this schedule picked
+    const onIt = () => state.section === "autotasks" && !!state.sel && state.sel.kind === "schedule" && String(state.sel.id) === String(d.id);
     const pick = (label, opts, v) => { const s = el("select", {"aria-label": label, id: "s-" + d.id + "-" + label.toLowerCase().replace(/ /g, "-"), onchange: touch}, opts.map(([val, txt]) => el("option", {value: val, text: txt}))); s.value = v; return s; };
     const repos = knownRepos();
     const task = isNew ? pick("Task", TASKS, TASKS[0][0]) : null, repo = isNew ? pick("Repo", repos.map(r => [r, r]), repos[0] || "") : null;
@@ -1476,30 +1486,34 @@ button.danger{color:var(--warn)}
     const boxes = WEEK.map(w => { const b = el("input", {type:"checkbox", id: "s-" + d.id + "-" + w, onchange: touch}); b.checked = Array.isArray(v0.days) && v0.days.includes(w); return [w, b]; });
     const days = el("fieldset", {class:"days", hidden: cad.value !== "weekly"}, el("legend", {text:"Days"}), boxes.map(([w, b]) => el("label", {class:"urg", for: b.id}, b, " " + w)));
     cad.addEventListener("change", () => { days.hidden = cad.value !== "weekly"; });
-    const st = el("span", {class:"status", role:"status", id: "s-" + d.id + "-status", text: sched.said.get(d.id) || ""}); f.st = st;
+    const st = el("span", {class:"status", role:"status", id: "s-" + d.id + "-status", text: (sched.said.get(d.id) || {}).text || ""}); f.st = st;
     const save = el("button", {class:"primary", type:"button", text:"Save", disabled: !ready}); f.save = save;
     save.addEventListener("click", async () => {
       if (!ready || f.saving) return;
       const body = { task: isNew ? task.value : d.task, repo: isNew ? repo.value : d.repo, cadence: cad.value, at: at.value };
       if (cad.value === "weekly") body.days = boxes.filter(([, b]) => b.checked).map(([w]) => w);
       f.dirty = true; f.saving = true; save.disabled = true; st.className = "status"; st.textContent = "Saving…";
+      const sent = f.edits;
       let r;
       try { r = await hub.post("/schedules", { ...body, ...(isNew ? {} : pinAt(f.version)) }); }
       catch (err) { f.saving = false; save.disabled = !ready; await refused(err, body); return; }
       // Saved. Only the post decides that: the read and the redraw after it never turn it into "Not saved".
       const id = r && r.id != null ? String(r.id) : d.id, v = r && Number(r.version) > 0 ? Number(r.version) : null;
       const said = r && r.first_run ? firstRunText(r.first_run) : "Saved. It is off, so it does not run.";
-      sched.said.delete(d.id); sched.said.set(id, said);
+      sched.said.delete(d.id); sched.said.set(id, { text: said, version: v });
       st.className = "status"; st.textContent = said;
-      if (v != null) { f.version = v; f.until = v; }
       f.saving = false; save.disabled = !ready;
+      // The server is at v now, so the next Save is pinned to it; the form is let go once the list holds v only when
+      // what it shows is what was saved: an edit made while the post was out keeps it.
+      if (v != null) { f.version = v; if (f.edits === sent) f.until = v; }
       await readSchedules();
       const now = sched.items.find(x => String(x.id) === id);
-      if (now && (v == null || Number(now.version) >= v)) {
+      if (now && (v == null || Number(now.version) >= v) && still(sent) && (v == null || f.until === v)) {
+        const mine = onIt();
         sched.forms.delete(d.id); if (id !== d.id) sched.forms.delete(id);
-        state.sel = { kind: "schedule", id };
+        if (mine) state.sel = { kind: "schedule", id };
+        schedRedraw();
       }
-      schedRedraw();
     });
     // A refused save keeps what was picked. A conflict reads the list again, so the next Save is made on what the
     // server holds now; for a new form it means the task and repo already have a schedule (the refusal names its id),
@@ -1508,7 +1522,11 @@ button.danger{color:var(--warn)}
       st.className = "status err"; st.textContent = "Not saved: " + why(err) + ". What you picked is kept.";
       if (err.status !== 409) return;
       await readSchedules();
+      // the version to pin the next Save to: what the server holds, whatever the form shows
       if (!isNew) { const cur = sched.items.find(x => String(x.id) === String(d.id)); if (cur) f.version = cur.version; return; }
+      // A new form the owner changed the task or repo of meanwhile, or that is gone or saving again: the refusal no
+      // longer says anything about it, so it is left as it is.
+      if (sched.forms.get(d.id) !== f || f.saving || task.value !== body.task || repo.value !== body.repo) return;
       const named = err.id || "", lower = s => String(s == null ? "" : s).toLowerCase();
       const cur = (named && sched.items.find(x => String(x.id) === named))
         || sched.items.find(x => x.task === body.task && lower(x.repo) === lower(body.repo));
@@ -1518,12 +1536,22 @@ button.danger{color:var(--warn)}
         return;
       }
       const cid = String(cur.id), have = sched.forms.get(cid), keep = !!(have && (have.dirty || have.saving));
+      // the owner moved on meanwhile (another schedule, another section): nothing is opened under them, the form stays
+      if (!onIt()) {
+        st.textContent = "Not saved: " + taskName(body.task) + " already has a schedule for " + String(cur.repo || body.repo) + " (" + cid +
+          "): open it to change it. What you picked is kept.";
+        return;
+      }
       const line = keep ? "This task and repo already has a schedule: it is open here, with the changes you had not saved on it. Save sets them."
         : "This task and repo already has a schedule: it is open here, with what you picked, not saved yet. Save sets it.";
+      // carried from the controls as they are now, so an edit made while the list was read goes with it
+      const picked = { cadence: cad.value, at: at.value, days: cad.value === "weekly" ? boxes.filter(([, b]) => b.checked).map(([w]) => w) : [] };
       if (keep) { have.st.className = "status"; have.st.textContent = line; }
-      else { sched.forms.delete(cid); sched.carry.set(cid, { cadence: body.cadence, at: body.at, days: body.days || [] }); }
-      sched.said.set(cid, line); sched.forms.delete(d.id);
-      state.sel = { kind: "schedule", id: cid }; schedRedraw();
+      else { sched.forms.delete(cid); sched.carry.set(cid, picked); }
+      sched.said.set(cid, { text: line, version: Number(cur.version) > 0 ? Number(cur.version) : null });
+      sched.forms.delete(d.id);
+      state.sel = { kind: "schedule", id: cid };
+      schedRedraw();
     }
     const fld = (label, c) => el("label", {class:"fld", for: c.id}, label, c);
     f.node = el("article", {class:"q sched", id: "sched-" + d.id},

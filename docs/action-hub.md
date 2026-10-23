@@ -542,7 +542,8 @@ naming the field, with nothing written. Setting an existing schedule again takes
 `id`: the page opens that one, with what was picked on the new form carried onto it unsaved
 (unless it holds unsaved changes of its own), so one Save sets it. A daily or weekly per-repo task
 whose repo is not exactly one checkout in the machine config's `launcher.repos` is `invalid`
-naming `repo`, since the tick could not run it. The answer carries `first_run`, the first slot
+naming `repo`, since the tick could not run it; so is one set while the machine config's
+launcher list cannot be read. The answer carries `first_run`, the first slot
 as YYYY-MM-DDTHH:MM in the hub machine's local time with no zone (null when off); the task
 starts at the first tick at or after it, up to about 15 minutes later. `tick.last` is UTC with
 its offset; the page shows `first_run` as it is and says it is the hub machine's time. `GET /api/v1/schedules` (anyone) lists them,
