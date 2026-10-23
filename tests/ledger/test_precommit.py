@@ -273,7 +273,8 @@ class TargetsTest(unittest.TestCase):
         ledger = os.path.join(self.root, 'rulings', 'LEDGER.md')
         self.ledger_at(ledger)
         paths = precommit.targets(self.home)
-        self.assertEqual(paths, (ledger, os.path.join(self.root, 'rulings', 'STANDING.md')))
+        self.assertEqual(paths[:2], (ledger, os.path.join(self.root, 'rulings', 'STANDING.md')))
+        self.assertEqual(len(paths), 2 + 5)        # and the five rulebooks
         staged = ['a.txt', 'rulings/LEDGER.md', 'rulings/STANDING.md', 'rulings/other.md']
         self.assertEqual(precommit.staged_targets(self.root, staged, paths),
                          ['rulings/LEDGER.md', 'rulings/STANDING.md'])

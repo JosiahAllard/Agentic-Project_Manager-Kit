@@ -5,13 +5,13 @@ githooks/pre-commit (a shell front end) runs githooks/pre-commit.py only when th
 `check` here. A repository opts in with `.kit.json` `ledger.pre_commit_check` set in `.kit.json`
 itself (the front end reads no section file); otherwise nothing runs.
 
-Opted in, the check judges only a commit that changes a ledger file or the standing digest
-(`targets`, from the machine config through kitlib.ledger.files: the `ledger_path` file and the
-digest beside it, or with `ledger_dir` every repo's file, the frozen `ledger_path` and the digest
-in that folder): any other commit passes after one `git diff --cached`. Such a commit is refused
+Opted in, the check judges only a commit that changes a ledger file, the standing digest or a
+rulebook (`targets`, from the machine config through kitlib.ledger.files: the `ledger_path` file
+and the digest beside it, or with `ledger_dir` every repo's file, the frozen `ledger_path` and the
+digest in that folder, and the rulebooks in the `rules` folder beside them): any other commit passes after one `git diff --cached`. Such a commit is refused
 when any of them has unstaged changes, whichever was staged (`tools/ledger.py check` reads the
 working files of all, so all must be what the commit holds); otherwise it runs
-`tools/ledger.py check --base HEAD` (well formed, append-only, standing digest), and a failure
+`tools/ledger.py check --base HEAD` (well formed, append-only, standing digest, rulebooks), and a failure
 refuses the commit.
 
 Fails closed, opted in: a `.kit.json` the kit cannot load whose text names `pre_commit_check`, a
@@ -31,7 +31,7 @@ from kitlib.config import ConfigError
 from kitlib.git import cmd
 from kitlib.proc import spawn
 
-from . import files
+from . import files, rulebook
 
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 LEDGER_TOOL = os.path.join(KIT, 'tools', 'ledger.py')
@@ -63,14 +63,16 @@ def command(root):
 
 
 def targets(home=None):
-    """The ledger files and the standing digest, from the machine config: `(ledger path, digest
-    path)` for the one-file ledger; with `ledger_dir`, every repo's file, then the frozen
-    `ledger_path` when set, then the digest. Raises ConfigError when the config cannot be read or
+    """The ledger files, the standing digest and the rulebooks, from the machine config: `(ledger
+    path, digest path)` for the one-file ledger; with `ledger_dir`, every repo's file, then the
+    frozen `ledger_path` when set, then the digest; then the fixed rulebook files
+    (kitlib.ledger.rulebook `NAMES`), present or not. Raises ConfigError when the config cannot be read or
     sets neither `ledger_path` nor `ledger_dir`."""
     found = files.of_config(config.user_config(home))
     if found is None:
         raise ConfigError('no ledger_path or ledger_dir in %s' % config.user.display(home))
-    return tuple(found.repos.values()) + ((found.frozen,) if found.frozen else ()) + (found.digest,)
+    return (tuple(found.repos.values()) + ((found.frozen,) if found.frozen else ()) + (found.digest,)
+            + tuple(rulebook.paths(found.rules).values()))
 
 
 def _key(path):

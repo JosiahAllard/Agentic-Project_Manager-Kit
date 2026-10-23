@@ -2,7 +2,7 @@
 
 The commit/push options take `--host NAME`: the agent host for the Co-Authored-By trailer, a host in `hosts.json`, default `PM_KIT_HOST`, else the registry's default host (Claude); `--provider` is its old name, accepted for one release. The trailer comes from `kitlib.attribution` (docs/commit.md); a Codex trailer needs the actual explicit --model id. The host and model are checked before anything is written; the provenance, branch, path and owner checks keep their rules.
 
-Append-only files hold the owner's rulings for every repository on the machine: one file per repository in the folder the machine config's `ledger_dir` names, or the one file `ledger_path` names ("Files"); no flag or environment variable names another. Entry point `tools/ledger.py`; logic `kitlib/ledger` (`read` the one reader, `fmt` the format, `files` which file holds what, `write` the writes, `vcs` the git, `standing` the standing digest, `precommit` the opt-in hook); tests `tests/ledger`. Ported from the PM repository's writer.
+Append-only files hold the owner's rulings for every repository on the machine: one file per repository in the folder the machine config's `ledger_dir` names, or the one file `ledger_path` names ("Files"); no flag or environment variable names another. Entry point `tools/ledger.py`; logic `kitlib/ledger` (`read` the one reader, `fmt` the format, `files` which file holds what, `write` the writes, `vcs` the git, `standing` the standing digest, `rulebook` the rulebooks, `precommit` the opt-in hook); tests `tests/ledger`. Ported from the PM repository's writer.
 
 ## Format
 
@@ -47,13 +47,14 @@ python tools/ledger.py grep TEXT [--repo REPO]
 python tools/ledger.py check [--base REV]
 python tools/ledger.py list --prov PROV --since YYYY-MM-DD [--repo REPO]
 python tools/ledger.py standing [WORD] [--repo REPO]
+python tools/ledger.py rules (--repo FOLDER | --all) [--sources] [--topic WORD]
 ```
 
 - **`add`** appends one entry to REPO's file and prints its id. It validates the file before and after writing, and writes it atomically with LF line ends. A Decides over 400 characters (`fmt.DECIDES_NUDGE`) draws a warning on stderr; the entry is still written. `--when` backfills a time.
 - **`retire`** turns an entry into its tombstone in place, in its own file, and prints its id. It is refused while a live entry's Decides or Items, in any ledger file, still names the entry. `--by` may name any file's entry. `--ruling` names the live entry whose Decides orders this retirement, and that entry's mention does not count.
 - **`show`** prints one entry from the file its id names; `grep` prints the header of every entry holding the text, ignoring case, from every file. Either exits 1 when nothing is found.
 - **`--repo REPO`** on `grep` and `list` reads one repository's view: its own file, and the frozen ledger's entries whose repo column is REPO or `all`.
-- **`check`** validates every ledger file and compares each with itself at `--base`: every older entry must be unchanged, or have become its own tombstone. A repository's file that the base lacks is new and is compared with nothing. The default base is `<repo.remote>/<main branch>` of the file's repository (`origin` unless its `.kit.json` sets `repo.remote`). A base that cannot be read prints `append-only NOT CHECKED` for that file and validates only. It also fails on each standing-digest line that cites a retired or missing entry ("Standing digest"). With `ledger_dir` set, each finding names its file, and the summary counts entries and files.
+- **`check`** validates every ledger file and compares each with itself at `--base`: every older entry must be unchanged, or have become its own tombstone. A repository's file that the base lacks is new and is compared with nothing. The default base is `<repo.remote>/<main branch>` of the file's repository (`origin` unless its `.kit.json` sets `repo.remote`). A base that cannot be read prints `append-only NOT CHECKED` for that file and validates only. It also fails on each standing-digest line that cites a retired or missing entry ("Standing digest"), and checks the rulebooks ("Rulebooks"). With `ledger_dir` set, each finding names its file, and the summary counts entries and files.
 - **`list`** is the read-only digest feed (docs/engineering-rulings.md "Kit pieces").
 - **`standing`** prints the standing digest's rule lines for a topic word, under their headings; `--repo` keeps only the digest's `## REPO` section, and with no word prints all of it. It needs a word, `--repo`, or both. Exits 1 on no match or no digest.
 - **Exit codes:** 0 ok; 1 no ledger configured, a ledger file that cannot be read, a refused write, a failed check, nothing found, or a commit or push that failed after the entry was written; 2 usage.
@@ -149,11 +150,33 @@ Logic: `kitlib/ledger/standing.py`.
 - `check` fails on each line citing an id that is retired or not in any ledger file.
 - `standing WORD` matches, ignoring case, a rule line holding the word or sitting under a heading that holds it. Each heading prints once. `--repo` first cuts the digest to that repository's section (`standing.section`).
 
+## Rulebooks
+
+Logic: `kitlib/ledger/rulebook.py` (`parse`, `render`, `load`, `check`, `for_repo`, `view`, `lines`); the folder from `kitlib/ledger/files.py` `of_config` (`Files.rules`); tests `tests/ledger/test_rulebook.py`.
+
+The standing rules of the machine live in rulebooks beside the log, in a `rules` folder: `<ledger_dir>/rules/` with `ledger_dir` set, else `rules/` in the folder of the `ledger_path` file. No config key names it. The files are fixed: `kit.md`, `retribution.md`, `griffball.md`, `pm.md`, and `all.md`, the shared one (printed as "shared"). A file that does not exist is no rulebook and no error. This slice reads and checks them; nothing writes them yet.
+
+```
+# Kit rules
+Repos: Agentic-Project_Manager-Kit
+Budget: 40
+
+## Landing
+- landing.batch: Landers batch up to three branches; a high-risk branch lands alone. (from <log id>, ...)
+```
+
+- **Header:** a `# title`, a `Repos:` line (checkout folder names, comma-separated; required) and an optional `Budget: N` (default 40, `rulebook.DEFAULT_BUDGET`).
+- **Topics and rules:** each `##` heading is a topic. A rule is one line, `- <key>: <text> (from <log id>, ...)`. The key is `<topic-slug>.<slug>` in lower case, digits, `-` and `.`, and unique in its file. A source is a log entry id (`fmt.ID`) and nothing else: a rule never cites a rule.
+- **Override:** a rule in a repository's rulebook with the key of a shared rule overrides it. `rules` marks it `[overrides shared]` and leaves the shared copy out of that repository's view; `check` notes it.
+- **Repository mapping:** `rulebook.for_repo` matches a checkout folder name against each rulebook's `Repos:` names, both lower-cased with every `_` as `-` (the `ledger_name` rule of `kitlib.coordinatorstart`); failing that, a rulebook whose file name is the folder's normalised name. `all.md` is never a repository's own.
+- **`rules --repo FOLDER`** prints the shared rulebook, then FOLDER's own, each under a `# name (N rules)` line with its topic headings. A folder with no rulebook gets the shared rules and a note on stderr. `--all` prints every rulebook. `--sources` adds each rule's `(from ...)`; `--topic WORD` keeps the rules whose heading, key or text holds the word (any case). One of `--repo` and `--all` is needed. Exit 1 when no rulebook file exists, or `--topic` matches no rule.
+- **`check`** fails on: an unknown line, a rule line that is malformed, a duplicate key, a rule with no source or a source that is not a log id, a header without `Repos:`, a bad `Budget:`, and a cited id that is not in any ledger file (a retired entry is allowed, since history stays). Overrides and a rulebook over its budget (a soft limit) print as `note:` lines and do not fail the check. When rulebooks exist the summary adds `rulebooks: N rules in M files`.
+
 ## Pre-commit check
 
 Hook `githooks/pre-commit`; dispatch `kitlib/githooks/precommit.py`; ledger step `kitlib/ledger/precommit.py`; tests `tests/ledger/test_precommit.py` and `tests/githooks/test_precommit.py`.
 
-Opt-in: a repository sets `"ledger": {"pre_commit_check": true}` in `.kit.json` itself, not in a section file, and `git config core.hooksPath <kit>/githooks`. The hook then judges each commit that adds, changes or deletes a ledger file or the standing digest (`precommit.targets`: every repository's file, the `ledger_path` file and the digest): it runs `tools/ledger.py check --base HEAD` and refuses the commit when that fails. Any other commit passes after one `git diff --cached` (the index the commit is built from, so `commit -a` and `commit -- <paths>` count). The check reads the working files of all of them, so such a commit is refused before it runs when any of them has unstaged changes, whichever of them is staged.
+Opt-in: a repository sets `"ledger": {"pre_commit_check": true}` in `.kit.json` itself, not in a section file, and `git config core.hooksPath <kit>/githooks`. The hook then judges each commit that adds, changes or deletes a ledger file or the standing digest (`precommit.targets`: every repository's file, the `ledger_path` file, the digest and the five rulebook files): it runs `tools/ledger.py check --base HEAD` and refuses the commit when that fails. Any other commit passes after one `git diff --cached` (the index the commit is built from, so `commit -a` and `commit -- <paths>` count). The check reads the working files of all of them, so such a commit is refused before it runs when any of them has unstaged changes, whichever of them is staged.
 
 `githooks/pre-commit.py` makes one call, `kitlib.githooks.precommit.main`, which runs the kit's checks (`CHECKS`: the render step, `kitlib.githooks.render`, which acts only in a kit checkout with a render source staged (docs/content.md "Render on commit"), then the ledger step) in order and stops at the first refusal. Nothing there runs a repository's own `hooks/pre-commit`; a later step would be one more entry in `CHECKS` (docs/pm-data-branch.md "Decided by the owner").
 
