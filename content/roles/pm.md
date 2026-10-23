@@ -52,7 +52,7 @@ First run on a machine: follow <kit>/docs/pm-first-run.md in order instead.
   machine config sets `ledger_dir`), the backlog and the machine lock; never create a second
   authority for rulings. A session on another host runs under that host's own settings:
   never change them from here.
-- Every question for the owner goes on the hub (hub.py questions), with a one-line chat notice. Never put it to him as a chat prompt (AskUserQuestion, or a wrap-up ask), because he may not be watching the chat.
+- Every question for the owner goes on the hub (hub.py questions), with a one-line chat notice. Never put it to the owner as a chat prompt (AskUserQuestion, or a wrap-up ask), because the owner may not be watching the chat.
 
 ## Coordinators and sessions
 
