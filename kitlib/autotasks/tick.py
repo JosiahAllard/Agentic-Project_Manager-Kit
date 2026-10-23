@@ -6,8 +6,9 @@ from TASKS alone (argv). A name TASKS does not hold is refused, never run. The t
 kit's own (`kit`: the folder holding tools/auto_tasks.py), with the python.exe beside the running
 interpreter, each detached with its output in logs/<schedule>.log of the state folder.
 
-The state folder is `auto-tasks` in the machine config's folder (kitlib.config.user.config_dir):
-state.json holds, per schedule, the last thing done for it ({'at', 'what', ...}; its `at` is the
+The state folder is `auto-tasks` in the home folder's machine config folder (~/.pm-kit, the
+kitlib.config.user DIR_NAME): machine-local, the same whatever the PM-repo pointer's state, and never
+in a checkout (the machine config itself lives in the PM repository, which is tracked). state.json holds, per schedule, the last thing done for it ({'at', 'what', ...}; its `at` is the
 schedule's baseline), tick.lock is the guard, tick.log the tick's own lines (one file of LOG_MAX
 bytes and one older one).
 
@@ -83,7 +84,9 @@ def argv(name, kit, main=None, python=None):
 
 
 def state_dir(home=None):
-    return os.path.join(kuser.config_dir(home), DIR_NAME)
+    """<home>/.pm-kit/auto-tasks: machine-local state, never the PM repository's tracked .pm-kit
+    (kitlib.config.user.config_dir), so a tick never leaves files in a checkout."""
+    return os.path.join(home or kuser.home_dir(), kuser.DIR_NAME, DIR_NAME)
 
 
 def read_state(path):
