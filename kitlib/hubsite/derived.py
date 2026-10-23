@@ -137,7 +137,10 @@ def findings(lint_dir):
             continue
         repo = _str(run.get('repo')) or name
         for f in run['findings']:
-            if not isinstance(f, dict) or not isinstance(f.get('fingerprint'), str)                     or not _FINGERPRINT.match(f['fingerprint']):
+            if not isinstance(f, dict):
+                continue
+            fp = f.get('fingerprint')
+            if not isinstance(fp, str) or not _FINGERPRINT.match(fp):
                 continue
             age = f.get('age')
             out.append({'repo': _str(f.get('repo')) or repo, 'check': _str(f.get('check')),

@@ -89,6 +89,11 @@ finding_marks/{id}/delete (OWNER, if_version optional) takes a mark back; GET fi
 lists them. POST to_pm with kind `act` passes a finding on to the PM: `finding` (its
 fingerprint, required, and refused for any other kind) prefills repo, refs (the fingerprint and
 the finding's target first) and, when none is given, text; the page marks the finding itself.
+POST to_pm/{id}/edit refuses to make an act note another kind or another note an act note.
+A finding's target and fix can name a path on this machine (a worktree's folder, a kit tool):
+only the local owner (Request.full: the owner, its error answers in its own words, not through
+the tunnel) sees them whole. Any other caller's findings, marks and act-note text have each
+absolute path cut to `.../<its last part>`, and no act note's refs carry one.
 
 Fields. A write route names the body fields it takes; any other field is refused (`invalid`, the
 field named), so a body cannot carry a field another role owns (an agent posting a question
@@ -304,7 +309,8 @@ DAYS_MAX = 3650
 AGENT_SAYS = {'store': 'the hub store is not available: the owner sees why'}
 
 Route = collections.namedtuple('Route', 'method pattern role handler')
-Request = collections.namedtuple('Request', 'role params body query via strong')
+# full: the local owner, told the store's own words (agent_words False) and not through the tunnel
+Request = collections.namedtuple('Request', 'role params body query via strong full')
 
 _TRUE = ('1', 'true', 'yes', 'on')
 _FALSE = ('', '0', 'false', 'no', 'off')
@@ -566,7 +572,8 @@ class Api(object):
         full = role == OWNER and agent_words is False       # the error's own text: paths and all
         strong = strong is True and role == OWNER
         try:
-            status, obj = 200, self._call(method, path, role, body, query, via, strong)
+            status, obj = 200, self._call(method, path, role, body, query, via, strong,
+                                          full and via != TUNNEL_VIA)
         except HubError as e:
             said = e.message if full else AGENT_SAYS.get(e.code, e.message)
             status, obj = STATUS.get(e.code, 500), error_body(e.code, said, e.field)
@@ -578,7 +585,7 @@ class Api(object):
         obj.setdefault('revision', revision)
         return status, obj
 
-    def _call(self, method, path, role, body, query, via, strong):
+    def _call(self, method, path, role, body, query, via, strong, full):
         if not isinstance(role, str) or role not in CALLERS:
             raise HubError('forbidden', 'this request carries no owner or agent credential',
                            'role')
@@ -602,7 +609,7 @@ class Api(object):
         if query is not None and not isinstance(query, dict):
             raise _invalid('the query is an object of names and values', 'query')
         out = route.handler(self, Request(role, params, body, query, via if isinstance(via, str)
-                                          else '', strong))
+                                          else '', strong, full is True))
         if not isinstance(out, dict):
             raise HubError('internal', 'the handler of %s gave no object' % route.pattern)
         return out
@@ -1141,7 +1148,7 @@ def to_pm_add(api, req):
     if refs is not None and not all(isinstance(r, str) and r.strip() for r in refs):
         raise _invalid('refs is a list of non-empty strings', 'refs')
     if b['kind'] == 'act':
-        _act_note(api, b)
+        _act_note(api, b, req)
     elif 'finding' in b:
         raise _invalid('finding is for an act note (kind act), not a %s one' % b['kind'],
                        'finding')
@@ -1171,6 +1178,10 @@ def to_pm_edit(api, req):
     doc_id = req.params['id']
     d = api.doc('to_pm', doc_id, b)
     _queued(doc_id, d, 'edited')
+    kind = changes.get('kind', d.get('kind'))
+    if kind != d.get('kind') and 'act' in (kind, d.get('kind')):
+        raise _invalid('an act note stays an act note and no other note becomes one: %s is %s'
+                       % (doc_id, d.get('kind')), 'kind')
     return api.change('to_pm', doc_id, d, changes, req, {'status': 'queued'})
 
 
@@ -1702,6 +1713,26 @@ def _put_pinned(api, coll, doc_id, fields, pin):
 # ---- the maintenance lint's findings and the owner's marks on them ("Findings")
 _FINGERPRINT = re.compile(r'[0-9a-f]{16}\Z')
 FINDING_COPY = ('repo', 'check', 'target', 'text')   # what a mark keeps of its finding
+FINDING_PATHS = ('target', 'fix')   # a finding's fields that can name a path on this machine
+# an absolute Windows path (a drive's or a share's), quoted with its spaces or bare to a space
+_ABS_PATH = re.compile(r'"(?:[A-Za-z]:[\\/]|\\\\)[^"]*"'
+                       r'|(?<![A-Za-z0-9])(?:[A-Za-z]:[\\/]|\\\\)[^\s"\'`<>|]*')
+
+
+def _unpathed(text):
+    """text with each absolute path cut to `.../<its last part>`."""
+    def cut(m):
+        parts = [p for p in re.split(r'[\\/]+', m.group(0).strip('"')) if p]
+        return '.../' + parts[-1] if len(parts) > 1 else '...'
+    return _ABS_PATH.sub(cut, text)
+
+
+def _seen(f, req):
+    """Finding f as this caller sees it: whole for the local owner (Request.full), else with no
+    absolute path in FINDING_PATHS."""
+    if req.full:
+        return f
+    return dict(f, **{k: _unpathed(f[k]) for k in FINDING_PATHS if isinstance(f.get(k), str)})
 
 
 def _fp_field(b, name):
@@ -1723,13 +1754,13 @@ def _finding(api, fp, field):
 def findings_list(api, req):
     repo = _q(req, 'repo').lower()
     marked = api.store.docs('finding_marks')
-    return {'items': [f for f in api.shown('findings')
+    return {'items': [_seen(f, req) for f in api.shown('findings')
                       if isinstance(f, dict) and f.get('fingerprint') not in marked
                       and (not repo or str(f.get('repo') or '').lower() == repo)]}
 
 
 def finding_marks_list(api, req):
-    return {'items': api.items('finding_marks', req)}
+    return {'items': [_seen(m, req) for m in api.items('finding_marks', req)]}
 
 
 def finding_marks_set(api, req):
@@ -1756,15 +1787,18 @@ def finding_marks_delete(api, req):
     return {'ok': True, 'id': doc_id, 'deleted': True, 'revision': r.revision}
 
 
-def _act_note(api, b):
-    """An `act` note's fields prefilled from its finding: repo, refs (the fingerprint and the
-    finding's target first, each once) and a text naming the check, target, text and fix."""
+def _act_note(api, b, req):
+    """An `act` note's fields prefilled from its finding as the caller sees it (_seen): repo,
+    refs (the fingerprint and the finding's target first, each once; a target's absolute path is
+    never a ref) and a text naming the check, target, text and fix."""
     fp = b.get('finding')
     if fp is None:
         raise _invalid('an act note names the finding it acts on (finding)', 'finding')
-    f = _finding(api, _fp_field(b, 'finding'), 'finding')
+    f = _seen(_finding(api, _fp_field(b, 'finding'), 'finding'), req)
+    target = f.get('target')
     refs = []
-    for r in [fp, f.get('target')] + list(b.get('refs') or ()):
+    for r in [fp, _unpathed(target) if isinstance(target, str) else None] + list(
+            b.get('refs') or ()):
         if isinstance(r, str) and r and r not in refs:
             refs.append(r)
     b['refs'] = refs

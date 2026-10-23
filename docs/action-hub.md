@@ -552,8 +552,10 @@ and marking again takes the mark's `if_version`, as for a schedule. `POST
 /api/v1/finding_marks/{fingerprint}/delete` (owner) takes the mark back; `GET
 /api/v1/finding_marks` (anyone) lists the marks. `POST /api/v1/to_pm` with kind `act` and
 `finding` passes one on: repo, refs (the fingerprint and the finding's target first) and, when
-none is given, text are filled from the finding. An agent is refused `forbidden` on each write
-(`kitlib.hubsite.api` "Findings").
+none is given, text are filled from the finding; an edit never changes a kind to or from `act`.
+Only the local owner sees a target or fix whole: any other caller, the tunnel included, gets
+each absolute path cut to `.../<its last part>`, and no act note's refs carry one. An agent is
+refused `forbidden` on each write (`kitlib.hubsite.api` "Findings").
 
 ## pages/<id> and page_html/<id>
 An agent's document: `pages/<id>` is its card, `page_html/<id>` = {html} its body. In `pages`,
