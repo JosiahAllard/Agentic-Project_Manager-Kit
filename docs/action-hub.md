@@ -540,8 +540,10 @@ whole document; an agent is refused `forbidden`. Any other field, or a bad value
 naming the field, with nothing written. Setting an existing schedule again takes its
 `if_version`; without it, or with another, it is `conflict`. A daily or weekly per-repo task
 whose repo is not exactly one checkout in the machine config's `launcher.repos` is `invalid`
-naming `repo`, since the tick could not run it. The answer carries `first_run`, the next local
-run as YYYY-MM-DDTHH:MM, or null when it is off. `GET /api/v1/schedules` (anyone) lists them,
+naming `repo`, since the tick could not run it. The answer carries `first_run`, the first slot
+as YYYY-MM-DDTHH:MM in the hub machine's local time with no zone (null when off); the task
+starts at the first tick at or after it, up to about 15 minutes later. `tick.last` is UTC with
+its offset; the page shows `first_run` as it is and says it is the hub machine's time. `GET /api/v1/schedules` (anyone) lists them,
 filtered by `repo` like every list, with `tick`: {last, running, every_s}: when the tick was last
 seen, whether that is recent enough to call it running, and its period in seconds
 (`kitlib.hubsite.api` "Schedules").

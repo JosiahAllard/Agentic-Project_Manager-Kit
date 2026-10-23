@@ -1695,8 +1695,15 @@ def tick_last_seen():
         timespec='seconds')
 
 
-TICK_EVERY_S = 15 * 60          # the kit-automatic-tasks task's interval
 TICK_STALE_S = 40 * 60          # no tick seen for this long: it is not running
+
+
+def tick_every_s():
+    """The kit-automatic-tasks task's interval in seconds, the one machine setup registers
+    (kitlib.machinesetup.extras.AUTO_EVERY_MINUTES). Imported here, not at the top: the
+    machinesetup package costs about three times this module's own import."""
+    from kitlib.machinesetup.extras import AUTO_EVERY_MINUTES
+    return AUTO_EVERY_MINUTES * 60
 
 
 def _aware(text):
@@ -1713,7 +1720,7 @@ def _tick_status(api):
     seen, now = _aware(last), _aware(api.clock())
     running = (seen is not None and now is not None
                and (now - seen).total_seconds() <= TICK_STALE_S)
-    return {'last': last, 'running': running, 'every_s': TICK_EVERY_S}
+    return {'last': last, 'running': running, 'every_s': tick_every_s()}
 
 
 def schedules_list(api, req):

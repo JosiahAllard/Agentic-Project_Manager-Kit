@@ -2884,10 +2884,14 @@ class ScheduleTest(ApiCase):
                 for role in (OWNER, AGENT):
                     got = self.ok('GET', '/schedules', role)
                     self.assertEqual(got['tick'], {'last': seen, 'running': running,
-                                                   'every_s': api.TICK_EVERY_S})
-        # the tick runs every 15 minutes: a few missed ticks before it is said not to run
-        self.assertEqual(api.TICK_EVERY_S, 15 * 60)
-        self.assertGreater(api.TICK_STALE_S, 2 * api.TICK_EVERY_S)
+                                                   'every_s': 15 * 60})
+        # the period is the one machine setup registers the tick with, not a copy of it; a few
+        # missed ticks before it is said not to run
+        from kitlib.machinesetup import extras
+        self.assertEqual(api.tick_every_s(), extras.AUTO_EVERY_MINUTES * 60)
+        with mock.patch.object(extras, 'AUTO_EVERY_MINUTES', 7):
+            self.assertEqual(self.ok('GET', '/schedules', OWNER)['tick']['every_s'], 7 * 60)
+        self.assertGreater(api.TICK_STALE_S, 2 * api.tick_every_s())
 
     def test_the_default_tick_seen_is_the_state_file_time(self):
         # serve.py passes neither seam: the hub server reads the tick's own files

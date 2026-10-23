@@ -1388,20 +1388,34 @@ button.danger{color:var(--warn)}
   const TASKS = [["maint-lint", "Maintenance lint"], ["worktree-sweep", "Worktree sweep"], ["agent-temp-sweep", "Agent temp sweep"]];
   const WEEK = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
   const taskName = t => (TASKS.find(x => x[0] === t) || [t, String(t)])[1];
-  // forms: the open form of each schedule by id ({node, version, dirty}), kept across redraws once the owner touched it.
-  // said: what the last save of a schedule answered, by id.
-  const sched = { items: [], tick: null, err: "", read: false, busy: false, forms: new Map(), said: new Map() };
-  async function readSchedules(){
-    if (sched.busy) return;
+  // forms: the open form of each schedule by id ({node, save, version, dirty, ready}), kept across redraws once the
+  // owner touched it. said: what the last save of a schedule answered, by id.
+  // reading: the read in flight. A read asked for meanwhile is not dropped: it makes that read go round once more, and
+  // the caller waits for the round, so what it then sees was read after it asked (a save's own row and first run).
+  const sched = { items: [], tick: null, err: "", read: false, busy: false, again: false, reading: null, forms: new Map(), said: new Map() };
+  function readSchedules(){
+    if (sched.reading) { sched.again = true; return sched.reading; }
     sched.busy = true;
-    try {
-      const j = await hub.call("GET", "/schedules");
-      sched.items = Array.isArray(j.items) ? j.items.filter(x => x && typeof x === "object" && x.id != null) : [];
-      sched.tick = j.tick && typeof j.tick === "object" ? j.tick : null; sched.err = "";
-    } catch (e) { sched.err = (e && e.message) || "no reason given"; }
-    finally { sched.busy = false; sched.read = true; }
-    if (state.section === "autotasks") render();
+    sched.reading = (async () => {
+      try {
+        do {
+          sched.again = false;
+          try {
+            const j = await hub.call("GET", "/schedules");
+            sched.items = Array.isArray(j.items) ? j.items.filter(x => x && typeof x === "object" && x.id != null) : [];
+            sched.tick = j.tick && typeof j.tick === "object" ? j.tick : null; sched.err = "";
+          } catch (e) { sched.err = (e && e.message) || "no reason given"; }
+        } while (sched.again);
+      } finally { sched.busy = false; sched.read = true; sched.reading = null; }
+      if (state.section === "autotasks") render();
+    })();
+    return sched.reading;
   }
+  const tickMinutes = () => sched.tick && Number(sched.tick.every_s) > 0 ? Math.round(Number(sched.tick.every_s) / 60) : 15;
+  // first_run is the hub machine's local time with no zone (api.py _first_run), so it is shown as it is, and said so;
+  // the task starts at the first tick at or after it.
+  const firstRunText = fr => "Saved. First run: the first tick at or after " + when(fr) + " (the hub machine's time), up to about " +
+    tickMinutes() + " min later.";
   function tickText(t){
     if (!t) return "";
     const every = Number(t.every_s) > 0 ? " every " + Math.round(Number(t.every_s) / 60) + " min" : "";
@@ -1428,9 +1442,14 @@ button.danger{color:var(--warn)}
   }
   // A schedule's form. Task and repo name the schedule, so they are picked only for a new one.
   function scheduleCard(d){
+    // A form drawn before the snapshot came (GET /schedules can answer first) has no repos and a disabled Save, so it is
+    // drawn again once the page is ready, unless the owner already touched it; a kept form's Save follows `ready`.
     const isNew = d.id === "new", old = sched.forms.get(d.id);
-    if (old && (old.dirty || old.version === d.version)) return old.node;
-    const f = { version: d.version, dirty: false }; sched.forms.set(d.id, f);
+    if (old && (old.dirty || (old.version === d.version && old.ready === ready))) {
+      if (!old.saving) old.save.disabled = !ready;
+      return old.node;
+    }
+    const f = { version: d.version, dirty: false, ready, saving: false }; sched.forms.set(d.id, f);
     const touch = () => { f.dirty = true; };
     const pick = (label, opts, v) => { const s = el("select", {"aria-label": label, id: "s-" + d.id + "-" + label.toLowerCase().replace(/ /g, "-"), onchange: touch}, opts.map(([val, txt]) => el("option", {value: val, text: txt}))); s.value = v; return s; };
     const repos = knownRepos();
@@ -1441,22 +1460,33 @@ button.danger{color:var(--warn)}
     const days = el("fieldset", {class:"days", hidden: cad.value !== "weekly"}, el("legend", {text:"Days"}), boxes.map(([w, b]) => el("label", {class:"urg", for: b.id}, b, " " + w)));
     cad.addEventListener("change", () => { days.hidden = cad.value !== "weekly"; });
     const st = el("span", {class:"status", role:"status", id: "s-" + d.id + "-status", text: sched.said.get(d.id) || ""});
-    const save = el("button", {class:"primary", type:"button", text:"Save", disabled: !ready});
+    const save = el("button", {class:"primary", type:"button", text:"Save", disabled: !ready}); f.save = save;
     save.addEventListener("click", async () => {
+      if (!ready || f.saving) return;
       const body = { task: isNew ? task.value : d.task, repo: isNew ? repo.value : d.repo, cadence: cad.value, at: at.value };
       if (cad.value === "weekly") body.days = boxes.filter(([, b]) => b.checked).map(([w]) => w);
-      f.dirty = true; save.disabled = true; st.className = "status"; st.textContent = "Saving…";
+      f.dirty = true; f.saving = true; save.disabled = true; st.className = "status"; st.textContent = "Saving…";
       try {
         const r = await hub.post("/schedules", { ...body, ...(isNew ? {} : pinAt(f.version)) });
         const id = r && r.id != null ? String(r.id) : d.id;
-        sched.forms.delete(d.id); sched.said.delete(d.id);
-        sched.said.set(id, r && r.first_run ? "Saved. first run: " + when(r.first_run) : "Saved. It is off, so it does not run.");
+        sched.forms.delete(d.id); sched.said.delete(d.id); sched.forms.delete(id);
+        sched.said.set(id, r && r.first_run ? firstRunText(r.first_run) : "Saved. It is off, so it does not run.");
         state.sel = { kind: "schedule", id };
         await readSchedules();
       } catch (err) {
+        f.saving = false;
         st.className = "status err"; st.textContent = "Not saved: " + why(err) + ". What you picked is kept."; save.disabled = false;
         // Changed meanwhile: the list is read again and the next Save is made on what the server holds now.
-        if (err.status === 409) { await readSchedules(); const cur = sched.items.find(x => x.id === d.id); if (cur) f.version = cur.version; }
+        if (err.status === 409) {
+          await readSchedules();
+          // A new one for a task and repo that already has a schedule: that schedule is opened, to change it there.
+          const cur = isNew ? sched.items.find(x => x.task === body.task && x.repo === body.repo) : sched.items.find(x => x.id === d.id);
+          if (cur && isNew) {
+            sched.forms.delete(d.id); sched.forms.delete(String(cur.id));
+            sched.said.set(String(cur.id), "This task and repo already has a schedule: it is open here. Change it and save.");
+            state.sel = { kind: "schedule", id: String(cur.id) }; render();
+          } else if (cur) f.version = cur.version;
+        }
       }
     });
     const fld = (label, c) => el("label", {class:"fld", for: c.id}, label, c);

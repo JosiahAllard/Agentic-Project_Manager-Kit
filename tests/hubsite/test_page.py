@@ -2597,7 +2597,8 @@ class AutoTasksTest(unittest.TestCase):
         self.assertEqual((got["hiddenBefore"], got["hiddenAfter"]), (True, False))
         self.assertEqual(got["posts"], [["/schedules", {"task": "maint-lint", "repo": "alpha", "cadence": "weekly", "at": "04:30",
                                                         "days": ["Mon", "Wed"], "if_version": 2}]])
-        self.assertEqual(got["said"], "Saved. first run: " + got["expect"])
+        self.assertEqual(got["said"], "Saved. First run: the first tick at or after " + got["expect"] +
+                         " (the hub machine's time), up to about 15 min later.")
         self.assertEqual(got["gets"], 2)                                       # read again after the save
 
     def test_a_schedule_set_off_says_it_does_not_run(self):
@@ -2650,7 +2651,70 @@ class AutoTasksTest(unittest.TestCase):
                                                            "at": "03:00", "set_at": NOW, "via": "web", "version": 1}]))))
         self.assertIn("No automatic tasks scheduled", got["empty"])
         self.assertEqual(got["cur"], ["row-maint-lint-beta"])
-        self.assertTrue(got["said"].startswith("Saved. first run: "), got["said"])
+        self.assertTrue(got["said"].startswith("Saved. First run: the first tick at or after "), got["said"])
+
+    # GET /snapshot held until release(): the section's own read answers first, as it can on a load straight into it.
+    HOLD_SNAPSHOT = """
+            const realFetch = globalThis.fetch; let release; const held = new Promise(r => { release = r; });
+            globalThis.fetch = (url, init) => /\\/snapshot$/.test(url) ? held.then(() => realFetch(url, init)) : realFetch(url, init);
+    """
+
+    def test_a_form_drawn_before_the_snapshot_can_save_once_it_comes(self):
+        got = self.run_page(self.HOLD_SNAPSHOT + """
+            await start();
+            const early = $("#sched-maint-lint-alpha"), before = early ? button(early, "Save").disabled : null;
+            release(); await settle(); await settle();
+            const save = button($("#pane-detail #sched-maint-lint-alpha"), "Save"), after = save.disabled;
+            await click(save);
+            return { before, after, order: calls.filter(c => c.path === "/snapshot" || c.path === "/schedules").map(c => c.method + " " + c.path),
+                     posts: calls.filter(c => c.method === "POST").map(c => c.body) };
+        """)
+        self.assertEqual(got["order"][:2], ["GET /schedules", "GET /snapshot"])           # the schedules came first
+        self.assertTrue(got["before"])                                                    # not ready: Save is off
+        self.assertFalse(got["after"])                  # pagedom fires a disabled button, so the flag itself is checked
+        self.assertEqual(got["posts"], [{"task": "maint-lint", "repo": "alpha", "cadence": "daily", "at": "03:00", "if_version": 2}])
+
+    def test_a_new_schedule_for_a_task_and_repo_that_has_one_opens_that_one(self):
+        conflict = "schedules/maint-lint-alpha changed: it is at version 2"
+        got = self.run_page("""
+            await start();
+            await click($("#sched-new"));
+            await click(button($("#pane-detail #sched-new"), "Save"));
+            return { posts: calls.filter(c => c.method === "POST").map(c => c.body),
+                     cur: $$("#list article").filter(a => a.getAttribute("aria-current") === "true").map(a => a.id),
+                     open: !!$("#pane-detail #sched-maint-lint-alpha"), gone: !$("#pane-detail #sched-new"),
+                     said: text($("#s-maint-lint-alpha-status")) };
+        """, post={"status": 409, "body": {"ok": False, "error": {"code": "conflict", "message": conflict}}})
+        self.assertEqual(got["posts"], [{"task": "maint-lint", "repo": "alpha", "cadence": "daily", "at": "03:00"}])
+        self.assertEqual(got["cur"], ["row-maint-lint-alpha"])
+        self.assertTrue(got["open"] and got["gone"], got)
+        self.assertEqual(got["said"], "This task and repo already has a schedule: it is open here. Change it and save.")
+
+    def test_the_read_after_a_save_follows_one_already_in_flight(self):
+        got = self.run_page("""
+            let saved = false, holding = false; const queue = [];
+            const before = SCHED0, after = SCHED1;
+            server.route = c => c.path !== "/schedules" ? undefined : c.method === "POST"
+              ? (saved = true, { status: 200, body: { ok: true, id: "maint-lint-alpha", version: 3, first_run: "2026-10-24T05:00" } })
+              : { status: 200, body: saved ? after : before };
+            const realFetch = globalThis.fetch;       // a held GET is answered as the server stood when it was asked
+            globalThis.fetch = (url, init) => { const p = realFetch(url, init); return holding && /\\/schedules$/.test(url) && init.method === "GET" ? new Promise(r => queue.push(() => r(p))) : p; };
+            await start();
+            holding = true;
+            await click($("#tabbar [data-s=todo]")); await click($("#tabbar [data-s=autotasks]"));   // a read now in flight
+            holding = false;
+            await type($("#s-maint-lint-alpha-at"), "05:00");
+            const saving = click(button($("#pane-detail #sched-maint-lint-alpha"), "Save"));
+            await settle();
+            queue.shift()(); await saving; await settle();
+            return { gets: calls.filter(c => c.method === "GET" && c.path === "/schedules").length,
+                     chip: text($("#row-maint-lint-alpha .chip")), said: text($("#s-maint-lint-alpha-status")) };
+        """.replace("SCHED0", json.dumps(schedules())).replace("SCHED1", json.dumps(schedules(items=[
+            {"id": "maint-lint-alpha", "task": "maint-lint", "repo": "alpha", "cadence": "daily", "at": "05:00",
+             "set_at": NOW, "via": "web", "version": 3}]))))
+        self.assertEqual(got["gets"], 3)                    # the first, the one in flight, and one more after the save
+        self.assertEqual(got["chip"], "Daily at 05:00")
+        self.assertTrue(got["said"].startswith("Saved. First run: "), got["said"])
 
     def test_on_a_phone_nothing_opens_by_itself(self):
         got = self.run_page(TriageListTest.PHONE + """
@@ -2705,6 +2769,11 @@ class PageTextTest(unittest.TestCase):
     def setUp(self):
         self.p = page()
         self.markup, self.script = self.p.split("<script>")[0], self.p.split("<script>")[1]
+
+    def test_the_pages_tasks_are_the_servers_schedule_tasks(self):
+        from kitlib.hubsite import api
+        tasks = json.loads(re.search(r"const TASKS = (\[.*?\]);\n", self.script).group(1))
+        self.assertEqual(tuple(t for t, _ in tasks), api.SCHEDULE_TASKS)
 
     def test_the_hidden_attribute_hides_whatever_display_rule_an_element_has(self):
         """A browser lets any author `display` rule beat its own rule for `hidden`; the stand-in DOM has no CSS and
