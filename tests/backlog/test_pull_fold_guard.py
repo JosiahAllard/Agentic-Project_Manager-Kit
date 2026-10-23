@@ -1,13 +1,15 @@
 """The fold-in guard on `pull` (docs/backlog.md, "The fold-in guard"): a pull whose scope overlaps
 a path another live pull's branch changed since its merge base with the code main belongs on that
-branch, so it is refused unless `--reason` and `--ruling R-nnnn` override it, the same route as a
-collision with a live pull's scope. The caller's own branch never counts. `next` runs the same
+branch, so it is the `pull-collision` row (kitlib/backlog/roles.py): refused unless the caller's
+role may take it (`may_collide`) and gives `--reason`, the same route as a collision with a live
+pull's scope. The caller's own branch never counts. `next` runs the same
 guard and passes such a record over (NextFold). End to end through Store.write on a ref store
 with a bare remote."""
 import unittest
 from unittest import mock
 
 from kitlib.backlog import plan as pmod
+from kitlib.backlog import policy
 from kitlib.backlog.errors import Failure, Refusal, Usage
 from kitlib.git import cmd, refs
 
@@ -63,7 +65,8 @@ class PullFold(_Branches):
         self.assertIn('cannot pull FOO: its scope overlaps the work of kit/holder', msg)
         self.assertIn('kitlib/x/** vs kitlib/x/a.py (changed on kit/holder)', msg)
         self.assertIn(FOLD, msg)
-        self.assertIn('--ruling R-nnnn', msg)
+        self.assertIn('`pull-collision`', msg)
+        self.assertNotIn('--ruling', msg)
         self.assertEqual(self.get('FOO').get('state'), 'open')
 
     def test_a_reason_alone_never_overrides_it(self):
@@ -71,50 +74,45 @@ class PullFold(_Branches):
         with self.assertRaises(Refusal) as cm:
             self.verb('pull', 'FOO', reason='the owner wants it today')
         self.assertIn(FOLD, str(cm.exception))
-        self.assertIn('--ruling R-nnnn', str(cm.exception))
+        self.assertIn('`pull-collision`', str(cm.exception))
         self.assertEqual(self.get('FOO').get('state'), 'open')
 
-    def test_a_ruling_alone_is_refused_asking_for_a_reason(self):
+    def test_a_role_that_may_collide_is_refused_without_a_reason(self):
         self.seed(priced('FOO', scope='kitlib/x/**'))
         with self.assertRaises(Refusal) as cm:
-            self.verb('pull', 'FOO', ruling='R-9001')
+            self.verb('pull', 'FOO', may_collide=True)
         self.assertIn('--reason', str(cm.exception))
         self.assertEqual(self.get('FOO').get('state'), 'open')
 
-    def test_a_reason_and_a_ruling_write_it_and_cite_the_ruling(self):
+    def test_a_reason_from_a_role_that_may_collide_writes_it_and_names_the_row(self):
         self.seed(priced('FOO', scope='kitlib/x/**'))
-        change = self.verb('pull', 'FOO', reason='the owner wants it today', ruling='R-9001')
+        change = self.verb('pull', 'FOO', reason='the owner wants it today', may_collide=True)
         r = self.get('FOO')
         self.assertEqual((r.get('state'), r.get('pulled_by'), r.get('preempt')),
-                         ('pulled', BRANCH, 'the owner wants it today (PM R-9001)'))
-        self.assertEqual(change.ruling, 'R-9001')
+                         ('pulled', BRANCH, 'the owner wants it today'))
+        self.assertEqual(change.rows, ['pull-collision'])
+        self.assertTrue(change.subject.endswith(policy.COLLISION_MARK), change.subject)
         self.assertNotIn('FOO', ' '.join(r.all('displaced')))
 
-    def test_a_bad_ruling_shape_is_usage(self):
-        self.seed(priced('FOO', scope='kitlib/x/**'))
-        with self.assertRaises(Usage):
-            self.verb('pull', 'FOO', reason='the owner wants it today', ruling='9001')
-        self.assertEqual(self.get('FOO').get('state'), 'open')
-
-    def test_an_out_of_order_pull_that_folds_names_the_ruling(self):
+    def test_an_out_of_order_pull_that_folds_names_the_row(self):
         self.seed(priced('TOP', priority='1', scope='docs/top.md'),
                   priced('FOO', priority='5', scope='kitlib/x/a.py'))
         with self.assertRaises(Refusal) as cm:
             self.verb('pull', 'FOO')
-        self.assertIn('--ruling R-nnnn', str(cm.exception))
+        self.assertIn('`pull-collision`', str(cm.exception))
 
     def test_a_disjoint_scope_pulls_plainly(self):
         self.seed(priced('FOO', scope='kitlib/other/**'))
-        change = self.verb('pull', 'FOO')
+        change = self.verb('pull', 'FOO', may_collide=True)
         self.assertEqual(self.get('FOO').get('state'), 'pulled')
-        self.assertIsNone(change.ruling)
+        self.assertFalse(getattr(change, 'rows', None))
 
     def test_the_callers_own_branch_diff_never_counts(self):
         self.branch_with(BRANCH, 'kitlib/own/b.py', existing=True)
         self.seed(held('MINE', BRANCH, 'docs/mine.md'), priced('FOO', scope='kitlib/own/**'))
         change = self.verb('pull', 'FOO', reason='bundled with MINE')
         self.assertEqual(self.get('FOO').get('state'), 'pulled')
-        self.assertIsNone(change.ruling)
+        self.assertFalse(getattr(change, 'rows', None))
 
     def test_a_branch_that_holds_no_pull_does_not_count(self):
         self.branch_with('kit/idle', 'kitlib/z/a.py')
@@ -184,7 +182,7 @@ class PullFold(_Branches):
         self.assertIn('NOTE: code main %s shares no history with kit/orphan; set '
                       'backlog.code_main; branch diffs not compared' % base, change.lines)
         self.assertEqual(self.get('FOO').get('state'), 'pulled')
-        self.assertIsNone(change.ruling)
+        self.assertFalse(getattr(change, 'rows', None))
 
     def assert_git_failure(self):
         self.seed(priced('FOO', scope='docs/y.md'))
@@ -243,7 +241,7 @@ class NextFold(_Branches):
 
     def test_its_pull_names_the_fold_not_the_offer(self):
         # Passed over by `next`, so the fold refusal must come before "not in next's offer":
-        # that one would hide the reason and the `--ruling` override.
+        # that one would hide the reason and the collision row that overrides it.
         self.seed(priced('FOO', scope='kitlib/x/**'))
         with self.assertRaises(Refusal) as cm:
             self.verb('pull', 'FOO')
@@ -341,21 +339,23 @@ class SetScopeFold(_Branches):
             self.verb('set', 'MINE', [('scope', ['docs/mine.md', 'kitlib/x/**'])])
         msg = str(cm.exception)
         self.assertIn('kitlib/x/** vs kitlib/x/a.py (changed on kit/holder)', msg)
-        self.assertIn('--ruling R-nnnn', msg)
+        self.assertIn('`set-widen-collision`', msg)
+        self.assertNotIn('--ruling', msg)
         self.assertEqual(self.get('MINE').all('scope'), ['docs/mine.md'])
 
-    def test_widening_into_another_branchs_work_with_a_ruling_is_written(self):
+    def test_widening_into_another_branchs_work_the_role_may_take_is_written(self):
         change = self.verb('set', 'MINE', [('scope', ['docs/mine.md', 'kitlib/x/**'])],
-                           ruling='R-9001')
+                           may_collide=True)
         self.assertEqual(self.get('MINE').all('scope'), ['docs/mine.md', 'kitlib/x/**'])
-        self.assertEqual(change.ruling, 'R-9001')
-        self.assertIn('  folds into the work of kit/holder on R-9001: kitlib/x/** vs kitlib/x/a.py '
+        self.assertEqual(change.rows, ['set-widen-collision'])
+        self.assertTrue(change.subject.endswith(policy.COLLISION_MARK), change.subject)
+        self.assertIn('  folds into the work of kit/holder: kitlib/x/** vs kitlib/x/a.py '
                       '(changed on kit/holder)', change.lines)
 
     def test_widening_into_free_space_is_free(self):
         change = self.verb('set', 'MINE', [('scope', ['docs/mine.md', 'kitlib/free/**'])])
         self.assertEqual(self.get('MINE').all('scope'), ['docs/mine.md', 'kitlib/free/**'])
-        self.assertIsNone(change.ruling)
+        self.assertFalse(getattr(change, 'rows', None))
 
     def test_the_records_own_branch_diff_never_counts(self):
         self.branch_with(BRANCH, 'kitlib/own/b.py', existing=True)
@@ -369,8 +369,8 @@ class SetScopeFold(_Branches):
 
 
 class TakeoverFold(_Branches):
-    """The dead-pull takeover is the same door: one that folds into a live branch's work needs
-    `--ruling`, and takes no `--reason`, as a colliding takeover does."""
+    """The dead-pull takeover is the same door: one that folds into a live branch's work is the
+    `pull-collision` row, and takes no `--reason`, as a colliding takeover does."""
 
     def setUp(self):
         super().setUp()
@@ -380,22 +380,22 @@ class TakeoverFold(_Branches):
                   priced('DEAD', state='pulled', pulled_at='2026-10-01', pulled_by='kit/gone',
                          scope='kitlib/x/**', session='kit'))
 
-    def test_a_folding_takeover_is_refused_without_a_ruling(self):
+    def test_a_folding_takeover_is_refused_unless_the_role_may_collide(self):
         with self.assertRaises(Refusal) as cm:
             self.verb('pull', 'DEAD')
         msg = str(cm.exception)
         self.assertIn('kitlib/x/** vs kitlib/x/a.py (changed on kit/holder)', msg)
-        self.assertIn('--ruling R-nnnn', msg)
+        self.assertIn('`pull-collision`', msg)
         self.assertEqual(self.get('DEAD').get('pulled_by'), 'kit/gone')
 
-    def test_a_folding_takeover_with_a_ruling_is_written(self):
-        change = self.verb('pull', 'DEAD', ruling='R-9001')
+    def test_a_folding_takeover_the_role_may_take_is_written_and_names_the_row(self):
+        change = self.verb('pull', 'DEAD', may_collide=True)
         self.assertEqual(self.get('DEAD').get('pulled_by'), BRANCH)
-        self.assertEqual(change.ruling, 'R-9001')
+        self.assertEqual(change.rows, ['pull-collision'])
 
     def test_a_folding_takeover_takes_no_reason(self):
         with self.assertRaises(Usage):
-            self.verb('pull', 'DEAD', reason='the owner wants it', ruling='R-9001')
+            self.verb('pull', 'DEAD', reason='the owner wants it', may_collide=True)
 
 
 class PullFoldInThePmDataWorktree(PmDataWorktree):

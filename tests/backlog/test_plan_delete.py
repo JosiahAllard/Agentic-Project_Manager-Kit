@@ -1,4 +1,4 @@
-"""`delete ID --why T [--ruling R]` (kitlib/backlog/plan.py plan_delete; docs/backlog.md
+"""`delete ID --why T` (kitlib/backlog/plan.py plan_delete; docs/backlog.md
 "Commands"): the record goes with the subject `deletes ID: <why>`, which history reads as it
 reads `closes` and `retires` (store._last_closing), so `add` again needs `--reopen`, `show`
 names the deleting commit and a `requires: item:` on it is never met. Retire's owner gates; a
@@ -12,7 +12,7 @@ from kitlib.backlog.errors import Failure, NotFound, Refusal, Usage
 
 from tests.backlog.helpers import ADD_NONE, TODAY, StoreCase, priced, rec
 
-OWNER_PRICED = dict(priority='2', priority_by='owner', priority_ruling='R-9001')
+OWNER_PRICED = dict(priority='2', priority_by='owner')
 OWNER_BLOCKED = dict(state='blocked', blocked_on='owner', owner_ask='which one?')
 WHY = 'the owner says this should not exist'
 
@@ -73,29 +73,28 @@ class Delete(DeleteCase):
 
 
 class OwnerGates(DeleteCase):
-    """Retire's gates: an owner-priced or owner-held record takes a ruling; a ruling on any other
-    record is a usage error."""
+    """Retire's gates: an owner-priced record is the `retire-priced` row and an owner-held one
+    `close-held` (kitlib/backlog/roles.py), both top-only, so a plan with no role check refuses
+    them; any other record goes without one."""
 
-    def test_an_owner_priced_record_needs_a_ruling(self):
+    def test_an_owner_priced_record_takes_the_role_check(self):
         self.seed(rec('FOO', **OWNER_PRICED), rec('BAR'))
         with self.assertRaises(Refusal) as cm:
             self.verb('delete', 'FOO', WHY)
-        self.assertIn('--ruling', str(cm.exception))
-        with self.assertRaises(Usage):
-            self.verb('delete', 'BAR', WHY, ruling='R-9002')
-        with self.assertRaises(Refusal) as cm:
-            self.verb('delete', 'FOO', WHY, ruling='R-9001')
-        self.assertIn('One ruling, one change', str(cm.exception))
-        change = self.verb('delete', 'FOO', WHY, ruling='R-9002')
-        self.assertEqual(change.ruling, 'R-9002')
+        self.assertIn('retire-priced', str(cm.exception))
+        self.assertIn('no role check ran', str(cm.exception))
+        self.assertIsNotNone(self.get('FOO'))
+        change = self.verb('delete', 'FOO', WHY, role_checked=True)
+        self.assertNotIn('Ruling', change.subject)
         self.verb('delete', 'BAR', WHY)
         self.assertEqual(self.store.load().file_count, 0)
 
-    def test_an_owner_held_record_needs_a_ruling(self):
+    def test_an_owner_held_record_takes_the_role_check(self):
         self.seed(rec('FOO', **OWNER_BLOCKED))
-        with self.assertRaises(Refusal):
+        with self.assertRaises(Refusal) as cm:
             self.verb('delete', 'FOO', WHY)
-        self.verb('delete', 'FOO', WHY, ruling='R-9001')
+        self.assertIn('close-held', str(cm.exception))
+        self.verb('delete', 'FOO', WHY, role_checked=True)
         self.assertIsNone(self.get('FOO'))
 
 
