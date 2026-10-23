@@ -21,7 +21,7 @@ class Line(unittest.TestCase):
 
     def check(self, before, after, opens=True):
         self.assertEqual(pmod.uncite_line(before, opens), (after, False), before)
-        self.assertNotRegex(after, r'\b[Tt]he owner\b(?!_)', before)
+        self.assertNotRegex(after, r'\b(?:The|the) owner\b(?!_)', before)
         # idempotent: the rewrite cites nothing, so a second pass leaves it
         self.assertEqual(pmod.uncite_line(after, opens), (after, False), after)
 

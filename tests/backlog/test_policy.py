@@ -296,7 +296,7 @@ class CliRole(unittest.TestCase):
         before = self.ok(None, 'show', 'FOO')
         out = self.ok('plain', 'uncite')
         self.assertIn('UNCITE: 1 cite(s) in 1 record(s)', out)
-        self.assertIn("    + Per the owner's ruling, keep it.", out)
+        self.assertIn('    + Per an owner ruling, keep it.', out)
         self.assertEqual(self.ok(None, 'show', 'FOO'), before)          # a dry run writes nothing
         for mark in ('coordinator', 'worker'):
             rc, out = self.run_tool(mark, 'uncite', '--apply')

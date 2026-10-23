@@ -1649,14 +1649,14 @@ def _uncite_rules(opens, state):
         # a leading `CITES: ` or `CITES, ` (after a bullet and a short `Note: ` style label)
         (r'^(' + _BULLET + r')((?:[A-Za-z][A-Za-z _-]{0,20}: )?)' + _G + r'[:,]\s+(\S?)', prefix),
         # `the ruling CITES`, `owner question CITES`: the noun already says it
-        (r"\b((?:[Oo]wner|PM|[Tt]he|[Aa]n?|[Tt]hat|[Tt]his|[Ii]ts)(?:'s)? (?:(?:[Oo]wner|PM)"
+        (r"\b((?:[Oo]wner|PM|The|the|[Aa]n?|[Tt]hat|This|this|[Ii]ts)(?:'s)? (?:(?:[Oo]wner|PM)"
          r"(?:'s)? )?" + _NOUN + r") " + _G, r'\1'),
         # `R-nnnn (2026-10-07): ...` opening a line
         (r'^(?P<pre>' + _BULLET + r')(?P<c>' + _G + r')(?= \([0-9]{4}-[0-9]{2}-[0-9]{2}\):)',
          word()),
         # `R-nnnn's split`; `under the R-nnnn ruling`
         (place + r"(?P<c>" + _CITE + r")'s (?=[a-z])", word(suffix="'s ")),
-        (place + r'(?:[Tt]he )?(?P<c>' + _G + r') (?=' + _NOUN + r')', word(alone=False,
+        (place + r'(?:(?:The|the) )?(?P<c>' + _G + r') (?=' + _NOUN + r')', word(alone=False,
                                                                            suffix=' ')),
         # `per R-nnnn`, `answered by R-nnnn`
         (r'(?P<pre>' + _PREP + r')(?P<c>' + _G + r')' + _AFTER, word()),
