@@ -133,6 +133,11 @@ class NoAnswerCase(unittest.TestCase):
         hub, c = self.fake(['hold', 'hit'])
         self.assertEqual(c.wait(pending=True, for_key='pm')['pending'], HIT['pending'])
         self.assertEqual(hub.paths, [api.BASE + '/wait?for=pm&pending=1&timeout=%g' % TURN_S] * 2)
+        # so does one that leaves out items it has acted on, with no session key
+        hub, c = self.fake(['hold', 'hit'])
+        self.assertEqual(c.wait(pending=True, except_ids=['Q-7'])['pending'], HIT['pending'])
+        self.assertEqual(len(hub.paths), 2, hub.paths)
+        self.assertIn('except=Q-7', hub.paths[1])
 
     def test_a_held_poll_is_no_answer_a_serve_error_with_the_text_of_before(self):
         hub, c = self.fake(['hold'])
