@@ -25,6 +25,7 @@ import datetime
 import json
 import os
 import subprocess
+import sys
 
 from kitlib.config import ConfigError, user as kuser
 from kitlib.fs.treelock import TreeBusy, TreeLock, TreeLockError
@@ -141,13 +142,14 @@ def launcher_repos(home=None):
 
 
 def find_repo(repo, repos):
-    """The main checkout of the repository a schedule names (its name or launcher label, either
-    case), from launcher_repos' list; None when none or more than one checkout matches."""
+    """The main checkout of the repository a schedule names (its name, launcher label or checkout
+    folder name, either case), from launcher_repos' list; None when none or more than one checkout
+    matches."""
     if not isinstance(repo, str) or not repo:
         return None
     want = repo.lower()
     found = set(os.path.normcase(m) for label, m, name in repos
-                if want in (label.lower(), str(name).lower()))
+                if want in (label.lower(), str(name).lower(), os.path.basename(m).lower()))
     if len(found) != 1:
         return None
     return next(m for label, m, name in repos if os.path.normcase(m) in found)
@@ -284,7 +286,13 @@ def _tick_locked(folder, kit, now, schedules, start, repos, python):
             continue
         else:
             machine_wide.add(name)
-        command = argv(name, kit, main, python)
+        exe = python or spawn.console_python()
+        if not exe:
+            why = 'no python.exe beside %s to run it with' % sys.executable
+            records[k] = {'at': _stamp(now), 'what': SKIPPED, 'slot': slot, 'why': why}
+            lines.append('%s skipped: %s' % (k, why))
+            continue
+        command = argv(name, kit, main, exe)
         log = os.path.join(folder, LOGS, '%s.log' % _safe(k))
         records[k] = {'at': _stamp(now), 'what': STARTED, 'slot': slot, 'argv': command, 'log': log}
         plans.append((k, command, log))

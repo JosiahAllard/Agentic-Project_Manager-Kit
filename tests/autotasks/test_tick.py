@@ -93,6 +93,12 @@ class Table(unittest.TestCase):
         self.assertIsNone(T.find_repo('x', [('x', 'C:\\a', 'a'), ('y', 'C:\\b', 'x')]))
         self.assertEqual(T.find_repo('x', [('x', 'C:\\a', 'x'), ('y', 'C:\\a', 'x')]), 'C:\\a')
 
+    def test_find_repo_by_checkout_folder_name(self):
+        main = os.path.normpath('C:/r/folder-x')
+        repos = [('label', main, 'cfgname')]
+        self.assertEqual(T.find_repo('Folder-X', repos), main)
+        self.assertIsNone(T.find_repo('other', repos))
+
 
 class State(Base):
     def test_missing_state_is_empty(self):
@@ -177,6 +183,24 @@ class Tick(Base):
         code, lines = self.go()
         self.assertEqual(self.started, [])
         self.assertIn("worktree-sweep-elsewhere skipped: repository 'elsewhere'", '\n'.join(lines))
+
+    def test_a_schedule_naming_the_checkout_folder_starts_it(self):
+        main = os.path.normpath('C:/r/folder-x')
+        self.schedules = [sched(repo='folder-x')]
+        self.seed({'worktree-sweep-folder-x': {'at': '2026-10-20T09:01:00', 'what': 'started'}})
+        T.tick(home=self.home, kit=self.kit, now=NOW, fetch=lambda: self.schedules, start=self.start,
+               repos=lambda: [('label', main, 'cfgname')], python=PY)
+        self.assertEqual(self.started[0][0][2:4], ['-C', main])
+
+    def test_no_console_python_is_refused_before_the_start_record(self):
+        self.schedules = [sched()]
+        self.seed({'worktree-sweep-demo': {'at': '2026-10-20T09:01:00', 'what': 'started'}})
+        with mock.patch.object(T.spawn, 'console_python', return_value=None):
+            code, lines = T.tick(home=self.home, kit=self.kit, now=NOW, fetch=lambda: self.schedules,
+                                 start=self.start, repos=lambda: [('demo', MAIN, 'demo')])
+        self.assertEqual((code, self.started), (T.EXIT_OK, []))
+        self.assertIn('worktree-sweep-demo skipped: no python.exe', '\n'.join(lines))
+        self.assertEqual(self.records()['worktree-sweep-demo']['what'], 'skipped')
 
     def test_a_machine_wide_task_starts_once_a_tick(self):
         self.schedules = [sched('agent-temp-sweep', 'a'), sched('agent-temp-sweep', 'b')]
