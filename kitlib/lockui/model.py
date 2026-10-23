@@ -217,6 +217,17 @@ def build(snap, history_rows=(), now=None):
     return v
 
 
+def _result(d):
+    """A history line's outcome for the hub's filter: its `how` when the run was cancelled or
+    interrupted, else "ok" (exit code 0) or "failed" (any other code); None with no code."""
+    how, code = d.get("how"), d.get("code")
+    if how in ("cancelled", "interrupted"):
+        return how
+    if not isinstance(code, int) or isinstance(code, bool):
+        return None
+    return "ok" if code == 0 else "failed"
+
+
 def _strip(runs, queue, agent_holds, history_rows, now):
     out = []
     for r in runs:
@@ -257,6 +268,8 @@ def _strip(runs, queue, agent_holds, history_rows, now):
         vs = ("expected %s (%s %s)" % (span(exp), span(abs(took - exp)), "over" if late else "under")
               if exp else "no expected time")
         out.append({"type": "hist", "id": d.get("id"), "_s": s, "_e": max(e, s),
+                    "repo": d.get("repo") or None, "kind": d.get("kind") or None,
+                    "result": _result(d),
                     "_x": s + dt.timedelta(seconds=exp) if exp else None, "late": late, "open": False,
                     "text": "ran %s/%s (%s, %s) %s-%s: %s, %s%s%s%s" % (
                         d.get("repo") or "", d.get("slug") or "", d.get("kind") or "?",
@@ -443,7 +456,7 @@ HOLD_KEYS = ("id", "owner", "scope", "start", "end", "start_local", "end_local",
              "slots", "slots_fixed", "live", "state", "lapses_at", "repo", "slug", "kind")
 RUN_KEYS = ("id", "state", "repo", "slug", "kind", "since", "held_since", "expected_end",
             "expect_s", "expect_from", "cores", "gpus", "background", "overrun", "usage")
-STRIP_KEYS = ("type", "id", "open", "late", "text")
+STRIP_KEYS = ("type", "id", "open", "late", "text", "repo", "kind", "result")
 DIVISION_KEYS = ("division", "default_division", "owner_division", "wanted_division",
                  "cpu_slots", "gpu_slots", "agent_cap")
 GAME_KEYS = ("enabled", "hold", "slots", "would_take")
