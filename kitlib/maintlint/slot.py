@@ -105,16 +105,24 @@ def marker_path(result_path):
 
 def write_skip(result_path, skipped, now=None):
     """Writes the skip marker for `skipped` (a Skipped) beside result_path, whole (a temp file,
-    then os.replace); returns its path. OSError is the caller's."""
+    then os.replace); returns its path. OSError is the caller's; a failed write removes the temp
+    file."""
     now = now or datetime.datetime.now(datetime.timezone.utc)
     path = marker_path(result_path)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + '.tmp'
-    with open(tmp, 'w', encoding='utf-8', newline='\n') as fh:
-        json.dump({'reason': skipped.reason, 'at': now.strftime('%Y-%m-%dT%H:%M:%SZ'),
-                   'code': skipped.code}, fh, sort_keys=True)
-        fh.write('\n')
-    os.replace(tmp, path)
+    try:
+        with open(tmp, 'w', encoding='utf-8', newline='\n') as fh:
+            json.dump({'reason': skipped.reason, 'at': now.strftime('%Y-%m-%dT%H:%M:%SZ'),
+                       'code': skipped.code}, fh, sort_keys=True)
+            fh.write('\n')
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
     return path
 
 
@@ -127,7 +135,8 @@ def read_skip(result_path):
     except (OSError, ValueError):
         return None
     if not isinstance(data, dict) or data.get('reason') not in REASONS.values() \
-            or not isinstance(data.get('at'), str) or not isinstance(data.get('code'), int):
+            or not isinstance(data.get('at'), str) or not isinstance(data.get('code'), int) \
+            or isinstance(data['code'], bool):
         return None
     return {'reason': data['reason'], 'at': data['at'], 'code': data['code']}
 

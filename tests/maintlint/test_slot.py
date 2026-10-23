@@ -2,6 +2,7 @@
 waiting a fixed 15 min; a busy lock or a strong hold skips the run (exit 3), leaves the previous
 result.json as it was and writes the skip marker, which the next written result clears; the lock's
 exit 1 and 2 become 4; --dry-run books nothing. The lock is stubbed: no test books the machine's."""
+import contextlib
 import io
 import os
 import tempfile
@@ -166,6 +167,88 @@ class Tool(unittest.TestCase):
             with open(mark, 'w', encoding='utf-8') as fh:
                 fh.write(body)
             self.assertIsNone(slot.read_skip(self.result), body)
+
+    def test_read_skip_rejects_a_bool_code(self):
+        # bool is a subclass of int; a marker's code is a lock exit code, never true or false.
+        mark = os.path.join(self.dir, 'skipped.json')
+        for body in ('{"reason": "busy", "at": "x", "code": true}',
+                     '{"reason": "busy", "at": "x", "code": false}'):
+            with open(mark, 'w', encoding='utf-8') as fh:
+                fh.write(body)
+            self.assertIsNone(slot.read_skip(self.result), body)
+
+    def test_a_failed_marker_write_leaves_no_temp_file(self):
+        skipped = slot.Skipped('busy', EXIT_BUSY, 'SKIPPED: busy')
+        for target in ('replace', 'dump'):
+            where = slot.os if target == 'replace' else slot.json
+            with mock.patch.object(where, target, side_effect=OSError('no space')):
+                with self.assertRaises(OSError):
+                    slot.write_skip(self.result, skipped)
+            self.assertEqual(os.listdir(self.dir), [], target)
+
+    def test_a_marker_that_cannot_be_written_still_exits_skipped_with_a_note(self):
+        with mock.patch.object(slot.lockrun, 'book', refusing(EXIT_TIMEOUT)), \
+                mock.patch.object(slot.kinds_mod, 'load', return_value=TABLE), \
+                mock.patch.object(slot, 'write_skip', side_effect=OSError('denied')), \
+                mock.patch.object(maint_lint.maintlint, 'run') as run:
+            code, out, err = self.main('-C', self.dir, '--result', self.result)
+        self.assertEqual(code, slot.EXIT_SKIPPED, err)
+        self.assertTrue(out.startswith('SKIPPED: '), out)
+        self.assertEqual(err, 'note: the skip marker was not written: denied\n')
+        run.assert_not_called()
+
+    def test_a_marker_that_cannot_be_cleared_keeps_the_runs_exit_and_adds_a_note(self):
+        clean = {'findings': [], 'notes': [], 'counts': {}, 'ledger': None, 'elapsed_s': 0.0}
+        found = dict(clean, findings=[{'check': 'x', 'id': 'A', 'text': 't', 'fix': 'f'}])
+        for res, want in ((clean, 0), (found, 1)):
+            with mock.patch.object(slot, 'take', return_value=FakeSlot()), \
+                    mock.patch.object(slot, 'clear_skip', side_effect=OSError('in use')), \
+                    mock.patch.object(maint_lint.page, 'render', return_value=''), \
+                    mock.patch.object(maint_lint.maintlint, 'run', return_value=res):
+                code, out, err = self.main('-C', self.dir, '--result', self.result)
+            self.assertEqual(code, want, err)
+            self.assertEqual(err, 'note: the old skip marker was not removed: in use\n')
+            self.assertTrue(os.path.isfile(self.result))
+
+    def test_an_unexpected_error_exits_5_with_one_error_line(self):
+        self.assertNotIn(maint_lint.EXIT_ERROR,
+                         (0, 1, 2, slot.EXIT_SKIPPED, slot.EXIT_LOCK, EXIT_FAIL, EXIT_USAGE,
+                          EXIT_BUSY, EXIT_TIMEOUT, EXIT_REQUIRE, EXIT_RESERVED, EXIT_HOLD))
+        held = FakeSlot()
+        cases = (
+            ('RuntimeError: take broke',
+             [mock.patch.object(slot, 'take', side_effect=RuntimeError('take broke'))]),
+            ('RuntimeError: book broke',
+             [mock.patch.object(slot.kinds_mod, 'load', return_value=TABLE),
+              mock.patch.object(slot.lockrun, 'book', side_effect=RuntimeError('book broke'))]),
+            ('ValueError: lint broke',
+             [mock.patch.object(slot, 'take', return_value=held),
+              mock.patch.object(maint_lint.maintlint, 'run',
+                                side_effect=ValueError('lint broke'))]),
+        )
+        for want, patches in cases:
+            with contextlib.ExitStack() as stack:
+                for p in patches:
+                    stack.enter_context(p)
+                code, out, err = self.main('-C', self.dir, '--result', self.result)
+            self.assertEqual(code, maint_lint.EXIT_ERROR, (want, out, err))
+            self.assertEqual(err, 'ERROR: %s\n' % want)
+        self.assertEqual((held.entered, held.exited), (1, 1))
+
+    def test_an_unexpected_error_in_a_dry_run_exits_5(self):
+        page = os.path.join(self.dir, 'page.html')
+        with mock.patch.object(maint_lint.maintlint, 'run', side_effect=KeyError('gone')):
+            code, _, err = self.main('-C', self.dir, '--dry-run', '--result', self.result,
+                                     '--out', page)
+        self.assertEqual(code, maint_lint.EXIT_ERROR, err)
+        self.assertIn('KeyError', err)
+
+    def test_keyboard_interrupt_and_other_base_exceptions_are_not_caught(self):
+        for exc in (KeyboardInterrupt, SystemExit):
+            with mock.patch.object(slot, 'take', return_value=FakeSlot()), \
+                    mock.patch.object(maint_lint.maintlint, 'run', side_effect=exc):
+                with self.assertRaises(exc):
+                    self.main('-C', self.dir, '--result', self.result)
 
     def test_another_refusal_exits_with_the_locks_code_and_runs_nothing(self):
         with mock.patch.object(slot.lockrun, 'book', refusing(EXIT_REQUIRE)), \

@@ -10,8 +10,10 @@ runs that command.
 Exit codes: 0 no finding, 1 findings, 2 USAGE (`--dry-run` without `--out`, or no `--result` and
 no `pm_data` to put it under), 3 SKIPPED (the machine lock stayed busy or a strong hold reserves
 it; see "Schedule"), 4 when the lock refuses the run with its own exit 1 or 2 (mapped, so it cannot
-read as findings or USAGE), else the lock's own exit code when it refuses the run for another
-reason.
+read as findings or USAGE), 5 ERROR (any other error, an `Exception`, raised while booking the
+slot or linting: one `ERROR: <type>: <message>` line on stderr instead of a traceback, whose
+Python exit 1 would read as findings; `EXIT_ERROR` in the tool), else the lock's own exit code
+when it refuses the run for another reason. Ctrl+C and other `BaseException`s are not caught.
 
 ## Schedule
 
