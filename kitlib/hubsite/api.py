@@ -103,7 +103,11 @@ POST to_pm/{id}/edit refuses to make an act note another kind or another note an
 A finding's target and fix can name a path on this machine (a worktree's folder, a kit tool):
 only the local owner (Request.full: the owner, its error answers in its own words, not through
 the tunnel) sees them whole. Any other caller's findings, marks and act-note text have each
-absolute path cut to `.../<its last part>`, and no act note's refs carry one.
+absolute path cut to `.../<its last part>`, and no act note's refs carry one; GET to_pm and GET
+snapshot cut an act note's text and refs and a mark's target the same way (_unpath_act, _seen).
+GET findings also answers `skipped`: [{repo, reason, at}], the repos whose last weekly run was
+skipped (the optional lint_skips view), only where the marker's `at` is later than the result's
+`started` and both parse (_lint_skips); no view, or one that fails, is an empty list.
 
 Fields. A write route names the body fields it takes; any other field is refused (`invalid`, the
 field named), so a body cannot carry a field another role owns (an agent posting a question
@@ -157,6 +161,8 @@ is null and `unavailable` maps its name to that same reason:
   completed(repo='', days=None)             [{repo, fetched_at, items}]
   notices()  repos()  usage()  agents()     a list each
   findings()                                the lint's rows (GET findings; not in GET snapshot)
+  lint_skips()                              [{repo, reason, at, started}]: each repo's skip
+                                            marker and its result's started (GET findings)
   health()                                  a dict merged into GET health (git, backlog, ...)
   record(repo, id)                          one record (GET records/{repo}/{id})
   record_template(repo)                     a new record's fields (GET records/{repo}/new)
@@ -1156,7 +1162,23 @@ def stories_withdraw(api, req):
 
 
 def to_pm_list(api, req):
-    return {'items': api.items('to_pm', req)}
+    """The notes; an act note's text and refs with no absolute path but for the local owner
+    (Request.full), as for its finding (_seen)."""
+    items = api.items('to_pm', req)
+    if not req.full:
+        for d in items:
+            _unpath_act(d)
+    return {'items': items}
+
+
+def _unpath_act(d):
+    """Note d (a copy) with an act note's text and refs cut as _unpathed; any other note as
+    it is: the owner's own words are the PM's to read whole."""
+    if isinstance(d, dict) and d.get('kind') == 'act':
+        if isinstance(d.get('text'), str):
+            d['text'] = _unpathed(d['text'])
+        if isinstance(d.get('refs'), list):
+            d['refs'] = [_unpathed(r) if isinstance(r, str) else r for r in d['refs']]
 
 
 def to_pm_add(api, req):
@@ -1824,9 +1846,16 @@ def _put_pinned(api, coll, doc_id, fields, pin):
 _FINGERPRINT = re.compile(r'[0-9a-f]{16}\Z')
 FINDING_COPY = ('repo', 'check', 'target', 'text')   # what a mark keeps of its finding
 FINDING_PATHS = ('target', 'fix')   # a finding's fields that can name a path on this machine
-# an absolute Windows path (a drive's or a share's), quoted with its spaces or bare to a space
-_ABS_PATH = re.compile(r'"(?:[A-Za-z]:[\\/]|\\\\)[^"]*"'
-                       r'|(?<![A-Za-z0-9])(?:[A-Za-z]:[\\/]|\\\\)[^\s"\'`<>|]*')
+# an absolute Windows path: a drive's (C:\ or C:/) or a share's, \\host\ or //host/ (a host is
+# needed: a lone doubled backslash is no path, and a URL's :// is no share). Quoted, it runs to
+# its quote; bare, on past each space whose next word holds a separator and starts no new path,
+# absolute or ./ ../ relative (Q:\home\A B\x is one path), so no folder after a space shows
+_PATH_HEAD = r'(?:[A-Za-z]:[\\/]|(?<![:\\/])[\\/]{2,}[^\s\\/"\'`<>|]+[\\/]+)'
+_PATH_WORD = r'[^\s"\'`<>|]*'
+_ABS_PATH = re.compile(r'"%s[^"]*"' % _PATH_HEAD
+                       + r'|(?<![A-Za-z0-9])%s%s' % (_PATH_HEAD, _PATH_WORD)
+                       + r'(?:[ \t]+(?![A-Za-z]:[\\/]|[\\/]{2}|\.{1,2}[\\/])[^\s"\'`<>|\\/]*[\\/]%s)*'
+                       % _PATH_WORD)
 
 
 def _unpathed(text):
@@ -1866,7 +1895,36 @@ def findings_list(api, req):
     marked = api.store.docs('finding_marks')
     return {'items': [_seen(f, req) for f in api.shown('findings')
                       if isinstance(f, dict) and f.get('fingerprint') not in marked
-                      and (not repo or str(f.get('repo') or '').lower() == repo)]}
+                      and (not repo or str(f.get('repo') or '').lower() == repo)],
+            'skipped': [s for s in _lint_skips(api)
+                        if not repo or s['repo'].lower() == repo]}
+
+
+def _utc(text):
+    """An ISO time (a trailing Z is UTC) as an aware datetime, or None when it does not parse."""
+    if not isinstance(text, str):
+        return None
+    return _when(text[:-1] + '+00:00' if text.endswith('Z') else text, '')
+
+
+def _lint_skips(api):
+    """The repos whose last weekly lint run was skipped: {repo, reason, at} from the optional
+    lint_skips view, kept only when the marker's `at` is later than its result's `started`
+    (both must parse; a marker left beside a newer result is no skip). No view, a view that
+    raises or a row that is not one: nothing, never a failed GET findings."""
+    try:
+        rows = api.view('lint_skips')
+    except Exception:               # noqa: BLE001 - the line is context; the rows still show
+        return []
+    out = []
+    for s in rows if isinstance(rows, list) else ():
+        if not isinstance(s, dict) or not all(isinstance(s.get(k), str)
+                                              for k in ('repo', 'reason')):
+            continue
+        at, started = _utc(s.get('at')), _utc(s.get('started'))
+        if at is not None and started is not None and at > started:
+            out.append({'repo': s['repo'], 'reason': s['reason'], 'at': s['at']})
+    return out
 
 
 def finding_marks_list(api, req):
@@ -1923,6 +1981,13 @@ def _act_note(api, b, req):
 def snapshot(api, req):
     revision, docs = api.store.snapshot()
     docs.pop('page_html', None)     # a body is read on its own (GET pages/{id}, "Pages")
+    if not req.full:                # the paths as GET to_pm and GET finding_marks cut them
+        for d in (docs.get('to_pm') or {}).values():
+            _unpath_act(d)
+        marks = docs.get('finding_marks') or {}
+        for doc_id, m in list(marks.items()):
+            if isinstance(m, dict):
+                marks[doc_id] = _seen(m, req)
     views, missing = {}, {}
     for name in VIEWS:
         try:

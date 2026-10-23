@@ -3082,8 +3082,10 @@ class FindingsTest(ApiCase):
         d = self.store.get('to_pm', obj['id'])
         self.assertIn(HOSTILE, d['text'])
         self.assertEqual(d['refs'], [FP, '..\\..\\Windows\\x'])
-        self.assertEqual([f['text'] for f in self.ok('GET', '/to_pm', AGENT)['items']],
+        self.assertEqual([f['text'] for f in self.ok('GET', '/to_pm', OWNER)['items']],
                          [d['text']])
+        self.assertEqual([f['text'] for f in self.ok('GET', '/to_pm', AGENT)['items']],
+                         [d['text'].replace('D:\\data\\..\\y', '.../y')])
 
     def test_a_path_is_the_local_owners_to_see(self):
         wt = 'Q:\\work\\Repo\\.claude\\worktrees\\my-slug'
@@ -3122,6 +3124,117 @@ class FindingsTest(ApiCase):
         self.assertNotIn('Q:', d['text'])
         self.assertNotIn('\\\\share', d['text'])
         self.assertIn(cut[1], d['text'])
+
+    # every caller but the local owner (Request.full), as test_a_path_is_the_local_owners_to_see
+    REMOTE = ({'role': AGENT}, {'role': OWNER, 'via': 'tunnel', 'agent_words': True},
+              {'role': OWNER, 'agent_words': True}, {'role': OWNER, 'via': 'tunnel'})
+
+    def seen_fix(self, fix, **kw):
+        self.views.rows = [finding(fix=fix)]
+        return self.ok('GET', '/findings', kw.pop('role', OWNER), **kw)['items'][0]['fix']
+
+    def test_a_forward_slash_share_is_cut(self):
+        fix = 'copy it to //nas/share/Users/jdoe/out.txt; see https://example.com/a/b'
+        for kw in self.REMOTE:
+            with self.subTest(caller=kw):
+                self.assertEqual(self.seen_fix(fix, **kw),
+                                 'copy it to .../out.txt; see https://example.com/a/b')
+
+    def test_a_bare_path_with_a_space_is_cut_whole(self):
+        fix = 'run Q:\\home\\Jane Doe\\repo\\x.py -C Z:/w/Repo then D:\\a\\b ../rel/c'
+        for kw in self.REMOTE:
+            with self.subTest(caller=kw):
+                self.assertEqual(self.seen_fix(fix, **kw),
+                                 'run .../x.py -C .../Repo then .../b ../rel/c')
+
+    def test_a_doubled_backslash_with_no_share_is_not_cut(self):
+        fix = 'split on \\\\ or \\\\n, not \\\\host alone; Q:\\\\home\\\\a\\\\b.py is a path'
+        for kw in self.REMOTE:
+            with self.subTest(caller=kw):
+                self.assertEqual(self.seen_fix(fix, **kw),
+                                 'split on \\\\ or \\\\n, not \\\\host alone; .../b.py is a path')
+
+    def test_get_to_pm_cuts_an_act_notes_paths_for_all_but_the_local_owner(self):
+        wt = 'Q:\\work\\Repo\\.claude\\worktrees\\my-slug'
+        self.views.rows = [finding(target=wt, fix='python Q:/kit/tools/x.py')]
+        act = self.ok('POST', '/to_pm', OWNER, {'kind': 'act', 'finding': FP,
+                                                'refs': ['Q:\\work\\Repo\\x']})['id']
+        note = self.ok('POST', '/to_pm', OWNER, {'text': 'a question'})['id']
+        made = self.store.get('to_pm', act)
+        self.assertIn(wt, made['text'])                     # made locally: the paths whole
+        self.mark()
+        for kw in self.REMOTE:
+            with self.subTest(caller=kw):
+                kw = dict(kw)
+                role = kw.pop('role')
+                got = {d['id']: d for d in self.ok('GET', '/to_pm', role, **kw)['items']}
+                cols = self.ok('GET', '/snapshot', role, **kw)['collections']
+                self.assertEqual(cols['to_pm'][act],
+                                 {k: v for k, v in got[act].items() if k != 'id'})
+                self.assertEqual(cols['finding_marks'][FP]['target'], '.../my-slug')
+                self.assertNotIn('Q:', json.dumps(got[act]))
+                self.assertNotIn('Q:', json.dumps(cols))
+                self.assertIn('.../my-slug', got[act]['text'])
+                self.assertIn('.../x.py', got[act]['text'])
+                self.assertEqual(got[act]['refs'], [FP, '.../my-slug', '.../x'])
+                self.assertEqual(got[note]['text'], 'a question')
+        cols = self.ok('GET', '/snapshot', OWNER)['collections']   # the local owner: whole
+        self.assertEqual(cols['to_pm'][act], made)
+        self.assertEqual(cols['finding_marks'][FP]['target'], wt)
+
+    def test_a_json_escaped_share_is_cut(self):
+        # a share path inside JSON text: each backslash doubled (\\\\nas\\share\\...)
+        fix = ('see {"p": "\\\\\\\\nas\\\\share\\\\jdoe\\\\out.txt"}, \\\\\\\\nas\\\\s\\\\a.log'
+               ' and \\\\\\\\')
+        for kw in self.REMOTE:
+            with self.subTest(caller=kw):
+                self.assertEqual(self.seen_fix(fix, **kw),
+                                 'see {"p": .../out.txt}, .../a.log and \\\\\\\\')
+
+    def skips(self, rows, **kw):
+        self.views.lint_skips = lambda: rows
+        return self.ok('GET', '/findings', OWNER, **kw)['skipped']
+
+    def test_findings_name_a_skipped_run_only_when_the_marker_is_newer(self):
+        self.assertEqual(self.ok('GET', '/findings', AGENT)['skipped'], [])     # no view
+        newer = {'repo': 'kit', 'reason': 'busy', 'at': '2026-01-09T03:00:00Z',
+                 'started': '2026-01-02T03:04:05Z', 'code': 3}
+        self.assertEqual(self.skips([newer]),
+                         [{'repo': 'kit', 'reason': 'busy', 'at': '2026-01-09T03:00:00Z'}])
+        self.assertEqual(self.skips([newer], query={'repo': 'OTHER'}), [])
+        self.assertEqual(len(self.skips([newer], query={'repo': 'KIT'})), 1)
+        for bad in (dict(newer, at='2026-01-01T00:00:00Z'),      # a result newer: no skip
+                    dict(newer, at=newer['started']),
+                    dict(newer, at='last tuesday'), dict(newer, at=None),
+                    dict(newer, at='2026-01-09T03:00:00'),      # no offset
+                    dict(newer, started='?'), dict(newer, started=None),
+                    dict(newer, reason=3), dict(newer, repo=None), 'kit', None):
+            with self.subTest(row=bad):
+                self.assertEqual(self.skips([bad]), [])
+        self.assertEqual(self.skips('not a list'), [])
+
+        def broken():
+            raise OSError('C:\\secret\\skipped.json')
+        self.views.lint_skips = broken
+        obj = self.ok('GET', '/findings', OWNER)
+        self.assertEqual((obj['skipped'], len(obj['items'])), ([], 2))
+
+    def test_the_local_owner_sees_every_path_whole(self):
+        wt = 'Q:\\home\\Jane Doe\\repo'
+        fix = ('copy to //nas/share/jdoe/out.txt; run Q:\\home\\Jane Doe\\repo\\x.py; '
+               'split on \\\\')
+        self.views.rows = [finding(target=wt, fix=fix)]
+        self.assertEqual(self.ok('GET', '/findings', OWNER)['items'], [finding(target=wt,
+                                                                                fix=fix)])
+        self.mark()
+        self.assertEqual(self.ok('GET', '/finding_marks', OWNER)['items'][0]['target'], wt)
+        act = self.ok('POST', '/to_pm', OWNER, {'kind': 'act', 'finding': FP,
+                                                'refs': ['Q:\\home\\Jane Doe\\x']})['id']
+        made = self.store.get('to_pm', act)
+        got = self.ok('GET', '/to_pm', OWNER)['items']
+        self.assertEqual([(d['text'], d['refs']) for d in got], [(made['text'], made['refs'])])
+        self.assertIn(fix, made['text'])
+        self.assertIn('Q:\\home\\Jane Doe\\x', made['refs'])
 
     def test_an_edit_never_makes_or_unmakes_an_act_note(self):
         act = self.ok('POST', '/to_pm', OWNER, {'kind': 'act', 'finding': FP})['id']
