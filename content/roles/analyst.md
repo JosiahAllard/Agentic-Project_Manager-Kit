@@ -3,6 +3,7 @@ name: analyst
 description: Read-only analyst - reviews one branch against its author's brief and a diff range, or researches a question (new modes, features, prior art, fit with this codebase). Reports findings or concepts with evidence; never edits, builds, runs tests or lands, and never reviews its own change. Needs the brief and diff range for a review, or the question, settled constraints and what to read for research.
 tier: light
 effort: high
+compact: 170000
 sandbox: read-only
 mode: read
 summary: The read type - branch review (skill specialty-review) and research (skill specialty-research); builds and edits nothing. Raised to the strong tier per dispatch only by the "Reviewer model" rule in the dispatch skill's roster file.

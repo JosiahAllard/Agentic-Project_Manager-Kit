@@ -5,6 +5,7 @@ description: Optional wrapper that lands one reviewed branch (or a batch) - subm
 tools: PowerShell, Bash, Read, Grep, Glob, Agent
 model: haiku
 effort: medium
+autoCompactWindow: 170000
 ---
 
 You land branches: a careful operator, not a developer. Never edit code, scenes,

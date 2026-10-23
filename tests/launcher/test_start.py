@@ -351,7 +351,7 @@ class Start(Base):
 
     def test_coordinator_command_carries_only_the_default_compact_window(self):
         out = self.go(name='x-coordinator-a1', prompt='go')
-        self.assertIn("claude --agent pm-kit:coordinator --autocompact 170000 --permission-mode auto "
+        self.assertIn("claude --agent pm-kit:coordinator --autocompact 200000 --permission-mode auto "
                       "--remote-control 'x-coordinator-a1' -n 'x-coordinator-a1' 'go'", out)
         for flag in ('--model', '--effort'):
             self.assertNotIn(flag, out)
@@ -436,21 +436,21 @@ class Start(Base):
         self.assertLess(out.index('$env:TMP'), out.index('Set-Location'))
 
     def test_the_compact_window_defaults_per_kind(self):
-        self.assertIn('--autocompact 170000 ', self.go(no_agent=True))
-        self.assertIn('--autocompact 170000 ', self.go(agent='analyst'))
+        self.assertIn('--autocompact 200000 ', self.go(no_agent=True))
+        self.assertIn('--autocompact 200000 ', self.go(agent='analyst'))
         self.assertIn('--autocompact 300000 ', self.go(autocompact=300000))
         self.assertNotIn('--autocompact', self.go(autocompact=0))
         self.assertEqual((start.DEFAULT_AUTOCOMPACT, start.CONSULTANT_DEFAULT_AUTOCOMPACT, start.DEEP_AUTOCOMPACT),
-                         (170000, 350000, 500000))
+                         (200000, 350000, 500000))
 
     def test_a_hand_off_or_reboot_start_gets_the_default_too(self):
         self.h.write_state('sessions.json', {'rev': {'repo': 'alpha', 'agent': True, 'stem': 'alpha-coord',
                                                      'state': 's.md', 'account': 2, 'name': 'alpha-coord-a2'}})
         out = '\n'.join(start.start_entry(self.h.settings, self.host, 'rev', whatif=True))
-        self.assertIn('--autocompact 170000 ', out)
+        self.assertIn('--autocompact 200000 ', out)
 
     def test_an_entry_of_a_long_role_gets_that_roles_window(self):
-        for agent, window_ in (('consultant', 350000), ('deep-worker', 500000), ('analyst', 170000)):
+        for agent, window_ in (('consultant', 350000), ('deep-worker', 500000), ('analyst', 200000)):
             self.h.write_state('sessions.json', {'k': {'repo': 'alpha', 'agent': agent, 'stem': 'alpha-x',
                                                        'state': 's.md', 'account': 2}})
             out = '\n'.join(start.start_entry(self.h.settings, self.host, 'k', whatif=True))
@@ -461,8 +461,8 @@ class Start(Base):
         out = self.go(agent=p + 'deep-worker')
         self.assertIn('--agent %sdeep-worker ' % p, out)
         self.assertIn("-n 'alpha-deep-worker-a1'", out)
-        for agent, window_ in ((p + 'consultant', 350000), (p + 'deep-worker', 500000), (p + 'analyst', 170000),
-                               ('other:consultant', 170000)):
+        for agent, window_ in ((p + 'consultant', 350000), (p + 'deep-worker', 500000), (p + 'analyst', 200000),
+                               ('other:consultant', 200000)):
             with self.subTest(agent):
                 args = start.entry_start_args(self.h.settings, 'k', {'repo': 'alpha', 'agent': agent,
                                                                      'stem': 'alpha-x'}, '2', None)

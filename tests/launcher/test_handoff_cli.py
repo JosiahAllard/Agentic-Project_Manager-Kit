@@ -266,11 +266,11 @@ class Cli(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn('launch.py stop: JSONDecodeError:', err)
 
-    def test_start_defaults_to_a_170k_compact_window_and_takes_an_override(self):
+    def test_start_defaults_to_a_200k_compact_window_and_takes_an_override(self):
         _, out, _, _ = self.main(['start', '--repo', 'alpha', '--account', '1', '--what-if'])
-        self.assertIn('--autocompact 170000 ', out)
+        self.assertIn('--autocompact 200000 ', out)
         _, out, _, _ = self.main(['start', '--repo', 'alpha', '--account', '1', '--no-agent', '--what-if'])
-        self.assertIn('--autocompact 170000 ', out)
+        self.assertIn('--autocompact 200000 ', out)
         _, out, _, _ = self.main(['start', '--repo', 'alpha', '--account', '1', '--autocompact', '250000',
                                   '--what-if'])
         self.assertIn('--autocompact 250000 ', out)
