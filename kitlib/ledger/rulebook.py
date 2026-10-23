@@ -335,9 +335,10 @@ def applied(books, texts):
     tagged entry (by its time, then file and log order; `texts` are the log files' texts) must be
     in force: a `set` as a rule citing it, a `dropped` as no rule, a `header` as the book's header
     having the digest its tag records.
-    A tombstone keeps no Decides, so which change it was is unknown: a rule citing a retired id,
-    or a rule or header with a retired entry of a repo routed to its book (`target`) newer than its
-    last live change, is not judged (the retired one may have been the last change)."""
+    A tombstone keeps no Decides, so which change it was is unknown. Not judged: a rule citing a
+    retired entry newer than its last live change (a later set, since retired); and a `set` whose
+    rule is absent, or a header, with a retired entry of a repo routed to its book (`target`) newer
+    than its last live change (perhaps a later drop or header change, since retired)."""
     last, heads, retired = {}, {}, []
     for f, text in enumerate(texts):
         for n, (rid, block) in enumerate(split_entries(text)[1]):
@@ -358,7 +359,7 @@ def applied(books, texts):
                 k = (m.group(1), m.group(2))
                 if k not in last or last[k][0] < order:
                     last[k] = (order, rid, m.group(3))
-    dead = {rid for _, rid, _ in retired}
+    dead = {rid: o for o, rid, _ in retired}
 
     def overtaken(name, order):
         return any(o > order and target(books, repo) == name for o, _, repo in retired)
@@ -366,8 +367,10 @@ def applied(books, texts):
     for (name, key), (order, rid, op) in sorted(last.items()):
         book = books.get(name)
         rule = next((r for r in book.rules if r.key == key), None) if book else None
-        if overtaken(name, order) or (rule is not None and dead & set(rule.sources)):
-            continue
+        if rule is not None and any(s in dead and dead[s] > order for s in rule.sources):
+            continue        # a later set, since retired: the rule cites it
+        if op == 'set' and rule is None and overtaken(name, order):
+            continue        # perhaps a later drop, since retired
         if op == 'set' and (rule is None or rid not in rule.sources):
             why = ('there is no %s' % file_name(name) if book is None else
                    'it has no such rule' if rule is None else 'the rule does not cite it')

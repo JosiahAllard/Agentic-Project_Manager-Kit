@@ -273,6 +273,46 @@ class WriteTest(WriteBase):
         self.retire(5)
         self.assert_check_ok()
 
+    def crash_second_write(self):
+        real, calls = write.write_atomic, []
+
+        def crash(path, text):
+            calls.append(path)
+            if len(calls) == 2:
+                raise OSError('simulated crash')
+            real(path, text)
+        return mock.patch.object(write, 'write_atomic', crash)
+
+    def test_a_rule_citing_an_older_retired_entry_hides_no_later_crash(self):
+        self.set()                      # rid(4) sets the rule; the rule cites it
+        self.retire(4)                  # the rule still cites the retired rid(4)
+        with self.crash_second_write(), self.assertRaises(OSError):
+            self.set(text='Small branches land first.', decides='Small branches land first.')
+        errs = rulebook.applied(write.load_books(self.rules), [self.read(self.log)])
+        self.assertEqual(len(errs), 1, errs)
+        self.assertIn('%s sets kit.md landing.fast' % rid(5), errs[0])
+        with self.crash_second_write(), self.assertRaises(OSError):
+            write.add(self.log, 'kit', 'selected', 'q', 'a', 'dropped landing.fast: no', 's', when=WHEN,
+                      rule=write.RuleChange(self.rules, 'dropped', 'landing.fast'))
+        errs = rulebook.applied(write.load_books(self.rules), [self.read(self.log)])
+        self.assertEqual(len(errs), 1, errs)
+        self.assertIn('%s drops kit.md landing.fast, which is still there' % rid(6), errs[0])
+
+    def test_a_book_rerouted_while_waiting_for_its_lock_is_refused(self):
+        real = write.rule_target
+
+        def reroute(folder, repo):
+            got = real(folder, repo)        # kit.md, the book whose lock add takes
+            self.book('kit', KIT.replace('Alpha_Checkout', 'elsewhere'))
+            self.book('beta', '# Beta rules\nRepos: kit\n')
+            return got
+        log = self.read(self.log)
+        with mock.patch.object(write, 'rule_target', reroute), self.assertRaises(Refused) as e:
+            write.add(self.log, 'kit', 'selected', 'q', 'a', 'rulebook header: Budget 10', 's', when=WHEN,
+                      rule=write.RuleChange(self.rules, 'header', budget=10))
+        self.assertIn('changed from kit.md to beta.md while waiting for its lock', str(e.exception))
+        self.assertEqual(self.read(self.log), log)
+
     def test_an_older_retired_entry_of_the_book_hides_no_later_crash(self):
         write.add(self.log, 'kit', 'selected', 'q', 'a', 'Plain.', 's', when=WHEN)
         self.retire(4)
