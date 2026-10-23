@@ -5,7 +5,7 @@ hub site design, section 2 "HTTP API" and section 9).
              is a full path under BASE; a `{name}` segment takes one path segment. role is OWNER,
              AGENT, ANY, APPROVER or LOCK_WRITE: who may call it ("Roles", "Machine lock").
   Api(store, views=None, clock=None, session_keys=None, now=None, approval_key=None,
-      checkout=None, lock=None)
+      checkout=None, lock=None, repo_name=None, schedule_repos=None, tick_seen=None)
              .call(method, path, role, body=None, query=None, via='', raise_unexpected=False,
                    agent_words=False, strong=False) -> (status, object)
              via names the transport (web, desktop-mcp, cli, tunnel, ...); every write records
@@ -75,9 +75,17 @@ SCHEDULE_TASKS; cadence one of CADENCES (`off` keeps the document and runs nothi
 24-hour; days, a list from DAYS, is required for `weekly` and refused for the others, and is
 stored once each in DAYS order. repo must be a repository the hub knows (its repos/ documents'
 names and aliases, and the store's known_repos), case ignored, and is stored as that repo's name.
+A task that runs for one repository (kitlib.autotasks.tick.TASKS per_repo), on any cadence but
+`off`, also needs exactly one checkout of it in the machine config's launcher.repos, as the tick
+finds it (tick.find_repo over Api's schedule_repos, default launcher_checkouts: tick.launcher_repos);
+none, or two, is `invalid`, field repo, and so is a launcher config that cannot be read.
 A refusal is `invalid` naming the field, with nothing written. Writing over a schedule takes its
-`if_version`; without it, or with another, it is `conflict`, as for a page. GET schedules (ANY)
-lists them. Nothing here runs a task: a tick outside the hub reads the list.
+`if_version`; without it, or with another, it is `conflict`, as for a page. The answer carries
+`first_run`: the first slot strictly after set_at by kitlib.autotasks.due's rule, naive local
+time to the minute (None when off). GET schedules (ANY) lists them, with `tick`: {last, running,
+every_s}, last when the tick was last seen (Api's tick_seen, default tick_last_seen: the time of
+its state file) and running false when that is None or more than TICK_STALE_S before the clock.
+Nothing here runs a task: a tick outside the hub reads the list.
 
 Findings. GET findings (ANY) lists the maintenance lint's last findings (the `findings` view),
 filtered by `repo` (case ignored), less every one the owner has marked: a finding_marks/
@@ -261,6 +269,7 @@ import collections
 import datetime
 import json
 import math
+import os
 import re
 import time
 
@@ -531,11 +540,17 @@ class Api(object):
     of that repository or None ("Approvals"); both default to None, which no approval passes.
     `repo_name(repo_id)` gives the name of this machine's configured repository with that remote,
     or None (default), which routes a decided approval to the PM alone ("Routes").
-    `lock` is the machine lock's door or None ("Machine lock")."""
+    `lock` is the machine lock's door or None ("Machine lock"). `schedule_repos()` gives the
+    machine config's launcher.repos as [(label, main checkout, name)] (default:
+    launcher_checkouts), `tick_seen()` the ISO time the automatic tasks' tick was last seen or
+    None (default: tick_last_seen); both are read on each use ("Schedules")."""
 
     def __init__(self, store, views=None, clock=None, session_keys=None, now=None,
-                 approval_key=None, checkout=None, lock=None, repo_name=None):
+                 approval_key=None, checkout=None, lock=None, repo_name=None,
+                 schedule_repos=None, tick_seen=None):
         self.store = store
+        self.schedule_repos = schedule_repos or launcher_checkouts
+        self.tick_seen = tick_seen or tick_last_seen
         self.views = views
         self.lock = lock
         self.lock_poll_s = LOCK_POLL_S
@@ -1660,8 +1675,82 @@ def _schedule_repo(api, name):
     return found
 
 
+def launcher_checkouts():
+    """Api's default schedule_repos: the machine config's launcher.repos as the tick reads them
+    (kitlib.autotasks.tick.launcher_repos)."""
+    from kitlib.autotasks import tick
+    return tick.launcher_repos()
+
+
+def tick_last_seen():
+    """Api's default tick_seen: when the tick last wrote its state file (it does on every tick
+    that reads the hub and takes its lock), an ISO time in UTC, or None when there is none."""
+    from kitlib.autotasks import tick
+    from kitlib.config import ConfigError
+    try:
+        mtime = os.path.getmtime(os.path.join(tick.state_dir(), tick.STATE_NAME))
+    except (OSError, ConfigError):
+        return None
+    return datetime.datetime.fromtimestamp(mtime, datetime.timezone.utc).isoformat(
+        timespec='seconds')
+
+
+TICK_EVERY_S = 15 * 60          # the kit-automatic-tasks task's interval
+TICK_STALE_S = 40 * 60          # no tick seen for this long: it is not running
+
+
+def _aware(text):
+    """The aware datetime an ISO text names (one with no offset is local), None for no time."""
+    try:
+        at = datetime.datetime.fromisoformat(text)
+    except (TypeError, ValueError):
+        return None
+    return at if at.tzinfo is not None else at.astimezone()
+
+
+def _tick_status(api):
+    last = api.tick_seen()
+    seen, now = _aware(last), _aware(api.clock())
+    running = (seen is not None and now is not None
+               and (now - seen).total_seconds() <= TICK_STALE_S)
+    return {'last': last, 'running': running, 'every_s': TICK_EVERY_S}
+
+
 def schedules_list(api, req):
-    return {'items': api.items('schedules', req)}
+    return {'items': api.items('schedules', req), 'tick': _tick_status(api)}
+
+
+def _first_run(fields):
+    """The first slot strictly after the schedule's set_at, as naive local HH:MM ISO text: the
+    first candidate slot kitlib.autotasks.due.decide calls due with no record. None when off."""
+    from kitlib.autotasks import due
+    start, at = due.local(fields.get('set_at')), due.parse_at(fields.get('at'))
+    if fields.get('cadence') == due.OFF or start is None or at is None:
+        return None
+    day = start.replace(hour=at[0], minute=at[1], second=0, microsecond=0)
+    for k in range(9):
+        slot = day + datetime.timedelta(days=k)
+        if due.decide(fields, None, slot) == (due.DUE, slot):
+            return slot.isoformat(timespec='minutes')
+    return None
+
+
+def _one_checkout(api, task, cadence, repo):
+    """`invalid`, field repo, unless the tick could run task for repo: exactly one checkout of
+    the machine config's launcher.repos matches it (kitlib.autotasks.tick.find_repo). Off, and a
+    task that runs for no repository, need none."""
+    from kitlib.autotasks import tick
+    from kitlib.config import ConfigError
+    if cadence == 'off' or not tick.TASKS[task].per_repo:
+        return
+    try:
+        repos = api.schedule_repos()
+    except ConfigError as e:
+        raise _invalid("the machine config's launcher.repos cannot be read: %s" % e, 'repo')
+    if tick.find_repo(repo, repos) is None:
+        raise _invalid("repo %r is not exactly one checkout in the machine config's "
+                       "launcher.repos, so the automatic task could not run for it: add it "
+                       "there once (launcher.repos), then set the schedule again" % repo, 'repo')
 
 
 def schedules_set(api, req):
@@ -1685,11 +1774,14 @@ def schedules_set(api, req):
     why = schema.check_id(doc_id)
     if why:
         raise _invalid(why, 'repo')
+    _one_checkout(api, task, cadence, repo)
     fields = {'task': task, 'repo': repo, 'cadence': cadence, 'at': at, 'set_at': api.clock(),
               'via': _via(req)}
     if cadence == 'weekly':
         fields['days'] = [d for d in DAYS if d in days]
-    return _put_pinned(api, 'schedules', doc_id, fields, pin)
+    out = _put_pinned(api, 'schedules', doc_id, fields, pin)
+    out['first_run'] = _first_run(fields)
+    return out
 
 
 def _put_pinned(api, coll, doc_id, fields, pin):
