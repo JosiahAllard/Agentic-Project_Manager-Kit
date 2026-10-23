@@ -183,5 +183,48 @@ class BatchTest(unittest.TestCase):
         self.assertEqual(codes(bad), [('todos/T-4', 'unreadable')])
 
 
+class PluginPathTest(unittest.TestCase):
+    STALE = ('python "Z:/pm-kit/plugin/c1c8fa5e5d54/tools/hub.py" todos list',
+             r'python %LOCALAPPDATA%\pm-kit\plugin\0123456789ab\tools\gate.py -C Z:\r --full',
+             'python D:/exports/PLUGIN/abcdefabcdef/tools/x.py')
+
+    def test_a_command_under_a_plugin_export_folder_is_warned_with_an_instead(self):
+        for cmd in self.STALE:
+            with self.subTest(cmd=cmd):
+                f = V.validate({'todos': {'T-1': todo(commands=['dir', cmd])}})
+                self.assertEqual([(x.level, x.rel, x.code) for x in f],
+                                 [(V.WARN, 'todos/T-1', 'plugin-path')])
+                self.assertIn('commands[1]', f[0].message)
+                self.assertIn('Instead: name the tool in the kit main checkout', f[0].message)
+
+    def test_the_message_names_the_folder_alone(self):
+        f = V.validate({'todos': {'T-1': todo(commands=[self.STALE[0]])}})
+        self.assertIn(' Z:/pm-kit/plugin/c1c8fa5e5d54,', f[0].message)
+
+    def test_one_warning_per_todo(self):
+        f = V.validate({'todos': {'T-1': todo(commands=list(self.STALE))}})
+        self.assertEqual(codes(f), [('todos/T-1', 'plugin-path')])
+
+    def test_the_main_checkout_and_near_misses_are_not_warned(self):
+        for cmd in ('python Z:/GitHub/Agentic-Project_Manager-Kit/tools/hub.py todos list',
+                    'python Z:/pm-kit/plugin/c1c8fa5e5d5/tools/x.py',        # 11 hex
+                    'python Z:/pm-kit/plugin/c1c8fa5e5d54ff/tools/x.py',     # 14 hex
+                    'python Z:/pm-kit/plugin/state.json',
+                    'python Z:/pm-kit/myplugin/c1c8fa5e5d54/tools/x.py',
+                    'git show c1c8fa5e5d54'):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(V.validate({'todos': {'T-1': todo(commands=[cmd])}}), [])
+
+    def test_a_done_todo_is_not_warned(self):
+        docs = {'todos': {'T-1': todo(status='done', commands=[self.STALE[0]])}}
+        self.assertEqual(V.validate(docs), [])
+
+    def test_a_batch_set_is_warned(self):
+        docs, bad = V.batch_docs([{'op': 'set', 'collection': 'todos', 'doc_id': 'T-9',
+                                   'data': todo(commands=[self.STALE[1]])}], '.')
+        self.assertEqual(bad, [])
+        self.assertEqual(codes(V.validate(docs)), [('todos/T-9', 'plugin-path')])
+
+
 if __name__ == '__main__':
     unittest.main()
