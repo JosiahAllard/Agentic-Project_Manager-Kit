@@ -21,7 +21,8 @@ it.
 Exit codes: 0 no finding, 1 findings, 2 USAGE (--dry-run without --out, or no --result and no
 pm_data.path to put it under), 3 SKIPPED (the lock stayed busy, or a strong hold reserves the
 machine: nothing ran, and result.json and the page are left as they were), 4 the lock refused with
-its own exit 1 or 2, else the lock's own exit code when it refuses the run otherwise.
+its own exit 1 or 2, 5 ERROR (an unexpected error in the lock or the lint: one `ERROR: <type>:
+<message>` line on stderr), else the lock's own exit code when it refuses the run otherwise.
 """
 import argparse
 import os
@@ -31,6 +32,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from kitlib import maintlint                                       # noqa: E402
 from kitlib.maintlint import page, result as rmod, slot            # noqa: E402
+
+# An unexpected error (any Exception other than the lock's refusals): none of 0-4, nor a lock code.
+EXIT_ERROR = 5
 
 
 def _counts(res):
@@ -69,6 +73,17 @@ def main(argv=None):
                   file=sys.stderr)
             return 2
         path = os.path.join(folder, rmod.NAME) if folder else None
+    try:
+        return _run(root, path, a)
+    except Exception as e:
+        # Python's own exit 1 for a traceback would read as findings. BaseException (Ctrl+C,
+        # SystemExit, a deliberate BaseException) is not caught.
+        print('ERROR: %s: %s' % (type(e).__name__, str(e).replace('\n', ' ')), file=sys.stderr)
+        return EXIT_ERROR
+
+
+def _run(root, path, a):
+    """The lint after its arguments were checked: --dry-run, or inside the held slot."""
     if a.dry_run:
         return _report(_lint(root, path, a.out, False))
     try:
