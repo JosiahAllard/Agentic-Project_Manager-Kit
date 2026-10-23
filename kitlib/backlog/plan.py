@@ -1547,9 +1547,14 @@ _GP = r'(?<![A-Za-z0-9-])' + _CITE + _PART + r'(?:' + _RUN + _CITE + _PART + r')
 # A key or lead word before a cite that goes with it (`value_ruling R-nnnn`, `ref: R-nnnn`).
 _KEY = r'(?:(?:[a-z][a-z0-9]*_[a-z0-9_]+|[Rr]ef|[Pp]er|[Ss]ee|PM|[Oo]wner):? )?'
 _BULLET = r'\s*(?:[-*] |[0-9]+\. )?'
-# Where a cite can stand as a subject: the line's start (after a bullet), a sentence's start, an
-# opening parenthesis, or after `:` or `;`.
-_OPEN = r'(?:^' + _BULLET + r'|[.!?:;] |\()'
+# A cite (with a part it names) that ends the text before a tag rule's mark: the mark joins a run
+# of cites (`by R-nnnn, R-nnnn`), which is no tag, so the run stays whole for the object rule.
+_CITE_END = re.compile(CITE_ID + r'(?:\([a-z0-9]{1,3}\))?' + _PART + '$')
+# The mark after a leading cite list that goes with it: not when the words after it join on to
+# the cites (`(R-nnnn, and the rule)`, `R-nnnn, which says`), which without them reads wrong.
+# After a colon `which` and `that` start the text the label names (`Q-nnn: which one?`).
+_JOINS = r'(?!(?:and|or|but|nor|plus|then|with)\b)'
+_LIST_MARK = r'(?:[:;]|,(?!\s+(?:which|that)\b))\s+' + _JOINS
 # The words a cite can follow as their object (`per R-nnnn`, `answered by R-nnnn`).
 _PREP = (r'(?:\b(?:[Pp]er|[Uu]nder|[Ii]n|[Bb]y|[Ff]rom|[Ss]ince|[Aa]fter|[Bb]efore|[Uu]ntil|'
          r'[Ff]ollowing|[Ss]ee|[Cc]iting|[Cc]ites|[Oo]n|[Oo]f|[Ww]ith|[Aa]gainst|[Bb]reaks?|'
@@ -1557,14 +1562,15 @@ _PREP = (r'(?:\b(?:[Pp]er|[Uu]nder|[Ii]n|[Bb]y|[Ff]rom|[Ss]ince|[Aa]fter|[Bb]efo
 # What may follow a cite as an object: punctuation, the line's end, a parenthesis, a joining word.
 _AFTER = (r'(?=[.,;:)!?]|$| \(| (?:and|or|but|so|then|which|that|to|for|when|while|because|as|'
           r'until|unless|if|before|after)\b)')
-# The verbs a cite can be the subject of. `is`, `was` and the like are not: `R-nnnn is the plan`
-# names the ruling, which an owner ruling would not.
-_SUBJECT_VERBS = (r'[a-z]{2,}ed|says|sets|makes|puts|chooses|keeps|gives|wants|asks|holds|defers|'
-                  r'splits|takes|does|covers|names|lists|answers|settles|rules|moves|adds|drops|'
-                  r'replaces|allows|approves|requires|leaves|applies|stays|governs|decides|picks|'
-                  r'confirms|reverses|overrides|chose|gave|took|did|left|will|would|can|may|must|'
-                  r'should')
+# The words a question id can follow as an object and still read as the question (`waiting on
+# Q-nnn`, `asked in Q-nnn`). After any other (`done per Q-nnn`) the id stands for its answer, which
+# `an owner question` would not say: that line is left for a hand edit.
+_Q_PREPS = ('on', 'in', 'of', 'see', 'citing', 'cites')
 _NOUN = r'(?:ruling|question|answer|decision)s?\b'
+# What may stand before `ruling`, `question` and the like for the noun rule to drop the cite after
+# it: an article, `this`/`that`/`its`, or a possessive, with an `owner` or `PM` between. A bare
+# `Owner ruling R-nnnn` has none: dropping the cite would leave `Owner ruling wants`.
+_DET = r"(?:The|the|[Aa]n?|[Tt]hat|This|this|[Ii]ts|[Oo]wner's|PM's)"
 # What a rewrite can leave that reads wrong: an empty or space-led parenthesis, one opened at the
 # line's end, a space before punctuation, a doubled comma or space.
 _ODD = re.compile(r'\(\s*\)|\( |\($|\s[,;.]|,,|\S  \S')
@@ -1596,15 +1602,23 @@ def _words(cites, alone):
 def _uncite_rules(opens, state):
     """The rewrites in the order they run, each `(pattern, replacement)`. The first ones drop a
     cite that is a tag on the sentence (in a parenthesis, after a comma, a label before a colon,
-    after the noun that already says it); the rest put `an owner ruling` / `an owner question`
-    where the cite is a word of the sentence: an object (`per R-nnnn`), a subject (`R-nnnn says`),
-    a possessive (`R-nnnn's`) or before a noun (`the R-nnnn ruling`). A cite no rule places, a run
-    a rule cannot word, or a word rule at the start of a line that continues a sentence, sets
-    state['hand']: uncite_line then leaves the line as it was. state['words'] counts the word
-    rules that ran."""
+    after a noun with an article that already says it); the rest put `an owner ruling` / `an
+    owner question` where the cite is a word of the sentence: an object (`per R-nnnn`), before a
+    noun after a preposition (`under the R-nnnn ruling`), or a dated label opening a line. No rule
+    words a cite that is a subject (`R-nnnn says`) or a possessive (`R-nnnn's`): `an owner
+    ruling` there would say some ruling where the line meant one. A tag rule whose mark follows a
+    cite leaves the run (`by R-nnnn, R-nnnn`) for the object rule, which keeps it plural; one whose
+    list would leave a joining word first (`(R-nnnn, and the rule)`) does not run. A cite no rule
+    places, a run a rule cannot word, or a word rule at the start of a line that continues a
+    sentence, sets state['hand']: uncite_line then leaves the line as it was. state['words']
+    counts the word rules that ran."""
     def hand(m):
         state['hand'] = True
         return m.group(0)
+
+    def tag(m):
+        # a mark after a cite joins a run of them: no tag, left whole for the object rule
+        return m.group(0) if _CITE_END.search(m.string[:m.start()]) else ''
 
     def continued(m):
         # the line's first words continue the line before's sentence: no rule knows the word
@@ -1619,10 +1633,12 @@ def _uncite_rules(opens, state):
             nxt = nxt.upper()
         return m.group(1) + m.group(2) + nxt
 
-    def word(alone=True, suffix='', subject=False):
+    def word(alone=True, suffix='', obj=False):
         def rep(m):
             text = _words(m.group('c'), alone)
-            if text is None or continued(m) or (subject and len(CITED.findall(m.group('c'))) > 1):
+            q_word = obj and 'question' in (text or '')
+            if text is None or continued(m) or (
+                    q_word and m.group('pre').strip().lower() not in _Q_PREPS):
                 return hand(m)
             state['words'] += 1
             start = m.end('pre')
@@ -1631,7 +1647,6 @@ def _uncite_rules(opens, state):
             return m.group('pre') + text + suffix
         return rep
 
-    place = r'(?P<pre>' + _OPEN + '|' + _PREP + r')'
     return [
         # a parenthesis holding only cites (a lead word and parts with them): gone, with the
         # space before it (never the line's indent)
@@ -1640,29 +1655,25 @@ def _uncite_rules(opens, state):
         (r'^(' + _BULLET + r')[Ss]ee ' + _G + r'\.\s*', r'\1'),
         (r'(?<=[.!?]) [Ss]ee ' + _G + r'\.', ''),
         # `(CITES: rest`, `rest; CITES)`, `rest, CITES, more`
-        (r'\(' + _KEY + _GP + r'[:;,]\s+', '('),
-        (r'[,;]\s+' + _KEY + _GP + r'(?=\))', ''),
-        (r'[,;]\s+' + _KEY + _G + r'(?=[,;]\s)', ''),
+        (r'\(' + _KEY + _GP + _LIST_MARK, '('),
+        (r'[,;]\s+' + _KEY + _GP + r'(?=\))', tag),
+        (r'[,;]\s+' + _KEY + _G + r'(?=[,;]\s)', tag),
         # a trailing `, CITES` (or `, key CITES`) before the line's end, a full stop or a
         # parenthesis
-        (r'\s*[,;|]\s*' + _KEY + _G + r'(?=\s*(?:\.|\(|$))', ''),
+        (r'\s*[,;|]\s*' + _KEY + _G + r'(?=\s*(?:\.|\(|$))', tag),
         # a leading `CITES: ` or `CITES, ` (after a bullet and a short `Note: ` style label)
-        (r'^(' + _BULLET + r')((?:[A-Za-z][A-Za-z _-]{0,20}: )?)' + _G + r'[:,]\s+(\S?)', prefix),
-        # `the ruling CITES`, `owner question CITES`: the noun already says it
-        (r"\b((?:[Oo]wner|PM|The|the|[Aa]n?|[Tt]hat|This|this|[Ii]ts)(?:'s)? (?:(?:[Oo]wner|PM)"
-         r"(?:'s)? )?" + _NOUN + r") " + _G, r'\1'),
+        (r'^(' + _BULLET + r')((?:[A-Za-z][A-Za-z _-]{0,20}: )?)' + _G + r'(?!;)' + _LIST_MARK +
+         r'(\S?)', prefix),
+        # `the ruling CITES`, `an owner question CITES`: the noun already says it
+        (r'\b(' + _DET + r" (?:(?:[Oo]wner|PM)(?:'s)? )?" + _NOUN + r') ' + _G, r'\1'),
         # `R-nnnn (2026-10-07): ...` opening a line
         (r'^(?P<pre>' + _BULLET + r')(?P<c>' + _G + r')(?= \([0-9]{4}-[0-9]{2}-[0-9]{2}\):)',
          word()),
-        # `R-nnnn's split`; `under the R-nnnn ruling`
-        (place + r"(?P<c>" + _CITE + r")'s (?=[a-z])", word(suffix="'s ")),
-        (place + r'(?:(?:The|the) )?(?P<c>' + _G + r') (?=' + _NOUN + r')', word(alone=False,
-                                                                           suffix=' ')),
+        # `under the R-nnnn ruling`
+        (r'(?P<pre>' + _PREP + r')(?:(?:The|the) )?(?P<c>' + _G + r') (?=' + _NOUN + r')',
+         word(alone=False, suffix=' ')),
         # `per R-nnnn`, `answered by R-nnnn`
-        (r'(?P<pre>' + _PREP + r')(?P<c>' + _G + r')' + _AFTER, word()),
-        # `R-nnnn says`
-        (r'(?P<pre>' + _OPEN + r')(?P<c>' + _G + r')(?= (?:' + _SUBJECT_VERBS + r')\b)',
-         word(subject=True)),
+        (r'(?P<pre>' + _PREP + r')(?P<c>' + _G + r')' + _AFTER, word(obj=True)),
     ]
 
 
@@ -1702,7 +1713,8 @@ def _uncite_body(body):
     `(n, line)` of each line uncite_line left for a hand edit, `n` its 1-based place in the new
     body. A rewritten line left opening on a stray mark (`, not this one.` once a parenthesis of
     cites went) gives the mark to the line above it, or drops it where that line is blank, a
-    heading or already ends on a mark; it is left for a hand edit when the line above is one."""
+    heading or already ends on a mark, capitalising what is left after a blank line, a heading or
+    a finished sentence; it is left for a hand edit when the line above is one."""
     out, rewritten, hand = [], [], []
     at = {}                                  # out index -> its rewritten entry
     prev = ''
@@ -1725,7 +1737,10 @@ def _uncite_body(body):
                     else:
                         at[len(out) - 1] = [above, out[-1]]
                         rewritten.append(at[len(out) - 1])
-                elif not above.strip() or above.rstrip()[-1:] in '.!?':
+                elif (not above.strip() or above.rstrip()[-1:] in '.!?' or
+                      above.lstrip().startswith('#')):
+                    # the line starts a sentence (after a blank line, a finished one or a
+                    # heading): it opens with a capital
                     rest = rest[:1].upper() + rest[1:]
                 after = stray.group(1) + rest if rest else ''
         if needs:

@@ -32,17 +32,16 @@ class Line(unittest.TestCase):
     def test_each_rule_reads_as_words(self):
         for before, after in (
                 ('Per R-9033, x', 'Per an owner ruling, x'),
-                ('Done per Q-301.', 'Done per an owner question.'),
                 ('Waiting on Q-123.', 'Waiting on an owner question.'),
+                ('Asked in Q-301.', 'Asked in an owner question.'),
                 ('x (R-9033).', 'x.'),
                 ('x (see R-9033 and R-9034).', 'x.'),
-                ('(R-9033 added delete)', '(an owner ruling added delete)'),
                 ('- R-9033: the hub', '- The hub'),
                 ('- Note: R-9033, keep it', '- Note: keep it'),
                 ('(R-9033: a split) it stays', '(a split) it stays'),
                 ('it stays (a split; R-9033)', 'it stays (a split)'),
-                ('R-9033 says x', 'An owner ruling says x'),
-                ('Owner ruling R-9033 says', 'Owner ruling says'),
+                ('The ruling R-9033 says', 'The ruling says'),
+                ("Its owner's ruling PM R-9033 holds", "Its owner's ruling holds"),
                 ('answered by R-9033.', 'answered by an owner ruling.'),
                 ('Settled, R-9033.', 'Settled.'),
                 ('under R-9033 ruling the hub moves', 'under an owner ruling the hub moves'),
@@ -72,17 +71,45 @@ class Line(unittest.TestCase):
                 ('it refuses (R-9618(c)) and logs', 'it refuses and logs')):
             self.check(before, after)
 
-    def test_a_dated_cite_and_a_possessive_read_as_words(self):
+    def test_a_dated_cite_reads_as_words(self):
         self.check('PM R-9482 (2026-10-07): the nightly',
                    'An owner ruling (2026-10-07): the nightly')
-        self.check("R-9116's split holds.", "An owner ruling's split holds.")
-        self.check('An interrupt ends it. PM R-9144 does not settle this case.',
-                   'An interrupt ends it. An owner ruling does not settle this case.')
 
     def test_a_cite_at_the_start_of_a_continued_line_is_left(self):
         # the line continues the sentence before it: no rule knows the word before the cite
-        self.left('R-9033 says x', opens=False)
-        self.check('done. R-9033 says x', 'done. An owner ruling says x', opens=False)
+        self.left('R-9482 (2026-10-07): the nightly', opens=False)
+        self.check('- R-9482 (2026-10-07): x', '- An owner ruling (2026-10-07): x', opens=False)
+
+    def test_a_noun_with_no_article_keeps_its_cite_for_a_hand_edit(self):
+        # dropping the cite would leave `Owner ruling wants`, `owner question.`
+        self.left('Owner ruling PM R-9515 wants the split')
+        self.left('Owner ruling R-9033 says')
+        self.left('the hub moves; owner question Q-301.')
+
+    def test_a_run_of_cites_after_a_comma_keeps_its_plural(self):
+        # the comma joins the run: never a tag, so two rulings never read as one
+        self.check('Superseded by R-9001, R-9002.', 'Superseded by owner rulings.')
+        self.check('per R-9001, R-9002, R-9003, more', 'per owner rulings, more')
+        self.left('the plan R-9001, R-9002.')
+
+    def test_a_subject_or_possessive_cite_is_left(self):
+        # `an owner ruling` there says some ruling, where the line meant one
+        for line in ('PM R-9144 does not settle this case.',
+                     'An interrupt ends it. PM R-9144 does not settle this case.',
+                     'R-9033 says x', 'done. R-9033 says x', '(R-9033 added delete)',
+                     'R-9033 ruling holds', "PM R-9104's approved build order",
+                     "R-9116's split holds."):
+            self.left(line)
+
+    def test_a_question_cite_for_its_answer_is_left(self):
+        for line in ('Done per Q-301.', 'Answered by Q-301.', 'Moved after Q-301 and x'):
+            self.left(line)
+
+    def test_a_cite_list_that_leaves_a_joining_word_first_is_left(self):
+        self.left('(PM R-9526 and R-9746, and the HKCU rule, PM R-9595)')
+        self.left('- R-9033, and then x')
+        self.left('(R-9033, which sets the cap) it holds')
+        self.check('- Q-301: which one?', '- Which one?')
 
     def test_a_cite_that_is_a_word_no_rule_places_is_left(self):
         for line in (
@@ -141,7 +168,7 @@ class Body(unittest.TestCase):
         self.assertEqual(body.split('\n'), ['Done.', 'It checks U1', '', 'More'])
         self.assertEqual(hand, [])
         body, _, _ = pmod._uncite_body('## Heading\n(R-9001), more')
-        self.assertEqual(body.split('\n'), ['## Heading', 'more'])
+        self.assertEqual(body.split('\n'), ['## Heading', 'More'])
 
     def test_a_line_of_only_cites_goes(self):
         body, rewritten, _ = pmod._uncite_body('x\n(R-9001)\nSee R-9002.\ny')
