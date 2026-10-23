@@ -20,6 +20,7 @@ from kitlib.git import cmd
 from kitlib.git import defaults as gitdefaults
 from kitlib.records import gate_ok, landing
 from tests import gitfixture
+from tests.home import machine_config
 
 KIT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 TOOL = os.path.join(KIT, 'tools', 'landed.py')
@@ -415,9 +416,7 @@ class TheDefaultLogDirIsTheGates(Fixture):
     def test_a_machine_config_that_cannot_be_read_still_answers_from_the_shared_temp(self):
         """work_temp refuses a bad machine config; landed reads the shared temp's base and says
         why, instead of a traceback that exits 1 (NOT_YET) for ever."""
-        os.makedirs(os.path.join(self.tmp, kuser.DIR_NAME), exist_ok=True)
-        with open(kuser.config_file(self.tmp), 'w', encoding='utf-8') as fh:
-            fh.write('{"temp_dir": "relative"}\n')
+        machine_config(self.tmp, '{"temp_dir": "relative"}\n', case=self)
         self.log('topic/1/gate.log', 'GATE FAILED: x\n', base=self.gate_dir())
         code, out = self.look()
         self.assertEqual(code, landed.FAILED, out)

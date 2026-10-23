@@ -1,8 +1,11 @@
 """Read the owner's delegation list (docs/delegations.md): one file, read only, never written.
 
-The file is `owner-delegations.json` in the machine config folder (`~/.pm-kit`). No setting, no
-environment variable and no older folder moves it; only a test passes `home=`. A link or junction
-on the file or on the folder refuses, so the list is the file the owner wrote in that folder.
+The file is `owner-delegations.json` in the PM repository's machine config folder
+(`<PM repo>/.pm-kit`, kitlib.config.user.locate's OK; tools/config_move.py copies it there from
+`~/.pm-kit`). No setting and no environment variable moves it; only a test passes `home=`. With no
+PM-repo pointer there is no list (nothing is delegated); a machine config that cannot be read
+(locate's UNMOVED or BAD) is a DelegationError. A link or junction on the file or on the folder
+refuses, so the list is the file the owner wrote in that folder.
 """
 import collections
 import os
@@ -26,6 +29,8 @@ class DelegationMissing(DelegationError):
 
 
 def delegations_file(home=None):
+    """The home folder's copy, `~/.pm-kit/owner-delegations.json`: the move's source, which the
+    guard still holds (kitlib.guard.delegfile). load reads the PM repository's."""
     return os.path.join(home or user.home_dir(), user.DIR_NAME, FILE_NAME)
 
 
@@ -34,8 +39,15 @@ def _linked(path):
 
 
 def load(home=None):
-    """The Delegations of this machine, or DelegationError (DelegationMissing when absent)."""
-    path = delegations_file(home)
+    """The Delegations of this machine, or DelegationError (DelegationMissing when absent or
+    when there is no PM-repo pointer)."""
+    loc = user.locate(home)
+    if loc.error:
+        raise DelegationError('the machine config cannot be read, so neither can the delegation '
+                              'list: %s' % loc.error)
+    if loc.state != user.OK:
+        raise DelegationMissing('no PM repo pointer, so no delegation list: nothing is delegated')
+    path = os.path.join(loc.folder, FILE_NAME)
     folder = os.path.dirname(path)
     if _linked(folder):
         raise DelegationError('%s is a link or junction; the delegation list is read only from a '

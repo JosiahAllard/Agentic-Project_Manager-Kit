@@ -20,6 +20,7 @@ from unittest import mock
 from kitlib import machinesetup as M
 from kitlib.config import user as kuser
 from kitlib.machinesetup import extras, managed, settings
+from tests.home import machine_config, pm_repo
 from tests.machinesetup import test_fresh as F
 from tests.machinesetup import test_machinesetup as T
 
@@ -65,7 +66,7 @@ class ManagedBase(unittest.TestCase):
         for rel in ('boot/hook.py', 'optional/usage/statusline-usage.ps1'):
             T.touch(os.path.join(self.kit, *rel.split('/')))
         os.makedirs(os.path.join(self.home, '.claude'))
-        os.makedirs(kuser.config_dir(self.home))
+        pm_repo(self, path=os.path.join(self.root, 'pm-repo'))   # the fenced pointer's: the machine config folder is its .pm-kit
         self.config({'plugin': {'export_dir': self.export}})
         self.source = os.path.join(self.kit, *managed.source().split('/'))
         dump(self.source, TEMPLATE)
@@ -75,8 +76,7 @@ class ManagedBase(unittest.TestCase):
         self.target = self.host.managed
 
     def config(self, data):
-        with open(os.path.join(kuser.config_dir(self.home), kuser.FILE_NAME), 'w', encoding='utf-8') as f:
-            json.dump(data, f)
+        machine_config(self.home, data, case=self)
 
     def overlay(self, data):
         dump(os.path.join(kuser.config_dir(self.home), managed.OVERLAY), data)

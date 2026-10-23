@@ -2,14 +2,13 @@
 check refuses besides a user profile (kitlib.machinepaths), read from the machine config. Unset, it
 names none: the check then refuses only user-profile paths. Fixture folder names are invented; no
 test here names a folder of this machine."""
-import json
-import os
 import shutil
 import tempfile
 import unittest
 
 from kitlib.config import user
 from kitlib.config.types import ConfigError
+from tests.home import machine_config
 
 
 class MachinePathFolders(unittest.TestCase):
@@ -19,9 +18,7 @@ class MachinePathFolders(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.home, True)
 
     def write(self, body):
-        os.makedirs(os.path.join(self.home, user.DIR_NAME), exist_ok=True)
-        with open(user.config_file(self.home), 'w', encoding='utf-8') as f:
-            json.dump(body, f)
+        machine_config(self.home, body, case=self)   # the PM repository's two files
 
     def test_the_kit_codes_no_default_folder_list(self):
         self.assertFalse(hasattr(user, 'DEFAULT_MACHINE_FOLDERS'))

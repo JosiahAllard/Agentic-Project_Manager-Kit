@@ -1,6 +1,5 @@
 """kitlib.hubsite.settings and the machine config's `hub` key. Every machine config here is a
 file in a temp home; the real one is never read."""
-import json
 import os
 import shutil
 import tempfile
@@ -9,6 +8,7 @@ import unittest
 from kitlib import config
 from kitlib.config import user
 from kitlib.hubsite import settings
+from tests.home import machine_config, pm_repo
 
 
 class HomeCase(unittest.TestCase):
@@ -16,11 +16,13 @@ class HomeCase(unittest.TestCase):
         self.home = tempfile.mkdtemp(prefix='kit-hub-home-')
         self.addCleanup(shutil.rmtree, self.home, True)
         self.data = os.path.join(self.home, 'data')
+        # The fenced PM repository, with no kit-pm-data.json record: no pm_data, as a machine
+        # config without the key had before pm_data was derived (a pm_data.path makes one).
+        pm_repo(self, record=False)
 
     def write(self, body):
-        os.makedirs(os.path.join(self.home, user.DIR_NAME), exist_ok=True)
-        with open(user.config_file(self.home), 'w', encoding='utf-8') as f:
-            f.write(json.dumps(body))
+        """The machine config `body`, in the fenced PM repository's two files (tests.home)."""
+        machine_config(self.home, body, case=self)
 
     def refused(self, hub, why):
         self.write({'hub': hub})
@@ -218,13 +220,14 @@ class RefusalTest(HomeCase):
             settings.load(home=self.home)
         self.assertIn('unknown key(s) bind', str(cm.exception))
         self.assertIn('port must be a whole number', str(cm.exception))
-        self.assertIn(user.config_file(self.home), str(cm.exception))
+        self.assertIn(os.path.dirname(user.key_file(self.home, settings.KEY)), str(cm.exception))
 
-    def test_a_malformed_pm_data_is_a_config_error(self):
-        self.write({'pm_data': {'path': 'relative'}})
+    def test_a_pm_data_key_in_the_machine_config_is_a_config_error(self):
+        # pm_data is derived from the PM-repo pointer (kitlib.config.user.locate), never a file's
+        machine_config(self.home, '{"pm_data": {"path": "relative"}}', case=self)
         with self.assertRaises(config.ConfigError) as cm:
             settings.load(home=self.home)
-        self.assertIn('path must be an absolute path', str(cm.exception))
+        self.assertIn('pm_data is derived', str(cm.exception))
 
 
 if __name__ == '__main__':

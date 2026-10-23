@@ -14,8 +14,7 @@ from hosts.claude.adapter import claude_host as H
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))), "tools"))
 import pm_watch as cli                                              # noqa: E402
-from kitlib.config import user as kuser                             # noqa: E402
-from tests.home import TempHomeCase                                 # noqa: E402
+from tests.home import TempHomeCase, machine_config, pm_repo       # noqa: E402
 
 
 class UsageEvents(unittest.TestCase):
@@ -297,10 +296,9 @@ class Cli(TempHomeCase):
 
     def test_launcher_configured_reads_the_machine_config(self):
         with tempfile.TemporaryDirectory() as home:
+            pm_repo(self)                                   # the fenced pointer's PM repository
             self.assertFalse(W.launcher_configured(home))
-            os.makedirs(kuser.config_dir(home))
-            with open(kuser.config_file(home), "w", encoding="utf-8") as f:
-                json.dump({"launcher": {"accounts": {"1": ["~/.claude"]}}}, f)
+            machine_config(home, {"launcher": {"accounts": {"1": ["~/.claude"]}}}, case=self)
             self.assertTrue(W.launcher_configured(home))
 
     def test_usage_is_read_in_process(self):

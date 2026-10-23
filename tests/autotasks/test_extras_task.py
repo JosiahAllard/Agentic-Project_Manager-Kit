@@ -53,8 +53,16 @@ class Step(MS.Base):
         self.host.task_register = lambda line: self.regs.append(line)
         self.host.task_list = lambda: list(self.tasks)
         self.place = gitrepo.Place(gitrepo.MAIN, self.kit, '', None, None)
+        real_classify = gitrepo.classify
+
+        def classify(path, *a, **k):
+            # Only the kit is a main checkout here; the PM repo pointer's check
+            # (kitlib.config.pointer) classifies its own repository for real.
+            if os.path.normcase(os.path.abspath(path)) == os.path.normcase(os.path.abspath(self.kit)):
+                return self.place
+            return real_classify(path, *a, **k)
         for target, value in (('kitlib.machinesetup.worktreesweep.tool_root', lambda kit, environ=None: self.kit),
-                              ('kitlib.git.repo.classify', lambda path, *a, **k: self.place),
+                              ('kitlib.git.repo.classify', classify),
                               ('kitlib.launcher.pythonw.base_pythonw', lambda base_prefix=None: PYW)):
             p = mock.patch(target, value)
             p.start()

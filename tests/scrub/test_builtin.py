@@ -405,10 +405,11 @@ class TheChecks(unittest.TestCase):
         from tests.scrub import test_builtin as me
         home = tempfile.mkdtemp(prefix='kit-scrub-home-')
         self.addCleanup(__import__('shutil').rmtree, home, True)
-        with mock.patch.object(tests, '_REAL_HOME', home):
+        with mock.patch.object(tests, '_REAL_HOME', home), \
+                mock.patch.object(tests, '_REAL_POINTER', (None, 'no pointer here')):
             self.assertEqual(me.configured_folders(), ())       # no machine config file
             os.makedirs(os.path.join(home, kuser.DIR_NAME))
-            with open(kuser.config_file(home), 'w', encoding='utf-8') as f:
+            with open(os.path.join(home, kuser.DIR_NAME, kuser.FILE_NAME), 'w', encoding='utf-8') as f:
                 json.dump({'machine_path_folders': ['Src']}, f)
             self.assertEqual(me.configured_folders(), ('Src',))
             extra = 'tests/zz_new.py'

@@ -1,7 +1,6 @@
 """The conductor-to-coordinator rename, part 1: coordinators.json with a refusal for the old name,
 handoff --stem, the one-release guard against an old-stem session, and the autostart task rename."""
 import io
-import json
 import os
 import shutil
 import sys
@@ -9,9 +8,9 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 
-from kitlib.config import user as kuser
 from kitlib.launcher import autostart, handoff, lookup, reboot, start, state, stop
 from kitlib.launcher.settings import LaunchError
+from tests.home import machine_config
 from tests.launcher.fakes import FakeHost, Home, role_of, session
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
@@ -166,9 +165,7 @@ class OldStateFileElsewhere(unittest.TestCase):
         self.assertEqual(host.killed, [])
 
     def test_stop_cli_says_refused_and_exits_2(self):
-        os.makedirs(kuser.config_dir(self.h.root))
-        with open(kuser.config_file(self.h.root), 'w', encoding='utf-8') as f:
-            json.dump({'launcher': self.h.obj}, f)
+        machine_config(self.h.root, {'launcher': self.h.obj}, case=self)
         host = FakeHost(self.h.root, [session(10, 'x-a1')])
         out, err = io.StringIO(), io.StringIO()
         with redirect_stdout(out), redirect_stderr(err):
@@ -209,9 +206,7 @@ class Autostart(unittest.TestCase):
 class Cli(unittest.TestCase):
     def test_handoff_stem_reaches_the_library(self):
         h = Home(self)
-        os.makedirs(kuser.config_dir(h.root))
-        with open(kuser.config_file(h.root), 'w', encoding='utf-8') as f:
-            json.dump({'launcher': h.obj}, f)
+        machine_config(h.root, {'launcher': h.obj}, case=self)
         h.write_state('sessions.json', {'alpha': dict(ALPHA)})
         host = FakeHost(h.root)
         out, err = io.StringIO(), io.StringIO()
