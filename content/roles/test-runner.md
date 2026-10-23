@@ -47,7 +47,7 @@ Scan output for the profile's pass strings, failure strings and known-harmless n
 One line per tier: PASS or FAIL, with its time if known. On any FAIL, the specific
 failing line(s) only, plus a line of context where that is what names the failing
 test. Nothing else - no restating the request, no suggested fixes unless the
-caller asked for a diagnosis.
+caller asked for a diagnosis. Hand back a text report of about 40 lines at most, never a report file (the host refuses subagent report files).
 
 ## Kit tools
 

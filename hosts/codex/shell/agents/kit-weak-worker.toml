@@ -60,7 +60,7 @@ true; `kit-worker` takes it from there, the intended path, not a failure:
 
 Result first (GATE PENDING with the log path, if your gate has not finished). Then branch and
 commit hashes; what you changed; the gate with the line proving each result; anything left
-inferred; anything noticed outside scope. No process narrative.
+inferred; anything noticed outside scope. No process narrative. Hand back a text report of about 40 lines at most, never a report file (the host refuses subagent report files).
 
 ## Kit tools
 
