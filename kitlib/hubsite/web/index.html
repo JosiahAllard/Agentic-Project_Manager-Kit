@@ -36,7 +36,7 @@
   .listpane{padding-block:16px 88px}
   .wrap:has(> #pane-detail:not([hidden])) > .listpane{display:none}
   .detailpane{position:static;height:auto;border-left:0;padding:16px 16px 88px}
-  .tabbar{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));position:fixed;left:0;right:0;bottom:0;z-index:10;background:var(--surface);border-top:1px solid var(--line);padding:4px 0 calc(6px + env(safe-area-inset-bottom))}
+  .tabbar{display:grid;grid-template-columns:repeat(9,minmax(0,1fr));position:fixed;left:0;right:0;bottom:0;z-index:10;background:var(--surface);border-top:1px solid var(--line);padding:4px 0 calc(6px + env(safe-area-inset-bottom))}
 }
 h1{font-size:1.6rem;margin:0;font-weight:700;letter-spacing:-.01em;text-wrap:balance}
 .sub{color:var(--muted);margin:0;max-width:62ch}
@@ -196,6 +196,7 @@ button.danger{color:var(--warn)}
     <button class="sec" role="tab" data-s="backlog" aria-selected="false" id="sec-backlog">Backlog <span class="n" id="n-s">0</span><span class="n hot" id="n-sp" hidden></span></button>
     <button class="sec" role="tab" data-s="docs" aria-selected="false" id="sec-docs">Docs <span class="n" id="n-d">0</span></button>
     <button class="sec" role="tab" data-s="autotasks" aria-selected="false" id="sec-autotasks">Automatic tasks</button>
+    <button class="sec" role="tab" data-s="findings" aria-selected="false" id="sec-findings">Findings</button>
     <button class="sec" role="tab" data-s="info" aria-selected="false" id="sec-info">Info</button>
   </div>
   <div class="sidefoot" id="sidefoot" role="status"></div>
@@ -281,6 +282,7 @@ button.danger{color:var(--warn)}
     <button class="tb" role="tab" data-s="backlog" aria-selected="false" id="tb-backlog">Backlog <span class="n" data-of="n-s">0</span></button>
     <button class="tb" role="tab" data-s="docs" aria-selected="false" id="tb-docs">Docs <span class="n" data-of="n-d">0</span></button>
     <button class="tb" role="tab" data-s="autotasks" aria-selected="false" id="tb-autotasks">Auto</button>
+    <button class="tb" role="tab" data-s="findings" aria-selected="false" id="tb-findings">Lint</button>
     <button class="tb" role="tab" data-s="info" aria-selected="false" id="tb-info">Info</button>
   </div>
 </div>
@@ -299,7 +301,7 @@ button.danger{color:var(--warn)}
   // know leaves the page where it is.
   const ROUTES = { "#home": {section:"home"}, "#questions": {section:"questions"}, "#inbox": {section:"inbox"}, "#todo": {section:"todo"}, "#topm": {section:"topm"},
     "#backlog": {section:"backlog"}, "#stories": {section:"backlog"}, "#parked": {section:"backlog", sfilter:"parked"},
-    "#docs": {section:"docs"}, "#autotasks": {section:"autotasks"}, "#info": {section:"info"}, "#usage": {section:"info", infotab:"usage"}, "#agents": {section:"info", infotab:"agents"} };
+    "#docs": {section:"docs"}, "#autotasks": {section:"autotasks"}, "#findings": {section:"findings"}, "#info": {section:"info"}, "#usage": {section:"info", infotab:"usage"}, "#agents": {section:"info", infotab:"agents"} };
   const route = h => Object.prototype.hasOwnProperty.call(ROUTES, h) ? ROUTES[h] : null;
   try { const it = localStorage.getItem("oq.infotab"); if (it === "usage" || it === "agents") state.infotab = it; } catch(e){}
   Object.assign(state, route(location.hash));
@@ -353,7 +355,7 @@ button.danger{color:var(--warn)}
   const why = e => (e && e.message) || "the hub server refused the write";
   const NOT_READY = "Waiting for the hub server", NOT_READY_WHY = "Nothing has been read from the hub server yet. The line at the top says why when it cannot be reached.";
 
-  try { const f = localStorage.getItem("oq.filter"); if (f) state.filter = f; const sct = localStorage.getItem("oq.section"); if (sct && !["#home", "#inbox", "#todo", "#questions", "#backlog", "#stories", "#usage", "#info", "#agents", "#parked", "#topm", "#docs", "#autotasks"].includes(location.hash)) { state.section = {stories: "backlog", parked: "backlog", agents: "info", usage: "info", pages: "docs"}[sct] || sct; if (sct === "parked") state.sfilter = "parked"; } const sf = localStorage.getItem("oq.sfilter"); if (["current", "parked", "done"].includes(sf) && location.hash !== "#parked") state.sfilter = sf; state.brepo = localStorage.getItem("oq.brepo") || ""; const pd = +localStorage.getItem("oq.period"); if ([1, 7, 30, 90].includes(pd)) state.period = pd; for (const [k, v] of [["bprio", "oq.bprio"], ["bstat", "oq.bstat"]]) { const x = JSON.parse(localStorage.getItem(v) || "null"); if (Array.isArray(x)) state[k] = new Set(x.map(String)); } } catch(e){}
+  try { const f = localStorage.getItem("oq.filter"); if (f) state.filter = f; const sct = localStorage.getItem("oq.section"); if (sct && !["#home", "#inbox", "#todo", "#questions", "#backlog", "#stories", "#usage", "#info", "#agents", "#parked", "#topm", "#docs", "#autotasks", "#findings"].includes(location.hash)) { state.section = {stories: "backlog", parked: "backlog", agents: "info", usage: "info", pages: "docs"}[sct] || sct; if (sct === "parked") state.sfilter = "parked"; } const sf = localStorage.getItem("oq.sfilter"); if (["current", "parked", "done"].includes(sf) && location.hash !== "#parked") state.sfilter = sf; state.brepo = localStorage.getItem("oq.brepo") || ""; const pd = +localStorage.getItem("oq.period"); if ([1, 7, 30, 90].includes(pd)) state.period = pd; for (const [k, v] of [["bprio", "oq.bprio"], ["bstat", "oq.bstat"]]) { const x = JSON.parse(localStorage.getItem(v) || "null"); if (Array.isArray(x)) state[k] = new Set(x.map(String)); } } catch(e){}
   // An answer's draft is kept in the browser's storage and in the page itself, so it survives a redraw
   // where the browser gives the page no storage.
   const draftKey = id => "oq.draft." + id, drafts = new Map();
@@ -449,6 +451,7 @@ button.danger{color:var(--warn)}
     seenLine();
     const sc = state.section, q = sc === "questions";
     if (sc === "autotasks" && drewSection !== "autotasks") sched.read = false;     // the schedules are read again each time the section is shown
+    if (sc === "findings" && drewSection !== "findings") lint.read = false;        // and so are the findings
     drewSection = sc;
     const inb = q || sc === "inbox";
     document.querySelectorAll(".sec, .tb").forEach(b =>b.setAttribute("aria-selected", String(b.dataset.s === "questions" ? inb : b.dataset.s === sc)));
@@ -471,7 +474,7 @@ button.danger{color:var(--warn)}
     $("#n-p").textContent = state.parked.length; $("#n-p").classList.toggle("hot", state.parked.length > 0);
     $("#n-sp").textContent = state.parked.length + " parked"; $("#n-sp").hidden = !state.parked.length;
     const pb = pmBadge(state.topm); $("#n-pm").textContent = pb.n; $("#n-pm").classList.toggle("hot", pb.hot);
-    $("#repo").hidden = sc === "home" || sc === "info" || sc === "backlog" || sc === "topm" || sc === "autotasks";
+    $("#repo").hidden = sc === "home" || sc === "info" || sc === "backlog" || sc === "topm" || sc === "autotasks" || sc === "findings";
     $("#n-d").textContent = state.pages.length;
     // The phone's tab bar shows the sidebar's counts: each copies the one it names.
     document.querySelectorAll("#tabbar [data-of]").forEach(n => { const o = document.getElementById(n.dataset.of); n.textContent = o.textContent; n.className = o.className; });
@@ -480,7 +483,7 @@ button.danger{color:var(--warn)}
     if (sc === "topm") pmCompose.fill();     // the repos arrive after the form is built: the menu is filled without a click
     $("#addform").hidden = sc !== "todo" || !ready;
     $("#rec-new").hidden = sc !== "backlog" || !ready;
-    sc === "home" ? renderHome() : q ? renderQuestions() : sc === "inbox" ? renderInbox() : sc === "todo" ? renderTodos() : sc === "topm" ? renderToPm() : sc === "info" ? renderInfo() : sc === "docs" ? renderDocs() : sc === "autotasks" ? renderAutotasks() : renderBacklog();
+    sc === "home" ? renderHome() : q ? renderQuestions() : sc === "inbox" ? renderInbox() : sc === "todo" ? renderTodos() : sc === "topm" ? renderToPm() : sc === "info" ? renderInfo() : sc === "docs" ? renderDocs() : sc === "autotasks" ? renderAutotasks() : sc === "findings" ? renderFindings() : renderBacklog();
     place($("#pane-detail"), detailKids); $("#pane-detail").hidden = !detailKids.length;
   }
 
@@ -634,12 +637,14 @@ button.danger{color:var(--warn)}
   const pmSendAll = (items, iso) => items.filter(x => x.status === "queued").map(x => ({ id: x.id, patch: { status: "sent", sent_at: iso } }));
   // Refs may be question ids (Q-nnn); entries shaped like a ledger id are never shown.
   const keptRefs = a => Array.isArray(a) ? a.filter(r => !/^R-\d+$/.test(String(r))) : [];
+  // A note's kind as the page names it: an act note (a lint finding passed on, docs/action-hub.md) is its own kind.
+  const pmKindText = k => k === "fyi" ? "FYI" : k === "act" ? "Act" : "Question";
   // The sent items, one line each with its id.
   function pmAlertLines(items){
     const sent = items.filter(x => x.status === "sent");
     if (!sent.length) return [];
     const L = ["", "To PM (owner's questions and FYIs; reply in to_pm/ and set status done, with reply):"];
-    for (const x of sent) L.push("- " + x.id + " [" + (x.kind === "fyi" ? "FYI" : "Question") + (x.repo ? ", " + x.repo : "") + "]" + (x.urgent ? " (urgent)" : "") + ": " + String(x.text || "").replace(/\s+/g, " ").slice(0, 300));
+    for (const x of sent) L.push("- " + x.id + " [" + pmKindText(x.kind) + (x.repo ? ", " + x.repo : "") + "]" + (x.urgent ? " (urgent)" : "") + ": " + String(x.text || "").replace(/\s+/g, " ").slice(0, 300));
     return L;
   }
   // A todo's commands as a list: an array, a lone string, or the older `command`.
@@ -738,10 +743,13 @@ button.danger{color:var(--warn)}
   };
   // pm-pure:end
 
+  // An act note keeps its kind (the server refuses a change to or from act): its form offers no kind and its Save
+  // sends none.
   function pmFields(init){
+    const act = init.kind === "act";
     const f = { kind: init.kind === "fyi" ? "fyi" : "question", repo: init.repo || "", urgent: !!init.urgent };
-    const kinds = el("div", {class:"row", role:"radiogroup", "aria-label":"Type"});
-    const drawKinds = () => kinds.replaceChildren(...[["question", "Question"], ["fyi", "FYI"]].map(([v, t]) => el("button", {type:"button", class:"fchip", role:"radio", "aria-checked": String(f.kind === v), text: t, onclick: () => { f.kind = v; drawKinds(); }})));
+    const kinds = act ? el("span", {class:"chip", text:"Act: a finding passed on"}) : el("div", {class:"row", role:"radiogroup", "aria-label":"Type"});
+    const drawKinds = () => act ? null : kinds.replaceChildren(...[["question", "Question"], ["fyi", "FYI"]].map(([v, t]) => el("button", {type:"button", class:"fchip", role:"radio", "aria-checked": String(f.kind === v), text: t, onclick: () => { f.kind = v; drawKinds(); }})));
     drawKinds();
     // The repos load after the compose form is built, so the menu refills when it is opened;
     // an old tag maps to its repo (canonRepo) once the repos are known.
@@ -757,7 +765,7 @@ button.danger{color:var(--warn)}
     const urg = el("input", {type:"checkbox"}); urg.checked = f.urgent; urg.addEventListener("change", () => { f.urgent = urg.checked; });
     const ta = el("textarea", {placeholder:"What you want to ask or tell the PM", "aria-label":"Message to the PM"}); ta.value = init.text || "";
     const node = el("div", {class:"pmf"}, el("div", {class:"row"}, kinds, sel, el("label", {class:"urg"}, urg, " Urgent")), ta);
-    return { node, ta, fill, get: () => ({ kind: f.kind, repo: f.repo, urgent: f.urgent, text: ta.value.trim() }),
+    return { node, ta, fill, get: () => ({ ...(act ? {} : { kind: f.kind }), repo: f.repo, urgent: f.urgent, text: ta.value.trim() }),
       reset: () => { f.kind = "question"; f.repo = ""; f.urgent = false; sel.value = ""; urg.checked = false; ta.value = ""; drawKinds(); } };
   }
   const pmCompose = pmFields({});
@@ -845,7 +853,7 @@ button.danger{color:var(--warn)}
     });
     return del;
   }
-  const pmMeta = (x, tab) => el("div", {class:"meta"}, x.urgent ? el("span", {class:"chip urgent", text:"Urgent"}) : null, el("span", {class:"id", text: x.id}), el("span", {class:"chip", text: x.kind === "fyi" ? "FYI" : "Question"}), x.repo ? el("span", {class:"chip", text: x.repo}) : null,
+  const pmMeta = (x, tab) => el("div", {class:"meta"}, x.urgent ? el("span", {class:"chip urgent", text:"Urgent"}) : null, el("span", {class:"id", text: x.id}), el("span", {class:"chip", text: pmKindText(x.kind)}), x.repo ? el("span", {class:"chip", text: x.repo}) : null,
     x.created_at ? el("span", {text: "written " + when(x.created_at)}) : null, x.sent_at && tab !== "queued" ? el("span", {text: "sent " + when(x.sent_at)}) : null, tab === "done" && x.done_at ? el("span", {class:"chip ok", text: "done " + when(x.done_at)}) : null);
   // The card of a queued item being edited, built once for the edit `ed`.
   function pmEditCard(x, ed){
@@ -1375,7 +1383,7 @@ button.danger{color:var(--warn)}
     if (!at) return;
     const [kind, d] = at;
     openId = d.id;
-    const c = drawn(kind === "approval" ? approvalCard : kind === "todo" ? todoCard : kind === "schedule" ? scheduleCard : card, d);
+    const c = drawn(kind === "approval" ? approvalCard : kind === "todo" ? todoCard : kind === "schedule" ? scheduleCard : kind === "finding" ? findingCard : card, d);
     c.tabIndex = -1;
     place(dview, [dlinks, ...(notes || []), c]);
     detailKids = [dview];
@@ -1559,6 +1567,158 @@ button.danger{color:var(--warn)}
       el("h2", {text: isNew ? "A new automatic task" : taskName(d.task) + " for " + String(d.repo || "?")}),
       isNew ? fld("Task", task) : null, isNew ? fld("Repo", repo) : null, fld("How often", cad), fld("At (24-hour)", at), days,
       el("div", {class:"act"}, save, st));
+    return f.node;
+  }
+
+  // ---- Findings: the maintenance lint's last findings (docs/maint-lint.md), each with what can be done about it
+  // (docs/action-hub.md "finding_marks/<fingerprint>"). They are not in the snapshot: GET /findings (the unmarked ones,
+  // with each repo's last run) and GET /finding_marks (the marked ones, which stay listed with their mark) are read each
+  // time the section is shown and after each mark. A target or fix is shown as the server gives it: the server cuts its
+  // paths for every caller but the local owner, and the page never puts a path together itself.
+  // forms: the open form of each unmarked finding by fingerprint ({node, ta, st, btns, shape, edits, saving, passed}),
+  // kept while the owner works on it; said: what the last write of a finding answered, by fingerprint. As for a
+  // schedule, a step after an await (a post, the read after it) drops a form only when nothing changed meanwhile: the
+  // form is still the one drawn, its edits count is the one read before the await and no write of it is in flight.
+  const lint = { items: [], marks: [], runs: [], err: "", read: false, busy: false, again: false, reading: null, forms: new Map(), said: new Map() };
+  const lintRows = (j, key) => j && Array.isArray(j[key]) ? j[key].filter(x => x && typeof x === "object") : [];
+  function readFindings(){
+    if (lint.reading) { lint.again = true; return lint.reading; }
+    lint.busy = true;
+    lint.reading = (async () => {
+      try {
+        do {
+          lint.again = false;
+          const errs = [], got = (what, p) => p.catch(e => { errs.push("the " + what + " (" + ((e && e.message) || "no reason given") + ")"); return null; });
+          const [f, m] = await Promise.all([got("findings", hub.call("GET", "/findings")), got("marks", hub.call("GET", "/finding_marks"))]);
+          if (f) { lint.items = lintRows(f, "items").filter(x => typeof x.fingerprint === "string"); lint.runs = lintRows(f, "runs").filter(r => typeof r.repo === "string"); }
+          if (m) lint.marks = lintRows(m, "items").filter(x => x.id != null);
+          lint.err = errs.join(" and ");
+        } while (lint.again);
+      } finally { lint.busy = false; lint.read = true; lint.reading = null; }
+    })();
+    const read = lint.reading;
+    read.then(lintRedraw);
+    return read;
+  }
+  function lintRedraw(){
+    try { if (state.section === "findings") render(); }
+    catch (e) { loadSay("This page could not show the findings it read (" + ((e && e.message) || "no reason given") + "). Open the section again to redraw it."); }
+  }
+  // What the owner can do about a finding of each check, besides Pass on and Dismiss: the record it names opens on
+  // its record page, where its priority, scope, blocker or hold is edited, or it is deleted.
+  const FINDING_ACTS = { "unpriced": "Set priority", "keyword-hold": "Unblock", "dead-blocker": "Unblock", "answered-question": "Unblock",
+    "scope-path-gone": "Edit scope", "body-path-gone": "Edit scope", "file-moved": "Edit scope", "duplicate": "Retire", "dead-pull": "Retire", "landed-still-pulled": "Retire" };
+  const MARKED = { passed_on: "Passed on", dismissed: "Dismissed", done: "Done" };
+  // A record check's target starts with the record's id; a duplicate's is the ids, each one a record to retire.
+  function findingRecords(d){
+    if (!FINDING_ACTS[d.check] || typeof d.target !== "string") return [];
+    const ids = d.target.trim().split(/\s+/).filter(t => /^[A-Za-z][A-Za-z0-9_.-]*$/.test(t));
+    return d.check === "duplicate" ? ids : ids.slice(0, 1);
+  }
+  const ageText = a => a == null || a === "" ? "" : "age " + String(a);
+  // The note the server writes for a finding passed on with none (api.py _act_note), from the finding as shown here.
+  const actText = d => { const s = v => typeof v === "string" ? v : "-"; return "Act on maintenance finding " + s(d.check) + " " + s(d.target) + ": " + s(d.text) + " (fix: " + s(d.fix) + ")"; };
+  function findingChips(d){
+    return [el("span", {class:"chip need", text: String(d.check || "?")}), d.repo ? el("span", {class:"chip", text: String(d.repo)}) : null,
+      d.new === true ? el("span", {class:"chip urgent", text:"New"}) : null,
+      d.status != null ? el("span", {class: "chip" + (d.status === "dismissed" ? "" : " ok"), text: MARKED[d.status] || String(d.status)}) : null];
+  }
+  function findingRow(d){
+    const row = rowCard("finding", { id: d.id, title: d.target || "(no target)" }, findingChips(d),
+      d.status != null ? (d.marked_at ? "marked " + when(d.marked_at) : "") : ageText(d.age));
+    row.insertBefore(el("p", {class:"ctx", text: String(d.text || "")}), row.lastChild);
+    return row;
+  }
+  // Each repo's last run, as context: its ledger as counts only, and a skip only when the skip marker is later than
+  // the run (the server says so; the page checks both times parse and leaves the line out when one does not).
+  function runLines(){
+    const out = [];
+    for (const r of lint.runs) {
+      const led = r.ledger && typeof r.ledger === "object" ? r.ledger : null;
+      const n = led ? [["stale_cites", "stale cites"], ["superseded", "superseded"], ["superseded_live", "superseded and still live"]].filter(([k]) => Number.isInteger(led[k])).map(([k, t]) => led[k] + " " + t) : [];
+      if (n.length) out.push(el("p", {class:"status", text: r.repo + " ledger: " + n.join(", ") + "."}));
+      const sk = r.skipped && typeof r.skipped === "object" ? r.skipped : null;
+      const at = sk && typeof sk.at === "string" ? Date.parse(sk.at) : NaN, ran = typeof r.started === "string" ? Date.parse(r.started) : NaN;
+      if (sk && typeof sk.reason === "string" && isFinite(at) && isFinite(ran) && at > ran)
+        out.push(el("p", {class:"gone", role:"status", text: r.repo + ": last run skipped: " + sk.reason + ", " + when(sk.at) + "."}));
+    }
+    return out;
+  }
+  function renderFindings(){
+    if (!lint.read && !lint.busy) readFindings();
+    const open = lint.items.map(f => ({ ...f, id: f.fingerprint }));
+    for (const [id, f] of [...lint.forms]) if (!f.saving && !f.reading && !open.some(x => x.id === id)) lint.forms.delete(id);
+    const all = [...open, ...lint.marks];
+    const at = settle(all.map(d => ["finding", d]));
+    const head = [lint.err ? el("p", {class:"gone", role:"status", text: "Could not read " + lint.err + "."}) : null, ...runLines()];
+    show([], head, all.length ? all.map(d => drawn(findingRow, d))
+      : el("div", {class:"empty"}, el("strong", {text: !lint.read ? "Reading the findings…" : "No findings"}), "What the maintenance lint's last run of each repo found shows here, with what can be done about it."));
+    pickDetail(at);
+  }
+  function goRecord(repo, id){ state.section = "backlog"; state.sfilter = "current"; state.repo = ""; $("#repo").value = ""; openRecord(canonRepo(repo) || String(repo || ""), id); }
+  function findingCard(d){
+    const told = lint.said.get(d.id);
+    const say = told ? el("p", {class:"status", role:"status", id: "f-" + d.id + "-status", text: told.text}) : null;
+    const kept = told && told.kept ? el("div", {class:"ans"}, el("b", {text:"What you typed after pressing Pass on (it is not in the note):"}), el("p", {class:"reply", text: told.kept})) : null;
+    const facts = [el("div", {class:"meta"}, ...findingChips(d), el("span", {class:"id", text: String(d.id)}), d.status == null && d.age != null ? el("span", {text: ageText(d.age)}) : null),
+      el("h2", {text: d.target || "(no target)"}), el("p", {class:"ctx", text: String(d.text || "")}), d.fix ? el("p", {class:"ctx", text: "Fix: " + d.fix}) : null];
+    if (d.status != null)
+      return el("article", {class:"q", id: "finding-" + d.id}, ...facts, d.note ? el("p", {class:"ctx", text: "Note: " + d.note}) : null,
+        el("p", {class:"status", text: (MARKED[d.status] || String(d.status)) + (d.marked_at ? " " + when(d.marked_at) : "") + (d.via ? " via " + d.via : "") + "."}), say, kept);
+    const shape = JSON.stringify([d.repo, d.check, d.target, d.text, d.fix, d.age, d.new]);
+    const old = lint.forms.get(d.id);
+    if (old && (old.edits || old.saving || old.passed || (old.shape === shape && old.ready === ready))) { if (!old.saving) old.btns.forEach(b => { b.disabled = !ready; }); return old.node; }
+    const f = { shape, ready, edits: 0, saving: false, passed: null }; lint.forms.set(d.id, f);
+    const prefill = actText(d);
+    const ta = el("textarea", {id: "f-" + d.id + "-note", "aria-label":"Note to the PM", oninput: () => { f.edits++; }}); ta.value = prefill;
+    const st = el("span", {class:"status", role:"status", id: "f-" + d.id + "-status", text: told ? told.text : ""});
+    // nothing changed on this form since `edits` was read: still the form drawn, not typed in, no write of it in flight
+    const still = edits => lint.forms.get(d.id) === f && f.edits === edits && !f.saving;
+    const pass = el("button", {class:"primary", type:"button", text:"Pass on", disabled: !ready});
+    const dismiss = el("button", {class:"link", type:"button", text:"Dismiss", disabled: !ready});
+    f.btns = [pass, dismiss];
+    const busy = on => { f.saving = on; f.btns.forEach(b => { b.disabled = on || !ready; }); };
+    const tell = (cls, t) => { st.className = cls; st.textContent = t; };
+    // Pass on: an act note to the PM (queued in To PM, like any note), then the finding is marked passed on. A note the
+    // server took is not sent twice: when the mark is what failed, Pass on again only marks.
+    pass.addEventListener("click", async () => {
+      if (!ready || f.saving) return;
+      const sent = f.edits, txt = ta.value.trim();
+      busy(true); tell("status", "Passing on…");
+      if (!f.passed) {
+        let r;
+        try { r = await write("/to_pm", { kind: "act", finding: d.id, ...(txt && txt !== prefill ? { text: txt } : {}) }); }
+        catch (e) { busy(false); tell("status err", "Not passed on: " + why(e) + ". Your note is kept."); return; }
+        f.passed = r && r.id != null ? String(r.id) : "a note";
+      }
+      await markIt("passed_on", "Passed on as " + f.passed, sent,
+        "Passed on as " + f.passed + ": it is queued in To PM, so press Send all there to send it.",
+        e => "Passed on as " + f.passed + ", but not marked: " + why(e) + ". Pass on again marks it, without a second note.");
+    });
+    dismiss.addEventListener("click", async () => {
+      if (!ready || f.saving) return;
+      busy(true); tell("status", "Dismissing…");
+      await markIt("dismissed", null, f.edits, "Dismissed.", e => "Not dismissed: " + why(e) + ".");
+    });
+    async function markIt(status, note, sent, ok, bad){
+      try { await hub.post("/finding_marks", { fingerprint: d.id, status, ...(note ? { note } : {}) }); }
+      catch (e) { busy(false); tell("status err", bad(e)); return; }
+      busy(false); tell("status", ok);
+      lint.said.set(d.id, { text: ok, kept: null });
+      f.reading = true;
+      try { await readFindings(); } finally { f.reading = false; }
+      // The form goes once the list read shows the finding marked (a read that failed keeps it, and what it holds).
+      // A note typed in after the press is not in the note sent: it is kept under the mark, to copy.
+      if (lint.forms.get(d.id) !== f || lint.items.some(x => x.fingerprint === d.id)) return lintRedraw();
+      if (!still(sent) && status === "passed_on") lint.said.set(d.id, { text: ok, kept: ta.value });
+      lint.forms.delete(d.id);
+      lintRedraw();
+    }
+    const recs = findingRecords(d).map(id => el("button", {class:"link", type:"button", text: FINDING_ACTS[d.check] + " " + id,
+      "aria-label": FINDING_ACTS[d.check] + " " + id + ": opens its record page", onclick: () => goRecord(d.repo, id)}));
+    f.ta = ta; f.st = st;
+    f.node = el("article", {class:"q", id: "finding-" + d.id}, ...facts, recs.length ? el("div", {class:"act"}, ...recs) : null,
+      el("label", {class:"fld", for: ta.id}, "Note to the PM", ta), el("div", {class:"act"}, pass, dismiss, st));
     return f.node;
   }
 

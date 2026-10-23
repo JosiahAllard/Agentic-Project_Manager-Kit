@@ -204,6 +204,10 @@ class LogicTest(unittest.TestCase):
         self.assertIn("P-003 [Question] (urgent)", lines[3])
         self.assertEqual(js("pmAlertLines(items)", [item(1, "queued")]), [])
 
+    def test_an_act_note_is_its_own_kind_in_the_alert(self):
+        lines = js("pmAlertLines(items)", [item(5, "sent", kind="act", repo="alpha", text="Act on maintenance finding unpriced R-1")])
+        self.assertIn("P-005 [Act, alpha]: Act on maintenance finding unpriced R-1", lines[2])
+
     def test_freshness(self):
         now = "Date.parse('2026-10-11T12:00:00Z')"
         self.assertEqual(js("pmFresh(items, %s)" % now, []), {"kind": "never"})
@@ -1303,7 +1307,7 @@ class DomTest(unittest.TestCase):
             out.none = on(); out.empty = text($("#list"));
             return out;
         """, snapshot(views=views))
-        self.assertEqual(got["sections"], ["home", "questions", "topm", "todo", "backlog", "docs", "autotasks", "info"])
+        self.assertEqual(got["sections"], ["home", "questions", "topm", "todo", "backlog", "docs", "autotasks", "findings", "info"])
         self.assertEqual(got["first"], {"say": "3 parked", "off": False, "hot": True})       # seen from any section
         self.assertEqual(got["badge"], "sec-backlog")
         self.assertEqual(got["tab"], {"chosen": "true", "n": "3", "section": "true", "row": False})
@@ -3021,6 +3025,251 @@ class AutoTasksTest(unittest.TestCase):
         self.assertTrue(got["first"].startswith("Saved. First run: "), got["first"])
         self.assertEqual((got["said"], got["at"]), ("", "07:00"))
 
+
+def finding(fp, check, target, text, **kw):
+    """One unmarked item of GET /findings (api.findings_list)."""
+    d = {"repo": "alpha", "check": check, "target": target, "text": text, "fix": "fix it", "age": "2d", "fingerprint": fp,
+         "new": False, "started": NOW}
+    d.update(kw)
+    return d
+
+
+FOUND = [finding("fp1", "unpriced", "R-1", "R-1 has no priority"),
+         finding("fp2", "duplicate", "R-2 R-3", "two records say the same", new=True),
+         finding("fp3", "worktree-A", ".../wt-old", "a worktree with no branch")]
+MARKS = [{"id": "fp9", "repo": "alpha", "check": "dead-pull", "target": "R-9", "text": "pulled, no branch", "status": "passed_on",
+          "note": "Passed on as P-5", "marked_at": NOW, "via": "web", "version": 1},
+         {"id": "fp8", "repo": "alpha", "check": "audit", "target": "notes", "text": "an old audit", "status": "dismissed",
+          "note": "", "marked_at": NOW, "via": "web", "version": 1}]
+
+# The findings and marks the page reads, and the two writes: POST /finding_marks marks one (it moves from the findings
+# to the marks), POST /to_pm answers the act note's id. lintS.markFail / lintS.actFail / lintS.readFail answer instead.
+FINDINGS_ROUTE = """
+    const lintS = { items: FOUND, marks: MARKS, runs: RUNS, markFail: null, actFail: null, readFail: null };
+    server.route = c => {
+      if (c.path === "/findings" && c.method === "GET") return lintS.readFail || { status: 200, body: { ok: true, items: lintS.items, runs: lintS.runs } };
+      if (c.path === "/finding_marks" && c.method === "GET") return { status: 200, body: { ok: true, items: lintS.marks } };
+      if (c.path === "/finding_marks" && c.method === "POST") {
+        if (lintS.markFail) return lintS.markFail;
+        const i = lintS.items.findIndex(x => x.fingerprint === c.body.fingerprint), d = lintS.items.splice(i, 1)[0];
+        lintS.marks.push({ id: d.fingerprint, repo: d.repo, check: d.check, target: d.target, text: d.text, status: c.body.status,
+                           note: c.body.note || "", marked_at: d.started, via: "web", version: 1 });
+        return { status: 200, body: { ok: true, id: d.fingerprint, version: 1 } };
+      }
+      if (c.path === "/to_pm" && c.method === "POST") return lintS.actFail || { status: 200, body: { ok: true, id: "P-9" } };
+      return undefined;
+    };
+    const posts = () => calls.filter(c => c.method === "POST").map(c => [c.path, c.body]);
+"""
+
+
+def refusal(code, message, status=400):
+    return {"status": status, "body": {"ok": False, "error": {"code": code, "message": message, "field": ""}}}
+
+
+@unittest.skipUnless(NODE, "node is needed to run the page's logic")
+class FindingsTest(unittest.TestCase):
+    """The Findings section: GET /findings and GET /finding_marks as rows, one finding acted on in the detail pane."""
+
+    def run_page(self, body, found=None, marks=None, runs=None, hash="#findings"):
+        src = (FINDINGS_ROUTE.replace("FOUND", json.dumps(FOUND if found is None else found))
+               .replace("MARKS", json.dumps(MARKS if marks is None else marks)).replace("RUNS", json.dumps(runs or []))) + body
+        return dom(src, snapshot(views={"repos": [{"name": "alpha"}]}), hash=hash)
+
+    def test_each_finding_is_a_row_and_a_marked_one_stays_with_its_tag(self):
+        got = self.run_page("""
+            await start();
+            return { sec: $("#sections .sec[aria-selected=true]").dataset.s,
+                     rows: $$("#list article").map(a => [a.id, text(a.querySelector("h2")), [...a.querySelectorAll(".chip")].map(text), text(a.querySelector("p.ctx"))]),
+                     gets: calls.filter(c => c.method === "GET" && /^\\/finding/.test(c.path)).map(c => c.path).sort() };
+        """)
+        self.assertEqual(got["sec"], "findings")
+        self.assertEqual(got["rows"], [
+            ["row-fp1", "R-1", ["unpriced", "alpha"], "R-1 has no priority"],
+            ["row-fp2", "R-2 R-3", ["duplicate", "alpha", "New"], "two records say the same"],
+            ["row-fp3", ".../wt-old", ["worktree-A", "alpha"], "a worktree with no branch"],      # a path as the server gives it
+            ["row-fp9", "R-9", ["dead-pull", "alpha", "Passed on"], "pulled, no branch"],
+            ["row-fp8", "notes", ["audit", "alpha", "Dismissed"], "an old audit"]])
+        self.assertEqual(got["gets"], ["/finding_marks", "/findings"])
+
+    def test_the_findings_are_read_each_time_the_section_is_shown(self):
+        got = self.run_page("""
+            await start();
+            await click($("#tabbar [data-s=todo]")); await click($("#tabbar [data-s=findings]")); await settle();
+            return calls.filter(c => c.method === "GET" && c.path === "/findings").length;
+        """)
+        self.assertEqual(got, 2)
+
+    def test_a_record_check_opens_the_record_it_names_and_a_duplicate_offers_each(self):
+        got = self.run_page("""
+            await start();
+            const acts = id => { const c = $("#pane-detail #finding-" + id); return [...c.querySelectorAll("button")].map(b => text(b)); };
+            const one = acts("fp1");
+            await click($("#open-fp2")); const two = acts("fp2");
+            await click($("#open-fp3")); const three = acts("fp3");
+            await click($("#open-fp1")); await click(button($("#pane-detail #finding-fp1"), "Set priority R-1")); await settle();
+            return { one, two, three, read: calls.filter(c => /^\\/records\\//.test(c.path)).map(c => c.path), sec: $("#sections .sec[aria-selected=true]").dataset.s };
+        """)
+        self.assertEqual(got["one"], ["Set priority R-1", "Pass on", "Dismiss"])
+        self.assertEqual(got["two"], ["Retire R-2", "Retire R-3", "Pass on", "Dismiss"])
+        self.assertEqual(got["three"], ["Pass on", "Dismiss"])
+        self.assertEqual(got["read"], ["/records/alpha/R-1"])
+        self.assertEqual(got["sec"], "backlog")
+
+    def test_pass_on_sends_an_act_note_then_marks_it(self):
+        got = self.run_page("""
+            await start();
+            const note = $("#f-fp1-note").value;
+            await click(button($("#pane-detail #finding-fp1"), "Pass on")); await settle();
+            return { note, posts: posts(), said: text($("#f-fp1-status")), form: !!$("#f-fp1-note"),
+                     chips: $$("#row-fp1 .chip").map(text) };
+        """)
+        self.assertEqual(got["note"], "Act on maintenance finding unpriced R-1: R-1 has no priority (fix: fix it)")
+        self.assertEqual(got["posts"], [["/to_pm", {"kind": "act", "finding": "fp1"}],          # the server writes the note it prefills
+                                        ["/finding_marks", {"fingerprint": "fp1", "status": "passed_on", "note": "Passed on as P-9"}]])
+        self.assertEqual(got["said"], "Passed on as P-9: it is queued in To PM, so press Send all there to send it.")
+        self.assertFalse(got["form"])
+        self.assertEqual(got["chips"], ["unpriced", "alpha", "Passed on"])
+
+    def test_an_edited_note_is_sent_as_typed(self):
+        got = self.run_page("""
+            await start();
+            await type($("#f-fp1-note"), "Price R-1 first.");
+            await click(button($("#pane-detail #finding-fp1"), "Pass on")); await settle();
+            return posts()[0];
+        """)
+        self.assertEqual(got, ["/to_pm", {"kind": "act", "finding": "fp1", "text": "Price R-1 first."}])
+
+    def test_a_refused_pass_on_keeps_the_note_and_marks_nothing(self):
+        got = self.run_page("""
+            lintS.actFail = REFUSED;
+            await start();
+            await type($("#f-fp1-note"), "my words");
+            await click(button($("#pane-detail #finding-fp1"), "Pass on")); await settle();
+            return { posts: posts().map(p => p[0]), said: text($("#f-fp1-status")), note: $("#f-fp1-note").value };
+        """.replace("REFUSED", json.dumps(refusal("not_found", "no finding fp1"))))
+        self.assertEqual(got["posts"], ["/to_pm"])
+        self.assertEqual(got["said"], "Not passed on: no finding fp1. Your note is kept.")
+        self.assertEqual(got["note"], "my words")
+
+    def test_a_failed_mark_is_marked_again_without_a_second_note(self):
+        got = self.run_page("""
+            lintS.markFail = REFUSED;
+            await start();
+            await click(button($("#pane-detail #finding-fp1"), "Pass on")); await settle();
+            const first = text($("#f-fp1-status"));
+            lintS.markFail = null;
+            await click(button($("#pane-detail #finding-fp1"), "Pass on")); await settle();
+            return { first, posts: posts().map(p => p[0]), said: text($("#f-fp1-status")) };
+        """.replace("REFUSED", json.dumps(refusal("store", "store busy", 503))))
+        self.assertEqual(got["first"], "Passed on as P-9, but not marked: store busy. Pass on again marks it, without a second note.")
+        self.assertEqual(got["posts"], ["/to_pm", "/finding_marks", "/finding_marks"])
+        self.assertEqual(got["said"], "Passed on as P-9: it is queued in To PM, so press Send all there to send it.")
+
+    def test_dismiss_marks_it_dismissed(self):
+        got = self.run_page("""
+            await start();
+            await click($("#open-fp3"));
+            await click(button($("#pane-detail #finding-fp3"), "Dismiss")); await settle();
+            return { posts: posts(), said: text($("#f-fp3-status")), chips: $$("#row-fp3 .chip").map(text) };
+        """)
+        self.assertEqual(got["posts"], [["/finding_marks", {"fingerprint": "fp3", "status": "dismissed"}]])
+        self.assertEqual(got["said"], "Dismissed.")
+        self.assertEqual(got["chips"], ["worktree-A", "alpha", "Dismissed"])
+
+    # As in AutoTasksTest.EDIT_WHILE: one request held while the owner types in the note.
+    EDIT_WHILE = AutoTasksTest.EDIT_WHILE.replace(
+        'const isPost = (u, i) => /\\/schedules$/.test(u) && i.method === "POST", isRead = (u, i) => /\\/schedules$/.test(u) && i.method === "GET";',
+        'const isAct = (u, i) => /\\/to_pm$/.test(u) && i.method === "POST", isRead = (u, i) => /\\/findings$/.test(u) && i.method === "GET";').replace(
+        "const posts = () => calls.filter(c => c.method === \"POST\").map(c => c.body);", "")
+
+    def test_a_note_typed_while_the_pass_on_is_out_is_kept_under_the_mark(self):
+        got = self.run_page(self.EDIT_WHILE + """
+            await start();
+            await editWhile(isAct, button($("#pane-detail #finding-fp1"), "Pass on"), () => type($("#f-fp1-note"), "late words"));
+            const c = $("#pane-detail #finding-fp1");
+            return { posts: posts(), card: text(c), form: !!$("#f-fp1-note") };
+        """)
+        self.assertEqual(got["posts"][0], ["/to_pm", {"kind": "act", "finding": "fp1"}])
+        self.assertFalse(got["form"])
+        self.assertIn("What you typed after pressing Pass on (it is not in the note):late words", got["card"])
+
+    def test_a_note_typed_while_the_read_after_a_mark_is_out_is_kept_under_the_mark(self):
+        got = self.run_page(self.EDIT_WHILE + """
+            await start();
+            await editWhile(isRead, button($("#pane-detail #finding-fp1"), "Pass on"), () => type($("#f-fp1-note"), "later words"));
+            return text($("#pane-detail #finding-fp1"));
+        """)
+        self.assertIn("(it is not in the note):later words", got)
+
+    def test_a_mark_whose_read_fails_keeps_the_form_and_says_why(self):
+        got = self.run_page(self.EDIT_WHILE + """
+            await start();
+            await editWhile(isRead, button($("#pane-detail #finding-fp1"), "Pass on"), async () => { lintS.readFail = FAIL; await type($("#f-fp1-note"), "keep me"); });
+            return { note: $("#f-fp1-note") && $("#f-fp1-note").value, said: text($("#f-fp1-status")),
+                     err: $$("#list p.gone").map(text) };
+        """.replace("FAIL", json.dumps(refusal("store", "store busy", 503))))
+        self.assertEqual(got["note"], "keep me")
+        self.assertEqual(got["said"], "Passed on as P-9: it is queued in To PM, so press Send all there to send it.")
+        self.assertEqual(got["err"], ["Could not read the findings (store busy)."])
+
+    def test_the_ledger_is_counts_and_a_skip_shows_only_when_later_than_the_run(self):
+        runs = [{"repo": "alpha", "started": "2026-10-20T03:00:00Z", "ledger": {"stale_cites": 2, "superseded": 1, "superseded_live": 0},
+                 "skipped": {"reason": "the lock was busy", "at": "2026-10-21T03:00:00Z"}},
+                {"repo": "beta", "started": "2026-10-21T03:00:00Z", "ledger": None,
+                 "skipped": {"reason": "older", "at": "2026-10-20T03:00:00Z"}},
+                {"repo": "gamma", "started": "2026-10-21T03:00:00Z", "ledger": {"stale_cites": "3", "superseded": 1.5},
+                 "skipped": {"reason": "garbled", "at": "not a time"}},
+                {"repo": "delta", "started": "yesterday", "ledger": None, "skipped": {"reason": "no run time", "at": "2026-10-21T03:00:00Z"}}]
+        got = self.run_page("""
+            await start();
+            return $$("#list p").filter(p => p.className === "status" || p.className === "gone").map(p => [p.className, text(p)]);
+        """, runs=runs)
+        self.assertEqual(got[0], ["status", "alpha ledger: 2 stale cites, 1 superseded, 0 superseded and still live."])
+        self.assertEqual(got[1][0], "gone")
+        self.assertTrue(got[1][1].startswith("alpha: last run skipped: the lock was busy, "), got[1][1])
+        self.assertEqual(len(got), 2, got)
+
+    def test_server_text_on_the_section_is_drawn_as_text(self):
+        m = mark("finding")
+        found = [finding("fp1", m, m, m, repo=m, fix=m, age=m)]
+        marks = [{"id": "fp9", "repo": m, "check": m, "target": m, "text": m, "status": m, "note": m, "marked_at": NOW, "via": m, "version": 1}]
+        runs = [{"repo": m, "started": "2026-10-20T03:00:00Z", "ledger": None, "skipped": {"reason": m, "at": "2026-10-21T03:00:00Z"}}]
+        got = self.run_page("""
+            await start();
+            const a = text($("#list")) + text($("#pane-detail"));
+            await click($("#open-fp9"));
+            return { shown: a + text($("#pane-detail")), sinks, tags: [...new Set(created)] };
+        """, found=found, marks=marks, runs=runs)
+        self.assertIn(m, got["shown"])
+        self.assertEqual(got["sinks"], [])
+        self.assertNotIn("script", got["tags"])
+        self.assertNotIn("img", got["tags"])
+
+    def test_an_act_note_shows_as_act_offers_no_kind_and_shows_the_servers_refusal(self):
+        lists = json.loads(json.dumps(LISTS))
+        lists["to_pm"]["P-3"] = {"status": "queued", "kind": "act", "repo": "alpha", "text": "Act on maintenance finding unpriced R-1",
+                                 "version": 1, "created_at": NOW}
+        got = dom("""
+            await start();
+            const meta = $$("#pm-P-3 .chip").map(text);
+            await click(button($("#pm-P-3"), "Edit"));
+            const c = $("#pm-P-3"), chips = [...c.querySelectorAll(".chip")].map(text), radios = [...c.querySelectorAll("[role=radio]")].length;
+            await type($("#pm-P-3 textarea"), "Act on it now");
+            server.route = c => c.path === "/to_pm/P-3/edit" ? REFUSED : undefined;
+            await click(button($("#pm-P-3"), "Save")); await settle();
+            return { meta, chips, radios, body: calls.filter(c => c.path === "/to_pm/P-3/edit").map(c => c.body), said: text($("#pm-P-3 .status")) };
+        """.replace("REFUSED", json.dumps(refusal("invalid", "an act note stays an act note and no other note becomes one: P-3 is act"))),
+            snapshot(collections=lists), hash="#topm")
+        self.assertIn("Act", got["meta"])
+        self.assertIn("Act: a finding passed on", got["chips"])
+        self.assertEqual(got["radios"], 0)
+        self.assertEqual(len(got["body"]), 1)
+        self.assertNotIn("kind", got["body"][0])
+        self.assertEqual(got["body"][0]["text"], "Act on it now")
+        self.assertEqual(got["said"], "Not saved: an act note stays an act note and no other note becomes one: P-3 is act. Your text is kept.")
+
+
 class PageTextTest(unittest.TestCase):
     def setUp(self):
         self.p = page()
@@ -3119,9 +3368,10 @@ class PageTextTest(unittest.TestCase):
         self.assertNotIn("style:", self.script)
 
     def test_only_the_decided_routes(self):
-        self.assertEqual(sorted(re.findall(r'call\("GET", "(/[a-z_]+)', self.script)), ["/lock", "/pages", "/records", "/schedules", "/snapshot", "/wait"])
+        self.assertEqual(sorted(re.findall(r'call\("GET", "(/[a-z_]+)', self.script)), ["/finding_marks", "/findings", "/lock", "/pages", "/records", "/schedules", "/snapshot", "/wait"])
         roots = set(re.findall(r'(?:write|hub\.post|delButton)\("(/[a-z_]+)', self.script))
-        self.assertEqual(roots, {"/questions", "/todos", "/stories", "/records", "/to_pm", "/inbox", "/approvals", "/pages", "/schedules"})
+        self.assertEqual(roots, {"/questions", "/todos", "/stories", "/records", "/to_pm", "/inbox", "/approvals", "/pages", "/schedules",
+                                 "/finding_marks"})
         self.assertEqual(re.findall(r'"/approvals/" \+ seg\([^)]*\) \+ "(/[a-z]+)"', self.script), ["/decide"])
         # A page is read (GET /pages/<id>) and deleted, never written: publishing is the agents'.
         self.assertEqual(re.findall(r'"/pages/" \+ seg\([^)]*\) \+ "(/[a-z]+)"', self.script), ["/delete"])
