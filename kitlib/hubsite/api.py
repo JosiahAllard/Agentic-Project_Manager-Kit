@@ -758,13 +758,18 @@ class Api(object):
 
     def _routed(self):
         """([item], `now` of the next route change or None): the pending items with `from` and
-        `route`. Hand-overs of items no longer pending are forgotten here."""
-        found, keys, out = self.store.pending(), None, []
+        `route`. Hand-overs of items no longer pending are forgotten here. Each approval's
+        repository is resolved (repo_key) once per call, however many approvals name it."""
+        found, keys, out, repo_keys = self.store.pending(), None, [], {}
         for p in found:
             d = p._asdict()
             sender = d.pop('sender')
             if d['kind'] == 'approval':
-                sender = self.repo_key(d['repo'])   # no `from`: its repository's coordinator
+                # no `from`: its repository's coordinator
+                repo = d['repo'] if isinstance(d['repo'], str) else ''
+                if repo not in repo_keys:
+                    repo_keys[repo] = self.repo_key(repo)
+                sender = repo_keys[repo]
             mine = sender and sender not in (AGENT_FROM, OWNER_FROM)
             if mine and keys is None:
                 keys = self.session_keys()          # read once, and only when it can matter
