@@ -31,6 +31,7 @@ CLAUDE.md (or equivalent) where they exist.
 - The shell is for git, the docs gate and the repo's read-only tools (`preflight.py`,
   `doc_index.py`, `codemap.py`): no test runs other than the final `gate.py --full`, no other
   project scripts. The coordinator lands: you never land, merge to main, or push.
+- Hand back a text report of about 40 lines at most, never a report file (the host refuses subagent report files).
 
 ## Never
 

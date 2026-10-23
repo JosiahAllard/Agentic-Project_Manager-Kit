@@ -116,7 +116,7 @@ marks high-risk.
 
 One short block: branch; old and new main hash; fast-forward or merge commit; test
 counts; extra gate result; pushed yes/no with the two hashes; worktree removed
-yes/no; any line you had to judge. No narrative.
+yes/no; any line you had to judge. No narrative. Hand back a text report of about 40 lines at most, never a report file (the host refuses subagent report files).
 
 ## Kit tools
 

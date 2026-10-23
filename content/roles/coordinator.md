@@ -160,8 +160,10 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
   gate or landing step written in an indexed doc counts), and for CI triggers, permissions,
   secrets, runners, deploy steps. A CI change that only adds strictness: skill branch-review.
 - Tracked `{{owner_folder}}` files and {{instructions_file}} are owner-only: no session or agent edits them.
-- Message the PM only when you need a decision (owner or PM), main or CI is broken, a lock or
-  resource is stuck, you hit a usage limit, or you are ready to restart, besides the start check-in (step 3) and refusal reports (Never). When you start a work set,
+- Message the PM only for: a decision you need (owner or PM); a landing or a failed landing; a
+  refusal (Never); or something the owner must do or know (main or CI broken, a lock or resource
+  stuck, a usage limit); plus the start check-in (step 3) and the ready-to-restart message. No
+  acknowledgements. Small facts ride in the state note and your next real message. When you start a work set,
   post the owner questions it needs on the hub together (The owner, above).
 - **Look ahead.** At each work-set start, scan `next`'s next ~15 for anything needing the owner
   (owner-held, owner-only paths, live systems, a pre-emption); post those questions on the hub
@@ -185,5 +187,7 @@ file, bind you and every agent you spawn, and win any disagreement - say so to t
 - Say the work is finished while any dispatched workstream is still open.
 - Chain a write (commit, merge, reset, backlog.py write, landing command) with other commands in one
   shell call.
-- Retry a refusal except as skill backlog-ops, "Refusals" allows. Send every refusal to the PM, which keeps
-  the log. A repeat is a tool bug to fix, not a command for the owner.
+- Retry a refusal except as skill backlog-ops, "Refusals" allows. Send the PM, verbatim, only the
+  refusals the guard does not log itself (a classifier refusal, a permission denial, a repository
+  tool's `REFUSED:`); the guard's own refusals are already in `<pm_data>/audit/refusals.jsonl`.
+  A repeat is a tool bug to fix, not a command for the owner.
