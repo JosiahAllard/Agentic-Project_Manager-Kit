@@ -102,11 +102,13 @@ class ClosesByTrailer(StoreLandCase):
         self.assertEqual(self.stems(), ['HELD'])
         warn = self.warnings(out)
         self.assertEqual(len(warn), 1, out.lines)
-        self.assertIn('owner-held', warn[0])
+        # an owner-held close is the close-held row, and a landing runs no role check
+        self.assertIn('`close-held`', warn[0])
+        self.assertIn('no role check ran', warn[0])
         self.assertIn('which a Closes trailer of its commits names', warn[0])
-        # the same command (and owner's flag) as a held record the branch pulled itself:
-        # test_land_store.CloseEdges checks that flag
-        self.assertIn('close HELD --reason "landed %s"' % out.merge, warn[0])
+        # the same plain command as a held record the branch pulled itself
+        # (test_land_store.CloseEdges)
+        self.assertTrue(warn[0].endswith('close HELD --reason "landed %s"' % out.merge), warn[0])
 
     def test_a_batch_reads_the_trailers_of_each_branch(self):
         self.seed(pulled('ONE', by='main'), pulled('TWO', by='main', scope=['b.py']),
