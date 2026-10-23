@@ -74,8 +74,8 @@ Verdict, area, what, why, size, risk. Risk: L low, M medium.
 - **Kept 19** tools/config_move.py, kitlib/config/move.py: a plan is in flight (the existing
   record for moving machine config out of the home folder).
 - **Kept 20** kitlib/git/fake/*: unit-test git under `KIT_FAKE_GIT=1`.
-- **Kept 21** standing_delegation: covered by an existing record (ledger uncite leftovers). The
-  worldgraph lock-kind alias in `kitlib/lock/kinds.json` was dropped: no checked repo config used it.
+- **Kept 21** standing_delegation, worldgraph lock-kind alias: covered by two existing records
+  (ledger uncite leftovers; worldgraph lock-kind alias drop).
 - **Kept 22** kitlib/guard: out of scope; guard items go to `docs/guard-v2.md`.
 
 ## Not checked

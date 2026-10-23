@@ -1,6 +1,6 @@
 id: EX-LINK-LOOKUP-COST
 area: link.client
-summary: a wrapped member costs one extra call - one per item in the search, per widget in the lookup; dispatch margin unmeasured
+summary: a wrapped member costs one extra call - one per item in the search, per widget in the lookup; overhead not yet profiled
 priority: 3
 priority_by: agent
 effort: m

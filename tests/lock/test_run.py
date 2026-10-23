@@ -499,6 +499,13 @@ class CoreRequests(StoreCase):
         self.assertEqual(self.ended()[0]["kind"], "graph-build")
         self.assertEqual(self.code(kind="no-such-kind", no_wait=True), 2)
 
+    def test_the_kits_worldgraph_alias_resolves_to_graph_build(self):
+        from kitlib.lock import kinds
+        table = kinds.load()
+        self.assertEqual(kinds.resolve("worldgraph", table), "graph-build")
+        self.assertEqual(kinds.resolve("graph-build", table), "graph-build")
+        self.assertEqual(kinds.resolve("nope", table), "nope")
+
     def test_the_kinds_full_size_may_be_asked_for(self):
         self.everything_held()
         self.assertEqual(self.code(kind="cpu-eval", cores=6, no_wait=True), 11)

@@ -228,6 +228,9 @@ class KindsTableTest(unittest.TestCase):
         with self.assertRaisesRegex(config.ConfigError, 'aliases belongs at the top level'):
             policy.kinds_table(path)
 
+    def test_the_kits_table_aliases_worldgraph_to_graph_build(self):
+        self.assertEqual(policy.kinds_aliases().get('worldgraph'), 'graph-build')
+
 
 class HookModuleTest(TreeCase):
 
