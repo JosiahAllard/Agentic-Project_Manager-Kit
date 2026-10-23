@@ -5,4 +5,4 @@
 """
 from . import gate_ok, landing  # noqa: F401
 from .gate_ok import RecordError, config_hash, record_pass, verify  # noqa: F401
-from .landing import Busy, LandingLock, LockError, NotHolder, lock_name  # noqa: F401
+from .landing import Busy, LandingLock, LockError, NotHolder  # noqa: F401
