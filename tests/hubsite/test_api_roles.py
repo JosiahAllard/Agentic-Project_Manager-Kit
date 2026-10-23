@@ -309,7 +309,9 @@ class RolesCase(unittest.TestCase):
         self.addCleanup(store.close)
         doc_id = seed(store) if seed else 'X-1'
         return store, api.Api(store, views=Views(), clock=CLOCK, approval_key=lambda: KEY,
-                              checkout=lambda repo: GIT[0].root, lock=LockDoor()), doc_id
+                              checkout=lambda repo: GIT[0].root, lock=LockDoor(),
+                              schedule_repos=lambda: [('r', root, 'r')],
+                              tick_seen=lambda: None), doc_id
 
     def test_every_route_has_a_role_and_a_row(self):
         self.assertTrue(api.ROUTES)

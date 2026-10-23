@@ -64,13 +64,14 @@ class ApiCase(unittest.TestCase):
         self.assertEqual((status, obj.get('error')), (200, None))
         return obj
 
-    def refused(self, code, field, method, path, role, body=None, query=None, **kw):
+    def refused(self, code, field, method, path, role, body=None, query=None, more=(), **kw):
+        # more: the error's own keys past code, field and message (a schedule conflict names its id)
         before = self.store.snapshot()
         status, obj = self.call(method, path, role, body, query, **kw)
         self.assertEqual(obj['error']['code'], code, obj)
         self.assertEqual(status, api.STATUS[code])
         self.assertIs(obj['ok'], False)
-        self.assertEqual(sorted(obj['error']), ['code', 'field', 'message'])
+        self.assertEqual(sorted(obj['error']), sorted(['code', 'field', 'message', *more]))
         if field is not None:
             self.assertEqual(obj['error']['field'], field, obj)
         self.assertEqual(self.store.snapshot(), before, 'a refused call wrote')
@@ -2690,6 +2691,11 @@ class ScheduleTest(ApiCase):
     def setUp(self):
         ApiCase.setUp(self)
         self.store.put('repos', 'kit', {'name': 'Kit', 'aliases': ['old-kit']})
+        # the machine config's launcher.repos as kitlib.autotasks.tick.launcher_repos gives it
+        self.launcher = [('kit', 'C:\\checkouts\\Kit', 'Kit'), ('alpha', 'C:\\checkouts\\Alpha', 'Alpha')]
+        self.seen = None
+        self.api = api.Api(self.store, clock=CLOCK, schedule_repos=lambda: list(self.launcher),
+                           tick_seen=lambda: self.seen)
 
     def body(self, **kw):
         b = {'task': 'maint-lint', 'repo': 'Kit', 'cadence': 'daily', 'at': '04:00'}
@@ -2780,10 +2786,11 @@ class ScheduleTest(ApiCase):
 
     def test_setting_it_again_is_pinned_to_the_version_read(self):
         self.ok('POST', '/schedules', OWNER, self.body())
-        self.refused('conflict', 'if_version', 'POST', '/schedules', OWNER,
-                     self.body(cadence='off'))
-        self.refused('conflict', 'if_version', 'POST', '/schedules', OWNER,
-                     self.body(cadence='off', if_version=2))
+        # the refusal names the schedule there, so the page can open it
+        for pin in (None, 2):
+            got = self.refused('conflict', 'if_version', 'POST', '/schedules', OWNER,
+                               self.body(cadence='off', if_version=pin), more=('id',))
+            self.assertEqual(got['error']['id'], 'maint-lint-Kit')
         got = self.ok('POST', '/schedules', OWNER,
                       self.body(cadence='weekly', days=['Fri'], at='03:30', if_version=1))
         self.assertEqual(got['version'], 2)
@@ -2794,13 +2801,116 @@ class ScheduleTest(ApiCase):
         self.assertNotIn('days', self.store.get('schedules', 'maint-lint-Kit'))
         # a pin on a schedule that is not there
         self.refused('conflict', 'if_version', 'POST', '/schedules', OWNER,
-                     self.body(task='worktree-sweep', if_version=1))
+                     self.body(task='worktree-sweep', if_version=1), more=('id',))
 
     def test_an_agent_is_refused_the_write(self):
         self.refused('forbidden', 'role', 'POST', '/schedules', AGENT, self.body())
         self.refused('forbidden', 'role', 'POST', '/schedules', AGENT, self.body(),
                      agent_words=True)
         self.assertEqual(self.store.docs('schedules'), {})
+
+    def test_a_repo_that_is_not_exactly_one_launcher_checkout_is_refused(self):
+        # the hub knows Kit, but the tick could not run it: no checkout, or two (tick.find_repo)
+        two = [('kit', 'C:\\checkouts\\Kit', 'Kit'), ('kit2', 'D:\\other\\Kit', 'Kit')]
+        for launcher in ([], [('alpha', 'C:\\checkouts\\Alpha', 'Alpha')], two):
+            with self.subTest(launcher=launcher):
+                self.launcher = launcher
+                for task in ('maint-lint', 'worktree-sweep'):
+                    obj = self.refused('invalid', 'repo', 'POST', '/schedules', OWNER,
+                                       self.body(task=task))
+                    self.assertIn("launcher.repos", obj['error']['message'])
+                    self.assertIn("'Kit'", obj['error']['message'])
+        self.assertEqual(self.store.docs('schedules'), {})
+        # exactly one, by its label, its name or its folder's name
+        for launcher in ([('kit', 'C:\\checkouts\\Kit', 'Kit')], [('k', 'C:\\x\\y', 'kit')],
+                         [('k', 'C:\\x\\KIT', 'other')]):
+            with self.subTest(launcher=launcher):
+                self.launcher = launcher
+                if self.store.get('schedules', 'maint-lint-Kit') is not None:
+                    self.store.delete('schedules', 'maint-lint-Kit')
+                self.ok('POST', '/schedules', OWNER, self.body())
+
+    def test_off_and_a_machine_wide_task_need_no_checkout(self):
+        self.launcher = []
+        self.ok('POST', '/schedules', OWNER, self.body(cadence='off'))
+        self.ok('POST', '/schedules', OWNER, self.body(task='agent-temp-sweep'))
+        self.assertEqual(sorted(self.store.docs('schedules')),
+                         ['agent-temp-sweep-Kit', 'maint-lint-Kit'])
+
+    def test_a_launcher_config_that_cannot_be_read_is_refused(self):
+        from kitlib.config import ConfigError
+
+        def broken():
+            raise ConfigError('launcher.repos is not a table')
+        self.api.schedule_repos = broken
+        obj = self.refused('invalid', 'repo', 'POST', '/schedules', OWNER, self.body())
+        self.assertIn('launcher.repos is not a table', obj['error']['message'])
+
+    def test_the_answer_says_the_first_run(self):
+        # set at Monday 10:00 local: the first slot strictly after it (kitlib.autotasks.due)
+        self.api.clock = lambda: '2026-01-05T10:00:00'
+        cases = [
+            ({'at': '11:00'}, '2026-01-05T11:00'),
+            ({'at': '09:00'}, '2026-01-06T09:00'),
+            ({'at': '10:00'}, '2026-01-06T10:00'),                    # not the minute it was set
+            ({'cadence': 'weekly', 'days': ['Mon'], 'at': '10:00'}, '2026-01-12T10:00'),
+            ({'cadence': 'weekly', 'days': ['Mon'], 'at': '10:01'}, '2026-01-05T10:01'),
+            ({'cadence': 'weekly', 'days': ['Wed', 'Sun'], 'at': '08:00'}, '2026-01-07T08:00'),
+            ({'cadence': 'weekly', 'days': ['Sun'], 'at': '23:59'}, '2026-01-11T23:59'),
+            ({'cadence': 'off'}, None),
+        ]
+        for change, first in cases:
+            with self.subTest(change=change):
+                if self.store.get('schedules', 'maint-lint-Kit') is not None:
+                    self.store.delete('schedules', 'maint-lint-Kit')
+                got = self.ok('POST', '/schedules', OWNER, self.body(**change))
+                self.assertEqual(got['first_run'], first)
+        # an offset time is taken as local time first, as the tick does
+        self.store.delete('schedules', 'maint-lint-Kit')
+        self.api.clock = CLOCK
+        from kitlib.autotasks import due
+        set_at = due.local(NOW)
+        got = self.ok('POST', '/schedules', OWNER, self.body(at='%02d:%02d' % (set_at.hour, set_at.minute)))
+        self.assertEqual(got['first_run'], (set_at.replace(second=0) + datetime.timedelta(days=1))
+                         .isoformat(timespec='minutes'))
+
+    def test_get_says_when_the_tick_was_last_seen(self):
+        now = datetime.datetime.fromisoformat(NOW)
+        for seen, running in ((None, False),
+                              ((now - datetime.timedelta(minutes=16)).isoformat(), True),
+                              ((now - datetime.timedelta(seconds=api.TICK_STALE_S)).isoformat(), True),
+                              ((now - datetime.timedelta(seconds=api.TICK_STALE_S + 1)).isoformat(), False),
+                              ((now - datetime.timedelta(days=3)).isoformat(), False)):
+            with self.subTest(seen=seen):
+                self.seen = seen
+                for role in (OWNER, AGENT):
+                    got = self.ok('GET', '/schedules', role)
+                    self.assertEqual(got['tick'], {'last': seen, 'running': running,
+                                                   'every_s': 15 * 60})
+        # the period is the one machine setup registers the tick with, not a copy of it; a few
+        # missed ticks before it is said not to run
+        from kitlib.machinesetup import extras
+        self.assertEqual(api.tick_every_s(), extras.AUTO_EVERY_MINUTES * 60)
+        with mock.patch.object(extras, 'AUTO_EVERY_MINUTES', 7):
+            self.assertEqual(self.ok('GET', '/schedules', OWNER)['tick']['every_s'], 7 * 60)
+        self.assertGreater(api.TICK_STALE_S, 2 * api.tick_every_s())
+
+    def test_the_default_tick_seen_is_the_state_file_time(self):
+        # serve.py passes neither seam: the hub server reads the tick's own files
+        bare = api.Api(self.store)
+        self.assertIs(bare.schedule_repos, api.launcher_checkouts)
+        self.assertIs(bare.tick_seen, api.tick_last_seen)
+        home =tempfile.mkdtemp(prefix='kit-hubapi-home-')
+        self.addCleanup(shutil.rmtree, home, True)
+        from kitlib.autotasks import tick
+        with mock.patch.object(tick, 'state_dir', lambda home_=None: os.path.join(home, 'auto-tasks')):
+            self.assertIsNone(api.tick_last_seen())
+            os.makedirs(os.path.join(home, 'auto-tasks'))
+            path = os.path.join(home, 'auto-tasks', tick.STATE_NAME)
+            with open(path, 'w') as f:
+                f.write('{}')
+            os.utime(path, (1767323045, 1767323045))      # 2026-01-02T03:04:05Z
+            self.assertEqual(api.tick_last_seen(), '2026-01-02T03:04:05+00:00')
 
 
 # ------------------------------------------------------------ the maintenance lint's findings

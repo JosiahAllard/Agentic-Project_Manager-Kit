@@ -80,9 +80,10 @@ are off on this hub server." when the server runs no push worker. The page reads
 the server), so what the PM writes shows without a reload. A view the server cannot give says so
 at the top.
 
-Links ending `#inbox`, `#todo`, `#topm`, `#backlog` (or `#stories`), `#parked`, `#docs` or `#info` open that
+Links ending `#inbox`, `#todo`, `#topm`, `#backlog` (or `#stories`), `#parked`, `#docs`, `#autotasks` or `#info` open that
 section; `#usage` and `#agents` open that Info tab. The Questions, Answers, To do and Docs lists filter by
-repository; Questions, To do and Docs also by id or title.
+repository; Questions, To do and Docs also by id or title. Automatic tasks lists the schedules
+("schedules/") with the tick's last run, and sets, edits or turns one off.
 
 ## Serving it
 
@@ -537,8 +538,18 @@ and serves it: nothing in the hub runs a task, registers one or starts a process
 `POST /api/v1/schedules` (owner) takes {task, repo, cadence, at, days?, if_version?} and puts the
 whole document; an agent is refused `forbidden`. Any other field, or a bad value, is `invalid`
 naming the field, with nothing written. Setting an existing schedule again takes its
-`if_version`; without it, or with another, it is `conflict`. `GET /api/v1/schedules` (anyone)
-lists them, filtered by `repo` like every list (`kitlib.hubsite.api` "Schedules").
+`if_version`; without it, or with another, it is `conflict`, whose error names the schedule's
+`id`: the page opens that one, with what was picked on the new form carried onto it unsaved
+(unless it holds unsaved changes of its own), so one Save sets it. A daily or weekly per-repo task
+whose repo is not exactly one checkout in the machine config's `launcher.repos` is `invalid`
+naming `repo`, since the tick could not run it; so is one set while the machine config's
+launcher list cannot be read. The answer carries `first_run`, the first slot
+as YYYY-MM-DDTHH:MM in the hub machine's local time with no zone (null when off); the task
+starts at the first tick at or after it, up to about 15 minutes later. `tick.last` is UTC with
+its offset; the page shows `first_run` as it is and says it is the hub machine's time. `GET /api/v1/schedules` (anyone) lists them,
+filtered by `repo` like every list, with `tick`: {last, running, every_s}: when the tick was last
+seen, whether that is recent enough to call it running, and its period in seconds
+(`kitlib.hubsite.api` "Schedules").
 
 ## finding_marks/<fingerprint>
 The owner's mark on one maintenance-lint finding (docs/maint-lint.md), so it stops showing:
