@@ -24,6 +24,7 @@ from tests.ledger.test_standing import entry, rid
 from tools import maint_lint
 
 CMD = 'python "kit/tools/backlog.py" -C "wt"'
+KIT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def snap(*records):
@@ -94,6 +95,9 @@ class BacklogChecks(unittest.TestCase):
         self.assertEqual(notes, ['audit: the log has a bad line'])
         for f in got:
             for text in (f.key, f.text, f.fix):
+                # the fix names the kit's own checkout, whose path may contain the word
+                for root in (KIT_ROOT, KIT_ROOT.replace(os.sep, '/')):
+                    text = text.replace(root, '')
                 self.assertNotIn('private', text)
                 self.assertNotIn('abc1234', text)
         got, notes = backlog.audit('r', CMD, run=lambda *a, **k: (audit_check.NOT_CHECKED,
