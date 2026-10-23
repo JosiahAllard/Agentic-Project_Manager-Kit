@@ -938,10 +938,10 @@ class ParsedRuns(Hub):
         # after its script word is not python's
         self.rows((
             (bash, 'git commit --dry-run -m "Hub store: import the todos"'),
-            (bash, 'python Z:/k/tools/commit.py -C $PWD -m "Hub store: x" --model M kitlib/hubsite/store.py'),
+            (bash, 'python Q:/k/tools/commit.py -C $PWD -m "Hub store: x" --model M kitlib/hubsite/store.py'),
         ), False)
         self.rows((
-            (bash, 'python Z:/k/tools/commit.py -m "$(python -m hub answer Q-1)" x.py'),
+            (bash, 'python Q:/k/tools/commit.py -m "$(python -m hub answer Q-1)" x.py'),
             (bash, 'cd tools && python -W ignore -m hub answer Q-1'), (bash, 'cd tools && python -Bm hub answer Q-1'),
             (ps, 'cd tools; python -X dev -m hub answer Q-1'),
             # the shell joins what the guard's split parts: an escaped space, a quote, a backtick, a
@@ -972,7 +972,7 @@ class ParsedRuns(Hub):
     def test_an_owner_verb_beside_a_read_or_a_message(self):
         self.rows(((bash, 'git diff tools/hub.py; python -m tools.hub answer Q-1'),), 'hub-owner-verb')
         self.rows((
-            (bash, 'python Z:/k/tools/commit.py -m "fix tools.hub" tools/x.py; python -m tools.hub answer Q-1'),
+            (bash, 'python Q:/k/tools/commit.py -m "fix tools.hub" tools/x.py; python -m tools.hub answer Q-1'),
         ), 'hub-owner-verb')
 
     def test_a_python_with_a_path_runs_hub_as_a_module(self):
@@ -1033,7 +1033,7 @@ class ParsedRuns(Hub):
         ), 'hub-owner-verb')
 
     def test_an_owner_verb_beside_backlog_or_another_command(self):
-        backlog = 'python Z:/k/tools/backlog.py -C Z:/pm --session kit '
+        backlog = 'python Q:/k/tools/backlog.py -C Q:/pm --session kit '
         self.rows((
             (bash, backlog + 'set EX-RETIRE --scope tools/hub.py; python tools/hub.py answer Q-1'),
             (bash, 'python tools/hub.py answer Q-1 --scope tools/hub.py'),

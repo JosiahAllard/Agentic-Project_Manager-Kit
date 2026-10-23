@@ -380,7 +380,7 @@ class TempTreeTest(unittest.TestCase):
         from kitlib import pluginsource
         self.assertEqual(content.EXPORT_MARKER, pluginsource.MARKER)
         write(self.path('kit.json'), b'{"name": "pm-kit", "version": "9.8.7"}\n')
-        write(self.path('.pm-kit-export'), b'Z:/somewhere\n')
+        write(self.path('.pm-kit-export'), b'Q:/somewhere\n')
         before = read(self.path('.claude-plugin', 'plugin.json'))
         with self.assertRaises(hc.ContentError):
             content.write(self.root, self.rs)
@@ -395,7 +395,7 @@ class TempTreeTest(unittest.TestCase):
         write(self.path('kit.json'), b'{"name": "pm-kit", "version": "9.8.7"}\n')
         export = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, export, True)
-        write(os.path.join(export, '.pm-kit-export'), b'Z:/somewhere\n')
+        write(os.path.join(export, '.pm-kit-export'), b'Q:/somewhere\n')
         sub = os.path.join(export, 'nested', 'kit')               # a renderable tree two folders down
         shutil.copytree(self.root, sub)
         manifest = os.path.join(sub, '.claude-plugin', 'plugin.json')

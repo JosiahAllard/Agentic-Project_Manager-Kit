@@ -230,8 +230,8 @@ class Opener(unittest.TestCase):
     def test_the_probe_is_the_classifiers_imported_when_asked(self):
         with mock.patch.object(classify, 'branch_liveness',
                                return_value=(None, 'abc')) as probe:
-            self.assertEqual(opener.liveness('Z:/repo', 'kit/x'), (None, 'abc'))
-        probe.assert_called_once_with('Z:/repo', 'kit/x')
+            self.assertEqual(opener.liveness('Q:/repo', 'kit/x'), (None, 'abc'))
+        probe.assert_called_once_with('Q:/repo', 'kit/x')
 
 
 if __name__ == '__main__':

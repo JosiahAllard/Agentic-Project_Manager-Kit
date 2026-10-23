@@ -281,7 +281,7 @@ class Unmark(MarkCase):
         self.assertEqual(self.file_text(), '{"version": 2, "marks": []}\n')
 
 
-GOOD = {'branch': 'kit/a', 'tip': 'a' * 40, 'path': 'Z:\\r\\.claude\\worktrees\\a', 'why': 'w',
+GOOD = {'branch': 'kit/a', 'tip': 'a' * 40, 'path': 'Q:\\r\\.claude\\worktrees\\a', 'why': 'w',
         'at': '2026-10-01T10:00:00.000000Z', 'by': 'unmarked session'}
 
 

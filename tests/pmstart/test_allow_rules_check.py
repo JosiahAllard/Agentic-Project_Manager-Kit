@@ -92,7 +92,7 @@ class AllowRulesCheckTest(unittest.TestCase):
                          ['could not check allow_rules (g): no repository folder %s' % gone])
 
     def test_non_kit_path_is_ignored(self):
-        self.local({'permissions': {'allow': ['Bash(python Z:/other/%s/tools/land.py *)' % GONE,
+        self.local({'permissions': {'allow': ['Bash(python Q:/other/%s/tools/land.py *)' % GONE,
                                               'Bash(python %s/%sx/tools/land.py)' % (self.slash, GONE),
                                               'Read(%s/%s/**)' % (self.slash, CUR)]}})
         self.assertEqual(self.check(), [])

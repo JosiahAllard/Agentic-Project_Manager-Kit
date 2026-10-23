@@ -54,7 +54,7 @@ class RuleTextTest(unittest.TestCase):
         self.assertTrue(got)
         self.assertFalse([l for l in got if l.startswith('Bash(')])
         self.assertTrue([l for l in LINES['deny'] if l.startswith('Bash(')])
-        for cmd in (submit(), submit(middle='kit/a -[C] Z:/other'), submit(middle='kit/a -? Z:/other')):
+        for cmd in (submit(), submit(middle='kit/a -[C] Q:/other'), submit(middle='kit/a -? Q:/other')):
             self.assertIsNone(decide(cmd, 'Bash', ALLOW_ONLY))
 
     def test_one_allow_per_spelling_each_ending_at_submit(self):
@@ -114,8 +114,8 @@ class AllowedTest(unittest.TestCase):
 class DeniedTest(unittest.TestCase):
     def test_second_C_denied(self):
         for shell in SHELLS:
-            for cmd in (submit(middle='kit/a -C Z:/other'), submit(tail=' -C Z:/other'),
-                        submit(Q, middle='-C Z:/other kit/a')):
+            for cmd in (submit(middle='kit/a -C Q:/other'), submit(tail=' -C Q:/other'),
+                        submit(Q, middle='-C Q:/other kit/a')):
                 with self.subTest(shell=shell, cmd=cmd):
                     self.assertEqual(decide(cmd, shell), 'deny')
 
@@ -130,25 +130,25 @@ class DeniedTest(unittest.TestCase):
                     self.assertEqual(decide(cmd, shell), 'deny')
 
     def test_single_quoted_second_C_denied(self):
-        self.second_C("kit/a '-C' Z:/other")
+        self.second_C("kit/a '-C' Q:/other")
 
     def test_double_quoted_second_C_denied(self):
-        self.second_C('kit/a "-C" Z:/other')
+        self.second_C('kit/a "-C" Q:/other')
 
     def test_backslash_second_C_denied(self):
-        self.second_C('kit/a \\-C Z:/other')
+        self.second_C('kit/a \\-C Q:/other')
 
     def test_braced_second_C_denied(self):
-        self.second_C('kit/a {-C,Z:/other}')
+        self.second_C('kit/a {-C,Q:/other}')
 
     def test_tab_second_C_denied(self):
-        self.second_C('kit/a\t-C Z:/other')
+        self.second_C('kit/a\t-C Q:/other')
 
     def test_any_later_C_text_denied(self):
-        self.second_C('kit/a,-CZ:/other')
+        self.second_C('kit/a,-CQ:/other')
 
     def test_log_dir_denied(self):
-        for middle in ('kit/a --log-dir Z:/x', 'kit/a --log-dir=Z:/x', 'kit/a --lo Z:/x', 'kit/a --log Z:/x'):
+        for middle in ('kit/a --log-dir Q:/x', 'kit/a --log-dir=Q:/x', 'kit/a --lo Q:/x', 'kit/a --log Q:/x'):
             self.only_the_deny_closes(middle)
 
     def only_the_deny_closes(self, middle):
@@ -171,7 +171,7 @@ class DeniedTest(unittest.TestCase):
         """`cut` before the trailing --submit hides it from land.py in PowerShell (5.1, probed): the
         line then runs a foreground landing from an agent-written --submitted payload. The allow alone
         matches it; a deny must close it."""
-        cmd = '%s -C %s kit/a --submitted Z:/p.json --expect-tip abc%s --submit' % (P, R, cut)
+        cmd = '%s -C %s kit/a --submitted Q:/p.json --expect-tip abc%s --submit' % (P, R, cut)
         for shell in SHELLS:
             with self.subTest(shell=shell, cut=repr(cut)):
                 self.assertEqual(decide(cmd, shell), 'deny')
@@ -180,7 +180,7 @@ class DeniedTest(unittest.TestCase):
     def test_comment_hides_submit_denied(self):
         cmd = self.submit_dropped(' #')
         self.assertEqual(cmd, 'python X:/fake-export/0123456789ab/tools/land.py -C Y:/repo kit/a'
-                              ' --submitted Z:/p.json --expect-tip abc # --submit')
+                              ' --submitted Q:/p.json --expect-tip abc # --submit')
         self.assertEqual(decide(cmd, lines=ALLOW_ONLY), 'allow')
 
     def test_carriage_return_hides_submit_denied(self):
@@ -202,7 +202,7 @@ class DeniedTest(unittest.TestCase):
         native argument as a space does) cannot stand in for the spaces around it."""
         tip = 'a' * 40
         forms = [('--full --expect-tip %s -- kit/a' % tip, ''),
-                 ('--submitted Z:/p.land.submit --expect-tip %s -- kit/a' % tip, '')]
+                 ('--submitted Q:/p.land.submit --expect-tip %s -- kit/a' % tip, '')]
         for middle, tail in forms:
             argv = ['-C', R] + middle.split() + ['--expect-tip', tip, '--submit'] + tail.split()
             a = land.parser().parse_args(argv)
@@ -239,18 +239,18 @@ class DeniedTest(unittest.TestCase):
         """PowerShell takes U+2018-U+201B as single and U+201C-U+201E as double quotes and strips
         them from a native argument (probed): `-‘C’` reaches land.py as -C, `--l‘o’g-dir` as --log-dir."""
         for q in '\u2018\u2019\u201a\u201b\u201c\u201d\u201e':
-            self.second_C('kit/a -%sC%s Z:/other' % (q, q))
-            self.only_the_deny_closes('kit/a --l%so%sg-dir Z:/x' % (q, q))
+            self.second_C('kit/a -%sC%s Q:/other' % (q, q))
+            self.only_the_deny_closes('kit/a --l%so%sg-dir Q:/x' % (q, q))
 
     def test_typographic_dashes_denied(self):
         """PowerShell takes U+2013-U+2015 as parameter dashes. Probed 5.1 passes them to python as
         written, so `–C` is no -C there; denied anyway, as no submit needs one."""
         for d in '\u2013\u2014\u2015':
-            self.second_C('kit/a %sC Z:/other' % d)
-            self.only_the_deny_closes('kit/a %s%slog-dir Z:/x' % (d, d))
+            self.second_C('kit/a %sC Q:/other' % d)
+            self.only_the_deny_closes('kit/a %s%slog-dir Q:/x' % (d, d))
 
     def test_glued_C_denied(self):
-        self.assertEqual(decide(submit(middle='kit/a -CZ:/other')), 'deny')
+        self.assertEqual(decide(submit(middle='kit/a -CQ:/other')), 'deny')
 
     def test_first_C_not_denied(self):
         deny_only = {'allow': [], 'deny': LINES['deny']}
@@ -263,11 +263,11 @@ class DeniedTest(unittest.TestCase):
         self.assertEqual(decide(submit().replace('land.py -C', 'land.py  -C')), 'deny')
 
     def test_redirect_denied(self):
-        for cmd in (submit(tail=' > Z:/x'), submit(tail=' 2>Z:/x')):
+        for cmd in (submit(tail=' > Q:/x'), submit(tail=' 2>Q:/x')):
             with self.subTest(cmd=cmd):
                 self.assertEqual(decide(cmd), 'deny')
                 self.assertIsNone(decide(cmd, lines=ALLOW_ONLY))  # F2: the fixed tail takes no redirect
-        inner = submit(middle='kit/a < Z:/in')
+        inner = submit(middle='kit/a < Q:/in')
         self.assertEqual(decide(inner), 'deny')
         self.assertEqual(decide(inner, lines=ALLOW_ONLY), 'allow')     # the first `*` carries it: the deny closes it
 

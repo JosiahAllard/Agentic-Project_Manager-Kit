@@ -69,7 +69,7 @@ class Cli(StoreCase):
     def test_status_json_carries_resource_and_priority_for_runs_and_queue(self):
         from kitlib.lock import store as store_mod
         from kitlib.proc import process
-        land = "landing:z:\\repo\\.git"
+        land = "landing:q:\\repo\\.git"
         held, wait = "r-20261006T120000Z-aaaaaa", "r-20261006T120000Z-bbbbbb"
         self.live_record(held, resource=land, priority="land", cores=[0])
         for rid in (held, wait):                # live wrappers: this process, run mutexes held
@@ -262,10 +262,10 @@ class Cli(StoreCase):
         with mock.patch.object(self.tool, "detach", return_value=0) as det:
             for extra in ((), ("--detach",)):
                 with self.subTest(extra=extra):
-                    code, _, err = self.run_with("t", "--resource", "landing:z:\\repo\\.git",
+                    code, _, err = self.run_with("t", "--resource", "landing:q:\\repo\\.git",
                                                  *extra)
                     self.assertEqual(code, 2, err)
-                    self.assertIn("usage: --resource landing:z:\\repo\\.git: landing "
+                    self.assertIn("usage: --resource landing:q:\\repo\\.git: landing "
                                   "resources belong to land.py", err)
         det.assert_not_called()
         self.assertIsNone(self.store.read("queue.json"))

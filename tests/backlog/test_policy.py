@@ -135,12 +135,12 @@ class Refusal(unittest.TestCase):
 
 class ReadArgv(unittest.TestCase):
     def test_globals_verb_id_and_options(self):
-        a = policy.read_argv(words('-C', 'Z:/pm', '--session', 'kit', '--as', 'kit/wk', 'set', 'FOO',
+        a = policy.read_argv(words('-C', 'Q:/pm', '--session', 'kit', '--as', 'kit/wk', 'set', 'FOO',
                                    '--scope', 'tools/x.py', '--priority=2'))
-        self.assertEqual((a.root, a.branch, a.verb, a.rid, a.help), ('Z:/pm', 'kit/wk', 'set', 'FOO', False))
+        self.assertEqual((a.root, a.branch, a.verb, a.rid, a.help), ('Q:/pm', 'kit/wk', 'set', 'FOO', False))
         self.assertEqual(a.given['fields'], ['scope', 'priority'])
         self.assertEqual(a.given['priority'], ['2'])
-        self.assertEqual(policy.read_argv(words('-CZ:/pm', 'show', 'FOO')).root, 'Z:/pm')
+        self.assertEqual(policy.read_argv(words('-CQ:/pm', 'show', 'FOO')).root, 'Q:/pm')
         a = policy.read_argv(words('block', 'FOO', '--on', 'owner', '--reason', 'r'))
         self.assertEqual((a.verb, a.given['on']), ('block', ['owner']))
         a = policy.read_argv(words('set', 'FOO', '--unset', 'priority', '--body-file', 'b.md'))
@@ -163,7 +163,7 @@ class ReadArgv(unittest.TestCase):
                 (('pull', 'FOO', '--ruling', 'R'), ['pull-collision']),
                 (('block', 'FOO', '--on', 'owner'), ['block-owner']))
         for argv, want in rows:
-            for lead in ((), ('-C', 'Z:/pm')):
+            for lead in ((), ('-C', 'Q:/pm')):
                 line = lead + ('--',) + argv
                 parser.parse_args(list(line))            # the tool takes it
                 a = policy.read_argv(words(*line))
@@ -174,7 +174,7 @@ class ReadArgv(unittest.TestCase):
     def test_a_word_it_cannot_read_counts_as_unknown(self):
         self.assertEqual(policy.read_argv([('set', True), ('FOO', True), ('$x', False)]).given,
                          {'fields': [], 'priority': [], 'on': [], 'unknown': True})
-        a = policy.read_argv([('-C', True), ('Z:/pm', True), ('$verb', False)])
+        a = policy.read_argv([('-C', True), ('Q:/pm', True), ('$verb', False)])
         self.assertEqual((a.verb, a.given), (None, {'unknown': True}))
         for argv in (('--sess', 'kit', 'show', 'FOO'), ('set', 'FOO', '--scop', 'x'),
                      ('frobnicate', 'FOO'), ('set', 'FOO', '--scope')):
