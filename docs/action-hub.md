@@ -646,6 +646,36 @@ Routes, below `/api/v1`:
   optional `commit`; answers `{ok, valid, why}`, never the key or the sig. With `commit`, only an
   approval consumed by that commit is valid.
 
+An approval of kind `op` approves one run of a delegated operation (docs/delegations.md "Hub
+approvals"), not a change. It has no `head`, `files` or `diff`, and holds instead:
+
+| Field | Written by | Meaning |
+|---|---|---|
+| kind | agent | `op`; a document with no kind is a change |
+| op, repo | agent | the operation's id `D-nnn` and its repo name, or `*` |
+| line | agent | the run line `run D-nnn NAME=VALUE ...`, names sorted, each once (`approvals.new_op_doc`) |
+| what | agent | the operation's `what`, shown above the line as the agent's note, not signed; optional |
+| args_sha256 | server | the SHA-256 of `line`, computed by the server (`approvals.line_sha256`) |
+| consumed_at | server | once the runner consumes it; an op approval has no `commit` |
+
+Its signature covers the id, kind, op, repo, `args_sha256`, the decision and `decided_at`; the line
+is bound through `args_sha256`. A pending op request expires after 24 hours
+(`approvals.PENDING_OP_TTL_S`). Its routes:
+
+- POST `/approvals` (agent): body `kind` `op`, `op`, `repo`, `line`, `title`, optional `reason`
+  and `what`. No checkout is read. Any other `kind` is `invalid`, field `kind`.
+- POST `/approvals/{id}/consume` (agent): body `args_sha256` (in place of `commit`) and
+  `if_version`. Both `commit` and `args_sha256` is `invalid`.
+- GET `/approvals/{id}/verify` (agent): query `kind=op`, `op`, `repo` and `args` (the line's
+  SHA-256); answers `{ok, valid, why, version}`. The version pins the consume that follows. Only
+  `approved` verifies: a consumed op approval was used once.
+
+The change checks (`check`, `consume_fields`) refuse an op approval, and the op checks (`check_op`, `consume_op_fields`) a change approval. The
+page draws an op card with the operation, its `what` labelled as the agent's unsigned note, and its
+exact line, `run D-nnn` and then one `NAME=VALUE` a line; no head or diff. The signature does not
+cover `what`, `title` or `reason`: what the owner approves is the operation id, the repo and the line.
+`delegated.py request` asks for one, and `delegated.py run --approval` verifies and consumes it.
+
 The agent's side of an approval is `commit.py --owner-approval hub:A-<n>` (docs/commit.md "Owner
 approval"): it verifies, writes and commits the approved files, then consumes the approval for that
 commit and verifies it with the commit; `gate land` and the pre-push hook verify it again

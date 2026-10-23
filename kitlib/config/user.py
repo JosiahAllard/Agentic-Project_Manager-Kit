@@ -154,6 +154,7 @@ SCHEMA = {
     'temp_dir': Field(AbsPath(), None, "the folder the kit's own temp files go in (test run folders, gate logs), and the shared temp folder (gate fallback logs, the worktree sweep log, private index folders, comfy_gen's GPU self-lock and state) while its drive is there, made if missing; on Windows, as the test and gate folder, it is skipped when it is, holds or sits inside a session temp (`agent_temp_sweep` `dir`, or the user environment's AGENT_TEMP, TEMP or TMP); unset or skipped: the first of these clear of every session temp: `kit-temp`, then `kit-work`, at the root of the checkout's drive (not the system temp folder's drive), the system temp folder (%LOCALAPPDATA%\\Temp), `kit-work` beside it (docs/test-tools.md \"Temp folders\"); older kit copies reject the key"),
     'machine_path_folders': Field(ListOf(Str(pattern=r'[^\\/:*?"<>|\s]+', what='a folder name')), None, 'the drive-rooted folder names the machine-paths check refuses besides a user profile (docs/commit.md "machine_paths.py"); unset: none, so only drive-rooted user-profile paths are refused and tools/machine_paths.py prints a NOTE saying so; older kit copies reject the key; set it only after every folder runs a kit that knows it'),
     'agent_temp_sweep': Field(Owned('optional/agenttemp/agent_temp_sweep.py'), None, "the agents' temp folder to sweep (`dir`), the age past which an unused entry goes (`max_age_days`, default 3), the entries it never removes (`keep`, relative paths such as `claude/<project>/<session>`) and whether it also sweeps the session folders under the user's own temp, HKCU\\Environment TEMP, else TMP (`user_temp`, true or false, default false; older sweeps refuse the key); `tools/machine_setup.py` adds it when absent (docs/machine-setup.md \"Extras\")"),
+    'dev_drive': Field(AbsPath(), None, 'the Dev Drive\'s root folder: `delegated.py run --approval` runs an operation, and `delegated.py request` asks for one, only on paths under it and outside every checkout (docs/delegations.md "Hub approvals"); unset: every approval run and request refuses; older kit copies reject the key; set it only after every folder runs a kit that knows it'),
     'plugin': Field(Owned('kitlib.pluginsource'), None, 'where the plugin export of pushed kit main lives, and whether pm_watch refreshes it on its own (docs/plugin-source.md); older kit copies reject the key; set it only after every folder is migrated'),
 }
 
@@ -773,6 +774,13 @@ def machine_path_folders(home=None):
     tuple: the machine config's `machine_path_folders`, else () (the kit codes no folder names).
     A machine config that cannot be read raises ConfigError."""
     return tuple(user_config(home)['machine_path_folders'] or ())
+
+
+def dev_drive(cfg):
+    """The Dev Drive's root folder from a config user_config returned, or None when it sets none
+    (kitlib.delegations.place refuses every approval run then)."""
+    value = cfg.get('dev_drive')
+    return value if isinstance(value, str) and value.strip() else None
 
 
 def doc_lines():

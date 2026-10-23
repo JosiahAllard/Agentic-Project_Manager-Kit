@@ -16,8 +16,11 @@ import unittest
 from unittest import mock
 
 from kitlib.config import user as kuser
+from kitlib.delegations import place
 from kitlib.delegations import run as drun
 from kitlib.delegations import schema
+from kitlib.hubsite import approvals as hubapprovals
+from kitlib.hubsite import client as hubclient
 from kitlib.hubsite import serve as hubserve
 from kitlib.ledger import write as lwrite
 from tests import gitfixture
@@ -690,6 +693,388 @@ class RegistryEnv(unittest.TestCase):
             self.assertEqual(pf, pf64)
         self.assertIsNone(dword)            # a REG_DWORD is no string
         self.assertIsNone(missing)
+
+
+class ApprovalHub(object):
+    """A stand-in hub client for an op approval: `get` answers verify, `post` answers consume.
+    Every call goes in `events`, shared with the stand-in checks, cwd and spawn."""
+
+    def __init__(self, events, verdict=None, consumed=None, verify_error=None, consume_error=None):
+        self.events, self.calls = events, []
+        self.verdict = verdict if verdict is not None else {'ok': True, 'valid': True, 'why': '',
+                                                           'version': 3}
+        self.consumed = consumed if consumed is not None else {'status': 'consumed'}
+        self.verify_error, self.consume_error = verify_error, consume_error
+
+    def get(self, path, role=None, query=None, timeout=None):
+        self.events.append('verify')
+        self.calls.append(('get', path, role, query))
+        if self.verify_error:
+            raise self.verify_error
+        return self.verdict
+
+    def post(self, path, role, body=None):
+        self.events.append('consume')
+        self.calls.append(('post', path, role, body))
+        if self.consume_error:
+            raise self.consume_error
+        return self.consumed
+
+
+class HubApproval(Fixture):
+    """A run on a hub approval `hub:A-nnn` (docs/delegations.md "Hub approvals")."""
+
+    def setUp(self):
+        Fixture.setUp(self)
+        self.dir = os.path.realpath(self.dir)
+        self.dev = os.path.join(self.dir, 'dd')
+        self.home = os.path.join(self.dir, 'home')
+        self.kit = os.path.join(self.dir, 'kit')
+        for d in (self.dev, self.home, self.kit):
+            os.makedirs(d)
+        self.cfg = dict(self.cfg, dev_drive=self.dev,
+                        plugin={'export_dir': os.path.join(self.dir, 'release')})
+        self.dest = os.path.join(self.dev, 'out')
+        self.line = 'run D-001 dest=%s' % self.dest
+        self.events = []
+        self.hub = ApprovalHub(self.events)
+        self.cwds = []
+        self.spawn = Spawn(check=lambda argv, kw: self.events.append('spawn'))
+
+    def op(self, **kw):
+        kw.setdefault('command', 'tool {dest}')
+        kw.setdefault('args', [{'name': 'dest', 'pattern': '[A-Za-z0-9:/\\\\._-]+'}])
+        kw.setdefault('trigger', ['hub-approval'])
+        return operation(**kw)
+
+    def make_cwd(self):
+        self.events.append('cwd')
+        folder = tempfile.mkdtemp(prefix='kit-delegated-cwd-', dir=self.dir)
+        self.cwds.append(folder)
+        return folder
+
+    def check_pre(self, pre):
+        self.events.append('precondition')
+        return None
+
+    def approve(self, approval='hub:A-001', pairs=None, **kw):
+        kw.setdefault('op', self.op(preconditions=[{'kind': 'file-exists', 'path': self.exe}]))
+        kw.setdefault('hub', self.hub)
+        kw.setdefault('home', self.home)
+        kw.setdefault('kit_root', self.kit)
+        kw.setdefault('make_cwd', self.make_cwd)
+        kw.setdefault('checks', {'file-exists': self.check_pre})
+        return self.run_op(pairs=pairs or (('dest', self.dest),), trigger=approval, **kw)
+
+    def refused_approval(self, needle, **kw):
+        with self.assertRaises(drun.RunRefused) as cm:
+            self.approve(**kw)
+        self.assertIn(needle, str(cm.exception))
+        self.assertEqual(self.spawn.calls, [], 'a refused run started a program')
+        self.assertFalse(os.path.exists(self.ledger), 'a refused run wrote the ledger')
+        return str(cm.exception)
+
+    def test_the_run_is_verified_checked_consumed_claimed_then_started(self):
+        res = self.approve()
+        self.assertEqual(self.events, ['verify', 'precondition', 'cwd', 'consume', 'spawn'])
+        self.assertEqual((res.returncode, res.error), (0, None))
+        self.assertEqual(res.argv, [os.path.normpath(self.exe), self.dest])
+        sha = hubapprovals.line_sha256(self.line)
+        (_, vpath, vrole, query), (_, cpath, crole, body) = self.hub.calls
+        self.assertEqual((vpath, vrole), ('/approvals/A-001/verify', hubclient.AGENT))
+        self.assertEqual(query, {'kind': 'op', 'op': 'D-001', 'repo': 'kit', 'args': sha})
+        self.assertEqual((cpath, crole), ('/approvals/A-001/consume', hubclient.AGENT))
+        self.assertEqual(body, {'args_sha256': sha, 'if_version': 3})
+
+    def entries(self):
+        text = self.text()
+        self.assertEqual(drun.fmt.validate(text, repo='kit'), [])
+        return [drun.fmt.parse_block(b)[0] for _, b in drun.fmt.split_entries(text)[1]]
+
+    def test_the_run_entry_is_delegated_under_the_approval_and_no_owner_entry_is_written(self):
+        res = self.approve()
+        entries = self.entries()
+        self.assertEqual([e['prov'] for e in entries], ['delegated'], 'one entry, delegated')
+        self.assertEqual([e for e in entries if e['prov'] in drun.fmt.OWNER_PROVS], [])
+        ran = entries[0]
+        self.assertEqual((ran['id'], ran['prov'], ran['Decides']), (res.entry, 'delegated', self.line))
+        self.assertEqual(ran['Source'], 'under hub:A-001: D-001 hub:A-001')
+        self.assertEqual(ran['A'], "the owner approved this run on the hub as hub:A-001: the hub "
+                                   "verified the owner's signed approval for D-001 on kit and this "
+                                   "run line, and recorded its use")
+        texts = drun.ledger_texts(drun.lfiles.of_config(self.cfg))
+        self.assertEqual(drun.used(texts, None, 'hub:A-001'), 'H-kit-0001')
+        self.assertIsNone(drun.used(texts, None, 'hub:A-002'))
+
+    def test_with_ledger_dir_the_entry_goes_to_the_ops_repo_file_never_the_frozen_one(self):
+        frozen = os.path.join(self.dir, 'LEDGER.md')
+        with open(frozen, 'w', encoding='utf-8') as fh:
+            fh.write('frozen\n')
+        self.cfg = dict(self.cfg, ledger_path=frozen)
+        self.approve(op=self.op(repo='*', preconditions=[{'kind': 'file-exists', 'path': self.exe}]))
+        with open(os.path.join(self.folder, 'pm.md'), encoding='utf-8') as fh:
+            text = fh.read()
+        self.assertEqual(drun.fmt.validate(text, repo='pm'), [])
+        self.assertIn('## H-pm-0001 | 2026-10-20 12:00Z | pm | delegated', text)
+        self.assertIn('Source: under hub:A-001: D-001 hub:A-001', text)
+        self.assertNotIn('H-pm-0002', text)
+        for prov in drun.fmt.OWNER_PROVS:
+            self.assertNotIn('| %s\n' % prov, text)
+        self.assertFalse(os.path.exists(self.ledger), 'the kit file was written')
+        with open(frozen, encoding='utf-8') as fh:
+            self.assertEqual(fh.read(), 'frozen\n')
+
+    def test_a_source_under_the_approval_is_a_runner_entry_and_a_malformed_one_is_not(self):
+        m = drun.SOURCE_RE.match('under hub:A-001: D-001 hub:A-001')
+        self.assertEqual(m.groups(), ('hub:A-001', 'D-001', 'hub:A-001'))
+        for bad in ('under hub:A-01: D-001 hub:A-01', 'under A-001: D-001 hub:A-001',
+                    'under hub:A-000: D-001 hub:A-000', 'under hub:A-0001: D-001 hub:A-0001'):
+            self.assertIsNone(drun.SOURCE_RE.match(bad), bad)
+
+    def test_a_used_approval_is_refused_before_the_hub_is_asked(self):
+        self.approve()
+        self.events.clear()
+        self.spawn.calls.clear()
+        with self.assertRaises(drun.RunRefused) as cm:
+            self.approve()
+        self.assertIn('hub:A-001 was used already by H-kit-0001', str(cm.exception))
+        self.assertEqual(self.events, [])
+        self.assertEqual(self.spawn.calls, [])
+
+    def add_under_approval(self):
+        found = drun.lfiles.of_config(self.cfg)
+        col, path, split = drun.target(found, 'kit')
+        drun.lwrite.add(path, col, 'delegated', 'q', 'a', self.line, 'under hub:A-001 by hand',
+                        when='2026-10-20 11:00Z', repos=self.cfg.get('ledger_repos'), split=split)
+        return found, path, split
+
+    def test_any_live_entry_under_the_approval_refuses_it(self):
+        self.add_under_approval()
+        with self.assertRaises(drun.RunRefused) as cm:
+            self.approve()
+        self.assertIn('hub:A-001 was used already by H-kit-0001', str(cm.exception))
+        self.assertEqual(self.events, [])
+        self.assertEqual(self.spawn.calls, [])
+
+    def test_a_retired_entry_under_the_approval_does_not_count(self):
+        found, path, split = self.add_under_approval()
+        drun.lwrite.retire(path, 'H-kit-0001', 'spent', 'done', repos=self.cfg['ledger_repos'],
+                           split=split)
+        texts = drun.ledger_texts(found)
+        self.assertIn('Retired: spent', self.text())
+        self.assertIsNone(drun.used(texts, None, 'hub:A-001'))
+
+    def test_the_run_entry_is_no_owner_order(self):
+        # The approval leaves no owner entry: the run entry it wrote is delegated, so it never
+        # passes as an owner-session order for an op that also lists owner-session.
+        op = self.op(trigger=['owner-session', 'hub-approval'],
+                     preconditions=[{'kind': 'file-exists', 'path': self.exe}])
+        self.approve(op=op)
+        ran, = self.entries()
+        self.events.clear()
+        self.spawn.calls.clear()
+        with self.assertRaises(drun.RunRefused) as cm:
+            self.run_op(op=op, pairs=(('dest', self.dest),), trigger=ran['id'],
+                        kit_root=self.kit, home=self.home, make_cwd=self.make_cwd,
+                        checks={'file-exists': self.check_pre})
+        self.assertIn("%s is not the owner's: its provenance is delegated" % ran['id'],
+                      str(cm.exception))
+        self.assertEqual(self.spawn.calls, [])
+        self.assertEqual(len(self.entries()), 1)
+
+    def test_the_child_runs_in_a_new_empty_folder_removed_when_left_empty(self):
+        self.approve()
+        cwd = self.spawn.calls[0][1]['cwd']
+        self.assertEqual(self.cwds, [cwd])
+        self.assertNotEqual(os.path.normcase(cwd), os.path.normcase(self.kit))
+        self.assertFalse(os.path.exists(cwd))
+
+    def test_a_folder_the_child_wrote_in_is_kept(self):
+        def write(argv, kw):
+            open(os.path.join(kw['cwd'], 'made.txt'), 'w').close()
+        self.spawn = Spawn(check=write)
+        self.approve()
+        self.assertTrue(os.path.isfile(os.path.join(self.cwds[0], 'made.txt')))
+
+    def test_the_default_folder_is_under_the_machine_temp_folder(self):
+        with mock.patch.object(kuser, 'mkdtemp', side_effect=lambda prefix, home=None: (
+                self.events.append(('mkdtemp', prefix, home)) or self.make_cwd())):
+            self.approve(make_cwd=None)
+        self.assertIn(('mkdtemp', drun.CWD_PREFIX, self.home), self.events)
+
+    def test_an_approval_of_another_form_is_refused(self):
+        for bad in ('hub:A-000', 'hub:A-1', 'hub:A-0001', 'hub:B-001', 'hub:A-001 ', 'hub:'):
+            with self.subTest(bad=bad):
+                self.refused_approval('--approval takes hub:A-nnn, not %r' % bad, approval=bad)
+        self.assertEqual(self.events, [])
+        self.assertEqual(drun.trigger_kind('hub:A-1000'), drun.APPROVAL)
+
+    def test_an_op_that_does_not_list_hub_approval_is_refused(self):
+        msg = self.refused_approval('D-001 does not list hub-approval among its triggers',
+                                    op=self.op(trigger=['owner-session']))
+        self.assertIn('owner-session', msg)
+        self.assertEqual(self.events, [])
+
+    def test_a_path_off_the_dev_drive_is_refused_before_the_hub_is_asked(self):
+        other = os.path.join(self.dir, 'other')
+        msg = self.refused_approval('D-001 on hub:A-001 would act where no approved run may',
+                                    pairs=(('dest', other),))
+        self.assertIn(place.WHY_OFF % (other, self.dev), msg)
+        self.assertEqual(self.events, [])
+
+    def test_a_path_in_the_command_itself_is_judged(self):
+        repo = os.path.join(self.dev, 'repo')
+        os.makedirs(os.path.join(repo, '.git'))
+        op = self.op(command='tool {dest} /LOG:%s' % os.path.join(repo, 'x.log'))
+        msg = self.refused_approval('would act where no approved run may', op=op)
+        self.assertIn('inside the checkout %s' % repo, msg)
+        self.assertEqual(self.events, [])
+
+    def test_no_dev_drive_refuses(self):
+        self.cfg['dev_drive'] = None
+        self.refused_approval('sets no dev_drive')
+        self.assertEqual(self.events, [])
+
+    def test_no_hub_refuses(self):
+        self.refused_approval('no hub to verify hub:A-001 on', hub=None)
+
+    def test_a_hub_verdict_against_it_is_refused(self):
+        for why in (hubapprovals.WHY_ARGS, hubapprovals.WHY_OP, hubapprovals.WHY_REPO,
+                    hubapprovals.WHY_KIND_FILES, hubapprovals.WHY_STATUS % 'consumed'):
+            with self.subTest(why=why):
+                self.events.clear()
+                self.hub.verdict = {'ok': True, 'valid': False, 'why': why}
+                self.refused_approval('the hub refused hub:A-001: %s' % why)
+                self.assertEqual(self.events, ['verify'])
+
+    def test_a_hub_that_cannot_answer_is_refused(self):
+        self.hub.verify_error = hubserve.ServeError('down')
+        msg = self.refused_approval('the hub cannot be reached: ')
+        self.assertIn('nothing was run', msg)
+        self.assertEqual(self.events, ['verify'])
+
+    def test_a_verdict_with_no_version_is_refused(self):
+        self.hub.verdict = {'ok': True, 'valid': True, 'why': ''}
+        self.refused_approval('the hub refused hub:A-001: %s' % hubapprovals.WHY_ANSWER)
+
+    def test_a_failed_precondition_consumes_nothing(self):
+        self.refused_approval('precondition 0 (file-exists) does not hold',
+                              checks={'file-exists': lambda pre: self.events.append('pre') or 'no'})
+        self.assertEqual(self.events, ['verify', 'pre'])
+
+    def test_a_folder_that_cannot_be_made_consumes_nothing(self):
+        def broken():
+            raise OSError('disk full')
+        self.refused_approval('cannot make the empty working folder: disk full', make_cwd=broken)
+        self.assertEqual(self.events, ['verify', 'precondition'])
+
+    def test_a_consume_that_fails_runs_and_logs_nothing(self):
+        for error in (hubserve.ServeError('409 conflict'), OSError('reset'), ValueError('bad')):
+            with self.subTest(error=error):
+                self.events.clear()
+                self.cwds.clear()
+                self.hub.consume_error = error
+                msg = self.refused_approval('the hub did not record the use of hub:A-001: %s'
+                                            % error)
+                self.assertIn('nothing was run', msg)
+                self.assertEqual(self.events, ['verify', 'precondition', 'cwd', 'consume'])
+                self.assertFalse(os.path.exists(self.cwds[0]))
+
+    def test_a_consume_answering_another_status_runs_nothing(self):
+        for answer in ({'status': 'approved'}, {}, ['consumed'], {'status': None}):
+            with self.subTest(answer=answer):
+                self.hub.consumed = answer
+                self.refused_approval('the hub did not record the use of hub:A-001: it answered')
+
+    def test_a_question_or_ledger_trigger_still_runs_in_the_kit_folder(self):
+        rid = self.add(decides=self.line)
+        self.run_op(op=self.op(trigger=['owner-session']), pairs=(('dest', self.dest),),
+                    trigger=rid, kit_root=self.kit, home=self.home, make_cwd=self.make_cwd)
+        self.assertEqual(self.spawn.calls[0][1]['cwd'], self.kit)
+        self.assertEqual(self.cwds, [])
+
+
+class RequestHub(object):
+    """A stand-in hub client for request: `post` answers `reply` (or raises `error`)."""
+
+    def __init__(self, reply=None, error=None):
+        self.reply = {'ok': True, 'id': 'A-007'} if reply is None else reply
+        self.error, self.calls = error, []
+
+    def post(self, path, role, body=None):
+        self.calls.append((path, role, body))
+        if self.error:
+            raise self.error
+        return self.reply
+
+
+class Request(Fixture):
+    """request: the owner is asked on the hub only for a run the runner could take."""
+
+    op = HubApproval.op
+
+    def ask(self, hub='default', pairs=None, **kw):
+        op = kw.pop('op', None) or self.op(what='copy the build out')
+        return drun.request(op, list(pairs or (('dest', self.dest),)),
+                            kw.pop('cfg', self.cfg), self.hub_r if hub == 'default' else hub,
+                            'Copy the build', reason=kw.pop('reason', 'for the demo'),
+                            environ=self.environ, kit_root=self.kit, registry=self.reg,
+                            home=self.home, **kw)
+
+    def setUp(self):
+        HubApproval.setUp(self)
+        self.hub_r = RequestHub()
+
+    def refused_request(self, needle, **kw):
+        with self.assertRaises(drun.RunRefused) as cm:
+            self.ask(**kw)
+        self.assertIn(needle, str(cm.exception))
+        return str(cm.exception)
+
+    def test_a_request_posts_the_run_line_and_answers_the_new_id(self):
+        self.assertEqual(self.ask(), 'A-007')
+        self.assertEqual(self.hub_r.calls, [('/approvals', hubclient.AGENT, {
+            'kind': 'op', 'op': 'D-001', 'repo': 'kit', 'line': self.line,
+            'title': 'Copy the build', 'reason': 'for the demo', 'what': 'copy the build out'})])
+        self.assertFalse(os.path.exists(self.ledger), 'a request wrote the ledger')
+        self.assertEqual(self.spawn.calls, [])
+
+    def test_a_request_off_the_dev_drive_is_never_asked(self):
+        off = os.path.join(self.dir, 'elsewhere')
+        why = self.refused_request('would act where no approved run may', pairs=(('dest', off),))
+        self.assertIn('not on the Dev Drive', why)
+        self.assertEqual(self.hub_r.calls, [])
+
+    def test_a_request_for_an_op_without_hub_approval_is_never_asked(self):
+        self.refused_request('does not list hub-approval',
+                             op=self.op(trigger=['owner-session']))
+        self.assertEqual(self.hub_r.calls, [])
+
+    def test_a_request_with_a_bad_argument_is_never_asked(self):
+        self.refused_request("dest: 'a b' does not match", pairs=(('dest', 'a b'),))
+        self.assertEqual(self.hub_r.calls, [])
+
+    def test_a_request_with_no_dev_drive_is_never_asked(self):
+        cfg = dict(self.cfg)
+        del cfg['dev_drive']
+        self.refused_request('sets no dev_drive', cfg=cfg)
+        self.assertEqual(self.hub_r.calls, [])
+
+    def test_no_hub_is_refused(self):
+        self.refused_request('no hub to ask on', hub=None)
+
+    def test_a_hub_refusal_is_refused(self):
+        for error in (hubserve.ServeError('409 invalid line'), OSError('down'),
+                      ValueError('not json')):
+            with self.subTest(error=type(error).__name__):
+                self.refused_request('the hub did not take the request',
+                                     hub=RequestHub(error=error))
+
+    def test_a_reply_without_an_id_is_refused(self):
+        for reply in ({'ok': True}, {'id': ''}, ['A-001']):
+            with self.subTest(reply=reply):
+                self.refused_request("answered without the new approval's id",
+                                     hub=RequestHub(reply=reply))
 
 
 if __name__ == '__main__':
